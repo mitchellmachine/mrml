@@ -3237,3 +3237,13 @@ resolver and test-only extern scope to the existing WHP source and exact
 dependency graph. It adds no resolver, cache, hypervisor, guest, mapping, or
 virtualization mechanism. Agent review does not replace independent human dual
 review.
+
+# 2026-08-25 — Structured native PTX action and tensor migration
+
+**Result: TRIGGERED.** The native resolver now models generated PTX as a bounded
+feature-selected action and separates CUDA host artifacts by ABI triple. This
+extends the existing package, cache, and resolver risk area while leaving tensor
+and CUDA runtime mechanisms unchanged. It establishes neither clearance nor
+infringement; material release resolver/cache mechanisms remain subject to the
+recorded worldwide authoritative-register review. Agent review does not replace
+independent human dual review.

@@ -39,8 +39,10 @@ file sizes, and reports exact repository-relative file and line locations.
 
 ## Exact exceptional mechanisms
 
-- `mrml-tensor` owns the sole custom build target. Its `build.rs` invokes the
-  pinned rustc CUDA target and materializes PTX consumed through `include_bytes!`.
+- `mrml-tensor` owns the sole legacy Cargo custom-build target. Its native action
+  now invokes the pinned rustc CUDA target directly and materializes the PTX
+  consumed through `include_bytes!`; `build.rs` remains only for Cargo comparison
+  until the bridge is removed.
 - There are no procedural-macro targets.
 - Native link attributes occur only in the Windows/Linux platform layers, KVM,
   WHP, `mrml-math`, the hosted kernel benchmark, and the Opus differential
@@ -174,6 +176,16 @@ passes its tests, Clippy, doctor, and audit, but correctly skips the Windows-onl
 WHP action. Thirty-two components are native; 10 remain transitional. This is
 hosted WHP API/mapping evidence, not VTL1, TPM, IOMMU, bare-metal, or physical-
 hardware verification.
+
+`mrml-tensor` now has a structured PTX sub-action instead of depending on Cargo
+to execute its custom build target. The action binds the source, generated
+filename, `OUT_DIR`, `cuda` feature, required GPU architecture, nvptx target,
+optimization, and ABI-mismatch flag. CUDA host artifacts include the host ABI
+triple, preventing Windows/Linux cache aliasing. Native and Cargo CUDA suites
+both pass 43 tests on Windows gnullvm and Arch Linux WSL2; focused prefill probes
+execute on both CUDA device paths, and the two `sm_120` PTX hashes match.
+Thirty-three components are native; nine remain transitional. This is not
+physical-topology, passthrough-isolation, or native-MRML-GPU evidence.
 
 Native actions now bind one exact feature set and may gate an extern by both
 target family and selected feature. `mrml-av1` declares the empty default set,

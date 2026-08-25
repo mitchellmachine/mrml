@@ -434,6 +434,16 @@ hypervisor mapping execution are directly evidenced on this host. Thirty-two
 components are native and 10 remain transitional; this is hosted WHP evidence,
 not a VTL1, TPM, IOMMU, bare-metal, or physical-hardware claim.
 
+Tensor's former Cargo-only PTX step is now a bounded native action. The required
+`--gpu-arch` drives pinned rustc directly against the declared kernel source,
+the generated `OUT_DIR` and PTX filename are explicit, CUDA artifacts are
+separated by host ABI triple, and every test, example, and benchmark output is
+declared. Windows gnullvm and Arch Linux WSL2 each match Cargo at 43 passing
+CUDA-enabled tests; both execute the focused prefill CUDA probe. Their `sm_120`
+PTX hashes are identical. Thirty-three components are native and nine remain
+transitional. This proves the exercised CUDA driver/device paths, not physical
+GPU topology, passthrough isolation, or native MRML GPU execution.
+
 MRML uses Rust 2024 and the exact `nightly-2026-08-24` build toolchain pinned in
 `rust-toolchain.toml`. It is also the current `mrml-rustc` behavioral reference
 recorded as [ORACLE-0002](docs/compiler/oracles/ORACLE-0002.md); a floating

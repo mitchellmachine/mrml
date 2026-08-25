@@ -36,7 +36,9 @@ struct RustAction {
     projected_build_targets: Vec<String>,
     host_test_targets: Vec<String>,
     examples: Vec<RustExample>,
+    benchmarks: Vec<RustBenchmark>,
     binaries: Vec<RustBinary>,
+    ptx: Option<RustPtx>,
     compile_env: Vec<(String, String)>,
     absent_compile_env: Vec<String>,
     feature_sets: Vec<RustFeatureSet>,
@@ -84,6 +86,23 @@ struct RustTest {
 struct RustExample {
     name: String,
     source: String,
+    targets: Vec<String>,
+    feature: Option<String>,
+}
+
+#[derive(Clone, Debug)]
+struct RustBenchmark {
+    name: String,
+    source: String,
+    self_extern: bool,
+}
+
+#[derive(Clone, Debug)]
+struct RustPtx {
+    output: String,
+    source: String,
+    feature: String,
+    compile_env: String,
 }
 
 #[derive(Clone, Debug)]
@@ -190,7 +209,9 @@ fn load_workspace() -> Result<Workspace, String> {
     let mut rust_projected_builds = Vec::new();
     let mut rust_host_tests = Vec::new();
     let mut rust_examples = Vec::new();
+    let mut rust_benchmarks = Vec::new();
     let mut rust_binaries = Vec::new();
+    let mut rust_ptx = Vec::new();
     let mut rust_compile_env = Vec::new();
     let mut rust_absent_compile_env = Vec::new();
     let mut rust_feature_sets = Vec::new();
@@ -299,6 +320,34 @@ fn load_workspace() -> Result<Workspace, String> {
                     (*component).to_owned(),
                     (*name).to_owned(),
                     (*source).to_owned(),
+                    "*".to_owned(),
+                    String::new(),
+                ));
+            }
+            ["rust-example", component, name, source, targets, feature] => {
+                rust_examples.push((
+                    (*component).to_owned(),
+                    (*name).to_owned(),
+                    (*source).to_owned(),
+                    (*targets).to_owned(),
+                    (*feature).to_owned(),
+                ));
+            }
+            ["rust-benchmark", component, name, source, self_extern] => {
+                rust_benchmarks.push((
+                    (*component).to_owned(),
+                    (*name).to_owned(),
+                    (*source).to_owned(),
+                    (*self_extern).to_owned(),
+                ));
+            }
+            ["rust-ptx", component, output, source, feature, compile_env] => {
+                rust_ptx.push((
+                    (*component).to_owned(),
+                    (*output).to_owned(),
+                    (*source).to_owned(),
+                    (*feature).to_owned(),
+                    (*compile_env).to_owned(),
                 ));
             }
             [
@@ -450,7 +499,9 @@ fn load_workspace() -> Result<Workspace, String> {
             projected_build_targets: Vec::new(),
             host_test_targets: Vec::new(),
             examples: Vec::new(),
+            benchmarks: Vec::new(),
             binaries: Vec::new(),
+            ptx: None,
             compile_env: Vec::new(),
             absent_compile_env: Vec::new(),
             feature_sets: Vec::new(),
@@ -695,7 +746,7 @@ fn load_workspace() -> Result<Workspace, String> {
             self_extern: self_extern == "true",
         });
     }
-    for (component_id, name, source) in rust_examples {
+    for (component_id, name, source, targets, feature) in rust_examples {
         let component = components
             .iter_mut()
             .find(|component| component.id == component_id)
@@ -706,17 +757,95 @@ fn load_workspace() -> Result<Workspace, String> {
             .rust_action
             .as_mut()
             .ok_or_else(|| format!("RustExampleActionMissing {{ component: {component_id} }}"))?;
+        let targets = if targets == "*" {
+            component.targets.clone()
+        } else {
+            split_declaration(&targets)
+        };
+        let feature = (!feature.is_empty()).then_some(feature);
         if !rust_identifier(&name)
             || !safe_relative_path(&source)
             || !root.join(&source).is_file()
             || !root.join(&source).starts_with(root.join(&component.path))
+            || targets.is_empty()
+            || targets
+                .iter()
+                .any(|target| !component.targets.contains(target))
+            || feature
+                .as_ref()
+                .is_some_and(|feature| !component.features.contains(feature))
             || action.examples.iter().any(|example| example.name == name)
         {
             return Err(format!(
                 "RustExampleDeclarationInvalid {{ component: {component_id}, example: {name} }}"
             ));
         }
-        action.examples.push(RustExample { name, source });
+        action.examples.push(RustExample {
+            name,
+            source,
+            targets,
+            feature,
+        });
+    }
+    for (component_id, name, source, self_extern) in rust_benchmarks {
+        let component = components
+            .iter_mut()
+            .find(|component| component.id == component_id)
+            .ok_or_else(|| {
+                format!("RustBenchmarkComponentMissing {{ component: {component_id} }}")
+            })?;
+        let action = component
+            .rust_action
+            .as_mut()
+            .ok_or_else(|| format!("RustBenchmarkActionMissing {{ component: {component_id} }}"))?;
+        if !rust_identifier(&name)
+            || !safe_relative_path(&source)
+            || !root.join(&source).is_file()
+            || !root.join(&source).starts_with(root.join(&component.path))
+            || !matches!(self_extern.as_str(), "true" | "false")
+            || action
+                .benchmarks
+                .iter()
+                .any(|benchmark| benchmark.name == name)
+        {
+            return Err(format!(
+                "RustBenchmarkDeclarationInvalid {{ component: {component_id}, benchmark: {name} }}"
+            ));
+        }
+        action.benchmarks.push(RustBenchmark {
+            name,
+            source,
+            self_extern: self_extern == "true",
+        });
+    }
+    for (component_id, output, source, feature, compile_env) in rust_ptx {
+        let component = components
+            .iter_mut()
+            .find(|component| component.id == component_id)
+            .ok_or_else(|| format!("RustPtxComponentMissing {{ component: {component_id} }}"))?;
+        let action = component
+            .rust_action
+            .as_mut()
+            .ok_or_else(|| format!("RustPtxActionMissing {{ component: {component_id} }}"))?;
+        if !rust_output_name(&output)
+            || !output.ends_with(".ptx")
+            || !safe_relative_path(&source)
+            || !root.join(&source).is_file()
+            || !root.join(&source).starts_with(root.join(&component.path))
+            || !component.features.contains(&feature)
+            || compile_env != "OUT_DIR"
+            || action.ptx.is_some()
+        {
+            return Err(format!(
+                "RustPtxDeclarationInvalid {{ component: {component_id}, output: {output} }}"
+            ));
+        }
+        action.ptx = Some(RustPtx {
+            output,
+            source,
+            feature,
+            compile_env,
+        });
     }
     for (component_id, output, crate_name, source, self_extern, targets, feature) in rust_binaries {
         let component = components
@@ -810,13 +939,17 @@ fn load_workspace() -> Result<Workspace, String> {
     }
     for component in &components {
         if let Some(action) = &component.rust_action {
-            if action.compile_env.len() + action.absent_compile_env.len()
+            if action.compile_env.len()
+                + action.absent_compile_env.len()
+                + usize::from(action.ptx.is_some())
                 != component.input_policy.compile_env
             {
                 return Err(format!(
                     "RustCompileEnvDrift {{ component: {}, declared: {}, inputs: {} }}",
                     component.id,
-                    action.compile_env.len() + action.absent_compile_env.len(),
+                    action.compile_env.len()
+                        + action.absent_compile_env.len()
+                        + usize::from(action.ptx.is_some()),
                     component.input_policy.compile_env
                 ));
             }
@@ -929,6 +1062,49 @@ fn load_workspace() -> Result<Workspace, String> {
                     component.id,
                     declared_examples.join(","),
                     example_actions.join(",")
+                ));
+            }
+            let mut declared_benchmarks: Vec<_> = component
+                .outputs
+                .iter()
+                .filter_map(|output| output.strip_suffix(":bench"))
+                .collect();
+            let mut benchmark_actions: Vec<_> = action
+                .benchmarks
+                .iter()
+                .map(|benchmark| benchmark.name.as_str())
+                .collect();
+            declared_benchmarks.sort();
+            benchmark_actions.sort();
+            if declared_benchmarks != benchmark_actions {
+                return Err(format!(
+                    "RustBenchmarkOutputDrift {{ component: {}, outputs: {}, benchmarks: {} }}",
+                    component.id,
+                    declared_benchmarks.join(","),
+                    benchmark_actions.join(",")
+                ));
+            }
+            let mut declared_custom_builds: Vec<_> = component
+                .outputs
+                .iter()
+                .filter_map(|output| output.strip_suffix(":custom-build"))
+                .collect();
+            let mut ptx_actions = action
+                .ptx
+                .iter()
+                .map(|_| "build-script-build")
+                .collect::<Vec<_>>();
+            declared_custom_builds.sort();
+            ptx_actions.sort();
+            if declared_custom_builds != ptx_actions
+                || action.ptx.is_some()
+                    && (component.input_policy.build_scripts != 1
+                        || component.input_policy.external_commands != 1
+                        || component.input_policy.included_files != 1)
+            {
+                return Err(format!(
+                    "RustGeneratedOutputDrift {{ component: {} }}",
+                    component.id
                 ));
             }
             let mut declared_binaries: Vec<_> = component
@@ -1063,11 +1239,15 @@ fn rust_extern_active(
     external: &RustExtern,
     action: &RustAction,
     target: &str,
+    compile_target: &str,
     profile: &str,
     test: bool,
 ) -> bool {
     (!external.test_only || test)
-        && external.targets.iter().any(|family| family == target)
+        && external.targets.iter().any(|family| {
+            family == target
+                || compile_target_family(compile_target).is_ok_and(|host| family == host)
+        })
         && external
             .feature
             .as_ref()
@@ -1077,6 +1257,14 @@ fn rust_extern_active(
 fn rust_binary_active(binary: &RustBinary, action: &RustAction, target: &str) -> bool {
     binary.targets.iter().any(|candidate| candidate == target)
         && binary
+            .feature
+            .as_ref()
+            .is_none_or(|feature| rust_features(action, target, "default").contains(feature))
+}
+
+fn rust_example_active(example: &RustExample, action: &RustAction, target: &str) -> bool {
+    example.targets.iter().any(|candidate| candidate == target)
+        && example
             .feature
             .as_ref()
             .is_none_or(|feature| rust_features(action, target, "default").contains(feature))
@@ -1319,7 +1507,11 @@ fn build_or_test(workspace: &Workspace, args: &[String]) -> Result<(), String> {
         };
         emit(mode, operation, component, &target, builder, "START");
         if component.rust_action.is_some() {
-            run_rust_action(workspace, component, operation, &target, release)?;
+            let gpu_arch = args
+                .windows(2)
+                .find(|pair| pair[0] == "--gpu-arch")
+                .map(|pair| pair[1].as_str());
+            run_rust_action(workspace, component, operation, &target, release, gpu_arch)?;
         } else {
             run_cargo_transition(workspace, component, operation, &target, release)?;
         }
@@ -1383,6 +1575,7 @@ fn run_rust_action(
     operation: &str,
     target: &str,
     release: bool,
+    gpu_arch: Option<&str>,
 ) -> Result<(), String> {
     let compile_target = rust_compile_target(
         component
@@ -1391,6 +1584,30 @@ fn run_rust_action(
             .ok_or("NativeActionDisappeared")?,
         target,
     )?;
+    let action = component
+        .rust_action
+        .as_ref()
+        .ok_or("NativeActionDisappeared")?;
+    if let Some(ptx) = action
+        .ptx
+        .as_ref()
+        .filter(|ptx| rust_features(action, target, "default").contains(&ptx.feature))
+    {
+        compile_declared_ptx(
+            workspace,
+            component,
+            ptx,
+            target,
+            &compile_target,
+            release,
+            gpu_arch.ok_or_else(|| {
+                format!(
+                    "MissingTargetMetadata {{ component: {}, target: {target}, required: gpu_arch }}",
+                    component.id
+                )
+            })?,
+        )?;
+    }
     let mut built = BTreeSet::new();
     compile_rust_component(
         workspace,
@@ -1404,10 +1621,6 @@ fn run_rust_action(
         "default",
         &mut built,
     )?;
-    let action = component
-        .rust_action
-        .as_ref()
-        .ok_or("NativeActionDisappeared")?;
     for binary in action
         .binaries
         .iter()
@@ -1427,7 +1640,7 @@ fn run_rust_action(
         )?;
     }
     if operation == "test" {
-        let test_target = if matches!(target, "WINDOWS" | "LINUX") {
+        let test_target = if matches!(target, "WINDOWS" | "LINUX" | "CUDA") {
             target
         } else {
             let host = host_family()?;
@@ -1474,11 +1687,79 @@ fn run_rust_action(
                 },
             )?;
         }
-        for example in &action.examples {
+        for example in action
+            .examples
+            .iter()
+            .filter(|example| rust_example_active(example, action, test_target))
+        {
             compile_declared_example(workspace, component, action, example, test_target, release)?;
+        }
+        for benchmark in &action.benchmarks {
+            compile_declared_benchmark(
+                workspace,
+                component,
+                action,
+                benchmark,
+                test_target,
+                release,
+            )?;
         }
     }
     Ok(())
+}
+
+fn compile_declared_ptx(
+    workspace: &Workspace,
+    component: &Component,
+    ptx: &RustPtx,
+    target: &str,
+    compile_target: &str,
+    release: bool,
+    gpu_arch: &str,
+) -> Result<(), String> {
+    let output_dir = native_output_dir(workspace, target, compile_target, release)?;
+    fs::create_dir_all(&output_dir)
+        .map_err(|error| format!("ArtifactDirectoryError {{ detail: {error} }}"))?;
+    let output = output_dir.join(&ptx.output);
+    if output.is_file() {
+        fs::remove_file(&output)
+            .map_err(|error| format!("ArtifactCleanupError {{ detail: {error} }}"))?;
+    }
+    let rustc = pinned_tool("rustc")?;
+    let status = Command::new(rustc)
+        .current_dir(&workspace.root)
+        .arg(&ptx.source)
+        .args(["--crate-name", "mrml_cuda_ptx"])
+        .args(["--crate-type", "cdylib"])
+        .args(["--edition", "2024"])
+        .args(["--target", "nvptx64-nvidia-cuda"])
+        .arg("-O")
+        .arg("-C")
+        .arg(format!("target-cpu={gpu_arch}"))
+        .args(["-C", "unsafe-allow-abi-mismatch=target-cpu"])
+        .args(["--emit", "asm"])
+        .arg("-o")
+        .arg(&output)
+        .status()
+        .map_err(|error| {
+            format!(
+                "ToolchainUnavailable {{ target: CUDA, required_component: rustc, detail: {error} }}"
+            )
+        })?;
+    if !status.success() || !output.is_file() {
+        return Err(format!(
+            "GeneratedPtxFailed {{ component: {}, gpu_arch: {gpu_arch}, status: {:?} }}",
+            component.id,
+            status.code()
+        ));
+    }
+    Ok(())
+}
+
+fn apply_generated_compile_env(command: &mut Command, action: &RustAction, output_dir: &Path) {
+    if let Some(ptx) = &action.ptx {
+        command.env(&ptx.compile_env, output_dir);
+    }
 }
 
 fn compile_rust_component(
@@ -1507,11 +1788,16 @@ fn compile_rust_component(
             component.id
         )
     })?;
-    for external in action
-        .externs
-        .iter()
-        .filter(|external| rust_extern_active(external, action, target, feature_profile, test))
-    {
+    for external in action.externs.iter().filter(|external| {
+        rust_extern_active(
+            external,
+            action,
+            target,
+            compile_target,
+            feature_profile,
+            test,
+        )
+    }) {
         let dependency = workspace
             .components
             .iter()
@@ -1528,11 +1814,15 @@ fn compile_rust_component(
                 component.id, dependency.id
             )
         })?;
-        if !dependency.targets.iter().any(|family| family == target)
+        let compile_family = compile_target_family(compile_target).ok();
+        if !dependency
+            .targets
+            .iter()
+            .any(|family| family == target || compile_family.is_some_and(|host| family == host))
             && !dependency_action
                 .host_build_targets
                 .iter()
-                .any(|family| family == target)
+                .any(|family| family == target || compile_family.is_some_and(|host| family == host))
             && !dependency_action
                 .projected_build_targets
                 .iter()
@@ -1565,8 +1855,8 @@ fn compile_rust_component(
     let output_dir = native_output_dir(workspace, target, compile_target, release)?;
     fs::create_dir_all(&output_dir)
         .map_err(|error| format!("ArtifactDirectoryError {{ detail: {error} }}"))?;
-    let extension = if test && target == "WINDOWS" {
-        ".exe"
+    let extension = if test {
+        rust_binary_extension(compile_target)
     } else {
         ""
     };
@@ -1602,11 +1892,17 @@ fn compile_rust_component(
         .arg(&output);
     apply_rust_features(&mut command, component, action, target, feature_profile);
     apply_rust_compile_env(&mut command, action);
-    for external in action
-        .externs
-        .iter()
-        .filter(|external| rust_extern_active(external, action, target, feature_profile, test))
-    {
+    apply_generated_compile_env(&mut command, action, &output_dir);
+    for external in action.externs.iter().filter(|external| {
+        rust_extern_active(
+            external,
+            action,
+            target,
+            compile_target,
+            feature_profile,
+            test,
+        )
+    }) {
         let dependency = workspace
             .components
             .iter()
@@ -1632,7 +1928,7 @@ fn compile_rust_component(
     }
     if test {
         command.arg("--test").arg("-Zpanic-abort-tests");
-        apply_test_stack(&mut command, action, target);
+        apply_test_stack(&mut command, action, compile_target);
     }
     apply_rust_compile_target(&mut command, compile_target)?;
     if release {
@@ -1677,7 +1973,7 @@ fn run_declared_test(
 ) -> Result<(), String> {
     let compile_target = default_rust_target(target)?;
     let output_dir = native_output_dir(workspace, target, compile_target, release)?;
-    let extension = if target == "WINDOWS" { ".exe" } else { "" };
+    let extension = rust_binary_extension(compile_target);
     let output = output_dir.join(format!("{}_tests{extension}", test.name));
     let rustc = pinned_tool("rustc")?;
     let mut command = Command::new(rustc);
@@ -1695,6 +1991,7 @@ fn run_declared_test(
         .arg(&output);
     apply_rust_features(&mut command, component, action, target, "default");
     apply_rust_compile_env(&mut command, action);
+    apply_generated_compile_env(&mut command, action, &output_dir);
     if test.self_extern {
         command.arg("--extern").arg(format!(
             "{}={}",
@@ -1710,12 +2007,10 @@ fn run_declared_test(
             .display()
         ));
     }
-    apply_test_stack(&mut command, action, target);
-    for external in action
-        .externs
-        .iter()
-        .filter(|external| rust_extern_active(external, action, target, "default", true))
-    {
+    apply_test_stack(&mut command, action, compile_target);
+    for external in action.externs.iter().filter(|external| {
+        rust_extern_active(external, action, target, compile_target, "default", true)
+    }) {
         let dependency = workspace
             .components
             .iter()
@@ -1739,16 +2034,7 @@ fn run_declared_test(
             .display()
         ));
     }
-    if target == "WINDOWS" {
-        command.args(["-C", "linker=rust-lld", "-C", "target-feature=+crt-static"]);
-    } else if target == "LINUX" {
-        command.args(["--target", "x86_64-unknown-linux-gnu"]);
-    } else {
-        return Err(format!(
-            "RustTestTargetUnsupported {{ component: {}, target: {target} }}",
-            component.id
-        ));
-    }
+    apply_rust_compile_target(&mut command, compile_target)?;
     let status = command
         .status()
         .map_err(|error| format!("TestCompileUnavailable {{ detail: {error} }}"))?;
@@ -1773,7 +2059,7 @@ fn compile_declared_example(
 ) -> Result<(), String> {
     let compile_target = default_rust_target(target)?;
     let output_dir = native_output_dir(workspace, target, compile_target, release)?;
-    let extension = if target == "WINDOWS" { ".exe" } else { "" };
+    let extension = rust_binary_extension(compile_target);
     let output = output_dir.join(format!("{}{extension}", example.name));
     let rustc = pinned_tool("rustc")?;
     let mut command = Command::new(rustc);
@@ -1804,11 +2090,10 @@ fn compile_declared_example(
         .arg(&output);
     apply_rust_features(&mut command, component, action, target, "default");
     apply_rust_compile_env(&mut command, action);
-    for external in action
-        .externs
-        .iter()
-        .filter(|external| rust_extern_active(external, action, target, "default", false))
-    {
+    apply_generated_compile_env(&mut command, action, &output_dir);
+    for external in action.externs.iter().filter(|external| {
+        rust_extern_active(external, action, target, compile_target, "default", false)
+    }) {
         let dependency = workspace
             .components
             .iter()
@@ -1832,16 +2117,7 @@ fn compile_declared_example(
             .display()
         ));
     }
-    if target == "WINDOWS" {
-        command.args(["-C", "linker=rust-lld", "-C", "target-feature=+crt-static"]);
-    } else if target == "LINUX" {
-        command.args(["--target", "x86_64-unknown-linux-gnu"]);
-    } else {
-        return Err(format!(
-            "RustExampleTargetUnsupported {{ component: {}, target: {target} }}",
-            component.id
-        ));
-    }
+    apply_rust_compile_target(&mut command, compile_target)?;
     if release {
         command.args([
             "-C",
@@ -1864,6 +2140,103 @@ fn compile_declared_example(
             "ExampleCompileFailed {{ component: {}, example: {}, status: {:?} }}",
             component.id,
             example.name,
+            status.code()
+        ))
+    }
+}
+
+fn compile_declared_benchmark(
+    workspace: &Workspace,
+    component: &Component,
+    action: &RustAction,
+    benchmark: &RustBenchmark,
+    target: &str,
+    release: bool,
+) -> Result<(), String> {
+    let compile_target = default_rust_target(target)?;
+    let output_dir = native_output_dir(workspace, target, compile_target, release)?;
+    let extension = rust_binary_extension(compile_target);
+    let output = output_dir.join(format!("{}{extension}", benchmark.name));
+    let rustc = pinned_tool("rustc")?;
+    let mut command = Command::new(rustc);
+    command
+        .current_dir(&workspace.root)
+        .args(["--crate-name", &benchmark.name])
+        .args(["--edition", "2024"])
+        .arg(&benchmark.source)
+        .args(["--crate-type", "bin"])
+        .args(["-C", "panic=abort"])
+        .arg("-L")
+        .arg(format!("dependency={}", output_dir.display()))
+        .arg("-o")
+        .arg(&output);
+    apply_rust_features(&mut command, component, action, target, "default");
+    apply_rust_compile_env(&mut command, action);
+    apply_generated_compile_env(&mut command, action, &output_dir);
+    if benchmark.self_extern {
+        command.arg("--extern").arg(format!(
+            "{}={}",
+            action.crate_name,
+            native_artifact(
+                workspace,
+                action,
+                target,
+                compile_target,
+                release,
+                "default",
+            )?
+            .display()
+        ));
+    }
+    for external in action.externs.iter().filter(|external| {
+        rust_extern_active(external, action, target, compile_target, "default", false)
+    }) {
+        let dependency = workspace
+            .components
+            .iter()
+            .find(|candidate| candidate.cargo_package == external.package)
+            .ok_or("NativeDependencyDisappeared")?;
+        let dependency_action = dependency
+            .rust_action
+            .as_ref()
+            .ok_or("NativeDependencyActionDisappeared")?;
+        command.arg("--extern").arg(format!(
+            "{}={}",
+            external.crate_name,
+            native_artifact(
+                workspace,
+                dependency_action,
+                target,
+                compile_target,
+                release,
+                &external.provider_profile,
+            )?
+            .display()
+        ));
+    }
+    apply_rust_compile_target(&mut command, compile_target)?;
+    if release {
+        command.args([
+            "-C",
+            "opt-level=3",
+            "-C",
+            "lto=thin",
+            "-C",
+            "codegen-units=1",
+            "-C",
+            "strip=symbols",
+        ]);
+    }
+    let status = command
+        .status()
+        .map_err(|error| format!("BenchmarkCompileUnavailable {{ detail: {error} }}"))?;
+    if status.success() {
+        Ok(())
+    } else {
+        Err(format!(
+            "BenchmarkCompileFailed {{ component: {}, benchmark: {}, status: {:?} }}",
+            component.id,
+            benchmark.name,
             status.code()
         ))
     }
@@ -1904,12 +2277,13 @@ fn compile_declared_binary(
         .arg(&output);
     if test {
         command.arg("--test").arg("-Zpanic-abort-tests");
-        apply_test_stack(&mut command, action, target);
+        apply_test_stack(&mut command, action, compile_target);
     } else {
         command.args(["--crate-type", "bin"]);
     }
     apply_rust_features(&mut command, component, action, target, "default");
     apply_rust_compile_env(&mut command, action);
+    apply_generated_compile_env(&mut command, action, &output_dir);
     if binary.self_extern {
         command.arg("--extern").arg(format!(
             "{}={}",
@@ -1925,11 +2299,9 @@ fn compile_declared_binary(
             .display()
         ));
     }
-    for external in action
-        .externs
-        .iter()
-        .filter(|external| rust_extern_active(external, action, target, "default", test))
-    {
+    for external in action.externs.iter().filter(|external| {
+        rust_extern_active(external, action, target, compile_target, "default", test)
+    }) {
         let dependency = workspace
             .components
             .iter()
@@ -2051,11 +2423,11 @@ fn configure_test_process_stack(
     Ok(())
 }
 
-fn apply_test_stack(command: &mut Command, action: &RustAction, target: &str) {
+fn apply_test_stack(command: &mut Command, action: &RustAction, compile_target: &str) {
     if let Some(bytes) = action.test_stack_bytes {
-        if target == "WINDOWS" {
+        if compile_target == "x86_64-pc-windows-gnullvm" {
             command.arg("-C").arg(format!("link-arg=/STACK:{bytes}"));
-        } else if target == "LINUX" {
+        } else if compile_target == "x86_64-unknown-linux-gnu" {
             command
                 .arg("-C")
                 .arg(format!("link-arg=-Wl,-z,stack-size={bytes}"));
@@ -2069,8 +2441,20 @@ fn default_rust_target(target: &str) -> Result<&'static str, String> {
         "LINUX" => Ok("x86_64-unknown-linux-gnu"),
         "MRML_NATIVE" => Ok("x86_64-unknown-none"),
         "UEFI" => Ok("x86_64-unknown-uefi"),
+        "CUDA" if cfg!(target_os = "windows") => Ok("x86_64-pc-windows-gnullvm"),
+        "CUDA" if cfg!(target_os = "linux") => Ok("x86_64-unknown-linux-gnu"),
         _ => Err(format!(
             "RustActionTargetUnsupported {{ target: {target} }}"
+        )),
+    }
+}
+
+fn compile_target_family(compile_target: &str) -> Result<&'static str, String> {
+    match compile_target {
+        "x86_64-pc-windows-gnullvm" => Ok("WINDOWS"),
+        "x86_64-unknown-linux-gnu" => Ok("LINUX"),
+        other => Err(format!(
+            "RustCompileHostFamilyUnavailable {{ target: {other} }}"
         )),
     }
 }
@@ -2146,7 +2530,7 @@ fn native_output_dir(
     compile_target: &str,
     release: bool,
 ) -> Result<PathBuf, String> {
-    let target_directory = if compile_target == default_rust_target(target)? {
+    let target_directory = if target != "CUDA" && compile_target == default_rust_target(target)? {
         target.to_ascii_lowercase()
     } else {
         format!("{}-{compile_target}", target.to_ascii_lowercase())
@@ -2218,10 +2602,19 @@ fn check_cuda(args: &[String]) -> Result<(), String> {
             "ToolchainUnavailable { target: CUDA, required_component: nvptx64-nvidia-cuda }".into(),
         );
     }
-    if !gpu_arch.starts_with("sm_") && !gpu_arch.starts_with("compute_") {
+    if !valid_gpu_architecture(gpu_arch) {
         return Err(format!("InvalidGpuArchitecture {{ value: {gpu_arch} }}"));
     }
     Ok(())
+}
+
+fn valid_gpu_architecture(value: &str) -> bool {
+    let digits = value
+        .strip_prefix("sm_")
+        .or_else(|| value.strip_prefix("compute_"));
+    digits.is_some_and(|digits| {
+        (2..=3).contains(&digits.len()) && digits.bytes().all(|byte| byte.is_ascii_digit())
+    })
 }
 
 fn emit(
@@ -2781,11 +3174,23 @@ mod tests {
         assert_eq!(rust_binary_extension("x86_64-unknown-uefi"), ".efi");
         assert_eq!(rust_binary_extension("x86_64-unknown-linux-gnu"), "");
         assert_eq!(default_rust_target("UEFI").unwrap(), "x86_64-unknown-uefi");
+        let cuda_target = default_rust_target("CUDA").unwrap();
+        assert_eq!(
+            native_output_dir(&workspace(Vec::new()), "CUDA", cuda_target, false).unwrap(),
+            PathBuf::from("target")
+                .join("mrml")
+                .join(format!("cuda-{cuda_target}"))
+                .join("debug")
+        );
         let crypto = component("mrml-crypto", &[]);
         assert_ne!(
             rust_metadata_discriminator(&crypto, "WINDOWS", "x86_64-pc-windows-gnullvm", "default"),
             rust_metadata_discriminator(&crypto, "WINDOWS", "x86_64-pc-windows-gnullvm", "core")
         );
+        assert!(valid_gpu_architecture("sm_120"));
+        assert!(valid_gpu_architecture("compute_90"));
+        assert!(!valid_gpu_architecture("sm_120;other"));
+        assert!(!valid_gpu_architecture("sm_"));
     }
     #[test]
     fn rust_externs_are_target_scoped_and_unique() {

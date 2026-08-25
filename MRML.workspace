@@ -1,7 +1,7 @@
 # MRML native workspace graph v3. Cargo fields are a temporary stage-zero bridge.
 version|3
 # id|path|cargo-package|class|targets|default|dependencies|features|outputs|input-policy
-component|org.mrml.tool.build|tools/mrml|mrml|BOOTSTRAP_ONLY|WINDOWS,LINUX|true|||mrml:bin|build-script:0,proc-macro:0,native-link:0,compile-env:0,included-file:0,external-command:9
+component|org.mrml.tool.build|tools/mrml|mrml|BOOTSTRAP_ONLY|WINDOWS,LINUX|true|||mrml:bin|build-script:0,proc-macro:0,native-link:0,compile-env:0,included-file:0,external-command:11
 component|org.mrml.compiler.core|compiler/core|mrml-rustc|COMPILER|WINDOWS,LINUX|true|||conformance:test,mrml_rustc:lib,rustc_nightly_replacements:test|build-script:0,proc-macro:0,native-link:0,compile-env:0,included-file:0,external-command:0
 component|org.mrml.compiler.driver|compiler/driver|mrml-rustc-driver|COMPILER|WINDOWS,LINUX|true|mrml-error,mrml-runtime,mrml-rustc||mrml-rustc:bin|build-script:0,proc-macro:0,native-link:0,compile-env:0,included-file:0,external-command:0
 component|org.mrml.system.kernel|system/kernel|mrml-kernel|MRML_NATIVE|MRML_NATIVE|true|mrml-crypto||mrml_kernel:lib|build-script:0,proc-macro:0,native-link:0,compile-env:0,included-file:0,external-command:0
@@ -136,3 +136,21 @@ rust-action|org.mrml.tool.sign|mrml_sign_action|none|-|mrml-crypto=mrml_crypto@*
 rust-binary|org.mrml.tool.sign|mrml-sign|mrml_sign|tools/sign/src/main.rs|false
 rust-action|org.mrml.system.vmm-kvm|mrml_kvm|lib|system/vmm/kvm/src/lib.rs|mrml-crypto=mrml_crypto@*#core!test;mrml-kernel=mrml_kernel@*;mrml-runtime=mrml_runtime@*
 rust-action|org.mrml.system.vmm-whp|mrml_whp|lib|system/vmm/whp/src/lib.rs|mrml-crypto=mrml_crypto@*#core!test;mrml-kernel=mrml_kernel@*;mrml-runtime=mrml_runtime@*
+rust-action|org.mrml.library.tensor|mrml_tensor|lib|packages/gpu/tensor/src/lib.rs|mrml-kernel=mrml_kernel@CUDA?cuda;mrml-linux=mrml_linux@LINUX?runtime;mrml-math=mrml_math@*;mrml-runtime=mrml_runtime@*?runtime;mrml-windows=mrml_windows@WINDOWS?runtime
+rust-feature-set|org.mrml.library.tensor|WINDOWS,LINUX|runtime
+rust-feature-set|org.mrml.library.tensor|CUDA|cuda,runtime
+rust-host-tests|org.mrml.library.tensor|WINDOWS,LINUX
+rust-test-policy|org.mrml.library.tensor|67108864
+rust-test|org.mrml.library.tensor|device_test|packages/gpu/tensor/tests/device_test.rs|true
+rust-test|org.mrml.library.tensor|kv_cache_test|packages/gpu/tensor/tests/kv_cache_test.rs|true
+rust-test|org.mrml.library.tensor|model_test|packages/gpu/tensor/tests/model_test.rs|true
+rust-test|org.mrml.library.tensor|ops_test|packages/gpu/tensor/tests/ops_test.rs|true
+rust-test|org.mrml.library.tensor|quant_k_test|packages/gpu/tensor/tests/quant_k_test.rs|true
+rust-test|org.mrml.library.tensor|quant_test|packages/gpu/tensor/tests/quant_test.rs|true
+rust-test|org.mrml.library.tensor|speculative_test|packages/gpu/tensor/tests/speculative_test.rs|true
+rust-example|org.mrml.library.tensor|cuda_prefill_primitives|packages/gpu/tensor/examples/cuda_prefill_primitives.rs|CUDA|cuda
+rust-example|org.mrml.library.tensor|cuda_rust_compare|packages/gpu/tensor/examples/cuda_rust_compare.rs|CUDA|cuda
+rust-example|org.mrml.library.tensor|gguf_inspect|packages/gpu/tensor/examples/gguf_inspect.rs|WINDOWS,LINUX|
+rust-example|org.mrml.library.tensor|prefill_model_check|packages/gpu/tensor/examples/prefill_model_check.rs|WINDOWS,LINUX|
+rust-benchmark|org.mrml.library.tensor|hot_paths|packages/gpu/tensor/benches/hot_paths.rs|true
+rust-ptx|org.mrml.library.tensor|rust_cuda_kernels.ptx|packages/gpu/tensor/cuda_ptx/kernels.rs|cuda|OUT_DIR

@@ -292,6 +292,16 @@ does not build or run this Windows-only component. Thirty-two of 42 components
 are native; 10 remain transitional. This is not VTL1, TPM, IOMMU, bare-metal, or
 physical-hardware evidence.
 
+Tensor now replaces its Cargo-only custom build execution with a declared PTX
+sub-action. It validates the required GPU architecture, invokes the pinned
+nvptx rustc with fixed arguments, supplies the exact generated `OUT_DIR`, keeps
+CUDA host artifacts separate by ABI triple, and accounts for every test,
+example, and benchmark output. Windows gnullvm and Arch Linux WSL2 each match
+Cargo's 43-test CUDA baseline, run the focused CUDA prefill probe, and emit the
+same `sm_120` PTX hash. Thirty-three of 42 components are native; nine remain
+transitional. This is controlled CUDA driver/device evidence, not proof of
+physical GPU topology, passthrough isolation, or native MRML GPU execution.
+
 `mrml-zstd` is the fourth migrated leaf; its Wikipedia edge and patent-review
 source path now resolve to `packages/libraries/zstd` without changing codec
 behavior.

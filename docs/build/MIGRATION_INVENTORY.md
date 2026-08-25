@@ -717,8 +717,10 @@ second inventory.
 - Every component still has Cargo dependency metadata, but no tracked component
   remains beneath generic `crates/`. The root Cargo workspace still contains
   every component so the bridge resolves today's exact graph.
-- `packages/gpu/tensor/build.rs` invokes rustc for CUDA PTX and is the one current
-  build script. It must become an explicit structured build action.
+- `packages/gpu/tensor/build.rs` remains only for Cargo comparison while that
+  bridge exists. The native graph now replaces its behavior with an explicit
+  structured PTX action; final Cargo removal can delete the legacy script after
+  dependent native nodes and clean-source bootstrap are complete.
 - Dependency, feature, output, and source-input facts are persisted and fail
   closed on Cargo metadata or lexical-audit drift. Lexical discovery still
   cannot prove that arbitrary macro expansion introduces no additional input.
@@ -728,7 +730,7 @@ second inventory.
   explicit, native example outputs are checked and compiled, and exact feature
   sets can gate optional target-specific externs. Exact binary outputs, binary
   test harnesses, compile-time environment values, and bin-only actions are
-  explicit. Thirty-two
+  explicit. Thirty-three
   components now have native actions. Direct-rustc expansion still needs
   lock/digest validation and the remaining non-library actions before
   Cargo can be removed behind the remaining nodes.
@@ -813,6 +815,43 @@ exact Linux toolchain passes frontend tests, Clippy, doctor, and audit while
 correctly omitting the Windows-only action. Thirty-two components are native
 and 10 remain transitional. This establishes hosted WHP API and mapping
 execution only, not VTL1, TPM, IOMMU, bare-metal, or physical-hardware evidence.
+
+Tensor closes the remaining custom-build execution gap with a structured native
+PTX action. It binds the exact kernel source, output name, generated `OUT_DIR`,
+`cuda` feature, nvptx target, optimization, ABI-mismatch flag, and required
+command-line GPU architecture. Tests, feature-gated examples, and the harness-
+free benchmark are now exact native declarations, and semantic CUDA artifacts
+are isolated by Windows/Linux host ABI triple. With both exact dated toolchains:
+
+- frontend tests, strict Clippy, doctor, and audit pass;
+- native portable tensor builds and all 29 portable tests pass;
+- native and Cargo CUDA-enabled suites each pass all 43 tests;
+- both native CUDA paths compile the two CUDA-only examples and execute the
+  focused prefill-primitives probe through their available CUDA device path;
+- Windows and Linux emit byte-identical `sm_120` PTX with SHA-256
+  `83ad662cd1f6cb6f7736ddb817da1d12fa022394fa0bf415152c302e8e09c920`.
+
+Thirty-three components are native and nine remain transitional. The evidence
+covers hosted Windows and WSL2 CUDA driver/device execution; it does not prove
+physical GPU topology, passthrough isolation, native MRML GPU execution, or
+production model correctness.
+
+Engineering Constitution record:
+
+```text
+Complexity impact: MEDIUM
+TCB impact: NONE
+New parser boundary: YES
+New authority model: NO
+New persistent state: NO
+External dependency: NO
+Failure isolated: YES
+Existing-object reuse: HIGH
+```
+
+The bounded extension reuses the existing fail-closed workspace parser and
+reuses the pinned compiler, native graph, feature model, artifact directory, and
+test runner. Generated artifacts carry no runtime authority.
 
 Service-image requires a different compiler ABI from the default semantic
 family: it is an MRML native service payload stored as PE, so its exact target is
