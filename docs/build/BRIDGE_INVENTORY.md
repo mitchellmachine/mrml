@@ -150,6 +150,13 @@ A Windows probe poisoning all 21 declared absent inputs leaves the loader hash
 unchanged. Twenty-nine components are native; 13 remain transitional. No TPM or
 firmware hardware was exercised.
 
+Profile-qualified artifacts now also receive stable distinct rustc metadata.
+That closes the mixed-profile identity gap exposed when `mrml-sign` linked
+host-default crypto directly and crypto-core transitively through kernel. The
+signing binary builds and passes all eight temporary-file tests on Windows and
+Arch Linux WSL2. Thirty components are native; 12 remain transitional. No real
+key or signing deployment was touched.
+
 Native actions now bind one exact feature set and may gate an extern by both
 target family and selected feature. `mrml-av1` declares the empty default set,
 so its `nvidia` platform extern is inactive while `mrml-runtime` remains active.

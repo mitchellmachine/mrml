@@ -728,7 +728,7 @@ second inventory.
   explicit, native example outputs are checked and compiled, and exact feature
   sets can gate optional target-specific externs. Exact binary outputs, binary
   test harnesses, compile-time environment values, and bin-only actions are
-  explicit. Twenty-nine
+  explicit. Thirty
   components now have native actions. Direct-rustc expansion still needs
   lock/digest validation and the remaining non-library actions before
   Cargo can be removed behind the remaining nodes.
@@ -785,6 +785,14 @@ on both exact dated hosts and passes all 24 projected library/TPM simulation
 tests per host. On Windows, poisoning all 21 absent compile inputs leaves the
 loader hash unchanged. Twenty-nine components are native and 13 remain
 transitional. No firmware, TPM, Secure Boot, or physical hardware ran.
+
+Profile separation now includes a stable rustc metadata discriminator in
+addition to cache identity and filenames. The signing tool exposed this gate by
+depending on host-default crypto directly and crypto-core through kernel. With
+that corrected, both exact dated host toolchains build `mrml-sign` and pass all
+eight temporary-file tests. Thirty components are native and 12 remain
+transitional. No live key, Secure Boot enrollment, firmware, or hardware signing
+operation occurred.
 
 Service-image requires a different compiler ABI from the default semantic
 family: it is an MRML native service payload stored as PE, so its exact target is

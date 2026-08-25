@@ -1583,6 +1583,11 @@ fn compile_rust_component(
         .arg(&action.source)
         .args(["--crate-type", &action.crate_type])
         .args(["-C", "panic=abort"])
+        .arg("-C")
+        .arg(format!(
+            "metadata={}",
+            rust_metadata_discriminator(component, target, compile_target, feature_profile)
+        ))
         .arg("-L")
         .arg(format!("dependency={}", output_dir.display()))
         .arg("-o")
@@ -2104,6 +2109,27 @@ fn rust_binary_extension(compile_target: &str) -> &'static str {
         "x86_64-unknown-uefi" => ".efi",
         _ => "",
     }
+}
+
+fn rust_metadata_discriminator(
+    component: &Component,
+    target: &str,
+    compile_target: &str,
+    feature_profile: &str,
+) -> String {
+    let mut hash = 0xcbf2_9ce4_8422_2325_u64;
+    for field in [
+        component.id.as_str(),
+        target,
+        compile_target,
+        feature_profile,
+    ] {
+        for byte in field.bytes().chain(core::iter::once(0xff)) {
+            hash ^= u64::from(byte);
+            hash = hash.wrapping_mul(0x100_0000_01b3);
+        }
+    }
+    format!("mrml_{hash:016x}")
 }
 
 fn native_output_dir(
@@ -2747,6 +2773,11 @@ mod tests {
         assert_eq!(rust_binary_extension("x86_64-unknown-uefi"), ".efi");
         assert_eq!(rust_binary_extension("x86_64-unknown-linux-gnu"), "");
         assert_eq!(default_rust_target("UEFI").unwrap(), "x86_64-unknown-uefi");
+        let crypto = component("mrml-crypto", &[]);
+        assert_ne!(
+            rust_metadata_discriminator(&crypto, "WINDOWS", "x86_64-pc-windows-gnullvm", "default"),
+            rust_metadata_discriminator(&crypto, "WINDOWS", "x86_64-pc-windows-gnullvm", "core")
+        );
     }
     #[test]
     fn rust_externs_are_target_scoped_and_unique() {

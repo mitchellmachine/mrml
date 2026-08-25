@@ -410,6 +410,13 @@ probe confirms all 21 absent inputs leave the loader hash unchanged. Twenty-nine
 components are native and 13 remain transitional; no TPM, firmware, or physical
 hardware ran.
 
+Feature-profile identity now reaches rustc metadata as well as filenames and
+cache keys, allowing one graph to contain crypto-core through kernel and
+host-default crypto directly without crate ambiguity. `mrml-sign` uses that
+mixed graph, builds on both hosts, and passes all eight temporary-file tests.
+Thirty components are native and 12 remain transitional. No live signing key,
+Secure Boot enrollment, firmware, or hardware was used.
+
 MRML uses Rust 2024 and the exact `nightly-2026-08-24` build toolchain pinned in
 `rust-toolchain.toml`. It is also the current `mrml-rustc` behavioral reference
 recorded as [ORACLE-0002](docs/compiler/oracles/ORACLE-0002.md); a floating

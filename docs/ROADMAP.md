@@ -267,6 +267,13 @@ PE32+ EFI application; a Windows poisoned-environment probe leaves the hash
 unchanged across all 21 absent inputs. Twenty-nine of 42 components are native;
 13 remain transitional. Tests use simulated TPM transports, not TPM hardware.
 
+Native profile identity now includes a stable rustc metadata discriminator, not
+only the artifact filename and build key. This permits the signing tool's direct
+host-default crypto dependency to coexist with kernel's crypto-core dependency.
+`mrml-sign` builds and passes eight temporary-file tests on both hosts. Thirty of
+42 components are native; 12 remain transitional. No live key, enrollment,
+firmware, or hardware signing operation occurred.
+
 `mrml-zstd` is the fourth migrated leaf; its Wikipedia edge and patent-review
 source path now resolve to `packages/libraries/zstd` without changing codec
 behavior.

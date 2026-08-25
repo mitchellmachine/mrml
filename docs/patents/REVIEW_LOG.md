@@ -3208,3 +3208,14 @@ leaving loader, TPM, and boot-security mechanisms unchanged. It establishes
 neither clearance nor infringement; material release resolver/cache mechanisms
 remain subject to the recorded worldwide authoritative-register review. Agent
 review does not replace independent human dual review.
+
+# 2026-08-25 — Rustc profile metadata identity and native signing tool
+
+**Result: TRIGGERED.** The native resolver now gives each target/profile graph a
+stable distinct rustc metadata discriminator, closing ambiguity between two
+feature profiles of one crate. This extends the package/cache/resolver risk area
+and applies it to the unchanged signing tool; no cryptographic or signing
+mechanism changed. It establishes neither clearance nor infringement. Material
+release resolver/cache mechanisms remain subject to the recorded worldwide
+authoritative-register review, and agent review does not replace independent
+human dual review.

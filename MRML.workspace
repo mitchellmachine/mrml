@@ -132,3 +132,5 @@ rust-compile-env-absent|org.mrml.library.uefi|MRML_REQUIRE_TPM
 rust-compile-env-absent|org.mrml.library.uefi|MRML_SERVICE_MIN_VERSION
 rust-compile-env-absent|org.mrml.library.uefi|MRML_SERVICE_ROOT_DIGEST_HEX
 rust-compile-env-absent|org.mrml.library.uefi|MRML_TPM_NV_INDEX_HEX
+rust-action|org.mrml.tool.sign|mrml_sign_action|none|-|mrml-crypto=mrml_crypto@*;mrml-error=mrml_error@*;mrml-kernel=mrml_kernel@*;mrml-runtime=mrml_runtime@*
+rust-binary|org.mrml.tool.sign|mrml-sign|mrml_sign|tools/sign/src/main.rs|false
