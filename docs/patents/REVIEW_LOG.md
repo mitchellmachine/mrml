@@ -37,6 +37,10 @@ changing its implementation or public behavior and improves discovery of
 conditional native-link attributes. **Result: NOT_TRIGGERED.** Repository path
 organization and lexical audit correction introduce no new technical mechanism.
 
+The second semantic move relocates `mrml-percent-encoding` and updates its exact
+runtime and tools paths without changing implementation or behavior. **Result:
+NOT_TRIGGERED.** This is repository organization, not a new encoding mechanism.
+
 ## 2026-08-25 — Deployment, package, image, installer, and shell architecture
 
 **Result: TRIGGERED.** The documentation composes package/image containers,

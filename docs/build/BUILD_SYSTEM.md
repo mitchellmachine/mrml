@@ -100,8 +100,8 @@ dependency compilation; Cargo package identity is not MRML identity. Every
 existing component is classified `MRML_NATIVE`, `HOST_WINDOWS_LINUX`, `COMPILER`,
 `UEFI`, `GPU`, `TEST`, `SHARED`, or `BOOTSTRAP_ONLY`. The generic `crates/`
 layout remains transitional and moves only after `mrml` graph/path parity is
-verified. The first dependency-free leaf, `mrml-math`, now lives at
-`packages/libraries/math`; further semantic component homes belong under
+verified. The first two leaves, `mrml-math` and `mrml-percent-encoding`, now live
+under `packages/libraries/`; further semantic component homes belong under
 `packages/`, with the
 bootstrap tool under `tools/mrml` and compiler tooling under a clear compiler
 location. Do not create empty speculative directories.
