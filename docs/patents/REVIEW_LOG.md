@@ -93,6 +93,11 @@ updates both inbound Cargo paths without changing HTTP/HTTPS behavior.
 **Result: NOT_TRIGGERED.** This is repository organization, not a new protocol
 mechanism.
 
+The fifteenth semantic move relocates `mrml-ssh` after crypto/runtime and
+updates its Git consumer without changing SSH or signing behavior. **Result:
+NOT_TRIGGERED.** This is repository organization, not a new protocol or
+cryptographic mechanism.
+
 ## 2026-08-25 — Deployment, package, image, installer, and shell architecture
 
 **Result: TRIGGERED.** The documentation composes package/image containers,

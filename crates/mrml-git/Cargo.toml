@@ -13,5 +13,5 @@ path = "src/main.rs"
 [dependencies]
 mrml-error = { path = "../mrml-error" }
 mrml-runtime = { path = "../../packages/libraries/runtime" }
-mrml-ssh = { path = "../mrml-ssh" }
+mrml-ssh = { path = "../../packages/libraries/ssh" }
 mrml-terminal-style = { path = "../mrml-terminal-style" }

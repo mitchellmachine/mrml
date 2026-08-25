@@ -183,6 +183,10 @@ semantic home without changing protocol behavior.
 edges are sibling semantic-package references and both consumers resolve to its
 semantic home without changing HTTP/HTTPS behavior.
 
+`mrml-ssh` is the fifteenth migrated library component; its crypto/runtime
+edges are sibling semantic-package references and its Git consumer resolves to
+the semantic SSH home without changing protocol or signing behavior.
+
 The independently scoped compiler lane follows
 [COMPILER.md](COMPILER.md), not an arbitrary historical-rustc coverage target.
 Rust 2024 is the floor. Preserve and stabilize the existing bounded semantics,

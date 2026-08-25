@@ -7,5 +7,5 @@ license.workspace = true
 description = "Dependency-free SSH remote and signing support for MRML"
 
 [dependencies]
-mrml-crypto = { path = "../../packages/libraries/crypto" }
-mrml-runtime = { path = "../../packages/libraries/runtime" }
+mrml-crypto = { path = "../crypto" }
+mrml-runtime = { path = "../runtime" }
