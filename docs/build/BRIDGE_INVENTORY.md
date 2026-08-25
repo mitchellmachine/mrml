@@ -29,7 +29,7 @@ The 2026-08-25 Windows gnullvm result is:
 9 native-link source sites
 31 compile-time environment source sites
 1 included-file source site
-46 external-command source sites
+47 external-command source sites
 ```
 
 The structured output emits every native component, dependency list, feature
@@ -85,6 +85,14 @@ and checked against the declared `:test` outputs. A bounded 32 MiB test-stack
 policy is linked on Windows and applied to the Linux child process limit before
 exec. Both hosts pass 420 inline, 10 conformance, and 335 nightly-replacement
 tests. Thirteen components are native; 29 remain transitional.
+
+Native example outputs are now explicit and checked against every declared
+`:example` output. `mrml-opus` directly builds its library, runs 179 inline
+tests, and links all three examples on Windows and Arch Linux WSL2. The Linux
+C-reference differential example requires the distribution's `opus` package;
+the first run failed closed when `-lopus` was absent and passed after the explicit
+test dependency was installed. Fourteen components are native; 28 remain
+transitional.
 
 Patent review: `TRIGGERED`. This increment implements the first native dependency
 resolver, within the package/cache/resolver review already recorded in

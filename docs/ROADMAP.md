@@ -163,6 +163,9 @@ both integration targets run directly with an explicit bounded test stack.
 Windows and Arch Linux WSL2 each pass 765 compiler-core tests. Thirteen of 42
 components are native; 29 remain transitional.
 
+Native example outputs are now exact. `mrml-opus` passes 179 tests and links all
+three declared examples on both hosts, bringing the native count to 14 of 42.
+
 `mrml-zstd` is the fourth migrated leaf; its Wikipedia edge and patent-review
 source path now resolve to `packages/libraries/zstd` without changing codec
 behavior.

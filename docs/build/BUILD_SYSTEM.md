@@ -158,6 +158,14 @@ Windows and Arch Linux WSL2 each pass 420 inline tests, 10 conformance tests, an
 before exec so panic-abort child tests inherit it; Windows records the same stack
 in linker metadata.
 
+Native actions also declare example source/output pairs. Test mode compiles each
+example as its real binary crate and fails if example declarations drift from
+the component's `:example` outputs. `mrml-opus` uses this path for
+`inspect_range`, `opus_range_diff`, and `rfc8251_audit`; both hosts pass 179
+inline tests and link all three examples. Native-library requirements such as
+the differential example's system `libopus` remain explicit host prerequisites,
+not silently skipped outputs.
+
 Rust crate identity, MRML package identity, and stable MRML interface identity
 are distinct. The runtime component model is specified in
 [../packages/COMPONENT_INTERFACES.md](../packages/COMPONENT_INTERFACES.md).

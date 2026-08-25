@@ -32,6 +32,7 @@ struct RustAction {
     externs: Vec<RustExtern>,
     tests: Vec<RustTest>,
     test_stack_bytes: Option<usize>,
+    examples: Vec<RustExample>,
 }
 
 #[derive(Clone, Debug)]
@@ -46,6 +47,12 @@ struct RustTest {
     name: String,
     source: String,
     self_extern: bool,
+}
+
+#[derive(Clone, Debug)]
+struct RustExample {
+    name: String,
+    source: String,
 }
 
 #[derive(Debug)]
@@ -130,6 +137,7 @@ fn load_workspace() -> Result<Workspace, String> {
     let mut rust_actions = Vec::new();
     let mut rust_tests = Vec::new();
     let mut rust_test_policies = Vec::new();
+    let mut rust_examples = Vec::new();
     for (index, raw) in text.lines().enumerate() {
         let line = raw.trim();
         if line.is_empty() || line.starts_with('#') {
@@ -219,6 +227,13 @@ fn load_workspace() -> Result<Workspace, String> {
             ["rust-test-policy", component, stack_bytes] => {
                 rust_test_policies.push(((*component).to_owned(), (*stack_bytes).to_owned()));
             }
+            ["rust-example", component, name, source] => {
+                rust_examples.push((
+                    (*component).to_owned(),
+                    (*name).to_owned(),
+                    (*source).to_owned(),
+                ));
+            }
             _ => return Err(format!("WorkspaceSyntaxError {{ line: {} }}", index + 1)),
         }
     }
@@ -273,6 +288,7 @@ fn load_workspace() -> Result<Workspace, String> {
             externs,
             tests: Vec::new(),
             test_stack_bytes: None,
+            examples: Vec::new(),
         });
     }
     for (component_id, stack_bytes) in rust_test_policies {
@@ -322,6 +338,29 @@ fn load_workspace() -> Result<Workspace, String> {
             self_extern: self_extern == "true",
         });
     }
+    for (component_id, name, source) in rust_examples {
+        let component = components
+            .iter_mut()
+            .find(|component| component.id == component_id)
+            .ok_or_else(|| {
+                format!("RustExampleComponentMissing {{ component: {component_id} }}")
+            })?;
+        let action = component
+            .rust_action
+            .as_mut()
+            .ok_or_else(|| format!("RustExampleActionMissing {{ component: {component_id} }}"))?;
+        if !rust_identifier(&name)
+            || !safe_relative_path(&source)
+            || !root.join(&source).is_file()
+            || !root.join(&source).starts_with(root.join(&component.path))
+            || action.examples.iter().any(|example| example.name == name)
+        {
+            return Err(format!(
+                "RustExampleDeclarationInvalid {{ component: {component_id}, example: {name} }}"
+            ));
+        }
+        action.examples.push(RustExample { name, source });
+    }
     for component in &components {
         if let Some(action) = &component.rust_action {
             let mut declared: Vec<_> = component
@@ -338,6 +377,26 @@ fn load_workspace() -> Result<Workspace, String> {
                     component.id,
                     declared.join(","),
                     actions.join(",")
+                ));
+            }
+            let mut declared_examples: Vec<_> = component
+                .outputs
+                .iter()
+                .filter_map(|output| output.strip_suffix(":example"))
+                .collect();
+            let mut example_actions: Vec<_> = action
+                .examples
+                .iter()
+                .map(|example| example.name.as_str())
+                .collect();
+            declared_examples.sort();
+            example_actions.sort();
+            if declared_examples != example_actions {
+                return Err(format!(
+                    "RustExampleOutputDrift {{ component: {}, outputs: {}, examples: {} }}",
+                    component.id,
+                    declared_examples.join(","),
+                    example_actions.join(",")
                 ));
             }
         }
@@ -670,6 +729,9 @@ fn run_rust_action(
         for test in &action.tests {
             run_declared_test(workspace, component, action, test, target, release)?;
         }
+        for example in &action.examples {
+            compile_declared_example(workspace, component, action, example, target, release)?;
+        }
     }
     Ok(())
 }
@@ -893,6 +955,98 @@ fn run_declared_test(
         ));
     }
     execute_test(&output, component, action.test_stack_bytes)
+}
+
+fn compile_declared_example(
+    workspace: &Workspace,
+    component: &Component,
+    action: &RustAction,
+    example: &RustExample,
+    target: &str,
+    release: bool,
+) -> Result<(), String> {
+    let output_dir = workspace
+        .root
+        .join("target")
+        .join("mrml")
+        .join(target.to_ascii_lowercase())
+        .join(if release { "release" } else { "debug" });
+    let extension = if target == "WINDOWS" { ".exe" } else { "" };
+    let output = output_dir.join(format!("{}{extension}", example.name));
+    let rustc = pinned_tool("rustc")?;
+    let mut command = Command::new(rustc);
+    command
+        .current_dir(&workspace.root)
+        .args(["--crate-name", &example.name])
+        .args(["--edition", "2024"])
+        .arg(&example.source)
+        .args(["--crate-type", "bin"])
+        .args(["-C", "panic=abort"])
+        .arg("-L")
+        .arg(format!("dependency={}", output_dir.display()))
+        .arg("--extern")
+        .arg(format!(
+            "{}={}",
+            action.crate_name,
+            native_artifact(workspace, action, target, release).display()
+        ))
+        .arg("-o")
+        .arg(&output);
+    for external in action
+        .externs
+        .iter()
+        .filter(|external| external.targets.iter().any(|family| family == target))
+    {
+        let dependency = workspace
+            .components
+            .iter()
+            .find(|candidate| candidate.cargo_package == external.package)
+            .ok_or("NativeDependencyDisappeared")?;
+        let dependency_action = dependency
+            .rust_action
+            .as_ref()
+            .ok_or("NativeDependencyActionDisappeared")?;
+        command.arg("--extern").arg(format!(
+            "{}={}",
+            external.crate_name,
+            native_artifact(workspace, dependency_action, target, release).display()
+        ));
+    }
+    if target == "WINDOWS" {
+        command.args(["-C", "linker=rust-lld", "-C", "target-feature=+crt-static"]);
+    } else if target == "LINUX" {
+        command.args(["--target", "x86_64-unknown-linux-gnu"]);
+    } else {
+        return Err(format!(
+            "RustExampleTargetUnsupported {{ component: {}, target: {target} }}",
+            component.id
+        ));
+    }
+    if release {
+        command.args([
+            "-C",
+            "opt-level=3",
+            "-C",
+            "lto=thin",
+            "-C",
+            "codegen-units=1",
+            "-C",
+            "strip=symbols",
+        ]);
+    }
+    let status = command
+        .status()
+        .map_err(|error| format!("ExampleCompileUnavailable {{ detail: {error} }}"))?;
+    if status.success() {
+        Ok(())
+    } else {
+        Err(format!(
+            "ExampleCompileFailed {{ component: {}, example: {}, status: {:?} }}",
+            component.id,
+            example.name,
+            status.code()
+        ))
+    }
 }
 
 fn execute_test(

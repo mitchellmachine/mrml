@@ -49,6 +49,11 @@ toolchains:
   420 + 10 + 335 tests. The declared 32 MiB stack is applied before exec; an
   earlier ELF-metadata-only attempt failed 29 stack-heavy tests and is not
   counted as parity evidence.
+- Windows GNU/LLVM: direct `mrml-opus` build, 179 inline tests, and three example
+  links — PASS;
+- Arch Linux WSL2: the same Opus action — PASS after installing the explicit
+  distribution `opus` test dependency. The initial `-lopus` absence failed
+  closed and is not counted as parity evidence.
 
 This is hosted WSL2 evidence. No KVM, bare-metal Linux, or physical hardware was
 exercised by this increment.
@@ -643,7 +648,8 @@ second inventory.
 - Native graph construction now provides dependency-first ordering, cycle
   diagnostics, and target-scoped exact extern artifacts for migrated library
   nodes. Native integration-test outputs and bounded test-process stacks are
-  explicit. Thirteen components now have native actions. Direct-rustc expansion still
+  explicit, and native example outputs are checked and compiled. Fourteen
+  components now have native actions. Direct-rustc expansion still
   needs features, lock/digest validation,
   and explicit non-library actions before
   Cargo can be removed behind the remaining nodes.

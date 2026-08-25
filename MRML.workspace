@@ -1,7 +1,7 @@
 # MRML native workspace graph v3. Cargo fields are a temporary stage-zero bridge.
 version|3
 # id|path|cargo-package|class|targets|default|dependencies|features|outputs|input-policy
-component|org.mrml.tool.build|tools/mrml|mrml|BOOTSTRAP_ONLY|WINDOWS,LINUX|true|||mrml:bin|build-script:0,proc-macro:0,native-link:0,compile-env:0,included-file:0,external-command:7
+component|org.mrml.tool.build|tools/mrml|mrml|BOOTSTRAP_ONLY|WINDOWS,LINUX|true|||mrml:bin|build-script:0,proc-macro:0,native-link:0,compile-env:0,included-file:0,external-command:8
 component|org.mrml.compiler.core|compiler/core|mrml-rustc|COMPILER|WINDOWS,LINUX|true|||conformance:test,mrml_rustc:lib,rustc_nightly_replacements:test|build-script:0,proc-macro:0,native-link:0,compile-env:0,included-file:0,external-command:0
 component|org.mrml.compiler.driver|compiler/driver|mrml-rustc-driver|COMPILER|WINDOWS,LINUX|true|mrml-error,mrml-runtime,mrml-rustc||mrml-rustc:bin|build-script:0,proc-macro:0,native-link:0,compile-env:0,included-file:0,external-command:0
 component|org.mrml.system.kernel|system/kernel|mrml-kernel|MRML_NATIVE|MRML_NATIVE|true|mrml-crypto||mrml_kernel:lib|build-script:0,proc-macro:0,native-link:0,compile-env:0,included-file:0,external-command:0
@@ -59,3 +59,7 @@ rust-action|org.mrml.compiler.core|mrml_rustc|lib|compiler/core/src/lib.rs|
 rust-test|org.mrml.compiler.core|conformance|compiler/core/tests/conformance.rs|false
 rust-test|org.mrml.compiler.core|rustc_nightly_replacements|compiler/core/tests/rustc_nightly_replacements.rs|true
 rust-test-policy|org.mrml.compiler.core|33554432
+rust-action|org.mrml.library.opus|mrml_opus|lib|packages/libraries/opus/src/lib.rs|mrml-math=mrml_math@*
+rust-example|org.mrml.library.opus|inspect_range|packages/libraries/opus/examples/inspect_range.rs
+rust-example|org.mrml.library.opus|opus_range_diff|packages/libraries/opus/examples/opus_range_diff.rs
+rust-example|org.mrml.library.opus|rfc8251_audit|packages/libraries/opus/examples/rfc8251_audit.rs

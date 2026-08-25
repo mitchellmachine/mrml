@@ -303,6 +303,10 @@ The `mrml-rustc` core is also native, including both integration-test targets
 and an explicit bounded test stack. Thirteen components are now native and 29
 remain transitional.
 
+`mrml-opus` adds exact native example compilation: all 179 library tests and its
+three declared example binaries pass on Windows and Arch Linux WSL2. Fourteen
+components are native and 28 remain transitional.
+
 MRML uses Rust 2024 and the exact `nightly-2026-08-24` build toolchain pinned in
 `rust-toolchain.toml`. It is also the current `mrml-rustc` behavioral reference
 recorded as [ORACLE-0002](docs/compiler/oracles/ORACLE-0002.md); a floating
