@@ -1,5 +1,7 @@
 const MAX_GENERATION_PACKAGES: usize = 256;
 const MAX_PACKAGE_CANDIDATES: usize = 1024;
+const MAX_PACKAGE_DEPENDENCIES: usize = 256;
+const MAX_GENERATION_DEPENDENCY_EDGES: usize = 4096;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct SystemPackage {
@@ -69,6 +71,142 @@ impl PackageRequirement {
             artifact_digest: package.artifact_digest,
         })
     }
+
+    pub fn package_id(&self) -> &str {
+        &self.package_id
+    }
+
+    pub const fn version(&self) -> u64 {
+        self.version
+    }
+
+    pub const fn artifact_digest(&self) -> &[u8; 64] {
+        &self.artifact_digest
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct PackageCandidate {
+    package: SystemPackage,
+    dependencies: Vec<PackageRequirement>,
+}
+
+impl PackageCandidate {
+    pub fn exact(
+        package: SystemPackage,
+        dependencies: Vec<PackageRequirement>,
+    ) -> Result<Self, GraphResolutionError> {
+        if dependencies.len() > MAX_PACKAGE_DEPENDENCIES {
+            return Err(GraphResolutionError::DependencyCount);
+        }
+        if !dependencies
+            .windows(2)
+            .all(|pair| pair[0].package_id < pair[1].package_id)
+        {
+            return Err(GraphResolutionError::NonCanonicalDependencies);
+        }
+        if dependencies
+            .iter()
+            .any(|dependency| dependency.package_id == package.package_id)
+        {
+            return Err(GraphResolutionError::SelfDependency);
+        }
+        Ok(Self {
+            package,
+            dependencies,
+        })
+    }
+
+    pub fn package(&self) -> &SystemPackage {
+        &self.package
+    }
+
+    pub fn dependencies(&self) -> &[PackageRequirement] {
+        &self.dependencies
+    }
+}
+
+pub fn resolve_exact_package_graph(
+    generation: u64,
+    roots: &[PackageRequirement],
+    candidates: &[PackageCandidate],
+) -> Result<SystemGeneration, GraphResolutionError> {
+    if generation == 0 {
+        return Err(GraphResolutionError::InvalidGeneration);
+    }
+    if roots.is_empty() || roots.len() > MAX_GENERATION_PACKAGES {
+        return Err(GraphResolutionError::RootCount);
+    }
+    if candidates.is_empty() || candidates.len() > MAX_PACKAGE_CANDIDATES {
+        return Err(GraphResolutionError::CandidateCount);
+    }
+    if !roots
+        .windows(2)
+        .all(|pair| pair[0].package_id < pair[1].package_id)
+    {
+        return Err(GraphResolutionError::NonCanonicalRoots);
+    }
+
+    let mut pending = roots.to_vec();
+    let mut selected = Vec::<SystemPackage>::new();
+    let mut cursor = 0usize;
+    let mut edge_count = 0usize;
+    while cursor < pending.len() {
+        let requirement = &pending[cursor];
+        cursor += 1;
+        if let Some(existing) = selected
+            .iter()
+            .find(|package| package.package_id == requirement.package_id)
+        {
+            if existing.version != requirement.version
+                || existing.artifact_digest != requirement.artifact_digest
+            {
+                return Err(GraphResolutionError::ConflictingExactRequirement);
+            }
+            continue;
+        }
+        let mut matching = candidates.iter().filter(|candidate| {
+            candidate.package.package_id == requirement.package_id
+                && candidate.package.version == requirement.version
+                && candidate.package.artifact_digest == requirement.artifact_digest
+        });
+        let candidate = matching
+            .next()
+            .ok_or(GraphResolutionError::MissingExactPackage)?;
+        if matching.next().is_some() {
+            return Err(GraphResolutionError::AmbiguousExactPackage);
+        }
+        if selected.len() == MAX_GENERATION_PACKAGES {
+            return Err(GraphResolutionError::PackageCount);
+        }
+        edge_count = edge_count
+            .checked_add(candidate.dependencies.len())
+            .ok_or(GraphResolutionError::DependencyEdgeCount)?;
+        if edge_count > MAX_GENERATION_DEPENDENCY_EDGES {
+            return Err(GraphResolutionError::DependencyEdgeCount);
+        }
+        selected.push(candidate.package.clone());
+        pending.extend(candidate.dependencies.iter().cloned());
+    }
+    selected.sort_by(|left, right| left.package_id.cmp(&right.package_id));
+    SystemGeneration::new(generation, selected).map_err(GraphResolutionError::InvalidResult)
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum GraphResolutionError {
+    InvalidGeneration,
+    RootCount,
+    CandidateCount,
+    DependencyCount,
+    DependencyEdgeCount,
+    NonCanonicalRoots,
+    NonCanonicalDependencies,
+    SelfDependency,
+    MissingExactPackage,
+    AmbiguousExactPackage,
+    ConflictingExactRequirement,
+    PackageCount,
+    InvalidResult(GenerationError),
 }
 
 pub fn resolve_exact_packages(
@@ -338,6 +476,140 @@ mod tests {
                 &oversized_candidates,
             ),
             Err(ResolutionError::CandidateCount)
+        );
+    }
+
+    fn requirement(id: &str, version: u64, marker: u8) -> PackageRequirement {
+        PackageRequirement::exact(id.into(), version, [marker; 64]).unwrap()
+    }
+
+    fn candidate(
+        id: &str,
+        version: u64,
+        marker: u8,
+        dependencies: Vec<PackageRequirement>,
+    ) -> PackageCandidate {
+        PackageCandidate::exact(package(id, version, marker), dependencies).unwrap()
+    }
+
+    #[test]
+    fn exact_graph_resolution_constructs_a_canonical_transitive_generation() {
+        let roots = [requirement("org.mrml.desktop", 3, 0x30)];
+        let candidates = [
+            candidate("org.mrml.zstd", 14, 0x2e, vec![]),
+            candidate(
+                "org.mrml.desktop",
+                3,
+                0x30,
+                vec![requirement("org.mrml.zim", 8, 0x18)],
+            ),
+            candidate(
+                "org.mrml.zim",
+                8,
+                0x18,
+                vec![requirement("org.mrml.zstd", 14, 0x2e)],
+            ),
+        ];
+        let generation = resolve_exact_package_graph(105, &roots, &candidates).unwrap();
+        assert_eq!(generation.generation(), 105);
+        assert_eq!(
+            generation
+                .packages()
+                .iter()
+                .map(SystemPackage::package_id)
+                .collect::<Vec<_>>(),
+            vec!["org.mrml.desktop", "org.mrml.zim", "org.mrml.zstd"]
+        );
+    }
+
+    #[test]
+    fn exact_graph_resolution_accepts_cycles_but_never_substitutes_or_conflicts() {
+        let candidates = [
+            candidate(
+                "org.mrml.zim",
+                8,
+                0x18,
+                vec![requirement("org.mrml.zstd", 14, 0x2e)],
+            ),
+            candidate(
+                "org.mrml.zstd",
+                14,
+                0x2e,
+                vec![requirement("org.mrml.zim", 8, 0x18)],
+            ),
+        ];
+        assert_eq!(
+            resolve_exact_package_graph(106, &[requirement("org.mrml.zim", 8, 0x18)], &candidates,)
+                .unwrap()
+                .packages()
+                .len(),
+            2
+        );
+
+        let conflicting = [
+            candidate(
+                "org.mrml.desktop",
+                3,
+                0x30,
+                vec![requirement("org.mrml.zstd", 15, 0x2f)],
+            ),
+            candidates[0].clone(),
+            candidates[1].clone(),
+            candidate("org.mrml.zstd", 15, 0x2f, vec![]),
+        ];
+        assert_eq!(
+            resolve_exact_package_graph(
+                106,
+                &[
+                    requirement("org.mrml.desktop", 3, 0x30),
+                    requirement("org.mrml.zim", 8, 0x18),
+                ],
+                &conflicting,
+            ),
+            Err(GraphResolutionError::ConflictingExactRequirement)
+        );
+    }
+
+    #[test]
+    fn exact_graph_resolution_rejects_missing_ambiguous_and_noncanonical_inputs() {
+        let root = requirement("org.mrml.zim", 8, 0x18);
+        assert_eq!(
+            resolve_exact_package_graph(107, std::slice::from_ref(&root), &[]),
+            Err(GraphResolutionError::CandidateCount)
+        );
+        assert_eq!(
+            resolve_exact_package_graph(
+                107,
+                std::slice::from_ref(&root),
+                &[candidate("org.mrml.zstd", 14, 0x2e, vec![])],
+            ),
+            Err(GraphResolutionError::MissingExactPackage)
+        );
+        let duplicate = candidate("org.mrml.zim", 8, 0x18, vec![]);
+        assert_eq!(
+            resolve_exact_package_graph(
+                107,
+                std::slice::from_ref(&root),
+                &[duplicate.clone(), duplicate],
+            ),
+            Err(GraphResolutionError::AmbiguousExactPackage)
+        );
+        assert_eq!(
+            PackageCandidate::exact(
+                package("org.mrml.desktop", 3, 0x30),
+                vec![
+                    requirement("org.mrml.zstd", 14, 0x2e),
+                    requirement("org.mrml.zim", 8, 0x18),
+                ],
+            ),
+            Err(GraphResolutionError::NonCanonicalDependencies)
+        );
+        assert_eq!(
+            PackageCandidate::exact(
+                package("org.mrml.zim", 8, 0x18),
+                vec![requirement("org.mrml.zim", 8, 0x18)],
+            ),
+            Err(GraphResolutionError::SelfDependency)
         );
     }
 }

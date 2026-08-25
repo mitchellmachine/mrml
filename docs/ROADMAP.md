@@ -46,10 +46,13 @@ persistence, rollback, and the end-to-end component-interface lane remain
 **PLANNED**; bounded prerequisite increments are recorded below.
 
 The prerequisite now includes bounded exact package resolution from canonical
-identity/version/digest requirements to identical immutable candidates. It has
-no version ranges, optimization, backtracking, network/catalog lookup, provider
-substitution, activation, or transitive graph construction; those broader
-package and component mechanisms remain **PLANNED**.
+identity/version/digest requirements to identical immutable candidates and
+bounded transitive closure from canonical exact roots. Closure preserves exact
+cycles, emits canonical package order, and rejects conflicting, missing,
+ambiguous, noncanonical, self-dependent, or over-limit graphs. It has no version
+ranges, optimization, backtracking, network/catalog lookup, provider
+substitution, admission policy, activation, or durable generation state; those
+broader package and component mechanisms remain **PLANNED**.
 
 Stable ABI groundwork now includes canonical interface identity/generation,
 bounded borrowed-view validation, opaque generational handles, and a fixed

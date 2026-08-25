@@ -24,15 +24,22 @@ immutable bounded `SystemGeneration` record containing a nonzero local
 generation and canonically ordered exact package identity, version, and artifact
 digest entries. Focused Windows and Linux tests reject zero values, malformed
 identities, empty/oversized graphs, duplicates, and noncanonical order. It does
-not yet resolve, admit, activate, retain, roll back, export, or garbage-collect a
-generation.
+not yet admit, activate, persist, retain, roll back, export, or garbage-collect
+a generation.
 
 The same foundation now also performs bounded exact package resolution: every
 requirement contains one package identity, one version, and one artifact digest,
 and resolution succeeds only for one identical candidate. It rejects missing,
 ambiguous, duplicate/noncanonical, empty, and over-capacity inputs and never
 chooses a range, nearest version, replacement package, or policy-ranked result.
-This is not yet transitive package-graph construction or generation admission.
+The build-tool model also constructs a bounded transitive graph from canonical
+exact roots and exact dependency records. It admits only the byte-identical
+identity/version/digest candidate, produces canonical package order, terminates
+exact cycles without duplicating packages, and rejects missing or ambiguous
+candidates, conflicting exact requirements, self-dependencies, noncanonical
+edges, and package/edge/candidate limit violations. This is deterministic graph
+construction only: package signature/admission policy, capabilities, durable
+generation state, activation, rollback, and runtime loading remain **PLANNED**.
 
 > Installation, updating, offline servicing, recovery, system imaging, and
 > system snapshots are different operations over the same immutable package and
