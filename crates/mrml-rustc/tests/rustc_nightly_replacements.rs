@@ -4282,6 +4282,37 @@ fn rustc_projected_reference_value_move_chains_preserve_tuple_field_loans() {
 }
 
 #[test]
+fn rustc_function_return_references_must_outlive_local_storage() {
+    let rejected = [
+        "#[unsafe(no_mangle)] pub extern \"C\" fn probe(input: &u16) -> &u16 { let local = *input; &local }",
+        "#[unsafe(no_mangle)] pub extern \"C\" fn probe(input: &u16) -> &u16 { let local = *input; return &local; }",
+        "#[unsafe(no_mangle)] pub extern \"C\" fn probe(input: &u16, choose: bool) -> &u16 { let local = *input; if choose { return &local; } input }",
+        "#[unsafe(no_mangle)] pub extern \"C\" fn probe(input: &u16, choose: bool) -> &u16 { let local = *input; let mut selected: &u16 = &local; if choose { selected = input; } selected }",
+    ];
+    for source in rejected {
+        for format in [ObjectFormat::Elf64, ObjectFormat::Coff] {
+            assert_eq!(
+                compile_wide(source, format),
+                Err(CompileErrorKind::Codegen(
+                    CodegenErrorKind::RuntimeReferenceOutlivesFunction
+                ))
+            );
+        }
+    }
+
+    let accepted = [
+        "#[unsafe(no_mangle)] pub extern \"C\" fn probe(input: &u16) -> &u16 { input }",
+        "#[unsafe(no_mangle)] pub extern \"C\" fn probe(input: &u16) -> &u16 { let returned: &u16 = &*input; returned }",
+        "#[unsafe(no_mangle)] pub extern \"C\" fn probe(input: &u16) -> &u16 { let local = *input; let mut selected: &u16 = &local; selected = input; selected }",
+        "#[unsafe(no_mangle)] pub extern \"C\" fn probe(input: &mut u16) -> &u16 { let moved = input; let returned: &u16 = &*moved; returned }",
+    ];
+    for source in accepted {
+        assert_eq!(compile_wide(source, ObjectFormat::Elf64), Ok(()));
+        assert_eq!(compile_wide(source, ObjectFormat::Coff), Ok(()));
+    }
+}
+
+#[test]
 fn rustc_moved_conditional_reference_origins_match_the_oracle() {
     let rejected = [
         "#[unsafe(no_mangle)] pub extern \"C\" fn probe(first: &mut u16, second: &mut u16, choose: bool) -> u16 { let parent: &mut u16 = if choose { &mut *first } else { &mut *second }; let moved = parent; let child: &u16 = &*moved; let changed: &mut u16 = &mut *first; *changed += 1; *child }",

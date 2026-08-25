@@ -102,6 +102,7 @@ pub enum CodegenErrorKind {
     InvalidRuntimeControlFlowFacts,
     RuntimeUseAfterMove,
     RuntimeBorrowConflict,
+    RuntimeReferenceOutlivesFunction,
     DuplicateLocal,
     ImmutableAssignment,
 }
@@ -3899,14 +3900,38 @@ impl<'source> RuntimeBodyFacts<'source> {
             })?;
         let moved_path = self.move_paths.get(moved.path.0).and_then(|path| *path)?;
         let source_loan = if moved_path.projections == RuntimePlaceProjections::EMPTY {
-            let RuntimePlaceIdentity::Local(source) = moved_path.base else {
-                return None;
-            };
-            self.direct_moved_source_loan_before_at_depth(
-                source,
-                moved.event,
-                depth.checked_add(1)?,
-            )?
+            match moved_path.base {
+                RuntimePlaceIdentity::Local(source) => self
+                    .direct_moved_source_loan_before_at_depth(
+                        source,
+                        moved.event,
+                        depth.checked_add(1)?,
+                    )?,
+                RuntimePlaceIdentity::Parameter(_) => {
+                    let RuntimeExpressionType::Reference {
+                        mutable: source_mutable,
+                        ..
+                    } = moved_path.ty
+                    else {
+                        return None;
+                    };
+                    if source_mutable != mutable {
+                        return None;
+                    }
+                    RuntimeLoanFact {
+                        id: RuntimeLoanId(MAX_RUNTIME_INITIALIZATION_FACTS + move_effect),
+                        borrower,
+                        borrowed_path: moved.path,
+                        kind: if mutable {
+                            RuntimePlaceEffectKind::MutableBorrow
+                        } else {
+                            RuntimePlaceEffectKind::SharedBorrow
+                        },
+                        issue_effect: move_effect,
+                        generation_event: moved.event,
+                    }
+                }
+            }
         } else {
             self.direct_tuple_field_loan_origin_before(moved.path, moved.event)?
         };
@@ -4098,6 +4123,190 @@ impl<'source> RuntimeBodyFacts<'source> {
                 issue_effect,
                 generation_event: generation.event,
             })
+    }
+
+    fn direct_tuple_field_assigned_loan_origin_before(
+        &self,
+        field_path: RuntimeMovePathId,
+        before: RuntimeOwnershipEventId,
+    ) -> Option<RuntimeLoanFact> {
+        let field = self.move_paths.get(field_path.0).and_then(|path| *path)?;
+        if !matches!(
+            field.projections,
+            RuntimePlaceProjections {
+                items: [
+                    Some(RuntimePlaceProjection::TupleField(_)),
+                    None,
+                    None,
+                    None,
+                ],
+                count: 1,
+            }
+        ) {
+            return None;
+        }
+        let RuntimeExpressionType::Reference { mutable, .. } = field.ty else {
+            return None;
+        };
+        let RuntimePlaceIdentity::Local(borrower) = field.base else {
+            return None;
+        };
+        let (generation_index, generation) = self.effects[..self.effect_count]
+            .iter()
+            .enumerate()
+            .filter_map(|(index, effect)| effect.map(|effect| (index, effect)))
+            .filter(|(_, effect)| {
+                effect.path == field_path
+                    && effect.kind == RuntimePlaceEffectKind::Write
+                    && effect.event.0 < before.0
+            })
+            .max_by_key(|(_, effect)| effect.event.0)?;
+        self.effects[..generation_index]
+            .iter()
+            .enumerate()
+            .filter_map(|(index, effect)| effect.map(|effect| (index, effect)))
+            .filter(|(_, effect)| {
+                effect.event.0 < generation.event.0
+                    && effect.location == generation.location
+                    && effect.expression_path == generation.expression_path
+                    && effect.expression_conditional == generation.expression_conditional
+                    && matches!(
+                        (mutable, effect.kind),
+                        (false, RuntimePlaceEffectKind::SharedBorrow)
+                            | (true, RuntimePlaceEffectKind::MutableBorrow)
+                    )
+            })
+            .max_by_key(|(_, effect)| effect.event.0)
+            .map(|(issue_effect, origin)| RuntimeLoanFact {
+                id: RuntimeLoanId(MAX_RUNTIME_INITIALIZATION_FACTS + generation_index),
+                borrower,
+                borrowed_path: origin.path,
+                kind: origin.kind,
+                issue_effect,
+                generation_event: generation.event,
+            })
+    }
+
+    fn direct_tuple_field_value_origin_before(
+        &self,
+        field_path: RuntimeMovePathId,
+        before: RuntimeOwnershipEventId,
+    ) -> Option<RuntimeLoanFact> {
+        let field = self.move_paths.get(field_path.0).and_then(|path| *path)?;
+        let RuntimePlaceProjections {
+            items:
+                [
+                    Some(RuntimePlaceProjection::TupleField(field_index)),
+                    None,
+                    None,
+                    None,
+                ],
+            count: 1,
+        } = field.projections
+        else {
+            return None;
+        };
+        let root_id = field.parent?;
+        let root = self.move_paths.get(root_id.0).and_then(|path| *path)?;
+        let RuntimeExpressionType::Tuple {
+            elements,
+            element_count,
+        } = root.ty
+        else {
+            return None;
+        };
+        let RuntimeExpressionType::Reference { mutable, .. } = field.ty else {
+            return None;
+        };
+        let mut reference_count = 0usize;
+        let mut target_ordinal = None;
+        for (index, element) in elements[..element_count].iter().enumerate() {
+            if matches!(element, Some(RuntimeTupleElementType::Reference { .. })) {
+                if index == field_index {
+                    target_ordinal = Some(reference_count);
+                }
+                reference_count = reference_count.checked_add(1)?;
+            }
+        }
+        let target_ordinal = target_ordinal?;
+        let initialization = self.initializations[..self.initialization_count]
+            .iter()
+            .flatten()
+            .filter(|initialization| {
+                initialization.path == root_id && initialization.event.0 < before.0
+            })
+            .max_by_key(|initialization| initialization.event.0)?;
+        if self.effects[..self.effect_count]
+            .iter()
+            .flatten()
+            .any(|effect| {
+                (effect.path == root_id || effect.path == field_path)
+                    && effect.kind == RuntimePlaceEffectKind::Write
+                    && effect.event.0 > initialization.event.0
+                    && effect.event.0 < before.0
+            })
+        {
+            return None;
+        }
+        let mut value_count = 0usize;
+        let mut selected = None;
+        for (issue_effect, effect) in self.effects[..self.effect_count]
+            .iter()
+            .enumerate()
+            .filter_map(|(index, effect)| effect.map(|effect| (index, effect)))
+            .filter(|(_, effect)| {
+                effect.event.0 < initialization.event.0
+                    && effect.location == initialization.location
+                    && effect.expression_path == initialization.expression_path
+                    && effect.expression_conditional == initialization.expression_conditional
+                    && matches!(
+                        effect.kind,
+                        RuntimePlaceEffectKind::Copy | RuntimePlaceEffectKind::Move
+                    )
+                    && self
+                        .move_paths
+                        .get(effect.path.0)
+                        .and_then(|path| *path)
+                        .is_some_and(|path| {
+                            matches!(path.ty, RuntimeExpressionType::Reference { .. })
+                        })
+            })
+        {
+            if value_count == target_ordinal {
+                selected = Some((issue_effect, effect));
+            }
+            value_count = value_count.checked_add(1)?;
+        }
+        let (issue_effect, origin) = selected?;
+        let RuntimeExpressionType::Reference {
+            mutable: source_mutable,
+            ..
+        } = self
+            .move_paths
+            .get(origin.path.0)
+            .and_then(|path| *path)?
+            .ty
+        else {
+            return None;
+        };
+        if value_count != reference_count || source_mutable != mutable {
+            return None;
+        }
+        let RuntimePlaceIdentity::Local(borrower) = root.base else {
+            return None;
+        };
+        Some(RuntimeLoanFact {
+            id: RuntimeLoanId(MAX_RUNTIME_INITIALIZATION_FACTS + issue_effect),
+            borrower,
+            borrowed_path: origin.path,
+            kind: if mutable {
+                RuntimePlaceEffectKind::MutableBorrow
+            } else {
+                RuntimePlaceEffectKind::SharedBorrow
+            },
+            issue_effect,
+            generation_event: initialization.event,
+        })
     }
 
     fn direct_expression_loan_fact(&self, effect_index: usize) -> Option<RuntimeLoanFact> {
@@ -4372,6 +4581,54 @@ impl<'source> RuntimeBodyFacts<'source> {
             }
             (None, None) => None,
         }
+    }
+
+    fn direct_reference_move_source_before(
+        &self,
+        borrower: RuntimeLocalId,
+        before: RuntimeOwnershipEventId,
+    ) -> Option<(RuntimeMovePathId, RuntimePlaceEffectFact)> {
+        let borrower_path = self.find_move_path(
+            RuntimePlaceIdentity::Local(borrower),
+            RuntimePlaceProjections::EMPTY,
+        )?;
+        let destination = self
+            .move_paths
+            .get(borrower_path.0)
+            .and_then(|path| *path)?;
+        let RuntimeExpressionType::Reference {
+            mutable: destination_mutable,
+            ..
+        } = destination.ty
+        else {
+            return None;
+        };
+        let initialization = self.initializations[..self.initialization_count]
+            .iter()
+            .flatten()
+            .filter(|initialization| {
+                initialization.path == borrower_path && initialization.event.0 < before.0
+            })
+            .max_by_key(|initialization| initialization.event.0)?;
+        let source = self.effects[..self.effect_count]
+            .iter()
+            .flatten()
+            .find(|effect| {
+                effect.kind == RuntimePlaceEffectKind::Move
+                    && effect.event.0.checked_add(1) == Some(initialization.event.0)
+                    && effect.location == initialization.location
+                    && effect.expression_path == initialization.expression_path
+                    && effect.expression_conditional == initialization.expression_conditional
+            })?;
+        let source_path = self.move_paths.get(source.path.0).and_then(|path| *path)?;
+        let RuntimeExpressionType::Reference {
+            mutable: source_mutable,
+            ..
+        } = source_path.ty
+        else {
+            return None;
+        };
+        (source_mutable == destination_mutable).then_some((source.path, *source))
     }
 
     fn direct_loan_generation_position(
@@ -10978,6 +11235,150 @@ fn validate_runtime_bounded_direct_loan_liveness(
     Ok(())
 }
 
+const fn runtime_location_is_exact_function_return_value(
+    location: RuntimeOwnershipEventLocation,
+) -> bool {
+    matches!(
+        location,
+        RuntimeOwnershipEventLocation::ConditionalReturnValue { .. }
+            | RuntimeOwnershipEventLocation::ConditionalReturnElseValue { .. }
+            | RuntimeOwnershipEventLocation::LoopConditionalReturnValue { .. }
+            | RuntimeOwnershipEventLocation::LoopReturnValue { .. }
+            | RuntimeOwnershipEventLocation::ReturnValue { .. }
+            | RuntimeOwnershipEventLocation::Tail
+    )
+}
+
+fn runtime_path_outlives_function_at_effect(
+    facts: &RuntimeBodyFacts<'_>,
+    path_id: RuntimeMovePathId,
+    returned_at: RuntimePlaceEffectFact,
+    depth: usize,
+) -> Option<bool> {
+    if depth > facts.initialization_count.checked_add(facts.effect_count)? {
+        return None;
+    }
+    let path = facts.move_paths.get(path_id.0).and_then(|path| *path)?;
+    match path.base {
+        RuntimePlaceIdentity::Parameter(_) => Some(true),
+        RuntimePlaceIdentity::Local(local) => {
+            if path.projections != RuntimePlaceProjections::EMPTY {
+                let RuntimeExpressionType::Reference { .. } = path.ty else {
+                    return Some(false);
+                };
+                if let Some(origin) =
+                    facts.direct_tuple_field_assigned_loan_origin_before(path_id, returned_at.event)
+                {
+                    let issue = facts
+                        .effects
+                        .get(origin.issue_effect)
+                        .and_then(|effect| *effect)?;
+                    return runtime_path_outlives_function_at_effect(
+                        facts,
+                        origin.borrowed_path,
+                        issue,
+                        depth + 1,
+                    );
+                }
+                let origin = facts
+                    .direct_tuple_field_loan_origin_before(path_id, returned_at.event)
+                    .or_else(|| {
+                        facts.direct_tuple_field_value_origin_before(path_id, returned_at.event)
+                    })?;
+                let issue = facts
+                    .effects
+                    .get(origin.issue_effect)
+                    .and_then(|effect| *effect)?;
+                return runtime_path_outlives_function_at_effect(
+                    facts,
+                    origin.borrowed_path,
+                    issue,
+                    depth + 1,
+                );
+            }
+            let RuntimeExpressionType::Reference { .. } = path.ty else {
+                return Some(false);
+            };
+            let mut found = false;
+            for loan in (0..facts.initialization_count)
+                .filter_map(|index| facts.direct_loan_fact(index))
+                .chain(
+                    (0..facts.effect_count)
+                        .filter_map(|index| facts.direct_assigned_loan_fact(index)),
+                )
+                .chain(
+                    (0..facts.effect_count)
+                        .filter_map(|index| facts.direct_expression_loan_fact(index)),
+                )
+                .chain((0..facts.initialization_count).flat_map(|move_depth| {
+                    (0..facts.effect_count).filter_map(move |index| {
+                        facts.moved_expression_loan_fact_at_depth(index, move_depth)
+                    })
+                }))
+                .filter(|loan| {
+                    loan.borrower == local
+                        && runtime_specific_loan_is_active_at_effect(facts, *loan, returned_at)
+                })
+            {
+                found = true;
+                let issue = facts
+                    .effects
+                    .get(loan.issue_effect)
+                    .and_then(|effect| *effect)?;
+                if !runtime_path_outlives_function_at_effect(
+                    facts,
+                    loan.borrowed_path,
+                    issue,
+                    depth + 1,
+                )? {
+                    return Some(false);
+                }
+            }
+            if found {
+                Some(true)
+            } else if let Some((source, moved_at)) =
+                facts.direct_reference_move_source_before(local, returned_at.event)
+            {
+                runtime_path_outlives_function_at_effect(facts, source, moved_at, depth + 1)
+            } else {
+                Some(false)
+            }
+        }
+    }
+}
+
+fn validate_runtime_function_return_outlives(
+    facts: &RuntimeBodyFacts<'_>,
+    fallback_span: Span,
+) -> Result<(), CodegenError> {
+    if !facts.control_flow_complete {
+        return Ok(());
+    }
+    for returned in facts.effects[..facts.effect_count]
+        .iter()
+        .flatten()
+        .filter(|effect| {
+            matches!(
+                effect.kind,
+                RuntimePlaceEffectKind::SharedBorrow | RuntimePlaceEffectKind::MutableBorrow
+            ) && runtime_location_is_exact_function_return_value(effect.location)
+        })
+    {
+        if !runtime_path_outlives_function_at_effect(facts, returned.path, *returned, 0).ok_or(
+            CodegenError {
+                kind: CodegenErrorKind::InvalidRuntimePlaceFacts,
+                span: fallback_span,
+            },
+        )? {
+            return Err(CodegenError {
+                kind: CodegenErrorKind::RuntimeReferenceOutlivesFunction,
+                span: returned.span,
+            });
+        }
+    }
+    Ok(())
+}
+
 fn preanalyze_runtime_body_declarations<
     'source,
     R: ConstantResolver,
@@ -11122,6 +11523,13 @@ fn preanalyze_runtime_body_declarations<
         })?;
     validate_runtime_initializedness(facts, body.tail_span)?;
     validate_runtime_bounded_direct_loan_liveness(facts, body.tail_span)?;
+    if function
+        .return_type
+        .and_then(|return_type| runtime_reference_type(return_type.text))
+        .is_some()
+    {
+        validate_runtime_function_return_outlives(facts, body.tail_span)?;
+    }
     Ok(facts.local_count)
 }
 
@@ -28784,6 +29192,47 @@ mod tests {
             "fn value(input: u16) -> u16 { let mut first = input; let mut second = input + 1; let holder = (&mut first,); let mut moved = holder.0; moved = &mut second; let again = moved; let child: &u16 = &*again; first += 1; *child + first }",
         ] {
             analyze(accepted).unwrap();
+        }
+    }
+
+    #[test]
+    fn runtime_function_return_references_outlive_local_storage() {
+        fn analyze(source: &str) -> Result<usize, CodegenError> {
+            let module = Parser::new(source).parse_module::<1, 8>().unwrap();
+            let Some(Item::Function(function)) = module.items()[0] else {
+                panic!("expected function")
+            };
+            let body = function.parse_body::<8>().unwrap();
+            let mut facts = RuntimeBodyFacts::EMPTY;
+            preanalyze_runtime_body_declarations::<_, 8, 32>(
+                &function,
+                &NoConstants,
+                &body,
+                "&u16",
+                function.body_expression_span.start,
+                &mut facts,
+            )
+        }
+
+        for rejected in [
+            "fn value(input: &u16) -> &u16 { let local = *input; &local }",
+            "fn value(input: &u16) -> &u16 { let local = *input; return &local; }",
+            "fn value(input: &u16, choose: bool) -> &u16 { let local = *input; if choose { return &local; } input }",
+            "fn value(input: &u16, choose: bool) -> &u16 { let local = *input; let mut selected: &u16 = &local; if choose { selected = input; } selected }",
+        ] {
+            assert_eq!(
+                analyze(rejected).unwrap_err().kind,
+                CodegenErrorKind::RuntimeReferenceOutlivesFunction
+            );
+        }
+
+        for accepted in [
+            "fn value(input: &u16) -> &u16 { input }",
+            "fn value(input: &u16) -> &u16 { let returned: &u16 = &*input; returned }",
+            "fn value(input: &u16) -> &u16 { let local = *input; let mut selected: &u16 = &local; selected = input; selected }",
+            "fn value(input: &mut u16) -> &u16 { let moved = input; let returned: &u16 = &*moved; returned }",
+        ] {
+            analyze(accepted).unwrap_or_else(|error| panic!("{accepted}: {error:?}"));
         }
     }
 
