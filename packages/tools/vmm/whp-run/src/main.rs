@@ -23,11 +23,11 @@ use mrml_kernel::{
     GpuQueueIdentity, GpuQueueReceiver, GpuResourceResponse, GpuResourceResponseSender,
     GpuSharedQueueLayout, GpuVmmQueueBridge, GuestMemory, HypercallRouter, InterruptPolicy,
     IsolationAdmissionTable, IsolationMode, IsolationPlacement, ObjectId,
-    PreparedIsolationServiceRoute, ResourceCommand, Rights, SIGNED_ARTIFACT_OVERHEAD_BYTES,
-    SignedArtifact, TotalMicrovmClass, TrustRoot, VIRTUAL_BLOCK_FEATURE_FLUSH, VerifiedExecutable,
-    VerifiedGpuKernelBundle, VirtualBlockBackend, VirtualBlockBackendAuthority,
-    VirtualBlockCompletionStatus, VirtualBlockConfigurationPage, VirtualBlockDevice,
-    VirtualBlockDeviceState, VirtualBlockError, VirtualBlockMutationError,
+    PreparedComponentServiceLaunch, PreparedIsolationServiceRoute, ResourceCommand, Rights,
+    SIGNED_ARTIFACT_OVERHEAD_BYTES, SignedArtifact, TotalMicrovmClass, TrustRoot,
+    VIRTUAL_BLOCK_FEATURE_FLUSH, VerifiedExecutable, VerifiedGpuKernelBundle, VirtualBlockBackend,
+    VirtualBlockBackendAuthority, VirtualBlockCompletionStatus, VirtualBlockConfigurationPage,
+    VirtualBlockDevice, VirtualBlockDeviceState, VirtualBlockError, VirtualBlockMutationError,
     VirtualBlockPciAttachment, VirtualBlockPciAttachmentState, VirtualBlockPciCleanupMode,
     VirtualBlockPciCleanupRecord, VirtualBlockPciFunctionRevoker, VirtualBlockPciGuestMemoryMapper,
     VirtualBlockPciGuestWindowBackend, VirtualBlockPciResourceRevoker, VirtualBlockProcessOutcome,
@@ -60,6 +60,9 @@ type WhpConfigurationLauncher<'system> = PreparedMicrovmConfigurationLauncher<
 #[cfg(target_os = "windows")]
 fn prepare_configured_total_service(
     admission: &mut IsolationAdmissionTable<1>,
+    domain: ObjectId,
+    interface: ObjectId,
+    interface_generation: u32,
     provider_generation: u64,
 ) -> Result<PreparedIsolationServiceRoute> {
     let root_object = ObjectId(0x4953_4f4c_4154_494f);
@@ -134,9 +137,9 @@ fn prepare_configured_total_service(
     )
     .map_err(|error| anyhow!("WHP package isolation bounds failed: {:?}", error))?;
     let identity = IsolationServiceIdentity::new(
-        ObjectId(0x434f_4e46_4947),
-        ObjectId(0x434f_4e46_4947_0001),
-        1,
+        domain,
+        interface,
+        interface_generation,
         provider_generation,
         TotalMicrovmClass::MicrovmEligible,
     )
@@ -297,6 +300,11 @@ const SERVICE_SHARED_VIRTUAL: u64 = 0x006f_e000;
 const SERVICE_RESOURCE_PHYSICAL: u64 = 0x00f0_1000;
 #[cfg(target_os = "windows")]
 const SERVICE_RESOURCE_VIRTUAL: u64 = 0x006f_f000;
+#[cfg(target_os = "windows")]
+const ZSTD_INTERFACE_FINGERPRINT: [u8; 32] = [
+    106, 98, 189, 213, 148, 175, 40, 79, 81, 237, 193, 115, 74, 161, 88, 81, 229, 222, 55, 239,
+    126, 33, 16, 59, 102, 84, 84, 199, 67, 226, 18, 108,
+];
 #[cfg(target_os = "windows")]
 const BLOCK_PROOF_PORT: u16 = 0x4d65;
 #[cfg(target_os = "windows")]
@@ -1422,6 +1430,7 @@ fn application_main() -> Result<()> {
         return Ok(());
     }
     let service_mode = arguments.len() == 9 && arguments[5] == "service-probe";
+    let component_service_mode = arguments.len() == 12 && arguments[5] == "component-service-probe";
     let block_service_mode = arguments.len() == 9 && arguments[5] == "block-service-probe";
     let service_restart_request_mode =
         arguments.len() == 9 && arguments[5] == "service-restart-request-probe";
@@ -1430,6 +1439,7 @@ fn application_main() -> Result<()> {
     let smp_service_migration_mode =
         arguments.len() == 9 && arguments[5] == "smp-service-migration-probe";
     let service_artifact_mode = service_mode
+        || component_service_mode
         || block_service_mode
         || service_restart_request_mode
         || service_preemption_mode
@@ -1466,7 +1476,7 @@ fn application_main() -> Result<()> {
         && !smp_periodic_balance_mode
     {
         return Err(anyhow!(
-            "usage: mrml-whp-run KERNEL.mrp PACKAGE.public KERNEL.public MINIMUM_VERSION MODE [SYSTEM.mrs SYSTEM_RELEASE.public | ARTIFACT.signed ARTIFACT.public ARTIFACT_MINIMUM_VERSION]\n       mrml-whp-run --verify-boot-artifacts KERNEL.mrp PACKAGE.public MINIMUM_VERSION SYSTEM.mrs SYSTEM_RELEASE.public\n       mrml-whp-run --export-cuda-bundle OUTPUT.ptx"
+            "usage: mrml-whp-run KERNEL.mrp PACKAGE.public KERNEL.public MINIMUM_VERSION MODE [SYSTEM.mrs SYSTEM_RELEASE.public | ARTIFACT.signed ARTIFACT.public ARTIFACT_MINIMUM_VERSION | CONSUMER.signed CONSUMER.public CONSUMER_MINIMUM PROVIDER.signed PROVIDER.public PROVIDER_MINIMUM]\n       mrml-whp-run --verify-boot-artifacts KERNEL.mrp PACKAGE.public MINIMUM_VERSION SYSTEM.mrs SYSTEM_RELEASE.public\n       mrml-whp-run --export-cuda-bundle OUTPUT.ptx"
         ));
     }
     let minimum_version = arguments[4]
@@ -1534,6 +1544,46 @@ fn application_main() -> Result<()> {
         }
         (None, None) => None,
         _ => return Err(anyhow!("incomplete service verification inputs")),
+    };
+    let provider_bundle = if component_service_mode {
+        Some(mrml_runtime::read_file_bounded(
+            &arguments[9],
+            SIGNED_ARTIFACT_OVERHEAD_BYTES + mrml_kernel::MAX_SERVICE_IMAGE_BYTES as usize,
+        )?)
+    } else {
+        None
+    };
+    let provider_public = if component_service_mode {
+        let public = mrml_runtime::read_file_bounded(&arguments[10], LAMPORT_PUBLIC_KEY_BYTES)?;
+        if public.len() != LAMPORT_PUBLIC_KEY_BYTES {
+            return Err(anyhow!("invalid provider public-key length"));
+        }
+        Some(public)
+    } else {
+        None
+    };
+    let provider_executable = match (&provider_bundle, &provider_public) {
+        (Some(bundle), Some(public)) => {
+            let minimum = arguments[11]
+                .parse::<u64>()
+                .ok()
+                .filter(|version| *version != 0)
+                .ok_or_else(|| anyhow!("provider minimum version must be nonzero"))?;
+            let root = TrustRoot::new(
+                ArtifactKind::ServiceImage,
+                Sha3_512::digest(public),
+                minimum,
+            );
+            let signed = SignedArtifact::decode(bundle)
+                .map_err(|_| anyhow!("invalid signed provider bundle"))?;
+            Some(
+                signed
+                    .verify_executable(&root, ArtifactKind::ServiceImage)
+                    .map_err(|_| anyhow!("provider signature or PE policy rejected"))?,
+            )
+        }
+        (None, None) => None,
+        _ => return Err(anyhow!("incomplete provider verification inputs")),
     };
     let cuda_bundle = if service_artifact_mode
         || boot_mode
@@ -1624,7 +1674,7 @@ fn application_main() -> Result<()> {
     let system = WhpSystem::open()
         .map_err(|error| anyhow!("Windows Hypervisor Platform is unavailable: {:?}", error))?;
     let preparation_started = Instant::now();
-    let mut isolation_admission = if service_mode {
+    let mut isolation_admission = if service_mode || component_service_mode {
         Some(
             IsolationAdmissionTable::<1>::new(IsolationMode::TotalMicrovm, 1)
                 .map_err(|error| anyhow!("WHP isolation admission failed: {:?}", error))?,
@@ -1632,14 +1682,37 @@ fn application_main() -> Result<()> {
     } else {
         None
     };
-    let isolation_preparation = if let Some(admission) = isolation_admission.as_mut() {
+    let mut isolation_preparation = if let Some(admission) = isolation_admission.as_mut() {
+        let (domain, interface, interface_generation, provider_generation) =
+            if component_service_mode {
+                (
+                    ObjectId(0x5a49_4d5f_5a53_5444),
+                    ObjectId(0x5a53_5444_0000_0003),
+                    3,
+                    provider_executable
+                        .as_ref()
+                        .ok_or_else(|| anyhow!("missing verified Zstd provider"))?
+                        .artifact()
+                        .version(),
+                )
+            } else {
+                (
+                    ObjectId(0x434f_4e46_4947),
+                    ObjectId(0x434f_4e46_4947_0001),
+                    1,
+                    service_executable
+                        .as_ref()
+                        .ok_or_else(|| anyhow!("missing verified configuration provider"))?
+                        .artifact()
+                        .version(),
+                )
+            };
         Some(prepare_configured_total_service(
             admission,
-            service_executable
-                .as_ref()
-                .ok_or_else(|| anyhow!("missing verified configuration provider"))?
-                .artifact()
-                .version(),
+            domain,
+            interface,
+            interface_generation,
+            provider_generation,
         )?)
     } else {
         None
@@ -1677,7 +1750,11 @@ fn application_main() -> Result<()> {
             )
             .map_err(|_| anyhow!("invalid block resume page"))?,
         )
-    } else if service_mode || block_service_mode || service_restart_request_mode {
+    } else if service_mode
+        || component_service_mode
+        || block_service_mode
+        || service_restart_request_mode
+    {
         system.prepare_isolated_service_kernel(&executable, handoff.as_slice(), layout)
     } else if service_preemption_mode {
         system.prepare_preemption_kernel(&executable, handoff.as_slice(), layout)
@@ -1691,49 +1768,107 @@ fn application_main() -> Result<()> {
         system.prepare_kernel_gpu_guest(&executable, handoff.as_slice(), layout, queue)
     }
     .map_err(|error| anyhow!("verified WHP kernel preparation failed: {:?}", error))?;
+    let mut component_launch = if component_service_mode {
+        let prepared = isolation_preparation
+            .take()
+            .ok_or_else(|| anyhow!("missing prepared component isolation route"))?;
+        let consumer = service_executable
+            .as_ref()
+            .ok_or_else(|| anyhow!("missing verified ZIM consumer"))?;
+        let provider = provider_executable
+            .as_ref()
+            .ok_or_else(|| anyhow!("missing verified Zstd provider"))?;
+        Some(
+            PreparedComponentServiceLaunch::bind(
+                prepared,
+                ObjectId(0x5a53_5444_0000_0003),
+                3,
+                provider.artifact().version(),
+                ZSTD_INTERFACE_FINGERPRINT,
+                *consumer.artifact().digest(),
+                *provider.artifact().digest(),
+            )
+            .map_err(|(_, error)| anyhow!("component launch binding failed: {:?}", error))?,
+        )
+    } else {
+        None
+    };
     if service_artifact_mode {
         let local_apic = service_preemption_mode || smp_service_migration_mode;
-        guest = guest
-            .attach_isolated_service_at(
-                0,
-                &executable,
-                layout,
-                service_executable
-                    .as_ref()
-                    .ok_or_else(|| anyhow!("missing verified service executable"))?,
-                SERVICE_PHYSICAL,
-                SERVICE_VIRTUAL,
-                SERVICE_STACK_PHYSICAL,
-                SERVICE_STACK_VIRTUAL,
-                8,
-                SERVICE_TABLE_PHYSICAL,
-                32,
-                local_apic,
-            )
-            .map_err(|error| anyhow!("isolated WHP service preparation failed: {:?}", error))?;
-        guest = guest
-            .attach_isolated_service_at(
-                1,
-                &executable,
-                layout,
-                service_executable
-                    .as_ref()
-                    .ok_or_else(|| anyhow!("missing verified service executable"))?,
-                SERVICE_B_PHYSICAL,
-                SERVICE_VIRTUAL,
-                SERVICE_B_STACK_PHYSICAL,
-                SERVICE_STACK_VIRTUAL,
-                8,
-                SERVICE_B_TABLE_PHYSICAL,
-                32,
-                local_apic,
-            )
-            .map_err(|error| {
-                anyhow!(
-                    "second isolated WHP service preparation failed: {:?}",
-                    error
+        guest = if let Some(launch) = component_launch.as_ref() {
+            guest
+                .attach_component_service_pair(
+                    launch,
+                    &executable,
+                    layout,
+                    service_executable
+                        .as_ref()
+                        .ok_or_else(|| anyhow!("missing verified ZIM consumer"))?,
+                    SERVICE_PHYSICAL,
+                    SERVICE_VIRTUAL,
+                    SERVICE_STACK_PHYSICAL,
+                    SERVICE_STACK_VIRTUAL,
+                    8,
+                    SERVICE_TABLE_PHYSICAL,
+                    32,
+                    provider_executable
+                        .as_ref()
+                        .ok_or_else(|| anyhow!("missing verified Zstd provider"))?,
+                    SERVICE_B_PHYSICAL,
+                    SERVICE_VIRTUAL,
+                    SERVICE_B_STACK_PHYSICAL,
+                    SERVICE_STACK_VIRTUAL,
+                    8,
+                    SERVICE_B_TABLE_PHYSICAL,
+                    32,
+                    local_apic,
                 )
-            })?;
+                .map_err(|error| {
+                    anyhow!("component service pair preparation failed: {:?}", error)
+                })?
+        } else {
+            let guest = guest
+                .attach_isolated_service_at(
+                    0,
+                    &executable,
+                    layout,
+                    service_executable
+                        .as_ref()
+                        .ok_or_else(|| anyhow!("missing verified service executable"))?,
+                    SERVICE_PHYSICAL,
+                    SERVICE_VIRTUAL,
+                    SERVICE_STACK_PHYSICAL,
+                    SERVICE_STACK_VIRTUAL,
+                    8,
+                    SERVICE_TABLE_PHYSICAL,
+                    32,
+                    local_apic,
+                )
+                .map_err(|error| anyhow!("isolated WHP service preparation failed: {:?}", error))?;
+            guest
+                .attach_isolated_service_at(
+                    1,
+                    &executable,
+                    layout,
+                    service_executable
+                        .as_ref()
+                        .ok_or_else(|| anyhow!("missing verified service executable"))?,
+                    SERVICE_B_PHYSICAL,
+                    SERVICE_VIRTUAL,
+                    SERVICE_B_STACK_PHYSICAL,
+                    SERVICE_STACK_VIRTUAL,
+                    8,
+                    SERVICE_B_TABLE_PHYSICAL,
+                    32,
+                    local_apic,
+                )
+                .map_err(|error| {
+                    anyhow!(
+                        "second isolated WHP service preparation failed: {:?}",
+                        error
+                    )
+                })?
+        };
         if service_mode || service_restart_request_mode {
             guest = guest
                 .attach_isolated_service_at(
@@ -1783,9 +1918,12 @@ fn application_main() -> Result<()> {
         let service_entry = guest
             .service_entry()
             .ok_or_else(|| anyhow!("missing WHP service entry"))?;
+        let provider_entry = guest
+            .service_entry_at(1)
+            .ok_or_else(|| anyhow!("missing WHP provider entry"))?;
         if guest.service_page_table_root() != PhysAddr::new(SERVICE_TABLE_PHYSICAL).ok()
-            || guest.service_entry_at(1) != Some(service_entry)
             || guest.service_page_table_root_at(1) != PhysAddr::new(SERVICE_B_TABLE_PHYSICAL).ok()
+            || (!component_service_mode && provider_entry != service_entry)
             || ((service_mode || service_restart_request_mode)
                 && (guest.service_entry_at(2) != Some(service_entry)
                     || guest.service_page_table_root_at(2)
@@ -1799,6 +1937,17 @@ fn application_main() -> Result<()> {
             &service_entry.to_le_bytes(),
         )
         .map_err(|_| anyhow!("failed to publish WHP service entry"))?;
+        if component_service_mode {
+            VmBackend::write_guest(
+                &mut guest,
+                SERVICE_SHARED_PHYSICAL + 16,
+                &provider_entry.to_le_bytes(),
+            )
+            .map_err(|_| anyhow!("failed to publish WHP provider entry"))?;
+        }
+    }
+    if let Some(launch) = component_launch.take() {
+        isolation_preparation = Some(launch.into_route());
     }
     let mut guest = if let (Some(admission), Some(prepared)) =
         (isolation_admission.as_mut(), isolation_preparation)
@@ -2120,6 +2269,48 @@ fn application_main() -> Result<()> {
             total_started.elapsed().as_micros()
         );
         return Ok(());
+    }
+    if component_service_mode {
+        let mut exit = exit;
+        let cleanup_stages = [0x21, 0x20, 0x40];
+        let mut cleanup_stage = 0;
+        for _ in 0..64 {
+            match exit {
+                VmExit::Io {
+                    port: SERVICE_CALL_PORT,
+                    size: 4,
+                    write: true,
+                    value: 1..=2,
+                } => {}
+                VmExit::Io {
+                    port: SERVICE_PROBE_PORT,
+                    size: 4,
+                    write: true,
+                    value,
+                } => {
+                    if cleanup_stages.get(cleanup_stage).copied() != Some(value) {
+                        return Err(anyhow!("WHP component cleanup stage mismatch: {:?}", exit));
+                    }
+                    cleanup_stage += 1;
+                    if value == 0x40 {
+                        println!(
+                            "verified exact-generation ZIM/Zstd component data path and lifecycle cleanup under WHP: verify={}us prepare={}us execute={}us total={}us",
+                            verification_micros,
+                            preparation_micros,
+                            execution_started.elapsed().as_micros(),
+                            total_started.elapsed().as_micros()
+                        );
+                        return Ok(());
+                    }
+                }
+                _ => return Err(anyhow!("WHP component service stage mismatch: {:?}", exit)),
+            }
+            exit = VmBackend::run(&mut guest, 0)
+                .map_err(|error| anyhow!("WHP component service execution failed: {:?}", error))?;
+        }
+        return Err(anyhow!(
+            "WHP component service probe exceeded its stage bound"
+        ));
     }
     if block_service_mode {
         let mut exit = exit;

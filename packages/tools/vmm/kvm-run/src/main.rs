@@ -20,11 +20,11 @@ use mrml_kernel::{
     GpuQueueIdentity, GpuQueueReceiver, GpuResourceResponse, GpuResourceResponseSender,
     GpuSharedQueueLayout, GpuVmmQueueBridge, GuestMemory, HypercallRouter, InterruptPolicy,
     IsolationAdmissionTable, IsolationMode, IsolationPlacement, ObjectId,
-    PreparedIsolationServiceRoute, ResourceCommand, Rights, SIGNED_ARTIFACT_OVERHEAD_BYTES,
-    SignedArtifact, TotalMicrovmClass, TrustRoot, VIRTUAL_BLOCK_FEATURE_FLUSH, VerifiedExecutable,
-    VerifiedGpuKernelBundle, VirtualBlockBackend, VirtualBlockBackendAuthority,
-    VirtualBlockCompletionStatus, VirtualBlockConfigurationPage, VirtualBlockDevice,
-    VirtualBlockDeviceState, VirtualBlockError, VirtualBlockMutationError,
+    PreparedComponentServiceLaunch, PreparedIsolationServiceRoute, ResourceCommand, Rights,
+    SIGNED_ARTIFACT_OVERHEAD_BYTES, SignedArtifact, TotalMicrovmClass, TrustRoot,
+    VIRTUAL_BLOCK_FEATURE_FLUSH, VerifiedExecutable, VerifiedGpuKernelBundle, VirtualBlockBackend,
+    VirtualBlockBackendAuthority, VirtualBlockCompletionStatus, VirtualBlockConfigurationPage,
+    VirtualBlockDevice, VirtualBlockDeviceState, VirtualBlockError, VirtualBlockMutationError,
     VirtualBlockPciAttachment, VirtualBlockPciAttachmentState, VirtualBlockPciCleanupMode,
     VirtualBlockPciCleanupRecord, VirtualBlockPciFunctionRevoker, VirtualBlockPciGuestMemoryMapper,
     VirtualBlockPciGuestWindowBackend, VirtualBlockPciResourceRevoker, VirtualBlockProcessOutcome,
@@ -60,6 +60,9 @@ type KvmConfigurationLauncher =
 #[cfg(target_os = "linux")]
 fn prepare_configured_total_service(
     admission: &mut IsolationAdmissionTable<1>,
+    domain: ObjectId,
+    interface: ObjectId,
+    interface_generation: u32,
     provider_generation: u64,
 ) -> Result<PreparedIsolationServiceRoute> {
     let root_object = ObjectId(0x4953_4f4c_4154_494f);
@@ -134,9 +137,9 @@ fn prepare_configured_total_service(
     )
     .map_err(|error| anyhow!("KVM package isolation bounds failed: {:?}", error))?;
     let identity = IsolationServiceIdentity::new(
-        ObjectId(0x434f_4e46_4947),
-        ObjectId(0x434f_4e46_4947_0001),
-        1,
+        domain,
+        interface,
+        interface_generation,
         provider_generation,
         TotalMicrovmClass::MicrovmEligible,
     )
@@ -301,6 +304,11 @@ const SERVICE_RESOURCE_PHYSICAL: u64 = 0x00f0_1000;
 #[cfg(target_os = "linux")]
 const SERVICE_RESOURCE_VIRTUAL: u64 = 0x006f_f000;
 #[cfg(target_os = "linux")]
+const ZSTD_INTERFACE_FINGERPRINT: [u8; 32] = [
+    106, 98, 189, 213, 148, 175, 40, 79, 81, 237, 193, 115, 74, 161, 88, 81, 229, 222, 55, 239,
+    126, 33, 16, 59, 102, 84, 84, 199, 67, 226, 18, 108,
+];
+#[cfg(target_os = "linux")]
 const BLOCK_PROOF_PORT: u16 = 0x4d65;
 #[cfg(target_os = "linux")]
 const BLOCK_PROBE_CYCLES: usize = 8;
@@ -350,6 +358,7 @@ enum LaunchMode {
     PreemptionProbe,
     UserProbe,
     ServiceProbe,
+    ComponentServiceProbe,
     BlockServiceProbe,
     BlockGuestDriverProbe,
     PciConfigurationProbe,
@@ -373,6 +382,7 @@ impl LaunchMode {
             "preemption-probe" => Ok(Self::PreemptionProbe),
             "user-probe" => Ok(Self::UserProbe),
             "service-probe" => Ok(Self::ServiceProbe),
+            "component-service-probe" => Ok(Self::ComponentServiceProbe),
             "block-service-probe" => Ok(Self::BlockServiceProbe),
             "block-guest-driver-probe" => Ok(Self::BlockGuestDriverProbe),
             "pci-configuration-probe" => Ok(Self::PciConfigurationProbe),
@@ -385,7 +395,7 @@ impl LaunchMode {
             "smp-service-migration-probe" => Ok(Self::SmpServiceMigrationProbe),
             "smp-periodic-balance-probe" => Ok(Self::SmpPeriodicBalanceProbe),
             _ => Err(anyhow!(
-                "mode must be boot, fault-probe, timer-probe, preemption-probe, user-probe, service-probe, block-service-probe, block-guest-driver-probe, pci-configuration-probe, service-restart-request-probe, service-preemption-probe, gpu-benchmark, smp-probe, smp-scheduler-probe, smp-ipi-probe, smp-service-migration-probe, or smp-periodic-balance-probe"
+                "mode must be boot, fault-probe, timer-probe, preemption-probe, user-probe, service-probe, component-service-probe, block-service-probe, block-guest-driver-probe, pci-configuration-probe, service-restart-request-probe, service-preemption-probe, gpu-benchmark, smp-probe, smp-scheduler-probe, smp-ipi-probe, smp-service-migration-probe, or smp-periodic-balance-probe"
             )),
         }
     }
@@ -1504,9 +1514,10 @@ fn application_main() -> Result<()> {
         );
         return Ok(());
     }
-    if arguments.len() != 6 && arguments.len() != 8 && arguments.len() != 9 {
+    if arguments.len() != 6 && arguments.len() != 8 && arguments.len() != 9 && arguments.len() != 12
+    {
         return Err(anyhow!(
-            "usage: mrml-kvm-run KERNEL.mrp PACKAGE.public KERNEL.public MINIMUM_VERSION MODE [SYSTEM.mrs SYSTEM_RELEASE.public | ARTIFACT.signed ARTIFACT.public ARTIFACT_MINIMUM_VERSION]\n       mrml-kvm-run --verify-boot-artifacts KERNEL.mrp PACKAGE.public MINIMUM_VERSION SYSTEM.mrs SYSTEM_RELEASE.public\n       mrml-kvm-run --export-cuda-bundle OUTPUT.ptx"
+            "usage: mrml-kvm-run KERNEL.mrp PACKAGE.public KERNEL.public MINIMUM_VERSION MODE [SYSTEM.mrs SYSTEM_RELEASE.public | ARTIFACT.signed ARTIFACT.public ARTIFACT_MINIMUM_VERSION | CONSUMER.signed CONSUMER.public CONSUMER_MINIMUM PROVIDER.signed PROVIDER.public PROVIDER_MINIMUM]\n       mrml-kvm-run --verify-boot-artifacts KERNEL.mrp PACKAGE.public MINIMUM_VERSION SYSTEM.mrs SYSTEM_RELEASE.public\n       mrml-kvm-run --export-cuda-bundle OUTPUT.ptx"
         ));
     }
     let minimum_version = arguments[4]
@@ -1518,6 +1529,12 @@ fn application_main() -> Result<()> {
     if arguments.len() == 8 && mode != LaunchMode::Boot {
         return Err(anyhow!(
             "SystemRelease binding is accepted only for boot mode"
+        ));
+    }
+    let component_service_mode = mode == LaunchMode::ComponentServiceProbe;
+    if component_service_mode != (arguments.len() == 12) {
+        return Err(anyhow!(
+            "component-service-probe requires exact consumer and provider signed artifacts, public keys, and minimum versions"
         ));
     }
     if matches!(
@@ -1559,6 +1576,7 @@ fn application_main() -> Result<()> {
     let service_mode = matches!(
         mode,
         LaunchMode::ServiceProbe
+            | LaunchMode::ComponentServiceProbe
             | LaunchMode::BlockServiceProbe
             | LaunchMode::ServiceRestartRequestProbe
             | LaunchMode::ServicePreemptionProbe
@@ -1603,6 +1621,46 @@ fn application_main() -> Result<()> {
         }
         (None, None) => None,
         _ => return Err(anyhow!("incomplete service verification inputs")),
+    };
+    let provider_bundle = if component_service_mode {
+        Some(mrml_runtime::read_file_bounded(
+            &arguments[9],
+            SIGNED_ARTIFACT_OVERHEAD_BYTES + mrml_kernel::MAX_SERVICE_IMAGE_BYTES as usize,
+        )?)
+    } else {
+        None
+    };
+    let provider_public = if component_service_mode {
+        let public = mrml_runtime::read_file_bounded(&arguments[10], LAMPORT_PUBLIC_KEY_BYTES)?;
+        if public.len() != LAMPORT_PUBLIC_KEY_BYTES {
+            return Err(anyhow!("invalid provider public-key length"));
+        }
+        Some(public)
+    } else {
+        None
+    };
+    let provider_executable = match (&provider_bundle, &provider_public) {
+        (Some(bundle), Some(public)) => {
+            let minimum = arguments[11]
+                .parse::<u64>()
+                .ok()
+                .filter(|version| *version != 0)
+                .ok_or_else(|| anyhow!("provider minimum version must be nonzero"))?;
+            let root = TrustRoot::new(
+                ArtifactKind::ServiceImage,
+                Sha3_512::digest(public),
+                minimum,
+            );
+            let signed = SignedArtifact::decode(bundle)
+                .map_err(|_| anyhow!("invalid signed provider bundle"))?;
+            Some(
+                signed
+                    .verify_executable(&root, ArtifactKind::ServiceImage)
+                    .map_err(|_| anyhow!("provider signature or PE policy rejected"))?,
+            )
+        }
+        (None, None) => None,
+        _ => return Err(anyhow!("incomplete provider verification inputs")),
     };
     let cuda_bundle = if mode == LaunchMode::GpuBenchmark {
         Some(verify_cuda_bundle(
@@ -1684,7 +1742,10 @@ fn application_main() -> Result<()> {
     let system = KvmSystem::open()
         .map_err(|error| anyhow!("KVM is unavailable or incompatible: {:?}", error))?;
     let preparation_started = Instant::now();
-    let total_service_mode = mode == LaunchMode::ServiceProbe;
+    let total_service_mode = matches!(
+        mode,
+        LaunchMode::ServiceProbe | LaunchMode::ComponentServiceProbe
+    );
     let mut isolation_admission = if total_service_mode {
         Some(
             IsolationAdmissionTable::<1>::new(IsolationMode::TotalMicrovm, 1)
@@ -1693,14 +1754,37 @@ fn application_main() -> Result<()> {
     } else {
         None
     };
-    let isolation_preparation = if let Some(admission) = isolation_admission.as_mut() {
+    let mut isolation_preparation = if let Some(admission) = isolation_admission.as_mut() {
+        let (domain, interface, interface_generation, provider_generation) =
+            if component_service_mode {
+                (
+                    ObjectId(0x5a49_4d5f_5a53_5444),
+                    ObjectId(0x5a53_5444_0000_0003),
+                    3,
+                    provider_executable
+                        .as_ref()
+                        .ok_or_else(|| anyhow!("missing verified Zstd provider"))?
+                        .artifact()
+                        .version(),
+                )
+            } else {
+                (
+                    ObjectId(0x434f_4e46_4947),
+                    ObjectId(0x434f_4e46_4947_0001),
+                    1,
+                    service_executable
+                        .as_ref()
+                        .ok_or_else(|| anyhow!("missing verified configuration provider"))?
+                        .artifact()
+                        .version(),
+                )
+            };
         Some(prepare_configured_total_service(
             admission,
-            service_executable
-                .as_ref()
-                .ok_or_else(|| anyhow!("missing verified configuration provider"))?
-                .artifact()
-                .version(),
+            domain,
+            interface,
+            interface_generation,
+            provider_generation,
         )?)
     } else {
         None
@@ -1767,6 +1851,7 @@ fn application_main() -> Result<()> {
             system.prepare_smp_kernel_guest::<16>(&executable, handoff.as_slice(), layout)
         }
         LaunchMode::ServiceProbe
+        | LaunchMode::ComponentServiceProbe
         | LaunchMode::BlockServiceProbe
         | LaunchMode::ServiceRestartRequestProbe => system
             .prepare_isolated_service_kernel_guest::<16>(
@@ -1778,47 +1863,107 @@ fn application_main() -> Result<()> {
         _ => system.prepare_kernel_guest::<16>(0, &executable, handoff.as_slice(), layout),
     }
     .map_err(|error| anyhow!("verified kernel launch preparation failed: {:?}", error))?;
+    let mut component_launch = if component_service_mode {
+        let prepared = isolation_preparation
+            .take()
+            .ok_or_else(|| anyhow!("missing prepared component isolation route"))?;
+        let consumer = service_executable
+            .as_ref()
+            .ok_or_else(|| anyhow!("missing verified ZIM consumer"))?;
+        let provider = provider_executable
+            .as_ref()
+            .ok_or_else(|| anyhow!("missing verified Zstd provider"))?;
+        Some(
+            PreparedComponentServiceLaunch::bind(
+                prepared,
+                ObjectId(0x5a53_5444_0000_0003),
+                3,
+                provider.artifact().version(),
+                ZSTD_INTERFACE_FINGERPRINT,
+                *consumer.artifact().digest(),
+                *provider.artifact().digest(),
+            )
+            .map_err(|(_, error)| anyhow!("component launch binding failed: {:?}", error))?,
+        )
+    } else {
+        None
+    };
     if service_mode {
         let local_apic = matches!(
             mode,
             LaunchMode::ServicePreemptionProbe | LaunchMode::SmpServiceMigrationProbe
         );
-        guest = guest
-            .attach_isolated_service_at(
-                0,
-                &executable,
-                layout,
-                service_executable
-                    .as_ref()
-                    .ok_or_else(|| anyhow!("missing verified service executable"))?,
-                SERVICE_PHYSICAL,
-                SERVICE_VIRTUAL,
-                SERVICE_STACK_PHYSICAL,
-                SERVICE_STACK_VIRTUAL,
-                8,
-                SERVICE_TABLE_PHYSICAL,
-                32,
-                local_apic,
-            )
-            .map_err(|error| anyhow!("isolated service preparation failed: {:?}", error))?;
-        guest = guest
-            .attach_isolated_service_at(
-                1,
-                &executable,
-                layout,
-                service_executable
-                    .as_ref()
-                    .ok_or_else(|| anyhow!("missing verified service executable"))?,
-                SERVICE_B_PHYSICAL,
-                SERVICE_VIRTUAL,
-                SERVICE_B_STACK_PHYSICAL,
-                SERVICE_STACK_VIRTUAL,
-                8,
-                SERVICE_B_TABLE_PHYSICAL,
-                32,
-                local_apic,
-            )
-            .map_err(|error| anyhow!("second isolated service preparation failed: {:?}", error))?;
+        guest = if let Some(launch) = component_launch.as_ref() {
+            guest
+                .attach_component_service_pair(
+                    launch,
+                    &executable,
+                    layout,
+                    service_executable
+                        .as_ref()
+                        .ok_or_else(|| anyhow!("missing verified ZIM consumer"))?,
+                    SERVICE_PHYSICAL,
+                    SERVICE_VIRTUAL,
+                    SERVICE_STACK_PHYSICAL,
+                    SERVICE_STACK_VIRTUAL,
+                    8,
+                    SERVICE_TABLE_PHYSICAL,
+                    32,
+                    provider_executable
+                        .as_ref()
+                        .ok_or_else(|| anyhow!("missing verified Zstd provider"))?,
+                    SERVICE_B_PHYSICAL,
+                    SERVICE_VIRTUAL,
+                    SERVICE_B_STACK_PHYSICAL,
+                    SERVICE_STACK_VIRTUAL,
+                    8,
+                    SERVICE_B_TABLE_PHYSICAL,
+                    32,
+                    local_apic,
+                )
+                .map_err(|error| {
+                    anyhow!("component service pair preparation failed: {:?}", error)
+                })?
+        } else {
+            let guest = guest
+                .attach_isolated_service_at(
+                    0,
+                    &executable,
+                    layout,
+                    service_executable
+                        .as_ref()
+                        .ok_or_else(|| anyhow!("missing verified service executable"))?,
+                    SERVICE_PHYSICAL,
+                    SERVICE_VIRTUAL,
+                    SERVICE_STACK_PHYSICAL,
+                    SERVICE_STACK_VIRTUAL,
+                    8,
+                    SERVICE_TABLE_PHYSICAL,
+                    32,
+                    local_apic,
+                )
+                .map_err(|error| anyhow!("isolated service preparation failed: {:?}", error))?;
+            guest
+                .attach_isolated_service_at(
+                    1,
+                    &executable,
+                    layout,
+                    service_executable
+                        .as_ref()
+                        .ok_or_else(|| anyhow!("missing verified service executable"))?,
+                    SERVICE_B_PHYSICAL,
+                    SERVICE_VIRTUAL,
+                    SERVICE_B_STACK_PHYSICAL,
+                    SERVICE_STACK_VIRTUAL,
+                    8,
+                    SERVICE_B_TABLE_PHYSICAL,
+                    32,
+                    local_apic,
+                )
+                .map_err(|error| {
+                    anyhow!("second isolated service preparation failed: {:?}", error)
+                })?
+        };
         if matches!(
             mode,
             LaunchMode::ServiceProbe | LaunchMode::ServiceRestartRequestProbe
@@ -1871,9 +2016,12 @@ fn application_main() -> Result<()> {
         let service_entry = guest
             .service_entry()
             .ok_or_else(|| anyhow!("missing KVM service entry"))?;
+        let provider_entry = guest
+            .service_entry_at(1)
+            .ok_or_else(|| anyhow!("missing KVM provider entry"))?;
         if guest.service_page_table_root() != PhysAddr::new(SERVICE_TABLE_PHYSICAL).ok()
-            || guest.service_entry_at(1) != Some(service_entry)
             || guest.service_page_table_root_at(1) != PhysAddr::new(SERVICE_B_TABLE_PHYSICAL).ok()
+            || (!component_service_mode && provider_entry != service_entry)
             || (matches!(
                 mode,
                 LaunchMode::ServiceProbe | LaunchMode::ServiceRestartRequestProbe
@@ -1891,6 +2039,17 @@ fn application_main() -> Result<()> {
             &service_entry.to_le_bytes(),
         )
         .map_err(|_| anyhow!("failed to publish KVM service entry"))?;
+        if component_service_mode {
+            VmBackend::write_guest(
+                &mut guest,
+                SERVICE_SHARED_PHYSICAL + 16,
+                &provider_entry.to_le_bytes(),
+            )
+            .map_err(|_| anyhow!("failed to publish KVM provider entry"))?;
+        }
+    }
+    if let Some(launch) = component_launch.take() {
+        isolation_preparation = Some(launch.into_route());
     }
     let mut guest = if let (Some(admission), Some(prepared)) =
         (isolation_admission.as_mut(), isolation_preparation)
@@ -2195,6 +2354,42 @@ fn application_main() -> Result<()> {
         }
         exit = VmBackend::run(&mut guest, 0)
             .map_err(|error| anyhow!("KVM execution after user proof failed: {:?}", error))?;
+    } else if mode == LaunchMode::ComponentServiceProbe {
+        let cleanup_stages = [0x21, 0x20, 0x40];
+        let mut cleanup_stage = 0;
+        for _ in 0..64 {
+            match exit {
+                VmExit::Io {
+                    port: SERVICE_CALL_PORT,
+                    size: 4,
+                    write: true,
+                    value: 1..=2,
+                } => {}
+                VmExit::Io {
+                    port: SERVICE_PROBE_PORT,
+                    size: 4,
+                    write: true,
+                    value,
+                } => {
+                    if cleanup_stages.get(cleanup_stage).copied() != Some(value) {
+                        return Err(anyhow!("KVM component cleanup stage mismatch: {:?}", exit));
+                    }
+                    cleanup_stage += 1;
+                    if value == 0x40 {
+                        exit = VmExit::Halted;
+                        break;
+                    }
+                }
+                _ => return Err(anyhow!("KVM component service stage mismatch: {:?}", exit)),
+            }
+            exit = VmBackend::run(&mut guest, 0)
+                .map_err(|error| anyhow!("KVM component service execution failed: {:?}", error))?;
+        }
+        if exit != VmExit::Halted {
+            return Err(anyhow!(
+                "KVM component service probe exceeded its stage bound"
+            ));
+        }
     } else if mode == LaunchMode::BlockServiceProbe {
         let cleanup_stages = [0x21, 0x31, 0x20, 0x30];
         let mut cleanup_stage = 0;
@@ -2786,6 +2981,11 @@ fn application_main() -> Result<()> {
                 "service probe unexpectedly modified the framebuffer"
             ));
         }
+        LaunchMode::ComponentServiceProbe if marker != [0; 4] => {
+            return Err(anyhow!(
+                "component service probe unexpectedly modified the framebuffer"
+            ));
+        }
         LaunchMode::GpuBenchmark if marker != [0x78, 0xe0, 0x46, 0] => {
             return Err(anyhow!(
                 "kernel did not authenticate the GPU benchmark completion"
@@ -3268,6 +3468,10 @@ mod tests {
         assert_eq!(
             LaunchMode::parse("service-probe").unwrap(),
             LaunchMode::ServiceProbe
+        );
+        assert_eq!(
+            LaunchMode::parse("component-service-probe").unwrap(),
+            LaunchMode::ComponentServiceProbe
         );
         assert_eq!(
             LaunchMode::parse("block-service-probe").unwrap(),

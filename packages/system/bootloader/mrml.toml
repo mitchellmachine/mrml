@@ -23,6 +23,9 @@ name = "block-guest-driver-probe"
 name = "block-service-probe"
 
 [[feature]]
+name = "component-service-probe"
+
+[[feature]]
 name = "emulated-ap-timing"
 
 [[feature]]
@@ -135,6 +138,11 @@ targets = ["UEFI"]
 [[feature_profile]]
 features = ["service-probe"]
 name = "service_probe"
+targets = ["UEFI"]
+
+[[feature_profile]]
+features = ["service-probe", "component-service-probe"]
+name = "component_service_probe"
 targets = ["UEFI"]
 
 [[absent_compile_env]]

@@ -473,10 +473,10 @@ static mut SERVICE_SYSCALL_CAPABILITIES: [u8; MAX_CAPABILITIES
 #[cfg(feature = "service-probe")]
 struct HostedServiceEraser;
 
-#[cfg(feature = "block-service-probe")]
+#[cfg(any(feature = "block-service-probe", feature = "component-service-probe"))]
 struct HostedUnmappedResourceRevoker;
 
-#[cfg(feature = "block-service-probe")]
+#[cfg(any(feature = "block-service-probe", feature = "component-service-probe"))]
 impl GuestMappingRevoker for HostedUnmappedResourceRevoker {
     type Error = ();
 
@@ -1132,7 +1132,43 @@ unsafe extern "sysv64" fn mrml_user_call_dispatch(frame: *mut UserCallFrame) {
                 _ => halt(),
             },
             SyscallRequest::Exit => {
-                #[cfg(feature = "block-service-probe")]
+                #[cfg(feature = "component-service-probe")]
+                {
+                    let supervisor = (*core::ptr::addr_of_mut!(SERVICE_SUPERVISOR))
+                        .as_mut()
+                        .unwrap_or_else(|| halt());
+                    let terminated = supervisor.exit_current(runtime).unwrap_or_else(|_| halt());
+                    if terminated.task != current || runtime.context(current).is_ok() {
+                        halt();
+                    }
+                    complete_service_cleanup(supervisor, terminated.cleanup);
+                    match terminated.next {
+                        ScheduleOutcome::Switch { to, .. } => enter_service_task(runtime, to),
+                        ScheduleOutcome::Idle => {
+                            let ids = (*core::ptr::addr_of!(SERVICE_IDS)).unwrap_or_else(|| halt());
+                            if ids[..2].iter().any(|service| {
+                                supervisor.task(*service) != Ok(None)
+                                    || supervisor.pending_cleanup(*service) != Ok(None)
+                                    || supervisor.state(*service)
+                                        != Ok(mrml_kernel::ServiceState::Exited)
+                            }) {
+                                halt();
+                            }
+                            asm!(
+                                "out dx, eax",
+                                in("dx") SERVICE_PROBE_PORT,
+                                in("eax") 0x40u32,
+                                options(nomem, nostack)
+                            );
+                            halt();
+                        }
+                        _ => halt(),
+                    }
+                }
+                #[cfg(all(
+                    not(feature = "component-service-probe"),
+                    feature = "block-service-probe"
+                ))]
                 {
                     let supervisor = (*core::ptr::addr_of_mut!(SERVICE_SUPERVISOR))
                         .as_mut()
@@ -1184,7 +1220,10 @@ unsafe extern "sysv64" fn mrml_user_call_dispatch(frame: *mut UserCallFrame) {
                         _ => halt(),
                     }
                 }
-                #[cfg(not(feature = "block-service-probe"))]
+                #[cfg(not(any(
+                    feature = "component-service-probe",
+                    feature = "block-service-probe"
+                )))]
                 {
                     let supervisor = (*core::ptr::addr_of_mut!(SERVICE_SUPERVISOR))
                         .as_mut()
@@ -2962,9 +3001,13 @@ unsafe fn run_kernel(bytes: *const u8, length: usize) -> ! {
             SERVICE_STACK_TOP,
         )
         .unwrap_or_else(|_| halt());
+        #[cfg(feature = "component-service-probe")]
+        let service_b_entry = hosted_provider_entry();
+        #[cfg(not(feature = "component-service-probe"))]
+        let service_b_entry = service_entry + 0x200;
         let mut context_b = UserContext::new(
             PhysAddr::new(SERVICE_B_ROOT).unwrap_or_else(|_| halt()),
-            service_entry + 0x200,
+            service_b_entry,
             SERVICE_STACK_TOP,
         )
         .unwrap_or_else(|_| halt());
@@ -3042,11 +3085,29 @@ unsafe fn run_kernel(bytes: *const u8, length: usize) -> ! {
         #[cfg(feature = "block-service-probe")]
         let (resource_capabilities, sender_resources) =
             provision_service_resource(runtime, receiver, Some(sender));
-        #[cfg(not(feature = "block-service-probe"))]
+        #[cfg(feature = "component-service-probe")]
+        let (resource_capabilities, _) =
+            provision_service_resource(runtime, receiver, Some(sender));
+        #[cfg(not(any(feature = "block-service-probe", feature = "component-service-probe")))]
         let (resource_capabilities, _) = provision_service_resource(runtime, receiver, None);
         #[cfg(feature = "block-service-probe")]
         let [sender_write, sender_read, sender_transfer] =
             sender_resources.unwrap_or_else(|| halt());
+        #[cfg(feature = "component-service-probe")]
+        let resource_transfer = runtime
+            .capabilities_mut(receiver)
+            .and_then(|space| {
+                space
+                    .insert(
+                        ObjectId(0x94),
+                        Rights::MAP
+                            .union(Rights::READ)
+                            .union(Rights::WRITE)
+                            .union(Rights::DELEGATE),
+                    )
+                    .map_err(|_| mrml_kernel::TaskRuntimeError::IntegrityFailure)
+            })
+            .unwrap_or_else(|_| halt());
         #[cfg(not(feature = "block-service-probe"))]
         let supervision_capability = runtime
             .capabilities_mut(sender)
@@ -3078,6 +3139,7 @@ unsafe fn run_kernel(bytes: *const u8, length: usize) -> ! {
                     .map_err(|_| mrml_kernel::TaskRuntimeError::IntegrityFailure)
             })
             .unwrap_or_else(|_| halt());
+        #[cfg(not(feature = "component-service-probe"))]
         let setting_capability = runtime
             .capabilities_mut(sender)
             .and_then(|space| {
@@ -3115,7 +3177,14 @@ unsafe fn run_kernel(bytes: *const u8, length: usize) -> ! {
         receiver_context.r13 = receiver_capability.token();
         receiver_context.r14 = sender.token();
         receiver_context.r15 = resource_capabilities[0].token();
-        receiver_context.rbx = resource_capabilities[1].token();
+        #[cfg(feature = "component-service-probe")]
+        {
+            receiver_context.rbx = resource_transfer.token();
+        }
+        #[cfg(not(feature = "component-service-probe"))]
+        {
+            receiver_context.rbx = resource_capabilities[1].token();
+        }
         receiver_context.r11 = recovery_capability.map_or(0, Capability::token);
         #[cfg(feature = "service-restart-request-probe")]
         {
@@ -3133,7 +3202,10 @@ unsafe fn run_kernel(bytes: *const u8, length: usize) -> ! {
             sender_context.r15 = sender_write.token();
             sender_context.r11 = sender_read.token();
         }
-        sender_context.rbx = setting_capability.token();
+        #[cfg(not(feature = "component-service-probe"))]
+        {
+            sender_context.rbx = setting_capability.token();
+        }
         #[cfg(not(feature = "block-service-probe"))]
         {
             sender_context.rbp = supervision_capability.token();
@@ -3698,14 +3770,8 @@ unsafe fn provision_service_resource(
         unsafe { memory_pointer.write(Some(GuestMemory::new())) };
     }
     let memory = unsafe { (*memory_pointer).as_mut().unwrap_or_else(|| halt()) };
-    let region = GuestRegion::new(
-        SERVICE_RESOURCE_VIRTUAL,
-        resource_physical,
-        1,
-        true,
-        false,
-    )
-    .unwrap_or_else(|_| halt());
+    let region = GuestRegion::new(SERVICE_RESOURCE_VIRTUAL, resource_physical, 1, true, false)
+        .unwrap_or_else(|_| halt());
     let mapping = memory.map(region).unwrap_or_else(|_| halt());
     let resources_pointer = core::ptr::addr_of_mut!(SERVICE_RESOURCES);
     if unsafe { (*resources_pointer).is_none() } {
@@ -3795,7 +3861,7 @@ unsafe fn complete_service_cleanup(
     ticket: mrml_kernel::ServiceCleanupTicket,
 ) {
     let root = ticket.context().page_table().get();
-    #[cfg(feature = "block-service-probe")]
+    #[cfg(any(feature = "block-service-probe", feature = "component-service-probe"))]
     if root == SERVICE_ROOT || root == SERVICE_B_ROOT {
         let resources = unsafe {
             (*core::ptr::addr_of_mut!(SERVICE_RESOURCES))
@@ -3826,7 +3892,7 @@ unsafe fn complete_service_cleanup(
             .unwrap_or_else(|_| halt());
         return;
     }
-    #[cfg(feature = "block-service-probe")]
+    #[cfg(any(feature = "block-service-probe", feature = "component-service-probe"))]
     let resource_virtual = if root == SERVICE_ROOT {
         Some(SERVICE_RESOURCE_VIRTUAL)
     } else if root == SERVICE_B_ROOT {
@@ -3834,7 +3900,7 @@ unsafe fn complete_service_cleanup(
     } else {
         None
     };
-    #[cfg(not(feature = "block-service-probe"))]
+    #[cfg(not(any(feature = "block-service-probe", feature = "component-service-probe")))]
     let resource_virtual = (root == SERVICE_ROOT).then_some(SERVICE_RESOURCE_VIRTUAL);
     let Some(resource_virtual) = resource_virtual else {
         supervisor
@@ -4172,6 +4238,19 @@ unsafe fn hosted_service_entry() -> u64 {
         .checked_add(u64::from(mrml_kernel::MAX_SERVICE_IMAGE_BYTES))
         .unwrap_or_else(|| halt());
     if !(image_base..image_end).contains(&entry) || entry.checked_add(0x200).is_none() {
+        halt();
+    }
+    entry
+}
+
+#[cfg(feature = "component-service-probe")]
+unsafe fn hosted_provider_entry() -> u64 {
+    let entry = unsafe { core::ptr::read_volatile((SERVICE_SHARED_PHYSICAL + 16) as *const u64) };
+    let image_base = 0x0000_0001_4000_0000u64;
+    let image_end = image_base
+        .checked_add(u64::from(mrml_kernel::MAX_SERVICE_IMAGE_BYTES))
+        .unwrap_or_else(|| halt());
+    if !(image_base..image_end).contains(&entry) {
         halt();
     }
     entry

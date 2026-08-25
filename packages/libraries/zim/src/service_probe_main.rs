@@ -20,6 +20,7 @@ extern "C" fn efi_main() -> ! {
         "mov rsi, r14",
         "mov rdx, r15",
         "mov rcx, r12",
+        "mov r8, rbx",
         "sub rsp, 16",
         "call mrml_zim_probe",
         "ud2",
@@ -39,11 +40,14 @@ unsafe extern "sysv64" fn mrml_zim_probe(
     provider: u64,
     shared: u64,
     provider_generation: u64,
+    transfer: u64,
 ) -> ! {
     if endpoint == 0
         || provider == 0
         || shared == 0
         || shared >> 32 == 0
+        || transfer == 0
+        || transfer == shared
         || provider_generation == 0
     {
         halt();
@@ -64,8 +68,10 @@ unsafe extern "sysv64" fn mrml_zim_probe(
         BorrowedWriteView::within(64, 32, SHARED_BYTES).unwrap_or_else(|| halt()),
     )
     .unwrap_or_else(|_| halt());
-    let descriptor =
-        capability_descriptor(shared, Rights::MAP.union(Rights::READ).union(Rights::WRITE));
+    let descriptor = capability_descriptor(
+        transfer,
+        Rights::MAP.union(Rights::READ).union(Rights::WRITE),
+    );
     unsafe { send(endpoint, provider, &request, &descriptor) };
 
     let mut response = [0; DECOMPRESS_RESPONSE_BYTES];
