@@ -3,7 +3,8 @@
 Status: **PARTIALLY IMPLEMENTED**. Manifest V2 parses a typed placement policy,
 rejects unknown fields/tokens, contradictory bounds, duplicates, and cross-class
 placements, and requires a reason for fixed platform policy. Current application
-and service manifests explicitly record native singleton policies. The bounded
+and service manifests explicitly record policy; the configuration service is the
+first package admitting both native-service and microVM forms. The bounded
 resolver applies package defaults, owner requests, and total-mode requests; an
 unsupported total promotion is reported as an exception and launches nothing.
 The workspace model retains each validated policy and `mrml.lock` records its
@@ -32,10 +33,15 @@ exact interface/provider/policy generations to either `NATIVE_SERVICE` or
 `MICROVM`; the router invokes only that backend entry and commits only matching
 readiness evidence. Total mode rejects a native-service request before backend
 launch, and microVM failure is retained as unavailable without native fallback.
-This composition does not select a provider or placement, create a VM, carry an
-interface invocation, assign resources, persist policy, or provide transparent
-cross-placement transport. Those mechanisms and the representative concrete
-dual-placement service remain **PLANNED**.
+The configuration service now supplies the first concrete adapter over those
+two backend entries, and its manifest admits both forms while retaining native
+service as the default and floor. Focused tests prove that either form preserves
+one interface/provider binding and that microVM failure never invokes its native
+launcher. The launchers are still abstract boundaries: this composition does not
+select a provider or placement, create a VM, carry an interface invocation,
+assign resources, persist policy, or provide transparent cross-placement
+transport. A fully instantiated representative dual-placement service remains
+**PLANNED**.
 
 ## One policy, several placements
 

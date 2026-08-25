@@ -36,9 +36,11 @@ Three new persistent deltas are documented before implementation:
   retains typed unavailable attempts while rejecting Total-mode native
   downgrades or active blockers. A bounded routing prerequisite now dispatches
   a caller-selected service placement to distinct native-service or microVM
-  backend entries while preserving exact interface and provider generations;
-  it does not select the placement/provider or transport interface calls. A representative
-  dual-placement service, owner-setting persistence, VM construction, resource
+  backend entries while preserving exact interface and provider generations.
+  The configuration package now admits both forms and supplies a concrete
+  configuration-specific adapter with focused fail-closed tests; its native and
+  microVM launch factories are not yet instantiated into one runtime. A complete
+  representative dual-placement service, owner-setting persistence, VM construction, resource
   projection, and cross-placement runtime transport remain **PLANNED**.
   The existing hosted KVM/WHP configuration-service probes are wired to this
   admission record, but do not yet constitute native-versus-microVM resolution.

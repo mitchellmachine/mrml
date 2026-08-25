@@ -36,8 +36,8 @@ class, requested placement, and typed resource/transport reason. An admitted
 retry clears the older record only after capacity, policy, placement, and next
 generation all preflight successfully; bounded retention evicts only the oldest
 failure. The Total report exposes the number of unavailable eligible domains but
-does not miscount them as running native fallback. This behavior adds one focused
-focused tests in both hosted suites.
+does not miscount them as running native fallback. Focused tests cover this in
+both hosted suites.
 
 A bounded service-routing prerequisite now composes that admission table with
 distinct native-service and microVM backend entry points. Its typed specification
@@ -45,10 +45,15 @@ preserves exact interface, interface-generation, provider-generation, and policy
 generation identity across either placement. It rejects Total-mode native service
 before invoking a backend, records microVM launch failure as unavailable, and
 never retries through the native entry. This is **PARTIALLY IMPLEMENTED** kernel
-mechanism and focused simulation evidence only: it does not yet choose a provider
-or placement, instantiate a concrete configuration-service backend, transport an
-interface call, allocate VM resources, or complete the representative
-dual-placement-service milestone.
+mechanism and focused simulation evidence only. The configuration package now
+implements a concrete adapter with separately typed native-service and microVM
+launchers, and its manifest admits both forms. Two focused configuration tests on
+Windows and Arch Linux preserve the exact interface/provider generations across
+both routes and prove microVM unavailability cannot call the native launcher.
+The launchers are not yet wired to native supervision and VMM construction, so
+this does not choose a provider or placement, transport an interface call,
+allocate VM resources, or complete the representative dual-placement-service
+milestone.
 
 The hosted KVM and WHP `service-probe` launchers now prepare the exact
 configuration-service domain as `MICROVM_ELIGIBLE` under policy generation 1

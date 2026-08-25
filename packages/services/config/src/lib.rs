@@ -14,10 +14,11 @@ use core::ops::{Deref, DerefMut};
 use mrml_crypto::Sha3_256;
 use mrml_kernel::arch::x86_64::UserContext;
 use mrml_kernel::{
-    Capability, CapabilityError, CapabilitySpace, MemoryBackingKind, MemoryObjectId, MemoryPoolId,
-    MemoryPoolTable, MemoryResourceError, Message, ObjectId, PAGE_SIZE, Priority, RestartPolicy,
-    Rights, ServiceError, ServiceId, ServiceRegistrationPlan, ServiceState, ServiceSupervisor,
-    TaskId, TaskRuntime, TaskRuntimeError,
+    Capability, CapabilityError, CapabilitySpace, IsolationBackendFailure, IsolationPlacement,
+    IsolationServiceBackend, IsolationServiceSpec, IsolationUnavailableReason, MemoryBackingKind,
+    MemoryObjectId, MemoryPoolId, MemoryPoolTable, MemoryResourceError, Message, ObjectId,
+    PAGE_SIZE, Priority, RestartPolicy, Rights, ServiceError, ServiceId, ServiceRegistrationPlan,
+    ServiceState, ServiceSupervisor, TaskId, TaskRuntime, TaskRuntimeError,
 };
 use mrml_storage::{
     AuthorityRecoveryValidator, BlockFileSession, BlockVolume, BlockVolumeError,
@@ -91,6 +92,119 @@ pub trait ServicePolicyAuthorizer {
         service: ServiceId,
         policy: RestartPolicy,
     ) -> Result<(), ConfigError>;
+}
+
+/// A concrete configuration-service launcher for the native-service form.
+/// The returned endpoint is opaque; names and manifest metadata grant no
+/// authority to use it.
+pub trait NativeConfigurationServiceLauncher {
+    type Endpoint;
+    type Error;
+
+    fn launch_native(
+        &mut self,
+        spec: IsolationServiceSpec,
+    ) -> Result<Self::Endpoint, (IsolationUnavailableReason, Self::Error)>;
+
+    fn revoke_native(&mut self, endpoint: &Self::Endpoint) -> Result<(), Self::Error>;
+}
+
+/// A concrete configuration-service launcher for the microVM form. The
+/// implementation must return only after the projected endpoint is ready.
+pub trait MicrovmConfigurationServiceLauncher {
+    type Endpoint;
+    type Error;
+
+    fn launch_microvm(
+        &mut self,
+        spec: IsolationServiceSpec,
+    ) -> Result<Self::Endpoint, (IsolationUnavailableReason, Self::Error)>;
+
+    fn revoke_microvm(&mut self, endpoint: &Self::Endpoint) -> Result<(), Self::Error>;
+}
+
+#[derive(Debug, Eq, PartialEq)]
+pub enum ConfigurationServiceEndpoint<Native, Microvm> {
+    Native(Native),
+    Microvm(Microvm),
+}
+
+impl<Native, Microvm> ConfigurationServiceEndpoint<Native, Microvm> {
+    pub const fn placement(&self) -> IsolationPlacement {
+        match self {
+            Self::Native(_) => IsolationPlacement::NativeService,
+            Self::Microvm(_) => IsolationPlacement::Microvm,
+        }
+    }
+}
+
+#[derive(Debug, Eq, PartialEq)]
+pub enum ConfigurationPlacementError<Native, Microvm> {
+    Native(Native),
+    Microvm(Microvm),
+}
+
+/// Adapts the two concrete configuration-service forms to the kernel's one
+/// fail-closed placement route. It does not choose placement or provider.
+pub struct ConfigurationPlacementBackend<Native, Microvm> {
+    native: Native,
+    microvm: Microvm,
+}
+
+impl<Native, Microvm> ConfigurationPlacementBackend<Native, Microvm> {
+    pub const fn new(native: Native, microvm: Microvm) -> Self {
+        Self { native, microvm }
+    }
+
+    pub fn into_parts(self) -> (Native, Microvm) {
+        (self.native, self.microvm)
+    }
+}
+
+impl<Native, Microvm> IsolationServiceBackend for ConfigurationPlacementBackend<Native, Microvm>
+where
+    Native: NativeConfigurationServiceLauncher,
+    Microvm: MicrovmConfigurationServiceLauncher,
+{
+    type Endpoint = ConfigurationServiceEndpoint<Native::Endpoint, Microvm::Endpoint>;
+    type Error = ConfigurationPlacementError<Native::Error, Microvm::Error>;
+
+    fn launch_native_service(
+        &mut self,
+        spec: IsolationServiceSpec,
+    ) -> Result<Self::Endpoint, IsolationBackendFailure<Self::Error>> {
+        self.native
+            .launch_native(spec)
+            .map(ConfigurationServiceEndpoint::Native)
+            .map_err(|(reason, error)| {
+                IsolationBackendFailure::new(reason, ConfigurationPlacementError::Native(error))
+            })
+    }
+
+    fn launch_microvm_service(
+        &mut self,
+        spec: IsolationServiceSpec,
+    ) -> Result<Self::Endpoint, IsolationBackendFailure<Self::Error>> {
+        self.microvm
+            .launch_microvm(spec)
+            .map(ConfigurationServiceEndpoint::Microvm)
+            .map_err(|(reason, error)| {
+                IsolationBackendFailure::new(reason, ConfigurationPlacementError::Microvm(error))
+            })
+    }
+
+    fn revoke(&mut self, endpoint: &Self::Endpoint) -> Result<(), Self::Error> {
+        match endpoint {
+            ConfigurationServiceEndpoint::Native(endpoint) => self
+                .native
+                .revoke_native(endpoint)
+                .map_err(ConfigurationPlacementError::Native),
+            ConfigurationServiceEndpoint::Microvm(endpoint) => self
+                .microvm
+                .revoke_microvm(endpoint)
+                .map_err(ConfigurationPlacementError::Microvm),
+        }
+    }
 }
 
 impl<const CAPS: usize> CapabilityAuthorizer for CapabilitySpace<CAPS> {
@@ -3122,6 +3236,9 @@ fn write_u64(output: &mut [u8], offset: usize, value: u64) -> Result<(), ConfigE
 #[cfg(test)]
 mod tests {
     use super::*;
+    use mrml_kernel::{
+        IsolationAdmissionTable, IsolationMode, TotalMicrovmClass, route_isolation_service,
+    };
     use mrml_storage::{
         AUTHORITY_RECOVERY_STATE_BYTES, AuthenticatedAuthorityRecoveryState,
         AuthorityCheckpointProofIssuer, AuthorityRecoveryGuard, AuthorityRecoveryStateStore,
@@ -3137,6 +3254,142 @@ mod tests {
     const MEMORY_POOL_RIGHTS: Rights = Rights::ALLOCATE.union(Rights::INSPECT);
 
     type TestPolicySubstrate = AccountedPolicyServiceSubstrate<2, 4, 2, 3, 2>;
+
+    #[derive(Default)]
+    struct NativePlacementProbe {
+        launches: usize,
+    }
+
+    impl NativeConfigurationServiceLauncher for NativePlacementProbe {
+        type Endpoint = u64;
+        type Error = ();
+
+        fn launch_native(
+            &mut self,
+            spec: IsolationServiceSpec,
+        ) -> Result<Self::Endpoint, (IsolationUnavailableReason, Self::Error)> {
+            self.launches += 1;
+            Ok(0x1000 | spec.provider_generation())
+        }
+
+        fn revoke_native(&mut self, _endpoint: &Self::Endpoint) -> Result<(), Self::Error> {
+            Ok(())
+        }
+    }
+
+    #[derive(Default)]
+    struct MicrovmPlacementProbe {
+        launches: usize,
+        unavailable: bool,
+    }
+
+    impl MicrovmConfigurationServiceLauncher for MicrovmPlacementProbe {
+        type Endpoint = u64;
+        type Error = ();
+
+        fn launch_microvm(
+            &mut self,
+            spec: IsolationServiceSpec,
+        ) -> Result<Self::Endpoint, (IsolationUnavailableReason, Self::Error)> {
+            self.launches += 1;
+            if self.unavailable {
+                Err((IsolationUnavailableReason::VmmResource, ()))
+            } else {
+                Ok(0x2000 | spec.provider_generation())
+            }
+        }
+
+        fn revoke_microvm(&mut self, _endpoint: &Self::Endpoint) -> Result<(), Self::Error> {
+            Ok(())
+        }
+    }
+
+    fn configuration_service_spec(placement: IsolationPlacement) -> IsolationServiceSpec {
+        IsolationServiceSpec::new(
+            ObjectId(0x434f_4e46_4947),
+            ObjectId(0x434f_4e46_4947_0001),
+            1,
+            11,
+            5,
+            TotalMicrovmClass::MicrovmEligible,
+            placement,
+        )
+        .unwrap()
+    }
+
+    #[test]
+    fn configuration_backend_preserves_binding_across_both_placements() {
+        let mut native_admission =
+            IsolationAdmissionTable::<1>::new(IsolationMode::Balanced, 5).unwrap();
+        let mut native_backend = ConfigurationPlacementBackend::new(
+            NativePlacementProbe::default(),
+            MicrovmPlacementProbe::default(),
+        );
+        let native = route_isolation_service(
+            &mut native_admission,
+            &mut native_backend,
+            configuration_service_spec(IsolationPlacement::NativeService),
+        )
+        .unwrap();
+        assert_eq!(
+            native.endpoint().placement(),
+            IsolationPlacement::NativeService
+        );
+        assert_eq!(native.interface_generation(), 1);
+        assert_eq!(native.provider_generation(), 11);
+        let (native_probe, microvm_probe) = native_backend.into_parts();
+        assert_eq!((native_probe.launches, microvm_probe.launches), (1, 0));
+
+        let mut microvm_admission =
+            IsolationAdmissionTable::<1>::new(IsolationMode::TotalMicrovm, 5).unwrap();
+        let mut microvm_backend = ConfigurationPlacementBackend::new(
+            NativePlacementProbe::default(),
+            MicrovmPlacementProbe::default(),
+        );
+        let microvm = route_isolation_service(
+            &mut microvm_admission,
+            &mut microvm_backend,
+            configuration_service_spec(IsolationPlacement::Microvm),
+        )
+        .unwrap();
+        assert_eq!(microvm.endpoint().placement(), IsolationPlacement::Microvm);
+        assert_eq!(microvm.interface(), native.interface());
+        assert_eq!(
+            microvm.interface_generation(),
+            native.interface_generation()
+        );
+        assert_eq!(microvm.provider_generation(), native.provider_generation());
+        let (native_probe, microvm_probe) = microvm_backend.into_parts();
+        assert_eq!((native_probe.launches, microvm_probe.launches), (0, 1));
+    }
+
+    #[test]
+    fn unavailable_configuration_microvm_never_invokes_native_launcher() {
+        let mut admission =
+            IsolationAdmissionTable::<1>::new(IsolationMode::TotalMicrovm, 5).unwrap();
+        let mut backend = ConfigurationPlacementBackend::new(
+            NativePlacementProbe::default(),
+            MicrovmPlacementProbe {
+                launches: 0,
+                unavailable: true,
+            },
+        );
+        assert!(matches!(
+            route_isolation_service(
+                &mut admission,
+                &mut backend,
+                configuration_service_spec(IsolationPlacement::Microvm),
+            ),
+            Err(mrml_kernel::IsolationServiceRouteError::Backend {
+                reason: IsolationUnavailableReason::VmmResource,
+                error: ConfigurationPlacementError::Microvm(()),
+            })
+        ));
+        let (native_probe, microvm_probe) = backend.into_parts();
+        assert_eq!((native_probe.launches, microvm_probe.launches), (0, 1));
+        assert_eq!(admission.unavailable_domains().count(), 1);
+        assert_eq!(admission.total_microvm_report().native_fallback, 0);
+    }
 
     #[test]
     fn policy_substrate_uses_one_exact_aggregate_commitment_for_all_components() {

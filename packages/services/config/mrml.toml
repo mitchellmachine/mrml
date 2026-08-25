@@ -12,7 +12,7 @@ profile = "system-service"
 [isolation]
 default = "native-service"
 minimum = "native-service"
-supported = ["native-service"]
+supported = ["native-service", "microvm"]
 
 [[target]]
 arch = "x86_64"
