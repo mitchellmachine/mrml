@@ -514,6 +514,39 @@ fn write_workspace_lock(workspace: &Workspace, check: bool) -> Result<(), String
     let mut encoded = String::from(
         "[lock]\nformat = \"mrml-workspace-lock\"\nversion = 2\ntoolchain = \"nightly-2026-08-24\"\n\n",
     );
+    let compile_edges = workspace
+        .components
+        .iter()
+        .map(|component| component.dependencies.len())
+        .sum::<usize>();
+    const SYSTEM_RELEASE: [(&str, &str); 3] = [
+        ("bootloader", "org.mrml.library.uefi"),
+        ("kernel", "org.mrml.system.kernel"),
+        ("configuration", "org.mrml.service.config"),
+    ];
+    for (_, package) in SYSTEM_RELEASE {
+        if !workspace
+            .components
+            .iter()
+            .any(|candidate| candidate.id == package)
+        {
+            return Err(format!(
+                "SystemReleasePackageMissing {{ package: {package} }}"
+            ));
+        }
+    }
+    encoded.push_str("[graphs]\n");
+    encoded.push_str(&format!("compile_edges = {compile_edges}\n"));
+    encoded.push_str("build_tool_edges = 0\n");
+    encoded.push_str(&format!(
+        "runtime_interface_edges = {}\n",
+        workspace.interface_bindings.len()
+    ));
+    encoded.push_str("package_edges = 0\n");
+    encoded.push_str(&format!(
+        "system_release_edges = {}\n\n",
+        SYSTEM_RELEASE.len()
+    ));
     for component in components {
         let mut dependencies = component
             .dependencies
@@ -564,6 +597,11 @@ fn write_workspace_lock(workspace: &Workspace, check: bool) -> Result<(), String
             encoded.push('"');
         }
         encoded.push_str("]\n\n");
+    }
+    for (role, package) in SYSTEM_RELEASE {
+        encoded.push_str("[[system_release_package]]\n");
+        encoded.push_str(&format!("role = \"{role}\"\n"));
+        encoded.push_str(&format!("package = \"{package}\"\n\n"));
     }
     let canonical = encoded;
     let path = workspace.root.join("mrml.lock");
