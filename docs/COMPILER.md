@@ -108,7 +108,7 @@ language as a whole.
 | Let chains | **NOT IMPLEMENTED** | Boolean short-circuit expressions exist, but `if let`/`while let` chains and their pattern scopes do not. |
 | Async closures | **NOT IMPLEMENTED** | There is no async/await, generator, future, or async-closure lowering. |
 | Modern borrowing / Polonius | **PARTIAL** | References, explicit and expected-type implicit reborrow ancestry, return coercion-site reborrows, mutable pointee operations, bounded ownership/place/effect facts, fixed-point definite-initialization, direct shared/mutable-loan conflicts, and bounded intermediate-ancestor invalidation across the supported statement/loop CFG exist. Conditional expressions retain bounded program points and canonical nested/sequential edges. General indirect loan identity, regions/outlives reasoning, and complete Polonius-compatible analysis remain unimplemented. |
-| Next-generation trait solving | **NOT IMPLEMENTED** | Method-like built-ins are recognized directly; there is no general trait declaration/implementation model, goal solver, canonicalization, projection, coherence, ambiguity, or cycle handling. |
+| Next-generation trait solving | **PARTIAL** | Method-like built-ins remain recognized directly. An allocation-free implemented-goal representation now distinguishes concrete types, inference variables, and placeholders and canonicalizes inference variables by first occurrence with fixed capacity. There is no trait declaration/implementation model, goal selection, projection, coherence, ambiguity, cycle handling, or source integration. |
 | Naked functions / `naked_asm!` | **NOT IMPLEMENTED** | High-priority **STABLE** systems-language target. No implementation may insert an ordinary prologue or epilogue into a naked function. |
 | Modern inline assembly | **NOT IMPLEMENTED** | No `asm!`, register/operand validation, options, clobber model, or architecture-specific assembly lowering exists. |
 | Pointer/provenance APIs | **PARTIAL** | Raw-pointer casts, `addr`, `with_addr`, `expose_provenance`, integer-address reconstruction, offsets, comparisons, alignment, copying, writes, references, and metadata operations have bounded tests. The current scalar machine representation cannot establish a complete provenance/alias model and must not equate equal integer addresses with interchangeable provenance. |
@@ -776,6 +776,24 @@ Projected mutable tuple-field origins also survive an identity call at the
 return boundary and through one stored call result. A local-backed conditional
 origin fails outlives validation while all parameter-backed origins remain
 accepted, reusing the same call-argument and projected-origin facts.
+
+The first modern trait-solver foundation is an explicit bounded implemented-
+goal representation. Stable trait/type/inference/placeholder identities remain
+distinct; canonicalization replaces inference identities with first-occurrence
+bound variables, makes alpha-equivalent goals equal, preserves placeholders,
+and fails on argument or variable capacity overflow. It performs no selection
+and cannot authorize compilation of trait syntax.
+
+```text
+Complexity impact: LOW
+TCB impact: LOW
+New parser boundary: NO
+New authority model: NO
+New persistent state: NO
+External dependency: NO
+Failure isolated: YES
+Existing-object reuse: HIGH
+```
 Smaller parser, type, aggregate, control-flow, and diagnostic prerequisites may
 continue when they directly prepare that analysis. Arbitrary old-edition
 parsing, obsolete compiler quirks, historical diagnostic compatibility,

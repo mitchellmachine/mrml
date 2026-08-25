@@ -3821,6 +3821,18 @@ origin and accept all parameter-backed branches. Windows gnullvm and native Arch
 Linux WSL each pass the same 766 compiler tests. This is bounded composition of
 existing facts, not general interprocedural lifetime inference or regions.
 
+The trait-goal canonicalization foundation introduces allocation-free stable
+trait, type, inference-variable, and placeholder identities plus an eight-
+argument implemented goal. Canonicalization numbers inference variables by
+first occurrence, preserves repeated-variable equality, leaves placeholders and
+concrete types distinct, and makes alpha-equivalent goals identical. Argument
+and canonical-variable overflow fail explicitly. It does not parse traits,
+select implementations, normalize projections, decide ambiguity, check
+coherence, or handle solver cycles. Windows gnullvm and native Arch Linux WSL
+each pass 425 library tests, one component-interface probe, 10 conformance tests,
+and 335 replacement tests: 771 compiler tests per host. The core remains
+`no_std`, allocation-free, and `unsafe`-free.
+
 The nested conditional tuple-origin milestone walks each leaf's bounded
 conditional-parent chain to the outermost generation before grouping reference
 origins by field ordinal. The exact oracle rejects a three-leaf returned field

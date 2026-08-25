@@ -602,6 +602,15 @@ tuple field returned directly through the call and through one stored call
 result. ORACLE-0002 and MRML reject the mixed local/parameter origin set and
 accept the all-parameter set. Both hosts pass 766 compiler tests.
 
+The first trait-goal foundation adds fixed-capacity implemented goals and
+first-occurrence canonicalization without source syntax or selection. Concrete
+types, inference variables, placeholders, and canonical bound variables are
+distinct; alpha-equivalent goals canonicalize equally; argument and variable
+overflow fail explicitly. Windows gnullvm and native Arch Linux WSL each pass
+425 library tests, one component-interface probe, 10 conformance tests, and 335
+replacement tests: 771 compiler tests per host. The unchanged driver was not
+re-executed.
+
 At compiler path checkpoint `9a950ae9`, the Windows gnullvm core suite passed
 765 tests: 420 library tests, 10 conformance tests, and 335 replacement tests.
 Core formatting, warnings-denied Clippy, the no-`std`/no-`alloc`/unsafe hygiene

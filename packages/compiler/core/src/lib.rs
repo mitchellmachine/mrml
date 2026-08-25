@@ -15,6 +15,7 @@ pub mod object;
 pub mod parser;
 pub mod pipeline;
 pub mod semantics;
+pub mod trait_goals;
 
 pub use codegen::{
     CodegenError, CodegenErrorKind, CodegenOptions, MachineCode, X86_64Abi,
@@ -56,4 +57,10 @@ pub use semantics::{
     Constant, ConstantTable, MAX_CONST_CALL_DEPTH, MAX_CONST_FUNCTION_EXPRESSION_NODES,
     MAX_CONST_LOOP_ITERATIONS, MAX_CONSTANT_IR_INSTRUCTIONS, MAX_CONSTANT_STACK_VALUES,
     SemanticError, SemanticErrorKind, TargetLayout, analyze_constants,
+};
+pub use trait_goals::{
+    CanonicalImplementedTraitGoal, CanonicalTraitGoalType, ImplementedTraitGoal,
+    MAX_CANONICAL_TRAIT_VARIABLES, MAX_TRAIT_GOAL_ARGUMENTS, TraitGoalError, TraitGoalType,
+    TraitId, TraitInferenceVariableId, TraitPlaceholderId, TraitTypeId,
+    canonicalize_implemented_trait_goal,
 };
