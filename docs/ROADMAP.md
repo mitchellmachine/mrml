@@ -175,6 +175,10 @@ changing runtime behavior.
 sibling semantic-package reference and all fourteen inbound Cargo paths resolve
 to the semantic cryptography home without changing algorithms or policy.
 
+`mrml-tls` is the thirteenth migrated library component; its crypto/runtime
+edges are sibling semantic-package references and both consumers resolve to its
+semantic home without changing protocol behavior.
+
 The independently scoped compiler lane follows
 [COMPILER.md](COMPILER.md), not an arbitrary historical-rustc coverage target.
 Rust 2024 is the floor. Preserve and stabilize the existing bounded semantics,

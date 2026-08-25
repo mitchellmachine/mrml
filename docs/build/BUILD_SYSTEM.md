@@ -100,10 +100,10 @@ dependency compilation; Cargo package identity is not MRML identity. Every
 existing component is classified `MRML_NATIVE`, `HOST_WINDOWS_LINUX`, `COMPILER`,
 `UEFI`, `GPU`, `TEST`, `SHARED`, or `BOOTSTRAP_ONLY`. The generic `crates/`
 layout remains transitional and moves only after `mrml` graph/path parity is
-verified. The first twelve library components, `mrml-math`,
+verified. The first thirteen library components, `mrml-math`,
 `mrml-percent-encoding`, `mrml-tokenizer`, `mrml-zstd`, `mrml-zim`, `mrml-json`,
 `mrml-wikipedia`, `mrml-opus`, `mrml-windows`, `mrml-linux`, and
-`mrml-runtime`, and `mrml-crypto`, now live under
+`mrml-runtime`, `mrml-crypto`, and `mrml-tls`, now live under
 `packages/libraries/`; further semantic component homes belong under
 `packages/`, with the
 bootstrap tool under `tools/mrml` and compiler tooling under a clear compiler
