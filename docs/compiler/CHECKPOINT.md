@@ -572,6 +572,11 @@ backed branches. Two-reference-field controls prove that a local-backed sibling
 does not affect the selected returned field in either field position. Windows
 gnullvm and native Arch Linux WSL each pass the same 766 compiler tests.
 
+Nested conditional tuple-field origins now normalize each leaf's bounded
+conditional-parent chain to its outer generation. ORACLE-0002 rejects a
+three-leaf generation with one local-backed leaf and accepts the equivalent
+all-parameter generation. Both host suites remain green at 766 compiler tests.
+
 At compiler path checkpoint `9a950ae9`, the Windows gnullvm core suite passed
 765 tests: 420 library tests, 10 conformance tests, and 335 replacement tests.
 Core formatting, warnings-denied Clippy, the no-`std`/no-`alloc`/unsafe hygiene

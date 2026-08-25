@@ -755,6 +755,10 @@ field ordinal, distinguishes reference copies/moves from fresh shared or mutable
 borrows, and does not let a local-backed sibling field poison a parameter-backed
 returned field. Nested conditional groups and nested tuple types remain outside
 this implemented slice.
+Nested conditional leaves within that field are normalized through their bounded
+parent chain to the outer conditional generation. This preserves separation from
+later tuple fields while requiring every nested leaf origin to pass the same
+outlives proof. Arbitrary expression-origin partitioning remains unimplemented.
 Smaller parser, type, aggregate, control-flow, and diagnostic prerequisites may
 continue when they directly prepare that analysis. Arbitrary old-edition
 parsing, obsolete compiler quirks, historical diagnostic compatibility,

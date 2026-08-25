@@ -11565,14 +11565,31 @@ fn runtime_conditional_tuple_field_origins_outlive_function(
                     .is_some_and(|path| matches!(path.ty, RuntimeExpressionType::Reference { .. })))
         })
     {
-        let new_group = effect.expression_conditional.is_none()
-            || effect.expression_conditional != last_conditional;
+        let expression_conditional = match effect.expression_conditional {
+            Some(mut conditional) => {
+                let mut outermost = None;
+                for _ in 0..=facts.conditional_expression_count {
+                    let fact = facts
+                        .conditional_expressions
+                        .get(conditional.0)
+                        .and_then(|fact| *fact)?;
+                    let Some(parent) = fact.parent else {
+                        outermost = Some(conditional);
+                        break;
+                    };
+                    conditional = parent;
+                }
+                Some(outermost?)
+            }
+            None => None,
+        };
+        let new_group =
+            expression_conditional.is_none() || expression_conditional != last_conditional;
         if new_group {
             group_count = group_count.checked_add(1)?;
         }
-        last_conditional = effect.expression_conditional;
-        if group_count.checked_sub(1)? != target_ordinal || effect.expression_conditional.is_none()
-        {
+        last_conditional = expression_conditional;
+        if group_count.checked_sub(1)? != target_ordinal || expression_conditional.is_none() {
             continue;
         }
         target_is_conditional = true;
@@ -29655,6 +29672,7 @@ mod tests {
             "fn value(input: &u16) -> &u16 { let local = *input; let holder = (&local,); holder.0 }",
             "fn value(input: &u16, choose: bool) -> &u16 { let local = *input; let mut holder = (input,); holder.0 = if choose { input } else { &local }; holder.0 }",
             "fn value(input: &u16, choose: bool) -> &u16 { let local = *input; let holder = (if choose { input } else { &local },); holder.0 }",
+            "fn value(input: &u16, first: bool, second: bool) -> &u16 { let local = *input; let holder = (if first { input } else if second { &local } else { input },); holder.0 }",
         ] {
             match analyze(rejected) {
                 Err(error) => assert_eq!(
@@ -29678,6 +29696,7 @@ mod tests {
             "fn value(input: &u16, choose: bool) -> &u16 { let holder = (if choose { input } else { &*input },); holder.0 }",
             "fn value(input: &u16, choose: bool) -> &u16 { let local = *input; let holder = (if choose { input } else { &*input }, &local); holder.0 }",
             "fn value(input: &u16, choose: bool) -> &u16 { let local = *input; let holder = (&local, if choose { input } else { &*input }); holder.1 }",
+            "fn value(input: &u16, first: bool, second: bool) -> &u16 { let holder = (if first { input } else if second { &*input } else { input },); holder.0 }",
         ] {
             analyze(accepted).unwrap_or_else(|error| panic!("{accepted}: {error:?}"));
         }

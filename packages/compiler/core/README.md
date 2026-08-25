@@ -3806,6 +3806,16 @@ compiler tests. This is bounded one-level tuple initialization, not nested tuple
 types, arbitrary nested conditional grouping, named lifetime inference, or
 complete Polonius semantics.
 
+The nested conditional tuple-origin milestone walks each leaf's bounded
+conditional-parent chain to the outermost generation before grouping reference
+origins by field ordinal. The exact oracle rejects a three-leaf returned field
+when one nested leaf references local storage and accepts the all-parameter
+equivalent. Distinct top-level conditional groups and later reference fields
+remain separate. Windows gnullvm and native Arch Linux WSL each pass the same
+766 compiler tests. This is bounded conditional ancestry, not arbitrary
+expression-origin partitioning, named lifetime inference, or complete Polonius
+semantics.
+
 The repeated projected-source loan milestone extends that bounded relation
 across another directly initialized tuple whose selected reference field is
 later moved and reborrowed. The pinned oracle rejects shared and mutable live-

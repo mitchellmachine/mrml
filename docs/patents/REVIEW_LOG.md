@@ -3896,3 +3896,11 @@ reference effects by one tuple-field ordinal and checks their existing bounded
 outlives relation. It selects no runtime allocation, reclamation,
 synchronization, enforcement, hardware, protocol, cryptographic, or executable
 mechanism.
+
+# 2026-08-25 — Nested conditional compiler-origin normalization
+
+**Result: NOT_TRIGGERED.** This compiler-only increment follows an existing
+bounded parent relation to group nested conditional effects for the existing
+outlives check. It selects no new runtime, allocation, reclamation,
+synchronization, enforcement, hardware, protocol, cryptographic, or executable
+mechanism.
