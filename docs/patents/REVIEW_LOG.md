@@ -4725,3 +4725,11 @@ proof before logical-clause fallback, reusing copied inference state and the
 existing cycle/depth stack. It adds no coherence rule, search order,
 specialization, cache, parser, runtime mechanism, allocation, synchronization,
 protocol, cryptography, or hardware behavior.
+
+# 2026-08-25 — Projection-bearing implemented-trait premises
+
+**Result: NOT_TRIGGERED.** This compiler-only increment reuses an existing fixed
+term arena to instantiate and normalize bounded implemented-trait premises
+before the existing flat proof scheduler. It adds no new term graph, coherence
+rule, search order, specialization, cache, parser, runtime mechanism,
+allocation, synchronization, protocol, cryptography, or hardware behavior.

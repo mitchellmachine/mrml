@@ -1858,6 +1858,8 @@ pub struct ProjectionBearingTraitClause {
     consequence: BoundProjectionBearingTraitGoal,
     premises: [Option<BoundImplementedTraitGoal>; MAX_TRAIT_PREDICATES],
     premise_count: usize,
+    term_premises: [Option<BoundProjectionBearingTraitGoal>; MAX_TRAIT_PREDICATES],
+    term_premise_count: usize,
 }
 
 impl ProjectionBearingTraitClause {
@@ -1873,6 +1875,8 @@ impl ProjectionBearingTraitClause {
             consequence: bound.goal,
             premises: [None; MAX_TRAIT_PREDICATES],
             premise_count: 0,
+            term_premises: [None; MAX_TRAIT_PREDICATES],
+            term_premise_count: 0,
         })
     }
 
@@ -1881,6 +1885,9 @@ impl ProjectionBearingTraitClause {
         premise: BoundImplementedTraitGoal,
     ) -> Result<(), TraitGoalError> {
         validate_bound_goal(premise, self.parameter_count)?;
+        if self.premise_count + self.term_premise_count >= MAX_TRAIT_PREDICATES {
+            return Err(TraitGoalError::TooManyPredicates);
+        }
         let slot = self
             .premises
             .get_mut(self.premise_count)
@@ -1892,6 +1899,27 @@ impl ProjectionBearingTraitClause {
 
     pub fn premises(&self) -> &[Option<BoundImplementedTraitGoal>] {
         &self.premises[..self.premise_count]
+    }
+
+    pub fn push_projection_bearing_premise(
+        &mut self,
+        premise: BoundProjectionBearingTraitGoal,
+    ) -> Result<(), TraitGoalError> {
+        validate_bound_projection_bearing_goal(premise, self.arena.term_count)?;
+        if self.premise_count + self.term_premise_count >= MAX_TRAIT_PREDICATES {
+            return Err(TraitGoalError::TooManyPredicates);
+        }
+        let slot = self
+            .term_premises
+            .get_mut(self.term_premise_count)
+            .ok_or(TraitGoalError::TooManyPredicates)?;
+        *slot = Some(premise);
+        self.term_premise_count += 1;
+        Ok(())
+    }
+
+    pub fn projection_bearing_premises(&self) -> &[Option<BoundProjectionBearingTraitGoal>] {
+        &self.term_premises[..self.term_premise_count]
     }
 }
 
@@ -2451,6 +2479,36 @@ fn elaborate_projection_bearing_clause(
                 .ok_or(TraitGoalError::InvalidGoal)?,
             &instantiated_arguments[..clause.parameter_count],
         )?)?;
+    }
+    for premise in clause.projection_bearing_premises() {
+        let premise = instantiate_bound_term_goal(
+            &clause.arena,
+            premise
+                .as_ref()
+                .copied()
+                .ok_or(TraitGoalError::InvalidGoal)?,
+            &instantiated_arguments[..clause.parameter_count],
+        )?;
+        let normalized = match environment.normalize_projection_bearing_goal(
+            &premise.arena,
+            premise.goal,
+            state,
+        )? {
+            ProjectionBearingGoalNormalizationSolution::Unique(goal) => goal,
+            ProjectionBearingGoalNormalizationSolution::Ambiguous => {
+                return Ok(TraitProofSolution::Ambiguous);
+            }
+            ProjectionBearingGoalNormalizationSolution::NoSolution => {
+                return Ok(TraitProofSolution::NoSolution);
+            }
+            ProjectionBearingGoalNormalizationSolution::Cycle => {
+                return Ok(TraitProofSolution::Cycle);
+            }
+            ProjectionBearingGoalNormalizationSolution::Overflow => {
+                return Ok(TraitProofSolution::Overflow);
+            }
+        };
+        premises.push(normalized)?;
     }
     if premises.predicates().is_empty() {
         return Ok(TraitProofSolution::Proven);
@@ -6237,6 +6295,12 @@ mod tests {
                 BoundTraitGoalType::Parameter(parameter),
             ))
             .unwrap();
+        implementation
+            .push_projection_bearing_premise(BoundProjectionBearingTraitGoal::new(
+                TraitId::new(1113),
+                projection,
+            ))
+            .unwrap();
         let implementation_id = GenericTraitImplementationId::new(310);
         let mut implementations = ProjectionBearingGenericTraitImplementationDatabase::EMPTY;
         implementations
@@ -6250,6 +6314,13 @@ mod tests {
                 projection_implementation_id,
                 TraitId::new(1110),
                 TraitTypeId::new(10),
+            ))
+            .unwrap();
+        exact
+            .insert(TraitImplementationHeader::new(
+                TraitImplementationId::new(255),
+                TraitId::new(1113),
+                TraitTypeId::new(20),
             ))
             .unwrap();
         exact
@@ -6303,6 +6374,13 @@ mod tests {
                 projection_implementation_id,
                 TraitId::new(1110),
                 TraitTypeId::new(10),
+            ))
+            .unwrap();
+        missing_premise
+            .insert(TraitImplementationHeader::new(
+                TraitImplementationId::new(255),
+                TraitId::new(1113),
+                TraitTypeId::new(20),
             ))
             .unwrap();
         let mut missing_values = TraitAssociatedTypeDatabase::EMPTY;

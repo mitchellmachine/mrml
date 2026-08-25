@@ -1068,8 +1068,14 @@ cycles, and overflow remain explicit. An opt-in general solver threads this
 table through nested implemented-trait premises alongside projection-bearing
 logical clauses. Admitted implementations are tried before logical clauses,
 one successful copied state is committed, and the shared 16-frame stack reports
-cycles and depth overflow. Legacy entry points remain closed. Projection terms in premise type positions,
-complete projection-equation coherence, higher-ranked term binders,
+cycles and depth overflow. Legacy entry points remain closed. Projection-
+bearing clauses and implementations may also retain bounded implemented-trait
+premises whose self and argument positions reference the same validated term
+arena as the head. Selection instantiates and normalizes those premises in the
+shared root state before the existing flat premise scheduler proves them.
+Projection-premise normalization ambiguity currently fails closed immediately;
+mixed deferral with flat premises is not implemented. Complete projection-
+equation coherence, higher-ranked term binders,
 backtracking, caching,
 coinduction, and source associated-type syntax remain unsupported.
 
