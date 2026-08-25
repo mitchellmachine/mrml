@@ -2140,11 +2140,13 @@ fn projection_bearing_heads_may_overlap(
     {
         return Ok(false);
     }
-    if bound_terms_are_distinct_concrete(
+    let mut unifier = FlatGenericHeadUnifier::NEW;
+    if !bound_term_pair_may_overlap(
         &left.arena,
         left.consequence.self_type,
         &right.arena,
         right.consequence.self_type,
+        &mut unifier,
     )? {
         return Ok(false);
     }
@@ -2154,7 +2156,7 @@ fn projection_bearing_heads_may_overlap(
         .iter()
         .zip(right.consequence.arguments())
     {
-        if bound_terms_are_distinct_concrete(
+        if !bound_term_pair_may_overlap(
             &left.arena,
             left_term
                 .as_ref()
@@ -2165,6 +2167,7 @@ fn projection_bearing_heads_may_overlap(
                 .as_ref()
                 .copied()
                 .ok_or(TraitGoalError::InvalidGoal)?,
+            &mut unifier,
         )? {
             return Ok(false);
         }
@@ -2172,19 +2175,25 @@ fn projection_bearing_heads_may_overlap(
     Ok(true)
 }
 
-fn bound_terms_are_distinct_concrete(
+fn bound_term_pair_may_overlap(
     left_arena: &BoundTraitGoalTermArena,
     left: TraitGoalTermId,
     right_arena: &BoundTraitGoalTermArena,
     right: TraitGoalTermId,
+    unifier: &mut FlatGenericHeadUnifier,
 ) -> Result<bool, TraitGoalError> {
-    Ok(matches!(
-        (left_arena.get(left), right_arena.get(right)),
-        (
-            Some(BoundTraitGoalTerm::Type(BoundTraitGoalType::Concrete(left))),
-            Some(BoundTraitGoalTerm::Type(BoundTraitGoalType::Concrete(right)))
-        ) if left != right
-    ))
+    let left = left_arena
+        .get(left)
+        .ok_or(TraitGoalError::InvalidTraitGoalTermReference)?;
+    let right = right_arena
+        .get(right)
+        .ok_or(TraitGoalError::InvalidTraitGoalTermReference)?;
+    Ok(match (left, right) {
+        (BoundTraitGoalTerm::Type(left), BoundTraitGoalTerm::Type(right)) => {
+            unifier.unify(left, right)
+        }
+        _ => true,
+    })
 }
 
 fn projection_bearing_head_may_overlap_exact(
@@ -2196,21 +2205,23 @@ fn projection_bearing_head_may_overlap_exact(
     {
         return false;
     }
-    if bound_term_is_distinct_from_concrete(
+    let mut bindings = [None; MAX_TRAIT_GENERIC_PARAMETERS];
+    if !bound_term_may_match_concrete(
         &projection.arena,
         projection.consequence.self_type,
         exact.self_type,
+        &mut bindings,
     ) {
         return false;
     }
-    !projection
+    projection
         .consequence
         .arguments()
         .iter()
         .zip(exact.arguments())
-        .any(|(term, exact)| {
+        .all(|(term, exact)| {
             term.zip(*exact).is_some_and(|(term, exact)| {
-                bound_term_is_distinct_from_concrete(&projection.arena, term, exact)
+                bound_term_may_match_concrete(&projection.arena, term, exact, &mut bindings)
             })
         })
 }
@@ -2224,48 +2235,51 @@ fn projection_bearing_head_may_overlap_flat(
     {
         return false;
     }
-    if bound_term_is_distinct_from_bound_leaf(
+    let mut unifier = FlatGenericHeadUnifier::NEW;
+    if !bound_term_may_match_bound_leaf(
         &projection.arena,
         projection.consequence.self_type,
         flat.consequence.self_type,
+        &mut unifier,
     ) {
         return false;
     }
-    !projection
+    projection
         .consequence
         .arguments()
         .iter()
         .zip(flat.consequence.arguments())
-        .any(|(term, flat)| {
+        .all(|(term, flat)| {
             term.zip(*flat).is_some_and(|(term, flat)| {
-                bound_term_is_distinct_from_bound_leaf(&projection.arena, term, flat)
+                bound_term_may_match_bound_leaf(&projection.arena, term, flat, &mut unifier)
             })
         })
 }
 
-fn bound_term_is_distinct_from_concrete(
+fn bound_term_may_match_concrete(
     arena: &BoundTraitGoalTermArena,
     term: TraitGoalTermId,
     concrete: TraitTypeId,
+    bindings: &mut [Option<TraitTypeId>; MAX_TRAIT_GENERIC_PARAMETERS],
 ) -> bool {
-    matches!(
-        arena.get(term),
-        Some(BoundTraitGoalTerm::Type(BoundTraitGoalType::Concrete(value))) if value != concrete
-    )
+    match arena.get(term) {
+        Some(BoundTraitGoalTerm::Type(term)) => bound_type_matches_exact(term, concrete, bindings),
+        Some(BoundTraitGoalTerm::Projection { .. }) => true,
+        None => false,
+    }
 }
 
-fn bound_term_is_distinct_from_bound_leaf(
+fn bound_term_may_match_bound_leaf(
     arena: &BoundTraitGoalTermArena,
     term: TraitGoalTermId,
     flat: BoundTraitGoalType,
+    unifier: &mut FlatGenericHeadUnifier,
 ) -> bool {
-    matches!(
-        (arena.get(term), flat),
-        (
-            Some(BoundTraitGoalTerm::Type(BoundTraitGoalType::Concrete(left))),
-            BoundTraitGoalType::Concrete(right)
-        ) if left != right
-    )
+    match arena.get(term) {
+        Some(BoundTraitGoalTerm::Type(term)) => unifier.unify(term, flat),
+        Some(BoundTraitGoalTerm::Projection { .. }) => true,
+        None => false,
+    }
 }
 
 impl ProjectionBearingTraitClauseDatabase {
@@ -6309,6 +6323,74 @@ mod tests {
                 &flat,
                 GenericTraitImplementationId::new(306),
                 implementation(12),
+            )
+            .unwrap();
+
+        let parameter = TraitGenericParameterId::new(0);
+        let mut repeated_arena = BoundTraitGoalTermArena::EMPTY;
+        let repeated_term = repeated_arena
+            .intern_type(BoundTraitGoalType::Parameter(parameter))
+            .unwrap();
+        let mut repeated_head =
+            BoundProjectionBearingTraitGoal::new(TraitId::new(1105), repeated_term);
+        repeated_head.push_argument(repeated_term).unwrap();
+        let repeated = ProjectionBearingTraitClause::new(1, repeated_arena, repeated_head).unwrap();
+        let mut unequal_arena = BoundTraitGoalTermArena::EMPTY;
+        let ten = unequal_arena
+            .intern_type(BoundTraitGoalType::Concrete(TraitTypeId::new(10)))
+            .unwrap();
+        let eleven = unequal_arena
+            .intern_type(BoundTraitGoalType::Concrete(TraitTypeId::new(11)))
+            .unwrap();
+        let mut unequal_head = BoundProjectionBearingTraitGoal::new(TraitId::new(1105), ten);
+        unequal_head.push_argument(eleven).unwrap();
+        let unequal = ProjectionBearingTraitClause::new(0, unequal_arena, unequal_head).unwrap();
+        let mut repeated_checked = ProjectionBearingGenericTraitImplementationDatabase::EMPTY;
+        repeated_checked
+            .insert(GenericTraitImplementationId::new(307), repeated)
+            .unwrap();
+        repeated_checked
+            .insert(GenericTraitImplementationId::new(308), unequal)
+            .unwrap();
+
+        let mut unequal_exact = TraitImplementationHeader::new(
+            TraitImplementationId::new(256),
+            TraitId::new(1105),
+            TraitTypeId::new(10),
+        );
+        unequal_exact.push_argument(TraitTypeId::new(11)).unwrap();
+        let mut exact_disjoint = TraitImplementationDatabase::EMPTY;
+        exact_disjoint.insert(unequal_exact).unwrap();
+        let mut repeated_exact_checked = ProjectionBearingGenericTraitImplementationDatabase::EMPTY;
+        repeated_exact_checked
+            .insert_coherent(
+                &exact_disjoint,
+                &GenericTraitImplementationDatabase::EMPTY,
+                GenericTraitImplementationId::new(309),
+                repeated,
+            )
+            .unwrap();
+        let mut unequal_flat_head = BoundImplementedTraitGoal::new(
+            TraitId::new(1105),
+            BoundTraitGoalType::Concrete(TraitTypeId::new(10)),
+        );
+        unequal_flat_head
+            .push_argument(BoundTraitGoalType::Concrete(TraitTypeId::new(11)))
+            .unwrap();
+        let mut unequal_flat = GenericTraitImplementationDatabase::EMPTY;
+        unequal_flat
+            .insert(
+                GenericTraitImplementationId::new(313),
+                TraitWhereClause::new(0, unequal_flat_head).unwrap(),
+            )
+            .unwrap();
+        let mut repeated_flat_checked = ProjectionBearingGenericTraitImplementationDatabase::EMPTY;
+        repeated_flat_checked
+            .insert_coherent(
+                &TraitImplementationDatabase::EMPTY,
+                &unequal_flat,
+                GenericTraitImplementationId::new(314),
+                repeated,
             )
             .unwrap();
     }

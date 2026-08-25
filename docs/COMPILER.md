@@ -1060,6 +1060,11 @@ projections, and every other unresolved relationship conservatively mean
 potential overlap. Admission rejects duplicate identities, peer overlap, and
 potential collisions with exact or flat-generic heads, while permitting heads
 separated by an explicit concrete leaf. Premises never waive overlap.
+Direct leaf positions across the complete head now feed the existing fixed
+equality unifier, so repeated parameters, parameter unions, and concrete
+constraints can prove disjointness even when other positions contain opaque
+projections. The same repeated-parameter constraints apply against exact and
+flat-generic heads. Projection nodes themselves never prove disjointness.
 Existential selection copies the root constraint state per admitted candidate,
 normalizes the complete head through the associated-value environment, proves
 flat premises, and returns the stable generic implementation identity plus the

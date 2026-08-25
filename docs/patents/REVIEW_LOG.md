@@ -4753,3 +4753,12 @@ flat predicates before normalizing existing bounded term-bearing predicates in
 the same fixed inference state. It adds no worklist, backtracking, coherence
 rule, search order, specialization, cache, parser, runtime mechanism,
 allocation, synchronization, protocol, cryptography, or hardware behavior.
+
+# 2026-08-25 — Direct-leaf projection-head coherence
+
+**Result: NOT_TRIGGERED.** This compiler-only increment sends direct leaf
+positions from existing bounded heads through the existing fixed equality
+unifier while treating projection nodes as opaque potential matches. It adds no
+projection equation solver, search order, specialization, cache, parser,
+runtime mechanism, allocation, synchronization, protocol, cryptography, or
+hardware behavior.

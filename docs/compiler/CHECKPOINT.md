@@ -1022,7 +1022,12 @@ first and then normalizes term-bearing predicates in the refined root state.
 Windows gnullvm and native Arch Linux WSL each pass 529 library tests, one
 component-interface probe, 10 conformance tests, and 335 replacement tests: 875
 compiler tests per host. A two-candidate projection becomes unique only after a
-flat premise constrains its parameter. Reverse dependency scheduling, complete projection-equation coherence,
+flat premise constrains its parameter. The direct-leaf coherence refinement
+feeds every non-projection head position into the fixed equality unifier, so
+repeated parameters can prove a projection-bearing head disjoint from peer,
+exact, and flat-generic heads with conflicting concrete tuples. Both hosts pass
+the same 875 compiler tests; projection nodes remain opaque and never prove
+disjointness. Reverse dependency scheduling, complete projection-equation coherence,
 higher-ranked term binders, backtracking, caching, coinduction, and source
 syntax remain unsupported.
 
