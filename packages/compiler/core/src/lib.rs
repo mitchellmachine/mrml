@@ -78,6 +78,8 @@ pub use trait_goals::{
     MAX_TRAIT_ASSOCIATED_TYPE_VALUES, MAX_TRAIT_GENERIC_PARAMETERS, MAX_TRAIT_GOAL_ARGUMENTS,
     MAX_TRAIT_GOAL_TERMS, MAX_TRAIT_IMPLEMENTATIONS, MAX_TRAIT_PREDICATES,
     MAX_TRAIT_PROJECTION_DEPTH, MAX_TRAIT_PROOF_DEPTH, MAX_TRAIT_WHERE_CLAUSES,
+    ProjectionBearingTraitClause, ProjectionBearingTraitClauseAnswer,
+    ProjectionBearingTraitClauseDatabase, ProjectionBearingTraitClauseSolution,
     ProjectionBearingTraitGoal, SymbolicTraitGoalSubstitution, TraitAssociatedTypeDatabase,
     TraitAssociatedTypeId, TraitAssociatedTypeValue, TraitGenericParameterId, TraitGoalAnswer,
     TraitGoalError, TraitGoalSolution, TraitGoalSubstitution, TraitGoalTerm, TraitGoalTermArena,

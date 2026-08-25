@@ -1034,6 +1034,21 @@ identities after instantiation. This does not add higher-ranked term binders,
 projection terms to clause heads or premise type positions, or source
 associated-type syntax.
 
+Projection-bearing logical clause heads use a separate fixed 64-entry
+identified database. Direct concrete or parameter leaf positions first bind
+every clause parameter in the root inference state; the complete head is then
+instantiated and normalized through the existing projection-aware environment
+before it is unified with the query. Stable clause identities are retained,
+duplicate identities and clauses fail explicitly, multiple matching clauses
+remain ambiguous, and a parameter that occurs only beneath a projection fails
+closed as ambiguous instead of being guessed. Focused tests cover projection
+normalization that determines an existential substitution, a normalized
+mismatch, and the unconstrained-parameter boundary. This is bounded logical
+head/fact elaboration only: clause premises, recursive solver integration,
+projection terms in premise type positions, generic implementation heads and
+their coherence rules, higher-ranked term binders, backtracking, caching,
+coinduction, and source associated-type syntax remain unsupported.
+
 Rigid clause elaboration accepts goals containing only concrete types and rigid
 placeholders. Bound parameters may match either term, repeated parameters require
 exact equality, and instantiated premises retain the same placeholder universe

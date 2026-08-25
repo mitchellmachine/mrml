@@ -981,6 +981,18 @@ tests per host. Projection terms in binders, clause heads, and premise type
 positions, concrete/rigid projection-premise proof, backtracking, caching,
 coinduction, and source syntax remain unsupported.
 
+The projection-bearing logical clause-head milestone stores up to 64 identified
+bound heads separately from flat clauses. Every parameter must be constrained
+by a direct leaf position before the instantiated head is normalized through
+the shared projection environment and unified with the existential query;
+parameters found only below projections fail closed as ambiguous. Windows
+gnullvm and native Arch Linux WSL each pass 522 library tests, one component-
+interface probe, 10 conformance tests, and 335 replacement tests: 868 compiler
+tests per host. Clause premises, recursive solver integration, generic
+implementation heads and coherence, higher-ranked term binders, projection
+terms in premise type positions, backtracking, caching, coinduction, and source
+syntax remain unsupported.
+
 The existential projection-term binder milestone mirrors the 64-node runtime
 arena with bound concrete/parameter leaves, validates parameter scope, remaps
 deduplicated identities during instantiation, and creates universe-aware root

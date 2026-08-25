@@ -1851,6 +1851,260 @@ impl TraitWhereClauseDatabase {
     }
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct ProjectionBearingTraitClause {
+    parameter_count: usize,
+    arena: BoundTraitGoalTermArena,
+    consequence: BoundProjectionBearingTraitGoal,
+}
+
+impl ProjectionBearingTraitClause {
+    pub fn new(
+        parameter_count: usize,
+        arena: BoundTraitGoalTermArena,
+        consequence: BoundProjectionBearingTraitGoal,
+    ) -> Result<Self, TraitGoalError> {
+        let bound = ExistsProjectionBearingTraitGoal::new(parameter_count, arena, consequence)?;
+        Ok(Self {
+            parameter_count: bound.parameter_count,
+            arena: bound.arena,
+            consequence: bound.goal,
+        })
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct IdentifiedProjectionBearingTraitClause {
+    id: TraitWhereClauseId,
+    clause: ProjectionBearingTraitClause,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct ProjectionBearingTraitClauseAnswer {
+    pub clause_id: TraitWhereClauseId,
+    pub substitution: SymbolicTraitGoalSubstitution,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum ProjectionBearingTraitClauseSolution {
+    Unique(ProjectionBearingTraitClauseAnswer),
+    Ambiguous,
+    NoSolution,
+    Cycle,
+    Overflow,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct ProjectionBearingTraitClauseDatabase {
+    clauses: [Option<IdentifiedProjectionBearingTraitClause>; MAX_TRAIT_WHERE_CLAUSES],
+    clause_count: usize,
+}
+
+impl ProjectionBearingTraitClauseDatabase {
+    pub const EMPTY: Self = Self {
+        clauses: [None; MAX_TRAIT_WHERE_CLAUSES],
+        clause_count: 0,
+    };
+
+    pub fn insert(
+        &mut self,
+        id: TraitWhereClauseId,
+        clause: ProjectionBearingTraitClause,
+    ) -> Result<(), TraitGoalError> {
+        for existing in self.clauses[..self.clause_count].iter().flatten() {
+            if existing.id == id {
+                return Err(TraitGoalError::DuplicateWhereClauseId);
+            }
+            if existing.clause == clause {
+                return Err(TraitGoalError::DuplicateWhereClause);
+            }
+        }
+        let slot = self
+            .clauses
+            .get_mut(self.clause_count)
+            .ok_or(TraitGoalError::TooManyWhereClauses)?;
+        *slot = Some(IdentifiedProjectionBearingTraitClause { id, clause });
+        self.clause_count += 1;
+        Ok(())
+    }
+
+    pub fn elaborate_existential(
+        &self,
+        exact_implementations: &TraitImplementationDatabase,
+        generic_implementations: &GenericTraitImplementationDatabase,
+        clauses: &TraitWhereClauseDatabase,
+        exact_values: &TraitAssociatedTypeDatabase,
+        generic_values: &GenericTraitAssociatedTypeDatabase,
+        query: ImplementedTraitGoal,
+    ) -> Result<ProjectionBearingTraitClauseSolution, TraitGoalError> {
+        validate_existential_goal(query)?;
+        let canonicalized = canonicalize_implemented_trait_goal_with_variables(query)?;
+        let initial = InferenceConstraintState::new(canonicalized)?;
+        let environment = TraitProjectionEnvironment {
+            exact_implementations,
+            generic_implementations,
+            clauses,
+            exact_values,
+            generic_values,
+        };
+        let mut selected = None;
+        for candidate in self.clauses[..self.clause_count].iter().flatten() {
+            let mut state = initial;
+            match elaborate_projection_bearing_clause(
+                candidate.clause,
+                query,
+                environment,
+                &mut state,
+            )? {
+                TraitProofSolution::Proven => {
+                    if selected.is_some() {
+                        return Ok(ProjectionBearingTraitClauseSolution::Ambiguous);
+                    }
+                    selected = Some(ProjectionBearingTraitClauseAnswer {
+                        clause_id: candidate.id,
+                        substitution: state.substitution()?,
+                    });
+                }
+                TraitProofSolution::Ambiguous => {
+                    return Ok(ProjectionBearingTraitClauseSolution::Ambiguous);
+                }
+                TraitProofSolution::NoSolution => {}
+                TraitProofSolution::Cycle => {
+                    return Ok(ProjectionBearingTraitClauseSolution::Cycle);
+                }
+                TraitProofSolution::Overflow => {
+                    return Ok(ProjectionBearingTraitClauseSolution::Overflow);
+                }
+            }
+        }
+        Ok(selected.map_or(
+            ProjectionBearingTraitClauseSolution::NoSolution,
+            ProjectionBearingTraitClauseSolution::Unique,
+        ))
+    }
+}
+
+fn elaborate_projection_bearing_clause(
+    clause: ProjectionBearingTraitClause,
+    query: ImplementedTraitGoal,
+    environment: TraitProjectionEnvironment<'_>,
+    state: &mut InferenceConstraintState,
+) -> Result<TraitProofSolution, TraitGoalError> {
+    if clause.consequence.trait_id != query.trait_id
+        || clause.consequence.argument_count != query.argument_count
+    {
+        return Ok(TraitProofSolution::NoSolution);
+    }
+    let mut arguments = [None; MAX_TRAIT_GENERIC_PARAMETERS];
+    if !bind_direct_bound_term(
+        &clause.arena,
+        clause.consequence.self_type,
+        query.self_type,
+        clause.parameter_count,
+        &mut arguments,
+        state,
+    )? {
+        return Ok(TraitProofSolution::NoSolution);
+    }
+    for (bound, query) in clause.consequence.arguments().iter().zip(query.arguments()) {
+        if !bind_direct_bound_term(
+            &clause.arena,
+            bound.as_ref().copied().ok_or(TraitGoalError::InvalidGoal)?,
+            query.as_ref().copied().ok_or(TraitGoalError::InvalidGoal)?,
+            clause.parameter_count,
+            &mut arguments,
+            state,
+        )? {
+            return Ok(TraitProofSolution::NoSolution);
+        }
+    }
+    if arguments[..clause.parameter_count]
+        .iter()
+        .any(Option::is_none)
+    {
+        return Ok(TraitProofSolution::Ambiguous);
+    }
+    let mut instantiated_arguments =
+        [TraitGoalType::Concrete(TraitTypeId::new(0)); MAX_TRAIT_GENERIC_PARAMETERS];
+    for (index, argument) in arguments[..clause.parameter_count].iter().enumerate() {
+        instantiated_arguments[index] = argument.ok_or(TraitGoalError::InvalidGoal)?;
+    }
+    let instantiated = instantiate_bound_term_goal(
+        &clause.arena,
+        clause.consequence,
+        &instantiated_arguments[..clause.parameter_count],
+    )?;
+    let normalized = match environment.normalize_projection_bearing_goal(
+        &instantiated.arena,
+        instantiated.goal,
+        state,
+    )? {
+        ProjectionBearingGoalNormalizationSolution::Unique(goal) => goal,
+        ProjectionBearingGoalNormalizationSolution::Ambiguous => {
+            return Ok(TraitProofSolution::Ambiguous);
+        }
+        ProjectionBearingGoalNormalizationSolution::NoSolution => {
+            return Ok(TraitProofSolution::NoSolution);
+        }
+        ProjectionBearingGoalNormalizationSolution::Cycle => {
+            return Ok(TraitProofSolution::Cycle);
+        }
+        ProjectionBearingGoalNormalizationSolution::Overflow => {
+            return Ok(TraitProofSolution::Overflow);
+        }
+    };
+    if normalized.trait_id != query.trait_id
+        || normalized.argument_count != query.argument_count
+        || !state.unify_types(normalized.self_type, query.self_type)?
+    {
+        return Ok(TraitProofSolution::NoSolution);
+    }
+    for (normalized, query) in normalized.arguments().iter().zip(query.arguments()) {
+        if !state.unify_types(
+            normalized
+                .as_ref()
+                .copied()
+                .ok_or(TraitGoalError::InvalidGoal)?,
+            query.as_ref().copied().ok_or(TraitGoalError::InvalidGoal)?,
+        )? {
+            return Ok(TraitProofSolution::NoSolution);
+        }
+    }
+    Ok(TraitProofSolution::Proven)
+}
+
+fn bind_direct_bound_term(
+    arena: &BoundTraitGoalTermArena,
+    term_id: TraitGoalTermId,
+    query: TraitGoalType,
+    parameter_count: usize,
+    arguments: &mut [Option<TraitGoalType>; MAX_TRAIT_GENERIC_PARAMETERS],
+    state: &mut InferenceConstraintState,
+) -> Result<bool, TraitGoalError> {
+    match arena
+        .get(term_id)
+        .ok_or(TraitGoalError::InvalidTraitGoalTermReference)?
+    {
+        BoundTraitGoalTerm::Projection { .. } => Ok(true),
+        BoundTraitGoalTerm::Type(BoundTraitGoalType::Concrete(concrete)) => {
+            state.unify_types(TraitGoalType::Concrete(concrete), query)
+        }
+        BoundTraitGoalTerm::Type(BoundTraitGoalType::Parameter(parameter)) => {
+            let index = parameter.get() as usize;
+            if index >= parameter_count {
+                return Err(TraitGoalError::UnboundGenericParameter);
+            }
+            match arguments[index] {
+                Some(existing) => state.unify_types(existing, query),
+                None => {
+                    arguments[index] = Some(state.apply_type(query)?);
+                    Ok(true)
+                }
+            }
+        }
+    }
+}
+
 pub fn solve_concrete_trait_goal(
     implementations: &TraitImplementationDatabase,
     clauses: &TraitWhereClauseDatabase,
@@ -4949,6 +5203,127 @@ mod tests {
                 BoundProjectionBearingTraitGoal::new(TraitId::new(916), invalid),
             ),
             Err(TraitGoalError::UnboundGenericParameter)
+        );
+    }
+
+    #[test]
+    fn elaborates_projection_bearing_clause_heads() {
+        let parameter = TraitGenericParameterId::new(0);
+        let associated = TraitAssociatedTypeId::new(1);
+        let mut arena = BoundTraitGoalTermArena::EMPTY;
+        let bound = arena
+            .intern_type(BoundTraitGoalType::Parameter(parameter))
+            .unwrap();
+        let projection = arena
+            .intern_projection(
+                BoundProjectionBearingTraitGoal::new(TraitId::new(960), bound),
+                associated,
+            )
+            .unwrap();
+        let mut consequence = BoundProjectionBearingTraitGoal::new(TraitId::new(961), bound);
+        consequence.push_argument(projection).unwrap();
+        let clause = ProjectionBearingTraitClause::new(1, arena, consequence).unwrap();
+        let clause_id = TraitWhereClauseId::new(90);
+        let mut clauses = ProjectionBearingTraitClauseDatabase::EMPTY;
+        clauses.insert(clause_id, clause).unwrap();
+
+        let implementation_id = TraitImplementationId::new(236);
+        let mut exact = TraitImplementationDatabase::EMPTY;
+        exact
+            .insert(TraitImplementationHeader::new(
+                implementation_id,
+                TraitId::new(960),
+                TraitTypeId::new(10),
+            ))
+            .unwrap();
+        let mut values = TraitAssociatedTypeDatabase::EMPTY;
+        values
+            .insert(
+                &exact,
+                TraitAssociatedTypeValue::new(implementation_id, associated, TraitTypeId::new(20)),
+            )
+            .unwrap();
+        let variable = TraitInferenceVariableId::in_universe(TraitUniverseIndex::new(19), 0);
+        let mut query = ImplementedTraitGoal::new(
+            TraitId::new(961),
+            TraitGoalType::InferenceVariable(variable),
+        );
+        query
+            .push_argument(TraitGoalType::Concrete(TraitTypeId::new(20)))
+            .unwrap();
+        let ProjectionBearingTraitClauseSolution::Unique(answer) = clauses
+            .elaborate_existential(
+                &exact,
+                &GenericTraitImplementationDatabase::EMPTY,
+                &TraitWhereClauseDatabase::EMPTY,
+                &values,
+                &GenericTraitAssociatedTypeDatabase::EMPTY,
+                query,
+            )
+            .unwrap()
+        else {
+            panic!("projection-bearing clause head should elaborate");
+        };
+        assert_eq!(answer.clause_id, clause_id);
+        assert_eq!(
+            answer.substitution.binding(variable),
+            Some(TraitGoalType::Concrete(TraitTypeId::new(10)))
+        );
+
+        let mut mismatch = ImplementedTraitGoal::new(
+            TraitId::new(961),
+            TraitGoalType::InferenceVariable(variable),
+        );
+        mismatch
+            .push_argument(TraitGoalType::Concrete(TraitTypeId::new(21)))
+            .unwrap();
+        assert_eq!(
+            clauses.elaborate_existential(
+                &exact,
+                &GenericTraitImplementationDatabase::EMPTY,
+                &TraitWhereClauseDatabase::EMPTY,
+                &values,
+                &GenericTraitAssociatedTypeDatabase::EMPTY,
+                mismatch,
+            ),
+            Ok(ProjectionBearingTraitClauseSolution::NoSolution)
+        );
+    }
+
+    #[test]
+    fn projection_bearing_clause_heads_fail_closed_on_unconstrained_parameters() {
+        let parameter = TraitGenericParameterId::new(0);
+        let mut arena = BoundTraitGoalTermArena::EMPTY;
+        let bound = arena
+            .intern_type(BoundTraitGoalType::Parameter(parameter))
+            .unwrap();
+        let projection = arena
+            .intern_projection(
+                BoundProjectionBearingTraitGoal::new(TraitId::new(962), bound),
+                TraitAssociatedTypeId::new(1),
+            )
+            .unwrap();
+        let clause = ProjectionBearingTraitClause::new(
+            1,
+            arena,
+            BoundProjectionBearingTraitGoal::new(TraitId::new(963), projection),
+        )
+        .unwrap();
+        let mut clauses = ProjectionBearingTraitClauseDatabase::EMPTY;
+        clauses.insert(TraitWhereClauseId::new(91), clause).unwrap();
+        assert_eq!(
+            clauses.elaborate_existential(
+                &TraitImplementationDatabase::EMPTY,
+                &GenericTraitImplementationDatabase::EMPTY,
+                &TraitWhereClauseDatabase::EMPTY,
+                &TraitAssociatedTypeDatabase::EMPTY,
+                &GenericTraitAssociatedTypeDatabase::EMPTY,
+                ImplementedTraitGoal::new(
+                    TraitId::new(963),
+                    TraitGoalType::Concrete(TraitTypeId::new(20)),
+                ),
+            ),
+            Ok(ProjectionBearingTraitClauseSolution::Ambiguous)
         );
     }
 

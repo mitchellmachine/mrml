@@ -4375,6 +4375,15 @@ and substitutes a concrete or parameter value. It adds no new search strategy,
 specialization order, cache, parser, runtime mechanism, allocation,
 synchronization, protocol, cryptography, or hardware behavior.
 
+# 2026-08-25 — Projection-bearing logical clause heads
+
+**Result: NOT_TRIGGERED.** This compiler-only increment binds directly
+constrained parameters in an existing fixed bound-term arena, normalizes an
+existing projection-bearing head, and classifies candidates in an existing
+fixed identified clause table. It adds no implementation coherence rule,
+branching search, specialization order, cache, parser, runtime mechanism,
+allocation, synchronization, protocol, cryptography, or hardware behavior.
+
 # 2026-08-25 — Unified concrete trait projection selection
 
 **Result: NOT_TRIGGERED.** This compiler-only increment dispatches one bounded

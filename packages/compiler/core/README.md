@@ -4206,6 +4206,18 @@ host. Higher-ranked term binders, projection terms in clause heads and premise
 type positions, concrete/rigid projection-premise proof, backtracking, caching,
 coinduction, source syntax, and general normalization remain unsupported.
 
+The projection-bearing logical clause-head milestone keeps up to 64 identified
+bound heads in a separate fixed database. Direct leaf positions must constrain
+every parameter before the complete instantiated head is normalized through
+the projection-aware environment and unified with the existential query. A
+parameter occurring only beneath a projection fails closed as ambiguous.
+Windows gnullvm and native Arch Linux WSL each pass 522 library tests, one
+component-interface probe, 10 conformance tests, and 335 replacement tests: 868
+compiler tests per host. Clause premises, recursive solver integration, generic
+implementation heads and coherence, higher-ranked term binders, projection
+terms in premise type positions, backtracking, caching, coinduction, and source
+syntax remain unsupported.
+
 The nested conditional tuple-origin milestone walks each leaf's bounded
 conditional-parent chain to the outermost generation before grouping reference
 origins by field ordinal. The exact oracle rejects a three-leaf returned field
