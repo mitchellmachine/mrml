@@ -4707,3 +4707,12 @@ potential overlap, admitting disjointness only from trait/arity mismatch or an
 unequal concrete leaf. It adds no equation solver, search strategy,
 specialization order, cache, parser, runtime mechanism, allocation,
 synchronization, protocol, cryptography, or hardware behavior.
+
+# 2026-08-25 — Projection-bearing implementation selection
+
+**Result: NOT_TRIGGERED.** This compiler-only increment evaluates already
+admitted fixed heads by copying the existing bounded inference state,
+normalizing through the existing associated-value environment, and proving
+existing bounded flat premises. It adds no coherence rule, search order,
+specialization, cache, parser, runtime mechanism, allocation, synchronization,
+protocol, cryptography, or hardware behavior.

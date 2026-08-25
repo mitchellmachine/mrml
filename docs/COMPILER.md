@@ -1059,8 +1059,13 @@ trait/arity or an unequal concrete leaf proves heads disjoint; parameters,
 projections, and every other unresolved relationship conservatively mean
 potential overlap. Admission rejects duplicate identities, peer overlap, and
 potential collisions with exact or flat-generic heads, while permitting heads
-separated by an explicit concrete leaf. Premises never waive overlap. Selection
-is not yet exposed from this table. Projection terms in premise type positions,
+separated by an explicit concrete leaf. Premises never waive overlap.
+Existential selection copies the root constraint state per admitted candidate,
+normalizes the complete head through the associated-value environment, proves
+flat premises, and returns the stable generic implementation identity plus the
+recovered substitution. Missing premises reject the candidate; ambiguity,
+cycles, and overflow remain explicit. Recursive use of this implementation
+table is not yet wired into general trait proof. Projection terms in premise type positions,
 complete projection-equation coherence, higher-ranked term binders,
 backtracking, caching,
 coinduction, and source associated-type syntax remain unsupported.

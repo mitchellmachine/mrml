@@ -1935,6 +1935,21 @@ pub struct ProjectionBearingGenericTraitImplementationDatabase {
     implementation_count: usize,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct ProjectionBearingGenericTraitImplementationAnswer {
+    pub implementation_id: GenericTraitImplementationId,
+    pub substitution: SymbolicTraitGoalSubstitution,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum ProjectionBearingGenericTraitImplementationSolution {
+    Unique(ProjectionBearingGenericTraitImplementationAnswer),
+    Ambiguous,
+    NoSolution,
+    Cycle,
+    Overflow,
+}
+
 impl ProjectionBearingGenericTraitImplementationDatabase {
     pub const EMPTY: Self = Self {
         implementations: [None; MAX_GENERIC_TRAIT_IMPLEMENTATIONS],
@@ -1990,6 +2005,68 @@ impl ProjectionBearingGenericTraitImplementationDatabase {
             return Err(TraitGoalError::OverlappingExactAndGenericImplementation);
         }
         self.insert(id, implementation)
+    }
+
+    pub fn select_existential(
+        &self,
+        exact_implementations: &TraitImplementationDatabase,
+        generic_implementations: &GenericTraitImplementationDatabase,
+        clauses: &TraitWhereClauseDatabase,
+        exact_values: &TraitAssociatedTypeDatabase,
+        generic_values: &GenericTraitAssociatedTypeDatabase,
+        query: ImplementedTraitGoal,
+    ) -> Result<ProjectionBearingGenericTraitImplementationSolution, TraitGoalError> {
+        validate_existential_goal(query)?;
+        let canonicalized = canonicalize_implemented_trait_goal_with_variables(query)?;
+        let initial = InferenceConstraintState::new(canonicalized)?;
+        let environment = TraitProjectionEnvironment {
+            exact_implementations,
+            generic_implementations,
+            clauses,
+            exact_values,
+            generic_values,
+        };
+        let mut selected = None;
+        for candidate in self.implementations[..self.implementation_count]
+            .iter()
+            .flatten()
+        {
+            let mut state = initial;
+            let mut stack = [None; MAX_TRAIT_PROOF_DEPTH];
+            match elaborate_projection_bearing_clause(
+                candidate.implementation,
+                query,
+                environment,
+                &mut state,
+                None,
+                &mut stack,
+                0,
+            )? {
+                TraitProofSolution::Proven => {
+                    if selected.is_some() {
+                        return Ok(ProjectionBearingGenericTraitImplementationSolution::Ambiguous);
+                    }
+                    selected = Some(ProjectionBearingGenericTraitImplementationAnswer {
+                        implementation_id: candidate.id,
+                        substitution: state.substitution()?,
+                    });
+                }
+                TraitProofSolution::Ambiguous => {
+                    return Ok(ProjectionBearingGenericTraitImplementationSolution::Ambiguous);
+                }
+                TraitProofSolution::NoSolution => {}
+                TraitProofSolution::Cycle => {
+                    return Ok(ProjectionBearingGenericTraitImplementationSolution::Cycle);
+                }
+                TraitProofSolution::Overflow => {
+                    return Ok(ProjectionBearingGenericTraitImplementationSolution::Overflow);
+                }
+            }
+        }
+        Ok(selected.map_or(
+            ProjectionBearingGenericTraitImplementationSolution::NoSolution,
+            ProjectionBearingGenericTraitImplementationSolution::Unique,
+        ))
     }
 }
 
@@ -6027,6 +6104,121 @@ mod tests {
                 implementation(12),
             )
             .unwrap();
+    }
+
+    #[test]
+    fn selects_projection_bearing_implementation_and_proves_premises() {
+        let parameter = TraitGenericParameterId::new(0);
+        let associated = TraitAssociatedTypeId::new(1);
+        let mut arena = BoundTraitGoalTermArena::EMPTY;
+        let term = arena
+            .intern_type(BoundTraitGoalType::Parameter(parameter))
+            .unwrap();
+        let projection = arena
+            .intern_projection(
+                BoundProjectionBearingTraitGoal::new(TraitId::new(1110), term),
+                associated,
+            )
+            .unwrap();
+        let mut head = BoundProjectionBearingTraitGoal::new(TraitId::new(1111), term);
+        head.push_argument(projection).unwrap();
+        let mut implementation = ProjectionBearingTraitClause::new(1, arena, head).unwrap();
+        implementation
+            .push_premise(BoundImplementedTraitGoal::new(
+                TraitId::new(1112),
+                BoundTraitGoalType::Parameter(parameter),
+            ))
+            .unwrap();
+        let implementation_id = GenericTraitImplementationId::new(310);
+        let mut implementations = ProjectionBearingGenericTraitImplementationDatabase::EMPTY;
+        implementations
+            .insert(implementation_id, implementation)
+            .unwrap();
+
+        let projection_implementation_id = TraitImplementationId::new(253);
+        let mut exact = TraitImplementationDatabase::EMPTY;
+        exact
+            .insert(TraitImplementationHeader::new(
+                projection_implementation_id,
+                TraitId::new(1110),
+                TraitTypeId::new(10),
+            ))
+            .unwrap();
+        exact
+            .insert(TraitImplementationHeader::new(
+                TraitImplementationId::new(254),
+                TraitId::new(1112),
+                TraitTypeId::new(10),
+            ))
+            .unwrap();
+        let mut values = TraitAssociatedTypeDatabase::EMPTY;
+        values
+            .insert(
+                &exact,
+                TraitAssociatedTypeValue::new(
+                    projection_implementation_id,
+                    associated,
+                    TraitTypeId::new(20),
+                ),
+            )
+            .unwrap();
+        let variable = TraitInferenceVariableId::in_universe(TraitUniverseIndex::new(23), 0);
+        let mut query = ImplementedTraitGoal::new(
+            TraitId::new(1111),
+            TraitGoalType::InferenceVariable(variable),
+        );
+        query
+            .push_argument(TraitGoalType::Concrete(TraitTypeId::new(20)))
+            .unwrap();
+        let ProjectionBearingGenericTraitImplementationSolution::Unique(answer) = implementations
+            .select_existential(
+                &exact,
+                &GenericTraitImplementationDatabase::EMPTY,
+                &TraitWhereClauseDatabase::EMPTY,
+                &values,
+                &GenericTraitAssociatedTypeDatabase::EMPTY,
+                query,
+            )
+            .unwrap()
+        else {
+            panic!("projection-bearing implementation should select");
+        };
+        assert_eq!(answer.implementation_id, implementation_id);
+        assert_eq!(
+            answer.substitution.binding(variable),
+            Some(TraitGoalType::Concrete(TraitTypeId::new(10)))
+        );
+
+        let mut missing_premise = TraitImplementationDatabase::EMPTY;
+        missing_premise
+            .insert(TraitImplementationHeader::new(
+                projection_implementation_id,
+                TraitId::new(1110),
+                TraitTypeId::new(10),
+            ))
+            .unwrap();
+        let mut missing_values = TraitAssociatedTypeDatabase::EMPTY;
+        missing_values
+            .insert(
+                &missing_premise,
+                TraitAssociatedTypeValue::new(
+                    projection_implementation_id,
+                    associated,
+                    TraitTypeId::new(20),
+                ),
+            )
+            .unwrap();
+        assert_eq!(
+            implementations.select_existential(
+                &missing_premise,
+                &GenericTraitImplementationDatabase::EMPTY,
+                &TraitWhereClauseDatabase::EMPTY,
+                &missing_values,
+                &GenericTraitAssociatedTypeDatabase::EMPTY,
+                query,
+            ),
+            Ok(ProjectionBearingGenericTraitImplementationSolution::NoSolution)
+        );
     }
 
     #[test]

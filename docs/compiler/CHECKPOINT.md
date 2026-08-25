@@ -1002,7 +1002,12 @@ from trait/arity mismatch or an unequal direct concrete leaf and rejects every
 projection or parameter relationship it cannot decide, including collisions
 with exact and flat-generic heads. Windows gnullvm and native Arch Linux WSL
 each pass 526 library tests, one component-interface probe, 10 conformance
-tests, and 335 replacement tests: 872 compiler tests per host. Selection,
+tests, and 335 replacement tests: 872 compiler tests per host. Existential
+selection now normalizes one admitted head in a copied root state, proves its
+flat premises, and returns the stable implementation identity and inferred
+substitution. Windows gnullvm and native Arch Linux WSL each pass 527 library
+tests, one component-interface probe, 10 conformance tests, and 335 replacement
+tests: 873 compiler tests per host. Recursive implementation-table proof,
 complete projection-equation coherence, higher-ranked term binders, projection
 terms in premise type positions, backtracking, caching, coinduction, and source
 syntax remain unsupported.
