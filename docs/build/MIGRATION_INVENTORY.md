@@ -33,6 +33,10 @@ implemented; general Store release/image/publication work is not complete.
   Linux and Windows GNU/LLVM, then gates V2 check/format, lock parity, audit,
   package/interface/migration unit tests, and a representative direct `mrml`
   native build.
+- On Windows GNU/LLVM, 20 warm process invocations of `mrml manifest check`
+  averaged 16.69 ms (minimum 15.70 ms, maximum 26.84 ms) on 2026-08-25. This is
+  end-to-end process plus V2 parse/validation/graph overhead on this host, not a
+  cross-host benchmark or a comparison against the retired in-process V1 path.
 
 ## Implemented first gate
 

@@ -350,6 +350,16 @@ generation, prove exact combination binding, and admit only authorized slices.
 UEFI testing builds, packages/extracts, and boots `BOOTX64.EFI` under QEMU with an
 expected signed probe before any exact physical-hardware claim.
 
+The authenticated package-derived positive path has executed under QEMU/EDK2
+with the raw trace `c8 b0 b2 b0 b2 c9 b0 b2 b2 a1 a2 a3 a4 a5 a6 a7 a8 b1
+b2 b3`: the release, bootloader/configuration packages, exact kernel package,
+inner signed kernel, and established kernel path all completed. Shared parser
+tests reject modified package bytes, wrong release digest, bad signature,
+malformed length, truncation, wrong architecture/class, and incompatible release
+version. Those are unit/parser tests, not negative QEMU evidence. Repeatable
+QEMU media construction and the corresponding negative firmware boots remain an
+acceptance gate; do not report them as completed from parser tests alone.
+
 ## Releases, images, install, and publication
 
 `mrml release` consumes exact packages/digests, compatibility policy, and metadata
