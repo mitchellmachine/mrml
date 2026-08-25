@@ -37,6 +37,7 @@ use schema::InterfaceSchema;
 const MAX_WORKSPACE_BYTES: u64 = 1024 * 1024;
 const MAX_MANIFEST_BYTES: u64 = 256 * 1024;
 const MAX_COMPONENTS: usize = 256;
+const MAX_DISCOVERY_DIRECTORIES: usize = 4096;
 const PINNED_NIGHTLY: &str = "nightly-2026-08-24";
 const TARGET_FAMILIES: [&str; 5] = ["WINDOWS", "LINUX", "MRML_NATIVE", "UEFI", "CUDA"];
 
@@ -650,6 +651,53 @@ fn read_bounded_manifest(path: &Path, label: &str) -> Result<String, String> {
         .map_err(|error| format!("ManifestReadError {{ file: {label}, detail: {error} }}"))
 }
 
+fn audit_workspace_admission(root: &Path, admitted: &BTreeSet<String>) -> Result<(), String> {
+    let mut pending = vec![root.to_path_buf()];
+    let mut visited = 0_usize;
+    while let Some(directory) = pending.pop() {
+        visited = visited.checked_add(1).ok_or("WorkspaceDiscoveryOverflow")?;
+        if visited > MAX_DISCOVERY_DIRECTORIES {
+            return Err(format!(
+                "WorkspaceDiscoveryLimit {{ limit: {MAX_DISCOVERY_DIRECTORIES} }}"
+            ));
+        }
+        let entries = fs::read_dir(&directory).map_err(|error| {
+            format!(
+                "WorkspaceDiscoveryReadError {{ directory: {}, detail: {error} }}",
+                directory.display()
+            )
+        })?;
+        for entry in entries {
+            let entry = entry
+                .map_err(|error| format!("WorkspaceDiscoveryEntryError {{ detail: {error} }}"))?;
+            let file_type = entry
+                .file_type()
+                .map_err(|error| format!("WorkspaceDiscoveryTypeError {{ detail: {error} }}"))?;
+            let name = entry.file_name();
+            if file_type.is_dir() {
+                if name != ".git" && name != "target" {
+                    pending.push(entry.path());
+                }
+                continue;
+            }
+            if file_type.is_symlink() || name != "mrml.toml" || directory == root {
+                continue;
+            }
+            let relative = directory
+                .strip_prefix(root)
+                .map_err(|_| "WorkspaceDiscoveryEscape".to_owned())?
+                .to_string_lossy()
+                .replace('\\', "/");
+            if !admitted.contains(&relative) {
+                return Err(format!(
+                    "WorkspaceManifestNotAdmitted {{ path: {relative}/mrml.toml }}"
+                ));
+            }
+        }
+    }
+    Ok(())
+}
+
 fn load_manifest_declarations(root: &Path) -> Result<ManifestDeclarations, String> {
     let root_text = read_bounded_manifest(&root.join("mrml.toml"), "mrml.toml")?;
     let root_document = ManifestDocument::parse(root_text.as_bytes())
@@ -764,6 +812,7 @@ fn load_manifest_declarations(root: &Path) -> Result<ManifestDeclarations, Strin
             declarations.push(declaration);
         }
     }
+    audit_workspace_admission(root, &seen)?;
     for (provider, interface, generation, fingerprint, _) in &providers {
         if interface_definitions.get(interface) != Some(&(*generation, fingerprint.clone())) {
             return Err(format!(
