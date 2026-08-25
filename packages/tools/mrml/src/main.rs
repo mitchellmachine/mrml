@@ -1119,7 +1119,7 @@ fn v2_declarations(
         externs.push(encoded);
     }
     declarations.push(vec![
-        "rust-action".into(),
+        "action".into(),
         id.into(),
         rust.string("crate_name")
             .map_err(|error| manifest_error(file, error))?
@@ -1132,7 +1132,7 @@ fn v2_declarations(
             .into(),
         externs.join(";"),
     ]);
-    for (section_name, record_name) in [("test", "rust-test"), ("benchmark", "rust-benchmark")] {
+    for (section_name, record_name) in [("test", "test"), ("benchmark", "benchmark")] {
         for section in document.array_sections(section_name) {
             declarations.push(vec![
                 record_name.into(),
@@ -1161,7 +1161,7 @@ fn v2_declarations(
             .map_err(|error| manifest_error(file, error))?
             .unwrap_or("");
         let mut record = vec![
-            "rust-example".into(),
+            "example".into(),
             id.into(),
             section
                 .string("name")
@@ -1190,7 +1190,7 @@ fn v2_declarations(
             .optional_string("feature")
             .map_err(|error| manifest_error(file, error))?;
         let mut record = vec![
-            "rust-binary".into(),
+            "binary".into(),
             id.into(),
             section
                 .string("output")
@@ -1221,7 +1221,7 @@ fn v2_declarations(
     }
     for section in document.array_sections("feature_set") {
         declarations.push(vec![
-            "rust-feature-set".into(),
+            "feature-set".into(),
             id.into(),
             section
                 .strings("targets")
@@ -1235,7 +1235,7 @@ fn v2_declarations(
     }
     for section in document.array_sections("feature_profile") {
         declarations.push(vec![
-            "rust-feature-profile".into(),
+            "feature-profile".into(),
             id.into(),
             section
                 .string("name")
@@ -1253,7 +1253,7 @@ fn v2_declarations(
     }
     for section in document.array_sections("compile_env") {
         declarations.push(vec![
-            "rust-compile-env".into(),
+            "compile-env".into(),
             id.into(),
             section
                 .string("name")
@@ -1268,7 +1268,7 @@ fn v2_declarations(
     }
     for section in document.array_sections("absent_compile_env") {
         declarations.push(vec![
-            "rust-compile-env-absent".into(),
+            "compile-env-absent".into(),
             id.into(),
             section
                 .string("name")
@@ -1277,9 +1277,9 @@ fn v2_declarations(
         ]);
     }
     for (name, record) in [
-        ("host_build", "rust-host-builds"),
-        ("projected_build", "rust-projected-builds"),
-        ("host_test", "rust-host-tests"),
+        ("host_build", "host-builds"),
+        ("projected_build", "projected-builds"),
+        ("host_test", "host-tests"),
     ] {
         for section in document.array_sections(name) {
             declarations.push(vec![
@@ -1294,7 +1294,7 @@ fn v2_declarations(
     }
     if let Ok(policy) = document.section("test_policy") {
         declarations.push(vec![
-            "rust-test-policy".into(),
+            "test-policy".into(),
             id.into(),
             policy
                 .integer("stack_bytes")
@@ -1304,7 +1304,7 @@ fn v2_declarations(
     }
     for section in document.array_sections("target_triple") {
         declarations.push(vec![
-            "rust-target-triple".into(),
+            "target-triple".into(),
             id.into(),
             section
                 .string("target")
@@ -1318,7 +1318,7 @@ fn v2_declarations(
     }
     for section in document.array_sections("extern_profile") {
         declarations.push(vec![
-            "rust-extern-profile".into(),
+            "extern-profile".into(),
             id.into(),
             section
                 .string("compile_name")
@@ -1336,7 +1336,7 @@ fn v2_declarations(
     }
     for section in document.array_sections("generated") {
         declarations.push(vec![
-            "rust-ptx".into(),
+            "ptx".into(),
             id.into(),
             section
                 .string("output")
@@ -1436,14 +1436,7 @@ fn load_workspace() -> Result<Workspace, String> {
                     rust_action: None,
                 });
             }
-            [
-                "rust-action",
-                component,
-                crate_name,
-                crate_type,
-                source,
-                externs,
-            ] => {
+            ["action", component, crate_name, crate_type, source, externs] => {
                 if rust_actions.iter().any(
                     |(existing, _, _, _, _): &(String, String, String, String, String)| {
                         existing == component
@@ -1462,7 +1455,7 @@ fn load_workspace() -> Result<Workspace, String> {
                     (*externs).into(),
                 ));
             }
-            ["rust-test", component, name, source, self_extern] => {
+            ["test", component, name, source, self_extern] => {
                 rust_tests.push((
                     (*component).to_owned(),
                     (*name).to_owned(),
@@ -1470,19 +1463,19 @@ fn load_workspace() -> Result<Workspace, String> {
                     (*self_extern).to_owned(),
                 ));
             }
-            ["rust-test-policy", component, stack_bytes] => {
+            ["test-policy", component, stack_bytes] => {
                 rust_test_policies.push(((*component).to_owned(), (*stack_bytes).to_owned()));
             }
-            ["rust-host-builds", component, targets] => {
+            ["host-builds", component, targets] => {
                 rust_host_builds.push(((*component).to_owned(), (*targets).to_owned()));
             }
-            ["rust-projected-builds", component, targets] => {
+            ["projected-builds", component, targets] => {
                 rust_projected_builds.push(((*component).to_owned(), (*targets).to_owned()));
             }
-            ["rust-host-tests", component, targets] => {
+            ["host-tests", component, targets] => {
                 rust_host_tests.push(((*component).to_owned(), (*targets).to_owned()));
             }
-            ["rust-example", component, name, source] => {
+            ["example", component, name, source] => {
                 rust_examples.push((
                     (*component).to_owned(),
                     (*name).to_owned(),
@@ -1491,7 +1484,7 @@ fn load_workspace() -> Result<Workspace, String> {
                     String::new(),
                 ));
             }
-            ["rust-example", component, name, source, targets, feature] => {
+            ["example", component, name, source, targets, feature] => {
                 rust_examples.push((
                     (*component).to_owned(),
                     (*name).to_owned(),
@@ -1500,7 +1493,7 @@ fn load_workspace() -> Result<Workspace, String> {
                     (*feature).to_owned(),
                 ));
             }
-            ["rust-benchmark", component, name, source, self_extern] => {
+            ["benchmark", component, name, source, self_extern] => {
                 rust_benchmarks.push((
                     (*component).to_owned(),
                     (*name).to_owned(),
@@ -1509,7 +1502,7 @@ fn load_workspace() -> Result<Workspace, String> {
                 ));
             }
             [
-                "rust-ptx",
+                "ptx",
                 component,
                 output,
                 source,
@@ -1526,14 +1519,7 @@ fn load_workspace() -> Result<Workspace, String> {
                     (*default_gpu_arch).to_owned(),
                 ));
             }
-            [
-                "rust-binary",
-                component,
-                output,
-                crate_name,
-                source,
-                self_extern,
-            ] => {
+            ["binary", component, output, crate_name, source, self_extern] => {
                 rust_binaries.push((
                     (*component).to_owned(),
                     (*output).to_owned(),
@@ -1545,7 +1531,7 @@ fn load_workspace() -> Result<Workspace, String> {
                 ));
             }
             [
-                "rust-binary",
+                "binary",
                 component,
                 output,
                 crate_name,
@@ -1564,7 +1550,7 @@ fn load_workspace() -> Result<Workspace, String> {
                     (*feature).to_owned(),
                 ));
             }
-            ["rust-compile-env", component, name, value] => {
+            ["compile-env", component, name, value] => {
                 rust_compile_env.push((
                     (*component).to_owned(),
                     (*name).to_owned(),
@@ -1572,7 +1558,7 @@ fn load_workspace() -> Result<Workspace, String> {
                     "1".to_owned(),
                 ));
             }
-            ["rust-compile-env", component, name, value, uses] => {
+            ["compile-env", component, name, value, uses] => {
                 rust_compile_env.push((
                     (*component).to_owned(),
                     (*name).to_owned(),
@@ -1580,24 +1566,24 @@ fn load_workspace() -> Result<Workspace, String> {
                     (*uses).to_owned(),
                 ));
             }
-            ["rust-compile-env-absent", component, name] => {
+            ["compile-env-absent", component, name] => {
                 rust_absent_compile_env.push(((*component).to_owned(), (*name).to_owned()));
             }
-            ["rust-feature-set", component, features] => {
+            ["feature-set", component, features] => {
                 rust_feature_sets.push((
                     (*component).to_owned(),
                     "*".to_owned(),
                     (*features).to_owned(),
                 ));
             }
-            ["rust-feature-set", component, targets, features] => {
+            ["feature-set", component, targets, features] => {
                 rust_feature_sets.push((
                     (*component).to_owned(),
                     (*targets).to_owned(),
                     (*features).to_owned(),
                 ));
             }
-            ["rust-feature-profile", component, name, targets, features] => {
+            ["feature-profile", component, name, targets, features] => {
                 rust_feature_profiles.push((
                     (*component).to_owned(),
                     (*name).to_owned(),
@@ -1605,13 +1591,7 @@ fn load_workspace() -> Result<Workspace, String> {
                     (*features).to_owned(),
                 ));
             }
-            [
-                "rust-extern-profile",
-                component,
-                package,
-                consumer,
-                provider,
-            ] => {
+            ["extern-profile", component, package, consumer, provider] => {
                 rust_extern_profiles.push((
                     (*component).to_owned(),
                     (*package).to_owned(),
@@ -1619,7 +1599,7 @@ fn load_workspace() -> Result<Workspace, String> {
                     (*provider).to_owned(),
                 ));
             }
-            ["rust-target-triple", component, target, triple] => {
+            ["target-triple", component, target, triple] => {
                 rust_target_triples.push((
                     (*component).to_owned(),
                     (*target).to_owned(),
@@ -2707,7 +2687,7 @@ fn list(workspace: &Workspace, args: &[String]) -> Result<(), String> {
     for component in &workspace.components {
         if mode == OutputMode::Structured {
             println!(
-                "component|id={}|path={}|class={}|targets={}|dependencies={}|features={}|outputs={}|inputs={}|builder=native-rustc",
+                "manifest-component|id={}|path={}|class={}|targets={}|dependencies={}|features={}|outputs={}|inputs={}|builder=native-rustc",
                 component.id,
                 component.path,
                 component.class,
