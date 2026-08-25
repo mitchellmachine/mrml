@@ -142,8 +142,11 @@ retired while reservations remain. Runtime groundwork now starts one explicit
 fixed period and precharges every authorized maximum slice before vCPU entry.
 All parallel reservations consume the same allowance; exhaustion, time
 regression, period crossing, zero slices, stale reservations, and arithmetic
-failure reject before execution authority is issued. Focused Windows and Linux
-tests pass. This does not yet program a host or APIC deadline from the slice,
+failure reject before execution authority is issued. Each authorization now
+also binds the exact reserved domain, an in-range vCPU index, one logical CPU
+allowed by the affinity mask, and a priority no stronger than the ceiling.
+Rejected vCPU, affinity, or priority choices consume no runtime. Focused Windows
+and Linux tests pass. This does not yet program a host or APIC deadline from the slice,
 reconcile actual elapsed time, enforce priority/class/affinity, derive child
 budgets, or prove physical topology behavior. Those integrations remain
 **PLANNED**.
@@ -157,7 +160,9 @@ retain the reservation until confirmed guest teardown, then verify zero
 reserved parallelism and retire the root. Every focused component vCPU entry is
 now preceded by an exact one-microsecond maximum-slice charge, and teardown
 verifies the shared budget consumed exactly the number of issued entries. This
-is hosted controlled dispatch-admission evidence, not measured guest CPU time
+charge is authorized for vCPU 0 on allowed logical CPU 0 at the exact budget
+ceiling on both runners. This is hosted controlled dispatch-admission evidence,
+not measured guest CPU time
 or a host timer guarantee; deadline programming, elapsed-time reconciliation,
 priority, affinity, general scheduler, multi-vCPU, and physical-topology
 enforcement remain **PLANNED**.

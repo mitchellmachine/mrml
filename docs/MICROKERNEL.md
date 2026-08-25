@@ -7836,6 +7836,9 @@ The focused component vCPU budget now starts one explicit runtime period and
 precharges an exact maximum slice before every KVM/WHP vCPU entry. Parallel
 reservations share the same allowance, and invalid time, boundary crossing,
 exhaustion, stale identity, or missing execute authority rejects before entry.
+The authorization also records the exact domain, in-range vCPU index,
+affinity-allowed logical CPU, and bounded priority; hostile substitutions leave
+the runtime counter unchanged.
 Teardown verifies that consumed slices equal issued entries before retiring the
 budget. Windows and Linux kernel suites passed 506 tests, WHP passed 7, KVM
 passed 8, and fresh signed hosted probes passed with zero KVM native fallback.

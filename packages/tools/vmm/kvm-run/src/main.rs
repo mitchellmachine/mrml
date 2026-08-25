@@ -85,7 +85,16 @@ fn precharge_component_vcpu(cpu: &mut Option<ComponentCpuAuthority>) -> Result<(
         .as_mut()
         .ok_or_else(|| anyhow!("missing component vCPU runtime authority"))?;
     budgets
-        .charge_runtime_slice(*reservation, *capability, *next_start, 1, capabilities)
+        .authorize_runtime_slice(
+            *reservation,
+            *capability,
+            0,
+            0,
+            u8::MAX,
+            *next_start,
+            1,
+            capabilities,
+        )
         .map_err(|error| anyhow!("component vCPU runtime charge failed: {:?}", error))?;
     *next_start = next_start
         .checked_add(1)

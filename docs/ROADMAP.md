@@ -247,7 +247,10 @@ gates.
 The vCPU budget now has a first runtime-enforcement prerequisite: one explicit
 fixed period, a shared allowance across parallel reservations, and exact
 maximum-slice charging before each focused component vCPU entry. Exhaustion,
-time regression, period crossing, and stale authority fail before dispatch.
+time regression, period crossing, stale authority, out-of-range vCPU, denied
+affinity, and excessive priority fail before dispatch and without partial
+charging. Successful authorization retains the exact domain, vCPU, logical CPU,
+and priority decision for the runner.
 Windows/Linux kernel suites and fresh WHP/KVM hosted probes pass, including
 zero KVM native fallback. This is deterministic dispatch-admission accounting,
 not elapsed-time or hardware-deadline evidence. Backend timer programming,

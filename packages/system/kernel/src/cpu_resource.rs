@@ -108,12 +108,32 @@ impl CpuBudgetUsage {
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct CpuRuntimeSlice {
+    domain: ObjectId,
+    vcpu_index: u16,
+    logical_cpu: u8,
+    priority: u8,
     charged_micros: u32,
     remaining_micros: u32,
     period_end_micros: u64,
 }
 
 impl CpuRuntimeSlice {
+    pub const fn domain(&self) -> ObjectId {
+        self.domain
+    }
+
+    pub const fn vcpu_index(&self) -> u16 {
+        self.vcpu_index
+    }
+
+    pub const fn logical_cpu(&self) -> u8 {
+        self.logical_cpu
+    }
+
+    pub const fn priority(&self) -> u8 {
+        self.priority
+    }
+
     pub const fn charged_micros(self) -> u32 {
         self.charged_micros
     }
@@ -141,6 +161,9 @@ pub enum CpuResourceError {
     RuntimeExhausted,
     TimeRegression,
     SliceCrossesPeriod,
+    VcpuOutsideReservation,
+    AffinityDenied,
+    PriorityDenied,
     GenerationExhausted,
     Arithmetic,
     Capability(CapabilityError),
@@ -378,10 +401,13 @@ impl<const B: usize, const R: usize> CpuBudgetTable<B, R> {
     /// Charges one scheduler-authorized maximum runtime slice before vCPU entry.
     /// All reservations under a budget consume the same period allowance, so
     /// additional parallel reservations cannot amplify CPU time authority.
-    pub fn charge_runtime_slice<const C: usize>(
+    pub fn authorize_runtime_slice<const C: usize>(
         &mut self,
         reservation: VcpuReservationId,
         capability: Capability,
+        vcpu_index: u16,
+        logical_cpu: u8,
+        priority: u8,
         slice_start_micros: u64,
         slice_micros: u32,
         capabilities: &CapabilitySpace<C>,
@@ -395,6 +421,18 @@ impl<const B: usize, const R: usize> CpuBudgetTable<B, R> {
             return Err(CpuResourceError::Capability(
                 CapabilityError::PermissionDenied,
             ));
+        }
+        if vcpu_index >= reservation.parallelism {
+            return Err(CpuResourceError::VcpuOutsideReservation);
+        }
+        let affinity_bit = 1_u64
+            .checked_shl(u32::from(logical_cpu))
+            .ok_or(CpuResourceError::AffinityDenied)?;
+        if budget.spec.affinity_mask & affinity_bit == 0 {
+            return Err(CpuResourceError::AffinityDenied);
+        }
+        if priority > budget.spec.priority_ceiling {
+            return Err(CpuResourceError::PriorityDenied);
         }
         let mut period_start = budget
             .runtime_period_start_micros
@@ -434,6 +472,10 @@ impl<const B: usize, const R: usize> CpuBudgetTable<B, R> {
         budget_mut.runtime_period_start_micros = Some(period_start);
         budget_mut.consumed_runtime_micros = next_consumed;
         Ok(CpuRuntimeSlice {
+            domain: reservation.domain,
+            vcpu_index,
+            logical_cpu,
+            priority,
             charged_micros: slice_micros,
             remaining_micros: budget.spec.runtime_micros - next_consumed,
             period_end_micros: period_end,
@@ -533,6 +575,26 @@ impl<const B: usize, const R: usize> CpuBudgetTable<B, R> {
 mod tests {
     use super::*;
 
+    fn charge<const R: usize>(
+        table: &mut CpuBudgetTable<1, R>,
+        reservation: VcpuReservationId,
+        capability: Capability,
+        start: u64,
+        micros: u32,
+        capabilities: &CapabilitySpace<1>,
+    ) -> Result<CpuRuntimeSlice, CpuResourceError> {
+        table.authorize_runtime_slice(
+            reservation,
+            capability,
+            0,
+            0,
+            0,
+            start,
+            micros,
+            capabilities,
+        )
+    }
+
     fn spec(parallelism: u16) -> CpuBudgetSpec {
         CpuBudgetSpec::new(parallelism, 5_000, 10_000, 7, 0b11).unwrap()
     }
@@ -628,7 +690,7 @@ mod tests {
             .reserve_vcpus(budget, capability, ObjectId(30), 1, &capabilities)
             .unwrap();
         assert_eq!(
-            table.charge_runtime_slice(reservation, capability, 100, 1, &capabilities),
+            charge(&mut table, reservation, capability, 100, 1, &capabilities),
             Err(CpuResourceError::RuntimeNotStarted)
         );
         table
@@ -638,30 +700,86 @@ mod tests {
             table.start_runtime_period(reservation, capability, 100, &capabilities),
             Err(CpuResourceError::RuntimeAlreadyStarted)
         );
-        let first = table
-            .charge_runtime_slice(reservation, capability, 100, 3_000, &capabilities)
-            .unwrap();
+        assert_eq!(
+            table.authorize_runtime_slice(reservation, capability, 1, 0, 0, 100, 1, &capabilities,),
+            Err(CpuResourceError::VcpuOutsideReservation)
+        );
+        assert_eq!(
+            table.authorize_runtime_slice(reservation, capability, 0, 2, 0, 100, 1, &capabilities,),
+            Err(CpuResourceError::AffinityDenied)
+        );
+        assert_eq!(
+            table.authorize_runtime_slice(reservation, capability, 0, 0, 8, 100, 1, &capabilities,),
+            Err(CpuResourceError::PriorityDenied)
+        );
+        assert_eq!(
+            table
+                .usage(budget, capability, &capabilities)
+                .unwrap()
+                .consumed_runtime_micros(),
+            0
+        );
+        let first = charge(
+            &mut table,
+            reservation,
+            capability,
+            100,
+            3_000,
+            &capabilities,
+        )
+        .unwrap();
         assert_eq!(first.charged_micros(), 3_000);
+        assert_eq!(first.domain(), ObjectId(30));
+        assert_eq!(first.vcpu_index(), 0);
+        assert_eq!(first.logical_cpu(), 0);
+        assert_eq!(first.priority(), 0);
         assert_eq!(first.remaining_micros(), 2_000);
         assert_eq!(first.period_end_micros(), 10_100);
         assert_eq!(
-            table.charge_runtime_slice(reservation, capability, 3_100, 2_001, &capabilities),
+            charge(
+                &mut table,
+                reservation,
+                capability,
+                3_100,
+                2_001,
+                &capabilities,
+            ),
             Err(CpuResourceError::RuntimeExhausted)
         );
         assert_eq!(
-            table.charge_runtime_slice(reservation, capability, 10_099, 2, &capabilities),
+            charge(
+                &mut table,
+                reservation,
+                capability,
+                10_099,
+                2,
+                &capabilities,
+            ),
             Err(CpuResourceError::SliceCrossesPeriod)
         );
-        let next = table
-            .charge_runtime_slice(reservation, capability, 10_100, 5_000, &capabilities)
-            .unwrap();
+        let next = charge(
+            &mut table,
+            reservation,
+            capability,
+            10_100,
+            5_000,
+            &capabilities,
+        )
+        .unwrap();
         assert_eq!(next.remaining_micros(), 0);
         assert_eq!(next.period_end_micros(), 20_100);
         let usage = table.usage(budget, capability, &capabilities).unwrap();
         assert_eq!(usage.runtime_period_start_micros(), Some(10_100));
         assert_eq!(usage.consumed_runtime_micros(), 5_000);
         assert_eq!(
-            table.charge_runtime_slice(reservation, capability, 10_099, 1, &capabilities),
+            charge(
+                &mut table,
+                reservation,
+                capability,
+                10_099,
+                1,
+                &capabilities,
+            ),
             Err(CpuResourceError::TimeRegression)
         );
     }
@@ -680,16 +798,13 @@ mod tests {
         table
             .start_runtime_period(first, capability, 0, &capabilities)
             .unwrap();
-        table
-            .charge_runtime_slice(first, capability, 0, 4_000, &capabilities)
-            .unwrap();
+        charge(&mut table, first, capability, 0, 4_000, &capabilities).unwrap();
         assert_eq!(
-            table.charge_runtime_slice(second, capability, 4_000, 1_001, &capabilities),
+            charge(&mut table, second, capability, 4_000, 1_001, &capabilities,),
             Err(CpuResourceError::RuntimeExhausted)
         );
         assert_eq!(
-            table
-                .charge_runtime_slice(second, capability, 4_000, 1_000, &capabilities)
+            charge(&mut table, second, capability, 4_000, 1_000, &capabilities,)
                 .unwrap()
                 .remaining_micros(),
             0

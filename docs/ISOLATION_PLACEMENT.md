@@ -254,7 +254,9 @@ profiles/vCPUs, and physical-topology evidence remain **PLANNED**.
 The CPU gate now also precharges an exact bounded runtime slice before every
 focused component vCPU entry. One period allowance is shared across all
 reservations under the budget, so parallel vCPUs cannot amplify time authority;
-exhaustion and invalid time transitions fail before entry. Both hosted probes
+the dispatch also binds the reservation domain, in-range vCPU index, allowed
+logical CPU, and priority ceiling. Exhaustion, invalid time, affinity, priority,
+or vCPU selection fails without charging and before entry. Both hosted probes
 verify issued-slice accounting through teardown. The one-microsecond values are
 deterministic controlled-probe maximum charges, not measurements or proof that
 WHP/KVM enforces a one-microsecond deadline. Backend deadline programming and

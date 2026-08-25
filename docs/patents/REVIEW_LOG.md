@@ -4766,6 +4766,17 @@ protocol mechanism. General scheduler policy and backend deadline enforcement
 remain separate review scopes; agent review does not replace independent human
 dual review.
 
+# 2026-08-25 — Exact CPU dispatch-constraint authorization
+
+**Result: NOT_TRIGGERED.** This increment performs conventional scalar checks
+that a requested vCPU index is within an existing reservation, a logical CPU is
+selected by an existing 64-bit affinity mask, and a priority is no stronger
+than an existing ceiling before invoking the reviewed fixed-period charge. It
+adds no scheduler selection, load balancing, topology discovery, migration,
+deadline/timer mechanism, virtualization technique, or hardware protocol.
+Broader scheduler and backend deadline work retain separate review scopes;
+agent review does not replace independent human dual review.
+
 # 2026-08-25 — Direct-leaf projection-head coherence
 
 **Result: NOT_TRIGGERED.** This compiler-only increment sends direct leaf
