@@ -9,12 +9,11 @@ the named commit and current source.
 ## Recoverable baseline
 
 - Branch: `main`
-- Compiler checkpoint commit: `f307c1b3`
-  (`compiler: validate loop terminal returns`)
-- Remote state when recorded: `origin/main` includes the compiler checkpoint,
-  durable documentation, and review through `ccacb0dc`. The push was a verified
-  fast-forward containing exactly the three isolated loop-terminal-return
-  commits; unrelated OS work remained outside this worktree.
+- Compiler checkpoint commit: `13ad7843`
+  (`compiler: validate nested loop returns`)
+- Remote state when recorded: publication of this compiler checkpoint, its
+  durable documentation, and review is pending. Unrelated OS work remains
+  outside this worktree.
 - Preceding compiler commits: `5c53eb9` (`compiler: track mutable tuple field
   moves`), `480a198` (`compiler: identify constant array
   elements`), `40a035c` (`compiler: analyze initializedness
@@ -184,8 +183,15 @@ At the checkpoint commit, the runtime emitter has these bounded mechanisms:
   location maps to the exact unconditional CFG return edge. The outlives pass
   rejects an identity-call result backed by loop-local storage while preserving
   the equivalent parameter-backed return. Ordinary loop actions and `break`
-  terminals are not promoted into this gate; nested-loop return locations and
-  general lifetime relationships remain separate future work.
+  terminals are not promoted into this gate; general lifetime relationships
+  remain separate future work.
+  Nested-loop unconditional and conditional return values now also use return-
+  context preanalysis. Their existing shape-validated action index and ordered
+  control coordinate maps to an exact CFG return edge, and only nested controls
+  that carry a return value use `NestedLoopControlValue`. Local-backed identity
+  results are rejected while parameter-backed equivalents are preserved.
+  Nested conditional conditions, `break`, `continue`, ordinary actions, and
+  general region relationships remain outside this bounded gate.
   Explicit direct mutable reborrows derive their parent loan and ultimate owner
   path with an initialization-count traversal bound. A parent use before a
   later child use reports a conflict, a parent use after the child’s last use is
@@ -521,7 +527,7 @@ Windows-only run.
 
 ## Last complete verification
 
-The checkpoint source passed 766 tests on each host: 419
+The checkpoint source passed 767 tests on each host: 420
 library tests, 10 conformance tests, 335 replacement tests, and 2 driver tests.
 Warnings-denied Clippy also passed on both hosts. The commands were:
 

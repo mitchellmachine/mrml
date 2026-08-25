@@ -267,7 +267,12 @@ Conditional-loop terminal returns in both the primary and else arm now use
 return-context preanalysis and the existing exact terminal return edge. This
 rejects a loop-local identity-call result while preserving a parameter-backed
 result. It does not classify ordinary terminal actions or `break` as returns,
-and it does not claim nested-loop return coverage or general lifetime solving.
+and it does not claim general lifetime solving. Nested-loop unconditional and
+conditional return values likewise use return-context preanalysis and their
+existing shape-validated ordered control location. Only return controls carry a
+`NestedLoopControlValue`; conditions, `break`, `continue`, and ordinary actions
+remain outside the exact return-value classification. Local-backed identity-call
+results are rejected and parameter-backed controls are preserved.
 For complete supported statement/loop CFGs, definite initializedness now uses
 a bounded fixed point over exact block and edge events. Two fixed 64-block by
 22-word bitset matrices cover all 1,360 move paths; predecessor states meet by
