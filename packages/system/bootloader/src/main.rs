@@ -3179,6 +3179,7 @@ unsafe fn run_kernel(bytes: *const u8, length: usize) -> ! {
         receiver_context.r15 = resource_capabilities[0].token();
         #[cfg(feature = "component-service-probe")]
         {
+            receiver_context.r12 = 1;
             receiver_context.rbx = resource_transfer.token();
         }
         #[cfg(not(feature = "component-service-probe"))]
@@ -3193,6 +3194,10 @@ unsafe fn run_kernel(bytes: *const u8, length: usize) -> ! {
         let sender_context = runtime.context_mut(sender).unwrap_or_else(|_| halt());
         sender_context.r13 = capability.token();
         sender_context.r14 = receiver.token();
+        #[cfg(feature = "component-service-probe")]
+        {
+            sender_context.r12 = 1;
+        }
         #[cfg(not(feature = "block-service-probe"))]
         {
             sender_context.r15 = root_capability.token();

@@ -183,6 +183,27 @@ DATA PLANE
 App domain == admitted IPC/shared queue ==> bound provider -> backend/hardware
 ```
 
+The first signed two-artifact hosted probe now applies this split end to end.
+The control plane verifies and atomically attaches the exact immutable
+`org.mrml.zim` consumer and `org.mrml.zstd` provider generations, commits one
+Total-mode microVM route, and supplies separate use and delegation
+capabilities. The data plane then carries the fixed ABI-3 request, bounded
+payload, and response through the already-bound IPC endpoint and shared
+`MemoryObject`; it performs no provider lookup or policy round trip. A shared
+buffer read accepts exactly either `MAP|READ` or `MAP|READ|WRITE`, never an
+arbitrary rights superset, so the one admitted read/write data capability can
+serve the bounded request/response buffer without weakening exact-rights
+authorization.
+
+Fresh one-time-signed artifacts completed this controlled hosted probe on
+2026-08-25. KVM reported `eligible=1`, `microvm=1`, and
+`native_fallback=0`, then reached the expected bounded halt. WHP completed the
+same exact-generation ZIM/Zstd exchange and lifecycle cleanup. This is hosted
+controlled-probe evidence only; it does not prove host-resistant isolation,
+physical hardware, persistent owner settings, boot-menu Total mode, or
+required-system Total readiness. The complete adaptive-placement architecture
+and Total MicroVM Isolation therefore remain **PLANNED**.
+
 ## One policy, several placements
 
 MRML extends its existing process, service, capability, package-generation, and

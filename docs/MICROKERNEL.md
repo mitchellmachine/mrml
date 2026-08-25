@@ -7774,6 +7774,28 @@ broader independently serviced component subsystem remains `TRIGGERED`; see
 [patents/REVIEW_LOG.md](patents/REVIEW_LOG.md). Agent review does not replace
 independent human dual review.
 
+### Signed independently serviced component probe
+
+The exact-generation ZIM/Zstd hosted component probe is **IMPLEMENTED** as a
+controlled probe on both KVM and WHP. This status covers only the focused
+signed-artifact path: the common launch identity binds distinct consumer and
+provider digests, interface ABI generation 3 and fingerprint, and provider
+generation before either image is published. Total-mode admission then commits
+one eligible microVM with zero native fallback. The consumer receives separate
+shared-buffer use and delegation tokens, attenuates the delegated token to
+exact `MAP|READ|WRITE`, and exchanges the fixed request and response over the
+already-established IPC and `MemoryObject` data path. No payload field chooses
+a provider, placement, endpoint, path, or capability.
+
+The Windows kernel suite passed 492 tests, including the focused exact
+read-only/read-write shared-buffer authorization test. Fresh one-time-signed
+artifacts then completed under nested KVM with
+`eligible=1|microvm=1|native_fallback=0` and under WHP with exact-generation
+data-path and lifecycle-cleanup success. These are hosted controlled probes,
+not bare-metal, physical-device, host-security-boundary, or complete Total-mode
+evidence. Patent review remains `TRIGGERED` under the existing bounded
+component-lifecycle review; see [patents/REVIEW_LOG.md](patents/REVIEW_LOG.md).
+
 ## Milestones
 
 This historical list is retained for continuity. The current dependency-ordered

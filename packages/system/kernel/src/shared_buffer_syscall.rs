@@ -135,6 +135,16 @@ impl SharedBufferSyscallExecutor {
         let capabilities = runtime
             .capabilities(task)
             .map_err(SharedBufferSyscallError::Runtime)?;
+        let rights = if !service_writes && capabilities.authorize_exact(capability, rights).is_err()
+        {
+            let read_write = Rights::MAP.union(Rights::READ).union(Rights::WRITE);
+            capabilities
+                .authorize_exact(capability, read_write)
+                .map(|_| read_write)
+                .unwrap_or(rights)
+        } else {
+            rights
+        };
         let message = Message::new(&[], &[capability]).map_err(|error| {
             SharedBufferSyscallError::Authorization(IpcSharedBufferError::Ipc(error))
         })?;
@@ -384,6 +394,76 @@ mod tests {
         .unwrap();
         assert_eq!(&user.bytes[..4], b"read");
         assert_eq!((user.validations, user.copies, shared.calls), (1, 1, 1));
+        assert_eq!(scratch, [0; 8]);
+    }
+
+    #[test]
+    fn read_accepts_only_exact_read_or_exact_read_write_authority() {
+        let mut fixture = fixture(SharedAccess::ReadWrite);
+        let (mut shared, mut user) = backends(&fixture);
+        shared.bytes[7..11].copy_from_slice(b"data");
+        let mut scratch = [0xcc; 8];
+        SharedBufferSyscallExecutor::execute(
+            SyscallRequest::ReadSharedBuffer {
+                capability: fixture.capability,
+                offset: 7,
+                output_address: USER_ADDRESS,
+                length: 4,
+            },
+            &fixture.runtime,
+            fixture.task,
+            fixture.vm,
+            &fixture.bindings,
+            &fixture.memory,
+            &mut shared,
+            &mut user,
+            &mut scratch,
+        )
+        .unwrap();
+        assert_eq!(&user.bytes[..4], b"data");
+        assert_eq!((user.validations, user.copies, shared.calls), (1, 1, 1));
+        assert_eq!(scratch, [0; 8]);
+
+        fixture
+            .runtime
+            .capabilities_mut(fixture.task)
+            .unwrap()
+            .revoke(fixture.capability)
+            .unwrap();
+        let overbroad = fixture
+            .runtime
+            .capabilities_mut(fixture.task)
+            .unwrap()
+            .insert(
+                ObjectId(51),
+                Rights::MAP
+                    .union(Rights::READ)
+                    .union(Rights::WRITE)
+                    .union(Rights::CONTROL),
+            )
+            .unwrap();
+        let (mut shared, mut user) = backends(&fixture);
+        let mut scratch = [0xcc; 8];
+        assert!(matches!(
+            SharedBufferSyscallExecutor::execute(
+                SyscallRequest::ReadSharedBuffer {
+                    capability: overbroad,
+                    offset: 7,
+                    output_address: USER_ADDRESS,
+                    length: 4,
+                },
+                &fixture.runtime,
+                fixture.task,
+                fixture.vm,
+                &fixture.bindings,
+                &fixture.memory,
+                &mut shared,
+                &mut user,
+                &mut scratch,
+            ),
+            Err(SharedBufferSyscallError::Authorization(_))
+        ));
+        assert_eq!((user.copies, shared.calls), (0, 0));
         assert_eq!(scratch, [0; 8]);
     }
 

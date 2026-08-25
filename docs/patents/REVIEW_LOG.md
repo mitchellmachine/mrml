@@ -4065,6 +4065,22 @@ no clause database, recursive search, cycle algorithm, cache, parser, runtime
 mechanism, allocation, synchronization, protocol, cryptography, or hardware
 behavior.
 
+# 2026-08-25 — Signed ZIM/Zstd hosted component execution
+
+**Result: TRIGGERED; bounded implementation remains within the reviewed
+lifecycle shape.** The signed hosted probe now executes the already reviewed
+fixed 104-byte request, one exact attenuated read/write shared-buffer
+capability, bounded payload in an already-created `MemoryObject`, and fixed
+16-byte response between exact immutable ZIM consumer and Zstd provider
+generations. Control-plane admission and atomic two-image attachment precede
+the steady-state data path; no request byte selects authority, provider,
+placement, endpoint, filename, path, proxy, ring, or alternate transport. The
+shared-buffer syscall change accepts exactly read-only or read/write authority
+for a read and rejects arbitrary supersets. This adds no new transport or
+resolver mechanism beyond the prior claim-focused review. Broader provider
+lifecycle, update retention, supervision, and reclamation remain
+`TRIGGERED`, and agent review does not replace independent human dual review.
+
 # 2026-08-25 — Bounded identified trait-clause database
 
 **Result: NOT_TRIGGERED.** This compiler-only increment stores fixed identified
