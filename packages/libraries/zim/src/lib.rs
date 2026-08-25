@@ -1,6 +1,10 @@
 #![no_std]
 
 use core::fmt;
+use mrml_interface_zstd_v3::{
+    BorrowedReadView, BorrowedWriteView, DecompressError, ZstdTransport,
+    decode_decompress_response, encode_decompress_request,
+};
 use mrml_runtime::{File, Text, Vector};
 
 pub const ZIM_MAGIC: u32 = 0x044d_495a;
@@ -125,12 +129,6 @@ pub struct ClusterInfo {
     pub compressed_bytes: u64,
     pub compression: Compression,
     pub extended_offsets: bool,
-}
-
-/// Compression is deliberately supplied by a separate crate so the ZIM
-/// container remains small and testable independently of codec internals.
-pub trait ClusterDecoder {
-    fn decode_zstd(&mut self, compressed: &[u8]) -> core::result::Result<Vector<u8>, ()>;
 }
 
 pub struct Archive {
@@ -312,11 +310,11 @@ impl Archive {
         blob_from_cluster(&bytes, wide, blob)
     }
 
-    pub fn read_blob_with<D: ClusterDecoder>(
+    pub fn read_blob_with<T: ZstdTransport>(
         &mut self,
         cluster: u32,
         blob: u32,
-        decoder: &mut D,
+        transport: &mut T,
     ) -> Result<Vector<u8>> {
         let info = self.cluster_info(cluster)?;
         if let Some(cached) = self
@@ -330,9 +328,7 @@ impl Archive {
             let payload = self.read_cluster_payload(cluster)?;
             let bytes = match info.compression {
                 Compression::None => payload,
-                Compression::Zstd => decoder
-                    .decode_zstd(&payload)
-                    .map_err(|_| Error::Decompression)?,
+                Compression::Zstd => decode_zstd(transport, &payload)?,
                 Compression::Unknown(kind) => return Err(Error::UnsupportedCompression(kind)),
             };
             if self.decoded_clusters.len() == self.cluster_cache_capacity {
@@ -346,6 +342,59 @@ impl Archive {
         }
         let cached = self.decoded_clusters.last().ok_or(Error::InvalidCluster)?;
         blob_from_cluster(&cached.bytes, cached.extended_offsets, blob)
+    }
+}
+
+fn decode_zstd<T: ZstdTransport>(transport: &mut T, compressed: &[u8]) -> Result<Vector<u8>> {
+    const MAX_OUTPUT: usize = 512 * 1024 * 1024;
+    let initial = compressed
+        .len()
+        .checked_mul(4)
+        .unwrap_or(MAX_OUTPUT)
+        .clamp(4096, MAX_OUTPUT);
+    let mut output_capacity = initial;
+    loop {
+        let total = compressed
+            .len()
+            .checked_add(output_capacity)
+            .ok_or(Error::Allocation)?;
+        let mut memory = Vector::with_capacity(total).map_err(|_| Error::Allocation)?;
+        memory.resize(total, 0);
+        memory[..compressed.len()].copy_from_slice(compressed);
+        let input = BorrowedReadView::within(0, compressed.len() as u64, total as u64)
+            .ok_or(Error::Decompression)?;
+        let output = BorrowedWriteView::within(
+            compressed.len() as u64,
+            output_capacity as u64,
+            total as u64,
+        )
+        .ok_or(Error::Decompression)?;
+        let request = encode_decompress_request(input, output).map_err(|_| Error::Decompression)?;
+        let response = transport
+            .call(&request, &mut memory)
+            .map_err(|_| Error::Decompression)?;
+        match decode_decompress_response(&response).map_err(|_| Error::Decompression)? {
+            Ok(written) => {
+                let written = usize::try_from(written).map_err(|_| Error::Decompression)?;
+                if written > output_capacity {
+                    return Err(Error::Decompression);
+                }
+                let start = compressed.len();
+                let mut decoded = Vector::with_capacity(written).map_err(|_| Error::Allocation)?;
+                decoded
+                    .try_extend_from_slice(&memory[start..start + written])
+                    .map_err(|_| Error::Allocation)?;
+                return Ok(decoded);
+            }
+            Err((DecompressError::OutputTooSmall, required)) => {
+                let required = usize::try_from(required).map_err(|_| Error::Decompression)?;
+                if required <= output_capacity || required > MAX_OUTPUT {
+                    return Err(Error::Decompression);
+                }
+                output_capacity = required;
+            }
+            Err((DecompressError::InvalidFrame, _)) => return Err(Error::Decompression),
+        }
     }
 }
 

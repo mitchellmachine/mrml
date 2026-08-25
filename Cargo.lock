@@ -83,6 +83,10 @@ dependencies = [
 ]
 
 [[package]]
+name = "mrml-interface-zstd-v3"
+version = "0.0.1"
+
+[[package]]
 name = "mrml-json"
 version = "0.0.1"
 dependencies = [
@@ -352,6 +356,7 @@ version = "0.0.1"
 name = "mrml-zim"
 version = "0.0.1"
 dependencies = [
+ "mrml-interface-zstd-v3",
  "mrml-runtime",
 ]
 
@@ -359,5 +364,6 @@ dependencies = [
 name = "mrml-zstd"
 version = "0.0.1"
 dependencies = [
+ "mrml-interface-zstd-v3",
  "mrml-runtime",
 ]

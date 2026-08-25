@@ -3615,3 +3615,40 @@ reference retention, update activation, GC, and servicing remain `TRIGGERED`
 for separate selected-mechanism review. This technical screen establishes
 neither clearance nor infringement and does not replace independent human dual
 review.
+
+# 2026-08-25 — Zstd ABI-3 byte-call provider and ZIM consumer
+
+**Result for this bounded mechanism: NOT_TRIGGERED.** The implementation uses
+one fixed 104-byte little-endian request and one fixed 16-byte response for an
+already selected in-process provider. It validates the exact interface
+fingerprint, generation, operation, reserved bytes, response size, bounded
+non-overlapping offsets, and maximum input/output lengths before decoding. The
+provider returns a typed error or copies into the caller-provided output view;
+the ZIM consumer retries once at the exact reported bounded size. The Rust
+transport trait is only a source-level hosted adapter and is explicitly not the
+stable component ABI. This increment has no descriptor rings, sockets, remote
+discovery, service directory, endpoint negotiation, provider selection, path
+search, executable loading, capability transfer, update, or client rebinding.
+
+Claim-focused worldwide searching reviewed adjacent families including
+[US 10,585,689 B1](https://patents.google.com/patent/US10585689B1), whose claims
+require initiating a shared-memory interface between separate application
+processes, allocating shared regions, and generating unidirectional descriptor
+rings; [US 7,533,176 B2](https://patents.google.com/patent/US7533176B2), whose
+claims concern network-protocol offload connection requests and descriptor
+tables shared with an adapter; [US 8,918,451 B2](https://patents.google.com/patent/US8918451B2),
+whose claims concern service-component-architecture data transformation and
+runtime service binding extensions; and
+[EP 1 374 051 A1](https://patents.google.com/patent/EP1374051A1/en), whose family
+describes advertised component services, contractual service descriptors, and
+session-directory composition. The bounded direct function-call adapter
+implements none of those claim-defining process/ring, network-offload,
+transformation-extension, advertisement, contract, or directory mechanisms.
+Material publications and family records were reviewed through linked
+national/regional register data; non-overlap, not assumed legal status, is the
+design basis.
+
+Resolver-to-loader call dispatch, isolated-service transport, provider update,
+retention/GC, rebinding policy, and servicing remain `TRIGGERED` for separate
+selected-mechanism review. This technical screen establishes neither clearance
+nor infringement and does not replace independent human dual review.

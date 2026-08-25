@@ -2,7 +2,7 @@
 
 use core::fmt;
 use mrml_runtime::Text;
-use mrml_zim::{Archive, ClusterDecoder, DirectoryEntry, EntryLocation};
+use mrml_zim::{Archive, DirectoryEntry, EntryLocation};
 
 #[derive(Debug)]
 pub enum Error {
@@ -77,17 +77,6 @@ impl ArticleReader {
     }
 }
 
-struct NativeZstd;
-
-impl ClusterDecoder for NativeZstd {
-    fn decode_zstd(
-        &mut self,
-        compressed: &[u8],
-    ) -> core::result::Result<mrml_runtime::Vector<u8>, ()> {
-        mrml_zstd::decode(compressed).map_err(|_| ())
-    }
-}
-
 /// Reads one article and converts its HTML body to normalized training text.
 /// The archive stays open so callers can stream entries from multi-gigabyte
 /// Wikipedia files without loading the ZIM into memory.
@@ -106,7 +95,7 @@ fn entry_text(archive: &mut Archive, entry: &DirectoryEntry) -> Result<Text> {
     let EntryLocation::Blob { cluster, blob } = entry.location else {
         return Err(Error::NotArticle);
     };
-    let bytes = archive.read_blob_with(cluster, blob, &mut NativeZstd)?;
+    let bytes = archive.read_blob_with(cluster, blob, &mut mrml_zstd::ComponentProvider)?;
     let html = core::str::from_utf8(&bytes).map_err(|_| Error::InvalidUtf8)?;
     Ok(html_to_text(html))
 }

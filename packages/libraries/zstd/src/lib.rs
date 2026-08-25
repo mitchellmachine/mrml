@@ -6,6 +6,10 @@ mod huffman;
 mod sequences;
 
 use core::fmt;
+use mrml_interface_zstd_v3::{
+    DECOMPRESS_REQUEST_BYTES, DECOMPRESS_RESPONSE_BYTES, DecompressError, ProtocolError,
+    ZstdTransport, decode_decompress_request, encode_decompress_response, encode_output_too_small,
+};
 use mrml_runtime::Vector;
 
 pub const FRAME_MAGIC: u32 = 0xfd2f_b528;
@@ -70,6 +74,52 @@ impl fmt::Display for Error {
 
 impl core::error::Error for Error {}
 pub type Result<T> = core::result::Result<T, Error>;
+
+/// Canonical in-process provider for
+/// `org.mrml.interface.compression.zstd@3`.
+///
+/// The resolver supplies the immutable provider generation. This value carries
+/// no authority and does not perform path or filename lookup.
+#[derive(Default)]
+pub struct ComponentProvider;
+
+impl ZstdTransport for ComponentProvider {
+    fn call(
+        &mut self,
+        request_bytes: &[u8; DECOMPRESS_REQUEST_BYTES],
+        memory: &mut [u8],
+    ) -> core::result::Result<[u8; DECOMPRESS_RESPONSE_BYTES], ProtocolError> {
+        let request = decode_decompress_request(request_bytes, memory.len() as u64)?;
+        let input_start =
+            usize::try_from(request.input.offset()).map_err(|_| ProtocolError::InvalidRequest)?;
+        let input_end = usize::try_from(
+            request
+                .input
+                .offset()
+                .checked_add(request.input.length())
+                .ok_or(ProtocolError::InvalidRequest)?,
+        )
+        .map_err(|_| ProtocolError::InvalidRequest)?;
+        let decoded = match decode(&memory[input_start..input_end]) {
+            Ok(decoded) => decoded,
+            Err(_) => {
+                return Ok(encode_decompress_response(Err(
+                    DecompressError::InvalidFrame,
+                )));
+            }
+        };
+        if decoded.len() as u64 > request.output.length() {
+            return Ok(encode_output_too_small(decoded.len() as u64));
+        }
+        let output_start =
+            usize::try_from(request.output.offset()).map_err(|_| ProtocolError::InvalidRequest)?;
+        let output_end = output_start
+            .checked_add(decoded.len())
+            .ok_or(ProtocolError::InvalidRequest)?;
+        memory[output_start..output_end].copy_from_slice(&decoded);
+        Ok(encode_decompress_response(Ok(decoded.len() as u64)))
+    }
+}
 
 #[derive(Debug, Clone, Copy, Eq, PartialEq)]
 pub struct FrameInfo {
@@ -399,6 +449,34 @@ mod tests {
             0x28, 0xb5, 0x2f, 0xfd, 0x20, 3, 0x19, 0, 0, b'a', b'b', b'c',
         ];
         assert_eq!(&*decode(&frame).unwrap(), b"abc");
+    }
+
+    #[test]
+    fn abi_three_provider_uses_bounded_views_and_reports_required_output() {
+        use mrml_interface_zstd_v3::{
+            BorrowedReadView, BorrowedWriteView, decode_decompress_response,
+            encode_decompress_request,
+        };
+
+        let frame = [
+            0x28, 0xb5, 0x2f, 0xfd, 0x20, 3, 0x19, 0, 0, b'a', b'b', b'c',
+        ];
+        let mut memory = [0_u8; 32];
+        memory[..frame.len()].copy_from_slice(&frame);
+        let input = BorrowedReadView::within(0, frame.len() as u64, 32).unwrap();
+        let small = BorrowedWriteView::within(frame.len() as u64, 2, 32).unwrap();
+        let request = encode_decompress_request(input, small).unwrap();
+        let response = ComponentProvider.call(&request, &mut memory).unwrap();
+        assert_eq!(
+            decode_decompress_response(&response),
+            Ok(Err((DecompressError::OutputTooSmall, 3)))
+        );
+
+        let output = BorrowedWriteView::within(frame.len() as u64, 3, 32).unwrap();
+        let request = encode_decompress_request(input, output).unwrap();
+        let response = ComponentProvider.call(&request, &mut memory).unwrap();
+        assert_eq!(decode_decompress_response(&response), Ok(Ok(3)));
+        assert_eq!(&memory[frame.len()..frame.len() + 3], b"abc");
     }
 
     #[test]

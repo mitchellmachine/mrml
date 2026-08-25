@@ -20,7 +20,7 @@ mrml audit --output structured
 The 2026-08-25 Windows gnullvm result is:
 
 ```text
-42 components
+43 components
 118 deduplicated local dependency records
 72 feature names
 64 declared outputs
@@ -54,7 +54,7 @@ cannot create another input. The native resolver covers declared graph facts;
 the source scan identifies known direct sites. Both must pass before a direct-
 rustc or build-input change.
 
-The internal Cargo bridge is removed. All 42 components, including `mrml`
+The internal Cargo bridge is removed. All 43 components, including `mrml`
 itself, have exact native actions and workspace loading fails on any missing
 action. Fresh `cargo build --locked -p mrml` is the sole stage-zero use; both
 exact hosts then pass doctor/audit, native self-build, and all 12 native
@@ -63,7 +63,7 @@ not the still-planned package/release/image work.
 
 ## Next gate
 
-All 42 tracked components now live in semantic `apps/`, `compiler/`, `packages/`,
+All 43 tracked components now live in semantic `apps/`, `compiler/`, `packages/`,
 `services/`, `system/`, `tests/`, or `tools/` homes; no tracked component remains
 under generic `crates/`. The next gate makes source roots, crate types, editions,
 target cfgs, feature activation, extern names/artifacts, build actions, compiler

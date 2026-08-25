@@ -280,7 +280,7 @@ cargo build --locked -p mrml
 Then use `mrml doctor`, `mrml audit`, `mrml build`, `mrml test`, and target/
 component selectors for repository work. `doctor` verifies the native dependency
 graph without Cargo metadata; `audit` inventories native declarations and
-unusual build inputs. All 42 components have exact native actions and `mrml`
+unusual build inputs. All 43 components have exact native actions and `mrml`
 contains no Cargo fallback. Cargo is confined to the locked clean-source
 bootstrap above; package/release/image commands are not implemented yet.
 
@@ -492,7 +492,7 @@ physical hardware ran.
 Finally, `mrml` has an exact native self-build/self-test action and the internal
 Cargo transition branch has been deleted. Fresh locked Cargo bootstrap followed
 by doctor/audit, native self-build, and all 12 self-tests passes on Windows
-gnullvm and Arch Linux WSL2. All 42 components are native; Cargo is used only to
+gnullvm and Arch Linux WSL2. All 43 components are native; Cargo is used only to
 obtain the first `mrml` binary from a clean checkout. Package/release/image work
 remains separate and incomplete.
 

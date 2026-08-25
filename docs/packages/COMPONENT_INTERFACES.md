@@ -373,8 +373,10 @@ foundations, stable ABI primitives, and quantitative memory accounting, proceed:
    (**PARTIALLY IMPLEMENTED** as bounded in-generation exact resolution);
 3. immutable in-process loader and generation-safe `InterfaceBinding`
    (**PARTIALLY IMPLEMENTED** for immutable binding identity/lifetime only);
-4. `org.mrml.zstd` providing `compression.zstd@3`;
-5. `org.mrml.zim` consuming that interface without provider path knowledge;
+4. `org.mrml.zstd` providing `compression.zstd@3`
+   (**PARTIALLY IMPLEMENTED** for the canonical in-process byte-call adapter);
+5. `org.mrml.zim` consuming that interface without provider path knowledge
+   (**PARTIALLY IMPLEMENTED** for bounded borrowed views and typed responses);
 6. Store update N to N+1 while old/new ZIM processes retain exact bindings;
 7. lifetime/rollback/snapshot-aware GC and dependency inspection;
 8. ABI-4 coexistence/rejection and vulnerable-provider quarantine/retirement;
@@ -423,3 +425,10 @@ generated ABI bindings, update/retention composition, and shared-page accounting
 require mechanism-specific worldwide review before implementation. Record that
 review in [patents/REVIEW_LOG.md](../patents/REVIEW_LOG.md); this design does not
 establish patent clearance and agent review does not replace human dual review.
+
+The checked-in ABI-3 binding package, direct in-process provider adapter, and
+ZIM consumer are bounded hosted evidence only. The package resolver still must
+connect the recorded generational `InterfaceBinding` to native call dispatch;
+the current Wikipedia composition root constructs the provider for tests. This
+does not establish dynamic loading, service isolation, update-without-rebuild,
+retention/GC, performance, fuzzing, or physical-system evidence.

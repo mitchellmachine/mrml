@@ -56,9 +56,12 @@ not by itself implement that deployment architecture.
 
 Versioned independently serviced component interfaces are likewise **PLANNED**
 in [packages/COMPONENT_INTERFACES.md](packages/COMPONENT_INTERFACES.md). Package,
-interface, and Rust crate identity are separate; no dynamic loader, interface
-resolver, shared code mapping, Zstd provider binding, or ZIM dynamic consumption
-is currently implemented.
+interface, and Rust crate identity are separate. Bounded foundations now cover
+schema/binding generation, exact in-generation provider resolution, immutable
+load plans and binding records, shared-code accounting reservations, and a
+hosted Zstd ABI-3 provider/ZIM consumer byte-call adapter. No admitted native
+dynamic loader-to-call path, independently serviced activation, isolated-service
+transport, or retention/GC lifecycle is implemented.
 
 CPU support-floor, vendor microcode, vulnerability, heterogeneous scheduling,
 quantitative CPU authority, power, telemetry, and thermal policy are canonical

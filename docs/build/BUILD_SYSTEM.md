@@ -3,7 +3,7 @@
 **Status: PARTIALLY IMPLEMENTED.** `packages/tools/mrml` now parses the versioned root
 `MRML.workspace`, emits typed list/doctor/audit/build/test results, resolves and
 validates the complete declared dependency graph natively, inventories unusual
-build inputs, directly invokes pinned upstream rustc for all 42 actions, selects current-
+build inputs, directly invokes pinned upstream rustc for all 43 actions, selects current-
 host WHP/KVM VMM adapters, builds an
 x86-64 UEFI artifact, recognizes the CUDA target with explicit architecture and
 toolchain checks, and rejects unimplemented package/release/image/publish
@@ -270,8 +270,10 @@ implemented as `mrml interface generate-rust SCHEMA OUTPUT`. It bounds input at
 profile, computes a SHA3-256 fingerprint, and emits deterministic pointer-free
 Rust types. The Zstd ABI-3 schema and checked-in generated output are the first
 golden fixture. Native call lowering, conformance execution, ABI diffs, and
-`mrml-rustc` emission remain **PLANNED**; neither Rust's native ABI nor a package
-name is the stable interface.
+`mrml-rustc` emission remain **PLANNED**. A bounded hosted ABI-3 byte-call
+adapter exercises the generated request/response contract for Zstd and ZIM,
+but is not native loader dispatch; neither Rust's native ABI nor a package name
+is the stable interface.
 
 Profiles define compiler restrictions, ABI, unsafe/FFI policy, format, metadata,
 signing, and admission:

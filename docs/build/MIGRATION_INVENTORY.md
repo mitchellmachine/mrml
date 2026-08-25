@@ -1,7 +1,7 @@
 # Universal build migration inventory
 
 **Status: NATIVE GRAPH IMPLEMENTED; PACKAGING PARTIAL.** The authoritative machine-readable inventory
-is [`../../MRML.workspace`](../../MRML.workspace). All 42 current components are
+is [`../../MRML.workspace`](../../MRML.workspace). All 43 current components are
 classified and live in semantic `apps/`, `compiler/`, `packages/`, `services/`,
 `system/`, `tests/`, or `tools/` homes; no tracked component remains under generic
 `crates/`. The native resolver validates all 118 declared dependency edges
@@ -33,7 +33,7 @@ toolchains:
 - Windows GNU/LLVM: direct `mrml-math` build/test — PASS, 1 test;
 - Windows GNU/LLVM: direct `mrml-windows` build/test — PASS, 15 tests;
 - Arch Linux WSL2 (`6.18.33.2-microsoft-standard-WSL2`): native `doctor` and
-  `audit` — PASS, 42 components and 118 dependency edges;
+  `audit` — PASS, 43 components and 120 dependency edges;
 - Arch Linux WSL2: direct `mrml-math` build/test — PASS, 1 test;
 - Arch Linux WSL2: direct `mrml-linux` build/test — PASS, 4 tests.
 - Windows GNU/LLVM: dependency-first direct `mrml-runtime` build/test with only
@@ -710,7 +710,7 @@ were not exercised by the Windows implementation environment.
 | `TEST` | kernel benchmark |
 | `SHARED` | reusable crypto/runtime/protocol/media/model/platform libraries |
 
-The exact 42 entries live in `MRML.workspace`; this table must not become a
+The exact 43 entries live in `MRML.workspace`; this table must not become a
 second inventory.
 
 ## Post-migration constraints
@@ -729,7 +729,7 @@ second inventory.
   explicit, native example outputs are checked and compiled, and exact feature
   sets can gate optional target-specific externs. Exact binary outputs, binary
   test harnesses, compile-time environment values, and bin-only actions are
-  explicit. All 42
+  explicit. All 43
   components now have native actions. Direct-rustc expansion still needs
   lock/digest validation for later packaging, but Cargo has been removed from
   every normal component build/test path.
@@ -921,7 +921,7 @@ The `mrml` build tool now has an exact native self-build/self-test action.
 Workspace loading rejects any component without an action, structured listing
 has no transition builder, and the internal Cargo subprocess path is deleted.
 Fresh locked Cargo bootstrap followed by doctor/audit, native self-build, and
-all 12 native self-tests passes on Windows gnullvm and Arch Linux WSL2. All 42
+all 12 native self-tests passes on Windows gnullvm and Arch Linux WSL2. All 43
 components are native; Cargo is required only to obtain the first `mrml` binary
 from clean source. Full host-family builds pass on both hosts, as do all declared
 MRML-native components, both UEFI components, and the CUDA target. Runtime,
