@@ -91,7 +91,10 @@ controlled revoker exact-matches attachment/function generation, BAR window,
 queue, block generation, backend range, and vector; preflights exact backend and
 interrupt capabilities; revokes both; resets the block device/attachment; and
 only then permits PCI generation advance with BAR/decode clear. This proves
-destroyed-execution cleanup, not live dynamic unmapping or production hotplug.
+destroyed-execution cleanup. The controlled runners now first exact-remove and
+verify absence of the preinstalled first-level BAR trap leaf from the stopped
+guest and permanently deny its re-entry. This is not resumable dynamic
+unmapping, TLB-coherent hotplug, or production hotplug.
 
 ## Capability projection into application microVMs
 
@@ -226,7 +229,7 @@ Reset clears the old notification and
 invalidates the request, attachment, mapping identity, and device generation.
 Only a fresh bridge and attachment bind the successor generations; replay of
 the old BAR acknowledgement, ticket, or request reaches no successor state,
-while a fresh successor request is accepted. Live native unmapping/hotplug,
+while a fresh successor request is accepted. Resumable native unmapping/hotplug,
 durable backend recovery, QEMU differential testing,
 and physical-device evidence remain pending. The hosted evidence destroys the
 native execution container before exact capability revocation and reset; it

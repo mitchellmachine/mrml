@@ -189,6 +189,7 @@ struct DriverProbeBlock([u8; 8192], usize);
 #[cfg(target_os = "linux")]
 struct PreinstalledPciMmioWindow {
     mapped: bool,
+    retired: bool,
 }
 
 #[cfg(target_os = "linux")]
@@ -201,6 +202,7 @@ struct DestroyedPciBlockResources<'a> {
     expected_queue: VirtualBlockQueueLayout,
     expected_backend: VirtualBlockBackendAuthority,
     expected_window: VirtualPciMmioWindow,
+    expected_mapped_window: Option<VirtualPciMmioWindow>,
     execution_destroyed: bool,
     revoked: bool,
 }
@@ -220,7 +222,8 @@ unsafe impl VirtualBlockPciResourceRevoker for DestroyedPciBlockResources<'_> {
             || record.queue() != self.expected_queue
             || record.interrupt_vector() != 48
             || record.backend() != self.expected_backend
-            || record.mapped_window() != Some(self.expected_window)
+            || record.pci().mmio_window() != Some(self.expected_window)
+            || record.mapped_window() != self.expected_mapped_window
         {
             return Err(());
         }
@@ -258,6 +261,7 @@ unsafe impl VirtualBlockPciWindowBackend for PreinstalledPciMmioWindow {
             .mmio_window()
             .ok_or(VirtualPciNativeResourceError::Rejected)?;
         if self.mapped
+            || self.retired
             || record.mapped_window().is_some()
             || u64::from(window.address()) != PCI_TEST_MMIO_BASE
             || u64::from(window.size()) != mrml_kernel::PAGE_SIZE
@@ -272,13 +276,22 @@ unsafe impl VirtualBlockPciWindowBackend for PreinstalledPciMmioWindow {
         &mut self,
         record: VirtualBlockPciCleanupRecord,
     ) -> core::result::Result<(), VirtualPciNativeResourceError> {
-        if !self.mapped || record.mapped_window() != record.pci().mmio_window() {
+        if !self.mapped || !self.retired || record.mapped_window() != record.pci().mmio_window() {
             return Err(VirtualPciNativeResourceError::Rejected);
         }
-        // This controlled probe can validate its preinstalled trap window, but
-        // cannot remove the first-level leaf after launch.  Never report a
-        // successful revocation that the backend did not actually perform.
-        Err(VirtualPciNativeResourceError::Uncertain)
+        self.mapped = false;
+        Ok(())
+    }
+}
+
+#[cfg(target_os = "linux")]
+impl PreinstalledPciMmioWindow {
+    fn confirm_retired(&mut self, address: u64) -> Result<()> {
+        if !self.mapped || self.retired || address != PCI_TEST_MMIO_BASE {
+            return Err(anyhow!("invalid retired KVM PCI MMIO window"));
+        }
+        self.retired = true;
+        Ok(())
     }
 }
 
@@ -801,7 +814,10 @@ fn run_pci_configuration_probe(
             command_selector
         ));
     }
-    let mut window_backend = PreinstalledPciMmioWindow { mapped: false };
+    let mut window_backend = PreinstalledPciMmioWindow {
+        mapped: false,
+        retired: false,
+    };
     let command = {
         let mut mapper =
             VirtualBlockPciMemoryMapper::new(&mut attachment, &device, &mut window_backend);
@@ -1054,6 +1070,36 @@ fn run_pci_configuration_probe(
         .admit(&consumed)
         .map_err(|error| anyhow!("failed to admit in-flight reset request: {:?}", error))?
         .ticket();
+    if guest
+        .retire_trapped_mmio_before_destroy(PCI_TEST_MMIO_BASE + mrml_kernel::PAGE_SIZE)
+        .is_ok()
+    {
+        return Err(anyhow!("KVM PCI MMIO retirement accepted a wrong leaf"));
+    }
+    guest
+        .retire_trapped_mmio_before_destroy(PCI_TEST_MMIO_BASE)
+        .map_err(|error| anyhow!("failed to retire KVM PCI MMIO leaf: {:?}", error))?;
+    if guest
+        .retire_trapped_mmio_before_destroy(PCI_TEST_MMIO_BASE)
+        .is_ok()
+    {
+        return Err(anyhow!("KVM PCI MMIO retirement accepted replay"));
+    }
+    window_backend.confirm_retired(PCI_TEST_MMIO_BASE)?;
+    let disable = {
+        let mut mapper =
+            VirtualBlockPciMemoryMapper::new(&mut attachment, &device, &mut window_backend);
+        router
+            .write_with_mapper(location, 4, 2, 0, &mut mapper)
+            .map_err(|_| anyhow!("failed to disable retired KVM PCI MMIO window"))?
+    };
+    if disable != mrml_kernel::VirtualPciWriteOutcome::Command(0)
+        || window_backend.mapped
+        || attachment.mapped_window().is_some()
+        || VmBackend::run(&mut guest, 0).is_ok()
+    {
+        return Err(anyhow!("KVM PCI MMIO retirement did not fail closed"));
+    }
     let expected_pci = router
         .describe_attachment(pci)
         .map_err(|_| anyhow!("PCI cleanup attachment disappeared"))?
@@ -1072,6 +1118,7 @@ fn run_pci_configuration_probe(
         expected_queue: layout,
         expected_backend: authority,
         expected_window,
+        expected_mapped_window: None,
         execution_destroyed: true,
         revoked: false,
     };
@@ -1533,7 +1580,7 @@ fn application_main() -> Result<()> {
     if mode == LaunchMode::PciConfigurationProbe {
         run_pci_configuration_probe(guest, &system, &executable, handoff.as_slice(), layout)?;
         println!(
-            "verified signed test-only attached MRML block PCI-MMIO write/read/flush, orderly VM replacement, and pending-I/O destroyed-VM reset isolation under KVM: verify={}us prepare={}us execute={}us total={}us",
+            "verified signed test-only attached MRML block PCI-MMIO write/read/flush, orderly VM replacement, exact stopped-guest BAR-leaf retirement, and pending-I/O reset isolation under KVM: verify={}us prepare={}us execute={}us total={}us",
             verification_micros,
             preparation_micros,
             execution_started.elapsed().as_micros(),

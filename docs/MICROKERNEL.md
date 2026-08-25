@@ -6814,6 +6814,59 @@ semantic interface, JavaScript/WebAssembly runtime, AI mechanism, or media
 mechanism. Those planned scopes remain `TRIGGERED`; agent review does not
 replace independent human dual review.
 
+### Exact stopped-guest BAR-leaf retirement
+
+Before the pending-I/O probe destroys its final native execution container,
+KVM and WHP now open the exact existing kernel page-table arena and root, require
+the configured page-aligned trapped-MMIO identity, exact-match the identity-
+mapped `KERNEL_MMIO_READ_WRITE` leaf, remove it, and verify it is absent. A wrong
+address and a duplicate retirement fail without changing the recorded state.
+Successful retirement irreversibly marks that prepared guest non-runnable;
+both the inherent WHP entry and common `VmBackend` entry reject all later vCPU
+execution. This prevents an unflushed cached translation from becoming a
+runnable fallback and deliberately avoids claiming resumable live unmapping.
+
+Only after leaf retirement succeeds does the controlled mapper accept the
+existing memory-decode disable, clear its exact attachment mapping record, and
+permit subsequent VM destruction, capability revocation, block/attachment
+reset, and PCI generation advance. The trap page never had a second-level RAM
+mapping, so there is no native KVM slot or WHP GPA allocation to withdraw.
+
+Recorded controlled-probe results on 2026-08-24 were 103,209 us total under
+Arch Linux/WSL2 KVM (`verify=17177us`, `prepare=2140us`, `execute=62216us`) and
+30,940 us total under Windows WHP (`verify=17756us`, `prepare=3858us`,
+`execute=5547us`). These reuse the previously signed test artifact. They are
+not resumable dynamic unmapping, a TLB shootdown protocol, hotplug, production
+BAR management, durable-device, QEMU-differential, or physical evidence.
+
+Engineering Constitution complexity score: complexity impact `LOW`, TCB impact
+`NONE` for the hosted adapter, new parser `NO`, new authority model `NO`, new
+persistent state `NO`, external dependency `NO`, failure isolated `YES`, and
+existing-object reuse `YES`. The change reuses exact `Mapping`, existing-root
+page-table access, `unmap_exact`, `verify_unmapped`, the PCI mapper contract,
+and the existing fail-closed reset path.
+
+DIGITAL-RIGHTS REVIEW: leaf retirement removes access and cannot create backend,
+interrupt, device, path, publisher, vendor, verifier, DRM, AI, or accessibility
+authority. The successor still requires fresh exact capabilities. It records no
+user identity, activity, content, or remote evidence.
+
+HOSTILE SECURITY REVIEW: the requested address, page-table arena/root, leaf
+permissions/physical identity, mapper record, BAR/command state, execution
+state, and replay attempts are hostile. Exact-match validation precedes the
+leaf write; the no-reentry quarantine publishes before the first possible
+page-table mutation; verified absence precedes mapper publication. Failure or
+uncertainty cannot resume execution, clear authority, or permit reset.
+Resumable operation remains unavailable until a separately reviewed TLB-
+coherent protocol exists.
+
+Patent review: `NOT_TRIGGERED` — conventional exact page-table leaf removal,
+absence verification, linear no-reentry state, and existing PCI lifecycle
+composition add no compatibility transport, host-share protocol, accessibility
+device, browser semantic interface, JavaScript/WebAssembly runtime, AI
+mechanism, or media mechanism. Planned scopes remain `TRIGGERED`; agent review
+does not replace independent human dual review.
+
 ## Milestones
 
 This historical list is retained for continuity. The current dependency-ordered

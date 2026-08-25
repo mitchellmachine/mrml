@@ -957,8 +957,12 @@ admitted. The live runners stage the completion and request ownership in native
 guest memory after the signed workload, destroy the execution container, revoke
 the old exact backend/interrupt capabilities, and then perform the common reset;
 the separately latched-notification case remains focused simulation evidence.
-This is not live BAR unmapping, hotplug, durable recovery, QEMU comparison, or
-physical-device evidence.
+The controlled native path additionally removes and verifies absence of its
+exact preinstalled first-level BAR trap leaf while the vCPU is stopped. It
+permanently rejects re-entry afterward, so stale TLB state cannot become a
+runnable fallback; mapper bookkeeping is cleared before destruction and reset.
+This is not resumable dynamic BAR unmapping, hotplug, durable recovery, QEMU
+comparison, or physical-device evidence.
 Memory-decode command transitions now require a separate unsafe native mapper.
 Enable maps the exact attachment/function generation and assigned BAR window
 before publishing the command bit; disable proves that same native window

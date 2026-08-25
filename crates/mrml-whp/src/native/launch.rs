@@ -97,6 +97,10 @@ pub struct PreparedWhpGuest<'system> {
     partition: PreparedWhpPartition<'system>,
     entry: u64,
     root: PhysAddr,
+    table_physical: u64,
+    table_pages: u64,
+    trapped_mmio: Option<u64>,
+    trapped_mmio_retired: bool,
     service_entry: [Option<u64>; MAX_ISOLATED_SERVICES],
     service_root: [Option<PhysAddr>; MAX_ISOLATED_SERVICES],
     service_instance: [Option<ServiceInstance>; MAX_ISOLATED_SERVICES],
@@ -165,6 +169,39 @@ impl<'system> PreparedWhpGuest<'system> {
     }
     pub const fn page_table_root(&self) -> PhysAddr {
         self.root
+    }
+
+    /// Irreversibly removes the exact first-level trap leaf from this stopped
+    /// guest before partition destruction. No vCPU may run afterward;
+    /// resumable live unmapping requires a separate TLB-coherent protocol.
+    pub fn retire_trapped_mmio_before_destroy(&mut self, address: u64) -> Result<(), WhpError> {
+        if self.trapped_mmio != Some(address)
+            || self.trapped_mmio_retired
+            || !address.is_multiple_of(PAGE_SIZE)
+        {
+            return Err(WhpError::InvalidMapping);
+        }
+        let mapping = Mapping::new(
+            VirtAddr::new(address).map_err(|_| WhpError::InvalidMapping)?,
+            PhysAddr::new(address).map_err(|_| WhpError::InvalidMapping)?,
+            1,
+            PagePermissions::KERNEL_MMIO_READ_WRITE,
+        )
+        .map_err(|_| WhpError::InvalidMapping)?;
+        let store = WhpPageTableStore::open_existing(
+            &mut self.partition,
+            self.table_physical,
+            self.table_pages,
+        )?;
+        let mut tables = PageTableBuilder::from_existing_root(store, self.root);
+        // From this point any page-table rejection is uncertain with respect
+        // to executable translation state, so re-entry stays forbidden.
+        self.trapped_mmio_retired = true;
+        tables
+            .unmap_exact(mapping)
+            .and_then(|()| tables.verify_unmapped(mapping))
+            .map_err(|_| WhpError::PageTable)?;
+        Ok(())
     }
     pub const fn service_entry(&self) -> Option<u64> {
         self.service_entry[0]
@@ -455,6 +492,9 @@ impl<'system> PreparedWhpGuest<'system> {
             .map_err(|_| WhpError::PageTable)
     }
     pub fn run(&mut self) -> Result<VmExit, WhpError> {
+        if self.trapped_mmio_retired {
+            return Err(WhpError::InvalidMapping);
+        }
         self.partition.run()
     }
     pub fn run_smp(&mut self) -> Result<(VmExit, VmExit), WhpError> {
@@ -936,6 +976,9 @@ impl VmBackend for PreparedWhpGuest<'_> {
     fn run(&mut self, vcpu: u32) -> Result<VmExit, Self::Error> {
         if vcpu != 0 {
             return Err(WhpError::InvalidVcpu);
+        }
+        if self.trapped_mmio_retired {
+            return Err(WhpError::InvalidMapping);
         }
         self.partition.run()
     }
@@ -1549,6 +1592,16 @@ impl WhpSystem {
             partition,
             entry,
             root,
+            table_physical: layout
+                .table_physical
+                .checked_add(PAGE_SIZE)
+                .ok_or(WhpError::MemoryOverflow)?,
+            table_pages: layout
+                .table_pages
+                .checked_sub(1)
+                .ok_or(WhpError::InvalidMapping)?,
+            trapped_mmio,
+            trapped_mmio_retired: false,
             service_entry: [None; MAX_ISOLATED_SERVICES],
             service_root: [None; MAX_ISOLATED_SERVICES],
             service_instance: [None; MAX_ISOLATED_SERVICES],
@@ -2402,6 +2455,10 @@ mod tests {
             partition,
             entry: 0x20_0000,
             root: PhysAddr::new(0x10_0000).unwrap(),
+            table_physical: 0,
+            table_pages: 0,
+            trapped_mmio: None,
+            trapped_mmio_retired: false,
             service_entry: [None; MAX_ISOLATED_SERVICES],
             service_root: [None; MAX_ISOLATED_SERVICES],
             service_instance: [None; MAX_ISOLATED_SERVICES],

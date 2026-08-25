@@ -2797,6 +2797,18 @@ runtime, AI mechanism, media mechanism, durable recovery protocol, or new
 authority model. Previously recorded planned scopes remain `TRIGGERED`; this
 agent review does not replace the required independent human dual review.
 
+# 2026-08-24 — Exact stopped-guest PCI BAR-leaf retirement
+
+**Result: NOT_TRIGGERED.** The KVM/WHP controlled adapters conventionally open
+an existing bounded page-table arena, exact-match and remove one preinstalled
+identity-mapped MMIO leaf, verify absence, permanently reject vCPU re-entry,
+and then clear existing PCI mapper bookkeeping before destruction and reset.
+It adds no resumable TLB-shootdown protocol, VirtIO compatibility, host-share
+protocol, accessibility device, browser semantic interface,
+JavaScript/WebAssembly runtime, AI mechanism, media mechanism, or new authority
+model. Previously recorded planned scopes remain `TRIGGERED`; this agent review
+does not replace required independent human dual review.
+
 # 2026-08-24 — Conditional-loan move chains
 
 **Result: NOT_TRIGGERED.** The compiler conventionally extends its bounded

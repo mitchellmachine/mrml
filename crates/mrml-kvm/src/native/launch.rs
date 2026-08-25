@@ -98,6 +98,10 @@ pub struct PreparedKvmGuest<const N: usize> {
     backend: KvmBackend<N>,
     entry: u64,
     root: PhysAddr,
+    table_physical: u64,
+    table_pages: u64,
+    trapped_mmio: Option<u64>,
+    trapped_mmio_retired: bool,
     service_entry: [Option<u64>; MAX_ISOLATED_SERVICES],
     service_root: [Option<PhysAddr>; MAX_ISOLATED_SERVICES],
     service_instance: [Option<ServiceInstance>; MAX_ISOLATED_SERVICES],
@@ -168,6 +172,39 @@ impl<const N: usize> PreparedKvmGuest<N> {
     }
     pub const fn page_table_root(&self) -> PhysAddr {
         self.root
+    }
+
+    /// Irreversibly removes the exact first-level trap leaf from this stopped
+    /// guest before native execution is destroyed. No vCPU may run afterward;
+    /// resumable live unmapping requires a separate TLB-coherent protocol.
+    pub fn retire_trapped_mmio_before_destroy(&mut self, address: u64) -> Result<(), KvmError> {
+        if self.trapped_mmio != Some(address)
+            || self.trapped_mmio_retired
+            || !address.is_multiple_of(PAGE_SIZE)
+        {
+            return Err(KvmError::InvalidMapping);
+        }
+        let mapping = Mapping::new(
+            VirtAddr::new(address).map_err(|_| KvmError::InvalidMapping)?,
+            PhysAddr::new(address).map_err(|_| KvmError::InvalidMapping)?,
+            1,
+            PagePermissions::KERNEL_MMIO_READ_WRITE,
+        )
+        .map_err(|_| KvmError::InvalidMapping)?;
+        let store = KvmPageTableStore::open_existing(
+            &mut self.backend.memory,
+            self.table_physical,
+            self.table_pages,
+        )?;
+        let mut tables = PageTableBuilder::from_existing_root(store, self.root);
+        // From this point any page-table rejection is uncertain with respect
+        // to executable translation state, so re-entry stays forbidden.
+        self.trapped_mmio_retired = true;
+        tables
+            .unmap_exact(mapping)
+            .and_then(|()| tables.verify_unmapped(mapping))
+            .map_err(|_| KvmError::PageTable)?;
+        Ok(())
     }
     pub const fn service_entry(&self) -> Option<u64> {
         self.service_entry[0]
@@ -803,6 +840,9 @@ impl KvmPageWalk {
 impl<const N: usize> VmBackend for PreparedKvmGuest<N> {
     type Error = KvmError;
     fn run(&mut self, vcpu: u32) -> Result<VmExit, Self::Error> {
+        if self.trapped_mmio_retired {
+            return Err(KvmError::InvalidMapping);
+        }
         self.backend.run(vcpu)
     }
     fn read_guest(&self, address: u64, output: &mut [u8]) -> Result<(), Self::Error> {
@@ -1572,6 +1612,10 @@ impl KvmSystem {
             backend,
             entry: loaded_image.entry(),
             root,
+            table_physical: layout.table_physical,
+            table_pages: layout.table_pages,
+            trapped_mmio,
+            trapped_mmio_retired: false,
             service_entry: [None; MAX_ISOLATED_SERVICES],
             service_root: [None; MAX_ISOLATED_SERVICES],
             service_instance: [None; MAX_ISOLATED_SERVICES],

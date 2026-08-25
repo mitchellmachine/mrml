@@ -1076,8 +1076,12 @@ and no cleanup call after preflight failure. Controlled KVM/WHP destroyed-VM
 revokers now retire the exact native execution container, preflight the complete
 cleanup record and both capabilities, revoke backend and interrupt authority,
 reset the block attachment, and then allow PCI generation advance with BAR/
-decode clear. Live dynamic unmapping, hotplug, and production native revokers
-remain pending.
+decode clear. The controlled KVM/WHP path now also exact-matches, removes, and
+verifies absence of the preinstalled first-level BAR trap leaf while the final
+vCPU is stopped, then permanently forbids that prepared guest from re-entry
+before mapper bookkeeping, destruction, capability revocation, and reset.
+Resumable dynamic unmapping with explicit TLB coherence, hotplug, and production
+native revokers remain pending.
 Memory-decode command writes are now transactionally coupled to native BAR
 state. `VirtualPciMemoryMapper` is an unsafe exact-generation boundary: enable
 must map the complete assigned window before the command bit publishes, while
@@ -1089,8 +1093,10 @@ function. Tests cover exact mapping/unmapping identity, deny-by-default enable,
 failure preservation, independent successful transitions, mapper-free BAR
 assignment, and common-runner VM failure on mapping rejection. The controlled
 signed KVM/WHP probes now provide narrow adapters for the exact preinstalled
-trap window and authorized test-only block function. A production mapper that
-can both install and revoke native mappings remains pending.
+trap window and authorized test-only block function. The controlled adapter can
+now consume verified stopped-guest leaf retirement before clearing its mapping
+state. A production mapper that supports install plus TLB-coherent revocation
+and safe continuation remains pending.
 The first authorized concrete-function policy slice now binds one routed PCI
 generation to an active MRML-native block generation, exact queue/vector, and
 capability-selected backend region. A block-specific mapper records only a
@@ -1117,8 +1123,8 @@ and a fresh generation-2 request remains admissible. The controlled hosted
 probe stages the two pending ownership classes in native guest memory after the
 signed workload, destroys that VM/partition, revokes the old block and interrupt
 capabilities, performs the exact common reset, rejects both stale identities,
-and issues fresh successor capabilities before admission. Live native
-unmapping/hotplug, durable backend recovery, and QEMU differential evidence
+and issues fresh successor capabilities before admission. Resumable dynamic
+native unmapping/hotplug, durable backend recovery, and QEMU differential evidence
 remain pending, so this does not complete `BLOCK` acceptance.
 Legacy completion notification now also revalidates the exact live router
 generation, BAR, memory-decode, and interrupt-disable state. The first signed
