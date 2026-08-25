@@ -103,6 +103,11 @@ overflows; both native hosts match the pinned Cargo baseline's two remaining
 source failures (273 passed, 2 failed). Fifteen components are native; 27 remain
 transitional.
 
+`mrml-crypto` records its resolved default set as `runtime`; that selected gate
+activates the exact `mrml_runtime` extern on both supported hosts. Windows and
+Arch Linux WSL2 each pass all 27 direct cryptography tests. Sixteen components
+are native; 26 remain transitional.
+
 Patent review: `TRIGGERED`. This increment implements the first native dependency
 resolver, within the package/cache/resolver review already recorded in
 [`../patents/REVIEW_LOG.md`](../patents/REVIEW_LOG.md).

@@ -148,6 +148,13 @@ The cryptography move was checked on a Windows host:
 
 No Linux host or runtime execution was exercised by this move.
 
+The later native cryptography action was checked with the exact dated
+2026-08-24 toolchains on Windows and Arch Linux WSL2. Its resolved effective
+default set selects `runtime`, activating the exact optional runtime extern.
+`mrml doctor`, `mrml audit`, `mrml build mrml-crypto`, and all 27 direct tests
+passed on both hosts. This did not exercise external ACVP vector directories,
+physical hardware, or establish independent cryptographic validation.
+
 The TLS move was checked on a Windows host:
 
 - `cargo +nightly-2026-08-24-x86_64-pc-windows-gnullvm fmt -p mrml-tls -- --check`

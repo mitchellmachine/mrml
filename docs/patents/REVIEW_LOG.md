@@ -88,6 +88,11 @@ fourteen inbound Cargo paths without changing any algorithm or protocol.
 **Result: NOT_TRIGGERED.** Existing cryptographic review requirements remain in
 force.
 
+The later native action selects the already-declared `runtime` feature and
+optional runtime dependency without changing any cryptographic mechanism.
+**Result: NOT_TRIGGERED.** Existing cryptographic and package-resolver reviews
+remain in force.
+
 The thirteenth semantic move relocates `mrml-tls` after crypto/runtime and
 updates both inbound Cargo paths without changing any protocol or algorithm.
 **Result: NOT_TRIGGERED.** Existing TLS and hybrid-key-exchange review

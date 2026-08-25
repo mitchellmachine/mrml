@@ -314,6 +314,10 @@ overflows; both native hosts reproduce the Cargo baseline's two remaining AV1
 source-test failures at 273 passed and 2 failed. Fifteen components are native
 and 27 remain transitional; this is build parity, not AV1 conformance evidence.
 
+`mrml-crypto` records the resolved default feature set as `runtime`, activates
+only that optional native extern, and passes all 27 direct tests on Windows and
+Arch Linux WSL2. Sixteen components are native and 26 remain transitional.
+
 MRML uses Rust 2024 and the exact `nightly-2026-08-24` build toolchain pinned in
 `rust-toolchain.toml`. It is also the current `mrml-rustc` behavioral reference
 recorded as [ORACLE-0002](docs/compiler/oracles/ORACLE-0002.md); a floating

@@ -173,6 +173,11 @@ example directly. With its declared 32 MiB test stack, each host reproduces the
 Cargo baseline at 273 passing and two existing source-test failures. Fifteen of
 42 components are native; 27 remain transitional.
 
+`mrml-crypto` is the first nonempty native feature-set consumer. Its resolved
+default set selects `runtime`, activating the already-native runtime extern;
+Windows and Arch Linux WSL2 each pass all 27 direct tests. Sixteen of 42
+components are native; 26 remain transitional.
+
 `mrml-zstd` is the fourth migrated leaf; its Wikipedia edge and patent-review
 source path now resolve to `packages/libraries/zstd` without changing codec
 behavior.

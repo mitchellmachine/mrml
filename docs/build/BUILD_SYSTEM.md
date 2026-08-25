@@ -175,6 +175,10 @@ Windows/Linux externs are not. Its library and declared example build on both
 hosts; a 32 MiB executable-stack policy leaves the same two source failures as
 the pinned Cargo baseline rather than sixteen additional stack failures.
 
+`mrml-crypto` exercises the enabled side of the same rule. Its action records
+the resolved effective default set as `runtime`, which activates exactly the
+optional runtime extern; both supported hosts pass all 27 inline tests directly.
+
 Rust crate identity, MRML package identity, and stable MRML interface identity
 are distinct. The runtime component model is specified in
 [../packages/COMPONENT_INTERFACES.md](../packages/COMPONENT_INTERFACES.md).
