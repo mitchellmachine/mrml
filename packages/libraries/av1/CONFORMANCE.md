@@ -1,7 +1,8 @@
 # AV1 conformance ledger
 
-This crate is a clean-room, CPU-only implementation. `cargo check -p mrml-av1
---all-targets` is the minimum gate. A feature is only marked complete after
+This crate is a clean-room, CPU-only implementation. `mrml test
+org.mrml.library.av1 --target native` is the minimum current gate. A feature is
+only marked complete after
 positive vectors, malformed-input tests, and comparison with AOM conformance
 vectors have passed.
 

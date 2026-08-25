@@ -3,7 +3,11 @@
 The codec is incomplete; this evidence covers only the code currently present.
 It must not be used as evidence of AV1 bitstream conformance.
 
-## 2026-08-22 Windows
+The dated commands below are historical evidence from before Manifest V2.
+Current contributors use `mrml test org.mrml.library.av1 --target native
+--release`; Cargo is reserved for the locked stage-zero build of `mrml`.
+
+## Historical 2026-08-22 Windows
 
 Host: `x86_64-pc-windows-gnullvm`, Rust nightly 1.100.0
 
@@ -18,7 +22,7 @@ run; crate-local Clippy passed with warnings denied after the latest CPU
 changes. No MSVC, Visual Studio, Windows SDK, CUDA
 Toolkit, or external LLVM was used.
 
-## 2026-08-22 Linux
+## Historical 2026-08-22 Linux
 
 Host: WSL2 `x86_64-unknown-linux-gnu`, Rust nightly 1.100.0
 

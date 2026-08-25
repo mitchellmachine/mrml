@@ -5,6 +5,11 @@ MRML. It is being bootstrapped against the observable behavior of the pinned
 Rust nightly while remaining suitable for MRML's `no_std`, no-global-`alloc`
 environment.
 
+Current repository builds and tests use `mrml build` and `mrml test`; Cargo is
+reserved for the locked stage-zero `mrml` frontend. Cargo command blocks later
+in this file are dated historical oracle evidence, not current contributor
+instructions.
+
 The long-term target is contemporary and forward-looking Rust semantics with
 MRML-specific security and systems integration. Rust 2024 is the floor, not the
 destination. The compiler does not promise Rust 2015/2018/2021, every stable or

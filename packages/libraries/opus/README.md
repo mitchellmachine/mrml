@@ -47,10 +47,12 @@ buffers.
 The dependency-free rfc8251_audit example reads either the twelve official
 .bit files in a directory or one selected vector file, decodes every packet
 statefully, and compares final_range() with the authoritative range stored in
-each record. Run it with:
+each record. Build and verify the declared package through `mrml`, then run the
+resulting declared example:
 
-    cargo run -p mrml-opus --release --example rfc8251_audit -- <vector-directory>
-    cargo run -p mrml-opus --release --example rfc8251_audit -- <vector.bit>
+    mrml test org.mrml.library.opus --target native --release
+    target/mrml-native/<host>/release/rfc8251_audit[.exe] <vector-directory>
+    target/mrml-native/<host>/release/rfc8251_audit[.exe] <vector.bit>
 
 Pass `--report-first` to print the first mismatching packet, its hexadecimal
 payload, and both final ranges. Pass `--report-configs` to break the totals
