@@ -456,7 +456,7 @@ lifecycle verification.
 
 ## 2026-08-23 — typed configuration and supervision protocol foundation
 
-MRML source: `crates/mrml-config/src/lib.rs` and
+MRML source: `services/config/src/lib.rs` and
 `system/kernel/src/{capability,service_lifecycle}.rs`.
 
 The service foundation applies fixed schemas, ordinary optimistic transaction
@@ -472,7 +472,7 @@ service-control message handling.
 
 ## 2026-08-23 — IPC-derived configuration and supervision dispatch
 
-MRML source: `crates/mrml-config/src/lib.rs` and
+MRML source: `services/config/src/lib.rs` and
 `system/kernel/src/ipc.rs`.
 
 Configuration and supervision dispatch now separates payload data from
@@ -660,7 +660,7 @@ category.
 
 ## 2026-08-23 — signed CPL3 configuration read dispatch
 
-MRML source: `crates/mrml-config`, `system/kernel`, the signed kernel and
+MRML source: `services/config`, `system/kernel`, the signed kernel and
 service images, and the WHP/KVM hosted launch paths.
 
 The signed service now decodes a conventional fixed-record configuration read,
@@ -676,7 +676,7 @@ integration.
 
 ## 2026-08-23 — signed CPL3 configuration commit dispatch
 
-MRML source: `crates/mrml-config`, the signed kernel and service images, and the
+MRML source: `services/config`, the signed kernel and service images, and the
 WHP/KVM hosted launch paths.
 
 The signed client encodes a conventional fixed-record one-update transaction,
@@ -692,7 +692,7 @@ transaction integration.
 
 ## 2026-08-23 — signed CPL3 configuration schema admission
 
-MRML source: `crates/mrml-config`, the signed service image, and the WHP/KVM
+MRML source: `services/config`, the signed service image, and the WHP/KVM
 hosted probe sequencing.
 
 The service decodes a conventional fixed schema record for Boolean, bounded
@@ -708,7 +708,7 @@ RPC integration.
 
 ## 2026-08-23 — bounded configuration checkpoint codec
 
-MRML source: `crates/mrml-config`.
+MRML source: `services/config`.
 
 Configuration state is serialized into conventional fixed headers and records,
 hashed with SHA3-256, and decoded into fresh fixed-capacity state only after
@@ -1435,7 +1435,7 @@ lookup and bounded status enumeration.
 
 ## 2026-08-24 — canonical userspace supervision query envelope
 
-MRML source: `crates/mrml-config/src/lib.rs`,
+MRML source: `services/config/src/lib.rs`,
 `system/service-image/src/main.rs`,
 `system/bootloader/src/main.rs`, and the KVM/WHP hosted runners.
 
@@ -1451,7 +1451,7 @@ with least-authority capability transfer.
 
 MRML source: `system/kernel/src/service_lifecycle.rs`,
 `system/kernel/src/syscall.rs`, and
-`crates/mrml-config/src/lib.rs`.
+`services/config/src/lib.rs`.
 
 The kernel conventionally separates authorization and validation from commit so
 a trusted host may reprovision resources between them, then repeats lifecycle,
@@ -1477,7 +1477,7 @@ mapping.
 
 ## 2026-08-24 — capability-authorized hosted restart request
 
-MRML source: `crates/mrml-config/src/lib.rs`,
+MRML source: `services/config/src/lib.rs`,
 `system/service-image/src/main.rs`,
 `system/bootloader/src/main.rs`, and the KVM/WHP hosted runners.
 

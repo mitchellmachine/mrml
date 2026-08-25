@@ -10,7 +10,7 @@ preemption-probe = []
 block-service-loop = []
 
 [dependencies]
-mrml-config = { path = "../../crates/mrml-config" }
+mrml-config = { path = "../../services/config" }
 mrml-crypto = { path = "../../packages/libraries/crypto", default-features = false }
 mrml-kernel = { path = "../../system/kernel" }
 mrml-storage = { path = "../../crates/mrml-storage" }

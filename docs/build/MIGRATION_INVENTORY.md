@@ -320,6 +320,25 @@ The UEFI target compilation above is compile-time evidence only. No signed
 service runtime, WHP/KVM, UEFI firmware, bare-metal, or physical-hardware
 execution was exercised by this path-only move.
 
+The configuration-service move from `crates/mrml-config` to `services/config`
+was checked on a Windows host without changing service source behavior:
+
+- `cargo metadata --no-deps --format-version 1`,
+  `cargo +nightly-2026-08-24-x86_64-pc-windows-gnullvm fmt -p mrml-config -- --check`,
+  `.\target\debug\mrml.exe doctor`, and `.\target\debug\mrml.exe audit`
+  — PASS;
+- `cargo +nightly-2026-08-24-x86_64-pc-windows-gnullvm test -p mrml-config`
+  — PASS, 31 tests;
+- `cargo +nightly-2026-08-24-x86_64-pc-windows-gnullvm clippy -p mrml-config --all-targets --no-deps -- -D warnings`
+  — FAIL on one existing `drop_non_drop` lint in unchanged configuration test
+  code;
+- `.\target\debug\mrml.exe build mrml-config` — PASS;
+- `git grep -n 'crates/mrml-config/' -- ':!docs/build/MIGRATION_INVENTORY.md'`
+  — PASS with no stale exact configuration-package path matches.
+
+No Linux host/runtime, signed service, WHP/KVM, bare-metal, or physical-hardware
+execution was exercised by this path-only move.
+
 `package`, `release`, `image`, and `publish` deliberately fail as `PLANNED`.
 Linux, KVM, cross-host equivalence, physical UEFI/GPU, and release functionality
 were not exercised by the Windows implementation environment.
