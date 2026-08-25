@@ -1188,7 +1188,7 @@ from blue before the transition to green after successful exit, providing a
 visible bring-up signal without serial hardware. Build it with:
 
 ```text
-cargo build --release -p mrml-uefi --bin mrml-loader --features uefi-image --target x86_64-unknown-uefi
+mrml build org.mrml.library.uefi --target uefi-x86_64 --release
 ```
 
 This remains a bring-up loader rather than a production boot chain. It loads,
@@ -1965,15 +1965,17 @@ path, and verifier receive external cryptographic and platform audits.
 ### Reproducible signing and bootstrap
 
 `mrml-sign` is the original, dependency-free release signer. It runs after
-compilation, never from `build.rs`, so Cargo and repository contents do not need
-access to private keys:
+compilation, never from a compiler build hook, so the build graph and repository
+contents do not need access to private keys:
 
 ```text
-cargo build --release -p mrml-sign
+mrml build org.mrml.tool.sign --target windows --release
 mrml-sign keygen release.private release.public
 mrml-sign sign-bundle kernel 1 mrml-kernel.exe release.private mrml-kernel.signed
 mrml-sign key-digest release.public
 ```
+
+Use `--target linux` for the equivalent Linux host tool build.
 
 `sign-bundle` emits the sole boot-artifact representation: a fixed 112-byte
 header, the 64 KiB public key, the 32 KiB signature, and the exact payload.
@@ -2014,17 +2016,19 @@ path-independent build inventory:
 
 ```text
 mrml-sign build-receipt first.receipt source.tar "rustc 1.x (...)" \
-  "cargo 1.x (...)" x86_64-unknown-uefi release Cargo.lock \
+  x86_64-unknown-uefi release mrml.toml mrml.lock rust-toolchain.toml \
   kernel.efi service.efi loader.efi configuration.bin
 mrml-sign compare-build-receipts first.receipt second.receipt
 ```
 
 The source archive must itself be created canonically by the release process;
 the receipt does not canonicalize a source tree. The receipt records no time,
-username, hostname, build path, or general environment. It contains exact
-declared Rust/Cargo version strings and target/profile plus byte lengths and
-SHA3-512 digests for the source archive, lockfile, unsigned kernel, service,
-loader, and selected configuration. Comparison accepts only the canonical
+username, hostname, build path, or general environment. It contains the exact
+declared upstream-rustc version and target/profile plus byte lengths and SHA3-
+512 digests for the source archive, MRML workspace manifest, MRML workspace
+lock, toolchain lock, unsigned kernel, service, loader, and selected
+configuration. Cargo is not a mandatory field; stage-zero Cargo provenance may
+be recorded separately when relevant. Comparison accepts only the canonical
 field order, lowercase fixed-width digests, canonical decimal lengths, bounded
 printable metadata, a final newline, and byte-for-byte equality. A receipt can
 be signed as a policy artifact after independent comparison. Matching receipts
@@ -2306,8 +2310,9 @@ baseline, not a portable performance guarantee.
 The reproducible integration sequence is:
 
 ```text
-cargo build --release -p mrml-kernel-image --bin mrml-kernel-pe --features kernel-image --target x86_64-unknown-uefi
-cargo build --release -p mrml-sign -p mrml-kvm-run
+mrml build org.mrml.system.bootloader --target uefi-x86_64 --release
+mrml build org.mrml.tool.sign --target linux --release
+mrml build org.mrml.tool.vmm-kvm-run --target linux --release
 mrml-sign keygen release.private release.public
 mrml-sign sign-bundle kernel 1 mrml-kernel-pe.efi release.private kernel.signed
 mrml-kvm-run kernel.signed release.public 1 boot

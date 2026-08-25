@@ -3,7 +3,13 @@
 Verified on 2026-08-20 for the TLS, HTTP, model-download, and HTTPS-server
 changes.
 
-## Platforms and commands
+## Historical platforms and commands
+
+The commands below record the exact pre-Manifest-V2 verification that was run;
+they are evidence, not current contributor instructions. Current component
+builds and tests use `mrml build` and `mrml test`. Cargo is limited to the locked
+stage-zero build of the `mrml` frontend, as specified in
+[BUILD_SYSTEM.md](build/BUILD_SYSTEM.md).
 
 Windows used nightly `x86_64-pc-windows-gnullvm` with Rust's bundled MinGW and
 LLD components:
