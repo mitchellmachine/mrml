@@ -35,10 +35,7 @@ use mrml_kernel::{
 #[cfg(target_os = "linux")]
 use mrml_kvm::{KvmLaunchLayout, KvmSystem, PreparedKvmGuest};
 #[cfg(target_os = "linux")]
-use mrml_package_format::{
-    BootPackageRole, MAX_BOOT_PACKAGE_BYTES, MAX_BOOT_RELEASE_BYTES, parse as parse_package,
-    parse_release,
-};
+use mrml_package_format::{MAX_BOOT_PACKAGE_BYTES, MAX_BOOT_RELEASE_BYTES, admit_kernel_payload};
 #[cfg(target_os = "linux")]
 use mrml_runtime::Instant;
 #[cfg(target_os = "linux")]
@@ -1245,44 +1242,29 @@ fn read_kernel_package(
 ) -> Result<Vector<u8>> {
     let bytes = mrml_runtime::read_file_bounded(path, MAX_BOOT_PACKAGE_BYTES)?;
     let public = mrml_runtime::read_file_bounded(public_path, LAMPORT_PUBLIC_KEY_BYTES)?;
-    if public.len() != LAMPORT_PUBLIC_KEY_BYTES {
-        return Err(anyhow!("invalid package public-key length"));
-    }
-    let package =
-        parse_package(&bytes, true, true).map_err(|_| anyhow!("invalid signed kernel package"))?;
-    if let Some((release_path, release_public_path)) = release_binding {
-        let release_bytes =
-            mrml_runtime::read_file_bounded(release_path, MAX_BOOT_RELEASE_BYTES)?;
-        let release_public = mrml_runtime::read_file_bounded(
-            release_public_path,
-            LAMPORT_PUBLIC_KEY_BYTES,
-        )?;
-        if release_public.len() != LAMPORT_PUBLIC_KEY_BYTES {
-            return Err(anyhow!("invalid SystemRelease public-key length"));
+    let release = if let Some((release_path, release_public_path)) = release_binding {
+        let release_bytes = mrml_runtime::read_file_bounded(release_path, MAX_BOOT_RELEASE_BYTES)?;
+        let release_public =
+            mrml_runtime::read_file_bounded(release_public_path, LAMPORT_PUBLIC_KEY_BYTES)?;
+        Some((release_bytes, release_public))
+    } else {
+        None
+    };
+    let payload = match admit_kernel_payload(
+        &bytes,
+        &public,
+        minimum,
+        MAX_KERNEL_BUNDLE,
+        release
+            .as_ref()
+            .map(|(release, public)| (release.as_ref(), public.as_ref())),
+    ) {
+        Ok(payload) => payload,
+        Err(error) => {
+            println!("boot-artifacts|status=FAIL|backend=kvm|detail={error:?}");
+            return Err(anyhow!("kernel package admission rejected"));
         }
-        let release = parse_release(&release_bytes, true)
-            .map_err(|_| anyhow!("invalid signed SystemRelease"))?;
-        if release.key_id != Sha3_512::digest(&release_public)
-            || !release.binds_exact_package(BootPackageRole::Kernel, package.version, &bytes)
-        {
-            return Err(anyhow!("SystemRelease kernel binding rejected"));
-        }
-    }
-    if package.id != "org.mrml.system.kernel"
-        || package.class != "kernel"
-        || package.version < minimum
-        || package.key_id != Sha3_512::digest(&public)
-    {
-        return Err(anyhow!(
-            "kernel package identity, version, or trust root rejected"
-        ));
-    }
-    let payload = package
-        .select("kernel", "x86_64")
-        .map_err(|_| anyhow!("kernel package payload selection rejected"))?;
-    if payload.raw_len == 0 || payload.raw_len > MAX_KERNEL_BUNDLE {
-        return Err(anyhow!("kernel package payload size rejected"));
-    }
+    };
     let mut output = Vector::with_capacity(payload.raw_len)
         .map_err(|_| anyhow!("kernel package allocation failed"))?;
     output.resize(payload.raw_len, 0);
@@ -1302,9 +1284,27 @@ fn application_main() -> Result<()> {
         println!("wrote exact embedded CUDA PTX bundle to {}", arguments[2]);
         return Ok(());
     }
+    if arguments.len() == 7 && arguments[1] == "--verify-boot-artifacts" {
+        let minimum = arguments[4]
+            .parse::<u64>()
+            .ok()
+            .filter(|version| *version != 0)
+            .ok_or_else(|| anyhow!("minimum version must be a nonzero integer"))?;
+        let payload = read_kernel_package(
+            &arguments[2],
+            &arguments[3],
+            minimum,
+            Some((&arguments[5], &arguments[6])),
+        )?;
+        println!(
+            "boot-artifacts|status=PASS|backend=kvm|raw_kernel_bytes={}",
+            payload.len()
+        );
+        return Ok(());
+    }
     if arguments.len() != 6 && arguments.len() != 8 && arguments.len() != 9 {
         return Err(anyhow!(
-            "usage: mrml-kvm-run KERNEL.package PACKAGE.public KERNEL.public MINIMUM_VERSION MODE [SYSTEM.RELEASE SYSTEM_RELEASE.public | ARTIFACT.signed ARTIFACT.public ARTIFACT_MINIMUM_VERSION]\n       mrml-kvm-run --export-cuda-bundle OUTPUT.ptx"
+            "usage: mrml-kvm-run KERNEL.mrp PACKAGE.public KERNEL.public MINIMUM_VERSION MODE [SYSTEM.mrs SYSTEM_RELEASE.public | ARTIFACT.signed ARTIFACT.public ARTIFACT_MINIMUM_VERSION]\n       mrml-kvm-run --verify-boot-artifacts KERNEL.mrp PACKAGE.public MINIMUM_VERSION SYSTEM.mrs SYSTEM_RELEASE.public\n       mrml-kvm-run --export-cuda-bundle OUTPUT.ptx"
         ));
     }
     let minimum_version = arguments[4]
@@ -1332,8 +1332,8 @@ fn application_main() -> Result<()> {
             "gpu-benchmark and service modes require exactly one matching signed artifact, public key, and minimum version"
         ));
     }
-    let release_binding = (arguments.len() == 8)
-        .then(|| (arguments[6].as_str(), arguments[7].as_str()));
+    let release_binding =
+        (arguments.len() == 8).then(|| (arguments[6].as_str(), arguments[7].as_str()));
     let bundle = read_kernel_package(
         &arguments[1],
         &arguments[2],

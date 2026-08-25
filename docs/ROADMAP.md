@@ -72,7 +72,11 @@ guest-read-only firmware but cannot encode NX. They still launch verified packag
 rather than executing OVMF, but their
 release-bound boot form now authenticates the identical `SYSTEM.RELEASE` and
 exact kernel-package version/digest carried by that image. Fresh WHP and nested-
-KVM runs reached the authenticated marker from that shared pair. Native-runner
+KVM runs reached the authenticated marker from that shared pair. Both runners
+now delegate the package trust-root, identity, version, release-binding, payload-
+selection, and payload-bound decision to one `no_std` package-format admission
+function. Their focused verification mode decoded the same 2,232,432-byte
+kernel payload before optimized live runs reached the expected halt. Native-runner
 OVMF/device/boot-media integration and physical UEFI evidence remain **PLANNED**.
 
 The independently serviced component lane is **PLANNED** in

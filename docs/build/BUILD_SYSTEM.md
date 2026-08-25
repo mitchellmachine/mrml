@@ -417,14 +417,19 @@ labels diagnose the test path and are not authenticated evidence or remote
 attestation.
 
 The WHP and KVM runners both consume the byte-identical canonical signed kernel
-package, authenticate its package key, select/decompress its x86-64 kernel
-payload, authenticate the inner signed PE, and construct their native guest
-launch state. Their release-bound `boot` form now additionally parses the same
+package through one `no_std` package-format admission function. That shared
+decision authenticates the exact package trust root and identity, enforces the
+nonzero version floor and payload bound, selects/decompresses its x86-64 kernel
+payload, and rejects malformed input before either backend constructs native
+guest launch state. Their release-bound `boot` form additionally parses the same
 signed `SYSTEM.RELEASE` carried by the QEMU image, authenticates its explicitly
 selected release key, and requires the kernel record's version and SHA3-512
 package digest to match the exact package before payload selection. A missing,
 substituted, malformed, wrongly signed, or wrong-key release fails before native
-guest preparation. The earlier five-argument direct-package form remains as a
+guest preparation. The focused `--verify-boot-artifacts` mode exercises that
+same decision without launching a guest; on 2026-08-25 both optimized runners
+accepted the exact release/package pair and decoded 2,232,432 kernel bytes. The
+earlier five-argument direct-package form remains as a
 temporary differential path. The shared package's SHA-256 transport checksum in the refreshed
 probe was `30ded12b7c772d88ec442b62a0afb2dd0347f100f2e09bbe037f1acae483f1e4`.
 Structured `mrml package verify` output now reports an exact size breakdown and
@@ -438,7 +443,8 @@ microseconds for payload decoding, 18,553 microseconds total. These are one
 controlled host sample and exact artifact accounting, not portable performance
 or compression-ratio claims.
 The same release-bound package set reached the authenticated framebuffer marker
-and terminal halt under nested KVM and WHP on 2026-08-25. WHP's ordinary `boot`
+and terminal halt under optimized nested-KVM and WHP runners on 2026-08-25.
+WHP's ordinary `boot`
 preparation deliberately omits emulated xAPIC
 state so the terminal HLT remains observable; specialized timer/SMP/device
 probes retain their existing APIC policy. The native runners do not currently

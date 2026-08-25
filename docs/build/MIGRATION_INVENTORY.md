@@ -729,6 +729,15 @@ package boot `SystemRelease`. General Store releases, `image`, and `publish`
 remain **PLANNED**. Physical UEFI/GPU evidence is still absent unless separately
 recorded below.
 
+The native WHP and KVM runners now use the same `no_std` package-format kernel-
+admission function for package trust, exact identity, version floor, optional
+signed `SystemRelease` binding, payload selection, and decoded-size bounds. On
+2026-08-25 their optimized focused verification modes accepted the same exact
+release/package pair and each decoded 2,232,432 bytes; optimized live WHP and
+nested-KVM runs from that pair then reached the expected kernel halt. This is
+native direct-launch evidence, not native-runner OVMF, physical UEFI, Secure
+Boot, TPM, IOMMU, or bare-metal evidence.
+
 ## Current semantic classes
 
 | Class | Current components/direction |
