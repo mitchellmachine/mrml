@@ -122,9 +122,10 @@ bridge incrementally. Package/release/image/publication remain planned.
 The bridge-audit increment is now implemented: `mrml doctor` compares all 42
 components with locked Cargo metadata, and `mrml audit` emits dependencies,
 features, targets, build scripts, proc macros, and bounded source-input sites.
-Dependency, feature, and output facts are now native version-2 graph declarations
-that fail on Cargo drift. Persist per-component input policy before the first
-semantic leaf move; see [build/BRIDGE_INVENTORY.md](build/BRIDGE_INVENTORY.md).
+Dependency, feature, output, and per-component input-policy facts are now native
+version-3 declarations that fail on Cargo or lexical-audit drift. The first
+semantic leaf move is next; see
+[build/BRIDGE_INVENTORY.md](build/BRIDGE_INVENTORY.md).
 
 The independently scoped compiler lane follows
 [COMPILER.md](COMPILER.md), not an arbitrary historical-rustc coverage target.

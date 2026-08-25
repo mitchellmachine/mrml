@@ -16,6 +16,7 @@ struct Component {
     dependencies: Vec<String>,
     features: Vec<String>,
     outputs: Vec<String>,
+    input_policy: InputCounts,
 }
 
 #[derive(Debug)]
@@ -107,6 +108,7 @@ fn load_workspace() -> Result<Workspace, String> {
                 dependencies,
                 features,
                 outputs,
+                input_policy,
             ] => {
                 if components
                     .iter()
@@ -133,18 +135,56 @@ fn load_workspace() -> Result<Workspace, String> {
                     dependencies: split_declaration(dependencies),
                     features: split_declaration(features),
                     outputs: split_declaration(outputs),
+                    input_policy: parse_input_policy(input_policy, index + 1)?,
                 });
             }
             _ => return Err(format!("WorkspaceSyntaxError {{ line: {} }}", index + 1)),
         }
     }
-    if version != Some("2") {
+    if version != Some("3") {
         return Err("UnsupportedWorkspaceVersion".into());
     }
     if components.is_empty() {
         return Err("EmptyWorkspace".into());
     }
     Ok(Workspace { root, components })
+}
+
+fn parse_input_policy(value: &str, line: usize) -> Result<InputCounts, String> {
+    let mut counts = InputCounts::default();
+    let mut seen = [false; 6];
+    for field in value.split(',') {
+        let (name, raw_count) = field
+            .split_once(':')
+            .ok_or_else(|| format!("InputPolicySyntaxError {{ line: {line} }}"))?;
+        let count = raw_count
+            .parse::<usize>()
+            .map_err(|_| format!("InputPolicyCountError {{ line: {line}, kind: {name} }}"))?;
+        let (slot, destination) = match name {
+            "build-script" => (0, &mut counts.build_scripts),
+            "proc-macro" => (1, &mut counts.proc_macros),
+            "native-link" => (2, &mut counts.native_links),
+            "compile-env" => (3, &mut counts.compile_env),
+            "included-file" => (4, &mut counts.included_files),
+            "external-command" => (5, &mut counts.external_commands),
+            _ => {
+                return Err(format!(
+                    "InputPolicyUnknownKind {{ line: {line}, kind: {name} }}"
+                ));
+            }
+        };
+        if seen[slot] {
+            return Err(format!(
+                "InputPolicyDuplicateKind {{ line: {line}, kind: {name} }}"
+            ));
+        }
+        seen[slot] = true;
+        *destination = count;
+    }
+    if !seen.iter().all(|value| *value) {
+        return Err(format!("InputPolicyMissingKind {{ line: {line} }}"));
+    }
+    Ok(counts)
 }
 
 fn split_declaration(value: &str) -> Vec<String> {
@@ -172,14 +212,15 @@ fn list(workspace: &Workspace, args: &[String]) -> Result<(), String> {
     for component in &workspace.components {
         if mode == OutputMode::Structured {
             println!(
-                "component|id={}|path={}|class={}|targets={}|dependencies={}|features={}|outputs={}|bridge=cargo",
+                "component|id={}|path={}|class={}|targets={}|dependencies={}|features={}|outputs={}|inputs={}|bridge=cargo",
                 component.id,
                 component.path,
                 component.class,
                 component.targets.join(","),
                 component.dependencies.join(","),
                 component.features.join(","),
-                component.outputs.join(",")
+                component.outputs.join(","),
+                component.input_policy.structured()
             );
         } else {
             println!(
@@ -386,7 +427,7 @@ fn doctor(workspace: &Workspace, args: &[String]) -> Result<(), String> {
     let packages = verify_cargo_graph(workspace)?;
     if mode == OutputMode::Structured {
         println!(
-            "doctor|host={host}|workspace_version=2|components={}|cargo_packages={}|cargo={}|rustc={}",
+            "doctor|host={host}|workspace_version=3|components={}|cargo_packages={}|cargo={}|rustc={}",
             workspace.components.len(),
             packages.len(),
             clean(&cargo),
@@ -394,7 +435,7 @@ fn doctor(workspace: &Workspace, args: &[String]) -> Result<(), String> {
         );
     } else {
         println!(
-            "host: {host}\nworkspace: v2 ({} components; {} Cargo bridge packages verified)\ncargo: {}\nrustc: {}",
+            "host: {host}\nworkspace: v3 ({} components; {} Cargo bridge packages verified)\ncargo: {}\nrustc: {}",
             workspace.components.len(),
             packages.len(),
             cargo.trim(),
@@ -491,7 +532,7 @@ fn verify_cargo_graph(workspace: &Workspace) -> Result<Vec<metadata::CargoPackag
     Ok(packages)
 }
 
-#[derive(Default)]
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 struct InputCounts {
     build_scripts: usize,
     proc_macros: usize,
@@ -499,6 +540,48 @@ struct InputCounts {
     compile_env: usize,
     included_files: usize,
     external_commands: usize,
+}
+
+impl InputCounts {
+    fn structured(self) -> String {
+        format!(
+            "build-script:{},proc-macro:{},native-link:{},compile-env:{},included-file:{},external-command:{}",
+            self.build_scripts,
+            self.proc_macros,
+            self.native_links,
+            self.compile_env,
+            self.included_files,
+            self.external_commands
+        )
+    }
+
+    fn add(&mut self, other: Self) -> Result<(), String> {
+        self.build_scripts = self
+            .build_scripts
+            .checked_add(other.build_scripts)
+            .ok_or("AuditCountOverflow")?;
+        self.proc_macros = self
+            .proc_macros
+            .checked_add(other.proc_macros)
+            .ok_or("AuditCountOverflow")?;
+        self.native_links = self
+            .native_links
+            .checked_add(other.native_links)
+            .ok_or("AuditCountOverflow")?;
+        self.compile_env = self
+            .compile_env
+            .checked_add(other.compile_env)
+            .ok_or("AuditCountOverflow")?;
+        self.included_files = self
+            .included_files
+            .checked_add(other.included_files)
+            .ok_or("AuditCountOverflow")?;
+        self.external_commands = self
+            .external_commands
+            .checked_add(other.external_commands)
+            .ok_or("AuditCountOverflow")?;
+        Ok(())
+    }
 }
 
 fn audit(workspace: &Workspace, args: &[String]) -> Result<(), String> {
@@ -519,12 +602,6 @@ fn audit(workspace: &Workspace, args: &[String]) -> Result<(), String> {
             .checked_add(package.targets.len())
             .ok_or("AuditCountOverflow")?;
         for target in &package.targets {
-            if target.kinds.iter().any(|kind| kind == "custom-build") {
-                counts.build_scripts += 1;
-            }
-            if target.kinds.iter().any(|kind| kind == "proc-macro") {
-                counts.proc_macros += 1;
-            }
             if mode == OutputMode::Structured {
                 println!(
                     "cargo-target|package={}|name={}|kinds={}",
@@ -544,7 +621,33 @@ fn audit(workspace: &Workspace, args: &[String]) -> Result<(), String> {
         }
     }
     for component in &workspace.components {
-        scan_component(workspace, component, mode, &mut counts)?;
+        let package = packages
+            .iter()
+            .find(|package| package.name == component.cargo_package)
+            .ok_or("AuditPackageDisappeared")?;
+        let mut component_counts = InputCounts {
+            build_scripts: package
+                .targets
+                .iter()
+                .filter(|target| target.kinds.iter().any(|kind| kind == "custom-build"))
+                .count(),
+            proc_macros: package
+                .targets
+                .iter()
+                .filter(|target| target.kinds.iter().any(|kind| kind == "proc-macro"))
+                .count(),
+            ..InputCounts::default()
+        };
+        scan_component(workspace, component, mode, &mut component_counts)?;
+        if component.input_policy != component_counts {
+            return Err(format!(
+                "InputPolicyDrift {{ component: {}, declared: {}, actual: {} }}",
+                component.id,
+                component.input_policy.structured(),
+                component_counts.structured()
+            ));
+        }
+        counts.add(component_counts)?;
     }
     if mode == OutputMode::Structured {
         println!(
@@ -755,5 +858,21 @@ mod tests {
     fn native_declarations_are_canonicalized() {
         assert_eq!(split_declaration("z,a,z"), ["a", "z"]);
         assert!(split_declaration("").is_empty());
+    }
+    #[test]
+    fn input_policy_requires_every_unique_kind() {
+        let policy = parse_input_policy(
+            "build-script:1,proc-macro:0,native-link:2,compile-env:3,included-file:4,external-command:5",
+            7,
+        )
+        .unwrap();
+        assert_eq!(policy.build_scripts, 1);
+        assert_eq!(policy.external_commands, 5);
+        assert!(parse_input_policy("build-script:0", 7).is_err());
+        assert!(parse_input_policy(
+            "build-script:0,build-script:0,proc-macro:0,native-link:0,compile-env:0,included-file:0,external-command:0",
+            7
+        )
+        .is_err());
     }
 }

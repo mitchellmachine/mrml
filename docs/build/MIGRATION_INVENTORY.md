@@ -10,7 +10,8 @@ Cargo bridge removal are complete.
 
 - dependency-free Rust `tools/mrml`, bootstrapped with pinned Cargo/rustc;
 - versioned native component inventory with distinct identity, path, Cargo bridge,
-  class, target families, default selection, dependencies, features, and outputs;
+  class, target families, default selection, dependencies, features, outputs,
+  and per-component input policies;
 - Windows/Linux host recognition and MRML/Windows/Linux/UEFI/CUDA target families;
 - structured list, doctor, build, test, target/toolchain failure, and planned-
   command results;
@@ -49,10 +50,9 @@ second inventory.
   today’s exact graph.
 - `crates/mrml-tensor/build.rs` invokes rustc for CUDA PTX and is the one current
   build script. It must become an explicit structured build action.
-- Dependency, feature, and output facts are persisted and fail closed on Cargo
-  metadata drift. Source-input facts still need per-component native policy
-  declarations. Lexical discovery also cannot prove that arbitrary macro
-  expansion introduces no additional input.
+- Dependency, feature, output, and source-input facts are persisted and fail
+  closed on Cargo metadata or lexical-audit drift. Lexical discovery still
+  cannot prove that arbitrary macro expansion introduces no additional input.
 - Direct-rustc graph construction needs target-aware resolved externs, features,
   build order, lock/digest validation, and cycle diagnostics before Cargo can be
   removed behind migrated nodes.
@@ -62,15 +62,13 @@ second inventory.
 
 ## Next safe migration order
 
-1. Add per-component input-policy declarations to `MRML.workspace` and validate
-   them against the implemented lexical audit.
-2. Move one leaf library into `packages/libraries/`, update every reference, and
+1. Move one leaf library into `packages/libraries/`, update every reference, and
    prove old and `mrml` builds agree.
-3. Expand by semantic groups: shared libraries, services, system, host tools;
+2. Expand by semantic groups: shared libraries, services, system, host tools;
    keep compiler and bootstrap roots distinct.
-4. Prove Windows WHP and Linux KVM matrices, then remove generic `crates/` only
+3. Prove Windows WHP and Linux KVM matrices, then remove generic `crates/` only
    after repository-wide stale-path search returns none.
-5. Add direct-rustc nodes/native resolver, leaving Cargo required only for clean-
+4. Add direct-rustc nodes/native resolver, leaving Cargo required only for clean-
    source stage-zero `mrml` bootstrap.
 
 Patent review: `NOT_TRIGGERED` for this incremental implementation—the parser,

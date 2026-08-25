@@ -26,6 +26,12 @@ conventional build-analysis techniques and do not implement the future resolver,
 cache, package, provenance, or publication mechanisms covered by the triggered
 review above.
 
+Workspace versions 2 and 3 persist the audited dependency/feature/output graph
+and per-component input-category policies, then reject metadata or lexical-count
+drift. **Result for these schema increments: NOT_TRIGGERED.** Declarative build
+graphs and input allowlists are conventional tooling mechanisms; the future
+resolver/cache/package mechanisms retain their triggered review.
+
 ## 2026-08-25 — Deployment, package, image, installer, and shell architecture
 
 **Result: TRIGGERED.** The documentation composes package/image containers,
