@@ -133,7 +133,7 @@ consumer/provider phases without post-hoc accounting.
 The focused signed component profile now consumes that authority on both hosted
 backends. Before the first native allocation, each runner reserves the exact
 sum of its base-kernel mappings, the rounded consumer/provider image pages,
-their stacks and page tables, and the shared/resource pages. KVM includes its
+and their stacks and page tables. KVM includes its
 one-page framebuffer phase while WHP's component layout does not. Each phase is
 consumed before its corresponding backend call, the reservation must be exactly
 complete before isolation admission, and the full object returns only after
@@ -151,6 +151,18 @@ pinning, sharing, DMA, device, or placement authority. The object remains live
 through guest ownership, is reclaimed only after backend teardown, and must
 leave the common pool at zero. This intentionally does not estimate or claim
 opaque KVM/WHP host-kernel, hypervisor, allocator, or device-model memory.
+
+The focused ZIM/Zstd transport pages are now separate from that aggregate guest
+RAM object. Before guest construction, the common kernel helper allocates one
+exact shared `MemoryObject` for the data page and one for the resource page,
+then reserves one read/write mapping slot for each exact guest virtual page
+under an independent target-address-space capability. Projection kind and guest
+address are data, not authority. A third projection fails at the two-slot limit
+and its provisional object charge is rolled back. After native guest teardown,
+both mapping reservations retire before either page object; only then may the
+control object and pool reach zero. Windows and Linux kernel tests plus signed
+WHP/nested-KVM probes exercise this lifecycle. This does not implement a general
+VirtIO, VirtualGPU, device, DMA, or host-share projection budget.
 
 Pinning is separate scarce authority because it limits reclamation and may enable
 device visibility. Object ownership never implies DMA. DMA requires the exact

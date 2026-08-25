@@ -4174,6 +4174,20 @@ device-model memory remain outside this increment; broader microVM resource
 accounting remains `TRIGGERED`, and agent review does not replace independent
 human dual review.
 
+# 2026-08-25 — Exact hosted component page-projection accounting
+
+**Result: NOT_TRIGGERED within the existing reviewed memory/accounting and
+shared-buffer transport shape.** The focused KVM/WHP component path separates
+its already-existing shared data and resource pages into conventional one-page
+shared `MemoryObject` charges and exact read/write mapping-slot reservations.
+It uses the existing capability, overlap, W^X, mapping-limit, rollback, and
+native-teardown-first reclamation mechanisms. It adds no queue or shared-memory
+algorithm, interface routing, device protocol, VirtIO compatibility,
+VirtualGPU mechanism, DMA, host-share transport, placement selector, or
+reclamation policy. The broader component lifecycle and future device
+projections remain `TRIGGERED`; agent review does not replace independent human
+dual review.
+
 # 2026-08-25 — Bounded identified trait-clause database
 
 **Result: NOT_TRIGGERED.** This compiler-only increment stores fixed identified

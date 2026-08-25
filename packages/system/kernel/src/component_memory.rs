@@ -23,6 +23,12 @@ const MICROVM_CONTROL_MEMORY_RIGHTS: Rights = Rights::READ
     .union(Rights::INSPECT)
     .union(Rights::CONTROL);
 
+const MICROVM_PAGE_PROJECTION_RIGHTS: Rights = Rights::READ
+    .union(Rights::WRITE)
+    .union(Rights::MAP)
+    .union(Rights::INSPECT)
+    .union(Rights::CONTROL);
+
 /// Accounted immutable code pages for one independently serviced component.
 ///
 /// This is a memory-resource identity, not a package or interface identity and
@@ -63,6 +69,43 @@ impl MicrovmControlMemory {
 
     pub const fn pages(&self) -> u64 {
         self.pages
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum MicrovmPageProjectionKind {
+    SharedData,
+    Resource,
+}
+
+/// One exact host-owned page and its bounded projection into a microVM.
+///
+/// The kind and guest virtual page identify the admitted projection; neither
+/// value authorizes a host object or a mapping. The accompanying object and
+/// target capabilities remain independently required for lifecycle operations.
+#[derive(Debug, Eq, PartialEq)]
+pub struct MicrovmPageProjection {
+    object: MemoryObjectId,
+    mapping: MemoryMappingId,
+    kind: MicrovmPageProjectionKind,
+    virtual_page: u64,
+}
+
+impl MicrovmPageProjection {
+    pub const fn object(&self) -> MemoryObjectId {
+        self.object
+    }
+
+    pub const fn mapping(&self) -> MemoryMappingId {
+        self.mapping
+    }
+
+    pub const fn kind(&self) -> MicrovmPageProjectionKind {
+        self.kind
+    }
+
+    pub const fn virtual_page(&self) -> u64 {
+        self.virtual_page
     }
 }
 
@@ -200,6 +243,60 @@ pub unsafe fn release_microvm_control_memory<
     capabilities: &mut CapabilitySpace<C>,
 ) -> Result<u64, MemoryResourceError> {
     table.release_object(reservation.object, capability, capabilities)
+}
+
+/// Charges one exact shared page and one guest mapping slot before a backend
+/// publishes that projection. Allocation and mapping authority are distinct;
+/// a kind or guest address cannot substitute for either capability.
+pub fn reserve_microvm_page_projection<
+    const P: usize,
+    const O: usize,
+    const M: usize,
+    const C: usize,
+>(
+    table: &mut MemoryPoolTable<P, O, M>,
+    pool: MemoryPoolId,
+    pool_capability: Capability,
+    target_capability: Capability,
+    kind: MicrovmPageProjectionKind,
+    virtual_page: u64,
+    capabilities: &mut CapabilitySpace<C>,
+) -> Result<(MicrovmPageProjection, Capability), MemoryResourceError> {
+    let (object, object_capability) = table.allocate_object(
+        pool,
+        pool_capability,
+        1,
+        MemoryBackingKind::Shared,
+        MICROVM_PAGE_PROJECTION_RIGHTS,
+        capabilities,
+    )?;
+    let mapping = match table.reserve_mapping(
+        object,
+        object_capability,
+        target_capability,
+        virtual_page,
+        0,
+        1,
+        Rights::READ.union(Rights::WRITE),
+        capabilities,
+    ) {
+        Ok(mapping) => mapping,
+        Err(error) => {
+            if let Err(cleanup) = table.release_object(object, object_capability, capabilities) {
+                return Err(cleanup);
+            }
+            return Err(error);
+        }
+    };
+    Ok((
+        MicrovmPageProjection {
+            object,
+            mapping,
+            kind,
+            virtual_page,
+        },
+        object_capability,
+    ))
 }
 
 pub fn prepare_microvm_guest_ram<const P: usize, const O: usize, const M: usize, const C: usize>(
@@ -614,5 +711,93 @@ mod tests {
             },
             Ok(2)
         );
+    }
+
+    #[test]
+    fn microvm_page_projections_charge_exact_objects_and_mapping_slots() {
+        let mut capabilities = CapabilitySpace::<8>::new();
+        let mut table = MemoryPoolTable::<1, 3, 2>::new(29).unwrap();
+        let (pool, pool_capability) = table
+            .create_root(3, 2, 0, POOL_RIGHTS, &mut capabilities)
+            .unwrap();
+        let target = capabilities
+            .insert(
+                ObjectId(0x700),
+                Rights::MAP.union(Rights::INSPECT).union(Rights::CONTROL),
+            )
+            .unwrap();
+        let (shared, shared_capability) = reserve_microvm_page_projection(
+            &mut table,
+            pool,
+            pool_capability,
+            target,
+            MicrovmPageProjectionKind::SharedData,
+            0x6fe,
+            &mut capabilities,
+        )
+        .unwrap();
+        let (resource, resource_capability) = reserve_microvm_page_projection(
+            &mut table,
+            pool,
+            pool_capability,
+            target,
+            MicrovmPageProjectionKind::Resource,
+            0x6ff,
+            &mut capabilities,
+        )
+        .unwrap();
+
+        let usage = table.usage(pool, pool_capability, &capabilities).unwrap();
+        assert_eq!(usage.object_pages(), 2);
+        assert_eq!(usage.active_mappings(), 2);
+        assert_eq!(shared.kind(), MicrovmPageProjectionKind::SharedData);
+        assert_eq!(resource.virtual_page(), 0x6ff);
+        assert_eq!(
+            table.object_backing(shared.object()),
+            Ok(MemoryBackingKind::Shared)
+        );
+        assert_eq!(
+            table
+                .mapping_info(shared.mapping(), target, &capabilities)
+                .unwrap()
+                .access(),
+            Rights::READ.union(Rights::WRITE)
+        );
+
+        assert_eq!(
+            reserve_microvm_page_projection(
+                &mut table,
+                pool,
+                pool_capability,
+                target,
+                MicrovmPageProjectionKind::Resource,
+                0x700,
+                &mut capabilities,
+            ),
+            Err(MemoryResourceError::MappingLimitExceeded)
+        );
+        let usage = table.usage(pool, pool_capability, &capabilities).unwrap();
+        assert_eq!(usage.object_pages(), 2);
+        assert_eq!(usage.active_mappings(), 2);
+
+        unsafe {
+            table
+                .release_mapping(shared.mapping(), target, &capabilities)
+                .unwrap();
+            table
+                .release_mapping(resource.mapping(), target, &capabilities)
+                .unwrap();
+        }
+        assert_eq!(
+            table.release_object(shared.object(), shared_capability, &mut capabilities),
+            Ok(1)
+        );
+        assert_eq!(
+            table.release_object(resource.object(), resource_capability, &mut capabilities),
+            Ok(1)
+        );
+        let usage = table.usage(pool, pool_capability, &capabilities).unwrap();
+        assert_eq!(usage.object_pages(), 0);
+        assert_eq!(usage.active_mappings(), 0);
     }
 }

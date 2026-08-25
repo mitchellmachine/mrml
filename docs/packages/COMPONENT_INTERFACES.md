@@ -538,7 +538,13 @@ an unpublished builder so a second-image failure cannot return a partially
 prepared guest. Failure while constructing the guest, binding that handoff, or
 attaching either exact image consumes the route into typed `VMM_RESOURCE`
 unavailability, with no native fallback. Both exact signed artifacts have now
-completed the hosted controlled probe on WHP and nested KVM. The package resolver still must
+completed the hosted controlled probe on WHP and nested KVM. That focused path
+now also charges the shared data and resource pages as distinct one-page shared
+objects with exact read/write guest mapping reservations before construction;
+their kind and guest address grant no authority, mapping exhaustion fails before
+publication, and teardown retires mappings before object reclamation. This is
+bounded accounting for the existing transport, not a new interface ABI or a
+general device-projection mechanism. The package resolver still must
 connect the recorded generational `InterfaceBinding` to native call dispatch;
 the current Wikipedia composition root constructs the provider for hosted
 tests. This does not establish dynamic loading, service isolation,

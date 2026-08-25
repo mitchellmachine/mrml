@@ -7806,6 +7806,18 @@ Linux kernel suites passed 502 tests, the WHP runner passed 7, and the KVM
 runner passed 8. This does not account opaque host-kernel KVM/WHP allocations,
 hypervisor internals, or device-model memory.
 
+The same focused profile now accounts its concrete shared data page and
+resource page independently: each is a one-page shared `MemoryObject` with one
+exact read/write guest mapping reservation, established under separate source
+and target capabilities before construction. A third reservation fails at the
+two-slot mapping ceiling and rolls back its page charge. After backend teardown,
+the runners verify two live projection mappings, retire both mappings, reclaim
+both objects, then reclaim control memory and require zero remaining pages or
+mappings. Windows and Linux kernel suites passed 503 tests, WHP passed 7, KVM
+passed 8, and fresh signed hosted probes passed with KVM reporting one eligible
+microVM and zero native fallback. This is not general VirtIO, VirtualGPU, DMA,
+host-share, physical-device, or host-resistant evidence.
+
 ## Milestones
 
 This historical list is retained for continuity. The current dependency-ordered

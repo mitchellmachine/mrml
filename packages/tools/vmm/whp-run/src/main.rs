@@ -23,24 +23,26 @@ use mrml_kernel::{
     GPU_QUEUE_MESSAGE_BYTES, GpuCommandRing, GpuQueueIdentity, GpuQueueReceiver,
     GpuResourceResponse, GpuResourceResponseSender, GpuSharedQueueLayout, GpuVmmQueueBridge,
     GuestMemory, HypercallRouter, InterruptPolicy, IsolationAdmissionTable, IsolationMode,
-    IsolationPlacement, IsolationUnavailableReason, MemoryPoolTable, ObjectId,
-    PreparedComponentServiceLaunch, PreparedIsolationServiceRoute, ResourceCommand, Rights,
-    SIGNED_ARTIFACT_OVERHEAD_BYTES, SignedArtifact, TotalMicrovmClass, TrustRoot,
-    VIRTUAL_BLOCK_FEATURE_FLUSH, VerifiedExecutable, VerifiedGpuKernelBundle, VirtualBlockBackend,
-    VirtualBlockBackendAuthority, VirtualBlockCompletionStatus, VirtualBlockConfigurationPage,
-    VirtualBlockDevice, VirtualBlockDeviceState, VirtualBlockError, VirtualBlockMutationError,
-    VirtualBlockPciAttachment, VirtualBlockPciAttachmentState, VirtualBlockPciCleanupMode,
-    VirtualBlockPciCleanupRecord, VirtualBlockPciFunctionRevoker, VirtualBlockPciGuestMemoryMapper,
-    VirtualBlockPciGuestWindowBackend, VirtualBlockPciResourceRevoker, VirtualBlockProcessOutcome,
-    VirtualBlockQueueBridge, VirtualBlockQueueLayout, VirtualBlockRequest, VirtualBlockResumePage,
+    IsolationPlacement, IsolationUnavailableReason, MemoryPoolTable, MicrovmPageProjectionKind,
+    ObjectId, PAGE_SIZE, PreparedComponentServiceLaunch, PreparedIsolationServiceRoute,
+    ResourceCommand, Rights, SIGNED_ARTIFACT_OVERHEAD_BYTES, SignedArtifact, TotalMicrovmClass,
+    TrustRoot, VIRTUAL_BLOCK_FEATURE_FLUSH, VerifiedExecutable, VerifiedGpuKernelBundle,
+    VirtualBlockBackend, VirtualBlockBackendAuthority, VirtualBlockCompletionStatus,
+    VirtualBlockConfigurationPage, VirtualBlockDevice, VirtualBlockDeviceState, VirtualBlockError,
+    VirtualBlockMutationError, VirtualBlockPciAttachment, VirtualBlockPciAttachmentState,
+    VirtualBlockPciCleanupMode, VirtualBlockPciCleanupRecord, VirtualBlockPciFunctionRevoker,
+    VirtualBlockPciGuestMemoryMapper, VirtualBlockPciGuestWindowBackend,
+    VirtualBlockPciResourceRevoker, VirtualBlockProcessOutcome, VirtualBlockQueueBridge,
+    VirtualBlockQueueLayout, VirtualBlockRequest, VirtualBlockResumePage,
     VirtualBlockTransactionOutcome, VirtualBlockTransport, VirtualBlockVmmMemory,
     VirtualPciAttachedResources, VirtualPciConfigurationMechanismOne,
     VirtualPciConfigurationRouter, VirtualPciIdentity, VirtualPciIoOutcome, VirtualPciLocation,
     VirtualPciMemoryBar, VirtualPciMmioWindow, VirtualPciNativeResourceError,
     VirtualPciType0Function, VmBackend, VmExit, VmTable, prepare_microvm_guest_ram,
     release_microvm_guest_ram, reserve_isolation_vcpus, reserve_microvm_guest_ram,
-    run_pci_configuration_once, run_pci_configuration_once_with_backend_mapper,
-    run_virtual_block_mmio_transaction_once, run_virtual_block_transaction_once,
+    reserve_microvm_page_projection, run_pci_configuration_once,
+    run_pci_configuration_once_with_backend_mapper, run_virtual_block_mmio_transaction_once,
+    run_virtual_block_transaction_once,
 };
 #[cfg(any(test, target_os = "windows"))]
 use mrml_kernel::{
@@ -1706,20 +1708,20 @@ fn application_main() -> Result<()> {
             .ok_or_else(|| anyhow!("component service guest RAM overflow"))?;
         let guest_pages = base_pages
             .checked_add(service_pages)
-            .and_then(|pages| pages.checked_add(2))
             .ok_or_else(|| anyhow!("component guest RAM overflow"))?;
         let control_pages =
             accounted_pages(core::mem::size_of::<PreparedWhpGuest<'static>>() as u64)?;
         let total_pages = guest_pages
             .checked_add(control_pages)
+            .and_then(|pages| pages.checked_add(2))
             .ok_or_else(|| anyhow!("component memory commitment overflow"))?;
-        let mut authorities = CapabilitySpace::<3>::new();
-        let mut memory = MemoryPoolTable::<1, 2>::new(0x5a52)
+        let mut authorities = CapabilitySpace::<6>::new();
+        let mut memory = MemoryPoolTable::<1, 4, 2>::new(0x5a52)
             .map_err(|error| anyhow!("component RAM table failed: {:?}", error))?;
         let (pool, pool_capability) = memory
             .create_root(
                 total_pages,
-                1,
+                2,
                 0,
                 Rights::ALLOCATE
                     .union(Rights::CONTROL)
@@ -1749,6 +1751,32 @@ fn application_main() -> Result<()> {
             &mut authorities,
         )
         .map_err(|error| anyhow!("component control-memory reservation failed: {:?}", error))?;
+        let projection_target = authorities
+            .insert(
+                ObjectId(0x434f_4d50_5f56_4d00),
+                Rights::MAP.union(Rights::INSPECT).union(Rights::CONTROL),
+            )
+            .map_err(|error| anyhow!("component projection target failed: {:?}", error))?;
+        let (shared_projection, shared_capability) = reserve_microvm_page_projection(
+            &mut memory,
+            pool,
+            pool_capability,
+            projection_target,
+            MicrovmPageProjectionKind::SharedData,
+            SERVICE_SHARED_VIRTUAL / PAGE_SIZE,
+            &mut authorities,
+        )
+        .map_err(|error| anyhow!("component shared projection failed: {:?}", error))?;
+        let (resource_projection, resource_capability) = reserve_microvm_page_projection(
+            &mut memory,
+            pool,
+            pool_capability,
+            projection_target,
+            MicrovmPageProjectionKind::Resource,
+            SERVICE_RESOURCE_VIRTUAL / PAGE_SIZE,
+            &mut authorities,
+        )
+        .map_err(|error| anyhow!("component resource projection failed: {:?}", error))?;
         Some((
             memory,
             authorities,
@@ -1759,6 +1787,11 @@ fn application_main() -> Result<()> {
             service_pages,
             control,
             control_capability,
+            projection_target,
+            shared_projection,
+            shared_capability,
+            resource_projection,
+            resource_capability,
         ))
     } else {
         None
@@ -2070,14 +2103,6 @@ fn application_main() -> Result<()> {
                     anyhow!("third isolated WHP service preparation failed: {:?}", error)
                 })?;
         }
-        if component_service_mode {
-            component_ram
-                .as_mut()
-                .ok_or_else(|| anyhow!("missing component RAM construction authority"))?
-                .5
-                .consume_phase(2)
-                .map_err(|error| anyhow!("component shared RAM phase failed: {:?}", error))?;
-        }
         let shared = Mapping::new(
             VirtAddr::new(SERVICE_SHARED_VIRTUAL)
                 .map_err(|_| anyhow!("invalid WHP service shared virtual address"))?,
@@ -2113,6 +2138,11 @@ fn application_main() -> Result<()> {
                 _,
                 control,
                 control_capability,
+                projection_target,
+                shared_projection,
+                shared_capability,
+                resource_projection,
+                resource_capability,
             ) = component_ram
                 .take()
                 .ok_or_else(|| anyhow!("missing completed component RAM construction"))?;
@@ -2128,6 +2158,11 @@ fn application_main() -> Result<()> {
                 active,
                 control,
                 control_capability,
+                projection_target,
+                shared_projection,
+                shared_capability,
+                resource_projection,
+                resource_capability,
             ));
         }
         let service_entry = guest
@@ -2518,6 +2553,11 @@ fn application_main() -> Result<()> {
                             active,
                             control,
                             control_capability,
+                            projection_target,
+                            shared_projection,
+                            shared_capability,
+                            resource_projection,
+                            resource_capability,
                         ) = active_component_ram
                             .take()
                             .ok_or_else(|| anyhow!("missing active component RAM authority"))?;
@@ -2540,10 +2580,69 @@ fn application_main() -> Result<()> {
                                 })?;
                         let expected_control_pages = control.pages();
                         if released != expected_pages
+                            || usage.object_pages() != expected_control_pages + 2
+                            || usage.active_mappings() != 2
+                        {
+                            return Err(anyhow!("component RAM release state was invalid"));
+                        }
+                        unsafe {
+                            memory
+                                .release_mapping(
+                                    shared_projection.mapping(),
+                                    projection_target,
+                                    &authorities,
+                                )
+                                .map_err(|error| {
+                                    anyhow!(
+                                        "component shared projection release failed: {:?}",
+                                        error
+                                    )
+                                })?;
+                            memory
+                                .release_mapping(
+                                    resource_projection.mapping(),
+                                    projection_target,
+                                    &authorities,
+                                )
+                                .map_err(|error| {
+                                    anyhow!(
+                                        "component resource projection release failed: {:?}",
+                                        error
+                                    )
+                                })?;
+                        }
+                        let released_shared = memory
+                            .release_object(
+                                shared_projection.object(),
+                                shared_capability,
+                                &mut authorities,
+                            )
+                            .map_err(|error| {
+                                anyhow!("component shared page release failed: {:?}", error)
+                            })?;
+                        let released_resource = memory
+                            .release_object(
+                                resource_projection.object(),
+                                resource_capability,
+                                &mut authorities,
+                            )
+                            .map_err(|error| {
+                                anyhow!("component resource page release failed: {:?}", error)
+                            })?;
+                        let usage =
+                            memory
+                                .usage(pool, pool_capability, &authorities)
+                                .map_err(|error| {
+                                    anyhow!("component projection inspection failed: {:?}", error)
+                                })?;
+                        if released_shared != 1
+                            || released_resource != 1
                             || usage.object_pages() != expected_control_pages
                             || usage.active_mappings() != 0
                         {
-                            return Err(anyhow!("component RAM release state was invalid"));
+                            return Err(anyhow!(
+                                "component projections were not completely reclaimed"
+                            ));
                         }
                         let released_control = unsafe {
                             mrml_kernel::release_microvm_control_memory(

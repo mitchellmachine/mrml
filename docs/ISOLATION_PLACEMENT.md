@@ -226,11 +226,16 @@ reserve any of these resources makes the Total-mode component unavailable
 without native fallback. Opaque host-hypervisor internals and device-model
 allocations are not counted or claimed. The focused signed
 component path now does consume it: backend-specific base pages, both service
-images/stacks/page tables, and the shared/resource pages are charged before
+images/stacks/page tables are charged before
 their native construction phases; exact completion precedes admission; and
 guest teardown precedes full release. WHP and nested-KVM controlled probes pass
-with zero native fallback. Other microVM profiles, vCPU budgets, VMM metadata,
-and device projections remain **PLANNED**.
+with zero native fallback. The shared data and resource pages now consume two
+separate one-page shared objects and two exact guest mapping slots established
+by the control plane before construction. Teardown retires both native
+projections, then their mapping reservations and object charges; projection
+exhaustion fails before publication and never selects native placement. Other
+microVM profiles, scheduler enforcement, executable/private-page integration,
+and general device projections remain **PLANNED**.
 Kernel CPU-budget groundwork now provides the separate generational authority
 for the vCPU gate, including exact domain reservations and bounded parallelism.
 The signed component runners reserve exactly one vCPU before guest construction,

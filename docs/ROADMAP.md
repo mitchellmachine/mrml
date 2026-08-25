@@ -231,8 +231,12 @@ and reclaims it after teardown. Exhaustion consumes the Total route into typed
 unavailability with zero fallback. Each runner also pre-reserves a separate
 page-rounded anonymous object for its exact MRML-owned prepared guest structure,
 retains that charge through teardown, and requires the pool to return to zero.
-This deliberately excludes opaque host-hypervisor allocations. Scheduler
-enforcement and device/shared projection accounting are the current gates.
+The focused shared data and resource pages are no longer hidden in aggregate
+guest RAM: each has a distinct one-page shared object and exact guest mapping
+reservation, with a two-slot ceiling and native-teardown-first reclamation on
+WHP and KVM. This deliberately excludes opaque host-hypervisor allocations.
+Scheduler enforcement, executable/private-page integration, and broader
+device-specific projection accounting are the current gates.
 
 Typed provider-resolution groundwork now matches canonical `REQUIRES` and
 `PROVIDES` edges only inside an immutable `SystemGeneration`. Interface name,
