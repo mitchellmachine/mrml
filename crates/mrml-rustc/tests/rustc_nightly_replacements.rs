@@ -4292,6 +4292,8 @@ fn rustc_function_return_references_must_outlive_local_storage() {
         "fn identity(value: &mut u16) -> &mut u16 { value } #[unsafe(no_mangle)] pub extern \"C\" fn probe(input: &mut u16, choose: bool) -> &mut u16 { let mut local = *input; if choose { return identity(&mut local); } input }",
         "fn identity(value: &mut u16) -> &mut u16 { value } #[unsafe(no_mangle)] pub extern \"C\" fn probe(input: &mut u16, choose: bool) -> &mut u16 { let mut local = *input; if choose { let returned = identity(&mut local); return returned; } input }",
         "fn identity(value: &mut u16) -> &mut u16 { value } #[unsafe(no_mangle)] pub extern \"C\" fn probe(input: &mut u16, choose: bool) -> &mut u16 { loop { if choose { let mut local = *input; return identity(&mut local); } else { return input; } } }",
+        "fn identity(value: &mut u16) -> &mut u16 { value } #[unsafe(no_mangle)] pub extern \"C\" fn probe(input: &mut u16) -> &mut u16 { loop { loop { let mut local = *input; return identity(&mut local); } } }",
+        "fn identity(value: &mut u16) -> &mut u16 { value } #[unsafe(no_mangle)] pub extern \"C\" fn probe(input: &mut u16, choose: bool) -> &mut u16 { loop { loop { let mut local = *input; if choose { return identity(&mut local); } } } }",
     ];
     for source in rejected {
         for format in [ObjectFormat::Elf64, ObjectFormat::Coff] {
@@ -4314,6 +4316,8 @@ fn rustc_function_return_references_must_outlive_local_storage() {
         "fn identity(value: &mut u16) -> &mut u16 { value } #[unsafe(no_mangle)] pub extern \"C\" fn probe(input: &mut u16) -> &mut u16 { identity(input) }",
         "fn identity(value: &mut u16) -> &mut u16 { value } #[unsafe(no_mangle)] pub extern \"C\" fn probe(input: &mut u16) -> &mut u16 { let returned = identity(input); returned }",
         "fn identity(value: &mut u16) -> &mut u16 { value } #[unsafe(no_mangle)] pub extern \"C\" fn probe(input: &mut u16, choose: bool) -> &mut u16 { loop { if choose { return identity(input); } else { return input; } } }",
+        "fn identity(value: &mut u16) -> &mut u16 { value } #[unsafe(no_mangle)] pub extern \"C\" fn probe(input: &mut u16) -> &mut u16 { loop { loop { return identity(input); } } }",
+        "fn identity(value: &mut u16) -> &mut u16 { value } #[unsafe(no_mangle)] pub extern \"C\" fn probe(input: &mut u16, choose: bool) -> &mut u16 { loop { loop { if choose { return identity(input); } } } }",
     ];
     for source in accepted {
         assert_eq!(compile_wide(source, ObjectFormat::Elf64), Ok(()));

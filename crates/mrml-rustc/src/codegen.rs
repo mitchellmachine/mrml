@@ -8123,7 +8123,7 @@ fn preanalyze_runtime_nested_loop_block<
                             action_index,
                             control_order,
                         };
-                    preanalyze_runtime_source_expression_reads::<
+                    preanalyze_runtime_return_expression_reads::<
                         R,
                         MAX_PARAMETERS,
                         MAX_EXPRESSION_NODES,
@@ -8185,7 +8185,7 @@ fn preanalyze_runtime_nested_loop_block<
                         action_index,
                         control_order,
                     };
-                preanalyze_runtime_source_expression_reads::<
+                preanalyze_runtime_return_expression_reads::<
                     R,
                     MAX_PARAMETERS,
                     MAX_EXPRESSION_NODES,
@@ -11283,6 +11283,7 @@ const fn runtime_location_is_exact_function_return_value(
             | RuntimeOwnershipEventLocation::LoopConditionalReturnValue { .. }
             | RuntimeOwnershipEventLocation::LoopReturnValue { .. }
             | RuntimeOwnershipEventLocation::LoopConditionalTerminal { .. }
+            | RuntimeOwnershipEventLocation::NestedLoopControlValue { .. }
             | RuntimeOwnershipEventLocation::ReturnValue { .. }
             | RuntimeOwnershipEventLocation::Tail
     )
@@ -29350,6 +29351,42 @@ mod tests {
             CodegenErrorKind::RuntimeReferenceOutlivesFunction
         );
         analyze("fn value(input: &mut u16, choose: bool) -> &mut u16 { loop { if choose { return identity(input); } else { return input; } } }").unwrap();
+    }
+
+    #[test]
+    fn runtime_function_return_outlives_follow_nested_loop_returns() {
+        fn analyze(source: &str) -> Result<usize, CodegenError> {
+            let module = Parser::new(source).parse_module::<1, 8>().unwrap();
+            let Some(Item::Function(function)) = module.items()[0] else {
+                panic!("expected function")
+            };
+            let body = function.parse_body::<8>().unwrap();
+            let mut facts = RuntimeBodyFacts::EMPTY;
+            preanalyze_runtime_body_declarations::<_, 8, 48>(
+                &function,
+                &MutableReferenceCallResolver,
+                &body,
+                "&mut u16",
+                function.body_expression_span.start,
+                &mut facts,
+            )
+        }
+
+        for rejected in [
+            "fn value(input: &mut u16, choose: bool) -> &mut u16 { loop { loop { let mut local = *input; return identity(&mut local); } } }",
+            "fn value(input: &mut u16, choose: bool) -> &mut u16 { loop { loop { let mut local = *input; if choose { return identity(&mut local); } } } }",
+        ] {
+            assert_eq!(
+                analyze(rejected).unwrap_err().kind,
+                CodegenErrorKind::RuntimeReferenceOutlivesFunction
+            );
+        }
+        for accepted in [
+            "fn value(input: &mut u16) -> &mut u16 { loop { loop { return identity(input); } } }",
+            "fn value(input: &mut u16, choose: bool) -> &mut u16 { loop { loop { if choose { return identity(input); } } } }",
+        ] {
+            analyze(accepted).unwrap_or_else(|error| panic!("{accepted}: {error:?}"));
+        }
     }
 
     #[test]
