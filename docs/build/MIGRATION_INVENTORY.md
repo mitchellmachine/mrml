@@ -525,6 +525,20 @@ was checked on a Windows host without changing agent source behavior:
 No Linux runtime, live remote model service, CUDA/GPU execution, desktop tools,
 or physical-hardware evidence was established by this path-only move.
 
+The CLI move from `crates/mrml-cli` to `apps/cli` was checked on a Windows host
+without changing application source behavior:
+
+- workspace metadata, formatting, `mrml doctor`, and `mrml audit` — PASS;
+- pinned-nightly no-default-feature tests — PASS with zero tests defined;
+- no-default-feature strict all-target Clippy — FAIL on four existing lint sites
+  in unchanged CLI source/test compilation;
+- `.\target\debug\mrml.exe build mrml-cli` — FAIL at tensor's already-recorded
+  MSVC/no_std build-script unwind limitation;
+- stale exact `crates/mrml-cli/` path scan — PASS.
+
+No Linux runtime, interactive CLI, remote model download, CUDA/GPU execution,
+or physical-hardware evidence was established by this path-only move.
+
 `package`, `release`, `image`, and `publish` deliberately fail as `PLANNED`.
 Linux, KVM, cross-host equivalence, physical UEFI/GPU, and release functionality
 were not exercised by the Windows implementation environment.

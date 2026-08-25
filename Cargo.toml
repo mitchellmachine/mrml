@@ -20,7 +20,7 @@ members = [
     "packages/libraries/math",
     "packages/gpu/tensor",
     "packages/libraries/agent",
-    "crates/mrml-cli",
+    "apps/cli",
     "tools/git",
     "packages/libraries/ssh",
     "crates/mrml-machine",
