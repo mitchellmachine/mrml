@@ -9,12 +9,11 @@ the named commit and current source.
 ## Recoverable baseline
 
 - Branch: `main`
-- Compiler checkpoint commit: `f6cd266b`
-  (`compiler: chain moved conditional loans`)
-- Remote state when recorded: `origin/main` includes the compiler checkpoint,
-  durable documentation, and review through `891c9ce4`. The final push was a
-  verified fast-forward containing exactly the three isolated conditional-loan-
-  chain commits; unrelated unstaged OS work was not included.
+- Compiler checkpoint commit: `6c0a9387`
+  (`compiler: preserve projected tuple loan origins`)
+- Remote state when recorded: `origin/main` is at `65c655dc`; the compiler
+  checkpoint and its documentation/review commits are pending publication.
+  Unrelated unstaged OS work is not part of the compiler checkpoint.
 - Preceding compiler commits: `5c53eb9` (`compiler: track mutable tuple field
   moves`), `480a198` (`compiler: identify constant array
   elements`), `40a035c` (`compiler: analyze initializedness
@@ -143,6 +142,15 @@ At the checkpoint commit, the runtime emitter has these bounded mechanisms:
   count. Checked `initialization_count * effect_count` work and depth-qualified
   loan IDs preserve intermediate generations and reject missing or replaced
   hops without collapsing the chain to its terminal binding.
+  A direct move from one reference-typed field of a directly initialized tuple
+  now retains that field's exact shared or mutable loan origin. Correlation is
+  limited to a validated one-step numeric tuple-field path whose tuple
+  initialization contains exactly the expected number and order of borrow
+  effects. An intervening root/field write, mismatched mutability, malformed
+  path, or ambiguous effect shape refuses derivation. Sibling owners remain
+  disjoint and bounded last-use reachability still restores owner access.
+  Nested projections, projected move chains, and general aggregate provenance
+  remain unimplemented.
   Explicit direct mutable reborrows derive their parent loan and ultimate owner
   path with an initialization-count traversal bound. A parent use before a
   later child use reports a conflict, a parent use after the child’s last use is
@@ -478,20 +486,20 @@ Windows-only run.
 
 ## Last complete verification
 
-The checkpoint source passed 758 tests on each host: 414
-library tests, 10 conformance tests, 332 replacement tests, and 2 driver tests.
+The checkpoint source passed 760 tests on each host: 415
+library tests, 10 conformance tests, 333 replacement tests, and 2 driver tests.
 Warnings-denied Clippy also passed on both hosts. The commands were:
 
 ```powershell
 $env:RUSTFLAGS='-C link-arg=/stack:16777216'
-cargo +nightly-2026-08-20-x86_64-pc-windows-gnullvm test -p mrml-rustc -p mrml-rustc-driver --target x86_64-pc-windows-gnullvm --offline
-cargo +nightly-2026-08-20-x86_64-pc-windows-gnullvm clippy -p mrml-rustc -p mrml-rustc-driver --target x86_64-pc-windows-gnullvm --all-targets --no-deps --offline -- -D warnings
+cargo +nightly-2026-08-20-x86_64-pc-windows-gnullvm test -p mrml-rustc -p mrml-rustc-driver
+cargo +nightly-2026-08-20-x86_64-pc-windows-gnullvm clippy -p mrml-rustc -p mrml-rustc-driver --all-targets --no-deps -- -D warnings
 ```
 
 ```sh
 cd /mnt/c/Users/Mitch/Documents/mrml
-cargo +nightly-2026-08-20-x86_64-unknown-linux-gnu test -p mrml-rustc -p mrml-rustc-driver --target x86_64-unknown-linux-gnu --release --offline
-cargo +nightly-2026-08-20-x86_64-unknown-linux-gnu clippy -p mrml-rustc -p mrml-rustc-driver --target x86_64-unknown-linux-gnu --release --all-targets --no-deps --offline -- -D warnings
+cargo +nightly-2026-08-20-x86_64-unknown-linux-gnu test -p mrml-rustc -p mrml-rustc-driver --release --offline
+cargo +nightly-2026-08-20-x86_64-unknown-linux-gnu clippy -p mrml-rustc -p mrml-rustc-driver --all-targets --release --offline --no-deps -- -D warnings
 ```
 
 The separately installed 2026-08-23 Arch nightly at commit

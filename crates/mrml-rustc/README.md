@@ -3713,3 +3713,17 @@ possible owners, while accepting unrelated-owner and post-last-use controls.
 Projected reference-value moves and general region/outlives propagation remain
 unimplemented; this does not claim complete Polonius semantics. The
 `no_std`/allocation/unsafe hygiene scan remained empty.
+
+The projected tuple-field loan-origin milestone at `6c0a9387` passed all 760
+compiler and driver tests on Windows gnullvm and all 760 in release mode on
+native Arch Linux WSL, plus warnings-denied compiler-only Clippy on both hosts
+using pinned rustc commit
+`f7d782a3be46d6bb4b9792fe69a61db389ba1769`. Moving one direct
+reference-typed tuple field into an inferred local now retains that field's
+shared or mutable loan origin, so a descendant continues to protect the exact
+owner. Exact effect count/order, mutability, tuple shape, and absence of an
+intervening write are required; ambiguous shapes fail closed. The tests reject
+live-child mutation for first and later reference fields while accepting sibling
+owner mutation and post-last-use access. This does not claim nested projected
+moves, projected move chains, aggregate provenance, or general regions. The
+`no_std`/allocation/unsafe hygiene scan remained empty.

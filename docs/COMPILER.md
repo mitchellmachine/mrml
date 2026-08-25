@@ -582,8 +582,13 @@ one fact per origin and move depth through direct root-move chains. Its checked
 `initialization_count * effect_count` enumeration and depth-qualified loan IDs
 preserve intermediate generations instead of collapsing to the terminal
 binding; every hop rechecks precise move/init shape and intervening replacement.
-Projected reference-value moves and general alias/region propagation remain
-unimplemented.
+One direct move from a reference-typed field of a directly initialized tuple now
+retains the field's exact loan origin. The bounded correlation requires one
+validated numeric tuple-field projection, the exact expected borrow-effect count
+and order, compatible mutability, and no intervening root or field write. It
+refuses ambiguous or malformed shapes rather than guessing. Nested projections,
+projected move chains, general aggregate provenance, and general alias/region
+propagation remain unimplemented.
 
 Explicit direct mutable reborrows additionally derive their parent loan and
 bounded ultimate owner path. A mutable parent is suspended when it is used
