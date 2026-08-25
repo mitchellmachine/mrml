@@ -3898,17 +3898,18 @@ impl<'source> RuntimeBodyFacts<'source> {
                     && effect.expression_conditional == initialization.expression_conditional
             })?;
         let moved_path = self.move_paths.get(moved.path.0).and_then(|path| *path)?;
-        if moved_path.projections != RuntimePlaceProjections::EMPTY {
-            return None;
-        }
-        let RuntimePlaceIdentity::Local(source) = moved_path.base else {
-            return None;
+        let source_loan = if moved_path.projections == RuntimePlaceProjections::EMPTY {
+            let RuntimePlaceIdentity::Local(source) = moved_path.base else {
+                return None;
+            };
+            self.direct_moved_source_loan_before_at_depth(
+                source,
+                moved.event,
+                depth.checked_add(1)?,
+            )?
+        } else {
+            self.direct_tuple_field_loan_origin_before(moved.path, moved.event)?
         };
-        let source_loan = self.direct_moved_source_loan_before_at_depth(
-            source,
-            moved.event,
-            depth.checked_add(1)?,
-        )?;
         matches!(
             (mutable, source_loan.kind),
             (false, RuntimePlaceEffectKind::SharedBorrow)
@@ -3920,6 +3921,122 @@ impl<'source> RuntimeBodyFacts<'source> {
             borrowed_path: source_loan.borrowed_path,
             kind: source_loan.kind,
             issue_effect: move_effect,
+            generation_event: initialization.event,
+        })
+    }
+
+    fn direct_tuple_field_loan_origin_before(
+        &self,
+        field_path: RuntimeMovePathId,
+        before: RuntimeOwnershipEventId,
+    ) -> Option<RuntimeLoanFact> {
+        let field = self.move_paths.get(field_path.0).and_then(|path| *path)?;
+        let RuntimePlaceProjections {
+            items:
+                [
+                    Some(RuntimePlaceProjection::TupleField(field_index)),
+                    None,
+                    None,
+                    None,
+                ],
+            count: 1,
+        } = field.projections
+        else {
+            return None;
+        };
+        let root_id = field.parent?;
+        let root = self.move_paths.get(root_id.0).and_then(|path| *path)?;
+        if root.base != field.base || root.projections != RuntimePlaceProjections::EMPTY {
+            return None;
+        }
+        let RuntimeExpressionType::Tuple {
+            elements,
+            element_count,
+        } = root.ty
+        else {
+            return None;
+        };
+        let RuntimeExpressionType::Reference { mutable, .. } = field.ty else {
+            return None;
+        };
+        let mut reference_count = 0usize;
+        let mut target_ordinal = None;
+        for (index, element) in elements[..element_count].iter().enumerate() {
+            if matches!(element, Some(RuntimeTupleElementType::Reference { .. })) {
+                if index == field_index {
+                    target_ordinal = Some(reference_count);
+                }
+                reference_count = reference_count.checked_add(1)?;
+            }
+        }
+        let target_ordinal = target_ordinal?;
+        let initialization = self.initializations[..self.initialization_count]
+            .iter()
+            .flatten()
+            .filter(|initialization| {
+                initialization.path == root_id && initialization.event.0 < before.0
+            })
+            .max_by_key(|initialization| initialization.event.0)?;
+        if self.effects[..self.effect_count]
+            .iter()
+            .flatten()
+            .any(|effect| {
+                (effect.path == root_id || effect.path == field_path)
+                    && effect.kind == RuntimePlaceEffectKind::Write
+                    && runtime_ownership_position_precedes(
+                        self,
+                        initialization.event,
+                        initialization.location,
+                        effect.event,
+                        effect.location,
+                    )
+                    && effect.event.0 < before.0
+            })
+        {
+            return None;
+        }
+        let mut borrow_count = 0usize;
+        let mut selected = None;
+        for (issue_effect, effect) in self.effects[..self.effect_count]
+            .iter()
+            .enumerate()
+            .filter_map(|(index, effect)| effect.map(|effect| (index, effect)))
+            .filter(|(_, effect)| {
+                effect.event.0 < initialization.event.0
+                    && effect.location == initialization.location
+                    && effect.expression_path == initialization.expression_path
+                    && effect.expression_conditional == initialization.expression_conditional
+                    && matches!(
+                        effect.kind,
+                        RuntimePlaceEffectKind::SharedBorrow
+                            | RuntimePlaceEffectKind::MutableBorrow
+                    )
+            })
+        {
+            if borrow_count == target_ordinal {
+                selected = Some((issue_effect, effect));
+            }
+            borrow_count = borrow_count.checked_add(1)?;
+        }
+        let (issue_effect, origin) = selected?;
+        if borrow_count != reference_count
+            || !matches!(
+                (mutable, origin.kind),
+                (false, RuntimePlaceEffectKind::SharedBorrow)
+                    | (true, RuntimePlaceEffectKind::MutableBorrow)
+            )
+        {
+            return None;
+        }
+        let RuntimePlaceIdentity::Local(borrower) = root.base else {
+            return None;
+        };
+        Some(RuntimeLoanFact {
+            id: RuntimeLoanId(MAX_RUNTIME_INITIALIZATION_FACTS + issue_effect),
+            borrower,
+            borrowed_path: origin.path,
+            kind: origin.kind,
+            issue_effect,
             generation_event: initialization.event,
         })
     }
@@ -28588,6 +28705,44 @@ mod tests {
             "fn value(input: u16) -> u16 { let mut slot = input; let parent: &mut u16 = &mut slot; let moved = parent; *moved += 1; *moved }",
             "fn value(input: u16) -> u16 { let mut slot = input; let parent: &mut u16 = &mut slot; let first = parent; let second = first; let child: &u16 = &*second; let copied = *child; slot += 1; copied + slot }",
             "fn value(input: u16) -> u16 { let mut first = input; let mut second = input + 1; let mut parent: &mut u16 = &mut first; parent = &mut second; let moved = parent; let child: &u16 = &*moved; first += 1; *child + first }",
+        ] {
+            analyze(accepted).unwrap();
+        }
+    }
+
+    #[test]
+    fn runtime_projected_reference_value_moves_propagate_tuple_field_loans() {
+        fn analyze(source: &str) -> Result<usize, CodegenError> {
+            let module = Parser::new(source).parse_module::<1, 8>().unwrap();
+            let Some(Item::Function(function)) = module.items()[0] else {
+                panic!("expected function")
+            };
+            let body = function.parse_body::<8>().unwrap();
+            let mut facts = RuntimeBodyFacts::EMPTY;
+            preanalyze_runtime_body_declarations::<_, 8, 32>(
+                &function,
+                &NoConstants,
+                &body,
+                "u16",
+                function.body_expression_span.start,
+                &mut facts,
+            )
+        }
+
+        for rejected in [
+            "fn value(input: u16) -> u16 { let mut slot = input; let holder = (&mut slot,); let moved = holder.0; let child: &u16 = &*moved; slot += 1; *child }",
+            "fn value(input: u16) -> u16 { let mut slot = input; let holder = (&mut slot,); let moved = holder.0; let child: &mut u16 = &mut *moved; slot += 1; *child }",
+            "fn value(input: u16) -> u16 { let mut first = input; let mut second = input + 1; let holder = (&mut first, &mut second); let moved = holder.1; let child: &u16 = &*moved; second += 1; *child }",
+        ] {
+            assert_eq!(
+                analyze(rejected).unwrap_err().kind,
+                CodegenErrorKind::RuntimeBorrowConflict
+            );
+        }
+
+        for accepted in [
+            "fn value(input: u16) -> u16 { let mut slot = input; let holder = (&mut slot,); let moved = holder.0; let child: &u16 = &*moved; let copied = *child; slot += 1; copied + slot }",
+            "fn value(input: u16) -> u16 { let mut first = input; let mut second = input + 1; let holder = (&mut first, &mut second); let moved = holder.1; let child: &u16 = &*moved; first += 1; *child + first }",
         ] {
             analyze(accepted).unwrap();
         }
