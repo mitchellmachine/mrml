@@ -103,6 +103,14 @@ reclamation. Prohibited providers are denied for new bindings without erasing
 retained content. No package deletion, persistent root discovery, update
 transaction, or running-system integration is implemented.
 
+The optional isolated-service form is **PARTIALLY IMPLEMENTED** only as a hosted
+transport adapter around the identical ABI-3 byte descriptors. It preserves an
+opaque endpoint generation, enforces an explicit per-call memory ceiling, and
+requires an already-authorized runtime endpoint implementation; the endpoint
+identity and package metadata grant no authority. No IPC, process isolation,
+capability projection, supervision, CPU/RAM charging, or native service call
+was exercised.
+
 Within existing boot/deployment phases, add typed UEFI objects, verified installer
 entry creation, shell boot administration, owner/compatibility/dbx policy, then
 physical firmware tests per

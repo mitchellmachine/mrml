@@ -384,7 +384,9 @@ foundations, stable ABI primitives, and quantitative memory accounting, proceed:
 8. ABI-4 coexistence/rejection and vulnerable-provider quarantine/retirement
    (**PARTIALLY IMPLEMENTED** for incompatible-generation rejection and denial
    of new prohibited-provider bindings only);
-9. cross-compiler, performance, fuzzing, and optional service-provider evidence;
+9. cross-compiler, performance, fuzzing, and optional service-provider evidence
+   (**PARTIALLY IMPLEMENTED** for a bounded hosted isolated-endpoint adapter;
+   compiler, performance, fuzzing, and real isolation evidence remain);
 10. selective migration of further high-value components.
 
 The end-to-end Zstd gate proves equal corpus decoding by old and new providers,

@@ -3687,3 +3687,38 @@ storage compaction, isolated-service lifecycle, and automatic servicing remain
 `TRIGGERED` for separate selected-mechanism review. This technical screen
 establishes neither clearance nor infringement and does not replace independent
 human dual review.
+
+# 2026-08-25 — Bounded isolated-service transport adapter
+
+**Result for this bounded mechanism: NOT_TRIGGERED.** The implementation wraps
+an already-authorized caller-supplied endpoint operation. Before forwarding the
+same fixed Zstd ABI-3 request and caller memory slice, it checks one fixed
+maximum-memory ceiling and revalidates the canonical descriptor. It preserves
+an opaque endpoint index/generation but does not treat that identity as a
+capability. It creates no process, IPC channel, shared mapping, queue, routing
+table, service registry, discovery operation, proxy, socket, interrupt, device
+transport, capability, or resource grant.
+
+Claim-focused worldwide searching reviewed adjacent families including
+[US 10,846,155 B2](https://patents.google.com/patent/US10846155B2), whose claims
+concern RPC/gRPC tunneling to NVMe storage over PCIe with tunnel agents and
+device/host buffers; [CN 117667451 A](https://patents.google.com/patent/CN117667451A/en),
+whose claims allocate per-thread partitions at pre-agreed mapped addresses and
+send next-available addresses for server-side data-object RPC;
+[US 2021/0328972 A1](https://patents.google.com/patent/US20210328972A1/en), whose
+family concerns interception through client, proxy and service communication
+ports attached to shared memory; and
+[US 8,954,964 B2](https://patents.google.com/patent/US8954964B2), whose claims
+route a private-network VM request addressed to a predetermined nonexistent
+address through a hypervisor shared resource to a security appliance. The MRML
+adapter implements none of those claim-defining PCIe tunneling, per-thread
+mapped-address allocation, interception proxy, nonexistent-address routing,
+hypervisor, device, or shared-memory mechanisms. Material publications and
+family records were reviewed through linked national/regional register data;
+non-overlap, not assumed legal status, is the design basis.
+
+Actual IPC/shared-memory transport, endpoint-capability projection, isolated
+service creation and supervision, resource charging, batching, queues, and
+native dispatch remain `TRIGGERED` for separate selected-mechanism review. This
+technical screen establishes neither clearance nor infringement and does not
+replace independent human dual review.

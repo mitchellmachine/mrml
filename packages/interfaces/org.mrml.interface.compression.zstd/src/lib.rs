@@ -31,6 +31,62 @@ pub trait ZstdTransport {
     ) -> Result<[u8; DECOMPRESS_RESPONSE_BYTES], ProtocolError>;
 }
 
+/// Already-authorized service-call mechanism supplied by the process runtime.
+/// The endpoint identity is generational but is not itself a capability.
+pub trait ZstdServiceEndpoint {
+    fn invoke(
+        &mut self,
+        endpoint: OpaqueHandle,
+        request: &[u8; DECOMPRESS_REQUEST_BYTES],
+        memory: &mut [u8],
+    ) -> Result<[u8; DECOMPRESS_RESPONSE_BYTES], ProtocolError>;
+}
+
+pub struct IsolatedServiceTransport<E> {
+    endpoint: OpaqueHandle,
+    maximum_memory_bytes: usize,
+    service: E,
+}
+
+impl<E> IsolatedServiceTransport<E> {
+    pub fn new(
+        endpoint: OpaqueHandle,
+        maximum_memory_bytes: usize,
+        service: E,
+    ) -> Result<Self, ProtocolError> {
+        if maximum_memory_bytes == 0 || maximum_memory_bytes > 553_648_128 {
+            return Err(ProtocolError::InvalidRequest);
+        }
+        Ok(Self {
+            endpoint,
+            maximum_memory_bytes,
+            service,
+        })
+    }
+
+    pub const fn endpoint(&self) -> OpaqueHandle {
+        self.endpoint
+    }
+
+    pub fn into_service(self) -> E {
+        self.service
+    }
+}
+
+impl<E: ZstdServiceEndpoint> ZstdTransport for IsolatedServiceTransport<E> {
+    fn call(
+        &mut self,
+        request: &[u8; DECOMPRESS_REQUEST_BYTES],
+        memory: &mut [u8],
+    ) -> Result<[u8; DECOMPRESS_RESPONSE_BYTES], ProtocolError> {
+        if memory.len() > self.maximum_memory_bytes {
+            return Err(ProtocolError::InvalidRequest);
+        }
+        decode_decompress_request(request, memory.len() as u64)?;
+        self.service.invoke(self.endpoint, request, memory)
+    }
+}
+
 pub fn encode_decompress_request(
     input: BorrowedReadView,
     output: BorrowedWriteView,
@@ -164,6 +220,44 @@ mod tests {
         assert_eq!(
             decode_decompress_response(&encode_output_too_small(4096)),
             Ok(Err((DecompressError::OutputTooSmall, 4096)))
+        );
+    }
+
+    struct RecordingService {
+        endpoint: Option<OpaqueHandle>,
+    }
+
+    impl ZstdServiceEndpoint for RecordingService {
+        fn invoke(
+            &mut self,
+            endpoint: OpaqueHandle,
+            _request: &[u8; DECOMPRESS_REQUEST_BYTES],
+            _memory: &mut [u8],
+        ) -> Result<[u8; DECOMPRESS_RESPONSE_BYTES], ProtocolError> {
+            self.endpoint = Some(endpoint);
+            Ok(encode_decompress_response(Ok(3)))
+        }
+    }
+
+    #[test]
+    fn isolated_form_preserves_endpoint_generation_and_resource_bound() {
+        let endpoint = OpaqueHandle::new(7, 11).unwrap();
+        let service = RecordingService { endpoint: None };
+        let mut transport = IsolatedServiceTransport::new(endpoint, 32, service).unwrap();
+        let input = BorrowedReadView::within(0, 8, 32).unwrap();
+        let output = BorrowedWriteView::within(8, 24, 32).unwrap();
+        let request = encode_decompress_request(input, output).unwrap();
+        assert_eq!(
+            decode_decompress_response(&transport.call(&request, &mut [0; 32]).unwrap()),
+            Ok(Ok(3))
+        );
+        assert_eq!(transport.into_service().endpoint, Some(endpoint));
+
+        let service = RecordingService { endpoint: None };
+        let mut transport = IsolatedServiceTransport::new(endpoint, 31, service).unwrap();
+        assert_eq!(
+            transport.call(&request, &mut [0; 32]),
+            Err(ProtocolError::InvalidRequest)
         );
     }
 }
