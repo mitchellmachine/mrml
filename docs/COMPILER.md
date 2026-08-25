@@ -768,6 +768,10 @@ Loop-carried projected generations apply the same rule, but only when the write
 is reachable from function entry and can reach the exact returned field. This
 retains local-backed generations from zero-or-more-iteration loops while
 excluding disconnected post-`break` suffix writes.
+The same exact-origin set survives a projected field move into a reference local
+before return. Direct initialization, conditional initialization, branch-local
+assignments, and disconnected loop suffixes therefore retain the same outlives
+result through the additional local generation.
 Smaller parser, type, aggregate, control-flow, and diagnostic prerequisites may
 continue when they directly prepare that analysis. Arbitrary old-edition
 parsing, obsolete compiler quirks, historical diagnostic compatibility,

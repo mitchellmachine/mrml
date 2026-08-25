@@ -3877,6 +3877,12 @@ dispatch mechanism. Existing `TRIGGERED` reviews for those implementation paths
 remain unchanged; this evidence/metadata tooling selects no additional patent
 mechanism.
 
+# 2026-08-25 — Moved projected-return ancestry evidence
+
+**Result: NOT_TRIGGERED.** This evidence increment exercises the existing
+bounded projected-move and outlives relations with independently authored
+compiler probes. It selects no new compiler algorithm or runtime mechanism.
+
 # 2026-08-25 — Loop-carried projected-return reachability
 
 **Result: NOT_TRIGGERED.** This compiler-only increment filters existing bounded

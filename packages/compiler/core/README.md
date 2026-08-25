@@ -3806,6 +3806,14 @@ compiler tests. This is bounded one-level tuple initialization, not nested tuple
 types, arbitrary nested conditional grouping, named lifetime inference, or
 complete Polonius semantics.
 
+The moved projected-return evidence confirms that exact tuple-field origins
+survive one projected move into a reference local before return. Direct and
+conditional initializations, mutually exclusive assignments, and disconnected
+post-`break` writes preserve the same accepted/rejected outcomes as direct field
+returns. Windows gnullvm and native Arch Linux WSL each pass the same 766
+compiler tests. This is independently authored oracle and MRML evidence for the
+existing bounded moved-loan relation, not general alias analysis or regions.
+
 The nested conditional tuple-origin milestone walks each leaf's bounded
 conditional-parent chain to the outermost generation before grouping reference
 origins by field ordinal. The exact oracle rejects a three-leaf returned field

@@ -591,6 +591,12 @@ an unreachable write after unconditional `break`. The latter requires both
 entry-to-generation and generation-to-return CFG reachability, not event order
 alone. Both host suites remain green at 766 compiler tests.
 
+Moved projected-return evidence now covers direct and conditional tuple-field
+initializations plus mutually exclusive field assignments before the field is
+moved into a local and returned. Local-backed reachable origins fail with the
+bounded outlives diagnostic, all-parameter origins pass, and a disconnected
+post-`break` local write remains excluded. Both hosts pass 766 compiler tests.
+
 At compiler path checkpoint `9a950ae9`, the Windows gnullvm core suite passed
 765 tests: 420 library tests, 10 conformance tests, and 335 replacement tests.
 Core formatting, warnings-denied Clippy, the no-`std`/no-`alloc`/unsafe hygiene

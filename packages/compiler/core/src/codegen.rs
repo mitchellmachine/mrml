@@ -29820,6 +29820,9 @@ mod tests {
             "fn value(input: &u16, choose: bool) -> &u16 { let local = *input; let mut holder = (&local,); holder.0 = if choose { input } else { &*input }; holder.0 }",
             "fn value(input: &u16, repeat: bool) -> &u16 { let local = *input; let mut holder = (input,); while repeat { holder.0 = &local; break; } holder.0 }",
             "fn value(input: &u16, repeat: bool) -> &u16 { let local = *input; let mut holder = (input,); while repeat { holder.0 = &local; holder.0 = input; break; } holder.0 }",
+            "fn value(input: &u16) -> &u16 { let local = *input; let holder = (&local,); let moved = holder.0; moved }",
+            "fn value(input: &u16, choose: bool) -> &u16 { let local = *input; let holder = (if choose { input } else { &local },); let moved = holder.0; moved }",
+            "fn value(input: &u16, choose: bool) -> &u16 { let local = *input; let mut holder = (input,); if choose { holder.0 = &local; } else { holder.0 = input; } let moved = holder.0; moved }",
         ] {
             match analyze(rejected) {
                 Err(error) => assert_eq!(
@@ -29848,6 +29851,10 @@ mod tests {
             "fn value(input: &u16) -> &u16 { let mut holder = (input,); holder.0 = &*input; holder.0 = input; holder.0 }",
             "fn value(input: &u16, repeat: bool) -> &u16 { let mut holder = (input,); while repeat { holder.0 = &*input; break; } holder.0 }",
             "fn value(input: &u16, repeat: bool) -> &u16 { let local = *input; let mut holder = (input,); while repeat { break; holder.0 = &local; } holder.0 }",
+            "fn value(input: &u16) -> &u16 { let holder = (input,); let moved = holder.0; moved }",
+            "fn value(input: &u16, choose: bool) -> &u16 { let holder = (if choose { input } else { &*input },); let moved = holder.0; moved }",
+            "fn value(input: &u16, choose: bool) -> &u16 { let mut holder = (input,); if choose { holder.0 = &*input; } else { holder.0 = input; } let moved = holder.0; moved }",
+            "fn value(input: &u16, repeat: bool) -> &u16 { let local = *input; let mut holder = (input,); while repeat { break; holder.0 = &local; } let moved = holder.0; moved }",
         ] {
             analyze(accepted).unwrap_or_else(|error| panic!("{accepted}: {error:?}"));
         }
