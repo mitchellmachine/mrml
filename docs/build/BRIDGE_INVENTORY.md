@@ -199,6 +199,12 @@ number of audited source reads. `mrml-agent` binds
 20 passing tests. Thirty-five components are native; seven remain transitional.
 No configured live remote/model path or CUDA agent profile was exercised.
 
+`mrml-trainer` is now an exact bin-only native action over math, runtime,
+tensor, tokenizer, and Wikipedia. Windows gnullvm and Arch Linux WSL2 each
+match Cargo at four passing tests. Thirty-six components are native; six remain
+transitional. The bounded generated-data tests establish neither production
+training nor CUDA or physical-hardware behavior.
+
 Native actions now bind one exact feature set and may gate an extern by both
 target family and selected feature. `mrml-av1` declares the empty default set,
 so its `nvidia` platform extern is inactive while `mrml-runtime` remains active.

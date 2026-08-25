@@ -730,7 +730,7 @@ second inventory.
   explicit, native example outputs are checked and compiled, and exact feature
   sets can gate optional target-specific externs. Exact binary outputs, binary
   test harnesses, compile-time environment values, and bin-only actions are
-  explicit. Thirty-five
+  explicit. Thirty-six
   components now have native actions. Direct-rustc expansion still needs
   lock/digest validation and the remaining non-library actions before
   Cargo can be removed behind the remaining nodes.
@@ -869,6 +869,13 @@ host toolchains pass frontend tests, strict Clippy, doctor/audit, native build,
 and the native/Cargo 20-test baselines. Thirty-five components are native and
 seven remain transitional. No configured live Hugging Face query, remote
 inference, production model workload, or CUDA agent profile ran.
+
+Trainer is an exact bin-only native action over its five already-native
+semantic providers. The exact Windows gnullvm and Arch Linux WSL2 toolchains
+pass doctor/audit and match the native and Cargo four-test baselines. Thirty-six
+components are native and six remain transitional. Tests used bounded generated
+data only; no production corpus, sustained training, CUDA path, or physical
+hardware ran.
 
 Service-image requires a different compiler ABI from the default semantic
 family: it is an MRML native service payload stored as PE, so its exact target is

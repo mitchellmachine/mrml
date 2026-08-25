@@ -458,6 +458,12 @@ Thirty-five components are native and seven remain transitional. No configured
 live Hugging Face query, remote inference, model workload, or CUDA agent profile
 was exercised.
 
+The trainer binary now binds its five semantic library providers directly and
+builds without the Cargo bridge. Windows gnullvm and Arch Linux WSL2 each match
+Cargo at four passing unit tests. Thirty-six components are native and six
+remain transitional. The tests use bounded generated data; no production
+corpus, long-running training, CUDA path, or physical hardware was exercised.
+
 MRML uses Rust 2024 and the exact `nightly-2026-08-24` build toolchain pinned in
 `rust-toolchain.toml`. It is also the current `mrml-rustc` behavioral reference
 recorded as [ORACLE-0002](docs/compiler/oracles/ORACLE-0002.md); a floating

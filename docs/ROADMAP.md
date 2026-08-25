@@ -315,6 +315,12 @@ Both exact hosts build it and match Cargo at 20 passing tests. Thirty-five of 42
 components are native; seven remain transitional. No configured live Hugging
 Face query, remote inference, model workload, or CUDA agent profile ran.
 
+The trainer is now a native bin-only action with exact math, runtime, tensor,
+tokenizer, and Wikipedia providers. Both exact hosts build it and match Cargo
+at four passing tests. Thirty-six of 42 components are native; six remain
+transitional. Only bounded generated test data ran; this is not production
+corpus, sustained training, CUDA, or physical-hardware evidence.
+
 `mrml-zstd` is the fourth migrated leaf; its Wikipedia edge and patent-review
 source path now resolve to `packages/libraries/zstd` without changing codec
 behavior.

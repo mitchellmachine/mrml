@@ -3266,3 +3266,10 @@ model, or runtime mechanism. It establishes neither clearance nor infringement;
 material release resolver/cache mechanisms remain subject to the recorded
 worldwide authoritative-register review. Agent review does not replace
 independent human dual review.
+
+# 2026-08-25 — Native trainer action
+
+**Result: NOT_TRIGGERED.** This increment applies the existing native resolver
+and bin-only action model to the unchanged trainer source and its exact existing
+dependency graph. It adds no training, model, export, resolver, cache, CUDA, or
+runtime mechanism. Agent review does not replace independent human dual review.
