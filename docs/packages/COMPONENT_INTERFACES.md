@@ -527,7 +527,10 @@ WHP and KVM do not independently select package bytes. A kernel-owned prepared
 launch handoff also retains both exact digests, interface fingerprint and
 generation, provider generation, and the still-uncommitted Total-mode route;
 any substitution returns that route for fail-closed unavailable/cancel
-handling. Neither artifact has
+handling. Both WHP and KVM now consume that same handoff, reject wrong service
+kinds or either digest before mapping, and attach the consumer/provider through
+an unpublished builder so a second-image failure cannot return a partially
+prepared guest. Neither artifact has
 been launched. The package resolver still must
 connect the recorded generational `InterfaceBinding` to native call dispatch;
 the current Wikipedia composition root constructs the provider for hosted

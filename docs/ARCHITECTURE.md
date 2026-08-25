@@ -90,8 +90,11 @@ resolver connection. The kernel now retains the prepared fail-closed isolation
 route, exact consumer/provider artifact digests, interface identity/fingerprint,
 and provider generation in one typed component-launch handoff; substitution
 returns the still-uncommitted route for unavailable/cancel handling. Backend
-artifact comparison and launch remain incomplete. A standalone `org.mrml.zstd`
-MRML-target service binary now
+adapters now verify both service kinds/digests from that handoff before mapping
+either image, then consume the unpublished builder while attaching the exact
+consumer and provider in separate address spaces. The adapters have not yet
+executed these package artifacts. A standalone `org.mrml.zstd` MRML-target
+service binary now
 maps the service loop to the existing receive, shared-read/write, release, and
 send traps. Its allocation-free target floor decodes raw/RLE frames in one
 private 4 KiB scratch page and rejects entropy-coded blocks until their bounded

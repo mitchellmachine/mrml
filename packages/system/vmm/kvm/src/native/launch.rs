@@ -6,9 +6,9 @@ use mrml_kernel::arch::x86_64::{
 };
 use mrml_kernel::{
     ArtifactKind, BootHandoff, GpuSharedQueueLayout, GpuVmmMemory, PAGE_SIZE, PhysAddr,
-    RevocableVmBackend, ServiceAddressSpaceEraser, TaskId, VerifiedExecutable,
-    VirtualBlockConfigurationPage, VirtualBlockQueueLayout, VirtualBlockResumePage,
-    VirtualBlockVmmMemory, VmBackend, VmExit,
+    PreparedComponentServiceLaunch, RevocableVmBackend, ServiceAddressSpaceEraser, TaskId,
+    VerifiedExecutable, VirtualBlockConfigurationPage, VirtualBlockQueueLayout,
+    VirtualBlockResumePage, VirtualBlockVmmMemory, VmBackend, VmExit,
 };
 
 use super::{
@@ -679,6 +679,72 @@ impl<const N: usize> PreparedKvmGuest<N> {
             table_physical,
             table_pages,
             false,
+        )
+    }
+
+    /// Atomically prepares the two exact service images retained by one
+    /// generation-bound component launch. A digest/kind mismatch is rejected
+    /// before either KVM memory slot is created; failure while attaching the
+    /// second image consumes and drops the unpublished guest builder.
+    #[allow(clippy::too_many_arguments)]
+    pub fn attach_component_service_pair(
+        self,
+        launch: &PreparedComponentServiceLaunch,
+        kernel: &VerifiedExecutable<'_>,
+        kernel_layout: KvmLaunchLayout,
+        consumer: &VerifiedExecutable<'_>,
+        consumer_physical: u64,
+        consumer_virtual: u64,
+        consumer_stack_physical: u64,
+        consumer_stack_virtual: u64,
+        consumer_stack_pages: u64,
+        consumer_table_physical: u64,
+        consumer_table_pages: u64,
+        provider: &VerifiedExecutable<'_>,
+        provider_physical: u64,
+        provider_virtual: u64,
+        provider_stack_physical: u64,
+        provider_stack_virtual: u64,
+        provider_stack_pages: u64,
+        provider_table_physical: u64,
+        provider_table_pages: u64,
+        local_apic: bool,
+    ) -> Result<Self, KvmError> {
+        launch
+            .verify_artifacts(
+                consumer.artifact().kind(),
+                consumer.artifact().digest(),
+                provider.artifact().kind(),
+                provider.artifact().digest(),
+            )
+            .map_err(|_| KvmError::InvalidMapping)?;
+        let guest = self.attach_isolated_service_at(
+            0,
+            kernel,
+            kernel_layout,
+            consumer,
+            consumer_physical,
+            consumer_virtual,
+            consumer_stack_physical,
+            consumer_stack_virtual,
+            consumer_stack_pages,
+            consumer_table_physical,
+            consumer_table_pages,
+            local_apic,
+        )?;
+        guest.attach_isolated_service_at(
+            1,
+            kernel,
+            kernel_layout,
+            provider,
+            provider_physical,
+            provider_virtual,
+            provider_stack_physical,
+            provider_stack_virtual,
+            provider_stack_pages,
+            provider_table_physical,
+            provider_table_pages,
+            local_apic,
         )
     }
 

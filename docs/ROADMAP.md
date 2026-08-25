@@ -190,7 +190,10 @@ remain **PLANNED**.
 The kernel-side prepared launch handoff now carries the same two digests plus
 the exact interface fingerprint/generation and provider generation while
 retaining the uncommitted fail-closed isolation route. Backend verification of
-those digests and actual attachment remain **PLANNED**.
+those digests and two-image builder attachment are **PARTIALLY IMPLEMENTED** in
+both WHP and KVM adapters: mismatch precedes mapping and a second-image failure
+cannot publish the consumed builder. Package-artifact execution remains
+**PLANNED**.
 
 Loader groundwork now validates exact immutable package image geometry and W^X
 section plans, including an executable entry point, without parsing, relocating,

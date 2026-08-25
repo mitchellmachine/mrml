@@ -4445,6 +4445,18 @@ supervision, provider selection, fallback, or transport operation. The bounded
 `TRIGGERED` lifecycle review remains controlling for backend attachment and
 execution.
 
+# 2026-08-25 — Exact two-artifact WHP/KVM attachment adapters
+
+**Result: NOT_TRIGGERED within the reviewed lifecycle shape.** Both hosted
+backends now call the common kind/digest verifier before mapping either service
+image, then reuse their existing isolated-service attachment operation for the
+exact consumer and provider. The unpublished guest builder is consumed, so a
+second-image failure cannot return a partially attached guest. This adds no new
+mapping format, page-table mechanism, transport, capability projection,
+service discovery, provider selection, fallback, or supervision algorithm.
+Actual execution of the package artifacts remains under the bounded
+`TRIGGERED` lifecycle review.
+
 # 2026-08-25 — Flat symbolic generic-existential trait selection
 
 **Result: NOT_TRIGGERED.** This compiler-only increment uses fixed-size

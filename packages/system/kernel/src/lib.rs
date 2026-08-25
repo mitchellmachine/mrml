@@ -82,13 +82,14 @@ pub use ipc::{
     MAX_WIRE_MESSAGE, Message, Receiver, WIRE_HEADER_LENGTH,
 };
 pub use isolation::{
-    ComponentServiceLaunchError, HostSubstrateReason, IsolationAdmissionTable,
-    IsolationBackendFailure, IsolationLaunchError, IsolationLaunchEvidence, IsolationLaunchRequest,
-    IsolationMode, IsolationPlacement, IsolationServiceBackend, IsolationServiceRouteError,
-    IsolationServiceSpec, IsolationServiceSpecError, IsolationUnavailableReason,
-    PreparedComponentServiceLaunch, PreparedIsolationLaunch, PreparedIsolationServiceRoute,
-    RoutedIsolationService, RunningIsolationDomain, TotalMicrovmClass, TotalMicrovmReport,
-    UnavailableIsolationDomain, prepare_isolation_service_route, route_isolation_service,
+    ComponentServiceArtifactError, ComponentServiceLaunchError, HostSubstrateReason,
+    IsolationAdmissionTable, IsolationBackendFailure, IsolationLaunchError,
+    IsolationLaunchEvidence, IsolationLaunchRequest, IsolationMode, IsolationPlacement,
+    IsolationServiceBackend, IsolationServiceRouteError, IsolationServiceSpec,
+    IsolationServiceSpecError, IsolationUnavailableReason, PreparedComponentServiceLaunch,
+    PreparedIsolationLaunch, PreparedIsolationServiceRoute, RoutedIsolationService,
+    RunningIsolationDomain, TotalMicrovmClass, TotalMicrovmReport, UnavailableIsolationDomain,
+    prepare_isolation_service_route, route_isolation_service,
 };
 pub use memory::{
     FrameAllocator, MemoryError, MemoryKind, MemoryMap, MemoryRegion, PAGE_SIZE, PhysAddr,

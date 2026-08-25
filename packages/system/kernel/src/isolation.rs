@@ -1,6 +1,6 @@
 use core::array;
 
-use crate::ObjectId;
+use crate::{ArtifactKind, ObjectId};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum IsolationMode {
@@ -352,6 +352,30 @@ impl PreparedComponentServiceLaunch {
         &self.interface_fingerprint
     }
 
+    /// Verifies the two already authenticated executable records before a VMM
+    /// backend maps either image. File names, paths, and argument order never
+    /// substitute for the exact retained digests.
+    pub fn verify_artifacts(
+        &self,
+        consumer_kind: ArtifactKind,
+        consumer_digest: &[u8; 64],
+        provider_kind: ArtifactKind,
+        provider_digest: &[u8; 64],
+    ) -> Result<(), ComponentServiceArtifactError> {
+        if consumer_kind != ArtifactKind::ServiceImage
+            || provider_kind != ArtifactKind::ServiceImage
+        {
+            return Err(ComponentServiceArtifactError::InvalidArtifactKind);
+        }
+        if consumer_digest != &self.consumer_artifact {
+            return Err(ComponentServiceArtifactError::ConsumerArtifactMismatch);
+        }
+        if provider_digest != &self.provider_artifact {
+            return Err(ComponentServiceArtifactError::ProviderArtifactMismatch);
+        }
+        Ok(())
+    }
+
     pub fn into_route(self) -> PreparedIsolationServiceRoute {
         self.route
     }
@@ -363,6 +387,13 @@ pub enum ComponentServiceLaunchError {
     InvalidInterfaceFingerprint,
     InvalidArtifactDigest,
     ArtifactSubstitution,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum ComponentServiceArtifactError {
+    InvalidArtifactKind,
+    ConsumerArtifactMismatch,
+    ProviderArtifactMismatch,
 }
 
 pub fn prepare_isolation_service_route<const DOMAINS: usize>(
@@ -1205,6 +1236,42 @@ mod tests {
         assert_eq!(launch.interface_fingerprint(), &[0x3a; 32]);
         assert_eq!(launch.consumer_artifact(), &[0x18; 64]);
         assert_eq!(launch.provider_artifact(), &[0x2f; 64]);
+        assert_eq!(
+            launch.verify_artifacts(
+                ArtifactKind::ServiceImage,
+                &[0x18; 64],
+                ArtifactKind::ServiceImage,
+                &[0x2f; 64],
+            ),
+            Ok(())
+        );
+        assert_eq!(
+            launch.verify_artifacts(
+                ArtifactKind::Kernel,
+                &[0x18; 64],
+                ArtifactKind::ServiceImage,
+                &[0x2f; 64],
+            ),
+            Err(ComponentServiceArtifactError::InvalidArtifactKind)
+        );
+        assert_eq!(
+            launch.verify_artifacts(
+                ArtifactKind::ServiceImage,
+                &[0x19; 64],
+                ArtifactKind::ServiceImage,
+                &[0x2f; 64],
+            ),
+            Err(ComponentServiceArtifactError::ConsumerArtifactMismatch)
+        );
+        assert_eq!(
+            launch.verify_artifacts(
+                ArtifactKind::ServiceImage,
+                &[0x18; 64],
+                ArtifactKind::ServiceImage,
+                &[0x30; 64],
+            ),
+            Err(ComponentServiceArtifactError::ProviderArtifactMismatch)
+        );
         assert_eq!(table.running().count(), 0);
         launch.into_route().commit(&mut table, 0x55aa_u64).unwrap();
         assert!(table.total_microvm_report().satisfied());
