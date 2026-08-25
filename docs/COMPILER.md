@@ -699,8 +699,12 @@ latest-generation replacement, cyclic reborrow ancestry, moved parameters, and
 exact tuple-field initialization/reassignment origins. Direct shared-reference
 copies now retain the same bounded ancestry through successive local bindings;
 mutable references remain move-only. Local storage, mismatched mutability, and
-unclassified ancestry fail closed. This is not named-lifetime inference, general
-regions, or complete Polonius outlives reasoning. The highest-value next major
+unclassified ancestry fail closed. Conditional action-block returns now retain
+an exact terminal ownership location and CFG return edge, including direct or
+locally stored identity-call results. Reference-typed return `Copy`/`Move`
+effects are validated without classifying ordinary value effects as reference
+returns. This is not named-lifetime inference, general regions, or complete
+Polonius outlives reasoning. The highest-value next major
 implementation task is extending this relation across the remaining exact return
 and indirect-alias forms without collapsing generation or CFG path distinctions.
 Existing loop-result origin proofs do not imply branch-local or loop-local

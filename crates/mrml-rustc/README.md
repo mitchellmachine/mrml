@@ -3370,6 +3370,22 @@ direct-loan identity until initialization generations can prevent stale loans;
 this does not claim general coercion sites, regions, or complete Polonius
 semantics. The `no_std`/allocation/unsafe hygiene scan remained empty.
 
+The conditional action-return outlives milestone at `68124775` passed all 765
+compiler and driver tests on Windows gnullvm and all 765 in release mode on
+native Arch Linux WSL, plus warnings-denied compiler-only Clippy on both hosts
+using pinned rustc commit
+`f7d782a3be46d6bb4b9792fe69a61db389ba1769`. The pinned oracle rejected an
+identity-call result rooted in conditional-action local storage with E0515 and
+accepted the equivalent parameter-backed direct and locally stored call
+results. Conditional return actions now receive a distinct shape-validated
+ownership location mapped to the exact CFG return edge. The outlives gate also
+checks exact reference-typed `Copy` and `Move` return effects while preserving
+the existing pointee-path treatment for borrow effects. Ordinary conditional
+actions, non-reference values, malformed locations, and ambiguous ancestry are
+not promoted into accepted return facts. This remains bounded call-origin and
+escape analysis, not general interprocedural lifetime inference or complete
+Polonius semantics. The `no_std`/allocation/unsafe hygiene scan remained empty.
+
 The explicit reference-reassignment generation milestone passed all 711
 compiler and driver tests on Windows gnullvm and all 711 in release mode on
 native Arch Linux WSL, plus warnings-denied compiler-only Clippy on both hosts

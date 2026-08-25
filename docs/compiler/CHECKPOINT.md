@@ -9,12 +9,11 @@ the named commit and current source.
 ## Recoverable baseline
 
 - Branch: `main`
-- Compiler checkpoint commit: `c5d007d9`
-  (`compiler: trace shared return copies`)
-- Remote state when recorded: `origin/main` includes the compiler checkpoint,
-  durable documentation, and review through `dd92c087`. The push was a verified
-  fast-forward containing the isolated shared-reference-return-copy milestone;
-  unrelated unstaged OS work was not included.
+- Compiler checkpoint commit: `68124775`
+  (`compiler: validate conditional action returns`)
+- Remote state when recorded: the compiler checkpoint and its documentation/
+  review commits are pending publication. Unrelated unstaged OS work is not part
+  of the compiler checkpoint.
 - Preceding compiler commits: `5c53eb9` (`compiler: track mutable tuple field
   moves`), `480a198` (`compiler: identify constant array
   elements`), `40a035c` (`compiler: analyze initializedness
@@ -172,6 +171,13 @@ At the checkpoint commit, the runtime emitter has these bounded mechanisms:
   still require a move. Ambiguous nested-loop control values, general regions,
   named lifetime relationships, and complete Polonius outlives reasoning remain
   unimplemented.
+  Return expressions inside conditional action blocks now have a distinct,
+  shape-validated ownership location mapped to the action block's exact
+  unconditional return edge. This lets the outlives pass reject direct and
+  locally stored identity-call results backed by local storage while preserving
+  equivalent parameter-backed calls. Exact reference-typed `Copy` and `Move`
+  return effects are checked alongside borrow effects; non-reference value
+  effects and ordinary conditional actions remain outside this gate.
   Explicit direct mutable reborrows derive their parent loan and ultimate owner
   path with an initialization-count traversal bound. A parent use before a
   later child use reports a conflict, a parent use after the child’s last use is
@@ -507,7 +513,7 @@ Windows-only run.
 
 ## Last complete verification
 
-The checkpoint source passed 764 tests on each host: 417
+The checkpoint source passed 765 tests on each host: 418
 library tests, 10 conformance tests, 335 replacement tests, and 2 driver tests.
 Warnings-denied Clippy also passed on both hosts. The commands were:
 
