@@ -1450,10 +1450,12 @@ can count as trusted consent.
    infrastructure rather than independent reproducible-build evidence.
    The UEFI target now fixes the PE timestamp at zero and omits the otherwise
    nondeterministic embedded PE debug identity. A controlled same-host build of
-   commit `cd1df99` in two separate source and target roots produced matching
-   canonical receipts for the unsigned kernel, service, and loader. This is
-   repeat-build evidence for one exact toolchain and host, not independent-
-   builder, cross-host, or complete release reproducibility evidence.
+   exact commit `6976f8f` in two separate source and target roots, using only
+   committed build configuration, produced matching canonical receipts for the
+   unsigned kernel, service, and loader with an empty selected test
+   configuration. This is repeat-build evidence for one exact toolchain and
+   host, not independent-builder, cross-host, or complete configured-release
+   reproducibility evidence.
 5. Bind inspectable system-generation metadata to the exact kernel, compositor,
    services, configuration root, and compiler/runtime artifacts.
 6. Implement owner-selectable trust-root enrollment, replacement, owner-build and

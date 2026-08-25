@@ -2020,14 +2020,16 @@ zero and disables the embedded PE debug directory. The latter otherwise carries
 a nondeterministic linker-produced debug identity even when the source, target,
 toolchain, and `SOURCE_DATE_EPOCH` match. Debug information may be retained as a
 separate review artifact, but it is not embedded in the signed boot image. A
-controlled same-host probe of commit `cd1df99` built the exact source archive in
+controlled same-host probe of commit `6976f8f` built the exact source archive in
 two distinct source and Cargo target roots with rustc
 `1.100.0-nightly (fb6531d55 2026-08-23)` and Cargo
-`1.100.0-nightly (e8cb624d5 2026-08-22)`. Before these linker controls, each of
-the equal-length kernel, service, and loader images differed in exactly ten
-bytes. With `/debug:none` and `/timestamp:0`, the canonical receipts for all
-three unsigned images matched byte-for-byte. This is a controlled repeated
-build on one host, not independent-builder or cross-platform evidence.
+`1.100.0-nightly (e8cb624d5 2026-08-22)`, using only the committed linker
+configuration. A preceding diagnostic build without these controls found each
+equal-length kernel, service, and loader image differed in exactly ten PE
+metadata bytes. With the committed policy, the canonical receipts for all three
+unsigned images matched byte-for-byte. The probe used an empty selected test
+configuration. This is a controlled repeated build on one host, not
+independent-builder, cross-platform, or complete configured-release evidence.
 
 After generating distinct artifact keys and a next-release root, create and
 sign the canonical 408-byte release manifest:
