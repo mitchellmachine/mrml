@@ -183,6 +183,12 @@ text installer is the first complete path; a later GUI is a semantic projection
 over the same `InstallPlan`, exact destructive preview, trusted authorization,
 and verification state. Neither path may make sight, pointer use, cloud AI, or a
 working accelerated GPU a prerequisite for essential install/recovery choices.
+Disk/image, optical media, burn progress, and destructive previews use the same
+semantic objects described in
+[storage/STORAGE_AND_OPTICAL.md](storage/STORAGE_AND_OPTICAL.md). Adaptive
+isolation settings and the boot-time total-microVM choice likewise require
+equivalent visual, keyboard, Braille, speech, and trusted nonvisual meaning; see
+[ISOLATION_PLACEMENT.md](ISOLATION_PLACEMENT.md).
 
 Application VMs project authenticated, bounded guest GUI semantics into the
 host graph. Guest semantics are untrusted content and cannot forge compositor-

@@ -116,6 +116,17 @@ Upstream rustc does not make its native/unsafe toolchain memory-safe.
 
 ## Manifest, lockfile, profiles, and isolation
 
+Manifest V2's planned bounded `[isolation]` table records default, minimum, and
+supported placements as specified in
+[../ISOLATION_PLACEMENT.md](../ISOLATION_PLACEMENT.md). It is policy metadata,
+not a compile edge or capability grant, and remains **PLANNED** until parser,
+resolver, and focused tests exist.
+
+Artifact filenames follow
+[../packages/ARTIFACT_EXTENSIONS.md](../packages/ARTIFACT_EXTENSIONS.md): `.mrp`
+package, `.mrs` release, `.mrz` system image, `.mri` standalone interface, and
+optional `.mrsig` detached signature. Extensions are non-authoritative.
+
 The root `mrml.toml` enumerates bounded package members; each package-local
 `mrml.toml` owns its version-3 component, target/profile, action, dependency, and
 input-policy declarations. The loader rejects absent, duplicate, escaping, or

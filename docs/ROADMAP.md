@@ -16,6 +16,22 @@ remain independently attributable.
 
 ## Current priority
 
+Three new persistent deltas are documented before implementation:
+
+- [packages/ARTIFACT_EXTENSIONS.md](packages/ARTIFACT_EXTENSIONS.md) defines
+  `.mrp`, `.mrs`, `.mrz`, `.mri`, and `.mrsig` as non-authoritative filename
+  conventions. Default-output and filename-independence tooling/tests are next.
+- [ISOLATION_PLACEMENT.md](ISOLATION_PLACEMENT.md) defines adaptive placement,
+  mandatory floors, stable location-independent interfaces, persistent owner
+  policy, and a one-boot total-microVM request. All runtime work is **PLANNED**.
+- [storage/STORAGE_AND_OPTICAL.md](storage/STORAGE_AND_OPTICAL.md) defines the
+  disk/image, GPT/FAT, UDF/ISO, MMC, AHCI/USB optical, burning, and virtual-
+  optical dependency order. New optical mechanisms are **PLANNED**.
+
+Finish the small package-extension/tooling delta first. Then keep adaptive
+isolation and storage/optical as separate sequential foundational OS tasks under
+the work-in-progress limit; do not combine them into one functional commit.
+
 The deployment lane is defined in [DEPLOYMENT.md](DEPLOYMENT.md) and must not
 displace the current foundational gate. Later work proceeds as separate bounded
 milestones: package/boot-safe formats; release/generation state; Store/catalog;

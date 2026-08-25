@@ -263,6 +263,14 @@ This is a design aid, not paperwork for routine implementation.
 
 ## Dependencies, compatibility, and readability
 
+Artifact suffixes are presentation rather than authority; the canonical MRML
+extension family is recorded in
+[packages/ARTIFACT_EXTENSIONS.md](packages/ARTIFACT_EXTENSIONS.md). Runtime
+placement remains one capability/interface architecture as specified in
+[ISOLATION_PLACEMENT.md](ISOLATION_PLACEMENT.md), not a parallel sandbox stack.
+Storage and optical mechanisms follow the bounded dependency order and evidence
+gates in [storage/STORAGE_AND_OPTICAL.md](storage/STORAGE_AND_OPTICAL.md).
+
 MRML remains aggressively dependency-minimized. For core components prefer
 MRML-owned implementation, `no_std`, bounded memory, fixed-capacity structures,
 explicit failure, deterministic behavior, small interfaces, and auditable unsafe

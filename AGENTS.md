@@ -246,10 +246,31 @@ bootloader and recovery dependencies may remain static or `BOOT_BOUND` so they
 do not depend on the userspace resolver. The canonical package format is shared
 by boot, Store, installer, and recovery work, and QEMU package boot is a required
 acceptance test. WHP and KVM must admit the same package-derived guest bytes.
+Canonical user-facing extensions are `.mrp` for packages, `.mrs` for distinct
+SystemRelease artifacts, `.mrz` for complete SystemImages, `.mri` for standalone
+interface definitions, and `.mrsig` for optional detached signatures. Extensions
+never establish format, identity, class, compression, or trust; internal magic,
+authenticated metadata, and exact digests do. Do not create class-specific
+kernel/VMM/app extensions. Follow `docs/packages/ARTIFACT_EXTENSIONS.md`.
 Build receipts are MRML-native and bind the workspace manifest, `mrml.lock`, and
 toolchain lock; Cargo metadata is only nested stage-zero provenance. Upstream
 rustc remains the production compiler until the profile-specific `mrml-rustc`
 gate passes.
+
+Adaptive placement follows `docs/ISOLATION_PLACEMENT.md`: use the existing
+process/service/capability/VMM architecture, distinguish preference from mandatory
+minimum and supported forms, preserve stable exact-generation interfaces across
+placement, and never let placement metadata grant capabilities. Total MicroVM
+Isolation and its boot override remain **PLANNED** until end-to-end tests exist.
+
+Storage and optical work follows `docs/storage/STORAGE_AND_OPTICAL.md` in its
+dependency order. Disk/image tooling is first-party; optical `.iso` is
+interoperable media while `.mrz` remains SystemImage. The common MMC layer sits
+above initial AHCI/ATAPI, USB, and planned VirtIO transports. Exact exclusive
+host device/media generations authorize delegation and burning. Never claim UDF,
+Blu-ray, physical AHCI/USB, real-drive WHP/KVM, or boot/burn evidence without
+the exact implementation and hardware result. Commercial DRM circumvention is
+not part of the optical stack.
 
 Patent review is technical risk screening, not legal adjudication. For each
 substantial new mechanism, report `Patent review: NOT_TRIGGERED` or

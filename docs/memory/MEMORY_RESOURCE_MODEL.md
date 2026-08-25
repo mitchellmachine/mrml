@@ -115,6 +115,11 @@ deduplication is disabled by default pending side-channel analysis.
 
 ## Placement and performance
 
+Adaptive execution placement is specified in
+[../ISOLATION_PLACEMENT.md](../ISOLATION_PLACEMENT.md). Requested and effective
+placement carry explicit process/service/VM, page-table, queue, and shared-code
+charges; total-microVM policy cannot hide commitment or cross limits silently.
+
 Default policy selects NUMA placement, migration, tiering, and huge pages while
 preserving object identity. Advanced authority may request node/device locality,
 interleave, latency class, or large-page preference, subject to policy. Physical

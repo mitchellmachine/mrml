@@ -67,10 +67,12 @@ evidence. Documentation alone establishes none of the latter five claims.
 
 ## Canonical package family
 
-One signed MRML package-container family uses artifact classes and admission
+One signed MRML package-container family uses the preferred `.mrp` extension,
+artifact classes, and admission
 profiles for applications, libraries, drivers, system modules, kernel, VMM,
-bootloader distribution, and recovery components. The exact extension and
-binary layout remain provisional. Stable reverse-DNS identifiers include
+bootloader distribution, and recovery components. The extension is presentation;
+internal magic/version and authenticated metadata remain authoritative. See
+[packages/ARTIFACT_EXTENSIONS.md](packages/ARTIFACT_EXTENSIONS.md). Stable reverse-DNS identifiers include
 `org.mrml.system.kernel`, `.bootloader`, `.vmm`, and `.recovery`;
 `org.mrml.service.network`, `.wifi`, and `.bluetooth`;
 `org.mrml.driver.nvme` and `.gpu.nvidia.blackwell`; and
@@ -243,6 +245,10 @@ redacted semantic state. The terminal is neither root nor ambient authority and
 its scrollback and rendering resources are bounded.
 
 ## Disk, partition, and boot administration
+
+The canonical disk-image, checking, filesystem, UDF, optical/MMC, burning, and
+virtual-optical design is [storage/STORAGE_AND_OPTICAL.md](storage/STORAGE_AND_OPTICAL.md).
+Those new mechanisms remain **PLANNED** unless exact code and evidence are cited.
 
 Native administration enumerates disks, inspects tables, initializes GPT,
 creates/deletes partitions, identifies ESPs, creates MRML system/data/recovery

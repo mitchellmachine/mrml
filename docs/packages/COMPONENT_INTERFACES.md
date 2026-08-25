@@ -183,6 +183,12 @@ schema-language version rather than an ignored extension.
 
 ## Component forms and isolation decision
 
+The general placement policy selecting among admitted in-process, native
+process/service, microVM, and fixed platform forms is
+[../ISOLATION_PLACEMENT.md](../ISOLATION_PLACEMENT.md). Interface identity and
+exact provider generation remain independent of placement; metadata grants no
+capability.
+
 Two primary forms are planned:
 
 - **in-process component:** immutable executable pages mapped into an admitted

@@ -61,6 +61,12 @@ is separately controlled for one-time recovery, candidate, Windows, or test boot
 and never implies permanent order change. A boot transaction can create MRML,
 preserve Windows, propose order, and leave fallback state unchanged.
 
+The planned MRML boot menu also offers a nonpersistent one-boot `Total MicroVM
+Isolation` request with an equivalent exact-token UEFI/EFI Shell argument. It is
+authenticated into the boot handoff, cannot bypass package/generation/security
+policy, and reports fixed exceptions. See
+[../ISOLATION_PLACEMENT.md](../ISOLATION_PLACEMENT.md).
+
 The conventional fallback `\EFI\BOOT\BOOTX64.EFI` may be installed only under
 policy that proves ownership/non-conflict and previews backup/recovery or exact
 replacement. A shared ESP's existing fallback is never casually overwritten.

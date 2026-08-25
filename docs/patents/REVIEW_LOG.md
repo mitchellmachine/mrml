@@ -4,6 +4,15 @@ Historical paths in this log are intentionally preserved. The canonical
 [old-to-current source-path map](PATH_MIGRATION.md) locates their present
 implementations without altering the original review evidence.
 
+## 2026-08-25 — Artifact extensions, adaptive isolation, and storage/optical design
+
+Patent review: artifact filename conventions are **NOT_TRIGGERED** because names
+do not alter format or trust. Adaptive placement/transparent transport and the
+planned UDF, MMC/burning, virtual-optical, and deployment mechanisms are
+**TRIGGERED** for targeted worldwide claim/family/status and applicable royalty-
+free-grant review before implementation. Documentation records no clearance,
+non-infringement, interoperability, physical-device, or implementation result.
+
 ## 2026-08-25 — Native VMM reset-vector firmware entry
 
 Patent review: **TRIGGERED** under the existing VMM and firmware reviews. The

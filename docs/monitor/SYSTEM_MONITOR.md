@@ -189,6 +189,12 @@ observation is not capture/injection. Storage health is not content access.
 Sensor inspection is not fan/voltage/frequency/power/thermal control. DMA/IOMMU
 views grant no physical addresses or mappings. Firmware, TPM, VBS, hosted VMM,
 nested VM, and bare-metal claims retain exact evidence and threat-model labels.
+Planned adaptive-isolation views distinguish requested/effective placement,
+policy source, mandatory floor, generation, resource cost, and exceptions.
+Planned optical views distinguish drive/media generations, actual profiles,
+semantic burn progress/errors, and delegation without inventing telemetry. See
+[../ISOLATION_PLACEMENT.md](../ISOLATION_PLACEMENT.md) and
+[../storage/STORAGE_AND_OPTICAL.md](../storage/STORAGE_AND_OPTICAL.md).
 
 ## Interfaces, accessibility, and servicing
 

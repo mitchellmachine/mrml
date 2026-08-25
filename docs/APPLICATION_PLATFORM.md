@@ -99,6 +99,11 @@ accepts self-asserted compiler metadata as proof.
 
 ### Execution classes
 
+Per-component placement preferences, mandatory floors, supported forms,
+persistent owner policy, and the one-boot total-microVM request are canonical in
+[ISOLATION_PLACEMENT.md](ISOLATION_PLACEMENT.md). These are **PLANNED** and refine
+the classes below without introducing another sandbox architecture.
+
 1. A native safe application is a memory-safe, isolated CPL3 process controlled
    by capabilities.
 2. A strongly isolated MRML application, or small related group, runs inside a

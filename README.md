@@ -584,6 +584,11 @@ the repository or undoing its invariants.
    Rust 2024 is the
    floor; prioritize modern/future semantics and do not infer old-edition,
    stable-Rust, every-nightly, or unstable-Rust-ABI compatibility.
+9. Preserve the canonical deltas for
+   [artifact extensions](docs/packages/ARTIFACT_EXTENSIONS.md),
+   [adaptive isolation](docs/ISOLATION_PLACEMENT.md), and
+   [storage and optical media](docs/storage/STORAGE_AND_OPTICAL.md), including
+   their exact status and physical-evidence limits.
 
 ## License
 

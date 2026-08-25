@@ -95,6 +95,11 @@ or remote attestation.
 
 ## Capability and isolation invariants
 
+The planned adaptive placement policy is specified in
+[ISOLATION_PLACEMENT.md](ISOLATION_PLACEMENT.md). Placement metadata never grants
+authority, mandatory floors fail closed, and microVM capabilities are separately
+projected and revocable.
+
 Memory allocation is quantitative authority distinct from mapping and content
 access. The security/acceptance gate is canonical in
 [memory/MEMORY_RESOURCE_MODEL.md](memory/MEMORY_RESOURCE_MODEL.md).
@@ -121,6 +126,9 @@ access. The security/acceptance gate is canonical in
 - Debug authority is exact-target and rights-scoped, never implicitly global.
 - AI control is not user/root authority, and provenance labels never replace
   capability enforcement.
+- Storage and optical inspection, health, content, write, erase, burn, eject,
+  and delegation rights remain separate and exact-generation as defined in
+  [storage/STORAGE_AND_OPTICAL.md](storage/STORAGE_AND_OPTICAL.md).
 
 Compromise cleanup generalizes the Phase 1 lifecycle rules: revoke task/service
 capabilities and descendants; remove native mappings; invalidate IPC, queues,

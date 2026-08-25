@@ -107,6 +107,9 @@ unmapping, TLB-coherent hotplug, or production hotplug.
 
 ## Capability projection into application microVMs
 
+MicroVM selection follows [ISOLATION_PLACEMENT.md](ISOLATION_PLACEMENT.md);
+selecting placement does not itself delegate any device.
+
 A microVM receives devices derived from exactly the application's capabilities:
 
 ```text
@@ -119,6 +122,12 @@ BrailleOutput D          -> accessibility output device D
 Projection cannot widen these into a host disk, ambient host filesystem, raw
 networking, global input, backend handle, interrupt authority, or mapping
 authority.
+
+The planned MRML-specific VirtIO optical family and its common MMC/AHCI/USB
+layer are defined in
+[storage/STORAGE_AND_OPTICAL.md](storage/STORAGE_AND_OPTICAL.md). It exposes
+bounded semantic operations rather than arbitrary host SCSI; no implementation
+or physical-drive claim is made here.
 
 ## Virtual accessibility family
 

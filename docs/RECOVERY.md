@@ -957,6 +957,14 @@ workspace because inheriting packages require their own unstable-edition opt-in.
 
 ## 4. Select the next work
 
+Recover the three new persistent deltas from
+[packages/ARTIFACT_EXTENSIONS.md](packages/ARTIFACT_EXTENSIONS.md),
+[ISOLATION_PLACEMENT.md](ISOLATION_PLACEMENT.md), and
+[storage/STORAGE_AND_OPTICAL.md](storage/STORAGE_AND_OPTICAL.md). Complete their
+documentation first, then keep adaptive isolation and storage/optical as
+sequential foundational OS milestones. Preserve every **PLANNED** physical, UDF,
+optical, and total-microVM claim until exact implementation and evidence exist.
+
 For system-monitor work, recover the single canonical observer from
 [monitor/SYSTEM_MONITOR.md](monitor/SYSTEM_MONITOR.md). Its caches are
 disposable: after restart, reconstruct scoped snapshots from authoritative
