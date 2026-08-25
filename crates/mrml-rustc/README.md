@@ -3785,3 +3785,17 @@ mutability must match, and mutable references still require `Move`. Missing or
 ambiguous ancestry remains fail-closed. This is bounded direct copy ancestry,
 not general alias analysis, named lifetime inference, or complete Polonius
 semantics. The `no_std`/allocation/unsafe hygiene scan remained empty.
+
+The loop conditional-terminal outlives milestone at `f307c1b3` passed all 766
+compiler and driver tests on Windows gnullvm and all 766 in release mode on
+native Arch Linux WSL, plus warnings-denied compiler-only Clippy on both hosts
+using pinned rustc commit
+`f7d782a3be46d6bb4b9792fe69a61db389ba1769`. The pinned oracle rejected
+an identity-call return backed by loop-local storage with E0515 and accepted the
+equivalent parameter-backed return. The existing shape-validated
+`LoopConditionalTerminal` location already maps to an exact CFG return edge;
+primary and else-arm `Return` terminals now use return-context preanalysis.
+Ordinary terminal actions and `break` are not promoted. This does not claim
+nested-loop return coverage, general regions, named lifetime inference, or
+complete Polonius semantics. The `no_std`/allocation/unsafe hygiene scan
+remained empty.

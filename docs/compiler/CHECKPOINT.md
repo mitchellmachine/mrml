@@ -9,12 +9,11 @@ the named commit and current source.
 ## Recoverable baseline
 
 - Branch: `main`
-- Compiler checkpoint commit: `68124775`
-  (`compiler: validate conditional action returns`)
-- Remote state when recorded: `origin/main` includes the compiler checkpoint,
-  durable documentation, and review through `a7da602c`. The push was a verified
-  fast-forward containing exactly the three isolated conditional-action-return
-  commits; unrelated unstaged OS work was not included.
+- Compiler checkpoint commit: `f307c1b3`
+  (`compiler: validate loop terminal returns`)
+- Remote state when recorded: publication of this compiler checkpoint, its
+  durable documentation, and review is pending. The compiler commit is based on
+  `origin/main` at `2e531f35`; unrelated OS work remains outside this worktree.
 - Preceding compiler commits: `5c53eb9` (`compiler: track mutable tuple field
   moves`), `480a198` (`compiler: identify constant array
   elements`), `40a035c` (`compiler: analyze initializedness
@@ -179,6 +178,13 @@ At the checkpoint commit, the runtime emitter has these bounded mechanisms:
   equivalent parameter-backed calls. Exact reference-typed `Copy` and `Move`
   return effects are checked alongside borrow effects; non-reference value
   effects and ordinary conditional actions remain outside this gate.
+  Primary and else-arm `ConditionalLoopTerminal::Return` expressions now use
+  return-context preanalysis and their existing shape-validated terminal
+  location maps to the exact unconditional CFG return edge. The outlives pass
+  rejects an identity-call result backed by loop-local storage while preserving
+  the equivalent parameter-backed return. Ordinary loop actions and `break`
+  terminals are not promoted into this gate; nested-loop return locations and
+  general lifetime relationships remain separate future work.
   Explicit direct mutable reborrows derive their parent loan and ultimate owner
   path with an initialization-count traversal bound. A parent use before a
   later child use reports a conflict, a parent use after the child’s last use is
@@ -514,7 +520,7 @@ Windows-only run.
 
 ## Last complete verification
 
-The checkpoint source passed 765 tests on each host: 418
+The checkpoint source passed 766 tests on each host: 419
 library tests, 10 conformance tests, 335 replacement tests, and 2 driver tests.
 Warnings-denied Clippy also passed on both hosts. The commands were:
 

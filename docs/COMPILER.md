@@ -257,6 +257,11 @@ direct-return, nested-loop-header/action, and ordered nested-control origins.
 These map to exact sourced blocks or return edges. Bounded parser operation
 counts and exact CFG-source matching reject forged operation, arm, action, and
 control coordinates instead of assigning an enclosing block.
+Conditional-loop terminal returns in both the primary and else arm now use
+return-context preanalysis and the existing exact terminal return edge. This
+rejects a loop-local identity-call result while preserving a parameter-backed
+result. It does not classify ordinary terminal actions or `break` as returns,
+and it does not claim nested-loop return coverage or general lifetime solving.
 For complete supported statement/loop CFGs, definite initializedness now uses
 a bounded fixed point over exact block and edge events. Two fixed 64-block by
 22-word bitset matrices cover all 1,360 move paths; predecessor states meet by
