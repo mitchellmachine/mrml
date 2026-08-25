@@ -24,7 +24,7 @@ mrml-error = { path = "../mrml-error", optional = true }
 serde_json = { package = "mrml-json", path = "../../packages/libraries/json", optional = true }
 mrml-percent-encoding = { path = "../../packages/libraries/percent-encoding", optional = true }
 mrml-runtime = { path = "../../packages/libraries/runtime", optional = true }
-mrml-http = { path = "../mrml-http", optional = true }
+mrml-http = { path = "../../packages/libraries/http", optional = true }
 
 [target.'cfg(windows)'.dependencies]
 mrml-windows = { path = "../../packages/libraries/windows", optional = true }

@@ -14,7 +14,7 @@ members = [
     "crates/mrml-sign",
     "packages/libraries/crypto",
     "packages/libraries/tls",
-    "crates/mrml-http",
+    "packages/libraries/http",
     "packages/libraries/runtime",
     "crates/mrml-model",
     "packages/libraries/math",

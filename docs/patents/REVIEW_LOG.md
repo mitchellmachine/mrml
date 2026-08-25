@@ -88,6 +88,11 @@ updates both inbound Cargo paths without changing any protocol or algorithm.
 **Result: NOT_TRIGGERED.** Existing TLS and hybrid-key-exchange review
 requirements remain in force.
 
+The fourteenth semantic move relocates `mrml-http` after TLS/runtime and
+updates both inbound Cargo paths without changing HTTP/HTTPS behavior.
+**Result: NOT_TRIGGERED.** This is repository organization, not a new protocol
+mechanism.
+
 ## 2026-08-25 — Deployment, package, image, installer, and shell architecture
 
 **Result: TRIGGERED.** The documentation composes package/image containers,

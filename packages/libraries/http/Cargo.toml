@@ -7,5 +7,5 @@ license.workspace = true
 description = "Original no_std HTTPS and HTTP/1.1 implementation for MRML"
 
 [dependencies]
-mrml-runtime = { path = "../../packages/libraries/runtime" }
-mrml-tls = { path = "../../packages/libraries/tls" }
+mrml-runtime = { path = "../runtime" }
+mrml-tls = { path = "../tls" }
