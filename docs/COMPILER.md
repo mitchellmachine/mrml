@@ -108,7 +108,7 @@ language as a whole.
 | Let chains | **NOT IMPLEMENTED** | Boolean short-circuit expressions exist, but `if let`/`while let` chains and their pattern scopes do not. |
 | Async closures | **NOT IMPLEMENTED** | There is no async/await, generator, future, or async-closure lowering. |
 | Modern borrowing / Polonius | **PARTIAL** | References, explicit and expected-type implicit reborrow ancestry, return coercion-site reborrows, mutable pointee operations, bounded ownership/place/effect facts, fixed-point definite-initialization, direct shared/mutable-loan conflicts, and bounded intermediate-ancestor invalidation across the supported statement/loop CFG exist. Conditional expressions retain bounded program points and canonical nested/sequential edges. General indirect loan identity, regions/outlives reasoning, and complete Polonius-compatible analysis remain unimplemented. |
-| Next-generation trait solving | **PARTIAL** | Method-like built-ins remain recognized directly. Allocation-free goals distinguish concrete types, universe-aware inference variables, binders, and rigid placeholders. A 64-entry clause database and 16-frame solver prove concrete or skolemized premises. Exact and generic associated values normalize bounded concrete projections after implementation proof; generic values may recursively project through a separate 16-frame visited stack. A coherent 64-entry generic-implementation table rejects flat-head overlap, selects one stable implementation for concrete queries, and recursively proves its instantiated premises. Symmetric admission checks reject exact/generic overlap in either insertion order. There is no trait syntax, mixed inference/higher-ranked solving, projection-bearing type terms or premises, premise-aware coherence, specialization, general answer composition, or source integration. |
+| Next-generation trait solving | **PARTIAL** | Method-like built-ins remain recognized directly. Allocation-free goals distinguish concrete types, universe-aware inference variables, binders, and rigid placeholders. A 64-entry clause database and 16-frame solver prove concrete or skolemized premises. Exact and generic associated values normalize bounded concrete projections after implementation proof; generic values may recursively project through a separate 16-frame visited stack. A coherent 64-entry generic-implementation table rejects flat-head overlap, selects one stable implementation for concrete or rigid queries, and recursively proves instantiated premises while preserving placeholder universes. Symmetric admission checks reject exact/generic overlap in either insertion order. There is no trait syntax, mixed inference solving, general higher-ranked search, projection-bearing type terms or premises, premise-aware coherence, specialization, general answer composition, or source integration. |
 | Naked functions / `naked_asm!` | **NOT IMPLEMENTED** | High-priority **STABLE** systems-language target. No implementation may insert an ordinary prologue or epilogue into a naked function. |
 | Modern inline assembly | **NOT IMPLEMENTED** | No `asm!`, register/operand validation, options, clobber model, or architecture-specific assembly lowering exists. |
 | Pointer/provenance APIs | **PARTIAL** | Raw-pointer casts, `addr`, `with_addr`, `expose_provenance`, integer-address reconstruction, offsets, comparisons, alignment, copying, writes, references, and metadata operations have bounded tests. The current scalar machine representation cannot establish a complete provenance/alias model and must not equate equal integer addresses with interchangeable provenance. |
@@ -869,8 +869,8 @@ The higher-ranked prerequisite gives every rigid placeholder an explicit 16-bit
 universe plus a stable placeholder identity. A bound clause can instantiate its
 parameters as distinct rigid placeholders in a caller-selected fresh universe;
 canonicalization preserves those identities, different universes do not alias,
-and universe advancement overflow fails. No leak checking, universe relation,
-higher-ranked matching, or `for<...>` source syntax exists yet.
+and universe advancement overflow fails. No general universe relation,
+higher-ranked search, or `for<...>` source syntax exists yet.
 
 Inference-variable identity now includes its creation universe while preserving
 the root-universe `new(id)` constructor. Canonicalization treats identical
@@ -912,6 +912,15 @@ generic heads in either insertion order, including repeated-parameter equality
 constraints. The solver still treats a pre-existing unchecked collision as
 ambiguous for defense in depth. This is not inference-bearing generic proof,
 premise-aware coherence, specialization, or source-level trait solving.
+
+Rigid generic selection applies the same coherent implementation table to goals
+containing concrete types and rigid placeholders. Selected answers retain each
+placeholder's exact identity and universe, repeated parameters require exact
+term equality, and instantiated generic premises recurse through the existing
+16-frame proof stack. Missing premises, ambiguity, cycles, and overflow remain
+distinct, while inference-bearing entry goals fail. This is bounded skolemized
+generic proof, not mixed inference/skolem unification, binder introduction,
+coinduction, or complete higher-ranked reasoning.
 
 Rigid clause elaboration accepts goals containing only concrete types and rigid
 placeholders. Bound parameters may match either term, repeated parameters require

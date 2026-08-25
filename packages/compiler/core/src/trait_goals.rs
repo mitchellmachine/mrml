@@ -446,20 +446,20 @@ impl TraitWhereClause {
             .map(TraitWhereClauseElaboration::Unique)
     }
 
-    fn concrete_bindings(
+    fn rigid_bindings(
         self,
         consequence: ImplementedTraitGoal,
-    ) -> Result<Option<[Option<TraitTypeId>; MAX_TRAIT_GENERIC_PARAMETERS]>, TraitGoalError> {
-        validate_concrete_goal(consequence)?;
+    ) -> Result<Option<[Option<TraitGoalType>; MAX_TRAIT_GENERIC_PARAMETERS]>, TraitGoalError> {
+        validate_rigid_goal(consequence)?;
         if self.consequence.trait_id != consequence.trait_id
             || self.consequence.argument_count != consequence.argument_count
         {
             return Ok(None);
         }
         let mut bindings = [None; MAX_TRAIT_GENERIC_PARAMETERS];
-        if !bound_type_matches_concrete(
+        if !bound_type_matches_rigid(
             self.consequence.self_type,
-            concrete_goal_type(consequence.self_type)?,
+            rigid_goal_type(consequence.self_type)?,
             &mut bindings,
         ) {
             return Ok(None);
@@ -471,11 +471,11 @@ impl TraitWhereClause {
             .zip(consequence.arguments())
         {
             let bound = bound.as_ref().copied().ok_or(TraitGoalError::InvalidGoal)?;
-            let concrete = concrete
+            let rigid = concrete
                 .as_ref()
                 .copied()
                 .ok_or(TraitGoalError::InvalidGoal)?;
-            if !bound_type_matches_concrete(bound, concrete_goal_type(concrete)?, &mut bindings) {
+            if !bound_type_matches_rigid(bound, rigid_goal_type(rigid)?, &mut bindings) {
                 return Ok(None);
             }
         }
@@ -548,12 +548,12 @@ struct IdentifiedGenericTraitImplementation {
 pub struct GenericTraitImplementationAnswer {
     pub implementation_id: GenericTraitImplementationId,
     pub instantiated: InstantiatedTraitWhereClause,
-    arguments: [Option<TraitTypeId>; MAX_TRAIT_GENERIC_PARAMETERS],
+    arguments: [Option<TraitGoalType>; MAX_TRAIT_GENERIC_PARAMETERS],
     argument_count: usize,
 }
 
 impl GenericTraitImplementationAnswer {
-    pub fn arguments(&self) -> &[Option<TraitTypeId>] {
+    pub fn arguments(&self) -> &[Option<TraitGoalType>] {
         &self.arguments[..self.argument_count]
     }
 }
@@ -639,7 +639,46 @@ impl GenericTraitImplementationDatabase {
                     }
                     let arguments = implementation
                         .implementation
-                        .concrete_bindings(goal)?
+                        .rigid_bindings(goal)?
+                        .ok_or(TraitGoalError::InvalidGoal)?;
+                    selected = Some(GenericTraitImplementationAnswer {
+                        implementation_id: implementation.id,
+                        instantiated,
+                        arguments,
+                        argument_count: implementation.implementation.parameter_count,
+                    });
+                }
+                TraitWhereClauseElaboration::Ambiguous => {
+                    return Ok(GenericTraitImplementationSolution::Ambiguous);
+                }
+                TraitWhereClauseElaboration::NoSolution => {}
+            }
+        }
+        Ok(selected.map_or(
+            GenericTraitImplementationSolution::NoSolution,
+            GenericTraitImplementationSolution::Unique,
+        ))
+    }
+
+    pub fn select_rigid(
+        &self,
+        goal: ImplementedTraitGoal,
+    ) -> Result<GenericTraitImplementationSolution, TraitGoalError> {
+        validate_rigid_goal(goal)?;
+        let mut selected = None;
+        for implementation in self.implementations[..self.implementation_count]
+            .iter()
+            .flatten()
+            .copied()
+        {
+            match implementation.implementation.elaborate_rigid(goal)? {
+                TraitWhereClauseElaboration::Unique(instantiated) => {
+                    if selected.is_some() {
+                        return Ok(GenericTraitImplementationSolution::Ambiguous);
+                    }
+                    let arguments = implementation
+                        .implementation
+                        .rigid_bindings(goal)?
                         .ok_or(TraitGoalError::InvalidGoal)?;
                     selected = Some(GenericTraitImplementationAnswer {
                         implementation_id: implementation.id,
@@ -1111,6 +1150,115 @@ fn solve_generic_premises(
             .copied()
             .ok_or(TraitGoalError::InvalidGoal)?;
         let result = solve_concrete_trait_goal_with_generics_inner(
+            implementations,
+            generic_implementations,
+            clauses,
+            premise,
+            stack,
+            depth,
+        )?;
+        if result != TraitProofSolution::Proven {
+            return Ok(result);
+        }
+    }
+    Ok(TraitProofSolution::Proven)
+}
+
+pub fn solve_rigid_trait_goal_with_generics(
+    implementations: &TraitImplementationDatabase,
+    generic_implementations: &GenericTraitImplementationDatabase,
+    clauses: &TraitWhereClauseDatabase,
+    goal: ImplementedTraitGoal,
+) -> Result<TraitProofSolution, TraitGoalError> {
+    let mut stack = [None; MAX_TRAIT_PROOF_DEPTH];
+    solve_rigid_trait_goal_with_generics_inner(
+        implementations,
+        generic_implementations,
+        clauses,
+        goal,
+        &mut stack,
+        0,
+    )
+}
+
+fn solve_rigid_trait_goal_with_generics_inner(
+    implementations: &TraitImplementationDatabase,
+    generic_implementations: &GenericTraitImplementationDatabase,
+    clauses: &TraitWhereClauseDatabase,
+    goal: ImplementedTraitGoal,
+    stack: &mut [Option<ImplementedTraitGoal>; MAX_TRAIT_PROOF_DEPTH],
+    depth: usize,
+) -> Result<TraitProofSolution, TraitGoalError> {
+    validate_rigid_goal(goal)?;
+    let exact = implementations.solve(canonicalize_implemented_trait_goal(goal)?);
+    let generic = generic_implementations.select_rigid(goal)?;
+    match (exact, generic) {
+        (TraitGoalSolution::Unique(_), GenericTraitImplementationSolution::NoSolution) => {
+            return Ok(TraitProofSolution::Proven);
+        }
+        (TraitGoalSolution::Unique(_), _)
+        | (TraitGoalSolution::Ambiguous, _)
+        | (_, GenericTraitImplementationSolution::Ambiguous) => {
+            return Ok(TraitProofSolution::Ambiguous);
+        }
+        (TraitGoalSolution::NoSolution, GenericTraitImplementationSolution::Unique(answer)) => {
+            if stack[..depth].contains(&Some(goal)) {
+                return Ok(TraitProofSolution::Cycle);
+            }
+            if depth >= MAX_TRAIT_PROOF_DEPTH {
+                return Ok(TraitProofSolution::Overflow);
+            }
+            stack[depth] = Some(goal);
+            let result = solve_rigid_generic_premises(
+                implementations,
+                generic_implementations,
+                clauses,
+                answer.instantiated.premises,
+                stack,
+                depth + 1,
+            )?;
+            stack[depth] = None;
+            return Ok(result);
+        }
+        (TraitGoalSolution::NoSolution, GenericTraitImplementationSolution::NoSolution) => {}
+    }
+    if stack[..depth].contains(&Some(goal)) {
+        return Ok(TraitProofSolution::Cycle);
+    }
+    if depth >= MAX_TRAIT_PROOF_DEPTH {
+        return Ok(TraitProofSolution::Overflow);
+    }
+    stack[depth] = Some(goal);
+    let solution = match clauses.elaborate_rigid(goal)? {
+        TraitWhereClauseSolution::Unique(answer) => solve_rigid_generic_premises(
+            implementations,
+            generic_implementations,
+            clauses,
+            answer.instantiated.premises,
+            stack,
+            depth + 1,
+        )?,
+        TraitWhereClauseSolution::Ambiguous => TraitProofSolution::Ambiguous,
+        TraitWhereClauseSolution::NoSolution => TraitProofSolution::NoSolution,
+    };
+    stack[depth] = None;
+    Ok(solution)
+}
+
+fn solve_rigid_generic_premises(
+    implementations: &TraitImplementationDatabase,
+    generic_implementations: &GenericTraitImplementationDatabase,
+    clauses: &TraitWhereClauseDatabase,
+    premises: ImplementedTraitPredicates,
+    stack: &mut [Option<ImplementedTraitGoal>; MAX_TRAIT_PROOF_DEPTH],
+    depth: usize,
+) -> Result<TraitProofSolution, TraitGoalError> {
+    for premise in premises.predicates().iter() {
+        let premise = premise
+            .as_ref()
+            .copied()
+            .ok_or(TraitGoalError::InvalidGoal)?;
+        let result = solve_rigid_trait_goal_with_generics_inner(
             implementations,
             generic_implementations,
             clauses,
@@ -1783,7 +1931,8 @@ fn instantiate_generic_associated_type(
             .get(parameter.get() as usize)
             .and_then(Option::as_ref)
             .copied()
-            .ok_or(TraitGoalError::UnboundGenericParameter),
+            .ok_or(TraitGoalError::UnboundGenericParameter)
+            .and_then(concrete_goal_type),
     }
 }
 
@@ -1794,12 +1943,10 @@ fn instantiate_generic_projection_goal(
     let mut arguments =
         [TraitGoalType::Concrete(TraitTypeId::new(0)); MAX_TRAIT_GENERIC_PARAMETERS];
     for (index, argument) in answer.arguments().iter().enumerate() {
-        arguments[index] = TraitGoalType::Concrete(
-            argument
-                .as_ref()
-                .copied()
-                .ok_or(TraitGoalError::UnboundGenericParameter)?,
-        );
+        arguments[index] = argument
+            .as_ref()
+            .copied()
+            .ok_or(TraitGoalError::UnboundGenericParameter)?;
     }
     instantiate_bound_goal(goal, &arguments[..answer.argument_count])
 }
@@ -3144,6 +3291,209 @@ mod tests {
                 TraitGoalType::InferenceVariable(TraitInferenceVariableId::new(0)),
             )),
             Err(TraitGoalError::NonConcreteClauseQuery)
+        );
+    }
+
+    #[test]
+    fn rigid_generic_selection_preserves_placeholder_universes() {
+        let parameter = TraitGenericParameterId::new(0);
+        let mut head = BoundImplementedTraitGoal::new(
+            TraitId::new(260),
+            BoundTraitGoalType::Parameter(parameter),
+        );
+        head.push_argument(BoundTraitGoalType::Parameter(parameter))
+            .unwrap();
+        let mut implementations = GenericTraitImplementationDatabase::EMPTY;
+        implementations
+            .insert(
+                GenericTraitImplementationId::new(1),
+                TraitWhereClause::new(1, head).unwrap(),
+            )
+            .unwrap();
+        let placeholder =
+            TraitPlaceholder::new(TraitUniverseIndex::new(3), TraitPlaceholderId::new(7));
+        let mut goal =
+            ImplementedTraitGoal::new(TraitId::new(260), TraitGoalType::Placeholder(placeholder));
+        goal.push_argument(TraitGoalType::Placeholder(placeholder))
+            .unwrap();
+        let GenericTraitImplementationSolution::Unique(answer) =
+            implementations.select_rigid(goal).unwrap()
+        else {
+            panic!("expected one rigid generic implementation");
+        };
+        assert_eq!(
+            answer.arguments(),
+            &[Some(TraitGoalType::Placeholder(placeholder))]
+        );
+
+        let mut different_universe = goal;
+        different_universe.arguments[0] = Some(TraitGoalType::Placeholder(TraitPlaceholder::new(
+            TraitUniverseIndex::new(4),
+            TraitPlaceholderId::new(7),
+        )));
+        assert_eq!(
+            implementations.select_rigid(different_universe),
+            Ok(GenericTraitImplementationSolution::NoSolution)
+        );
+        assert_eq!(
+            implementations.select_rigid(ImplementedTraitGoal::new(
+                TraitId::new(260),
+                TraitGoalType::InferenceVariable(TraitInferenceVariableId::new(0)),
+            )),
+            Err(TraitGoalError::NonRigidClauseQuery)
+        );
+    }
+
+    #[test]
+    fn recursively_proves_rigid_generic_implementation_premises() {
+        let parameter = TraitGenericParameterId::new(0);
+        let mut root = TraitWhereClause::new(
+            1,
+            BoundImplementedTraitGoal::new(
+                TraitId::new(270),
+                BoundTraitGoalType::Parameter(parameter),
+            ),
+        )
+        .unwrap();
+        root.push_premise(BoundImplementedTraitGoal::new(
+            TraitId::new(271),
+            BoundTraitGoalType::Parameter(parameter),
+        ))
+        .unwrap();
+        let leaf = TraitWhereClause::new(
+            1,
+            BoundImplementedTraitGoal::new(
+                TraitId::new(271),
+                BoundTraitGoalType::Parameter(parameter),
+            ),
+        )
+        .unwrap();
+        let mut generic = GenericTraitImplementationDatabase::EMPTY;
+        generic
+            .insert(GenericTraitImplementationId::new(1), root)
+            .unwrap();
+        let goal = ImplementedTraitGoal::new(
+            TraitId::new(270),
+            TraitGoalType::Placeholder(TraitPlaceholder::new(
+                TraitUniverseIndex::new(5),
+                TraitPlaceholderId::new(0),
+            )),
+        );
+        assert_eq!(
+            solve_rigid_trait_goal_with_generics(
+                &TraitImplementationDatabase::EMPTY,
+                &generic,
+                &TraitWhereClauseDatabase::EMPTY,
+                goal,
+            ),
+            Ok(TraitProofSolution::NoSolution)
+        );
+        generic
+            .insert(GenericTraitImplementationId::new(2), leaf)
+            .unwrap();
+        assert_eq!(
+            solve_rigid_trait_goal_with_generics(
+                &TraitImplementationDatabase::EMPTY,
+                &generic,
+                &TraitWhereClauseDatabase::EMPTY,
+                goal,
+            ),
+            Ok(TraitProofSolution::Proven)
+        );
+    }
+
+    #[test]
+    fn rigid_generic_proof_reports_cycles_and_rejects_inference() {
+        let parameter = TraitGenericParameterId::new(0);
+        let mut cycle = TraitWhereClause::new(
+            1,
+            BoundImplementedTraitGoal::new(
+                TraitId::new(280),
+                BoundTraitGoalType::Parameter(parameter),
+            ),
+        )
+        .unwrap();
+        cycle
+            .push_premise(BoundImplementedTraitGoal::new(
+                TraitId::new(280),
+                BoundTraitGoalType::Parameter(parameter),
+            ))
+            .unwrap();
+        let mut generic = GenericTraitImplementationDatabase::EMPTY;
+        generic
+            .insert(GenericTraitImplementationId::new(1), cycle)
+            .unwrap();
+        assert_eq!(
+            solve_rigid_trait_goal_with_generics(
+                &TraitImplementationDatabase::EMPTY,
+                &generic,
+                &TraitWhereClauseDatabase::EMPTY,
+                ImplementedTraitGoal::new(
+                    TraitId::new(280),
+                    TraitGoalType::Placeholder(TraitPlaceholder::new(
+                        TraitUniverseIndex::new(1),
+                        TraitPlaceholderId::new(1),
+                    )),
+                ),
+            ),
+            Ok(TraitProofSolution::Cycle)
+        );
+        assert_eq!(
+            solve_rigid_trait_goal_with_generics(
+                &TraitImplementationDatabase::EMPTY,
+                &generic,
+                &TraitWhereClauseDatabase::EMPTY,
+                ImplementedTraitGoal::new(
+                    TraitId::new(280),
+                    TraitGoalType::InferenceVariable(TraitInferenceVariableId::new(0)),
+                ),
+            ),
+            Err(TraitGoalError::NonRigidClauseQuery)
+        );
+    }
+
+    #[test]
+    fn rigid_generic_proof_reports_depth_overflow() {
+        let parameter = TraitGenericParameterId::new(0);
+        let mut generic = GenericTraitImplementationDatabase::EMPTY;
+        for index in 0..=MAX_TRAIT_PROOF_DEPTH {
+            let mut implementation = TraitWhereClause::new(
+                1,
+                BoundImplementedTraitGoal::new(
+                    TraitId::new(290 + index as u32),
+                    BoundTraitGoalType::Parameter(parameter),
+                ),
+            )
+            .unwrap();
+            if index < MAX_TRAIT_PROOF_DEPTH {
+                implementation
+                    .push_premise(BoundImplementedTraitGoal::new(
+                        TraitId::new(291 + index as u32),
+                        BoundTraitGoalType::Parameter(parameter),
+                    ))
+                    .unwrap();
+            }
+            generic
+                .insert(
+                    GenericTraitImplementationId::new(index as u32),
+                    implementation,
+                )
+                .unwrap();
+        }
+        assert_eq!(
+            solve_rigid_trait_goal_with_generics(
+                &TraitImplementationDatabase::EMPTY,
+                &generic,
+                &TraitWhereClauseDatabase::EMPTY,
+                ImplementedTraitGoal::new(
+                    TraitId::new(290),
+                    TraitGoalType::Placeholder(TraitPlaceholder::new(
+                        TraitUniverseIndex::new(2),
+                        TraitPlaceholderId::new(0),
+                    )),
+                ),
+            ),
+            Ok(TraitProofSolution::Overflow)
         );
     }
 

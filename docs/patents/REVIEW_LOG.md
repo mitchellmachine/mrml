@@ -4331,3 +4331,11 @@ synchronization, compression, cryptographic, or hardware mechanism. The exact
 component transport remains subject to its `TRIGGERED` review and bounded
 design-around; this adapter neither broadens that shape nor supplies a new
 cross-placement RPC design.
+
+# 2026-08-25 — Rigid generic trait selection and proof
+
+**Result: NOT_TRIGGERED.** This compiler-only increment retains concrete or
+rigid-placeholder substitutions from existing bounded structural matching and
+reuses the existing fixed-depth premise traversal. It adds no inference search,
+specialization order, cache, parser, runtime mechanism, allocation,
+synchronization, protocol, cryptography, or hardware behavior.

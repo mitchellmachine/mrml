@@ -4050,6 +4050,17 @@ pass 476 library tests, one component-interface probe, 10 conformance tests, and
 arguments and premises, inference projections, coinduction, specialization,
 source syntax, and mixed inference selection remain unsupported.
 
+The rigid generic-selection and proof milestone retains generic substitutions as
+concrete-or-placeholder terms. Rigid selection preserves exact placeholder
+identity and universe, rejects repeated-parameter mismatches, and recursively
+proves instantiated generic or rigid-clause premises through the existing
+16-frame stack. Missing premises, ambiguity, cycles, and overflow remain
+distinct; inference-bearing inputs fail explicitly. Windows gnullvm and native
+Arch Linux WSL each pass 480 library tests, one component-interface probe, 10
+conformance tests, and 335 replacement tests: 826 compiler tests per host. Mixed
+inference/skolem unification, binder introduction, coinduction, specialization,
+source higher-ranked syntax, and mixed inference selection remain unsupported.
+
 The nested conditional tuple-origin milestone walks each leaf's bounded
 conditional-parent chain to the outermost generation before grouping reference
 origins by field ordinal. The exact oracle rejects a three-leaf returned field

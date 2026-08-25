@@ -81,4 +81,5 @@ pub use trait_goals::{
     generic_trait_implementation_heads_overlap, generic_trait_implementation_overlaps_exact,
     normalize_concrete_trait_projection, solve_concrete_trait_goal,
     solve_concrete_trait_goal_with_generics, solve_rigid_trait_goal,
+    solve_rigid_trait_goal_with_generics,
 };
