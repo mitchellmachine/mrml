@@ -344,9 +344,12 @@ impl PreparedIsolationServiceRoute {
     }
 }
 
-/// One fail-closed handoff from exact interface/policy admission to a VMM
-/// backend. It owns the still-uncommitted route so attachment failure can be
-/// recorded or cancelled without ever publishing a running domain.
+/// One fail-closed control-plane handoff from exact interface/policy admission
+/// to the selected native-service or microVM backend. It owns the
+/// still-uncommitted route so attachment failure can be recorded or cancelled
+/// without ever publishing a running domain. Control planes establish
+/// authority; the resulting data plane may take the shortest safe path only
+/// after this transaction commits.
 #[derive(Debug, Eq, PartialEq)]
 pub struct PreparedComponentServiceLaunch {
     route: PreparedIsolationServiceRoute,
@@ -407,9 +410,9 @@ impl PreparedComponentServiceLaunch {
         &self.interface_fingerprint
     }
 
-    /// Verifies the two already authenticated executable records before a VMM
-    /// backend maps either image. File names, paths, and argument order never
-    /// substitute for the exact retained digests.
+    /// Verifies the two already authenticated executable records before the
+    /// selected backend maps either image. File names, paths, and argument
+    /// order never substitute for the exact retained digests.
     pub fn verify_artifacts(
         &self,
         consumer_kind: ArtifactKind,
@@ -460,6 +463,15 @@ pub enum ComponentServiceArtifactError {
     InvalidArtifactKind,
     ConsumerArtifactMismatch,
     ProviderArtifactMismatch,
+}
+
+#[derive(Debug, Eq, PartialEq)]
+pub enum PreparedComponentServiceRouteError<E, Endpoint> {
+    Artifact {
+        launch: PreparedComponentServiceLaunch,
+        error: ComponentServiceArtifactError,
+    },
+    Route(IsolationServiceRouteError<E, Endpoint>),
 }
 
 pub fn prepare_isolation_service_route<const DOMAINS: usize>(
@@ -533,6 +545,19 @@ pub fn route_isolation_service<B: IsolationServiceBackend, const DOMAINS: usize>
 {
     let prepared = prepare_isolation_service_route(admission, spec)
         .map_err(IsolationServiceRouteError::Admission)?;
+    launch_prepared_isolation_service_route(admission, backend, prepared)
+}
+
+/// Launches one already prepared exact service route. Preparation and backend
+/// construction remain separate linear stages so package/interface admission
+/// can bind immutable artifacts before either placement creates an endpoint.
+pub fn launch_prepared_isolation_service_route<B: IsolationServiceBackend, const DOMAINS: usize>(
+    admission: &mut IsolationAdmissionTable<DOMAINS>,
+    backend: &mut B,
+    prepared: PreparedIsolationServiceRoute,
+) -> Result<RoutedIsolationService<B::Endpoint>, IsolationServiceRouteError<B::Error, B::Endpoint>>
+{
+    let spec = prepared.spec();
     let launched = match spec.placement {
         IsolationPlacement::NativeService => backend.launch_native_service(spec),
         IsolationPlacement::Microvm => backend.launch_microvm_service(spec),
@@ -570,6 +595,38 @@ pub fn route_isolation_service<B: IsolationServiceBackend, const DOMAINS: usize>
         }
     };
     Ok(routed)
+}
+
+/// Revalidates the exact authenticated consumer/provider artifacts retained by
+/// the control plane before invoking either the native-service or microVM
+/// backend. Artifact failure returns the complete uncommitted launch; backend
+/// failure follows the normal unavailable/rollback path and never tries the
+/// other placement. The returned route is the immutable authority boundary
+/// from which a placement adapter can open its direct IPC or shared-queue data
+/// plane without repeating resolution or policy selection per message.
+#[allow(clippy::too_many_arguments)]
+pub fn launch_prepared_component_service<B: IsolationServiceBackend, const DOMAINS: usize>(
+    admission: &mut IsolationAdmissionTable<DOMAINS>,
+    backend: &mut B,
+    launch: PreparedComponentServiceLaunch,
+    consumer_kind: ArtifactKind,
+    consumer_digest: &[u8; 64],
+    provider_kind: ArtifactKind,
+    provider_digest: &[u8; 64],
+) -> Result<
+    RoutedIsolationService<B::Endpoint>,
+    PreparedComponentServiceRouteError<B::Error, B::Endpoint>,
+> {
+    if let Err(error) = launch.verify_artifacts(
+        consumer_kind,
+        consumer_digest,
+        provider_kind,
+        provider_digest,
+    ) {
+        return Err(PreparedComponentServiceRouteError::Artifact { launch, error });
+    }
+    launch_prepared_isolation_service_route(admission, backend, launch.into_route())
+        .map_err(PreparedComponentServiceRouteError::Route)
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -1358,6 +1415,75 @@ mod tests {
         assert_eq!(table.running().count(), 0);
         launch.into_route().commit(&mut table, 0x55aa_u64).unwrap();
         assert!(table.total_microvm_report().satisfied());
+    }
+
+    #[test]
+    fn artifact_bound_component_launch_invokes_only_selected_backend() {
+        let mut table = IsolationAdmissionTable::<1>::new(IsolationMode::Balanced, 7).unwrap();
+        let spec = service_spec(IsolationPlacement::NativeService);
+        let route = prepare_isolation_service_route(&mut table, spec).unwrap();
+        let launch = PreparedComponentServiceLaunch::bind(
+            route,
+            spec.interface(),
+            spec.interface_generation(),
+            spec.provider_generation(),
+            [0x3a; 32],
+            [0x18; 64],
+            [0x2f; 64],
+        )
+        .unwrap();
+        let mut backend = backend();
+        let routed = launch_prepared_component_service(
+            &mut table,
+            &mut backend,
+            launch,
+            ArtifactKind::ServiceImage,
+            &[0x18; 64],
+            ArtifactKind::ServiceImage,
+            &[0x2f; 64],
+        )
+        .unwrap();
+        assert_eq!(routed.placement(), IsolationPlacement::NativeService);
+        assert_eq!((backend.native_launches, backend.microvm_launches), (1, 0));
+    }
+
+    #[test]
+    fn artifact_mismatch_returns_complete_uncommitted_launch() {
+        let mut table = IsolationAdmissionTable::<1>::new(IsolationMode::TotalMicrovm, 7).unwrap();
+        let spec = service_spec(IsolationPlacement::Microvm);
+        let route = prepare_isolation_service_route(&mut table, spec).unwrap();
+        let launch = PreparedComponentServiceLaunch::bind(
+            route,
+            spec.interface(),
+            spec.interface_generation(),
+            spec.provider_generation(),
+            [0x3a; 32],
+            [0x18; 64],
+            [0x2f; 64],
+        )
+        .unwrap();
+        let mut backend = backend();
+        let error = launch_prepared_component_service(
+            &mut table,
+            &mut backend,
+            launch,
+            ArtifactKind::ServiceImage,
+            &[0x18; 64],
+            ArtifactKind::ServiceImage,
+            &[0x30; 64],
+        )
+        .unwrap_err();
+        let PreparedComponentServiceRouteError::Artifact { launch, error } = error else {
+            panic!("artifact mismatch must precede backend launch");
+        };
+        assert_eq!(
+            error,
+            ComponentServiceArtifactError::ProviderArtifactMismatch
+        );
+        assert_eq!(launch.spec(), spec);
+        assert_eq!((backend.native_launches, backend.microvm_launches), (0, 0));
+        assert_eq!(table.running().count(), 0);
+        launch.into_route().cancel(&mut table).unwrap();
     }
 
     #[test]

@@ -7859,6 +7859,16 @@ separate operation issue the provider's exact reply capability and project the
 route into the unchanged request/reply data plane. The projection preserves all
 admitted route fields and cannot select a provider or placement.
 
+That separation now uses the same artifact-bound kernel transaction as the
+focused microVM path. The control plane revalidates both authenticated
+`ServiceImage` digests plus the exact interface fingerprint and generations
+before invoking the selected backend. A mismatch invokes no backend and leaves
+the complete route available for cancellation. After commit, the native
+adapter projects only the exact reply capability into direct `TaskRuntime` IPC:
+control planes establish authority; data planes should take the shortest safe
+path. Data-plane bytes cannot repeat resolution, change placement, or widen the
+route's authority.
+
 The focused test sends the generated 104-byte request and one attenuated shared-
 buffer capability from the caller to the launched provider task, executes the
 existing private-scratch service loop, verifies the exact reply and output, and
@@ -7881,13 +7891,13 @@ target/debug/mrml.exe test org.mrml.zstd --target windows --release
 26 passed; 0 failed
 
 target/debug/mrml.exe test org.mrml.system.kernel --target windows --release
-506 passed; 0 failed
+508 passed; 0 failed
 
 ./target/debug/mrml test org.mrml.zstd --target linux --release
 26 passed; 0 failed (Arch Linux under WSL)
 
 ./target/debug/mrml test org.mrml.system.kernel --target linux --release
-506 passed; 0 failed (Arch Linux under WSL)
+508 passed; 0 failed (Arch Linux under WSL)
 
 target/debug/mrml.exe test org.mrml.tool.vmm-whp-run --target windows --release
 7 passed; 0 failed

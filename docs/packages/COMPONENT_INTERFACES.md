@@ -110,6 +110,16 @@ only after address-space erasure. Cleanup uncertainty retains the exact service
 and ticket for retry; Total mode denies native placement before task creation.
 Windows and Arch Linux tests cover this native-service lifecycle, but do not
 execute the standalone EFI image or establish physical isolation.
+The kernel handoff now makes the architecture rule explicit: **control planes
+establish authority; data planes should take the shortest safe path.** One
+linear `PreparedComponentServiceLaunch` binds the exact interface fingerprint,
+interface/provider generations, policy-selected placement, and authenticated
+consumer/provider image digests before either backend runs. Only its committed
+route may be projected into the native IPC data plane; steady-state ABI calls
+do not repeat provider resolution or placement policy. Artifact mismatch calls
+neither backend and returns the complete uncommitted transaction for bounded
+cleanup. This is focused hosted transaction evidence, not active
+`SystemGeneration` integration or a general runtime resolver.
 The canonical provider now builds its own `mrml-zstd-service.efi` artifact—never
 an alias of the generic configuration service—with an x86-64 architecture trap,
 one private 4 KiB scratch page, and exact launch-register endpoint/caller/

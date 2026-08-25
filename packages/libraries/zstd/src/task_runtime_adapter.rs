@@ -187,6 +187,9 @@ impl<'a, E, const TASKS: usize, const CAPS: usize, const SERVICES: usize>
     where
         E: ServiceAddressSpaceEraser,
     {
+        // The committed route is the control-plane proof. This projection
+        // creates only the direct IPC endpoint used for steady-state traffic;
+        // it cannot re-resolve a provider, change placement, or widen rights.
         let endpoint = *routed.endpoint();
         if self.active != Some(endpoint) {
             return Err((routed, ZstdNativeServiceError::WrongEndpoint));
@@ -646,8 +649,9 @@ mod tests {
     };
     use mrml_kernel::arch::x86_64::UserContext;
     use mrml_kernel::{
-        GuestRegion, HostResourceHandle, IsolationAdmissionTable, IsolationMode,
-        IsolationServiceSpec, PhysAddr, Priority, SharedAccess, SharedEndpoint, VmTable,
+        ArtifactKind, GuestRegion, HostResourceHandle, IsolationAdmissionTable, IsolationMode,
+        IsolationServiceSpec, PhysAddr, PreparedComponentServiceLaunch, Priority, SharedAccess,
+        SharedEndpoint, VmTable, launch_prepared_component_service,
         prepare_isolation_service_route, route_isolation_service,
     };
 
@@ -804,10 +808,26 @@ mod tests {
         )
         .unwrap();
         let mut admission = IsolationAdmissionTable::<1>::new(IsolationMode::Balanced, 7).unwrap();
-        let routed = route_isolation_service(
+        let spec = service_spec(interface, 11, 7, IsolationPlacement::NativeService);
+        let route = prepare_isolation_service_route(&mut admission, spec).unwrap();
+        let launch = PreparedComponentServiceLaunch::bind(
+            route,
+            interface,
+            INTERFACE_GENERATION,
+            11,
+            [0x3a; 32],
+            [0x18; 64],
+            [0x2f; 64],
+        )
+        .unwrap();
+        let routed = launch_prepared_component_service(
             &mut admission,
             &mut native,
-            service_spec(interface, 11, 7, IsolationPlacement::NativeService),
+            launch,
+            ArtifactKind::ServiceImage,
+            &[0x18; 64],
+            ArtifactKind::ServiceImage,
+            &[0x2f; 64],
         )
         .unwrap();
         let native_endpoint = *routed.endpoint();

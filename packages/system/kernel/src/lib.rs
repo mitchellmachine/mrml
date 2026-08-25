@@ -99,10 +99,11 @@ pub use isolation::{
     IsolationLaunchEvidence, IsolationLaunchRequest, IsolationMode, IsolationPlacement,
     IsolationServiceBackend, IsolationServiceRouteError, IsolationServiceSpec,
     IsolationServiceSpecError, IsolationUnavailableReason, IsolationVcpuReservationError,
-    PreparedComponentServiceLaunch, PreparedIsolationLaunch, PreparedIsolationServiceRoute,
-    ReservedIsolationVcpus, RoutedIsolationService, RunningIsolationDomain, TotalMicrovmClass,
-    TotalMicrovmReport, UnavailableIsolationDomain, prepare_isolation_service_route,
-    reserve_isolation_vcpus, route_isolation_service,
+    PreparedComponentServiceLaunch, PreparedComponentServiceRouteError, PreparedIsolationLaunch,
+    PreparedIsolationServiceRoute, ReservedIsolationVcpus, RoutedIsolationService,
+    RunningIsolationDomain, TotalMicrovmClass, TotalMicrovmReport, UnavailableIsolationDomain,
+    launch_prepared_component_service, launch_prepared_isolation_service_route,
+    prepare_isolation_service_route, reserve_isolation_vcpus, route_isolation_service,
 };
 pub use memory::{
     FrameAllocator, MemoryError, MemoryKind, MemoryMap, MemoryRegion, PAGE_SIZE, PhysAddr,

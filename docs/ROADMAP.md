@@ -197,6 +197,15 @@ retains the exact
 endpoint for retry, and strict Total admission rejects native placement before
 supervisor launch. This is native-service lifecycle/model evidence on Windows
 and Arch Linux, not standalone MRML-image execution or physical isolation.
+The native path now consumes the same `PreparedComponentServiceLaunch` used by
+the focused microVM path: its control plane checks the exact interface
+fingerprint and both authenticated image digests before invoking one selected
+backend, then projects the committed route into direct IPC without per-message
+resolution or policy lookup. Artifact mismatch invokes neither backend and
+returns the complete uncommitted transaction. This implements the bounded
+control-plane/shortest-safe-data-plane split for this hosted path only; active
+`SystemGeneration` validation and the general runtime resolver remain
+**PLANNED**.
 A backend-neutral linear control-plane admission now binds those two immutable
 load plans to the exact generation/interface placement before an endpoint
 exists. Only a subsequently returned backend endpoint can be published into the
