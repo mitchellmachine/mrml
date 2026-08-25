@@ -7030,6 +7030,52 @@ mechanism is implemented. Planned scopes recorded as `TRIGGERED` in
 [patents/REVIEW_LOG.md](patents/REVIEW_LOG.md) remain unchanged; agent review
 does not replace independent human dual review.
 
+### Fixed IPC and task-metadata commitment
+
+The first IPC-accounting foundation is **PARTIALLY IMPLEMENTED**. The task
+runtime already owns fixed-capacity scheduler state, task/capability metadata,
+a bounded delegation table, and two inline message slots per task; message
+delivery does not allocate RAM. `AccountedTaskRuntime` therefore rounds its
+complete concrete footprint to pages and commits that exact quantity as one
+anonymous `MemoryObject` before the wrapper becomes available. It delegates
+ordinary runtime operations without creating per-message double charges.
+
+Invalid scheduler configuration fails before charging. Insufficient pool
+authority fails without publishing a runtime or changing usage. Consuming
+release returns the exact commitment. If control authority was revoked or
+release otherwise fails, the API returns the complete still-accounted runtime
+rather than dropping its ownership state. The existing unaccounted constructor
+remains available to simulations and current boot composition, so production
+integration, dynamic IPC storage, cache/page-table charges, and physical backing
+are not implemented by this milestone.
+
+Engineering Constitution complexity score: complexity impact `LOW`, TCB impact
+`LOW`, new parser `NO`, new authority model `NO`, new persistent state `NO`,
+external dependency `NO`, failure isolated `YES`, and existing-object reuse
+`YES` through `MemoryPoolTable` and `CapabilitySpace`.
+
+DIGITAL-RIGHTS REVIEW: one exact local pool pays for the fixed privileged
+footprint; no sender, peer, publisher, vendor, provider, verifier, DRM,
+attestation, AI, or accessibility identity gains authority. The charge records
+only a page quantity and backing class, exposes no message or memory content,
+and cannot draw from an unrelated pool after exhaustion.
+
+HOSTILE SECURITY REVIEW: generic task/capability capacities, concrete layout
+size, integer conversion, page rounding, pool/object generations, capability
+slots, exhaustion, revocation, and release failure are hostile. Checked
+calculation and pool allocation complete before publication. Allocation failure
+leaves usage unchanged; release failure returns the live wrapper and preserves
+the commitment. Static inbox capacity and delivery backpressure remain
+independent from RAM authority.
+
+Patent review: `NOT_TRIGGERED` — page-rounded accounting of a fixed-capacity
+runtime allocation is conventional resource accounting. It implements no
+compatibility transport, host-share protocol, accessibility device, browser
+semantic interface, JavaScript/WebAssembly runtime, AI mechanism, or media
+mechanism. Planned scopes recorded as `TRIGGERED` in
+[patents/REVIEW_LOG.md](patents/REVIEW_LOG.md) remain unchanged; agent review
+does not replace independent human dual review.
+
 ## Milestones
 
 This historical list is retained for continuity. The current dependency-ordered

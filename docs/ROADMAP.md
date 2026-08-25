@@ -173,8 +173,14 @@ reservations, child counts, and rights; exact allocation limits fail locally;
 content-free usage inspection is independent from control; release and
 recursive pool revocation stale object and descendant-pool identities. This is
 accounting rather than frame allocation. Mapping, sharing, pinning, DMA,
-resize/COW, IPC and cache charging, VMM guest projection, userspace policy, and
-hardware evidence remain pending before this prerequisite is complete.
+resize/COW, cache/page-table charging, VMM guest projection, userspace policy,
+and hardware evidence remain pending before this prerequisite is complete.
+The first IPC/task-metadata charge foundation is now **PARTIALLY IMPLEMENTED**:
+an accounted runtime reserves its complete fixed scheduler, task/capability,
+delegation-table, and two-slot-per-task inline-inbox footprint from one exact
+pool before publication. Exhaustion leaves the pool unchanged, and consuming
+release returns the commitment; failed release returns the still-accounted
+runtime. Existing boot/runtime construction is not yet migrated to this path.
 
 1. Implement the policy/configuration service and service supervision protocol.
    **PARTIALLY IMPLEMENTED:** `mrml-config` provides a no-allocation typed

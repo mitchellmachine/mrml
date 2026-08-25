@@ -71,8 +71,11 @@ Quantitative memory-resource policy now has fixed-capacity generational pools
 and objects, attenuated child page/mapping/count reservations, content-free
 usage inspection, exact capability checks, and recursive pool revocation. This
 accounts commitments only; frame allocation, mapping, sharing, pinning, DMA,
-IPC/cache charging, VMM projection, and userspace policy integration remain
-unimplemented.
+cache/page-table charging, VMM projection, and userspace policy integration
+remain unimplemented. An opt-in accounted task-runtime wrapper now commits its
+complete fixed scheduler, task/capability metadata, delegation-table, and
+inline IPC-inbox footprint to one exact pool object before publication. The
+legacy unaccounted constructor remains for simulation and existing boot paths.
 The UEFI measured-boot path now extends the individually authenticated kernel
 and service payloads and then a canonical 192-byte selected-set record binding
 their fixed order, kinds, nonzero versions, and verified SHA3-512 digests. The

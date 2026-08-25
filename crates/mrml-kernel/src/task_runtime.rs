@@ -1,10 +1,14 @@
 use core::array;
+use core::mem::size_of;
+use core::ops::{Deref, DerefMut};
 
 use crate::arch::x86_64::{TrapDisposition, UserContext};
 use crate::{
     BalancePolicyError, BalanceTarget, Capability, CapabilitySpace, DetachedTask, Endpoint,
-    IpcError, KernelScheduleError, KernelScheduler, Message, ObjectId, OwnershipMailbox,
-    PeriodicBalancer, Priority, Rights, ScheduleOutcome, SchedulerLoad, TaskId, TaskMigration,
+    IpcError, KernelScheduleError, KernelScheduler, MemoryBackingKind, MemoryObjectId,
+    MemoryPoolId, MemoryPoolTable, MemoryResourceError, Message, ObjectId, OwnershipMailbox,
+    PAGE_SIZE, PeriodicBalancer, Priority, Rights, ScheduleOutcome, SchedulerLoad, TaskId,
+    TaskMigration,
 };
 
 pub const TASK_INBOX_MESSAGES: usize = 2;
@@ -28,6 +32,25 @@ pub enum TaskRuntimeError {
     ActiveControlPeers,
     ActiveDelegations,
     DelegationTableFull,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum AccountedTaskRuntimeError {
+    Runtime(TaskRuntimeError),
+    Memory(MemoryResourceError),
+    Arithmetic,
+}
+
+impl From<TaskRuntimeError> for AccountedTaskRuntimeError {
+    fn from(value: TaskRuntimeError) -> Self {
+        Self::Runtime(value)
+    }
+}
+
+impl From<MemoryResourceError> for AccountedTaskRuntimeError {
+    fn from(value: MemoryResourceError) -> Self {
+        Self::Memory(value)
+    }
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -253,6 +276,94 @@ pub struct TaskRuntime<const TASKS: usize, const CAPS: usize> {
     scheduler: KernelScheduler<TASKS>,
     domains: [Option<TaskDomain<CAPS>>; TASKS],
     delegations: [Option<Delegation>; MAX_TASK_DELEGATIONS],
+}
+
+/// A task runtime whose complete fixed-capacity kernel footprint has one exact
+/// memory-pool commitment.
+///
+/// This accounts the scheduler, task/capability metadata, delegation table,
+/// and every inline IPC inbox slot together. Per-message delivery does not
+/// create another RAM charge because those slots already exist in this fixed
+/// allocation. Consuming `release` is the only supported way to return the
+/// commitment; a failed release returns the still-accounted runtime.
+pub struct AccountedTaskRuntime<const TASKS: usize, const CAPS: usize> {
+    runtime: TaskRuntime<TASKS, CAPS>,
+    charge: MemoryObjectId,
+    charge_capability: Capability,
+    committed_pages: u64,
+}
+
+impl<const TASKS: usize, const CAPS: usize> AccountedTaskRuntime<TASKS, CAPS> {
+    #[allow(clippy::too_many_arguments)]
+    pub fn new<const POOLS: usize, const OBJECTS: usize, const AUTHORITIES: usize>(
+        ticks_per_second: u32,
+        quantum_ticks: u32,
+        pool: MemoryPoolId,
+        pool_capability: Capability,
+        memory: &mut MemoryPoolTable<POOLS, OBJECTS>,
+        authorities: &mut CapabilitySpace<AUTHORITIES>,
+    ) -> Result<Self, AccountedTaskRuntimeError> {
+        let runtime = TaskRuntime::new(ticks_per_second, quantum_ticks)?;
+        let committed_pages = Self::required_pages()?;
+        let (charge, charge_capability) = memory.allocate_object(
+            pool,
+            pool_capability,
+            committed_pages,
+            MemoryBackingKind::Anonymous,
+            Rights::CONTROL,
+            authorities,
+        )?;
+        Ok(Self {
+            runtime,
+            charge,
+            charge_capability,
+            committed_pages,
+        })
+    }
+
+    pub fn required_pages() -> Result<u64, AccountedTaskRuntimeError> {
+        let bytes =
+            u64::try_from(size_of::<Self>()).map_err(|_| AccountedTaskRuntimeError::Arithmetic)?;
+        bytes
+            .checked_add(PAGE_SIZE - 1)
+            .map(|rounded| rounded / PAGE_SIZE)
+            .filter(|pages| *pages != 0)
+            .ok_or(AccountedTaskRuntimeError::Arithmetic)
+    }
+
+    pub const fn charge(&self) -> MemoryObjectId {
+        self.charge
+    }
+
+    pub const fn committed_pages(&self) -> u64 {
+        self.committed_pages
+    }
+
+    #[allow(clippy::result_large_err)]
+    pub fn release<const POOLS: usize, const OBJECTS: usize, const AUTHORITIES: usize>(
+        self,
+        memory: &mut MemoryPoolTable<POOLS, OBJECTS>,
+        authorities: &mut CapabilitySpace<AUTHORITIES>,
+    ) -> Result<u64, (Self, MemoryResourceError)> {
+        match memory.release_object(self.charge, self.charge_capability, authorities) {
+            Ok(pages) => Ok(pages),
+            Err(error) => Err((self, error)),
+        }
+    }
+}
+
+impl<const TASKS: usize, const CAPS: usize> Deref for AccountedTaskRuntime<TASKS, CAPS> {
+    type Target = TaskRuntime<TASKS, CAPS>;
+
+    fn deref(&self) -> &Self::Target {
+        &self.runtime
+    }
+}
+
+impl<const TASKS: usize, const CAPS: usize> DerefMut for AccountedTaskRuntime<TASKS, CAPS> {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.runtime
+    }
 }
 
 impl<const TASKS: usize, const CAPS: usize> TaskRuntime<TASKS, CAPS> {
@@ -1032,10 +1143,165 @@ fn two_domains_mut<const TASKS: usize, const CAPS: usize>(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{ObjectId, OwnershipMailbox, PhysAddr, Rights};
+    use crate::{CapabilityError, ObjectId, OwnershipMailbox, PhysAddr, Rights};
 
     fn context(root: u64, entry: u64) -> UserContext {
         UserContext::new(PhysAddr::new(root).unwrap(), entry, 0x0000_7000_0000_0000).unwrap()
+    }
+
+    const KERNEL_POOL_RIGHTS: Rights = Rights::ALLOCATE.union(Rights::INSPECT);
+
+    #[test]
+    fn accounted_runtime_charges_complete_fixed_ipc_footprint_until_release() {
+        let pages = AccountedTaskRuntime::<2, 4>::required_pages().unwrap();
+        let mut memory = MemoryPoolTable::<1, 1>::new(21).unwrap();
+        let mut authorities = CapabilitySpace::<3>::new();
+        let (pool, pool_capability) = memory
+            .create_root(pages, 1, 0, KERNEL_POOL_RIGHTS, &mut authorities)
+            .unwrap();
+        let mut runtime = AccountedTaskRuntime::<2, 4>::new(
+            1_000,
+            1,
+            pool,
+            pool_capability,
+            &mut memory,
+            &mut authorities,
+        )
+        .unwrap();
+        assert_eq!(runtime.committed_pages(), pages);
+        assert_eq!(memory.object_pool(runtime.charge()), Ok(pool));
+        assert_eq!(
+            memory
+                .usage(pool, pool_capability, &authorities)
+                .unwrap()
+                .object_pages(),
+            pages
+        );
+        let sender = runtime
+            .create(Priority::NORMAL, context(0x20_0000, 0x40_0000))
+            .unwrap();
+        let receiver = runtime
+            .create(Priority::NORMAL, context(0x30_0000, 0x50_0000))
+            .unwrap();
+        let endpoint_object = ObjectId(0x100);
+        let endpoint_capability = runtime
+            .capabilities_mut(sender)
+            .unwrap()
+            .insert(endpoint_object, Rights::SIGNAL)
+            .unwrap();
+        let mut endpoint = Endpoint::new(endpoint_object);
+        runtime
+            .deliver_ipc(
+                sender,
+                receiver,
+                &mut endpoint,
+                endpoint_capability,
+                b"first",
+                &[],
+            )
+            .unwrap();
+        runtime
+            .deliver_ipc(
+                sender,
+                receiver,
+                &mut endpoint,
+                endpoint_capability,
+                b"second",
+                &[],
+            )
+            .unwrap();
+        assert_eq!(
+            runtime.deliver_ipc(
+                sender,
+                receiver,
+                &mut endpoint,
+                endpoint_capability,
+                b"full",
+                &[],
+            ),
+            Err(TaskRuntimeError::InboxFull)
+        );
+        assert_eq!(
+            memory
+                .usage(pool, pool_capability, &authorities)
+                .unwrap()
+                .committed_pages(),
+            pages
+        );
+        assert!(matches!(
+            runtime.release(&mut memory, &mut authorities),
+            Ok(released) if released == pages
+        ));
+        assert_eq!(
+            memory
+                .usage(pool, pool_capability, &authorities)
+                .unwrap()
+                .committed_pages(),
+            0
+        );
+    }
+
+    #[test]
+    fn insufficient_runtime_commitment_fails_without_publishing_or_charging() {
+        let pages = AccountedTaskRuntime::<1, 2>::required_pages().unwrap();
+        assert!(pages > 1);
+        let mut memory = MemoryPoolTable::<1, 1>::new(22).unwrap();
+        let mut authorities = CapabilitySpace::<3>::new();
+        let (pool, pool_capability) = memory
+            .create_root(pages - 1, 1, 0, KERNEL_POOL_RIGHTS, &mut authorities)
+            .unwrap();
+        assert!(matches!(
+            AccountedTaskRuntime::<1, 2>::new(
+                1_000,
+                1,
+                pool,
+                pool_capability,
+                &mut memory,
+                &mut authorities,
+            ),
+            Err(AccountedTaskRuntimeError::Memory(
+                MemoryResourceError::PoolExhausted
+            ))
+        ));
+        assert_eq!(
+            memory
+                .usage(pool, pool_capability, &authorities)
+                .unwrap()
+                .committed_pages(),
+            0
+        );
+    }
+
+    #[test]
+    fn failed_runtime_release_returns_the_live_runtime_and_retains_its_charge() {
+        let pages = AccountedTaskRuntime::<1, 2>::required_pages().unwrap();
+        let mut memory = MemoryPoolTable::<1, 1>::new(23).unwrap();
+        let mut authorities = CapabilitySpace::<3>::new();
+        let (pool, pool_capability) = memory
+            .create_root(pages, 1, 0, KERNEL_POOL_RIGHTS, &mut authorities)
+            .unwrap();
+        let runtime = AccountedTaskRuntime::<1, 2>::new(
+            1_000,
+            1,
+            pool,
+            pool_capability,
+            &mut memory,
+            &mut authorities,
+        )
+        .unwrap();
+        authorities.revoke(runtime.charge_capability).unwrap();
+        let retained = match runtime.release(&mut memory, &mut authorities) {
+            Err((runtime, MemoryResourceError::Capability(CapabilityError::Invalid))) => runtime,
+            _ => panic!("revoked charge authority must fail closed"),
+        };
+        assert_eq!(retained.committed_pages(), pages);
+        assert_eq!(
+            memory
+                .usage(pool, pool_capability, &authorities)
+                .unwrap()
+                .committed_pages(),
+            pages
+        );
     }
 
     #[test]
