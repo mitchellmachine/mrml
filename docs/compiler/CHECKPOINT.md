@@ -11,10 +11,10 @@ the named commit and current source.
 - Branch: `main`
 - Compiler checkpoint commit: `f6cd266b`
   (`compiler: chain moved conditional loans`)
-- Remote state when recorded: `origin/main` is still at `2cfe524`. The named
-  compiler checkpoint is committed locally after independently committed VMM
-  and kernel work; pushing the combined mainline history awaits explicit owner
-  approval after the repository safety review declined the mixed-scope push.
+- Remote state when recorded: `origin/main` includes the compiler checkpoint,
+  durable documentation, and review through `891c9ce4`. The final push was a
+  verified fast-forward containing exactly the three isolated conditional-loan-
+  chain commits; unrelated unstaged OS work was not included.
 - Preceding compiler commits: `5c53eb9` (`compiler: track mutable tuple field
   moves`), `480a198` (`compiler: identify constant array
   elements`), `40a035c` (`compiler: analyze initializedness
