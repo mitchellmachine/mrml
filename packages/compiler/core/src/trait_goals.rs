@@ -12,11 +12,25 @@ pub const MAX_TRAIT_PREDICATES: usize = 8;
 pub const MAX_TRAIT_GENERIC_PARAMETERS: usize = 8;
 pub const MAX_TRAIT_WHERE_CLAUSES: usize = 64;
 pub const MAX_TRAIT_PROOF_DEPTH: usize = 16;
+pub const MAX_TRAIT_ASSOCIATED_TYPE_VALUES: usize = 64;
 
 #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
 pub struct TraitId(u32);
 
 impl TraitId {
+    pub const fn new(value: u32) -> Self {
+        Self(value)
+    }
+
+    pub const fn get(self) -> u32 {
+        self.0
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
+pub struct TraitAssociatedTypeId(u32);
+
+impl TraitAssociatedTypeId {
     pub const fn new(value: u32) -> Self {
         Self(value)
     }
@@ -542,6 +556,9 @@ pub enum TraitGoalError {
     TooManyWhereClauses,
     DuplicateWhereClauseId,
     DuplicateWhereClause,
+    TooManyAssociatedTypeValues,
+    DuplicateAssociatedTypeValue,
+    UnknownImplementationId,
     NonConcreteClauseQuery,
     UnboundGenericParameter,
     WrongGenericArgumentCount,
@@ -689,6 +706,97 @@ impl TraitImplementationId {
 
     pub const fn get(self) -> u32 {
         self.0
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct TraitAssociatedTypeValue {
+    pub implementation_id: TraitImplementationId,
+    pub associated_type_id: TraitAssociatedTypeId,
+    pub value: TraitTypeId,
+}
+
+impl TraitAssociatedTypeValue {
+    pub const fn new(
+        implementation_id: TraitImplementationId,
+        associated_type_id: TraitAssociatedTypeId,
+        value: TraitTypeId,
+    ) -> Self {
+        Self {
+            implementation_id,
+            associated_type_id,
+            value,
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum TraitProjectionSolution {
+    Unique(TraitTypeId),
+    Ambiguous,
+    NoSolution,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct TraitAssociatedTypeDatabase {
+    values: [Option<TraitAssociatedTypeValue>; MAX_TRAIT_ASSOCIATED_TYPE_VALUES],
+    value_count: usize,
+}
+
+impl TraitAssociatedTypeDatabase {
+    pub const EMPTY: Self = Self {
+        values: [None; MAX_TRAIT_ASSOCIATED_TYPE_VALUES],
+        value_count: 0,
+    };
+
+    pub fn insert(
+        &mut self,
+        implementations: &TraitImplementationDatabase,
+        value: TraitAssociatedTypeValue,
+    ) -> Result<(), TraitGoalError> {
+        if !implementations.contains_id(value.implementation_id) {
+            return Err(TraitGoalError::UnknownImplementationId);
+        }
+        if self.values[..self.value_count]
+            .iter()
+            .flatten()
+            .any(|existing| {
+                existing.implementation_id == value.implementation_id
+                    && existing.associated_type_id == value.associated_type_id
+            })
+        {
+            return Err(TraitGoalError::DuplicateAssociatedTypeValue);
+        }
+        let slot = self
+            .values
+            .get_mut(self.value_count)
+            .ok_or(TraitGoalError::TooManyAssociatedTypeValues)?;
+        *slot = Some(value);
+        self.value_count += 1;
+        Ok(())
+    }
+
+    pub fn normalize(
+        &self,
+        implementations: &TraitImplementationDatabase,
+        goal: CanonicalImplementedTraitGoal,
+        associated_type_id: TraitAssociatedTypeId,
+    ) -> TraitProjectionSolution {
+        let answer = match implementations.solve(goal) {
+            TraitGoalSolution::Unique(answer) => answer,
+            TraitGoalSolution::Ambiguous => return TraitProjectionSolution::Ambiguous,
+            TraitGoalSolution::NoSolution => return TraitProjectionSolution::NoSolution,
+        };
+        self.values[..self.value_count]
+            .iter()
+            .flatten()
+            .find(|value| {
+                value.implementation_id == answer.implementation_id
+                    && value.associated_type_id == associated_type_id
+            })
+            .map_or(TraitProjectionSolution::NoSolution, |value| {
+                TraitProjectionSolution::Unique(value.value)
+            })
     }
 }
 
@@ -870,6 +978,13 @@ impl TraitImplementationDatabase {
             });
         }
         selected.map_or(TraitGoalSolution::NoSolution, TraitGoalSolution::Unique)
+    }
+
+    fn contains_id(&self, id: TraitImplementationId) -> bool {
+        self.implementations[..self.implementation_count]
+            .iter()
+            .flatten()
+            .any(|implementation| implementation.id == id)
     }
 }
 
@@ -1744,6 +1859,147 @@ mod tests {
                 bindings: [None; MAX_CANONICAL_TRAIT_VARIABLES],
                 binding_count: 0,
             })
+        );
+    }
+
+    #[test]
+    fn normalizes_exact_registered_associated_type_values() {
+        let implementation_id = TraitImplementationId::new(12);
+        let associated_type_id = TraitAssociatedTypeId::new(4);
+        let mut implementations = TraitImplementationDatabase::EMPTY;
+        implementations
+            .insert(TraitImplementationHeader::new(
+                implementation_id,
+                TraitId::new(3),
+                TraitTypeId::new(8),
+            ))
+            .unwrap();
+        let mut associated_types = TraitAssociatedTypeDatabase::EMPTY;
+        associated_types
+            .insert(
+                &implementations,
+                TraitAssociatedTypeValue::new(
+                    implementation_id,
+                    associated_type_id,
+                    TraitTypeId::new(90),
+                ),
+            )
+            .unwrap();
+        let goal = ImplementedTraitGoal::new(
+            TraitId::new(3),
+            TraitGoalType::Concrete(TraitTypeId::new(8)),
+        );
+        let goal = canonicalize_implemented_trait_goal(goal).unwrap();
+        assert_eq!(
+            associated_types.normalize(&implementations, goal, associated_type_id),
+            TraitProjectionSolution::Unique(TraitTypeId::new(90))
+        );
+        assert_eq!(
+            associated_types.normalize(&implementations, goal, TraitAssociatedTypeId::new(99),),
+            TraitProjectionSolution::NoSolution
+        );
+    }
+
+    #[test]
+    fn projection_normalization_preserves_implementation_ambiguity() {
+        let mut implementations = TraitImplementationDatabase::EMPTY;
+        let mut associated_types = TraitAssociatedTypeDatabase::EMPTY;
+        for (id, self_type, value) in [(1, 10, 100), (2, 20, 200)] {
+            let implementation_id = TraitImplementationId::new(id);
+            implementations
+                .insert(TraitImplementationHeader::new(
+                    implementation_id,
+                    TraitId::new(5),
+                    TraitTypeId::new(self_type),
+                ))
+                .unwrap();
+            associated_types
+                .insert(
+                    &implementations,
+                    TraitAssociatedTypeValue::new(
+                        implementation_id,
+                        TraitAssociatedTypeId::new(1),
+                        TraitTypeId::new(value),
+                    ),
+                )
+                .unwrap();
+        }
+        let inference = canonicalize_implemented_trait_goal(ImplementedTraitGoal::new(
+            TraitId::new(5),
+            TraitGoalType::InferenceVariable(TraitInferenceVariableId::new(0)),
+        ))
+        .unwrap();
+        assert_eq!(
+            associated_types.normalize(&implementations, inference, TraitAssociatedTypeId::new(1),),
+            TraitProjectionSolution::Ambiguous
+        );
+        let absent = canonicalize_implemented_trait_goal(ImplementedTraitGoal::new(
+            TraitId::new(6),
+            TraitGoalType::Concrete(TraitTypeId::new(10)),
+        ))
+        .unwrap();
+        assert_eq!(
+            associated_types.normalize(&implementations, absent, TraitAssociatedTypeId::new(1),),
+            TraitProjectionSolution::NoSolution
+        );
+    }
+
+    #[test]
+    fn rejects_stale_duplicate_and_excess_associated_type_values() {
+        let implementation_id = TraitImplementationId::new(1);
+        let mut implementations = TraitImplementationDatabase::EMPTY;
+        implementations
+            .insert(TraitImplementationHeader::new(
+                implementation_id,
+                TraitId::new(1),
+                TraitTypeId::new(1),
+            ))
+            .unwrap();
+        let mut values = TraitAssociatedTypeDatabase::EMPTY;
+        assert_eq!(
+            values.insert(
+                &implementations,
+                TraitAssociatedTypeValue::new(
+                    TraitImplementationId::new(99),
+                    TraitAssociatedTypeId::new(0),
+                    TraitTypeId::new(0),
+                ),
+            ),
+            Err(TraitGoalError::UnknownImplementationId)
+        );
+        for index in 0..MAX_TRAIT_ASSOCIATED_TYPE_VALUES {
+            values
+                .insert(
+                    &implementations,
+                    TraitAssociatedTypeValue::new(
+                        implementation_id,
+                        TraitAssociatedTypeId::new(index as u32),
+                        TraitTypeId::new(index as u32),
+                    ),
+                )
+                .unwrap();
+        }
+        assert_eq!(
+            values.insert(
+                &implementations,
+                TraitAssociatedTypeValue::new(
+                    implementation_id,
+                    TraitAssociatedTypeId::new(0),
+                    TraitTypeId::new(500),
+                ),
+            ),
+            Err(TraitGoalError::DuplicateAssociatedTypeValue)
+        );
+        assert_eq!(
+            values.insert(
+                &implementations,
+                TraitAssociatedTypeValue::new(
+                    implementation_id,
+                    TraitAssociatedTypeId::new(100),
+                    TraitTypeId::new(100),
+                ),
+            ),
+            Err(TraitGoalError::TooManyAssociatedTypeValues)
         );
     }
 

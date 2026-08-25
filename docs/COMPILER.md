@@ -108,7 +108,7 @@ language as a whole.
 | Let chains | **NOT IMPLEMENTED** | Boolean short-circuit expressions exist, but `if let`/`while let` chains and their pattern scopes do not. |
 | Async closures | **NOT IMPLEMENTED** | There is no async/await, generator, future, or async-closure lowering. |
 | Modern borrowing / Polonius | **PARTIAL** | References, explicit and expected-type implicit reborrow ancestry, return coercion-site reborrows, mutable pointee operations, bounded ownership/place/effect facts, fixed-point definite-initialization, direct shared/mutable-loan conflicts, and bounded intermediate-ancestor invalidation across the supported statement/loop CFG exist. Conditional expressions retain bounded program points and canonical nested/sequential edges. General indirect loan identity, regions/outlives reasoning, and complete Polonius-compatible analysis remain unimplemented. |
-| Next-generation trait solving | **PARTIAL** | Method-like built-ins remain recognized directly. Allocation-free implemented goals distinguish concrete types, inference variables, rigid placeholders, and generic binder parameters. Up to eight predicates share one canonical-variable universe. A 64-entry identified where-clause database infers eight parameters and instantiates eight premises; concrete proof composes exact implementation facts and unique clauses through 16 frames with distinct ambiguity, cycle, overflow, and no-solution outcomes. There is no trait syntax, inference-bearing recursive solving, projection, complete coherence/specialization, answer composition, or source integration. |
+| Next-generation trait solving | **PARTIAL** | Method-like built-ins remain recognized directly. Allocation-free implemented goals distinguish concrete types, inference variables, rigid placeholders, and generic binder parameters. A 64-entry clause database and 16-frame concrete proof distinguish ambiguity, cycles, overflow, and no solution. A separate 64-entry associated-value table normalizes exact implementation projections while preserving selection ambiguity and rejecting stale IDs. There is no trait syntax, inference-bearing recursive solving, generic associated values, nested projection normalization, complete coherence/specialization, answer composition, or source integration. |
 | Naked functions / `naked_asm!` | **NOT IMPLEMENTED** | High-priority **STABLE** systems-language target. No implementation may insert an ordinary prologue or epilogue into a naked function. |
 | Modern inline assembly | **NOT IMPLEMENTED** | No `asm!`, register/operand validation, options, clobber model, or architecture-specific assembly lowering exists. |
 | Pointer/provenance APIs | **PARTIAL** | Raw-pointer casts, `addr`, `with_addr`, `expose_provenance`, integer-address reconstruction, offsets, comparisons, alignment, copying, writes, references, and metadata operations have bounded tests. The current scalar machine representation cannot establish a complete provenance/alias model and must not equate equal integer addresses with interchangeable provenance. |
@@ -828,6 +828,14 @@ bounds work and detects repeated goals, including a cycle that closes at the
 depth boundary. Missing premises, ambiguous candidates, cycles, and acyclic
 depth overflow remain distinct results. This does not recurse over inference-
 bearing goals, cache answers, normalize projections, or implement coinduction.
+
+The first projection-normalization slice registers up to 64 exact associated-
+type values under stable `(implementation, associated type)` identities. Values
+must reference an implementation already present in the exact header database;
+stale references, duplicate keys, and overflow fail. Normalization selects the
+implementation through the existing canonical query and returns the exact value
+or preserves ambiguity/no solution. Values cannot yet mention generic parameters
+or other projections.
 
 ```text
 Complexity impact: LOW

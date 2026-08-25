@@ -4081,6 +4081,14 @@ explicit repeated-goal detection, and a hard overflow result. It adds no novel
 search ordering, coinduction, cache, parser, runtime mechanism, allocation,
 synchronization, protocol, cryptography, or hardware behavior.
 
+# 2026-08-25 — Exact associated-type value normalization
+
+**Result: NOT_TRIGGERED.** This compiler-only increment uses a conventional
+fixed lookup keyed by stable implementation and associated-type IDs after the
+existing exact implementation selection. It adds no generic normalization,
+recursive projection algorithm, cache, parser, runtime mechanism, allocation,
+synchronization, protocol, cryptography, or hardware behavior.
+
 # 2026-08-25 — Typed persistent isolation-policy records
 
 **Result: NOT_TRIGGERED.** This increment uses the existing capability-checked,

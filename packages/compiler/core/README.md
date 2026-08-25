@@ -3921,6 +3921,17 @@ conformance tests, and 335 replacement tests: 793 compiler tests per host. This
 does not recurse over inference-bearing goals, cache answers, apply coinduction,
 normalize projections, or integrate source trait syntax.
 
+The exact associated-type normalization milestone adds stable associated-type
+IDs and a fixed 64-value table keyed by `(implementation, associated type)`.
+Values must reference an implementation already registered in the exact header
+database; stale IDs, duplicate keys, and overflow fail. Normalization reuses the
+canonical implementation selector and preserves its unique, ambiguous, and no-
+solution outcomes. Windows gnullvm and native Arch Linux WSL each pass 450
+library tests, one component-interface probe, 10 conformance tests, and 335
+replacement tests: 796 compiler tests per host. Values cannot contain generic
+parameters or nested projections, and there is no source integration or
+recursive normalization.
+
 The nested conditional tuple-origin milestone walks each leaf's bounded
 conditional-parent chain to the outermost generation before grouping reference
 origins by field ordinal. The exact oracle rejects a three-leaf returned field

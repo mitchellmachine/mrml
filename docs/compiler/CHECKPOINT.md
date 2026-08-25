@@ -689,6 +689,15 @@ probe, 10 conformance tests, and 335 replacement tests: 793 compiler tests per
 host. Inference-bearing recursion, caching, coinduction, projections, and source
 integration remain unsupported.
 
+The exact associated-type normalization milestone adds a fixed 64-value table
+keyed by stable implementation and associated-type IDs. Insertion rejects stale
+implementation references, duplicate keys, and overflow. Normalization reuses
+canonical implementation selection and preserves unique, ambiguous, and no-
+solution outcomes. Windows gnullvm and native Arch Linux WSL each pass 450
+library tests, one component-interface probe, 10 conformance tests, and 335
+replacement tests: 796 compiler tests per host. Generic associated values,
+nested projections, source syntax, and recursive normalization remain absent.
+
 At compiler path checkpoint `9a950ae9`, the Windows gnullvm core suite passed
 765 tests: 420 library tests, 10 conformance tests, and 335 replacement tests.
 Core formatting, warnings-denied Clippy, the no-`std`/no-`alloc`/unsafe hygiene
