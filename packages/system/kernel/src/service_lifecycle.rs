@@ -364,6 +364,48 @@ impl<const SERVICES: usize> ServiceSupervisor<SERVICES> {
         self.register_with_policy(object, task, RestartPolicy::ONCE_IMMEDIATE)
     }
 
+    /// Creates and publishes one supervised task as a single kernel-owned
+    /// transition. Slot and object validation complete before task creation,
+    /// and no caller can mutate the reservation between creation and publish.
+    pub fn launch<const TASKS: usize, const CAPS: usize>(
+        &mut self,
+        object: ObjectId,
+        runtime: &mut TaskRuntime<TASKS, CAPS>,
+        priority: Priority,
+        context: UserContext,
+    ) -> Result<(ServiceId, TaskId), ServiceError> {
+        if object.0 == 0 {
+            return Err(ServiceError::InvalidObject);
+        }
+        let slot = self
+            .slots
+            .iter()
+            .position(|entry| !entry.occupied)
+            .ok_or(ServiceError::Full)?;
+        let generation = self.slots[slot].generation;
+        let task = runtime
+            .create(priority, context)
+            .map_err(ServiceError::Runtime)?;
+        let entry = &mut self.slots[slot];
+        debug_assert!(!entry.occupied && entry.generation == generation);
+        entry.object = object;
+        entry.task = Some(task);
+        entry.state = ServiceState::Running;
+        entry.occupied = true;
+        entry.restart_policy = RestartPolicy::ONCE_IMMEDIATE;
+        entry.policy_generation = 1;
+        entry.completed_restarts = 0;
+        entry.next_restart_tick = 0;
+        entry.cleanup = None;
+        Ok((
+            ServiceId {
+                slot: slot as u32,
+                generation,
+            },
+            task,
+        ))
+    }
+
     pub fn register_with_policy(
         &mut self,
         object: ObjectId,
@@ -967,6 +1009,37 @@ mod tests {
         supervisor
             .complete_cleanup(ticket, &mut TestEraser::default())
             .unwrap();
+    }
+
+    #[test]
+    fn atomic_launch_preflights_slot_before_creating_task() {
+        let mut unavailable_runtime = TaskRuntime::<1, 1>::new(1_000, 1).unwrap();
+        let mut unavailable = ServiceSupervisor::<0>::new();
+        assert!(matches!(
+            unavailable.launch(
+                ObjectId(0x51),
+                &mut unavailable_runtime,
+                Priority::NORMAL,
+                context(0x20_0000, 0x40_0000),
+            ),
+            Err(ServiceError::Full)
+        ));
+        assert_eq!(unavailable_runtime.current(), None);
+
+        let mut runtime = TaskRuntime::<1, 1>::new(1_000, 1).unwrap();
+        let mut supervisor = ServiceSupervisor::<1>::new();
+        let (service, task) = supervisor
+            .launch(
+                ObjectId(0x51),
+                &mut runtime,
+                Priority::NORMAL,
+                context(0x20_0000, 0x40_0000),
+            )
+            .unwrap();
+        assert_eq!(supervisor.task(service), Ok(Some(task)));
+        assert_eq!(supervisor.state(service), Ok(ServiceState::Running));
+        let _ = runtime.start();
+        assert_eq!(runtime.current(), Some(task));
     }
 
     #[test]

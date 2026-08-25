@@ -17,8 +17,9 @@ use mrml_kernel::{
     Capability, CapabilityError, CapabilitySpace, IsolationBackendFailure, IsolationPlacement,
     IsolationServiceBackend, IsolationServiceSpec, IsolationUnavailableReason, MemoryBackingKind,
     MemoryObjectId, MemoryPoolId, MemoryPoolTable, MemoryResourceError, Message, ObjectId,
-    PAGE_SIZE, Priority, RestartPolicy, Rights, ServiceError, ServiceId, ServiceRegistrationPlan,
-    ServiceState, ServiceSupervisor, TaskId, TaskRuntime, TaskRuntimeError,
+    PAGE_SIZE, Priority, RestartPolicy, Rights, ServiceAddressSpaceEraser, ServiceCleanupError,
+    ServiceError, ServiceId, ServiceRegistrationPlan, ServiceState, ServiceSupervisor, TaskId,
+    TaskRuntime, TaskRuntimeError,
 };
 use mrml_storage::{
     AuthorityRecoveryValidator, BlockFileSession, BlockVolume, BlockVolumeError,
@@ -158,6 +159,198 @@ impl<Native, Microvm> ConfigurationPlacementBackend<Native, Microvm> {
 
     pub fn into_parts(self) -> (Native, Microvm) {
         (self.native, self.microvm)
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct NativeConfigurationEndpoint {
+    service: ServiceId,
+    task: TaskId,
+    domain: ObjectId,
+    interface: ObjectId,
+    interface_generation: u32,
+    provider_generation: u64,
+}
+
+impl NativeConfigurationEndpoint {
+    pub const fn service(self) -> ServiceId {
+        self.service
+    }
+
+    pub const fn task(self) -> TaskId {
+        self.task
+    }
+
+    pub const fn domain(self) -> ObjectId {
+        self.domain
+    }
+
+    pub const fn interface(self) -> ObjectId {
+        self.interface
+    }
+
+    pub const fn interface_generation(self) -> u32 {
+        self.interface_generation
+    }
+
+    pub const fn provider_generation(self) -> u64 {
+        self.provider_generation
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum NativeConfigurationLaunchError<E> {
+    AlreadyRunning,
+    NonEmptyRuntime,
+    WrongEndpoint,
+    Service(ServiceError),
+    Cleanup(ServiceCleanupError<E>),
+}
+
+/// Owns one accounted native configuration-service runtime and its eraser.
+/// Successful revocation is reported only after the exact retired address
+/// space has been erased and the supervisor cleanup ticket is consumed.
+pub struct SupervisedNativeConfigurationLauncher<
+    E,
+    const TASKS: usize,
+    const CAPS: usize,
+    const SERVICES: usize,
+    const SETTINGS: usize,
+    const AUDIT: usize,
+> {
+    substrate: AccountedPolicyServiceSubstrate<TASKS, CAPS, SERVICES, SETTINGS, AUDIT>,
+    eraser: E,
+    priority: Priority,
+    context: UserContext,
+    active: Option<NativeConfigurationEndpoint>,
+}
+
+impl<
+    E,
+    const TASKS: usize,
+    const CAPS: usize,
+    const SERVICES: usize,
+    const SETTINGS: usize,
+    const AUDIT: usize,
+> SupervisedNativeConfigurationLauncher<E, TASKS, CAPS, SERVICES, SETTINGS, AUDIT>
+{
+    pub const fn new(
+        substrate: AccountedPolicyServiceSubstrate<TASKS, CAPS, SERVICES, SETTINGS, AUDIT>,
+        eraser: E,
+        priority: Priority,
+        context: UserContext,
+    ) -> Self {
+        Self {
+            substrate,
+            eraser,
+            priority,
+            context,
+            active: None,
+        }
+    }
+
+    pub const fn active(&self) -> Option<NativeConfigurationEndpoint> {
+        self.active
+    }
+
+    pub const fn substrate(
+        &self,
+    ) -> &AccountedPolicyServiceSubstrate<TASKS, CAPS, SERVICES, SETTINGS, AUDIT> {
+        &self.substrate
+    }
+
+    pub const fn eraser(&self) -> &E {
+        &self.eraser
+    }
+}
+
+impl<
+    E: ServiceAddressSpaceEraser,
+    const TASKS: usize,
+    const CAPS: usize,
+    const SERVICES: usize,
+    const SETTINGS: usize,
+    const AUDIT: usize,
+> NativeConfigurationServiceLauncher
+    for SupervisedNativeConfigurationLauncher<E, TASKS, CAPS, SERVICES, SETTINGS, AUDIT>
+{
+    type Endpoint = NativeConfigurationEndpoint;
+    type Error = NativeConfigurationLaunchError<E::Error>;
+
+    fn launch_native(
+        &mut self,
+        spec: IsolationServiceSpec,
+    ) -> Result<Self::Endpoint, (IsolationUnavailableReason, Self::Error)> {
+        if self.active.is_some() {
+            return Err((
+                IsolationUnavailableReason::NativeServiceResource,
+                NativeConfigurationLaunchError::AlreadyRunning,
+            ));
+        }
+        if self.substrate.runtime.load().occupied() != 0 {
+            return Err((
+                IsolationUnavailableReason::NativeServiceResource,
+                NativeConfigurationLaunchError::NonEmptyRuntime,
+            ));
+        }
+        let (service, task) = self
+            .substrate
+            .supervisor
+            .launch(
+                spec.domain(),
+                &mut self.substrate.runtime,
+                self.priority,
+                self.context,
+            )
+            .map_err(|error| {
+                (
+                    IsolationUnavailableReason::NativeServiceResource,
+                    NativeConfigurationLaunchError::Service(error),
+                )
+            })?;
+        let _ = self.substrate.runtime.start();
+        debug_assert_eq!(self.substrate.runtime.current(), Some(task));
+        let endpoint = NativeConfigurationEndpoint {
+            service,
+            task,
+            domain: spec.domain(),
+            interface: spec.interface(),
+            interface_generation: spec.interface_generation(),
+            provider_generation: spec.provider_generation(),
+        };
+        self.active = Some(endpoint);
+        Ok(endpoint)
+    }
+
+    fn revoke_native(&mut self, endpoint: &Self::Endpoint) -> Result<(), Self::Error> {
+        if self.active != Some(*endpoint) {
+            return Err(NativeConfigurationLaunchError::WrongEndpoint);
+        }
+        let cleanup = match self.substrate.supervisor.state(endpoint.service) {
+            Ok(ServiceState::Running) => {
+                self.substrate
+                    .supervisor
+                    .exit_current(&mut self.substrate.runtime)
+                    .map_err(NativeConfigurationLaunchError::Service)?
+                    .cleanup
+            }
+            Ok(ServiceState::Exited | ServiceState::Faulted) => self
+                .substrate
+                .supervisor
+                .pending_cleanup(endpoint.service)
+                .map_err(NativeConfigurationLaunchError::Service)?
+                .ok_or(NativeConfigurationLaunchError::WrongEndpoint)?,
+            Err(error) => return Err(NativeConfigurationLaunchError::Service(error)),
+        };
+        if cleanup.task() != endpoint.task {
+            return Err(NativeConfigurationLaunchError::WrongEndpoint);
+        }
+        self.substrate
+            .supervisor
+            .complete_cleanup(cleanup, &mut self.eraser)
+            .map_err(NativeConfigurationLaunchError::Cleanup)?;
+        self.active = None;
+        Ok(())
     }
 }
 
@@ -3283,6 +3476,26 @@ mod tests {
         unavailable: bool,
     }
 
+    #[derive(Default)]
+    struct NativeAddressSpaceEraser {
+        attempts: usize,
+        fail_first: bool,
+        erased: Option<(TaskId, UserContext)>,
+    }
+
+    impl ServiceAddressSpaceEraser for NativeAddressSpaceEraser {
+        type Error = ();
+
+        fn erase(&mut self, task: TaskId, context: UserContext) -> Result<(), Self::Error> {
+            self.attempts += 1;
+            if self.fail_first && self.attempts == 1 {
+                return Err(());
+            }
+            self.erased = Some((task, context));
+            Ok(())
+        }
+    }
+
     impl MicrovmConfigurationServiceLauncher for MicrovmPlacementProbe {
         type Endpoint = u64;
         type Error = ();
@@ -3389,6 +3602,91 @@ mod tests {
         assert_eq!((native_probe.launches, microvm_probe.launches), (0, 1));
         assert_eq!(admission.unavailable_domains().count(), 1);
         assert_eq!(admission.total_microvm_report().native_fallback, 0);
+    }
+
+    #[test]
+    fn supervised_native_configuration_launch_retries_exact_cleanup_before_revocation() {
+        type NativeSubstrate = AccountedPolicyServiceSubstrate<1, 1, 1, 1, 1>;
+
+        let pages = NativeSubstrate::required_pages().unwrap();
+        let mut memory = MemoryPoolTable::<1, 1>::new(42).unwrap();
+        let mut authorities = CapabilitySpace::<3>::new();
+        let (pool, pool_capability) = memory
+            .create_root(pages, 1, 0, MEMORY_POOL_RIGHTS, &mut authorities)
+            .unwrap();
+        let schema = SettingSchema::boolean(SettingId::new(1).unwrap(), ObjectId(11)).unwrap();
+        let substrate = NativeSubstrate::new(
+            1_000,
+            1,
+            ObjectId(10),
+            &[schema],
+            pool,
+            pool_capability,
+            &mut memory,
+            &mut authorities,
+        )
+        .unwrap();
+        let context = UserContext::new(
+            mrml_kernel::PhysAddr::new(0x20_0000).unwrap(),
+            0x40_0000,
+            0x7000_0000,
+        )
+        .unwrap();
+        let native = SupervisedNativeConfigurationLauncher::new(
+            substrate,
+            NativeAddressSpaceEraser {
+                fail_first: true,
+                ..NativeAddressSpaceEraser::default()
+            },
+            Priority::NORMAL,
+            context,
+        );
+        let mut backend =
+            ConfigurationPlacementBackend::new(native, MicrovmPlacementProbe::default());
+        let mut admission = IsolationAdmissionTable::<1>::new(IsolationMode::Balanced, 5).unwrap();
+        let routed = route_isolation_service(
+            &mut admission,
+            &mut backend,
+            configuration_service_spec(IsolationPlacement::NativeService),
+        )
+        .unwrap();
+        let endpoint = match routed.endpoint() {
+            ConfigurationServiceEndpoint::Native(endpoint) => *endpoint,
+            ConfigurationServiceEndpoint::Microvm(_) => panic!("wrong placement"),
+        };
+        assert_eq!(endpoint.domain(), ObjectId(0x434f_4e46_4947));
+        assert_eq!(endpoint.interface(), routed.interface());
+        assert!(matches!(
+            backend.revoke(routed.endpoint()),
+            Err(ConfigurationPlacementError::Native(
+                NativeConfigurationLaunchError::Cleanup(ServiceCleanupError::Eraser(()))
+            ))
+        ));
+        assert_eq!(
+            backend.native.active(),
+            Some(endpoint),
+            "uncertain cleanup must retain the endpoint for exact retry"
+        );
+        backend.revoke(routed.endpoint()).unwrap();
+        let (native, _) = backend.into_parts();
+        assert_eq!(native.active(), None);
+        assert_eq!(native.eraser().attempts, 2);
+        assert_eq!(native.eraser().erased, Some((endpoint.task(), context)));
+        assert_eq!(
+            native.substrate().supervisor().state(endpoint.service()),
+            Ok(ServiceState::Exited)
+        );
+        assert_eq!(
+            native
+                .substrate()
+                .supervisor()
+                .pending_cleanup(endpoint.service()),
+            Ok(None)
+        );
+        assert_eq!(
+            native.substrate().runtime().context(endpoint.task()),
+            Err(TaskRuntimeError::MissingTask)
+        );
     }
 
     #[test]

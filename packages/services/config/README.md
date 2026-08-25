@@ -8,9 +8,9 @@ Implemented boundaries:
 
 - a configuration-specific placement adapter with distinct native-service and
   microVM launch/revocation boundaries, exact generational binding preservation,
-  and fail-closed no-fallback tests; the package manifest admits both forms but
-  the concrete supervisor/VMM launch factories and interface transport remain
-  planned;
+  and fail-closed no-fallback tests; its native form now owns a real accounted
+  task runtime and service supervisor and retains uncertain cleanup for exact
+  retry, while the VMM launcher and interface transport remain planned;
 - fixed, typed schemas for Boolean, bounded unsigned, and bounded byte values;
 - root-CONTROL-authorized bounded schema admission that freezes after commit;
 - exact capability-object authorization for reads and every transaction write;
@@ -52,7 +52,7 @@ still requires authenticated native-storage selection and is not self-
 authentication. Live persistent restoration, reboot-time authority
 reconstruction, and physical durability remain pending.
 
-Patent review: **NOT_TRIGGERED** for the bounded caller-selected adapter under
-the existing [routing-prerequisite review](../../../docs/patents/REVIEW_LOG.md#2026-08-25--caller-selected-dual-placement-service-routing-prerequisite).
+Patent review: **NOT_TRIGGERED** for the bounded caller-selected adapter and
+native lifecycle under the [supervised-lifecycle review](../../../docs/patents/REVIEW_LOG.md#2026-08-25--supervised-native-configuration-placement-lifecycle).
 Automated placement/provider/VM/resource selection and transparent transport
 remain **TRIGGERED**.

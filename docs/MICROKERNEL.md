@@ -55,6 +55,18 @@ this does not choose a provider or placement, transport an interface call,
 allocate VM resources, or complete the representative dual-placement-service
 milestone.
 
+The native half is now wired to actual kernel supervision. `ServiceSupervisor`
+preflights object and slot capacity before task creation, then publishes the new
+task and service identity without exposing an intervening reservation. The
+configuration launcher requires an otherwise empty owned runtime, starts the
+exact task, and returns an endpoint carrying its service/task and immutable
+interface/provider generations. Revocation uses `exit_current`, checks the exact
+cleanup task, and calls `complete_cleanup`; injected eraser failure retains the
+stopped endpoint and cleanup ticket until an exact retry succeeds. Windows and
+Arch Linux pass 34 configuration tests and 488 kernel tests. This is hosted
+unit/simulation evidence, not a VMM-backed configuration launch, interface
+transport, WHP/KVM execution, or physical evidence.
+
 The hosted KVM and WHP `service-probe` launchers now prepare the exact
 configuration-service domain as `MICROVM_ELIGIBLE` under policy generation 1
 before constructing the guest. They commit only `MicrovmReady` after the signed

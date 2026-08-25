@@ -4,6 +4,18 @@ Historical paths in this log are intentionally preserved. The canonical
 [old-to-current source-path map](PATH_MIGRATION.md) locates their present
 implementations without altering the original review evidence.
 
+## 2026-08-25 — Supervised native configuration placement lifecycle
+
+Patent review: **NOT_TRIGGERED**. This increment conventionally composes the
+existing fixed-capacity task runtime, service supervisor, generational endpoint,
+and address-space cleanup ticket. Slot/object preflight precedes task creation;
+revocation retains an uncertain cleanup ticket for exact retry. It performs no
+automated placement/provider selection, VM construction, resource assignment,
+workload classification, application publication, cross-placement transport,
+or new scheduling policy. Those adaptive-isolation mechanisms remain
+**TRIGGERED** under the existing review. Agent review is not legal clearance and
+does not replace independent human dual review.
+
 ## 2026-08-25 — Caller-selected dual-placement service routing prerequisite
 
 Patent review: **NOT_TRIGGERED** for this bounded composition increment. One

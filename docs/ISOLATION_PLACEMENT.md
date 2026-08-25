@@ -43,6 +43,15 @@ assign resources, persist policy, or provide transparent cross-placement
 transport. A fully instantiated representative dual-placement service remains
 **PLANNED**.
 
+The native configuration form now has its first real supervised launcher. It
+preflights one vacant supervisor slot before creating a task, publishes the task
+and `ServiceId` as one kernel-owned transition, and returns a binding-preserving
+endpoint only after the dedicated runtime starts it. Revocation retires the task
+and consumes its exact cleanup ticket only after address-space erasure. Erasure
+uncertainty retains the endpoint and ticket for exact retry. The microVM launcher
+is not yet wired to VMM construction, so the dual-placement milestone remains
+**PARTIALLY IMPLEMENTED** rather than complete.
+
 ## One policy, several placements
 
 MRML extends its existing process, service, capability, package-generation, and

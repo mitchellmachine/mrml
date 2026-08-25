@@ -38,8 +38,9 @@ Three new persistent deltas are documented before implementation:
   a caller-selected service placement to distinct native-service or microVM
   backend entries while preserving exact interface and provider generations.
   The configuration package now admits both forms and supplies a concrete
-  configuration-specific adapter with focused fail-closed tests; its native and
-  microVM launch factories are not yet instantiated into one runtime. A complete
+  configuration-specific adapter with focused fail-closed tests. The native
+  form now uses a real accounted `TaskRuntime`/`ServiceSupervisor` launch and
+  exact retryable address-space cleanup; the VMM form remains unwired. A complete
   representative dual-placement service, owner-setting persistence, VM construction, resource
   projection, and cross-placement runtime transport remain **PLANNED**.
   The existing hosted KVM/WHP configuration-service probes are wired to this

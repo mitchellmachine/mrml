@@ -46,6 +46,7 @@ pub enum IsolationLaunchEvidence {
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum IsolationUnavailableReason {
+    NativeServiceResource,
     VirtualizationUnavailable,
     MemoryBudget,
     VcpuBudget,
