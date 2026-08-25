@@ -4170,6 +4170,16 @@ Concrete/rigid projection-premise proof, general projection-bearing type terms,
 backtracking, caching, coinduction, source syntax, and general normalization
 remain unsupported.
 
+The concrete projection-premise entry point validates a fully concrete goal and
+reuses the bounded projection-aware inference engine with zero inference
+binders. It checks clause and generic-implementation associated-value premises
+under the existing fixed proof, projection, and predicate limits. Matching
+values prove and mismatches remain no solution; environment-free concrete proof
+continues to fail closed. Windows gnullvm and native Arch Linux WSL each pass 531
+library tests, one component probe, 10 conformance tests, and 335 replacement
+tests: 877 compiler tests per host. Rigid projection-premise proof,
+backtracking, caching, coinduction, and source syntax remain unsupported.
+
 The projection-bearing term milestone uses a fixed 64-node arena for flat leaf
 terms and associated-type projections whose trait self/argument positions refer
 only to earlier nodes. Identical nodes intern to one stable identity; invalid

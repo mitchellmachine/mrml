@@ -981,6 +981,15 @@ tests per host. Projection terms in binders, clause heads, and premise type
 positions, concrete/rigid projection-premise proof, backtracking, caching,
 coinduction, and source syntax remain unsupported.
 
+The concrete projection-premise entry point validates a fully concrete goal and
+reuses the same fixed projection-aware constraint state, proof stack, associated-
+value environment, and mixed predicate scheduler as existential proof. Matching
+associated values prove while mismatches remain no solution; legacy environment-
+free concrete proof continues to fail closed. Windows gnullvm and native Arch
+Linux WSL each pass 531 library tests, one component-interface probe, 10
+conformance tests, and 335 replacement tests: 877 compiler tests per host. Rigid
+projection-premise proof remains unsupported.
+
 The projection-bearing logical clause-head milestone stores up to 64 identified
 bound heads separately from flat clauses. Every parameter must be constrained
 by a direct leaf position before the instantiated head is normalized through

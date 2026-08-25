@@ -4815,6 +4815,40 @@ pub fn solve_exists_trait_goal_with_projection_environment(
     }
 }
 
+pub fn solve_concrete_trait_goal_with_projection_environment(
+    exact: &TraitImplementationDatabase,
+    generic: &GenericTraitImplementationDatabase,
+    clauses: &TraitWhereClauseDatabase,
+    exact_values: &TraitAssociatedTypeDatabase,
+    generic_values: &GenericTraitAssociatedTypeDatabase,
+    goal: ImplementedTraitGoal,
+) -> Result<TraitProofSolution, TraitGoalError> {
+    validate_concrete_goal(goal)?;
+    let canonicalized = canonicalize_implemented_trait_goal_with_variables(goal)?;
+    let mut state = InferenceConstraintState::new(canonicalized)?;
+    let mut stack = [None; MAX_TRAIT_PROOF_DEPTH];
+    let environment = TraitProjectionEnvironment {
+        exact_implementations: exact,
+        generic_implementations: generic,
+        clauses,
+        exact_values,
+        generic_values,
+    };
+    solve_inferred_trait_goal_inner(
+        exact,
+        generic,
+        clauses,
+        None,
+        None,
+        Some(environment),
+        0,
+        goal,
+        &mut state,
+        &mut stack,
+        0,
+    )
+}
+
 pub fn solve_exists_trait_goal_with_projection_clauses(
     exact: &TraitImplementationDatabase,
     generic: &GenericTraitImplementationDatabase,
@@ -7210,6 +7244,92 @@ mod tests {
         );
         assert_eq!(
             solve_rigid_trait_goal(&TraitImplementationDatabase::EMPTY, &clauses, goal),
+            Ok(TraitProofSolution::NoSolution)
+        );
+    }
+
+    #[test]
+    fn concrete_projection_aware_proof_checks_associated_premises() {
+        let associated = TraitAssociatedTypeId::new(1);
+        let mut clause = TraitWhereClause::new(
+            0,
+            BoundImplementedTraitGoal::new(
+                TraitId::new(705),
+                BoundTraitGoalType::Concrete(TraitTypeId::new(1)),
+            ),
+        )
+        .unwrap();
+        clause
+            .push_projection_premise(
+                BoundTraitProjection::new(
+                    BoundImplementedTraitGoal::new(
+                        TraitId::new(706),
+                        BoundTraitGoalType::Concrete(TraitTypeId::new(2)),
+                    ),
+                    associated,
+                ),
+                BoundTraitGoalType::Concrete(TraitTypeId::new(3)),
+            )
+            .unwrap();
+        let mut clauses = TraitWhereClauseDatabase::EMPTY;
+        clauses.insert(TraitWhereClauseId::new(71), clause).unwrap();
+
+        let projection_implementation = TraitImplementationId::new(219);
+        let mut exact = TraitImplementationDatabase::EMPTY;
+        exact
+            .insert(TraitImplementationHeader::new(
+                projection_implementation,
+                TraitId::new(706),
+                TraitTypeId::new(2),
+            ))
+            .unwrap();
+        let mut matching_values = TraitAssociatedTypeDatabase::EMPTY;
+        matching_values
+            .insert(
+                &exact,
+                TraitAssociatedTypeValue::new(
+                    projection_implementation,
+                    associated,
+                    TraitTypeId::new(3),
+                ),
+            )
+            .unwrap();
+        let goal = ImplementedTraitGoal::new(
+            TraitId::new(705),
+            TraitGoalType::Concrete(TraitTypeId::new(1)),
+        );
+        assert_eq!(
+            solve_concrete_trait_goal_with_projection_environment(
+                &exact,
+                &GenericTraitImplementationDatabase::EMPTY,
+                &clauses,
+                &matching_values,
+                &GenericTraitAssociatedTypeDatabase::EMPTY,
+                goal,
+            ),
+            Ok(TraitProofSolution::Proven)
+        );
+
+        let mut mismatching_values = TraitAssociatedTypeDatabase::EMPTY;
+        mismatching_values
+            .insert(
+                &exact,
+                TraitAssociatedTypeValue::new(
+                    projection_implementation,
+                    associated,
+                    TraitTypeId::new(4),
+                ),
+            )
+            .unwrap();
+        assert_eq!(
+            solve_concrete_trait_goal_with_projection_environment(
+                &exact,
+                &GenericTraitImplementationDatabase::EMPTY,
+                &clauses,
+                &mismatching_values,
+                &GenericTraitAssociatedTypeDatabase::EMPTY,
+                goal,
+            ),
             Ok(TraitProofSolution::NoSolution)
         );
     }
