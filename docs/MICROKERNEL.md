@@ -7426,6 +7426,63 @@ runtime, AI mechanism, or media mechanism. Planned `TRIGGERED` scopes in
 [patents/REVIEW_LOG.md](patents/REVIEW_LOG.md) remain unchanged; agent review
 does not replace independent human dual review.
 
+### Exact backed-mapping composition
+
+The mapping/backing composition is **PARTIALLY IMPLEMENTED**.
+`install_backed_mapping` first completes the same source-object, target, access,
+range, W^X, overlap, capacity, slot, generation, and counter preflight as the
+backend-neutral mapping transaction. It then requires a live physical binding
+for the exact object. The validated object-page offset is checked, converted to
+bytes, added to the backing start, and represented as an exact page-aligned
+physical subrange of the same requested length. Missing backing or arithmetic
+failure occurs before the mapping backend is called.
+
+The privileged backend request now carries that derived physical subrange in
+addition to the abstract object/range, target authority, virtual range, and
+access. The committed mapping record retains the same subrange, so retryable
+removal receives byte-for-byte identical data. Removal failure keeps the mapping
+and prevents physical-backing release; successful confirmed teardown retires the
+mapping before scrub/release can proceed. Public mapping inspection deliberately
+continues to omit physical identity; separately authorized object `INSPECT` is
+required for that information. The older unbacked install/reservation path
+remains explicitly useful for policy simulations and cannot be mistaken for a
+physical mapping by a backend that requires `physical() == Some(...)`.
+
+Focused deterministic tests prove missing-backing denial before backend entry,
+checked nonzero object-page offset translation, exact physical request reuse on
+failed and successful removal, and backing-release exclusion throughout the live
+mapping. This still uses protocol doubles and does not edit x86 page tables,
+resolve firmware memory, drive KVM/WHP, invalidate real translations, or provide
+hosted/physical evidence.
+
+Engineering Constitution complexity score: complexity impact `LOW`, TCB impact
+`LOW`, new parser `NO`, new authority model `NO`, new persistent state `NO`,
+external dependency `NO`, failure isolated `YES`, and existing-object reuse
+`YES` through the already reviewed mapping and backing transactions.
+
+DIGITAL-RIGHTS REVIEW: composition introduces no identity, content inspection,
+collection, retention, correlation, remote disclosure, DRM, attestation,
+publisher/vendor/provider/verifier, AI-only, first-party, or accessibility
+authority. Physical identity remains minimized to the privileged backend and
+separately authorized exact-object inspection. Neither object names nor physical
+addresses grant mapping authority.
+
+HOSTILE SECURITY REVIEW: object/backing/mapping generations, both capabilities,
+rights, object-page and byte offsets, physical/virtual bounds, W^X, overlap,
+backend results, retained retry state, teardown, invalidation, and scrub ordering
+are hostile. All arithmetic and authority checks precede backend mutation. The
+installed exact physical request is retained unchanged until confirmed removal;
+backing and logical reclamation remain impossible while it is live.
+
+Patent review: `NOT_TRIGGERED` — checked derivation of a physical subrange and
+its reuse across conventional transactional map/unmap operations is a standard
+memory-management composition. This adds no deployment/package mechanism,
+compatibility transport, host-share protocol, accessibility device, browser
+semantic interface, JavaScript/WebAssembly runtime, AI mechanism, or media
+mechanism. Planned `TRIGGERED` scopes in
+[patents/REVIEW_LOG.md](patents/REVIEW_LOG.md) remain unchanged; agent review
+does not replace independent human dual review.
+
 ## Milestones
 
 This historical list is retained for continuity. The current dependency-ordered

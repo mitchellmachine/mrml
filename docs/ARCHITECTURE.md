@@ -100,7 +100,11 @@ privileged backend confirms exclusive zeroed ownership. Overlap is rejected;
 live backing blocks object/pool reclamation; release remains recorded until the
 backend confirms mapping/DMA revocation, invalidation, complete scrub, and safe
 reuse. This is protocol-backend evidence rather than a reusable frame allocator
-or hardware result. An opt-in accounted configuration-service wrapper now commits its
+or hardware result. The mapping transaction can now require such backing and
+derive the exact physical subrange from the object offset before invoking its
+backend. Removal reuses the identical physical request, and backing release
+remains blocked until mapping teardown succeeds. Accounting-only mappings still
+exist for simulations; no concrete page-table backend is claimed. An opt-in accounted configuration-service wrapper now commits its
 complete fixed settings and audit state for fresh, empty, and checkpoint-
 recovered construction; live service-image composition has not adopted it. An
 opt-in accounted supervisor separately commits all fixed service/task bindings,

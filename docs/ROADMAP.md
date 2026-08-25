@@ -209,8 +209,13 @@ confirms exclusive zeroed ownership, and remains live until confirmed mapping/
 DMA revocation, invalidation, full scrub, and safe release. Exact `CONTROL|PIN`,
 physical overlap rejection, separate `INSPECT`, and fail-closed object/pool
 retirement are enforced. Only a deterministic protocol backend is tested; no
-reusable frame allocator or physical machine is claimed. The first page-
-table charge foundation is **PARTIALLY IMPLEMENTED**: an opt-in wrapper commits
+reusable frame allocator or physical machine is claimed. Backed mapping
+composition now rejects unbacked objects before backend invocation, derives the exact
+physical subrange from the validated object-page range, binds that range into
+both install and retryable removal, and prevents backing release until mapping
+retirement. Accounting-only mappings remain available for simulation; an x86
+page-table or KVM/WHP adapter is still pending. The first page-table charge
+foundation is **PARTIALLY IMPLEMENTED**: an opt-in wrapper commits
 the complete validated preallocated arena capacity before exposing a usable
 store, and unsafe release requires the caller to prove every table unreachable
 and required invalidation complete. Existing boot construction is not migrated.

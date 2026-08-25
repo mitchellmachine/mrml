@@ -68,6 +68,7 @@ impl MemoryMapping {
 pub struct MemoryMappingBackendRequest {
     mapping: MemoryMapping,
     target: ObjectId,
+    physical: Option<MemoryPhysicalBacking>,
 }
 
 impl MemoryMappingBackendRequest {
@@ -76,6 +77,9 @@ impl MemoryMappingBackendRequest {
     }
     pub const fn target(self) -> ObjectId {
         self.target
+    }
+    pub const fn physical(self) -> Option<MemoryPhysicalBacking> {
+        self.physical
     }
 }
 
@@ -341,6 +345,7 @@ struct MappingEntry {
     object_page: u64,
     pages: u64,
     access: Rights,
+    physical: Option<MemoryPhysicalBacking>,
     occupied: bool,
 }
 
@@ -364,6 +369,7 @@ impl MappingEntry {
         object_page: 0,
         pages: 0,
         access: Rights::NONE,
+        physical: None,
         occupied: false,
     };
 }
@@ -800,6 +806,66 @@ impl<const P: usize, const O: usize, const M: usize> MemoryPoolTable<P, O, M> {
         Ok(self.commit_mapping(prepared))
     }
 
+    #[allow(clippy::too_many_arguments)]
+    pub fn install_backed_mapping<B: MemoryMappingBackend, const C: usize>(
+        &mut self,
+        object: MemoryObjectId,
+        object_capability: Capability,
+        target_capability: Capability,
+        virtual_page: u64,
+        object_page: u64,
+        pages: u64,
+        access: Rights,
+        capabilities: &CapabilitySpace<C>,
+        backend: &mut B,
+    ) -> Result<MemoryMappingId, MemoryMappingOperationError<B::Error>> {
+        let mut prepared = self
+            .prepare_mapping(
+                object,
+                object_capability,
+                target_capability,
+                virtual_page,
+                object_page,
+                pages,
+                access,
+                capabilities,
+            )
+            .map_err(MemoryMappingOperationError::Policy)?;
+        let backing = self
+            .object(object)
+            .map_err(MemoryMappingOperationError::Policy)?
+            .physical
+            .ok_or(MemoryMappingOperationError::Policy(
+                MemoryResourceError::PhysicalBackingAbsent,
+            ))?;
+        let offset =
+            object_page
+                .checked_mul(PAGE_SIZE)
+                .ok_or(MemoryMappingOperationError::Policy(
+                    MemoryResourceError::Arithmetic,
+                ))?;
+        let start =
+            backing
+                .start
+                .get()
+                .checked_add(offset)
+                .ok_or(MemoryMappingOperationError::Policy(
+                    MemoryResourceError::Arithmetic,
+                ))?;
+        let physical = MemoryPhysicalBacking::new(
+            PhysAddr::new(start).map_err(|_| {
+                MemoryMappingOperationError::Policy(MemoryResourceError::InvalidPhysicalBacking)
+            })?,
+            pages,
+        )
+        .map_err(MemoryMappingOperationError::Policy)?;
+        prepared.entry.physical = Some(physical);
+        backend
+            .install(mapping_backend_request(prepared.entry))
+            .map_err(MemoryMappingOperationError::Backend)?;
+        Ok(self.commit_mapping(prepared))
+    }
+
     /// Retires one reservation only after its actual page-table/backend mapping
     /// has been removed and every required invalidation has completed.
     ///
@@ -1088,6 +1154,7 @@ impl<const P: usize, const O: usize, const M: usize> MemoryPoolTable<P, O, M> {
                 object_page,
                 pages,
                 access,
+                physical: None,
                 occupied: true,
             },
             pool: object_entry.pool,
@@ -1249,6 +1316,7 @@ const fn mapping_backend_request(entry: MappingEntry) -> MemoryMappingBackendReq
             access: entry.access,
         },
         target: entry.target,
+        physical: entry.physical,
     }
 }
 
@@ -1978,7 +2046,31 @@ mod tests {
         let wrong = caps
             .insert(ObjectId(100), Rights::CONTROL.union(Rights::PIN))
             .unwrap();
+        let target = caps
+            .insert(
+                ObjectId(101),
+                Rights::MAP.union(Rights::CONTROL).union(Rights::INSPECT),
+            )
+            .unwrap();
         let physical = MemoryPhysicalBacking::new(PhysAddr::new(0x20_0000).unwrap(), 2).unwrap();
+        let mut mapping_backend = RecordingMappingBackend::default();
+        assert_eq!(
+            table.install_backed_mapping(
+                first,
+                first_cap,
+                target,
+                0x300,
+                1,
+                1,
+                Rights::READ,
+                &caps,
+                &mut mapping_backend,
+            ),
+            Err(MemoryMappingOperationError::Policy(
+                MemoryResourceError::PhysicalBackingAbsent
+            ))
+        );
+        assert_eq!(mapping_backend.install_calls, 0);
         let mut backend = RecordingBackingBackend {
             fail_claim: true,
             ..RecordingBackingBackend::default()
@@ -2027,15 +2119,25 @@ mod tests {
             Err(MemoryResourceError::PhysicalBackingActive)
         );
 
-        let target = caps
-            .insert(
-                ObjectId(101),
-                Rights::MAP.union(Rights::CONTROL).union(Rights::INSPECT),
+        let mapping = table
+            .install_backed_mapping(
+                first,
+                first_cap,
+                target,
+                0x300,
+                1,
+                1,
+                Rights::READ,
+                &caps,
+                &mut mapping_backend,
             )
             .unwrap();
-        let mapping = table
-            .reserve_mapping(first, first_cap, target, 0x300, 0, 2, Rights::READ, &caps)
-            .unwrap();
+        let mapping_request = mapping_backend.installed.unwrap();
+        assert_eq!(
+            mapping_request.physical(),
+            Some(MemoryPhysicalBacking::new(PhysAddr::new(0x20_1000).unwrap(), 1).unwrap())
+        );
+        assert_eq!(mapping_request.mapping().object_page(), 1);
         assert_eq!(
             table.release_physical_backing(first, first_cap, &caps, &mut backend),
             Err(MemoryBackingOperationError::Policy(
@@ -2043,7 +2145,17 @@ mod tests {
             ))
         );
         assert_eq!(backend.release_calls, 0);
-        unsafe { table.release_mapping(mapping, target, &caps) }.unwrap();
+        mapping_backend.fail_remove = true;
+        assert_eq!(
+            table.remove_mapping(mapping, target, &caps, &mut mapping_backend),
+            Err(MemoryMappingOperationError::Backend("remove"))
+        );
+        assert_eq!(mapping_backend.installed, Some(mapping_request));
+        mapping_backend.fail_remove = false;
+        table
+            .remove_mapping(mapping, target, &caps, &mut mapping_backend)
+            .unwrap();
+        assert_eq!(mapping_backend.installed, None);
 
         backend.fail_release = true;
         assert_eq!(
