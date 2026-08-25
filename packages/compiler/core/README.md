@@ -3994,6 +3994,17 @@ probe, 10 conformance tests, and 335 replacement tests: 809 compiler tests per
 host. Recursive generic-implementation proof, specialization, source impl syntax,
 and mixed inference selection remain unsupported.
 
+The recursive generic-proof milestone sends each instantiated premise back
+through the existing 16-frame concrete proof stack. Exact facts, further generic
+implementations, and bounded where clauses can discharge a branch; missing
+premises, ambiguity, cycles, and overflow remain distinct. An exact/generic
+collision fails closed as ambiguity until admission is coherent across both
+families. Windows gnullvm and native Arch Linux WSL each pass 466 library tests,
+one component-interface probe, 10 conformance tests, and 335 replacement tests:
+812 compiler tests per host. Inference-bearing generic proof, specialization,
+cross-family coherence, source impl syntax, and mixed inference selection remain
+unsupported.
+
 The nested conditional tuple-origin milestone walks each leaf's bounded
 conditional-parent chain to the outermost generation before grouping reference
 origins by field ordinal. The exact oracle rejects a three-leaf returned field

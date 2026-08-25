@@ -886,6 +886,115 @@ pub fn solve_rigid_trait_goal(
     solve_rigid_trait_goal_inner(implementations, clauses, goal, &mut stack, 0)
 }
 
+pub fn solve_concrete_trait_goal_with_generics(
+    implementations: &TraitImplementationDatabase,
+    generic_implementations: &GenericTraitImplementationDatabase,
+    clauses: &TraitWhereClauseDatabase,
+    goal: ImplementedTraitGoal,
+) -> Result<TraitProofSolution, TraitGoalError> {
+    let mut stack = [None; MAX_TRAIT_PROOF_DEPTH];
+    solve_concrete_trait_goal_with_generics_inner(
+        implementations,
+        generic_implementations,
+        clauses,
+        goal,
+        &mut stack,
+        0,
+    )
+}
+
+fn solve_concrete_trait_goal_with_generics_inner(
+    implementations: &TraitImplementationDatabase,
+    generic_implementations: &GenericTraitImplementationDatabase,
+    clauses: &TraitWhereClauseDatabase,
+    goal: ImplementedTraitGoal,
+    stack: &mut [Option<ImplementedTraitGoal>; MAX_TRAIT_PROOF_DEPTH],
+    depth: usize,
+) -> Result<TraitProofSolution, TraitGoalError> {
+    validate_concrete_goal(goal)?;
+    let exact = implementations.solve(canonicalize_implemented_trait_goal(goal)?);
+    let generic = generic_implementations.select(goal)?;
+    match (exact, generic) {
+        (TraitGoalSolution::Unique(_), GenericTraitImplementationSolution::NoSolution) => {
+            return Ok(TraitProofSolution::Proven);
+        }
+        (TraitGoalSolution::Unique(_), _)
+        | (TraitGoalSolution::Ambiguous, _)
+        | (_, GenericTraitImplementationSolution::Ambiguous) => {
+            return Ok(TraitProofSolution::Ambiguous);
+        }
+        (TraitGoalSolution::NoSolution, GenericTraitImplementationSolution::Unique(answer)) => {
+            if stack[..depth].contains(&Some(goal)) {
+                return Ok(TraitProofSolution::Cycle);
+            }
+            if depth >= MAX_TRAIT_PROOF_DEPTH {
+                return Ok(TraitProofSolution::Overflow);
+            }
+            stack[depth] = Some(goal);
+            let result = solve_generic_premises(
+                implementations,
+                generic_implementations,
+                clauses,
+                answer.instantiated.premises,
+                stack,
+                depth + 1,
+            )?;
+            stack[depth] = None;
+            return Ok(result);
+        }
+        (TraitGoalSolution::NoSolution, GenericTraitImplementationSolution::NoSolution) => {}
+    }
+    if stack[..depth].contains(&Some(goal)) {
+        return Ok(TraitProofSolution::Cycle);
+    }
+    if depth >= MAX_TRAIT_PROOF_DEPTH {
+        return Ok(TraitProofSolution::Overflow);
+    }
+    stack[depth] = Some(goal);
+    let solution = match clauses.elaborate(goal)? {
+        TraitWhereClauseSolution::Unique(answer) => solve_generic_premises(
+            implementations,
+            generic_implementations,
+            clauses,
+            answer.instantiated.premises,
+            stack,
+            depth + 1,
+        )?,
+        TraitWhereClauseSolution::Ambiguous => TraitProofSolution::Ambiguous,
+        TraitWhereClauseSolution::NoSolution => TraitProofSolution::NoSolution,
+    };
+    stack[depth] = None;
+    Ok(solution)
+}
+
+fn solve_generic_premises(
+    implementations: &TraitImplementationDatabase,
+    generic_implementations: &GenericTraitImplementationDatabase,
+    clauses: &TraitWhereClauseDatabase,
+    premises: ImplementedTraitPredicates,
+    stack: &mut [Option<ImplementedTraitGoal>; MAX_TRAIT_PROOF_DEPTH],
+    depth: usize,
+) -> Result<TraitProofSolution, TraitGoalError> {
+    for premise in premises.predicates().iter() {
+        let premise = premise
+            .as_ref()
+            .copied()
+            .ok_or(TraitGoalError::InvalidGoal)?;
+        let result = solve_concrete_trait_goal_with_generics_inner(
+            implementations,
+            generic_implementations,
+            clauses,
+            premise,
+            stack,
+            depth,
+        )?;
+        if result != TraitProofSolution::Proven {
+            return Ok(result);
+        }
+    }
+    Ok(TraitProofSolution::Proven)
+}
+
 fn solve_rigid_trait_goal_inner(
     implementations: &TraitImplementationDatabase,
     clauses: &TraitWhereClauseDatabase,
@@ -2587,6 +2696,148 @@ mod tests {
                 TraitGoalType::InferenceVariable(TraitInferenceVariableId::new(0)),
             )),
             Err(TraitGoalError::NonConcreteClauseQuery)
+        );
+    }
+
+    #[test]
+    fn recursively_proves_generic_implementation_premises() {
+        let parameter = TraitGenericParameterId::new(0);
+        let mut root = TraitWhereClause::new(
+            1,
+            BoundImplementedTraitGoal::new(
+                TraitId::new(120),
+                BoundTraitGoalType::Parameter(parameter),
+            ),
+        )
+        .unwrap();
+        root.push_premise(BoundImplementedTraitGoal::new(
+            TraitId::new(121),
+            BoundTraitGoalType::Parameter(parameter),
+        ))
+        .unwrap();
+        let mut middle = TraitWhereClause::new(
+            1,
+            BoundImplementedTraitGoal::new(
+                TraitId::new(121),
+                BoundTraitGoalType::Parameter(parameter),
+            ),
+        )
+        .unwrap();
+        middle
+            .push_premise(BoundImplementedTraitGoal::new(
+                TraitId::new(122),
+                BoundTraitGoalType::Parameter(parameter),
+            ))
+            .unwrap();
+        let mut generic = GenericTraitImplementationDatabase::EMPTY;
+        generic
+            .insert(GenericTraitImplementationId::new(1), root)
+            .unwrap();
+        generic
+            .insert(GenericTraitImplementationId::new(2), middle)
+            .unwrap();
+        let mut exact = TraitImplementationDatabase::EMPTY;
+        exact
+            .insert(TraitImplementationHeader::new(
+                TraitImplementationId::new(1),
+                TraitId::new(122),
+                TraitTypeId::new(5),
+            ))
+            .unwrap();
+        let query = ImplementedTraitGoal::new(
+            TraitId::new(120),
+            TraitGoalType::Concrete(TraitTypeId::new(5)),
+        );
+        assert_eq!(
+            solve_concrete_trait_goal_with_generics(
+                &exact,
+                &generic,
+                &TraitWhereClauseDatabase::EMPTY,
+                query,
+            ),
+            Ok(TraitProofSolution::Proven)
+        );
+        assert_eq!(
+            solve_concrete_trait_goal_with_generics(
+                &TraitImplementationDatabase::EMPTY,
+                &generic,
+                &TraitWhereClauseDatabase::EMPTY,
+                query,
+            ),
+            Ok(TraitProofSolution::NoSolution)
+        );
+    }
+
+    #[test]
+    fn recursive_generic_proof_reports_cycles() {
+        let parameter = TraitGenericParameterId::new(0);
+        let mut cycle = TraitWhereClause::new(
+            1,
+            BoundImplementedTraitGoal::new(
+                TraitId::new(130),
+                BoundTraitGoalType::Parameter(parameter),
+            ),
+        )
+        .unwrap();
+        cycle
+            .push_premise(BoundImplementedTraitGoal::new(
+                TraitId::new(130),
+                BoundTraitGoalType::Parameter(parameter),
+            ))
+            .unwrap();
+        let mut generic = GenericTraitImplementationDatabase::EMPTY;
+        generic
+            .insert(GenericTraitImplementationId::new(1), cycle)
+            .unwrap();
+        assert_eq!(
+            solve_concrete_trait_goal_with_generics(
+                &TraitImplementationDatabase::EMPTY,
+                &generic,
+                &TraitWhereClauseDatabase::EMPTY,
+                ImplementedTraitGoal::new(
+                    TraitId::new(130),
+                    TraitGoalType::Concrete(TraitTypeId::new(1)),
+                ),
+            ),
+            Ok(TraitProofSolution::Cycle)
+        );
+    }
+
+    #[test]
+    fn recursive_generic_proof_rejects_exact_generic_collisions() {
+        let mut exact = TraitImplementationDatabase::EMPTY;
+        exact
+            .insert(TraitImplementationHeader::new(
+                TraitImplementationId::new(1),
+                TraitId::new(140),
+                TraitTypeId::new(1),
+            ))
+            .unwrap();
+        let mut generic = GenericTraitImplementationDatabase::EMPTY;
+        generic
+            .insert(
+                GenericTraitImplementationId::new(1),
+                TraitWhereClause::new(
+                    1,
+                    BoundImplementedTraitGoal::new(
+                        TraitId::new(140),
+                        BoundTraitGoalType::Parameter(TraitGenericParameterId::new(0)),
+                    ),
+                )
+                .unwrap(),
+            )
+            .unwrap();
+        assert_eq!(
+            solve_concrete_trait_goal_with_generics(
+                &exact,
+                &generic,
+                &TraitWhereClauseDatabase::EMPTY,
+                ImplementedTraitGoal::new(
+                    TraitId::new(140),
+                    TraitGoalType::Concrete(TraitTypeId::new(1)),
+                ),
+            ),
+            Ok(TraitProofSolution::Ambiguous)
         );
     }
 

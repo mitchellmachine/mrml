@@ -747,6 +747,16 @@ library tests, one component-interface probe, 10 conformance tests, and 335
 replacement tests: 809 compiler tests per host. Recursive generic-implementation
 proof, specialization, and source impl syntax remain unsupported.
 
+The recursive generic-proof milestone composes concrete generic selection with
+the existing 16-frame proof stack. Instantiated premises may resolve through
+exact facts, further generic implementations, or bounded where clauses; missing
+premises, ambiguity, cycles, and overflow remain distinct. A simultaneous exact
+and generic match fails closed as ambiguity until cross-family admission is
+coherent. Windows gnullvm and native Arch Linux WSL each pass 466 library tests,
+one component-interface probe, 10 conformance tests, and 335 replacement tests:
+812 compiler tests per host. Inference-bearing generic proof, specialization,
+cross-family coherence, and source impl syntax remain unsupported.
+
 The bounded rigid-proof milestone recursively composes concrete and skolemized
 placeholder premises through the existing 16-goal stack. Exact concrete facts
 can terminate branches; otherwise one unique rigid clause is elaborated.
