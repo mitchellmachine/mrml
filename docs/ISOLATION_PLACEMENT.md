@@ -92,6 +92,22 @@ for both. This is hosted controlled-probe evidence—not host-resistant isolatio
 bare metal, physical hardware, broad application compatibility, or required-
 system Total readiness.
 
+Both hosted runners now replace their former hard-coded Total
+`IsolationServiceSpec` with the same typed configuration path. Each constructs
+component `MICROVM` and system `TOTAL_MICROVM` records through exact
+capabilities, commits revision 1, loads and reapplies the revision-bound plan,
+checks the configuration service's native/microVM package bounds, binds the
+verified service artifact generation and interface generation, and reserves the
+kernel route before guest construction. The existing retained guest lifecycle
+then consumes that exact prepared specification. A fresh run with the same
+signed artifacts on 2026-08-25 again reported one eligible domain, one microVM
+domain, and zero native fallback on both backends. WHP reported
+`verify=24643us`, `prepare=4337us`, `execute=3497us`, `total=64082us`; KVM
+reported `verify=21416us`, `prepare=2747us`, `execute=1527us`,
+`total=116185us`. This proves hosted policy-to-construction parity only; the
+probe's policy store is transient and does not prove stable-policy recovery,
+boot selection, host resistance, bare metal, or required-system Total readiness.
+
 The exact frontend/build and execution commands were:
 
 ```text

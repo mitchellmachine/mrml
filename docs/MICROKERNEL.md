@@ -2918,6 +2918,19 @@ failure is not retried through the other form. Windows and Arch Linux each pass
 all 40 focused configuration tests. This remains unit/simulation evidence and
 not the complete general package resolver or broad cross-placement runtime.
 
+The hosted WHP and nested-KVM service runners now exercise the configured
+preparation path before real guest construction. Both build component and system
+policy records under separate setting capabilities, atomically commit revision
+1, reauthorize the plan, apply the same native-service/microVM package bounds,
+bind the verified provider generation, and reserve the kernel transaction before
+the VMM constructs the guest. The previously implemented retained lifecycle
+consumes the resulting exact specification. Fresh same-artifact runs on
+2026-08-25 reported `eligible=1`, `microvm=1`, and `native_fallback=0` on both;
+WHP timings were `24643/4337/3497/64082us` and KVM timings were
+`21416/2747/1527/116185us` for verify/prepare/execute/total. This is hosted
+controlled-probe parity with transient policy state, not disk recovery, boot
+selection, host-resistant isolation, or physical-hardware evidence.
+
 The fixed supervision protocol binds request identity, opaque generational
 `ServiceId`, operation, and restart time while likewise resolving authority
 only from the kernel message. `ServiceSupervisor::state_authorized` requires

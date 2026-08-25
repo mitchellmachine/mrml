@@ -20,10 +20,11 @@ use mrml_kernel::{
     Capability, CapabilityError, CapabilitySpace, IsolationAdmissionTable, IsolationBackendFailure,
     IsolationMode, IsolationPlacement, IsolationServiceBackend, IsolationServiceRouteError,
     IsolationServiceSpec, IsolationUnavailableReason, MemoryBackingKind, MemoryObjectId,
-    MemoryPoolId, MemoryPoolTable, MemoryResourceError, Message, ObjectId, PAGE_SIZE, Priority,
-    RestartPolicy, Rights, RoutedIsolationService, ServiceAddressSpaceEraser, ServiceCleanupError,
-    ServiceError, ServiceId, ServiceRegistrationPlan, ServiceState, ServiceSupervisor, TaskId,
-    TaskRuntime, TaskRuntimeError, route_isolation_service,
+    MemoryPoolId, MemoryPoolTable, MemoryResourceError, Message, ObjectId, PAGE_SIZE,
+    PreparedIsolationServiceRoute, Priority, RestartPolicy, Rights, RoutedIsolationService,
+    ServiceAddressSpaceEraser, ServiceCleanupError, ServiceError, ServiceId,
+    ServiceRegistrationPlan, ServiceState, ServiceSupervisor, TaskId, TaskRuntime,
+    TaskRuntimeError, prepare_isolation_service_route, route_isolation_service,
 };
 use mrml_storage::{
     AuthorityRecoveryValidator, BlockFileSession, BlockVolume, BlockVolumeError,
@@ -2328,6 +2329,69 @@ pub enum ConfiguredIsolationRouteError<E, Endpoint> {
     Route(IsolationServiceRouteError<E, Endpoint>),
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum ConfiguredIsolationPreparationError {
+    Configuration(ConfigError),
+    Admission(mrml_kernel::IsolationLaunchError),
+}
+
+fn configured_isolation_service_spec<
+    const SETTINGS: usize,
+    const AUDIT: usize,
+    const DOMAINS: usize,
+    A: CapabilityAuthorizer + ?Sized,
+>(
+    configuration: &ConfigurationService<SETTINGS, AUDIT>,
+    capabilities: &A,
+    plan: IsolationPolicyApplicationPlan,
+    bounds: IsolationServiceBounds,
+    identity: IsolationServiceIdentity,
+    admission: &IsolationAdmissionTable<DOMAINS>,
+) -> Result<IsolationServiceSpec, ConfigError> {
+    let applied = plan.apply(configuration, capabilities)?;
+    if admission.mode() != applied.mode()
+        || admission.policy_generation() != applied.policy_generation()
+    {
+        return Err(ConfigError::IsolationPolicyMismatch);
+    }
+    applied.admit_service(bounds)?.service_spec(
+        identity.domain,
+        identity.interface,
+        identity.interface_generation,
+        identity.provider_generation,
+        identity.class,
+    )
+}
+
+/// Performs the complete configured control-plane check and reserves kernel
+/// admission before a VMM starts guest construction. The returned transaction
+/// retains the exact checked specification through later commit or rollback.
+pub fn prepare_configured_isolation_service_route<
+    const SETTINGS: usize,
+    const AUDIT: usize,
+    const DOMAINS: usize,
+    A: CapabilityAuthorizer + ?Sized,
+>(
+    configuration: &ConfigurationService<SETTINGS, AUDIT>,
+    capabilities: &A,
+    plan: IsolationPolicyApplicationPlan,
+    bounds: IsolationServiceBounds,
+    identity: IsolationServiceIdentity,
+    admission: &mut IsolationAdmissionTable<DOMAINS>,
+) -> Result<PreparedIsolationServiceRoute, ConfiguredIsolationPreparationError> {
+    let spec = configured_isolation_service_spec(
+        configuration,
+        capabilities,
+        plan,
+        bounds,
+        identity,
+        admission,
+    )
+    .map_err(ConfiguredIsolationPreparationError::Configuration)?;
+    prepare_isolation_service_route(admission, spec)
+        .map_err(ConfiguredIsolationPreparationError::Admission)
+}
+
 /// Revalidates persistent policy, package bounds, kernel policy generation,
 /// and the exact interface/provider identity before invoking one selected
 /// backend. No backend is called on any control-plane mismatch, and backend
@@ -2348,28 +2412,15 @@ pub fn route_configured_isolation_service<
     backend: &mut B,
 ) -> Result<RoutedIsolationService<B::Endpoint>, ConfiguredIsolationRouteError<B::Error, B::Endpoint>>
 {
-    let applied = plan
-        .apply(configuration, capabilities)
-        .map_err(ConfiguredIsolationRouteError::Configuration)?;
-    if admission.mode() != applied.mode()
-        || admission.policy_generation() != applied.policy_generation()
-    {
-        return Err(ConfiguredIsolationRouteError::Configuration(
-            ConfigError::IsolationPolicyMismatch,
-        ));
-    }
-    let admitted = applied
-        .admit_service(bounds)
-        .map_err(ConfiguredIsolationRouteError::Configuration)?;
-    let spec = admitted
-        .service_spec(
-            identity.domain,
-            identity.interface,
-            identity.interface_generation,
-            identity.provider_generation,
-            identity.class,
-        )
-        .map_err(ConfiguredIsolationRouteError::Configuration)?;
+    let spec = configured_isolation_service_spec(
+        configuration,
+        capabilities,
+        plan,
+        bounds,
+        identity,
+        admission,
+    )
+    .map_err(ConfiguredIsolationRouteError::Configuration)?;
     route_isolation_service(admission, backend, spec).map_err(ConfiguredIsolationRouteError::Route)
 }
 
@@ -7882,6 +7933,20 @@ mod tests {
             TotalMicrovmClass::MicrovmEligible,
         )
         .unwrap();
+        let mut prepared_admission =
+            IsolationAdmissionTable::<1>::new(IsolationMode::TotalMicrovm, 1).unwrap();
+        let prepared = prepare_configured_isolation_service_route(
+            &configuration,
+            &capabilities,
+            plan,
+            bounds,
+            identity,
+            &mut prepared_admission,
+        )
+        .unwrap();
+        assert_eq!(prepared.spec().placement(), IsolationPlacement::Microvm);
+        assert_eq!(prepared.spec().provider_generation(), 19);
+        prepared.cancel(&mut prepared_admission).unwrap();
         let mut admission =
             IsolationAdmissionTable::<1>::new(IsolationMode::TotalMicrovm, 1).unwrap();
         let mut backend = ConfigurationPlacementBackend::new(

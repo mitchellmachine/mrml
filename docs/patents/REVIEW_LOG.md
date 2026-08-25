@@ -4155,3 +4155,13 @@ failure does not select an alternate. It adds no workload classification,
 provider/template/resource selection, VM construction, queue or interface
 transport, or application publication. Automated adaptive selection and broad
 cross-placement transport remain `TRIGGERED`.
+
+# 2026-08-25 — Hosted configured-policy preparation parity
+
+**Result: NOT_TRIGGERED.** The WHP and KVM probes replace a hard-coded service
+specification with the existing typed policy records, exact capability checks,
+revision-bound application, caller-supplied package bounds, verified provider
+generation, and prepared kernel transaction before their existing guest
+construction. This adds no workload classification, provider/template/resource
+selection, VM construction algorithm, transport, or fallback. Automated
+adaptive selection and broad cross-placement transport remain `TRIGGERED`.

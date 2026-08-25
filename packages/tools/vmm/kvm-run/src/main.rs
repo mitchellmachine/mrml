@@ -3,8 +3,11 @@
 
 #[cfg(target_os = "linux")]
 use mrml_config::{
-    AdmittedConfigurationGuestFactory, ConfigurationMicrovmEndpoint,
-    MicrovmConfigurationServiceLauncher, PreparedMicrovmConfigurationLauncher,
+    AdmittedConfigurationGuestFactory, ConfigTransaction, ConfigurationMicrovmEndpoint,
+    ConfigurationService, IsolationPolicyApplicationPlan, IsolationPolicySetting,
+    IsolationServiceBounds, IsolationServiceIdentity, MicrovmConfigurationServiceLauncher,
+    OwnerIsolationSelection, PreparedMicrovmConfigurationLauncher, SettingId,
+    prepare_configured_isolation_service_route,
 };
 #[cfg(target_os = "linux")]
 use mrml_crypto::{LAMPORT_PUBLIC_KEY_BYTES, Sha3_512};
@@ -16,24 +19,23 @@ use mrml_kernel::{
     ArtifactKind, CapabilitySpace, GPU_DOORBELL_PORT, GPU_QUEUE_MESSAGE_BYTES, GpuCommandRing,
     GpuQueueIdentity, GpuQueueReceiver, GpuResourceResponse, GpuResourceResponseSender,
     GpuSharedQueueLayout, GpuVmmQueueBridge, GuestMemory, HypercallRouter, InterruptPolicy,
-    IsolationAdmissionTable, IsolationMode, IsolationPlacement, IsolationServiceSpec, ObjectId,
-    ResourceCommand, Rights, SIGNED_ARTIFACT_OVERHEAD_BYTES, SignedArtifact, TotalMicrovmClass,
-    TrustRoot, VIRTUAL_BLOCK_FEATURE_FLUSH, VerifiedExecutable, VerifiedGpuKernelBundle,
-    VirtualBlockBackend, VirtualBlockBackendAuthority, VirtualBlockCompletionStatus,
-    VirtualBlockConfigurationPage, VirtualBlockDevice, VirtualBlockDeviceState, VirtualBlockError,
-    VirtualBlockMutationError, VirtualBlockPciAttachment, VirtualBlockPciAttachmentState,
-    VirtualBlockPciCleanupMode, VirtualBlockPciCleanupRecord, VirtualBlockPciFunctionRevoker,
-    VirtualBlockPciGuestMemoryMapper, VirtualBlockPciGuestWindowBackend,
-    VirtualBlockPciResourceRevoker, VirtualBlockProcessOutcome, VirtualBlockQueueBridge,
-    VirtualBlockQueueLayout, VirtualBlockRequest, VirtualBlockResumePage,
+    IsolationAdmissionTable, IsolationMode, IsolationPlacement, ObjectId,
+    PreparedIsolationServiceRoute, ResourceCommand, Rights, SIGNED_ARTIFACT_OVERHEAD_BYTES,
+    SignedArtifact, TotalMicrovmClass, TrustRoot, VIRTUAL_BLOCK_FEATURE_FLUSH, VerifiedExecutable,
+    VerifiedGpuKernelBundle, VirtualBlockBackend, VirtualBlockBackendAuthority,
+    VirtualBlockCompletionStatus, VirtualBlockConfigurationPage, VirtualBlockDevice,
+    VirtualBlockDeviceState, VirtualBlockError, VirtualBlockMutationError,
+    VirtualBlockPciAttachment, VirtualBlockPciAttachmentState, VirtualBlockPciCleanupMode,
+    VirtualBlockPciCleanupRecord, VirtualBlockPciFunctionRevoker, VirtualBlockPciGuestMemoryMapper,
+    VirtualBlockPciGuestWindowBackend, VirtualBlockPciResourceRevoker, VirtualBlockProcessOutcome,
+    VirtualBlockQueueBridge, VirtualBlockQueueLayout, VirtualBlockRequest, VirtualBlockResumePage,
     VirtualBlockTransactionOutcome, VirtualBlockTransport, VirtualBlockVmmMemory,
     VirtualPciAttachedResources, VirtualPciConfigurationMechanismOne,
     VirtualPciConfigurationRouter, VirtualPciIdentity, VirtualPciIoOutcome, VirtualPciLocation,
     VirtualPciMemoryBar, VirtualPciMmioWindow, VirtualPciNativeResourceError,
-    VirtualPciType0Function, VmBackend, VmExit, VmTable, prepare_isolation_service_route,
-    run_pci_configuration_once, run_pci_configuration_once_with_backend_mapper,
-    run_virtual_block_mmio_transaction_once, run_virtual_block_transaction_once,
-    verify_gpu_kernel_bundle,
+    VirtualPciType0Function, VmBackend, VmExit, VmTable, run_pci_configuration_once,
+    run_pci_configuration_once_with_backend_mapper, run_virtual_block_mmio_transaction_once,
+    run_virtual_block_transaction_once, verify_gpu_kernel_bundle,
 };
 #[cfg(any(test, target_os = "linux"))]
 use mrml_kernel::{
@@ -54,6 +56,101 @@ use mrml_runtime::mrml_println as println;
 #[cfg(target_os = "linux")]
 type KvmConfigurationLauncher =
     PreparedMicrovmConfigurationLauncher<AdmittedConfigurationGuestFactory<PreparedKvmGuest<16>>>;
+
+#[cfg(target_os = "linux")]
+fn prepare_configured_total_service(
+    admission: &mut IsolationAdmissionTable<1>,
+    provider_generation: u64,
+) -> Result<PreparedIsolationServiceRoute> {
+    let root_object = ObjectId(0x4953_4f4c_4154_494f);
+    let component_object = ObjectId(0x434f_4e46_504f_4c59);
+    let system_object = ObjectId(0x5359_5354_504f_4c59);
+    let component = IsolationPolicySetting::component(
+        SettingId::new(1).map_err(|error| anyhow!("KVM component setting failed: {:?}", error))?,
+        component_object,
+        IsolationPlacement::NativeService,
+    )
+    .map_err(|error| anyhow!("KVM component policy failed: {:?}", error))?;
+    let system = IsolationPolicySetting::system(
+        SettingId::new(2).map_err(|error| anyhow!("KVM system setting failed: {:?}", error))?,
+        system_object,
+    )
+    .map_err(|error| anyhow!("KVM system policy failed: {:?}", error))?;
+    let mut configuration = ConfigurationService::<2, 4>::new(
+        root_object,
+        &[
+            component
+                .schema()
+                .map_err(|error| anyhow!("KVM component schema failed: {:?}", error))?,
+            system
+                .schema()
+                .map_err(|error| anyhow!("KVM system schema failed: {:?}", error))?,
+        ],
+    )
+    .map_err(|error| anyhow!("KVM policy configuration failed: {:?}", error))?;
+    let mut capabilities = CapabilitySpace::<3>::new();
+    let root = capabilities
+        .insert(root_object, Rights::CONTROL)
+        .map_err(|error| anyhow!("KVM policy root capability failed: {:?}", error))?;
+    let component_access = capabilities
+        .insert(component_object, Rights::READ.union(Rights::WRITE))
+        .map_err(|error| anyhow!("KVM component capability failed: {:?}", error))?;
+    let system_access = capabilities
+        .insert(system_object, Rights::READ.union(Rights::WRITE))
+        .map_err(|error| anyhow!("KVM system capability failed: {:?}", error))?;
+    let mut transaction = ConfigTransaction::<2>::new(0);
+    component
+        .stage(
+            &mut transaction,
+            component_access,
+            OwnerIsolationSelection::Microvm,
+        )
+        .map_err(|error| anyhow!("KVM component policy staging failed: {:?}", error))?;
+    system
+        .stage(
+            &mut transaction,
+            system_access,
+            OwnerIsolationSelection::TotalMicrovm,
+        )
+        .map_err(|error| anyhow!("KVM system policy staging failed: {:?}", error))?;
+    configuration
+        .commit(&capabilities, root, &transaction)
+        .map_err(|error| anyhow!("KVM policy commit failed: {:?}", error))?;
+    let plan = IsolationPolicyApplicationPlan::load(
+        &configuration,
+        &capabilities,
+        system,
+        system_access,
+        component,
+        component_access,
+    )
+    .map_err(|error| anyhow!("KVM policy load failed: {:?}", error))?;
+    let bounds = IsolationServiceBounds::new(
+        IsolationPlacement::NativeService,
+        IsolationPlacement::NativeService,
+        IsolationPlacement::Microvm,
+        true,
+        true,
+    )
+    .map_err(|error| anyhow!("KVM package isolation bounds failed: {:?}", error))?;
+    let identity = IsolationServiceIdentity::new(
+        ObjectId(0x434f_4e46_4947),
+        ObjectId(0x434f_4e46_4947_0001),
+        1,
+        provider_generation,
+        TotalMicrovmClass::MicrovmEligible,
+    )
+    .map_err(|error| anyhow!("KVM service identity failed: {:?}", error))?;
+    prepare_configured_isolation_service_route(
+        &configuration,
+        &capabilities,
+        plan,
+        bounds,
+        identity,
+        admission,
+    )
+    .map_err(|error| anyhow!("KVM configured isolation preparation failed: {:?}", error))
+}
 
 #[cfg(target_os = "linux")]
 enum KvmGuestOwner {
@@ -1597,26 +1694,14 @@ fn application_main() -> Result<()> {
         None
     };
     let isolation_preparation = if let Some(admission) = isolation_admission.as_mut() {
-        Some(
-            prepare_isolation_service_route(
-                admission,
-                IsolationServiceSpec::new(
-                    ObjectId(0x434f_4e46_4947),
-                    ObjectId(0x434f_4e46_4947_0001),
-                    1,
-                    service_executable
-                        .as_ref()
-                        .ok_or_else(|| anyhow!("missing verified configuration provider"))?
-                        .artifact()
-                        .version(),
-                    1,
-                    TotalMicrovmClass::MicrovmEligible,
-                    IsolationPlacement::Microvm,
-                )
-                .map_err(|error| anyhow!("KVM isolation request failed: {:?}", error))?,
-            )
-            .map_err(|error| anyhow!("KVM isolation preparation failed: {:?}", error))?,
-        )
+        Some(prepare_configured_total_service(
+            admission,
+            service_executable
+                .as_ref()
+                .ok_or_else(|| anyhow!("missing verified configuration provider"))?
+                .artifact()
+                .version(),
+        )?)
     } else {
         None
     };

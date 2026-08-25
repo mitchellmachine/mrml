@@ -67,6 +67,12 @@ Three new persistent deltas are documented before implementation:
   kernel admission mode/generation and exact interface/provider identity, and
   invokes only the admitted backend. Stale policy or admission mismatch reaches
   neither launcher. Broad cross-placement interface transport remains planned.
+  The WHP and KVM hosted service probes now create and capability-authorize the
+  same typed component/system policy records, apply exact service package bounds
+  and verified provider generation, and reserve that prepared route before
+  constructing the guest. Fresh same-artifact runs on both backends again report
+  one eligible microVM domain and zero native fallback. Their in-memory policy
+  setup is controlled-probe evidence, not stable recovery or boot policy.
   The existing hosted KVM/WHP configuration-service probes are wired to this
   admission record, but do not yet constitute native-versus-microVM resolution.
   A one-use typed service transaction now preserves exact binding identity from
