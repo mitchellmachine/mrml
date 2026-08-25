@@ -4190,6 +4190,15 @@ one component probe, 10 conformance tests, and 335 replacement tests: 878
 compiler tests per host. Symbolic rigid projection normalization remains
 unsupported.
 
+The symbolic rigid-projection milestone selects premise-free generic associated
+values for rigid goals, preserves placeholder identities in parameter-valued
+results, and follows nested associated projections through the fixed 16-frame
+visited stack. Placeholder identity and symbolic self-cycle tests are explicit.
+Associated values whose selected implementations carry trait or projection
+premises remain fail closed. Windows gnullvm and native Arch Linux WSL each pass
+534 library tests, one component probe, 10 conformance tests, and 335 replacement
+tests: 880 compiler tests per host.
+
 The projection-bearing term milestone uses a fixed 64-node arena for flat leaf
 terms and associated-type projections whose trait self/argument positions refer
 only to earlier nodes. Identical nodes intern to one stable identity; invalid

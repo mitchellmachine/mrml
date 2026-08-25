@@ -1001,6 +1001,16 @@ component-interface probe, 10 conformance tests, and 335 replacement tests: 878
 compiler tests per host. General rigid projection normalization remains
 unsupported.
 
+The symbolic rigid-projection milestone selects premise-free generic associated
+values with rigid heads, substitutes exact placeholder identities into parameter
+results, and recursively normalizes nested projections through the existing
+16-frame visited stack. Focused tests prove placeholder identity and report a
+self-projection cycle distinctly. Implementations whose associated values depend
+on trait or projection premises still fail closed in this rigid normalization
+path. Windows gnullvm and native Arch Linux WSL each pass 534 library tests, one
+component-interface probe, 10 conformance tests, and 335 replacement tests: 880
+compiler tests per host.
+
 The projection-bearing logical clause-head milestone stores up to 64 identified
 bound heads separately from flat clauses. Every parameter must be constrained
 by a direct leaf position before the instantiated head is normalized through

@@ -2866,7 +2866,7 @@ pub fn solve_rigid_trait_goal_with_generics(
     )
 }
 
-pub fn solve_rigid_trait_goal_with_concrete_projection_environment(
+pub fn solve_rigid_trait_goal_with_projection_environment(
     implementations: &TraitImplementationDatabase,
     generic_implementations: &GenericTraitImplementationDatabase,
     clauses: &TraitWhereClauseDatabase,
@@ -2890,6 +2890,24 @@ pub fn solve_rigid_trait_goal_with_concrete_projection_environment(
         goal,
         &mut stack,
         0,
+    )
+}
+
+pub fn solve_rigid_trait_goal_with_concrete_projection_environment(
+    implementations: &TraitImplementationDatabase,
+    generic_implementations: &GenericTraitImplementationDatabase,
+    clauses: &TraitWhereClauseDatabase,
+    exact_values: &TraitAssociatedTypeDatabase,
+    generic_values: &GenericTraitAssociatedTypeDatabase,
+    goal: ImplementedTraitGoal,
+) -> Result<TraitProofSolution, TraitGoalError> {
+    solve_rigid_trait_goal_with_projection_environment(
+        implementations,
+        generic_implementations,
+        clauses,
+        exact_values,
+        generic_values,
+        goal,
     )
 }
 
@@ -3014,31 +3032,34 @@ fn solve_rigid_generic_premises(
             .as_ref()
             .copied()
             .ok_or(TraitGoalError::InvalidGoal)?;
-        let goal = match validate_concrete_goal(premise.goal) {
+        let goal = match validate_rigid_goal(premise.goal) {
             Ok(()) => ConcreteTraitProjectionGoal {
                 goal: premise.goal,
                 associated_type_id: premise.associated_type_id,
             },
-            Err(TraitGoalError::NonConcreteClauseQuery) => {
+            Err(TraitGoalError::NonRigidClauseQuery) => {
                 return Ok(TraitProofSolution::NoSolution);
             }
             Err(error) => return Err(error),
         };
         let expected = match premise.expected {
-            TraitGoalType::Concrete(expected) => expected,
-            TraitGoalType::Placeholder(_) | TraitGoalType::InferenceVariable(_) => {
+            TraitGoalType::Concrete(_) | TraitGoalType::Placeholder(_) => premise.expected,
+            TraitGoalType::InferenceVariable(_) => {
                 return Ok(TraitProofSolution::NoSolution);
             }
         };
         let mut projection_stack = [None; MAX_TRAIT_PROJECTION_DEPTH];
-        match environment.normalize_inner(goal, &mut projection_stack, 0)? {
-            TraitProjectionSolution::Unique(actual) if actual == expected => {}
-            TraitProjectionSolution::Unique(_) | TraitProjectionSolution::NoSolution => {
+        match environment.normalize_rigid_inner(goal, &mut projection_stack, 0)? {
+            InferredProjectionValueSolution::Unique(actual) if actual == expected => {}
+            InferredProjectionValueSolution::Unique(_)
+            | InferredProjectionValueSolution::NoSolution => {
                 return Ok(TraitProofSolution::NoSolution);
             }
-            TraitProjectionSolution::Ambiguous => return Ok(TraitProofSolution::Ambiguous),
-            TraitProjectionSolution::Cycle => return Ok(TraitProofSolution::Cycle),
-            TraitProjectionSolution::Overflow => return Ok(TraitProofSolution::Overflow),
+            InferredProjectionValueSolution::Ambiguous => {
+                return Ok(TraitProofSolution::Ambiguous);
+            }
+            InferredProjectionValueSolution::Cycle => return Ok(TraitProofSolution::Cycle),
+            InferredProjectionValueSolution::Overflow => return Ok(TraitProofSolution::Overflow),
         }
     }
     Ok(TraitProofSolution::Proven)
@@ -3830,6 +3851,97 @@ struct TraitProjectionEnvironment<'a> {
 }
 
 impl TraitProjectionEnvironment<'_> {
+    fn normalize_rigid_inner(
+        self,
+        projection: ConcreteTraitProjectionGoal,
+        stack: &mut [Option<ConcreteTraitProjectionGoal>; MAX_TRAIT_PROJECTION_DEPTH],
+        depth: usize,
+    ) -> Result<InferredProjectionValueSolution, TraitGoalError> {
+        validate_rigid_goal(projection.goal)?;
+        if stack[..depth].contains(&Some(projection)) {
+            return Ok(InferredProjectionValueSolution::Cycle);
+        }
+        if depth >= MAX_TRAIT_PROJECTION_DEPTH {
+            return Ok(InferredProjectionValueSolution::Overflow);
+        }
+        stack[depth] = Some(projection);
+        let result = self.normalize_rigid_selected(projection, stack, depth);
+        stack[depth] = None;
+        result
+    }
+
+    fn normalize_rigid_selected(
+        self,
+        projection: ConcreteTraitProjectionGoal,
+        stack: &mut [Option<ConcreteTraitProjectionGoal>; MAX_TRAIT_PROJECTION_DEPTH],
+        depth: usize,
+    ) -> Result<InferredProjectionValueSolution, TraitGoalError> {
+        let canonical = canonicalize_implemented_trait_goal(projection.goal)?;
+        let exact = self.exact_implementations.solve(canonical);
+        let generic = self.generic_implementations.select_rigid(projection.goal)?;
+        let answer = match (exact, generic) {
+            (TraitGoalSolution::Unique(answer), GenericTraitImplementationSolution::NoSolution) => {
+                let Some(value) = self.exact_values.values[..self.exact_values.value_count]
+                    .iter()
+                    .flatten()
+                    .find(|value| {
+                        value.implementation_id == answer.implementation_id
+                            && value.associated_type_id == projection.associated_type_id
+                    })
+                else {
+                    return Ok(InferredProjectionValueSolution::NoSolution);
+                };
+                return Ok(InferredProjectionValueSolution::Unique(
+                    TraitGoalType::Concrete(value.value),
+                ));
+            }
+            (TraitGoalSolution::NoSolution, GenericTraitImplementationSolution::Unique(answer)) => {
+                answer
+            }
+            (TraitGoalSolution::NoSolution, GenericTraitImplementationSolution::NoSolution) => {
+                return Ok(InferredProjectionValueSolution::NoSolution);
+            }
+            (TraitGoalSolution::Unique(_), _)
+            | (TraitGoalSolution::Ambiguous, _)
+            | (_, GenericTraitImplementationSolution::Ambiguous) => {
+                return Ok(InferredProjectionValueSolution::Ambiguous);
+            }
+        };
+        if !answer.instantiated.premises.predicates().is_empty()
+            || answer.instantiated.has_projection_premises()
+        {
+            return Ok(InferredProjectionValueSolution::NoSolution);
+        }
+        let Some(value) = self.generic_values.values[..self.generic_values.value_count]
+            .iter()
+            .flatten()
+            .find(|value| {
+                value.implementation_id == answer.implementation_id
+                    && value.associated_type_id == projection.associated_type_id
+            })
+        else {
+            return Ok(InferredProjectionValueSolution::NoSolution);
+        };
+        match value.value {
+            GenericTraitAssociatedTypeTerm::Type(value) => {
+                Ok(InferredProjectionValueSolution::Unique(
+                    instantiate_generic_associated_type_rigid(value, answer)?,
+                ))
+            }
+            GenericTraitAssociatedTypeTerm::Projection(nested) => {
+                let goal = instantiate_generic_projection_goal(nested.goal, answer)?;
+                self.normalize_rigid_inner(
+                    ConcreteTraitProjectionGoal {
+                        goal,
+                        associated_type_id: nested.associated_type_id,
+                    },
+                    stack,
+                    depth + 1,
+                )
+            }
+        }
+    }
+
     fn normalize_inner(
         self,
         projection: ConcreteTraitProjectionGoal,
@@ -4191,6 +4303,22 @@ fn instantiate_generic_associated_type(
             .copied()
             .ok_or(TraitGoalError::UnboundGenericParameter)
             .and_then(concrete_goal_type),
+    }
+}
+
+fn instantiate_generic_associated_type_rigid(
+    value: BoundTraitGoalType,
+    answer: GenericTraitImplementationAnswer,
+) -> Result<TraitGoalType, TraitGoalError> {
+    match value {
+        BoundTraitGoalType::Concrete(value) => Ok(TraitGoalType::Concrete(value)),
+        BoundTraitGoalType::Parameter(parameter) => answer
+            .arguments()
+            .get(parameter.get() as usize)
+            .and_then(Option::as_ref)
+            .copied()
+            .ok_or(TraitGoalError::UnboundGenericParameter)
+            .and_then(rigid_goal_type),
     }
 }
 
@@ -7503,6 +7631,143 @@ mod tests {
                 ImplementedTraitGoal::new(TraitId::new(709), placeholder),
             ),
             Ok(TraitProofSolution::NoSolution)
+        );
+    }
+
+    #[test]
+    fn rigid_projection_normalization_preserves_placeholder_identity() {
+        let parameter = TraitGenericParameterId::new(0);
+        let associated = TraitAssociatedTypeId::new(1);
+        let implementation_id = GenericTraitImplementationId::new(217);
+        let implementation = TraitWhereClause::new(
+            1,
+            BoundImplementedTraitGoal::new(
+                TraitId::new(710),
+                BoundTraitGoalType::Parameter(parameter),
+            ),
+        )
+        .unwrap();
+        let mut generic = GenericTraitImplementationDatabase::EMPTY;
+        generic.insert(implementation_id, implementation).unwrap();
+        let mut values = GenericTraitAssociatedTypeDatabase::EMPTY;
+        values
+            .insert(
+                &generic,
+                GenericTraitAssociatedTypeValue::new(
+                    implementation_id,
+                    associated,
+                    BoundTraitGoalType::Parameter(parameter),
+                ),
+            )
+            .unwrap();
+
+        let mut outer = TraitWhereClause::new(
+            1,
+            BoundImplementedTraitGoal::new(
+                TraitId::new(711),
+                BoundTraitGoalType::Parameter(parameter),
+            ),
+        )
+        .unwrap();
+        outer
+            .push_projection_premise(
+                BoundTraitProjection::new(
+                    BoundImplementedTraitGoal::new(
+                        TraitId::new(710),
+                        BoundTraitGoalType::Parameter(parameter),
+                    ),
+                    associated,
+                ),
+                BoundTraitGoalType::Parameter(parameter),
+            )
+            .unwrap();
+        let mut clauses = TraitWhereClauseDatabase::EMPTY;
+        clauses.insert(TraitWhereClauseId::new(74), outer).unwrap();
+        let placeholder = TraitGoalType::Placeholder(TraitPlaceholder::new(
+            TraitUniverseIndex::new(5),
+            TraitPlaceholderId::new(0),
+        ));
+        assert_eq!(
+            solve_rigid_trait_goal_with_projection_environment(
+                &TraitImplementationDatabase::EMPTY,
+                &generic,
+                &clauses,
+                &TraitAssociatedTypeDatabase::EMPTY,
+                &values,
+                ImplementedTraitGoal::new(TraitId::new(711), placeholder),
+            ),
+            Ok(TraitProofSolution::Proven)
+        );
+    }
+
+    #[test]
+    fn rigid_projection_normalization_reports_symbolic_cycles() {
+        let parameter = TraitGenericParameterId::new(0);
+        let associated = TraitAssociatedTypeId::new(1);
+        let implementation_id = GenericTraitImplementationId::new(216);
+        let implementation = TraitWhereClause::new(
+            1,
+            BoundImplementedTraitGoal::new(
+                TraitId::new(712),
+                BoundTraitGoalType::Parameter(parameter),
+            ),
+        )
+        .unwrap();
+        let mut generic = GenericTraitImplementationDatabase::EMPTY;
+        generic.insert(implementation_id, implementation).unwrap();
+        let mut values = GenericTraitAssociatedTypeDatabase::EMPTY;
+        values
+            .insert(
+                &generic,
+                GenericTraitAssociatedTypeValue::new_projection(
+                    implementation_id,
+                    associated,
+                    BoundTraitProjection::new(
+                        BoundImplementedTraitGoal::new(
+                            TraitId::new(712),
+                            BoundTraitGoalType::Parameter(parameter),
+                        ),
+                        associated,
+                    ),
+                ),
+            )
+            .unwrap();
+        let mut outer = TraitWhereClause::new(
+            1,
+            BoundImplementedTraitGoal::new(
+                TraitId::new(713),
+                BoundTraitGoalType::Parameter(parameter),
+            ),
+        )
+        .unwrap();
+        outer
+            .push_projection_premise(
+                BoundTraitProjection::new(
+                    BoundImplementedTraitGoal::new(
+                        TraitId::new(712),
+                        BoundTraitGoalType::Parameter(parameter),
+                    ),
+                    associated,
+                ),
+                BoundTraitGoalType::Parameter(parameter),
+            )
+            .unwrap();
+        let mut clauses = TraitWhereClauseDatabase::EMPTY;
+        clauses.insert(TraitWhereClauseId::new(75), outer).unwrap();
+        let placeholder = TraitGoalType::Placeholder(TraitPlaceholder::new(
+            TraitUniverseIndex::new(6),
+            TraitPlaceholderId::new(0),
+        ));
+        assert_eq!(
+            solve_rigid_trait_goal_with_projection_environment(
+                &TraitImplementationDatabase::EMPTY,
+                &generic,
+                &clauses,
+                &TraitAssociatedTypeDatabase::EMPTY,
+                &values,
+                ImplementedTraitGoal::new(TraitId::new(713), placeholder),
+            ),
+            Ok(TraitProofSolution::Cycle)
         );
     }
 
