@@ -116,6 +116,10 @@ updates its Git consumer without changing SSH or signing behavior. **Result:
 NOT_TRIGGERED.** This is repository organization, not a new protocol or
 cryptographic mechanism.
 
+The later native SSH action changes only build orchestration and exact extern
+selection. **Result: NOT_TRIGGERED.** Existing SSH, cryptographic, and package-
+resolver reviews remain in force.
+
 The sixteenth semantic move relocates `mrml-error` after JSON/runtime and
 updates all eleven inbound Cargo paths without changing error behavior.
 **Result: NOT_TRIGGERED.** This is repository organization, not a new error-

@@ -188,6 +188,11 @@ Linux WSL2 each pass all three direct tests; environment-selected live URL and
 range probes were not exercised. Eighteen of 42 components are native; 24
 remain transitional.
 
+`mrml-ssh` now consumes exact native crypto/runtime artifacts. Windows and Arch
+Linux WSL2 each pass all 23 direct tests, including loopback transport; no live
+remote or external signing operation was exercised. Nineteen of 42 components
+are native; 23 remain transitional.
+
 `mrml-zstd` is the fourth migrated leaf; its Wikipedia edge and patent-review
 source path now resolve to `packages/libraries/zstd` without changing codec
 behavior.

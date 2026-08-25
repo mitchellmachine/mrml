@@ -328,6 +328,11 @@ three tests on both hosts. Live URL/range paths were not configured, so this is
 not network-interoperability evidence. Eighteen components are native and 24
 remain transitional.
 
+`mrml-ssh` directly consumes native crypto/runtime artifacts and passes all 23
+tests on both hosts, including loopback transport. No live remote or external
+signing operation was exercised. Nineteen components are native and 23 remain
+transitional.
+
 MRML uses Rust 2024 and the exact `nightly-2026-08-24` build toolchain pinned in
 `rust-toolchain.toml`. It is also the current `mrml-rustc` behavioral reference
 recorded as [ORACLE-0002](docs/compiler/oracles/ORACLE-0002.md); a floating

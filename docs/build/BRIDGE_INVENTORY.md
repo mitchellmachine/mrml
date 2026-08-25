@@ -118,6 +118,11 @@ Linux WSL2 each pass all three inline tests; the environment-selected live URL
 and range probes were not supplied. Eighteen components are native; 24 remain
 transitional.
 
+`mrml-ssh` directly binds the native crypto and runtime rlibs. Windows and Arch
+Linux WSL2 each pass all 23 inline tests, including loopback transport; no live
+remote or external signing operation was supplied. Nineteen components are
+native; 23 remain transitional.
+
 Patent review: `TRIGGERED`. This increment implements the first native dependency
 resolver, within the package/cache/resolver review already recorded in
 [`../patents/REVIEW_LOG.md`](../patents/REVIEW_LOG.md).

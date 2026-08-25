@@ -188,6 +188,10 @@ coverage.
 Both hosts pass its three inline tests directly; absent live URL/range inputs
 remain absent network evidence.
 
+`mrml-ssh` directly binds exact crypto/runtime rlibs. Both hosts pass its 23
+inline tests, including loopback transport; live remotes and external signing
+remain outside this evidence.
+
 Rust crate identity, MRML package identity, and stable MRML interface identity
 are distinct. The runtime component model is specified in
 [../packages/COMPONENT_INTERFACES.md](../packages/COMPONENT_INTERFACES.md).
