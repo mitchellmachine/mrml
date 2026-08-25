@@ -163,8 +163,11 @@ At the checkpoint commit, the runtime emitter has these bounded mechanisms:
   another projected source: the same exact tuple-value correlation is followed
   before the remaining direct move chain continues. Each projected hop still
   requires one numeric field, exact reference-value count/order and mutability,
-  and no intervening root or field replacement. Nested projections and general
-  aggregate provenance remain unimplemented.
+  and no unclassified intervening root or field replacement. A direct tuple-
+  field reference reassignment is classified separately: a later move now uses
+  that latest exact borrow generation rather than losing the reassigned owner's
+  ancestry. Nested projections and general aggregate provenance remain
+  unimplemented.
   A separate bounded return-outlives pass now runs for declared reference-return
   functions with complete CFG facts. Exact tail, explicit, conditional, and
   supported loop return-value effects trace reference ancestry through the active

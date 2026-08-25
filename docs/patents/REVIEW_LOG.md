@@ -16,6 +16,18 @@ accessibility or browser-semantic interface, JavaScript/WebAssembly runtime, AI
 mechanism, media mechanism, or other patent-candidate mechanism. This agent
 review does not replace required independent human dual review.
 
+## 2026-08-25 — Reassigned projected compiler-loan sources
+
+Patent review: **NOT_TRIGGERED**. The compiler conventionally selects its
+existing exact direct tuple-field assignment loan before older initialization
+origins when a later move consumes that field. The traversal remains bounded,
+event-decreasing, generation-sensitive, and fail-closed on missing or ambiguous
+facts. This adds no optimization, new arena, authority model, device or
+compatibility protocol, host-share mechanism, accessibility or browser-semantic
+interface, JavaScript/WebAssembly runtime, AI mechanism, media mechanism, or
+other patent-candidate mechanism. This agent review does not replace required
+independent human dual review.
+
 ## 2026-08-25 — Bounded kernel isolation launch admission
 
 Patent review: **NOT_TRIGGERED** for this bounded record/commit mechanism. It

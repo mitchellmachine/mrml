@@ -3772,6 +3772,12 @@ failure to prove that origin remains conservative. The Windows native compiler
 suite and native Arch Linux WSL suite each pass 420 library tests, one component-
 interface probe, 10 conformance tests, and 335 original replacement tests; both
 hosts also pass the two driver tests, for 768 compiler and driver tests per host.
+The same traversal now selects a direct tuple-field reassignment generation
+before its older initialization origin when that field is later moved. The
+pinned oracle rejects shared and mutable live-child mutation of the reassigned
+owner with E0503, preserves the original owner's independently retained borrow,
+and accepts unrelated-owner and post-last-use controls. Both native core suites
+remain green at the counts above after this extension.
 Warnings-denied Clippy was not exercised by the current native frontend. This
 does not claim nested projections, general aggregate provenance, named regions,
 or complete Polonius semantics. The `no_std`/allocation/unsafe hygiene scan

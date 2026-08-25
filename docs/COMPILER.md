@@ -610,8 +610,12 @@ assignment generation rather than reviving the field's old owner. The same
 correlation may now cross another directly initialized tuple-field source later
 in the chain before continuing through direct root moves. Every projected hop
 retains the one-step numeric-field, exact effect count/order, matching
-mutability, and no-replacement requirements. Nested projections, general
-aggregate provenance, and general alias/region propagation remain unimplemented.
+mutability, and no-unclassified-replacement requirements. A later move from a
+directly reassigned tuple reference field now selects the exact assignment borrow
+generation before considering its initialization origin, preserving the new
+owner's ancestry without reviving it from older storage. Nested projections,
+general aggregate provenance, and general alias/region propagation remain
+unimplemented.
 
 Explicit direct mutable reborrows additionally derive their parent loan and
 bounded ultimate owner path. A mutable parent is suspended when it is used
