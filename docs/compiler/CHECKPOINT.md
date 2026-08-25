@@ -9,7 +9,7 @@ the named commit and current source.
 ## Recoverable baseline
 
 - Branch: `main`
-- Compiler checkpoint commit: `19e0e124`
+- Compiler checkpoint commit: `c5d007d9`
   (`compiler: trace shared return copies`)
 - Remote state when recorded: the compiler checkpoint and its documentation/
   review commits are pending publication. Unrelated unstaged OS work is not part

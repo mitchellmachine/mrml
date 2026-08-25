@@ -3757,7 +3757,7 @@ bounded escape/outlives slice, not named lifetime inference, general regions, or
 complete Polonius semantics. The `no_std`/allocation/unsafe hygiene scan remained
 empty.
 
-The shared-reference return-copy milestone at `19e0e124` passed all 764 compiler
+The shared-reference return-copy milestone at `c5d007d9` passed all 764 compiler
 and driver tests on Windows gnullvm and all 764 in release mode on native Arch
 Linux WSL, plus warnings-denied compiler-only Clippy on both hosts using pinned
 rustc commit `f7d782a3be46d6bb4b9792fe69a61db389ba1769`. The pinned
