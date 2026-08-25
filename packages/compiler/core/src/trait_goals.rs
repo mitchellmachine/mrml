@@ -13,6 +13,7 @@ pub const MAX_TRAIT_GENERIC_PARAMETERS: usize = 8;
 pub const MAX_TRAIT_WHERE_CLAUSES: usize = 64;
 pub const MAX_TRAIT_PROOF_DEPTH: usize = 16;
 pub const MAX_TRAIT_ASSOCIATED_TYPE_VALUES: usize = 64;
+pub const MAX_GENERIC_TRAIT_IMPLEMENTATIONS: usize = 64;
 
 #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
 pub struct TraitId(u32);
@@ -488,6 +489,157 @@ impl TraitWhereClause {
 }
 
 #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
+pub struct GenericTraitImplementationId(u32);
+
+impl GenericTraitImplementationId {
+    pub const fn new(value: u32) -> Self {
+        Self(value)
+    }
+
+    pub const fn get(self) -> u32 {
+        self.0
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct IdentifiedGenericTraitImplementation {
+    id: GenericTraitImplementationId,
+    implementation: TraitWhereClause,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct GenericTraitImplementationDatabase {
+    implementations:
+        [Option<IdentifiedGenericTraitImplementation>; MAX_GENERIC_TRAIT_IMPLEMENTATIONS],
+    implementation_count: usize,
+}
+
+impl GenericTraitImplementationDatabase {
+    pub const EMPTY: Self = Self {
+        implementations: [None; MAX_GENERIC_TRAIT_IMPLEMENTATIONS],
+        implementation_count: 0,
+    };
+
+    pub fn insert(
+        &mut self,
+        id: GenericTraitImplementationId,
+        implementation: TraitWhereClause,
+    ) -> Result<(), TraitGoalError> {
+        for existing in self.implementations[..self.implementation_count]
+            .iter()
+            .flatten()
+            .copied()
+        {
+            if existing.id == id {
+                return Err(TraitGoalError::DuplicateGenericImplementationId);
+            }
+            if generic_trait_implementation_heads_overlap(existing.implementation, implementation) {
+                return Err(TraitGoalError::OverlappingGenericImplementation);
+            }
+        }
+        let slot = self
+            .implementations
+            .get_mut(self.implementation_count)
+            .ok_or(TraitGoalError::TooManyGenericImplementations)?;
+        *slot = Some(IdentifiedGenericTraitImplementation { id, implementation });
+        self.implementation_count += 1;
+        Ok(())
+    }
+}
+
+pub fn generic_trait_implementation_heads_overlap(
+    left: TraitWhereClause,
+    right: TraitWhereClause,
+) -> bool {
+    if left.consequence.trait_id != right.consequence.trait_id
+        || left.consequence.argument_count != right.consequence.argument_count
+    {
+        return false;
+    }
+    let mut unifier = FlatGenericHeadUnifier::NEW;
+    if !unifier.unify(left.consequence.self_type, right.consequence.self_type) {
+        return false;
+    }
+    left.consequence
+        .arguments()
+        .iter()
+        .zip(right.consequence.arguments())
+        .all(|(left, right)| {
+            left.zip(*right)
+                .is_some_and(|(left, right)| unifier.unify(left, right))
+        })
+}
+
+const FLAT_GENERIC_HEAD_VARIABLES: usize = MAX_TRAIT_GENERIC_PARAMETERS * 2;
+
+#[derive(Clone, Copy)]
+struct FlatGenericHeadUnifier {
+    parents: [u8; FLAT_GENERIC_HEAD_VARIABLES],
+    concrete: [Option<TraitTypeId>; FLAT_GENERIC_HEAD_VARIABLES],
+}
+
+impl FlatGenericHeadUnifier {
+    const NEW: Self = Self {
+        parents: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15],
+        concrete: [None; FLAT_GENERIC_HEAD_VARIABLES],
+    };
+
+    fn unify(&mut self, left: BoundTraitGoalType, right: BoundTraitGoalType) -> bool {
+        match (left, right) {
+            (BoundTraitGoalType::Concrete(left), BoundTraitGoalType::Concrete(right)) => {
+                left == right
+            }
+            (BoundTraitGoalType::Parameter(left), BoundTraitGoalType::Concrete(right)) => {
+                self.constrain(left.get() as usize, right)
+            }
+            (BoundTraitGoalType::Concrete(left), BoundTraitGoalType::Parameter(right)) => {
+                self.constrain(MAX_TRAIT_GENERIC_PARAMETERS + right.get() as usize, left)
+            }
+            (BoundTraitGoalType::Parameter(left), BoundTraitGoalType::Parameter(right)) => self
+                .union(
+                    left.get() as usize,
+                    MAX_TRAIT_GENERIC_PARAMETERS + right.get() as usize,
+                ),
+        }
+    }
+
+    fn root(&self, mut variable: usize) -> usize {
+        while self.parents[variable] as usize != variable {
+            variable = self.parents[variable] as usize;
+        }
+        variable
+    }
+
+    fn constrain(&mut self, variable: usize, concrete: TraitTypeId) -> bool {
+        let root = self.root(variable);
+        match self.concrete[root] {
+            Some(existing) => existing == concrete,
+            None => {
+                self.concrete[root] = Some(concrete);
+                true
+            }
+        }
+    }
+
+    fn union(&mut self, left: usize, right: usize) -> bool {
+        let left = self.root(left);
+        let right = self.root(right);
+        if left == right {
+            return true;
+        }
+        match (self.concrete[left], self.concrete[right]) {
+            (Some(left), Some(right)) if left != right => return false,
+            _ => {}
+        }
+        self.parents[right] = left as u8;
+        if self.concrete[left].is_none() {
+            self.concrete[left] = self.concrete[right];
+        }
+        true
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
 pub struct TraitWhereClauseId(u32);
 
 impl TraitWhereClauseId {
@@ -802,6 +954,9 @@ pub enum TraitGoalError {
     UniverseOverflow,
     UniverseLeak,
     NonRigidClauseQuery,
+    TooManyGenericImplementations,
+    DuplicateGenericImplementationId,
+    OverlappingGenericImplementation,
     NonConcreteClauseQuery,
     UnboundGenericParameter,
     WrongGenericArgumentCount,
@@ -2196,6 +2351,116 @@ mod tests {
                 .unwrap(),
             ),
             Err(TraitGoalError::TooManyWhereClauses)
+        );
+    }
+
+    #[test]
+    fn generic_head_overlap_honors_repeated_parameter_equality() {
+        let parameter = TraitGenericParameterId::new(0);
+        let mut repeated_head = BoundImplementedTraitGoal::new(
+            TraitId::new(70),
+            BoundTraitGoalType::Parameter(parameter),
+        );
+        repeated_head
+            .push_argument(BoundTraitGoalType::Parameter(parameter))
+            .unwrap();
+        let repeated = TraitWhereClause::new(1, repeated_head).unwrap();
+
+        let mut equal_head = BoundImplementedTraitGoal::new(
+            TraitId::new(70),
+            BoundTraitGoalType::Concrete(TraitTypeId::new(3)),
+        );
+        equal_head
+            .push_argument(BoundTraitGoalType::Concrete(TraitTypeId::new(3)))
+            .unwrap();
+        let equal = TraitWhereClause::new(0, equal_head).unwrap();
+
+        let mut unequal_head = BoundImplementedTraitGoal::new(
+            TraitId::new(70),
+            BoundTraitGoalType::Concrete(TraitTypeId::new(3)),
+        );
+        unequal_head
+            .push_argument(BoundTraitGoalType::Concrete(TraitTypeId::new(4)))
+            .unwrap();
+        let unequal = TraitWhereClause::new(0, unequal_head).unwrap();
+
+        assert!(generic_trait_implementation_heads_overlap(repeated, equal));
+        assert!(!generic_trait_implementation_heads_overlap(
+            repeated, unequal
+        ));
+        assert!(!generic_trait_implementation_heads_overlap(
+            repeated,
+            concrete_clause(71, 3, None),
+        ));
+    }
+
+    #[test]
+    fn generic_head_overlap_unifies_parameters_from_both_binders() {
+        let mut left = BoundImplementedTraitGoal::new(
+            TraitId::new(80),
+            BoundTraitGoalType::Parameter(TraitGenericParameterId::new(0)),
+        );
+        left.push_argument(BoundTraitGoalType::Parameter(TraitGenericParameterId::new(
+            1,
+        )))
+        .unwrap();
+        let left = TraitWhereClause::new(2, left).unwrap();
+        let mut right = BoundImplementedTraitGoal::new(
+            TraitId::new(80),
+            BoundTraitGoalType::Parameter(TraitGenericParameterId::new(0)),
+        );
+        right
+            .push_argument(BoundTraitGoalType::Parameter(TraitGenericParameterId::new(
+                0,
+            )))
+            .unwrap();
+        let right = TraitWhereClause::new(1, right).unwrap();
+        assert!(generic_trait_implementation_heads_overlap(left, right));
+    }
+
+    #[test]
+    fn generic_implementation_database_rejects_overlap_ids_and_overflow() {
+        let parameter = TraitGenericParameterId::new(0);
+        let generic = TraitWhereClause::new(
+            1,
+            BoundImplementedTraitGoal::new(
+                TraitId::new(90),
+                BoundTraitGoalType::Parameter(parameter),
+            ),
+        )
+        .unwrap();
+        let concrete = concrete_clause(90, 5, None);
+        let distinct = concrete_clause(91, 5, None);
+        let mut database = GenericTraitImplementationDatabase::EMPTY;
+        database
+            .insert(GenericTraitImplementationId::new(1), generic)
+            .unwrap();
+        assert_eq!(
+            database.insert(GenericTraitImplementationId::new(2), concrete),
+            Err(TraitGoalError::OverlappingGenericImplementation)
+        );
+        assert_eq!(
+            database.insert(GenericTraitImplementationId::new(1), distinct),
+            Err(TraitGoalError::DuplicateGenericImplementationId)
+        );
+        database
+            .insert(GenericTraitImplementationId::new(2), distinct)
+            .unwrap();
+
+        let mut full = GenericTraitImplementationDatabase::EMPTY;
+        for index in 0..MAX_GENERIC_TRAIT_IMPLEMENTATIONS {
+            full.insert(
+                GenericTraitImplementationId::new(index as u32),
+                concrete_clause(index as u32, index as u32, None),
+            )
+            .unwrap();
+        }
+        assert_eq!(
+            full.insert(
+                GenericTraitImplementationId::new(100),
+                concrete_clause(100, 100, None),
+            ),
+            Err(TraitGoalError::TooManyGenericImplementations)
         );
     }
 

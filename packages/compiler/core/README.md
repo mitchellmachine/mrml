@@ -3973,6 +3973,17 @@ interface probe, 10 conformance tests, and 335 replacement tests: 804 compiler
 tests per host. Mixed inference/skolem unification, coinduction, complete higher-
 ranked reasoning, and source `for<...>` remain unsupported.
 
+The flat generic-head coherence milestone adds a 64-entry identified generic-
+implementation table. A fixed 16-node equality unifier decides whether two
+concrete/parameter heads share any instantiation across their separate binders.
+Concrete constraints propagate through unions, so repeated parameters overlap
+equal concrete positions but remain disjoint from unequal ones. Duplicate IDs,
+satisfiable overlap, and capacity overflow fail. Windows gnullvm and native Arch
+Linux WSL each pass 461 library tests, one component-interface probe, 10
+conformance tests, and 335 replacement tests: 807 compiler tests per host.
+Premises do not waive head conflicts; cross-family coherence, specialization,
+and source impl syntax remain unsupported.
+
 The nested conditional tuple-origin milestone walks each leaf's bounded
 conditional-parent chain to the outermost generation before grouping reference
 origins by field ordinal. The exact oracle rejects a three-leaf returned field

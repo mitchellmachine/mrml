@@ -4247,3 +4247,12 @@ abandonment. Any shared queue/ring, proxy, shared heap/address, automatic
 transport choice, capability-transfer generalization, or broader component RPC
 requires a new claim-focused review; the general cross-placement transport
 review therefore remains `TRIGGERED` outside this exact shape.
+
+# 2026-08-25 — Flat generic trait-head coherence
+
+**Result: NOT_TRIGGERED.** This compiler-only increment applies conventional
+fixed-size equality union/find with concrete constraints to flat generic trait
+heads and rejects overlapping entries in a bounded table. It adds no novel
+specialization order, recursive theorem proving, cache, parser, runtime
+mechanism, allocation, synchronization, protocol, cryptography, or hardware
+behavior.

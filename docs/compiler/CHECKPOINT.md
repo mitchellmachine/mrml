@@ -728,6 +728,16 @@ probe, 10 conformance tests, and 335 replacement tests: 802 compiler tests per
 host. Recursive rigid proof, general unification, and source `for<...>` remain
 unsupported.
 
+The flat generic-head coherence milestone adds a fixed 64-entry identified
+implementation table. A fixed 16-node equality unifier decides exact overlap for
+the current concrete/parameter head language across both binders, including
+repeated-parameter constraints and conflicting concrete assignments. Duplicate
+IDs, satisfiable overlap, and overflow fail. Windows gnullvm and native Arch
+Linux WSL each pass 461 library tests, one component-interface probe, 10
+conformance tests, and 335 replacement tests: 807 compiler tests per host.
+Premise satisfiability, cross-family coherence, specialization, and source impl
+syntax remain unsupported.
+
 The bounded rigid-proof milestone recursively composes concrete and skolemized
 placeholder premises through the existing 16-goal stack. Exact concrete facts
 can terminate branches; otherwise one unique rigid clause is elaborated.
