@@ -61,6 +61,10 @@ The seventh semantic move relocates `mrml-wikipedia` after its ZIM/Zstandard
 dependencies and updates the trainer path without changing extraction behavior.
 **Result: NOT_TRIGGERED.** This is repository organization, not a new parser.
 
+The eighth semantic move relocates `mrml-opus` and updates its math and patent-
+review paths without changing codec behavior. **Result: NOT_TRIGGERED.** The
+existing worldwide Opus mechanism review remains in force.
+
 ## 2026-08-25 — Deployment, package, image, installer, and shell architecture
 
 **Result: TRIGGERED.** The documentation composes package/image containers,
@@ -99,7 +103,7 @@ AV1, and Opus. Roadmap-only systems were not treated as implemented.
 | Priority | Mechanism | MRML source | Initial result |
 | --- | --- | --- | --- |
 | Highest | AV1 coding tools, restoration, prediction, transforms, entropy, film grain | `crates/mrml-av1/src/` | AOMedia patent terms require exact license review; third-party assertions remain possible. |
-| Highest | Opus SILK/CELT, PVQ, range coding, stereo/pitch tools | `crates/mrml-opus/src/` | RFC 6716 records multiple IETF IPR disclosures; terms and worldwide family members need claims review. |
+| Highest | Opus SILK/CELT, PVQ, range coding, stereo/pitch tools | `packages/libraries/opus/src/` | RFC 6716 records multiple IETF IPR disclosures; terms and worldwide family members need claims review. |
 | High | GPU mediation, authenticated rings, reset, EPT/VT-d, CUDA | `crates/mrml-kernel/src/virtual_gpu.rs`, `arch/x86_64/{ept,vtd,vtd_tables}.rs`, `crates/mrml-{kvm,whp}/`, `crates/mrml-tensor/src/cuda.rs` | Distinctive hardware-facing composition; no candidate verified. |
 | High | Quantized inference, planning, KV cache, speculative decoding | `crates/mrml-tensor/src/{quant,ops,execution_plan,kv_cache,speculative}.rs` | Must distinguish standard formats from MRML scheduling/layout. |
 | High | Zstandard FSE/Huffman/sequences | `packages/libraries/zstd/src/` | Compression and upstream grant review required. |

@@ -42,7 +42,7 @@ members = [
     "packages/libraries/tokenizer",
     "crates/mrml-trainer",
     "crates/mrml-av1",
-    "crates/mrml-opus",
+    "packages/libraries/opus",
 ]
 
 [workspace.package]

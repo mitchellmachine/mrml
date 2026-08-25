@@ -39,6 +39,9 @@ that semantic moves or Cargo bridge removal are complete.
   four parser/writer tests and Cargo bridge remain.
 - `mrml-wikipedia` moved after ZIM/Zstandard, with sibling semantic paths and its
   trainer consumer updated; its six extraction/filter tests and bridge remain.
+- `mrml-opus` moved with its math dependency converted to a sibling semantic
+  path; its codec implementation, examples, native-link declaration, and Cargo
+  bridge remain unchanged.
 
 `package`, `release`, `image`, and `publish` deliberately fail as `PLANNED`.
 Linux, KVM, cross-host equivalence, physical UEFI/GPU, and release functionality

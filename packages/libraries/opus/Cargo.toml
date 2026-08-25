@@ -10,4 +10,4 @@ description = "Original allocation-free RFC 6716 Opus implementation"
 path = "src/lib.rs"
 
 [dependencies]
-mrml-math = { path = "../../packages/libraries/math" }
+mrml-math = { path = "../math" }
