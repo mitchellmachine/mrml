@@ -2,6 +2,7 @@ use crate::abi::{AbiOpaqueHandle, InterfaceIdentity};
 use crate::binding::{BindingError, InterfaceBindingId, InterfaceBindingTable, ProviderTarget};
 use crate::generation::{SystemGeneration, SystemPackage};
 use crate::isolation::{EffectivePlacement, IsolationPlacement, PlacementSource};
+use crate::loader::ImmutableLoadPlan;
 
 /// One exact, immutable handoff from generation-bound interface resolution to
 /// an already selected isolated-service placement. Package and interface names
@@ -110,11 +111,60 @@ pub enum RuntimePlacementError {
     ProviderGenerationMismatch,
 }
 
+/// The complete backend-neutral control-plane result for one independently
+/// serviced binding. KVM and WHP consume these already matched immutable load
+/// plans; neither backend may choose or substitute package bytes.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct GenerationBoundServiceLaunch {
+    placement: GenerationBoundServicePlacement,
+    consumer: ImmutableLoadPlan,
+    provider: ImmutableLoadPlan,
+}
+
+impl GenerationBoundServiceLaunch {
+    pub fn admit(
+        placement: GenerationBoundServicePlacement,
+        consumer: ImmutableLoadPlan,
+        provider: ImmutableLoadPlan,
+    ) -> Result<Self, ServiceLaunchAdmissionError> {
+        if consumer.package() != placement.consumer() {
+            return Err(ServiceLaunchAdmissionError::ConsumerArtifactMismatch);
+        }
+        if provider.package() != placement.provider() {
+            return Err(ServiceLaunchAdmissionError::ProviderArtifactMismatch);
+        }
+        Ok(Self {
+            placement,
+            consumer,
+            provider,
+        })
+    }
+
+    pub const fn placement(&self) -> &GenerationBoundServicePlacement {
+        &self.placement
+    }
+
+    pub const fn consumer(&self) -> &ImmutableLoadPlan {
+        &self.consumer
+    }
+
+    pub const fn provider(&self) -> &ImmutableLoadPlan {
+        &self.provider
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum ServiceLaunchAdmissionError {
+    ConsumerArtifactMismatch,
+    ProviderArtifactMismatch,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::binding::InterfaceBindingTable;
     use crate::isolation::{IsolationPolicy, PlacementRequest};
+    use crate::loader::{COMPONENT_PAGE_BYTES, ImageSection, SectionPermissions};
     use crate::manifest::Document;
     use crate::resolver::{
         InterfaceProvider, InterfaceRequirement, ProviderForm, resolve_interface_providers,
@@ -158,6 +208,23 @@ mod tests {
         )
         .unwrap();
         IsolationPolicy::parse(&document, "service", "org.mrml.zstd").unwrap()
+    }
+
+    fn load_plan(package: SystemPackage) -> ImmutableLoadPlan {
+        ImmutableLoadPlan::admit(
+            package,
+            COMPONENT_PAGE_BYTES,
+            64,
+            vec![
+                ImageSection::pages(
+                    0,
+                    COMPONENT_PAGE_BYTES,
+                    SectionPermissions::new(true, false, true).unwrap(),
+                )
+                .unwrap(),
+            ],
+        )
+        .unwrap()
     }
 
     #[test]
@@ -261,6 +328,76 @@ mod tests {
         assert_eq!(
             GenerationBoundServicePlacement::bind(&system, &in_process, in_process_id, effective,),
             Err(RuntimePlacementError::ProviderFormMismatch)
+        );
+    }
+
+    #[test]
+    fn exact_placement_admits_only_its_two_immutable_package_generations() {
+        let system = system(15, 0x2f);
+        let mut bindings = InterfaceBindingTable::<1>::new().unwrap();
+        let id = bindings
+            .bind(
+                &resolved(&system, ProviderForm::IsolatedService),
+                ProviderTarget::IsolatedService {
+                    endpoint: AbiOpaqueHandle::new(7, 11).unwrap(),
+                },
+            )
+            .unwrap();
+        let placement = GenerationBoundServicePlacement::bind(
+            &system,
+            &bindings,
+            id,
+            dual_service_policy()
+                .resolve(PlacementRequest::TotalMicrovm)
+                .unwrap(),
+        )
+        .unwrap();
+        let launch = GenerationBoundServiceLaunch::admit(
+            placement,
+            load_plan(system.package("org.mrml.zim").unwrap().clone()),
+            load_plan(system.package("org.mrml.zstd").unwrap().clone()),
+        )
+        .unwrap();
+        assert_eq!(launch.placement().placement(), IsolationPlacement::Microvm);
+        assert_eq!(launch.consumer().package().package_id(), "org.mrml.zim");
+        assert_eq!(launch.provider().package().package_id(), "org.mrml.zstd");
+    }
+
+    #[test]
+    fn either_artifact_generation_mismatch_fails_before_backend_launch() {
+        let system = system(15, 0x2f);
+        let mut bindings = InterfaceBindingTable::<1>::new().unwrap();
+        let id = bindings
+            .bind(
+                &resolved(&system, ProviderForm::IsolatedService),
+                ProviderTarget::IsolatedService {
+                    endpoint: AbiOpaqueHandle::new(7, 11).unwrap(),
+                },
+            )
+            .unwrap();
+        let effective = dual_service_policy()
+            .resolve(PlacementRequest::TotalMicrovm)
+            .unwrap();
+        let placement =
+            GenerationBoundServicePlacement::bind(&system, &bindings, id, effective).unwrap();
+        assert_eq!(
+            GenerationBoundServiceLaunch::admit(
+                placement,
+                load_plan(package("org.mrml.zim", 9, 0x19)),
+                load_plan(system.package("org.mrml.zstd").unwrap().clone()),
+            ),
+            Err(ServiceLaunchAdmissionError::ConsumerArtifactMismatch)
+        );
+
+        let placement =
+            GenerationBoundServicePlacement::bind(&system, &bindings, id, effective).unwrap();
+        assert_eq!(
+            GenerationBoundServiceLaunch::admit(
+                placement,
+                load_plan(system.package("org.mrml.zim").unwrap().clone()),
+                load_plan(package("org.mrml.zstd", 16, 0x30)),
+            ),
+            Err(ServiceLaunchAdmissionError::ProviderArtifactMismatch)
         );
     }
 }

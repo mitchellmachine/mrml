@@ -447,7 +447,9 @@ foundations, stable ABI primitives, and quantitative memory accounting, proceed:
 2. typed provides/requires metadata and exact candidate resolution
    (**PARTIALLY IMPLEMENTED** as bounded in-generation exact resolution);
 3. immutable in-process loader and generation-safe `InterfaceBinding`
-   (**PARTIALLY IMPLEMENTED** for immutable binding identity/lifetime only);
+   (**PARTIALLY IMPLEMENTED** for immutable binding identity/lifetime and a
+   backend-neutral launch admission that accepts only the exact consumer and
+   provider load plans selected by the generation-bound service placement);
 4. `org.mrml.zstd` providing `compression.zstd@3`
    (**PARTIALLY IMPLEMENTED** for the canonical byte-call provider and bounded
    hosted kernel-IPC/shared-buffer adapter, plus a standalone MRML-target
@@ -519,7 +521,10 @@ bounded hosted evidence. Separate `org.mrml.zstd` provider and `org.mrml.zim`
 consumer artifacts now build for the MRML-native target; the consumer launch
 registers bind an exact endpoint, provider task, shared-buffer capability, and
 provider generation while the interface request remains free of routing
-identity. Neither artifact has been launched. The package resolver still must
+identity. A common launch admission now rejects either artifact when its exact
+package generation/digest differs from the immutable interface placement, so
+WHP and KVM do not independently select package bytes. Neither artifact has
+been launched. The package resolver still must
 connect the recorded generational `InterfaceBinding` to native call dispatch;
 the current Wikipedia composition root constructs the provider for hosted
 tests. This does not establish dynamic loading, service isolation,

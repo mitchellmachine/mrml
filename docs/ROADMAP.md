@@ -183,6 +183,10 @@ adapter now exercises exact generated descriptors on Windows and Arch Linux.
 Separate package-owned `org.mrml.zstd` provider and `org.mrml.zim` consumer
 artifacts also build for the MRML-native target. They have not been launched,
 so this is build evidence rather than native execution or isolation evidence.
+A backend-neutral control-plane admission now binds those two immutable load
+plans to the exact generation/interface placement and rejects either package
+generation mismatch before backend launch. WHP/KVM attachment and execution
+remain **PLANNED**.
 
 Loader groundwork now validates exact immutable package image geometry and W^X
 section plans, including an executable entry point, without parsing, relocating,
