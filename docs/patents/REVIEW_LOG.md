@@ -4347,3 +4347,20 @@ universal goal with distinct rigid placeholders in the next checked universe and
 reuses existing rigid proof. It adds no inference search, answer inversion,
 specialization order, cache, parser, runtime mechanism, allocation,
 synchronization, protocol, cryptography, or hardware behavior.
+
+# 2026-08-25 — Standalone MRML-target Zstd service artifact
+
+**Result: TRIGGERED; build-only boundary retained.** This increment realizes the
+previously reviewed fixed Zstd ABI-3 request as a standalone x86-64 UEFI service
+artifact with one private 4 KiB scratch page and the existing MRML syscall
+frames. Its allocation-free target floor copies raw blocks, fills RLE blocks,
+and rejects entropy-coded blocks; Windows/Linux retain the previously reviewed
+host decoder. It adds no queue, proxy, shared heap/address, transport selection,
+service discovery, provider-selection algorithm, or new compression format.
+
+The bounded component-transport design-around and its claim-focused worldwide
+comparison remain controlling. Actual native/microVM launch, supervision,
+resource-pool integration, and WHP/KVM call execution cross the previously
+reserved isolated-service lifecycle boundary and require review before those
+mechanisms are claimed complete. This entry authorizes no patent conclusion and
+does not turn successful target compilation into launch evidence.

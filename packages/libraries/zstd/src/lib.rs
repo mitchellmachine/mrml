@@ -1,9 +1,13 @@
 #![no_std]
 
+#[cfg(any(windows, unix))]
 mod bits;
+#[cfg(any(windows, unix))]
 mod fse;
+#[cfg(any(windows, unix))]
 mod huffman;
 mod kernel_transport;
+#[cfg(any(windows, unix))]
 mod sequences;
 mod service_loop;
 mod task_runtime_adapter;
@@ -14,6 +18,7 @@ use mrml_interface_zstd_v3::{
     DECOMPRESS_REQUEST_BYTES, DECOMPRESS_RESPONSE_BYTES, DecompressError, ProtocolError,
     ZstdTransport, decode_decompress_request, encode_decompress_response, encode_output_too_small,
 };
+#[cfg(any(windows, unix))]
 use mrml_runtime::Vector;
 
 pub use kernel_transport::{ZstdKernelTransport, ZstdKernelTransportError};
@@ -116,24 +121,62 @@ impl ZstdTransport for ComponentProvider {
                 .ok_or(ProtocolError::InvalidRequest)?,
         )
         .map_err(|_| ProtocolError::InvalidRequest)?;
-        let decoded = match decode(&memory[input_start..input_end]) {
-            Ok(decoded) => decoded,
-            Err(_) => {
-                return Ok(encode_decompress_response(Err(
-                    DecompressError::InvalidFrame,
-                )));
-            }
-        };
-        if decoded.len() as u64 > request.output.length() {
-            return Ok(encode_output_too_small(decoded.len() as u64));
-        }
         let output_start =
             usize::try_from(request.output.offset()).map_err(|_| ProtocolError::InvalidRequest)?;
-        let output_end = output_start
-            .checked_add(decoded.len())
-            .ok_or(ProtocolError::InvalidRequest)?;
-        memory[output_start..output_end].copy_from_slice(&decoded);
-        Ok(encode_decompress_response(Ok(decoded.len() as u64)))
+        let output_capacity =
+            usize::try_from(request.output.length()).map_err(|_| ProtocolError::InvalidRequest)?;
+        #[cfg(any(windows, unix))]
+        {
+            let decoded = match decode(&memory[input_start..input_end]) {
+                Ok(decoded) => decoded,
+                Err(_) => {
+                    return Ok(encode_decompress_response(Err(
+                        DecompressError::InvalidFrame,
+                    )));
+                }
+            };
+            if decoded.len() > output_capacity {
+                return Ok(encode_output_too_small(decoded.len() as u64));
+            }
+            let output_end = output_start
+                .checked_add(decoded.len())
+                .ok_or(ProtocolError::InvalidRequest)?;
+            memory[output_start..output_end].copy_from_slice(&decoded);
+            Ok(encode_decompress_response(Ok(decoded.len() as u64)))
+        }
+        #[cfg(not(any(windows, unix)))]
+        {
+            let output_limit = output_start
+                .checked_add(output_capacity)
+                .ok_or(ProtocolError::InvalidRequest)?;
+            if output_limit > memory.len() {
+                return Err(ProtocolError::InvalidRequest);
+            }
+            let decoded = if input_end <= output_start {
+                let (input_memory, output_memory) = memory.split_at_mut(output_start);
+                decode_into(
+                    &input_memory[input_start..input_end],
+                    &mut output_memory[..output_capacity],
+                )
+            } else if output_limit <= input_start {
+                let (output_memory, input_memory) = memory.split_at_mut(input_start);
+                decode_into(
+                    &input_memory[..input_end - input_start],
+                    &mut output_memory[output_start..output_limit],
+                )
+            } else {
+                return Err(ProtocolError::InvalidRequest);
+            };
+            match decoded {
+                Ok(written) => Ok(encode_decompress_response(Ok(written as u64))),
+                Err(DecodeIntoError::OutputTooSmall(required)) => {
+                    Ok(encode_output_too_small(required))
+                }
+                Err(DecodeIntoError::Frame(_)) => Ok(encode_decompress_response(Err(
+                    DecompressError::InvalidFrame,
+                ))),
+            }
+        }
     }
 }
 
@@ -201,9 +244,80 @@ pub fn inspect_frame(input: &[u8]) -> Result<FrameInfo> {
     })
 }
 
-/// Decodes complete frames containing raw and run-length blocks. Entropy-coded
-/// blocks deliberately return a distinct error while the Huffman/FSE stages
-/// are implemented, rather than accepting partially decoded data.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum DecodeIntoError {
+    Frame(Error),
+    OutputTooSmall(u64),
+}
+
+impl From<Error> for DecodeIntoError {
+    fn from(error: Error) -> Self {
+        Self::Frame(error)
+    }
+}
+
+/// Allocation-free target floor for complete raw/RLE frames. Entropy-coded
+/// blocks fail closed until their bounded table workspace is migrated.
+pub fn decode_into(
+    input: &[u8],
+    output: &mut [u8],
+) -> core::result::Result<usize, DecodeIntoError> {
+    let info = inspect_frame(input)?;
+    let mut cursor = info.header_bytes;
+    let mut written = 0usize;
+    loop {
+        let header = read_u24(input, cursor)?;
+        cursor += 3;
+        let last = header & 1 != 0;
+        let block_type = (header >> 1) & 3;
+        let block_size = (header >> 3) as usize;
+        let next = written
+            .checked_add(block_size)
+            .ok_or(Error::BlockTooLarge)?;
+        match block_type {
+            0 => {
+                let end = cursor.checked_add(block_size).ok_or(Error::Truncated)?;
+                let bytes = input.get(cursor..end).ok_or(Error::Truncated)?;
+                if let Some(destination) = output.get_mut(written..next) {
+                    destination.copy_from_slice(bytes);
+                }
+                cursor = end;
+            }
+            1 => {
+                let byte = *input.get(cursor).ok_or(Error::Truncated)?;
+                cursor += 1;
+                if let Some(destination) = output.get_mut(written..next) {
+                    destination.fill(byte);
+                }
+            }
+            2 => return Err(Error::UnsupportedCompressedBlock.into()),
+            _ => return Err(Error::ReservedBlock.into()),
+        }
+        written = next;
+        if last {
+            break;
+        }
+    }
+    if info.checksum {
+        cursor = cursor.checked_add(4).ok_or(Error::Truncated)?;
+    }
+    if cursor > input.len() {
+        return Err(Error::Truncated.into());
+    }
+    if cursor != input.len() {
+        return Err(Error::TrailingData.into());
+    }
+    if info.content_size.is_some_and(|size| size != written as u64) {
+        return Err(Error::ContentSizeMismatch.into());
+    }
+    if written > output.len() {
+        return Err(DecodeIntoError::OutputTooSmall(written as u64));
+    }
+    Ok(written)
+}
+
+/// Host decoder with entropy-coded Huffman/FSE support.
+#[cfg(any(windows, unix))]
 pub fn decode(input: &[u8]) -> Result<Vector<u8>> {
     let info = inspect_frame(input)?;
     let capacity = info
@@ -273,12 +387,14 @@ pub fn decode(input: &[u8]) -> Result<Vector<u8>> {
     Ok(output)
 }
 
+#[cfg(any(windows, unix))]
 enum Literals<'a> {
     Raw(&'a [u8]),
     Rle { byte: u8, count: usize },
     Decoded(Vector<u8>),
 }
 
+#[cfg(any(windows, unix))]
 fn decode_compressed_block(
     block: &[u8],
     output: &mut Vector<u8>,
@@ -304,6 +420,7 @@ fn decode_compressed_block(
     Ok(())
 }
 
+#[cfg(any(windows, unix))]
 fn parse_literals<'a>(
     block: &'a [u8],
     previous_table: &mut Option<huffman::Table>,
@@ -351,6 +468,7 @@ fn parse_literals<'a>(
     }
 }
 
+#[cfg(any(windows, unix))]
 fn parse_huffman_literals<'a>(
     block: &'a [u8],
     reuse: bool,
@@ -465,6 +583,30 @@ mod tests {
             0x28, 0xb5, 0x2f, 0xfd, 0x20, 3, 0x19, 0, 0, b'a', b'b', b'c',
         ];
         assert_eq!(&*decode(&frame).unwrap(), b"abc");
+    }
+
+    #[test]
+    fn allocation_free_target_floor_is_bounded_and_fail_closed() {
+        let raw = [
+            0x28, 0xb5, 0x2f, 0xfd, 0x20, 3, 0x19, 0, 0, b'a', b'b', b'c',
+        ];
+        let rle = [0x28, 0xb5, 0x2f, 0xfd, 0x20, 5, 0x2b, 0, 0, b'x'];
+        let compressed = [
+            0x28, 0xb5, 0x2f, 0xfd, 0x20, 3, 0x2d, 0, 0, 0x18, b'a', b'b', b'c', 0,
+        ];
+        let mut output = [0xcc; 5];
+        assert_eq!(decode_into(&raw, &mut output), Ok(3));
+        assert_eq!(&output[..3], b"abc");
+        assert_eq!(decode_into(&rle, &mut output), Ok(5));
+        assert_eq!(&output, b"xxxxx");
+        assert_eq!(
+            decode_into(&raw, &mut output[..2]),
+            Err(DecodeIntoError::OutputTooSmall(3))
+        );
+        assert_eq!(
+            decode_into(&compressed, &mut output),
+            Err(DecodeIntoError::Frame(Error::UnsupportedCompressedBlock))
+        );
     }
 
     #[test]

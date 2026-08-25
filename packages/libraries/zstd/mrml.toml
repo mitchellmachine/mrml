@@ -29,14 +29,33 @@ environment = "windows"
 arch = "x86_64"
 environment = "linux"
 
+[[target]]
+arch = "x86_64"
+environment = "mrml"
+
 [[artifact]]
 kind = "lib"
 name = "mrml_zstd"
+
+[[artifact]]
+kind = "bin"
+name = "mrml-zstd-service"
 
 [rust]
 crate_name = "mrml_zstd"
 crate_type = "lib"
 source = "packages/libraries/zstd/src/lib.rs"
+
+[[binary]]
+crate_name = "mrml_zstd_service"
+output = "mrml-zstd-service"
+self_extern = true
+source = "packages/libraries/zstd/src/service_main.rs"
+targets = ["MRML_NATIVE"]
+
+[[target_triple]]
+target = "MRML_NATIVE"
+triple = "x86_64-unknown-uefi"
 
 [[dependency]]
 alias = "mrml_interface_zstd_v3"
@@ -49,6 +68,7 @@ alias = "mrml_runtime"
 compile_name = "mrml-runtime"
 package = "org.mrml.library.runtime"
 scope = "compile"
+targets = ["WINDOWS", "LINUX"]
 
 [[dependency]]
 alias = "mrml_kernel"

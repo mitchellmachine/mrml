@@ -220,8 +220,12 @@ separate ABI-3 binding package, declares the isolated-service form, and no
 longer names a provider crate or path. Zstd declares native-service or microVM
 placement and supplies a bounded service-side kernel IPC/shared-buffer adapter.
 The existing Wikipedia composition root still directly supplies the provider
-in its host build. This does not prove resolver-to-launch dispatch,
-update-without-consumer-rebuild, or an MRML-target service process.
+in its host build. A standalone `org.mrml.zstd` x86-64 UEFI service artifact now
+builds through `mrml` on Windows and Arch Linux with exact launch-register and
+syscall-frame bindings. Its allocation-free one-page target floor handles
+raw/RLE frames and rejects entropy-coded blocks. This proves target build and
+format only, not resolver-to-launch dispatch, update-without-consumer-rebuild,
+a running service process, or placement parity.
 
 Servicing retention and inspection are **PARTIALLY IMPLEMENTED** as a bounded
 build-tool model. Exact live bindings and retained system generations, rollback
@@ -243,11 +247,12 @@ rejects an unexpected sender, uses separate reply authority, and withholds the
 reply unless received-leaf revocation succeeds. Its construction now consumes a
 committed route retaining domain, interface/provider/policy generations,
 Total-mode class, and placement, and rejects disagreement with the expected
-resolver/policy binding. No MRML-target service process, concrete syscall
-trap, actual resolver-to-launch dispatch, supervision, CPU/RAM pool integration,
-WHP/KVM guest call, or physical isolation was exercised. The host-tested
-register adapter does map the loop to exact operations 5, 7/8, 12, and 4 and
-proves capability release precedes response visibility.
+resolver/policy binding. A canonical MRML-target provider binary and concrete
+x86-64 trap now build, but no service process, actual resolver-to-launch
+dispatch, supervision, CPU/RAM pool integration, WHP/KVM guest call, or physical
+isolation was exercised. The host-tested register adapter maps the loop to exact
+operations 5, 7/8, 12, and 4 and proves capability release precedes response
+visibility.
 
 Cross-compiler evidence is **PARTIALLY IMPLEMENTED** for one narrow descriptor
 identity projection. On both Windows gnullvm and Arch Linux, the canonical MRML

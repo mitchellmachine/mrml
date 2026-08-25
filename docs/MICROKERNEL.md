@@ -64,7 +64,7 @@ capability, revalidates its VM/task binding, copies only the declared compressed
 input into private scratch, invokes the existing provider, writes only the exact
 successful output range, and erases scratch on every return path. The Zstd and
 ZIM manifests now select `isolated-service`; Zstd permits native-service or
-microVM placement with a native-service floor. Twenty-one focused Zstd tests pass
+microVM placement with a native-service floor. Twenty-two focused Zstd tests pass
 on Windows and Arch Linux, including actual inbox delivery, revocation, wrong-
 task rejection, distinct VM/task projections, invalid-frame no-write, and
 scratch exhaustion. The provider now also has a bounded userspace receive/reply
@@ -79,14 +79,20 @@ retains the domain, policy generation, Total-mode class, and placement as well
 as interface/provider identity. The adapter consumes that route only when it
 matches the expected interface object, ABI generation, provider generation, and
 policy generation; the data plane cannot substitute them. This is hosted
-unit/simulation evidence. A register-level userspace adapter now emits the exact
+unit/simulation evidence. A register-level userspace adapter emits the exact
 existing receive-buffer (5), shared-buffer read/write (7/8), capability-release
 (12), and send-buffer (4) frames; a full mock-trap test proves the bounded call
-and release-before-response order. It does not supply the MRML-target `int 0x80`
-implementation, launch a service process or guest, connect the actual generation
-resolver to launch, integrate supervision/resource pools, or prove WHP/KVM
-parity, so the representative dual-placement service remains **PARTIALLY
-IMPLEMENTED**.
+and release-before-response order. The canonical provider now also builds a
+standalone x86-64 UEFI service binary containing that `int 0x80` implementation,
+one private 4 KiB scratch page, and immutable launch-register endpoint/caller/
+provider-generation inputs. Windows and Arch Linux target builds pass; Windows
+format inspection found machine `0x8664`, PE32+ magic `0x020b`, EFI application
+subsystem 10, and nonzero entry RVA `0x0000ae90`. The allocation-free target
+floor supports raw/RLE blocks and rejects entropy-coded blocks pending bounded
+table migration. No service process or guest executed, the actual generation
+resolver is not connected to launch, and supervision/resource-pool and WHP/KVM
+parity remain absent, so the representative dual-placement service remains
+**PARTIALLY IMPLEMENTED**.
 
 The native half is now wired to actual kernel supervision. `ServiceSupervisor`
 preflights object and slot capacity before task creation, then publishes the new

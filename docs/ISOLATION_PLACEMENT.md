@@ -61,12 +61,13 @@ if revocation fails. Construction now consumes one committed service route and
 requires exact agreement with the expected interface object, ABI generation,
 immutable provider generation, and policy generation. The retained domain,
 Total-mode class, and placement cannot be replaced by data-plane messages. It is
-not a launched native service or microVM: actual resolver-to-launch dispatch, a
-target-architecture syscall trap, supervision, and WHP/KVM invocation remain
-**PLANNED**. The register-level prerequisite is now host-tested: it maps the
-unchanged service trait to exact operations 5, 7/8, 12, and 4 and preserves
-revocation-before-reply ordering without accepting endpoint/task identity from
-request bytes.
+not a launched native service or microVM: actual resolver-to-launch dispatch,
+supervision, and WHP/KVM invocation remain **PLANNED**. The standalone
+`org.mrml.zstd` target binary now supplies the x86-64 `int 0x80` trap for exact
+operations 5, 7/8, 12, and 4 and accepts endpoint, caller, and provider
+generation only from immutable launch registers. Cross-host target builds pass,
+but the image has not executed. Its current one-page allocation-free floor
+supports raw/RLE frames and fails closed on entropy-coded blocks.
 
 The native configuration form now has its first real supervised launcher. It
 preflights one vacant supervisor slot before creating a task, publishes the task
