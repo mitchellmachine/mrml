@@ -4107,6 +4107,18 @@ tests: 839 compiler tests per host. Inference-aware where clauses, projection
 constraints, backtracking, caching, coinduction, source syntax, and general
 mixed inference selection remain unsupported.
 
+The inferred where-clause milestone applies the existing flat symbolic matcher
+to the bounded clause database and returns stable clause identity, instantiated
+premises, and a universe-checked substitution. Recursive inferred proof consults
+a clause only after exact and generic candidates return no solution and composes
+clause/generic/exact chains in the same root constraint state. Multiple clauses,
+cycles, and acyclic overflow remain distinct. Windows gnullvm and native Arch
+Linux WSL each pass 498 library tests, one component-interface probe, 10
+conformance tests, and 335 replacement tests: 844 compiler tests per host.
+Environment layering, implied bounds, negative reasoning, projection predicates,
+backtracking, caching, coinduction, source syntax, and general mixed inference
+selection remain unsupported.
+
 The nested conditional tuple-origin milestone walks each leaf's bounded
 conditional-parent chain to the outermost generation before grouping reference
 origins by field ordinal. The exact oracle rejects a three-leaf returned field
