@@ -2641,6 +2641,7 @@ fn solve_projection_clause_mixed_premises(
                 projection_clauses,
                 projection_implementations,
                 Some(environment),
+                None,
                 0,
                 premise,
                 state,
@@ -2688,6 +2689,7 @@ fn solve_projection_clause_mixed_premises(
                 projection_clauses,
                 projection_implementations,
                 Some(environment),
+                None,
                 0,
                 normalized,
                 state,
@@ -4737,6 +4739,7 @@ impl TraitProjectionEnvironment<'_> {
             None,
             None,
             Some(self),
+            None,
             premise_depth + 1,
             projection.goal,
             state,
@@ -5245,6 +5248,7 @@ pub fn solve_projection_bearing_trait_goal(
         None,
         None,
         Some(environment),
+        None,
         0,
         goal,
         &mut state,
@@ -5430,6 +5434,7 @@ pub fn solve_exists_trait_projection_equality(
 
 fn solve_inferred_trait_predicate_with_stack(
     environment: Option<TraitProjectionEnvironment<'_>>,
+    coinductive_traits: Option<&CoinductiveTraitDatabase>,
     premise_depth: usize,
     exact: &TraitImplementationDatabase,
     generic: &GenericTraitImplementationDatabase,
@@ -5449,6 +5454,7 @@ fn solve_inferred_trait_predicate_with_stack(
             projection_clauses,
             projection_implementations,
             environment,
+            coinductive_traits,
             premise_depth,
             goal,
             state,
@@ -5528,6 +5534,7 @@ pub fn solve_exists_trait_predicate_conjunction(
             let mut proof_stack = [None; MAX_TRAIT_PROOF_DEPTH];
             match solve_inferred_trait_predicate_with_stack(
                 Some(environment),
+                None,
                 0,
                 exact_implementations,
                 generic_implementations,
@@ -6081,7 +6088,7 @@ pub fn solve_exists_trait_goal_with_environment(
     let mut state = InferenceConstraintState::new(canonicalized)?;
     let mut stack = [None; MAX_TRAIT_PROOF_DEPTH];
     match solve_inferred_trait_goal_inner(
-        exact, generic, clauses, None, None, None, 0, goal, &mut state, &mut stack, 0,
+        exact, generic, clauses, None, None, None, None, 0, goal, &mut state, &mut stack, 0,
     )? {
         TraitProofSolution::Proven => {
             Ok(InferredTraitGoalSolution::Unique(InferredTraitGoalAnswer {
@@ -6122,6 +6129,45 @@ pub fn solve_exists_trait_goal_with_projection_environment(
         None,
         None,
         Some(environment),
+        None,
+        0,
+        goal,
+        &mut state,
+        &mut stack,
+        0,
+    )? {
+        TraitProofSolution::Proven => {
+            Ok(InferredTraitGoalSolution::Unique(InferredTraitGoalAnswer {
+                substitution: state.substitution()?,
+            }))
+        }
+        TraitProofSolution::Ambiguous => Ok(InferredTraitGoalSolution::Ambiguous),
+        TraitProofSolution::NoSolution => Ok(InferredTraitGoalSolution::NoSolution),
+        TraitProofSolution::Cycle => Ok(InferredTraitGoalSolution::Cycle),
+        TraitProofSolution::Overflow => Ok(InferredTraitGoalSolution::Overflow),
+    }
+}
+
+pub fn solve_exists_trait_goal_with_coinduction(
+    exact: &TraitImplementationDatabase,
+    generic: &GenericTraitImplementationDatabase,
+    clauses: &TraitWhereClauseDatabase,
+    coinductive_traits: &CoinductiveTraitDatabase,
+    universe: TraitUniverseIndex,
+    goal: ExistsImplementedTraitGoal,
+) -> Result<InferredTraitGoalSolution, TraitGoalError> {
+    let goal = goal.instantiate_in_universe(universe)?;
+    let canonicalized = canonicalize_implemented_trait_goal_with_variables(goal)?;
+    let mut state = InferenceConstraintState::new(canonicalized)?;
+    let mut stack = [None; MAX_TRAIT_PROOF_DEPTH];
+    match solve_inferred_trait_goal_inner(
+        exact,
+        generic,
+        clauses,
+        None,
+        None,
+        None,
+        Some(coinductive_traits),
         0,
         goal,
         &mut state,
@@ -6166,6 +6212,7 @@ pub fn solve_concrete_trait_goal_with_projection_environment(
         None,
         None,
         Some(environment),
+        None,
         0,
         goal,
         &mut state,
@@ -6202,6 +6249,7 @@ pub fn solve_exists_trait_goal_with_projection_clauses(
         Some(projection_clauses),
         None,
         Some(environment),
+        None,
         0,
         goal,
         &mut state,
@@ -6249,6 +6297,7 @@ pub fn solve_exists_trait_goal_with_projection_implementations(
         Some(projection_clauses),
         Some(projection_implementations),
         Some(environment),
+        None,
         0,
         goal,
         &mut state,
@@ -6274,6 +6323,7 @@ fn solve_inferred_trait_goal_inner(
     projection_clauses: Option<&ProjectionBearingTraitClauseDatabase>,
     projection_implementations: Option<&ProjectionBearingGenericTraitImplementationDatabase>,
     environment: Option<TraitProjectionEnvironment<'_>>,
+    coinductive_traits: Option<&CoinductiveTraitDatabase>,
     premise_depth: usize,
     goal: ImplementedTraitGoal,
     state: &mut InferenceConstraintState,
@@ -6305,6 +6355,7 @@ fn solve_inferred_trait_goal_inner(
                 projection_clauses,
                 projection_implementations,
                 environment,
+                coinductive_traits,
                 premise_depth,
                 goal,
                 answer.instantiated,
@@ -6327,6 +6378,7 @@ fn solve_inferred_trait_goal_inner(
                         projection_clauses,
                         projection_implementations,
                         environment,
+                        coinductive_traits,
                         premise_depth,
                         goal,
                         answer.instantiated,
@@ -6375,6 +6427,7 @@ fn solve_inferred_premises(
     projection_clauses: Option<&ProjectionBearingTraitClauseDatabase>,
     projection_implementations: Option<&ProjectionBearingGenericTraitImplementationDatabase>,
     environment: Option<TraitProjectionEnvironment<'_>>,
+    coinductive_traits: Option<&CoinductiveTraitDatabase>,
     premise_depth: usize,
     goal: ImplementedTraitGoal,
     instantiated: InstantiatedTraitWhereClause,
@@ -6383,8 +6436,14 @@ fn solve_inferred_premises(
     depth: usize,
 ) -> Result<TraitProofSolution, TraitGoalError> {
     let goal = state.apply_goal(goal)?;
-    if stack[..depth].contains(&Some(goal)) {
-        return Ok(TraitProofSolution::Cycle);
+    if let Some(cycle_start) = find_inferred_cycle_start(state, stack, depth, goal)? {
+        return classify_inferred_coinductive_cycle(
+            coinductive_traits,
+            state,
+            stack,
+            cycle_start,
+            depth,
+        );
     }
     if depth >= MAX_TRAIT_PROOF_DEPTH {
         return Ok(TraitProofSolution::Overflow);
@@ -6429,6 +6488,7 @@ fn solve_inferred_premises(
             let saved = *state;
             match solve_inferred_trait_predicate_with_stack(
                 environment,
+                coinductive_traits,
                 premise_depth,
                 exact,
                 generic,
@@ -6457,6 +6517,40 @@ fn solve_inferred_premises(
     };
     stack[depth] = None;
     Ok(result)
+}
+
+fn find_inferred_cycle_start(
+    state: &InferenceConstraintState,
+    stack: &[Option<ImplementedTraitGoal>; MAX_TRAIT_PROOF_DEPTH],
+    depth: usize,
+    goal: ImplementedTraitGoal,
+) -> Result<Option<usize>, TraitGoalError> {
+    for (index, entry) in stack[..depth].iter().enumerate() {
+        let entry = entry.as_ref().copied().ok_or(TraitGoalError::InvalidGoal)?;
+        if state.apply_goal(entry)? == goal {
+            return Ok(Some(index));
+        }
+    }
+    Ok(None)
+}
+
+fn classify_inferred_coinductive_cycle(
+    coinductive_traits: Option<&CoinductiveTraitDatabase>,
+    state: &InferenceConstraintState,
+    stack: &[Option<ImplementedTraitGoal>; MAX_TRAIT_PROOF_DEPTH],
+    cycle_start: usize,
+    depth: usize,
+) -> Result<TraitProofSolution, TraitGoalError> {
+    let Some(coinductive_traits) = coinductive_traits else {
+        return Ok(TraitProofSolution::Cycle);
+    };
+    for entry in &stack[cycle_start..depth] {
+        let goal = state.apply_goal(entry.as_ref().copied().ok_or(TraitGoalError::InvalidGoal)?)?;
+        if validate_rigid_goal(goal).is_err() || !coinductive_traits.contains(goal.trait_id) {
+            return Ok(TraitProofSolution::Cycle);
+        }
+    }
+    Ok(TraitProofSolution::Proven)
 }
 
 #[derive(Clone, Copy)]
@@ -10734,6 +10828,123 @@ mod tests {
                 goal,
             ),
             Ok(TraitProofSolution::NoSolution)
+        );
+    }
+
+    #[test]
+    fn inferred_coinduction_requires_a_fully_resolved_cycle() {
+        let parameter = TraitGenericParameterId::new(0);
+        let recursive_trait = TraitId::new(285);
+        let constraining_trait = TraitId::new(286);
+        let mut resolved = TraitWhereClause::new(
+            1,
+            BoundImplementedTraitGoal::new(
+                recursive_trait,
+                BoundTraitGoalType::Parameter(parameter),
+            ),
+        )
+        .unwrap();
+        resolved
+            .push_premise(BoundImplementedTraitGoal::new(
+                constraining_trait,
+                BoundTraitGoalType::Parameter(parameter),
+            ))
+            .unwrap();
+        resolved
+            .push_premise(BoundImplementedTraitGoal::new(
+                recursive_trait,
+                BoundTraitGoalType::Parameter(parameter),
+            ))
+            .unwrap();
+        let mut generic = GenericTraitImplementationDatabase::EMPTY;
+        generic
+            .insert(GenericTraitImplementationId::new(7), resolved)
+            .unwrap();
+        let mut exact = TraitImplementationDatabase::EMPTY;
+        exact
+            .insert(TraitImplementationHeader::new(
+                TraitImplementationId::new(270),
+                constraining_trait,
+                TraitTypeId::new(10),
+            ))
+            .unwrap();
+        let query = ExistsImplementedTraitGoal::new(
+            1,
+            BoundImplementedTraitGoal::new(
+                recursive_trait,
+                BoundTraitGoalType::Parameter(parameter),
+            ),
+        )
+        .unwrap();
+        let mut coinductive = CoinductiveTraitDatabase::EMPTY;
+        coinductive.insert(recursive_trait).unwrap();
+
+        assert_eq!(
+            solve_exists_trait_goal_with_environment(
+                &exact,
+                &generic,
+                &TraitWhereClauseDatabase::EMPTY,
+                TraitUniverseIndex::ROOT,
+                query,
+            ),
+            Ok(InferredTraitGoalSolution::Cycle)
+        );
+        let InferredTraitGoalSolution::Unique(answer) = solve_exists_trait_goal_with_coinduction(
+            &exact,
+            &generic,
+            &TraitWhereClauseDatabase::EMPTY,
+            &coinductive,
+            TraitUniverseIndex::ROOT,
+            query,
+        )
+        .unwrap() else {
+            panic!("resolved coinductive cycle should preserve its substitution");
+        };
+        assert_eq!(
+            answer
+                .substitution
+                .binding(TraitInferenceVariableId::new(0)),
+            Some(TraitGoalType::Concrete(TraitTypeId::new(10)))
+        );
+
+        let mut unresolved = TraitWhereClause::new(
+            1,
+            BoundImplementedTraitGoal::new(
+                TraitId::new(287),
+                BoundTraitGoalType::Parameter(parameter),
+            ),
+        )
+        .unwrap();
+        unresolved
+            .push_premise(BoundImplementedTraitGoal::new(
+                TraitId::new(287),
+                BoundTraitGoalType::Parameter(parameter),
+            ))
+            .unwrap();
+        let mut unresolved_generic = GenericTraitImplementationDatabase::EMPTY;
+        unresolved_generic
+            .insert(GenericTraitImplementationId::new(8), unresolved)
+            .unwrap();
+        let mut unresolved_coinductive = CoinductiveTraitDatabase::EMPTY;
+        unresolved_coinductive.insert(TraitId::new(287)).unwrap();
+        let unresolved_query = ExistsImplementedTraitGoal::new(
+            1,
+            BoundImplementedTraitGoal::new(
+                TraitId::new(287),
+                BoundTraitGoalType::Parameter(parameter),
+            ),
+        )
+        .unwrap();
+        assert_eq!(
+            solve_exists_trait_goal_with_coinduction(
+                &TraitImplementationDatabase::EMPTY,
+                &unresolved_generic,
+                &TraitWhereClauseDatabase::EMPTY,
+                &unresolved_coinductive,
+                TraitUniverseIndex::ROOT,
+                unresolved_query,
+            ),
+            Ok(InferredTraitGoalSolution::Cycle)
         );
     }
 

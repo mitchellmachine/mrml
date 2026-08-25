@@ -1093,6 +1093,17 @@ library tests, one component-interface probe, 10 conformance tests, and 335
 replacement tests: 890 compiler tests per host. Inference and source integration
 remain unsupported.
 
+The resolved-inference coinduction milestone reapplies the current substitution
+to every stored goal before classifying a repeated existential proof path. A
+cycle succeeds only when all cycle goals are inference-free and all trait
+identities are explicitly coinductive. A preceding exact sibling obligation can
+therefore resolve a variable and preserve that concrete answer, while an
+otherwise identical unresolved self-cycle remains `Cycle`. Windows gnullvm and
+native Arch Linux WSL each pass 545 library tests, one component-interface probe,
+10 conformance tests, and 335 replacement tests: 891 compiler tests per host.
+Backtracking over unresolved coinductive answers and source integration remain
+unsupported.
+
 The premise-bearing rigid-normalization milestone proves the selected generic
 implementation's instantiated trait and projection predicates before exposing
 its associated value. It shares the caller's 16-frame rigid proof stack and
