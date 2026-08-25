@@ -22,11 +22,17 @@ jobs:
             toolchain: nightly-2026-08-24-x86_64-unknown-linux-gnu
             components: rustfmt
             mrml: target/debug/mrml
+            host_target: linux
+            math_artifact: target/mrml-native/linux/debug/libmrml_math.rlib
+            vmm: org.mrml.tool.vmm-kvm-run
           - host: Windows GNU/LLVM
             os: windows-latest
             toolchain: nightly-2026-08-24-x86_64-pc-windows-gnullvm
             components: rustfmt,rust-mingw
             mrml: target/debug/mrml.exe
+            host_target: windows
+            math_artifact: target/mrml-native/windows/debug/libmrml_math.rlib
+            vmm: org.mrml.tool.vmm-whp-run
     runs-on: ${{ matrix.os }}
     timeout-minutes: 30
 
@@ -53,7 +59,31 @@ jobs:
           "${{ matrix.mrml }}" manifest lock --check
           "${{ matrix.mrml }}" audit --output structured
 
+      - name: Reject active Manifest V1 declarations
+        shell: bash
+        run: |
+          if git grep -n -E '^(declarations[[:space:]]*=|.*(component|rust-action|rust-test|rust-feature-set|rust-example|rust-bench)\|)' -- ':(glob)**/mrml.toml'; then
+            echo 'active Manifest V1 declaration found' >&2
+            exit 1
+          fi
+
       - name: Build representative native component without Cargo
         shell: bash
         run: |
           "${{ matrix.mrml }}" build org.mrml.library.math --target native
+
+      - name: Test through the MRML-native frontend
+        shell: bash
+        run: |
+          "${{ matrix.mrml }}" test org.mrml.library.math --target "${{ matrix.host_target }}"
+
+      - name: Create and verify a canonical package
+        shell: bash
+        run: |
+          "${{ matrix.mrml }}" package create org.mrml.library.math library 1 x86_64 library "${{ matrix.math_artifact }}" target/ci-math.package
+          "${{ matrix.mrml }}" package verify target/ci-math.package --output structured
+
+      - name: Compile the host VMM runner
+        shell: bash
+        run: |
+          "${{ matrix.mrml }}" build "${{ matrix.vmm }}" --target "${{ matrix.host_target }}"
