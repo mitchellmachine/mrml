@@ -445,6 +445,42 @@ impl TraitWhereClause {
             .map(TraitWhereClauseElaboration::Unique)
     }
 
+    fn concrete_bindings(
+        self,
+        consequence: ImplementedTraitGoal,
+    ) -> Result<Option<[Option<TraitTypeId>; MAX_TRAIT_GENERIC_PARAMETERS]>, TraitGoalError> {
+        validate_concrete_goal(consequence)?;
+        if self.consequence.trait_id != consequence.trait_id
+            || self.consequence.argument_count != consequence.argument_count
+        {
+            return Ok(None);
+        }
+        let mut bindings = [None; MAX_TRAIT_GENERIC_PARAMETERS];
+        if !bound_type_matches_concrete(
+            self.consequence.self_type,
+            concrete_goal_type(consequence.self_type)?,
+            &mut bindings,
+        ) {
+            return Ok(None);
+        }
+        for (bound, concrete) in self
+            .consequence
+            .arguments()
+            .iter()
+            .zip(consequence.arguments())
+        {
+            let bound = bound.as_ref().copied().ok_or(TraitGoalError::InvalidGoal)?;
+            let concrete = concrete
+                .as_ref()
+                .copied()
+                .ok_or(TraitGoalError::InvalidGoal)?;
+            if !bound_type_matches_concrete(bound, concrete_goal_type(concrete)?, &mut bindings) {
+                return Ok(None);
+            }
+        }
+        Ok(Some(bindings))
+    }
+
     pub fn elaborate_rigid(
         self,
         consequence: ImplementedTraitGoal,
@@ -511,6 +547,14 @@ struct IdentifiedGenericTraitImplementation {
 pub struct GenericTraitImplementationAnswer {
     pub implementation_id: GenericTraitImplementationId,
     pub instantiated: InstantiatedTraitWhereClause,
+    arguments: [Option<TraitTypeId>; MAX_TRAIT_GENERIC_PARAMETERS],
+    argument_count: usize,
+}
+
+impl GenericTraitImplementationAnswer {
+    pub fn arguments(&self) -> &[Option<TraitTypeId>] {
+        &self.arguments[..self.argument_count]
+    }
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -592,9 +636,15 @@ impl GenericTraitImplementationDatabase {
                     if selected.is_some() {
                         return Ok(GenericTraitImplementationSolution::Ambiguous);
                     }
+                    let arguments = implementation
+                        .implementation
+                        .concrete_bindings(goal)?
+                        .ok_or(TraitGoalError::InvalidGoal)?;
                     selected = Some(GenericTraitImplementationAnswer {
                         implementation_id: implementation.id,
                         instantiated,
+                        arguments,
+                        argument_count: implementation.implementation.parameter_count,
                     });
                 }
                 TraitWhereClauseElaboration::Ambiguous => {
@@ -607,6 +657,17 @@ impl GenericTraitImplementationDatabase {
             GenericTraitImplementationSolution::NoSolution,
             GenericTraitImplementationSolution::Unique,
         ))
+    }
+
+    fn find(
+        &self,
+        id: GenericTraitImplementationId,
+    ) -> Option<IdentifiedGenericTraitImplementation> {
+        self.implementations[..self.implementation_count]
+            .iter()
+            .flatten()
+            .copied()
+            .find(|implementation| implementation.id == id)
     }
 }
 
@@ -1173,7 +1234,9 @@ pub enum TraitGoalError {
     DuplicateWhereClause,
     TooManyAssociatedTypeValues,
     DuplicateAssociatedTypeValue,
+    DuplicateGenericAssociatedTypeValue,
     UnknownImplementationId,
+    UnknownGenericImplementationId,
     UniverseOverflow,
     UniverseLeak,
     NonRigidClauseQuery,
@@ -1470,6 +1533,118 @@ impl TraitAssociatedTypeDatabase {
             .map_or(TraitProjectionSolution::NoSolution, |value| {
                 TraitProjectionSolution::Unique(value.value)
             })
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct GenericTraitAssociatedTypeValue {
+    pub implementation_id: GenericTraitImplementationId,
+    pub associated_type_id: TraitAssociatedTypeId,
+    pub value: BoundTraitGoalType,
+}
+
+impl GenericTraitAssociatedTypeValue {
+    pub const fn new(
+        implementation_id: GenericTraitImplementationId,
+        associated_type_id: TraitAssociatedTypeId,
+        value: BoundTraitGoalType,
+    ) -> Self {
+        Self {
+            implementation_id,
+            associated_type_id,
+            value,
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct GenericTraitAssociatedTypeDatabase {
+    values: [Option<GenericTraitAssociatedTypeValue>; MAX_TRAIT_ASSOCIATED_TYPE_VALUES],
+    value_count: usize,
+}
+
+impl GenericTraitAssociatedTypeDatabase {
+    pub const EMPTY: Self = Self {
+        values: [None; MAX_TRAIT_ASSOCIATED_TYPE_VALUES],
+        value_count: 0,
+    };
+
+    pub fn insert(
+        &mut self,
+        implementations: &GenericTraitImplementationDatabase,
+        value: GenericTraitAssociatedTypeValue,
+    ) -> Result<(), TraitGoalError> {
+        let implementation = implementations
+            .find(value.implementation_id)
+            .ok_or(TraitGoalError::UnknownGenericImplementationId)?;
+        if let BoundTraitGoalType::Parameter(parameter) = value.value
+            && parameter.get() as usize >= implementation.implementation.parameter_count
+        {
+            return Err(TraitGoalError::UnboundGenericParameter);
+        }
+        if self.values[..self.value_count]
+            .iter()
+            .flatten()
+            .any(|existing| {
+                existing.implementation_id == value.implementation_id
+                    && existing.associated_type_id == value.associated_type_id
+            })
+        {
+            return Err(TraitGoalError::DuplicateGenericAssociatedTypeValue);
+        }
+        let slot = self
+            .values
+            .get_mut(self.value_count)
+            .ok_or(TraitGoalError::TooManyAssociatedTypeValues)?;
+        *slot = Some(value);
+        self.value_count += 1;
+        Ok(())
+    }
+
+    pub fn normalize(
+        &self,
+        exact: &TraitImplementationDatabase,
+        implementations: &GenericTraitImplementationDatabase,
+        clauses: &TraitWhereClauseDatabase,
+        goal: ImplementedTraitGoal,
+        associated_type_id: TraitAssociatedTypeId,
+    ) -> Result<TraitProjectionSolution, TraitGoalError> {
+        match solve_concrete_trait_goal_with_generics(exact, implementations, clauses, goal)? {
+            TraitProofSolution::Proven => {}
+            TraitProofSolution::Ambiguous
+            | TraitProofSolution::Cycle
+            | TraitProofSolution::Overflow => return Ok(TraitProjectionSolution::Ambiguous),
+            TraitProofSolution::NoSolution => return Ok(TraitProjectionSolution::NoSolution),
+        }
+        let answer = match implementations.select(goal)? {
+            GenericTraitImplementationSolution::Unique(answer) => answer,
+            GenericTraitImplementationSolution::Ambiguous => {
+                return Ok(TraitProjectionSolution::Ambiguous);
+            }
+            GenericTraitImplementationSolution::NoSolution => {
+                return Ok(TraitProjectionSolution::NoSolution);
+            }
+        };
+        let Some(value) = self.values[..self.value_count]
+            .iter()
+            .flatten()
+            .find(|value| {
+                value.implementation_id == answer.implementation_id
+                    && value.associated_type_id == associated_type_id
+            })
+        else {
+            return Ok(TraitProjectionSolution::NoSolution);
+        };
+        let value = match value.value {
+            BoundTraitGoalType::Concrete(value) => value,
+            BoundTraitGoalType::Parameter(parameter) => answer
+                .arguments()
+                .get(parameter.get() as usize)
+                .and_then(Option::as_ref)
+                .copied()
+                .ok_or(TraitGoalError::UnboundGenericParameter)?,
+        };
+        Ok(TraitProjectionSolution::Unique(value))
     }
 }
 
@@ -3381,6 +3556,177 @@ mod tests {
                 ),
             ),
             Err(TraitGoalError::TooManyAssociatedTypeValues)
+        );
+    }
+
+    #[test]
+    fn normalizes_generic_associated_type_parameters_after_proof() {
+        let parameter = TraitGenericParameterId::new(0);
+        let implementation_id = GenericTraitImplementationId::new(21);
+        let mut implementation = TraitWhereClause::new(
+            1,
+            BoundImplementedTraitGoal::new(
+                TraitId::new(170),
+                BoundTraitGoalType::Parameter(parameter),
+            ),
+        )
+        .unwrap();
+        implementation
+            .push_premise(BoundImplementedTraitGoal::new(
+                TraitId::new(171),
+                BoundTraitGoalType::Parameter(parameter),
+            ))
+            .unwrap();
+        let mut implementations = GenericTraitImplementationDatabase::EMPTY;
+        implementations
+            .insert(implementation_id, implementation)
+            .unwrap();
+        let associated_type_id = TraitAssociatedTypeId::new(2);
+        let mut values = GenericTraitAssociatedTypeDatabase::EMPTY;
+        values
+            .insert(
+                &implementations,
+                GenericTraitAssociatedTypeValue::new(
+                    implementation_id,
+                    associated_type_id,
+                    BoundTraitGoalType::Parameter(parameter),
+                ),
+            )
+            .unwrap();
+        let goal = ImplementedTraitGoal::new(
+            TraitId::new(170),
+            TraitGoalType::Concrete(TraitTypeId::new(44)),
+        );
+        assert_eq!(
+            values.normalize(
+                &TraitImplementationDatabase::EMPTY,
+                &implementations,
+                &TraitWhereClauseDatabase::EMPTY,
+                goal,
+                associated_type_id,
+            ),
+            Ok(TraitProjectionSolution::NoSolution)
+        );
+        let mut exact = TraitImplementationDatabase::EMPTY;
+        exact
+            .insert(TraitImplementationHeader::new(
+                TraitImplementationId::new(1),
+                TraitId::new(171),
+                TraitTypeId::new(44),
+            ))
+            .unwrap();
+        assert_eq!(
+            values.normalize(
+                &exact,
+                &implementations,
+                &TraitWhereClauseDatabase::EMPTY,
+                goal,
+                associated_type_id,
+            ),
+            Ok(TraitProjectionSolution::Unique(TraitTypeId::new(44)))
+        );
+    }
+
+    #[test]
+    fn generic_projection_preserves_ambiguity_and_missing_values() {
+        let implementation_id = GenericTraitImplementationId::new(22);
+        let implementation = TraitWhereClause::new(
+            0,
+            BoundImplementedTraitGoal::new(
+                TraitId::new(180),
+                BoundTraitGoalType::Concrete(TraitTypeId::new(3)),
+            ),
+        )
+        .unwrap();
+        let mut implementations = GenericTraitImplementationDatabase::EMPTY;
+        implementations
+            .insert(implementation_id, implementation)
+            .unwrap();
+        let values = GenericTraitAssociatedTypeDatabase::EMPTY;
+        let goal = ImplementedTraitGoal::new(
+            TraitId::new(180),
+            TraitGoalType::Concrete(TraitTypeId::new(3)),
+        );
+        assert_eq!(
+            values.normalize(
+                &TraitImplementationDatabase::EMPTY,
+                &implementations,
+                &TraitWhereClauseDatabase::EMPTY,
+                goal,
+                TraitAssociatedTypeId::new(1),
+            ),
+            Ok(TraitProjectionSolution::NoSolution)
+        );
+        let mut exact = TraitImplementationDatabase::EMPTY;
+        exact
+            .insert(TraitImplementationHeader::new(
+                TraitImplementationId::new(3),
+                TraitId::new(180),
+                TraitTypeId::new(3),
+            ))
+            .unwrap();
+        assert_eq!(
+            values.normalize(
+                &exact,
+                &implementations,
+                &TraitWhereClauseDatabase::EMPTY,
+                goal,
+                TraitAssociatedTypeId::new(1),
+            ),
+            Ok(TraitProjectionSolution::Ambiguous)
+        );
+    }
+
+    #[test]
+    fn rejects_stale_duplicate_and_unbound_generic_associated_values() {
+        let implementation_id = GenericTraitImplementationId::new(23);
+        let mut implementations = GenericTraitImplementationDatabase::EMPTY;
+        implementations
+            .insert(
+                implementation_id,
+                TraitWhereClause::new(
+                    1,
+                    BoundImplementedTraitGoal::new(
+                        TraitId::new(190),
+                        BoundTraitGoalType::Parameter(TraitGenericParameterId::new(0)),
+                    ),
+                )
+                .unwrap(),
+            )
+            .unwrap();
+        let associated_type_id = TraitAssociatedTypeId::new(1);
+        let value = GenericTraitAssociatedTypeValue::new(
+            implementation_id,
+            associated_type_id,
+            BoundTraitGoalType::Concrete(TraitTypeId::new(9)),
+        );
+        let mut values = GenericTraitAssociatedTypeDatabase::EMPTY;
+        assert_eq!(values.insert(&implementations, value), Ok(()));
+        assert_eq!(
+            values.insert(&implementations, value),
+            Err(TraitGoalError::DuplicateGenericAssociatedTypeValue)
+        );
+        assert_eq!(
+            values.insert(
+                &implementations,
+                GenericTraitAssociatedTypeValue::new(
+                    GenericTraitImplementationId::new(99),
+                    TraitAssociatedTypeId::new(2),
+                    BoundTraitGoalType::Concrete(TraitTypeId::new(9)),
+                ),
+            ),
+            Err(TraitGoalError::UnknownGenericImplementationId)
+        );
+        assert_eq!(
+            values.insert(
+                &implementations,
+                GenericTraitAssociatedTypeValue::new(
+                    implementation_id,
+                    TraitAssociatedTypeId::new(2),
+                    BoundTraitGoalType::Parameter(TraitGenericParameterId::new(1)),
+                ),
+            ),
+            Err(TraitGoalError::UnboundGenericParameter)
         );
     }
 

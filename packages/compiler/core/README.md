@@ -4015,6 +4015,19 @@ interface probe, 10 conformance tests, and 335 replacement tests: 814 compiler
 tests per host. Premise-aware coherence, specialization, source impl syntax, and
 mixed inference selection remain unsupported.
 
+The generic associated-type normalization milestone adds a separate fixed
+64-value table keyed by stable generic-implementation and associated-type IDs.
+Values may be concrete or name one bound implementation parameter. The selected
+implementation answer retains its fixed substitution, and normalization first
+requires every instantiated premise to prove. Missing premises and values return
+no solution; unchecked selection collisions, proof cycles, and proof overflow
+remain ambiguous. Stale IDs, duplicate keys, and unbound parameters fail
+explicitly. Windows gnullvm and native Arch Linux WSL each pass 471 library
+tests, one component-interface probe, 10 conformance tests, and 335 replacement
+tests: 817 compiler tests per host. Nested projection terms, premise projection
+goals, specialization, source associated-type syntax, and mixed inference
+selection remain unsupported.
+
 The nested conditional tuple-origin milestone walks each leaf's bounded
 conditional-parent chain to the outermost generation before grouping reference
 origins by field ordinal. The exact oracle rejects a three-leaf returned field

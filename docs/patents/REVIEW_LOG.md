@@ -4281,3 +4281,12 @@ generic head. It reuses direct equality and fixed-array parameter binding and
 adds no specialization order, inference search, cache, parser, runtime
 mechanism, allocation, synchronization, protocol, cryptography, or hardware
 behavior.
+
+# 2026-08-25 — Bounded generic associated-type normalization
+
+**Result: NOT_TRIGGERED.** This compiler-only increment stores a bounded
+associated value under an admitted generic implementation identity, retains the
+selector's existing fixed-array substitution, proves existing bounded premises,
+and substitutes a concrete or parameter value. It adds no new search strategy,
+specialization order, cache, parser, runtime mechanism, allocation,
+synchronization, protocol, cryptography, or hardware behavior.

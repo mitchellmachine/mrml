@@ -767,6 +767,18 @@ probe, 10 conformance tests, and 335 replacement tests: 814 compiler tests per
 host. Premise-aware coherence, specialization, and source impl syntax remain
 unsupported.
 
+The generic associated-type normalization milestone adds a separate fixed
+64-value table keyed by stable generic-implementation and associated-type IDs.
+A value may be concrete or refer to one bound implementation parameter. The
+normalizer retains the selected implementation substitution and requires its
+recursive premises to prove before producing a value. Missing premises and
+values return no solution; unchecked collisions, proof cycles, and proof
+overflow remain ambiguous. Stale IDs, duplicate keys, and unbound parameters
+fail explicitly. Windows gnullvm and native Arch Linux WSL each pass 471 library
+tests, one component-interface probe, 10 conformance tests, and 335 replacement
+tests: 817 compiler tests per host. Nested projection terms, premise projection
+goals, specialization, and source associated-type syntax remain unsupported.
+
 The bounded rigid-proof milestone recursively composes concrete and skolemized
 placeholder premises through the existing 16-goal stack. Exact concrete facts
 can terminate branches; otherwise one unique rigid clause is elaborated.
