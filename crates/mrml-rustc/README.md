@@ -3800,7 +3800,7 @@ nested-loop return coverage, general regions, named lifetime inference, or
 complete Polonius semantics. The `no_std`/allocation/unsafe hygiene scan
 remained empty.
 
-The nested-loop return outlives milestone at `13ad7843` passed all 767 compiler
+The nested-loop return outlives milestone at `885ba7b7` passed all 767 compiler
 and driver tests on Windows gnullvm and all 767 in release mode on native Arch
 Linux WSL, plus warnings-denied compiler-only Clippy on both hosts using pinned
 rustc commit `f7d782a3be46d6bb4b9792fe69a61db389ba1769`. The pinned

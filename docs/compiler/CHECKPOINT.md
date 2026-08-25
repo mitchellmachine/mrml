@@ -9,7 +9,7 @@ the named commit and current source.
 ## Recoverable baseline
 
 - Branch: `main`
-- Compiler checkpoint commit: `13ad7843`
+- Compiler checkpoint commit: `885ba7b7`
   (`compiler: validate nested loop returns`)
 - Remote state when recorded: publication of this compiler checkpoint, its
   durable documentation, and review is pending. Unrelated OS work remains
