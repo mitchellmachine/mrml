@@ -939,3 +939,14 @@ each pass 507 library tests, one component-interface probe, 10 conformance
 tests, and 335 replacement tests: 853 compiler tests per host. Projection
 equalities in where-clause premises, general projection-bearing type terms,
 backtracking, caching, coinduction, and source syntax remain unsupported.
+
+The projection-premise representation milestone extends bounded where clauses
+and generic implementations with projection equality under the existing shared
+eight-predicate capacity. Concrete, rigid, and existential instantiation retain
+the projection goal, associated-type identity, and expected term. Proof entry
+points without associated-value environments reject such premises as no
+solution. Windows gnullvm and native Arch Linux WSL each pass 509 library tests,
+one component-interface probe, 10 conformance tests, and 335 replacement tests:
+855 compiler tests per host. Projection-aware recursive premise proof, general
+projection-bearing type terms, backtracking, caching, coinduction, and source
+syntax remain unsupported.

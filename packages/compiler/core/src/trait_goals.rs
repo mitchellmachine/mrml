@@ -375,6 +375,13 @@ impl ExistsImplementedTraitGoal {
 pub struct InstantiatedTraitWhereClause {
     pub consequence: ImplementedTraitGoal,
     pub premises: ImplementedTraitPredicates,
+    pub projection_premises: InferredTraitProjectionPredicates,
+}
+
+impl InstantiatedTraitWhereClause {
+    pub const fn has_projection_premises(self) -> bool {
+        !self.projection_premises.is_empty()
+    }
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -390,6 +397,8 @@ pub struct TraitWhereClause {
     pub consequence: BoundImplementedTraitGoal,
     premises: [Option<BoundImplementedTraitGoal>; MAX_TRAIT_PREDICATES],
     premise_count: usize,
+    projection_premises: [Option<(BoundTraitProjection, BoundTraitGoalType)>; MAX_TRAIT_PREDICATES],
+    projection_premise_count: usize,
 }
 
 impl TraitWhereClause {
@@ -406,6 +415,8 @@ impl TraitWhereClause {
             consequence,
             premises: [None; MAX_TRAIT_PREDICATES],
             premise_count: 0,
+            projection_premises: [None; MAX_TRAIT_PREDICATES],
+            projection_premise_count: 0,
         })
     }
 
@@ -418,6 +429,9 @@ impl TraitWhereClause {
         premise: BoundImplementedTraitGoal,
     ) -> Result<(), TraitGoalError> {
         validate_bound_goal(premise, self.parameter_count)?;
+        if self.premise_count + self.projection_premise_count >= MAX_TRAIT_PREDICATES {
+            return Err(TraitGoalError::TooManyPredicates);
+        }
         let slot = self
             .premises
             .get_mut(self.premise_count)
@@ -429,6 +443,29 @@ impl TraitWhereClause {
 
     pub fn premises(&self) -> &[Option<BoundImplementedTraitGoal>] {
         &self.premises[..self.premise_count]
+    }
+
+    pub fn push_projection_premise(
+        &mut self,
+        projection: BoundTraitProjection,
+        expected: BoundTraitGoalType,
+    ) -> Result<(), TraitGoalError> {
+        validate_bound_goal(projection.goal, self.parameter_count)?;
+        validate_bound_type(expected, self.parameter_count)?;
+        if self.premise_count + self.projection_premise_count >= MAX_TRAIT_PREDICATES {
+            return Err(TraitGoalError::TooManyPredicates);
+        }
+        let slot = self
+            .projection_premises
+            .get_mut(self.projection_premise_count)
+            .ok_or(TraitGoalError::TooManyPredicates)?;
+        *slot = Some((projection, expected));
+        self.projection_premise_count += 1;
+        Ok(())
+    }
+
+    pub fn projection_premises(&self) -> &[Option<(BoundTraitProjection, BoundTraitGoalType)>] {
+        &self.projection_premises[..self.projection_premise_count]
     }
 
     pub fn instantiate(
@@ -481,9 +518,22 @@ impl TraitWhereClause {
                 arguments,
             )?)?;
         }
+        let mut projection_premises = InferredTraitProjectionPredicates::EMPTY;
+        for premise in self.projection_premises() {
+            let (projection, expected) = premise
+                .as_ref()
+                .copied()
+                .ok_or(TraitGoalError::InvalidGoal)?;
+            projection_premises.push(InferredTraitProjectionEquality {
+                goal: instantiate_bound_goal(projection.goal, arguments)?,
+                associated_type_id: projection.associated_type_id,
+                expected: instantiate_bound_type(expected, arguments)?,
+            })?;
+        }
         Ok(InstantiatedTraitWhereClause {
             consequence,
             premises,
+            projection_premises,
         })
     }
 
@@ -1445,6 +1495,9 @@ fn solve_concrete_trait_goal_inner(
     stack[depth] = Some(goal);
     let solution = match clauses.elaborate(goal)? {
         TraitWhereClauseSolution::Unique(answer) => {
+            if answer.instantiated.has_projection_premises() {
+                return Ok(TraitProofSolution::NoSolution);
+            }
             let mut result = TraitProofSolution::Proven;
             for premise in answer.instantiated.premises.predicates().iter() {
                 let premise = premise
@@ -1519,6 +1572,9 @@ fn solve_concrete_trait_goal_with_generics_inner(
             return Ok(TraitProofSolution::Ambiguous);
         }
         (TraitGoalSolution::NoSolution, GenericTraitImplementationSolution::Unique(answer)) => {
+            if answer.instantiated.has_projection_premises() {
+                return Ok(TraitProofSolution::NoSolution);
+            }
             if stack[..depth].contains(&Some(goal)) {
                 return Ok(TraitProofSolution::Cycle);
             }
@@ -1547,14 +1603,20 @@ fn solve_concrete_trait_goal_with_generics_inner(
     }
     stack[depth] = Some(goal);
     let solution = match clauses.elaborate(goal)? {
-        TraitWhereClauseSolution::Unique(answer) => solve_generic_premises(
-            implementations,
-            generic_implementations,
-            clauses,
-            answer.instantiated.premises,
-            stack,
-            depth + 1,
-        )?,
+        TraitWhereClauseSolution::Unique(answer) => {
+            if answer.instantiated.has_projection_premises() {
+                TraitProofSolution::NoSolution
+            } else {
+                solve_generic_premises(
+                    implementations,
+                    generic_implementations,
+                    clauses,
+                    answer.instantiated.premises,
+                    stack,
+                    depth + 1,
+                )?
+            }
+        }
         TraitWhereClauseSolution::Ambiguous => TraitProofSolution::Ambiguous,
         TraitWhereClauseSolution::NoSolution => TraitProofSolution::NoSolution,
     };
@@ -1644,6 +1706,9 @@ fn solve_rigid_trait_goal_with_generics_inner(
             return Ok(TraitProofSolution::Ambiguous);
         }
         (TraitGoalSolution::NoSolution, GenericTraitImplementationSolution::Unique(answer)) => {
+            if answer.instantiated.has_projection_premises() {
+                return Ok(TraitProofSolution::NoSolution);
+            }
             if stack[..depth].contains(&Some(goal)) {
                 return Ok(TraitProofSolution::Cycle);
             }
@@ -1672,14 +1737,20 @@ fn solve_rigid_trait_goal_with_generics_inner(
     }
     stack[depth] = Some(goal);
     let solution = match clauses.elaborate_rigid(goal)? {
-        TraitWhereClauseSolution::Unique(answer) => solve_rigid_generic_premises(
-            implementations,
-            generic_implementations,
-            clauses,
-            answer.instantiated.premises,
-            stack,
-            depth + 1,
-        )?,
+        TraitWhereClauseSolution::Unique(answer) => {
+            if answer.instantiated.has_projection_premises() {
+                TraitProofSolution::NoSolution
+            } else {
+                solve_rigid_generic_premises(
+                    implementations,
+                    generic_implementations,
+                    clauses,
+                    answer.instantiated.premises,
+                    stack,
+                    depth + 1,
+                )?
+            }
+        }
         TraitWhereClauseSolution::Ambiguous => TraitProofSolution::Ambiguous,
         TraitWhereClauseSolution::NoSolution => TraitProofSolution::NoSolution,
     };
@@ -1737,6 +1808,9 @@ fn solve_rigid_trait_goal_inner(
     stack[depth] = Some(goal);
     let solution = match clauses.elaborate_rigid(goal)? {
         TraitWhereClauseSolution::Unique(answer) => {
+            if answer.instantiated.has_projection_premises() {
+                return Ok(TraitProofSolution::NoSolution);
+            }
             let mut result = TraitProofSolution::Proven;
             for premise in answer.instantiated.premises.predicates().iter() {
                 let premise = premise
@@ -2256,6 +2330,40 @@ pub struct InferredTraitProjectionEquality {
     pub goal: ImplementedTraitGoal,
     pub associated_type_id: TraitAssociatedTypeId,
     pub expected: TraitGoalType,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct InferredTraitProjectionPredicates {
+    predicates: [Option<InferredTraitProjectionEquality>; MAX_TRAIT_PREDICATES],
+    predicate_count: usize,
+}
+
+impl InferredTraitProjectionPredicates {
+    pub const EMPTY: Self = Self {
+        predicates: [None; MAX_TRAIT_PREDICATES],
+        predicate_count: 0,
+    };
+
+    pub fn push(
+        &mut self,
+        predicate: InferredTraitProjectionEquality,
+    ) -> Result<(), TraitGoalError> {
+        let slot = self
+            .predicates
+            .get_mut(self.predicate_count)
+            .ok_or(TraitGoalError::TooManyPredicates)?;
+        *slot = Some(predicate);
+        self.predicate_count += 1;
+        Ok(())
+    }
+
+    pub fn predicates(&self) -> &[Option<InferredTraitProjectionEquality>] {
+        &self.predicates[..self.predicate_count]
+    }
+
+    pub const fn is_empty(self) -> bool {
+        self.predicate_count == 0
+    }
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -3193,6 +3301,9 @@ fn solve_inferred_trait_goal_inner(
             Ok(TraitProofSolution::Proven)
         }
         (TraitGoalSolution::NoSolution, GenericExistentialTraitGoalSolution::Unique(answer)) => {
+            if answer.instantiated.has_projection_premises() {
+                return Ok(TraitProofSolution::NoSolution);
+            }
             state.merge_symbolic(answer.substitution)?;
             solve_inferred_premises(
                 exact,
@@ -3208,6 +3319,9 @@ fn solve_inferred_trait_goal_inner(
         (TraitGoalSolution::NoSolution, GenericExistentialTraitGoalSolution::NoSolution) => {
             match clauses.elaborate_existential(goal)? {
                 InferredTraitWhereClauseSolution::Unique(answer) => {
+                    if answer.instantiated.has_projection_premises() {
+                        return Ok(TraitProofSolution::NoSolution);
+                    }
                     state.merge_symbolic(answer.substitution)?;
                     solve_inferred_premises(
                         exact,
@@ -3895,6 +4009,112 @@ mod tests {
                 Some(TraitGoalType::Concrete(TraitTypeId::new(20))),
                 Some(TraitGoalType::Concrete(TraitTypeId::new(99))),
             ]
+        );
+    }
+
+    #[test]
+    fn instantiates_projection_where_clause_premises_and_bounds_combined_capacity() {
+        let first = TraitGenericParameterId::new(0);
+        let second = TraitGenericParameterId::new(1);
+        let mut clause = TraitWhereClause::new(
+            2,
+            BoundImplementedTraitGoal::new(TraitId::new(700), BoundTraitGoalType::Parameter(first)),
+        )
+        .unwrap();
+        clause
+            .push_premise(BoundImplementedTraitGoal::new(
+                TraitId::new(701),
+                BoundTraitGoalType::Parameter(second),
+            ))
+            .unwrap();
+        clause
+            .push_projection_premise(
+                BoundTraitProjection::new(
+                    BoundImplementedTraitGoal::new(
+                        TraitId::new(702),
+                        BoundTraitGoalType::Parameter(first),
+                    ),
+                    TraitAssociatedTypeId::new(3),
+                ),
+                BoundTraitGoalType::Parameter(second),
+            )
+            .unwrap();
+        let instantiated = clause
+            .instantiate(&[TraitTypeId::new(10), TraitTypeId::new(20)])
+            .unwrap();
+        assert_eq!(instantiated.premises.predicates().len(), 1);
+        assert_eq!(instantiated.projection_premises.predicates().len(), 1);
+        assert_eq!(
+            instantiated.projection_premises.predicates()[0],
+            Some(InferredTraitProjectionEquality {
+                goal: ImplementedTraitGoal::new(
+                    TraitId::new(702),
+                    TraitGoalType::Concrete(TraitTypeId::new(10)),
+                ),
+                associated_type_id: TraitAssociatedTypeId::new(3),
+                expected: TraitGoalType::Concrete(TraitTypeId::new(20)),
+            })
+        );
+
+        for index in 2..MAX_TRAIT_PREDICATES {
+            clause
+                .push_premise(BoundImplementedTraitGoal::new(
+                    TraitId::new(710 + index as u32),
+                    BoundTraitGoalType::Parameter(first),
+                ))
+                .unwrap();
+        }
+        assert_eq!(
+            clause.push_projection_premise(
+                BoundTraitProjection::new(
+                    BoundImplementedTraitGoal::new(
+                        TraitId::new(799),
+                        BoundTraitGoalType::Parameter(first),
+                    ),
+                    TraitAssociatedTypeId::new(1),
+                ),
+                BoundTraitGoalType::Parameter(second),
+            ),
+            Err(TraitGoalError::TooManyPredicates)
+        );
+    }
+
+    #[test]
+    fn legacy_clause_proof_fails_closed_on_projection_premises() {
+        let consequence = BoundImplementedTraitGoal::new(
+            TraitId::new(703),
+            BoundTraitGoalType::Concrete(TraitTypeId::new(1)),
+        );
+        let mut clause = TraitWhereClause::new(0, consequence).unwrap();
+        clause
+            .push_projection_premise(
+                BoundTraitProjection::new(
+                    BoundImplementedTraitGoal::new(
+                        TraitId::new(704),
+                        BoundTraitGoalType::Concrete(TraitTypeId::new(2)),
+                    ),
+                    TraitAssociatedTypeId::new(1),
+                ),
+                BoundTraitGoalType::Concrete(TraitTypeId::new(3)),
+            )
+            .unwrap();
+        let mut clauses = TraitWhereClauseDatabase::EMPTY;
+        clauses.insert(TraitWhereClauseId::new(70), clause).unwrap();
+        let goal = ImplementedTraitGoal::new(
+            TraitId::new(703),
+            TraitGoalType::Concrete(TraitTypeId::new(1)),
+        );
+        let TraitWhereClauseSolution::Unique(answer) = clauses.elaborate(goal).unwrap() else {
+            panic!("projection-bearing clause should elaborate before proof");
+        };
+        assert!(answer.instantiated.has_projection_premises());
+        assert_eq!(
+            solve_concrete_trait_goal(&TraitImplementationDatabase::EMPTY, &clauses, goal),
+            Ok(TraitProofSolution::NoSolution)
+        );
+        assert_eq!(
+            solve_rigid_trait_goal(&TraitImplementationDatabase::EMPTY, &clauses, goal),
+            Ok(TraitProofSolution::NoSolution)
         );
     }
 

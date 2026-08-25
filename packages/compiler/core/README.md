@@ -4144,6 +4144,18 @@ equalities in where-clause premises, general projection-bearing type terms,
 backtracking, caching, coinduction, source syntax, and general normalization
 remain unsupported.
 
+The projection-premise representation milestone lets a bounded where clause or
+generic implementation retain projection equalities beside implemented-trait
+premises under one combined eight-entry limit. Instantiation substitutes the
+same concrete, rigid, or inference terms into the projection goal and expected
+term. Legacy proof APIs do not possess associated-value environments and return
+no solution when such a premise is selected. Windows gnullvm and native Arch
+Linux WSL each pass 509 library tests, one component-interface probe, 10
+conformance tests, and 335 replacement tests: 855 compiler tests per host.
+Projection-aware recursive premise proof, general projection-bearing type
+terms, backtracking, caching, coinduction, source syntax, and general
+normalization remain unsupported.
+
 The nested conditional tuple-origin milestone walks each leaf's bounded
 conditional-parent chain to the outermost generation before grouping reference
 origins by field ordinal. The exact oracle rejects a three-leaf returned field

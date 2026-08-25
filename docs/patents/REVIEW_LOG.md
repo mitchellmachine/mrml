@@ -4501,3 +4501,13 @@ array, retries ambiguous entries after monotonic shared-state refinement, and
 rolls back tentative ambiguous constraints. It adds no new term grammar,
 branching search, specialization order, cache, parser, runtime mechanism,
 allocation, synchronization, protocol, cryptography, or hardware behavior.
+
+# 2026-08-25 — Typed trait projection-premise representation
+
+**Result: NOT_TRIGGERED.** This compiler-only increment stores an existing
+bounded projection-equality form beside existing bounded trait premises,
+validates binder indices, substitutes existing term identities, and makes
+non-projection-aware proof reject the premise. It adds no solving algorithm,
+term grammar, branching search, specialization order, cache, parser, runtime
+mechanism, allocation, synchronization, protocol, cryptography, or hardware
+behavior.
