@@ -339,6 +339,26 @@ was checked on a Windows host without changing service source behavior:
 No Linux host/runtime, signed service, WHP/KVM, bare-metal, or physical-hardware
 execution was exercised by this path-only move.
 
+The storage-service move from `crates/mrml-storage` to `services/storage` was
+checked on a Windows host without changing storage source behavior:
+
+- `cargo metadata --no-deps --format-version 1`,
+  `cargo +nightly-2026-08-24-x86_64-pc-windows-gnullvm fmt -p mrml-storage -- --check`,
+  `.\target\debug\mrml.exe doctor`, and `.\target\debug\mrml.exe audit`
+  — PASS;
+- `cargo +nightly-2026-08-24-x86_64-pc-windows-gnullvm test -p mrml-storage`
+  — FAIL, 118 passed and 3 existing stack-heavy tests overflowed the default
+  Windows test-harness stack;
+- the same test with `RUSTFLAGS=-C link-arg=/stack:67108864` — PASS, 121 tests;
+- `cargo +nightly-2026-08-24-x86_64-pc-windows-gnullvm clippy -p mrml-storage --all-targets --no-deps -- -D warnings`
+  — FAIL on four existing `drop_non_drop` lints in unchanged storage test code;
+- `.\target\debug\mrml.exe build mrml-storage` — PASS;
+- `git grep -n 'crates/mrml-storage/' -- ':!docs/build/MIGRATION_INVENTORY.md'`
+  — PASS with no stale exact storage-package path matches.
+
+No Linux host/runtime, live block device, signed service, WHP/KVM, bare-metal,
+or physical-storage execution was exercised by this path-only move.
+
 `package`, `release`, `image`, and `publish` deliberately fail as `PLANNED`.
 Linux, KVM, cross-host equivalence, physical UEFI/GPU, and release functionality
 were not exercised by the Windows implementation environment.

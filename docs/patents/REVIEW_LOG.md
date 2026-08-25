@@ -788,7 +788,7 @@ bookkeeping.
 
 ## 2026-08-23 — capability-native storage identity and metadata foundation
 
-MRML source: `crates/mrml-storage`.
+MRML source: `services/storage`.
 
 The userspace storage foundation uses conventional nonzero stable identifiers,
 fixed-capacity generational capability tables, attenuated delegation with
@@ -803,7 +803,7 @@ defensive fixed-record filesystem metadata.
 
 ## 2026-08-23 — bounded native extent mapping
 
-MRML source: `crates/mrml-storage/src/extent.rs`.
+MRML source: `services/storage/src/extent.rs`.
 
 The storage service uses conventional fixed extent records, explicit sparse
 holes, ordered logical coverage, linear bounded lookup, physical range checks,
@@ -817,7 +817,7 @@ mapping.
 
 ## 2026-08-23 — checksummed COW metadata publication planning
 
-MRML source: `crates/mrml-storage/src/cow.rs`.
+MRML source: `services/storage/src/cow.rs`.
 
 The storage service uses conventional copy-on-write ordering: validate and
 checksum new unreachable metadata, flush it, atomically replace an inactive
@@ -831,7 +831,7 @@ publication ordering.
 
 ## 2026-08-23 — capability-authorized bounded directory operations
 
-MRML source: `crates/mrml-storage/src/directory.rs` and the storage authority
+MRML source: `services/storage/src/directory.rs` and the storage authority
 and metadata modules.
 
 The service uses conventional fixed-capacity directory tables, monotonic object
@@ -846,7 +846,7 @@ bookkeeping.
 
 ## 2026-08-23 — bounded verified native file reads
 
-MRML source: `crates/mrml-storage/src/file.rs` and the extent/authority modules.
+MRML source: `services/storage/src/file.rs` and the extent/authority modules.
 
 The service uses conventional capability-checked range reads, linear extent
 resolution, sparse-hole zero filling, SHA3-256 data verification, bounded
@@ -858,7 +858,7 @@ Patent review: `NOT_TRIGGERED` — conventional checksummed extent reads.
 
 ## 2026-08-23 — bounded COW native file writes
 
-MRML source: `crates/mrml-storage/src/file.rs` and the extent/COW/metadata
+MRML source: `services/storage/src/file.rs` and the extent/COW/metadata
 modules.
 
 The service uses conventional capability-checked range writes, complete
@@ -873,7 +873,7 @@ updates.
 
 ## 2026-08-23 — bounded multi-file COW transactions
 
-MRML source: `crates/mrml-storage/src/transaction.rs` and the file/COW modules.
+MRML source: `services/storage/src/transaction.rs` and the file/COW modules.
 
 The service uses conventional fixed-capacity transaction admission, duplicate
 participant/range rejection, one copy-on-write root publication, and one-use
@@ -886,7 +886,7 @@ Patent review: `NOT_TRIGGERED` — conventional bounded transaction batching.
 
 ## 2026-08-23 — redundant COW root recovery selection
 
-MRML source: `crates/mrml-storage/src/recovery.rs` and the canonical superblock
+MRML source: `services/storage/src/recovery.rs` and the canonical superblock
 format.
 
 The service uses conventional redundant checksummed superblocks, complete-tree
@@ -899,7 +899,7 @@ Patent review: `NOT_TRIGGERED` — conventional redundant-root selection.
 
 ## 2026-08-23 — canonical allocation ownership index
 
-MRML source: `crates/mrml-storage/src/allocation.rs`.
+MRML source: `services/storage/src/allocation.rs`.
 
 The service uses conventional checksummed allocation records, physical ordering,
 reserved-range exclusion, global overlap rejection, and exact owner/generation/
@@ -910,7 +910,7 @@ Patent review: `NOT_TRIGGERED` — conventional allocation ownership bookkeeping
 
 ## 2026-08-23 — canonical allocation metadata image
 
-MRML source: `crates/mrml-storage/src/allocation.rs`.
+MRML source: `services/storage/src/allocation.rs`.
 
 The service uses a conventional versioned image header, fixed-width allocation
 records, whole-image SHA3-256 corruption detection, zero padding, and bounded
@@ -922,7 +922,7 @@ Patent review: `NOT_TRIGGERED` — conventional checksummed allocation metadata.
 
 ## 2026-08-23 — canonical extent metadata images
 
-MRML source: `crates/mrml-storage/src/extent.rs` and allocation ownership types.
+MRML source: `services/storage/src/extent.rs` and allocation ownership types.
 
 The service uses a conventional versioned extent-list header, fixed-width
 checksummed records, whole-image SHA3-256 corruption detection, zero padding,
@@ -934,7 +934,7 @@ Patent review: `NOT_TRIGGERED` — conventional checksummed extent-list metadata
 
 ## 2026-08-23 — bounded reachable storage validation
 
-MRML source: `crates/mrml-storage/src/recovery.rs`, `directory.rs`, and the
+MRML source: `services/storage/src/recovery.rs`, `directory.rs`, and the
 allocation/extent metadata modules.
 
 The service uses conventional fixed-capacity graph traversal, versioned
@@ -947,7 +947,7 @@ Patent review: `NOT_TRIGGERED` — conventional filesystem consistency traversal
 
 ## 2026-08-23 — integrated redundant-root recovery simulation
 
-MRML source: `crates/mrml-storage/src/recovery.rs`.
+MRML source: `services/storage/src/recovery.rs`.
 
 The service composes conventional redundant-root selection with bounded
 filesystem consistency validation, deterministic fault injection, and a
@@ -962,7 +962,7 @@ Patent review: `NOT_TRIGGERED` — conventional recovery fault simulation.
 
 ## 2026-08-23 — bounded allocation successor planning
 
-MRML source: `crates/mrml-storage/src/allocation.rs`.
+MRML source: `services/storage/src/allocation.rs`.
 
 The service uses conventional copy-on-write allocation-table reconstruction,
 exact free/allocate changes, sorted records, active-range exclusion, generation
@@ -974,7 +974,7 @@ Patent review: `NOT_TRIGGERED` — conventional COW allocation bookkeeping.
 
 ## 2026-08-23 — staged transactional allocation images
 
-MRML source: `crates/mrml-storage/src/allocation.rs` and `transaction.rs`.
+MRML source: `services/storage/src/allocation.rs` and `transaction.rs`.
 
 The service uses conventional complete-image staging, SHA3-256 corruption
 detection, durable flush ordering, typed transaction participants, exact COW
@@ -1008,7 +1008,7 @@ Patent review: `NOT_TRIGGERED` — conventional type-directed compiler traversal
 
 ## 2026-08-23 — staged transactional directory images
 
-MRML source: `crates/mrml-storage/src/directory.rs` and `transaction.rs`.
+MRML source: `services/storage/src/directory.rs` and `transaction.rs`.
 
 The service uses conventional canonical directory metadata and entry-list
 encoding, SHA3-256 corruption detection, copy-on-write staging, durable flush
@@ -1021,7 +1021,7 @@ staging.
 
 ## 2026-08-23 — bounded directory ancestry proof
 
-MRML source: `crates/mrml-storage/src/directory.rs`.
+MRML source: `services/storage/src/directory.rs`.
 
 The service performs a conventional fixed-capacity parent-chain walk over one
 immutable filesystem generation, binds the moved directory's exact generation
@@ -1047,7 +1047,7 @@ validation.
 
 ## 2026-08-23 — transactional stable object-ID allocator image
 
-MRML source: `crates/mrml-storage/src/object_id_allocator.rs` and
+MRML source: `services/storage/src/object_id_allocator.rs` and
 `transaction.rs`.
 
 The service uses a conventional monotonic integer allocator, canonical
@@ -1061,7 +1061,7 @@ metadata.
 
 ## 2026-08-23 — exact allocator-metadata allocation ownership
 
-MRML source: `crates/mrml-storage/src/allocation.rs` and
+MRML source: `services/storage/src/allocation.rs` and
 `object_id_allocator.rs`.
 
 The service uses a conventional purpose tag and exact owner, generation, and
@@ -1074,7 +1074,7 @@ Patent review: `NOT_TRIGGERED` — conventional exact allocation bookkeeping.
 
 ## 2026-08-23 — grouped create receipt consumption
 
-MRML source: `crates/mrml-storage/src/transaction.rs`.
+MRML source: `services/storage/src/transaction.rs`.
 
 The transaction receipt conventionally preflights two bounded participant
 groups for presence and duplicates before clearing the complete set. This adds
@@ -1084,7 +1084,7 @@ Patent review: `NOT_TRIGGERED` — conventional atomic receipt bookkeeping.
 
 ## 2026-08-23 — complete prepared storage create assembly
 
-MRML source: `crates/mrml-storage/src/create.rs` and its existing directory,
+MRML source: `services/storage/src/create.rs` and its existing directory,
 file, allocation, allocator, authority, COW, and transaction primitives.
 
 The service conventionally groups a staged parent-directory closure, empty
@@ -1098,7 +1098,7 @@ Patent review: `NOT_TRIGGERED` — conventional transactional create assembly.
 
 ## 2026-08-23 — reachable object-ID allocator recovery validation
 
-MRML source: `crates/mrml-storage/src/recovery.rs` and the canonical allocator
+MRML source: `services/storage/src/recovery.rs` and the canonical allocator
 and allocation formats.
 
 The recovery validator conventionally requires one purpose-tagged allocator
@@ -1112,7 +1112,7 @@ Patent review: `NOT_TRIGGERED` — conventional allocator recovery validation.
 
 ## 2026-08-23 — exact directory-create parent binding
 
-MRML source: `crates/mrml-storage/src/directory.rs` and `create.rs`.
+MRML source: `services/storage/src/directory.rs` and `create.rs`.
 
 The service conventionally retains the parent encoded in new directory
 metadata, compares it with the unique parent successor containing the new
@@ -1124,7 +1124,7 @@ Patent review: `NOT_TRIGGERED` — conventional directory parent validation.
 
 ## 2026-08-23 — full-range primary-metadata COW digests
 
-MRML source: `crates/mrml-storage/src/cow.rs`, `file.rs`, and `directory.rs`.
+MRML source: `services/storage/src/cow.rs`, `file.rs`, and `directory.rs`.
 
 The service conventionally hashes a fixed metadata record followed by zero
 padding through its exact block-aligned storage range. This makes the staged
@@ -1135,7 +1135,7 @@ Patent review: `NOT_TRIGGERED` — conventional zero-padded image hashing.
 
 ## 2026-08-23 — interrupted create publication recovery simulation
 
-MRML source: `crates/mrml-storage/src/create.rs` using the existing COW and
+MRML source: `services/storage/src/create.rs` using the existing COW and
 reachable-recovery primitives.
 
 The test model conventionally separates staged metadata and redundant
@@ -1149,7 +1149,7 @@ Patent review: `NOT_TRIGGERED` — conventional cut-point recovery simulation.
 
 ## 2026-08-23 — recovered child capability derivation
 
-MRML source: `crates/mrml-storage/src/authority.rs`, `directory.rs`, and
+MRML source: `services/storage/src/authority.rs`, `directory.rs`, and
 `create.rs`.
 
 The service conventionally requires an explicit parent-directory right before
@@ -1164,7 +1164,7 @@ revocation lineage.
 
 ## 2026-08-23 — exact-block metadata adapter
 
-MRML source: `crates/mrml-storage/src/block.rs`.
+MRML source: `services/storage/src/block.rs`.
 
 The service conventionally adapts canonical metadata images to exact block
 writes, verifies SHA3-256 by complete readback, orders flushes before and after
@@ -1177,8 +1177,8 @@ Patent review: `NOT_TRIGGERED` — conventional checked block-I/O adaptation.
 
 ## 2026-08-23 — exact-block file-data adapter
 
-MRML source: `crates/mrml-storage/src/block.rs` and the crate-private
-`FileState` extent-map accessor in `crates/mrml-storage/src/file.rs`.
+MRML source: `services/storage/src/block.rs` and the crate-private
+`FileState` extent-map accessor in `services/storage/src/file.rs`.
 
 The service conventionally verifies a complete extent before a subrange read,
 reconstructs copy-on-write successor blocks from verified predecessor data,
@@ -1190,7 +1190,7 @@ Patent review: `NOT_TRIGGERED` — conventional verified file-data adaptation.
 
 ## 2026-08-23 — capability-bound block-service core
 
-MRML source: `crates/mrml-storage/src/block_service.rs`.
+MRML source: `services/storage/src/block_service.rs`.
 
 The service conventionally registers device descriptors, authorizes exact block
 operations with principal-bound generational handles and attenuable rights,
@@ -1203,7 +1203,7 @@ service dispatch.
 
 ## 2026-08-23 — versioned block-service control codec
 
-MRML source: `crates/mrml-storage/src/block_protocol.rs`.
+MRML source: `services/storage/src/block_protocol.rs`.
 
 The service conventionally encodes fixed-size versioned request/response
 records, uses separately authorized buffers for bulk I/O, correlates requests
@@ -1216,7 +1216,7 @@ Patent review: `NOT_TRIGGERED` — conventional bounded control protocol.
 ## 2026-08-23 — exact received-buffer capability shape
 
 MRML source: `system/kernel/src/{capability,ipc}.rs` and
-`crates/mrml-storage/src/block_protocol.rs`.
+`services/storage/src/block_protocol.rs`.
 
 The kernel conventionally requires zero capabilities or one live transferred
 capability with an exact rights set before returning its object identity, while
@@ -1240,7 +1240,7 @@ Patent review: `NOT_TRIGGERED` — conventional authorized mapping resolution.
 
 ## 2026-08-23 — canonical empty child creation images
 
-MRML source: `crates/mrml-storage/src/file.rs`, `directory.rs`, and
+MRML source: `services/storage/src/file.rs`, `directory.rs`, and
 `transaction.rs`.
 
 The service conventionally encodes and stages empty generation-1 file/extent
@@ -1292,7 +1292,7 @@ Patent review: `NOT_TRIGGERED` — conventional bounded authorized lookup.
 
 ## 2026-08-23 — capability-bound block transport composition
 
-MRML source: `crates/mrml-storage/src/{block_protocol,kernel_transport}.rs`
+MRML source: `services/storage/src/{block_protocol,kernel_transport}.rs`
 and `system/kernel/src/ipc.rs`.
 
 The storage service conventionally separates replay/poison admission from

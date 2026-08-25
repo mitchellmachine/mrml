@@ -13,7 +13,7 @@ block-service-loop = []
 mrml-config = { path = "../../services/config" }
 mrml-crypto = { path = "../../packages/libraries/crypto", default-features = false }
 mrml-kernel = { path = "../../system/kernel" }
-mrml-storage = { path = "../../crates/mrml-storage" }
+mrml-storage = { path = "../../services/storage" }
 
 [[bin]]
 name = "mrml-service-pe"

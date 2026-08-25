@@ -173,7 +173,7 @@ explicitly and downgrade the status rather than guessing.
   ABI stabilization.
 - Application/GUI/browser OS work: search the whole tree; absence is meaningful
   and planned documentation must not be promoted to implementation status.
-- Native filesystem: `crates/mrml-storage` contains the first userspace-service
+- Native filesystem: `services/storage` contains the first userspace-service
   foundation: stable volume/object identities, attenuated generational
   authority with descendant revocation, and canonical checksummed v1 volume,
   superblock, directory-entry, directory, file, and extent metadata. Its bounded
