@@ -728,6 +728,16 @@ probe, 10 conformance tests, and 335 replacement tests: 802 compiler tests per
 host. Recursive rigid proof, general unification, and source `for<...>` remain
 unsupported.
 
+The bounded rigid-proof milestone recursively composes concrete and skolemized
+placeholder premises through the existing 16-goal stack. Exact concrete facts
+can terminate branches; otherwise one unique rigid clause is elaborated.
+Ambiguity, no solution, cycles, and overflow remain distinct, and inference-
+bearing entry goals fail explicitly. Windows gnullvm and native Arch Linux WSL
+each pass 458 library tests, one component-interface probe, 10 conformance
+tests, and 335 replacement tests: 804 compiler tests per host. Mixed
+inference/skolem unification, coinduction, and source higher-ranked syntax remain
+unsupported.
+
 At compiler path checkpoint `9a950ae9`, the Windows gnullvm core suite passed
 765 tests: 420 library tests, 10 conformance tests, and 335 replacement tests.
 Core formatting, warnings-denied Clippy, the no-`std`/no-`alloc`/unsafe hygiene

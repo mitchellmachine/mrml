@@ -679,6 +679,64 @@ fn solve_concrete_trait_goal_inner(
     Ok(solution)
 }
 
+pub fn solve_rigid_trait_goal(
+    implementations: &TraitImplementationDatabase,
+    clauses: &TraitWhereClauseDatabase,
+    goal: ImplementedTraitGoal,
+) -> Result<TraitProofSolution, TraitGoalError> {
+    let mut stack = [None; MAX_TRAIT_PROOF_DEPTH];
+    solve_rigid_trait_goal_inner(implementations, clauses, goal, &mut stack, 0)
+}
+
+fn solve_rigid_trait_goal_inner(
+    implementations: &TraitImplementationDatabase,
+    clauses: &TraitWhereClauseDatabase,
+    goal: ImplementedTraitGoal,
+    stack: &mut [Option<ImplementedTraitGoal>; MAX_TRAIT_PROOF_DEPTH],
+    depth: usize,
+) -> Result<TraitProofSolution, TraitGoalError> {
+    validate_rigid_goal(goal)?;
+    match implementations.solve(canonicalize_implemented_trait_goal(goal)?) {
+        TraitGoalSolution::Unique(_) => return Ok(TraitProofSolution::Proven),
+        TraitGoalSolution::Ambiguous => return Ok(TraitProofSolution::Ambiguous),
+        TraitGoalSolution::NoSolution => {}
+    }
+    if stack[..depth].contains(&Some(goal)) {
+        return Ok(TraitProofSolution::Cycle);
+    }
+    if depth >= MAX_TRAIT_PROOF_DEPTH {
+        return Ok(TraitProofSolution::Overflow);
+    }
+    stack[depth] = Some(goal);
+    let solution = match clauses.elaborate_rigid(goal)? {
+        TraitWhereClauseSolution::Unique(answer) => {
+            let mut result = TraitProofSolution::Proven;
+            for premise in answer.instantiated.premises.predicates().iter() {
+                let premise = premise
+                    .as_ref()
+                    .copied()
+                    .ok_or(TraitGoalError::InvalidGoal)?;
+                let premise = solve_rigid_trait_goal_inner(
+                    implementations,
+                    clauses,
+                    premise,
+                    stack,
+                    depth + 1,
+                )?;
+                if premise != TraitProofSolution::Proven {
+                    result = premise;
+                    break;
+                }
+            }
+            result
+        }
+        TraitWhereClauseSolution::Ambiguous => TraitProofSolution::Ambiguous,
+        TraitWhereClauseSolution::NoSolution => TraitProofSolution::NoSolution,
+    };
+    stack[depth] = None;
+    Ok(solution)
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct CanonicalImplementedTraitGoal {
     pub trait_id: TraitId,
@@ -1808,6 +1866,93 @@ mod tests {
                 TraitId::new(40),
                 TraitGoalType::InferenceVariable(TraitInferenceVariableId::new(0)),
             )),
+            Err(TraitGoalError::NonRigidClauseQuery)
+        );
+    }
+
+    #[test]
+    fn recursively_proves_skolemized_rigid_clause_premises() {
+        let parameter = TraitGenericParameterId::new(0);
+        let mut root = TraitWhereClause::new(
+            1,
+            BoundImplementedTraitGoal::new(
+                TraitId::new(50),
+                BoundTraitGoalType::Parameter(parameter),
+            ),
+        )
+        .unwrap();
+        root.push_premise(BoundImplementedTraitGoal::new(
+            TraitId::new(51),
+            BoundTraitGoalType::Parameter(parameter),
+        ))
+        .unwrap();
+        let leaf = TraitWhereClause::new(
+            1,
+            BoundImplementedTraitGoal::new(
+                TraitId::new(51),
+                BoundTraitGoalType::Parameter(parameter),
+            ),
+        )
+        .unwrap();
+        let mut clauses = TraitWhereClauseDatabase::EMPTY;
+        clauses.insert(TraitWhereClauseId::new(1), root).unwrap();
+        clauses.insert(TraitWhereClauseId::new(2), leaf).unwrap();
+        let placeholder =
+            TraitPlaceholder::new(TraitUniverseIndex::new(3), TraitPlaceholderId::new(4));
+        assert_eq!(
+            solve_rigid_trait_goal(
+                &TraitImplementationDatabase::EMPTY,
+                &clauses,
+                ImplementedTraitGoal::new(
+                    TraitId::new(50),
+                    TraitGoalType::Placeholder(placeholder),
+                ),
+            ),
+            Ok(TraitProofSolution::Proven)
+        );
+    }
+
+    #[test]
+    fn rigid_recursive_proof_reports_cycles_and_rejects_inference() {
+        let parameter = TraitGenericParameterId::new(0);
+        let mut cycle = TraitWhereClause::new(
+            1,
+            BoundImplementedTraitGoal::new(
+                TraitId::new(60),
+                BoundTraitGoalType::Parameter(parameter),
+            ),
+        )
+        .unwrap();
+        cycle
+            .push_premise(BoundImplementedTraitGoal::new(
+                TraitId::new(60),
+                BoundTraitGoalType::Parameter(parameter),
+            ))
+            .unwrap();
+        let mut clauses = TraitWhereClauseDatabase::EMPTY;
+        clauses.insert(TraitWhereClauseId::new(1), cycle).unwrap();
+        let placeholder =
+            TraitPlaceholder::new(TraitUniverseIndex::new(1), TraitPlaceholderId::new(0));
+        assert_eq!(
+            solve_rigid_trait_goal(
+                &TraitImplementationDatabase::EMPTY,
+                &clauses,
+                ImplementedTraitGoal::new(
+                    TraitId::new(60),
+                    TraitGoalType::Placeholder(placeholder),
+                ),
+            ),
+            Ok(TraitProofSolution::Cycle)
+        );
+        assert_eq!(
+            solve_rigid_trait_goal(
+                &TraitImplementationDatabase::EMPTY,
+                &clauses,
+                ImplementedTraitGoal::new(
+                    TraitId::new(60),
+                    TraitGoalType::InferenceVariable(TraitInferenceVariableId::new(0)),
+                ),
+            ),
             Err(TraitGoalError::NonRigidClauseQuery)
         );
     }

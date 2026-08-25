@@ -4145,6 +4145,14 @@ identities and rejects inference-bearing inputs. It adds no recursive higher-
 ranked search, general unification, cache, parser, runtime mechanism, allocation,
 synchronization, protocol, cryptography, or hardware behavior.
 
+# 2026-08-25 — Depth-bounded rigid trait proof
+
+**Result: NOT_TRIGGERED.** This compiler-only increment reuses the existing
+fixed-depth visited-goal traversal with rigid placeholder goals and the existing
+bounded rigid clause matcher. It adds no new search ordering, coinduction,
+general unification, cache, parser, runtime mechanism, allocation,
+synchronization, protocol, cryptography, or hardware behavior.
+
 # 2026-08-25 — Composed configured-service isolation route
 
 **Result: NOT_TRIGGERED.** This increment conventionally composes existing

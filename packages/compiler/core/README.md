@@ -3963,6 +3963,16 @@ tests, one component-interface probe, 10 conformance tests, and 335 replacement
 tests: 802 compiler tests per host. Recursive rigid proof, complete higher-ranked
 reasoning, general unification, and source `for<...>` remain unsupported.
 
+The bounded rigid-proof milestone applies the existing 16-frame proof stack to
+goals containing concrete types and skolem placeholders. Exact concrete facts
+may close a branch; otherwise one unique rigid clause is elaborated and every
+premise is recursively proved. `Proven`, `NoSolution`, `Ambiguous`, `Cycle`, and
+`Overflow` remain distinct, while inference-bearing entry goals fail. Windows
+gnullvm and native Arch Linux WSL each pass 458 library tests, one component-
+interface probe, 10 conformance tests, and 335 replacement tests: 804 compiler
+tests per host. Mixed inference/skolem unification, coinduction, complete higher-
+ranked reasoning, and source `for<...>` remain unsupported.
+
 The nested conditional tuple-origin milestone walks each leaf's bounded
 conditional-parent chain to the outermost generation before grouping reference
 origins by field ordinal. The exact oracle rejects a three-leaf returned field

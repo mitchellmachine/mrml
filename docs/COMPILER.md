@@ -108,7 +108,7 @@ language as a whole.
 | Let chains | **NOT IMPLEMENTED** | Boolean short-circuit expressions exist, but `if let`/`while let` chains and their pattern scopes do not. |
 | Async closures | **NOT IMPLEMENTED** | There is no async/await, generator, future, or async-closure lowering. |
 | Modern borrowing / Polonius | **PARTIAL** | References, explicit and expected-type implicit reborrow ancestry, return coercion-site reborrows, mutable pointee operations, bounded ownership/place/effect facts, fixed-point definite-initialization, direct shared/mutable-loan conflicts, and bounded intermediate-ancestor invalidation across the supported statement/loop CFG exist. Conditional expressions retain bounded program points and canonical nested/sequential edges. General indirect loan identity, regions/outlives reasoning, and complete Polonius-compatible analysis remain unimplemented. |
-| Next-generation trait solving | **PARTIAL** | Method-like built-ins remain recognized directly. Allocation-free goals distinguish concrete types, universe-aware inference variables, generic binder parameters, and rigid placeholders. Binders instantiate fresh placeholders; leak checks reject newer universes. Bound clauses structurally match rigid concrete/placeholder goals and preserve repeated-placeholder equality through premises. A 64-entry clause database, 16-frame concrete proof, and exact associated-value table preserve bounded failure. There is no trait syntax, recursive higher-ranked proof, inference-bearing recursive solving, generic/nested projections, complete coherence/specialization, answer composition, or source integration. |
+| Next-generation trait solving | **PARTIAL** | Method-like built-ins remain recognized directly. Allocation-free goals distinguish concrete types, universe-aware inference variables, generic binder parameters, and rigid placeholders. Binders instantiate fresh placeholders; leak checks reject newer universes. A 64-entry clause database and 16-frame solver recursively prove concrete or skolemized rigid premises with explicit ambiguity, cycles, overflow, and failure. Exact associated values normalize bounded projections. There is no trait syntax, mixed inference/higher-ranked solving, generic/nested projections, complete coherence/specialization, answer composition, or source integration. |
 | Naked functions / `naked_asm!` | **NOT IMPLEMENTED** | High-priority **STABLE** systems-language target. No implementation may insert an ordinary prologue or epilogue into a naked function. |
 | Modern inline assembly | **NOT IMPLEMENTED** | No `asm!`, register/operand validation, options, clobber model, or architecture-specific assembly lowering exists. |
 | Pointer/provenance APIs | **PARTIAL** | Raw-pointer casts, `addr`, `with_addr`, `expose_provenance`, integer-address reconstruction, offsets, comparisons, alignment, copying, writes, references, and metadata operations have bounded tests. The current scalar machine representation cannot establish a complete provenance/alias model and must not equate equal integer addresses with interchangeable provenance. |
@@ -851,6 +851,14 @@ concrete values and same-or-older-universe inference variables/placeholders, but
 rejects any value from a newer universe with an explicit leak error. This is a
 bounded leak-check primitive, not higher-ranked candidate matching or complete
 unification.
+
+Rigid proof composition applies the same 16-frame visited-goal discipline to
+concrete/placeholder goals. Exact concrete facts may terminate a branch;
+otherwise one unique rigid clause is elaborated and every rigid premise is
+proved recursively. Ambiguity, missing premises, cycles, and overflow remain
+distinct, and inference-bearing entry goals fail. This is not mixed
+inference/skolem unification, coinduction, or complete higher-ranked Rust
+reasoning.
 
 Rigid clause elaboration accepts goals containing only concrete types and rigid
 placeholders. Bound parameters may match either term, repeated parameters require

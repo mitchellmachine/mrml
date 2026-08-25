@@ -74,5 +74,5 @@ pub use trait_goals::{
     TraitWhereClauseAnswer, TraitWhereClauseDatabase, TraitWhereClauseElaboration,
     TraitWhereClauseId, TraitWhereClauseSolution, canonicalize_implemented_trait_goal,
     canonicalize_implemented_trait_goal_with_variables, canonicalize_implemented_trait_predicates,
-    solve_concrete_trait_goal,
+    solve_concrete_trait_goal, solve_rigid_trait_goal,
 };
