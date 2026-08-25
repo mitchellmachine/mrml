@@ -11,4 +11,4 @@ default = ["runtime"]
 runtime = ["dep:mrml-runtime"]
 
 [dependencies]
-mrml-runtime = { path = "../../packages/libraries/runtime", optional = true }
+mrml-runtime = { path = "../runtime", optional = true }

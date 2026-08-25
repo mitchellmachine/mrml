@@ -78,6 +78,11 @@ updating its dependency paths and thirty-one inbound Cargo paths without
 changing runtime behavior. **Result: NOT_TRIGGERED.** This is repository organization,
 not a new runtime mechanism.
 
+The twelfth semantic move relocates `mrml-crypto` after runtime and updates all
+fourteen inbound Cargo paths without changing any algorithm or protocol.
+**Result: NOT_TRIGGERED.** Existing cryptographic review requirements remain in
+force.
+
 ## 2026-08-25 — Deployment, package, image, installer, and shell architecture
 
 **Result: TRIGGERED.** The documentation composes package/image containers,
@@ -120,7 +125,7 @@ AV1, and Opus. Roadmap-only systems were not treated as implemented.
 | High | GPU mediation, authenticated rings, reset, EPT/VT-d, CUDA | `crates/mrml-kernel/src/virtual_gpu.rs`, `arch/x86_64/{ept,vtd,vtd_tables}.rs`, `crates/mrml-{kvm,whp}/`, `crates/mrml-tensor/src/cuda.rs` | Distinctive hardware-facing composition; no candidate verified. |
 | High | Quantized inference, planning, KV cache, speculative decoding | `crates/mrml-tensor/src/{quant,ops,execution_plan,kv_cache,speculative}.rs` | Must distinguish standard formats from MRML scheduling/layout. |
 | High | Zstandard FSE/Huffman/sequences | `packages/libraries/zstd/src/` | Compression and upstream grant review required. |
-| High | Hybrid X25519/ML-KEM TLS and AEAD | `crates/mrml-tls/`, `crates/mrml-crypto/` | Standards/IPR and exact protocol-version review required. |
+| High | Hybrid X25519/ML-KEM TLS and AEAD | `crates/mrml-tls/`, `packages/libraries/crypto/` | Standards/IPR and exact protocol-version review required. |
 | Medium-high | Protected receipts, sealed-key gates, VMX-root custody | `crates/mrml-kernel/src/protected_*.rs`, `crates/mrml-whp/src/protected_broker.rs` | Unusual composed state machine; search confidence low. |
 | Medium | Rust-subset lowering/object generation | `crates/mrml-rustc/src/` | Review distinctive optimizations only, not ordinary compiler structure. |
 

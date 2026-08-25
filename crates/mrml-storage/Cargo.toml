@@ -6,5 +6,5 @@ authors.workspace = true
 license.workspace = true
 
 [dependencies]
-mrml-crypto = { path = "../mrml-crypto", default-features = false }
+mrml-crypto = { path = "../../packages/libraries/crypto", default-features = false }
 mrml-kernel = { path = "../mrml-kernel" }

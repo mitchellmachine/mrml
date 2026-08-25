@@ -171,6 +171,10 @@ edges are now sibling semantic-package references and all thirty-one inbound
 Cargo paths across thirty manifests resolve to the semantic runtime home without
 changing runtime behavior.
 
+`mrml-crypto` is the twelfth migrated library component; its runtime edge is a
+sibling semantic-package reference and all fourteen inbound Cargo paths resolve
+to the semantic cryptography home without changing algorithms or policy.
+
 The independently scoped compiler lane follows
 [COMPILER.md](COMPILER.md), not an arbitrary historical-rustc coverage target.
 Rust 2024 is the floor. Preserve and stabilize the existing bounded semantics,

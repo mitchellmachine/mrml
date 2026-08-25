@@ -10,7 +10,7 @@ name = "mrml-sign"
 path = "src/main.rs"
 
 [dependencies]
-mrml-crypto = { path = "../mrml-crypto" }
+mrml-crypto = { path = "../../packages/libraries/crypto" }
 mrml-error = { path = "../mrml-error" }
 mrml-kernel = { path = "../mrml-kernel" }
 mrml-runtime = { path = "../../packages/libraries/runtime" }

@@ -11,7 +11,7 @@ name = "mrml-kvm-run"
 path = "src/main.rs"
 
 [dependencies]
-mrml-crypto = { path = "../mrml-crypto", default-features = false }
+mrml-crypto = { path = "../../packages/libraries/crypto", default-features = false }
 mrml-error = { path = "../mrml-error" }
 mrml-kernel = { path = "../mrml-kernel" }
 mrml-kvm = { path = "../mrml-kvm" }

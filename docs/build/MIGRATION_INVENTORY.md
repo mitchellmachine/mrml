@@ -2,10 +2,10 @@
 
 **Status: PARTIALLY IMPLEMENTED.** The authoritative machine-readable inventory
 is [`../../MRML.workspace`](../../MRML.workspace). All 42 current components are
-classified and reachable through the Cargo bridge. Eleven libraries—`mrml-math`,
+classified and reachable through the Cargo bridge. Twelve libraries—`mrml-math`,
 `mrml-percent-encoding`, `mrml-tokenizer`, `mrml-zstd`, `mrml-zim`,
 `mrml-json`, `mrml-wikipedia`, `mrml-opus`, `mrml-windows`,
-`mrml-linux`, and `mrml-runtime`—have moved under `packages/libraries/`,
+`mrml-linux`, `mrml-runtime`, and `mrml-crypto`—have moved under `packages/libraries/`,
 and stage-zero lives at `tools/mrml`; other source remains under `crates/`.
 No claim is made that semantic moves or Cargo bridge removal are complete.
 
@@ -52,6 +52,9 @@ No claim is made that semantic moves or Cargo bridge removal are complete.
   paths and all thirty-one inbound Cargo paths updated across thirty manifests;
   its runtime implementation, direct-input policy, and Cargo bridge remain
   unchanged.
+- `mrml-crypto` moved after runtime, with its runtime edge and all fourteen
+  inbound Cargo paths updated; its algorithms, feature behavior, review status,
+  and Cargo bridge remain unchanged.
 
 The runtime move was checked on a Windows host:
 
@@ -64,6 +67,19 @@ The runtime move was checked on a Windows host:
 - `.\target\debug\mrml.exe build mrml-runtime` — PASS;
 - `cargo +nightly-2026-08-24-x86_64-pc-windows-gnullvm clippy -p mrml-runtime --all-targets --no-deps -- -D warnings`
   — FAIL, six existing lints in unchanged runtime source and tests.
+
+No Linux host or runtime execution was exercised by this move.
+
+The cryptography move was checked on a Windows host:
+
+- `cargo +nightly-2026-08-24-x86_64-pc-windows-gnullvm fmt -p mrml-crypto -- --check`
+  — PASS;
+- `cargo +nightly-2026-08-24-x86_64-pc-windows-gnullvm test -p mrml-crypto`
+  — PASS, 27 tests;
+- `.\target\debug\mrml.exe doctor`, `.\target\debug\mrml.exe audit`, and
+  `.\target\debug\mrml.exe build mrml-crypto` — PASS;
+- `cargo +nightly-2026-08-24-x86_64-pc-windows-gnullvm clippy -p mrml-crypto --all-targets --no-deps -- -D warnings`
+  — FAIL, five existing lints in unchanged cryptography source.
 
 No Linux host or runtime execution was exercised by this move.
 
@@ -89,7 +105,7 @@ second inventory.
 
 ## Cargo-removal blockers
 
-- Every component still has Cargo dependency metadata; all except the eleven moved
+- Every component still has Cargo dependency metadata; all except the twelve moved
   libraries and stage-zero remain beneath `crates/`. The root Cargo workspace
   still contains every component so the bridge resolves today’s exact graph.
 - `crates/mrml-tensor/build.rs` invokes rustc for CUDA PTX and is the one current

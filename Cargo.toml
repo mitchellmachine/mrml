@@ -12,7 +12,7 @@ members = [
     "crates/mrml-kernel",
     "crates/mrml-kernel-bench",
     "crates/mrml-sign",
-    "crates/mrml-crypto",
+    "packages/libraries/crypto",
     "crates/mrml-tls",
     "crates/mrml-http",
     "packages/libraries/runtime",
