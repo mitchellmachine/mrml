@@ -2259,6 +2259,105 @@ pub struct InferredTraitProjectionEquality {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum BoundTraitPredicate {
+    Implemented(BoundImplementedTraitGoal),
+    ProjectionEquality {
+        projection: BoundTraitProjection,
+        expected: BoundTraitGoalType,
+    },
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum InferredTraitPredicate {
+    Implemented(ImplementedTraitGoal),
+    ProjectionEquality(InferredTraitProjectionEquality),
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct ExistsTraitPredicateConjunction {
+    parameter_count: usize,
+    predicates: [Option<BoundTraitPredicate>; MAX_TRAIT_PREDICATES],
+    predicate_count: usize,
+}
+
+impl ExistsTraitPredicateConjunction {
+    pub fn new(parameter_count: usize) -> Result<Self, TraitGoalError> {
+        if parameter_count > MAX_TRAIT_GENERIC_PARAMETERS {
+            return Err(TraitGoalError::TooManyGenericParameters);
+        }
+        Ok(Self {
+            parameter_count,
+            predicates: [None; MAX_TRAIT_PREDICATES],
+            predicate_count: 0,
+        })
+    }
+
+    pub const fn parameter_count(self) -> usize {
+        self.parameter_count
+    }
+
+    pub fn push(&mut self, predicate: BoundTraitPredicate) -> Result<(), TraitGoalError> {
+        match predicate {
+            BoundTraitPredicate::Implemented(goal) => {
+                validate_bound_goal(goal, self.parameter_count)?;
+            }
+            BoundTraitPredicate::ProjectionEquality {
+                projection,
+                expected,
+            } => {
+                validate_bound_goal(projection.goal, self.parameter_count)?;
+                validate_bound_type(expected, self.parameter_count)?;
+            }
+        }
+        let slot = self
+            .predicates
+            .get_mut(self.predicate_count)
+            .ok_or(TraitGoalError::TooManyPredicates)?;
+        *slot = Some(predicate);
+        self.predicate_count += 1;
+        Ok(())
+    }
+
+    pub fn predicates(&self) -> &[Option<BoundTraitPredicate>] {
+        &self.predicates[..self.predicate_count]
+    }
+
+    fn instantiate_predicate(
+        self,
+        predicate: BoundTraitPredicate,
+        universe: TraitUniverseIndex,
+    ) -> Result<InferredTraitPredicate, TraitGoalError> {
+        let mut arguments =
+            [TraitGoalType::InferenceVariable(TraitInferenceVariableId::in_universe(universe, 0));
+                MAX_TRAIT_GENERIC_PARAMETERS];
+        for (index, argument) in arguments[..self.parameter_count].iter_mut().enumerate() {
+            *argument = TraitGoalType::InferenceVariable(TraitInferenceVariableId::in_universe(
+                universe,
+                index as u32,
+            ));
+        }
+        match predicate {
+            BoundTraitPredicate::Implemented(goal) => Ok(InferredTraitPredicate::Implemented(
+                instantiate_bound_goal(goal, &arguments[..self.parameter_count])?,
+            )),
+            BoundTraitPredicate::ProjectionEquality {
+                projection,
+                expected,
+            } => Ok(InferredTraitPredicate::ProjectionEquality(
+                InferredTraitProjectionEquality {
+                    goal: instantiate_bound_goal(
+                        projection.goal,
+                        &arguments[..self.parameter_count],
+                    )?,
+                    associated_type_id: projection.associated_type_id,
+                    expected: instantiate_bound_type(expected, &arguments[..self.parameter_count])?,
+                },
+            )),
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct GenericTraitAssociatedTypeDatabase {
     values: [Option<GenericTraitAssociatedTypeValue>; MAX_TRAIT_ASSOCIATED_TYPE_VALUES],
     value_count: usize,
@@ -2668,6 +2767,116 @@ pub fn solve_exists_trait_projection_equality(
         InferredProjectionValueSolution::Cycle => Ok(InferredTraitProjectionSolution::Cycle),
         InferredProjectionValueSolution::Overflow => Ok(InferredTraitProjectionSolution::Overflow),
     }
+}
+
+fn solve_inferred_trait_predicate(
+    environment: TraitProjectionEnvironment<'_>,
+    predicate: InferredTraitPredicate,
+    state: &mut InferenceConstraintState,
+) -> Result<TraitProofSolution, TraitGoalError> {
+    match predicate {
+        InferredTraitPredicate::Implemented(goal) => {
+            let mut stack = [None; MAX_TRAIT_PROOF_DEPTH];
+            solve_inferred_trait_goal_inner(
+                environment.exact_implementations,
+                environment.generic_implementations,
+                environment.clauses,
+                goal,
+                state,
+                &mut stack,
+                0,
+            )
+        }
+        InferredTraitPredicate::ProjectionEquality(projection) => {
+            let mut stack = [None; MAX_TRAIT_PROJECTION_DEPTH];
+            match environment.normalize_inferred_inner(
+                ConcreteTraitProjectionGoal {
+                    goal: projection.goal,
+                    associated_type_id: projection.associated_type_id,
+                },
+                state,
+                &mut stack,
+                0,
+            )? {
+                InferredProjectionValueSolution::Unique(value) => {
+                    if state.unify_types(value, projection.expected)? {
+                        Ok(TraitProofSolution::Proven)
+                    } else {
+                        Ok(TraitProofSolution::NoSolution)
+                    }
+                }
+                InferredProjectionValueSolution::Ambiguous => Ok(TraitProofSolution::Ambiguous),
+                InferredProjectionValueSolution::NoSolution => Ok(TraitProofSolution::NoSolution),
+                InferredProjectionValueSolution::Cycle => Ok(TraitProofSolution::Cycle),
+                InferredProjectionValueSolution::Overflow => Ok(TraitProofSolution::Overflow),
+            }
+        }
+    }
+}
+
+pub fn solve_exists_trait_predicate_conjunction(
+    exact_implementations: &TraitImplementationDatabase,
+    generic_implementations: &GenericTraitImplementationDatabase,
+    clauses: &TraitWhereClauseDatabase,
+    exact_values: &TraitAssociatedTypeDatabase,
+    generic_values: &GenericTraitAssociatedTypeDatabase,
+    universe: TraitUniverseIndex,
+    query: ExistsTraitPredicateConjunction,
+) -> Result<InferredTraitGoalSolution, TraitGoalError> {
+    let mut state = InferenceConstraintState::from_universe(universe, query.parameter_count())?;
+    let environment = TraitProjectionEnvironment {
+        exact_implementations,
+        generic_implementations,
+        clauses,
+        exact_values,
+        generic_values,
+    };
+    let mut pending = [None; MAX_TRAIT_PREDICATES];
+    let mut pending_count = 0usize;
+    for predicate in query.predicates() {
+        pending[pending_count] = Some(
+            query.instantiate_predicate(
+                predicate
+                    .as_ref()
+                    .copied()
+                    .ok_or(TraitGoalError::InvalidGoal)?,
+                universe,
+            )?,
+        );
+        pending_count += 1;
+    }
+
+    while pending_count != 0 {
+        let mut next = [None; MAX_TRAIT_PREDICATES];
+        let mut next_count = 0usize;
+        let mut proven_count = 0usize;
+        for predicate in pending[..pending_count].iter().copied() {
+            let predicate = predicate.ok_or(TraitGoalError::InvalidGoal)?;
+            let saved = state;
+            match solve_inferred_trait_predicate(environment, predicate, &mut state)? {
+                TraitProofSolution::Proven => proven_count += 1,
+                TraitProofSolution::Ambiguous => {
+                    state = saved;
+                    next[next_count] = Some(predicate);
+                    next_count += 1;
+                }
+                TraitProofSolution::NoSolution => {
+                    return Ok(InferredTraitGoalSolution::NoSolution);
+                }
+                TraitProofSolution::Cycle => return Ok(InferredTraitGoalSolution::Cycle),
+                TraitProofSolution::Overflow => return Ok(InferredTraitGoalSolution::Overflow),
+            }
+        }
+        if proven_count == 0 {
+            return Ok(InferredTraitGoalSolution::Ambiguous);
+        }
+        pending = next;
+        pending_count = next_count;
+    }
+
+    Ok(InferredTraitGoalSolution::Unique(InferredTraitGoalAnswer {
+        substitution: state.substitution()?,
+    }))
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -7046,6 +7255,274 @@ mod tests {
                 query,
             ),
             Ok(InferredTraitProjectionSolution::Overflow)
+        );
+    }
+
+    #[test]
+    fn inferred_predicate_conjunction_defers_ambiguity_until_projection_refines_it() {
+        let parameter = TraitGenericParameterId::new(0);
+        let associated = TraitAssociatedTypeId::new(1);
+        let mut exact = TraitImplementationDatabase::EMPTY;
+        for (id, ty) in [(201, 10), (202, 11)] {
+            exact
+                .insert(TraitImplementationHeader::new(
+                    TraitImplementationId::new(id),
+                    TraitId::new(600),
+                    TraitTypeId::new(ty),
+                ))
+                .unwrap();
+        }
+        let projection_implementation = TraitImplementationId::new(203);
+        exact
+            .insert(TraitImplementationHeader::new(
+                projection_implementation,
+                TraitId::new(601),
+                TraitTypeId::new(20),
+            ))
+            .unwrap();
+        let mut values = TraitAssociatedTypeDatabase::EMPTY;
+        values
+            .insert(
+                &exact,
+                TraitAssociatedTypeValue::new(
+                    projection_implementation,
+                    associated,
+                    TraitTypeId::new(10),
+                ),
+            )
+            .unwrap();
+
+        let mut query = ExistsTraitPredicateConjunction::new(1).unwrap();
+        query
+            .push(BoundTraitPredicate::Implemented(
+                BoundImplementedTraitGoal::new(
+                    TraitId::new(600),
+                    BoundTraitGoalType::Parameter(parameter),
+                ),
+            ))
+            .unwrap();
+        query
+            .push(BoundTraitPredicate::ProjectionEquality {
+                projection: BoundTraitProjection::new(
+                    BoundImplementedTraitGoal::new(
+                        TraitId::new(601),
+                        BoundTraitGoalType::Concrete(TraitTypeId::new(20)),
+                    ),
+                    associated,
+                ),
+                expected: BoundTraitGoalType::Parameter(parameter),
+            })
+            .unwrap();
+        let InferredTraitGoalSolution::Unique(answer) = solve_exists_trait_predicate_conjunction(
+            &exact,
+            &GenericTraitImplementationDatabase::EMPTY,
+            &TraitWhereClauseDatabase::EMPTY,
+            &values,
+            &GenericTraitAssociatedTypeDatabase::EMPTY,
+            TraitUniverseIndex::ROOT,
+            query,
+        )
+        .unwrap() else {
+            panic!("projection should refine the deferred implementation predicate");
+        };
+        assert_eq!(
+            answer
+                .substitution
+                .binding(TraitInferenceVariableId::new(0)),
+            Some(TraitGoalType::Concrete(TraitTypeId::new(10)))
+        );
+    }
+
+    #[test]
+    fn inferred_predicate_conjunction_rejects_cross_predicate_contradictions() {
+        let parameter = TraitGenericParameterId::new(0);
+        let associated = TraitAssociatedTypeId::new(1);
+        let mut exact = TraitImplementationDatabase::EMPTY;
+        exact
+            .insert(TraitImplementationHeader::new(
+                TraitImplementationId::new(204),
+                TraitId::new(602),
+                TraitTypeId::new(11),
+            ))
+            .unwrap();
+        let projection_implementation = TraitImplementationId::new(205);
+        exact
+            .insert(TraitImplementationHeader::new(
+                projection_implementation,
+                TraitId::new(603),
+                TraitTypeId::new(20),
+            ))
+            .unwrap();
+        let mut values = TraitAssociatedTypeDatabase::EMPTY;
+        values
+            .insert(
+                &exact,
+                TraitAssociatedTypeValue::new(
+                    projection_implementation,
+                    associated,
+                    TraitTypeId::new(10),
+                ),
+            )
+            .unwrap();
+        let mut query = ExistsTraitPredicateConjunction::new(1).unwrap();
+        query
+            .push(BoundTraitPredicate::Implemented(
+                BoundImplementedTraitGoal::new(
+                    TraitId::new(602),
+                    BoundTraitGoalType::Parameter(parameter),
+                ),
+            ))
+            .unwrap();
+        query
+            .push(BoundTraitPredicate::ProjectionEquality {
+                projection: BoundTraitProjection::new(
+                    BoundImplementedTraitGoal::new(
+                        TraitId::new(603),
+                        BoundTraitGoalType::Concrete(TraitTypeId::new(20)),
+                    ),
+                    associated,
+                ),
+                expected: BoundTraitGoalType::Parameter(parameter),
+            })
+            .unwrap();
+        assert_eq!(
+            solve_exists_trait_predicate_conjunction(
+                &exact,
+                &GenericTraitImplementationDatabase::EMPTY,
+                &TraitWhereClauseDatabase::EMPTY,
+                &values,
+                &GenericTraitAssociatedTypeDatabase::EMPTY,
+                TraitUniverseIndex::ROOT,
+                query,
+            ),
+            Ok(InferredTraitGoalSolution::NoSolution)
+        );
+    }
+
+    #[test]
+    fn inferred_predicate_conjunction_bounds_and_preserves_unresolved_ambiguity() {
+        assert_eq!(
+            ExistsTraitPredicateConjunction::new(MAX_TRAIT_GENERIC_PARAMETERS + 1),
+            Err(TraitGoalError::TooManyGenericParameters)
+        );
+        let parameter = TraitGenericParameterId::new(0);
+        let predicate = BoundTraitPredicate::Implemented(BoundImplementedTraitGoal::new(
+            TraitId::new(604),
+            BoundTraitGoalType::Parameter(parameter),
+        ));
+        let mut overfull = ExistsTraitPredicateConjunction::new(1).unwrap();
+        for _ in 0..MAX_TRAIT_PREDICATES {
+            overfull.push(predicate).unwrap();
+        }
+        assert_eq!(
+            overfull.push(predicate),
+            Err(TraitGoalError::TooManyPredicates)
+        );
+
+        let mut exact = TraitImplementationDatabase::EMPTY;
+        for (id, ty) in [(206, 1), (207, 2)] {
+            exact
+                .insert(TraitImplementationHeader::new(
+                    TraitImplementationId::new(id),
+                    TraitId::new(604),
+                    TraitTypeId::new(ty),
+                ))
+                .unwrap();
+        }
+        let mut ambiguous = ExistsTraitPredicateConjunction::new(1).unwrap();
+        ambiguous.push(predicate).unwrap();
+        assert_eq!(
+            solve_exists_trait_predicate_conjunction(
+                &exact,
+                &GenericTraitImplementationDatabase::EMPTY,
+                &TraitWhereClauseDatabase::EMPTY,
+                &TraitAssociatedTypeDatabase::EMPTY,
+                &GenericTraitAssociatedTypeDatabase::EMPTY,
+                TraitUniverseIndex::ROOT,
+                ambiguous,
+            ),
+            Ok(InferredTraitGoalSolution::Ambiguous)
+        );
+    }
+
+    #[test]
+    fn inferred_predicate_conjunction_handles_empty_and_cyclic_queries() {
+        let empty = ExistsTraitPredicateConjunction::new(1).unwrap();
+        let InferredTraitGoalSolution::Unique(answer) = solve_exists_trait_predicate_conjunction(
+            &TraitImplementationDatabase::EMPTY,
+            &GenericTraitImplementationDatabase::EMPTY,
+            &TraitWhereClauseDatabase::EMPTY,
+            &TraitAssociatedTypeDatabase::EMPTY,
+            &GenericTraitAssociatedTypeDatabase::EMPTY,
+            TraitUniverseIndex::new(14),
+            empty,
+        )
+        .unwrap() else {
+            panic!("empty conjunction should preserve its existential universe");
+        };
+        let variable = TraitInferenceVariableId::in_universe(TraitUniverseIndex::new(14), 0);
+        assert_eq!(
+            answer.substitution.binding(variable),
+            Some(TraitGoalType::InferenceVariable(variable))
+        );
+
+        let associated = TraitAssociatedTypeId::new(1);
+        let implementation_id = GenericTraitImplementationId::new(208);
+        let mut generic = GenericTraitImplementationDatabase::EMPTY;
+        generic
+            .insert(
+                implementation_id,
+                TraitWhereClause::new(
+                    0,
+                    BoundImplementedTraitGoal::new(
+                        TraitId::new(605),
+                        BoundTraitGoalType::Concrete(TraitTypeId::new(9)),
+                    ),
+                )
+                .unwrap(),
+            )
+            .unwrap();
+        let mut values = GenericTraitAssociatedTypeDatabase::EMPTY;
+        values
+            .insert(
+                &generic,
+                GenericTraitAssociatedTypeValue::new_projection(
+                    implementation_id,
+                    associated,
+                    BoundTraitProjection::new(
+                        BoundImplementedTraitGoal::new(
+                            TraitId::new(605),
+                            BoundTraitGoalType::Concrete(TraitTypeId::new(9)),
+                        ),
+                        associated,
+                    ),
+                ),
+            )
+            .unwrap();
+        let mut cyclic = ExistsTraitPredicateConjunction::new(0).unwrap();
+        cyclic
+            .push(BoundTraitPredicate::ProjectionEquality {
+                projection: BoundTraitProjection::new(
+                    BoundImplementedTraitGoal::new(
+                        TraitId::new(605),
+                        BoundTraitGoalType::Concrete(TraitTypeId::new(9)),
+                    ),
+                    associated,
+                ),
+                expected: BoundTraitGoalType::Concrete(TraitTypeId::new(9)),
+            })
+            .unwrap();
+        assert_eq!(
+            solve_exists_trait_predicate_conjunction(
+                &TraitImplementationDatabase::EMPTY,
+                &generic,
+                &TraitWhereClauseDatabase::EMPTY,
+                &TraitAssociatedTypeDatabase::EMPTY,
+                &values,
+                TraitUniverseIndex::ROOT,
+                cyclic,
+            ),
+            Ok(InferredTraitGoalSolution::Cycle)
         );
     }
 

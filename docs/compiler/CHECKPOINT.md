@@ -928,3 +928,14 @@ component-interface probe, 10 conformance tests, and 335 replacement tests: 849
 compiler tests per host. Projection-bearing type terms and premises, predicate
 conjunction composition, backtracking, caching, coinduction, and source syntax
 remain unsupported.
+
+The mixed inferred-predicate milestone admits up to eight implemented-trait or
+projection-equality predicates under one existential binder and one fixed root
+constraint state. Ambiguous predicates roll back tentative refinement and are
+retried after another predicate proves; a no-progress pass remains ambiguous.
+Cross-predicate contradictions, projection cycles, empty conjunctions, and
+capacity limits have focused tests. Windows gnullvm and native Arch Linux WSL
+each pass 507 library tests, one component-interface probe, 10 conformance
+tests, and 335 replacement tests: 853 compiler tests per host. Projection
+equalities in where-clause premises, general projection-bearing type terms,
+backtracking, caching, coinduction, and source syntax remain unsupported.

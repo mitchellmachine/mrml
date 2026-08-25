@@ -4492,3 +4492,12 @@ fixed root-variable state under the existing fixed projection stack. It adds no
 new type-term grammar, backtracking, specialization order, cache, parser,
 runtime mechanism, allocation, synchronization, protocol, cryptography, or
 hardware behavior.
+
+# 2026-08-25 — Bounded mixed trait-predicate scheduling
+
+**Result: NOT_TRIGGERED.** This compiler-only increment places existing
+implemented-trait and projection-equality obligations in a fixed eight-entry
+array, retries ambiguous entries after monotonic shared-state refinement, and
+rolls back tentative ambiguous constraints. It adds no new term grammar,
+branching search, specialization order, cache, parser, runtime mechanism,
+allocation, synchronization, protocol, cryptography, or hardware behavior.

@@ -59,11 +59,11 @@ pub use semantics::{
     SemanticError, SemanticErrorKind, TargetLayout, analyze_constants,
 };
 pub use trait_goals::{
-    BoundImplementedTraitGoal, BoundTraitGoalType, BoundTraitProjection,
+    BoundImplementedTraitGoal, BoundTraitGoalType, BoundTraitPredicate, BoundTraitProjection,
     CanonicalImplementedTraitGoal, CanonicalTraitGoalType, CanonicalizedImplementedTraitGoal,
     CanonicalizedImplementedTraitPredicates, ExistentialTraitGoalAnswer,
-    ExistentialTraitGoalSolution, ExistsImplementedTraitGoal, ExistsTraitProjectionEquality,
-    ForAllImplementedTraitGoal, GenericExistentialTraitGoalAnswer,
+    ExistentialTraitGoalSolution, ExistsImplementedTraitGoal, ExistsTraitPredicateConjunction,
+    ExistsTraitProjectionEquality, ForAllImplementedTraitGoal, GenericExistentialTraitGoalAnswer,
     GenericExistentialTraitGoalSolution, GenericTraitAssociatedTypeDatabase,
     GenericTraitAssociatedTypeTerm, GenericTraitAssociatedTypeValue,
     GenericTraitImplementationAnswer, GenericTraitImplementationDatabase,
@@ -89,6 +89,7 @@ pub use trait_goals::{
     solve_concrete_trait_goal, solve_concrete_trait_goal_with_generics,
     solve_exists_trait_goal_exact, solve_exists_trait_goal_generic,
     solve_exists_trait_goal_with_environment, solve_exists_trait_goal_with_generics,
-    solve_exists_trait_projection_equality, solve_for_all_trait_goal_with_generics,
-    solve_rigid_trait_goal, solve_rigid_trait_goal_with_generics,
+    solve_exists_trait_predicate_conjunction, solve_exists_trait_projection_equality,
+    solve_for_all_trait_goal_with_generics, solve_rigid_trait_goal,
+    solve_rigid_trait_goal_with_generics,
 };

@@ -4131,6 +4131,19 @@ bearing type terms and premises, predicate conjunction composition,
 backtracking, caching, coinduction, source syntax, and general normalization
 remain unsupported.
 
+The mixed inferred-predicate milestone groups up to eight implemented-trait and
+projection-equality predicates beneath one bounded existential binder. Every
+predicate shares the same fixed root constraint state. Ambiguous attempts are
+rolled back and retried after another predicate refines that state; a full pass
+without progress remains ambiguous instead of selecting speculatively. Empty
+conjunctions, cross-predicate contradictions, projection cycles, and capacity
+limits fail or resolve explicitly. Windows gnullvm and native Arch Linux WSL
+each pass 507 library tests, one component-interface probe, 10 conformance
+tests, and 335 replacement tests: 853 compiler tests per host. Projection
+equalities in where-clause premises, general projection-bearing type terms,
+backtracking, caching, coinduction, source syntax, and general normalization
+remain unsupported.
+
 The nested conditional tuple-origin milestone walks each leaf's bounded
 conditional-parent chain to the outermost generation before grouping reference
 origins by field ordinal. The exact oracle rejects a three-leaf returned field
