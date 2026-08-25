@@ -11,14 +11,29 @@ use core::cell::UnsafeCell;
 use core::mem::MaybeUninit;
 #[cfg(any(feature = "smp-scheduler-probe", feature = "smp-ipi-probe"))]
 use core::sync::atomic::{AtomicBool, AtomicU32, Ordering};
-#[cfg(any(feature = "user-probe", feature = "preemption-probe"))]
-use mrml_kernel::arch::x86_64::enter_user_context;
+#[cfg(feature = "production-policy")]
+use mrml_kernel::BootPolicy;
+#[cfg(feature = "service-probe")]
+use mrml_kernel::GuestMappingRevoker;
+#[cfg(any(feature = "timer-probe", feature = "smp-scheduler-probe"))]
+use mrml_kernel::KernelScheduler;
+#[cfg(all(feature = "smp-ipi-probe", not(feature = "smp-periodic-balance-probe")))]
+use mrml_kernel::PeriodicBalancer;
 #[cfg(any(
+    feature = "user-probe",
     feature = "service-probe",
-    feature = "service-preemption-probe",
     feature = "smp-service-migration-probe"
 ))]
-use mrml_kernel::arch::x86_64::enter_user_context_on_stack;
+use mrml_kernel::SyscallRequest;
+#[cfg(any(
+    feature = "user-probe",
+    feature = "service-probe",
+    feature = "preemption-probe",
+    feature = "service-preemption-probe",
+    feature = "smp-ipi-probe"
+))]
+use mrml_kernel::TaskRuntime;
+use mrml_kernel::UserCallFrame;
 #[cfg(feature = "smp-ipi-probe")]
 use mrml_kernel::arch::x86_64::LocalApicController;
 #[cfg(any(
@@ -52,6 +67,14 @@ use mrml_kernel::arch::x86_64::TrapDisposition;
     feature = "smp-ipi-probe"
 ))]
 use mrml_kernel::arch::x86_64::UserContext;
+#[cfg(any(feature = "user-probe", feature = "preemption-probe"))]
+use mrml_kernel::arch::x86_64::enter_user_context;
+#[cfg(any(
+    feature = "service-probe",
+    feature = "service-preemption-probe",
+    feature = "smp-service-migration-probe"
+))]
+use mrml_kernel::arch::x86_64::enter_user_context_on_stack;
 #[cfg(not(feature = "fault-probe"))]
 use mrml_kernel::arch::x86_64::{
     ActiveApTrampolinePage, ActivePageTables, ApStartupTable, ApStartupTiming, ApTrampolineImage,
@@ -63,8 +86,8 @@ use mrml_kernel::arch::x86_64::{
     PagePermissions, UserBufferAccess, VirtAddr,
 };
 use mrml_kernel::arch::x86_64::{
-    ApOnlineTable, CpuDescriptorState, HardwareTrapFrame, PrivilegeStackLayout, MAX_X86_64_CPUS,
-    PRIVILEGE_STACK_ARENA_PAGES,
+    ApOnlineTable, CpuDescriptorState, HardwareTrapFrame, MAX_X86_64_CPUS,
+    PRIVILEGE_STACK_ARENA_PAGES, PrivilegeStackLayout,
 };
 #[cfg(any(
     feature = "block-guest-driver-probe",
@@ -73,45 +96,22 @@ use mrml_kernel::arch::x86_64::{
 use mrml_kernel::arch::x86_64::{NativeX86VirtualBlockPortIo, X86VirtualBlockGuestQueueTransport};
 #[cfg(feature = "uefi-service-preemption-probe")]
 use mrml_kernel::arch::x86_64::{PreallocatedPageTableStore, ServiceAddressSpace};
-#[cfg(feature = "production-policy")]
-use mrml_kernel::BootPolicy;
-#[cfg(feature = "service-probe")]
-use mrml_kernel::GuestMappingRevoker;
-#[cfg(any(feature = "timer-probe", feature = "smp-scheduler-probe"))]
-use mrml_kernel::KernelScheduler;
-#[cfg(all(feature = "smp-ipi-probe", not(feature = "smp-periodic-balance-probe")))]
-use mrml_kernel::PeriodicBalancer;
-#[cfg(any(
-    feature = "user-probe",
-    feature = "service-probe",
-    feature = "smp-service-migration-probe"
-))]
-use mrml_kernel::SyscallRequest;
-#[cfg(any(
-    feature = "user-probe",
-    feature = "service-probe",
-    feature = "preemption-probe",
-    feature = "service-preemption-probe",
-    feature = "smp-ipi-probe"
-))]
-use mrml_kernel::TaskRuntime;
-use mrml_kernel::UserCallFrame;
-#[cfg(feature = "service-probe")]
-use mrml_kernel::{
-    decode_capability_transfers, BootRecoveryDelivery, BootRecoverySyscallExecutor,
-    BootRecoverySyscallRequest, Capability, CapabilitySpace, ControlEvent,
-    DirectHostResourceMemory, GuestMemory, GuestRegion, HostResourceTable, PeerDeathReason,
-    RestartPolicy, ServiceAddressSpaceEraser, ServiceError, ServiceId, ServiceResourceEraser,
-    ServiceSupervisor, SharedAccess, SharedBufferSyscallExecutor, SharedEndpoint,
-    SharedEndpointRequest, SharedMemoryBindings, VmId, VmTable, BOOT_RECOVERY_SYSCALL_OPERATION,
-    CAPABILITY_TRANSFER_DESCRIPTOR_BYTES, MAX_CAPABILITIES, MAX_INLINE_PAYLOAD,
-};
 #[cfg(feature = "uefi-service-preemption-probe")]
 use mrml_kernel::{ArtifactKind, SignedArtifact, TrustRoot};
+#[cfg(feature = "service-probe")]
+use mrml_kernel::{
+    BOOT_RECOVERY_SYSCALL_OPERATION, BootRecoveryDelivery, BootRecoverySyscallExecutor,
+    BootRecoverySyscallRequest, CAPABILITY_TRANSFER_DESCRIPTOR_BYTES, Capability, CapabilitySpace,
+    ControlEvent, DirectHostResourceMemory, GuestMemory, GuestRegion, HostResourceTable,
+    MAX_CAPABILITIES, MAX_INLINE_PAYLOAD, PeerDeathReason, RestartPolicy,
+    ServiceAddressSpaceEraser, ServiceError, ServiceId, ServiceResourceEraser, ServiceSupervisor,
+    SharedAccess, SharedBufferSyscallExecutor, SharedEndpoint, SharedEndpointRequest,
+    SharedMemoryBindings, VmId, VmTable, decode_capability_transfers,
+};
 #[cfg(not(feature = "fault-probe"))]
 use mrml_kernel::{
-    BootHandoff, MemoryKind, MemoryRegion, PhysAddr, HANDOFF_HEADER_BYTES, MAX_HANDOFF_BYTES,
-    MAX_HANDOFF_REGIONS,
+    BootHandoff, HANDOFF_HEADER_BYTES, MAX_HANDOFF_BYTES, MAX_HANDOFF_REGIONS, MemoryKind,
+    MemoryRegion, PhysAddr,
 };
 #[cfg(all(
     not(feature = "fault-probe"),
@@ -130,10 +130,15 @@ use mrml_kernel::{DomainBalanceOutcome, PeriodicDomainBalancer};
 use mrml_kernel::{Endpoint, ObjectId, Rights};
 #[cfg(all(not(feature = "fault-probe"), feature = "gpu-benchmark"))]
 use mrml_kernel::{
-    GpuGuestCommandPublisher, GpuQueueIdentity, GpuQueueSender, GpuResourceResponse,
-    GpuResourceResponseReceiver, GpuSharedRingIndices, ResourceCommand, GPU_DOORBELL_PORT,
-    GPU_QUEUE_MESSAGE_BYTES,
+    GPU_DOORBELL_PORT, GPU_QUEUE_MESSAGE_BYTES, GpuGuestCommandPublisher, GpuQueueIdentity,
+    GpuQueueSender, GpuResourceResponse, GpuResourceResponseReceiver, GpuSharedRingIndices,
+    ResourceCommand,
 };
+#[cfg(any(
+    feature = "block-guest-driver-probe",
+    feature = "pci-configuration-probe"
+))]
+use mrml_kernel::{PAGE_SIZE, VIRTUAL_BLOCK_CONFIGURATION_BYTES, VirtualBlockGuestDriver};
 #[cfg(any(
     feature = "timer-probe",
     feature = "preemption-probe",
@@ -148,12 +153,7 @@ use mrml_kernel::{Priority, ScheduleOutcome};
     feature = "block-guest-driver-probe",
     feature = "pci-configuration-probe"
 ))]
-use mrml_kernel::{VirtualBlockGuestDriver, PAGE_SIZE, VIRTUAL_BLOCK_CONFIGURATION_BYTES};
-#[cfg(any(
-    feature = "block-guest-driver-probe",
-    feature = "pci-configuration-probe"
-))]
-use mrml_kernel::{VirtualBlockResumePage, VIRTUAL_BLOCK_REQUEST_BYTES};
+use mrml_kernel::{VIRTUAL_BLOCK_REQUEST_BYTES, VirtualBlockResumePage};
 
 #[cfg(feature = "gpu-benchmark")]
 const GPU_COMMAND_BASE: usize = 0x00b0_0000;

@@ -1,4 +1,4 @@
-use crate::{Capability, CapabilityError, CapabilitySpace, ObjectId, PhysAddr, Rights, PAGE_SIZE};
+use crate::{Capability, CapabilityError, CapabilitySpace, ObjectId, PAGE_SIZE, PhysAddr, Rights};
 
 pub const HYPERCALL_BYTES: usize = 64;
 pub const MAX_GUEST_REGIONS: usize = 64;
@@ -926,11 +926,7 @@ mod tests {
     impl RevocableVmBackend for RevocationBackend {
         fn revoke_guest_mapping(&mut self, address: u64, bytes: u64) -> Result<(), Self::Error> {
             self.request = Some((address, bytes));
-            if self.fail {
-                Err(())
-            } else {
-                Ok(())
-            }
+            if self.fail { Err(()) } else { Ok(()) }
         }
     }
 

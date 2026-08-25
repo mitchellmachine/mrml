@@ -1,7 +1,7 @@
 use crate::{
-    revoke_mapping_before_resume, Capability, CapabilityError, CapabilitySpace, GuestMappingId,
-    GuestMappingRevoker, GuestMemory, MappingRevocationError, ObjectId, Rights,
-    ServiceAddressSpaceEraser, TaskId, VmId,
+    Capability, CapabilityError, CapabilitySpace, GuestMappingId, GuestMappingRevoker, GuestMemory,
+    MappingRevocationError, ObjectId, Rights, ServiceAddressSpaceEraser, TaskId, VmId,
+    revoke_mapping_before_resume,
 };
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -793,11 +793,7 @@ mod tests {
         type Error = ();
         fn retire(&mut self, _handle: HostResourceHandle) -> Result<(), Self::Error> {
             self.calls += 1;
-            if self.calls == 1 {
-                Err(())
-            } else {
-                Ok(())
-            }
+            if self.calls == 1 { Err(()) } else { Ok(()) }
         }
     }
 
@@ -809,11 +805,7 @@ mod tests {
             _context: crate::arch::x86_64::UserContext,
         ) -> Result<(), Self::Error> {
             self.calls += 1;
-            if self.calls == 1 {
-                Err(())
-            } else {
-                Ok(())
-            }
+            if self.calls == 1 { Err(()) } else { Ok(()) }
         }
     }
 
@@ -837,11 +829,7 @@ mod tests {
         fn revoke_guest_mapping(&mut self, address: u64, bytes: u64) -> Result<(), Self::Error> {
             self.calls[self.count] = (address, bytes);
             self.count += 1;
-            if self.fail {
-                Err(())
-            } else {
-                Ok(())
-            }
+            if self.fail { Err(()) } else { Ok(()) }
         }
     }
 

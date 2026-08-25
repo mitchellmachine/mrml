@@ -1,5 +1,5 @@
 use crate::arch::x86_64::{USER_CODE_SELECTOR, USER_DATA_SELECTOR};
-use crate::{Capability, ObjectId, Rights, TaskId, MAX_CAPABILITIES, MAX_INLINE_PAYLOAD};
+use crate::{Capability, MAX_CAPABILITIES, MAX_INLINE_PAYLOAD, ObjectId, Rights, TaskId};
 
 pub const X86_USER_CALL_VECTOR: u8 = 0x80;
 pub const MAX_SYSCALL_INLINE_PAYLOAD: usize = 24;
