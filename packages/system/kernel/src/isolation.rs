@@ -1690,33 +1690,27 @@ mod tests {
                     [0x18; 64],
                     [0x2f; 64],
                 ),
-                ComponentServiceLaunchError::InvalidInterfaceFingerprint => {
-                    (
-                        spec.interface(),
-                        spec.system_generation(),
-                        [0; 32],
-                        [0x18; 64],
-                        [0x2f; 64],
-                    )
-                }
-                ComponentServiceLaunchError::InvalidArtifactDigest => {
-                    (
-                        spec.interface(),
-                        spec.system_generation(),
-                        [0x3a; 32],
-                        [0; 64],
-                        [0x2f; 64],
-                    )
-                }
-                ComponentServiceLaunchError::ArtifactSubstitution => {
-                    (
-                        spec.interface(),
-                        spec.system_generation(),
-                        [0x3a; 32],
-                        [0x2f; 64],
-                        [0x2f; 64],
-                    )
-                }
+                ComponentServiceLaunchError::InvalidInterfaceFingerprint => (
+                    spec.interface(),
+                    spec.system_generation(),
+                    [0; 32],
+                    [0x18; 64],
+                    [0x2f; 64],
+                ),
+                ComponentServiceLaunchError::InvalidArtifactDigest => (
+                    spec.interface(),
+                    spec.system_generation(),
+                    [0x3a; 32],
+                    [0; 64],
+                    [0x2f; 64],
+                ),
+                ComponentServiceLaunchError::ArtifactSubstitution => (
+                    spec.interface(),
+                    spec.system_generation(),
+                    [0x3a; 32],
+                    [0x2f; 64],
+                    [0x2f; 64],
+                ),
             };
             let (route, error) = PreparedComponentServiceLaunch::bind(
                 route,
