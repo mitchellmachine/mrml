@@ -4,6 +4,18 @@ Historical paths in this log are intentionally preserved. The canonical
 [old-to-current source-path map](PATH_MIGRATION.md) locates their present
 implementations without altering the original review evidence.
 
+## 2026-08-25 — KVM/WHP configuration transaction and retained lifecycle integration
+
+Patent review: **NOT_TRIGGERED** for this integration increment. The existing
+hosted probes use the existing typed one-use transaction, carrying caller-
+supplied interface/provider generations across the same guest construction,
+then transfer the prepared guest once into the existing configuration lifecycle.
+Exact endpoint matching gates access and successful retirement precedes success
+reporting. No new VM construction, resource-selection, transport, scheduling,
+workload classification, or provider-selection mechanism is added. Those broader
+adaptive-isolation mechanisms remain **TRIGGERED**. Agent review is not legal
+clearance and does not replace independent human dual review.
+
 ## 2026-08-25 — Typed service construction transaction
 
 Patent review: **NOT_TRIGGERED**. This is a conventional one-use transaction
