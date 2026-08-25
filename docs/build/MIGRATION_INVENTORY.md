@@ -568,6 +568,20 @@ Windows host without changing application source behavior:
 No Linux runtime, externally exposed server, remote traffic, CUDA/GPU execution,
 or physical-hardware evidence was established by this path-only move.
 
+The trainer-tool move from `crates/mrml-trainer` to `tools/trainer` was checked
+on a Windows host without changing trainer source behavior:
+
+- workspace metadata, formatting, `mrml doctor`, and `mrml audit` — PASS;
+- pinned-nightly tests — PASS, 4 training/export tests;
+- strict all-target Clippy — FAIL on 8 existing dead-code sites in unchanged
+  test compilation;
+- `.\target\debug\mrml.exe build mrml-trainer` — FAIL at tensor's already-
+  recorded MSVC/no_std build-script unwind limitation;
+- stale exact `crates/mrml-trainer/` path scan — PASS.
+
+No Linux runtime, production corpus, long-running training, CUDA/GPU execution,
+or physical-hardware evidence was established by this path-only move.
+
 `package`, `release`, `image`, and `publish` deliberately fail as `PLANNED`.
 Linux, KVM, cross-host equivalence, physical UEFI/GPU, and release functionality
 were not exercised by the Windows implementation environment.
@@ -590,11 +604,9 @@ second inventory.
 
 ## Cargo-removal blockers
 
-- Every component still has Cargo dependency metadata; all except the eighteen
-  moved libraries, compiler core/driver, kernel, Git/host tools, and stage-zero
-  remain beneath `crates/`. The
-  root Cargo workspace still contains every component so the bridge resolves
-  today’s exact graph.
+- Every component still has Cargo dependency metadata, but no tracked component
+  remains beneath generic `crates/`. The root Cargo workspace still contains
+  every component so the bridge resolves today's exact graph.
 - `packages/gpu/tensor/build.rs` invokes rustc for CUDA PTX and is the one current
   build script. It must become an explicit structured build action.
 - Dependency, feature, output, and source-input facts are persisted and fail

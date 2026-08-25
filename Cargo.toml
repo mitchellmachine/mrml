@@ -40,7 +40,7 @@ members = [
     "packages/libraries/zstd",
     "packages/libraries/wikipedia",
     "packages/libraries/tokenizer",
-    "crates/mrml-trainer",
+    "tools/trainer",
     "packages/libraries/av1",
     "packages/libraries/opus",
 ]
