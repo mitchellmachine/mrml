@@ -685,6 +685,20 @@ pub enum GenericExistentialTraitGoalSolution {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct InferredTraitGoalAnswer {
+    pub substitution: SymbolicTraitGoalSubstitution,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum InferredTraitGoalSolution {
+    Unique(InferredTraitGoalAnswer),
+    Ambiguous,
+    NoSolution,
+    Cycle,
+    Overflow,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct GenericTraitImplementationDatabase {
     implementations:
         [Option<IdentifiedGenericTraitImplementation>; MAX_GENERIC_TRAIT_IMPLEMENTATIONS],
@@ -2598,6 +2612,262 @@ pub fn solve_exists_trait_goal_generic(
     implementations.select_existential(goal.instantiate_in_universe(universe)?)
 }
 
+pub fn solve_exists_trait_goal_with_generics(
+    exact: &TraitImplementationDatabase,
+    generic: &GenericTraitImplementationDatabase,
+    universe: TraitUniverseIndex,
+    goal: ExistsImplementedTraitGoal,
+) -> Result<InferredTraitGoalSolution, TraitGoalError> {
+    let goal = goal.instantiate_in_universe(universe)?;
+    let canonicalized = canonicalize_implemented_trait_goal_with_variables(goal)?;
+    let mut state = InferenceConstraintState::new(canonicalized)?;
+    let mut stack = [None; MAX_TRAIT_PROOF_DEPTH];
+    match solve_inferred_trait_goal_inner(exact, generic, goal, &mut state, &mut stack, 0)? {
+        TraitProofSolution::Proven => {
+            Ok(InferredTraitGoalSolution::Unique(InferredTraitGoalAnswer {
+                substitution: state.substitution()?,
+            }))
+        }
+        TraitProofSolution::Ambiguous => Ok(InferredTraitGoalSolution::Ambiguous),
+        TraitProofSolution::NoSolution => Ok(InferredTraitGoalSolution::NoSolution),
+        TraitProofSolution::Cycle => Ok(InferredTraitGoalSolution::Cycle),
+        TraitProofSolution::Overflow => Ok(InferredTraitGoalSolution::Overflow),
+    }
+}
+
+fn solve_inferred_trait_goal_inner(
+    exact: &TraitImplementationDatabase,
+    generic: &GenericTraitImplementationDatabase,
+    goal: ImplementedTraitGoal,
+    state: &mut InferenceConstraintState,
+    stack: &mut [Option<ImplementedTraitGoal>; MAX_TRAIT_PROOF_DEPTH],
+    depth: usize,
+) -> Result<TraitProofSolution, TraitGoalError> {
+    let goal = state.apply_goal(goal)?;
+    validate_existential_goal(goal)?;
+    let canonicalized = canonicalize_implemented_trait_goal_with_variables(goal)?;
+    let exact_solution = exact.solve(canonicalized.goal);
+    let generic_solution = generic.select_existential(goal)?;
+    match (exact_solution, generic_solution) {
+        (TraitGoalSolution::Unique(answer), GenericExistentialTraitGoalSolution::NoSolution) => {
+            let substitution = answer
+                .substitute(canonicalized)
+                .ok_or(TraitGoalError::InvalidGoal)?;
+            state.merge_concrete(substitution)?;
+            Ok(TraitProofSolution::Proven)
+        }
+        (TraitGoalSolution::NoSolution, GenericExistentialTraitGoalSolution::Unique(answer)) => {
+            state.merge_symbolic(answer.substitution)?;
+            let goal = state.apply_goal(goal)?;
+            if stack[..depth].contains(&Some(goal)) {
+                return Ok(TraitProofSolution::Cycle);
+            }
+            if depth >= MAX_TRAIT_PROOF_DEPTH {
+                return Ok(TraitProofSolution::Overflow);
+            }
+            stack[depth] = Some(goal);
+            let mut result = TraitProofSolution::Proven;
+            for premise in answer.instantiated.premises.predicates().iter() {
+                let premise = premise
+                    .as_ref()
+                    .copied()
+                    .ok_or(TraitGoalError::InvalidGoal)?;
+                result = solve_inferred_trait_goal_inner(
+                    exact,
+                    generic,
+                    premise,
+                    state,
+                    stack,
+                    depth + 1,
+                )?;
+                if result != TraitProofSolution::Proven {
+                    break;
+                }
+            }
+            stack[depth] = None;
+            Ok(result)
+        }
+        (TraitGoalSolution::NoSolution, GenericExistentialTraitGoalSolution::NoSolution) => {
+            Ok(TraitProofSolution::NoSolution)
+        }
+        (TraitGoalSolution::Unique(_), _)
+        | (TraitGoalSolution::Ambiguous, _)
+        | (_, GenericExistentialTraitGoalSolution::Ambiguous) => Ok(TraitProofSolution::Ambiguous),
+    }
+}
+
+#[derive(Clone, Copy)]
+struct InferenceConstraintState {
+    variables: [Option<TraitInferenceVariableId>; MAX_CANONICAL_TRAIT_VARIABLES],
+    parents: [u8; MAX_CANONICAL_TRAIT_VARIABLES],
+    concrete: [Option<TraitTypeId>; MAX_CANONICAL_TRAIT_VARIABLES],
+    variable_count: usize,
+}
+
+impl InferenceConstraintState {
+    fn new(goal: CanonicalizedImplementedTraitGoal) -> Result<Self, TraitGoalError> {
+        let mut variables = [None; MAX_CANONICAL_TRAIT_VARIABLES];
+        for (index, variable) in goal.variables().iter().enumerate() {
+            variables[index] = Some(
+                variable
+                    .as_ref()
+                    .copied()
+                    .ok_or(TraitGoalError::InvalidGoal)?,
+            );
+        }
+        Ok(Self {
+            variables,
+            parents: [0, 1, 2, 3, 4, 5, 6, 7],
+            concrete: [None; MAX_CANONICAL_TRAIT_VARIABLES],
+            variable_count: goal.variable_count,
+        })
+    }
+
+    fn merge_concrete(
+        &mut self,
+        substitution: TraitGoalSubstitution,
+    ) -> Result<(), TraitGoalError> {
+        for binding in substitution.bindings().iter().flatten() {
+            let index = self
+                .variable_index(binding.variable)
+                .ok_or(TraitGoalError::InvalidGoal)?;
+            if !self.constrain(index, binding.concrete_type) {
+                return Err(TraitGoalError::InvalidGoal);
+            }
+        }
+        Ok(())
+    }
+
+    fn merge_symbolic(
+        &mut self,
+        substitution: SymbolicTraitGoalSubstitution,
+    ) -> Result<(), TraitGoalError> {
+        for assignment in substitution.bindings().iter().flatten() {
+            let variable = self
+                .variable_index(assignment.variable())
+                .ok_or(TraitGoalError::InvalidGoal)?;
+            let accepted = match assignment.value() {
+                TraitGoalType::Concrete(concrete) => self.constrain(variable, concrete),
+                TraitGoalType::InferenceVariable(other) => {
+                    let other = self
+                        .variable_index(other)
+                        .ok_or(TraitGoalError::InvalidGoal)?;
+                    self.union(variable, other)
+                }
+                TraitGoalType::Placeholder(_) => return Err(TraitGoalError::UniverseLeak),
+            };
+            if !accepted {
+                return Err(TraitGoalError::InvalidGoal);
+            }
+        }
+        Ok(())
+    }
+
+    fn apply_goal(
+        &self,
+        goal: ImplementedTraitGoal,
+    ) -> Result<ImplementedTraitGoal, TraitGoalError> {
+        let mut applied =
+            ImplementedTraitGoal::new(goal.trait_id, self.apply_type(goal.self_type)?);
+        for argument in goal.arguments().iter() {
+            applied.push_argument(
+                self.apply_type(
+                    argument
+                        .as_ref()
+                        .copied()
+                        .ok_or(TraitGoalError::InvalidGoal)?,
+                )?,
+            )?;
+        }
+        Ok(applied)
+    }
+
+    fn apply_type(&self, ty: TraitGoalType) -> Result<TraitGoalType, TraitGoalError> {
+        let TraitGoalType::InferenceVariable(variable) = ty else {
+            return Ok(ty);
+        };
+        let index = self
+            .variable_index(variable)
+            .ok_or(TraitGoalError::InvalidGoal)?;
+        let root = self.root(index);
+        Ok(self.concrete[root].map(TraitGoalType::Concrete).unwrap_or(
+            TraitGoalType::InferenceVariable(
+                self.representative(root)
+                    .ok_or(TraitGoalError::InvalidGoal)?,
+            ),
+        ))
+    }
+
+    fn substitution(self) -> Result<SymbolicTraitGoalSubstitution, TraitGoalError> {
+        let mut bindings = [None; MAX_CANONICAL_TRAIT_VARIABLES];
+        for (index, variable) in self.variables[..self.variable_count].iter().enumerate() {
+            let variable = variable
+                .as_ref()
+                .copied()
+                .ok_or(TraitGoalError::InvalidGoal)?;
+            bindings[index] = Some(TraitUniverseAssignment::new(
+                variable,
+                self.apply_type(TraitGoalType::InferenceVariable(variable))?,
+            )?);
+        }
+        Ok(SymbolicTraitGoalSubstitution {
+            bindings,
+            binding_count: self.variable_count,
+        })
+    }
+
+    fn variable_index(self, variable: TraitInferenceVariableId) -> Option<usize> {
+        self.variables[..self.variable_count]
+            .iter()
+            .position(|candidate| *candidate == Some(variable))
+    }
+
+    fn root(self, mut variable: usize) -> usize {
+        while self.parents[variable] as usize != variable {
+            variable = self.parents[variable] as usize;
+        }
+        variable
+    }
+
+    fn representative(self, root: usize) -> Option<TraitInferenceVariableId> {
+        self.variables[..self.variable_count]
+            .iter()
+            .enumerate()
+            .filter_map(|(index, variable)| {
+                (self.root(index) == root).then_some(*variable).flatten()
+            })
+            .min()
+    }
+
+    fn constrain(&mut self, variable: usize, concrete: TraitTypeId) -> bool {
+        let root = self.root(variable);
+        match self.concrete[root] {
+            Some(existing) => existing == concrete,
+            None => {
+                self.concrete[root] = Some(concrete);
+                true
+            }
+        }
+    }
+
+    fn union(&mut self, left: usize, right: usize) -> bool {
+        let left = self.root(left);
+        let right = self.root(right);
+        if left == right {
+            return true;
+        }
+        match (self.concrete[left], self.concrete[right]) {
+            (Some(left), Some(right)) if left != right => return false,
+            _ => {}
+        }
+        self.parents[right] = left as u8;
+        if self.concrete[left].is_none() {
+            self.concrete[left] = self.concrete[right];
+        }
+        true
+    }
+}
+
 fn implementation_matches_goal(
     implementation: TraitImplementationHeader,
     goal: CanonicalImplementedTraitGoal,
@@ -4360,6 +4630,243 @@ mod tests {
                 TraitGoalType::InferenceVariable(TraitInferenceVariableId::new(0)),
             )),
             Ok(GenericExistentialTraitGoalSolution::NoSolution)
+        );
+    }
+
+    #[test]
+    fn inferred_generic_proof_composes_exact_premise_bindings() {
+        let parameter = TraitGenericParameterId::new(0);
+        let mut implementation = TraitWhereClause::new(
+            1,
+            BoundImplementedTraitGoal::new(
+                TraitId::new(370),
+                BoundTraitGoalType::Parameter(parameter),
+            ),
+        )
+        .unwrap();
+        implementation
+            .push_premise(BoundImplementedTraitGoal::new(
+                TraitId::new(371),
+                BoundTraitGoalType::Parameter(parameter),
+            ))
+            .unwrap();
+        let mut generic = GenericTraitImplementationDatabase::EMPTY;
+        generic
+            .insert(GenericTraitImplementationId::new(1), implementation)
+            .unwrap();
+        let mut exact = TraitImplementationDatabase::EMPTY;
+        exact
+            .insert(TraitImplementationHeader::new(
+                TraitImplementationId::new(1),
+                TraitId::new(371),
+                TraitTypeId::new(77),
+            ))
+            .unwrap();
+        let goal = ExistsImplementedTraitGoal::new(
+            1,
+            BoundImplementedTraitGoal::new(
+                TraitId::new(370),
+                BoundTraitGoalType::Parameter(parameter),
+            ),
+        )
+        .unwrap();
+        let variable = TraitInferenceVariableId::in_universe(TraitUniverseIndex::new(10), 0);
+        let InferredTraitGoalSolution::Unique(answer) = solve_exists_trait_goal_with_generics(
+            &exact,
+            &generic,
+            TraitUniverseIndex::new(10),
+            goal,
+        )
+        .unwrap() else {
+            panic!("expected inferred premise proof");
+        };
+        assert_eq!(
+            answer.substitution.binding(variable),
+            Some(TraitGoalType::Concrete(TraitTypeId::new(77)))
+        );
+    }
+
+    #[test]
+    fn inferred_generic_proof_recurses_and_rejects_conflicting_premises() {
+        let parameter = TraitGenericParameterId::new(0);
+        let mut root = TraitWhereClause::new(
+            1,
+            BoundImplementedTraitGoal::new(
+                TraitId::new(372),
+                BoundTraitGoalType::Parameter(parameter),
+            ),
+        )
+        .unwrap();
+        root.push_premise(BoundImplementedTraitGoal::new(
+            TraitId::new(373),
+            BoundTraitGoalType::Parameter(parameter),
+        ))
+        .unwrap();
+        let mut middle = TraitWhereClause::new(
+            1,
+            BoundImplementedTraitGoal::new(
+                TraitId::new(373),
+                BoundTraitGoalType::Parameter(parameter),
+            ),
+        )
+        .unwrap();
+        middle
+            .push_premise(BoundImplementedTraitGoal::new(
+                TraitId::new(374),
+                BoundTraitGoalType::Parameter(parameter),
+            ))
+            .unwrap();
+        let mut generic = GenericTraitImplementationDatabase::EMPTY;
+        generic
+            .insert(GenericTraitImplementationId::new(1), root)
+            .unwrap();
+        generic
+            .insert(GenericTraitImplementationId::new(2), middle)
+            .unwrap();
+        let mut exact = TraitImplementationDatabase::EMPTY;
+        exact
+            .insert(TraitImplementationHeader::new(
+                TraitImplementationId::new(1),
+                TraitId::new(374),
+                TraitTypeId::new(88),
+            ))
+            .unwrap();
+        let goal = ExistsImplementedTraitGoal::new(
+            1,
+            BoundImplementedTraitGoal::new(
+                TraitId::new(372),
+                BoundTraitGoalType::Parameter(parameter),
+            ),
+        )
+        .unwrap();
+        assert!(matches!(
+            solve_exists_trait_goal_with_generics(&exact, &generic, TraitUniverseIndex::ROOT, goal,),
+            Ok(InferredTraitGoalSolution::Unique(_))
+        ));
+
+        let mut conflicting = root;
+        conflicting
+            .push_premise(BoundImplementedTraitGoal::new(
+                TraitId::new(375),
+                BoundTraitGoalType::Parameter(parameter),
+            ))
+            .unwrap();
+        let mut generic = GenericTraitImplementationDatabase::EMPTY;
+        generic
+            .insert(GenericTraitImplementationId::new(3), conflicting)
+            .unwrap();
+        exact
+            .insert(TraitImplementationHeader::new(
+                TraitImplementationId::new(2),
+                TraitId::new(375),
+                TraitTypeId::new(99),
+            ))
+            .unwrap();
+        assert_eq!(
+            solve_exists_trait_goal_with_generics(&exact, &generic, TraitUniverseIndex::ROOT, goal,),
+            Ok(InferredTraitGoalSolution::NoSolution)
+        );
+    }
+
+    #[test]
+    fn inferred_generic_proof_reports_cycles_and_ambiguity() {
+        let parameter = TraitGenericParameterId::new(0);
+        let mut cycle = TraitWhereClause::new(
+            1,
+            BoundImplementedTraitGoal::new(
+                TraitId::new(380),
+                BoundTraitGoalType::Parameter(parameter),
+            ),
+        )
+        .unwrap();
+        cycle
+            .push_premise(BoundImplementedTraitGoal::new(
+                TraitId::new(380),
+                BoundTraitGoalType::Parameter(parameter),
+            ))
+            .unwrap();
+        let mut generic = GenericTraitImplementationDatabase::EMPTY;
+        generic
+            .insert(GenericTraitImplementationId::new(1), cycle)
+            .unwrap();
+        let goal = ExistsImplementedTraitGoal::new(
+            1,
+            BoundImplementedTraitGoal::new(
+                TraitId::new(380),
+                BoundTraitGoalType::Parameter(parameter),
+            ),
+        )
+        .unwrap();
+        assert_eq!(
+            solve_exists_trait_goal_with_generics(
+                &TraitImplementationDatabase::EMPTY,
+                &generic,
+                TraitUniverseIndex::ROOT,
+                goal,
+            ),
+            Ok(InferredTraitGoalSolution::Cycle)
+        );
+
+        let mut exact = TraitImplementationDatabase::EMPTY;
+        for (id, ty) in [(1, 1), (2, 2)] {
+            exact
+                .insert(TraitImplementationHeader::new(
+                    TraitImplementationId::new(id),
+                    TraitId::new(380),
+                    TraitTypeId::new(ty),
+                ))
+                .unwrap();
+        }
+        assert_eq!(
+            solve_exists_trait_goal_with_generics(&exact, &generic, TraitUniverseIndex::ROOT, goal,),
+            Ok(InferredTraitGoalSolution::Ambiguous)
+        );
+    }
+
+    #[test]
+    fn inferred_generic_proof_reports_depth_overflow() {
+        let parameter = TraitGenericParameterId::new(0);
+        let mut generic = GenericTraitImplementationDatabase::EMPTY;
+        for index in 0..=MAX_TRAIT_PROOF_DEPTH {
+            let mut implementation = TraitWhereClause::new(
+                1,
+                BoundImplementedTraitGoal::new(
+                    TraitId::new(390 + index as u32),
+                    BoundTraitGoalType::Parameter(parameter),
+                ),
+            )
+            .unwrap();
+            if index < MAX_TRAIT_PROOF_DEPTH {
+                implementation
+                    .push_premise(BoundImplementedTraitGoal::new(
+                        TraitId::new(391 + index as u32),
+                        BoundTraitGoalType::Parameter(parameter),
+                    ))
+                    .unwrap();
+            }
+            generic
+                .insert(
+                    GenericTraitImplementationId::new(index as u32),
+                    implementation,
+                )
+                .unwrap();
+        }
+        let goal = ExistsImplementedTraitGoal::new(
+            1,
+            BoundImplementedTraitGoal::new(
+                TraitId::new(390),
+                BoundTraitGoalType::Parameter(parameter),
+            ),
+        )
+        .unwrap();
+        assert_eq!(
+            solve_exists_trait_goal_with_generics(
+                &TraitImplementationDatabase::EMPTY,
+                &generic,
+                TraitUniverseIndex::ROOT,
+                goal,
+            ),
+            Ok(InferredTraitGoalSolution::Overflow)
         );
     }
 

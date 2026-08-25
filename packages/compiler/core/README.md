@@ -4095,6 +4095,18 @@ Recursive inferred-premise proof, nested/projection unification, cross-family
 answer composition, source existential syntax, and general mixed inference
 selection remain unsupported.
 
+The recursive inferred-proof milestone keeps one fixed union/concrete state for
+the root existential variables. Each exact or generic implementation answer
+refines that state before generic premises recurse through the existing 16-frame
+stack. Exact premises can resolve symbolic variables, generic chains propagate
+the result, contradictory premises return no solution, and cross-family
+ambiguity, cycles, and overflow remain distinct. Unrelated premise variables
+fail explicitly. Windows gnullvm and native Arch Linux WSL each pass 493 library
+tests, one component-interface probe, 10 conformance tests, and 335 replacement
+tests: 839 compiler tests per host. Inference-aware where clauses, projection
+constraints, backtracking, caching, coinduction, source syntax, and general
+mixed inference selection remain unsupported.
+
 The nested conditional tuple-origin milestone walks each leaf's bounded
 conditional-parent chain to the outermost generation before grouping reference
 origins by field ordinal. The exact oracle rejects a three-leaf returned field

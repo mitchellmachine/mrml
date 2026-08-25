@@ -841,6 +841,18 @@ native Arch Linux WSL each pass 489 library tests, one component-interface probe
 Recursive inferred-premise proof, nested/projection unification, cross-family
 answer composition, and source existential syntax remain unsupported.
 
+The recursive inferred-proof milestone keeps one fixed union/concrete state for
+the root existential variables. Each exact or generic implementation answer
+refines that state before generic premises recurse through the existing 16-frame
+stack. Exact premises can resolve symbolic variables, generic chains propagate
+the result, contradictory premises return no solution, and cross-family
+ambiguity, cycles, and overflow remain distinct. Unrelated premise variables
+fail explicitly. Windows gnullvm and native Arch Linux WSL each pass 493 library
+tests, one component-interface probe, 10 conformance tests, and 335 replacement
+tests: 839 compiler tests per host. Inference-aware where clauses, projection
+constraints, backtracking, caching, coinduction, and source syntax remain
+unsupported.
+
 The bounded rigid-proof milestone recursively composes concrete and skolemized
 placeholder premises through the existing 16-goal stack. Exact concrete facts
 can terminate branches; otherwise one unique rigid clause is elaborated.
