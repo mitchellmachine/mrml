@@ -2902,3 +2902,14 @@ share mechanism, accessibility or browser-semantic interface,
 JavaScript/WebAssembly runtime, AI mechanism, media mechanism, or other patent-
 candidate mechanism. This agent review does not replace required independent
 human dual review.
+
+# 2026-08-25 — Conditional action-return outlives
+
+**Result: NOT_TRIGGERED.** The compiler conventionally distinguishes a terminal
+return action from ordinary conditional actions, maps it to an existing CFG
+return edge, and applies bounded reference-origin escape checks to borrow, copy,
+and move effects. It adds no optimization, authority model, compatibility
+protocol, host-share mechanism, accessibility or browser-semantic interface,
+JavaScript/WebAssembly runtime, AI mechanism, media mechanism, or other patent-
+candidate mechanism. This agent review does not replace required independent
+human dual review.
