@@ -42,13 +42,14 @@ Three new persistent deltas are documented before implementation:
   form now uses a real accounted `TaskRuntime`/`ServiceSupervisor` launch and
   exact retryable address-space cleanup. The VMM form now has a backend-neutral
   owner that retains one prepared guest behind an exact generational endpoint
-  until confirmed teardown, including retry after teardown uncertainty; concrete
-  Both KVM and WHP hosted probes now place their transaction-committed guest in
+  until confirmed teardown, including retry after teardown uncertainty. Both
+  KVM and WHP hosted probes now place their transaction-committed guest in
   that owner, gate execution access on the exact endpoint, and explicitly retire
-  it on the successful terminal path. Their builds and focused tests pass;
-  retained signed artifacts still fail before the expected receiver-block stage,
-  so fresh live lifecycle parity remains pending. A complete
-  representative dual-placement
+  it on the successful terminal path. Their builds and focused tests pass. Fresh
+  one-time-signed identical artifacts completed the full hosted service probe on
+  both backends with one eligible domain, one microVM domain, and zero native
+  fallback. This is hosted controlled-probe evidence, not required-system Total
+  readiness. A complete representative dual-placement
   service, owner-setting persistence, VM construction, resource
   projection, and cross-placement runtime transport remain **PLANNED**.
   The existing hosted KVM/WHP configuration-service probes are wired to this
@@ -56,8 +57,8 @@ Three new persistent deltas are documented before implementation:
   A one-use typed service transaction now preserves exact binding identity from
   pre-construction admission through endpoint commit and teardown-safe rollback.
   Both hosted configuration probes use it around real guest construction and
-  pass build/unit gates; fresh retained-artifact execution did not complete, so
-  live KVM/WHP transaction parity remains pending. The build tool now also
+  pass build/unit gates and the fresh signed lifecycle probe completed on both
+  hosted backends. The build tool now also
   composes one exact `SystemGeneration`, isolated-service `InterfaceBinding`,
   and already resolved placement into a generation-bound handoff while rejecting
   stale IDs, package substitution, in-process targets, and Total-mode exceptions.

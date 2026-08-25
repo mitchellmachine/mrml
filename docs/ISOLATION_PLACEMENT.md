@@ -37,11 +37,10 @@ The configuration service now supplies the first concrete adapter over those
 two backend entries, and its manifest admits both forms while retaining native
 service as the default and floor. Focused tests prove that either form preserves
 one interface/provider binding and that microVM failure never invokes its native
-launcher. The launchers are still abstract boundaries: this composition does not
-select a provider or placement, create a VM, carry an interface invocation,
-assign resources, persist policy, or provide transparent cross-placement
-transport. A fully instantiated representative dual-placement service remains
-**PLANNED**.
+launcher. This routing composition still does not automatically select a
+provider or placement, carry a general interface invocation, persist policy, or
+provide transparent cross-placement transport. A fully resolved representative
+dual-placement service remains **PLANNED**.
 
 The native configuration form now has its first real supervised launcher. It
 preflights one vacant supervisor slot before creating a task, publishes the task
@@ -54,13 +53,14 @@ construction publishes only an opaque generational endpoint bound to the exact
 domain, interface, provider, and policy generations; confirmed destruction
 retires it; uncertain destruction retains the guest and endpoint for exact
 retry. Forged or stale endpoint tokens never reach backend teardown. Concrete
-The KVM and WHP hosted configuration probes now transfer their transaction-
+KVM and WHP hosted configuration probes now transfer their transaction-
 committed prepared guest into this owner, use the retained guest through its
 exact endpoint, and explicitly retire the lifecycle on the successful terminal
 path. Unrelated launch modes cannot consume a configuration-owned guest. Both
 runner builds and focused unit suites pass with this identical ownership shape.
 The dual-placement milestone remains **PARTIALLY IMPLEMENTED** rather than
-complete because fresh live execution has not passed.
+complete because general resolution and cross-placement transport remain
+planned.
 An admitted-guest transfer factory now accepts one backend-constructed guest
 only when the complete `IsolationServiceSpec` matches, consumes it once, and
 permits trusted mutable guest access only through the matching generational
@@ -81,10 +81,32 @@ the verified service artifact version; only the fully attached guest is
 committed as the endpoint, after which execution receives it back unchanged.
 The committed guest now remains inside the common configuration lifecycle until
 explicit terminal retirement. Both runners build and their focused host tests
-pass. Fresh signed execution with the available retained diagnostic artifacts
-still failed before the expected receiver-block stage on both backends, so live
-transaction/lifecycle execution parity remains **PLANNED** and no new hosted-
-execution claim is made.
+pass. Newly built one-time-signed kernel and service artifacts completed the
+full hosted service probe on both backends on 2026-08-25. WHP and nested KVM
+each reported one eligible domain, one domain in a microVM, and zero native
+fallback after explicit lifecycle retirement. WHP reported `verify=18258us`,
+`prepare=6937us`, `execute=3530us`, `total=53537us`; KVM reported
+`verify=22013us`, `prepare=2758us`, `execute=1578us`, `total=109945us`.
+The identical package, signed kernel, signed service, and public keys were used
+for both. This is hosted controlled-probe evidence—not host-resistant isolation,
+bare metal, physical hardware, broad application compatibility, or required-
+system Total readiness.
+
+The exact frontend/build and execution commands were:
+
+```text
+mrml build org.mrml.system.bootloader --target uefi-x86_64 --release --feature-profile service_probe
+mrml build org.mrml.system.service-image --target native --release
+mrml build org.mrml.tool.sign --target windows --release
+mrml-sign keygen target/total-microvm-current/kernel.private target/total-microvm-current/kernel.public
+mrml-sign keygen target/total-microvm-current/service.private target/total-microvm-current/service.public
+mrml-sign keygen target/total-microvm-current/package.private target/total-microvm-current/package.public
+mrml-sign sign-bundle kernel 1 target/total-microvm-current/kernel.efi target/total-microvm-current/kernel.private target/total-microvm-current/kernel.signed
+mrml-sign sign-bundle service 1 target/total-microvm-current/service.efi target/total-microvm-current/service.private target/total-microvm-current/service.signed
+mrml package create org.mrml.system.kernel kernel 1 x86_64 kernel target/total-microvm-current/kernel.signed target/total-microvm-current/kernel.mrp --private-key target/total-microvm-current/package.private
+mrml-whp-run.exe target/total-microvm-current/kernel.mrp target/total-microvm-current/package.public target/total-microvm-current/kernel.public 1 service-probe target/total-microvm-current/service.signed target/total-microvm-current/service.public 1
+wsl.exe -d archlinux -- ./target/mrml-native/linux/release/mrml-kvm-run target/total-microvm-current/kernel.mrp target/total-microvm-current/package.public target/total-microvm-current/kernel.public 1 service-probe target/total-microvm-current/service.signed target/total-microvm-current/service.public 1
+```
 
 The build tool now has a bounded composition prerequisite between exact package
 resolution and kernel launch routing. A `GenerationBoundServicePlacement`

@@ -50,9 +50,10 @@ implements a concrete adapter with separately typed native-service and microVM
 launchers, and its manifest admits both forms. Two focused configuration tests on
 Windows and Arch Linux preserve the exact interface/provider generations across
 both routes and prove microVM unavailability cannot call the native launcher.
-The launchers are not yet wired to native supervision and VMM construction, so
-this does not choose a provider or placement, transport an interface call,
-allocate VM resources, or complete the representative dual-placement-service
+The native launcher is wired to supervision and the microVM launcher now owns a
+transaction-committed KVM/WHP guest through exact endpoint retirement. This does
+not yet automatically choose a provider or placement, provide general cross-
+placement transport, or complete the representative dual-placement-service
 milestone.
 
 The native half is now wired to actual kernel supervision. `ServiceSupervisor`
@@ -63,9 +64,9 @@ exact task, and returns an endpoint carrying its service/task and immutable
 interface/provider generations. Revocation uses `exit_current`, checks the exact
 cleanup task, and calls `complete_cleanup`; injected eraser failure retains the
 stopped endpoint and cleanup ticket until an exact retry succeeds. Windows and
-Arch Linux pass 34 configuration tests and 488 kernel tests. This is hosted
-unit/simulation evidence, not a VMM-backed configuration launch, interface
-transport, WHP/KVM execution, or physical evidence.
+Arch Linux pass 36 configuration tests and the 489-test kernel suite remains
+green. This native lifecycle result is hosted unit/simulation evidence, not
+physical evidence.
 
 A one-use `PreparedIsolationServiceRoute` now carries the complete typed service
 binding across a multi-step backend construction window. Preparation reserves
@@ -78,12 +79,18 @@ before the admission slot is cancelled. One focused test is included in the
 prepare this exact transaction before constructing their native guest, commit
 the verified service artifact version as its provider generation, commit the
 fully attached guest as its endpoint, and recover the unchanged endpoint for
-execution. Release builds and focused runner tests pass on both hosts (KVM 8,
-WHP 7). A fresh WHP run using the older retained artifact reached its known
-receiver-stage mismatch; the newer corrected artifact did not complete within
-the bounded run. KVM with that corrected artifact stopped at configuration
-response stage 2. Therefore this records build/unit integration, not fresh live
-transaction execution parity, a new guest-service result, or physical evidence.
+execution. A one-use admitted-guest factory rechecks the complete service
+specification, after which only the matching generational endpoint exposes the
+retained guest. Successful terminal execution explicitly retires that lifecycle
+before success is reported. Release builds and focused runner tests pass on both
+hosts (KVM 8, WHP 7). Newly built one-time-signed identical kernel-package and
+service artifacts then completed the full probe under both backends on
+2026-08-25: each reported one eligible domain, one microVM domain, and zero
+native fallback. KVM reported `verify=22013us`, `prepare=2758us`,
+`execute=1578us`, `total=109945us`; WHP reported `verify=18258us`,
+`prepare=6937us`, `execute=3530us`, `total=53537us`. This is fresh hosted
+controlled-probe transaction/lifecycle parity, not host-resistant or physical
+evidence.
 
 The hosted KVM and WHP `service-probe` launchers now prepare the exact
 configuration-service domain as `MICROVM_ELIGIBLE` under policy generation 1
