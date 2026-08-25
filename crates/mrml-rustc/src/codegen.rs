@@ -4583,7 +4583,7 @@ impl<'source> RuntimeBodyFacts<'source> {
         }
     }
 
-    fn direct_reference_move_source_before(
+    fn direct_reference_value_source_before(
         &self,
         borrower: RuntimeLocalId,
         before: RuntimeOwnershipEventId,
@@ -4614,8 +4614,10 @@ impl<'source> RuntimeBodyFacts<'source> {
             .iter()
             .flatten()
             .find(|effect| {
-                effect.kind == RuntimePlaceEffectKind::Move
-                    && effect.event.0.checked_add(1) == Some(initialization.event.0)
+                matches!(
+                    effect.kind,
+                    RuntimePlaceEffectKind::Copy | RuntimePlaceEffectKind::Move
+                ) && effect.event.0.checked_add(1) == Some(initialization.event.0)
                     && effect.location == initialization.location
                     && effect.expression_path == initialization.expression_path
                     && effect.expression_conditional == initialization.expression_conditional
@@ -4628,7 +4630,9 @@ impl<'source> RuntimeBodyFacts<'source> {
         else {
             return None;
         };
-        (source_mutable == destination_mutable).then_some((source.path, *source))
+        (source_mutable == destination_mutable
+            && (!destination_mutable || source.kind == RuntimePlaceEffectKind::Move))
+            .then_some((source.path, *source))
     }
 
     fn direct_loan_generation_position(
@@ -11337,7 +11341,7 @@ fn runtime_path_outlives_function_at_effect(
             if found {
                 Some(true)
             } else if let Some((source, moved_at)) =
-                facts.direct_reference_move_source_before(local, returned_at.event)
+                facts.direct_reference_value_source_before(local, returned_at.event)
             {
                 runtime_path_outlives_function_at_effect(facts, source, moved_at, depth + 1)
             } else {
@@ -29219,6 +29223,7 @@ mod tests {
             "fn value(input: &u16) -> &u16 { let local = *input; return &local; }",
             "fn value(input: &u16, choose: bool) -> &u16 { let local = *input; if choose { return &local; } input }",
             "fn value(input: &u16, choose: bool) -> &u16 { let local = *input; let mut selected: &u16 = &local; if choose { selected = input; } selected }",
+            "fn value(input: &u16) -> &u16 { let local = *input; let source: &u16 = &local; let returned = source; returned }",
         ] {
             assert_eq!(
                 analyze(rejected).unwrap_err().kind,
@@ -29231,6 +29236,8 @@ mod tests {
             "fn value(input: &u16) -> &u16 { let returned: &u16 = &*input; returned }",
             "fn value(input: &u16) -> &u16 { let local = *input; let mut selected: &u16 = &local; selected = input; selected }",
             "fn value(input: &mut u16) -> &u16 { let moved = input; let returned: &u16 = &*moved; returned }",
+            "fn value(input: &u16) -> &u16 { let returned = input; returned }",
+            "fn value(input: &u16) -> &u16 { let first = input; let second = first; second }",
         ] {
             analyze(accepted).unwrap_or_else(|error| panic!("{accepted}: {error:?}"));
         }
