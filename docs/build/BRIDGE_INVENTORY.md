@@ -187,6 +187,11 @@ execute on both CUDA device paths, and the two `sm_120` PTX hashes match.
 Thirty-three components are native; nine remain transitional. This is not
 physical-topology, passthrough-isolation, or native-MRML-GPU evidence.
 
+`mrml-model` selects its exact default `runtime` set and binds native JSON,
+runtime, and tensor artifacts. Windows gnullvm and Arch Linux WSL2 each build it
+and match Cargo's seven passing tests. Thirty-four components are native; eight
+remain transitional. No model inference, remote provider, or CUDA profile ran.
+
 Native actions now bind one exact feature set and may gate an extern by both
 target family and selected feature. `mrml-av1` declares the empty default set,
 so its `nvidia` platform extern is inactive while `mrml-runtime` remains active.

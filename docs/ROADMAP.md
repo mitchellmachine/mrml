@@ -302,6 +302,12 @@ same `sm_120` PTX hash. Thirty-three of 42 components are native; nine remain
 transitional. This is controlled CUDA driver/device evidence, not proof of
 physical GPU topology, passthrough isolation, or native MRML GPU execution.
 
+The model library's default `runtime` profile now directly consumes native JSON,
+runtime, and tensor artifacts. Both exact host toolchains build it and match the
+Cargo baseline at seven passing tests. Thirty-four of 42 components are native;
+eight remain transitional. No production model, remote service, CUDA profile,
+or inference workload was exercised.
+
 `mrml-zstd` is the fourth migrated leaf; its Wikipedia edge and patent-review
 source path now resolve to `packages/libraries/zstd` without changing codec
 behavior.

@@ -154,3 +154,5 @@ rust-example|org.mrml.library.tensor|gguf_inspect|packages/gpu/tensor/examples/g
 rust-example|org.mrml.library.tensor|prefill_model_check|packages/gpu/tensor/examples/prefill_model_check.rs|WINDOWS,LINUX|
 rust-benchmark|org.mrml.library.tensor|hot_paths|packages/gpu/tensor/benches/hot_paths.rs|true
 rust-ptx|org.mrml.library.tensor|rust_cuda_kernels.ptx|packages/gpu/tensor/cuda_ptx/kernels.rs|cuda|OUT_DIR
+rust-action|org.mrml.library.model|mrml_model|lib|packages/libraries/model/src/lib.rs|mrml-json=serde_json@*?runtime;mrml-runtime=mrml_runtime@*;mrml-tensor=mrml_tensor@*?runtime
+rust-feature-set|org.mrml.library.model|runtime

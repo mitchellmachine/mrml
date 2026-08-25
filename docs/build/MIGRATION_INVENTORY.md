@@ -730,7 +730,7 @@ second inventory.
   explicit, native example outputs are checked and compiled, and exact feature
   sets can gate optional target-specific externs. Exact binary outputs, binary
   test harnesses, compile-time environment values, and bin-only actions are
-  explicit. Thirty-three
+  explicit. Thirty-four
   components now have native actions. Direct-rustc expansion still needs
   lock/digest validation and the remaining non-library actions before
   Cargo can be removed behind the remaining nodes.
@@ -852,6 +852,13 @@ Existing-object reuse: HIGH
 The bounded extension reuses the existing fail-closed workspace parser and
 reuses the pinned compiler, native graph, feature model, artifact directory, and
 test runner. Generated artifacts carry no runtime authority.
+
+Model is the next dependency-ordered native action. Its default `runtime`
+feature activates exactly JSON and tensor while runtime remains unconditional,
+matching the Cargo manifest. Both exact dated host toolchains pass doctor/audit,
+build the library directly, and match Cargo at all seven inline tests. Thirty-
+four components are native and eight remain transitional. No production model,
+remote service, CUDA model profile, or inference workload was exercised.
 
 Service-image requires a different compiler ABI from the default semantic
 family: it is an MRML native service payload stored as PE, so its exact target is

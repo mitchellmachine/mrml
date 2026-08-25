@@ -444,6 +444,12 @@ PTX hashes are identical. Thirty-three components are native and nine remain
 transitional. This proves the exercised CUDA driver/device paths, not physical
 GPU topology, passthrough isolation, or native MRML GPU execution.
 
+The default `runtime` model profile now directly binds native JSON, runtime, and
+tensor artifacts on both hosts. Windows gnullvm and Arch Linux WSL2 each build
+the library and match Cargo's seven passing chat/error/portable tests. Thirty-
+four components are native and eight remain transitional. No production model,
+remote service, CUDA profile, or inference workload was exercised by this step.
+
 MRML uses Rust 2024 and the exact `nightly-2026-08-24` build toolchain pinned in
 `rust-toolchain.toml`. It is also the current `mrml-rustc` behavioral reference
 recorded as [ORACLE-0002](docs/compiler/oracles/ORACLE-0002.md); a floating
