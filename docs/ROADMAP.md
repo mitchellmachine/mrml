@@ -158,6 +158,11 @@ The next eight featureless runtime consumers are now direct-rustc nodes as well;
 Windows and Arch Linux WSL2 each passed 31 tests across that layer. Twelve of 42
 components now have native actions, with the other 30 explicitly transitional.
 
+The compiler core is the first multi-output native node: its inline harness and
+both integration targets run directly with an explicit bounded test stack.
+Windows and Arch Linux WSL2 each pass 765 compiler-core tests. Thirteen of 42
+components are native; 29 remain transitional.
+
 `mrml-zstd` is the fourth migrated leaf; its Wikipedia edge and patent-review
 source path now resolve to `packages/libraries/zstd` without changing codec
 behavior.

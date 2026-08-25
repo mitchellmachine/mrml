@@ -30,6 +30,8 @@ struct RustAction {
     crate_type: String,
     source: String,
     externs: Vec<RustExtern>,
+    tests: Vec<RustTest>,
+    test_stack_bytes: Option<usize>,
 }
 
 #[derive(Clone, Debug)]
@@ -37,6 +39,13 @@ struct RustExtern {
     package: String,
     crate_name: String,
     targets: Vec<String>,
+}
+
+#[derive(Clone, Debug)]
+struct RustTest {
+    name: String,
+    source: String,
+    self_extern: bool,
 }
 
 #[derive(Debug)]
@@ -119,6 +128,8 @@ fn load_workspace() -> Result<Workspace, String> {
     let mut version = None;
     let mut components = Vec::new();
     let mut rust_actions = Vec::new();
+    let mut rust_tests = Vec::new();
+    let mut rust_test_policies = Vec::new();
     for (index, raw) in text.lines().enumerate() {
         let line = raw.trim();
         if line.is_empty() || line.starts_with('#') {
@@ -197,6 +208,17 @@ fn load_workspace() -> Result<Workspace, String> {
                     (*externs).into(),
                 ));
             }
+            ["rust-test", component, name, source, self_extern] => {
+                rust_tests.push((
+                    (*component).to_owned(),
+                    (*name).to_owned(),
+                    (*source).to_owned(),
+                    (*self_extern).to_owned(),
+                ));
+            }
+            ["rust-test-policy", component, stack_bytes] => {
+                rust_test_policies.push(((*component).to_owned(), (*stack_bytes).to_owned()));
+            }
             _ => return Err(format!("WorkspaceSyntaxError {{ line: {} }}", index + 1)),
         }
     }
@@ -249,13 +271,83 @@ fn load_workspace() -> Result<Workspace, String> {
             crate_type,
             source,
             externs,
+            tests: Vec::new(),
+            test_stack_bytes: None,
         });
+    }
+    for (component_id, stack_bytes) in rust_test_policies {
+        let component = components
+            .iter_mut()
+            .find(|component| component.id == component_id)
+            .ok_or_else(|| {
+                format!("RustTestPolicyComponentMissing {{ component: {component_id} }}")
+            })?;
+        let action = component.rust_action.as_mut().ok_or_else(|| {
+            format!("RustTestPolicyActionMissing {{ component: {component_id} }}")
+        })?;
+        let bytes = stack_bytes
+            .parse::<usize>()
+            .map_err(|_| format!("RustTestStackInvalid {{ component: {component_id} }}"))?;
+        if !(1024 * 1024..=64 * 1024 * 1024).contains(&bytes)
+            || action.test_stack_bytes.replace(bytes).is_some()
+        {
+            return Err(format!(
+                "RustTestStackInvalid {{ component: {component_id}, bytes: {bytes} }}"
+            ));
+        }
+    }
+    for (component_id, name, source, self_extern) in rust_tests {
+        let component = components
+            .iter_mut()
+            .find(|component| component.id == component_id)
+            .ok_or_else(|| format!("RustTestComponentMissing {{ component: {component_id} }}"))?;
+        let action = component
+            .rust_action
+            .as_mut()
+            .ok_or_else(|| format!("RustTestActionMissing {{ component: {component_id} }}"))?;
+        if !rust_identifier(&name)
+            || !safe_relative_path(&source)
+            || !root.join(&source).is_file()
+            || !root.join(&source).starts_with(root.join(&component.path))
+            || !matches!(self_extern.as_str(), "true" | "false")
+            || action.tests.iter().any(|test| test.name == name)
+        {
+            return Err(format!(
+                "RustTestDeclarationInvalid {{ component: {component_id}, test: {name} }}"
+            ));
+        }
+        action.tests.push(RustTest {
+            name,
+            source,
+            self_extern: self_extern == "true",
+        });
+    }
+    for component in &components {
+        if let Some(action) = &component.rust_action {
+            let mut declared: Vec<_> = component
+                .outputs
+                .iter()
+                .filter_map(|output| output.strip_suffix(":test"))
+                .collect();
+            let mut actions: Vec<_> = action.tests.iter().map(|test| test.name.as_str()).collect();
+            declared.sort();
+            actions.sort();
+            if declared != actions {
+                return Err(format!(
+                    "RustTestOutputDrift {{ component: {}, outputs: {}, tests: {} }}",
+                    component.id,
+                    declared.join(","),
+                    actions.join(",")
+                ));
+            }
+        }
     }
     Ok(Workspace { root, components })
 }
 
 fn safe_relative_path(value: &str) -> bool {
     !value.is_empty()
+        && !value.contains([':', '\\'])
         && Path::new(value)
             .components()
             .all(|component| matches!(component, PathComponent::Normal(_)))
@@ -568,14 +660,18 @@ fn run_rust_action(
     release: bool,
 ) -> Result<(), String> {
     let mut built = BTreeSet::new();
-    compile_rust_component(
-        workspace,
-        component,
-        target,
-        release,
-        operation == "test",
-        &mut built,
-    )
+    compile_rust_component(workspace, component, target, release, false, &mut built)?;
+    if operation == "test" {
+        compile_rust_component(workspace, component, target, release, true, &mut built)?;
+        let action = component
+            .rust_action
+            .as_ref()
+            .ok_or("NativeActionDisappeared")?;
+        for test in &action.tests {
+            run_declared_test(workspace, component, action, test, target, release)?;
+        }
+    }
+    Ok(())
 }
 
 fn compile_rust_component(
@@ -673,6 +769,7 @@ fn compile_rust_component(
     }
     if test {
         command.arg("--test").arg("-Zpanic-abort-tests");
+        apply_test_stack(&mut command, action, target);
     }
     if target == "WINDOWS" {
         command.args(["-C", "linker=rust-lld", "-C", "target-feature=+crt-static"]);
@@ -709,20 +806,173 @@ fn compile_rust_component(
         ));
     }
     if test {
-        let status = Command::new(&output)
-            .status()
-            .map_err(|error| format!("TestExecutionUnavailable {{ detail: {error} }}"))?;
-        if !status.success() {
-            return Err(format!(
-                "TestFailed {{ component: {}, status: {:?} }}",
-                component.id,
-                status.code()
-            ));
-        }
+        execute_test(&output, component, action.test_stack_bytes)?;
     } else {
         built.insert(component.id.clone());
     }
     Ok(())
+}
+
+fn run_declared_test(
+    workspace: &Workspace,
+    component: &Component,
+    action: &RustAction,
+    test: &RustTest,
+    target: &str,
+    release: bool,
+) -> Result<(), String> {
+    let output_dir = workspace
+        .root
+        .join("target")
+        .join("mrml")
+        .join(target.to_ascii_lowercase())
+        .join(if release { "release" } else { "debug" });
+    let extension = if target == "WINDOWS" { ".exe" } else { "" };
+    let output = output_dir.join(format!("{}_tests{extension}", test.name));
+    let rustc = pinned_tool("rustc")?;
+    let mut command = Command::new(rustc);
+    command
+        .current_dir(&workspace.root)
+        .args(["--crate-name", &test.name])
+        .args(["--edition", "2024"])
+        .arg(&test.source)
+        .arg("--test")
+        .arg("-Zpanic-abort-tests")
+        .args(["-C", "panic=abort"])
+        .arg("-L")
+        .arg(format!("dependency={}", output_dir.display()))
+        .arg("-o")
+        .arg(&output);
+    if test.self_extern {
+        command.arg("--extern").arg(format!(
+            "{}={}",
+            action.crate_name,
+            native_artifact(workspace, action, target, release).display()
+        ));
+    }
+    apply_test_stack(&mut command, action, target);
+    for external in action
+        .externs
+        .iter()
+        .filter(|external| external.targets.iter().any(|family| family == target))
+    {
+        let dependency = workspace
+            .components
+            .iter()
+            .find(|candidate| candidate.cargo_package == external.package)
+            .ok_or("NativeDependencyDisappeared")?;
+        let dependency_action = dependency
+            .rust_action
+            .as_ref()
+            .ok_or("NativeDependencyActionDisappeared")?;
+        command.arg("--extern").arg(format!(
+            "{}={}",
+            external.crate_name,
+            native_artifact(workspace, dependency_action, target, release).display()
+        ));
+    }
+    if target == "WINDOWS" {
+        command.args(["-C", "linker=rust-lld", "-C", "target-feature=+crt-static"]);
+    } else if target == "LINUX" {
+        command.args(["--target", "x86_64-unknown-linux-gnu"]);
+    } else {
+        return Err(format!(
+            "RustTestTargetUnsupported {{ component: {}, target: {target} }}",
+            component.id
+        ));
+    }
+    let status = command
+        .status()
+        .map_err(|error| format!("TestCompileUnavailable {{ detail: {error} }}"))?;
+    if !status.success() {
+        return Err(format!(
+            "TestCompileFailed {{ component: {}, test: {}, status: {:?} }}",
+            component.id,
+            test.name,
+            status.code()
+        ));
+    }
+    execute_test(&output, component, action.test_stack_bytes)
+}
+
+fn execute_test(
+    output: &Path,
+    component: &Component,
+    stack_bytes: Option<usize>,
+) -> Result<(), String> {
+    let mut command = Command::new(output);
+    configure_test_process_stack(&mut command, stack_bytes)?;
+    let status = command
+        .status()
+        .map_err(|error| format!("TestExecutionUnavailable {{ detail: {error} }}"))?;
+    if status.success() {
+        Ok(())
+    } else {
+        Err(format!(
+            "TestFailed {{ component: {}, status: {:?} }}",
+            component.id,
+            status.code()
+        ))
+    }
+}
+
+#[cfg(target_os = "linux")]
+fn configure_test_process_stack(
+    command: &mut Command,
+    stack_bytes: Option<usize>,
+) -> Result<(), String> {
+    use std::io;
+    use std::os::unix::process::CommandExt;
+
+    #[repr(C)]
+    struct RLimit {
+        current: u64,
+        maximum: u64,
+    }
+    unsafe extern "C" {
+        fn setrlimit(resource: i32, limit: *const RLimit) -> i32;
+    }
+    const RLIMIT_STACK: i32 = 3;
+    if let Some(bytes) = stack_bytes {
+        let bytes = u64::try_from(bytes).map_err(|_| "RustTestStackConversionError")?;
+        // SAFETY: pre_exec runs after fork and before exec. The closure captures
+        // only a Copy integer, constructs the documented Linux rlimit layout,
+        // and reports errno without allocation when setrlimit rejects it.
+        unsafe {
+            command.pre_exec(move || {
+                let limit = RLimit {
+                    current: bytes,
+                    maximum: bytes,
+                };
+                if setrlimit(RLIMIT_STACK, &limit) == 0 {
+                    Ok(())
+                } else {
+                    Err(io::Error::last_os_error())
+                }
+            });
+        }
+    }
+    Ok(())
+}
+
+#[cfg(not(target_os = "linux"))]
+fn configure_test_process_stack(
+    _command: &mut Command,
+    _stack_bytes: Option<usize>,
+) -> Result<(), String> {
+    Ok(())
+}
+
+fn apply_test_stack(command: &mut Command, action: &RustAction, target: &str) {
+    if let Some(bytes) = action.test_stack_bytes {
+        if target == "WINDOWS" {
+            command.arg("-C").arg(format!("link-arg=/STACK:{bytes}"));
+        } else if target == "LINUX" {
+            command
+                .arg("-C")
+                .arg(format!("link-arg=-Wl,-z,stack-size={bytes}"));
+        }
+    }
 }
 
 fn native_artifact(

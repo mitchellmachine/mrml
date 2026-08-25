@@ -296,8 +296,12 @@ exact rlib path directly to rustc.
 
 The featureless percent-encoding, tokenizer, Zstandard, ZIM, JSON, Wikipedia,
 error, and terminal-style libraries have also migrated to dependency-first
-native rustc actions. Twelve components are native; the remaining 30 stay
-explicitly labeled as transitional.
+native rustc actions. Together with the platform/runtime nodes, they form the
+twelve-node native library layer.
+
+The `mrml-rustc` core is also native, including both integration-test targets
+and an explicit bounded test stack. Thirteen components are now native and 29
+remain transitional.
 
 MRML uses Rust 2024 and the exact `nightly-2026-08-24` build toolchain pinned in
 `rust-toolchain.toml`. It is also the current `mrml-rustc` behavioral reference

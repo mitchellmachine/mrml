@@ -149,6 +149,15 @@ target/profile artifact directory as its transitive dependency search path and
 each direct extern remains bound to an exact rlib. Both Windows GNU/LLVM and
 Arch Linux WSL2 passed all 31 inline tests across this layer.
 
+Native actions can now declare integration-test targets, whether each target
+requires the component's own rlib, and a bounded test-process stack. The loader
+fails when declared `:test` outputs and native test actions differ. This migrated
+the dependency-free `mrml-rustc` core without omitting either integration suite:
+Windows and Arch Linux WSL2 each pass 420 inline tests, 10 conformance tests, and
+335 nightly-replacement tests. Linux applies the declared stack with `setrlimit`
+before exec so panic-abort child tests inherit it; Windows records the same stack
+in linker metadata.
+
 Rust crate identity, MRML package identity, and stable MRML interface identity
 are distinct. The runtime component model is specified in
 [../packages/COMPONENT_INTERFACES.md](../packages/COMPONENT_INTERFACES.md).

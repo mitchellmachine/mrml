@@ -43,6 +43,12 @@ toolchains:
   consumer layer — PASS, 31 tests;
 - Arch Linux WSL2: the same eight-component direct build/test layer — PASS,
   31 tests.
+- Windows GNU/LLVM: direct `mrml-rustc` library, inline harness, conformance
+  target, and nightly-replacement target — PASS, 420 + 10 + 335 tests;
+- Arch Linux WSL2: the same direct multi-output compiler-core action — PASS,
+  420 + 10 + 335 tests. The declared 32 MiB stack is applied before exec; an
+  earlier ELF-metadata-only attempt failed 29 stack-heavy tests and is not
+  counted as parity evidence.
 
 This is hosted WSL2 evidence. No KVM, bare-metal Linux, or physical hardware was
 exercised by this increment.
@@ -636,7 +642,8 @@ second inventory.
   cannot prove that arbitrary macro expansion introduces no additional input.
 - Native graph construction now provides dependency-first ordering, cycle
   diagnostics, and target-scoped exact extern artifacts for migrated library
-  nodes. Twelve components now have native actions. Direct-rustc expansion still
+  nodes. Native integration-test outputs and bounded test-process stacks are
+  explicit. Thirteen components now have native actions. Direct-rustc expansion still
   needs features, lock/digest validation,
   and explicit non-library actions before
   Cargo can be removed behind the remaining nodes.
