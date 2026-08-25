@@ -728,7 +728,7 @@ second inventory.
   explicit, native example outputs are checked and compiled, and exact feature
   sets can gate optional target-specific externs. Exact binary outputs, binary
   test harnesses, compile-time environment values, and bin-only actions are
-  explicit. Twenty-seven
+  explicit. Twenty-eight
   components now have native actions. Direct-rustc expansion still needs
   lock/digest validation and the remaining non-library actions before
   Cargo can be removed behind the remaining nodes.
@@ -768,6 +768,15 @@ registers 14 tests and Linux 13; every test remains explicitly ignored as a
 manual performance gate, so no benchmark executed and no performance or
 physical-core evidence is claimed. Twenty-seven components are native and 15
 remain transitional.
+
+The resolver now separately validates non-host dependency projections and
+present versus absent compile-environment inputs. Kernel-image projects kernel
+and crypto-core to UEFI, selects exactly `kernel-image`, and emits a PE32+ EFI
+application with both exact dated host toolchains. Rebuilding after poisoning
+all four inherited `MRML_*` option variables yields the unchanged same-host hash,
+proving rustc receives their declared absence. Twenty-eight components are
+native and 14 remain transitional. This is compile-time evidence only; no UEFI,
+Secure Boot, TPM, bare-metal, or physical hardware ran.
 
 Service-image requires a different compiler ABI from the default semantic
 family: it is an MRML native service payload stored as PE, so its exact target is

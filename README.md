@@ -393,6 +393,14 @@ all remain deliberately ignored manual performance gates, so this verifies
 compilation and ignore policy but records no benchmark result. Twenty-seven
 components are native and 15 remain transitional.
 
+Non-host dependency projections and absent compile-environment inputs are now
+explicit and fail closed. `mrml-kernel-image` selects only `kernel-image`,
+rebuilds kernel and crypto-core for `x86_64-unknown-uefi`, and emits a PE32+ EFI
+application on Windows and Arch Linux WSL2. Poisoning all four inherited
+`MRML_*` option variables leaves each host's artifact hash unchanged. Twenty-
+eight components are native and 14 remain transitional; no firmware or hardware
+execution is implied.
+
 MRML uses Rust 2024 and the exact `nightly-2026-08-24` build toolchain pinned in
 `rust-toolchain.toml`. It is also the current `mrml-rustc` behavioral reference
 recorded as [ORACLE-0002](docs/compiler/oracles/ORACLE-0002.md); a floating

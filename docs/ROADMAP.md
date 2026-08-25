@@ -251,6 +251,14 @@ ignored manual performance gates, and none ran. This is compile/registration
 evidence only, not benchmark or physical-core evidence. Twenty-seven of 42
 components are native; 15 remain transitional.
 
+Non-host projected builds now require an explicit provider declaration, and
+compile-environment inputs distinguish fixed values from enforced absence.
+Kernel-image selects exactly `kernel-image`, projects kernel/crypto-core to UEFI,
+and emits a PE32+ EFI application on both hosts. Deliberately inherited values
+for all four optional `MRML_*` inputs are removed and do not change the resulting
+same-host hash. Twenty-eight of 42 components are native; 14 remain transitional.
+No UEFI firmware, Secure Boot, TPM, bare-metal, or hardware execution occurred.
+
 `mrml-zstd` is the fourth migrated leaf; its Wikipedia edge and patent-review
 source path now resolve to `packages/libraries/zstd` without changing codec
 behavior.

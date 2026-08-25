@@ -3187,3 +3187,14 @@ dual review.
 and host projection to an existing benchmark harness. It changes no measured
 mechanism and runs none of the deliberately ignored performance gates. Agent
 review does not replace independent human dual review.
+
+# 2026-08-25 — Non-host projections and absent compile inputs
+
+**Result: TRIGGERED.** The native resolver now validates non-host dependency
+projections and separates fixed compile-environment values from enforced
+absence, then applies those mechanisms to the existing kernel-image graph. This
+extends the package/cache/resolver risk area but changes no bootloader or kernel
+runtime mechanism. It establishes neither clearance nor infringement; material
+release resolver/cache mechanisms remain subject to the recorded worldwide
+authoritative-register review. Agent review does not replace independent human
+dual review.

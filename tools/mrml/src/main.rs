@@ -33,10 +33,12 @@ struct RustAction {
     tests: Vec<RustTest>,
     test_stack_bytes: Option<usize>,
     host_build_targets: Vec<String>,
+    projected_build_targets: Vec<String>,
     host_test_targets: Vec<String>,
     examples: Vec<RustExample>,
     binaries: Vec<RustBinary>,
     compile_env: Vec<(String, String)>,
+    absent_compile_env: Vec<String>,
     feature_sets: Vec<RustFeatureSet>,
     feature_profiles: Vec<RustFeatureProfile>,
     target_triples: Vec<RustTargetTriple>,
@@ -182,10 +184,12 @@ fn load_workspace() -> Result<Workspace, String> {
     let mut rust_tests = Vec::new();
     let mut rust_test_policies = Vec::new();
     let mut rust_host_builds = Vec::new();
+    let mut rust_projected_builds = Vec::new();
     let mut rust_host_tests = Vec::new();
     let mut rust_examples = Vec::new();
     let mut rust_binaries = Vec::new();
     let mut rust_compile_env = Vec::new();
+    let mut rust_absent_compile_env = Vec::new();
     let mut rust_feature_sets = Vec::new();
     let mut rust_feature_profiles = Vec::new();
     let mut rust_target_triples = Vec::new();
@@ -281,6 +285,9 @@ fn load_workspace() -> Result<Workspace, String> {
             ["rust-host-builds", component, targets] => {
                 rust_host_builds.push(((*component).to_owned(), (*targets).to_owned()));
             }
+            ["rust-projected-builds", component, targets] => {
+                rust_projected_builds.push(((*component).to_owned(), (*targets).to_owned()));
+            }
             ["rust-host-tests", component, targets] => {
                 rust_host_tests.push(((*component).to_owned(), (*targets).to_owned()));
             }
@@ -313,6 +320,9 @@ fn load_workspace() -> Result<Workspace, String> {
                     (*name).to_owned(),
                     (*value).to_owned(),
                 ));
+            }
+            ["rust-compile-env-absent", component, name] => {
+                rust_absent_compile_env.push(((*component).to_owned(), (*name).to_owned()));
             }
             ["rust-feature-set", component, features] => {
                 rust_feature_sets.push((
@@ -412,10 +422,12 @@ fn load_workspace() -> Result<Workspace, String> {
             tests: Vec::new(),
             test_stack_bytes: None,
             host_build_targets: Vec::new(),
+            projected_build_targets: Vec::new(),
             host_test_targets: Vec::new(),
             examples: Vec::new(),
             binaries: Vec::new(),
             compile_env: Vec::new(),
+            absent_compile_env: Vec::new(),
             feature_sets: Vec::new(),
             feature_profiles: Vec::new(),
             target_triples: Vec::new(),
@@ -577,6 +589,36 @@ fn load_workspace() -> Result<Workspace, String> {
         }
         action.host_build_targets = targets;
     }
+    for (component_id, targets) in rust_projected_builds {
+        let component = components
+            .iter_mut()
+            .find(|component| component.id == component_id)
+            .ok_or_else(|| {
+                format!("RustProjectedBuildComponentMissing {{ component: {component_id} }}")
+            })?;
+        let action = component.rust_action.as_mut().ok_or_else(|| {
+            format!("RustProjectedBuildActionMissing {{ component: {component_id} }}")
+        })?;
+        let targets = split_declaration(&targets);
+        if targets.is_empty()
+            || targets
+                .iter()
+                .any(|target| !matches!(target.as_str(), "MRML_NATIVE" | "UEFI" | "CUDA"))
+            || targets
+                .iter()
+                .any(|target| component.targets.contains(target))
+            || targets
+                .iter()
+                .any(|target| action.host_build_targets.contains(target))
+            || !action.projected_build_targets.is_empty()
+        {
+            return Err(format!(
+                "RustProjectedBuildTargetInvalid {{ component: {component_id}, targets: {} }}",
+                targets.join(",")
+            ));
+        }
+        action.projected_build_targets = targets;
+    }
     for (component_id, targets) in rust_host_tests {
         let component = components
             .iter_mut()
@@ -703,13 +745,38 @@ fn load_workspace() -> Result<Workspace, String> {
         }
         action.compile_env.push((name, value));
     }
+    for (component_id, name) in rust_absent_compile_env {
+        let component = components
+            .iter_mut()
+            .find(|component| component.id == component_id)
+            .ok_or_else(|| {
+                format!("RustCompileEnvComponentMissing {{ component: {component_id} }}")
+            })?;
+        let action = component.rust_action.as_mut().ok_or_else(|| {
+            format!("RustCompileEnvActionMissing {{ component: {component_id} }}")
+        })?;
+        if !rust_identifier(&name)
+            || action
+                .compile_env
+                .iter()
+                .any(|(existing, _)| existing == &name)
+            || action.absent_compile_env.contains(&name)
+        {
+            return Err(format!(
+                "RustCompileEnvInvalid {{ component: {component_id}, name: {name} }}"
+            ));
+        }
+        action.absent_compile_env.push(name);
+    }
     for component in &components {
         if let Some(action) = &component.rust_action {
-            if action.compile_env.len() != component.input_policy.compile_env {
+            if action.compile_env.len() + action.absent_compile_env.len()
+                != component.input_policy.compile_env
+            {
                 return Err(format!(
                     "RustCompileEnvDrift {{ component: {}, declared: {}, inputs: {} }}",
                     component.id,
-                    action.compile_env.len(),
+                    action.compile_env.len() + action.absent_compile_env.len(),
                     component.input_policy.compile_env
                 ));
             }
@@ -772,6 +839,7 @@ fn load_workspace() -> Result<Workspace, String> {
                         .targets
                         .iter()
                         .chain(action.host_build_targets.iter())
+                        .chain(action.projected_build_targets.iter())
                         .chain(action.host_test_targets.iter())
                         .filter(|target| external.targets.contains(target))
                     {
@@ -1006,6 +1074,9 @@ fn apply_rust_features(
 fn apply_rust_compile_env(command: &mut Command, action: &RustAction) {
     for (name, value) in &action.compile_env {
         command.env(name, value);
+    }
+    for name in &action.absent_compile_env {
+        command.env_remove(name);
     }
 }
 
@@ -1397,6 +1468,10 @@ fn compile_rust_component(
         if !dependency.targets.iter().any(|family| family == target)
             && !dependency_action
                 .host_build_targets
+                .iter()
+                .any(|family| family == target)
+            && !dependency_action
+                .projected_build_targets
                 .iter()
                 .any(|family| family == target)
         {
@@ -1925,6 +2000,7 @@ fn default_rust_target(target: &str) -> Result<&'static str, String> {
         "WINDOWS" => Ok("x86_64-pc-windows-gnullvm"),
         "LINUX" => Ok("x86_64-unknown-linux-gnu"),
         "MRML_NATIVE" => Ok("x86_64-unknown-none"),
+        "UEFI" => Ok("x86_64-unknown-uefi"),
         _ => Err(format!(
             "RustActionTargetUnsupported {{ target: {target} }}"
         )),
@@ -2615,7 +2691,7 @@ mod tests {
         );
         assert_eq!(rust_binary_extension("x86_64-unknown-uefi"), ".efi");
         assert_eq!(rust_binary_extension("x86_64-unknown-linux-gnu"), "");
-        assert!(default_rust_target("UEFI").is_err());
+        assert_eq!(default_rust_target("UEFI").unwrap(), "x86_64-unknown-uefi");
     }
     #[test]
     fn rust_externs_are_target_scoped_and_unique() {

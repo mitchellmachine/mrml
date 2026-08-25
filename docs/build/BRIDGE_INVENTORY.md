@@ -134,6 +134,14 @@ The harness registers 14 tests on Windows and 13 on Linux, all deliberately
 ignored manual performance gates. No performance or physical-core claim follows.
 Twenty-seven components are native; 15 remain transitional.
 
+Providers may now explicitly project to a non-host family without advertising
+that family as a public component target. Compile inputs also distinguish a
+fixed value from required absence and remove inherited variables before rustc.
+Kernel-image uses UEFI projections of kernel and crypto-core, selects only
+`kernel-image`, and emits a PE32+ EFI application on both hosts. Poisoned values
+for its four absent `MRML_*` inputs leave same-host hashes unchanged. Twenty-
+eight components are native; 14 remain transitional.
+
 Native actions now bind one exact feature set and may gate an extern by both
 target family and selected feature. `mrml-av1` declares the empty default set,
 so its `nvidia` platform extern is inactive while `mrml-runtime` remains active.

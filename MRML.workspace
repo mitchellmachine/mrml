@@ -70,7 +70,8 @@ rust-example|org.mrml.library.av1|decode_ivf|packages/libraries/av1/examples/dec
 rust-action|org.mrml.library.crypto|mrml_crypto|lib|packages/libraries/crypto/src/lib.rs|mrml-runtime=mrml_runtime@*?runtime
 rust-feature-set|org.mrml.library.crypto|WINDOWS,LINUX|runtime
 rust-feature-set|org.mrml.library.crypto|MRML_NATIVE|
-rust-feature-profile|org.mrml.library.crypto|core|MRML_NATIVE,WINDOWS,LINUX|
+rust-feature-profile|org.mrml.library.crypto|core|MRML_NATIVE,UEFI,WINDOWS,LINUX|
+rust-projected-builds|org.mrml.library.crypto|UEFI
 rust-action|org.mrml.library.tls|mrml_tls|lib|packages/libraries/tls/src/lib.rs|mrml-crypto=mrml_crypto@*;mrml-runtime=mrml_runtime@*
 rust-action|org.mrml.library.http|mrml_http|lib|packages/libraries/http/src/lib.rs|mrml-runtime=mrml_runtime@*;mrml-tls=mrml_tls@*
 rust-action|org.mrml.library.ssh|mrml_ssh|lib|packages/libraries/ssh/src/lib.rs|mrml-crypto=mrml_crypto@*;mrml-runtime=mrml_runtime@*
@@ -84,6 +85,7 @@ rust-action|org.mrml.compiler.driver|mrml_rustc_driver|none|-|mrml-error=mrml_er
 rust-binary|org.mrml.compiler.driver|mrml-rustc|mrml_rustc_driver|compiler/driver/src/main.rs|false
 rust-action|org.mrml.system.kernel|mrml_kernel|lib|system/kernel/src/lib.rs|mrml-crypto=mrml_crypto@*#core
 rust-host-builds|org.mrml.system.kernel|WINDOWS,LINUX
+rust-projected-builds|org.mrml.system.kernel|UEFI
 rust-host-tests|org.mrml.system.kernel|WINDOWS,LINUX
 rust-test-policy|org.mrml.system.kernel|67108864
 rust-action|org.mrml.service.storage|mrml_storage|lib|services/storage/src/lib.rs|mrml-crypto=mrml_crypto@*#core;mrml-kernel=mrml_kernel@*
@@ -96,3 +98,10 @@ rust-binary|org.mrml.system.service-image|mrml-service-pe|mrml_service_pe|system
 rust-feature-set|org.mrml.system.service-image|MRML_NATIVE|
 rust-target-triple|org.mrml.system.service-image|MRML_NATIVE|x86_64-unknown-uefi
 rust-action|org.mrml.system.kernel-bench|mrml_kernel_bench|lib|tests/kernel-bench/src/lib.rs|mrml-kernel=mrml_kernel@*;mrml-runtime=mrml_runtime@*
+rust-action|org.mrml.system.bootloader|mrml_kernel_image|none|-|mrml-kernel=mrml_kernel@*
+rust-binary|org.mrml.system.bootloader|mrml-kernel-pe|mrml_kernel_pe|system/bootloader/src/main.rs|false
+rust-feature-set|org.mrml.system.bootloader|UEFI|kernel-image
+rust-compile-env-absent|org.mrml.system.bootloader|MRML_EMULATED_TSC_HZ
+rust-compile-env-absent|org.mrml.system.bootloader|MRML_KERNEL_MIN_VERSION
+rust-compile-env-absent|org.mrml.system.bootloader|MRML_SERVICE_MIN_VERSION
+rust-compile-env-absent|org.mrml.system.bootloader|MRML_SERVICE_ROOT_DIGEST_HEX
