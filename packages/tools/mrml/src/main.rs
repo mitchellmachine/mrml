@@ -236,6 +236,12 @@ fn print_help() {
         "       mrml package create ID CLASS VERSION ARCH PURPOSE INPUT OUTPUT [--compress] [--private-key KEY]"
     );
     println!("       mrml package verify FILE [--require-signature] [--output structured]");
+    println!(
+        "       mrml package boot-media-create LOADER BOOTLOADER_PACKAGE KERNEL_PACKAGE CONFIGURATION_PACKAGE SYSTEM_RELEASE SERVICE_SIGNED OUTPUT SFDISK MFORMAT MMD MCOPY"
+    );
+    println!(
+        "       mrml package qemu-boot IMAGE OVMF_CODE OVMF_VARS QEMU TRACE [--timeout-seconds N] [--expect-hex HEX | --expect-rejection-hex HEX]"
+    );
     println!("       mrml interface generate-rust SCHEMA OUTPUT");
     println!("  --all                 select every host-compatible component");
     println!("  --target <family>     native|windows|linux|uefi-x86_64|cuda-nvidia");
@@ -307,6 +313,8 @@ fn package_command(workspace: &Workspace, args: &[String]) -> Result<(), String>
             );
             Ok(())
         }
+        Some("boot-media-create") => qemu_boot::create_media(&args[1..]),
+        Some("qemu-boot") => qemu_boot::run_qemu(&args[1..]),
         Some("create") if args.len() >= 8 => {
             let id = &args[1];
             if !workspace
@@ -430,6 +438,8 @@ fn package_command(workspace: &Workspace, args: &[String]) -> Result<(), String>
         _ => Err("PackageUsageError { expected: create | verify }".into()),
     }
 }
+
+mod qemu_boot;
 
 fn manifest_command(workspace: &Workspace, args: &[String]) -> Result<(), String> {
     match args.first().map(String::as_str) {

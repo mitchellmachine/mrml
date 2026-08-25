@@ -356,9 +356,18 @@ b2 b3`: the release, bootloader/configuration packages, exact kernel package,
 inner signed kernel, and established kernel path all completed. Shared parser
 tests reject modified package bytes, wrong release digest, bad signature,
 malformed length, truncation, wrong architecture/class, and incompatible release
-version. Those are unit/parser tests, not negative QEMU evidence. Repeatable
-QEMU media construction and the corresponding negative firmware boots remain an
-acceptance gate; do not report them as completed from parser tests alone.
+version. `mrml package boot-media-create` now constructs the bounded GPT/FAT32
+ESP from the extracted loader, three exact boot packages, authenticated
+`SystemRelease`, and early service object; `mrml package qemu-boot` launches an explicitly selected
+QEMU/OVMF pair and exact-matches the boot trace. A fresh media construction
+reproduced the complete trace above. A separate image with one modified kernel-
+package payload byte produced two identical fail-closed attempts ending after
+`c8 b0 b2 b0 b2 c9`, before kernel-package admission, and the negative assertion
+reported `QEMU_UEFI_BOOT_REJECT_PASS`. This is firmware evidence for that one
+case only. The remaining wrong-digest, bad-signature, unsupported-architecture,
+malformed-offset, truncated-compressed-payload, wrong-class, missing-package,
+and incompatible-generation negative QEMU cases remain an acceptance gate; do
+not report them as completed from parser tests alone.
 
 ## Releases, images, install, and publication
 

@@ -34,60 +34,78 @@ source = "packages/tools/mrml/src/main.rs"
 
 [[build_input]]
 kind = "external-command"
-line = 2148
+line = 3109
 path = "packages/tools/mrml/src/main.rs"
 reason = "reviewed repository build input"
 
 [[build_input]]
 kind = "external-command"
-line = 2311
+line = 3273
 path = "packages/tools/mrml/src/main.rs"
 reason = "reviewed repository build input"
 
 [[build_input]]
 kind = "external-command"
-line = 2415
+line = 3377
 path = "packages/tools/mrml/src/main.rs"
 reason = "reviewed repository build input"
 
 [[build_input]]
 kind = "external-command"
-line = 2502
+line = 3464
 path = "packages/tools/mrml/src/main.rs"
 reason = "reviewed repository build input"
 
 [[build_input]]
 kind = "external-command"
-line = 2599
+line = 3561
 path = "packages/tools/mrml/src/main.rs"
 reason = "reviewed repository build input"
 
 [[build_input]]
 kind = "external-command"
-line = 2707
+line = 3671
 path = "packages/tools/mrml/src/main.rs"
 reason = "reviewed repository build input"
 
 [[build_input]]
 kind = "external-command"
-line = 2803
+line = 3774
 path = "packages/tools/mrml/src/main.rs"
 reason = "reviewed repository build input"
 
 [[build_input]]
 kind = "external-command"
-line = 3041
+line = 4012
 path = "packages/tools/mrml/src/main.rs"
 reason = "reviewed repository build input"
 
 [[build_input]]
 kind = "external-command"
-line = 3514
+line = 4485
 path = "packages/tools/mrml/src/main.rs"
 reason = "reviewed repository build input"
 
 [[build_input]]
 kind = "external-command"
-line = 3539
+line = 4510
 path = "packages/tools/mrml/src/main.rs"
 reason = "reviewed repository build input"
+
+[[build_input]]
+kind = "external-command"
+line = 159
+path = "packages/tools/mrml/src/qemu_boot.rs"
+reason = "launch the explicitly selected QEMU executable for the package-derived UEFI boot gate"
+
+[[build_input]]
+kind = "external-command"
+line = 244
+path = "packages/tools/mrml/src/qemu_boot.rs"
+reason = "invoke explicit GPT and FAT media tools through the bounded package-boot media action"
+
+[[build_input]]
+kind = "external-command"
+line = 266
+path = "packages/tools/mrml/src/qemu_boot.rs"
+reason = "invoke sfdisk with a fixed partition description through the bounded media action"
