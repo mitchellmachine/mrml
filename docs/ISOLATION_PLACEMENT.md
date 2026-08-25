@@ -222,7 +222,13 @@ The kernel now has the separate capability-bound `MicrovmGuestRam` reservation
 needed for the next step: it charges an exact non-executable `Guest`
 `MemoryObject` before backend allocation and may be returned only after native
 teardown is proven. KVM/WHP do not yet consume that reservation, so this does
-not promote the hosted path or Total mode beyond their existing status.
+not by itself promote Total mode beyond its existing status. The focused signed
+component path now does consume it: backend-specific base pages, both service
+images/stacks/page tables, and the shared/resource pages are charged before
+their native construction phases; exact completion precedes admission; and
+guest teardown precedes full release. WHP and nested-KVM controlled probes pass
+with zero native fallback. Other microVM profiles, vCPU budgets, VMM metadata,
+and device projections remain **PLANNED**.
 
 ## One policy, several placements
 

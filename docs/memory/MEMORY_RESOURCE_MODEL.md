@@ -122,8 +122,6 @@ delegation, DMA, device, or placement authority. Its unsafe release contract
 requires the VMM adapter to prove that all native backing and mappings are gone
 first. Focused Windows and Linux tests prove exact charging, exhaustion,
 metadata-without-capability rejection, rights separation, and full return.
-KVM/WHP pre-allocation consumption and cleanup binding remain **PLANNED**; this
-groundwork is not evidence that the hosted component probe is RAM-accounted.
 The reservation now converts into a non-cloneable staged construction authority:
 each backend allocation phase must consume a positive exact page count, an
 overrun fails, and publication is impossible while any pages remain. Abort and
@@ -131,6 +129,17 @@ active retirement return the underlying reservation only under an unsafe
 caller proof that all native allocations or mappings from completed phases are
 gone. This permits one pre-reserved total to cover base-kernel and later
 consumer/provider phases without post-hoc accounting.
+
+The focused signed component profile now consumes that authority on both hosted
+backends. Before the first native allocation, each runner reserves the exact
+sum of its base-kernel mappings, the rounded consumer/provider image pages,
+their stacks and page tables, and the shared/resource pages. KVM includes its
+one-page framebuffer phase while WHP's component layout does not. Each phase is
+consumed before its corresponding backend call, the reservation must be exactly
+complete before isolation admission, and the full object returns only after
+the guest owner confirms teardown. Fresh controlled probes passed on WHP and
+nested KVM on 2026-08-25. This accounts mapped guest RAM for this one profile;
+vCPU, VMM metadata, and device-specific resources remain **PLANNED**.
 
 Pinning is separate scarce authority because it limits reclamation and may enable
 device visibility. Object ownership never implies DMA. DMA requires the exact

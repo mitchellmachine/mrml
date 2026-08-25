@@ -20,20 +20,22 @@ use mrml_kernel::{
     GpuQueueIdentity, GpuQueueReceiver, GpuResourceResponse, GpuResourceResponseSender,
     GpuSharedQueueLayout, GpuVmmQueueBridge, GuestMemory, HypercallRouter, InterruptPolicy,
     IsolationAdmissionTable, IsolationMode, IsolationPlacement, IsolationUnavailableReason,
-    ObjectId, PreparedComponentServiceLaunch, PreparedIsolationServiceRoute, ResourceCommand,
-    Rights, SIGNED_ARTIFACT_OVERHEAD_BYTES, SignedArtifact, TotalMicrovmClass, TrustRoot,
-    VIRTUAL_BLOCK_FEATURE_FLUSH, VerifiedExecutable, VerifiedGpuKernelBundle, VirtualBlockBackend,
-    VirtualBlockBackendAuthority, VirtualBlockCompletionStatus, VirtualBlockConfigurationPage,
-    VirtualBlockDevice, VirtualBlockDeviceState, VirtualBlockError, VirtualBlockMutationError,
-    VirtualBlockPciAttachment, VirtualBlockPciAttachmentState, VirtualBlockPciCleanupMode,
-    VirtualBlockPciCleanupRecord, VirtualBlockPciFunctionRevoker, VirtualBlockPciGuestMemoryMapper,
-    VirtualBlockPciGuestWindowBackend, VirtualBlockPciResourceRevoker, VirtualBlockProcessOutcome,
-    VirtualBlockQueueBridge, VirtualBlockQueueLayout, VirtualBlockRequest, VirtualBlockResumePage,
+    MemoryPoolTable, ObjectId, PreparedComponentServiceLaunch, PreparedIsolationServiceRoute,
+    ResourceCommand, Rights, SIGNED_ARTIFACT_OVERHEAD_BYTES, SignedArtifact, TotalMicrovmClass,
+    TrustRoot, VIRTUAL_BLOCK_FEATURE_FLUSH, VerifiedExecutable, VerifiedGpuKernelBundle,
+    VirtualBlockBackend, VirtualBlockBackendAuthority, VirtualBlockCompletionStatus,
+    VirtualBlockConfigurationPage, VirtualBlockDevice, VirtualBlockDeviceState, VirtualBlockError,
+    VirtualBlockMutationError, VirtualBlockPciAttachment, VirtualBlockPciAttachmentState,
+    VirtualBlockPciCleanupMode, VirtualBlockPciCleanupRecord, VirtualBlockPciFunctionRevoker,
+    VirtualBlockPciGuestMemoryMapper, VirtualBlockPciGuestWindowBackend,
+    VirtualBlockPciResourceRevoker, VirtualBlockProcessOutcome, VirtualBlockQueueBridge,
+    VirtualBlockQueueLayout, VirtualBlockRequest, VirtualBlockResumePage,
     VirtualBlockTransactionOutcome, VirtualBlockTransport, VirtualBlockVmmMemory,
     VirtualPciAttachedResources, VirtualPciConfigurationMechanismOne,
     VirtualPciConfigurationRouter, VirtualPciIdentity, VirtualPciIoOutcome, VirtualPciLocation,
     VirtualPciMemoryBar, VirtualPciMmioWindow, VirtualPciNativeResourceError,
-    VirtualPciType0Function, VmBackend, VmExit, VmTable, run_pci_configuration_once,
+    VirtualPciType0Function, VmBackend, VmExit, VmTable, prepare_microvm_guest_ram,
+    release_microvm_guest_ram, reserve_microvm_guest_ram, run_pci_configuration_once,
     run_pci_configuration_once_with_backend_mapper, run_virtual_block_mmio_transaction_once,
     run_virtual_block_transaction_once, verify_gpu_kernel_bundle,
 };
@@ -303,6 +305,14 @@ const SERVICE_SHARED_VIRTUAL: u64 = 0x006f_e000;
 const SERVICE_RESOURCE_PHYSICAL: u64 = 0x00f0_1000;
 #[cfg(target_os = "linux")]
 const SERVICE_RESOURCE_VIRTUAL: u64 = 0x006f_f000;
+#[cfg(target_os = "linux")]
+fn accounted_pages(bytes: u64) -> Result<u64> {
+    bytes
+        .checked_add(mrml_kernel::PAGE_SIZE - 1)
+        .map(|rounded| rounded / mrml_kernel::PAGE_SIZE)
+        .filter(|pages| *pages != 0)
+        .ok_or_else(|| anyhow!("invalid guest RAM extent"))
+}
 #[cfg(target_os = "linux")]
 const ZSTD_INTERFACE_FINGERPRINT: [u8; 32] = [
     106, 98, 189, 213, 148, 175, 40, 79, 81, 237, 193, 115, 74, 161, 88, 81, 229, 222, 55, 239,
@@ -1741,6 +1751,73 @@ fn application_main() -> Result<()> {
     .map_err(|_| anyhow!("invalid fixed kernel launch layout"))?;
     let system = KvmSystem::open()
         .map_err(|error| anyhow!("KVM is unavailable or incompatible: {:?}", error))?;
+    let mut component_ram = if component_service_mode {
+        let consumer = service_executable
+            .as_ref()
+            .ok_or_else(|| anyhow!("missing verified ZIM consumer"))?;
+        let provider = provider_executable
+            .as_ref()
+            .ok_or_else(|| anyhow!("missing verified Zstd provider"))?;
+        let kernel_image_pages = accounted_pages(executable.image().image_size() as u64)?;
+        let handoff_pages = accounted_pages(handoff.as_slice().len() as u64)?;
+        let consumer_pages = accounted_pages(consumer.image().image_size() as u64)?;
+        let provider_pages = accounted_pages(provider.image().image_size() as u64)?;
+        let base_pages = table_pages
+            .checked_add(kernel_image_pages)
+            .and_then(|pages| pages.checked_add(handoff_pages))
+            .and_then(|pages| pages.checked_add(PRIVILEGE_STACK_ARENA_PAGES))
+            .and_then(|pages| pages.checked_add(1))
+            .ok_or_else(|| anyhow!("component base guest RAM overflow"))?;
+        let service_pages = consumer_pages
+            .checked_add(8 + 32)
+            .and_then(|pages| pages.checked_add(provider_pages))
+            .and_then(|pages| pages.checked_add(8 + 32))
+            .ok_or_else(|| anyhow!("component service guest RAM overflow"))?;
+        let total_pages = base_pages
+            .checked_add(service_pages)
+            .and_then(|pages| pages.checked_add(2))
+            .ok_or_else(|| anyhow!("component guest RAM overflow"))?;
+        let mut authorities = CapabilitySpace::<2>::new();
+        let mut memory = MemoryPoolTable::<1, 1>::new(0x5a52)
+            .map_err(|error| anyhow!("component RAM table failed: {:?}", error))?;
+        let (pool, pool_capability) = memory
+            .create_root(
+                total_pages,
+                1,
+                0,
+                Rights::ALLOCATE
+                    .union(Rights::CONTROL)
+                    .union(Rights::INSPECT),
+                &mut authorities,
+            )
+            .map_err(|error| anyhow!("component RAM pool failed: {:?}", error))?;
+        let (reservation, ram_capability) = reserve_microvm_guest_ram(
+            &mut memory,
+            pool,
+            pool_capability,
+            total_pages,
+            &mut authorities,
+        )
+        .map_err(|error| anyhow!("component RAM reservation failed: {:?}", error))?;
+        let mut prepared =
+            prepare_microvm_guest_ram(&memory, reservation, ram_capability, &authorities)
+                .map_err(|error| anyhow!("component RAM preparation failed: {:?}", error))?;
+        prepared
+            .consume_phase(base_pages)
+            .map_err(|error| anyhow!("component base RAM phase failed: {:?}", error))?;
+        Some((
+            memory,
+            authorities,
+            pool,
+            pool_capability,
+            ram_capability,
+            prepared,
+            service_pages,
+        ))
+    } else {
+        None
+    };
+    let mut active_component_ram = None;
     let preparation_started = Instant::now();
     let total_service_mode = matches!(
         mode,
@@ -1930,6 +2007,12 @@ fn application_main() -> Result<()> {
             LaunchMode::ServicePreemptionProbe | LaunchMode::SmpServiceMigrationProbe
         );
         guest = if let Some(launch) = component_launch.as_ref() {
+            let ram = component_ram
+                .as_mut()
+                .ok_or_else(|| anyhow!("missing component RAM construction authority"))?;
+            ram.5
+                .consume_phase(ram.6)
+                .map_err(|error| anyhow!("component service RAM phase failed: {:?}", error))?;
             match guest.attach_component_service_pair(
                 launch,
                 &executable,
@@ -2041,6 +2124,14 @@ fn application_main() -> Result<()> {
                     anyhow!("third isolated service preparation failed: {:?}", error)
                 })?;
         }
+        if component_service_mode {
+            component_ram
+                .as_mut()
+                .ok_or_else(|| anyhow!("missing component RAM construction authority"))?
+                .5
+                .consume_phase(2)
+                .map_err(|error| anyhow!("component shared RAM phase failed: {:?}", error))?;
+        }
         let shared = Mapping::new(
             VirtAddr::new(SERVICE_SHARED_VIRTUAL)
                 .map_err(|_| anyhow!("invalid service shared virtual address"))?,
@@ -2065,6 +2156,23 @@ fn application_main() -> Result<()> {
         guest = guest
             .attach_service_resource_page(0, resource)
             .map_err(|error| anyhow!("service resource-page attachment failed: {:?}", error))?;
+        if component_service_mode {
+            let (memory, authorities, pool, pool_capability, ram_capability, prepared, _) =
+                component_ram
+                    .take()
+                    .ok_or_else(|| anyhow!("missing completed component RAM construction"))?;
+            let active = prepared
+                .complete()
+                .map_err(|error| anyhow!("component RAM publication failed: {:?}", error))?;
+            active_component_ram = Some((
+                memory,
+                authorities,
+                pool,
+                pool_capability,
+                ram_capability,
+                active,
+            ));
+        }
         let service_entry = guest
             .service_entry()
             .ok_or_else(|| anyhow!("missing KVM service entry"))?;
@@ -3046,6 +3154,22 @@ fn application_main() -> Result<()> {
         _ => {}
     }
     guest.finish()?;
+    if let Some((mut memory, mut authorities, pool, pool_capability, ram_capability, active)) =
+        active_component_ram.take()
+    {
+        let expected_pages = active.pages();
+        let reservation = unsafe { active.retire() };
+        let released = unsafe {
+            release_microvm_guest_ram(&mut memory, reservation, ram_capability, &mut authorities)
+        }
+        .map_err(|error| anyhow!("component RAM release failed: {:?}", error))?;
+        let usage = memory
+            .usage(pool, pool_capability, &authorities)
+            .map_err(|error| anyhow!("component RAM inspection failed: {:?}", error))?;
+        if released != expected_pages || usage.object_pages() != 0 || usage.active_mappings() != 0 {
+            return Err(anyhow!("component RAM was not completely reclaimed"));
+        }
+    }
     if let Some(admission) = isolation_admission.as_ref() {
         let report = admission.total_microvm_report();
         println!(

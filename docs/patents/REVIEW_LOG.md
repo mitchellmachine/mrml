@@ -4127,6 +4127,17 @@ placement policy. Backend integration remains within the broader `TRIGGERED`
 microVM resource lifecycle review; agent review does not replace independent
 human dual review.
 
+# 2026-08-25 — Hosted component guest-RAM phase integration
+
+**Result: NOT_TRIGGERED within the reviewed microVM resource lifecycle
+shape.** KVM and WHP now sum their already fixed mapped-region sizes with
+checked page arithmetic, consume the existing linear reservation before each
+existing construction phase, and release the same object after existing guest
+teardown. This adds no allocator, mapping algorithm, placement selector,
+sharing, ballooning, migration, deduplication, transport, device mechanism, or
+reclamation policy. Broader microVM resource accounting remains `TRIGGERED`;
+agent review does not replace independent human dual review.
+
 # 2026-08-25 — Bounded identified trait-clause database
 
 **Result: NOT_TRIGGERED.** This compiler-only increment stores fixed identified

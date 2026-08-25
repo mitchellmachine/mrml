@@ -218,7 +218,11 @@ executable/private pages, vCPU, and device projections remain unaccounted in
 that path. A separate kernel guest-RAM reservation prerequisite now charges an
 exact non-executable `Guest` `MemoryObject` under a pool capability, rejects
 overcommit or metadata-only allocation, and requires proven native teardown
-before release. Backend pre-allocation consumption remains the next gate.
+before release. The signed component profile now consumes exact backend-
+specific base, consumer/provider, and shared/resource phases before WHP/KVM
+native allocation, requires complete consumption before admission, and returns
+the object after confirmed guest teardown. Fresh WHP and nested-KVM probes pass;
+vCPU and remaining VMM/device resource accounting are the next gates.
 
 Typed provider-resolution groundwork now matches canonical `REQUIRES` and
 `PROVIDES` edges only inside an immutable `SystemGeneration`. Interface name,
