@@ -4802,3 +4802,12 @@ goal and reuses the existing bounded projection-aware inference and predicate
 scheduler with zero inference binders. It adds no solver algorithm, candidate
 search, coherence rule, specialization, cache, parser, runtime mechanism,
 allocation, synchronization, protocol, cryptography, or hardware behavior.
+
+# 2026-08-25 — Rigid concrete-projection premise proof
+
+**Result: NOT_TRIGGERED.** This compiler-only increment threads an existing
+associated-value environment through existing bounded rigid proof recursion and
+checks only fully concrete projection predicates. It adds no normalization
+algorithm, candidate search, coherence rule, specialization, cache, parser,
+runtime mechanism, allocation, synchronization, protocol, cryptography, or
+hardware behavior.

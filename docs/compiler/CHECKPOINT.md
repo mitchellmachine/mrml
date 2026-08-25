@@ -990,6 +990,17 @@ Linux WSL each pass 531 library tests, one component-interface probe, 10
 conformance tests, and 335 replacement tests: 877 compiler tests per host. Rigid
 projection-premise proof remains unsupported.
 
+The rigid concrete-projection milestone threads an optional associated-value
+environment through the existing rigid generic/clause recursion. A skolemized
+outer goal can prove fully concrete projection predicates under the same fixed
+16-frame proof and projection limits; mismatches preserve no solution, and the
+environment-free entry point remains fail closed. Projection goals or expected
+values containing placeholders are rejected rather than treated as concrete.
+Windows gnullvm and native Arch Linux WSL each pass 532 library tests, one
+component-interface probe, 10 conformance tests, and 335 replacement tests: 878
+compiler tests per host. General rigid projection normalization remains
+unsupported.
+
 The projection-bearing logical clause-head milestone stores up to 64 identified
 bound heads separately from flat clauses. Every parameter must be constrained
 by a direct leaf position before the instantiated head is normalized through
