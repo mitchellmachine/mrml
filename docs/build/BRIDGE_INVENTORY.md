@@ -135,6 +135,12 @@ and selects only the host platform extern. Arch Linux WSL2 passes 32 tests;
 Windows reproduces the Cargo baseline at 31 passed and one installed-Edge
 DevTools failure. Twenty-one components are native; 21 remain transitional.
 
+Bin-only actions use an explicit `none` primary-library kind, still bind every
+binary output/source/test harness, and are rejected as extern providers. The
+compiler driver builds its real `mrml-rustc` executable and passes both tests on
+Windows and Arch Linux WSL2. Twenty-two components are native; 20 remain
+transitional.
+
 Patent review: `TRIGGERED`. This increment implements the first native dependency
 resolver, within the package/cache/resolver review already recorded in
 [`../patents/REVIEW_LOG.md`](../patents/REVIEW_LOG.md).

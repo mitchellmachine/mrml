@@ -204,6 +204,11 @@ Arch Linux WSL2 passes 32 direct tests; Windows matches its Cargo baseline at
 31 passed and one installed-Edge DevTools failure. Twenty-one of 42 components
 are native; 21 remain transitional.
 
+Bin-only native actions now declare the absence of a primary library, require
+exact binary outputs, and cannot satisfy an extern edge. The compiler driver
+builds `mrml-rustc` and passes both tests on Windows and Arch Linux WSL2.
+Twenty-two of 42 components are native; 20 remain transitional.
+
 `mrml-zstd` is the fourth migrated leaf; its Wikipedia edge and patent-review
 source path now resolve to `packages/libraries/zstd` without changing codec
 behavior.

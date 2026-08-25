@@ -184,6 +184,11 @@ Both hosts pass its 11 inline tests directly; absent environment-selected live
 peers and certificate fixtures remain absent evidence, not silently claimed
 coverage.
 
+An action may explicitly declare no primary library. Such a component must have
+no `:lib` output, cannot satisfy another action's extern edge, and still requires
+exact binary output/source/self-binding records. This migrates the bin-only
+compiler driver: both hosts build `mrml-rustc` and pass its two inline tests.
+
 `mrml-http` is the next featureless consumer and binds exact runtime/TLS rlibs.
 Both hosts pass its three inline tests directly; absent live URL/range inputs
 remain absent network evidence.

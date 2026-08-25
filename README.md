@@ -345,6 +345,11 @@ six universal externs, and one host-selected platform extern. Linux passes all
 installed-Edge DevTools failure. Twenty-one components are native and 21 remain
 transitional; no physical browser or accessibility hardware coverage is claimed.
 
+Bin-only actions now omit a fabricated primary library while retaining exact
+binary output and test declarations. `mrml-rustc-driver` builds the real
+`mrml-rustc` executable and passes both driver tests on Windows and Arch Linux
+WSL2. Twenty-two components are native and 20 remain transitional.
+
 MRML uses Rust 2024 and the exact `nightly-2026-08-24` build toolchain pinned in
 `rust-toolchain.toml`. It is also the current `mrml-rustc` behavioral reference
 recorded as [ORACLE-0002](docs/compiler/oracles/ORACLE-0002.md); a floating

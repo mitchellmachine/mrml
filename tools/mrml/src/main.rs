@@ -290,7 +290,7 @@ fn load_workspace() -> Result<Workspace, String> {
             .iter_mut()
             .find(|component| component.id == component_id)
             .ok_or_else(|| format!("RustActionComponentMissing {{ component: {component_id} }}"))?;
-        if crate_type != "lib" {
+        if !matches!(crate_type.as_str(), "lib" | "none") {
             return Err(format!(
                 "UnsupportedRustActionType {{ component: {component_id}, crate_type: {crate_type} }}"
             ));
@@ -323,12 +323,16 @@ fn load_workspace() -> Result<Workspace, String> {
                 extern_packages.join(",")
             ));
         }
-        let component_root = root.join(&component.path);
-        let source_path = root.join(&source);
-        if !safe_relative_path(&source)
-            || !source_path.is_file()
-            || !source_path.starts_with(&component_root)
-        {
+        let source_valid = if crate_type == "none" {
+            source == "-"
+        } else {
+            let component_root = root.join(&component.path);
+            let source_path = root.join(&source);
+            safe_relative_path(&source)
+                && source_path.is_file()
+                && source_path.starts_with(&component_root)
+        };
+        if !source_valid {
             return Err(format!(
                 "RustActionSourceInvalid {{ component: {component_id}, source: {source} }}"
             ));
@@ -508,6 +512,44 @@ fn load_workspace() -> Result<Workspace, String> {
                     "RustFeatureSetMissing {{ component: {} }}",
                     component.id
                 ));
+            }
+            let mut declared_libraries: Vec<_> = component
+                .outputs
+                .iter()
+                .filter_map(|output| output.strip_suffix(":lib"))
+                .collect();
+            let mut library_actions = if action.crate_type == "lib" {
+                vec![action.crate_name.as_str()]
+            } else {
+                Vec::new()
+            };
+            declared_libraries.sort();
+            library_actions.sort();
+            if declared_libraries != library_actions {
+                return Err(format!(
+                    "RustLibraryOutputDrift {{ component: {}, outputs: {}, libraries: {} }}",
+                    component.id,
+                    declared_libraries.join(","),
+                    library_actions.join(",")
+                ));
+            }
+            for external in &action.externs {
+                let dependency = components
+                    .iter()
+                    .find(|candidate| candidate.cargo_package == external.package)
+                    .and_then(|candidate| candidate.rust_action.as_ref())
+                    .ok_or_else(|| {
+                        format!(
+                            "NativeDependencyActionMissing {{ component: {}, dependency: {} }}",
+                            component.id, external.package
+                        )
+                    })?;
+                if dependency.crate_type != "lib" {
+                    return Err(format!(
+                        "NativeDependencyNotLibrary {{ component: {}, dependency: {} }}",
+                        component.id, external.package
+                    ));
+                }
             }
             let mut declared: Vec<_> = component
                 .outputs
@@ -1002,6 +1044,13 @@ fn compile_rust_component(
             ));
         }
         compile_rust_component(workspace, dependency, target, release, false, built)?;
+    }
+
+    if action.crate_type == "none" {
+        if !test {
+            built.insert(component.id.clone());
+        }
+        return Ok(());
     }
 
     let profile = if release { "release" } else { "debug" };

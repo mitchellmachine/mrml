@@ -145,6 +145,11 @@ The compiler-driver semantic move relocates `mrml-rustc-driver` to
 driver behavior. **Result: NOT_TRIGGERED.** This is repository organization,
 not a new compiler mechanism.
 
+The later bin-only action adds conventional absence-of-library validation,
+binary compilation, and inline binary-test execution, then applies them without
+changing compiler semantics. **Result: TRIGGERED** under the existing package/
+resolver review; existing compiler-mechanism reviews remain in force.
+
 The Git-tool semantic move relocates `mrml-git` to `tools/git` after its
 error/runtime/SSH/terminal-style dependencies without changing Git, SSH, pack,
 diff, or signing behavior. **Result: NOT_TRIGGERED.** This is repository

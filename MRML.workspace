@@ -78,3 +78,5 @@ rust-compile-env|org.mrml.tool.git|CARGO_PKG_VERSION|0.0.1
 rust-action|org.mrml.tool.host|mrml_tools|lib|tools/host/src/lib.rs|mrml-error=mrml_error@*?runtime;mrml-http=mrml_http@*?runtime;mrml-json=serde_json@*?runtime;mrml-linux=mrml_linux@LINUX?runtime;mrml-percent-encoding=mrml_percent_encoding@*?runtime;mrml-runtime=mrml_runtime@*?runtime;mrml-terminal-style=mrml_terminal_style@*?runtime;mrml-windows=mrml_windows@WINDOWS?runtime
 rust-feature-set|org.mrml.tool.host|runtime
 rust-compile-env|org.mrml.tool.host|CARGO_MANIFEST_DIR|tools/host
+rust-action|org.mrml.compiler.driver|mrml_rustc_driver|none|-|mrml-error=mrml_error@*;mrml-runtime=mrml_runtime@*;mrml-rustc=mrml_rustc@*
+rust-binary|org.mrml.compiler.driver|mrml-rustc|mrml_rustc_driver|compiler/driver/src/main.rs|false

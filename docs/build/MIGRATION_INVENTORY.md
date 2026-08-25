@@ -296,6 +296,14 @@ The compiler-driver move was checked on a Windows host with
 
 No Linux compiler-driver execution was exercised by this move.
 
+The later bin-only native action was checked with the exact dated 2026-08-24
+toolchains on Windows and Arch Linux WSL2. The action declares no primary rlib,
+binds the exact `mrml-rustc` binary source/output, and consumes native compiler-
+core, error, and runtime artifacts. Native build and both inline tests passed on
+each host, eliminating the earlier MSVC `link.exe` bridge failure. No emitted
+object was executed, no oracle delta was measured, and no KVM, bare metal, or
+physical hardware was exercised.
+
 The Git-tool move was checked on a Windows host:
 
 - `cargo +nightly-2026-08-24-x86_64-pc-windows-gnullvm fmt -p mrml-git -- --check`,
@@ -703,7 +711,8 @@ second inventory.
   nodes. Native integration-test outputs and bounded test-process stacks are
   explicit, native example outputs are checked and compiled, and exact feature
   sets can gate optional target-specific externs. Exact binary outputs, binary
-  test harnesses, and compile-time environment values are explicit. Twenty-one
+  test harnesses, compile-time environment values, and bin-only actions are
+  explicit. Twenty-two
   components now have native actions. Direct-rustc expansion still needs
   lock/digest validation and the remaining non-library actions before
   Cargo can be removed behind the remaining nodes.
