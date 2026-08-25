@@ -3350,3 +3350,41 @@ provider substitution, servicing, retention, or shared-page mechanism. The
 planned independently serviced component subsystem remains `TRIGGERED` and
 requires the recorded mechanism-specific worldwide review before implementation.
 This agent review does not replace independent human dual review.
+
+# 2026-08-25 — Immutable SystemGeneration package record
+
+**Result for this bounded mechanism: NOT_TRIGGERED.** The implemented build-tool
+foundation constructs one immutable, nonempty, bounded, canonically ordered
+record containing a nonzero local generation number and exact package identity,
+version, and nonzero artifact digest. It performs no activation, update,
+rollback, boot-image conversion, container operation, deployment monitoring,
+blockchain, distributed consensus, trust propagation, package selection, or
+interface/provider binding.
+
+Claim-focused searching reviewed the following potentially adjacent families:
+
+- [US 2023/0025529 A1](https://patents.google.com/patent/US20230025529A1)
+  claims a cluster-management agent receiving a container-image manifest,
+  converting it through a container runtime into a bootloader-consumable disk
+  image, and rebooting a distributed-system node. The recorded MRML mechanism
+  has none of those limitations. The reported family contains only the US
+  application; the publication and claims were cross-checked through
+  [USPTO Patent Public Search](https://ppubs.uspto.gov/basic/).
+- [US 10,133,563 B2](https://patents.google.com/patent/US10133563B2) claims
+  monitoring a deployed image for changed relevant artifacts, defining or
+  modifying preservation rules, copying those artifacts, and deploying a new
+  image. The MRML record performs none of those operations. The reported family
+  contains only the US application, and USPTO Patent Public Search reports the
+  patent as expired for fee-related reasons; non-overlap, rather than status, is
+  the design basis.
+- [US 2019/0303579 A1](https://patents.google.com/patent/US20190303579A1)
+  claims decentralized tamper-evident DAG and consensus/trust-record machinery.
+  The MRML record has no decentralized store, hash-pointer DAG, consensus, trust
+  evaluation, or execution admission. The reported US-only application is
+  abandoned; again, non-overlap is the design basis.
+
+The broader `SystemGeneration` activation/update design, package resolver, and
+independently serviced component subsystem remain `TRIGGERED`. Each later
+selected mechanism still requires its own claim and worldwide-family review.
+This technical screen establishes neither clearance nor infringement and does
+not replace independent human dual review.

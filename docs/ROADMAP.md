@@ -36,6 +36,14 @@ retention/GC and inspection, optional service form, and cross-compiler evidence.
 Do not convert kernel dependencies or every Rust crate, and do not claim any of
 these steps implemented before code and focused tests exist.
 
+**PARTIALLY IMPLEMENTED prerequisite:** the native build tool validates
+canonical MRML package identities separately from Cargo package and Rust crate
+identity and constructs a bounded immutable `SystemGeneration` record with exact
+package versions and artifact digests. Windows and Arch Linux tests cover exact
+lookup and fail-closed malformed, zero, duplicate, noncanonical, empty, and
+over-capacity inputs. Package resolution, admission, activation, persistence,
+rollback, and all component-interface milestones remain **PLANNED**.
+
 Within existing boot/deployment phases, add typed UEFI objects, verified installer
 entry creation, shell boot administration, owner/compatibility/dbx policy, then
 physical firmware tests per

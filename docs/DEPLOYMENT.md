@@ -14,6 +14,14 @@ and evidence recorded elsewhere. This document does not claim a package manager,
 Store, `SystemImage`, installer, deployment service, shell, or physical-disk
 workflow is implemented.
 
+**PARTIALLY IMPLEMENTED foundation:** `packages/tools/mrml` now exposes an
+immutable bounded `SystemGeneration` record containing a nonzero local
+generation and canonically ordered exact package identity, version, and artifact
+digest entries. Focused Windows and Linux tests reject zero values, malformed
+identities, empty/oversized graphs, duplicates, and noncanonical order. It does
+not yet resolve, admit, activate, retain, roll back, export, or garbage-collect a
+generation.
+
 > Installation, updating, offline servicing, recovery, system imaging, and
 > system snapshots are different operations over the same immutable package and
 > SystemGeneration model, not independent mechanisms.

@@ -1,8 +1,12 @@
+pub mod generation;
+
 use std::collections::{BTreeMap, BTreeSet};
 use std::env;
 use std::fs;
 use std::path::{Component as PathComponent, Path, PathBuf};
 use std::process::{Command, ExitCode};
+
+use generation::mrml_package_identifier;
 
 const MAX_WORKSPACE_BYTES: u64 = 1024 * 1024;
 const MAX_COMPONENTS: usize = 256;
@@ -2630,24 +2634,6 @@ fn native_output_dir(
         .join("mrml-native")
         .join(target_directory)
         .join(if release { "release" } else { "debug" }))
-}
-
-fn mrml_package_identifier(value: &str) -> bool {
-    value.starts_with("org.mrml.")
-        && value.split('.').all(|segment| {
-            !segment.is_empty()
-                && segment
-                    .bytes()
-                    .all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit() || byte == b'-')
-                && segment
-                    .as_bytes()
-                    .first()
-                    .is_some_and(u8::is_ascii_lowercase)
-                && segment
-                    .as_bytes()
-                    .last()
-                    .is_some_and(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit())
-        })
 }
 
 fn ensure_artifact_directory(output_dir: &Path) -> Result<(), String> {
