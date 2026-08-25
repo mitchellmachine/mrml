@@ -166,6 +166,15 @@ inline tests and link all three examples. Native-library requirements such as
 the differential example's system `libopus` remain explicit host prerequisites,
 not silently skipped outputs.
 
+Each native Rust action with declared component features must bind an exact
+feature set, including an explicitly empty set. Rustc receives selected feature
+cfgs plus the complete allowed feature universe, and optional externs are active
+only when both their target family and feature gate match. `mrml-av1` exercises
+this with an empty default set: `mrml-runtime` is active, while the `nvidia`
+Windows/Linux externs are not. Its library and declared example build on both
+hosts; a 32 MiB executable-stack policy leaves the same two source failures as
+the pinned Cargo baseline rather than sixteen additional stack failures.
+
 Rust crate identity, MRML package identity, and stable MRML interface identity
 are distinct. The runtime component model is specified in
 [../packages/COMPONENT_INTERFACES.md](../packages/COMPONENT_INTERFACES.md).

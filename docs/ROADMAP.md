@@ -166,6 +166,13 @@ components are native; 29 remain transitional.
 Native example outputs are now exact. `mrml-opus` passes 179 tests and links all
 three declared examples on both hosts, bringing the native count to 14 of 42.
 
+Native feature sets and optional extern gates are now exact for `mrml-av1`.
+The empty default set omits its `nvidia` platform extern while retaining the
+runtime edge; both Windows and Arch Linux WSL2 build the library and declared
+example directly. With its declared 32 MiB test stack, each host reproduces the
+Cargo baseline at 273 passing and two existing source-test failures. Fifteen of
+42 components are native; 27 remain transitional.
+
 `mrml-zstd` is the fourth migrated leaf; its Wikipedia edge and patent-review
 source path now resolve to `packages/libraries/zstd` without changing codec
 behavior.

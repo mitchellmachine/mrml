@@ -94,6 +94,15 @@ the first run failed closed when `-lopus` was absent and passed after the explic
 test dependency was installed. Fourteen components are native; 28 remain
 transitional.
 
+Native actions now bind one exact feature set and may gate an extern by both
+target family and selected feature. `mrml-av1` declares the empty default set,
+so its `nvidia` platform extern is inactive while `mrml-runtime` remains active.
+The library and `decode_ivf` example build directly on Windows and Arch Linux
+WSL2. A 32 MiB executable-stack policy eliminates sixteen Windows harness
+overflows; both native hosts match the pinned Cargo baseline's two remaining
+source failures (273 passed, 2 failed). Fifteen components are native; 27 remain
+transitional.
+
 Patent review: `TRIGGERED`. This increment implements the first native dependency
 resolver, within the package/cache/resolver review already recorded in
 [`../patents/REVIEW_LOG.md`](../patents/REVIEW_LOG.md).

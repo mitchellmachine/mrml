@@ -32,6 +32,11 @@ drift. **Result for these schema increments: NOT_TRIGGERED.** Declarative build
 graphs and input allowlists are conventional tooling mechanisms; the future
 resolver/cache/package mechanisms retain their triggered review.
 
+The native feature-set increment selects exact rustc feature cfgs and gates
+declared extern edges by target and feature. **Result: TRIGGERED** under the
+existing package/resolver review above; it adds no patent-clearance conclusion
+for AV1, whose separate worldwide mechanism and license review remains in force.
+
 The first semantic source move relocates dependency-free `mrml-math` without
 changing its implementation or public behavior and improves discovery of
 conditional native-link attributes. **Result: NOT_TRIGGERED.** Repository path

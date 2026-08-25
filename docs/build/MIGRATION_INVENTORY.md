@@ -228,6 +228,17 @@ The AV1 move was checked on a Windows host:
 No Linux host, NVIDIA feature path, conformance corpus, or physical decoder was
 exercised by this move.
 
+The later native-action increment was checked on Windows and Arch Linux WSL2
+with the exact dated 2026-08-24 toolchains. On both hosts, `mrml doctor`,
+`mrml audit`, and `mrml build mrml-av1` passed, including native compilation of
+the declared `decode_ivf` example. The empty feature set left both optional
+`nvidia` platform externs inactive and retained the unconditional runtime edge.
+With a declared 32 MiB executable stack, `mrml test mrml-av1` reached 273 passed
+and 2 failed on each host; those are the same pointer-identity assertion and
+restoration arithmetic failure already present in the pinned Cargo baseline.
+This establishes build-system parity only. No NVIDIA path, corpus, KVM, bare
+metal, physical decoder, or complete AV1 interoperability was exercised.
+
 The compiler-core move was checked on a Windows host with
 `RUSTFLAGS=-C link-arg=/stack:16777216`:
 
@@ -648,9 +659,9 @@ second inventory.
 - Native graph construction now provides dependency-first ordering, cycle
   diagnostics, and target-scoped exact extern artifacts for migrated library
   nodes. Native integration-test outputs and bounded test-process stacks are
-  explicit, and native example outputs are checked and compiled. Fourteen
-  components now have native actions. Direct-rustc expansion still
-  needs features, lock/digest validation,
+  explicit, native example outputs are checked and compiled, and exact feature
+  sets can gate optional target-specific externs. Fifteen components now have
+  native actions. Direct-rustc expansion still needs lock/digest validation,
   and explicit non-library actions before
   Cargo can be removed behind the remaining nodes.
 - Moving all paths requires updating Cargo dependencies, docs, scripts, fixtures,

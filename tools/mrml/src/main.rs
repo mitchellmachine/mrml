@@ -552,7 +552,9 @@ fn apply_rust_features(command: &mut Command, component: &Component, action: &Ru
         .join(",");
     command
         .arg("--check-cfg")
-        .arg(format!("cfg(feature, values({values}))"));
+        .arg(format!("cfg(feature, values({values}))"))
+        .arg("--check-cfg")
+        .arg("cfg(test)");
 }
 
 fn parse_input_policy(value: &str, line: usize) -> Result<InputCounts, String> {
@@ -1827,13 +1829,17 @@ mod tests {
     }
     #[test]
     fn rust_externs_are_target_scoped_and_unique() {
-        let externs =
-            parse_rust_externs("mrml-linux=mrml_linux@LINUX;mrml-windows=mrml_windows@WINDOWS")
-                .unwrap();
+        let externs = parse_rust_externs(
+            "mrml-linux=mrml_linux@LINUX?nvidia;mrml-windows=mrml_windows@WINDOWS",
+        )
+        .unwrap();
         assert_eq!(externs.len(), 2);
         assert_eq!(externs[0].package, "mrml-linux");
         assert_eq!(externs[0].targets, ["LINUX"]);
+        assert_eq!(externs[0].feature.as_deref(), Some("nvidia"));
+        assert_eq!(externs[1].feature, None);
         assert!(parse_rust_externs("mrml-runtime=bad-name@*").is_err());
+        assert!(parse_rust_externs("mrml-runtime=mrml_runtime@*?").is_err());
         assert!(
             parse_rust_externs(
                 "mrml-runtime=mrml_runtime@WINDOWS;mrml-runtime=runtime_again@LINUX"

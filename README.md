@@ -307,6 +307,13 @@ remain transitional.
 three declared example binaries pass on Windows and Arch Linux WSL2. Fourteen
 components are native and 28 remain transitional.
 
+`mrml-av1` adds exact empty-default feature selection and feature-gated platform
+externs. Its library and `decode_ivf` example build natively on Windows and Arch
+Linux WSL2. A declared 32 MiB executable stack removes sixteen harness-only
+overflows; both native hosts reproduce the Cargo baseline's two remaining AV1
+source-test failures at 273 passed and 2 failed. Fifteen components are native
+and 27 remain transitional; this is build parity, not AV1 conformance evidence.
+
 MRML uses Rust 2024 and the exact `nightly-2026-08-24` build toolchain pinned in
 `rust-toolchain.toml`. It is also the current `mrml-rustc` behavioral reference
 recorded as [ORACLE-0002](docs/compiler/oracles/ORACLE-0002.md); a floating
