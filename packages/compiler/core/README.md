@@ -3890,6 +3890,17 @@ tests per host. This is allocation-free binder representation and instantiation,
 not clause elaboration, generic impl selection, source syntax, projection
 normalization, or recursive solving.
 
+The single-clause elaboration milestone structurally matches one fully concrete
+implemented-trait query against a bound consequence. It infers generic arguments
+in a fixed array and instantiates the premises only when all parameters are
+constrained. Repeated parameters must match equal concrete types; mismatches
+produce no solution, unconstrained parameters remain ambiguous, and inference-
+bearing or placeholder queries fail closed. Windows gnullvm and native Arch
+Linux WSL each pass 439 library tests, one component-interface probe, 10
+conformance tests, and 335 replacement tests: 785 compiler tests per host. This
+does not add a clause database, multi-candidate combination, recursion, cycles,
+projection normalization, or source syntax.
+
 The nested conditional tuple-origin milestone walks each leaf's bounded
 conditional-parent chain to the outermost generation before grouping reference
 origins by field ordinal. The exact oracle rejects a three-leaf returned field

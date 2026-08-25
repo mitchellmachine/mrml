@@ -68,6 +68,6 @@ pub use trait_goals::{
     TraitGoalSubstitution, TraitGoalType, TraitId, TraitImplementationDatabase,
     TraitImplementationHeader, TraitImplementationId, TraitInferenceBinding,
     TraitInferenceVariableId, TraitPlaceholderId, TraitTypeId, TraitWhereClause,
-    canonicalize_implemented_trait_goal, canonicalize_implemented_trait_goal_with_variables,
-    canonicalize_implemented_trait_predicates,
+    TraitWhereClauseElaboration, canonicalize_implemented_trait_goal,
+    canonicalize_implemented_trait_goal_with_variables, canonicalize_implemented_trait_predicates,
 };

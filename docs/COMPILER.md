@@ -108,7 +108,7 @@ language as a whole.
 | Let chains | **NOT IMPLEMENTED** | Boolean short-circuit expressions exist, but `if let`/`while let` chains and their pattern scopes do not. |
 | Async closures | **NOT IMPLEMENTED** | There is no async/await, generator, future, or async-closure lowering. |
 | Modern borrowing / Polonius | **PARTIAL** | References, explicit and expected-type implicit reborrow ancestry, return coercion-site reborrows, mutable pointee operations, bounded ownership/place/effect facts, fixed-point definite-initialization, direct shared/mutable-loan conflicts, and bounded intermediate-ancestor invalidation across the supported statement/loop CFG exist. Conditional expressions retain bounded program points and canonical nested/sequential edges. General indirect loan identity, regions/outlives reasoning, and complete Polonius-compatible analysis remain unimplemented. |
-| Next-generation trait solving | **PARTIAL** | Method-like built-ins remain recognized directly. Allocation-free implemented goals distinguish concrete types, inference variables, rigid placeholders, and generic binder parameters. Up to eight predicates share one canonical-variable universe; a bounded where-clause representation validates up to eight generic parameters and concretely instantiates one consequence plus eight premises. A bounded exact-header table returns fixed substitutions and ambiguity without allocation. There is no trait syntax, generic impl selection, where-clause elaboration, projection, recursive goal, complete coherence/specialization, answer composition, or source integration. |
+| Next-generation trait solving | **PARTIAL** | Method-like built-ins remain recognized directly. Allocation-free implemented goals distinguish concrete types, inference variables, rigid placeholders, and generic binder parameters. Up to eight predicates share one canonical-variable universe; a bounded where clause validates eight parameters, structurally infers them from one concrete consequence, and instantiates eight premises. Repeated parameters must match equally and unconstrained parameters remain ambiguous. A bounded exact-header table returns fixed substitutions without allocation. There is no trait syntax, generic impl database, multi-clause/recursive solving, projection, complete coherence/specialization, answer composition, or source integration. |
 | Naked functions / `naked_asm!` | **NOT IMPLEMENTED** | High-priority **STABLE** systems-language target. No implementation may insert an ordinary prologue or epilogue into a naked function. |
 | Modern inline assembly | **NOT IMPLEMENTED** | No `asm!`, register/operand validation, options, clobber model, or architecture-specific assembly lowering exists. |
 | Pointer/provenance APIs | **PARTIAL** | Raw-pointer casts, `addr`, `with_addr`, `expose_provenance`, integer-address reconstruction, offsets, comparisons, alignment, copying, writes, references, and metadata operations have bounded tests. The current scalar machine representation cannot establish a complete provenance/alias model and must not equate equal integer addresses with interchangeable provenance. |
@@ -806,6 +806,14 @@ instantiation requires exact arity and consistently replaces each parameter in
 the consequence and premises. Generic parameters remain distinct from inference
 variables and rigid placeholders. This is not elaboration, selection, or source
 syntax.
+
+Single-clause elaboration structurally matches a fully concrete implemented-
+trait consequence against the bound consequence, infers fixed generic arguments,
+and instantiates the clause when every parameter is constrained. Repeated
+parameters require equal concrete types; mismatches return no solution,
+unconstrained parameters remain ambiguous, and inference-bearing or placeholder
+queries fail closed. There is no clause database, candidate combination,
+recursion, or cycle handling.
 
 ```text
 Complexity impact: LOW

@@ -196,6 +196,13 @@ pub struct InstantiatedTraitWhereClause {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum TraitWhereClauseElaboration {
+    Unique(InstantiatedTraitWhereClause),
+    Ambiguous,
+    NoSolution,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct TraitWhereClause {
     parameter_count: usize,
     pub consequence: BoundImplementedTraitGoal,
@@ -265,6 +272,50 @@ impl TraitWhereClause {
             premises,
         })
     }
+
+    pub fn elaborate(
+        self,
+        consequence: ImplementedTraitGoal,
+    ) -> Result<TraitWhereClauseElaboration, TraitGoalError> {
+        validate_concrete_goal(consequence)?;
+        if self.consequence.trait_id != consequence.trait_id
+            || self.consequence.argument_count != consequence.argument_count
+        {
+            return Ok(TraitWhereClauseElaboration::NoSolution);
+        }
+        let mut bindings = [None; MAX_TRAIT_GENERIC_PARAMETERS];
+        if !bound_type_matches_concrete(
+            self.consequence.self_type,
+            concrete_goal_type(consequence.self_type)?,
+            &mut bindings,
+        ) {
+            return Ok(TraitWhereClauseElaboration::NoSolution);
+        }
+        for (bound, concrete) in self
+            .consequence
+            .arguments()
+            .iter()
+            .zip(consequence.arguments())
+        {
+            let bound = bound.as_ref().copied().ok_or(TraitGoalError::InvalidGoal)?;
+            let concrete = concrete
+                .as_ref()
+                .copied()
+                .ok_or(TraitGoalError::InvalidGoal)?;
+            if !bound_type_matches_concrete(bound, concrete_goal_type(concrete)?, &mut bindings) {
+                return Ok(TraitWhereClauseElaboration::NoSolution);
+            }
+        }
+        let mut arguments = [TraitTypeId::new(0); MAX_TRAIT_GENERIC_PARAMETERS];
+        for (index, binding) in bindings[..self.parameter_count].iter().enumerate() {
+            let Some(binding) = binding else {
+                return Ok(TraitWhereClauseElaboration::Ambiguous);
+            };
+            arguments[index] = *binding;
+        }
+        self.instantiate(&arguments[..self.parameter_count])
+            .map(TraitWhereClauseElaboration::Unique)
+    }
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -323,6 +374,7 @@ pub enum TraitGoalError {
     TooManyCanonicalVariables,
     TooManyGenericParameters,
     TooManyPredicates,
+    NonConcreteClauseQuery,
     UnboundGenericParameter,
     WrongGenericArgumentCount,
     InvalidGoal,
@@ -356,6 +408,60 @@ fn validate_bound_goal(
         )?;
     }
     Ok(())
+}
+
+fn validate_concrete_goal(goal: ImplementedTraitGoal) -> Result<(), TraitGoalError> {
+    if goal.argument_count > goal.arguments.len()
+        || goal.arguments[..goal.argument_count]
+            .iter()
+            .any(Option::is_none)
+        || goal.arguments[goal.argument_count..]
+            .iter()
+            .any(Option::is_some)
+    {
+        return Err(TraitGoalError::InvalidGoal);
+    }
+    concrete_goal_type(goal.self_type)?;
+    for argument in goal.arguments().iter() {
+        concrete_goal_type(
+            argument
+                .as_ref()
+                .copied()
+                .ok_or(TraitGoalError::InvalidGoal)?,
+        )?;
+    }
+    Ok(())
+}
+
+fn concrete_goal_type(ty: TraitGoalType) -> Result<TraitTypeId, TraitGoalError> {
+    match ty {
+        TraitGoalType::Concrete(ty) => Ok(ty),
+        TraitGoalType::InferenceVariable(_) | TraitGoalType::Placeholder(_) => {
+            Err(TraitGoalError::NonConcreteClauseQuery)
+        }
+    }
+}
+
+fn bound_type_matches_concrete(
+    bound: BoundTraitGoalType,
+    concrete: TraitTypeId,
+    bindings: &mut [Option<TraitTypeId>; MAX_TRAIT_GENERIC_PARAMETERS],
+) -> bool {
+    match bound {
+        BoundTraitGoalType::Concrete(bound) => bound == concrete,
+        BoundTraitGoalType::Parameter(parameter) => {
+            let Some(binding) = bindings.get_mut(parameter.get() as usize) else {
+                return false;
+            };
+            match *binding {
+                Some(bound) => bound == concrete,
+                None => {
+                    *binding = Some(concrete);
+                    true
+                }
+            }
+        }
+    }
 }
 
 fn validate_bound_type(
@@ -934,6 +1040,17 @@ mod tests {
         let instantiated = clause
             .instantiate(&[TraitTypeId::new(20), TraitTypeId::new(30)])
             .unwrap();
+        let mut query = ImplementedTraitGoal::new(
+            TraitId::new(10),
+            TraitGoalType::Concrete(TraitTypeId::new(20)),
+        );
+        query
+            .push_argument(TraitGoalType::Concrete(TraitTypeId::new(30)))
+            .unwrap();
+        assert_eq!(
+            clause.elaborate(query),
+            Ok(TraitWhereClauseElaboration::Unique(instantiated))
+        );
         assert_eq!(
             instantiated.consequence,
             ImplementedTraitGoal {
@@ -997,6 +1114,56 @@ mod tests {
                 ),
             ),
             Err(TraitGoalError::TooManyGenericParameters)
+        );
+    }
+
+    #[test]
+    fn classifies_clause_mismatch_ambiguity_and_nonconcrete_queries() {
+        let parameter = TraitGenericParameterId::new(0);
+        let mut repeated = BoundImplementedTraitGoal::new(
+            TraitId::new(1),
+            BoundTraitGoalType::Parameter(parameter),
+        );
+        repeated
+            .push_argument(BoundTraitGoalType::Parameter(parameter))
+            .unwrap();
+        let repeated = TraitWhereClause::new(1, repeated).unwrap();
+        let mut mismatch = ImplementedTraitGoal::new(
+            TraitId::new(1),
+            TraitGoalType::Concrete(TraitTypeId::new(10)),
+        );
+        mismatch
+            .push_argument(TraitGoalType::Concrete(TraitTypeId::new(11)))
+            .unwrap();
+        assert_eq!(
+            repeated.elaborate(mismatch),
+            Ok(TraitWhereClauseElaboration::NoSolution)
+        );
+
+        let unconstrained = TraitWhereClause::new(
+            1,
+            BoundImplementedTraitGoal::new(
+                TraitId::new(2),
+                BoundTraitGoalType::Concrete(TraitTypeId::new(20)),
+            ),
+        )
+        .unwrap();
+        let concrete = ImplementedTraitGoal::new(
+            TraitId::new(2),
+            TraitGoalType::Concrete(TraitTypeId::new(20)),
+        );
+        assert_eq!(
+            unconstrained.elaborate(concrete),
+            Ok(TraitWhereClauseElaboration::Ambiguous)
+        );
+
+        let inference = ImplementedTraitGoal::new(
+            TraitId::new(2),
+            TraitGoalType::InferenceVariable(TraitInferenceVariableId::new(0)),
+        );
+        assert_eq!(
+            unconstrained.elaborate(inference),
+            Err(TraitGoalError::NonConcreteClauseQuery)
         );
     }
 

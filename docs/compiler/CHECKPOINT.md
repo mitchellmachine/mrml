@@ -662,6 +662,15 @@ library tests, one component-interface probe, 10 conformance tests, and 335
 replacement tests: 784 compiler tests per host. This does not elaborate clauses,
 select generic impls, introduce source syntax, normalize projections, or recurse.
 
+The single-clause elaboration milestone matches a fully concrete query against
+one bound consequence, infers its fixed generic arguments, and instantiates the
+premises only when every parameter is constrained. Repeated parameters require
+equal concrete types; mismatch is no solution, unconstrained parameters are
+ambiguous, and nonconcrete queries fail closed. Windows gnullvm and native Arch
+Linux WSL each pass 439 library tests, one component-interface probe, 10
+conformance tests, and 335 replacement tests: 785 compiler tests per host. No
+clause database, multi-candidate combination, recursion, or cycle handling exists.
+
 At compiler path checkpoint `9a950ae9`, the Windows gnullvm core suite passed
 765 tests: 420 library tests, 10 conformance tests, and 335 replacement tests.
 Core formatting, warnings-denied Clippy, the no-`std`/no-`alloc`/unsafe hygiene
