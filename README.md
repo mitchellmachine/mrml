@@ -378,6 +378,15 @@ artifacts. Windows and Arch Linux WSL2 cross-build it for
 Twenty-five components are native and 17 remain transitional; no signed service
 runtime, target execution, or physical-hardware verification is implied.
 
+Native actions may declare an allowlisted compiler-target variant distinct from
+their semantic target family. The variant propagates through the complete rlib
+graph and has a separate artifact directory, preventing ABI/cache collisions.
+`mrml-service-image` uses this to remain `MRML_NATIVE` while producing its
+`x86_64-unknown-uefi` PE32+ EFI application. Debug and release builds pass on
+Windows and Arch Linux WSL2 and repeat deterministically per host; cross-host
+hashes differ and are not claimed reproducible. Twenty-six components are native
+and 16 remain transitional. No UEFI runtime or signed-service execution occurred.
+
 MRML uses Rust 2024 and the exact `nightly-2026-08-24` build toolchain pinned in
 `rust-toolchain.toml`. It is also the current `mrml-rustc` behavioral reference
 recorded as [ORACLE-0002](docs/compiler/oracles/ORACLE-0002.md); a floating

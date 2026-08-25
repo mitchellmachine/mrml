@@ -237,6 +237,14 @@ all 31 tests through the declared host projection. Twenty-five of 42 components
 are native; 17 remain transitional. This does not establish signed-service,
 target-runtime, or physical-hardware execution.
 
+Compiler-target variants are now explicit, allowlisted, dependency-transitive,
+and artifact-separated from the semantic target's default triple. The service
+image remains in `MRML_NATIVE` policy while its complete graph compiles for
+`x86_64-unknown-uefi`; both hosts emit a PE32+ EFI application in debug and
+release modes. Repeated same-host hashes are stable, but Windows/Linux hashes
+differ, so cross-host reproducibility is not established. Twenty-six of 42
+components are native; 16 remain transitional. No UEFI or service runtime ran.
+
 `mrml-zstd` is the fourth migrated leaf; its Wikipedia edge and patent-review
 source path now resolve to `packages/libraries/zstd` without changing codec
 behavior.

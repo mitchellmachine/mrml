@@ -121,6 +121,14 @@ storage artifacts. Its `x86_64-unknown-none` cross-build and all 31 projected
 host tests pass on Windows and Arch Linux WSL2. Twenty-five components are
 native; 17 remain transitional.
 
+An allowlisted compiler-target variant now propagates through one complete
+native dependency graph and receives an isolated artifact directory. This keeps
+the service image's semantic family `MRML_NATIVE` while compiling it and its
+dependencies for `x86_64-unknown-uefi`. Windows and Arch Linux WSL2 produce a
+PE32+ EFI application in debug and release profiles. Same-host repeated hashes
+are stable; cross-host hashes differ and are not claimed reproducible. Twenty-
+six components are native; 16 remain transitional.
+
 Native actions now bind one exact feature set and may gate an extern by both
 target family and selected feature. `mrml-av1` declares the empty default set,
 so its `nvidia` platform extern is inactive while `mrml-runtime` remains active.

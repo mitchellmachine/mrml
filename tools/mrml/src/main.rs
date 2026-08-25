@@ -39,6 +39,7 @@ struct RustAction {
     compile_env: Vec<(String, String)>,
     feature_sets: Vec<RustFeatureSet>,
     feature_profiles: Vec<RustFeatureProfile>,
+    target_triples: Vec<RustTargetTriple>,
 }
 
 #[derive(Clone, Debug)]
@@ -52,6 +53,12 @@ struct RustFeatureProfile {
     name: String,
     targets: Vec<String>,
     features: Vec<String>,
+}
+
+#[derive(Clone, Debug)]
+struct RustTargetTriple {
+    target: String,
+    triple: String,
 }
 
 #[derive(Clone, Debug)]
@@ -82,6 +89,14 @@ struct RustBinary {
     crate_name: String,
     source: String,
     self_extern: bool,
+}
+
+#[derive(Clone, Copy, Debug)]
+struct RustCompileMode<'a> {
+    target: &'a str,
+    compile_target: &'a str,
+    release: bool,
+    test: bool,
 }
 
 #[derive(Debug)]
@@ -173,6 +188,7 @@ fn load_workspace() -> Result<Workspace, String> {
     let mut rust_compile_env = Vec::new();
     let mut rust_feature_sets = Vec::new();
     let mut rust_feature_profiles = Vec::new();
+    let mut rust_target_triples = Vec::new();
     for (index, raw) in text.lines().enumerate() {
         let line = raw.trim();
         if line.is_empty() || line.starts_with('#') {
@@ -320,6 +336,13 @@ fn load_workspace() -> Result<Workspace, String> {
                     (*features).to_owned(),
                 ));
             }
+            ["rust-target-triple", component, target, triple] => {
+                rust_target_triples.push((
+                    (*component).to_owned(),
+                    (*target).to_owned(),
+                    (*triple).to_owned(),
+                ));
+            }
             _ => return Err(format!("WorkspaceSyntaxError {{ line: {} }}", index + 1)),
         }
     }
@@ -395,6 +418,7 @@ fn load_workspace() -> Result<Workspace, String> {
             compile_env: Vec::new(),
             feature_sets: Vec::new(),
             feature_profiles: Vec::new(),
+            target_triples: Vec::new(),
         });
     }
     for (component_id, targets, features) in rust_feature_sets {
@@ -477,6 +501,35 @@ fn load_workspace() -> Result<Workspace, String> {
             targets,
             features,
         });
+    }
+    for (component_id, target, triple) in rust_target_triples {
+        let component = components
+            .iter_mut()
+            .find(|component| component.id == component_id)
+            .ok_or_else(|| {
+                format!("RustTargetTripleComponentMissing {{ component: {component_id} }}")
+            })?;
+        let action = component.rust_action.as_mut().ok_or_else(|| {
+            format!("RustTargetTripleActionMissing {{ component: {component_id} }}")
+        })?;
+        let valid_pair = matches!(
+            (target.as_str(), triple.as_str()),
+            ("MRML_NATIVE", "x86_64-unknown-uefi")
+        );
+        if !valid_pair
+            || !component.targets.contains(&target)
+            || action
+                .target_triples
+                .iter()
+                .any(|declaration| declaration.target == target)
+        {
+            return Err(format!(
+                "RustTargetTripleInvalid {{ component: {component_id}, target: {target}, triple: {triple} }}"
+            ));
+        }
+        action
+            .target_triples
+            .push(RustTargetTriple { target, triple });
     }
     for (component_id, stack_bytes) in rust_test_policies {
         let component = components
@@ -1205,16 +1258,43 @@ fn run_rust_action(
     target: &str,
     release: bool,
 ) -> Result<(), String> {
+    let compile_target = rust_compile_target(
+        component
+            .rust_action
+            .as_ref()
+            .ok_or("NativeActionDisappeared")?,
+        target,
+    )?;
     let mut built = BTreeSet::new();
     compile_rust_component(
-        workspace, component, target, release, false, "default", &mut built,
+        workspace,
+        component,
+        &RustCompileMode {
+            target,
+            compile_target: &compile_target,
+            release,
+            test: false,
+        },
+        "default",
+        &mut built,
     )?;
     let action = component
         .rust_action
         .as_ref()
         .ok_or("NativeActionDisappeared")?;
     for binary in &action.binaries {
-        compile_declared_binary(workspace, component, action, binary, target, release, false)?;
+        compile_declared_binary(
+            workspace,
+            component,
+            action,
+            binary,
+            &RustCompileMode {
+                target,
+                compile_target: &compile_target,
+                release,
+                test: false,
+            },
+        )?;
     }
     if operation == "test" {
         let test_target = if matches!(target, "WINDOWS" | "LINUX") {
@@ -1229,13 +1309,17 @@ fn run_rust_action(
             }
             host
         };
+        let test_compile_target = default_rust_target(test_target)?.to_owned();
         let mut test_built = BTreeSet::new();
         compile_rust_component(
             workspace,
             component,
-            test_target,
-            release,
-            true,
+            &RustCompileMode {
+                target: test_target,
+                compile_target: &test_compile_target,
+                release,
+                test: true,
+            },
             "default",
             &mut test_built,
         )?;
@@ -1248,9 +1332,12 @@ fn run_rust_action(
                 component,
                 action,
                 binary,
-                test_target,
-                release,
-                true,
+                &RustCompileMode {
+                    target: test_target,
+                    compile_target: &test_compile_target,
+                    release,
+                    test: true,
+                },
             )?;
         }
         for example in &action.examples {
@@ -1263,13 +1350,20 @@ fn run_rust_action(
 fn compile_rust_component(
     workspace: &Workspace,
     component: &Component,
-    target: &str,
-    release: bool,
-    test: bool,
+    mode: &RustCompileMode<'_>,
     feature_profile: &str,
     built: &mut BTreeSet<String>,
 ) -> Result<(), String> {
-    let build_key = format!("{}#{target}#{feature_profile}", component.id);
+    let RustCompileMode {
+        target,
+        compile_target,
+        release,
+        test,
+    } = *mode;
+    let build_key = format!(
+        "{}#{target}#{compile_target}#{feature_profile}",
+        component.id
+    );
     if !test && built.contains(&build_key) {
         return Ok(());
     }
@@ -1314,9 +1408,10 @@ fn compile_rust_component(
         compile_rust_component(
             workspace,
             dependency,
-            target,
-            release,
-            false,
+            &RustCompileMode {
+                test: false,
+                ..*mode
+            },
             &external.provider_profile,
             built,
         )?;
@@ -1329,13 +1424,7 @@ fn compile_rust_component(
         return Ok(());
     }
 
-    let profile = if release { "release" } else { "debug" };
-    let output_dir = workspace
-        .root
-        .join("target")
-        .join("mrml")
-        .join(target.to_ascii_lowercase())
-        .join(profile);
+    let output_dir = native_output_dir(workspace, target, compile_target, release)?;
     fs::create_dir_all(&output_dir)
         .map_err(|error| format!("ArtifactDirectoryError {{ detail: {error} }}"))?;
     let extension = if test && target == "WINDOWS" {
@@ -1346,7 +1435,14 @@ fn compile_rust_component(
     let output = if test {
         output_dir.join(format!("{}_tests{extension}", action.crate_name))
     } else {
-        native_artifact(workspace, action, target, release, feature_profile)
+        native_artifact(
+            workspace,
+            action,
+            target,
+            compile_target,
+            release,
+            feature_profile,
+        )?
     };
     let rustc = pinned_tool("rustc")?;
     let mut command = Command::new(rustc);
@@ -1384,9 +1480,10 @@ fn compile_rust_component(
                 workspace,
                 dependency_action,
                 target,
+                compile_target,
                 release,
                 &external.provider_profile,
-            )
+            )?
             .display()
         ));
     }
@@ -1394,18 +1491,7 @@ fn compile_rust_component(
         command.arg("--test").arg("-Zpanic-abort-tests");
         apply_test_stack(&mut command, action, target);
     }
-    if target == "WINDOWS" {
-        command.args(["-C", "linker=rust-lld", "-C", "target-feature=+crt-static"]);
-    } else if target == "LINUX" {
-        command.args(["--target", "x86_64-unknown-linux-gnu"]);
-    } else if target == "MRML_NATIVE" {
-        command.args(["--target", "x86_64-unknown-none"]);
-    } else {
-        return Err(format!(
-            "RustActionTargetUnsupported {{ component: {}, target: {target} }}",
-            component.id
-        ));
-    }
+    apply_rust_compile_target(&mut command, compile_target)?;
     if release {
         command.args([
             "-C",
@@ -1446,12 +1532,8 @@ fn run_declared_test(
     target: &str,
     release: bool,
 ) -> Result<(), String> {
-    let output_dir = workspace
-        .root
-        .join("target")
-        .join("mrml")
-        .join(target.to_ascii_lowercase())
-        .join(if release { "release" } else { "debug" });
+    let compile_target = default_rust_target(target)?;
+    let output_dir = native_output_dir(workspace, target, compile_target, release)?;
     let extension = if target == "WINDOWS" { ".exe" } else { "" };
     let output = output_dir.join(format!("{}_tests{extension}", test.name));
     let rustc = pinned_tool("rustc")?;
@@ -1474,7 +1556,15 @@ fn run_declared_test(
         command.arg("--extern").arg(format!(
             "{}={}",
             action.crate_name,
-            native_artifact(workspace, action, target, release, "default").display()
+            native_artifact(
+                workspace,
+                action,
+                target,
+                compile_target,
+                release,
+                "default",
+            )?
+            .display()
         ));
     }
     apply_test_stack(&mut command, action, target);
@@ -1499,9 +1589,10 @@ fn run_declared_test(
                 workspace,
                 dependency_action,
                 target,
+                compile_target,
                 release,
                 &external.provider_profile,
-            )
+            )?
             .display()
         ));
     }
@@ -1537,12 +1628,8 @@ fn compile_declared_example(
     target: &str,
     release: bool,
 ) -> Result<(), String> {
-    let output_dir = workspace
-        .root
-        .join("target")
-        .join("mrml")
-        .join(target.to_ascii_lowercase())
-        .join(if release { "release" } else { "debug" });
+    let compile_target = default_rust_target(target)?;
+    let output_dir = native_output_dir(workspace, target, compile_target, release)?;
     let extension = if target == "WINDOWS" { ".exe" } else { "" };
     let output = output_dir.join(format!("{}{extension}", example.name));
     let rustc = pinned_tool("rustc")?;
@@ -1560,7 +1647,15 @@ fn compile_declared_example(
         .arg(format!(
             "{}={}",
             action.crate_name,
-            native_artifact(workspace, action, target, release, "default").display()
+            native_artifact(
+                workspace,
+                action,
+                target,
+                compile_target,
+                release,
+                "default",
+            )?
+            .display()
         ))
         .arg("-o")
         .arg(&output);
@@ -1587,9 +1682,10 @@ fn compile_declared_example(
                 workspace,
                 dependency_action,
                 target,
+                compile_target,
                 release,
                 &external.provider_profile,
-            )
+            )?
             .display()
         ));
     }
@@ -1635,17 +1731,16 @@ fn compile_declared_binary(
     component: &Component,
     action: &RustAction,
     binary: &RustBinary,
-    target: &str,
-    release: bool,
-    test: bool,
+    mode: &RustCompileMode<'_>,
 ) -> Result<(), String> {
-    let output_dir = workspace
-        .root
-        .join("target")
-        .join("mrml")
-        .join(target.to_ascii_lowercase())
-        .join(if release { "release" } else { "debug" });
-    let extension = if target == "WINDOWS" { ".exe" } else { "" };
+    let RustCompileMode {
+        target,
+        compile_target,
+        release,
+        test,
+    } = *mode;
+    let output_dir = native_output_dir(workspace, target, compile_target, release)?;
+    let extension = rust_binary_extension(compile_target);
     let filename = if test {
         format!("{}_bin_tests{extension}", binary.output)
     } else {
@@ -1676,7 +1771,15 @@ fn compile_declared_binary(
         command.arg("--extern").arg(format!(
             "{}={}",
             action.crate_name,
-            native_artifact(workspace, action, target, release, "default").display()
+            native_artifact(
+                workspace,
+                action,
+                target,
+                compile_target,
+                release,
+                "default",
+            )?
+            .display()
         ));
     }
     for external in action
@@ -1700,22 +1803,14 @@ fn compile_declared_binary(
                 workspace,
                 dependency_action,
                 target,
+                compile_target,
                 release,
                 &external.provider_profile,
-            )
+            )?
             .display()
         ));
     }
-    if target == "WINDOWS" {
-        command.args(["-C", "linker=rust-lld", "-C", "target-feature=+crt-static"]);
-    } else if target == "LINUX" {
-        command.args(["--target", "x86_64-unknown-linux-gnu"]);
-    } else {
-        return Err(format!(
-            "RustBinaryTargetUnsupported {{ component: {}, target: {target} }}",
-            component.id
-        ));
-    }
+    apply_rust_compile_target(&mut command, compile_target)?;
     if release {
         command.args([
             "-C",
@@ -1825,25 +1920,97 @@ fn apply_test_stack(command: &mut Command, action: &RustAction, target: &str) {
     }
 }
 
+fn default_rust_target(target: &str) -> Result<&'static str, String> {
+    match target {
+        "WINDOWS" => Ok("x86_64-pc-windows-gnullvm"),
+        "LINUX" => Ok("x86_64-unknown-linux-gnu"),
+        "MRML_NATIVE" => Ok("x86_64-unknown-none"),
+        _ => Err(format!(
+            "RustActionTargetUnsupported {{ target: {target} }}"
+        )),
+    }
+}
+
+fn rust_compile_target(action: &RustAction, target: &str) -> Result<String, String> {
+    Ok(action
+        .target_triples
+        .iter()
+        .find(|declaration| declaration.target == target)
+        .map(|declaration| declaration.triple.clone())
+        .unwrap_or(default_rust_target(target)?.to_owned()))
+}
+
+fn apply_rust_compile_target(command: &mut Command, compile_target: &str) -> Result<(), String> {
+    match compile_target {
+        "x86_64-pc-windows-gnullvm" => {
+            command.args(["-C", "linker=rust-lld", "-C", "target-feature=+crt-static"]);
+        }
+        "x86_64-unknown-linux-gnu" | "x86_64-unknown-none" => {
+            command.args(["--target", compile_target]);
+        }
+        "x86_64-unknown-uefi" => {
+            command.args([
+                "--target",
+                compile_target,
+                "-C",
+                "link-arg=/debug:none",
+                "-C",
+                "link-arg=/timestamp:0",
+            ]);
+        }
+        _ => {
+            return Err(format!(
+                "RustCompileTargetUnsupported {{ target: {compile_target} }}"
+            ));
+        }
+    }
+    Ok(())
+}
+
+fn rust_binary_extension(compile_target: &str) -> &'static str {
+    match compile_target {
+        "x86_64-pc-windows-gnullvm" => ".exe",
+        "x86_64-unknown-uefi" => ".efi",
+        _ => "",
+    }
+}
+
+fn native_output_dir(
+    workspace: &Workspace,
+    target: &str,
+    compile_target: &str,
+    release: bool,
+) -> Result<PathBuf, String> {
+    let target_directory = if compile_target == default_rust_target(target)? {
+        target.to_ascii_lowercase()
+    } else {
+        format!("{}-{compile_target}", target.to_ascii_lowercase())
+    };
+    Ok(workspace
+        .root
+        .join("target")
+        .join("mrml")
+        .join(target_directory)
+        .join(if release { "release" } else { "debug" }))
+}
+
 fn native_artifact(
     workspace: &Workspace,
     action: &RustAction,
     target: &str,
+    compile_target: &str,
     release: bool,
     feature_profile: &str,
-) -> PathBuf {
+) -> Result<PathBuf, String> {
     let profile_suffix = if feature_profile == "default" {
         String::new()
     } else {
         format!("__{feature_profile}")
     };
-    workspace
-        .root
-        .join("target")
-        .join("mrml")
-        .join(target.to_ascii_lowercase())
-        .join(if release { "release" } else { "debug" })
-        .join(format!("lib{}{profile_suffix}.rlib", action.crate_name))
+    Ok(
+        native_output_dir(workspace, target, compile_target, release)?
+            .join(format!("lib{}{profile_suffix}.rlib", action.crate_name)),
+    )
 }
 
 fn find_component<'a>(workspace: &'a Workspace, cargo: &str) -> Result<&'a Component, String> {
@@ -2439,6 +2606,16 @@ mod tests {
         assert!(!rust_identifier("../mrml-math"));
         assert!(rust_output_name("mrml-git"));
         assert!(!rust_output_name("../mrml-git"));
+    }
+    #[test]
+    fn rust_target_variants_are_allowlisted_and_extension_exact() {
+        assert_eq!(
+            default_rust_target("MRML_NATIVE").unwrap(),
+            "x86_64-unknown-none"
+        );
+        assert_eq!(rust_binary_extension("x86_64-unknown-uefi"), ".efi");
+        assert_eq!(rust_binary_extension("x86_64-unknown-linux-gnu"), "");
+        assert!(default_rust_target("UEFI").is_err());
     }
     #[test]
     fn rust_externs_are_target_scoped_and_unique() {

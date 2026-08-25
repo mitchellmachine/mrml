@@ -3169,3 +3169,14 @@ resolver, provider-profile, and host-projection mechanisms to the existing
 configuration source and exact dependency graph. It adds no new configuration,
 security, storage, resolver, cache, or runtime mechanism. Agent review does not
 replace independent human dual review.
+
+# 2026-08-25 — Native compiler-target variants and service image
+
+**Result: TRIGGERED.** The native resolver now propagates one allowlisted
+compiler-target variant through a dependency graph and separates its artifacts
+from the semantic target's default ABI. This extends the existing package,
+cache, and resolver risk area; it does not change service-image runtime or
+security semantics. It establishes neither clearance nor infringement, and any
+material release resolver/cache mechanism still requires the recorded worldwide
+authoritative-register review. Agent review does not replace independent human
+dual review.

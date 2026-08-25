@@ -728,7 +728,7 @@ second inventory.
   explicit, native example outputs are checked and compiled, and exact feature
   sets can gate optional target-specific externs. Exact binary outputs, binary
   test harnesses, compile-time environment values, and bin-only actions are
-  explicit. Twenty-five
+  explicit. Twenty-six
   components now have native actions. Direct-rustc expansion still needs
   lock/digest validation and the remaining non-library actions before
   Cargo can be removed behind the remaining nodes.
@@ -760,6 +760,17 @@ crypto's empty `core` profile, kernel, and storage, matching its Cargo graph.
 Both exact dated host toolchains pass doctor/audit, cross-build the library for
 `x86_64-unknown-none`, and run all 31 projected host tests. Twenty-five
 components are native and 17 remain transitional; no signed service or target
+runtime was exercised.
+
+Service-image requires a different compiler ABI from the default semantic
+family: it is an MRML native service payload stored as PE, so its exact target is
+`x86_64-unknown-uefi`. The resolver now validates that sole nondefault pairing,
+propagates it through the complete dependency graph, and isolates the artifact
+directory by triple. Both exact dated host toolchains pass the frontend tests,
+clippy, doctor, and audit and emit PE32+ EFI applications in debug and release
+profiles. Repeated builds are byte-stable within each host; Windows and Linux
+hashes differ, so cross-host reproducibility remains unproved. Twenty-six
+components are native and 16 remain transitional. No UEFI or signed-service
 runtime was exercised.
 
 ## Next safe migration order

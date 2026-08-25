@@ -91,3 +91,7 @@ rust-host-tests|org.mrml.service.storage|WINDOWS,LINUX
 rust-test-policy|org.mrml.service.storage|67108864
 rust-action|org.mrml.service.config|mrml_config|lib|services/config/src/lib.rs|mrml-crypto=mrml_crypto@*#core;mrml-kernel=mrml_kernel@*;mrml-storage=mrml_storage@*
 rust-host-tests|org.mrml.service.config|WINDOWS,LINUX
+rust-action|org.mrml.system.service-image|mrml_service_image|none|-|mrml-config=mrml_config@*;mrml-crypto=mrml_crypto@*#core;mrml-kernel=mrml_kernel@*;mrml-storage=mrml_storage@*
+rust-binary|org.mrml.system.service-image|mrml-service-pe|mrml_service_pe|system/service-image/src/main.rs|false
+rust-feature-set|org.mrml.system.service-image|MRML_NATIVE|
+rust-target-triple|org.mrml.system.service-image|MRML_NATIVE|x86_64-unknown-uefi
