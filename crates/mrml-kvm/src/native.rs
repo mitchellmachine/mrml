@@ -351,6 +351,34 @@ impl KvmRunCancellation {
 }
 
 impl KvmVcpu {
+    fn reload_exact_page_table_root(&mut self, expected: u64) -> Result<(), KvmError> {
+        const CR4_PCIDE: u64 = 1 << 17;
+        if self.pending_io_read.is_some()
+            || self.pending_mmio_write.is_some()
+            || !expected.is_multiple_of(PAGE_SIZE)
+        {
+            return Err(KvmError::InvalidRegisterState);
+        }
+        let mut special = KvmSpecialRegisters::zeroed();
+        if unsafe { ioctl(self.file.0, KVM_GET_SREGS, &mut special) } < 0 {
+            return Err(KvmError::SystemCall);
+        }
+        if special.cr3 != expected || special.cr4 & CR4_PCIDE != 0 {
+            return Err(KvmError::InvalidRegisterState);
+        }
+        if unsafe { ioctl(self.file.0, KVM_SET_SREGS, &special) } < 0 {
+            return Err(KvmError::SystemCall);
+        }
+        let mut observed = KvmSpecialRegisters::zeroed();
+        if unsafe { ioctl(self.file.0, KVM_GET_SREGS, &mut observed) } < 0 {
+            return Err(KvmError::SystemCall);
+        }
+        if observed.cr3 != expected || observed.cr4 & CR4_PCIDE != 0 {
+            return Err(KvmError::InvalidRegisterState);
+        }
+        Ok(())
+    }
+
     fn lapic_id(&self) -> Result<u8, KvmError> {
         let mut state = KvmLapicState {
             registers: [0; 1024],
@@ -1277,6 +1305,13 @@ pub(crate) struct KvmBackend<const N: usize> {
 }
 
 impl<const N: usize> KvmBackend<N> {
+    pub(crate) fn reload_exact_page_table_root(&mut self, expected: u64) -> Result<(), KvmError> {
+        if self.mapping_poisoned || self.secondary.is_some() {
+            return Err(KvmError::InvalidRegisterState);
+        }
+        self.vcpu.reload_exact_page_table_root(expected)
+    }
+
     pub(crate) fn run_smp(&mut self) -> Result<(VmExit, VmExit), KvmError> {
         if self.mapping_poisoned {
             return Err(KvmError::MappingStateUncertain);

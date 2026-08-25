@@ -987,19 +987,17 @@ fn run_pci_configuration_probe<'system>(
         .map_err(|error| anyhow!("failed to admit in-flight reset request: {:?}", error))?
         .ticket();
     if guest
-        .retire_trapped_mmio_before_destroy(PCI_TEST_MMIO_BASE + mrml_kernel::PAGE_SIZE)
+        .withdraw_trapped_mmio(PCI_TEST_MMIO_BASE + mrml_kernel::PAGE_SIZE)
         .is_ok()
     {
-        return Err(anyhow!("WHP PCI MMIO retirement accepted a wrong leaf"));
+        return Err(anyhow!("WHP PCI MMIO withdrawal accepted a wrong leaf"));
     }
     guest
-        .retire_trapped_mmio_before_destroy(PCI_TEST_MMIO_BASE)
-        .map_err(|error| anyhow!("failed to retire WHP PCI MMIO leaf: {:?}", error))?;
-    if guest
-        .retire_trapped_mmio_before_destroy(PCI_TEST_MMIO_BASE)
-        .is_ok()
-    {
-        return Err(anyhow!("WHP PCI MMIO retirement accepted replay"));
+        .withdraw_trapped_mmio(PCI_TEST_MMIO_BASE)
+        .map_err(|error| anyhow!("failed to withdraw WHP PCI MMIO leaf: {:?}", error))?;
+    println!("WHP_PCI_WITHDRAW coherent=1");
+    if guest.withdraw_trapped_mmio(PCI_TEST_MMIO_BASE).is_ok() {
+        return Err(anyhow!("WHP PCI MMIO withdrawal accepted replay"));
     }
     window_backend.confirm_retired(PCI_TEST_MMIO_BASE)?;
     let disable = {
@@ -1012,9 +1010,8 @@ fn run_pci_configuration_probe<'system>(
     if disable != mrml_kernel::VirtualPciWriteOutcome::Command(0)
         || window_backend.mapped
         || attachment.mapped_window().is_some()
-        || VmBackend::run(&mut guest, 0).is_ok()
     {
-        return Err(anyhow!("WHP PCI MMIO retirement did not fail closed"));
+        return Err(anyhow!("WHP PCI MMIO withdrawal cleanup was incomplete"));
     }
     let expected_pci = router
         .describe_attachment(pci)
@@ -1489,7 +1486,7 @@ fn application_main() -> Result<()> {
     if pci_configuration_mode {
         run_pci_configuration_probe(guest, &system, &executable, handoff.as_slice(), layout)?;
         println!(
-            "verified signed test-only attached MRML block PCI-MMIO write/read/flush, orderly VM replacement, exact stopped-guest BAR-leaf retirement, and pending-I/O reset isolation under WHP: verify={}us prepare={}us execute={}us total={}us",
+            "verified signed test-only attached MRML block PCI-MMIO write/read/flush, orderly VM replacement, exact stopped-guest BAR-leaf withdrawal with checked CR3 reload, and pending-I/O reset isolation under WHP: verify={}us prepare={}us execute={}us total={}us",
             verification_micros,
             preparation_micros,
             execution_started.elapsed().as_micros(),

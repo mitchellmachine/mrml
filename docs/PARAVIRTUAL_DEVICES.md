@@ -92,9 +92,13 @@ queue, block generation, backend range, and vector; preflights exact backend and
 interrupt capabilities; revokes both; resets the block device/attachment; and
 only then permits PCI generation advance with BAR/decode clear. This proves
 destroyed-execution cleanup. The controlled runners now first exact-remove and
-verify absence of the preinstalled first-level BAR trap leaf from the stopped
-guest and permanently deny its re-entry. This is not resumable dynamic
-unmapping, TLB-coherent hotplug, or production hotplug.
+verify absence of the preinstalled non-global first-level BAR trap leaf from
+the stopped sole-vCPU guest. They retain a no-reentry quarantine until KVM/WHP
+exact-match and rewrite the prepared non-PCID CR3 and read it back. Any
+uncertain step keeps the quarantine permanent; success permits later entry and
+exact mapper cleanup. The current signed artifact proves successful withdrawal
+and cleanup, not post-withdrawal guest continuation. This is not SMP shootdown,
+asynchronous unmapping, TLB-coherent hotplug, or production hotplug.
 
 ## Capability projection into application microVMs
 

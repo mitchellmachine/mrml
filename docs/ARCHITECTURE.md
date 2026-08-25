@@ -958,10 +958,14 @@ guest memory after the signed workload, destroy the execution container, revoke
 the old exact backend/interrupt capabilities, and then perform the common reset;
 the separately latched-notification case remains focused simulation evidence.
 The controlled native path additionally removes and verifies absence of its
-exact preinstalled first-level BAR trap leaf while the vCPU is stopped. It
-permanently rejects re-entry afterward, so stale TLB state cannot become a
-runnable fallback; mapper bookkeeping is cleared before destruction and reset.
-This is not resumable dynamic BAR unmapping, hotplug, durable recovery, QEMU
+exact preinstalled first-level BAR trap leaf while the sole vCPU is stopped.
+KVM and WHP then require the exact prepared CR3, reject pending emulation and
+PCID, rewrite that CR3 through the native backend, and read it back before
+lifting the no-reentry quarantine. MRML leaf construction never marks this
+mapping global. Any page-table or register uncertainty leaves the guest
+permanently quarantined. The signed probes exercise successful withdrawal and
+lifecycle cleanup but do not yet prove post-withdrawal guest continuation.
+This is not asynchronous or SMP shootdown, hotplug, durable recovery, QEMU
 comparison, or physical-device evidence.
 Memory-decode command transitions now require a separate unsafe native mapper.
 Enable maps the exact attachment/function generation and assigned BAR window

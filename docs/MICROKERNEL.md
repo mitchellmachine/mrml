@@ -6867,6 +6867,57 @@ device, browser semantic interface, JavaScript/WebAssembly runtime, AI
 mechanism, or media mechanism. Planned scopes remain `TRIGGERED`; agent review
 does not replace independent human dual review.
 
+### Checked sole-vCPU BAR withdrawal
+
+The controlled KVM and WHP PCI/block probes now extend stopped-guest leaf
+retirement into a narrowly resumable withdrawal mechanism. Before editing the
+page table, the prepared guest exact-matches the configured page-aligned BAR
+leaf and publishes its no-reentry quarantine. It removes and verifies absence
+of the exact identity-mapped `KERNEL_MMIO_READ_WRITE` leaf. MRML's leaf encoder
+does not set the x86 global bit.
+
+The native backend then accepts only one vCPU, no pending I/O-read or MMIO-write
+emulation, the exact prepared aligned CR3, and CR4.PCIDE clear. It rewrites the
+same CR3 through `KVM_SET_SREGS` or `WHvSetVirtualProcessorRegisters` and reads
+CR3/CR4 back before the prepared guest clears quarantine and consumes the
+one-use trapped-leaf identity. A wrong leaf and replay fail before mutation.
+Any failure after quarantine publication leaves execution forbidden.
+
+Recorded controlled-probe results on 2026-08-24 were 134,291 us total under
+Arch Linux/WSL2 KVM (`verify=17598us`, `prepare=2240us`, `execute=93550us`) and
+30,984 us total under Windows WHP (`verify=17965us`, `prepare=3543us`,
+`execute=5520us`). Both reused the previously signed test artifact and printed
+the backend-specific `PCI_WITHDRAW coherent=1` checkpoint. The artifact enters
+`cli; hlt` immediately after its proof output, and WHP does not return that run,
+so this evidence covers successful checked withdrawal and subsequent lifecycle
+cleanup, not post-withdrawal guest continuation. It is not SMP/asynchronous
+shootdown, hotplug, production mapping, QEMU-differential, physical-device,
+bare-metal, or host-resistant evidence.
+
+Engineering Constitution complexity score: complexity impact `LOW`, TCB impact
+`NONE` for the hosted adapter, new parser `NO`, new authority model `NO`, new
+persistent state `NO`, external dependency `NO`, failure isolated `YES`, and
+existing-object reuse `YES`.
+
+DIGITAL-RIGHTS REVIEW: withdrawal only removes a previously capability-selected
+mapping. It creates no ambient backend/path authority, DRM, publisher or vendor
+priority, attestation, telemetry, secret export, accessibility restriction, or
+AI-only interface. Fresh device and capability generations remain necessary.
+
+HOSTILE SECURITY REVIEW: the requested leaf, root, vCPU count, pending-emulation
+state, CR4 mode, native register operation, read-back, mapper record, and replay
+are hostile. Exact checks precede mutation; quarantine precedes uncertainty;
+only verified leaf absence plus exact non-PCID CR3 rewrite/read-back permits
+later entry. Failure cannot clear mapping state or advance device generations.
+
+Patent review: `NOT_TRIGGERED` — this is conventional non-global page-table
+withdrawal and native stopped-vCPU control-register synchronization. It adds no
+VirtIO compatibility, host-share protocol, accessibility device, browser
+semantics, JavaScript/WebAssembly runtime, AI mechanism, or media mechanism.
+The planned scopes recorded as `TRIGGERED` in
+[patents/REVIEW_LOG.md](patents/REVIEW_LOG.md) remain unchanged; agent review
+does not replace independent human dual review.
+
 ## Milestones
 
 This historical list is retained for continuity. The current dependency-ordered

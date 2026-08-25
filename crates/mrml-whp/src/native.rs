@@ -369,6 +369,32 @@ impl WhpVcpuRunner {
 }
 
 impl PreparedWhpPartition<'_> {
+    pub(crate) fn reload_exact_page_table_root(&mut self, expected: u64) -> Result<(), WhpError> {
+        const CR4_PCIDE: u64 = 1 << 17;
+        self.ensure_mapping_coherent()?;
+        if self.vp_count != 1
+            || self.pending_io_reads[0].is_some()
+            || self.pending_mmio_writes[0].is_some()
+            || !expected.is_multiple_of(PAGE_SIZE)
+        {
+            return Err(WhpError::InvalidRegisterState);
+        }
+        let names = [REG_CR3, REG_CR4];
+        let current = self.read_registers(names)?;
+        if current[0].low != expected || current[1].low & CR4_PCIDE != 0 {
+            return Err(WhpError::InvalidRegisterState);
+        }
+        let cr3 = [RegisterValue::scalar(expected)];
+        check(unsafe {
+            (self.api.set_registers)(self.partition.as_ptr(), 0, names.as_ptr(), 1, cr3.as_ptr())
+        })?;
+        let observed = self.read_registers(names)?;
+        if observed[0].low != expected || observed[1].low & CR4_PCIDE != 0 {
+            return Err(WhpError::InvalidRegisterState);
+        }
+        Ok(())
+    }
+
     pub(crate) fn ensure_mapping_coherent(&self) -> Result<(), WhpError> {
         if self.mapping_poisoned {
             Err(WhpError::MappingStateUncertain)

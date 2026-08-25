@@ -203,6 +203,43 @@ impl<'system> PreparedWhpGuest<'system> {
             .map_err(|_| WhpError::PageTable)?;
         Ok(())
     }
+
+    /// Removes the exact non-global trap leaf and reloads the stopped sole
+    /// vCPU's exact CR3 before permitting re-entry. Any uncertain step leaves
+    /// the guest permanently quarantined.
+    pub fn withdraw_trapped_mmio(&mut self, address: u64) -> Result<(), WhpError> {
+        if self.trapped_mmio != Some(address)
+            || self.trapped_mmio_retired
+            || !address.is_multiple_of(PAGE_SIZE)
+        {
+            return Err(WhpError::InvalidMapping);
+        }
+        let mapping = Mapping::new(
+            VirtAddr::new(address).map_err(|_| WhpError::InvalidMapping)?,
+            PhysAddr::new(address).map_err(|_| WhpError::InvalidMapping)?,
+            1,
+            PagePermissions::KERNEL_MMIO_READ_WRITE,
+        )
+        .map_err(|_| WhpError::InvalidMapping)?;
+        self.trapped_mmio_retired = true;
+        {
+            let store = WhpPageTableStore::open_existing(
+                &mut self.partition,
+                self.table_physical,
+                self.table_pages,
+            )?;
+            let mut tables = PageTableBuilder::from_existing_root(store, self.root);
+            tables
+                .unmap_exact(mapping)
+                .and_then(|()| tables.verify_unmapped(mapping))
+                .map_err(|_| WhpError::PageTable)?;
+        }
+        self.partition
+            .reload_exact_page_table_root(self.root.get())?;
+        self.trapped_mmio = None;
+        self.trapped_mmio_retired = false;
+        Ok(())
+    }
     pub const fn service_entry(&self) -> Option<u64> {
         self.service_entry[0]
     }

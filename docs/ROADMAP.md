@@ -1077,10 +1077,14 @@ revokers now retire the exact native execution container, preflight the complete
 cleanup record and both capabilities, revoke backend and interrupt authority,
 reset the block attachment, and then allow PCI generation advance with BAR/
 decode clear. The controlled KVM/WHP path now also exact-matches, removes, and
-verifies absence of the preinstalled first-level BAR trap leaf while the final
-vCPU is stopped, then permanently forbids that prepared guest from re-entry
-before mapper bookkeeping, destruction, capability revocation, and reset.
-Resumable dynamic unmapping with explicit TLB coherence, hotplug, and production
+verifies absence of the preinstalled non-global first-level BAR trap leaf while
+the sole vCPU is stopped. It publishes a no-reentry quarantine before mutation,
+rejects pending emulation, a changed root, PCID, or a multi-vCPU backend,
+rewrites the exact CR3 through KVM/WHP, and reads it back before permitting
+later entry. Failure leaves the quarantine permanent. Controlled signed probes
+cover the successful withdrawal and cleanup path on both backends, but the
+current guest halts after its proof and does not supply post-withdrawal
+continuation evidence. SMP/asynchronous shootdown, hotplug, and production
 native revokers remain pending.
 Memory-decode command writes are now transactionally coupled to native BAR
 state. `VirtualPciMemoryMapper` is an unsafe exact-generation boundary: enable
