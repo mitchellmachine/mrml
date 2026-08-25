@@ -728,7 +728,7 @@ second inventory.
   explicit, native example outputs are checked and compiled, and exact feature
   sets can gate optional target-specific externs. Exact binary outputs, binary
   test harnesses, compile-time environment values, and bin-only actions are
-  explicit. Twenty-eight
+  explicit. Twenty-nine
   components now have native actions. Direct-rustc expansion still needs
   lock/digest validation and the remaining non-library actions before
   Cargo can be removed behind the remaining nodes.
@@ -777,6 +777,14 @@ all four inherited `MRML_*` option variables yields the unchanged same-host hash
 proving rustc receives their declared absence. Twenty-eight components are
 native and 14 remain transitional. This is compile-time evidence only; no UEFI,
 Secure Boot, TPM, bare-metal, or physical hardware ran.
+
+Target/feature-gated binary actions now distinguish a package's host library
+from a required-feature UEFI executable, and explicit UEFI selectors are no
+longer replaced by the default kernel image. `mrml-uefi` emits a PE32+ EFI loader
+on both exact dated hosts and passes all 24 projected library/TPM simulation
+tests per host. On Windows, poisoning all 21 absent compile inputs leaves the
+loader hash unchanged. Twenty-nine components are native and 13 remain
+transitional. No firmware, TPM, Secure Boot, or physical hardware ran.
 
 Service-image requires a different compiler ABI from the default semantic
 family: it is an MRML native service payload stored as PE, so its exact target is

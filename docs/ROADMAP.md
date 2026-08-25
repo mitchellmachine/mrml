@@ -259,6 +259,14 @@ for all four optional `MRML_*` inputs are removed and do not change the resultin
 same-host hash. Twenty-eight of 42 components are native; 14 remain transitional.
 No UEFI firmware, Secure Boot, TPM, bare-metal, or hardware execution occurred.
 
+Native binary actions now bind exact target and feature gates, and an explicit
+UEFI selector is preserved instead of being replaced by the default kernel
+image. `mrml-uefi` builds its library on hosts, emits the loader only for UEFI
+with `uefi-image`, and passes 24 projected tests on each host. Both hosts emit a
+PE32+ EFI application; a Windows poisoned-environment probe leaves the hash
+unchanged across all 21 absent inputs. Twenty-nine of 42 components are native;
+13 remain transitional. Tests use simulated TPM transports, not TPM hardware.
+
 `mrml-zstd` is the fourth migrated leaf; its Wikipedia edge and patent-review
 source path now resolve to `packages/libraries/zstd` without changing codec
 behavior.

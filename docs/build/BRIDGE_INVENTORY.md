@@ -142,6 +142,14 @@ Kernel-image uses UEFI projections of kernel and crypto-core, selects only
 for its four absent `MRML_*` inputs leave same-host hashes unchanged. Twenty-
 eight components are native; 14 remain transitional.
 
+Binary declarations may now require an exact target family and selected feature.
+The UEFI package's library remains host-buildable, while `mrml-loader` exists
+only for UEFI with `uefi-image`; explicit UEFI selectors are preserved. Windows
+and Arch Linux WSL2 emit PE32+ EFI loaders and pass all 24 host-projected tests.
+A Windows probe poisoning all 21 declared absent inputs leaves the loader hash
+unchanged. Twenty-nine components are native; 13 remain transitional. No TPM or
+firmware hardware was exercised.
+
 Native actions now bind one exact feature set and may gate an extern by both
 target family and selected feature. `mrml-av1` declares the empty default set,
 so its `nvidia` platform extern is inactive while `mrml-runtime` remains active.

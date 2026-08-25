@@ -3198,3 +3198,13 @@ runtime mechanism. It establishes neither clearance nor infringement; material
 release resolver/cache mechanisms remain subject to the recorded worldwide
 authoritative-register review. Agent review does not replace independent human
 dual review.
+
+# 2026-08-25 — Target/feature-gated native binaries and UEFI loader
+
+**Result: TRIGGERED.** The native resolver now gates declared binary outputs by
+target family and selected feature and preserves explicit UEFI component
+selection. This extends the existing package/cache/resolver risk area while
+leaving loader, TPM, and boot-security mechanisms unchanged. It establishes
+neither clearance nor infringement; material release resolver/cache mechanisms
+remain subject to the recorded worldwide authoritative-register review. Agent
+review does not replace independent human dual review.

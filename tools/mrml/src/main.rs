@@ -91,6 +91,8 @@ struct RustBinary {
     crate_name: String,
     source: String,
     self_extern: bool,
+    targets: Vec<String>,
+    feature: Option<String>,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -312,6 +314,28 @@ fn load_workspace() -> Result<Workspace, String> {
                     (*crate_name).to_owned(),
                     (*source).to_owned(),
                     (*self_extern).to_owned(),
+                    "*".to_owned(),
+                    String::new(),
+                ));
+            }
+            [
+                "rust-binary",
+                component,
+                output,
+                crate_name,
+                source,
+                self_extern,
+                targets,
+                feature,
+            ] => {
+                rust_binaries.push((
+                    (*component).to_owned(),
+                    (*output).to_owned(),
+                    (*crate_name).to_owned(),
+                    (*source).to_owned(),
+                    (*self_extern).to_owned(),
+                    (*targets).to_owned(),
+                    (*feature).to_owned(),
                 ));
             }
             ["rust-compile-env", component, name, value] => {
@@ -693,7 +717,7 @@ fn load_workspace() -> Result<Workspace, String> {
         }
         action.examples.push(RustExample { name, source });
     }
-    for (component_id, output, crate_name, source, self_extern) in rust_binaries {
+    for (component_id, output, crate_name, source, self_extern, targets, feature) in rust_binaries {
         let component = components
             .iter_mut()
             .find(|component| component.id == component_id)
@@ -702,12 +726,25 @@ fn load_workspace() -> Result<Workspace, String> {
             .rust_action
             .as_mut()
             .ok_or_else(|| format!("RustBinaryActionMissing {{ component: {component_id} }}"))?;
+        let targets = if targets == "*" {
+            component.targets.clone()
+        } else {
+            split_declaration(&targets)
+        };
+        let feature = (!feature.is_empty()).then_some(feature);
         if !rust_output_name(&output)
             || !rust_identifier(&crate_name)
             || !safe_relative_path(&source)
             || !root.join(&source).is_file()
             || !root.join(&source).starts_with(root.join(&component.path))
             || !matches!(self_extern.as_str(), "true" | "false")
+            || targets.is_empty()
+            || targets
+                .iter()
+                .any(|target| !component.targets.contains(target))
+            || feature
+                .as_ref()
+                .is_some_and(|feature| !component.features.contains(feature))
             || action.binaries.iter().any(|binary| binary.output == output)
         {
             return Err(format!(
@@ -719,6 +756,8 @@ fn load_workspace() -> Result<Workspace, String> {
             crate_name,
             source,
             self_extern: self_extern == "true",
+            targets,
+            feature,
         });
     }
     for (component_id, name, value) in rust_compile_env {
@@ -1027,6 +1066,14 @@ fn rust_extern_active(
             .is_none_or(|feature| rust_features(action, target, profile).contains(feature))
 }
 
+fn rust_binary_active(binary: &RustBinary, action: &RustAction, target: &str) -> bool {
+    binary.targets.contains(&target.to_owned())
+        && binary
+            .feature
+            .as_ref()
+            .is_none_or(|feature| rust_features(action, target, "default").contains(feature))
+}
+
 fn rust_features<'a>(action: &'a RustAction, target: &str, profile: &str) -> &'a [String] {
     if profile == "default" {
         action
@@ -1235,7 +1282,7 @@ fn build_or_test(workspace: &Workspace, args: &[String]) -> Result<(), String> {
     if selected.is_none() && target == "LINUX" {
         add_component(workspace, &mut components, "mrml-kvm-run");
     }
-    if target == "UEFI" {
+    if target == "UEFI" && selected.is_none() && !all {
         components = vec![find_component(workspace, "mrml-kernel-image")?];
     }
     if target == "CUDA" {
@@ -1353,7 +1400,11 @@ fn run_rust_action(
         .rust_action
         .as_ref()
         .ok_or("NativeActionDisappeared")?;
-    for binary in &action.binaries {
+    for binary in action
+        .binaries
+        .iter()
+        .filter(|binary| rust_binary_active(binary, action, target))
+    {
         compile_declared_binary(
             workspace,
             component,
@@ -1397,7 +1448,11 @@ fn run_rust_action(
         for test in &action.tests {
             run_declared_test(workspace, component, action, test, test_target, release)?;
         }
-        for binary in &action.binaries {
+        for binary in action
+            .binaries
+            .iter()
+            .filter(|binary| rust_binary_active(binary, action, test_target))
+        {
             compile_declared_binary(
                 workspace,
                 component,

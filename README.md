@@ -401,6 +401,15 @@ application on Windows and Arch Linux WSL2. Poisoning all four inherited
 eight components are native and 14 remain transitional; no firmware or hardware
 execution is implied.
 
+Binary outputs can now be gated by exact target family and selected feature.
+`mrml-uefi` builds its library on hosts but emits `mrml-loader.efi` only for
+UEFI with `uefi-image`; exact UEFI selectors are no longer overwritten by the
+default kernel-image choice. Both hosts emit a PE32+ EFI loader and pass all 24
+host-projected library/TPM simulation tests. A Windows poisoned-environment
+probe confirms all 21 absent inputs leave the loader hash unchanged. Twenty-nine
+components are native and 13 remain transitional; no TPM, firmware, or physical
+hardware ran.
+
 MRML uses Rust 2024 and the exact `nightly-2026-08-24` build toolchain pinned in
 `rust-toolchain.toml`. It is also the current `mrml-rustc` behavioral reference
 recorded as [ORACLE-0002](docs/compiler/oracles/ORACLE-0002.md); a floating
