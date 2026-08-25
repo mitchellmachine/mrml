@@ -37,18 +37,85 @@ pub struct ComponentExecutablePages {
 /// the host commitment that a VMM adapter must consume before allocating or
 /// mapping the corresponding native backing. It deliberately grants neither
 /// execute, share, DMA, delegation, nor device authority.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Debug, Eq, PartialEq)]
 pub struct MicrovmGuestRam {
     object: MemoryObjectId,
     pages: u64,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum MicrovmGuestRamError {
+    Capability(MemoryResourceError),
+    PhaseEmpty,
+    PhaseExceedsReservation,
+    ReservationIncomplete,
+}
+
+#[derive(Debug, Eq, PartialEq)]
+pub struct PreparedMicrovmGuestRam {
+    reservation: MicrovmGuestRam,
+    remaining_pages: u64,
+}
+
+impl PreparedMicrovmGuestRam {
+    pub const fn total_pages(&self) -> u64 {
+        self.reservation.pages
+    }
+
+    pub const fn remaining_pages(&self) -> u64 {
+        self.remaining_pages
+    }
+
+    /// Consumes one exact native-allocation phase before that phase begins.
+    pub fn consume_phase(&mut self, pages: u64) -> Result<(), MicrovmGuestRamError> {
+        if pages == 0 {
+            return Err(MicrovmGuestRamError::PhaseEmpty);
+        }
+        self.remaining_pages = self
+            .remaining_pages
+            .checked_sub(pages)
+            .ok_or(MicrovmGuestRamError::PhaseExceedsReservation)?;
+        Ok(())
+    }
+
+    pub fn complete(self) -> Result<ActiveMicrovmGuestRam, MicrovmGuestRamError> {
+        if self.remaining_pages != 0 {
+            return Err(MicrovmGuestRamError::ReservationIncomplete);
+        }
+        Ok(ActiveMicrovmGuestRam {
+            reservation: self.reservation,
+        })
+    }
+
+    /// Returns an unpublished reservation only after all native allocations
+    /// from completed phases have been torn down.
+    pub unsafe fn abort(self) -> MicrovmGuestRam {
+        self.reservation
+    }
+}
+
+#[derive(Debug, Eq, PartialEq)]
+pub struct ActiveMicrovmGuestRam {
+    reservation: MicrovmGuestRam,
+}
+
+impl ActiveMicrovmGuestRam {
+    pub const fn pages(&self) -> u64 {
+        self.reservation.pages
+    }
+
+    /// Returns the reservation only after complete native guest teardown.
+    pub unsafe fn retire(self) -> MicrovmGuestRam {
+        self.reservation
+    }
+}
+
 impl MicrovmGuestRam {
-    pub const fn object(self) -> MemoryObjectId {
+    pub const fn object(&self) -> MemoryObjectId {
         self.object
     }
 
-    pub const fn pages(self) -> u64 {
+    pub const fn pages(&self) -> u64 {
         self.pages
     }
 }
@@ -72,6 +139,31 @@ pub fn reserve_microvm_guest_ram<const P: usize, const O: usize, const M: usize,
         capabilities,
     )?;
     Ok((MicrovmGuestRam { object, pages }, capability))
+}
+
+pub fn prepare_microvm_guest_ram<const P: usize, const O: usize, const M: usize, const C: usize>(
+    table: &MemoryPoolTable<P, O, M>,
+    reservation: MicrovmGuestRam,
+    capability: Capability,
+    capabilities: &CapabilitySpace<C>,
+) -> Result<PreparedMicrovmGuestRam, MicrovmGuestRamError> {
+    table
+        .object_physical_backing(reservation.object, capability, capabilities)
+        .map_err(MicrovmGuestRamError::Capability)?;
+    if table
+        .object_backing(reservation.object)
+        .map_err(MicrovmGuestRamError::Capability)?
+        != MemoryBackingKind::Guest
+    {
+        return Err(MicrovmGuestRamError::Capability(
+            MemoryResourceError::InvalidObject,
+        ));
+    }
+    let remaining_pages = reservation.pages;
+    Ok(PreparedMicrovmGuestRam {
+        reservation,
+        remaining_pages,
+    })
 }
 
 /// Returns the exact host commitment only after the VMM adapter has proved all
@@ -376,6 +468,61 @@ mod tests {
                 .unwrap()
                 .object_pages(),
             0
+        );
+    }
+
+    #[test]
+    fn guest_ram_construction_is_linear_staged_and_exact() {
+        let mut capabilities = CapabilitySpace::<3>::new();
+        let mut table = MemoryPoolTable::<1, 1>::new(26).unwrap();
+        let (pool, pool_capability) = table
+            .create_root(12, 1, 0, POOL_RIGHTS, &mut capabilities)
+            .unwrap();
+        let (reservation, capability) =
+            reserve_microvm_guest_ram(&mut table, pool, pool_capability, 12, &mut capabilities)
+                .unwrap();
+        let mut prepared =
+            prepare_microvm_guest_ram(&table, reservation, capability, &capabilities).unwrap();
+        assert_eq!(prepared.total_pages(), 12);
+        assert_eq!(
+            prepared.consume_phase(0),
+            Err(MicrovmGuestRamError::PhaseEmpty)
+        );
+        prepared.consume_phase(5).unwrap();
+        assert_eq!(prepared.remaining_pages(), 7);
+        assert_eq!(
+            prepared.consume_phase(8),
+            Err(MicrovmGuestRamError::PhaseExceedsReservation)
+        );
+        prepared.consume_phase(3).unwrap();
+        assert_eq!(
+            prepared.complete(),
+            Err(MicrovmGuestRamError::ReservationIncomplete)
+        );
+    }
+
+    #[test]
+    fn active_guest_ram_returns_only_after_exact_complete_construction() {
+        let mut capabilities = CapabilitySpace::<3>::new();
+        let mut table = MemoryPoolTable::<1, 1>::new(27).unwrap();
+        let (pool, pool_capability) = table
+            .create_root(6, 1, 0, POOL_RIGHTS, &mut capabilities)
+            .unwrap();
+        let (reservation, capability) =
+            reserve_microvm_guest_ram(&mut table, pool, pool_capability, 6, &mut capabilities)
+                .unwrap();
+        let mut prepared =
+            prepare_microvm_guest_ram(&table, reservation, capability, &capabilities).unwrap();
+        prepared.consume_phase(2).unwrap();
+        prepared.consume_phase(4).unwrap();
+        let active = prepared.complete().unwrap();
+        assert_eq!(active.pages(), 6);
+        let reservation = unsafe { active.retire() };
+        assert_eq!(
+            unsafe {
+                release_microvm_guest_ram(&mut table, reservation, capability, &mut capabilities)
+            },
+            Ok(6)
         );
     }
 }

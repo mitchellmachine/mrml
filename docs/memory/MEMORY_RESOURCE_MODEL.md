@@ -124,6 +124,13 @@ first. Focused Windows and Linux tests prove exact charging, exhaustion,
 metadata-without-capability rejection, rights separation, and full return.
 KVM/WHP pre-allocation consumption and cleanup binding remain **PLANNED**; this
 groundwork is not evidence that the hosted component probe is RAM-accounted.
+The reservation now converts into a non-cloneable staged construction authority:
+each backend allocation phase must consume a positive exact page count, an
+overrun fails, and publication is impossible while any pages remain. Abort and
+active retirement return the underlying reservation only under an unsafe
+caller proof that all native allocations or mappings from completed phases are
+gone. This permits one pre-reserved total to cover base-kernel and later
+consumer/provider phases without post-hoc accounting.
 
 Pinning is separate scarce authority because it limits reclamation and may enable
 device visibility. Object ownership never implies DMA. DMA requires the exact

@@ -4116,6 +4116,17 @@ VMM transport, or reclamation policy. Backend consumption and any broader
 microVM resource lifecycle remain subject to the existing `TRIGGERED` review;
 agent review does not replace independent human dual review.
 
+# 2026-08-25 — Linear staged guest-RAM construction authority
+
+**Result: NOT_TRIGGERED.** The existing exact guest-RAM reservation now uses a
+conventional non-cloneable counter to require positive bounded phase
+consumption, reject overrun or incomplete publication, and retain the same
+reservation through abort or active teardown. It adds no allocator, mapping
+algorithm, reclamation choice, sharing, migration, ballooning, transport, or
+placement policy. Backend integration remains within the broader `TRIGGERED`
+microVM resource lifecycle review; agent review does not replace independent
+human dual review.
+
 # 2026-08-25 — Bounded identified trait-clause database
 
 **Result: NOT_TRIGGERED.** This compiler-only increment stores fixed identified

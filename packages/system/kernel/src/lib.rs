@@ -60,7 +60,8 @@ pub use build_receipt::{
 };
 pub use capability::{Capability, CapabilityError, CapabilitySpace, ObjectId, Rights};
 pub use component_memory::{
-    ComponentExecutablePages, MicrovmGuestRam, account_component_executable,
+    ActiveMicrovmGuestRam, ComponentExecutablePages, MicrovmGuestRam, MicrovmGuestRamError,
+    PreparedMicrovmGuestRam, account_component_executable, prepare_microvm_guest_ram,
     release_microvm_guest_ram, reserve_component_executable_mapping, reserve_microvm_guest_ram,
 };
 pub use early::{EarlyKernelContext, EarlyKernelError};
