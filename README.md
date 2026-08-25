@@ -478,6 +478,12 @@ and emit PTX hash `83ad662cd1f6cb6f7736ddb817da1d12fa022394fa0bf415152c302e8e09c
 Thirty-nine components are native and three remain transitional. No CUDA device,
 model inference, live provider, or production workload ran.
 
+Server now binds the same `auto` model artifact directly and through agent, so
+its shared API types retain one native crate identity. Both exact hosts match
+Cargo at four library tests and the zero-test self-linked binary harness. Forty
+components are native and two remain transitional. No listening service, TLS
+endpoint, remote model, CUDA device, or production traffic ran.
+
 MRML uses Rust 2024 and the exact `nightly-2026-08-24` build toolchain pinned in
 `rust-toolchain.toml`. It is also the current `mrml-rustc` behavioral reference
 recorded as [ORACLE-0002](docs/compiler/oracles/ORACLE-0002.md); a floating

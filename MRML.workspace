@@ -176,3 +176,6 @@ rust-action|org.mrml.library.machine|mrml_machine_action|none|-|mrml-agent=mrml_
 rust-feature-set|org.mrml.library.machine|WINDOWS,LINUX|auto
 rust-compile-env|org.mrml.library.machine|CARGO_PKG_VERSION|0.0.1
 rust-binary|org.mrml.library.machine|mrml-machine|mrml_machine|apps/machine/src/main.rs|false
+rust-action|org.mrml.app.server|mrml_server|lib|apps/server/src/lib.rs|mrml-agent=mrml_agent@*#auto;mrml-error=mrml_error@*;mrml-json=mrml_json@*;mrml-model=mrml_model@*#auto;mrml-runtime=mrml_runtime@*;mrml-terminal-style=mrml_terminal_style@*;mrml-tls=mrml_tls@*;mrml-tools=mrml_tools@*
+rust-feature-set|org.mrml.app.server|WINDOWS,LINUX|auto
+rust-binary|org.mrml.app.server|mrml-server|mrml_server_bin|apps/server/src/main.rs|true

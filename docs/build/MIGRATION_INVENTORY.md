@@ -730,7 +730,7 @@ second inventory.
   explicit, native example outputs are checked and compiled, and exact feature
   sets can gate optional target-specific externs. Exact binary outputs, binary
   test harnesses, compile-time environment values, and bin-only actions are
-  explicit. Thirty-nine
+  explicit. Forty
   components now have native actions. Direct-rustc expansion still needs
   lock/digest validation and the remaining non-library actions before
   Cargo can be removed behind the remaining nodes.
@@ -902,6 +902,14 @@ Cargo baselines (zero CLI tests and four machine tests). Their PTX SHA-256 is
 `83ad662cd1f6cb6f7736ddb817da1d12fa022394fa0bf415152c302e8e09c920`.
 Thirty-nine components are native and three remain transitional. No CUDA device,
 model inference, live provider, or production workload ran.
+
+Server is now a native library-plus-self-linked-binary action. Its direct model
+edge and agent's forwarded model edge both bind the exact `auto` artifact,
+preserving Cargo's effective feature unification and shared Rust type identity.
+Both exact hosts pass doctor/audit, native build, and matching native/Cargo
+baselines of four library tests plus the zero-test binary harness. Forty
+components are native and two remain transitional. No live listener, TLS
+endpoint, remote model, CUDA device, or production traffic ran.
 
 Service-image requires a different compiler ABI from the default semantic
 family: it is an MRML native service payload stored as PE, so its exact target is

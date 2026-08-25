@@ -335,6 +335,12 @@ identical PTX hash. Thirty-nine of 42 components are native; three remain
 transitional. No CUDA device, inference, live provider, or production workload
 ran.
 
+Server now compiles its library and self-linked binary natively while binding
+one `auto` model artifact on both its direct edge and the edge through agent.
+Windows and Linux match Cargo at four library tests and a zero-test binary
+harness. Forty of 42 components are native; two remain transitional. No live
+listener, TLS endpoint, remote model, CUDA device, or production traffic ran.
+
 `mrml-zstd` is the fourth migrated leaf; its Wikipedia edge and patent-review
 source path now resolve to `packages/libraries/zstd` without changing codec
 behavior.

@@ -218,6 +218,12 @@ Cargo artifact. Windows gnullvm and Arch Linux WSL2 match Cargo at zero CLI and
 four machine tests, and their PTX hashes match. Thirty-nine components are
 native; three remain transitional. No CUDA device or inference path ran.
 
+`mrml-server` now emits its native library and self-linked binary with direct
+agent and model edges selecting the same `auto` model artifact. Both exact
+hosts match Cargo at four library tests and a zero-test binary harness. Forty
+components are native; two remain transitional. No live listener, TLS endpoint,
+remote model, CUDA device, or production traffic ran.
+
 Native actions now bind one exact feature set and may gate an extern by both
 target family and selected feature. `mrml-av1` declares the empty default set,
 so its `nvidia` platform extern is inactive while `mrml-runtime` remains active.
