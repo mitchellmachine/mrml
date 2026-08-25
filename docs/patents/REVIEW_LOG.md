@@ -1,5 +1,9 @@
 # Patent review log
 
+Historical paths in this log are intentionally preserved. The canonical
+[old-to-current source-path map](PATH_MIGRATION.md) locates their present
+implementations without altering the original review evidence.
+
 ## 2026-08-25 — Package-local `mrml.toml` manifest migration
 
 Patent review: **NOT_TRIGGERED**. This increment redistributes the existing

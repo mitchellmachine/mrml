@@ -5,6 +5,11 @@ legal opinion, freedom-to-operate search, validity analysis, or infringement
 conclusion. No result proves MRML is patent-free; no listing proves
 infringement.
 
+Historical review entries retain their original repository paths. Resolve old
+`crates/...` references through the canonical
+[source-path migration map](PATH_MIGRATION.md) instead of rewriting the review
+record.
+
 ## Global scope
 
 Patent rights are territorial. The PCT is an international filing/search route;
