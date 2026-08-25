@@ -58,6 +58,10 @@ pub enum IsolationUnavailableReason {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct UnavailableIsolationDomain {
     domain: ObjectId,
+    policy_generation: u64,
+    sequence: u64,
+    class: TotalMicrovmClass,
+    requested_placement: IsolationPlacement,
     reason: IsolationUnavailableReason,
 }
 
@@ -68,6 +72,22 @@ impl UnavailableIsolationDomain {
 
     pub const fn reason(self) -> IsolationUnavailableReason {
         self.reason
+    }
+
+    pub const fn policy_generation(self) -> u64 {
+        self.policy_generation
+    }
+
+    pub const fn sequence(self) -> u64 {
+        self.sequence
+    }
+
+    pub const fn class(self) -> TotalMicrovmClass {
+        self.class
+    }
+
+    pub const fn requested_placement(self) -> IsolationPlacement {
+        self.requested_placement
     }
 }
 
@@ -167,6 +187,7 @@ pub struct TotalMicrovmReport {
     pub running_boot_only: usize,
     pub running_recovery_only: usize,
     pub running_unsupported_blockers: usize,
+    pub unavailable_microvm_eligible: usize,
     pub native_fallback: usize,
 }
 
@@ -187,7 +208,11 @@ pub struct IsolationAdmissionTable<const DOMAINS: usize> {
     mode: IsolationMode,
     policy_generation: u64,
     slots: [Option<LaunchSlot>; DOMAINS],
+    unavailable: [Option<UnavailableIsolationDomain>; DOMAINS],
+    unavailable_head: usize,
+    unavailable_count: usize,
     next_slot_generation: u64,
+    next_unavailable_sequence: u64,
 }
 
 impl<const DOMAINS: usize> IsolationAdmissionTable<DOMAINS> {
@@ -199,7 +224,11 @@ impl<const DOMAINS: usize> IsolationAdmissionTable<DOMAINS> {
             mode,
             policy_generation,
             slots: array::from_fn(|_| None),
+            unavailable: array::from_fn(|_| None),
+            unavailable_head: 0,
+            unavailable_count: 0,
             next_slot_generation: 1,
+            next_unavailable_sequence: 1,
         })
     }
 
@@ -233,9 +262,11 @@ impl<const DOMAINS: usize> IsolationAdmissionTable<DOMAINS> {
             .position(Option::is_none)
             .ok_or(IsolationLaunchError::TableFull)?;
         let generation = self.next_slot_generation;
-        self.next_slot_generation = generation
+        let next_generation = generation
             .checked_add(1)
             .ok_or(IsolationLaunchError::GenerationExhausted)?;
+        self.remove_unavailable(request.domain);
+        self.next_slot_generation = next_generation;
         self.slots[slot] = Some(LaunchSlot {
             generation,
             state: LaunchState::Prepared,
@@ -287,12 +318,23 @@ impl<const DOMAINS: usize> IsolationAdmissionTable<DOMAINS> {
         prepared: PreparedIsolationLaunch,
         reason: IsolationUnavailableReason,
     ) -> Result<UnavailableIsolationDomain, IsolationLaunchError> {
-        self.prepared_slot_mut(&prepared)?;
-        self.slots[prepared.slot] = None;
-        Ok(UnavailableIsolationDomain {
+        let record = self.prepared_slot_mut(&prepared)?.record;
+        let sequence = self.next_unavailable_sequence;
+        let next_sequence = sequence
+            .checked_add(1)
+            .ok_or(IsolationLaunchError::GenerationExhausted)?;
+        let unavailable = UnavailableIsolationDomain {
             domain: prepared.domain,
+            policy_generation: record.policy_generation,
+            sequence,
+            class: record.class,
+            requested_placement: record.placement,
             reason,
-        })
+        };
+        self.record_unavailable(unavailable);
+        self.next_unavailable_sequence = next_sequence;
+        self.slots[prepared.slot] = None;
+        Ok(unavailable)
     }
 
     pub fn retire(&mut self, domain: ObjectId) -> Result<(), IsolationLaunchError> {
@@ -316,6 +358,13 @@ impl<const DOMAINS: usize> IsolationAdmissionTable<DOMAINS> {
         })
     }
 
+    pub fn unavailable_domains(&self) -> impl Iterator<Item = UnavailableIsolationDomain> + '_ {
+        (0..self.unavailable_count).filter_map(|offset| {
+            let index = (self.unavailable_head + offset) % DOMAINS;
+            self.unavailable[index]
+        })
+    }
+
     pub fn total_microvm_report(&self) -> TotalMicrovmReport {
         let mut report = TotalMicrovmReport {
             mode: self.mode,
@@ -326,6 +375,10 @@ impl<const DOMAINS: usize> IsolationAdmissionTable<DOMAINS> {
             running_boot_only: 0,
             running_recovery_only: 0,
             running_unsupported_blockers: 0,
+            unavailable_microvm_eligible: self
+                .unavailable_domains()
+                .filter(|record| record.class == TotalMicrovmClass::MicrovmEligible)
+                .count(),
             native_fallback: 0,
         };
         for record in self.running() {
@@ -350,6 +403,32 @@ impl<const DOMAINS: usize> IsolationAdmissionTable<DOMAINS> {
             }
         }
         report
+    }
+
+    fn record_unavailable(&mut self, record: UnavailableIsolationDomain) {
+        self.remove_unavailable(record.domain);
+        if self.unavailable_count < DOMAINS {
+            let index = (self.unavailable_head + self.unavailable_count) % DOMAINS;
+            self.unavailable[index] = Some(record);
+            self.unavailable_count += 1;
+        } else {
+            self.unavailable[self.unavailable_head] = Some(record);
+            self.unavailable_head = (self.unavailable_head + 1) % DOMAINS;
+        }
+    }
+
+    fn remove_unavailable(&mut self, domain: ObjectId) {
+        let mut retained = array::from_fn(|_| None);
+        let mut retained_count = 0;
+        for record in self.unavailable_domains() {
+            if record.domain != domain {
+                retained[retained_count] = Some(record);
+                retained_count += 1;
+            }
+        }
+        self.unavailable = retained;
+        self.unavailable_head = 0;
+        self.unavailable_count = retained_count;
     }
 
     fn validate_placement(
@@ -498,6 +577,12 @@ mod tests {
         );
         assert_eq!(table.running().count(), 0);
         assert!(table.total_microvm_report().satisfied());
+        let retained = table.unavailable_domains().next().unwrap();
+        assert_eq!(retained.policy_generation(), 7);
+        assert_eq!(retained.sequence(), 1);
+        assert_eq!(retained.class(), TotalMicrovmClass::MicrovmEligible);
+        assert_eq!(retained.requested_placement(), IsolationPlacement::Microvm);
+        assert_eq!(table.total_microvm_report().unavailable_microvm_eligible, 1);
     }
 
     #[test]
@@ -558,5 +643,54 @@ mod tests {
         );
         table.cancel(prepared).unwrap();
         assert_eq!(table.running().count(), 0);
+    }
+
+    #[test]
+    fn unavailable_ledger_is_bounded_ordered_and_retry_replaces_old_failure() {
+        let mut table = IsolationAdmissionTable::<2>::new(IsolationMode::TotalMicrovm, 7).unwrap();
+        for (domain, reason) in [
+            (1, IsolationUnavailableReason::MemoryBudget),
+            (2, IsolationUnavailableReason::VcpuBudget),
+            (3, IsolationUnavailableReason::InterfaceTransport),
+        ] {
+            let prepared = table
+                .prepare(request(
+                    domain,
+                    TotalMicrovmClass::MicrovmEligible,
+                    IsolationPlacement::Microvm,
+                ))
+                .unwrap();
+            table.unavailable(prepared, reason).unwrap();
+        }
+        {
+            let mut retained = table.unavailable_domains();
+            let first = retained.next().unwrap();
+            let second = retained.next().unwrap();
+            assert!(retained.next().is_none());
+            assert_eq!(first.domain(), ObjectId(2));
+            assert_eq!(first.sequence(), 2);
+            assert_eq!(second.domain(), ObjectId(3));
+            assert_eq!(second.sequence(), 3);
+        }
+
+        let retry = table
+            .prepare(request(
+                2,
+                TotalMicrovmClass::MicrovmEligible,
+                IsolationPlacement::Microvm,
+            ))
+            .unwrap();
+        {
+            let mut retained = table.unavailable_domains();
+            assert_eq!(
+                retained.next().map(|record| record.domain()),
+                Some(ObjectId(3))
+            );
+            assert!(retained.next().is_none());
+        }
+        table
+            .commit(&retry, IsolationLaunchEvidence::MicrovmReady)
+            .unwrap();
+        assert!(table.total_microvm_report().satisfied());
     }
 }

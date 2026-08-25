@@ -12,6 +12,11 @@ launch-admission mechanism that records an exact policy generation, Total-mode
 eligibility class, requested placement, and matching backend-ready evidence. It
 rejects eligible native placement and active unsupported blockers in Total mode,
 and reports typed resource or transport unavailability without native fallback.
+Unavailable attempts are retained in a bounded ordered kernel ledger with exact
+policy generation, attempt sequence, class, requested placement, and reason;
+an explicit retry removes the prior failure only after a new launch slot is
+successfully reserved. The Total report counts unavailable eligible domains
+separately from running domains and native fallback.
 It does not select providers, create a VM, allocate resources, persist policy,
 or implement boot/runtime transport. Those mechanisms remain **PLANNED**.
 The existing signed configuration-service probes on both hosted VMM runners now

@@ -24,10 +24,20 @@ admission table. It binds each prepared domain to an exact policy generation,
 eligibility class, and placement; commit requires matching native, microVM, or
 platform backend-ready evidence. In Total mode it rejects eligible native
 placement and active unsupported blockers, and a typed resource or transport
-failure cancels preparation without creating a native fallback. Five focused
-tests are included in the 482-test Windows hosted kernel suite. This mechanism
-does not create VMs, select providers, allocate resources, or provide the first
-dual-placement service, so Total MicroVM remains **PLANNED**.
+failure cancels preparation without creating a native fallback. Six focused
+tests are included in the 483-test Windows and Arch Linux hosted kernel suites.
+This mechanism does not create VMs, select providers, allocate resources, or
+provide the first dual-placement service, so Total MicroVM remains **PLANNED**.
+
+Unavailable isolation attempts now remain in a same-capacity ordered ledger
+instead of disappearing when their prepared slot is released. Each record binds
+the exact domain, policy generation, monotonic attempt sequence, eligibility
+class, requested placement, and typed resource/transport reason. An admitted
+retry clears the older record only after capacity, policy, placement, and next
+generation all preflight successfully; bounded retention evicts only the oldest
+failure. The Total report exposes the number of unavailable eligible domains but
+does not miscount them as running native fallback. This behavior adds one focused
+test; both hosted suites pass all 483 tests.
 
 The hosted KVM and WHP `service-probe` launchers now prepare the exact
 configuration-service domain as `MICROVM_ELIGIBLE` under policy generation 1

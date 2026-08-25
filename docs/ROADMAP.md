@@ -33,7 +33,8 @@ Three new persistent deltas are documented before implementation:
   resolver handles defaults, owner selection, total-mode promotion, and visible
   unsupported exceptions, and the workspace/lock retains each validated policy;
   the kernel additionally records bounded generational launch admission and
-  rejects Total-mode native downgrades or active blockers. A representative
+  retains typed unavailable attempts while rejecting Total-mode native
+  downgrades or active blockers. A representative
   dual-placement service, owner-setting persistence, VM construction, resource
   projection, and cross-placement runtime transport remain **PLANNED**.
   The existing hosted KVM/WHP configuration-service probes are wired to this

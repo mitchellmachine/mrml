@@ -4,6 +4,17 @@ Historical paths in this log are intentionally preserved. The canonical
 [old-to-current source-path map](PATH_MIGRATION.md) locates their present
 implementations without altering the original review evidence.
 
+## 2026-08-25 — Bounded isolation-unavailability ledger
+
+Patent review: **NOT_TRIGGERED**. This is conventional fixed-capacity ordered
+failure accounting inside the existing admission object. It records exact
+generations, requested placement, class, sequence, and a typed reason; retry
+removes an older record only after admission preflight. It performs no VM or
+provider selection, VM construction, resource assignment, application
+publication, workload classification, cross-placement transport, or boot-policy
+composition. The adaptive-isolation mechanisms listed in the triggered entry
+below remain **TRIGGERED**.
+
 ## 2026-08-25 — Existing hosted service-probe admission binding
 
 Patent review: **NOT_TRIGGERED** for this integration increment. The KVM/WHP
