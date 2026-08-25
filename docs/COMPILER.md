@@ -691,11 +691,18 @@ upstream test-pass percentage. The major sequence is:
 10. progressively advance the exact future-Rust oracle.
 
 Return coercion-site reborrowing and bounded direct/intermediate reborrow
-invalidation are implemented for the documented subset. The highest-value next
-major implementation task is extending indirect alias identity and then staging
-flow-sensitive region/outlives reasoning without collapsing generation or CFG
-path distinctions. Existing loop-result origin proofs do not imply branch-local
-or loop-local mutation dataflow or general regions.
+invalidation are implemented for the documented subset. The first explicit
+outlives slice now rejects a supported returned reference unless its active,
+event-decreasing ancestry reaches parameter-backed storage. It covers exact
+tail, explicit, conditional, and supported loop return-value locations; preserves
+latest-generation replacement, cyclic reborrow ancestry, moved parameters, and
+exact tuple-field initialization/reassignment origins; and fails closed on local
+storage or unclassified ancestry. This is not named-lifetime inference, general
+regions, or complete Polonius outlives reasoning. The highest-value next major
+implementation task is extending this relation across the remaining exact return
+and indirect-alias forms without collapsing generation or CFG path distinctions.
+Existing loop-result origin proofs do not imply branch-local or loop-local
+mutation dataflow or general regions.
 Smaller parser, type, aggregate, control-flow, and diagnostic prerequisites may
 continue when they directly prepare that analysis. Arbitrary old-edition
 parsing, obsolete compiler quirks, historical diagnostic compatibility,

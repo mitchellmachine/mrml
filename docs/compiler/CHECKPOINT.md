@@ -9,12 +9,11 @@ the named commit and current source.
 ## Recoverable baseline
 
 - Branch: `main`
-- Compiler checkpoint commit: `bf91efb9`
-  (`compiler: verify projected tuple loan chains`)
-- Remote state when recorded: `origin/main` includes the compiler checkpoint,
-  durable documentation, and review through `b3e3ccb6`. The push was a verified
-  fast-forward containing exactly the three isolated projected-tuple-loan-chain
-  commits; unrelated unstaged OS work was not included.
+- Compiler checkpoint commit: `962aedcc`
+  (`compiler: enforce bounded return outlives`)
+- Remote state when recorded: the compiler checkpoint and its documentation/
+  review commits are pending publication. Unrelated unstaged OS work is not part
+  of the compiler checkpoint.
 - Preceding compiler commits: `5c53eb9` (`compiler: track mutable tuple field
   moves`), `480a198` (`compiler: identify constant array
   elements`), `40a035c` (`compiler: analyze initializedness
@@ -156,6 +155,19 @@ At the checkpoint commit, the runtime emitter has these bounded mechanisms:
   reassignment from reviving the tuple field's old owner. Nested projections,
   another projected source later in the chain, and general aggregate provenance
   remain unimplemented.
+  A separate bounded return-outlives pass now runs for declared reference-return
+  functions with complete CFG facts. Exact tail, explicit, conditional, and
+  supported loop return-value effects trace reference ancestry through the active
+  generation at each successively earlier issuance event. Parameter roots
+  outlive the function; direct or projected local storage, missing ancestry,
+  mismatched reference mutability, malformed facts, ambiguous provenance, and
+  bound exhaustion fail closed with `RuntimeReferenceOutlivesFunction` or the
+  existing invalid-fact error. The relation preserves direct parameter returns,
+  explicit reborrows, moved mutable parameters, latest-generation replacement,
+  cyclic reborrow generations, and exact tuple-field initialization or
+  reassignment origins. Ambiguous nested-loop control values, general regions,
+  named lifetime relationships, and complete Polonius outlives reasoning remain
+  unimplemented.
   Explicit direct mutable reborrows derive their parent loan and ultimate owner
   path with an initialization-count traversal bound. A parent use before a
   later child use reports a conflict, a parent use after the child’s last use is
@@ -491,8 +503,8 @@ Windows-only run.
 
 ## Last complete verification
 
-The checkpoint source passed 762 tests on each host: 416
-library tests, 10 conformance tests, 334 replacement tests, and 2 driver tests.
+The checkpoint source passed 764 tests on each host: 417
+library tests, 10 conformance tests, 335 replacement tests, and 2 driver tests.
 Warnings-denied Clippy also passed on both hosts. The commands were:
 
 ```powershell

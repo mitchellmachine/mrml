@@ -3740,3 +3740,19 @@ sibling-owner, and latest-generation replacement controls. This is evidence for
 chains after one directly initialized tuple-field source, not nested projections,
 multiple projected-source hops, aggregate provenance, or general regions. The
 `no_std`/allocation/unsafe hygiene scan remained empty.
+
+The bounded function-return outlives milestone at `962aedcc` passed all 764
+compiler and driver tests on Windows gnullvm and all 764 in release mode on
+native Arch Linux WSL, plus warnings-denied compiler-only Clippy on both hosts
+using pinned rustc commit
+`f7d782a3be46d6bb4b9792fe69a61db389ba1769`. Declared reference-return
+functions now reject exact returned values whose active, event-decreasing
+ancestry terminates in local storage. The pinned oracle rejected direct tail,
+explicit, conditional, and conditionally reaching local generations with E0515,
+while accepting direct parameters, explicit parameter reborrows, unconditional
+latest-generation replacement, and a moved mutable parameter. Existing tests
+also preserve cyclic reborrows and tuple-field initialization/reassignment
+origins. Unsupported or ambiguous ancestry fails closed. This is the first
+bounded escape/outlives slice, not named lifetime inference, general regions, or
+complete Polonius semantics. The `no_std`/allocation/unsafe hygiene scan remained
+empty.
