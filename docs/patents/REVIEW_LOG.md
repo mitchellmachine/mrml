@@ -2704,3 +2704,14 @@ adds no optimization, compatibility protocol, host-share mechanism,
 accessibility or browser-semantic interface, JavaScript/WebAssembly runtime, AI
 mechanism, media mechanism, or other patent-candidate mechanism. This agent
 review does not replace the required independent human dual review.
+
+# 2026-08-24 — Deterministic UEFI PE metadata
+
+**Result: NOT_TRIGGERED.** The UEFI target conventionally configures lld-link to
+use a fixed zero PE timestamp and omit its nondeterministic embedded debug
+directory. Canonical build receipts compare the resulting unsigned artifacts;
+debug evidence may remain separate. This adds no authority model, compatibility
+protocol, host-share mechanism, accessibility or browser-semantic interface,
+JavaScript/WebAssembly runtime, AI mechanism, media mechanism, or other patent-
+candidate mechanism. This agent review does not replace the required
+independent human dual review.

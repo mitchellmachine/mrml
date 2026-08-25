@@ -2015,6 +2015,20 @@ prove equality only for these recorded declarations and bytes; they do not
 prove clean builders, truthful version strings, complete source correspondence,
 independent control, or reproducibility until independent builds actually match.
 
+The repository's `x86_64-unknown-uefi` linker policy fixes the PE timestamp at
+zero and disables the embedded PE debug directory. The latter otherwise carries
+a nondeterministic linker-produced debug identity even when the source, target,
+toolchain, and `SOURCE_DATE_EPOCH` match. Debug information may be retained as a
+separate review artifact, but it is not embedded in the signed boot image. A
+controlled same-host probe of commit `cd1df99` built the exact source archive in
+two distinct source and Cargo target roots with rustc
+`1.100.0-nightly (fb6531d55 2026-08-23)` and Cargo
+`1.100.0-nightly (e8cb624d5 2026-08-22)`. Before these linker controls, each of
+the equal-length kernel, service, and loader images differed in exactly ten
+bytes. With `/debug:none` and `/timestamp:0`, the canonical receipts for all
+three unsigned images matched byte-for-byte. This is a controlled repeated
+build on one host, not independent-builder or cross-platform evidence.
+
 After generating distinct artifact keys and a next-release root, create and
 sign the canonical 408-byte release manifest:
 

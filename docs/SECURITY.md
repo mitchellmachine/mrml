@@ -369,6 +369,11 @@ artifacts, and selected configuration by length and SHA3-512. Strict parsing
 and byte-exact comparison detect changed recorded inputs or outputs. The receipt
 is untrusted evidence until independently produced and reviewed; it grants no
 authority and cannot prove that a builder was clean or its declarations honest.
+The UEFI linker policy fixes the non-authoritative PE timestamp and omits the
+nondeterministic embedded debug identity from signed boot artifacts. Separate
+debug evidence remains possible. A same-host, separate-root controlled build
+has matched the unsigned kernel/service/loader receipts; no independent builder
+or cross-host result has been recorded.
 
 Do not claim verified boot, rollback resistance, DMA isolation, device reset,
 confidential computing, side-channel resistance, formal noninterference,
