@@ -96,6 +96,11 @@ the Phase 2 policy/configuration service and its supervision protocol.
 
 ## Concurrent compiler lane
 
+The separate build-tool lane follows [build/BUILD_SYSTEM.md](build/BUILD_SYSTEM.md):
+manifest, pinned upstream orchestration, profiles, EFI export, packaging/signing,
+release/image/publication, provenance, experimental `mrml-rustc`, then per-profile
+promotion. It cannot redirect this compiler lane or the foundational OS gate.
+
 The independently scoped compiler lane follows
 [COMPILER.md](COMPILER.md), not an arbitrary historical-rustc coverage target.
 Rust 2024 is the floor. Preserve and stabilize the existing bounded semantics,

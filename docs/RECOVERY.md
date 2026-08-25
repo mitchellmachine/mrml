@@ -99,6 +99,12 @@ explicitly and downgrade the status rather than guessing.
 
 ## 3. Inspect the implementation map
 
+- Build/package orchestration: `docs/build/BUILD_SYSTEM.md`. Recover the planned
+  `mrml` frontend, pinned upstream production bootstrap, explicit compiler modes
+  without fallback, profile-specific promotion, EFI export then bootloader
+  packaging, distinct build/package/sign/release/image stages, isolated keys, and
+  typed results. Do not claim the frontend exists.
+
 - Package, Store, release/generation, bootloader distribution, system image,
   servicing, shell, disk administration, installer, and deployment direction:
   `docs/DEPLOYMENT.md`. Treat it as planned unless exact implementation and

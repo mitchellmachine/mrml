@@ -217,6 +217,10 @@ additional architectures.
 
 ## Rust compiler architecture
 
+The planned `mrml` frontend in [build/BUILD_SYSTEM.md](build/BUILD_SYSTEM.md)
+uses pinned upstream Rust for production until profile-specific `mrml-rustc`
+gates pass. Build profile and compiler provenance never authorize.
+
 `mrml-rustc` is an original MRML Rust compiler targeting contemporary and
 forward-looking Rust semantics. Rust 2024 is its floor, not its final target.
 Compatibility means deliberately reproduced observable language semantics, not

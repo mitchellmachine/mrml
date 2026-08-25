@@ -218,6 +218,14 @@ Profile forbids unsafe code and native unsafe FFI. Unsupported borrowing,
 traits, provenance, unsafe, ABI, assembly, const, or metadata semantics must
 continue to fail closed.
 
+Build-tool direction is durable in `docs/build/BUILD_SYSTEM.md`. Until an exact
+profile readiness gate passes, production artifacts use pinned upstream
+rustc/Cargo. Compiler selection/provenance is explicit and never silently falls
+back. Standard `.efi` output precedes bootloader packaging; build, package, sign,
+release, image, install, and publish remain distinct; ordinary builders hold no
+production signing keys; build metadata/profile/first-party identity grants no
+runtime capability; and tooling must not derail compiler-core work.
+
 Patent review is technical risk screening, not legal adjudication. For each
 substantial new mechanism, report `Patent review: NOT_TRIGGERED` or
 `Patent review: TRIGGERED` with the reason and a link to

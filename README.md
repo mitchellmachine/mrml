@@ -268,6 +268,11 @@ remain unfinished.
 
 ## Build and run
 
+The planned first-party `mrml` build/package frontend and mandatory pinned-
+upstream-rustc bootstrap policy are specified in
+[docs/build/BUILD_SYSTEM.md](docs/build/BUILD_SYSTEM.md). It is not implemented;
+the commands below remain the current direct Cargo workflows.
+
 MRML uses Rust 2024 and the nightly build toolchain configured in
 `rust-toolchain.toml`. That development toolchain is distinct from
 `mrml-rustc`'s exact dated behavioral oracle recorded under

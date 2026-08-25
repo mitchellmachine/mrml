@@ -1,5 +1,9 @@
 # MRML packages, deployment, installation, and system administration
 
+Source-to-artifact/package/sign/release/image orchestration is canonical in
+[build/BUILD_SYSTEM.md](build/BUILD_SYSTEM.md). Deployment consumes verified
+outputs and does not silently select compilers or hold ordinary build/signing keys.
+
 **Status: PLANNED.** Existing signed-container parsing, UEFI loading, measured-
 boot plumbing, release/recovery journals, rollback policy, native storage
 objects, and configuration generations retain the exact implementation statuses

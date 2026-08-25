@@ -1,5 +1,11 @@
 # MRML Rust compiler direction
 
+Production build-tool transition is governed by
+[build/BUILD_SYSTEM.md](build/BUILD_SYSTEM.md). Until an exact artifact profile
+satisfies its readiness gate, production artifacts use pinned upstream Rust.
+Experimental `mrml-rustc` is explicit, never silently falls back, and does not
+alter this document's compiler-core priorities.
+
 This document records the durable architectural direction for `mrml-rustc`.
 Implementation status remains grounded in current source, tests, and native
 evidence; this roadmap does not promote planned work to implemented work.
