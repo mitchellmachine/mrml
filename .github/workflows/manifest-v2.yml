@@ -20,7 +20,7 @@ jobs:
           - host: Linux
             os: ubuntu-latest
             toolchain: nightly-2026-08-24-x86_64-unknown-linux-gnu
-            components: rustfmt
+            components: rustfmt,llvm-tools
             mrml: target/debug/mrml
             host_target: linux
             math_artifact: target/mrml-native/linux/debug/libmrml_math.rlib
@@ -51,12 +51,24 @@ jobs:
           cargo +"${{ matrix.toolchain }}" build --locked --bin mrml
           cargo +"${{ matrix.toolchain }}" test --locked --bin mrml
 
-      - name: Verify Manifest V2 and separated lock graphs
+      - name: Check Manifest V2
         shell: bash
         run: |
           "${{ matrix.mrml }}" manifest check
+
+      - name: Check canonical manifest formatting
+        shell: bash
+        run: |
           "${{ matrix.mrml }}" manifest fmt --check
+
+      - name: Check separated lock graphs
+        shell: bash
+        run: |
           "${{ matrix.mrml }}" manifest lock --check
+
+      - name: Audit declared build inputs
+        shell: bash
+        run: |
           "${{ matrix.mrml }}" audit --output structured
 
       - name: Reject active Manifest V1 declarations
