@@ -4047,6 +4047,17 @@ canonicalization across the conjunction. It adds no where-clause algorithm,
 generic search, recursive solver, parser, runtime mechanism, allocation,
 synchronization, protocol, cryptography, or hardware behavior.
 
+# 2026-08-25 — Bounded quantitative CPU-budget groundwork
+
+**Result: NOT_TRIGGERED.** This prerequisite uses conventional fixed-capacity
+generational records and checked counters to represent maximum parallelism,
+runtime/period, priority ceiling, affinity, and exact domain-bound vCPU
+reservations behind the existing capability mechanism. It adds no scheduling
+algorithm, topology selection, migration policy, timing enforcement, power
+control, virtualization mechanism, or hardware protocol. Scheduler and VMM
+integration require their own mechanism-specific review; agent review does not
+replace independent human dual review.
+
 # 2026-08-25 — Bounded where-clause binder instantiation
 
 **Result: NOT_TRIGGERED.** This compiler-only increment stores conventional

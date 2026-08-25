@@ -13,6 +13,7 @@ mod boot_recovery_syscall;
 mod build_receipt;
 mod capability;
 mod component_memory;
+mod cpu_resource;
 mod early;
 mod framebuffer;
 mod grant;
@@ -63,6 +64,9 @@ pub use component_memory::{
     ActiveMicrovmGuestRam, ComponentExecutablePages, MicrovmGuestRam, MicrovmGuestRamError,
     PreparedMicrovmGuestRam, account_component_executable, prepare_microvm_guest_ram,
     release_microvm_guest_ram, reserve_component_executable_mapping, reserve_microvm_guest_ram,
+};
+pub use cpu_resource::{
+    CpuBudgetId, CpuBudgetSpec, CpuBudgetTable, CpuBudgetUsage, CpuResourceError, VcpuReservationId,
 };
 pub use early::{EarlyKernelContext, EarlyKernelError};
 pub use framebuffer::{Color, FramebufferError, FramebufferInfo, FramebufferSurface, PixelFormat};

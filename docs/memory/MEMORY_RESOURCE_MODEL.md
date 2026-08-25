@@ -207,6 +207,13 @@ storage quota, network capacity, device sessions, and IPC capacity. Common
 attenuation/accounting/revocation principles do not require one omnipotent
 `ResourceCapability` or administrator.
 
+The first separate CPU-family prerequisite is now implemented as a bounded
+generational `CpuBudgetTable`: it reserves exact domain-bound parallelism under
+an explicit budget capability, rejects amplification and stale or duplicate
+reservations, and blocks root retirement while vCPU reservations remain. It is
+not a `MemoryObject`, and RAM authority cannot substitute for it. Scheduler and
+hosted-VMM enforcement remain planned.
+
 Illustrative browser-VM envelope: four bounded vCPUs; 4 GiB RAM pool; graphics +
 decode with 512 MiB VRAM and bounded GPU time; 10 GiB storage quota; and exact
 network-connection capabilities. This is not frozen policy.

@@ -229,6 +229,11 @@ their native construction phases; exact completion precedes admission; and
 guest teardown precedes full release. WHP and nested-KVM controlled probes pass
 with zero native fallback. Other microVM profiles, vCPU budgets, VMM metadata,
 and device projections remain **PLANNED**.
+Kernel CPU-budget groundwork now provides the separate generational authority
+needed for the vCPU gate, including exact domain reservations and bounded
+parallelism. The signed component runners do not consume it yet; therefore a
+successful hosted one-vCPU creation is still not evidence of accounted CPU
+execution authority, and `VCPU_BUDGET` failure integration remains **PLANNED**.
 
 ## One policy, several placements
 

@@ -223,6 +223,11 @@ specific base, consumer/provider, and shared/resource phases before WHP/KVM
 native allocation, requires complete consumption before admission, and returns
 the object after confirmed guest teardown. Fresh WHP and nested-KVM probes pass;
 vCPU and remaining VMM/device resource accounting are the next gates.
+The next vCPU prerequisite is now **PARTIALLY IMPLEMENTED** in the kernel: a
+fixed-capacity generational CPU budget binds parallelism, runtime/period,
+priority ceiling, and affinity to capability authority and issues exact
+domain-bound reservations without amplification. WHP/KVM consumption and
+scheduler enforcement remain the current gate.
 
 Typed provider-resolution groundwork now matches canonical `REQUIRES` and
 `PROVIDES` edges only inside an immutable `SystemGeneration`. Interface name,

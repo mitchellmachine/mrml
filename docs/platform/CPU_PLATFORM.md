@@ -1,7 +1,7 @@
 # MRML CPU platform, scheduling, power, and thermal architecture
 
 **Status: PLANNED**, except for the existing x86_64 discovery, SMP, APIC,
-scheduler, VMX/EPT, measured-boot, and hosted-probe mechanisms recorded in
+scheduler, VMX/EPT, measured-boot, bounded CPU-budget groundwork, and hosted-probe mechanisms recorded in
 [`../MICROKERNEL.md`](../MICROKERNEL.md). This document defines future policy;
 it does not claim microcode loading, complete vulnerability evaluation, physical
 hardware support, power control, sensor service, or thermal protection exists.
@@ -131,6 +131,17 @@ utilization budget, priority ceiling, allowed scheduling classes, and affinity/
 topology constraints. Execution authority does not imply unlimited CPU
 consumption. Delegation attenuates and revocation removes derived scheduling
 state, aligned with RAM, VRAM, and GPU-time resource capabilities.
+
+The kernel now has **PARTIALLY IMPLEMENTED** fixed-capacity `CpuBudgetTable`
+groundwork. A generational root binds maximum parallelism, runtime/period,
+priority ceiling, and a nonempty affinity mask to an exact capability object in
+a CPU-specific namespace. Exact domain-bound vCPU reservations cannot exceed
+parallelism, duplicate a live domain, or survive a stale generation; allocation,
+control, and inspection require their respective rights, and a budget cannot be
+retired while reservations remain. Focused Windows and Linux tests pass. This
+does not yet enforce time, priority, class, or affinity in the scheduler or
+either VMM backend, derive child budgets, or prove physical topology behavior.
+Those integrations remain **PLANNED**.
 
 ## System power policy
 
