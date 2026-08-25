@@ -2820,3 +2820,16 @@ share mechanism, accessibility or browser-semantic interface,
 JavaScript/WebAssembly runtime, AI mechanism, media mechanism, or other patent-
 candidate mechanism. This agent review does not replace the required
 independent human dual review.
+
+# 2026-08-24 — Projected tuple-field loan origins
+
+**Result: NOT_TRIGGERED.** The compiler conventionally correlates one validated
+reference-typed tuple field with the same-expression borrow effect that supplied
+its direct tuple initialization, then preserves that existing loan origin across
+one consuming field move. The lookup is fixed-capacity, requires exact effect
+count/order and compatible mutability, rejects intervening replacement and
+ambiguous shapes, and adds no optimization, authority model, compatibility
+protocol, host-share mechanism, accessibility or browser-semantic interface,
+JavaScript/WebAssembly runtime, AI mechanism, media mechanism, or other patent-
+candidate mechanism. This agent review does not replace required independent
+human dual review.
