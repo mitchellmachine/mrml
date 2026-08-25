@@ -104,7 +104,16 @@ or hardware result. The mapping transaction can now require such backing and
 derive the exact physical subrange from the object offset before invoking its
 backend. Removal reuses the identical physical request, and backing release
 remains blocked until mapping teardown succeeds. Accounting-only mappings still
-exist for simulations; no concrete page-table backend is claimed. An opt-in accounted configuration-service wrapper now commits its
+exist for simulations. An inactive x86-64 page-table backend now composes that exact request with a
+privately owned `PageTableBuilder`. It accepts only read, read/write, or
+read/execute user leaves because x86 cannot enforce write-only or execute-only
+access; preflights the complete range; removes every attempted leaf after a
+late installation error; restores exact leaves after retryable removal error;
+and poisons the hierarchy when cleanup is uncertain. Its safety contract keeps
+the root unreachable from every CPU and resumable context, so this is concrete
+page-table construction evidence but not active invalidation, SMP, boot,
+KVM/WHP, hosted, or hardware evidence.
+An opt-in accounted configuration-service wrapper now commits its
 complete fixed settings and audit state for fresh, empty, and checkpoint-
 recovered construction; live service-image composition has not adopted it. An
 opt-in accounted supervisor separately commits all fixed service/task bindings,

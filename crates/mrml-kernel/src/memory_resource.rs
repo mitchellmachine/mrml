@@ -1355,6 +1355,10 @@ fn authority(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::arch::x86_64::{
+        InactivePageTableMappingBackend, InactivePageTableMappingError, Mapping, PagePermissions,
+        PageTableBuildError, PageTableBuilder, PageTableStore, VirtAddr,
+    };
 
     #[derive(Default)]
     struct RecordingMappingBackend {
@@ -1436,6 +1440,67 @@ mod tests {
             }
             self.claimed = None;
             Ok(())
+        }
+    }
+
+    struct FaultingPageTables {
+        pages: [[u64; 512]; 8],
+        used: usize,
+        writes: usize,
+        fail_writes: [usize; 2],
+    }
+
+    impl FaultingPageTables {
+        fn slot(frame: PhysAddr) -> Result<usize, PageTableBuildError> {
+            let page = frame.get() / PAGE_SIZE;
+            usize::try_from(page.checked_sub(1).ok_or(PageTableBuildError::Storage)?)
+                .map_err(|_| PageTableBuildError::Storage)
+        }
+    }
+
+    impl PageTableStore for FaultingPageTables {
+        fn allocate_zeroed(&mut self) -> Result<PhysAddr, PageTableBuildError> {
+            if self.used == self.pages.len() {
+                return Err(PageTableBuildError::Storage);
+            }
+            self.pages[self.used].fill(0);
+            self.used += 1;
+            PhysAddr::new(self.used as u64 * PAGE_SIZE).map_err(|_| PageTableBuildError::Storage)
+        }
+
+        fn read(&self, table: PhysAddr, index: usize) -> Result<u64, PageTableBuildError> {
+            self.pages
+                .get(Self::slot(table)?)
+                .and_then(|page| page.get(index))
+                .copied()
+                .ok_or(PageTableBuildError::Storage)
+        }
+
+        fn write(
+            &mut self,
+            table: PhysAddr,
+            index: usize,
+            value: u64,
+        ) -> Result<(), PageTableBuildError> {
+            self.writes += 1;
+            *self
+                .pages
+                .get_mut(Self::slot(table)?)
+                .and_then(|page| page.get_mut(index))
+                .ok_or(PageTableBuildError::Storage)? = value;
+            if self.fail_writes.contains(&self.writes) {
+                return Err(PageTableBuildError::Storage);
+            }
+            Ok(())
+        }
+    }
+
+    fn faulting_page_tables(fail_writes: [usize; 2]) -> FaultingPageTables {
+        FaultingPageTables {
+            pages: [[0; 512]; 8],
+            used: 0,
+            writes: 0,
+            fail_writes,
         }
     }
 
@@ -2179,5 +2244,195 @@ mod tests {
             Ok(None)
         );
         assert_eq!(table.release_object(first, first_cap, &mut caps), Ok(2));
+    }
+
+    #[test]
+    fn inactive_x86_backend_maps_exact_backing_and_removes_exact_leaves() {
+        let mut table = MemoryPoolTable::<1, 1, 1>::new(15).unwrap();
+        let mut caps = CapabilitySpace::<8>::new();
+        let (root, root_cap) = table.create_root(2, 2, 0, ROOT_RIGHTS, &mut caps).unwrap();
+        let (object, object_cap) = table
+            .allocate_object(
+                root,
+                root_cap,
+                2,
+                MemoryBackingKind::Anonymous,
+                OBJECT_OWNER,
+                &mut caps,
+            )
+            .unwrap();
+        let target_object = ObjectId(0x5151);
+        let target_cap = caps
+            .insert(target_object, Rights::MAP.union(Rights::CONTROL))
+            .unwrap();
+        let physical = MemoryPhysicalBacking::new(PhysAddr::new(0x20_0000).unwrap(), 2).unwrap();
+        let mut backing = RecordingBackingBackend::default();
+        table
+            .bind_physical_backing(object, object_cap, physical, &caps, &mut backing)
+            .unwrap();
+        let builder = PageTableBuilder::new(faulting_page_tables([6, usize::MAX])).unwrap();
+        let mut backend = unsafe { InactivePageTableMappingBackend::new(builder, target_object) };
+
+        let mapping_id = table
+            .install_backed_mapping(
+                object,
+                object_cap,
+                target_cap,
+                0x300,
+                0,
+                2,
+                Rights::READ.union(Rights::WRITE),
+                &caps,
+                &mut backend,
+            )
+            .unwrap();
+        let expected = Mapping::new(
+            VirtAddr::new(0x300 * PAGE_SIZE).unwrap(),
+            physical.start(),
+            2,
+            PagePermissions::USER_READ_WRITE,
+        )
+        .unwrap();
+        let root_address = backend.root();
+        assert_ne!(root_address.get(), 0);
+
+        assert_eq!(
+            table.remove_mapping(mapping_id, target_cap, &caps, &mut backend),
+            Err(MemoryMappingOperationError::Backend(
+                InactivePageTableMappingError::PageTable(PageTableBuildError::Storage)
+            ))
+        );
+        assert!(!backend.is_poisoned());
+        assert_eq!(
+            table
+                .usage(root, root_cap, &caps)
+                .unwrap()
+                .active_mappings(),
+            1
+        );
+        table
+            .remove_mapping(mapping_id, target_cap, &caps, &mut backend)
+            .unwrap();
+        let builder = backend.into_builder().unwrap();
+        assert_eq!(builder.verify_unmapped(expected), Ok(()));
+
+        let builder = PageTableBuilder::new(faulting_page_tables([5, 6])).unwrap();
+        let mut backend = unsafe { InactivePageTableMappingBackend::new(builder, target_object) };
+        assert_eq!(
+            table.install_backed_mapping(
+                object,
+                object_cap,
+                target_cap,
+                0x400,
+                0,
+                2,
+                Rights::READ,
+                &caps,
+                &mut backend,
+            ),
+            Err(MemoryMappingOperationError::Backend(
+                InactivePageTableMappingError::Poisoned
+            ))
+        );
+        assert!(backend.is_poisoned());
+        assert!(matches!(
+            backend.into_builder(),
+            Err(InactivePageTableMappingError::Poisoned)
+        ));
+        assert_eq!(
+            table
+                .usage(root, root_cap, &caps)
+                .unwrap()
+                .active_mappings(),
+            0
+        );
+    }
+
+    #[test]
+    fn inactive_x86_backend_rejects_broader_hardware_access_and_rolls_back() {
+        let mut table = MemoryPoolTable::<1, 1, 1>::new(16).unwrap();
+        let mut caps = CapabilitySpace::<8>::new();
+        let (root, root_cap) = table.create_root(2, 2, 0, ROOT_RIGHTS, &mut caps).unwrap();
+        let (object, object_cap) = table
+            .allocate_object(
+                root,
+                root_cap,
+                2,
+                MemoryBackingKind::Anonymous,
+                OBJECT_OWNER,
+                &mut caps,
+            )
+            .unwrap();
+        let target_object = ObjectId(0x6161);
+        let target_cap = caps
+            .insert(target_object, Rights::MAP.union(Rights::CONTROL))
+            .unwrap();
+        let physical = MemoryPhysicalBacking::new(PhysAddr::new(0x30_0000).unwrap(), 2).unwrap();
+        let mut backing = RecordingBackingBackend::default();
+        table
+            .bind_physical_backing(object, object_cap, physical, &caps, &mut backing)
+            .unwrap();
+
+        let builder = PageTableBuilder::new(faulting_page_tables([usize::MAX; 2])).unwrap();
+        let mut backend = unsafe { InactivePageTableMappingBackend::new(builder, target_object) };
+        assert_eq!(
+            table.install_backed_mapping(
+                object,
+                object_cap,
+                target_cap,
+                0x400,
+                0,
+                1,
+                Rights::WRITE,
+                &caps,
+                &mut backend,
+            ),
+            Err(MemoryMappingOperationError::Backend(
+                InactivePageTableMappingError::UnsupportedAccess
+            ))
+        );
+        assert_eq!(
+            table
+                .usage(root, root_cap, &caps)
+                .unwrap()
+                .active_mappings(),
+            0
+        );
+
+        let builder = PageTableBuilder::new(faulting_page_tables([5, usize::MAX])).unwrap();
+        let mut backend = unsafe { InactivePageTableMappingBackend::new(builder, target_object) };
+        assert_eq!(
+            table.install_backed_mapping(
+                object,
+                object_cap,
+                target_cap,
+                0x400,
+                0,
+                2,
+                Rights::READ,
+                &caps,
+                &mut backend,
+            ),
+            Err(MemoryMappingOperationError::Backend(
+                InactivePageTableMappingError::PageTable(PageTableBuildError::Storage)
+            ))
+        );
+        assert!(!backend.is_poisoned());
+        assert_eq!(
+            table
+                .usage(root, root_cap, &caps)
+                .unwrap()
+                .active_mappings(),
+            0
+        );
+        let builder = backend.into_builder().unwrap();
+        let expected = Mapping::new(
+            VirtAddr::new(0x400 * PAGE_SIZE).unwrap(),
+            physical.start(),
+            2,
+            PagePermissions::USER_READ,
+        )
+        .unwrap();
+        assert_eq!(builder.verify_unmapped(expected), Ok(()));
     }
 }

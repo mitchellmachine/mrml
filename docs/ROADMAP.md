@@ -224,7 +224,13 @@ composition now rejects unbacked objects before backend invocation, derives the 
 physical subrange from the validated object-page range, binds that range into
 both install and retryable removal, and prevents backing release until mapping
 retirement. Accounting-only mappings remain available for simulation; an x86
-page-table or KVM/WHP adapter is still pending. The first page-table charge
+active-page-table or KVM/WHP adapter is still pending. An exclusively owned inactive
+x86-64 hierarchy can now serve as the concrete backed-mapping adapter: it binds
+one exact target, rejects access that x86 leaves would broaden, maps exact
+physical leaves transactionally, restores a mapping after retryable removal
+failure, and permanently quarantines uncertain cleanup. Active hierarchy
+publication, TLB/SMP invalidation, boot adoption, and KVM/WHP adapters remain
+pending. The first page-table charge
 foundation is **PARTIALLY IMPLEMENTED**: an opt-in wrapper commits
 the complete validated preallocated arena capacity before exposing a usable
 store, and unsafe release requires the caller to prove every table unreachable

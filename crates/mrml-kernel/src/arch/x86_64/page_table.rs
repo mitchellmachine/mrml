@@ -5,8 +5,9 @@ use super::{
     UserBufferError, VirtAddr,
 };
 use crate::{
-    Capability, CapabilitySpace, GuestMappingRevoker, MemoryBackingKind, MemoryObjectId,
-    MemoryPoolId, MemoryPoolTable, MemoryResourceError, PAGE_SIZE, PhysAddr, Rights,
+    Capability, CapabilitySpace, GuestMappingRevoker, MemoryBackingKind, MemoryMappingBackend,
+    MemoryMappingBackendRequest, MemoryObjectId, MemoryPoolId, MemoryPoolTable,
+    MemoryResourceError, ObjectId, PAGE_SIZE, PhysAddr, Rights,
 };
 
 const LEAF_ACCESSED_DIRTY: u64 = (1 << 5) | (1 << 6);
@@ -26,6 +27,16 @@ pub enum PageTableBuildError {
 pub enum AccountedPageTableStoreError {
     PageTable(PageTableBuildError),
     Memory(MemoryResourceError),
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum InactivePageTableMappingError {
+    WrongTarget,
+    MissingPhysicalBacking,
+    UnsupportedAccess,
+    InvalidMapping,
+    PageTable(PageTableBuildError),
+    Poisoned,
 }
 
 impl From<PageTableBuildError> for AccountedPageTableStoreError {
@@ -476,6 +487,74 @@ impl<S: PageTableStore> PageTableBuilder<S> {
         Ok(())
     }
 
+    fn verify_available(&self, expected: Mapping) -> Result<(), PageTableBuildError> {
+        for page in 0..expected.pages() {
+            let (virtual_address, _) = mapping_page(expected, page)?;
+            match self.leaf_location(virtual_address) {
+                Ok((table, index)) => {
+                    if self.store.read(table, index)? & 1 != 0 {
+                        return Err(PageTableBuildError::AlreadyMapped);
+                    }
+                }
+                Err(PageTableBuildError::NotMapped) => {}
+                Err(error) => return Err(error),
+            }
+        }
+        Ok(())
+    }
+
+    fn rollback_new_mapping(
+        &mut self,
+        expected: Mapping,
+        attempted_pages: u64,
+    ) -> Result<(), PageTableBuildError> {
+        let mut page = 0;
+        while page < attempted_pages {
+            let (virtual_address, physical_address) = mapping_page(expected, page)?;
+            match self.leaf_location(virtual_address) {
+                Ok((table, index)) => {
+                    let current = self.store.read(table, index)?;
+                    if current & 1 != 0 {
+                        let wanted = PageTableEntry::leaf(physical_address, expected.permissions())
+                            .map_err(PageTableBuildError::Page)?
+                            .bits();
+                        if current & !LEAF_ACCESSED_DIRTY != wanted {
+                            return Err(PageTableBuildError::MappingMismatch);
+                        }
+                        self.store.write(table, index, 0)?;
+                    }
+                }
+                Err(PageTableBuildError::NotMapped) => {}
+                Err(error) => return Err(error),
+            }
+            page += 1;
+        }
+        Ok(())
+    }
+
+    fn restore_removed_mapping(
+        &mut self,
+        expected: Mapping,
+        attempted_pages: u64,
+    ) -> Result<(), PageTableBuildError> {
+        let mut page = 0;
+        while page < attempted_pages {
+            let (virtual_address, physical_address) = mapping_page(expected, page)?;
+            let (table, index) = self.leaf_location(virtual_address)?;
+            let current = self.store.read(table, index)?;
+            let wanted = PageTableEntry::leaf(physical_address, expected.permissions())
+                .map_err(PageTableBuildError::Page)?
+                .bits();
+            if current & 1 == 0 {
+                self.store.write(table, index, wanted)?;
+            } else if current & !LEAF_ACCESSED_DIRTY != wanted {
+                return Err(PageTableBuildError::MappingMismatch);
+            }
+            page += 1;
+        }
+        Ok(())
+    }
+
     /// Verifies every leaf still matches the exact expected frame and
     /// permissions without changing page-table state.
     pub fn verify_mapped(&self, expected: Mapping) -> Result<(), PageTableBuildError> {
@@ -539,6 +618,158 @@ impl<S: PageTableStore> PageTableBuilder<S> {
             self.store.write(parent, index, current | (1 << 2))?;
         }
         PhysAddr::new(current & ADDRESS_MASK).map_err(|_| PageTableBuildError::InvalidIntermediate)
+    }
+}
+
+/// Backend for constructing or editing one exclusively owned, inactive x86-64
+/// page-table hierarchy.
+///
+/// This adapter deliberately performs no TLB invalidation: its hierarchy must
+/// remain unreachable by every CPU while the adapter exists. Activation and
+/// active/SMP retirement require a separate lifecycle boundary.
+pub struct InactivePageTableMappingBackend<S> {
+    builder: PageTableBuilder<S>,
+    target: ObjectId,
+    poisoned: bool,
+}
+
+impl<S: PageTableStore> InactivePageTableMappingBackend<S> {
+    /// Binds an inactive hierarchy to one exact target address-space object.
+    ///
+    /// # Safety
+    ///
+    /// The caller must exclusively own the complete hierarchy and keep its
+    /// root unreachable from every CPU, VM, and resumable context until this
+    /// adapter is consumed. No concurrent page-table access or mutation is
+    /// permitted. If the adapter reports `Poisoned`, the hierarchy must never
+    /// become reachable.
+    pub unsafe fn new(builder: PageTableBuilder<S>, target: ObjectId) -> Self {
+        Self {
+            builder,
+            target,
+            poisoned: false,
+        }
+    }
+
+    pub const fn root(&self) -> PhysAddr {
+        self.builder.root()
+    }
+
+    pub const fn is_poisoned(&self) -> bool {
+        self.poisoned
+    }
+
+    /// Returns the hierarchy only when every adapter operation remained exact.
+    pub fn into_builder(self) -> Result<PageTableBuilder<S>, InactivePageTableMappingError> {
+        if self.poisoned {
+            Err(InactivePageTableMappingError::Poisoned)
+        } else {
+            Ok(self.builder)
+        }
+    }
+
+    fn native_mapping(
+        &self,
+        request: MemoryMappingBackendRequest,
+    ) -> Result<Mapping, InactivePageTableMappingError> {
+        if request.target() != self.target {
+            return Err(InactivePageTableMappingError::WrongTarget);
+        }
+        let physical = request
+            .physical()
+            .ok_or(InactivePageTableMappingError::MissingPhysicalBacking)?;
+        let mapping = request.mapping();
+        let access = mapping.access();
+        let permissions = if access == Rights::READ {
+            PagePermissions::USER_READ
+        } else if access == Rights::READ.union(Rights::WRITE) {
+            PagePermissions::USER_READ_WRITE
+        } else if access == Rights::READ.union(Rights::EXECUTE) {
+            PagePermissions::USER_READ_EXECUTE
+        } else {
+            return Err(InactivePageTableMappingError::UnsupportedAccess);
+        };
+        let virtual_address = mapping
+            .virtual_page()
+            .checked_mul(PAGE_SIZE)
+            .ok_or(InactivePageTableMappingError::InvalidMapping)?;
+        let virtual_start = VirtAddr::new(virtual_address)
+            .map_err(|_| InactivePageTableMappingError::InvalidMapping)?;
+        Mapping::new(
+            virtual_start,
+            physical.start(),
+            mapping.pages(),
+            permissions,
+        )
+        .map_err(|_| InactivePageTableMappingError::InvalidMapping)
+    }
+}
+
+// SAFETY: construction requires an inactive, exclusively owned hierarchy.
+// Install preflights the complete virtual range, and a late failure removes
+// every leaf that this attempt could have published. Cleanup uncertainty
+// permanently poisons the hierarchy. Removal exact-matches every leaf before
+// mutation; inactivity makes translation-cache invalidation unnecessary.
+unsafe impl<S: PageTableStore> MemoryMappingBackend for InactivePageTableMappingBackend<S> {
+    type Error = InactivePageTableMappingError;
+
+    fn install(&mut self, request: MemoryMappingBackendRequest) -> Result<(), Self::Error> {
+        if self.poisoned {
+            return Err(InactivePageTableMappingError::Poisoned);
+        }
+        let mapping = self.native_mapping(request)?;
+        self.builder
+            .verify_available(mapping)
+            .map_err(InactivePageTableMappingError::PageTable)?;
+        for page in 0..mapping.pages() {
+            let (virtual_address, physical_address) =
+                mapping_page(mapping, page).map_err(InactivePageTableMappingError::PageTable)?;
+            if let Err(error) =
+                self.builder
+                    .map_page(virtual_address, physical_address, mapping.permissions())
+            {
+                if self
+                    .builder
+                    .rollback_new_mapping(mapping, page + 1)
+                    .is_err()
+                {
+                    self.poisoned = true;
+                    return Err(InactivePageTableMappingError::Poisoned);
+                }
+                return Err(InactivePageTableMappingError::PageTable(error));
+            }
+        }
+        Ok(())
+    }
+
+    fn remove(&mut self, request: MemoryMappingBackendRequest) -> Result<(), Self::Error> {
+        if self.poisoned {
+            return Err(InactivePageTableMappingError::Poisoned);
+        }
+        let mapping = self.native_mapping(request)?;
+        self.builder
+            .verify_mapped(mapping)
+            .map_err(InactivePageTableMappingError::PageTable)?;
+        for page in 0..mapping.pages() {
+            let (virtual_address, _) =
+                mapping_page(mapping, page).map_err(InactivePageTableMappingError::PageTable)?;
+            let (table, index) = self
+                .builder
+                .leaf_location(virtual_address)
+                .map_err(InactivePageTableMappingError::PageTable)?;
+            if let Err(error) = self.builder.store.write(table, index, 0) {
+                if self
+                    .builder
+                    .restore_removed_mapping(mapping, page + 1)
+                    .is_err()
+                {
+                    self.poisoned = true;
+                    return Err(InactivePageTableMappingError::Poisoned);
+                }
+                return Err(InactivePageTableMappingError::PageTable(error));
+            }
+        }
+        Ok(())
     }
 }
 

@@ -7483,6 +7483,61 @@ mechanism. Planned `TRIGGERED` scopes in
 [patents/REVIEW_LOG.md](patents/REVIEW_LOG.md) remain unchanged; agent review
 does not replace independent human dual review.
 
+### Inactive x86 backed-mapping adapter
+
+The first concrete page-table composition is **PARTIALLY IMPLEMENTED** for an
+exclusively owned inactive x86-64 hierarchy. The unsafe
+`InactivePageTableMappingBackend` binds one `PageTableBuilder` to one exact
+target object and consumes only the already validated backed-mapping request.
+It requires physical backing and converts only `READ`, `READ|WRITE`, or
+`READ|EXECUTE` into user leaf permissions. Write-only and execute-only requests
+fail because ordinary x86 leaves would silently grant broader read access.
+
+Installation verifies the complete virtual range is absent before mutation.
+If any later page-table allocation or write fails, every leaf the attempt could
+have published—including a leaf whose store write mutated before returning an
+error—is exact-matched and removed. Cleanup uncertainty permanently poisons the
+adapter and prevents recovery of its builder. Removal first exact-matches every
+physical leaf and permission, then clears them; a late clear error restores all
+possibly removed leaves so the policy mapping remains retryable. Uncertain
+restoration also poisons the hierarchy. The root must remain unreachable by all
+CPUs, VMs, and resumable contexts while the adapter exists, so no TLB operation
+is needed or claimed.
+
+Focused deterministic release tests compose the real memory-resource policy,
+physical-backing lifecycle, and x86 page-table builder. They prove exact
+two-page installation/removal, unsupported-access denial without accounting
+publication, mutation-before-error rollback, retryable removal restoration,
+mapping-budget retention, and poison quarantine when rollback also fails. This
+does not publish an active hierarchy, issue local or remote TLB invalidation,
+perform an SMP shootdown, migrate boot construction, drive KVM/WHP, or provide
+hosted or physical evidence.
+
+Engineering Constitution complexity score: complexity impact `LOW`, TCB impact
+`LOW`, new parser `NO`, new authority model `NO`, new persistent state `NO`,
+external dependency `NO`, failure isolated `YES`, and existing-object reuse
+`YES` through the reviewed capability, backing, mapping, and page-table types.
+
+DIGITAL-RIGHTS REVIEW: the adapter introduces no identity, content inspection,
+collection, retention, correlation, remote disclosure, DRM, attestation,
+publisher/vendor/provider/verifier authority, first-party privilege, AI-only
+interface, or accessibility divergence. Target and physical identities remain
+data, while the policy table's exact capabilities remain authority.
+
+HOSTILE SECURITY REVIEW: target identity, backing presence, access shape,
+virtual/physical arithmetic, canonicality, page-table capacity, pre-existing
+leaves, partial or mutation-before-error writes, rollback, removal identity,
+and cleanup results are hostile. Complete absence or exact-identity preflight
+precedes mutation; retry preserves authority and accounting; uncertain cleanup
+quarantines the complete inactive hierarchy rather than allowing activation.
+
+Patent review: `NOT_TRIGGERED` — exact checked construction and removal of
+conventional x86 page-table leaves is a standard memory-management mechanism.
+It adds no compatibility transport, host-share protocol, accessibility device,
+browser semantic interface, JavaScript/WebAssembly runtime, AI/media mechanism,
+or deployment/package composition. Recorded planned `TRIGGERED` scopes remain
+unchanged; agent review does not replace independent human dual review.
+
 ## Milestones
 
 This historical list is retained for continuity. The current dependency-ordered

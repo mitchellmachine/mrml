@@ -56,7 +56,8 @@ pub use local_apic::{
 pub use page_table::{
     AccountedPageTableStoreError, AccountedPreallocatedPageTableStore, ActiveLeaf,
     ActiveMappingRevocationError, ActivePageTables, ActiveServiceMappingRevoker, ActiveUserBuffer,
-    PageTableBuildError, PageTableBuilder, PageTableStore, PreallocatedPageTableStore,
+    InactivePageTableMappingBackend, InactivePageTableMappingError, PageTableBuildError,
+    PageTableBuilder, PageTableStore, PreallocatedPageTableStore,
 };
 pub use pe_mapping::{PeMappingError, map_pe_image};
 pub use platform_mmio::{
