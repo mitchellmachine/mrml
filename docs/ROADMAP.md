@@ -30,9 +30,11 @@ derived GPT/FAT image completed its exact authenticated 20-byte trace through
 QEMU/EDK2 with TCG and WHPX on Windows and QEMU/KVM under Arch Linux/WSL2 on
 2026-08-25. The bounded gate accepts only explicit `tcg`, `whpx`, or `kvm`
 accelerators and reports the selected backend. Native MRML WHP/KVM runners still
-launch verified package payloads directly; they do not execute OVMF or consume
-this image. Native-runner firmware integration and physical UEFI evidence remain
-**PLANNED**.
+launch verified package payloads directly rather than executing OVMF, but their
+release-bound boot form now authenticates the identical `SYSTEM.RELEASE` and
+exact kernel-package version/digest carried by that image. Fresh WHP and nested-
+KVM runs reached the authenticated marker from that shared pair. Native-runner
+firmware integration and physical UEFI evidence remain **PLANNED**.
 
 The independently serviced component lane is **PLANNED** in
 [packages/COMPONENT_INTERFACES.md](packages/COMPONENT_INTERFACES.md) and follows,

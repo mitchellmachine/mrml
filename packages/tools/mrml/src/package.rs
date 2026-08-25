@@ -949,6 +949,11 @@ mod tests {
             decoded.package(BootPackageRole::Kernel).package_digest,
             Sha3_512::digest(&kernel)
         );
+        assert!(decoded.binds_exact_package(BootPackageRole::Kernel, 3, &kernel));
+        assert!(!decoded.binds_exact_package(BootPackageRole::Kernel, 2, &kernel));
+        let mut substituted = kernel.clone();
+        substituted[0] ^= 1;
+        assert!(!decoded.binds_exact_package(BootPackageRole::Kernel, 3, &substituted));
         let mut tampered = release.clone();
         tampered[200] ^= 1;
         assert!(parse_release(&tampered, true).is_err());

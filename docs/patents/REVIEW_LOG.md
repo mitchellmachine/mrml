@@ -4,6 +4,16 @@ Historical paths in this log are intentionally preserved. The canonical
 [old-to-current source-path map](PATH_MIGRATION.md) locates their present
 implementations without altering the original review evidence.
 
+## 2026-08-25 — Native VMM exact SystemRelease binding
+
+Patent review: **TRIGGERED** under the existing canonical package/release and
+VMM boot reviews. The WHP and KVM host runners now optionally authenticate the
+same signed `SYSTEM.RELEASE` used by the package-derived UEFI image and require
+its exact kernel package version and SHA3-512 digest before direct native guest
+preparation. This reuses the existing parser, Lamport verification, and exact
+record comparison; it records no patent clearance, non-infringement conclusion,
+or physical-firmware evidence.
+
 ## 2026-08-25 — Package-local `mrml.toml` manifest migration
 
 Patent review: **NOT_TRIGGERED**. This increment redistributes the existing

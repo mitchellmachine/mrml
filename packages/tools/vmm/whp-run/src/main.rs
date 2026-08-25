@@ -36,7 +36,10 @@ use mrml_kernel::{
     encode_handoff, encode_handoff_with_recovery, encode_handoff_with_smp,
 };
 #[cfg(target_os = "windows")]
-use mrml_package_format::{MAX_BOOT_PACKAGE_BYTES, parse as parse_package};
+use mrml_package_format::{
+    BootPackageRole, MAX_BOOT_PACKAGE_BYTES, MAX_BOOT_RELEASE_BYTES, parse as parse_package,
+    parse_release,
+};
 #[cfg(target_os = "windows")]
 use mrml_runtime::{Instant, Vector, mrml_println as println};
 #[cfg(target_os = "windows")]
@@ -1144,7 +1147,12 @@ fn run_pci_configuration_probe<'system>(
 }
 
 #[cfg(target_os = "windows")]
-fn read_kernel_package(path: &str, public_path: &str, minimum: u64) -> Result<Vector<u8>> {
+fn read_kernel_package(
+    path: &str,
+    public_path: &str,
+    minimum: u64,
+    release_binding: Option<(&str, &str)>,
+) -> Result<Vector<u8>> {
     let bytes = mrml_runtime::read_file_bounded(path, MAX_BOOT_PACKAGE_BYTES)?;
     let public = mrml_runtime::read_file_bounded(public_path, LAMPORT_PUBLIC_KEY_BYTES)?;
     if public.len() != LAMPORT_PUBLIC_KEY_BYTES {
@@ -1152,6 +1160,24 @@ fn read_kernel_package(path: &str, public_path: &str, minimum: u64) -> Result<Ve
     }
     let package =
         parse_package(&bytes, true, true).map_err(|_| anyhow!("invalid signed kernel package"))?;
+    if let Some((release_path, release_public_path)) = release_binding {
+        let release_bytes =
+            mrml_runtime::read_file_bounded(release_path, MAX_BOOT_RELEASE_BYTES)?;
+        let release_public = mrml_runtime::read_file_bounded(
+            release_public_path,
+            LAMPORT_PUBLIC_KEY_BYTES,
+        )?;
+        if release_public.len() != LAMPORT_PUBLIC_KEY_BYTES {
+            return Err(anyhow!("invalid SystemRelease public-key length"));
+        }
+        let release = parse_release(&release_bytes, true)
+            .map_err(|_| anyhow!("invalid signed SystemRelease"))?;
+        if release.key_id != Sha3_512::digest(&release_public)
+            || !release.binds_exact_package(BootPackageRole::Kernel, package.version, &bytes)
+        {
+            return Err(anyhow!("SystemRelease kernel binding rejected"));
+        }
+    }
     if package.id != "org.mrml.system.kernel"
         || package.class != "kernel"
         || package.version < minimum
@@ -1205,7 +1231,8 @@ fn application_main() -> Result<()> {
         || service_restart_request_mode
         || service_preemption_mode
         || smp_service_migration_mode;
-    let boot_mode = arguments.len() == 6 && arguments[5] == "boot";
+    let boot_mode = matches!(arguments.len(), 6 | 8) && arguments[5] == "boot";
+    let release_boot_mode = arguments.len() == 8 && boot_mode;
     let timer_mode = arguments.len() == 6 && arguments[5] == "timer-probe";
     let block_guest_driver_mode =
         arguments.len() == 6 && arguments[5] == "block-guest-driver-probe";
@@ -1217,6 +1244,11 @@ fn application_main() -> Result<()> {
     let smp_ipi_mode = arguments.len() == 6 && arguments[5] == "smp-ipi-probe";
     let smp_periodic_balance_mode =
         arguments.len() == 6 && arguments[5] == "smp-periodic-balance-probe";
+    if arguments.len() == 8 && !release_boot_mode {
+        return Err(anyhow!(
+            "SystemRelease binding is accepted only for boot mode"
+        ));
+    }
     if arguments.len() != 8
         && !service_artifact_mode
         && !boot_mode
@@ -1231,7 +1263,7 @@ fn application_main() -> Result<()> {
         && !smp_periodic_balance_mode
     {
         return Err(anyhow!(
-            "usage: mrml-whp-run KERNEL.package PACKAGE.public RELEASE.public MINIMUM_VERSION MODE [ARTIFACT.signed ARTIFACT.public ARTIFACT_MINIMUM_VERSION]\n       mrml-whp-run --export-cuda-bundle OUTPUT.ptx"
+            "usage: mrml-whp-run KERNEL.package PACKAGE.public KERNEL.public MINIMUM_VERSION MODE [SYSTEM.RELEASE SYSTEM_RELEASE.public | ARTIFACT.signed ARTIFACT.public ARTIFACT_MINIMUM_VERSION]\n       mrml-whp-run --export-cuda-bundle OUTPUT.ptx"
         ));
     }
     let minimum_version = arguments[4]
@@ -1239,7 +1271,13 @@ fn application_main() -> Result<()> {
         .ok()
         .filter(|version| *version != 0)
         .ok_or_else(|| anyhow!("minimum version must be a nonzero integer"))?;
-    let bundle = read_kernel_package(&arguments[1], &arguments[2], minimum_version)?;
+    let release_binding = release_boot_mode.then(|| (arguments[6].as_str(), arguments[7].as_str()));
+    let bundle = read_kernel_package(
+        &arguments[1],
+        &arguments[2],
+        minimum_version,
+        release_binding,
+    )?;
     let public = mrml_runtime::read_file_bounded(&arguments[3], LAMPORT_PUBLIC_KEY_BYTES)?;
     if public.len() != LAMPORT_PUBLIC_KEY_BYTES {
         return Err(anyhow!("invalid release public-key length"));

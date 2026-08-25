@@ -47,6 +47,18 @@ impl BootRelease<'_> {
     pub fn package(&self, role: BootPackageRole) -> BootPackageRecord {
         self.records[role as usize - 1]
     }
+
+    pub fn binds_exact_package(
+        &self,
+        role: BootPackageRole,
+        version: u64,
+        package_bytes: &[u8],
+    ) -> bool {
+        let record = self.package(role);
+        version != 0
+            && record.version == version
+            && record.package_digest == Sha3_512::digest(package_bytes)
+    }
 }
 
 pub fn parse_release(

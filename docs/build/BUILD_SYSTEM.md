@@ -407,7 +407,13 @@ attestation.
 The WHP and KVM runners both consume the byte-identical canonical signed kernel
 package, authenticate its package key, select/decompress its x86-64 kernel
 payload, authenticate the inner signed PE, and construct their native guest
-launch state. The shared package's SHA-256 transport checksum in the refreshed
+launch state. Their release-bound `boot` form now additionally parses the same
+signed `SYSTEM.RELEASE` carried by the QEMU image, authenticates its explicitly
+selected release key, and requires the kernel record's version and SHA3-512
+package digest to match the exact package before payload selection. A missing,
+substituted, malformed, wrongly signed, or wrong-key release fails before native
+guest preparation. The earlier five-argument direct-package form remains as a
+temporary differential path. The shared package's SHA-256 transport checksum in the refreshed
 probe was `30ded12b7c772d88ec442b62a0afb2dd0347f100f2e09bbe037f1acae483f1e4`.
 Structured `mrml package verify` output now reports an exact size breakdown and
 single-sample parse/signature/decode timings. A 2026-08-25 optimized Windows
@@ -419,8 +425,9 @@ measured 9,048 microseconds for parse/signature verification and 9,504
 microseconds for payload decoding, 18,553 microseconds total. These are one
 controlled host sample and exact artifact accounting, not portable performance
 or compression-ratio claims.
-It reached the authenticated framebuffer marker and terminal halt under nested
-KVM and WHP. WHP's ordinary `boot` preparation deliberately omits emulated xAPIC
+The same release-bound package set reached the authenticated framebuffer marker
+and terminal halt under nested KVM and WHP on 2026-08-25. WHP's ordinary `boot`
+preparation deliberately omits emulated xAPIC
 state so the terminal HLT remains observable; specialized timer/SMP/device
 probes retain their existing APIC policy. The native runners do not currently
 execute OVMF or consume the GPT/FAT boot image. Therefore shared package
