@@ -21,6 +21,9 @@ displace the current foundational gate. Later work proceeds as separate bounded
 milestones: package/boot-safe formats; release/generation state; Store/catalog;
 A/B loader; images and servicing; typed read-only administration; destructive
 storage transactions; text installer; unattended deployment; GUI projection.
+Its first end-to-end acceptance target is the same signed image and text installer
+creating and independently booting generation 1 on supported KVM and WHP. Physical
+UEFI/NVMe/power-cut work is a later, separately evidenced gate.
 
 The modern x86-64 platform lane is defined in
 [platform/CPU_PLATFORM.md](platform/CPU_PLATFORM.md). Do not begin its broad

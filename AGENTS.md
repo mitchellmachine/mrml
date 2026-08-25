@@ -107,6 +107,11 @@ Architectural invariants:
   transport; manifests request rather than grant; Store download is not admission;
   image/backup/secret export remain distinct; servicing constructs generations;
   and installation/storage destruction requires an exact preview-bound capability;
+  all shell/text/GUI/recovery/unattended/AI frontends use one `DeploymentService`;
+  shell and recovery are not root; automatic partitioning exact-matches target and
+  source media; GC retains every current/candidate/known-good/pinned root; runtime
+  microcode evidence is distinct from packaged payload; and operational rollback
+  never bypasses committed security anti-rollback policy;
 - follow `docs/memory/MEMORY_RESOURCE_MODEL.md`: RAM allocation is explicit
   quantitative authority; pools cannot amplify; objects, mappings, sharing,
   pinning, content access, DMA, and guest projection remain separate;

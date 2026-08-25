@@ -9,6 +9,12 @@ administration. Before implementation, search exact proposed mechanisms and
 worldwide families, then verify material rights in authoritative registers and
 record grants, expiration, design-arounds, or pauses here.
 
+The continuation adds partition templates, shared frontend/service semantics,
+candidate-health activation, reachability GC, typed shell serialization,
+streaming/delta plans, installation media, and image/snapshot conformance. These
+remain within the same `TRIGGERED` review; no implementation clearance is
+inferred from documentation.
+
 ## 2026-08-25 — CPU platform, microcode, scheduler, power, and thermal documentation
 
 **Result: NOT_TRIGGERED.** The documentation selects no novel implementation

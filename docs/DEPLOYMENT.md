@@ -11,6 +11,22 @@ workflow is implemented.
 > system snapshots are different operations over the same immutable package and
 > SystemGeneration model, not independent mechanisms.
 
+Terminology is strict: a `Package` is one signed classed artifact;
+`SystemModule` is its privileged module class; `SystemRelease` is a coherent
+exact package graph; `SystemGeneration` is its locally admitted configuration and
+trust instantiation; `SystemSnapshot` records an exact deployable generation;
+`SystemImage` transports releases/packages/snapshots for deployment and service;
+`MachineBackup` additionally contains explicitly selected mutable personal state;
+`InstallPlan` is non-authorizing declarative intent; `DeploymentTransaction` is
+the exact validated, previewed, capability-authorized operation; and `BootTarget`
+is explicit boot-placement state. “Image,” “release,” and “generation” are not
+interchangeable.
+
+Documentation status uses the repository vocabulary: `DESIGN GOAL` or
+**PLANNED** describes this architecture; **IMPLEMENTED** requires code and focused
+tests; `TESTED`, `MEASURED`, `AUDITED`, and `PROVEN` require their exact stated
+evidence. Documentation alone establishes none of the latter five claims.
+
 ## Canonical package family
 
 One signed MRML package-container family uses artifact classes and admission
@@ -218,6 +234,265 @@ A later GUI installer is a Semantic Scene Graph projection over the same
 second installer architecture. Essential text and GUI flows support trusted
 visual, keyboard, Braille, and speech operation as capability and evidence mature.
 
+### Automatic and custom partitioning
+
+The safe automatic UEFI template creates GPT with an ESP, MRML System partition,
+and optional Recovery and User/Data partitions. Exact sizing is policy. It exact-
+matches and revalidates the selected disk, protects installation media and every
+unrelated disk, aligns partitions, creates a conforming ESP and native system
+layout, retains recovery, and presents the complete transaction before authority.
+Ambiguous automatic selection stops without writes.
+
+Custom layout is available through typed shell, text installer, and later GUI
+objects. It may reuse an ESP, create/remove partitions, choose object-store
+targets, split system/data and recovery, select encryption, or compose multiple
+disks. Normal use specifies sizes, types, stable identities, alignment policy,
+volumes, and `BootTarget`, not raw LBAs. Low-level diagnostics may expose sectors.
+The validator proves that the resulting layout is bootable before destructive
+execution. Reusable `DesktopSingleDisk`, `MinimalSingleDisk`,
+`EncryptedDesktop`, `Developer`, and `Removable` templates produce plan fragments
+and never bypass validation or authorization.
+
+Stable disk binding includes available controller/device path, serial, namespace
+identity, size, model, and device/session generation. An unstable label such as
+“Disk 1” is presentation only. Installation source overwrite requires a supported
+explicit self-replacement workflow. Native storage becomes the install target
+only after its durability/security gate; temporary bootstrap layouts remain
+documented as transitional. Full-disk encryption later composes owner-controlled
+keys, optional TPM/hardware-assisted unlock, passphrase, and local recovery;
+cloud identity is never mandatory. Image signing and optional image encryption
+remain authenticity and confidentiality properties respectively.
+
+### One engine and system profiles
+
+`DeploymentService` is the sole installation engine for shell, text, GUI,
+unattended, recovery, automation, and capability-scoped AI frontends. Frontends
+construct the same objects, consume the same typed progress/errors, and invoke
+the same validation, preview, exact authorization, execution, and verification
+state machine. GUI flow adds source, package/customization, review, verification,
+and reboot screens through the trusted semantic GUI; acceleration failure falls
+back to software/GOP, then to the text installer if necessary. The text path
+requires only the minimum console/frontend—not full shell, GPU, mouse, network,
+Store, or AI.
+
+Signed/validated `Desktop`, `Minimal`, `Development`, and `Recovery` profile
+manifests select package sets and defaults, not editions or alternate security
+universes. Development can add compiler, debugger, SDK, and profiling packages
+without globally granting `DEBUG`, `RAW_GPU`, or `DISK_ADMIN`. Desktop can select
+compositor, terminal, shell, Store, connectivity, audio, HID, accessibility, and
+drivers. Profile data requests components and policy; admission still grants
+each capability explicitly.
+
+## Activation, recovery, and rollback
+
+Online servicing resolves a requested change into a staged candidate generation;
+active immutable packages are never patched in place. Offline servicing exposes
+a capability-scoped package/configuration object view of an image and commits or
+exports a new authenticated image/generation, leaving the source unchanged.
+“Mount” does not require pretending packages are a writable filesystem tree.
+
+Explicitly restartable isolated services may activate by verifying and staging a
+new service generation, revoking/stopping the old service, cleaning all authority
+and resources, launching and health-checking the replacement, then committing.
+Foundational kernel, VMM, bootloader, early-security, or incompatible ABI changes
+require a whole-system candidate and reboot. Not every component is hot-swappable.
+
+Candidate success requires early boot, critical services, and a defined health
+gate—not merely reaching kernel entry. Until then the previous policy-allowed
+known-good generation remains available. Bounded failure state supports owner-
+policy automatic or selected rollback. Operational rollback returns to a working
+generation; security rollback attempts a release barred by committed anti-
+rollback policy and may require explicit recovery policy or remain denied.
+
+The first-party recovery environment is an exact package/release graph using the
+same capability model. It can inspect/select generations; verify packages and
+storage; repair boot selection and package-store metadata; reinstall an
+authenticated bootloader package; import/install/export an image or authorized
+user data; inspect failures; and rotate owner keys where policy allows. Boot
+repair, layout modification, store repair, generation selection, trust-root
+change, data export, and credential recovery are separate authorities and may
+require physical presence or secure attention. Recovery is not unrestricted root.
+
+## Snapshots, package lifecycle, and provenance
+
+A `SystemSnapshot` binds an exact generation, package identities/digests,
+selected configuration, restore trust-policy identifiers, and compatibility
+metadata, but not transient runtime state absent an explicit checkpoint. It can
+export an independently verifiable `SystemImage`, and a readable known-good
+installation can export from recovery without bypassing secret rules. Import
+parses, verifies signatures/digests, checks architecture/profile and release
+consistency, then stores content; it never activates automatically.
+
+`Test-SystemImage` returns structured manifest, signature-chain, digest, missing-
+object, architecture, release/dependency, freshness/rollback, boot-profile, and
+corruption diagnostics—not a bare Boolean. Parsing is bounded, canonical,
+versioned, independently fuzzable, overflow-safe, overlap/duplicate-conflict
+rejecting, and strict about unknown required fields. Authenticated metadata needed
+for destructive decisions arrives before writes. Streaming supports bounded RAM
+without accepting partial objects. Optional later deltas are transport only; the
+reconstructed object must equal the canonical signed digest. Exact deduplication
+must not create unreviewed cross-boundary side channels.
+
+The content-addressed `PackageStore` retains everything reachable from current,
+known-good recovery, staged candidate, pinned snapshot, or explicit retention
+roots. GC never removes the sole known-good path. Caches remain untrusted until
+verified. Ordinary app install is transactional from download through verified
+published application generation; failures leave no half-installed authority.
+Uninstall removes generation references and revokes app authority while making
+retained user/shared data inspectable rather than silently erasing it. Updates
+create rollback-capable app generations and make data migrations explicit.
+Package-store garbage collection is therefore a reachability operation, never a
+space-pressure excuse to erase rollback or pinned retention roots.
+
+Dependencies are typed package, interface/ABI, hardware-feature, or service-
+capability-class requirements; resolution chooses artifacts and grants no runtime
+authority. The bootloader receives an already resolved exact graph and contains
+no dependency solver. Release records preserve package/digest, toolchain, and
+needed build identities. Generation provenance reports release, packages,
+configuration, admitting trust roots, official/owner/mixed composition, and
+content sources without converting provenance into authority.
+
+Repository source configuration binds endpoint, key-set/trust identity, allowed
+namespaces, priority, and mirror policy. Third-party repositories and local files
+use the same parsing, signature-policy, digest, dependency, architecture, and
+capability-request checks. Cryptographic validity is separate from policy trust.
+Owner-built and mixed releases remain possible under owner policy and are labeled
+honestly rather than reusing official provenance. Keys rotate/revoke through prior
+trusted policy or owner action. Stable/testing/development/pinned channels and
+package pins select candidates without changing trust semantics; blocked security
+progress is reported.
+
+Signed advisories can identify affected/fixed versions and severity but grant no
+authority. Application and system-module updates show requested-capability diffs;
+a valid update signature cannot silently widen authority. UX distinguishes app,
+service/module, driver, kernel/VMM, and bootloader activation requirements and
+shows a complete generation graph diff across visual, text, accessibility, and
+authorized automation/AI interfaces.
+
+The eventual Store GUI uses these same Package/Deployment APIs for discovery,
+provenance, compatibility, requested rights, history, install/uninstall/update,
+drivers/system components, and supported rollback. Its semantic state supports
+keyboard, speech, Braille, and capability-scoped AI; visual cards/screenshots are
+never the only software-installation interface. Terminal, shell, and text/GUI
+installer components are ordinary versioned, reproducible packages bound exactly
+into installation media and receive no first-party hidden authority.
+
+## Administration safety and deployment state
+
+The shell is never “run as root.” A session can inspect objects while lacking
+their modify rights; a specific, expiring `FORMAT` capability for one exact disk
+does not imply partition, boot, package, or other authority. The shell constructs
+a transaction, while the trusted authority broker/UI supplies high-risk consent;
+a terminal-rendered `[Y/N]` is not automatically trusted.
+
+Structured objects remain structured through pipelines, for example:
+
+```text
+Get-Disk | Where BusType == NVMe
+Get-SystemGeneration | Where State == KnownGood
+Get-SystemPackage | Where UpdateAvailable
+Get-Temperature | Sort Value Descending
+```
+
+Tools do not scrape human output when a typed API exists. Cross-boundary shell
+serialization is typed, versioned, bounded, canonical, and incapable of hiding
+bearer authority; serializing an object description transfers no capability
+without the explicit capability-transfer mechanism. Any future remote shell
+separates authenticated identity from authorization, scopes every capability,
+keeps destructive transactions inspectable, and applies audit/retention policy.
+It does not recreate unrestricted SSH-root semantics.
+
+`DeploymentProgress` carries phase, current operation, completed/total units,
+warnings, and recoverability state. Typed errors include `SignatureInvalid`,
+`DigestMismatch`, `UnsupportedArchitecture`, `InsufficientDiskSpace`,
+`TargetInUse`, `PartitionPlanConflict`, `RollbackDenied`,
+`BootloaderWriteUncertain`, `PackageDependencyConflict`, and `CapabilityDenied`.
+Durability uncertainty stays uncertainty. Text, GUI, Braille, speech, and AI
+consume the same semantic progress, error, audit, and preview objects.
+
+Cancellation is ordinary before destructive commit. Afterwards it must complete
+a coherent rollback/recovery action or state the exact recoverable intermediate
+condition; no unsafe Cancel control is offered. Before reboot, storage and store
+transactions, boot selection, and required logs/audit are durably resolved unless
+recovery explicitly covers the uncertain state. Deployment authority is
+transaction-scoped (for example one disk layout, volume format, store write,
+boot-target install, and generation create) and revoked after completion.
+
+Privacy-aware structured logs record target identity, planned partition actions,
+package verification, generation creation, boot staging, failures, trust changes,
+candidate selection, activation, rollback denial, and authority-request widening,
+but not passphrases, credentials, secrets, payloads, or user content. Power and
+thermal policy may adjust concurrency or recompression, never verification or
+durability. Parallel work preserves deterministic results and durability order.
+Measure verification, decompression, import, provisioning, generation build,
+staging, and candidate validation before optimizing; Zstd acceleration remains
+vendor-neutral with software fallback.
+
+## Installation media and hardware realization
+
+`BootTarget` binds ESP, architecture, firmware type, active/fallback loader slots,
+and generation locator. Its install authority is narrower than arbitrary ESP
+filesystem write where practical. Multiple explicit system roots/stores per disk
+remain possible. `New-InstallationMedia` creates and verifies an outer bootable
+EFI layout containing an installer/recovery generation, selected inner
+`SystemImage`, and required drivers; the media layout and image container are
+not interchangeable.
+
+The same image and installer serve supported VMs and physical machines. Before
+destruction, they verify image/release signatures, package digests, architecture,
+hardware requirements, loader compatibility, and integrity. A structured
+hardware readiness report marks CPU, IOMMU, NVMe, GPU, Wi-Fi, Bluetooth, USB,
+TPM, and
+UEFI/Secure Boot as Supported, Supported with limitations, Missing optional
+driver, Unsupported, or Unknown. Enumeration alone is not support evidence.
+
+Signed drivers may come from the image, trusted local media, or authenticated
+Store sources and are always verified. Offline base installation remains complete;
+network and remote accounts are optional. Local owner/trust setup establishes
+machine ownership without cloud identity. Secure Boot enrollment deliberately
+shows exact keys, explanation, backup/recovery guidance, and a rollback path and
+never silently replaces owner keys.
+
+Custom image construction resolves selected signed packages, base release, and
+profile directly into a reproducible image without first mutating a running
+machine. Image provenance distinguishes official, owner-composed, and third-party-
+composed graphs; altered graphs cannot borrow official branding. Owners can build
+offline installation/recovery media from a selected known-good generation.
+
+Hardware-compatible restore selects architecture slice and deterministic,
+inspectable signed driver set, preserving package identity while creating new
+machine-specific configuration as needed. It does not promise an in-place CPU-
+architecture switch. Driver package installation only records requested PCI,
+MMIO, interrupt, IOMMU, reset, and firmware authority; admission grants it.
+
+Intel and AMD microcode payloads may be authenticated system-package content or
+equivalent vendor-update objects recording vendor, applicability, revision,
+digest, and available authentication. MRML does not author vendor microcode. A
+release may bind approved payloads, while runtime evidence separately records the
+revision the physical CPU actually accepted. Deployment follows the exact support
+floor and post-update mitigation flow in
+[`platform/CPU_PLATFORM.md`](platform/CPU_PLATFORM.md). The existing Ryzen 9 7950X3D
+reference remains canonical; this deployment continuation does not replace
+it with the separately suggested 7950X.
+
+Default LowPower, Balanced, Performance, and Custom power policies may ship as
+signed configuration or system-module content. They remain policy inputs and
+never expand capabilities or weaken verification/durability.
+
+## Conceptual end-to-end flows
+
+```text
+GitHub Pages signed catalog -> GitHub Release or mirror artifact
+  -> verify publisher policy and digest -> PackageStore
+  -> exact SystemRelease candidate -> admitted SystemGeneration -> boot/update
+
+SystemGeneration -> Export-SystemImage -> compressed SystemImage
+  -> installer / recovery / offline servicing
+
+Get-Disk -> build InstallPlan -> exact preview -> trusted authorization
+  -> DeploymentService -> verified Candidate -> boot proof -> KnownGood
+```
+
 ## Verification, recovery, and review
 
 Dependency order is: specify/fuzz canonical package and boot-safe compression;
@@ -227,6 +502,26 @@ exact destructive transaction service; text installer; unattended deployment;
 then GUI projection. Do not skip storage durability, owner-trust, accessibility,
 or rollback gates for Store presentation.
 
+Integrated milestone order is: canonical container; verifier/store; release and
+generation graph; package-aware loader reader; safe A/B staging; online/offline
+service; image; shell object API; partition primitives; text installer; snapshot/
+export/import; recovery; Store application install; module/driver updates; GUI;
+unattended/AI; then measured delta/image optimization. Stable object semantics
+precede frozen shell spelling.
+
+The first installer proof boots UEFI media under supported KVM and WHP, uses the
+text frontend on a blank virtual disk, creates GPT/ESP/system storage, verifies a
+signed image, imports packages, creates generation 1, installs the EFI loader,
+verifies, reboots, and boots independently. It is hosted VM evidence only. A
+later physical NVMe proof requires real UEFI/NVMe, exact disk identity, enabled
+Secure Boot where claimed, known-good recovery, reboot and power-cut tests.
+
+Snapshot proof exports a booted known-good generation, installs it in a fresh VM,
+and verifies the exact graph and excluded secrets. Store proof authenticates a
+transport-neutral update, builds/activates a candidate as appropriate, and
+retains rollback. Offline proof changes exactly one permitted package in a new
+image, installs it, and verifies no other graph change.
+
 Tests cover canonical encoding/digests, architecture selection, decompression
 bounds, invalid graphs, publisher/admission separation, catalog replay/freeze,
 generation power loss, A/B interruption, image streaming/deduplication, secret
@@ -235,6 +530,21 @@ attenuation, stale disk/layout substitution, transaction preview binding,
 installer recovery, accessibility, and known-good boot proof. Label simulation,
 hosted VMM, UEFI, provisioned Secure Boot/TPM, physical disk, NVMe, reboot, and
 power-cut evidence exactly.
+
+Conformance covers blank/existing GPT, multiple/source-plus-target disks,
+insufficient space, corrupt/bad-signature images, interrupted copy/publication/
+loader staging, failed first boot, rollback, reinstall, and custom layout on KVM
+and WHP where applicable. Fuzz GPT, image, manifest, dependency, plan, locator,
+catalog, and servicing parsers only against virtual/simulated devices. Test text
+mode without GPU/mouse/network/Store/AI; GUI HiDPI, keyboard, Braille/speech,
+resize, GPU fallback, localization and bound prompts; stale disk generations and
+READ-only format denial; app authority requests; Store substitution/replay/key
+revocation; package-ID spoofing; and operational versus prohibited rollback.
+
+Power-loss fault points include partition-table update, filesystem creation,
+store write/verification, generation publication, loader staging, boot selection,
+and known-good marking. Every point has a defined recoverability state; durable
+claims require physical power-cut evidence.
 
 Digital-rights review: owner trust roots and export/migration remain practical;
 the Store cannot create publisher DRM; imaging excludes personal data and secrets

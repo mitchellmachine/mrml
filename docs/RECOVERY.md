@@ -104,6 +104,10 @@ explicitly and downgrade the status rather than guessing.
   `docs/DEPLOYMENT.md`. Treat it as planned unless exact implementation and
   evidence exist. Recover one immutable package/`SystemGeneration` model; never
   invent separate update, offline-service, recovery, image, or snapshot paths.
+  Preserve automatic/custom GPT safety, one `DeploymentService` for every
+  frontend, scoped recovery/shell authority, content-store reachability GC,
+  candidate health/known-good rollback, typed progress/errors, offline install,
+  owner-built/third-party sources, and exact transaction-bound disk operations.
 
 - Kernel mechanisms: `crates/mrml-kernel/src/`
 - x86_64 CPU, memory, SMP, VMX, EPT, VT-d: `crates/mrml-kernel/src/arch/x86_64/`
