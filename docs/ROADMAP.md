@@ -206,6 +206,9 @@ now resolve there without changing compiler semantics.
 The compiler driver now resides at `compiler/driver`; its core/error/runtime
 edges resolve to semantic homes without changing command behavior.
 
+`mrml-git` now resides at `tools/git`; all four dependency edges already
+resolve to semantic packages without changing Git or SSH behavior.
+
 The independently scoped compiler lane follows
 [COMPILER.md](COMPILER.md), not an arbitrary historical-rustc coverage target.
 Rust 2024 is the floor. Preserve and stabilize the existing bounded semantics,

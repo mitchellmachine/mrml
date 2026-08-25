@@ -123,6 +123,11 @@ The compiler-driver semantic move relocates `mrml-rustc-driver` to
 driver behavior. **Result: NOT_TRIGGERED.** This is repository organization,
 not a new compiler mechanism.
 
+The Git-tool semantic move relocates `mrml-git` to `tools/git` after its
+error/runtime/SSH/terminal-style dependencies without changing Git, SSH, pack,
+diff, or signing behavior. **Result: NOT_TRIGGERED.** This is repository
+organization, not a new Git mechanism.
+
 ## 2026-08-25 — Deployment, package, image, installer, and shell architecture
 
 **Result: TRIGGERED.** The documentation composes package/image containers,
