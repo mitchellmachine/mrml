@@ -2715,3 +2715,15 @@ protocol, host-share mechanism, accessibility or browser-semantic interface,
 JavaScript/WebAssembly runtime, AI mechanism, media mechanism, or other patent-
 candidate mechanism. This agent review does not replace the required
 independent human dual review.
+
+# 2026-08-24 — Projected reference-path ancestor moves
+
+**Result: NOT_TRIGGERED.** The compiler conventionally follows validated
+move-path parents to treat a containing tuple move as overlapping a reference
+field with a live shared or mutable child. The walk is fixed-capacity and fails
+closed on malformed or cyclic parents; sibling fields and generation-replacing
+writes retain their existing distinctions. It adds no optimization, authority
+model, compatibility protocol, host-share mechanism, accessibility or browser-
+semantic interface, JavaScript/WebAssembly runtime, AI mechanism, media
+mechanism, or other patent-candidate mechanism. This agent review does not
+replace the required independent human dual review.
