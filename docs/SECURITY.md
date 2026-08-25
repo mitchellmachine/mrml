@@ -171,16 +171,18 @@ authenticated, monotonic, power-loss-atomic storage; measured boot; exact
 artifact-set admission; corruption handling; recovery; and key rotation remain
 required. Development signing is not production Secure Boot.
 
-The loader now extends a canonical selected-set record after the separate
-authenticated kernel and service payload events. Its fixed encoding binds the
-ordered kernel/service kinds, nonzero signed versions, and verified SHA3-512
-digests; zero identity fields fail before measurement. The measured-boot flag
-requires all three successful PCR 11 extensions. This prevents the current
-handoff from calling two independently extended payloads a measured selected
-pair without recording their relationship. It does not establish a coherent
-same-release manifest, owner trust-root persistence, remote attestation, or
-measurement of planned VM, CUDA, launch-policy, configuration, and compiler/
-runtime artifacts, so Phase 6 exact artifact-set admission remains partial.
+The legacy loader path extends a canonical selected-set record after separate
+authenticated kernel and service payload events. Manifest-configured boot now
+requires bounded kernel, VM, service, CUDA, and launch-policy bundles, admits
+each through the exact same `VerifiedRelease`, and publishes no root transition
+while any kind is absent or invalid. It separately extends every authenticated
+payload and a canonical 512-byte version-3 set record containing a distinct
+manifest identity plus all five ordered artifact identities. Zero identities
+fail before measurement, and the measured-boot flag requires every extension.
+The additional firmware buffers are zeroed and returned before memory-map
+handoff. This is code and hosted-test evidence, not firmware/TPM execution,
+owner trust-root persistence, remote attestation, or measurement of
+configuration and compiler/runtime artifacts; Phase 6 remains partial.
 At the release-manifest boundary, callers can no longer extract a per-kind
 minimum-version trust root and accidentally admit a later artifact into an
 earlier verified release. `VerifiedRelease` now authenticates only the exact

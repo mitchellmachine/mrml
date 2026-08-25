@@ -1374,11 +1374,14 @@ can count as trusted consent.
    identity and verify every canonical field. The legacy record now correctly
    labels service kind 3 rather than VM kind 2. With a complete compiled
    release-journal configuration, the loader instead extends a canonical
-   272-byte version-2 record binding the exact manifest digest and kind 5 plus
-   the kernel and service digests and kinds 1 and 3 at one authenticated
-   release. It does not yet include the planned VM image, CUDA bundle, launch
-   policy, configuration root,
-   or compiler/runtime artifacts. No TPM-backed execution or remote-attestation
+   512-byte version-3 record binding a distinct manifest identity plus kernel,
+   VM, service, CUDA, and launch-policy identities at one authenticated release.
+   Configured boot requires all five bounded signed bundles, admits every kind
+   through one exact `VerifiedRelease`, independently extends every payload,
+   and refuses journal publication while any kind is missing or invalid.
+   Temporary VM/CUDA/policy firmware pages are zeroed and freed after
+   measurement. It does not yet include the configuration root or compiler/
+   runtime artifacts. No TPM-backed execution or remote-attestation
    evidence is claimed. The implemented `VerifiedRelease` foundation now also
    withholds its per-kind minimum-version roots and exposes exact-release
    artifact/executable admission instead: requested kind and signed artifact
@@ -1398,14 +1401,13 @@ can count as trusted consent.
    release journal now supplies rollback
    evidence directly; the standalone version counter remains an optional
    compatibility source rather than a second mandatory authority.
-   A typed pending-release transaction now records exact kernel and service
-   admission and refuses publication when either is missing. A deterministic
-   composed test covers zero/one-artifact rejection, publication conflict and
-   retry, successful transition, installed-manifest reconstruction, and repeat
-   boot without a second counter write.
-   Coherent-set boot admission remains partial because the other manifest
-   artifact kinds and physical reboot/power-loss behavior are not yet
-   integrated. Verification on 2026-08-24 passed all
+   A typed pending-release transaction now records all five exact admissions
+   and refuses publication when any kind is missing. A deterministic composed
+   test covers progressive omission, publication conflict and retry, successful
+   transition, installed-manifest reconstruction, and repeat boot without a
+   second counter write. Coherent-set boot admission remains partial because
+   configuration/compiler/runtime identity and physical reboot/power-loss
+   behavior are not yet integrated. Verification on 2026-08-24 passed all
    5 artifact tests, all 5 release-journal tests, all 24 UEFI library tests,
    strict kernel/storage/UEFI
    library Clippy on Windows and Arch Linux/WSL2, strict native UEFI-target

@@ -113,6 +113,7 @@ pub type LocateProtocol =
 pub type HandleProtocol =
     unsafe extern "efiapi" fn(Handle, *const Guid, *mut *mut c_void) -> Status;
 pub type AllocatePages = unsafe extern "efiapi" fn(u32, u32, usize, *mut u64) -> Status;
+pub type FreePages = unsafe extern "efiapi" fn(u64, usize) -> Status;
 pub type Tcg2HashLogExtendEvent =
     unsafe extern "efiapi" fn(*mut Tcg2Protocol, u64, u64, u64, *mut Tcg2Event) -> Status;
 pub type Tcg2SubmitCommand =
@@ -151,7 +152,7 @@ pub struct BootServices {
     pub raise_tpl: usize,
     pub restore_tpl: usize,
     pub allocate_pages: AllocatePages,
-    pub free_pages: usize,
+    pub free_pages: FreePages,
     pub get_memory_map: GetMemoryMap,
     pub allocate_pool: usize,
     pub free_pool: usize,
@@ -635,7 +636,8 @@ pub fn parse_nonzero_version(encoded: &[u8]) -> Option<u64> {
 }
 
 pub const SELECTED_BOOT_ARTIFACT_SET_BYTES: usize = 192;
-pub const SELECTED_RELEASE_ARTIFACT_SET_BYTES: usize = 272;
+pub const SELECTED_RELEASE_ARTIFACT_SET_BYTES: usize = 512;
+pub const SELECTED_RELEASE_MANIFEST_KIND: u16 = 0x100;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum SelectedArtifactSetError {
@@ -667,29 +669,41 @@ pub fn encode_selected_boot_artifact_set(
     Ok(output)
 }
 
-/// Encodes the authenticated release manifest plus the exact kernel/service
-/// pairing it authorized. This PCR evidence record carries no authority.
+/// Encodes the authenticated release manifest plus all five exact artifacts it
+/// authorized. This PCR evidence record carries no authority.
 pub fn encode_selected_release_artifact_set(
     release: u64,
     manifest_digest: [u8; 64],
-    kernel_digest: [u8; 64],
-    service_digest: [u8; 64],
+    artifact_digests: [[u8; 64]; 5],
 ) -> Result<[u8; SELECTED_RELEASE_ARTIFACT_SET_BYTES], SelectedArtifactSetError> {
     if release == 0
         || manifest_digest.iter().all(|byte| *byte == 0)
-        || kernel_digest.iter().all(|byte| *byte == 0)
-        || service_digest.iter().all(|byte| *byte == 0)
+        || artifact_digests
+            .iter()
+            .any(|digest| digest.iter().all(|byte| *byte == 0))
     {
         return Err(SelectedArtifactSetError::InvalidIdentity);
     }
     let mut output = [0; SELECTED_RELEASE_ARTIFACT_SET_BYTES];
-    output[..16].copy_from_slice(b"MRML-BOOTSET-v2\0");
+    output[..16].copy_from_slice(b"MRML-BOOTSET-v3\0");
     output[16..18].copy_from_slice(&(SELECTED_RELEASE_ARTIFACT_SET_BYTES as u16).to_le_bytes());
-    output[18..20].copy_from_slice(&2u16.to_le_bytes());
-    output[20..22].copy_from_slice(&3u16.to_le_bytes());
-    encode_artifact_identity(&mut output[32..112], 5, release, manifest_digest);
-    encode_artifact_identity(&mut output[112..192], 1, release, kernel_digest);
-    encode_artifact_identity(&mut output[192..272], 3, release, service_digest);
+    output[18..20].copy_from_slice(&3u16.to_le_bytes());
+    output[20..22].copy_from_slice(&6u16.to_le_bytes());
+    encode_artifact_identity(
+        &mut output[32..112],
+        SELECTED_RELEASE_MANIFEST_KIND,
+        release,
+        manifest_digest,
+    );
+    for (index, digest) in artifact_digests.into_iter().enumerate() {
+        let offset = 112 + index * 80;
+        encode_artifact_identity(
+            &mut output[offset..offset + 80],
+            index as u16 + 1,
+            release,
+            digest,
+        );
+    }
     Ok(output)
 }
 
@@ -791,14 +805,20 @@ mod tests {
     }
 
     #[test]
-    fn selected_release_set_binds_manifest_and_exact_same_release_artifacts() {
-        let encoded =
-            encode_selected_release_artifact_set(11, [0x33; 64], [0x44; 64], [0x55; 64]).unwrap();
-        assert_eq!(&encoded[..16], b"MRML-BOOTSET-v2\0");
-        assert_eq!(u16::from_le_bytes(encoded[16..18].try_into().unwrap()), 272);
-        assert_eq!(u16::from_le_bytes(encoded[18..20].try_into().unwrap()), 2);
-        assert_eq!(u16::from_le_bytes(encoded[20..22].try_into().unwrap()), 3);
-        for (offset, kind, digest) in [(32, 5, 0x33), (112, 1, 0x44), (192, 3, 0x55)] {
+    fn selected_release_set_binds_manifest_and_all_exact_same_release_artifacts() {
+        let encoded = encode_selected_release_artifact_set(
+            11,
+            [0x33; 64],
+            [[0x41; 64], [0x42; 64], [0x43; 64], [0x44; 64], [0x45; 64]],
+        )
+        .unwrap();
+        assert_eq!(&encoded[..16], b"MRML-BOOTSET-v3\0");
+        assert_eq!(u16::from_le_bytes(encoded[16..18].try_into().unwrap()), 512);
+        assert_eq!(u16::from_le_bytes(encoded[18..20].try_into().unwrap()), 3);
+        assert_eq!(u16::from_le_bytes(encoded[20..22].try_into().unwrap()), 6);
+        for (offset, kind, digest) in core::iter::once((32, SELECTED_RELEASE_MANIFEST_KIND, 0x33))
+            .chain((0..5).map(|index| (112 + index * 80, index as u16 + 1, 0x41 + index as u8)))
+        {
             assert_eq!(
                 u16::from_le_bytes(encoded[offset..offset + 2].try_into().unwrap()),
                 kind
@@ -815,7 +835,13 @@ mod tests {
             assert_eq!(&encoded[offset + 16..offset + 80], &[digest; 64]);
         }
         assert_eq!(
-            encode_selected_release_artifact_set(0, [1; 64], [2; 64], [3; 64]),
+            encode_selected_release_artifact_set(0, [1; 64], [[2; 64]; 5]),
+            Err(SelectedArtifactSetError::InvalidIdentity)
+        );
+        let mut missing = [[2; 64]; 5];
+        missing[3] = [0; 64];
+        assert_eq!(
+            encode_selected_release_artifact_set(1, [1; 64], missing),
             Err(SelectedArtifactSetError::InvalidIdentity)
         );
     }

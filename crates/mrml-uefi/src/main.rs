@@ -5,11 +5,12 @@ use core::arch::global_asm;
 use core::cell::UnsafeCell;
 use mrml_crypto::{LAMPORT_PUBLIC_KEY_BYTES, LAMPORT_SIGNATURE_BYTES};
 use mrml_kernel::{
-    ArtifactKind, BOOTSTRAP_STATE_BYTES, FramebufferInfo, MAX_HANDOFF_BYTES,
-    MAX_HANDOFF_MADT_BYTES, MAX_KERNEL_IMAGE_BYTES, MAX_SERVICE_IMAGE_BYTES, MemoryKind,
-    MemoryRegion, MonotonicStateStore, PeImage, PendingBootRelease, PhysAddr, PixelFormat,
-    RELEASE_MANIFEST_BYTES, RecoveryStateMetadata, SIGNED_ARTIFACT_OVERHEAD_BYTES, ServiceLaunch,
-    SignedArtifact, TrustRoot,
+    ArtifactKind, BOOTSTRAP_STATE_BYTES, FramebufferInfo, MAX_CUDA_KERNEL_BUNDLE_BYTES,
+    MAX_HANDOFF_BYTES, MAX_HANDOFF_MADT_BYTES, MAX_KERNEL_IMAGE_BYTES, MAX_LAUNCH_POLICY_BYTES,
+    MAX_SERVICE_IMAGE_BYTES, MAX_VM_IMAGE_BYTES, MemoryKind, MemoryRegion, MonotonicStateStore,
+    PeImage, PendingBootRelease, PhysAddr, PixelFormat, RELEASE_MANIFEST_BYTES,
+    RecoveryStateMetadata, SIGNED_ARTIFACT_OVERHEAD_BYTES, ServiceLaunch, SignedArtifact,
+    TrustRoot,
     arch::x86_64::{
         AcpiMemory, MAX_X86_64_CPUS, PRIVILEGE_STACK_ARENA_PAGES, PagePermissions,
         PageTableBuildError, PageTableBuilder, PageTableStore, PerCpuPrivilegeStacks, VirtAddr,
@@ -62,6 +63,15 @@ const KERNEL_PATH: &[u16] = &[
 const SERVICE_PATH: &[u16] = &[
     92, 69, 70, 73, 92, 77, 82, 77, 76, 92, 83, 69, 82, 86, 73, 67, 69, 46, 83, 73, 71, 78, 69, 68,
     0,
+];
+const VM_PATH: &[u16] = &[
+    92, 69, 70, 73, 92, 77, 82, 77, 76, 92, 86, 77, 46, 83, 73, 71, 78, 69, 68, 0,
+];
+const CUDA_PATH: &[u16] = &[
+    92, 69, 70, 73, 92, 77, 82, 77, 76, 92, 67, 85, 68, 65, 46, 83, 73, 71, 78, 69, 68, 0,
+];
+const POLICY_PATH: &[u16] = &[
+    92, 69, 70, 73, 92, 77, 82, 77, 76, 92, 80, 79, 76, 73, 67, 89, 46, 83, 73, 71, 78, 69, 68, 0,
 ];
 const RELEASE_MANIFEST_PATH: &[u16] = &[
     92, 69, 70, 73, 92, 77, 82, 77, 76, 92, 82, 69, 76, 69, 65, 83, 69, 46, 77, 65, 78, 73, 70, 69,
@@ -443,6 +453,45 @@ unsafe fn boot(image: Handle, table: *mut SystemTable) -> Result<(), Status> {
             .map_err(|_| LOAD_ERROR)?
     };
     loader_trace(0xa4);
+    let additional_release_artifacts = if let Some(release) = prepared_release.as_mut() {
+        Some([
+            unsafe {
+                load_and_admit_release_artifact(
+                    image,
+                    services,
+                    framebuffer,
+                    &mut release.admission,
+                    VM_PATH,
+                    MAX_VM_IMAGE_BYTES as usize,
+                    ArtifactKind::VmImage,
+                )
+            }?,
+            unsafe {
+                load_and_admit_release_artifact(
+                    image,
+                    services,
+                    framebuffer,
+                    &mut release.admission,
+                    CUDA_PATH,
+                    MAX_CUDA_KERNEL_BUNDLE_BYTES as usize,
+                    ArtifactKind::CudaKernelBundle,
+                )
+            }?,
+            unsafe {
+                load_and_admit_release_artifact(
+                    image,
+                    services,
+                    framebuffer,
+                    &mut release.admission,
+                    POLICY_PATH,
+                    MAX_LAUNCH_POLICY_BYTES as usize,
+                    ArtifactKind::LaunchPolicy,
+                )
+            }?,
+        ])
+    } else {
+        None
+    };
     if let Some(release) = prepared_release.as_mut() {
         release
             .admission
@@ -459,12 +508,39 @@ unsafe fn boot(image: Handle, table: *mut SystemTable) -> Result<(), Status> {
         service_signed.payload(),
         b"MRML authenticated service PE",
     )?;
+    let additional_release_measured = if let Some(artifacts) = &additional_release_artifacts {
+        let descriptions: [&[u8]; 3] = [
+            b"MRML authenticated VM image",
+            b"MRML authenticated CUDA bundle",
+            b"MRML authenticated policy",
+        ];
+        let mut measured = true;
+        for (artifact, description) in artifacts.iter().zip(descriptions) {
+            let bytes = unsafe {
+                core::slice::from_raw_parts(
+                    artifact.file.address as *const u8,
+                    artifact.file.length,
+                )
+            };
+            let signed = SignedArtifact::decode(bytes).map_err(|_| LOAD_ERROR)?;
+            measured &= measure_artifact(services, signed.payload(), description)?;
+        }
+        measured
+    } else {
+        true
+    };
     let artifact_set_measured = if let Some(release) = prepared_release.as_ref() {
+        let artifacts = additional_release_artifacts.as_ref().ok_or(LOAD_ERROR)?;
         let artifact_set = encode_selected_release_artifact_set(
             release.admission.release(),
             release.admission.manifest_digest(),
-            *verified.artifact().digest(),
-            *service_verified.artifact().digest(),
+            [
+                *verified.artifact().digest(),
+                artifacts[0].digest,
+                *service_verified.artifact().digest(),
+                artifacts[1].digest,
+                artifacts[2].digest,
+            ],
         )
         .map_err(|_| LOAD_ERROR)?;
         measure_artifact(services, &artifact_set, b"MRML selected release set")?
@@ -478,7 +554,13 @@ unsafe fn boot(image: Handle, table: *mut SystemTable) -> Result<(), Status> {
         .map_err(|_| LOAD_ERROR)?;
         measure_artifact(services, &artifact_set, b"MRML selected artifact set")?
     };
-    let measured_boot = kernel_measured && service_measured && artifact_set_measured;
+    if let Some(artifacts) = additional_release_artifacts {
+        for artifact in artifacts {
+            unsafe { release_loaded_file(services, artifact.file) }?;
+        }
+    }
+    let measured_boot =
+        kernel_measured && service_measured && additional_release_measured && artifact_set_measured;
     if require_tpm_measurement() && !measured_boot {
         return Err(LOAD_ERROR);
     }
@@ -1029,6 +1111,47 @@ fn measure_artifact(
 struct LoadedFile {
     address: u64,
     length: usize,
+}
+
+struct AdmittedReleaseArtifact {
+    file: LoadedFile,
+    digest: [u8; 64],
+}
+
+unsafe fn release_loaded_file(services: &BootServices, file: LoadedFile) -> Result<(), Status> {
+    let pages = file.length.div_ceil(PAGE_BYTES);
+    let allocation_bytes = pages.checked_mul(PAGE_BYTES).ok_or(LOAD_ERROR)?;
+    let bytes =
+        unsafe { core::slice::from_raw_parts_mut(file.address as *mut u8, allocation_bytes) };
+    bytes.fill(0);
+    check(unsafe { (services.free_pages)(file.address, pages) })
+}
+
+unsafe fn load_and_admit_release_artifact(
+    image: Handle,
+    services: &BootServices,
+    framebuffer: Framebuffer,
+    admission: &mut PendingBootRelease,
+    path: &[u16],
+    maximum_payload: usize,
+    kind: ArtifactKind,
+) -> Result<AdmittedReleaseArtifact, Status> {
+    let maximum = maximum_payload
+        .checked_add(SIGNED_ARTIFACT_OVERHEAD_BYTES)
+        .ok_or(LOAD_ERROR)?;
+    let file = unsafe { load_file(image, services, framebuffer, path, maximum) }?;
+    if file.address.checked_add(file.length as u64).is_none() {
+        return Err(LOAD_ERROR);
+    }
+    let bytes = unsafe { core::slice::from_raw_parts(file.address as *const u8, file.length) };
+    let signed = SignedArtifact::decode(bytes).map_err(|_| LOAD_ERROR)?;
+    let verified = admission
+        .verify_artifact(&signed, kind)
+        .map_err(|_| LOAD_ERROR)?;
+    Ok(AdmittedReleaseArtifact {
+        file,
+        digest: *verified.digest(),
+    })
 }
 
 unsafe fn load_file(

@@ -39,8 +39,9 @@ mod vm_interrupt;
 
 pub use artifact::{
     ArtifactError, ArtifactKind, BOOTSTRAP_STATE_BYTES, BootstrapState, ExecutableArtifactError,
-    MAX_KERNEL_IMAGE_BYTES, MAX_SERVICE_IMAGE_BYTES, MAX_VM_IMAGE_BYTES, MonotonicStateStore,
-    PendingBootRelease, RELEASE_MANIFEST_BYTES, ReleaseManifest, SIGNED_ARTIFACT_HEADER_BYTES,
+    MAX_CUDA_KERNEL_BUNDLE_BYTES, MAX_KERNEL_IMAGE_BYTES, MAX_LAUNCH_POLICY_BYTES,
+    MAX_SERVICE_IMAGE_BYTES, MAX_VM_IMAGE_BYTES, MonotonicStateStore, PendingBootRelease,
+    RELEASE_MANIFEST_BYTES, ReleaseManifest, SIGNED_ARTIFACT_HEADER_BYTES,
     SIGNED_ARTIFACT_OVERHEAD_BYTES, SignedArtifact, TrustRoot, VerifiedArtifact,
     VerifiedExecutable, VerifiedRelease, artifact_statement, executable_image_limit,
 };

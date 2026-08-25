@@ -2047,27 +2047,34 @@ from an adjacent release being spliced through a minimum-version check. The
 With a complete compiled release-journal configuration, the UEFI loader now
 loads the exact manifest and distinguishes repeat admission of its authenticated
 installed digest from a new signed root transition. Kernel and service
-executables are admitted through the resulting single `VerifiedRelease`; a new
-transition is committed after both signatures and PE formats pass but before
-PCR 11 extension, keeping the journal's read and publication policy coherent.
+executables plus bounded VM, CUDA, and launch-policy bundles are admitted
+through the resulting single `VerifiedRelease`; a new transition is committed
+only after all five exact kinds pass but before PCR 11 extension, keeping the
+journal's read and publication policy coherent.
 Later boot preparation failure retries through the installed receipt.
 `PendingBootRelease` owns this sequencing: it records only successful exact
-kernel/service admissions, rejects publication until both are present, retains
-state across a compare-and-store conflict for retry, skips counter publication
-for an already installed manifest, and erases predecessor/successor bytes after
-success or drop.
+kernel, VM, service, CUDA, and policy admissions; rejects publication until all
+five are present; retains state across a compare-and-store conflict for retry;
+skips counter publication for an already installed manifest; and erases
+predecessor/successor bytes after success or drop.
 Required mode fails closed without the configuration, while optional mode keeps
 the legacy independent-root path for development.
-The loader expects `\EFI\MRML\RELEASE.MANIFEST`; a new transition additionally
-requires `RELEASE.PUBLIC` and `RELEASE.SIG`. Its six all-or-none build fields
+The loader expects `\EFI\MRML\RELEASE.MANIFEST`, `KERNEL.SIGNED`,
+`VM.SIGNED`, `SERVICE.SIGNED`, `CUDA.SIGNED`, and `POLICY.SIGNED`; a new
+transition additionally requires `RELEASE.PUBLIC` and `RELEASE.SIG`. VM, CUDA,
+and policy payloads are bounded at 512 MiB, 64 MiB, and 16 MiB respectively;
+their temporary firmware pages are zeroed and freed after measurement. Its six
+all-or-none build fields
 are `MRML_RELEASE_COUNTER_NV_INDEX_HEX`, `MRML_RELEASE_SLOT0_NV_INDEX_HEX`,
 `MRML_RELEASE_SLOT1_NV_INDEX_HEX`, `MRML_RELEASE_POLICY_DIGEST_HEX`,
 `MRML_RELEASE_PCR_DIGEST_HEX`, and `MRML_RELEASE_PCR_SELECT_HEX`.
 `MRML_REQUIRE_RELEASE_MANIFEST=1` forbids fallback. If recovery journal fields
 are also present, every release and recovery NV index must be disjoint.
-Measured boot records configured release admission in a canonical 272-byte
-version-2 selected set: manifest kind 5, kernel kind 1, and service kind 3 share
-the exact release number and retain their verified SHA3-512 digests. The legacy
+Measured boot records configured release admission in a canonical 512-byte
+version-3 selected set: distinct manifest kind `0x100` followed by artifact
+kinds 1 through 5 share the exact release number and retain their verified
+SHA3-512 digests. Each authenticated payload is also extended independently.
+The legacy
 192-byte development record now also labels the service correctly as kind 3,
 not VM kind 2. These PCR records are evidence data and confer no authority.
 The manifest codec now rejects duplicate key roles before encoding: its next

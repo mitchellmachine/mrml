@@ -70,9 +70,10 @@ current loader actually selects; it is not same-release admission for the
 planned VM, CUDA, launch-policy, configuration, or compiler/runtime artifacts.
 The legacy record now correctly labels the service as artifact kind 3 rather
 than VM kind 2. When release-manifest admission is active, the loader instead
-extends a canonical 272-byte version-2 record containing the manifest identity
-(kind 5), kernel identity (kind 1), and service identity (kind 3), all at the
-same authenticated release and with the exact manifest and payload digests.
+extends a canonical 512-byte version-3 record containing a distinct manifest
+identity (kind `0x100`) followed by kernel, VM, service, CUDA, and launch-policy
+identities (kinds 1 through 5), all at the same authenticated release and with
+the exact verified manifest and payload digests.
 The existing authenticated `VerifiedRelease` boundary now admits an artifact
 only when its kind-specific root matches and its signed version equals—not
 merely meets—the manifest release. Executable admission performs this exact
@@ -83,18 +84,19 @@ When a complete release-journal configuration is compiled in, the UEFI loader
 now loads the exact 408-byte manifest. It either reconstructs an already
 committed release from the authenticated installed-manifest digest or verifies
 a new one-time manifest transition. Kernel and service signatures and PE
-formats are then admitted through that one `VerifiedRelease`; a new transition
-is published after both exact executables pass signature and PE admission but
-before PCR 11 is extended, so the release journal's fixed PCR policy is coherent
+formats plus the bounded VM, CUDA, and launch-policy bundles are then admitted
+through that one `VerifiedRelease`; a new transition is published only after
+all five exact artifacts pass admission but before PCR 11 is extended, so the
+release journal's fixed PCR policy is coherent
 for both its read and publication operations. Later boot preparation failure is
 retryable through the installed-manifest receipt. A required-mode
 flag fails closed when the complete release configuration is absent. The legacy
 independent-root path remains available only when required mode is disabled.
 The loader now uses a kernel-owned `PendingBootRelease` transaction rather than
-manually sequencing these steps. It records successful exact kernel and service
-admissions and refuses journal publication until both exist; state bytes are
-erased after success or drop. An already installed release still requires both
-admissions but performs no second monotonic publication.
+manually sequencing these steps. It records successful exact admission of all
+five artifact kinds and refuses journal publication while any kind is absent;
+state bytes are erased after success or drop. An already installed release
+still requires the complete set but performs no second monotonic publication.
 The canonical handoff carries a distinct coherent-release evidence bit only
 when this manifest path was used. Kernel production policy requires that bit in
 addition to Secure Boot, measured boot, and rollback protection; development

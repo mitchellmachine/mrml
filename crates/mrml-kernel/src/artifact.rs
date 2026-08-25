@@ -14,6 +14,8 @@ pub enum ArtifactKind {
 pub const MAX_KERNEL_IMAGE_BYTES: u32 = 64 * 1024 * 1024;
 pub const MAX_SERVICE_IMAGE_BYTES: u32 = 128 * 1024 * 1024;
 pub const MAX_VM_IMAGE_BYTES: u32 = 512 * 1024 * 1024;
+pub const MAX_CUDA_KERNEL_BUNDLE_BYTES: u32 = 64 * 1024 * 1024;
+pub const MAX_LAUNCH_POLICY_BYTES: u32 = 16 * 1024 * 1024;
 
 pub const fn executable_image_limit(kind: ArtifactKind) -> Option<u32> {
     match kind {
@@ -475,10 +477,17 @@ pub struct VerifiedRelease {
 
 const BOOT_KERNEL_ADMITTED: u8 = 1;
 const BOOT_SERVICE_ADMITTED: u8 = 1 << 1;
-const REQUIRED_BOOT_ADMISSIONS: u8 = BOOT_KERNEL_ADMITTED | BOOT_SERVICE_ADMITTED;
+const BOOT_VM_ADMITTED: u8 = 1 << 2;
+const BOOT_CUDA_ADMITTED: u8 = 1 << 3;
+const BOOT_POLICY_ADMITTED: u8 = 1 << 4;
+const REQUIRED_BOOT_ADMISSIONS: u8 = BOOT_KERNEL_ADMITTED
+    | BOOT_SERVICE_ADMITTED
+    | BOOT_VM_ADMITTED
+    | BOOT_CUDA_ADMITTED
+    | BOOT_POLICY_ADMITTED;
 
 /// Typed release transaction that cannot publish a new manifest transition
-/// until the exact kernel and service artifacts have both been admitted.
+/// until all five exact manifest artifacts have been admitted.
 pub struct PendingBootRelease {
     release: VerifiedRelease,
     expected: [u8; BOOTSTRAP_STATE_BYTES],
@@ -573,9 +582,9 @@ impl PendingBootRelease {
         self.admitted |= match kind {
             ArtifactKind::Kernel => BOOT_KERNEL_ADMITTED,
             ArtifactKind::ServiceImage => BOOT_SERVICE_ADMITTED,
-            ArtifactKind::VmImage | ArtifactKind::CudaKernelBundle | ArtifactKind::LaunchPolicy => {
-                0
-            }
+            ArtifactKind::VmImage => BOOT_VM_ADMITTED,
+            ArtifactKind::CudaKernelBundle => BOOT_CUDA_ADMITTED,
+            ArtifactKind::LaunchPolicy => BOOT_POLICY_ADMITTED,
         };
     }
 }
@@ -675,6 +684,33 @@ mod tests {
             self.state.copy_from_slice(replacement);
             Ok(())
         }
+    }
+
+    fn signed_test_parts(
+        kind: ArtifactKind,
+        version: u64,
+        payload: &[u8],
+        seed: u8,
+    ) -> (
+        [u8; LAMPORT_PUBLIC_KEY_BYTES],
+        [u8; LAMPORT_SIGNATURE_BYTES],
+    ) {
+        let private = [seed; LAMPORT_PRIVATE_KEY_BYTES];
+        let mut public = [0; LAMPORT_PUBLIC_KEY_BYTES];
+        let mut signature = [0; LAMPORT_SIGNATURE_BYTES];
+        lamport_public_key(&private, &mut public).unwrap();
+        lamport_sign(
+            &private,
+            &artifact_statement(
+                kind,
+                version,
+                payload.len() as u64,
+                Sha3_512::digest(payload),
+            ),
+            &mut signature,
+        )
+        .unwrap();
+        (public, signature)
     }
 
     #[test]
@@ -789,7 +825,7 @@ mod tests {
     }
 
     #[test]
-    fn pending_boot_release_requires_both_artifacts_and_repeats_without_republication() {
+    fn pending_boot_release_requires_complete_artifact_set_and_repeats_without_republication() {
         let mut transition_private = [0x19; LAMPORT_PRIVATE_KEY_BYTES];
         let mut transition_public = [0; LAMPORT_PUBLIC_KEY_BYTES];
         lamport_public_key(&transition_private, &mut transition_public).unwrap();
@@ -810,6 +846,16 @@ mod tests {
             &mut kernel_signature,
         )
         .unwrap();
+
+        let vm_payload = b"vm";
+        let (vm_public, vm_signature) =
+            signed_test_parts(ArtifactKind::VmImage, 7, vm_payload, 0x4c);
+        let cuda_payload = b"cuda";
+        let (cuda_public, cuda_signature) =
+            signed_test_parts(ArtifactKind::CudaKernelBundle, 7, cuda_payload, 0x5d);
+        let policy_payload = b"policy";
+        let (policy_public, policy_signature) =
+            signed_test_parts(ArtifactKind::LaunchPolicy, 7, policy_payload, 0x6e);
 
         let service_payload = b"service";
         let mut service_private = [0x3b; LAMPORT_PRIVATE_KEY_BYTES];
@@ -833,10 +879,10 @@ mod tests {
             [0x91; 64],
             [
                 Sha3_512::digest(&kernel_public),
-                [0x52; 64],
+                Sha3_512::digest(&vm_public),
                 Sha3_512::digest(&service_public),
-                [0x54; 64],
-                [0x55; 64],
+                Sha3_512::digest(&cuda_public),
+                Sha3_512::digest(&policy_public),
             ],
         )
         .unwrap()
@@ -897,6 +943,48 @@ mod tests {
         pending
             .verify_artifact(&service, ArtifactKind::ServiceImage)
             .unwrap();
+        assert_eq!(
+            pending.publish(&mut store),
+            Err(ArtifactError::IncompleteReleaseAdmission)
+        );
+        let vm = SignedArtifact {
+            kind: ArtifactKind::VmImage,
+            version: 7,
+            payload: vm_payload,
+            public_key: &vm_public,
+            signature: &vm_signature,
+        };
+        let cuda = SignedArtifact {
+            kind: ArtifactKind::CudaKernelBundle,
+            version: 7,
+            payload: cuda_payload,
+            public_key: &cuda_public,
+            signature: &cuda_signature,
+        };
+        let policy = SignedArtifact {
+            kind: ArtifactKind::LaunchPolicy,
+            version: 7,
+            payload: policy_payload,
+            public_key: &policy_public,
+            signature: &policy_signature,
+        };
+        assert_eq!(
+            pending
+                .verify_artifact(&vm, ArtifactKind::CudaKernelBundle)
+                .err(),
+            Some(ArtifactError::WrongArtifactKind)
+        );
+        pending.verify_artifact(&vm, ArtifactKind::VmImage).unwrap();
+        pending
+            .verify_artifact(&cuda, ArtifactKind::CudaKernelBundle)
+            .unwrap();
+        assert_eq!(
+            pending.publish(&mut store),
+            Err(ArtifactError::IncompleteReleaseAdmission)
+        );
+        pending
+            .verify_artifact(&policy, ArtifactKind::LaunchPolicy)
+            .unwrap();
         store.force_conflict = true;
         assert_eq!(
             pending.publish(&mut store),
@@ -913,6 +1001,13 @@ mod tests {
             .unwrap();
         repeat
             .verify_artifact(&service, ArtifactKind::ServiceImage)
+            .unwrap();
+        repeat.verify_artifact(&vm, ArtifactKind::VmImage).unwrap();
+        repeat
+            .verify_artifact(&cuda, ArtifactKind::CudaKernelBundle)
+            .unwrap();
+        repeat
+            .verify_artifact(&policy, ArtifactKind::LaunchPolicy)
             .unwrap();
         store.force_conflict = true;
         repeat.publish(&mut store).unwrap();

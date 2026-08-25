@@ -2716,6 +2716,17 @@ JavaScript/WebAssembly runtime, AI mechanism, media mechanism, or other patent-
 candidate mechanism. This agent review does not replace the required
 independent human dual review.
 
+# 2026-08-24 — Complete configured-release artifact admission
+
+**Result: NOT_TRIGGERED.** The UEFI loader conventionally loads bounded signed
+release files, verifies each exact kind/version/root before monotonic
+publication, extends their authenticated payloads, and serializes their ordered
+identities into PCR evidence. Temporary buffers are zeroed and freed. This adds
+no compatibility protocol, host-share mechanism, accessibility or browser-
+semantic interface, JavaScript/WebAssembly runtime, AI mechanism, media
+mechanism, or other patent-candidate mechanism. This agent review does not
+replace the required independent human dual review.
+
 # 2026-08-24 — Projected reference-path ancestor moves
 
 **Result: NOT_TRIGGERED.** The compiler conventionally follows validated
