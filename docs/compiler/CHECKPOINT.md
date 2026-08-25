@@ -1030,6 +1030,16 @@ component-interface probe, 10 conformance tests, and 335 replacement tests: 885
 compiler tests per host. Nested/mixed higher-ranked predicates and source syntax
 remain unsupported.
 
+The mixed universal-predicate milestone admits up to eight implemented-trait or
+projection-equality predicates under one top-level universal binder. Every
+predicate shares the same fresh placeholder universe and is proven through the
+premise-aware rigid environment without inference refinement. Focused tests
+cover mixed success, exact symbolic contradiction, an empty conjunction,
+capacity rejection, recursive cycles, and universe overflow. Windows gnullvm and
+native Arch Linux WSL each pass 540 library tests, one component-interface probe,
+10 conformance tests, and 335 replacement tests: 886 compiler tests per host.
+Nested higher-ranked binders and source syntax remain unsupported.
+
 The premise-bearing rigid-normalization milestone proves the selected generic
 implementation's instantiated trait and projection predicates before exposing
 its associated value. It shares the caller's 16-frame rigid proof stack and
