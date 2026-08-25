@@ -48,6 +48,12 @@ capability. MRML is not currently a production operating system.
 
 ## Current architecture
 
+Canonical packages, coherent `SystemRelease` graphs, immutable local
+`SystemGeneration` state, Store transport, system images, servicing, installation,
+and typed administration are **PLANNED** in [DEPLOYMENT.md](DEPLOYMENT.md).
+Existing signed-container, release-journal, boot, storage, and recovery work does
+not by itself implement that deployment architecture.
+
 CPU support-floor, vendor microcode, vulnerability, heterogeneous scheduling,
 quantitative CPU authority, power, telemetry, and thermal policy are canonical
 in [platform/CPU_PLATFORM.md](platform/CPU_PLATFORM.md). Those mechanisms are

@@ -172,6 +172,12 @@ domain identity accompanies untrusted content in every interface.
 
 ## VMs, browser, media, boot, and recovery
 
+Installation and offline servicing follow [DEPLOYMENT.md](DEPLOYMENT.md). The
+text installer is the first complete path; a later GUI is a semantic projection
+over the same `InstallPlan`, exact destructive preview, trusted authorization,
+and verification state. Neither path may make sight, pointer use, cloud AI, or a
+working accelerated GPU a prerequisite for essential install/recovery choices.
+
 Application VMs project authenticated, bounded guest GUI semantics into the
 host graph. Guest semantics are untrusted content and cannot forge compositor-
 owned domain/security identity. Compatibility VMs may bridge guest accessibility

@@ -47,6 +47,12 @@ reputation may inform policy but never create authority.
 
 ## Owner sovereignty
 
+Installation, update, offline servicing, recovery, imaging, and snapshots operate
+on one immutable package and `SystemGeneration` model. Package identity,
+publisher signatures, manifests, Store presentation, and transport request or
+describe policy; they never grant capabilities. Destructive deployment authority
+binds an exact previewed transaction. See [DEPLOYMENT.md](DEPLOYMENT.md).
+
 > Security authenticates and enforces the owner's policy; it must not transfer
 > ownership of the machine to a vendor, publisher, service provider, or remote
 > verifier.

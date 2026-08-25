@@ -16,6 +16,12 @@ remain independently attributable.
 
 ## Current priority
 
+The deployment lane is defined in [DEPLOYMENT.md](DEPLOYMENT.md) and must not
+displace the current foundational gate. Later work proceeds as separate bounded
+milestones: package/boot-safe formats; release/generation state; Store/catalog;
+A/B loader; images and servicing; typed read-only administration; destructive
+storage transactions; text installer; unattended deployment; GUI projection.
+
 The modern x86-64 platform lane is defined in
 [platform/CPU_PLATFORM.md](platform/CPU_PLATFORM.md). Do not begin its broad
 implementation ahead of the current foundational dependency gate. When reached,

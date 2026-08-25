@@ -99,6 +99,12 @@ explicitly and downgrade the status rather than guessing.
 
 ## 3. Inspect the implementation map
 
+- Package, Store, release/generation, bootloader distribution, system image,
+  servicing, shell, disk administration, installer, and deployment direction:
+  `docs/DEPLOYMENT.md`. Treat it as planned unless exact implementation and
+  evidence exist. Recover one immutable package/`SystemGeneration` model; never
+  invent separate update, offline-service, recovery, image, or snapshot paths.
+
 - Kernel mechanisms: `crates/mrml-kernel/src/`
 - x86_64 CPU, memory, SMP, VMX, EPT, VT-d: `crates/mrml-kernel/src/arch/x86_64/`
 - CPU support floor, Intel/AMD microcode, post-update vulnerability state,

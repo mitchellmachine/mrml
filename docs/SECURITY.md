@@ -177,6 +177,13 @@ slot reuse, capacity loss, or registration failure drops the recovery result.
 
 ## Persistent state and boot
 
+Package/update/deployment security follows [DEPLOYMENT.md](DEPLOYMENT.md): UEFI
+authentication and MRML release authentication are separate; GitHub is transport,
+not trust; individually valid packages do not form a release automatically;
+catalog and generation rollback/freeze protection is mandatory; imaging cannot
+export non-exportable secrets; and disk destruction requires authorization bound
+to the exact revalidated transaction.
+
 Signed images alone do not prevent rollback. TPM-backed or equivalent
 authenticated, monotonic, power-loss-atomic storage; measured boot; exact
 artifact-set admission; corruption handling; recovery; and key rotation remain

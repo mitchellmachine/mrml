@@ -18,6 +18,10 @@ drop-in replacement for mature codec and inference ecosystems.
 
 ## Project scope
 
+The planned canonical package, Store, immutable system-generation, image,
+servicing, installer, and typed-administration architecture is defined in
+[docs/DEPLOYMENT.md](docs/DEPLOYMENT.md). It is not currently implemented.
+
 The planned modern x86-64 support floor, Intel/AMD microcode policy,
 heterogeneous scheduling, CPU budgets, power, sensors, and thermal safety are
 defined in [docs/platform/CPU_PLATFORM.md](docs/platform/CPU_PLATFORM.md). The

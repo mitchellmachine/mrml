@@ -101,6 +101,12 @@ Architectural invariants:
   expose meaningless internal details as objects merely for uniformity;
 - native storage uses capability-bound stable objects and is not founded on
   FAT32, ext4, NTFS, POSIX permissions, or a universal global namespace;
+- follow `docs/DEPLOYMENT.md`: applications, kernel, VMM, bootloader, drivers,
+  services, modules, and recovery use one package family; exact coherent releases
+  instantiate immutable generations; UEFI remains conventional; GitHub is only
+  transport; manifests request rather than grant; Store download is not admission;
+  image/backup/secret export remain distinct; servicing constructs generations;
+  and installation/storage destruction requires an exact preview-bound capability;
 - follow `docs/memory/MEMORY_RESOURCE_MODEL.md`: RAM allocation is explicit
   quantitative authority; pools cannot amplify; objects, mappings, sharing,
   pinning, content access, DMA, and guest projection remain separate;

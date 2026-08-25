@@ -1,5 +1,14 @@
 # Patent review log
 
+## 2026-08-25 — Deployment, package, image, installer, and shell architecture
+
+**Result: TRIGGERED.** The documentation composes package/image containers,
+content-addressed deployment, snapshot/export, online/offline servicing, Store
+updates, A/B bootloader staging, transactional installation, and typed object
+administration. Before implementation, search exact proposed mechanisms and
+worldwide families, then verify material rights in authoritative registers and
+record grants, expiration, design-arounds, or pauses here.
+
 ## 2026-08-25 — CPU platform, microcode, scheduler, power, and thermal documentation
 
 **Result: NOT_TRIGGERED.** The documentation selects no novel implementation

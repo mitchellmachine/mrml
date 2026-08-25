@@ -322,6 +322,12 @@ capabilities.
 
 ## Authority and security UX
 
+The native terminal, object-oriented administration shell, Store, deployment
+service, and text/GUI installer follow [DEPLOYMENT.md](DEPLOYMENT.md). Semantic
+objects—not rendered text or pixels—cross administration interfaces. The GUI is
+a projection over the same `InstallPlan` and exact destructive authorization as
+the text installer, and neither terminal nor first-party origin grants authority.
+
 The planned semantic system monitor follows
 [CPU_PLATFORM.md](platform/CPU_PLATFORM.md): CPU, resource, power, sensor, and
 thermal observation is capability-scoped and does not imply budget changes,
