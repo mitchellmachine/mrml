@@ -4754,6 +4754,18 @@ the same fixed inference state. It adds no worklist, backtracking, coherence
 rule, search order, specialization, cache, parser, runtime mechanism,
 allocation, synchronization, protocol, cryptography, or hardware behavior.
 
+# 2026-08-25 — Fixed-period vCPU slice precharging
+
+**Result: NOT_TRIGGERED after the CPU-budget integration review.** This bounded
+prerequisite uses a conventional fixed-period counter and precharges a declared
+maximum slice before an existing hosted vCPU entry. Parallel reservations share
+one allowance; checked replenishment, exhaustion, boundary, time-regression,
+generation, and capability checks add no scheduler-selection, migration,
+deadline-programming, timer, topology, power, virtualization, or hardware
+protocol mechanism. General scheduler policy and backend deadline enforcement
+remain separate review scopes; agent review does not replace independent human
+dual review.
+
 # 2026-08-25 — Direct-leaf projection-head coherence
 
 **Result: NOT_TRIGGERED.** This compiler-only increment sends direct leaf

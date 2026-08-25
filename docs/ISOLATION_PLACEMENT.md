@@ -251,6 +251,15 @@ teardown. A shared kernel bridge consumes reservation failure into typed
 WHP/nested-KVM controlled probes pass. Broader scheduler enforcement, multiple
 profiles/vCPUs, and physical-topology evidence remain **PLANNED**.
 
+The CPU gate now also precharges an exact bounded runtime slice before every
+focused component vCPU entry. One period allowance is shared across all
+reservations under the budget, so parallel vCPUs cannot amplify time authority;
+exhaustion and invalid time transitions fail before entry. Both hosted probes
+verify issued-slice accounting through teardown. The one-microsecond values are
+deterministic controlled-probe maximum charges, not measurements or proof that
+WHP/KVM enforces a one-microsecond deadline. Backend deadline programming and
+actual elapsed-time reconciliation remain **PLANNED**.
+
 ## One policy, several placements
 
 MRML extends its existing process, service, capability, package-generation, and

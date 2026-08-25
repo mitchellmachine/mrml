@@ -244,6 +244,16 @@ native fallback. Scheduler enforcement, native physical backing, other
 profiles, and broader device-specific projection accounting are the current
 gates.
 
+The vCPU budget now has a first runtime-enforcement prerequisite: one explicit
+fixed period, a shared allowance across parallel reservations, and exact
+maximum-slice charging before each focused component vCPU entry. Exhaustion,
+time regression, period crossing, and stale authority fail before dispatch.
+Windows/Linux kernel suites and fresh WHP/KVM hosted probes pass, including
+zero KVM native fallback. This is deterministic dispatch-admission accounting,
+not elapsed-time or hardware-deadline evidence. Backend timer programming,
+elapsed reconciliation, priority/affinity, multiple profiles/vCPUs, and general
+scheduler integration remain current gates.
+
 Typed provider-resolution groundwork now matches canonical `REQUIRES` and
 `PROVIDES` edges only inside an immutable `SystemGeneration`. Interface name,
 major generation, and schema fingerprint must all be byte-identical; resolved

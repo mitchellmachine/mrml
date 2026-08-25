@@ -5,7 +5,8 @@ use crate::{Capability, CapabilityError, CapabilitySpace, ObjectId, Rights};
 const CPU_BUDGET_RIGHTS: Rights = Rights::ALLOCATE
     .union(Rights::CONTROL)
     .union(Rights::INSPECT)
-    .union(Rights::DELEGATE);
+    .union(Rights::DELEGATE)
+    .union(Rights::EXECUTE);
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct CpuBudgetId {
@@ -79,6 +80,8 @@ pub struct CpuBudgetUsage {
     spec: CpuBudgetSpec,
     reserved_parallelism: u16,
     active_reservations: u16,
+    runtime_period_start_micros: Option<u64>,
+    consumed_runtime_micros: u32,
 }
 
 impl CpuBudgetUsage {
@@ -93,6 +96,35 @@ impl CpuBudgetUsage {
     pub const fn active_reservations(self) -> u16 {
         self.active_reservations
     }
+
+    pub const fn runtime_period_start_micros(self) -> Option<u64> {
+        self.runtime_period_start_micros
+    }
+
+    pub const fn consumed_runtime_micros(self) -> u32 {
+        self.consumed_runtime_micros
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct CpuRuntimeSlice {
+    charged_micros: u32,
+    remaining_micros: u32,
+    period_end_micros: u64,
+}
+
+impl CpuRuntimeSlice {
+    pub const fn charged_micros(self) -> u32 {
+        self.charged_micros
+    }
+
+    pub const fn remaining_micros(self) -> u32 {
+        self.remaining_micros
+    }
+
+    pub const fn period_end_micros(self) -> u64 {
+        self.period_end_micros
+    }
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -104,6 +136,11 @@ pub enum CpuResourceError {
     ParallelismExhausted,
     DuplicateDomain,
     ReservationsActive,
+    RuntimeAlreadyStarted,
+    RuntimeNotStarted,
+    RuntimeExhausted,
+    TimeRegression,
+    SliceCrossesPeriod,
     GenerationExhausted,
     Arithmetic,
     Capability(CapabilityError),
@@ -122,6 +159,8 @@ struct BudgetEntry {
     spec: CpuBudgetSpec,
     reserved_parallelism: u16,
     active_reservations: u16,
+    runtime_period_start_micros: Option<u64>,
+    consumed_runtime_micros: u32,
     occupied: bool,
 }
 
@@ -138,6 +177,8 @@ impl BudgetEntry {
         },
         reserved_parallelism: 0,
         active_reservations: 0,
+        runtime_period_start_micros: None,
+        consumed_runtime_micros: 0,
         occupied: false,
     };
 }
@@ -211,6 +252,8 @@ impl<const B: usize, const R: usize> CpuBudgetTable<B, R> {
             spec,
             reserved_parallelism: 0,
             active_reservations: 0,
+            runtime_period_start_micros: None,
+            consumed_runtime_micros: 0,
             occupied: true,
         };
         Ok((id, capability))
@@ -309,6 +352,94 @@ impl<const B: usize, const R: usize> CpuBudgetTable<B, R> {
         Ok(entry.parallelism)
     }
 
+    pub fn start_runtime_period<const C: usize>(
+        &mut self,
+        reservation: VcpuReservationId,
+        capability: Capability,
+        period_start_micros: u64,
+        capabilities: &CapabilitySpace<C>,
+    ) -> Result<(), CpuResourceError> {
+        let reservation = self.reservation(reservation)?;
+        let budget = *self.budget(reservation.budget)?;
+        if capabilities.authorize(capability, Rights::EXECUTE)? != budget.authority {
+            return Err(CpuResourceError::Capability(
+                CapabilityError::PermissionDenied,
+            ));
+        }
+        if budget.runtime_period_start_micros.is_some() {
+            return Err(CpuResourceError::RuntimeAlreadyStarted);
+        }
+        let budget = self.budget_mut(reservation.budget)?;
+        budget.runtime_period_start_micros = Some(period_start_micros);
+        budget.consumed_runtime_micros = 0;
+        Ok(())
+    }
+
+    /// Charges one scheduler-authorized maximum runtime slice before vCPU entry.
+    /// All reservations under a budget consume the same period allowance, so
+    /// additional parallel reservations cannot amplify CPU time authority.
+    pub fn charge_runtime_slice<const C: usize>(
+        &mut self,
+        reservation: VcpuReservationId,
+        capability: Capability,
+        slice_start_micros: u64,
+        slice_micros: u32,
+        capabilities: &CapabilitySpace<C>,
+    ) -> Result<CpuRuntimeSlice, CpuResourceError> {
+        if slice_micros == 0 {
+            return Err(CpuResourceError::InvalidReservation);
+        }
+        let reservation = self.reservation(reservation)?;
+        let budget = *self.budget(reservation.budget)?;
+        if capabilities.authorize(capability, Rights::EXECUTE)? != budget.authority {
+            return Err(CpuResourceError::Capability(
+                CapabilityError::PermissionDenied,
+            ));
+        }
+        let mut period_start = budget
+            .runtime_period_start_micros
+            .ok_or(CpuResourceError::RuntimeNotStarted)?;
+        if slice_start_micros < period_start {
+            return Err(CpuResourceError::TimeRegression);
+        }
+        let period = u64::from(budget.spec.period_micros);
+        let elapsed_periods = (slice_start_micros - period_start) / period;
+        let mut consumed = budget.consumed_runtime_micros;
+        if elapsed_periods != 0 {
+            period_start = period_start
+                .checked_add(
+                    elapsed_periods
+                        .checked_mul(period)
+                        .ok_or(CpuResourceError::Arithmetic)?,
+                )
+                .ok_or(CpuResourceError::Arithmetic)?;
+            consumed = 0;
+        }
+        let period_end = period_start
+            .checked_add(period)
+            .ok_or(CpuResourceError::Arithmetic)?;
+        let slice_end = slice_start_micros
+            .checked_add(u64::from(slice_micros))
+            .ok_or(CpuResourceError::Arithmetic)?;
+        if slice_end > period_end {
+            return Err(CpuResourceError::SliceCrossesPeriod);
+        }
+        let next_consumed = consumed
+            .checked_add(slice_micros)
+            .ok_or(CpuResourceError::Arithmetic)?;
+        if next_consumed > budget.spec.runtime_micros {
+            return Err(CpuResourceError::RuntimeExhausted);
+        }
+        let budget_mut = self.budget_mut(reservation.budget)?;
+        budget_mut.runtime_period_start_micros = Some(period_start);
+        budget_mut.consumed_runtime_micros = next_consumed;
+        Ok(CpuRuntimeSlice {
+            charged_micros: slice_micros,
+            remaining_micros: budget.spec.runtime_micros - next_consumed,
+            period_end_micros: period_end,
+        })
+    }
+
     pub fn usage<const C: usize>(
         &self,
         budget: CpuBudgetId,
@@ -325,6 +456,8 @@ impl<const B: usize, const R: usize> CpuBudgetTable<B, R> {
             spec: entry.spec,
             reserved_parallelism: entry.reserved_parallelism,
             active_reservations: entry.active_reservations,
+            runtime_period_start_micros: entry.runtime_period_start_micros,
+            consumed_runtime_micros: entry.consumed_runtime_micros,
         })
     }
 
@@ -367,6 +500,14 @@ impl<const B: usize, const R: usize> CpuBudgetTable<B, R> {
             .get_mut(id.slot as usize)
             .filter(|entry| entry.occupied && entry.generation == id.generation)
             .ok_or(CpuResourceError::InvalidBudget)
+    }
+
+    fn reservation(&self, id: VcpuReservationId) -> Result<ReservationEntry, CpuResourceError> {
+        self.reservations
+            .get(id.slot as usize)
+            .copied()
+            .filter(|entry| entry.occupied && entry.generation == id.generation)
+            .ok_or(CpuResourceError::InvalidReservation)
     }
 
     fn budget_authority(&self, id: CpuBudgetId) -> Result<ObjectId, CpuResourceError> {
@@ -475,6 +616,83 @@ mod tests {
         assert_eq!(
             CpuBudgetSpec::new(1, 1, 1, 0, 0),
             Err(CpuResourceError::InvalidBudget)
+        );
+    }
+
+    #[test]
+    fn runtime_slices_are_precharged_bounded_and_periodic() {
+        let mut capabilities = CapabilitySpace::<1>::new();
+        let mut table = CpuBudgetTable::<1, 1>::new(3).unwrap();
+        let (budget, capability) = table.create_root(spec(1), &mut capabilities).unwrap();
+        let reservation = table
+            .reserve_vcpus(budget, capability, ObjectId(30), 1, &capabilities)
+            .unwrap();
+        assert_eq!(
+            table.charge_runtime_slice(reservation, capability, 100, 1, &capabilities),
+            Err(CpuResourceError::RuntimeNotStarted)
+        );
+        table
+            .start_runtime_period(reservation, capability, 100, &capabilities)
+            .unwrap();
+        assert_eq!(
+            table.start_runtime_period(reservation, capability, 100, &capabilities),
+            Err(CpuResourceError::RuntimeAlreadyStarted)
+        );
+        let first = table
+            .charge_runtime_slice(reservation, capability, 100, 3_000, &capabilities)
+            .unwrap();
+        assert_eq!(first.charged_micros(), 3_000);
+        assert_eq!(first.remaining_micros(), 2_000);
+        assert_eq!(first.period_end_micros(), 10_100);
+        assert_eq!(
+            table.charge_runtime_slice(reservation, capability, 3_100, 2_001, &capabilities),
+            Err(CpuResourceError::RuntimeExhausted)
+        );
+        assert_eq!(
+            table.charge_runtime_slice(reservation, capability, 10_099, 2, &capabilities),
+            Err(CpuResourceError::SliceCrossesPeriod)
+        );
+        let next = table
+            .charge_runtime_slice(reservation, capability, 10_100, 5_000, &capabilities)
+            .unwrap();
+        assert_eq!(next.remaining_micros(), 0);
+        assert_eq!(next.period_end_micros(), 20_100);
+        let usage = table.usage(budget, capability, &capabilities).unwrap();
+        assert_eq!(usage.runtime_period_start_micros(), Some(10_100));
+        assert_eq!(usage.consumed_runtime_micros(), 5_000);
+        assert_eq!(
+            table.charge_runtime_slice(reservation, capability, 10_099, 1, &capabilities),
+            Err(CpuResourceError::TimeRegression)
+        );
+    }
+
+    #[test]
+    fn parallel_reservations_share_one_runtime_allowance() {
+        let mut capabilities = CapabilitySpace::<1>::new();
+        let mut table = CpuBudgetTable::<1, 2>::new(4).unwrap();
+        let (budget, capability) = table.create_root(spec(2), &mut capabilities).unwrap();
+        let first = table
+            .reserve_vcpus(budget, capability, ObjectId(40), 1, &capabilities)
+            .unwrap();
+        let second = table
+            .reserve_vcpus(budget, capability, ObjectId(41), 1, &capabilities)
+            .unwrap();
+        table
+            .start_runtime_period(first, capability, 0, &capabilities)
+            .unwrap();
+        table
+            .charge_runtime_slice(first, capability, 0, 4_000, &capabilities)
+            .unwrap();
+        assert_eq!(
+            table.charge_runtime_slice(second, capability, 4_000, 1_001, &capabilities),
+            Err(CpuResourceError::RuntimeExhausted)
+        );
+        assert_eq!(
+            table
+                .charge_runtime_slice(second, capability, 4_000, 1_000, &capabilities)
+                .unwrap()
+                .remaining_micros(),
+            0
         );
     }
 }

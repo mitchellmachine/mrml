@@ -19,15 +19,15 @@ use mrml_kernel::arch::x86_64::{Mapping, PRIVILEGE_STACK_ARENA_PAGES, PagePermis
 use mrml_kernel::verify_gpu_kernel_bundle;
 #[cfg(target_os = "windows")]
 use mrml_kernel::{
-    ArtifactKind, CapabilitySpace, CpuBudgetSpec, CpuBudgetTable, GPU_DOORBELL_PORT,
-    GPU_QUEUE_MESSAGE_BYTES, GpuCommandRing, GpuQueueIdentity, GpuQueueReceiver,
+    ArtifactKind, Capability, CapabilitySpace, CpuBudgetId, CpuBudgetSpec, CpuBudgetTable,
+    GPU_DOORBELL_PORT, GPU_QUEUE_MESSAGE_BYTES, GpuCommandRing, GpuQueueIdentity, GpuQueueReceiver,
     GpuResourceResponse, GpuResourceResponseSender, GpuSharedQueueLayout, GpuVmmQueueBridge,
     GuestMemory, HypercallRouter, InterruptPolicy, IsolationAdmissionTable, IsolationMode,
     IsolationPlacement, IsolationUnavailableReason, MAX_COMPONENT_IMAGE_REGIONS, MemoryPoolTable,
     MicrovmPageProjectionKind, ObjectId, PAGE_SIZE, PreparedComponentServiceLaunch,
     PreparedIsolationServiceRoute, ResourceCommand, Rights, SIGNED_ARTIFACT_OVERHEAD_BYTES,
-    SignedArtifact, TotalMicrovmClass, TrustRoot, VIRTUAL_BLOCK_FEATURE_FLUSH, VerifiedExecutable,
-    VerifiedGpuKernelBundle, VirtualBlockBackend, VirtualBlockBackendAuthority,
+    SignedArtifact, TotalMicrovmClass, TrustRoot, VIRTUAL_BLOCK_FEATURE_FLUSH, VcpuReservationId,
+    VerifiedExecutable, VerifiedGpuKernelBundle, VirtualBlockBackend, VirtualBlockBackendAuthority,
     VirtualBlockCompletionStatus, VirtualBlockConfigurationPage, VirtualBlockDevice,
     VirtualBlockDeviceState, VirtualBlockError, VirtualBlockMutationError,
     VirtualBlockPciAttachment, VirtualBlockPciAttachmentState, VirtualBlockPciCleanupMode,
@@ -68,6 +68,30 @@ const COMPONENT_MEMORY_OBJECTS: usize = 4 + 2 * (MAX_COMPONENT_IMAGE_REGIONS + 1
 const COMPONENT_MEMORY_MAPPINGS: usize = 2 + 2 * MAX_COMPONENT_IMAGE_REGIONS;
 #[cfg(target_os = "windows")]
 const COMPONENT_MEMORY_CAPABILITIES: usize = 7 + 2 * (MAX_COMPONENT_IMAGE_REGIONS + 1);
+
+#[cfg(target_os = "windows")]
+type ComponentCpuAuthority = (
+    CpuBudgetTable<1, 1>,
+    CapabilitySpace<1>,
+    CpuBudgetId,
+    Capability,
+    VcpuReservationId,
+    u64,
+);
+
+#[cfg(target_os = "windows")]
+fn precharge_component_vcpu(cpu: &mut Option<ComponentCpuAuthority>) -> Result<()> {
+    let (budgets, capabilities, _, capability, reservation, next_start) = cpu
+        .as_mut()
+        .ok_or_else(|| anyhow!("missing component vCPU runtime authority"))?;
+    budgets
+        .charge_runtime_slice(*reservation, *capability, *next_start, 1, capabilities)
+        .map_err(|error| anyhow!("component vCPU runtime charge failed: {:?}", error))?;
+    *next_start = next_start
+        .checked_add(1)
+        .ok_or_else(|| anyhow!("component vCPU runtime cursor overflow"))?;
+    Ok(())
+}
 
 #[cfg(target_os = "windows")]
 fn prepare_configured_total_service(
@@ -1915,7 +1939,10 @@ fn application_main() -> Result<()> {
         .map_err(|error| anyhow!("component vCPU reservation failed: {:?}", error))?;
         let (route, reservation) = reserved.into_parts();
         isolation_preparation = Some(route);
-        Some((budgets, capabilities, budget, capability, reservation))
+        budgets
+            .start_runtime_period(reservation, capability, 0, &capabilities)
+            .map_err(|error| anyhow!("component CPU runtime start failed: {:?}", error))?;
+        Some((budgets, capabilities, budget, capability, reservation, 0))
     } else {
         None
     };
@@ -2365,6 +2392,9 @@ fn application_main() -> Result<()> {
         );
         return Ok(());
     } else {
+        if component_service_mode {
+            precharge_component_vcpu(&mut component_cpu)?;
+        }
         match VmBackend::run(&mut guest, 0) {
             Ok(exit) => exit,
             Err(error) => {
@@ -2771,10 +2801,16 @@ fn application_main() -> Result<()> {
                         {
                             return Err(anyhow!("component memory was not completely reclaimed"));
                         }
-                        let (mut budgets, mut capabilities, budget, capability, reservation) =
-                            component_cpu
-                                .take()
-                                .ok_or_else(|| anyhow!("missing component vCPU authority"))?;
+                        let (
+                            mut budgets,
+                            mut capabilities,
+                            budget,
+                            capability,
+                            reservation,
+                            charged_slices,
+                        ) = component_cpu
+                            .take()
+                            .ok_or_else(|| anyhow!("missing component vCPU authority"))?;
                         if budgets
                             .release_vcpus(reservation, capability, &capabilities)
                             .map_err(|error| {
@@ -2790,7 +2826,12 @@ fn application_main() -> Result<()> {
                                 .map_err(|error| {
                                     anyhow!("component CPU inspection failed: {:?}", error)
                                 })?;
-                        if usage.reserved_parallelism() != 0 || usage.active_reservations() != 0 {
+                        if usage.reserved_parallelism() != 0
+                            || usage.active_reservations() != 0
+                            || usage.consumed_runtime_micros()
+                                != u32::try_from(charged_slices).unwrap_or(u32::MAX)
+                            || charged_slices == 0
+                        {
                             return Err(anyhow!("component vCPU authority was not reclaimed"));
                         }
                         budgets
@@ -2810,6 +2851,7 @@ fn application_main() -> Result<()> {
                 }
                 _ => return Err(anyhow!("WHP component service stage mismatch: {:?}", exit)),
             }
+            precharge_component_vcpu(&mut component_cpu)?;
             exit = VmBackend::run(&mut guest, 0)
                 .map_err(|error| anyhow!("WHP component service execution failed: {:?}", error))?;
         }

@@ -138,10 +138,15 @@ priority ceiling, and a nonempty affinity mask to an exact capability object in
 a CPU-specific namespace. Exact domain-bound vCPU reservations cannot exceed
 parallelism, duplicate a live domain, or survive a stale generation; allocation,
 control, and inspection require their respective rights, and a budget cannot be
-retired while reservations remain. Focused Windows and Linux tests pass. This
-does not yet enforce time, priority, class, or affinity in the scheduler or
-either VMM backend, derive child budgets, or prove physical topology behavior.
-Those integrations remain **PLANNED**.
+retired while reservations remain. Runtime groundwork now starts one explicit
+fixed period and precharges every authorized maximum slice before vCPU entry.
+All parallel reservations consume the same allowance; exhaustion, time
+regression, period crossing, zero slices, stale reservations, and arithmetic
+failure reject before execution authority is issued. Focused Windows and Linux
+tests pass. This does not yet program a host or APIC deadline from the slice,
+reconcile actual elapsed time, enforce priority/class/affinity, derive child
+budgets, or prove physical topology behavior. Those integrations remain
+**PLANNED**.
 
 The focused signed ZIM/Zstd component profile now consumes one exact
 domain-bound vCPU reservation before either hosted backend constructs its
@@ -149,9 +154,13 @@ guest. The uncommitted isolation route and budget reservation are composed in
 one fail-closed kernel operation: exhaustion records `VCPU_BUDGET`
 unavailability and zero native fallback. Successful WHP and nested-KVM runs
 retain the reservation until confirmed guest teardown, then verify zero
-reserved parallelism and retire the root. This is hosted controlled-probe
-accounting only; runtime/period, priority, affinity, scheduler, multi-vCPU, and
-physical-topology enforcement remain **PLANNED**.
+reserved parallelism and retire the root. Every focused component vCPU entry is
+now preceded by an exact one-microsecond maximum-slice charge, and teardown
+verifies the shared budget consumed exactly the number of issued entries. This
+is hosted controlled dispatch-admission evidence, not measured guest CPU time
+or a host timer guarantee; deadline programming, elapsed-time reconciliation,
+priority, affinity, general scheduler, multi-vCPU, and physical-topology
+enforcement remain **PLANNED**.
 
 ## System power policy
 

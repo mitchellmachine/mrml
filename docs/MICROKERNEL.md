@@ -7832,6 +7832,17 @@ microVM and zero native fallback. This is not native physical backing,
 resource-model page-table installation, general device projection, or physical
 hardware evidence.
 
+The focused component vCPU budget now starts one explicit runtime period and
+precharges an exact maximum slice before every KVM/WHP vCPU entry. Parallel
+reservations share the same allowance, and invalid time, boundary crossing,
+exhaustion, stale identity, or missing execute authority rejects before entry.
+Teardown verifies that consumed slices equal issued entries before retiring the
+budget. Windows and Linux kernel suites passed 506 tests, WHP passed 7, KVM
+passed 8, and fresh signed hosted probes passed with zero KVM native fallback.
+The deterministic one-microsecond probe slices are accounting tokens, not
+measured execution or proof of a host/APIC deadline; timer programming and
+elapsed-time reconciliation remain planned.
+
 ## Milestones
 
 This historical list is retained for continuity. The current dependency-ordered

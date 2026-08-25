@@ -242,8 +242,12 @@ reservations, and blocks root retirement while vCPU reservations remain. It is
 not a `MemoryObject`, and RAM authority cannot substitute for it. The focused
 signed component profile now retains one exact reservation across WHP/KVM guest
 lifetime and releases it after teardown; budget failure makes the Total-mode
-domain unavailable rather than native. Scheduler time/priority/affinity
-enforcement and broader VMM profiles remain planned.
+domain unavailable rather than native. One shared fixed-period allowance now
+precharges every focused component vCPU entry and cannot be amplified by
+parallel reservations. This is deterministic dispatch-admission accounting,
+not elapsed-time or deadline evidence. Host/APIC timer enforcement,
+elapsed-time reconciliation, priority/affinity, and broader VMM profiles remain
+planned.
 
 Illustrative browser-VM envelope: four bounded vCPUs; 4 GiB RAM pool; graphics +
 decode with 512 MiB VRAM and bounded GPU time; 10 GiB storage quota; and exact
