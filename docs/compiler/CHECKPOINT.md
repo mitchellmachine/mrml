@@ -1021,6 +1021,15 @@ library tests, one component-interface probe, 10 conformance tests, and 335
 replacement tests: 884 compiler tests per host. Nested and mixed higher-ranked
 term binders remain unsupported.
 
+The universal projection-equality milestone binds a projection and expected term
+to fresh placeholders in the successor universe, runs premise-aware rigid
+normalization, and requires exact symbolic identity. It preserves ambiguity, no
+solution, cycle, overflow, and universe-index overflow as distinct outcomes.
+Windows gnullvm and native Arch Linux WSL each pass 539 library tests, one
+component-interface probe, 10 conformance tests, and 335 replacement tests: 885
+compiler tests per host. Nested/mixed higher-ranked predicates and source syntax
+remain unsupported.
+
 The premise-bearing rigid-normalization milestone proves the selected generic
 implementation's instantiated trait and projection predicates before exposing
 its associated value. It shares the caller's 16-frame rigid proof stack and

@@ -4217,6 +4217,14 @@ Arch Linux WSL each pass 538 library tests, one component probe, 10 conformance
 tests, and 335 replacement tests: 884 compiler tests per host. Nested/mixed
 higher-ranked term binders and source syntax remain unsupported.
 
+The universal projection-equality binder maps its projection and expected term
+to fresh placeholders in the successor universe, then uses premise-aware rigid
+normalization and exact symbolic comparison. Universe overflow remains explicit.
+Windows gnullvm and native Arch Linux WSL each pass 539 library tests, one
+component probe, 10 conformance tests, and 335 replacement tests: 885 compiler
+tests per host. Nested/mixed higher-ranked predicates and source syntax remain
+unsupported.
+
 The projection-bearing term milestone uses a fixed 64-node arena for flat leaf
 terms and associated-type projections whose trait self/argument positions refer
 only to earlier nodes. Identical nodes intern to one stable identity; invalid

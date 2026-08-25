@@ -3614,6 +3614,57 @@ pub struct ExistsTraitProjectionEquality {
     pub expected: BoundTraitGoalType,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct ForAllTraitProjectionEquality {
+    parameter_count: usize,
+    pub projection: BoundTraitProjection,
+    pub expected: BoundTraitGoalType,
+}
+
+impl ForAllTraitProjectionEquality {
+    pub fn new(
+        parameter_count: usize,
+        projection: BoundTraitProjection,
+        expected: BoundTraitGoalType,
+    ) -> Result<Self, TraitGoalError> {
+        if parameter_count > MAX_TRAIT_GENERIC_PARAMETERS {
+            return Err(TraitGoalError::TooManyGenericParameters);
+        }
+        validate_bound_goal(projection.goal, parameter_count)?;
+        validate_bound_type(expected, parameter_count)?;
+        Ok(Self {
+            parameter_count,
+            projection,
+            expected,
+        })
+    }
+
+    pub const fn parameter_count(self) -> usize {
+        self.parameter_count
+    }
+
+    pub fn instantiate_in_universe(
+        self,
+        universe: TraitUniverseIndex,
+    ) -> Result<InferredTraitProjectionEquality, TraitGoalError> {
+        let mut arguments = [TraitGoalType::Placeholder(TraitPlaceholder::new(
+            universe,
+            TraitPlaceholderId::new(0),
+        )); MAX_TRAIT_GENERIC_PARAMETERS];
+        for (index, argument) in arguments[..self.parameter_count].iter_mut().enumerate() {
+            *argument = TraitGoalType::Placeholder(TraitPlaceholder::new(
+                universe,
+                TraitPlaceholderId::new(index as u32),
+            ));
+        }
+        Ok(InferredTraitProjectionEquality {
+            goal: instantiate_bound_goal(self.projection.goal, &arguments[..self.parameter_count])?,
+            associated_type_id: self.projection.associated_type_id,
+            expected: instantiate_bound_type(self.expected, &arguments[..self.parameter_count])?,
+        })
+    }
+}
+
 impl ExistsTraitProjectionEquality {
     pub fn new(
         parameter_count: usize,
@@ -4755,6 +4806,49 @@ pub fn solve_for_all_projection_bearing_trait_goal(
         &mut stack,
         0,
     )
+}
+
+pub fn solve_for_all_trait_projection_equality(
+    exact_implementations: &TraitImplementationDatabase,
+    generic_implementations: &GenericTraitImplementationDatabase,
+    clauses: &TraitWhereClauseDatabase,
+    exact_values: &TraitAssociatedTypeDatabase,
+    generic_values: &GenericTraitAssociatedTypeDatabase,
+    parent_universe: TraitUniverseIndex,
+    query: ForAllTraitProjectionEquality,
+) -> Result<TraitProofSolution, TraitGoalError> {
+    let universe = parent_universe.next()?;
+    let query = query.instantiate_in_universe(universe)?;
+    validate_rigid_goal(query.goal)?;
+    rigid_goal_type(query.expected)?;
+    let environment = TraitProjectionEnvironment {
+        exact_implementations,
+        generic_implementations,
+        clauses,
+        exact_values,
+        generic_values,
+    };
+    let mut projection_stack = [None; MAX_TRAIT_PROJECTION_DEPTH];
+    let mut proof_stack = [None; MAX_TRAIT_PROOF_DEPTH];
+    match environment.normalize_rigid_inner(
+        ConcreteTraitProjectionGoal {
+            goal: query.goal,
+            associated_type_id: query.associated_type_id,
+        },
+        &mut projection_stack,
+        0,
+        &mut proof_stack,
+        0,
+    )? {
+        InferredProjectionValueSolution::Unique(actual) if actual == query.expected => {
+            Ok(TraitProofSolution::Proven)
+        }
+        InferredProjectionValueSolution::Unique(_)
+        | InferredProjectionValueSolution::NoSolution => Ok(TraitProofSolution::NoSolution),
+        InferredProjectionValueSolution::Ambiguous => Ok(TraitProofSolution::Ambiguous),
+        InferredProjectionValueSolution::Cycle => Ok(TraitProofSolution::Cycle),
+        InferredProjectionValueSolution::Overflow => Ok(TraitProofSolution::Overflow),
+    }
 }
 
 pub fn solve_exists_trait_projection_equality(
@@ -6467,6 +6561,70 @@ mod tests {
         );
         assert_eq!(
             solve_for_all_projection_bearing_trait_goal(
+                &TraitImplementationDatabase::EMPTY,
+                &generic,
+                &TraitWhereClauseDatabase::EMPTY,
+                &TraitAssociatedTypeDatabase::EMPTY,
+                &values,
+                TraitUniverseIndex::new(u16::MAX),
+                query,
+            ),
+            Err(TraitGoalError::UniverseOverflow)
+        );
+    }
+
+    #[test]
+    fn solves_universal_projection_equalities_with_rigid_placeholders() {
+        let parameter = TraitGenericParameterId::new(0);
+        let associated = TraitAssociatedTypeId::new(1);
+        let query = ForAllTraitProjectionEquality::new(
+            1,
+            BoundTraitProjection::new(
+                BoundImplementedTraitGoal::new(
+                    TraitId::new(762),
+                    BoundTraitGoalType::Parameter(parameter),
+                ),
+                associated,
+            ),
+            BoundTraitGoalType::Parameter(parameter),
+        )
+        .unwrap();
+        let implementation_id = GenericTraitImplementationId::new(209);
+        let implementation = TraitWhereClause::new(
+            1,
+            BoundImplementedTraitGoal::new(
+                TraitId::new(762),
+                BoundTraitGoalType::Parameter(parameter),
+            ),
+        )
+        .unwrap();
+        let mut generic = GenericTraitImplementationDatabase::EMPTY;
+        generic.insert(implementation_id, implementation).unwrap();
+        let mut values = GenericTraitAssociatedTypeDatabase::EMPTY;
+        values
+            .insert(
+                &generic,
+                GenericTraitAssociatedTypeValue::new(
+                    implementation_id,
+                    associated,
+                    BoundTraitGoalType::Parameter(parameter),
+                ),
+            )
+            .unwrap();
+        assert_eq!(
+            solve_for_all_trait_projection_equality(
+                &TraitImplementationDatabase::EMPTY,
+                &generic,
+                &TraitWhereClauseDatabase::EMPTY,
+                &TraitAssociatedTypeDatabase::EMPTY,
+                &values,
+                TraitUniverseIndex::ROOT,
+                query,
+            ),
+            Ok(TraitProofSolution::Proven)
+        );
+        assert_eq!(
+            solve_for_all_trait_projection_equality(
                 &TraitImplementationDatabase::EMPTY,
                 &generic,
                 &TraitWhereClauseDatabase::EMPTY,
