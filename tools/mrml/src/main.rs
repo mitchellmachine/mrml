@@ -3,6 +3,8 @@ use std::fs;
 use std::path::PathBuf;
 use std::process::{Command, ExitCode};
 
+mod metadata;
+
 #[derive(Clone, Debug)]
 struct Component {
     id: String,
@@ -46,6 +48,7 @@ fn run() -> Result<(), String> {
         "list" => list(&workspace, &args[1..]),
         "build" | "test" => build_or_test(&workspace, &args),
         "doctor" => doctor(&workspace, &args[1..]),
+        "audit" => audit(&workspace, &args[1..]),
         command @ ("package" | "release" | "image" | "publish") => Err(format!(
             "UnsupportedOperation {{ command: {command}, status: PLANNED }}"
         )),
@@ -55,7 +58,7 @@ fn run() -> Result<(), String> {
 
 fn print_help() {
     println!("mrml - canonical MRML repository build frontend (Cargo bridge stage)");
-    println!("usage: mrml <list|doctor|build|test> [component] [options]");
+    println!("usage: mrml <list|doctor|audit|build|test> [component] [options]");
     println!("  --all                 select every host-compatible component");
     println!("  --target <family>     native|windows|linux|uefi-x86_64|cuda-nvidia");
     println!("  --gpu-arch <name>     required metadata for CUDA target");
@@ -349,19 +352,300 @@ fn doctor(workspace: &Workspace, args: &[String]) -> Result<(), String> {
     let host = host_family()?;
     let cargo = tool_version("cargo")?;
     let rustc = tool_version("rustc")?;
+    let packages = verify_cargo_graph(workspace)?;
     if mode == OutputMode::Structured {
         println!(
-            "doctor|host={host}|workspace_version=1|components={}|cargo={}|rustc={}",
+            "doctor|host={host}|workspace_version=1|components={}|cargo_packages={}|cargo={}|rustc={}",
             workspace.components.len(),
+            packages.len(),
             clean(&cargo),
             clean(&rustc)
         );
     } else {
         println!(
-            "host: {host}\nworkspace: v1 ({} components)\ncargo: {}\nrustc: {}",
+            "host: {host}\nworkspace: v1 ({} components; {} Cargo bridge packages verified)\ncargo: {}\nrustc: {}",
             workspace.components.len(),
+            packages.len(),
             cargo.trim(),
             rustc.trim()
+        );
+    }
+    Ok(())
+}
+
+fn verify_cargo_graph(workspace: &Workspace) -> Result<Vec<metadata::CargoPackage>, String> {
+    let packages = metadata::load(&workspace.root)?;
+    if packages.len() != workspace.components.len() {
+        return Err(format!(
+            "CargoGraphCountMismatch {{ components: {}, packages: {} }}",
+            workspace.components.len(),
+            packages.len()
+        ));
+    }
+    for component in &workspace.components {
+        let package = packages
+            .iter()
+            .find(|package| package.name == component.cargo_package)
+            .ok_or_else(|| {
+                format!(
+                    "CargoPackageMissing {{ component: {}, cargo_package: {} }}",
+                    component.id, component.cargo_package
+                )
+            })?;
+        let expected = format!("{}/Cargo.toml", component.path).replace('\\', "/");
+        let actual = package.manifest_path.replace('\\', "/");
+        if !actual.ends_with(&expected) {
+            return Err(format!(
+                "CargoManifestMismatch {{ component: {}, expected: {}, actual: {} }}",
+                component.id,
+                expected,
+                clean(&actual)
+            ));
+        }
+        for dependency in &package.dependencies {
+            if !workspace
+                .components
+                .iter()
+                .any(|candidate| candidate.cargo_package == *dependency)
+            {
+                return Err(format!(
+                    "UnmappedCargoDependency {{ component: {}, dependency: {} }}",
+                    component.id, dependency
+                ));
+            }
+        }
+    }
+    for package in &packages {
+        if !workspace
+            .components
+            .iter()
+            .any(|component| component.cargo_package == package.name)
+        {
+            return Err(format!(
+                "UnmappedCargoPackage {{ cargo_package: {} }}",
+                package.name
+            ));
+        }
+    }
+    Ok(packages)
+}
+
+#[derive(Default)]
+struct InputCounts {
+    build_scripts: usize,
+    proc_macros: usize,
+    native_links: usize,
+    compile_env: usize,
+    included_files: usize,
+    external_commands: usize,
+}
+
+fn audit(workspace: &Workspace, args: &[String]) -> Result<(), String> {
+    let mode = output_mode(args);
+    let packages = verify_cargo_graph(workspace)?;
+    let mut dependency_count = 0_usize;
+    let mut feature_count = 0_usize;
+    let mut target_count = 0_usize;
+    let mut counts = InputCounts::default();
+    for package in &packages {
+        dependency_count = dependency_count
+            .checked_add(package.dependencies.len())
+            .ok_or("AuditCountOverflow")?;
+        feature_count = feature_count
+            .checked_add(package.features.len())
+            .ok_or("AuditCountOverflow")?;
+        target_count = target_count
+            .checked_add(package.targets.len())
+            .ok_or("AuditCountOverflow")?;
+        for target in &package.targets {
+            if target.kinds.iter().any(|kind| kind == "custom-build") {
+                counts.build_scripts += 1;
+            }
+            if target.kinds.iter().any(|kind| kind == "proc-macro") {
+                counts.proc_macros += 1;
+            }
+            if mode == OutputMode::Structured {
+                println!(
+                    "cargo-target|package={}|name={}|kinds={}",
+                    clean(&package.name),
+                    clean(&target.name),
+                    target.kinds.join(",")
+                );
+            }
+        }
+        if mode == OutputMode::Structured {
+            println!(
+                "cargo-package|name={}|dependencies={}|features={}",
+                clean(&package.name),
+                package.dependencies.join(","),
+                package.features.join(",")
+            );
+        }
+    }
+    for component in &workspace.components {
+        scan_component(workspace, component, mode, &mut counts)?;
+    }
+    if mode == OutputMode::Structured {
+        println!(
+            "audit|status=PASS|components={}|dependencies={dependency_count}|features={feature_count}|targets={target_count}|build_scripts={}|proc_macros={}|native_links={}|compile_env={}|included_files={}|external_commands={}",
+            workspace.components.len(),
+            counts.build_scripts,
+            counts.proc_macros,
+            counts.native_links,
+            counts.compile_env,
+            counts.included_files,
+            counts.external_commands
+        );
+    } else {
+        println!(
+            "audit PASS: {} components, {dependency_count} dependency records, {feature_count} features, {target_count} targets\ninputs: {} build scripts, {} proc macros, {} native links, {} compile-time environment reads, {} included files, {} external command sites",
+            workspace.components.len(),
+            counts.build_scripts,
+            counts.proc_macros,
+            counts.native_links,
+            counts.compile_env,
+            counts.included_files,
+            counts.external_commands
+        );
+    }
+    Ok(())
+}
+
+fn scan_component(
+    workspace: &Workspace,
+    component: &Component,
+    mode: OutputMode,
+    counts: &mut InputCounts,
+) -> Result<(), String> {
+    let mut pending = vec![workspace.root.join(&component.path)];
+    let mut visited = 0_usize;
+    while let Some(path) = pending.pop() {
+        visited = visited.checked_add(1).ok_or("AuditPathCountOverflow")?;
+        if visited > 20_000 {
+            return Err(format!("AuditPathLimit {{ component: {} }}", component.id));
+        }
+        let mut entries: Vec<_> = fs::read_dir(&path)
+            .map_err(|error| {
+                format!(
+                    "AuditReadDirectory {{ path: {}, detail: {error} }}",
+                    clean(&path.display().to_string())
+                )
+            })?
+            .collect::<Result<_, _>>()
+            .map_err(|error| {
+                format!(
+                    "AuditReadDirectory {{ path: {}, detail: {error} }}",
+                    clean(&path.display().to_string())
+                )
+            })?;
+        entries.sort_by_key(std::fs::DirEntry::file_name);
+        for entry in entries {
+            let entry_path = entry.path();
+            let file_type = entry
+                .file_type()
+                .map_err(|error| format!("AuditFileType {{ detail: {error} }}"))?;
+            if file_type.is_symlink() {
+                return Err(format!(
+                    "AuditSymlinkRejected {{ path: {} }}",
+                    clean(&entry_path.display().to_string())
+                ));
+            }
+            if file_type.is_dir() {
+                pending.push(entry_path);
+            } else if entry_path.extension().and_then(|value| value.to_str()) == Some("rs") {
+                scan_rust_file(workspace, component, &entry_path, mode, counts)?;
+            }
+        }
+    }
+    Ok(())
+}
+
+fn scan_rust_file(
+    workspace: &Workspace,
+    component: &Component,
+    path: &std::path::Path,
+    mode: OutputMode,
+    counts: &mut InputCounts,
+) -> Result<(), String> {
+    let metadata =
+        fs::metadata(path).map_err(|error| format!("AuditFileMetadata {{ detail: {error} }}"))?;
+    if metadata.len() > 2 * 1024 * 1024 {
+        return Err(format!(
+            "AuditSourceTooLarge {{ path: {}, bytes: {} }}",
+            clean(&path.display().to_string()),
+            metadata.len()
+        ));
+    }
+    let text = fs::read_to_string(path)
+        .map_err(|error| format!("AuditSourceRead {{ detail: {error} }}"))?;
+    let relative = path
+        .strip_prefix(&workspace.root)
+        .map_err(|_| "AuditPathOutsideWorkspace")?
+        .display()
+        .to_string()
+        .replace('\\', "/");
+    for (index, line) in text.lines().enumerate() {
+        let line_number = index + 1;
+        if line.contains(concat!("#[", "link(")) {
+            record_input(
+                mode,
+                component,
+                &relative,
+                line_number,
+                "native-link",
+                &mut counts.native_links,
+            )?;
+        }
+        if line.contains(concat!("env", "!(")) {
+            record_input(
+                mode,
+                component,
+                &relative,
+                line_number,
+                "compile-env",
+                &mut counts.compile_env,
+            )?;
+        }
+        if line.contains(concat!("include_", "bytes!("))
+            || line.contains(concat!("include_", "str!("))
+        {
+            record_input(
+                mode,
+                component,
+                &relative,
+                line_number,
+                "included-file",
+                &mut counts.included_files,
+            )?;
+        }
+        if line.contains(concat!("Command", "::new(")) {
+            record_input(
+                mode,
+                component,
+                &relative,
+                line_number,
+                "external-command",
+                &mut counts.external_commands,
+            )?;
+        }
+    }
+    Ok(())
+}
+
+fn record_input(
+    mode: OutputMode,
+    component: &Component,
+    relative: &str,
+    line: usize,
+    kind: &str,
+    count: &mut usize,
+) -> Result<(), String> {
+    *count = count.checked_add(1).ok_or("AuditCountOverflow")?;
+    if mode == OutputMode::Structured {
+        println!(
+            "input|component={}|kind={kind}|path={}|line={line}",
+            component.id,
+            clean(relative)
         );
     }
     Ok(())

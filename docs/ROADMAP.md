@@ -119,6 +119,12 @@ inventory build scripts/proc macros/native inputs, migrate semantic leaf package
 prove Windows/Linux parity, then remove generic `crates/` and the internal Cargo
 bridge incrementally. Package/release/image/publication remain planned.
 
+The bridge-audit increment is now implemented: `mrml doctor` compares all 42
+components with locked Cargo metadata, and `mrml audit` emits dependencies,
+features, targets, build scripts, proc macros, and bounded source-input sites.
+Persist those facts as native graph declarations before the first semantic leaf
+move; see [build/BRIDGE_INVENTORY.md](build/BRIDGE_INVENTORY.md).
+
 The independently scoped compiler lane follows
 [COMPILER.md](COMPILER.md), not an arbitrary historical-rustc coverage target.
 Rust 2024 is the floor. Preserve and stabilize the existing bounded semantics,

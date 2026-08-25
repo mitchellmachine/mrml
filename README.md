@@ -277,8 +277,10 @@ repository-pinned Windows/Linux Rust toolchain:
 cargo build -p mrml
 ```
 
-Then use `mrml build`, `mrml test`, and target/component selectors for migrated
-repository work. Cargo remains an internal locked dependency bridge during this
+Then use `mrml doctor`, `mrml audit`, `mrml build`, `mrml test`, and target/
+component selectors for migrated repository work. `doctor` verifies Cargo bridge
+graph coverage; `audit` inventories dependencies, features, outputs, and unusual
+build inputs. Cargo remains an internal locked dependency bridge during this
 incremental migration; package/release/image commands are not implemented yet.
 
 MRML uses Rust 2024 and the exact `nightly-2026-08-24` build toolchain pinned in

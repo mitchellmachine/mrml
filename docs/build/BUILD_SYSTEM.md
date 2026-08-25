@@ -1,7 +1,8 @@
 # MRML bootstrap build and packaging toolchain
 
 **Status: PARTIALLY IMPLEMENTED.** `tools/mrml` now parses the versioned root
-`MRML.workspace`, emits typed list/doctor/build/test results, uses a locked Cargo/
+`MRML.workspace`, emits typed list/doctor/audit/build/test results, verifies the
+Cargo bridge graph and inventories unusual build inputs, uses a locked Cargo/
 upstream-rustc bridge, selects current-host WHP/KVM VMM adapters, builds an
 x86-64 UEFI artifact, recognizes the CUDA target with explicit architecture and
 toolchain checks, and rejects unimplemented package/release/image/publish
@@ -102,6 +103,15 @@ layout remains transitional and moves only after `mrml` graph/path parity is
 verified; new semantic component homes belong under `packages/`, with the
 bootstrap tool under `tools/mrml` and compiler tooling under a clear compiler
 location. Do not create empty speculative directories.
+
+`mrml doctor` fails unless locked Cargo metadata has exact one-to-one package
+and manifest-path coverage with that inventory and every local Cargo dependency
+maps to a declared component. `mrml audit` emits dependencies, features,
+targets/outputs, custom builds, proc macros, native links, compile-time
+environment reads, included files, and external-command sites. The bounded
+parser and lexical scan are migration evidence, not native graph declarations;
+those declarations remain the next gate. See
+[BRIDGE_INVENTORY.md](BRIDGE_INVENTORY.md).
 
 A canonical manifest (filename provisional) binds package identity/version/class,
 profile/compiler mode, target slices, capability requests, dependencies/interfaces,

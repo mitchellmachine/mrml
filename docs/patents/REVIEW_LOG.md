@@ -19,6 +19,13 @@ workspace inventory, subprocess orchestration, target selection, and structured
 results/errors. **Result for this implementation: NOT_TRIGGERED.** The future
 package/cache/resolver/provenance mechanisms retain the `TRIGGERED` result above.
 
+The next bridge-audit increment adds a bounded JSON parser for Cargo's documented
+metadata output, one-to-one graph consistency checks, and lexical inventory of
+direct build inputs. **Result for this implementation: NOT_TRIGGERED.** These are
+conventional build-analysis techniques and do not implement the future resolver,
+cache, package, provenance, or publication mechanisms covered by the triggered
+review above.
+
 ## 2026-08-25 — Deployment, package, image, installer, and shell architecture
 
 **Result: TRIGGERED.** The documentation composes package/image containers,
