@@ -3897,6 +3897,14 @@ outlives relation. It selects no runtime allocation, reclamation,
 synchronization, enforcement, hardware, protocol, cryptographic, or executable
 mechanism.
 
+# 2026-08-25 — CFG-reaching projected-return generations
+
+**Result: NOT_TRIGGERED.** This compiler increment applies existing bounded CFG,
+place-generation, and outlives facts to branch and sequential assignments of one
+exact returned tuple field. It selects no runtime allocation, reclamation,
+synchronization, enforcement, hardware, protocol, cryptographic, or executable
+mechanism.
+
 # 2026-08-25 — Nested conditional compiler-origin normalization
 
 **Result: NOT_TRIGGERED.** This compiler-only increment follows an existing
@@ -3918,3 +3926,12 @@ mechanism; they select no new transport, placement, reclamation, cryptographic,
 hardware, or synchronization mechanism. The existing `TRIGGERED` review for
 actual IPC/shared-memory transport and isolated-service supervision remains in
 force.
+
+# 2026-08-25 — VirtualGPU control/data-plane binding composition
+
+**Result: NOT_TRIGGERED.** This increment composes the existing reviewed queue
+identity, bounded layout, guest publisher, VMM bridge, and authenticated
+sender/receiver into one consumed setup result, with no new queue algorithm,
+transport, hardware protocol, scheduling policy, or provider-selection method.
+The broader native GPU and VirtualGPU work remains `TRIGGERED` under the
+2026-08-24 review; this composition does not alter that status.

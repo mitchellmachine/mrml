@@ -759,6 +759,11 @@ Nested conditional leaves within that field are normalized through their bounded
 parent chain to the outer conditional generation. This preserves separation from
 later tuple fields while requiring every nested leaf origin to pass the same
 outlives proof. Arbitrary expression-origin partitioning remains unimplemented.
+At a returned exact tuple field, every CFG-reaching assignment generation and
+the original field generation must outlive the function. Mutually exclusive
+branch writes are both retained, as are sequential historical owners, matching
+modern Rust's projected-field return behavior. Reference-value copy/move RHS
+origins and fresh borrow RHS origins are classified separately and boundedly.
 Smaller parser, type, aggregate, control-flow, and diagnostic prerequisites may
 continue when they directly prepare that analysis. Arbitrary old-edition
 parsing, obsolete compiler quirks, historical diagnostic compatibility,

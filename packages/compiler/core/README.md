@@ -3816,6 +3816,17 @@ remain separate. Windows gnullvm and native Arch Linux WSL each pass the same
 expression-origin partitioning, named lifetime inference, or complete Polonius
 semantics.
 
+The branch-reaching projected-return milestone validates the tuple field's
+original generation and every assignment generation that can reach the exact
+return. It separately reconstructs fresh shared/mutable borrow RHS origins and
+reference-value copy/move RHS origins, while conditional expression generations
+reuse their already enumerated all-branch facts. The oracle rejects a local-
+backed branch, a sequential local-backed generation, and an old local-backed
+initialization even after later replacement; all-parameter branch and sequential
+controls are accepted. Windows gnullvm and native Arch Linux WSL each pass the
+same 766 compiler tests. This remains bounded projected-field outlives analysis,
+not general regions, named lifetime inference, or complete Polonius semantics.
+
 The repeated projected-source loan milestone extends that bounded relation
 across another directly initialized tuple whose selected reference field is
 later moved and reborrowed. The pinned oracle rejects shared and mutable live-

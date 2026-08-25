@@ -577,6 +577,13 @@ conditional-parent chain to its outer generation. ORACLE-0002 rejects a
 three-leaf generation with one local-backed leaf and accepts the equivalent
 all-parameter generation. Both host suites remain green at 766 compiler tests.
 
+The branch-reaching projected-return milestone checks the original tuple-field
+generation plus every assignment generation that can reach the return. The
+oracle rejects a local-backed write in either branch, an old local-backed
+initialization even after replacement, and a final sequential local-backed
+write; it accepts branch and sequential controls whose generations are all
+parameter-backed. Both host suites remain green at 766 compiler tests.
+
 At compiler path checkpoint `9a950ae9`, the Windows gnullvm core suite passed
 765 tests: 420 library tests, 10 conformance tests, and 335 replacement tests.
 Core formatting, warnings-denied Clippy, the no-`std`/no-`alloc`/unsafe hygiene
