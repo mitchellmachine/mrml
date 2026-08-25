@@ -4391,3 +4391,33 @@ resource-pool integration, and WHP/KVM call execution still cross the reserved
 isolated-service lifecycle boundary and require the separate review recorded
 for that next mechanism. This entry establishes neither patent clearance nor
 infringement and does not replace independent human dual review.
+
+# 2026-08-25 — Exact two-artifact hosted component lifecycle composition
+
+**Result: TRIGGERED; bounded implementation may proceed.** The reviewed next
+increment admits the independently signed `org.mrml.zstd` provider and
+`org.mrml.zim` consumer bytes as two distinct immutable service images, assigns
+each an existing isolated-service slot and private address space, projects one
+already-created shared `MemoryObject` capability, and starts the exact tasks
+only after both image identities, the ABI-3 interface generation/fingerprint,
+the provider generation, placement decision, resource charges, and launch
+route agree. Any verification, preparation, mapping, task creation, or
+capability-projection failure leaves the route unavailable; native fallback,
+provider substitution, and partial publication are forbidden.
+
+This composition reuses the conventional service creation, supervision,
+resource charging, task retirement, descendant-capability revocation, mapping
+erasure, and synchronous cleanup/restart mechanisms previously recorded as
+`NOT_TRIGGERED`. Its data path remains the claim-compared bounded shape from
+“Capability-bound inline IPC plus one shared component buffer”: one fixed
+inline request, one attenuated shared object, and one fixed inline response.
+It introduces no descriptor ring, shared queue, proxy/interception, connection
+negotiation, path lookup, shared heap/address, automatic transport selection,
+alternate provider, network offload, or automatic fallback.
+
+The broader independently serviced component, resolver, servicing, retention,
+and cross-placement mechanism remains `TRIGGERED`. This technical screen
+establishes neither patent clearance nor infringement and does not replace
+independent human dual review. Any deviation from the exact two-artifact,
+single-buffer, fixed-message lifecycle above requires renewed claim-focused
+worldwide review before implementation.
