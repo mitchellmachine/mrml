@@ -33,6 +33,16 @@ accounting evidence only: no physical backing, code population/sealing, native
 page-table installation, provider binding, private-state charge, or runtime
 loader is implemented.
 
+**PARTIALLY IMPLEMENTED resolution prerequisite:** the build tool now represents
+typed exact `REQUIRES` and `PROVIDES` edges and resolves them only within one
+immutable `SystemGeneration`. A match requires identical interface name, major
+generation, and 256-bit schema fingerprint; the result retains exact consumer
+and provider package versions and artifact digests plus the in-process/service
+form. Missing, ambiguous, out-of-generation, reordered, ABI-generation, and
+fingerprint substitution fail closed. This produces dependency data only, not a
+live `InterfaceBinding`, load authority, capability, or provider selection
+preference.
+
 The canonical deployment and generation model remains
 [DEPLOYMENT.md](../DEPLOYMENT.md); build orchestration remains
 [BUILD_SYSTEM.md](../build/BUILD_SYSTEM.md). This document adds only the
@@ -349,7 +359,8 @@ foundations, stable ABI primitives, and quantitative memory accounting, proceed:
 
 1. versioned canonical interface schema and generated safe bindings
    (**PARTIALLY IMPLEMENTED** for schema version 1 and the Zstd ABI-3 fixture);
-2. typed provides/requires metadata and exact candidate resolution;
+2. typed provides/requires metadata and exact candidate resolution
+   (**PARTIALLY IMPLEMENTED** as bounded in-generation exact resolution);
 3. immutable in-process loader and generation-safe `InterfaceBinding`;
 4. `org.mrml.zstd` providing `compression.zstd@3`;
 5. `org.mrml.zim` consuming that interface without provider path knowledge;

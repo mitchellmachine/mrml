@@ -1,6 +1,7 @@
 pub mod abi;
 pub mod generation;
 pub mod loader;
+pub mod resolver;
 pub mod schema;
 
 use std::collections::{BTreeMap, BTreeSet};

@@ -73,6 +73,14 @@ metadata cannot substitute for pool or target capabilities. Physical backing,
 population/sealing, native mapping, private-state charges, and runtime provider
 binding remain **PLANNED**.
 
+Typed provider-resolution groundwork now matches canonical `REQUIRES` and
+`PROVIDES` edges only inside an immutable `SystemGeneration`. Interface name,
+major generation, and schema fingerprint must all be byte-identical; resolved
+records retain exact consumer/provider package versions and artifact digests.
+ABI-4 cannot satisfy ABI-3, ambiguity fails instead of choosing a preferred
+provider, and no path or filename participates. Live generation-safe binding,
+policy preference, activation, and loading remain **PLANNED**.
+
 Within existing boot/deployment phases, add typed UEFI objects, verified installer
 entry creation, shell boot administration, owner/compatibility/dbx policy, then
 physical firmware tests per

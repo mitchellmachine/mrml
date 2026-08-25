@@ -3547,3 +3547,37 @@ automation, compiler-derived bindings, updates, retention, and servicing remain
 `TRIGGERED` for their selected mechanisms. This technical screen establishes
 neither clearance nor infringement and does not replace independent human dual
 review.
+
+# 2026-08-25 — Exact typed provider resolution inside SystemGeneration
+
+**Result for this bounded mechanism: NOT_TRIGGERED.** The resolver consumes a
+preexisting immutable package generation plus bounded, canonically ordered
+typed requirement/provider records. It accepts exactly one candidate only when
+interface name, major generation, and schema fingerprint are identical, then
+copies the already selected consumer/provider package versions and artifact
+digests into a data result. It has no compatibility ranges, oldest/newest/best
+selection, minimum version, feature/service version scoring, dependency-file
+rewriting, network acquisition, deployment ordering, loading, binding,
+activation, update, or provider-side selection logic.
+
+Claim-focused worldwide searching reviewed adjacent families including
+[EP 0 698 238 B1](https://patents.google.com/patent/EP0698238B1/en), whose claims
+use definition/current/oldest provider indicators and compatibility ranges to
+select an available runtime implementation version;
+[US 8,276,121 B2](https://patents.google.com/patent/US8276121B2), whose claims
+concern feature/service version compatibility and preferred-version selection;
+[WO 2018/040926 A1](https://patents.google.com/patent/WO2018040926A1/en), which
+assigns interface versions, associates package dependency information, builds a
+dependency file, and may automatically obtain packages; and
+[US 2025/0013453 A1](https://patents.google.com/patent/US20250013453A1), which
+places programmable bundle-version selection and setup/construction logic on
+the provider side. MRML deliberately performs none of those claim-defining
+range, preference, acquisition, construction, or upgrade mechanisms. Material
+publications and family records were reviewed through their linked
+national/regional register data; non-overlap, not assumed status, is the design
+basis.
+
+Policy preference, graph solving, live binding, provider loading, activation,
+updates, retention, and servicing remain `TRIGGERED` for separate
+mechanism-specific review. This technical screen establishes neither clearance
+nor infringement and does not replace independent human dual review.
