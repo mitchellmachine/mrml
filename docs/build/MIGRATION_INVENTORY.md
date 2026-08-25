@@ -730,7 +730,7 @@ second inventory.
   explicit, native example outputs are checked and compiled, and exact feature
   sets can gate optional target-specific externs. Exact binary outputs, binary
   test harnesses, compile-time environment values, and bin-only actions are
-  explicit. Thirty-four
+  explicit. Thirty-five
   components now have native actions. Direct-rustc expansion still needs
   lock/digest validation and the remaining non-library actions before
   Cargo can be removed behind the remaining nodes.
@@ -859,6 +859,16 @@ matching the Cargo manifest. Both exact dated host toolchains pass doctor/audit,
 build the library directly, and match Cargo at all seven inline tests. Thirty-
 four components are native and eight remain transitional. No production model,
 remote service, CUDA model profile, or inference workload was exercised.
+
+Compile-environment declarations now record a bounded use count separately from
+the exact value. This closes agent's multiplicity gap: one
+`CARGO_PKG_VERSION=0.0.1` binding accounts for both audited `env!` read sites
+without duplicate declarations. Agent's default `runtime` feature activates its
+seven optional providers while runtime remains unconditional. Both exact dated
+host toolchains pass frontend tests, strict Clippy, doctor/audit, native build,
+and the native/Cargo 20-test baselines. Thirty-five components are native and
+seven remain transitional. No configured live Hugging Face query, remote
+inference, production model workload, or CUDA agent profile ran.
 
 Service-image requires a different compiler ABI from the default semantic
 family: it is an MRML native service payload stored as PE, so its exact target is

@@ -192,6 +192,13 @@ runtime, and tensor artifacts. Windows gnullvm and Arch Linux WSL2 each build it
 and match Cargo's seven passing tests. Thirty-four components are native; eight
 remain transitional. No model inference, remote provider, or CUDA profile ran.
 
+Compile-environment declarations now separate one exact value from its bounded
+number of audited source reads. `mrml-agent` binds
+`CARGO_PKG_VERSION=0.0.1` once with use count two and selects its exact default
+`runtime` dependency set. Windows gnullvm and Arch Linux WSL2 each match Cargo's
+20 passing tests. Thirty-five components are native; seven remain transitional.
+No configured live remote/model path or CUDA agent profile was exercised.
+
 Native actions now bind one exact feature set and may gate an extern by both
 target family and selected feature. `mrml-av1` declares the empty default set,
 so its `nvidia` platform extern is inactive while `mrml-runtime` remains active.

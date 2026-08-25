@@ -308,6 +308,13 @@ Cargo baseline at seven passing tests. Thirty-four of 42 components are native;
 eight remain transitional. No production model, remote service, CUDA profile,
 or inference workload was exercised.
 
+Compile-time environment declarations now include a bounded source-use count.
+Agent binds one exact `CARGO_PKG_VERSION=0.0.1` value to its two audited reads,
+then its default `runtime` profile directly consumes the eight native providers.
+Both exact hosts build it and match Cargo at 20 passing tests. Thirty-five of 42
+components are native; seven remain transitional. No configured live Hugging
+Face query, remote inference, model workload, or CUDA agent profile ran.
+
 `mrml-zstd` is the fourth migrated leaf; its Wikipedia edge and patent-review
 source path now resolve to `packages/libraries/zstd` without changing codec
 behavior.

@@ -3255,3 +3255,14 @@ and feature/extern gating to the unchanged model library and its exact default
 dependency graph. It adds no model, inference, parser, AI-authority, resolver,
 cache, or runtime mechanism. Agent review does not replace independent human
 dual review.
+
+# 2026-08-25 — Compile-environment use counts and native agent action
+
+**Result: TRIGGERED.** The native resolver now binds one exact compile-time
+environment value to a bounded audited number of source read sites, then applies
+that declaration to the unchanged agent graph. This extends the existing
+package/cache/resolver risk area but adds no agent, AI-authority, remote-service,
+model, or runtime mechanism. It establishes neither clearance nor infringement;
+material release resolver/cache mechanisms remain subject to the recorded
+worldwide authoritative-register review. Agent review does not replace
+independent human dual review.

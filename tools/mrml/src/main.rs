@@ -39,7 +39,7 @@ struct RustAction {
     benchmarks: Vec<RustBenchmark>,
     binaries: Vec<RustBinary>,
     ptx: Option<RustPtx>,
-    compile_env: Vec<(String, String)>,
+    compile_env: Vec<RustCompileEnv>,
     absent_compile_env: Vec<String>,
     feature_sets: Vec<RustFeatureSet>,
     feature_profiles: Vec<RustFeatureProfile>,
@@ -103,6 +103,13 @@ struct RustPtx {
     source: String,
     feature: String,
     compile_env: String,
+}
+
+#[derive(Clone, Debug)]
+struct RustCompileEnv {
+    name: String,
+    value: String,
+    uses: usize,
 }
 
 #[derive(Clone, Debug)]
@@ -393,6 +400,15 @@ fn load_workspace() -> Result<Workspace, String> {
                     (*component).to_owned(),
                     (*name).to_owned(),
                     (*value).to_owned(),
+                    "1".to_owned(),
+                ));
+            }
+            ["rust-compile-env", component, name, value, uses] => {
+                rust_compile_env.push((
+                    (*component).to_owned(),
+                    (*name).to_owned(),
+                    (*value).to_owned(),
+                    (*uses).to_owned(),
                 ));
             }
             ["rust-compile-env-absent", component, name] => {
@@ -890,7 +906,7 @@ fn load_workspace() -> Result<Workspace, String> {
             feature,
         });
     }
-    for (component_id, name, value) in rust_compile_env {
+    for (component_id, name, value, uses) in rust_compile_env {
         let component = components
             .iter_mut()
             .find(|component| component.id == component_id)
@@ -900,19 +916,25 @@ fn load_workspace() -> Result<Workspace, String> {
         let action = component.rust_action.as_mut().ok_or_else(|| {
             format!("RustCompileEnvActionMissing {{ component: {component_id} }}")
         })?;
+        let uses = uses.parse::<usize>().map_err(|_| {
+            format!("RustCompileEnvUseCountInvalid {{ component: {component_id}, name: {name} }}")
+        })?;
         if !rust_identifier(&name)
             || value.len() > 1024
             || value.contains(['\r', '\n', '\0'])
+            || !(1..=64).contains(&uses)
             || action
                 .compile_env
                 .iter()
-                .any(|(existing, _)| existing == &name)
+                .any(|existing| existing.name == name)
         {
             return Err(format!(
                 "RustCompileEnvInvalid {{ component: {component_id}, name: {name} }}"
             ));
         }
-        action.compile_env.push((name, value));
+        action
+            .compile_env
+            .push(RustCompileEnv { name, value, uses });
     }
     for (component_id, name) in rust_absent_compile_env {
         let component = components
@@ -928,7 +950,7 @@ fn load_workspace() -> Result<Workspace, String> {
             || action
                 .compile_env
                 .iter()
-                .any(|(existing, _)| existing == &name)
+                .any(|existing| existing.name == name)
             || action.absent_compile_env.contains(&name)
         {
             return Err(format!(
@@ -939,7 +961,11 @@ fn load_workspace() -> Result<Workspace, String> {
     }
     for component in &components {
         if let Some(action) = &component.rust_action {
-            if action.compile_env.len()
+            if action
+                .compile_env
+                .iter()
+                .map(|input| input.uses)
+                .sum::<usize>()
                 + action.absent_compile_env.len()
                 + usize::from(action.ptx.is_some())
                 != component.input_policy.compile_env
@@ -947,7 +973,11 @@ fn load_workspace() -> Result<Workspace, String> {
                 return Err(format!(
                     "RustCompileEnvDrift {{ component: {}, declared: {}, inputs: {} }}",
                     component.id,
-                    action.compile_env.len()
+                    action
+                        .compile_env
+                        .iter()
+                        .map(|input| input.uses)
+                        .sum::<usize>()
                         + action.absent_compile_env.len()
                         + usize::from(action.ptx.is_some()),
                     component.input_policy.compile_env
@@ -1315,8 +1345,8 @@ fn apply_rust_features(
 }
 
 fn apply_rust_compile_env(command: &mut Command, action: &RustAction) {
-    for (name, value) in &action.compile_env {
-        command.env(name, value);
+    for input in &action.compile_env {
+        command.env(&input.name, &input.value);
     }
     for name in &action.absent_compile_env {
         command.env_remove(name);

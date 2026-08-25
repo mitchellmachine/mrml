@@ -450,6 +450,14 @@ the library and match Cargo's seven passing chat/error/portable tests. Thirty-
 four components are native and eight remain transitional. No production model,
 remote service, CUDA profile, or inference workload was exercised by this step.
 
+Compile-environment declarations now carry a bounded audited use count, allowing
+agent's single `CARGO_PKG_VERSION=0.0.1` value to account for both source read
+sites without duplicate or invented inputs. The default `runtime` agent graph
+builds natively and matches Cargo at 20 passing tests on Windows and Linux.
+Thirty-five components are native and seven remain transitional. No configured
+live Hugging Face query, remote inference, model workload, or CUDA agent profile
+was exercised.
+
 MRML uses Rust 2024 and the exact `nightly-2026-08-24` build toolchain pinned in
 `rust-toolchain.toml`. It is also the current `mrml-rustc` behavioral reference
 recorded as [ORACLE-0002](docs/compiler/oracles/ORACLE-0002.md); a floating
