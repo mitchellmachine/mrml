@@ -1011,6 +1011,16 @@ path. Windows gnullvm and native Arch Linux WSL each pass 534 library tests, one
 component-interface probe, 10 conformance tests, and 335 replacement tests: 880
 compiler tests per host.
 
+The universal projection-term binder milestone mirrors the bounded existential
+term arena but instantiates every bound parameter as a fresh placeholder in the
+successor universe. Rigid term normalization preserves those identities through
+nested associated projections before the existing rigid solver proves the flat
+goal. Focused evidence covers a parameter-valued associated projection and
+universe-index overflow. Windows gnullvm and native Arch Linux WSL each pass 538
+library tests, one component-interface probe, 10 conformance tests, and 335
+replacement tests: 884 compiler tests per host. Nested and mixed higher-ranked
+term binders remain unsupported.
+
 The premise-bearing rigid-normalization milestone proves the selected generic
 implementation's instantiated trait and projection predicates before exposing
 its associated value. It shares the caller's 16-frame rigid proof stack and

@@ -4820,6 +4820,23 @@ and reuses the existing fixed projection cycle stack. It adds no solver search,
 coherence rule, specialization, cache, parser, runtime mechanism, allocation,
 synchronization, protocol, cryptography, or hardware behavior.
 
+# 2026-08-25 — Premise-bearing rigid associated-value normalization
+
+**Result: NOT_TRIGGERED.** This compiler-only increment invokes the existing
+bounded rigid premise proof before exposing an already selected associated value
+and threads the existing fixed proof stack through normalization. It adds no new
+selection, search, coherence rule, specialization, cache, parser, runtime
+mechanism, allocation, synchronization, protocol, cryptography, or hardware
+behavior.
+
+# 2026-08-25 — Universal projection-term binder
+
+**Result: NOT_TRIGGERED.** This compiler-only increment maps an existing bounded
+term arena's parameters to existing rigid placeholder identities and reuses the
+existing rigid projection normalizer and proof solver. It adds no search,
+coherence rule, specialization, cache, parser, runtime mechanism, allocation,
+synchronization, protocol, cryptography, or hardware behavior.
+
 # 2026-08-25 — Hosted supervised native Zstd service lifecycle
 
 **Result: NOT_TRIGGERED after the existing component-interface review.** This

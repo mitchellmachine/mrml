@@ -4208,6 +4208,15 @@ depth overflow have focused tests. Windows gnullvm and native Arch Linux WSL eac
 pass 537 library tests, one component probe, 10 conformance tests, and 335
 replacement tests: 883 compiler tests per host.
 
+The universal projection-term binder mirrors the fixed existential bound-term
+arena but maps each parameter to a fresh placeholder in the successor universe.
+Rigid term normalization retains placeholder identity through associated
+projections and then invokes the bounded rigid solver. A parameter-valued
+projection and universe overflow have focused tests. Windows gnullvm and native
+Arch Linux WSL each pass 538 library tests, one component probe, 10 conformance
+tests, and 335 replacement tests: 884 compiler tests per host. Nested/mixed
+higher-ranked term binders and source syntax remain unsupported.
+
 The projection-bearing term milestone uses a fixed 64-node arena for flat leaf
 terms and associated-type projections whose trait self/argument positions refer
 only to earlier nodes. Identical nodes intern to one stable identity; invalid
