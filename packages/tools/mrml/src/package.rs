@@ -823,6 +823,55 @@ mod tests {
     }
 
     #[test]
+    fn bounded_mutation_corpus_never_bypasses_signed_parse_or_decode_bounds() {
+        let private = private_key_seed(0x5a);
+        let canonical = build(
+            "org.mrml.system.kernel",
+            "kernel",
+            9,
+            &[
+                BuildPayload {
+                    name: "kernel",
+                    purpose: "kernel",
+                    architecture: "x86_64",
+                    compress: true,
+                    bytes: &[0x4d; 257],
+                },
+                BuildPayload {
+                    name: "configuration",
+                    purpose: "configuration",
+                    architecture: "x86_64",
+                    compress: false,
+                    bytes: &[0x72; 31],
+                },
+            ],
+            Some(&private),
+        )
+        .unwrap();
+
+        for truncated in (0..canonical.len()).step_by(127) {
+            assert!(parse(&canonical[..truncated], true).is_err());
+        }
+
+        let mut state = 0x6d72_6d6c_u64;
+        for _ in 0..512 {
+            state = state
+                .wrapping_mul(6_364_136_223_846_793_005)
+                .wrapping_add(1_442_695_040_888_963_407);
+            let offset = (state as usize) % canonical.len();
+            let mut mutated = canonical.clone();
+            mutated[offset] ^= 1 << ((state >> 32) & 7);
+            if let Ok(package) = parse(&mutated, true) {
+                for payload in package.payloads {
+                    let mut decoded = vec![0; payload.raw_len];
+                    let result = payload.decode(&mut decoded);
+                    assert!(result.is_ok() || result == Err(Error::Compression));
+                }
+            }
+        }
+    }
+
+    #[test]
     fn system_release_binds_three_exact_signed_boot_packages() {
         let bootloader = release_package("org.mrml.library.uefi", "bootloader", "uefi-loader", 2);
         let kernel = release_package("org.mrml.system.kernel", "kernel", "kernel", 3);

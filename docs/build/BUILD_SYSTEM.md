@@ -356,7 +356,11 @@ b2 b3`: the release, bootloader/configuration packages, exact kernel package,
 inner signed kernel, and established kernel path all completed. Shared parser
 tests reject modified package bytes, wrong release digest, bad signature,
 malformed length, truncation, wrong architecture/class, and incompatible release
-version. `mrml package boot-media-create` now constructs the bounded GPT/FAT32
+version. A deterministic bounded mutation corpus now exercises 512 byte flips
+across a signed two-payload package plus stepped truncations, requiring signed
+parse and compressed/uncompressed decode paths to remain within their declared
+bounds. This is unit-level mutation evidence, not an exhaustive fuzzer campaign.
+`mrml package boot-media-create` now constructs the bounded GPT/FAT32
 ESP from the extracted loader, three exact boot packages, authenticated
 `SystemRelease`, and early service object; `mrml package qemu-boot` launches an explicitly selected
 QEMU/OVMF pair and exact-matches the boot trace. A fresh media construction
