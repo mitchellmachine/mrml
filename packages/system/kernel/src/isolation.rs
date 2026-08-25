@@ -221,6 +221,7 @@ pub enum IsolationServiceRouteError<E, Endpoint> {
         admission: IsolationLaunchError,
         error: E,
         endpoint: Endpoint,
+        prepared: PreparedIsolationServiceRoute,
     },
 }
 
@@ -233,9 +234,77 @@ pub struct RoutedIsolationService<E> {
     placement: IsolationPlacement,
 }
 
+#[derive(Debug, Eq, PartialEq)]
+pub struct PreparedIsolationServiceRoute {
+    spec: IsolationServiceSpec,
+    launch: PreparedIsolationLaunch,
+}
+
+impl PreparedIsolationServiceRoute {
+    pub const fn spec(&self) -> IsolationServiceSpec {
+        self.spec
+    }
+
+    pub fn unavailable<const DOMAINS: usize>(
+        self,
+        admission: &mut IsolationAdmissionTable<DOMAINS>,
+        reason: IsolationUnavailableReason,
+    ) -> Result<(), IsolationLaunchError> {
+        admission.unavailable(self.launch, reason).map(|_| ())
+    }
+
+    pub fn cancel<const DOMAINS: usize>(
+        self,
+        admission: &mut IsolationAdmissionTable<DOMAINS>,
+    ) -> Result<(), IsolationLaunchError> {
+        admission.cancel(self.launch)
+    }
+
+    pub fn commit<E, const DOMAINS: usize>(
+        self,
+        admission: &mut IsolationAdmissionTable<DOMAINS>,
+        endpoint: E,
+    ) -> Result<RoutedIsolationService<E>, (Self, IsolationLaunchError, E)> {
+        let evidence = match self.spec.placement {
+            IsolationPlacement::NativeService => IsolationLaunchEvidence::NativeReady,
+            IsolationPlacement::Microvm => IsolationLaunchEvidence::MicrovmReady,
+            _ => unreachable!("IsolationServiceSpec rejected non-service placement"),
+        };
+        if let Err(error) = admission.commit(&self.launch, evidence) {
+            return Err((self, error, endpoint));
+        }
+        Ok(RoutedIsolationService {
+            endpoint,
+            interface: self.spec.interface,
+            interface_generation: self.spec.interface_generation,
+            provider_generation: self.spec.provider_generation,
+            placement: self.spec.placement,
+        })
+    }
+}
+
+pub fn prepare_isolation_service_route<const DOMAINS: usize>(
+    admission: &mut IsolationAdmissionTable<DOMAINS>,
+    spec: IsolationServiceSpec,
+) -> Result<PreparedIsolationServiceRoute, IsolationLaunchError> {
+    let request = IsolationLaunchRequest::new(
+        spec.domain,
+        spec.policy_generation,
+        spec.class,
+        spec.placement,
+    )?;
+    admission
+        .prepare(request)
+        .map(|launch| PreparedIsolationServiceRoute { spec, launch })
+}
+
 impl<E> RoutedIsolationService<E> {
     pub const fn endpoint(&self) -> &E {
         &self.endpoint
+    }
+
+    pub fn into_endpoint(self) -> E {
+        self.endpoint
     }
     pub const fn interface(&self) -> ObjectId {
         self.interface
@@ -257,15 +326,7 @@ pub fn route_isolation_service<B: IsolationServiceBackend, const DOMAINS: usize>
     spec: IsolationServiceSpec,
 ) -> Result<RoutedIsolationService<B::Endpoint>, IsolationServiceRouteError<B::Error, B::Endpoint>>
 {
-    let request = IsolationLaunchRequest::new(
-        spec.domain,
-        spec.policy_generation,
-        spec.class,
-        spec.placement,
-    )
-    .map_err(IsolationServiceRouteError::Admission)?;
-    let prepared = admission
-        .prepare(request)
+    let prepared = prepare_isolation_service_route(admission, spec)
         .map_err(IsolationServiceRouteError::Admission)?;
     let launched = match spec.placement {
         IsolationPlacement::NativeService => backend.launch_native_service(spec),
@@ -275,8 +336,8 @@ pub fn route_isolation_service<B: IsolationServiceBackend, const DOMAINS: usize>
     let endpoint = match launched {
         Ok(endpoint) => endpoint,
         Err(failure) => {
-            admission
-                .unavailable(prepared, failure.reason)
+            prepared
+                .unavailable(admission, failure.reason)
                 .map_err(IsolationServiceRouteError::Admission)?;
             return Err(IsolationServiceRouteError::Backend {
                 reason: failure.reason,
@@ -284,33 +345,26 @@ pub fn route_isolation_service<B: IsolationServiceBackend, const DOMAINS: usize>
             });
         }
     };
-    let evidence = match spec.placement {
-        IsolationPlacement::NativeService => IsolationLaunchEvidence::NativeReady,
-        IsolationPlacement::Microvm => IsolationLaunchEvidence::MicrovmReady,
-        _ => unreachable!("IsolationServiceSpec rejected non-service placement"),
+    let routed = match prepared.commit(admission, endpoint) {
+        Ok(routed) => routed,
+        Err((prepared, admission_error, endpoint)) => {
+            return match backend.revoke(&endpoint) {
+                Ok(()) => {
+                    prepared
+                        .cancel(admission)
+                        .map_err(IsolationServiceRouteError::Admission)?;
+                    Err(IsolationServiceRouteError::Admission(admission_error))
+                }
+                Err(error) => Err(IsolationServiceRouteError::Rollback {
+                    admission: admission_error,
+                    error,
+                    endpoint,
+                    prepared,
+                }),
+            };
+        }
     };
-    if let Err(admission_error) = admission.commit(&prepared, evidence) {
-        return match backend.revoke(&endpoint) {
-            Ok(()) => {
-                admission
-                    .cancel(prepared)
-                    .map_err(IsolationServiceRouteError::Admission)?;
-                Err(IsolationServiceRouteError::Admission(admission_error))
-            }
-            Err(error) => Err(IsolationServiceRouteError::Rollback {
-                admission: admission_error,
-                error,
-                endpoint,
-            }),
-        };
-    }
-    Ok(RoutedIsolationService {
-        endpoint,
-        interface: spec.interface,
-        interface_generation: spec.interface_generation,
-        provider_generation: spec.provider_generation,
-        placement: spec.placement,
-    })
+    Ok(routed)
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -1023,6 +1077,22 @@ mod tests {
             ),
             (0, 1)
         );
+    }
+
+    #[test]
+    fn prepared_service_route_spans_construction_without_losing_binding_identity() {
+        let mut table = IsolationAdmissionTable::<1>::new(IsolationMode::TotalMicrovm, 7).unwrap();
+        let spec = service_spec(IsolationPlacement::Microvm);
+        let prepared = prepare_isolation_service_route(&mut table, spec).unwrap();
+        assert_eq!(prepared.spec(), spec);
+        assert_eq!(table.running().count(), 0);
+        let routed = prepared.commit(&mut table, 0x55aa_u64).unwrap();
+        assert_eq!(routed.endpoint(), &0x55aa);
+        assert_eq!(routed.interface(), spec.interface());
+        assert_eq!(routed.interface_generation(), spec.interface_generation());
+        assert_eq!(routed.provider_generation(), spec.provider_generation());
+        assert_eq!(routed.placement(), IsolationPlacement::Microvm);
+        assert!(table.total_microvm_report().satisfied());
     }
 
     #[test]

@@ -67,6 +67,16 @@ Arch Linux pass 34 configuration tests and 488 kernel tests. This is hosted
 unit/simulation evidence, not a VMM-backed configuration launch, interface
 transport, WHP/KVM execution, or physical evidence.
 
+A one-use `PreparedIsolationServiceRoute` now carries the complete typed service
+binding across a multi-step backend construction window. Preparation reserves
+admission before backend mutation. Success commits only readiness matching the
+bound placement and returns the endpoint with the same immutable interface and
+provider generations. Failure can enter the unavailable ledger, while commit
+failure returns the endpoint and transaction so backend revocation completes
+before the admission slot is cancelled. One focused test is included in the
+489-test Windows and Arch Linux kernel suites. The KVM/WHP runners have not yet
+been migrated to this transaction, so this is simulation evidence only.
+
 The hosted KVM and WHP `service-probe` launchers now prepare the exact
 configuration-service domain as `MICROVM_ELIGIBLE` under policy generation 1
 before constructing the guest. They commit only `MicrovmReady` after the signed

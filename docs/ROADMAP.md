@@ -45,6 +45,9 @@ Three new persistent deltas are documented before implementation:
   projection, and cross-placement runtime transport remain **PLANNED**.
   The existing hosted KVM/WHP configuration-service probes are wired to this
   admission record, but do not yet constitute native-versus-microVM resolution.
+  A one-use typed service transaction now preserves exact binding identity from
+  pre-construction admission through endpoint commit and teardown-safe rollback;
+  adopting it in both hosted runners is the next VMM integration gate.
 - [storage/STORAGE_AND_OPTICAL.md](storage/STORAGE_AND_OPTICAL.md) defines the
   disk/image, GPT/FAT, UDF/ISO, MMC, AHCI/USB optical, burning, and virtual-
   optical dependency order. New optical mechanisms are **PLANNED**.

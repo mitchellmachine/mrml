@@ -52,6 +52,16 @@ uncertainty retains the endpoint and ticket for exact retry. The microVM launche
 is not yet wired to VMM construction, so the dual-placement milestone remains
 **PARTIALLY IMPLEMENTED** rather than complete.
 
+The kernel routing API now also exposes a one-use prepared service transaction
+for VMM launchers whose construction spans multiple backend operations. The
+transaction reserves admission before construction and retains the exact
+domain, interface, interface generation, provider generation, policy generation,
+class, and placement until matching endpoint commit. Construction failure can
+consume it into the typed unavailable ledger; commit failure returns both the
+transaction and endpoint so native teardown precedes admission cancellation.
+This is the common fail-closed boundary intended for the KVM and WHP launchers;
+runner integration remains **PLANNED**.
+
 ## One policy, several placements
 
 MRML extends its existing process, service, capability, package-generation, and

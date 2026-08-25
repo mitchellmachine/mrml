@@ -86,8 +86,9 @@ pub use isolation::{
     IsolationLaunchEvidence, IsolationLaunchRequest, IsolationMode, IsolationPlacement,
     IsolationServiceBackend, IsolationServiceRouteError, IsolationServiceSpec,
     IsolationServiceSpecError, IsolationUnavailableReason, PreparedIsolationLaunch,
-    RoutedIsolationService, RunningIsolationDomain, TotalMicrovmClass, TotalMicrovmReport,
-    UnavailableIsolationDomain, route_isolation_service,
+    PreparedIsolationServiceRoute, RoutedIsolationService, RunningIsolationDomain,
+    TotalMicrovmClass, TotalMicrovmReport, UnavailableIsolationDomain,
+    prepare_isolation_service_route, route_isolation_service,
 };
 pub use memory::{
     FrameAllocator, MemoryError, MemoryKind, MemoryMap, MemoryRegion, PAGE_SIZE, PhysAddr,

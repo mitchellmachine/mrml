@@ -4,6 +4,18 @@ Historical paths in this log are intentionally preserved. The canonical
 [old-to-current source-path map](PATH_MIGRATION.md) locates their present
 implementations without altering the original review evidence.
 
+## 2026-08-25 — Typed service construction transaction
+
+Patent review: **NOT_TRIGGERED**. This is a conventional one-use transaction
+around the existing isolation admission record. It retains exact caller-supplied
+binding generations while backend construction occurs, commits matching
+readiness, records typed unavailability, and preserves the endpoint for teardown
+before cancellation on commit failure. It performs no automated provider,
+placement, VM, template, or resource selection and adds no cross-placement
+transport. Those mechanisms remain **TRIGGERED** under the adaptive-isolation
+review. Agent review is not legal clearance and does not replace independent
+human dual review.
+
 ## 2026-08-25 — Supervised native configuration placement lifecycle
 
 Patent review: **NOT_TRIGGERED**. This increment conventionally composes the
