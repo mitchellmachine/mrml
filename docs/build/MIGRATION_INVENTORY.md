@@ -2,13 +2,31 @@
 
 **Status: NATIVE GRAPH IMPLEMENTED; PACKAGING PARTIAL.** The authoritative
 machine-readable inventory is the root [`../../mrml.toml`](../../mrml.toml) plus
-all 45 package-local `mrml.toml` manifests. All current components are
+all 46 package-local `mrml.toml` manifests. All current components are
 classified and live in semantic `apps/`, `compiler/`, `packages/`, `services/`,
 `system/`, `tests/`, or `tools/` homes; no tracked component remains under generic
-`crates/`. The native resolver validates all 127 declared dependency edges
+`crates/`. The native resolver validates all 131 declared compile dependency edges
 without Cargo metadata, every component has an exact native action, and the
 internal Cargo bridge is removed. Cargo remains only for clean-source bootstrap
-of `mrml`; package/release/image work is not complete.
+of `mrml`. Canonical package and fixed boot `SystemRelease` construction are
+implemented; general Store release/image/publication work is not complete.
+
+## Current Manifest V2 completion state
+
+- Manifest V2 is the sole active representation; no active loader serializes
+  structured manifests back into the former declaration grammar.
+- `mrml manifest migrate LEGACY_WORKSPACE NEW_ROOT` is the retained bounded,
+  one-way V1 converter. Its fixture tests parse V1, emit and parse V2, compare
+  the normalized targets/artifacts/dependencies/features/tests/examples/
+  benchmarks/input/output graph, and reject dependency loss.
+- `mrml manifest check` admits 46 of 46 package manifests, rejects unadmitted
+  discovered manifests, and resolves 131 compile edges plus the one declared
+  runtime interface requirement.
+- `mrml.lock` V2 keeps compile, build-tool, runtime-interface, package, and
+  SystemRelease graphs distinct. The current declared counts are 131, 0, 1, 0,
+  and 3 respectively.
+- The only remaining `Cargo.toml` and `Cargo.lock` are the clean-source
+  stage-zero bootstrap for `mrml`; package-local Cargo manifests are gone.
 
 ## Implemented first gate
 

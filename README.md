@@ -280,9 +280,11 @@ cargo build --locked
 Then use `mrml doctor`, `mrml audit`, `mrml build`, `mrml test`, and target/
 component selectors for repository work. `doctor` verifies the native dependency
 graph without Cargo metadata; `audit` inventories native declarations and
-unusual build inputs. All 45 components have exact native actions and `mrml`
+unusual build inputs. All 46 components have exact native actions and `mrml`
 contains no Cargo fallback. Cargo is confined to the locked clean-source
-bootstrap above; package/release/image commands are not implemented yet.
+bootstrap above. Canonical package creation/verification and the fixed boot
+`SystemRelease` are implemented; general Store release/image/publication remain
+planned.
 
 `mrml-math`, `mrml-windows`, and `mrml-linux` were the first native compiler
 nodes. Every component now invokes pinned upstream rustc through an exact native
@@ -492,9 +494,11 @@ physical hardware ran.
 Finally, `mrml` has an exact native self-build/self-test action and the internal
 Cargo transition branch has been deleted. Fresh locked Cargo bootstrap followed
 by doctor/audit, native self-build, and all 12 self-tests passes on Windows
-gnullvm and Arch Linux WSL2. All 45 components are native; Cargo is used only to
-obtain the first `mrml` binary from a clean checkout. Package/release/image work
-remains separate and incomplete.
+gnullvm and Arch Linux WSL2. The admitted graph now contains 46 native
+components; Cargo is used only to obtain the first `mrml` binary from a clean
+checkout. Canonical package and boot `SystemRelease` construction are
+implemented, while general Store release/image/publication remain separate and
+incomplete.
 
 MRML uses Rust 2024 and the exact `nightly-2026-08-24` build toolchain pinned in
 `rust-toolchain.toml`. It is also the current `mrml-rustc` behavioral reference
@@ -518,20 +522,17 @@ builds use Rust PTX plus the NVIDIA driver API and do not require the CUDA
 Toolkit or `libcudart`.
 
 ```powershell
-# CPU inference
-cargo run --release -p mrml-cli --no-default-features -- `
-  --model C:\path\to\model.gguf --prompt "Hello"
+# Build CPU inference application
+mrml build org.mrml.app.cli --target native --release
 
-# CUDA inference
-cargo run --release -p mrml-cli --features cuda -- `
-  --model C:\path\to\model.gguf --ctx-size 8192 --prompt "Hello"
+# Build the declared CUDA profile
+mrml build org.mrml.app.cli --target cuda-nvidia --release
 
-# Native Git client
-cargo run --release -p mrml-git -- status
+# Build the native Git client
+mrml build org.mrml.tool.git --target native --release
 
-# Compile a supported Rust source subset to an object
-cargo run --release -p mrml-rustc-driver --bin mrml-rustc -- `
-  --emit coff --function answer input.rs -o answer.obj
+# Build the experimental compiler driver
+mrml build org.mrml.compiler.driver --target native --release
 ```
 
 Run a binary with `--help` for its supported interface. Do not infer complete
@@ -542,9 +543,11 @@ compatibility from familiar command names.
 The minimum repository gates are:
 
 ```powershell
-cargo test --workspace --release --no-default-features
-cargo clippy --workspace --all-targets --release --no-default-features -- `
-  -D warnings
+mrml manifest check
+mrml manifest fmt --check
+mrml manifest lock --check
+mrml audit --all --target native --output structured
+mrml test --all --target native --release
 ```
 
 Run feature- and hardware-specific suites for CUDA, KVM, WHP, UEFI, codecs,

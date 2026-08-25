@@ -3,12 +3,13 @@
 **Status: PARTIALLY IMPLEMENTED.** `packages/tools/mrml` now parses versioned
 root and package-local `mrml.toml` manifests, emits typed list/doctor/audit/build/test results, resolves and
 validates the complete declared dependency graph natively, inventories unusual
-build inputs, directly invokes pinned upstream rustc for all 45 actions, selects current-
+build inputs, directly invokes pinned upstream rustc for all 46 actions, selects current-
 host WHP/KVM VMM adapters, builds an
 x86-64 UEFI artifact, recognizes the CUDA target with explicit architecture and
-toolchain checks, and rejects unimplemented package/release/image/publish
-commands. All tracked components have semantic homes outside generic `crates/`.
-Package/release/image builders, sandboxing, and publication remain planned. See
+toolchain checks, creates and verifies the canonical signed package format, and
+creates/verifies the fixed boot `SystemRelease`. All tracked components have
+semantic homes outside generic `crates/`. General Store release/image builders,
+sandboxing, and publication remain planned. See
 [MIGRATION_INVENTORY.md](MIGRATION_INVENTORY.md).
 
 > Until `mrml-rustc` satisfies the defined production-readiness gate, the MRML
@@ -59,6 +60,21 @@ Native artifacts are isolated under `target/mrml-native/`. This deliberately
 does not use `target/mrml/`, because Cargo's Unix stage-zero executable occupies
 the path `target/mrml`; sharing that name makes a clean Linux bootstrap unable
 to create its native artifact directory.
+
+Manifest V2 is the only active workspace representation. The bounded
+`mrml manifest migrate LEGACY_WORKSPACE NEW_ROOT` command retains a one-way,
+read-only V1 parser solely for migration; it writes create-new structured V2
+manifests and rejects dependency information loss. `mrml manifest check` also
+rejects package manifests that exist beneath the repository but are not admitted
+by the root workspace.
+
+The canonical `mrml.lock` format is V2. It records compile dependencies and
+runtime interface bindings separately, including the exact interface generation,
+fingerprint, provider identity, and target set. It also reports distinct
+compile, build-tool, runtime-interface, package, and SystemRelease graph counts
+and records the three fixed boot-release roles. Zero build-tool or package edges
+means none are currently declared; it does not merge those domains into the
+compile graph.
 
 ## Compiler modes and readiness
 

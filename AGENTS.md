@@ -231,15 +231,25 @@ traits, provenance, unsafe, ABI, assembly, const, or metadata semantics must
 continue to fail closed.
 
 Build-tool direction is durable in `docs/build/BUILD_SYSTEM.md` and
-`docs/build/MIGRATION_INVENTORY.md`. Cargo is stage zero for `tools/mrml` and a
-private transitional dependency bridge only; `mrml` is the public build frontend
+`docs/build/MIGRATION_INVENTORY.md`. Cargo is stage zero only for `tools/mrml`;
+there is no package-local Cargo dependency bridge. `mrml` is the public build frontend
 for kernel, VMM, bootloader, services, drivers, apps, libraries, compiler, tests,
 host tools, and CUDA. Upstream rustc remains the initial backend and compiler
 selection never silently falls back. Preserve explicit host/target families,
 Windows/WHP and Linux/KVM selection, UEFI and CUDA separation, semantic
 `packages/` migration, signing-key isolation, runtime capability separation, and
-the profile-specific `mrml-rustc` gate. Do not claim `crates/` or Cargo is gone
-until the inventory proves it.
+the profile-specific `mrml-rustc` gate. Manifest V2 `mrml.toml` files are
+canonical and declaration strings are obsolete outside the bounded read-only V1
+migration parser and fixtures. Keep compile, build-tool, runtime-interface,
+package, and SystemRelease graphs separate. Use dynamic interfaces selectively;
+bootloader and recovery dependencies may remain static or `BOOT_BOUND` so they
+do not depend on the userspace resolver. The canonical package format is shared
+by boot, Store, installer, and recovery work, and QEMU package boot is a required
+acceptance test. WHP and KVM must admit the same package-derived guest bytes.
+Build receipts are MRML-native and bind the workspace manifest, `mrml.lock`, and
+toolchain lock; Cargo metadata is only nested stage-zero provenance. Upstream
+rustc remains the production compiler until the profile-specific `mrml-rustc`
+gate passes.
 
 Patent review is technical risk screening, not legal adjudication. For each
 substantial new mechanism, report `Patent review: NOT_TRIGGERED` or

@@ -3753,3 +3753,16 @@ and ELF objects for the same scalar projection. It introduces no compiler
 algorithm, ABI lowering, binding generator, loader, dispatch, update, transport,
 or reclamation mechanism. The mechanism-specific reviews above remain in force;
 no additional patent mechanism was selected by this evidence-only change.
+
+# 2026-08-25 — Manifest V1 migration and separated graph lock metadata
+
+**Result: NOT_TRIGGERED.** This increment adds a bounded parser and one-way
+structural conversion for MRML's own retired declaration format, rejects
+information-losing dependency conversion, audits explicit workspace admission,
+and serializes already-declared compile, build-tool, runtime-interface, package,
+and SystemRelease relationships into distinct lockfile sections. It does not
+select a package-resolution algorithm, provider-selection policy, update
+mechanism, storage/GC method, executable loader, signing construction, or runtime
+dispatch mechanism. Existing `TRIGGERED` reviews for those implementation paths
+remain unchanged; this evidence/metadata tooling selects no additional patent
+mechanism.
