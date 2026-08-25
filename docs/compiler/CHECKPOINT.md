@@ -9,14 +9,14 @@ the named commit and current source.
 ## Recoverable baseline
 
 - Branch: `main`
-- Compiler checkpoint commit: `885ba7b7`
-  (`compiler: validate nested loop returns`)
-- Remote state when recorded: `origin/main` includes the compiler checkpoint,
-  durable documentation, review, and post-rebase hash correction through
-  `8c04978f`. The push was a verified fast-forward containing exactly the four
-  isolated nested-loop-return commits; unrelated OS work remained outside this
-  worktree.
-- Preceding compiler commits: `5c53eb9` (`compiler: track mutable tuple field
+- Compiler checkpoint commit: `9a950ae9`
+  (`build: move compiler core`)
+- Remote state when recorded: `origin/main` includes the behavior-preserving
+  compiler-core relocation to `compiler/core`, its exact driver/recovery/oracle/
+  review path updates, and Windows verification. The push from `c74b0799` to
+  `9a950ae9` was a verified fast-forward; no compiler semantics changed.
+- Preceding compiler commits: `885ba7b7` (`compiler: validate nested loop
+  returns`), `5c53eb9` (`compiler: track mutable tuple field
   moves`), `480a198` (`compiler: identify constant array
   elements`), `40a035c` (`compiler: analyze initializedness
   through expressions`), `daf9fb9` (`compiler: connect conditional
@@ -530,6 +530,13 @@ declared components and targets. Do not infer successful cross-host verification
 from a Windows-only run.
 
 ## Current oracle verification
+
+At compiler path checkpoint `9a950ae9`, the Windows gnullvm core suite passed
+765 tests: 420 library tests, 10 conformance tests, and 335 replacement tests.
+Core formatting, warnings-denied Clippy, the no-`std`/no-`alloc`/unsafe hygiene
+scan, `mrml doctor`, `mrml audit`, and `mrml build mrml-rustc` passed.
+The driver was not re-executed by this path-only checkpoint, and no new Linux
+evidence is claimed.
 
 On 2026-08-25, ORACLE-0002 passed 767 tests on Windows gnullvm: 420 library
 tests, 10 conformance tests, 335 replacement tests, and 2 driver tests.
