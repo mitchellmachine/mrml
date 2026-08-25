@@ -9,6 +9,11 @@ kind = "application"
 name = "mrml-cli"
 profile = "host-tool"
 
+[isolation]
+default = "native-process"
+minimum = "native-process"
+supported = ["native-process"]
+
 [[target]]
 arch = "x86_64"
 environment = "windows"

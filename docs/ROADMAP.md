@@ -25,7 +25,9 @@ Three new persistent deltas are documented before implementation:
   tooling remains **PLANNED**.
 - [ISOLATION_PLACEMENT.md](ISOLATION_PLACEMENT.md) defines adaptive placement,
   mandatory floors, stable location-independent interfaces, persistent owner
-  policy, and a one-boot total-microVM request. All runtime work is **PLANNED**.
+  policy, and a one-boot total-microVM request. Typed Manifest V2 validation and
+  explicit current application/service native policies are **IMPLEMENTED**;
+  resolution and runtime work remain **PLANNED**.
 - [storage/STORAGE_AND_OPTICAL.md](storage/STORAGE_AND_OPTICAL.md) defines the
   disk/image, GPT/FAT, UDF/ISO, MMC, AHCI/USB optical, burning, and virtual-
   optical dependency order. New optical mechanisms are **PLANNED**.

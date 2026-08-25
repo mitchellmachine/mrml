@@ -1,9 +1,13 @@
 # MRML adaptive isolation placement
 
-Status: **PLANNED**. This document is the canonical placement-policy delta. It
-does not claim that persistent settings, boot overrides, whole-system microVM
-placement, or location-independent runtime transport exist until focused code
-and tests do.
+Status: **PARTIALLY IMPLEMENTED**. Manifest V2 now parses a typed placement
+policy, rejects unknown fields/tokens, contradictory bounds, duplicates, and
+cross-class placements, and requires a reason for fixed platform policy. Every
+current package without an explicit table receives a conservative singleton
+default. All current application and service manifests explicitly record their
+native singleton policy. MicroVM support, effective owner-policy resolution,
+persistent settings, boot overrides, and location-independent runtime transport
+remain **PLANNED**.
 
 ## One policy, several placements
 
@@ -41,7 +45,7 @@ development policy, visible consequences, and must remain forbidden for
 non-overridable TCB constraints. Publisher identity or metadata describes the
 floor but does not itself grant authority.
 
-Canonical Manifest V2 will use one bounded `[isolation]` table with explicit
+Canonical Manifest V2 uses one bounded `[isolation]` table with explicit
 tokens, conceptually:
 
 ```toml
@@ -129,8 +133,9 @@ state, and evidence scope without leaking unrelated content or secrets.
 
 ## Implementation order and acceptance
 
-Implementation proceeds as bounded milestones: typed placement model and
-validation; Manifest V2 metadata; effective-policy resolver; resource plan;
+Implementation proceeds as bounded milestones. The typed placement model,
+validation, and initial Manifest V2 metadata are implemented. Next are the
+effective-policy resolver; resource plan;
 native/interface transport invariants; microVM launch adapter; persistent policy
 service; shell/settings/monitor projections; boot-handoff override; recovery and
 adversarial tests. Do not start GUI polish before the typed backend exists.

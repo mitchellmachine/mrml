@@ -9,6 +9,11 @@ kind = "service"
 name = "mrml-service-image"
 profile = "system-service"
 
+[isolation]
+default = "native-service"
+minimum = "native-service"
+supported = ["native-service"]
+
 [[target]]
 arch = "x86_64"
 environment = "mrml"

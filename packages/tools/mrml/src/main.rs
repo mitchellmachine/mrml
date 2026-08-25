@@ -1,6 +1,7 @@
 pub mod abi;
 pub mod binding;
 pub mod generation;
+pub mod isolation;
 pub mod loader;
 pub mod manifest;
 pub mod migration;
@@ -20,6 +21,7 @@ use std::process::{Command, ExitCode};
 use std::time::Instant;
 
 use generation::mrml_package_identifier;
+use isolation::IsolationPolicy;
 use manifest::Document as ManifestDocument;
 #[path = "../../../libraries/crypto/src/sha3.rs"]
 #[allow(dead_code)]
@@ -944,6 +946,7 @@ fn load_manifest_declarations(root: &Path) -> Result<ManifestDeclarations, Strin
         let package_kind = package
             .string("kind")
             .map_err(|error| manifest_error(&relative, error))?;
+        IsolationPolicy::parse(&document, package_kind, package_id)?;
         let target_families: Vec<_> = document
             .array_sections("target")
             .map(v2_target_family)

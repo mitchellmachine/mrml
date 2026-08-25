@@ -116,11 +116,12 @@ Upstream rustc does not make its native/unsafe toolchain memory-safe.
 
 ## Manifest, lockfile, profiles, and isolation
 
-Manifest V2's planned bounded `[isolation]` table records default, minimum, and
+Manifest V2's bounded `[isolation]` table records default, minimum, and
 supported placements as specified in
 [../ISOLATION_PLACEMENT.md](../ISOLATION_PLACEMENT.md). It is policy metadata,
-not a compile edge or capability grant, and remains **PLANNED** until parser,
-resolver, and focused tests exist.
+not a compile edge or capability grant. Typed parsing and focused fail-closed
+tests are **IMPLEMENTED**; owner-policy resolution and runtime placement remain
+**PLANNED**.
 
 Artifact filenames follow
 [../packages/ARTIFACT_EXTENSIONS.md](../packages/ARTIFACT_EXTENSIONS.md): `.mrp`
