@@ -749,6 +749,12 @@ parameter/local generation therefore fails closed even when another branch is
 parameter-backed, while a generation whose branches all trace to the input is
 accepted. This remains one-step tuple-field provenance, not general aggregate
 escape analysis or named lifetime inference.
+Conditional reference origins created inside an initial tuple value receive the
+same all-origins return proof. The bounded grouping follows the exact reference-
+field ordinal, distinguishes reference copies/moves from fresh shared or mutable
+borrows, and does not let a local-backed sibling field poison a parameter-backed
+returned field. Nested conditional groups and nested tuple types remain outside
+this implemented slice.
 Smaller parser, type, aggregate, control-flow, and diagnostic prerequisites may
 continue when they directly prepare that analysis. Arbitrary old-edition
 parsing, obsolete compiler quirks, historical diagnostic compatibility,

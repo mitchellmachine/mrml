@@ -3888,3 +3888,11 @@ generation and outlives walk to every retained source of one exact returned
 tuple field. It is conventional compiler place, control-flow, and lifetime
 validation and selects no new runtime enforcement, allocation, reclamation,
 synchronization, hardware, protocol, cryptographic, or executable mechanism.
+
+# 2026-08-25 — Conditional tuple-initialization outlives grouping
+
+**Result: NOT_TRIGGERED.** This increment groups conventional compiler
+reference effects by one tuple-field ordinal and checks their existing bounded
+outlives relation. It selects no runtime allocation, reclamation,
+synchronization, enforcement, hardware, protocol, cryptographic, or executable
+mechanism.

@@ -11472,6 +11472,139 @@ const fn runtime_location_is_exact_function_return_value(
     )
 }
 
+fn runtime_conditional_tuple_field_origins_outlive_function(
+    facts: &RuntimeBodyFacts<'_>,
+    path_id: RuntimeMovePathId,
+    returned_at: RuntimePlaceEffectFact,
+    depth: usize,
+) -> Option<Option<bool>> {
+    let field = facts.move_paths.get(path_id.0).and_then(|path| *path)?;
+    let RuntimePlaceProjections {
+        items:
+            [
+                Some(RuntimePlaceProjection::TupleField(field_index)),
+                None,
+                None,
+                None,
+            ],
+        count: 1,
+    } = field.projections
+    else {
+        return Some(None);
+    };
+    let root_id = field.parent?;
+    let root = facts.move_paths.get(root_id.0).and_then(|path| *path)?;
+    let RuntimeExpressionType::Tuple {
+        elements,
+        element_count,
+    } = root.ty
+    else {
+        return Some(None);
+    };
+    let RuntimeExpressionType::Reference {
+        mutable: target_mutable,
+        ..
+    } = field.ty
+    else {
+        return Some(None);
+    };
+    let mut reference_count = 0usize;
+    let mut target_ordinal = None;
+    for (index, element) in elements[..element_count].iter().enumerate() {
+        if matches!(element, Some(RuntimeTupleElementType::Reference { .. })) {
+            if index == field_index {
+                target_ordinal = Some(reference_count);
+            }
+            reference_count = reference_count.checked_add(1)?;
+        }
+    }
+    let target_ordinal = target_ordinal?;
+    let initialization = facts.initializations[..facts.initialization_count]
+        .iter()
+        .flatten()
+        .filter(|initialization| {
+            initialization.path == root_id && initialization.event.0 < returned_at.event.0
+        })
+        .max_by_key(|initialization| initialization.event.0)?;
+    if facts.effects[..facts.effect_count]
+        .iter()
+        .flatten()
+        .any(|effect| {
+            (effect.path == root_id || effect.path == path_id)
+                && effect.kind == RuntimePlaceEffectKind::Write
+                && effect.event.0 > initialization.event.0
+                && effect.event.0 < returned_at.event.0
+        })
+    {
+        return Some(None);
+    }
+    let mut group_count = 0usize;
+    let mut last_conditional = None;
+    let mut target_is_conditional = false;
+    let mut target_outlives = true;
+    for effect in facts.effects[..facts.effect_count]
+        .iter()
+        .flatten()
+        .filter(|effect| {
+            effect.event.0 < initialization.event.0
+                && effect.location == initialization.location
+                && matches!(
+                    effect.kind,
+                    RuntimePlaceEffectKind::Copy
+                        | RuntimePlaceEffectKind::Move
+                        | RuntimePlaceEffectKind::SharedBorrow
+                        | RuntimePlaceEffectKind::MutableBorrow
+                )
+                && (matches!(
+                    effect.kind,
+                    RuntimePlaceEffectKind::SharedBorrow | RuntimePlaceEffectKind::MutableBorrow
+                ) || facts
+                    .move_paths
+                    .get(effect.path.0)
+                    .and_then(|path| *path)
+                    .is_some_and(|path| matches!(path.ty, RuntimeExpressionType::Reference { .. })))
+        })
+    {
+        let new_group = effect.expression_conditional.is_none()
+            || effect.expression_conditional != last_conditional;
+        if new_group {
+            group_count = group_count.checked_add(1)?;
+        }
+        last_conditional = effect.expression_conditional;
+        if group_count.checked_sub(1)? != target_ordinal || effect.expression_conditional.is_none()
+        {
+            continue;
+        }
+        target_is_conditional = true;
+        let source_mutable = match effect.kind {
+            RuntimePlaceEffectKind::SharedBorrow => false,
+            RuntimePlaceEffectKind::MutableBorrow => true,
+            RuntimePlaceEffectKind::Copy | RuntimePlaceEffectKind::Move => {
+                let RuntimeExpressionType::Reference { mutable, .. } = facts
+                    .move_paths
+                    .get(effect.path.0)
+                    .and_then(|path| *path)?
+                    .ty
+                else {
+                    return None;
+                };
+                mutable
+            }
+            _ => return None,
+        };
+        if source_mutable != target_mutable
+            || !runtime_path_outlives_function_at_effect(facts, effect.path, *effect, depth + 1)?
+        {
+            target_outlives = false;
+        }
+    }
+    if group_count != reference_count || !target_is_conditional {
+        Some(None)
+    } else {
+        Some(Some(target_outlives))
+    }
+}
+
 fn runtime_path_outlives_function_at_effect(
     facts: &RuntimeBodyFacts<'_>,
     path_id: RuntimeMovePathId,
@@ -11489,6 +11622,14 @@ fn runtime_path_outlives_function_at_effect(
                 let RuntimeExpressionType::Reference { .. } = path.ty else {
                     return Some(false);
                 };
+                if let Some(outlives) = runtime_conditional_tuple_field_origins_outlive_function(
+                    facts,
+                    path_id,
+                    returned_at,
+                    depth,
+                )? {
+                    return Some(outlives);
+                }
                 let latest_write = facts.effects[..facts.effect_count]
                     .iter()
                     .flatten()
@@ -29513,6 +29654,7 @@ mod tests {
             "fn value(input: &u16) -> &u16 { let local = *input; let source: &u16 = &local; let returned = source; returned }",
             "fn value(input: &u16) -> &u16 { let local = *input; let holder = (&local,); holder.0 }",
             "fn value(input: &u16, choose: bool) -> &u16 { let local = *input; let mut holder = (input,); holder.0 = if choose { input } else { &local }; holder.0 }",
+            "fn value(input: &u16, choose: bool) -> &u16 { let local = *input; let holder = (if choose { input } else { &local },); holder.0 }",
         ] {
             match analyze(rejected) {
                 Err(error) => assert_eq!(
@@ -29533,6 +29675,9 @@ mod tests {
             "fn value(input: &u16) -> &u16 { let first = input; let second = first; second }",
             "fn value(input: &u16) -> &u16 { let holder = (input,); holder.0 }",
             "fn value(input: &u16, choose: bool) -> &u16 { let mut holder = (input,); holder.0 = if choose { input } else { &*input }; holder.0 }",
+            "fn value(input: &u16, choose: bool) -> &u16 { let holder = (if choose { input } else { &*input },); holder.0 }",
+            "fn value(input: &u16, choose: bool) -> &u16 { let local = *input; let holder = (if choose { input } else { &*input }, &local); holder.0 }",
+            "fn value(input: &u16, choose: bool) -> &u16 { let local = *input; let holder = (&local, if choose { input } else { &*input }); holder.1 }",
         ] {
             analyze(accepted).unwrap_or_else(|error| panic!("{accepted}: {error:?}"));
         }

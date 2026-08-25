@@ -3794,6 +3794,18 @@ This remains exact one-step tuple-field provenance, not general aggregate escape
 analysis, path-sensitive branch selection, named lifetime inference, or complete
 Polonius semantics.
 
+The conditional tuple-initialization return milestone groups reference origins
+created before one tuple-root initialization by exact reference-field ordinal.
+It distinguishes reference-value copies and moves from fresh shared or mutable
+borrows, then requires every conditional origin of the selected returned field
+to outlive the function. The exact oracle rejects a mixed local/parameter field
+with E0515 and accepts two parameter-backed branches. Sibling controls with a
+local-backed reference in the other field remain accepted for either selected
+field position. Windows gnullvm and native Arch Linux WSL each pass the same 766
+compiler tests. This is bounded one-level tuple initialization, not nested tuple
+types, arbitrary nested conditional grouping, named lifetime inference, or
+complete Polonius semantics.
+
 The repeated projected-source loan milestone extends that bounded relation
 across another directly initialized tuple whose selected reference field is
 later moved and reborrowed. The pinned oracle rejects shared and mutable live-

@@ -565,6 +565,13 @@ workspace has no Cargo package named `mrml-rustc`, so the obsolete direct Cargo
 Clippy command was rejected before compilation; warnings-denied Clippy is not
 claimed for this milestone.
 
+The conditional tuple-initialization return milestone applies the same proof to
+origins created while the tuple root is initialized. ORACLE-0002 rejects a
+returned field whose branch may borrow local storage and accepts both parameter-
+backed branches. Two-reference-field controls prove that a local-backed sibling
+does not affect the selected returned field in either field position. Windows
+gnullvm and native Arch Linux WSL each pass the same 766 compiler tests.
+
 At compiler path checkpoint `9a950ae9`, the Windows gnullvm core suite passed
 765 tests: 420 library tests, 10 conformance tests, and 335 replacement tests.
 Core formatting, warnings-denied Clippy, the no-`std`/no-`alloc`/unsafe hygiene
