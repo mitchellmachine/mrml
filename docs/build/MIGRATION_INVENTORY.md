@@ -84,6 +84,9 @@ No claim is made that semantic moves or Cargo bridge removal are complete.
 - `mrml-git` moved to `tools/git` after error/runtime/SSH/terminal-style;
   its dependency paths already resolve to semantic packages, while library/bin
   behavior, compile-environment policy, and Cargo bridge remain unchanged.
+- `mrml-tools` moved to `tools/host` after all eight dependencies, with all
+  four inbound Cargo paths updated; its feature behavior, 26 external-command
+  sites, compile-environment policy, and Cargo bridge remain unchanged.
 
 The runtime move was checked on a Windows host:
 
@@ -239,6 +242,20 @@ The Git-tool move was checked on a Windows host:
 No Linux Git-tool execution or live remote operation was exercised by this
 move.
 
+The host-tool move was checked on a Windows host:
+
+- `cargo +nightly-2026-08-24-x86_64-pc-windows-gnullvm fmt -p mrml-tools -- --check`,
+  `.\target\debug\mrml.exe doctor`, `.\target\debug\mrml.exe audit`, and
+  `.\target\debug\mrml.exe build mrml-tools` — PASS;
+- `cargo +nightly-2026-08-24-x86_64-pc-windows-gnullvm test -p mrml-tools`
+  — FAIL, 31 passed and the installed-Edge integration test failed because
+  DevTools was not exposed on its assigned port;
+- `cargo +nightly-2026-08-24-x86_64-pc-windows-gnullvm clippy -p mrml-tools --all-targets --no-deps -- -D warnings`
+  — FAIL, 19 existing lints in unchanged host-tool source.
+
+No Linux host-tool execution, live remote web service, physical desktop/audio
+route, or accessibility hardware was exercised by this move.
+
 `package`, `release`, `image`, and `publish` deliberately fail as `PLANNED`.
 Linux, KVM, cross-host equivalence, physical UEFI/GPU, and release functionality
 were not exercised by the Windows implementation environment.
@@ -251,7 +268,7 @@ were not exercised by the Windows implementation environment.
 | `COMPILER` | `mrml-rustc` at `compiler/core`; driver at `compiler/driver` |
 | `MRML_NATIVE` | kernel, service image, configuration, storage |
 | `UEFI` | kernel-image bootloader artifact; `mrml-uefi` is shared support |
-| `HOST_WINDOWS_LINUX` | Git at `tools/git`; CLI/server/tools/sign/trainer and VMM launchers remain transitional |
+| `HOST_WINDOWS_LINUX` | Git at `tools/git`, host tools at `tools/host`; CLI/server/sign/trainer and VMM launchers remain transitional |
 | `GPU` | tensor/CUDA compatibility path; native GPU remains separate |
 | `TEST` | kernel benchmark |
 | `SHARED` | reusable crypto/runtime/protocol/media/model/platform libraries |
@@ -262,7 +279,7 @@ second inventory.
 ## Cargo-removal blockers
 
 - Every component still has Cargo dependency metadata; all except the eighteen
-  moved libraries, compiler core/driver, Git tool, and stage-zero remain beneath `crates/`. The
+  moved libraries, compiler core/driver, Git/host tools, and stage-zero remain beneath `crates/`. The
   root Cargo workspace still contains every component so the bridge resolves
   today’s exact graph.
 - `crates/mrml-tensor/build.rs` invokes rustc for CUDA PTX and is the one current

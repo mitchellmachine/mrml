@@ -209,6 +209,10 @@ edges resolve to semantic homes without changing command behavior.
 `mrml-git` now resides at `tools/git`; all four dependency edges already
 resolve to semantic packages without changing Git or SSH behavior.
 
+`mrml-tools` now resides at `tools/host`; all eight dependency edges resolve
+to semantic packages and all four consumers resolve to the host-tool home
+without changing input policy or tool behavior.
+
 The independently scoped compiler lane follows
 [COMPILER.md](COMPILER.md), not an arbitrary historical-rustc coverage target.
 Rust 2024 is the floor. Preserve and stabilize the existing bounded semantics,

@@ -114,6 +114,8 @@ The dependency-free `mrml-rustc` core lives at `compiler/core`, and its
 separate driver lives at `compiler/driver`.
 `mrml-git` now lives at `tools/git`; its host-tool classification and Cargo
 bridge remain unchanged.
+`mrml-tools` now lives at `tools/host`; its input-policy counts, feature
+behavior, and Cargo bridge remain unchanged.
 
 Rust crate identity, MRML package identity, and stable MRML interface identity
 are distinct. The runtime component model is specified in

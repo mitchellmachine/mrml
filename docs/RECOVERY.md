@@ -164,7 +164,7 @@ explicitly and downgrade the status rather than guessing.
   Read `docs/COMPILER.md` and every record under `docs/compiler/oracles/` before
   selecting compiler work. Recover the future-Rust direction, not an assumed
   obligation to reproduce old editions or arbitrary historical rustc behavior.
-- Host browser automation: `crates/mrml-tools/src/browser.rs` and `web.rs`; this
+- Host browser automation: `tools/host/src/browser.rs` and `web.rs`; this
   is not an MRML browser engine, compositor, or OS application implementation.
 - Future browser work must read `docs/BROWSER_SEMANTICS.md`: blind humans,
   Braille, speech, keyboard, and text-only AI share one sanitized generational

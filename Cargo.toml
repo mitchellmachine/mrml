@@ -27,7 +27,7 @@ members = [
     "packages/libraries/error",
     "crates/mrml-server",
     "packages/libraries/terminal-style",
-    "crates/mrml-tools",
+    "tools/host",
     "packages/libraries/percent-encoding",
     "packages/libraries/windows",
     "packages/libraries/linux",

@@ -128,6 +128,11 @@ error/runtime/SSH/terminal-style dependencies without changing Git, SSH, pack,
 diff, or signing behavior. **Result: NOT_TRIGGERED.** This is repository
 organization, not a new Git mechanism.
 
+The host-tool semantic move relocates `mrml-tools` to `tools/host` after all
+eight dependencies and updates all four inbound Cargo paths without changing
+browser, desktop, executor, media, MCP, or web behavior. **Result:
+NOT_TRIGGERED.** This is repository organization, not a new tool mechanism.
+
 ## 2026-08-25 — Deployment, package, image, installer, and shell architecture
 
 **Result: TRIGGERED.** The documentation composes package/image containers,

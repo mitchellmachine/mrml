@@ -27,7 +27,7 @@ sycl = ["runtime", "mrml-model/sycl"]
 [dependencies]
 mrml-model = { path = "../mrml-model", default-features = false, optional = true }
 mrml-terminal-style = { path = "../../packages/libraries/terminal-style", default-features = false, optional = true }
-mrml-tools = { path = "../mrml-tools", default-features = false, optional = true }
+mrml-tools = { path = "../../tools/host", default-features = false, optional = true }
 mrml-error = { path = "../../packages/libraries/error", optional = true }
 serde_json = { package = "mrml-json", path = "../../packages/libraries/json", optional = true }
 mrml-runtime = { path = "../../packages/libraries/runtime" }
