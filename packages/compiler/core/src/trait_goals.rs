@@ -364,6 +364,241 @@ fn validate_projection_bearing_goal(
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct BoundProjectionBearingTraitGoal {
+    pub trait_id: TraitId,
+    pub self_type: TraitGoalTermId,
+    arguments: [Option<TraitGoalTermId>; MAX_TRAIT_GOAL_ARGUMENTS],
+    argument_count: usize,
+}
+
+impl BoundProjectionBearingTraitGoal {
+    pub const fn new(trait_id: TraitId, self_type: TraitGoalTermId) -> Self {
+        Self {
+            trait_id,
+            self_type,
+            arguments: [None; MAX_TRAIT_GOAL_ARGUMENTS],
+            argument_count: 0,
+        }
+    }
+
+    pub fn push_argument(&mut self, argument: TraitGoalTermId) -> Result<(), TraitGoalError> {
+        let slot = self
+            .arguments
+            .get_mut(self.argument_count)
+            .ok_or(TraitGoalError::TooManyArguments)?;
+        *slot = Some(argument);
+        self.argument_count += 1;
+        Ok(())
+    }
+
+    pub fn arguments(&self) -> &[Option<TraitGoalTermId>] {
+        &self.arguments[..self.argument_count]
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum BoundTraitGoalTerm {
+    Type(BoundTraitGoalType),
+    Projection {
+        goal: BoundProjectionBearingTraitGoal,
+        associated_type_id: TraitAssociatedTypeId,
+    },
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct BoundTraitGoalTermArena {
+    terms: [Option<BoundTraitGoalTerm>; MAX_TRAIT_GOAL_TERMS],
+    term_count: usize,
+}
+
+impl BoundTraitGoalTermArena {
+    pub const EMPTY: Self = Self {
+        terms: [None; MAX_TRAIT_GOAL_TERMS],
+        term_count: 0,
+    };
+
+    pub fn intern_type(
+        &mut self,
+        ty: BoundTraitGoalType,
+    ) -> Result<TraitGoalTermId, TraitGoalError> {
+        self.intern(BoundTraitGoalTerm::Type(ty))
+    }
+
+    pub fn intern_projection(
+        &mut self,
+        goal: BoundProjectionBearingTraitGoal,
+        associated_type_id: TraitAssociatedTypeId,
+    ) -> Result<TraitGoalTermId, TraitGoalError> {
+        validate_bound_projection_bearing_goal(goal, self.term_count)?;
+        self.intern(BoundTraitGoalTerm::Projection {
+            goal,
+            associated_type_id,
+        })
+    }
+
+    pub fn get(&self, id: TraitGoalTermId) -> Option<BoundTraitGoalTerm> {
+        self.terms.get(id.get() as usize).copied().flatten()
+    }
+
+    pub fn terms(&self) -> &[Option<BoundTraitGoalTerm>] {
+        &self.terms[..self.term_count]
+    }
+
+    fn intern(&mut self, term: BoundTraitGoalTerm) -> Result<TraitGoalTermId, TraitGoalError> {
+        if let Some((index, _)) = self.terms[..self.term_count]
+            .iter()
+            .enumerate()
+            .find(|(_, existing)| **existing == Some(term))
+        {
+            return Ok(TraitGoalTermId::new(index as u8));
+        }
+        let slot = self
+            .terms
+            .get_mut(self.term_count)
+            .ok_or(TraitGoalError::TooManyTraitGoalTerms)?;
+        let id = TraitGoalTermId::new(self.term_count as u8);
+        *slot = Some(term);
+        self.term_count += 1;
+        Ok(id)
+    }
+}
+
+fn validate_bound_projection_bearing_goal(
+    goal: BoundProjectionBearingTraitGoal,
+    term_count: usize,
+) -> Result<(), TraitGoalError> {
+    if goal.argument_count > goal.arguments.len()
+        || goal.arguments[..goal.argument_count]
+            .iter()
+            .any(Option::is_none)
+        || goal.arguments[goal.argument_count..]
+            .iter()
+            .any(Option::is_some)
+    {
+        return Err(TraitGoalError::InvalidGoal);
+    }
+    if goal.self_type.get() as usize >= term_count
+        || goal.arguments().iter().any(|argument| {
+            argument
+                .as_ref()
+                .is_none_or(|argument| argument.get() as usize >= term_count)
+        })
+    {
+        return Err(TraitGoalError::InvalidTraitGoalTermReference);
+    }
+    Ok(())
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct InstantiatedProjectionBearingTraitGoal {
+    pub arena: TraitGoalTermArena,
+    pub goal: ProjectionBearingTraitGoal,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct ExistsProjectionBearingTraitGoal {
+    parameter_count: usize,
+    arena: BoundTraitGoalTermArena,
+    goal: BoundProjectionBearingTraitGoal,
+}
+
+impl ExistsProjectionBearingTraitGoal {
+    pub fn new(
+        parameter_count: usize,
+        arena: BoundTraitGoalTermArena,
+        goal: BoundProjectionBearingTraitGoal,
+    ) -> Result<Self, TraitGoalError> {
+        if parameter_count > MAX_TRAIT_GENERIC_PARAMETERS {
+            return Err(TraitGoalError::TooManyGenericParameters);
+        }
+        validate_bound_projection_bearing_goal(goal, arena.term_count)?;
+        for term in arena.terms().iter().flatten() {
+            if let BoundTraitGoalTerm::Type(ty) = term {
+                validate_bound_type(*ty, parameter_count)?;
+            }
+        }
+        Ok(Self {
+            parameter_count,
+            arena,
+            goal,
+        })
+    }
+
+    pub fn instantiate_in_universe(
+        self,
+        universe: TraitUniverseIndex,
+    ) -> Result<InstantiatedProjectionBearingTraitGoal, TraitGoalError> {
+        let mut arguments =
+            [TraitGoalType::InferenceVariable(TraitInferenceVariableId::in_universe(universe, 0));
+                MAX_TRAIT_GENERIC_PARAMETERS];
+        for (index, argument) in arguments[..self.parameter_count].iter_mut().enumerate() {
+            *argument = TraitGoalType::InferenceVariable(TraitInferenceVariableId::in_universe(
+                universe,
+                index as u32,
+            ));
+        }
+        instantiate_bound_term_goal(&self.arena, self.goal, &arguments[..self.parameter_count])
+    }
+}
+
+fn instantiate_bound_term_goal(
+    bound_arena: &BoundTraitGoalTermArena,
+    bound_goal: BoundProjectionBearingTraitGoal,
+    arguments: &[TraitGoalType],
+) -> Result<InstantiatedProjectionBearingTraitGoal, TraitGoalError> {
+    let mut arena = TraitGoalTermArena::EMPTY;
+    let mut mapped = [None; MAX_TRAIT_GOAL_TERMS];
+    for (index, term) in bound_arena.terms().iter().enumerate() {
+        let term = term.as_ref().copied().ok_or(TraitGoalError::InvalidGoal)?;
+        let instantiated = match term {
+            BoundTraitGoalTerm::Type(ty) => {
+                arena.intern_type(instantiate_bound_type(ty, arguments)?)?
+            }
+            BoundTraitGoalTerm::Projection {
+                goal,
+                associated_type_id,
+            } => arena.intern_projection(
+                map_bound_projection_bearing_goal(goal, &mapped[..index])?,
+                associated_type_id,
+            )?,
+        };
+        mapped[index] = Some(instantiated);
+    }
+    Ok(InstantiatedProjectionBearingTraitGoal {
+        arena,
+        goal: map_bound_projection_bearing_goal(bound_goal, &mapped[..bound_arena.term_count])?,
+    })
+}
+
+fn map_bound_projection_bearing_goal(
+    goal: BoundProjectionBearingTraitGoal,
+    mapped: &[Option<TraitGoalTermId>],
+) -> Result<ProjectionBearingTraitGoal, TraitGoalError> {
+    let self_type = mapped
+        .get(goal.self_type.get() as usize)
+        .and_then(Option::as_ref)
+        .copied()
+        .ok_or(TraitGoalError::InvalidTraitGoalTermReference)?;
+    let mut instantiated = ProjectionBearingTraitGoal::new(goal.trait_id, self_type);
+    for argument in goal.arguments() {
+        instantiated.push_argument(
+            mapped
+                .get(
+                    argument
+                        .as_ref()
+                        .copied()
+                        .ok_or(TraitGoalError::InvalidGoal)?
+                        .get() as usize,
+                )
+                .and_then(Option::as_ref)
+                .copied()
+                .ok_or(TraitGoalError::InvalidTraitGoalTermReference)?,
+        )?;
+    }
+    Ok(instantiated)
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct ImplementedTraitPredicates {
     predicates: [Option<ImplementedTraitGoal>; MAX_TRAIT_PREDICATES],
     predicate_count: usize,
@@ -3222,6 +3457,27 @@ pub fn solve_projection_bearing_trait_goal(
     }
 }
 
+pub fn solve_exists_projection_bearing_trait_goal(
+    exact_implementations: &TraitImplementationDatabase,
+    generic_implementations: &GenericTraitImplementationDatabase,
+    clauses: &TraitWhereClauseDatabase,
+    exact_values: &TraitAssociatedTypeDatabase,
+    generic_values: &GenericTraitAssociatedTypeDatabase,
+    universe: TraitUniverseIndex,
+    goal: ExistsProjectionBearingTraitGoal,
+) -> Result<InferredTraitGoalSolution, TraitGoalError> {
+    let instantiated = goal.instantiate_in_universe(universe)?;
+    solve_projection_bearing_trait_goal(
+        exact_implementations,
+        generic_implementations,
+        clauses,
+        exact_values,
+        generic_values,
+        &instantiated.arena,
+        instantiated.goal,
+    )
+}
+
 pub fn solve_exists_trait_projection_equality(
     exact_implementations: &TraitImplementationDatabase,
     generic_implementations: &GenericTraitImplementationDatabase,
@@ -4608,6 +4864,91 @@ mod tests {
         assert_eq!(
             answer.substitution.binding(variable),
             Some(TraitGoalType::Concrete(TraitTypeId::new(10)))
+        );
+    }
+
+    #[test]
+    fn solves_existential_projection_bearing_term_binders() {
+        let parameter = TraitGenericParameterId::new(0);
+        let associated = TraitAssociatedTypeId::new(1);
+        let mut arena = BoundTraitGoalTermArena::EMPTY;
+        let inferred = arena
+            .intern_type(BoundTraitGoalType::Parameter(parameter))
+            .unwrap();
+        let concrete = arena
+            .intern_type(BoundTraitGoalType::Concrete(TraitTypeId::new(30)))
+            .unwrap();
+        let projection = arena
+            .intern_projection(
+                BoundProjectionBearingTraitGoal::new(TraitId::new(914), inferred),
+                associated,
+            )
+            .unwrap();
+        let mut bound_goal = BoundProjectionBearingTraitGoal::new(TraitId::new(915), concrete);
+        bound_goal.push_argument(projection).unwrap();
+        let query = ExistsProjectionBearingTraitGoal::new(1, arena, bound_goal).unwrap();
+
+        let projection_implementation = TraitImplementationId::new(234);
+        let root_implementation = TraitImplementationId::new(235);
+        let mut exact = TraitImplementationDatabase::EMPTY;
+        exact
+            .insert(TraitImplementationHeader::new(
+                projection_implementation,
+                TraitId::new(914),
+                TraitTypeId::new(10),
+            ))
+            .unwrap();
+        let mut root_header = TraitImplementationHeader::new(
+            root_implementation,
+            TraitId::new(915),
+            TraitTypeId::new(30),
+        );
+        root_header.push_argument(TraitTypeId::new(20)).unwrap();
+        exact.insert(root_header).unwrap();
+        let mut values = TraitAssociatedTypeDatabase::EMPTY;
+        values
+            .insert(
+                &exact,
+                TraitAssociatedTypeValue::new(
+                    projection_implementation,
+                    associated,
+                    TraitTypeId::new(20),
+                ),
+            )
+            .unwrap();
+        let universe = TraitUniverseIndex::new(18);
+        let InferredTraitGoalSolution::Unique(answer) = solve_exists_projection_bearing_trait_goal(
+            &exact,
+            &GenericTraitImplementationDatabase::EMPTY,
+            &TraitWhereClauseDatabase::EMPTY,
+            &values,
+            &GenericTraitAssociatedTypeDatabase::EMPTY,
+            universe,
+            query,
+        )
+        .unwrap() else {
+            panic!("projection-bearing existential binder should prove");
+        };
+        assert_eq!(
+            answer
+                .substitution
+                .binding(TraitInferenceVariableId::in_universe(universe, 0)),
+            Some(TraitGoalType::Concrete(TraitTypeId::new(10)))
+        );
+
+        let mut invalid_arena = BoundTraitGoalTermArena::EMPTY;
+        let invalid = invalid_arena
+            .intern_type(BoundTraitGoalType::Parameter(TraitGenericParameterId::new(
+                1,
+            )))
+            .unwrap();
+        assert_eq!(
+            ExistsProjectionBearingTraitGoal::new(
+                1,
+                invalid_arena,
+                BoundProjectionBearingTraitGoal::new(TraitId::new(916), invalid),
+            ),
+            Err(TraitGoalError::UnboundGenericParameter)
         );
     }
 

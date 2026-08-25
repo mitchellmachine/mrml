@@ -4195,6 +4195,17 @@ Projection terms in binders, clause heads, and premise type positions,
 concrete/rigid projection-premise proof, backtracking, caching, coinduction,
 source syntax, and general normalization remain unsupported.
 
+The existential projection-term binder milestone adds a parallel fixed bound-
+term arena whose leaves contain concrete types or indexed generic parameters.
+Admission validates every parameter and backward reference; instantiation maps
+parameters to distinct universe-aware inference variables and remaps interned
+term identities before invoking projection-bearing goal proof. Windows gnullvm
+and native Arch Linux WSL each pass 520 library tests, one component-interface
+probe, 10 conformance tests, and 335 replacement tests: 866 compiler tests per
+host. Higher-ranked term binders, projection terms in clause heads and premise
+type positions, concrete/rigid projection-premise proof, backtracking, caching,
+coinduction, source syntax, and general normalization remain unsupported.
+
 The nested conditional tuple-origin milestone walks each leaf's bounded
 conditional-parent chain to the outermost generation before grouping reference
 origins by field ordinal. The exact oracle rejects a three-leaf returned field

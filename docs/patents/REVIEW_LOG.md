@@ -4601,3 +4601,12 @@ exact, generic, clause, and premise proof operations. It adds no new term or
 source grammar, branching search, specialization order, cache, parser, runtime
 mechanism, allocation, synchronization, protocol, cryptography, or hardware
 behavior.
+
+# 2026-08-25 — Existential projection-term binders
+
+**Result: NOT_TRIGGERED.** This compiler-only increment mirrors the existing
+fixed term arena with indexed bound leaves, validates scope, and substitutes
+existing universe-aware inference identities before using the existing goal
+solver. It adds no new term or source grammar, branching search,
+specialization order, cache, parser, runtime mechanism, allocation,
+synchronization, protocol, cryptography, or hardware behavior.
