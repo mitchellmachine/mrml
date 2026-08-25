@@ -29424,6 +29424,9 @@ mod tests {
             "fn value(input: u16, choose: bool) -> u16 { let mut first = input; let mut second = input + 1; let mut third = input + 2; let mut holder = (&mut first,); holder.0 = if choose { &mut second } else { &mut third }; let moved = holder.0; let child: &u16 = &*moved; second += 1; *child }",
             "fn value(input: u16, choose: bool) -> u16 { let mut first = input; let mut second = input + 1; let mut third = input + 2; let mut holder = (&mut first,); holder.0 = if choose { &mut second } else { &mut third }; let moved = holder.0; let child: &u16 = &*moved; third += 1; *child }",
             "fn value(input: u16, choose: bool) -> u16 { let mut first = input; let mut second = input + 1; let mut third = input + 2; let mut holder = (&mut first,); holder.0 = if choose { &mut second } else { &mut third }; let moved = holder.0; let child: &u16 = &*moved; first += 1; *child }",
+            "fn value(input: u16) -> u16 { let mut first = input; let mut second = input + 1; let mut third = input + 2; let mut holder = (&mut first,); holder.0 = &mut second; holder.0 = &mut third; let moved = holder.0; let child: &u16 = &*moved; first += 1; *child }",
+            "fn value(input: u16) -> u16 { let mut first = input; let mut second = input + 1; let mut third = input + 2; let mut holder = (&mut first,); holder.0 = &mut second; holder.0 = &mut third; let moved = holder.0; let child: &u16 = &*moved; second += 1; *child }",
+            "fn value(input: u16) -> u16 { let mut first = input; let mut second = input + 1; let mut third = input + 2; let mut holder = (&mut first,); holder.0 = &mut second; holder.0 = &mut third; let moved = holder.0; let child: &u16 = &*moved; third += 1; *child }",
         ] {
             match analyze(rejected) {
                 Err(error) => assert_eq!(error.kind, CodegenErrorKind::RuntimeBorrowConflict),
@@ -29440,6 +29443,8 @@ mod tests {
             "fn value(input: u16) -> u16 { let mut first = input; let mut second = input + 1; let mut holder = (&mut first,); holder.0 = &mut second; let moved = holder.0; let child: &u16 = &*moved; let copied = *child; second += 1; copied + second }",
             "fn value(input: u16, choose: bool) -> u16 { let mut first = input; let mut second = input + 1; let mut third = input + 2; let mut unrelated = input + 3; let mut holder = (&mut first,); holder.0 = if choose { &mut second } else { &mut third }; let moved = holder.0; let child: &u16 = &*moved; unrelated += 1; *child + unrelated }",
             "fn value(input: u16, choose: bool) -> u16 { let mut first = input; let mut second = input + 1; let mut third = input + 2; let mut holder = (&mut first,); holder.0 = if choose { &mut second } else { &mut third }; let moved = holder.0; let child: &u16 = &*moved; let copied = *child; second += 1; third += 1; copied + second + third }",
+            "fn value(input: u16) -> u16 { let mut first = input; let mut second = input + 1; let mut third = input + 2; let mut unrelated = input + 3; let mut holder = (&mut first,); holder.0 = &mut second; holder.0 = &mut third; let moved = holder.0; let child: &u16 = &*moved; unrelated += 1; *child + unrelated }",
+            "fn value(input: u16) -> u16 { let mut first = input; let mut second = input + 1; let mut third = input + 2; let mut holder = (&mut first,); holder.0 = &mut second; holder.0 = &mut third; let moved = holder.0; let child: &u16 = &*moved; let copied = *child; first += 1; second += 1; third += 1; copied + first + second + third }",
         ] {
             analyze(accepted).unwrap();
         }

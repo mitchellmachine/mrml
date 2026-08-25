@@ -738,7 +738,9 @@ Conditional reference reassignment into an exact tuple field now records every
 supported branch owner together with the field's replaced initialization owner.
 When that field is moved and reborrowed, bounded loan ancestry rejects mutation
 of any still-live possible owner and releases the branch owners after the
-descendant's last use. This is exact one-field conditional provenance, not path-
+descendant's last use. The same bounded ancestry retains both replaced owners
+across two successive exact field writes. This is exact one-field conditional
+and repeated-generation provenance, not path-
 sensitive branch selection, nested projections, general aggregate provenance,
 or complete Polonius semantics.
 Smaller parser, type, aggregate, control-flow, and diagnostic prerequisites may

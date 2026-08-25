@@ -3769,7 +3769,9 @@ initialization owner while a moved descendant remains live, accepts unrelated
 mutation, and accepts mutation of both conditional owners after the descendant's
 last use. MRML gives the conditional generation and prior exact field origin
 distinct bounded fact identities and carries both through liveness, mutable-
-parent suspension, and return-outlives traversal. Windows gnullvm and native
+parent suspension, and return-outlives traversal. Two successive exact field
+writes likewise retain the initialization owner, intermediate owner, and latest
+owner until the moved descendant's last use. Windows gnullvm and native
 Arch Linux WSL each pass 420 library tests, one component-interface probe, 10
 conformance tests, and 335 replacement tests: 766 compiler tests per host. The
 unchanged driver and warnings-denied Clippy were not re-executed. This does not

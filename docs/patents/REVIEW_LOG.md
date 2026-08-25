@@ -3873,3 +3873,10 @@ reclamation algorithm, runtime synchronization mechanism, hardware mechanism,
 wire protocol, compression, cryptography, or executable enforcement technique.
 The existing compiler-analysis reviews remain applicable, and this bounded
 correctness extension selects no additional patent mechanism.
+
+# 2026-08-25 — Repeated projected-reference replacement evidence
+
+**Result: NOT_TRIGGERED.** Independently authored compiler probes exercise the
+existing bounded generation walk across two successive writes to one exact tuple
+field. They select no new compiler algorithm or runtime mechanism beyond the
+conditional projected-reference ownership analysis reviewed immediately above.
