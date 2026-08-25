@@ -81,6 +81,14 @@ ABI-4 cannot satisfy ABI-3, ambiguity fails instead of choosing a preferred
 provider, and no path or filename participates. Live generation-safe binding,
 policy preference, activation, and loading remain **PLANNED**.
 
+Generation-safe binding identity is now **PARTIALLY IMPLEMENTED** in the build
+tool model. Fixed-capacity generational slots retain exact resolved
+consumer/provider package records and a generation-tagged in-process executable
+or isolated-service endpoint. Existing entries cannot be retargeted during an
+update, and released slot identities cannot address replacements. Runtime
+capability authorization, executable admission/mapping, call dispatch,
+reference accounting, and process integration remain **PLANNED**.
+
 Within existing boot/deployment phases, add typed UEFI objects, verified installer
 entry creation, shell boot administration, owner/compatibility/dbx policy, then
 physical firmware tests per

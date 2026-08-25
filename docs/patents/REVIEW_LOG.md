@@ -3581,3 +3581,37 @@ Policy preference, graph solving, live binding, provider loading, activation,
 updates, retention, and servicing remain `TRIGGERED` for separate
 mechanism-specific review. This technical screen establishes neither clearance
 nor infringement and does not replace independent human dual review.
+
+# 2026-08-25 — Immutable generation-safe InterfaceBinding identity
+
+**Result for this bounded mechanism: NOT_TRIGGERED.** The host-side model uses a
+fixed-capacity slot table with monotonically advanced slot generations. A new
+entry copies one already resolved consumer/provider package identity, version,
+artifact digest, interface generation/fingerprint, and exact generational
+executable or service endpoint. Entries have lookup and release but no retarget,
+patch, migration, reload, or provider replacement operation. Release invalidates
+the old slot generation before reuse.
+
+Claim-focused worldwide searching reviewed adjacent families including
+[US 11,681,520 B2](https://patents.google.com/patent/US11681520B2), whose claims
+inject DLL-manager code and data into a target process, create a remote thread,
+and load/replace DLL files;
+[US 8,997,047 B2](https://patents.google.com/patent/US8997047B2), whose claims
+execute active/inactive agent-code versions, compare versions, rebind existing
+clients, and deallocate inactive code when clients leave;
+[EP 0 648 353 A1](https://patents.google.com/patent/EP0648353A1/en), which
+describes trader-published linked procedure calls and coexisting old/new program
+units during operational replacement; and
+[US 7,124,408 B1](https://patents.google.com/patent/US7124408B1), whose claims
+concern hash-bound assembly references/manifests and runtime component integrity.
+MRML's bounded data table performs no injection, remote-thread creation, path or
+assembly search, code loading, retargeting, client rebinding, active/inactive
+switch, or reclamation. Material publications and family records were reviewed
+through their linked national/regional register data; non-overlap, not assumed
+status, is the design basis.
+
+Runtime capability authorization, actual call dispatch, provider mapping,
+reference retention, update activation, GC, and servicing remain `TRIGGERED`
+for separate selected-mechanism review. This technical screen establishes
+neither clearance nor infringement and does not replace independent human dual
+review.

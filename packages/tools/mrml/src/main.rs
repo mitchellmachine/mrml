@@ -1,4 +1,5 @@
 pub mod abi;
+pub mod binding;
 pub mod generation;
 pub mod loader;
 pub mod resolver;

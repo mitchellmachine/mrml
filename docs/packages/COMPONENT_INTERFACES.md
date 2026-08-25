@@ -43,6 +43,16 @@ fingerprint substitution fail closed. This produces dependency data only, not a
 live `InterfaceBinding`, load authority, capability, or provider selection
 preference.
 
+**PARTIALLY IMPLEMENTED binding-identity prerequisite:** a fixed-capacity
+`InterfaceBindingTable` publishes generational binding IDs only after exact
+resolution and provider-form checks. Each entry owns immutable copies of the
+consumer/provider package version and digest, interface generation and
+fingerprint, and an exact generational executable or service endpoint. There is
+no retarget operation: an update creates a new binding while a running consumer
+continues to resolve its old entry. Release advances the slot generation before
+reuse, so stale IDs cannot reach a replacement. This remains host policy-model
+evidence, not capability-authorized runtime loading or execution.
+
 The canonical deployment and generation model remains
 [DEPLOYMENT.md](../DEPLOYMENT.md); build orchestration remains
 [BUILD_SYSTEM.md](../build/BUILD_SYSTEM.md). This document adds only the
@@ -361,7 +371,8 @@ foundations, stable ABI primitives, and quantitative memory accounting, proceed:
    (**PARTIALLY IMPLEMENTED** for schema version 1 and the Zstd ABI-3 fixture);
 2. typed provides/requires metadata and exact candidate resolution
    (**PARTIALLY IMPLEMENTED** as bounded in-generation exact resolution);
-3. immutable in-process loader and generation-safe `InterfaceBinding`;
+3. immutable in-process loader and generation-safe `InterfaceBinding`
+   (**PARTIALLY IMPLEMENTED** for immutable binding identity/lifetime only);
 4. `org.mrml.zstd` providing `compression.zstd@3`;
 5. `org.mrml.zim` consuming that interface without provider path knowledge;
 6. Store update N to N+1 while old/new ZIM processes retain exact bindings;
