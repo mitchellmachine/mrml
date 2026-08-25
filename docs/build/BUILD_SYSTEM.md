@@ -94,8 +94,8 @@ Upstream rustc does not make its native/unsafe toolchain memory-safe.
 
 ## Manifest, lockfile, profiles, and isolation
 
-`MRML.workspace` is the authoritative repository component inventory and target/
-profile graph. During migration its `cargo-package` field bridges exact upstream
+`MRML.workspace` v2 is the authoritative repository component inventory and
+target/profile graph. During migration its `cargo-package` field bridges exact upstream
 dependency compilation; Cargo package identity is not MRML identity. Every
 existing component is classified `MRML_NATIVE`, `HOST_WINDOWS_LINUX`, `COMPILER`,
 `UEFI`, `GPU`, `TEST`, `SHARED`, or `BOOTSTRAP_ONLY`. The generic `crates/`
@@ -109,8 +109,9 @@ and manifest-path coverage with that inventory and every local Cargo dependency
 maps to a declared component. `mrml audit` emits dependencies, features,
 targets/outputs, custom builds, proc macros, native links, compile-time
 environment reads, included files, and external-command sites. The bounded
-parser and lexical scan are migration evidence, not native graph declarations;
-those declarations remain the next gate. See
+parser validates native dependency/feature/output declarations. Lexically found
+input sites are migration evidence, not yet per-component input policy; those
+policy declarations remain the next gate. See
 [BRIDGE_INVENTORY.md](BRIDGE_INVENTORY.md).
 
 A canonical manifest (filename provisional) binds package identity/version/class,

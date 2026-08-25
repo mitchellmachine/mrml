@@ -13,6 +13,9 @@ struct Component {
     class: String,
     targets: Vec<String>,
     default: bool,
+    dependencies: Vec<String>,
+    features: Vec<String>,
+    outputs: Vec<String>,
 }
 
 #[derive(Debug)]
@@ -93,7 +96,18 @@ fn load_workspace() -> Result<Workspace, String> {
         let fields: Vec<&str> = line.split('|').collect();
         match fields.as_slice() {
             ["version", value] => version = Some(*value),
-            ["component", id, path, cargo, class, targets, default] => {
+            [
+                "component",
+                id,
+                path,
+                cargo,
+                class,
+                targets,
+                default,
+                dependencies,
+                features,
+                outputs,
+            ] => {
                 if components
                     .iter()
                     .any(|item: &Component| item.id == *id || item.path == *path)
@@ -116,18 +130,32 @@ fn load_workspace() -> Result<Workspace, String> {
                     class: (*class).into(),
                     targets: targets.split(',').map(str::to_owned).collect(),
                     default: *default == "true",
+                    dependencies: split_declaration(dependencies),
+                    features: split_declaration(features),
+                    outputs: split_declaration(outputs),
                 });
             }
             _ => return Err(format!("WorkspaceSyntaxError {{ line: {} }}", index + 1)),
         }
     }
-    if version != Some("1") {
+    if version != Some("2") {
         return Err("UnsupportedWorkspaceVersion".into());
     }
     if components.is_empty() {
         return Err("EmptyWorkspace".into());
     }
     Ok(Workspace { root, components })
+}
+
+fn split_declaration(value: &str) -> Vec<String> {
+    let mut values: Vec<_> = value
+        .split(',')
+        .filter(|entry| !entry.is_empty())
+        .map(str::to_owned)
+        .collect();
+    values.sort();
+    values.dedup();
+    values
 }
 
 fn output_mode(args: &[String]) -> OutputMode {
@@ -144,11 +172,14 @@ fn list(workspace: &Workspace, args: &[String]) -> Result<(), String> {
     for component in &workspace.components {
         if mode == OutputMode::Structured {
             println!(
-                "component|id={}|path={}|class={}|targets={}|bridge=cargo",
+                "component|id={}|path={}|class={}|targets={}|dependencies={}|features={}|outputs={}|bridge=cargo",
                 component.id,
                 component.path,
                 component.class,
-                component.targets.join(",")
+                component.targets.join(","),
+                component.dependencies.join(","),
+                component.features.join(","),
+                component.outputs.join(",")
             );
         } else {
             println!(
@@ -355,7 +386,7 @@ fn doctor(workspace: &Workspace, args: &[String]) -> Result<(), String> {
     let packages = verify_cargo_graph(workspace)?;
     if mode == OutputMode::Structured {
         println!(
-            "doctor|host={host}|workspace_version=1|components={}|cargo_packages={}|cargo={}|rustc={}",
+            "doctor|host={host}|workspace_version=2|components={}|cargo_packages={}|cargo={}|rustc={}",
             workspace.components.len(),
             packages.len(),
             clean(&cargo),
@@ -363,7 +394,7 @@ fn doctor(workspace: &Workspace, args: &[String]) -> Result<(), String> {
         );
     } else {
         println!(
-            "host: {host}\nworkspace: v1 ({} components; {} Cargo bridge packages verified)\ncargo: {}\nrustc: {}",
+            "host: {host}\nworkspace: v2 ({} components; {} Cargo bridge packages verified)\ncargo: {}\nrustc: {}",
             workspace.components.len(),
             packages.len(),
             cargo.trim(),
@@ -413,6 +444,36 @@ fn verify_cargo_graph(workspace: &Workspace) -> Result<Vec<metadata::CargoPackag
                     component.id, dependency
                 ));
             }
+        }
+        if component.dependencies != package.dependencies {
+            return Err(format!(
+                "CargoDependencyDrift {{ component: {}, declared: {}, actual: {} }}",
+                component.id,
+                component.dependencies.join(","),
+                package.dependencies.join(",")
+            ));
+        }
+        if component.features != package.features {
+            return Err(format!(
+                "CargoFeatureDrift {{ component: {}, declared: {}, actual: {} }}",
+                component.id,
+                component.features.join(","),
+                package.features.join(",")
+            ));
+        }
+        let mut outputs: Vec<_> = package
+            .targets
+            .iter()
+            .map(|target| format!("{}:{}", target.name, target.kinds.join("+")))
+            .collect();
+        outputs.sort();
+        if component.outputs != outputs {
+            return Err(format!(
+                "CargoOutputDrift {{ component: {}, declared: {}, actual: {} }}",
+                component.id,
+                component.outputs.join(","),
+                outputs.join(",")
+            ));
         }
     }
     for package in &packages {
@@ -689,5 +750,10 @@ mod tests {
     #[test]
     fn structured_cleaning_is_bounded_to_delimiters() {
         assert_eq!(clean("a|b=c\n"), "a_b_c");
+    }
+    #[test]
+    fn native_declarations_are_canonicalized() {
+        assert_eq!(split_declaration("z,a,z"), ["a", "z"]);
+        assert!(split_declaration("").is_empty());
     }
 }

@@ -3,9 +3,11 @@
 **Status: IMPLEMENTED AUDIT / TRANSITIONAL BRIDGE.** The dependency-free `mrml`
 frontend obtains Cargo's locked version-1 metadata, parses it with a bounded
 repository-owned JSON parser, and verifies one-to-one package/name/manifest-path
-coverage against `MRML.workspace`. Every local dependency must resolve to another
-declared MRML component. This validates the current bridge; Cargo metadata does
-not become MRML package identity or runtime authority.
+coverage against `MRML.workspace`. Version 2 persists exact dependency, feature,
+and output declarations for every component; each is compared with locked Cargo
+metadata and every local dependency must resolve to another declared MRML
+component. Cargo metadata does not become MRML package identity or runtime
+authority.
 
 Run the human or stable structured inventory with the pinned toolchain:
 
@@ -52,11 +54,10 @@ semantic path move or Cargo-removal step.
 
 ## Next gate
 
-Persist dependency edges, feature mappings, outputs, and explicit input policy
-in the native workspace format; compare every declaration to this audited Cargo
-view; then move one dependency-light leaf library into `packages/libraries/`.
-Do not remove its Cargo bridge entry until old/new graph and Windows/Linux build
-equivalence are demonstrated.
+Persist per-component explicit input policy in the native workspace format and
+compare it with the lexical audit. Then move one dependency-light leaf library
+into `packages/libraries/`. Do not remove its Cargo bridge entry until old/new
+graph and Windows/Linux build equivalence are demonstrated.
 
 Patent review: `NOT_TRIGGERED`. This increment adds conventional bounded metadata
 parsing, graph consistency checks, and lexical source inventory. It does not
