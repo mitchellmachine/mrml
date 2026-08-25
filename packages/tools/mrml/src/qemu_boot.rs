@@ -82,7 +82,7 @@ pub fn create_media(args: &[String]) -> Result<(), String> {
 
 pub fn run_qemu(args: &[String]) -> Result<(), String> {
     if args.len() < 5 {
-        return Err("PackageQemuBootUsage { expected: IMAGE OVMF_CODE OVMF_VARS QEMU TRACE [--timeout-seconds N] [--expect-hex HEX | --expect-rejection-hex HEX] }".into());
+        return Err("PackageQemuBootUsage { expected: IMAGE OVMF_CODE OVMF_VARS QEMU TRACE [--accelerator tcg|whpx|kvm] [--timeout-seconds N] [--expect-hex HEX | --expect-rejection-hex HEX] }".into());
     }
     for input in &args[..3] {
         if !Path::new(input).is_file() {
@@ -103,6 +103,10 @@ pub fn run_qemu(args: &[String]) -> Result<(), String> {
         .ok()
         .filter(|seconds| (1..=300).contains(seconds))
         .ok_or_else(|| "PackageQemuTimeoutInvalid".to_owned())?;
+    let accelerator = option(args, "--accelerator")?.unwrap_or("tcg");
+    if !matches!(accelerator, "tcg" | "whpx" | "kvm") {
+        return Err("PackageQemuAcceleratorInvalid".into());
+    }
     let expected = option(args, "--expect-hex")?
         .map(parse_hex)
         .transpose()?
@@ -141,6 +145,7 @@ pub fn run_qemu(args: &[String]) -> Result<(), String> {
         &expected,
         rejection.as_deref(),
         timeout,
+        accelerator,
     );
     let _ = fs::remove_file(vars);
     result
@@ -155,16 +160,11 @@ fn run_qemu_child(
     expected: &[u8],
     rejection: Option<&[u8]>,
     timeout: u64,
+    accelerator: &str,
 ) -> Result<(), String> {
+    let machine = format!("q35,accel={accelerator}");
     let mut child = Command::new(qemu)
-        .args([
-            "-machine",
-            "q35,accel=tcg",
-            "-m",
-            "512M",
-            "-display",
-            "none",
-        ])
+        .args(["-machine", &machine, "-m", "512M", "-display", "none"])
         .args(["-serial", "none", "-monitor", "none", "-no-reboot"])
         .arg("-drive")
         .arg(format!("if=pflash,format=raw,readonly=on,file={code}"))
@@ -192,7 +192,7 @@ fn run_qemu_child(
                     .map_err(|error| format!("PackageQemuStopError {{ detail: {error} }}"))?;
                 let _ = child.wait();
                 println!(
-                    "package-qemu-boot|status=QEMU_UEFI_BOOT_REJECT_PASS|trace={}|bytes={}",
+                    "package-qemu-boot|status=QEMU_UEFI_BOOT_REJECT_PASS|accelerator={accelerator}|trace={}|bytes={}",
                     encode_hex(&bytes),
                     bytes.len()
                 );
@@ -204,7 +204,7 @@ fn run_qemu_child(
                     .map_err(|error| format!("PackageQemuStopError {{ detail: {error} }}"))?;
                 let _ = child.wait();
                 println!(
-                    "package-qemu-boot|status=QEMU_UEFI_BOOT_PASS|trace={}|bytes={}",
+                    "package-qemu-boot|status=QEMU_UEFI_BOOT_PASS|accelerator={accelerator}|trace={}|bytes={}",
                     encode_hex(&bytes),
                     bytes.len()
                 );
@@ -295,7 +295,7 @@ fn validate_options(args: &[String]) -> Result<(), String> {
     while index < args.len() {
         if !matches!(
             args[index].as_str(),
-            "--timeout-seconds" | "--expect-hex" | "--expect-rejection-hex"
+            "--accelerator" | "--timeout-seconds" | "--expect-hex" | "--expect-rejection-hex"
         ) || index + 1 == args.len()
         {
             return Err("PackageQemuBootUsage { unknown_option }".into());
@@ -364,5 +364,14 @@ mod tests {
             &prefix
         ));
         assert!(!rejected_twice(&SUCCESS_TRACE, &prefix));
+    }
+
+    #[test]
+    fn accelerator_option_is_explicit_and_bounded() {
+        let options = ["--accelerator".to_owned(), "whpx".to_owned()];
+        validate_options(&options).unwrap();
+        assert_eq!(option(&options, "--accelerator").unwrap(), Some("whpx"));
+        assert!(validate_options(&["--accelerator".to_owned()]).is_err());
+        assert!(validate_options(&["--unknown".to_owned(), "tcg".to_owned()]).is_err());
     }
 }

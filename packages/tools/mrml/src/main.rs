@@ -245,7 +245,7 @@ fn print_help() {
         "       mrml package boot-media-create LOADER BOOTLOADER_PACKAGE KERNEL_PACKAGE CONFIGURATION_PACKAGE SYSTEM_RELEASE SERVICE_SIGNED OUTPUT SFDISK MFORMAT MMD MCOPY"
     );
     println!(
-        "       mrml package qemu-boot IMAGE OVMF_CODE OVMF_VARS QEMU TRACE [--timeout-seconds N] [--expect-hex HEX | --expect-rejection-hex HEX]"
+        "       mrml package qemu-boot IMAGE OVMF_CODE OVMF_VARS QEMU TRACE [--accelerator tcg|whpx|kvm] [--timeout-seconds N] [--expect-hex HEX | --expect-rejection-hex HEX]"
     );
     println!("       mrml interface generate-rust SCHEMA OUTPUT");
     println!("  --all                 select every host-compatible component");

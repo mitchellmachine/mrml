@@ -386,6 +386,15 @@ and incompatible package generation. Each reported
 package-selection marker `b0`, while the other cases stopped before it. These
 are QEMU/OVMF firmware results, not physical-firmware evidence.
 
+The QEMU gate now accepts only the explicit accelerators `tcg`, `whpx`, or
+`kvm`, defaults to `tcg`, and includes the selected accelerator in its
+structured result. On 2026-08-25, the byte-identical package-derived image and
+EDK2 firmware completed the same 20-byte trace on Windows through both TCG and
+WHPX and under Arch Linux/WSL2 through QEMU/KVM. These are QEMU/EDK2
+firmware-media results using the named accelerators; they are not evidence that
+the native MRML WHP or KVM runner executes firmware, and they are not physical-
+firmware results.
+
 The WHP and KVM runners both consume the byte-identical canonical signed kernel
 package, authenticate its package key, select/decompress its x86-64 kernel
 payload, authenticate the inner signed PE, and construct their native guest
@@ -404,11 +413,12 @@ or compression-ratio claims.
 It reached the authenticated framebuffer marker and terminal halt under nested
 KVM and WHP. WHP's ordinary `boot` preparation deliberately omits emulated xAPIC
 state so the terminal HLT remains observable; specialized timer/SMP/device
-probes retain their existing APIC policy. The runners do not currently execute
-OVMF or consume the GPT/FAT boot image. Therefore shared package admission and
-native execution are implemented and live-tested, while the stronger requested
-WHP/KVM UEFI-media path remains **PLANNED**; do not call the native direct-launch
-probes firmware boots.
+probes retain their existing APIC policy. The native runners do not currently
+execute OVMF or consume the GPT/FAT boot image. Therefore shared package
+admission, native execution, and QEMU/EDK2 over WHPX are implemented and
+live-tested. QEMU/EDK2 over KVM has independently completed the same package-
+image trace. Native-runner firmware integration remains **PLANNED**. Do not call
+the native direct-launch probes firmware boots.
 
 ## Releases, images, install, and publication
 

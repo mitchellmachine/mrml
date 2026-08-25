@@ -94,7 +94,7 @@ reason = "reviewed repository build input"
 
 [[build_input]]
 kind = "external-command"
-line = 159
+line = 166
 path = "packages/tools/mrml/src/qemu_boot.rs"
 reason = "launch the explicitly selected QEMU executable for the package-derived UEFI boot gate"
 
