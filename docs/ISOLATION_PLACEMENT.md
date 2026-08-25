@@ -204,6 +204,14 @@ physical hardware, persistent owner settings, boot-menu Total mode, or
 required-system Total readiness. The complete adaptive-placement architecture
 and Total MicroVM Isolation therefore remain **PLANNED**.
 
+The component profile now also creates its complete fixed-capacity task runtime
+and service supervisor through the existing quantitative `MemoryPool` wrappers.
+It verifies the exact two-object page charge before launch and, only after both
+services and cleanup tickets retire, returns both commitments and verifies zero
+remaining object pages and mappings. The same signed kernel passed this gate on
+WHP and nested KVM. Guest RAM, executable/private pages, vCPU time, and device
+projections remain outside this focused pool and are still **PLANNED**.
+
 ## One policy, several placements
 
 MRML extends its existing process, service, capability, package-generation, and

@@ -103,6 +103,17 @@ The current helper records accounting/policy only. Physical backing,
 population/sealing, native installation, per-consumer private-state accounting,
 and runtime generation binding remain **PLANNED**.
 
+The focused signed ZIM/Zstd microVM probe additionally constructs the complete
+fixed-capacity `TaskRuntime` and `ServiceSupervisor` through their existing
+accounted wrappers. One exact pool is limited to the sum of those two required
+page commitments and two objects. Startup verifies the complete charge; after
+both tasks exit and supervised address-space/resource cleanup completes, the
+probe consumes both wrappers, returns the exact page counts, and requires zero
+remaining object pages and mappings before success. WHP and nested KVM execute
+that path. Guest RAM, executable/private pages, vCPU time, and device
+projections are not yet charged through this pool, so complete component/microVM
+resource accounting remains **PLANNED**.
+
 Pinning is separate scarce authority because it limits reclamation and may enable
 device visibility. Object ownership never implies DMA. DMA requires the exact
 object plus device/DMA authority and a valid IOMMU mapping; invalidation completes

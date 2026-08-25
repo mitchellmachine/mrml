@@ -96,6 +96,10 @@ use mrml_kernel::arch::x86_64::{
 use mrml_kernel::arch::x86_64::{NativeX86VirtualBlockPortIo, X86VirtualBlockGuestQueueTransport};
 #[cfg(feature = "uefi-service-preemption-probe")]
 use mrml_kernel::arch::x86_64::{PreallocatedPageTableStore, ServiceAddressSpace};
+#[cfg(feature = "component-service-probe")]
+use mrml_kernel::{
+    AccountedServiceSupervisor, AccountedTaskRuntime, MemoryPoolId, MemoryPoolTable,
+};
 #[cfg(feature = "uefi-service-preemption-probe")]
 use mrml_kernel::{ArtifactKind, SignedArtifact, TrustRoot};
 #[cfg(feature = "service-probe")]
@@ -413,12 +417,22 @@ static mut UEFI_SERVICE_RECOVERED: bool = false;
 static mut USER_RUNTIME: Option<TaskRuntime<2, 1>> = None;
 #[cfg(feature = "user-probe")]
 static mut USER_ENDPOINT: Option<Endpoint> = None;
-#[cfg(feature = "service-probe")]
+#[cfg(all(feature = "service-probe", not(feature = "component-service-probe")))]
 static mut SERVICE_RUNTIME: Option<TaskRuntime<3, 9>> = None;
+#[cfg(feature = "component-service-probe")]
+static mut SERVICE_RUNTIME: Option<AccountedTaskRuntime<3, 9>> = None;
 #[cfg(feature = "service-probe")]
 static mut SERVICE_ENDPOINT: Option<Endpoint> = None;
-#[cfg(feature = "service-probe")]
+#[cfg(all(feature = "service-probe", not(feature = "component-service-probe")))]
 static mut SERVICE_SUPERVISOR: Option<ServiceSupervisor<3>> = None;
+#[cfg(feature = "component-service-probe")]
+static mut SERVICE_SUPERVISOR: Option<AccountedServiceSupervisor<3>> = None;
+#[cfg(feature = "component-service-probe")]
+static mut COMPONENT_SERVICE_MEMORY: Option<MemoryPoolTable<1, 2>> = None;
+#[cfg(feature = "component-service-probe")]
+static mut COMPONENT_SERVICE_MEMORY_AUTHORITIES: Option<CapabilitySpace<3>> = None;
+#[cfg(feature = "component-service-probe")]
+static mut COMPONENT_SERVICE_MEMORY_POOL: Option<(MemoryPoolId, Capability)> = None;
 #[cfg(feature = "service-probe")]
 static mut SERVICE_MANAGEMENT: Option<CapabilitySpace<3>> = None;
 #[cfg(feature = "service-probe")]
@@ -1154,6 +1168,7 @@ unsafe extern "sysv64" fn mrml_user_call_dispatch(frame: *mut UserCallFrame) {
                             }) {
                                 halt();
                             }
+                            release_component_service_accounting();
                             asm!(
                                 "out dx, eax",
                                 in("dx") SERVICE_PROBE_PORT,
@@ -3014,6 +3029,61 @@ unsafe fn run_kernel(bytes: *const u8, length: usize) -> ! {
         context_a.r12 = 1;
         context_b.r12 = 1;
         let runtime_pointer = core::ptr::addr_of_mut!(SERVICE_RUNTIME);
+        #[cfg(feature = "component-service-probe")]
+        {
+            let mut authorities = CapabilitySpace::<3>::new();
+            let mut memory = MemoryPoolTable::<1, 2>::new(0x5444).unwrap_or_else(|_| halt());
+            let runtime_pages =
+                AccountedTaskRuntime::<3, 9>::required_pages().unwrap_or_else(|_| halt());
+            let supervisor_pages =
+                AccountedServiceSupervisor::<3>::required_pages().unwrap_or_else(|_| halt());
+            let committed_pages = runtime_pages
+                .checked_add(supervisor_pages)
+                .unwrap_or_else(|| halt());
+            let (pool, pool_capability) = memory
+                .create_root(
+                    committed_pages,
+                    2,
+                    0,
+                    Rights::ALLOCATE
+                        .union(Rights::CONTROL)
+                        .union(Rights::INSPECT),
+                    &mut authorities,
+                )
+                .unwrap_or_else(|_| halt());
+            let runtime = AccountedTaskRuntime::<3, 9>::new(
+                1_000,
+                1,
+                pool,
+                pool_capability,
+                &mut memory,
+                &mut authorities,
+            )
+            .unwrap_or_else(|_| halt());
+            let supervisor = AccountedServiceSupervisor::<3>::new(
+                pool,
+                pool_capability,
+                &mut memory,
+                &mut authorities,
+            )
+            .unwrap_or_else(|_| halt());
+            if runtime.committed_pages() != runtime_pages
+                || supervisor.committed_pages() != supervisor_pages
+                || memory
+                    .usage(pool, pool_capability, &authorities)
+                    .map(|usage| usage.object_pages())
+                    != Ok(committed_pages)
+            {
+                halt();
+            }
+            runtime_pointer.write(Some(runtime));
+            core::ptr::addr_of_mut!(SERVICE_SUPERVISOR).write(Some(supervisor));
+            core::ptr::addr_of_mut!(COMPONENT_SERVICE_MEMORY).write(Some(memory));
+            core::ptr::addr_of_mut!(COMPONENT_SERVICE_MEMORY_AUTHORITIES).write(Some(authorities));
+            core::ptr::addr_of_mut!(COMPONENT_SERVICE_MEMORY_POOL)
+                .write(Some((pool, pool_capability)));
+        }
+        #[cfg(not(feature = "component-service-probe"))]
         runtime_pointer.write(Some(
             TaskRuntime::<3, 9>::new(1_000, 1).unwrap_or_else(|_| halt()),
         ));
@@ -3036,7 +3106,14 @@ unsafe fn run_kernel(bytes: *const u8, length: usize) -> ! {
         let sender = runtime
             .create(Priority::NORMAL, context_b)
             .unwrap_or_else(|_| halt());
-        let mut supervisor = ServiceSupervisor::<3>::new();
+        #[cfg(feature = "component-service-probe")]
+        let supervisor = (*core::ptr::addr_of_mut!(SERVICE_SUPERVISOR))
+            .as_mut()
+            .unwrap_or_else(|| halt());
+        #[cfg(not(feature = "component-service-probe"))]
+        let mut supervisor_storage = ServiceSupervisor::<3>::new();
+        #[cfg(not(feature = "component-service-probe"))]
+        let supervisor = &mut supervisor_storage;
         let service_a = supervisor
             .register_with_policy(ObjectId(0xa0), receiver, RestartPolicy::ONCE_IMMEDIATE)
             .unwrap_or_else(|_| halt());
@@ -3240,7 +3317,8 @@ unsafe fn run_kernel(bytes: *const u8, length: usize) -> ! {
             halt();
         }
         core::ptr::addr_of_mut!(SERVICE_ENDPOINT).write(Some(endpoint));
-        core::ptr::addr_of_mut!(SERVICE_SUPERVISOR).write(Some(supervisor));
+        #[cfg(not(feature = "component-service-probe"))]
+        core::ptr::addr_of_mut!(SERVICE_SUPERVISOR).write(Some(supervisor_storage));
         core::ptr::addr_of_mut!(SERVICE_MANAGEMENT).write(Some(management));
         #[cfg(feature = "service-restart-request-probe")]
         {
@@ -3948,6 +4026,42 @@ unsafe fn complete_service_cleanup(
     supervisor
         .complete_cleanup(ticket, &mut eraser)
         .unwrap_or_else(|_| halt());
+}
+
+#[cfg(feature = "component-service-probe")]
+unsafe fn release_component_service_accounting() {
+    let runtime =
+        unsafe { (*core::ptr::addr_of_mut!(SERVICE_RUNTIME)).take() }.unwrap_or_else(|| halt());
+    let supervisor =
+        unsafe { (*core::ptr::addr_of_mut!(SERVICE_SUPERVISOR)).take() }.unwrap_or_else(|| halt());
+    let runtime_pages = runtime.committed_pages();
+    let supervisor_pages = supervisor.committed_pages();
+    let memory = unsafe {
+        (*core::ptr::addr_of_mut!(COMPONENT_SERVICE_MEMORY))
+            .as_mut()
+            .unwrap_or_else(|| halt())
+    };
+    let authorities = unsafe {
+        (*core::ptr::addr_of_mut!(COMPONENT_SERVICE_MEMORY_AUTHORITIES))
+            .as_mut()
+            .unwrap_or_else(|| halt())
+    };
+    let (pool, pool_capability) =
+        unsafe { (*core::ptr::addr_of!(COMPONENT_SERVICE_MEMORY_POOL)).unwrap_or_else(|| halt()) };
+    if !matches!(runtime.release(memory, authorities), Ok(pages) if pages == runtime_pages) {
+        halt();
+    }
+    if !matches!(unsafe { supervisor.release(memory, authorities) }, Ok(pages) if pages == supervisor_pages)
+    {
+        halt();
+    }
+    if memory
+        .usage(pool, pool_capability, authorities)
+        .map(|usage| (usage.object_pages(), usage.active_mappings()))
+        != Ok((0, 0))
+    {
+        halt();
+    }
 }
 
 #[cfg(feature = "service-restart-request-probe")]

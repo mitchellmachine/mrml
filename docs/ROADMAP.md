@@ -181,8 +181,10 @@ lowering, compiler-emitted conformance metadata, ABI diffs, runtime loading, and
 native provider execution remain **PLANNED**. The hosted Zstd ABI-3 byte-call
 adapter now exercises exact generated descriptors on Windows and Arch Linux.
 Separate package-owned `org.mrml.zstd` provider and `org.mrml.zim` consumer
-artifacts also build for the MRML-native target. They have not been launched,
-so this is build evidence rather than native execution or isolation evidence.
+artifacts also build for the MRML-native target. Separately signed artifacts
+now complete one exact-generation hosted microVM call and supervised cleanup on
+WHP and nested KVM; this remains controlled hosted evidence rather than native-
+service, host-resistant, physical, or general resolver evidence.
 A backend-neutral control-plane admission now binds those two immutable load
 plans to the exact generation/interface placement and rejects either package
 generation mismatch before backend launch. WHP/KVM attachment and execution
@@ -192,8 +194,8 @@ the exact interface fingerprint/generation and provider generation while
 retaining the uncommitted fail-closed isolation route. Backend verification of
 those digests and two-image builder attachment are **PARTIALLY IMPLEMENTED** in
 both WHP and KVM adapters: mismatch precedes mapping and a second-image failure
-cannot publish the consumed builder. Package-artifact execution remains
-**PLANNED**.
+cannot publish the consumed builder. Package-artifact execution is **PARTIALLY
+IMPLEMENTED** for that one signed ZIM/Zstd hosted probe.
 
 Loader groundwork now validates exact immutable package image geometry and W^X
 section plans, including an executable entry point, without parsing, relocating,
@@ -206,7 +208,11 @@ bounded read/execute mapping reservations for multiple consumers. The object
 capability contains no write right, live mappings block reclamation, and package
 metadata cannot substitute for pool or target capabilities. Physical backing,
 population/sealing, native mapping, private-state charges, and runtime provider
-binding remain **PLANNED**.
+binding remain **PLANNED**. The focused hosted component profile now also
+charges its fixed-capacity task runtime and supervisor to one exact memory pool
+and proves both commitments return after supervised cleanup; guest RAM,
+executable/private pages, vCPU, and device projections remain unaccounted in
+that path.
 
 Typed provider-resolution groundwork now matches canonical `REQUIRES` and
 `PROVIDES` edges only inside an immutable `SystemGeneration`. Interface name,
@@ -238,8 +244,10 @@ in its host build. A standalone `org.mrml.zstd` x86-64 UEFI service artifact now
 builds through `mrml` on Windows and Arch Linux with exact launch-register and
 syscall-frame bindings. Its allocation-free one-page target floor handles
 raw/RLE frames and rejects entropy-coded blocks. This proves target build and
-format only, not resolver-to-launch dispatch, update-without-consumer-rebuild,
-a running service process, or placement parity.
+format plus one separately signed hosted execution with the ZIM consumer on WHP
+and nested KVM. It does not prove general resolver-to-launch dispatch,
+update-without-consumer-rebuild, native-service placement, or physical
+isolation.
 
 Servicing retention and inspection are **PARTIALLY IMPLEMENTED** as a bounded
 build-tool model. Exact live bindings and retained system generations, rollback
@@ -262,9 +270,11 @@ reply unless received-leaf revocation succeeds. Its construction now consumes a
 committed route retaining domain, interface/provider/policy generations,
 Total-mode class, and placement, and rejects disagreement with the expected
 resolver/policy binding. A canonical MRML-target provider binary and concrete
-x86-64 trap now build, but no service process, actual resolver-to-launch
-dispatch, supervision, CPU/RAM pool integration, WHP/KVM guest call, or physical
-isolation was exercised. The host-tested register adapter maps the loop to exact
+x86-64 trap now run with the separately signed ZIM consumer in the focused WHP
+and nested-KVM microVM probe. Its fixed task runtime and supervisor are RAM-pool
+accounted and reclaimed after cleanup. General resolver dispatch,
+native-service parity, guest RAM/vCPU/device accounting, and physical isolation
+remain unproved. The host-tested register adapter maps the loop to exact
 operations 5, 7/8, 12, and 4 and proves capability release precedes response
 visibility.
 

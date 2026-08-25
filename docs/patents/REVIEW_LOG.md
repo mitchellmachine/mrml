@@ -4081,6 +4081,18 @@ resolver mechanism beyond the prior claim-focused review. Broader provider
 lifecycle, update retention, supervision, and reclamation remain
 `TRIGGERED`, and agent review does not replace independent human dual review.
 
+# 2026-08-25 — Accounted hosted component supervision
+
+**Result: NOT_TRIGGERED within the reviewed component lifecycle shape.** The
+focused signed component profile now instantiates the existing fixed-capacity
+accounted task-runtime and supervisor wrappers from one exact `MemoryPool`,
+checks their conventional page/object charge, and releases both only after the
+existing supervised cleanup path retires both tasks. It adds no allocation
+algorithm, scheduler policy, placement selector, transport, resolver, update,
+shared-memory protocol, compression method, or reclamation heuristic. The
+broader independently serviced component lifecycle remains `TRIGGERED`; agent
+review does not replace independent human dual review.
+
 # 2026-08-25 — Bounded identified trait-clause database
 
 **Result: NOT_TRIGGERED.** This compiler-only increment stores fixed identified

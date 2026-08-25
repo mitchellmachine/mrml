@@ -106,9 +106,14 @@ one private 4 KiB scratch page, and exact launch-register endpoint/caller/
 provider-generation inputs. Its allocation-free target floor supports raw/RLE
 blocks and rejects entropy-coded blocks until bounded tables replace host
 allocation. Windows and Arch Linux target builds pass, and Windows format
-inspection confirms a PE32+ EFI application with a nonzero entrypoint. No VMM
-guest invocation, resolver-to-launch dispatch, supervision integration, or
-WHP/KVM service parity is proved.
+inspection confirms a PE32+ EFI application with a nonzero entrypoint. The
+exact signed provider and its separately signed ZIM consumer now complete one
+hosted microVM service call and supervised cleanup on both WHP and nested KVM.
+The component profile charges the fixed task-runtime and supervisor footprints
+to an explicit `MemoryPool` and returns both commitments before reporting
+success. This does not prove a general resolver-to-launch service,
+native-service placement parity, update retention, physical isolation, or
+complete Total mode.
 
 > Functionality historically embedded in a Rust binary may instead be supplied
 > by an independently signed and serviced MRML component through an explicit,
@@ -245,8 +250,8 @@ Manifest V2 now records this distinction explicitly as `form = "in-process"`
 or `form = "isolated-service"` on both `PROVIDES` and `REQUIRES`. The native
 validator accepts no path/DLL/SO-shaped form, requires the consumer and provider
 forms to match exactly, and retains the form in `mrml.lock`. This is structural
-graph evidence plus the bounded hosted Zstd transport prerequisite described
-above; the complete isolated-service runtime remains **PLANNED**.
+graph evidence plus one bounded hosted signed ZIM/Zstd service execution on WHP
+and nested KVM. The general isolated-service runtime remains **PLANNED**.
 
 Where it stays simple, a semantic interface may support either location. This is
 not mandatory. Placement preserves semantic interface compatibility where
@@ -452,12 +457,12 @@ foundations, stable ABI primitives, and quantitative memory accounting, proceed:
    provider load plans selected by the generation-bound service placement);
 4. `org.mrml.zstd` providing `compression.zstd@3`
    (**PARTIALLY IMPLEMENTED** for the canonical byte-call provider and bounded
-   hosted kernel-IPC/shared-buffer adapter, plus a standalone MRML-target
-   provider artifact that has been built but not launched);
+   hosted kernel-IPC/shared-buffer adapter, plus a standalone signed MRML-target
+   provider launched with exact-generation identity on WHP and nested KVM);
 5. `org.mrml.zim` consuming that interface without provider path knowledge
    (**PARTIALLY IMPLEMENTED** for an isolated-service manifest requirement,
-   bounded borrowed views, typed responses, and a standalone MRML-target
-   consumer probe that has been built but not launched);
+   bounded borrowed views, typed responses, and a separately signed MRML-target
+   consumer probe launched with the provider on WHP and nested KVM);
 6. Store update N to N+1 while old/new ZIM processes retain exact bindings
    (**PARTIALLY IMPLEMENTED** as a bounded non-retargeting binding model);
 7. lifetime/rollback/snapshot-aware GC and dependency inspection
