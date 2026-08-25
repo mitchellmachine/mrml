@@ -3879,6 +3879,17 @@ clauses, introduce binders or generic impls, recurse, or compose answers. The
 package selector rejects the documented compiler-only Clippy command before
 compilation, so no new warnings-denied Clippy evidence is claimed.
 
+The bounded where-clause binder milestone adds a distinct generic-parameter
+term and represents one bound consequence plus up to eight bound premises over
+eight parameters. Construction rejects out-of-scope parameters and excess
+capacity. Concrete instantiation requires exact arity and replaces every
+repeated parameter consistently through the consequence and premises. Windows
+gnullvm and native Arch Linux WSL each pass 438 library tests, one component-
+interface probe, 10 conformance tests, and 335 replacement tests: 784 compiler
+tests per host. This is allocation-free binder representation and instantiation,
+not clause elaboration, generic impl selection, source syntax, projection
+normalization, or recursive solving.
+
 The nested conditional tuple-origin milestone walks each leaf's bounded
 conditional-parent chain to the outermost generation before grouping reference
 origins by field ordinal. The exact oracle rejects a three-leaf returned field

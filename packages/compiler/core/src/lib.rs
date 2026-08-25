@@ -59,12 +59,15 @@ pub use semantics::{
     SemanticError, SemanticErrorKind, TargetLayout, analyze_constants,
 };
 pub use trait_goals::{
-    CanonicalImplementedTraitGoal, CanonicalTraitGoalType, CanonicalizedImplementedTraitGoal,
+    BoundImplementedTraitGoal, BoundTraitGoalType, CanonicalImplementedTraitGoal,
+    CanonicalTraitGoalType, CanonicalizedImplementedTraitGoal,
     CanonicalizedImplementedTraitPredicates, ImplementedTraitGoal, ImplementedTraitPredicates,
-    MAX_CANONICAL_TRAIT_VARIABLES, MAX_TRAIT_GOAL_ARGUMENTS, MAX_TRAIT_IMPLEMENTATIONS,
-    MAX_TRAIT_PREDICATES, TraitGoalAnswer, TraitGoalError, TraitGoalSolution,
+    InstantiatedTraitWhereClause, MAX_CANONICAL_TRAIT_VARIABLES, MAX_TRAIT_GENERIC_PARAMETERS,
+    MAX_TRAIT_GOAL_ARGUMENTS, MAX_TRAIT_IMPLEMENTATIONS, MAX_TRAIT_PREDICATES,
+    TraitGenericParameterId, TraitGoalAnswer, TraitGoalError, TraitGoalSolution,
     TraitGoalSubstitution, TraitGoalType, TraitId, TraitImplementationDatabase,
     TraitImplementationHeader, TraitImplementationId, TraitInferenceBinding,
-    TraitInferenceVariableId, TraitPlaceholderId, TraitTypeId, canonicalize_implemented_trait_goal,
-    canonicalize_implemented_trait_goal_with_variables, canonicalize_implemented_trait_predicates,
+    TraitInferenceVariableId, TraitPlaceholderId, TraitTypeId, TraitWhereClause,
+    canonicalize_implemented_trait_goal, canonicalize_implemented_trait_goal_with_variables,
+    canonicalize_implemented_trait_predicates,
 };

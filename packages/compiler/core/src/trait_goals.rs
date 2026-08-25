@@ -9,6 +9,7 @@ pub const MAX_TRAIT_GOAL_ARGUMENTS: usize = 8;
 pub const MAX_CANONICAL_TRAIT_VARIABLES: usize = 8;
 pub const MAX_TRAIT_IMPLEMENTATIONS: usize = 64;
 pub const MAX_TRAIT_PREDICATES: usize = 8;
+pub const MAX_TRAIT_GENERIC_PARAMETERS: usize = 8;
 
 #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
 pub struct TraitId(u32);
@@ -67,6 +68,25 @@ pub enum TraitGoalType {
     Concrete(TraitTypeId),
     InferenceVariable(TraitInferenceVariableId),
     Placeholder(TraitPlaceholderId),
+}
+
+#[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
+pub struct TraitGenericParameterId(u8);
+
+impl TraitGenericParameterId {
+    pub const fn new(value: u8) -> Self {
+        Self(value)
+    }
+
+    pub const fn get(self) -> u8 {
+        self.0
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum BoundTraitGoalType {
+    Concrete(TraitTypeId),
+    Parameter(TraitGenericParameterId),
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -137,6 +157,117 @@ impl ImplementedTraitPredicates {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct BoundImplementedTraitGoal {
+    pub trait_id: TraitId,
+    pub self_type: BoundTraitGoalType,
+    arguments: [Option<BoundTraitGoalType>; MAX_TRAIT_GOAL_ARGUMENTS],
+    argument_count: usize,
+}
+
+impl BoundImplementedTraitGoal {
+    pub const fn new(trait_id: TraitId, self_type: BoundTraitGoalType) -> Self {
+        Self {
+            trait_id,
+            self_type,
+            arguments: [None; MAX_TRAIT_GOAL_ARGUMENTS],
+            argument_count: 0,
+        }
+    }
+
+    pub fn push_argument(&mut self, argument: BoundTraitGoalType) -> Result<(), TraitGoalError> {
+        let slot = self
+            .arguments
+            .get_mut(self.argument_count)
+            .ok_or(TraitGoalError::TooManyArguments)?;
+        *slot = Some(argument);
+        self.argument_count += 1;
+        Ok(())
+    }
+
+    pub fn arguments(&self) -> &[Option<BoundTraitGoalType>] {
+        &self.arguments[..self.argument_count]
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct InstantiatedTraitWhereClause {
+    pub consequence: ImplementedTraitGoal,
+    pub premises: ImplementedTraitPredicates,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct TraitWhereClause {
+    parameter_count: usize,
+    pub consequence: BoundImplementedTraitGoal,
+    premises: [Option<BoundImplementedTraitGoal>; MAX_TRAIT_PREDICATES],
+    premise_count: usize,
+}
+
+impl TraitWhereClause {
+    pub fn new(
+        parameter_count: usize,
+        consequence: BoundImplementedTraitGoal,
+    ) -> Result<Self, TraitGoalError> {
+        if parameter_count > MAX_TRAIT_GENERIC_PARAMETERS {
+            return Err(TraitGoalError::TooManyGenericParameters);
+        }
+        validate_bound_goal(consequence, parameter_count)?;
+        Ok(Self {
+            parameter_count,
+            consequence,
+            premises: [None; MAX_TRAIT_PREDICATES],
+            premise_count: 0,
+        })
+    }
+
+    pub const fn parameter_count(&self) -> usize {
+        self.parameter_count
+    }
+
+    pub fn push_premise(
+        &mut self,
+        premise: BoundImplementedTraitGoal,
+    ) -> Result<(), TraitGoalError> {
+        validate_bound_goal(premise, self.parameter_count)?;
+        let slot = self
+            .premises
+            .get_mut(self.premise_count)
+            .ok_or(TraitGoalError::TooManyPredicates)?;
+        *slot = Some(premise);
+        self.premise_count += 1;
+        Ok(())
+    }
+
+    pub fn premises(&self) -> &[Option<BoundImplementedTraitGoal>] {
+        &self.premises[..self.premise_count]
+    }
+
+    pub fn instantiate(
+        self,
+        arguments: &[TraitTypeId],
+    ) -> Result<InstantiatedTraitWhereClause, TraitGoalError> {
+        if arguments.len() != self.parameter_count {
+            return Err(TraitGoalError::WrongGenericArgumentCount);
+        }
+        let consequence = instantiate_bound_goal(self.consequence, arguments)?;
+        let mut premises = ImplementedTraitPredicates::EMPTY;
+        for premise in self.premises().iter() {
+            premises.push(instantiate_bound_goal(
+                premise
+                    .as_ref()
+                    .copied()
+                    .ok_or(TraitGoalError::InvalidGoal)?,
+                arguments,
+            )?)?;
+        }
+        Ok(InstantiatedTraitWhereClause {
+            consequence,
+            premises,
+        })
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct CanonicalImplementedTraitGoal {
     pub trait_id: TraitId,
     pub self_type: CanonicalTraitGoalType,
@@ -190,11 +321,88 @@ impl CanonicalImplementedTraitGoal {
 pub enum TraitGoalError {
     TooManyArguments,
     TooManyCanonicalVariables,
+    TooManyGenericParameters,
     TooManyPredicates,
+    UnboundGenericParameter,
+    WrongGenericArgumentCount,
     InvalidGoal,
     TooManyImplementations,
     DuplicateImplementationId,
     OverlappingImplementation,
+}
+
+fn validate_bound_goal(
+    goal: BoundImplementedTraitGoal,
+    parameter_count: usize,
+) -> Result<(), TraitGoalError> {
+    if goal.argument_count > goal.arguments.len()
+        || goal.arguments[..goal.argument_count]
+            .iter()
+            .any(Option::is_none)
+        || goal.arguments[goal.argument_count..]
+            .iter()
+            .any(Option::is_some)
+    {
+        return Err(TraitGoalError::InvalidGoal);
+    }
+    validate_bound_type(goal.self_type, parameter_count)?;
+    for argument in goal.arguments().iter() {
+        validate_bound_type(
+            argument
+                .as_ref()
+                .copied()
+                .ok_or(TraitGoalError::InvalidGoal)?,
+            parameter_count,
+        )?;
+    }
+    Ok(())
+}
+
+fn validate_bound_type(
+    ty: BoundTraitGoalType,
+    parameter_count: usize,
+) -> Result<(), TraitGoalError> {
+    if let BoundTraitGoalType::Parameter(parameter) = ty {
+        if parameter.get() as usize >= parameter_count {
+            return Err(TraitGoalError::UnboundGenericParameter);
+        }
+    }
+    Ok(())
+}
+
+fn instantiate_bound_goal(
+    goal: BoundImplementedTraitGoal,
+    arguments: &[TraitTypeId],
+) -> Result<ImplementedTraitGoal, TraitGoalError> {
+    validate_bound_goal(goal, arguments.len())?;
+    let mut instantiated = ImplementedTraitGoal::new(
+        goal.trait_id,
+        instantiate_bound_type(goal.self_type, arguments)?,
+    );
+    for argument in goal.arguments().iter() {
+        instantiated.push_argument(instantiate_bound_type(
+            argument
+                .as_ref()
+                .copied()
+                .ok_or(TraitGoalError::InvalidGoal)?,
+            arguments,
+        )?)?;
+    }
+    Ok(instantiated)
+}
+
+fn instantiate_bound_type(
+    ty: BoundTraitGoalType,
+    arguments: &[TraitTypeId],
+) -> Result<TraitGoalType, TraitGoalError> {
+    match ty {
+        BoundTraitGoalType::Concrete(ty) => Ok(TraitGoalType::Concrete(ty)),
+        BoundTraitGoalType::Parameter(parameter) => arguments
+            .get(parameter.get() as usize)
+            .copied()
+            .map(TraitGoalType::Concrete)
+            .ok_or(TraitGoalError::UnboundGenericParameter),
+    }
 }
 
 #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
@@ -700,6 +908,95 @@ mod tests {
         assert_eq!(
             canonicalize_implemented_trait_predicates(predicates),
             Err(TraitGoalError::TooManyCanonicalVariables)
+        );
+    }
+
+    #[test]
+    fn instantiates_bounded_where_clause_parameters_consistently() {
+        let first = TraitGenericParameterId::new(0);
+        let second = TraitGenericParameterId::new(1);
+        let mut consequence =
+            BoundImplementedTraitGoal::new(TraitId::new(10), BoundTraitGoalType::Parameter(first));
+        consequence
+            .push_argument(BoundTraitGoalType::Parameter(second))
+            .unwrap();
+        let mut clause = TraitWhereClause::new(2, consequence).unwrap();
+        let mut premise =
+            BoundImplementedTraitGoal::new(TraitId::new(11), BoundTraitGoalType::Parameter(second));
+        premise
+            .push_argument(BoundTraitGoalType::Parameter(first))
+            .unwrap();
+        premise
+            .push_argument(BoundTraitGoalType::Concrete(TraitTypeId::new(99)))
+            .unwrap();
+        clause.push_premise(premise).unwrap();
+
+        let instantiated = clause
+            .instantiate(&[TraitTypeId::new(20), TraitTypeId::new(30)])
+            .unwrap();
+        assert_eq!(
+            instantiated.consequence,
+            ImplementedTraitGoal {
+                trait_id: TraitId::new(10),
+                self_type: TraitGoalType::Concrete(TraitTypeId::new(20)),
+                arguments: [
+                    Some(TraitGoalType::Concrete(TraitTypeId::new(30))),
+                    None,
+                    None,
+                    None,
+                    None,
+                    None,
+                    None,
+                    None,
+                ],
+                argument_count: 1,
+            }
+        );
+        let premise = instantiated.premises.predicates()[0].unwrap();
+        assert_eq!(
+            premise.self_type,
+            TraitGoalType::Concrete(TraitTypeId::new(30))
+        );
+        assert_eq!(
+            premise.arguments(),
+            &[
+                Some(TraitGoalType::Concrete(TraitTypeId::new(20))),
+                Some(TraitGoalType::Concrete(TraitTypeId::new(99))),
+            ]
+        );
+    }
+
+    #[test]
+    fn rejects_unbound_or_wrong_arity_where_clause_parameters() {
+        let unbound = BoundImplementedTraitGoal::new(
+            TraitId::new(1),
+            BoundTraitGoalType::Parameter(TraitGenericParameterId::new(1)),
+        );
+        assert_eq!(
+            TraitWhereClause::new(1, unbound),
+            Err(TraitGoalError::UnboundGenericParameter)
+        );
+        let clause = TraitWhereClause::new(
+            1,
+            BoundImplementedTraitGoal::new(
+                TraitId::new(1),
+                BoundTraitGoalType::Parameter(TraitGenericParameterId::new(0)),
+            ),
+        )
+        .unwrap();
+        assert_eq!(
+            clause.instantiate(&[]),
+            Err(TraitGoalError::WrongGenericArgumentCount)
+        );
+        assert_eq!(
+            TraitWhereClause::new(
+                MAX_TRAIT_GENERIC_PARAMETERS + 1,
+                BoundImplementedTraitGoal::new(
+                    TraitId::new(1),
+                    BoundTraitGoalType::Concrete(TraitTypeId::new(1)),
+                ),
+            ),
+            Err(TraitGoalError::TooManyGenericParameters)
         );
     }
 

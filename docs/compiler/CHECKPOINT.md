@@ -653,6 +653,15 @@ manifest validation, `doctor`, and `audit` pass. The documented Cargo Clippy
 selector was rejected before compilation because `mrml-rustc` is no longer a
 Cargo package, so this checkpoint claims no new Clippy evidence.
 
+The bounded where-clause binder milestone represents one consequence and up to
+eight premises over eight indexed generic parameters. Construction rejects
+unbound parameters and excess parameter capacity; concrete instantiation
+requires exact arity and substitutes repeated parameters consistently through
+the entire clause. Windows gnullvm and native Arch Linux WSL each pass 438
+library tests, one component-interface probe, 10 conformance tests, and 335
+replacement tests: 784 compiler tests per host. This does not elaborate clauses,
+select generic impls, introduce source syntax, normalize projections, or recurse.
+
 At compiler path checkpoint `9a950ae9`, the Windows gnullvm core suite passed
 765 tests: 420 library tests, 10 conformance tests, and 335 replacement tests.
 Core formatting, warnings-denied Clippy, the no-`std`/no-`alloc`/unsafe hygiene

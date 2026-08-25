@@ -4034,3 +4034,12 @@ existing implemented-trait goals and reuses conventional first-occurrence
 canonicalization across the conjunction. It adds no where-clause algorithm,
 generic search, recursive solver, parser, runtime mechanism, allocation,
 synchronization, protocol, cryptography, or hardware behavior.
+
+# 2026-08-25 — Bounded where-clause binder instantiation
+
+**Result: NOT_TRIGGERED.** This compiler-only increment stores conventional
+indexed generic parameters in fixed-capacity consequence/premise records and
+performs direct fixed-array concrete substitution after exact arity validation.
+It adds no clause-search or elaboration algorithm, recursive solver, parser,
+runtime mechanism, allocation, synchronization, protocol, cryptography, or
+hardware behavior.
