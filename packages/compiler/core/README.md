@@ -4254,6 +4254,14 @@ native Arch Linux WSL each pass 542 library tests, one component probe, 10
 conformance tests, and 335 replacement tests: 888 compiler tests per host.
 Predicate-nested binders and source syntax remain unsupported.
 
+The rigid coinduction path uses an explicit fixed classification of at most 64
+coinductive trait identities. A repeated proof path is accepted only when every
+goal in the cycle is classified; ordinary and mixed cycles remain `Cycle`.
+Duplicate and capacity admission fail explicitly. Windows gnullvm and native
+Arch Linux WSL each pass 543 library tests, one component probe, 10 conformance
+tests, and 335 replacement tests: 889 compiler tests per host. Inference,
+projection-environment, and source-level coinduction remain unsupported.
+
 The projection-bearing term milestone uses a fixed 64-node arena for flat leaf
 terms and associated-type projections whose trait self/argument positions refer
 only to earlier nodes. Identical nodes intern to one stable identity; invalid

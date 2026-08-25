@@ -1063,6 +1063,15 @@ probe, 10 conformance tests, and 335 replacement tests: 888 compiler tests per
 host.
 Binders nested inside predicate terms and source syntax remain unsupported.
 
+The rigid coinduction milestone adds an explicit fixed classification of at most
+64 coinductive trait identities. A repeated rigid proof path succeeds only when
+every goal from the cycle entry onward is classified; unclassified and mixed
+inductive/coinductive cycles retain the existing `Cycle` result. Duplicate and
+capacity admission fail explicitly. Windows gnullvm and native Arch Linux WSL
+each pass 543 library tests, one component-interface probe, 10 conformance tests,
+and 335 replacement tests: 889 compiler tests per host. Inference, projection-
+environment, and source-level coinduction remain unsupported.
+
 The premise-bearing rigid-normalization milestone proves the selected generic
 implementation's instantiated trait and projection predicates before exposing
 its associated value. It shares the caller's 16-frame rigid proof stack and

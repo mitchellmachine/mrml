@@ -16,6 +16,7 @@ pub const MAX_TRAIT_ASSOCIATED_TYPE_VALUES: usize = 64;
 pub const MAX_TRAIT_PROJECTION_DEPTH: usize = 16;
 pub const MAX_GENERIC_TRAIT_IMPLEMENTATIONS: usize = 64;
 pub const MAX_TRAIT_GOAL_TERMS: usize = 64;
+pub const MAX_COINDUCTIVE_TRAITS: usize = 64;
 
 #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
 pub struct TraitId(u32);
@@ -1768,6 +1769,40 @@ pub enum TraitProofSolution {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct CoinductiveTraitDatabase {
+    traits: [Option<TraitId>; MAX_COINDUCTIVE_TRAITS],
+    trait_count: usize,
+}
+
+impl CoinductiveTraitDatabase {
+    pub const EMPTY: Self = Self {
+        traits: [None; MAX_COINDUCTIVE_TRAITS],
+        trait_count: 0,
+    };
+
+    pub fn insert(&mut self, trait_id: TraitId) -> Result<(), TraitGoalError> {
+        if self.traits[..self.trait_count].contains(&Some(trait_id)) {
+            return Err(TraitGoalError::DuplicateCoinductiveTrait);
+        }
+        let slot = self
+            .traits
+            .get_mut(self.trait_count)
+            .ok_or(TraitGoalError::TooManyCoinductiveTraits)?;
+        *slot = Some(trait_id);
+        self.trait_count += 1;
+        Ok(())
+    }
+
+    pub fn contains(self, trait_id: TraitId) -> bool {
+        self.traits[..self.trait_count].contains(&Some(trait_id))
+    }
+
+    pub const fn trait_count(self) -> usize {
+        self.trait_count
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 struct IdentifiedTraitWhereClause {
     id: TraitWhereClauseId,
     clause: TraitWhereClause,
@@ -2917,6 +2952,152 @@ pub fn solve_rigid_trait_goal_with_generics(
     )
 }
 
+pub fn solve_rigid_trait_goal_with_coinduction(
+    implementations: &TraitImplementationDatabase,
+    generic_implementations: &GenericTraitImplementationDatabase,
+    clauses: &TraitWhereClauseDatabase,
+    coinductive_traits: &CoinductiveTraitDatabase,
+    goal: ImplementedTraitGoal,
+) -> Result<TraitProofSolution, TraitGoalError> {
+    let mut stack = [None; MAX_TRAIT_PROOF_DEPTH];
+    solve_rigid_trait_goal_with_coinduction_inner(
+        implementations,
+        generic_implementations,
+        clauses,
+        coinductive_traits,
+        goal,
+        &mut stack,
+        0,
+    )
+}
+
+fn solve_rigid_trait_goal_with_coinduction_inner(
+    implementations: &TraitImplementationDatabase,
+    generic_implementations: &GenericTraitImplementationDatabase,
+    clauses: &TraitWhereClauseDatabase,
+    coinductive_traits: &CoinductiveTraitDatabase,
+    goal: ImplementedTraitGoal,
+    stack: &mut [Option<ImplementedTraitGoal>; MAX_TRAIT_PROOF_DEPTH],
+    depth: usize,
+) -> Result<TraitProofSolution, TraitGoalError> {
+    validate_rigid_goal(goal)?;
+    let exact = implementations.solve(canonicalize_implemented_trait_goal(goal)?);
+    let generic = generic_implementations.select_rigid(goal)?;
+    match (exact, generic) {
+        (TraitGoalSolution::Unique(_), GenericTraitImplementationSolution::NoSolution) => {
+            return Ok(TraitProofSolution::Proven);
+        }
+        (TraitGoalSolution::Unique(_), _)
+        | (TraitGoalSolution::Ambiguous, _)
+        | (_, GenericTraitImplementationSolution::Ambiguous) => {
+            return Ok(TraitProofSolution::Ambiguous);
+        }
+        (TraitGoalSolution::NoSolution, GenericTraitImplementationSolution::Unique(answer)) => {
+            if let Some(cycle_start) = stack[..depth].iter().position(|entry| *entry == Some(goal))
+            {
+                return Ok(classify_coinductive_cycle(
+                    coinductive_traits,
+                    stack,
+                    cycle_start,
+                    depth,
+                ));
+            }
+            if depth >= MAX_TRAIT_PROOF_DEPTH {
+                return Ok(TraitProofSolution::Overflow);
+            }
+            stack[depth] = Some(goal);
+            let result = solve_coinductive_rigid_premises(
+                implementations,
+                generic_implementations,
+                clauses,
+                coinductive_traits,
+                answer.instantiated,
+                stack,
+                depth + 1,
+            )?;
+            stack[depth] = None;
+            return Ok(result);
+        }
+        (TraitGoalSolution::NoSolution, GenericTraitImplementationSolution::NoSolution) => {}
+    }
+    if let Some(cycle_start) = stack[..depth].iter().position(|entry| *entry == Some(goal)) {
+        return Ok(classify_coinductive_cycle(
+            coinductive_traits,
+            stack,
+            cycle_start,
+            depth,
+        ));
+    }
+    if depth >= MAX_TRAIT_PROOF_DEPTH {
+        return Ok(TraitProofSolution::Overflow);
+    }
+    stack[depth] = Some(goal);
+    let solution = match clauses.elaborate_rigid(goal)? {
+        TraitWhereClauseSolution::Unique(answer) => solve_coinductive_rigid_premises(
+            implementations,
+            generic_implementations,
+            clauses,
+            coinductive_traits,
+            answer.instantiated,
+            stack,
+            depth + 1,
+        )?,
+        TraitWhereClauseSolution::Ambiguous => TraitProofSolution::Ambiguous,
+        TraitWhereClauseSolution::NoSolution => TraitProofSolution::NoSolution,
+    };
+    stack[depth] = None;
+    Ok(solution)
+}
+
+fn solve_coinductive_rigid_premises(
+    implementations: &TraitImplementationDatabase,
+    generic_implementations: &GenericTraitImplementationDatabase,
+    clauses: &TraitWhereClauseDatabase,
+    coinductive_traits: &CoinductiveTraitDatabase,
+    instantiated: InstantiatedTraitWhereClause,
+    stack: &mut [Option<ImplementedTraitGoal>; MAX_TRAIT_PROOF_DEPTH],
+    depth: usize,
+) -> Result<TraitProofSolution, TraitGoalError> {
+    if instantiated.has_projection_premises() {
+        return Ok(TraitProofSolution::NoSolution);
+    }
+    for premise in instantiated.premises.predicates() {
+        let premise = premise
+            .as_ref()
+            .copied()
+            .ok_or(TraitGoalError::InvalidGoal)?;
+        let result = solve_rigid_trait_goal_with_coinduction_inner(
+            implementations,
+            generic_implementations,
+            clauses,
+            coinductive_traits,
+            premise,
+            stack,
+            depth,
+        )?;
+        if result != TraitProofSolution::Proven {
+            return Ok(result);
+        }
+    }
+    Ok(TraitProofSolution::Proven)
+}
+
+fn classify_coinductive_cycle(
+    coinductive_traits: &CoinductiveTraitDatabase,
+    stack: &[Option<ImplementedTraitGoal>; MAX_TRAIT_PROOF_DEPTH],
+    cycle_start: usize,
+    depth: usize,
+) -> TraitProofSolution {
+    if stack[cycle_start..depth]
+        .iter()
+        .all(|entry| entry.is_some_and(|goal| coinductive_traits.contains(goal.trait_id)))
+    {
+        TraitProofSolution::Proven
+    } else {
+        TraitProofSolution::Cycle
+    }
+}
+
 pub fn solve_rigid_trait_goal_with_projection_environment(
     implementations: &TraitImplementationDatabase,
     generic_implementations: &GenericTraitImplementationDatabase,
@@ -3224,6 +3405,8 @@ pub enum TraitGoalError {
     TooManyCanonicalVariables,
     TooManyGenericParameters,
     TooManyBinderLevels,
+    TooManyCoinductiveTraits,
+    DuplicateCoinductiveTrait,
     TooManyPredicates,
     TooManyTraitGoalTerms,
     InvalidTraitGoalTermReference,
@@ -10214,6 +10397,97 @@ mod tests {
                 ),
             ),
             Err(TraitGoalError::NonRigidClauseQuery)
+        );
+    }
+
+    #[test]
+    fn rigid_coinduction_accepts_only_fully_declared_cycles() {
+        let parameter = TraitGenericParameterId::new(0);
+        let first_trait = TraitId::new(281);
+        let second_trait = TraitId::new(282);
+        let mut first = TraitWhereClause::new(
+            1,
+            BoundImplementedTraitGoal::new(first_trait, BoundTraitGoalType::Parameter(parameter)),
+        )
+        .unwrap();
+        first
+            .push_premise(BoundImplementedTraitGoal::new(
+                second_trait,
+                BoundTraitGoalType::Parameter(parameter),
+            ))
+            .unwrap();
+        let mut second = TraitWhereClause::new(
+            1,
+            BoundImplementedTraitGoal::new(second_trait, BoundTraitGoalType::Parameter(parameter)),
+        )
+        .unwrap();
+        second
+            .push_premise(BoundImplementedTraitGoal::new(
+                first_trait,
+                BoundTraitGoalType::Parameter(parameter),
+            ))
+            .unwrap();
+        let mut generic = GenericTraitImplementationDatabase::EMPTY;
+        generic
+            .insert(GenericTraitImplementationId::new(3), first)
+            .unwrap();
+        generic
+            .insert(GenericTraitImplementationId::new(4), second)
+            .unwrap();
+        let goal = ImplementedTraitGoal::new(
+            first_trait,
+            TraitGoalType::Placeholder(TraitPlaceholder::new(
+                TraitUniverseIndex::new(1),
+                TraitPlaceholderId::new(2),
+            )),
+        );
+
+        assert_eq!(
+            solve_rigid_trait_goal_with_coinduction(
+                &TraitImplementationDatabase::EMPTY,
+                &generic,
+                &TraitWhereClauseDatabase::EMPTY,
+                &CoinductiveTraitDatabase::EMPTY,
+                goal,
+            ),
+            Ok(TraitProofSolution::Cycle)
+        );
+        let mut coinductive = CoinductiveTraitDatabase::EMPTY;
+        coinductive.insert(first_trait).unwrap();
+        assert_eq!(
+            solve_rigid_trait_goal_with_coinduction(
+                &TraitImplementationDatabase::EMPTY,
+                &generic,
+                &TraitWhereClauseDatabase::EMPTY,
+                &coinductive,
+                goal,
+            ),
+            Ok(TraitProofSolution::Cycle)
+        );
+        coinductive.insert(second_trait).unwrap();
+        assert_eq!(coinductive.trait_count(), 2);
+        assert_eq!(
+            solve_rigid_trait_goal_with_coinduction(
+                &TraitImplementationDatabase::EMPTY,
+                &generic,
+                &TraitWhereClauseDatabase::EMPTY,
+                &coinductive,
+                goal,
+            ),
+            Ok(TraitProofSolution::Proven)
+        );
+        assert_eq!(
+            coinductive.insert(first_trait),
+            Err(TraitGoalError::DuplicateCoinductiveTrait)
+        );
+
+        let mut full = CoinductiveTraitDatabase::EMPTY;
+        for index in 0..MAX_COINDUCTIVE_TRAITS {
+            full.insert(TraitId::new(2_000 + index as u32)).unwrap();
+        }
+        assert_eq!(
+            full.insert(TraitId::new(3_000)),
+            Err(TraitGoalError::TooManyCoinductiveTraits)
         );
     }
 
