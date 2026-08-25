@@ -311,6 +311,14 @@ The Git-tool move was checked on a Windows host:
 No Linux Git-tool execution or live remote operation was exercised by this
 move.
 
+The later native Git action was checked with the exact dated 2026-08-24
+toolchains on Windows and Arch Linux WSL2. Its exact library and `mrml-git`
+binary outputs build directly; `CARGO_PKG_VERSION=0.0.1` is an explicit action
+input rather than inherited Cargo ambience. `mrml test mrml-git` passed 51
+library tests plus the binary's one inline test on each host. `mrml doctor` and
+`mrml audit` passed with 48 external-command sites. No live remote, external
+host key/signing operation, KVM, bare metal, or physical hardware was exercised.
+
 The host-tool move was checked on a Windows host:
 
 - `cargo +nightly-2026-08-24-x86_64-pc-windows-gnullvm fmt -p mrml-tools -- --check`,
@@ -685,9 +693,10 @@ second inventory.
   diagnostics, and target-scoped exact extern artifacts for migrated library
   nodes. Native integration-test outputs and bounded test-process stacks are
   explicit, native example outputs are checked and compiled, and exact feature
-  sets can gate optional target-specific externs. Fifteen components now have
-  native actions. Direct-rustc expansion still needs lock/digest validation,
-  and explicit non-library actions before
+  sets can gate optional target-specific externs. Exact binary outputs, binary
+  test harnesses, and compile-time environment values are explicit. Twenty
+  components now have native actions. Direct-rustc expansion still needs
+  lock/digest validation and the remaining non-library actions before
   Cargo can be removed behind the remaining nodes.
 - Moving all paths requires updating Cargo dependencies, docs, scripts, fixtures,
   and CI together and verifying both Windows/WHP and Linux/KVM. The present task

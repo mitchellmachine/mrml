@@ -193,6 +193,11 @@ Linux WSL2 each pass all 23 direct tests, including loopback transport; no live
 remote or external signing operation was exercised. Nineteen of 42 components
 are native; 23 remain transitional.
 
+Exact native binary outputs and compile-time environment records are now
+implemented. `mrml-git` builds its library and executable on both hosts, then
+passes 51 library tests plus one binary test. No live remote operation was
+exercised. Twenty of 42 components are native; 22 remain transitional.
+
 `mrml-zstd` is the fourth migrated leaf; its Wikipedia edge and patent-review
 source path now resolve to `packages/libraries/zstd` without changing codec
 behavior.

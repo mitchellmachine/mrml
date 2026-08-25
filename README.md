@@ -333,6 +333,12 @@ tests on both hosts, including loopback transport. No live remote or external
 signing operation was exercised. Nineteen components are native and 23 remain
 transitional.
 
+Native actions now cover exact library-plus-binary outputs and explicit
+compile-time environment values. `mrml-git` builds both outputs and passes 51
+library tests plus its binary test on Windows and Arch Linux WSL2. No live
+remote operation was exercised. Twenty components are native and 22 remain
+transitional.
+
 MRML uses Rust 2024 and the exact `nightly-2026-08-24` build toolchain pinned in
 `rust-toolchain.toml`. It is also the current `mrml-rustc` behavioral reference
 recorded as [ORACLE-0002](docs/compiler/oracles/ORACLE-0002.md); a floating

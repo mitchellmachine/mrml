@@ -150,6 +150,11 @@ error/runtime/SSH/terminal-style dependencies without changing Git, SSH, pack,
 diff, or signing behavior. **Result: NOT_TRIGGERED.** This is repository
 organization, not a new Git mechanism.
 
+The later multi-output action adds conventional binary compilation, binary test
+harness execution, and explicit compile-time environment selection, then applies
+them to `mrml-git` without changing Git behavior. **Result: TRIGGERED** under the
+existing package/resolver review; existing Git/SSH reviews remain in force.
+
 The host-tool semantic move relocates `mrml-tools` to `tools/host` after all
 eight dependencies and updates all four inbound Cargo paths without changing
 browser, desktop, executor, media, MCP, or web behavior. **Result:

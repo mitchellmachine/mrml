@@ -29,7 +29,7 @@ The 2026-08-25 Windows gnullvm result is:
 9 native-link source sites
 31 compile-time environment source sites
 1 included-file source site
-47 external-command source sites
+48 external-command source sites
 ```
 
 The structured output emits every native component, dependency list, feature
@@ -122,6 +122,12 @@ transitional.
 Linux WSL2 each pass all 23 inline tests, including loopback transport; no live
 remote or external signing operation was supplied. Nineteen components are
 native; 23 remain transitional.
+
+Native actions now declare exact binary output names, crate names, source roots,
+self-library bindings, binary test harnesses, and compile-time environment
+values. `mrml-git` builds its library and executable on Windows and Arch Linux
+WSL2 and passes 51 library tests plus one binary test on each. No live remote
+operation was exercised. Twenty components are native; 22 remain transitional.
 
 Patent review: `TRIGGERED`. This increment implements the first native dependency
 resolver, within the package/cache/resolver review already recorded in

@@ -192,6 +192,13 @@ remain absent network evidence.
 inline tests, including loopback transport; live remotes and external signing
 remain outside this evidence.
 
+Native binary records bind the public output name separately from the Rust crate
+name, source, and optional self-library extern. Build mode emits the real binary;
+test mode also compiles and runs that binary source as a test harness. Explicit
+compile-time environment records replace Cargo-provided ambient values.
+`mrml-git` exercises the complete path: both hosts build its library and binary,
+then pass 51 library tests and one binary test.
+
 Rust crate identity, MRML package identity, and stable MRML interface identity
 are distinct. The runtime component model is specified in
 [../packages/COMPONENT_INTERFACES.md](../packages/COMPONENT_INTERFACES.md).

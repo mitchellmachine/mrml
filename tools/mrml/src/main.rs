@@ -33,6 +33,8 @@ struct RustAction {
     tests: Vec<RustTest>,
     test_stack_bytes: Option<usize>,
     examples: Vec<RustExample>,
+    binaries: Vec<RustBinary>,
+    compile_env: Vec<(String, String)>,
     features: Vec<String>,
     feature_set_declared: bool,
 }
@@ -56,6 +58,14 @@ struct RustTest {
 struct RustExample {
     name: String,
     source: String,
+}
+
+#[derive(Clone, Debug)]
+struct RustBinary {
+    output: String,
+    crate_name: String,
+    source: String,
+    self_extern: bool,
 }
 
 #[derive(Debug)]
@@ -141,6 +151,8 @@ fn load_workspace() -> Result<Workspace, String> {
     let mut rust_tests = Vec::new();
     let mut rust_test_policies = Vec::new();
     let mut rust_examples = Vec::new();
+    let mut rust_binaries = Vec::new();
+    let mut rust_compile_env = Vec::new();
     let mut rust_feature_sets = Vec::new();
     for (index, raw) in text.lines().enumerate() {
         let line = raw.trim();
@@ -238,6 +250,29 @@ fn load_workspace() -> Result<Workspace, String> {
                     (*source).to_owned(),
                 ));
             }
+            [
+                "rust-binary",
+                component,
+                output,
+                crate_name,
+                source,
+                self_extern,
+            ] => {
+                rust_binaries.push((
+                    (*component).to_owned(),
+                    (*output).to_owned(),
+                    (*crate_name).to_owned(),
+                    (*source).to_owned(),
+                    (*self_extern).to_owned(),
+                ));
+            }
+            ["rust-compile-env", component, name, value] => {
+                rust_compile_env.push((
+                    (*component).to_owned(),
+                    (*name).to_owned(),
+                    (*value).to_owned(),
+                ));
+            }
             ["rust-feature-set", component, features] => {
                 rust_feature_sets.push(((*component).to_owned(), (*features).to_owned()));
             }
@@ -306,6 +341,8 @@ fn load_workspace() -> Result<Workspace, String> {
             tests: Vec::new(),
             test_stack_bytes: None,
             examples: Vec::new(),
+            binaries: Vec::new(),
+            compile_env: Vec::new(),
             features: Vec::new(),
             feature_set_declared: false,
         });
@@ -404,8 +441,68 @@ fn load_workspace() -> Result<Workspace, String> {
         }
         action.examples.push(RustExample { name, source });
     }
+    for (component_id, output, crate_name, source, self_extern) in rust_binaries {
+        let component = components
+            .iter_mut()
+            .find(|component| component.id == component_id)
+            .ok_or_else(|| format!("RustBinaryComponentMissing {{ component: {component_id} }}"))?;
+        let action = component
+            .rust_action
+            .as_mut()
+            .ok_or_else(|| format!("RustBinaryActionMissing {{ component: {component_id} }}"))?;
+        if !rust_output_name(&output)
+            || !rust_identifier(&crate_name)
+            || !safe_relative_path(&source)
+            || !root.join(&source).is_file()
+            || !root.join(&source).starts_with(root.join(&component.path))
+            || !matches!(self_extern.as_str(), "true" | "false")
+            || action.binaries.iter().any(|binary| binary.output == output)
+        {
+            return Err(format!(
+                "RustBinaryDeclarationInvalid {{ component: {component_id}, output: {output} }}"
+            ));
+        }
+        action.binaries.push(RustBinary {
+            output,
+            crate_name,
+            source,
+            self_extern: self_extern == "true",
+        });
+    }
+    for (component_id, name, value) in rust_compile_env {
+        let component = components
+            .iter_mut()
+            .find(|component| component.id == component_id)
+            .ok_or_else(|| {
+                format!("RustCompileEnvComponentMissing {{ component: {component_id} }}")
+            })?;
+        let action = component.rust_action.as_mut().ok_or_else(|| {
+            format!("RustCompileEnvActionMissing {{ component: {component_id} }}")
+        })?;
+        if !rust_identifier(&name)
+            || value.len() > 1024
+            || value.contains(['\r', '\n', '\0'])
+            || action
+                .compile_env
+                .iter()
+                .any(|(existing, _)| existing == &name)
+        {
+            return Err(format!(
+                "RustCompileEnvInvalid {{ component: {component_id}, name: {name} }}"
+            ));
+        }
+        action.compile_env.push((name, value));
+    }
     for component in &components {
         if let Some(action) = &component.rust_action {
+            if action.compile_env.len() != component.input_policy.compile_env {
+                return Err(format!(
+                    "RustCompileEnvDrift {{ component: {}, declared: {}, inputs: {} }}",
+                    component.id,
+                    action.compile_env.len(),
+                    component.input_policy.compile_env
+                ));
+            }
             if !component.features.is_empty() && !action.feature_set_declared {
                 return Err(format!(
                     "RustFeatureSetMissing {{ component: {} }}",
@@ -448,6 +545,26 @@ fn load_workspace() -> Result<Workspace, String> {
                     example_actions.join(",")
                 ));
             }
+            let mut declared_binaries: Vec<_> = component
+                .outputs
+                .iter()
+                .filter_map(|output| output.strip_suffix(":bin"))
+                .collect();
+            let mut binary_actions: Vec<_> = action
+                .binaries
+                .iter()
+                .map(|binary| binary.output.as_str())
+                .collect();
+            declared_binaries.sort();
+            binary_actions.sort();
+            if declared_binaries != binary_actions {
+                return Err(format!(
+                    "RustBinaryOutputDrift {{ component: {}, outputs: {}, binaries: {} }}",
+                    component.id,
+                    declared_binaries.join(","),
+                    binary_actions.join(",")
+                ));
+            }
         }
     }
     Ok(Workspace { root, components })
@@ -465,6 +582,16 @@ fn rust_identifier(value: &str) -> bool {
     let mut bytes = value.bytes();
     matches!(bytes.next(), Some(b'a'..=b'z' | b'A'..=b'Z' | b'_'))
         && bytes.all(|byte| matches!(byte, b'a'..=b'z' | b'A'..=b'Z' | b'0'..=b'9' | b'_'))
+}
+
+fn rust_output_name(value: &str) -> bool {
+    !value.is_empty()
+        && value.len() <= 128
+        && value != "."
+        && value != ".."
+        && value.bytes().all(
+            |byte| matches!(byte, b'a'..=b'z' | b'A'..=b'Z' | b'0'..=b'9' | b'_' | b'-' | b'.'),
+        )
 }
 
 fn parse_rust_externs(value: &str) -> Result<Vec<RustExtern>, String> {
@@ -555,6 +682,12 @@ fn apply_rust_features(command: &mut Command, component: &Component, action: &Ru
         .arg(format!("cfg(feature, values({values}))"))
         .arg("--check-cfg")
         .arg("cfg(test)");
+}
+
+fn apply_rust_compile_env(command: &mut Command, action: &RustAction) {
+    for (name, value) in &action.compile_env {
+        command.env(name, value);
+    }
 }
 
 fn parse_input_policy(value: &str, line: usize) -> Result<InputCounts, String> {
@@ -808,14 +941,20 @@ fn run_rust_action(
 ) -> Result<(), String> {
     let mut built = BTreeSet::new();
     compile_rust_component(workspace, component, target, release, false, &mut built)?;
+    let action = component
+        .rust_action
+        .as_ref()
+        .ok_or("NativeActionDisappeared")?;
+    for binary in &action.binaries {
+        compile_declared_binary(workspace, component, action, binary, target, release, false)?;
+    }
     if operation == "test" {
         compile_rust_component(workspace, component, target, release, true, &mut built)?;
-        let action = component
-            .rust_action
-            .as_ref()
-            .ok_or("NativeActionDisappeared")?;
         for test in &action.tests {
             run_declared_test(workspace, component, action, test, target, release)?;
+        }
+        for binary in &action.binaries {
+            compile_declared_binary(workspace, component, action, binary, target, release, true)?;
         }
         for example in &action.examples {
             compile_declared_example(workspace, component, action, example, target, release)?;
@@ -898,6 +1037,7 @@ fn compile_rust_component(
         .arg("-o")
         .arg(&output);
     apply_rust_features(&mut command, component, action);
+    apply_rust_compile_env(&mut command, action);
     for external in action
         .externs
         .iter()
@@ -995,6 +1135,7 @@ fn run_declared_test(
         .arg("-o")
         .arg(&output);
     apply_rust_features(&mut command, component, action);
+    apply_rust_compile_env(&mut command, action);
     if test.self_extern {
         command.arg("--extern").arg(format!(
             "{}={}",
@@ -1083,6 +1224,7 @@ fn compile_declared_example(
         .arg("-o")
         .arg(&output);
     apply_rust_features(&mut command, component, action);
+    apply_rust_compile_env(&mut command, action);
     for external in action
         .externs
         .iter()
@@ -1138,6 +1280,114 @@ fn compile_declared_example(
             status.code()
         ))
     }
+}
+
+fn compile_declared_binary(
+    workspace: &Workspace,
+    component: &Component,
+    action: &RustAction,
+    binary: &RustBinary,
+    target: &str,
+    release: bool,
+    test: bool,
+) -> Result<(), String> {
+    let output_dir = workspace
+        .root
+        .join("target")
+        .join("mrml")
+        .join(target.to_ascii_lowercase())
+        .join(if release { "release" } else { "debug" });
+    let extension = if target == "WINDOWS" { ".exe" } else { "" };
+    let filename = if test {
+        format!("{}_bin_tests{extension}", binary.output)
+    } else {
+        format!("{}{extension}", binary.output)
+    };
+    let output = output_dir.join(filename);
+    let rustc = pinned_tool("rustc")?;
+    let mut command = Command::new(rustc);
+    command
+        .current_dir(&workspace.root)
+        .args(["--crate-name", &binary.crate_name])
+        .args(["--edition", "2024"])
+        .arg(&binary.source)
+        .args(["-C", "panic=abort"])
+        .arg("-L")
+        .arg(format!("dependency={}", output_dir.display()))
+        .arg("-o")
+        .arg(&output);
+    if test {
+        command.arg("--test").arg("-Zpanic-abort-tests");
+        apply_test_stack(&mut command, action, target);
+    } else {
+        command.args(["--crate-type", "bin"]);
+    }
+    apply_rust_features(&mut command, component, action);
+    apply_rust_compile_env(&mut command, action);
+    if binary.self_extern {
+        command.arg("--extern").arg(format!(
+            "{}={}",
+            action.crate_name,
+            native_artifact(workspace, action, target, release).display()
+        ));
+    }
+    for external in action
+        .externs
+        .iter()
+        .filter(|external| rust_extern_active(external, action, target))
+    {
+        let dependency = workspace
+            .components
+            .iter()
+            .find(|candidate| candidate.cargo_package == external.package)
+            .ok_or("NativeDependencyDisappeared")?;
+        let dependency_action = dependency
+            .rust_action
+            .as_ref()
+            .ok_or("NativeDependencyActionDisappeared")?;
+        command.arg("--extern").arg(format!(
+            "{}={}",
+            external.crate_name,
+            native_artifact(workspace, dependency_action, target, release).display()
+        ));
+    }
+    if target == "WINDOWS" {
+        command.args(["-C", "linker=rust-lld", "-C", "target-feature=+crt-static"]);
+    } else if target == "LINUX" {
+        command.args(["--target", "x86_64-unknown-linux-gnu"]);
+    } else {
+        return Err(format!(
+            "RustBinaryTargetUnsupported {{ component: {}, target: {target} }}",
+            component.id
+        ));
+    }
+    if release {
+        command.args([
+            "-C",
+            "opt-level=3",
+            "-C",
+            "lto=thin",
+            "-C",
+            "codegen-units=1",
+            "-C",
+            "strip=symbols",
+        ]);
+    }
+    let status = command
+        .status()
+        .map_err(|error| format!("BinaryCompileUnavailable {{ detail: {error} }}"))?;
+    if !status.success() {
+        return Err(format!(
+            "BinaryCompileFailed {{ component: {}, binary: {}, test: {test}, status: {:?} }}",
+            component.id,
+            binary.output,
+            status.code()
+        ));
+    }
+    if test {
+        execute_test(&output, component, action.test_stack_bytes)?;
+    }
+    Ok(())
 }
 
 fn execute_test(
@@ -1826,6 +2076,8 @@ mod tests {
         assert!(!safe_relative_path("C:/outside.rs"));
         assert!(rust_identifier("mrml_math"));
         assert!(!rust_identifier("../mrml-math"));
+        assert!(rust_output_name("mrml-git"));
+        assert!(!rust_output_name("../mrml-git"));
     }
     #[test]
     fn rust_externs_are_target_scoped_and_unique() {
