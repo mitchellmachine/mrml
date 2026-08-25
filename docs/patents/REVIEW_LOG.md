@@ -3909,6 +3909,14 @@ by first occurrence. It introduces no trait-selection algorithm, parser,
 runtime mechanism, allocation, cache, persistence, protocol, hardware operation,
 or executable enforcement mechanism.
 
+# 2026-08-25 — Exact bounded trait-implementation selection
+
+**Result: NOT_TRIGGERED.** This compiler-only increment stores a fixed set of
+exact concrete trait headers, rejects duplicate/overlapping exact entries, and
+performs conventional structural matching with fixed variable bindings. It
+introduces no generic search strategy, recursive solver, cache, parser, runtime
+mechanism, protocol, hardware operation, or executable enforcement mechanism.
+
 # 2026-08-25 — Projected identity-call return evidence
 
 **Result: NOT_TRIGGERED.** Independently authored probes compose the existing

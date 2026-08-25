@@ -3833,6 +3833,19 @@ each pass 425 library tests, one component-interface probe, 10 conformance tests
 and 335 replacement tests: 771 compiler tests per host. The core remains
 `no_std`, allocation-free, and `unsafe`-free.
 
+The exact trait-implementation selection milestone adds a fixed 64-header
+database over the canonical goal form. Insertion rejects duplicate stable IDs
+and overlapping exact concrete heads. Solving returns one exact implementation
+for a rigid ground match, no solution for concrete or placeholder mismatch, and
+ambiguity for an inference-bearing match because answer substitutions are not
+yet represented. A fixed per-candidate binding table enforces equality across
+repeated canonical-variable occurrences. Capacity overflow fails explicitly.
+Windows gnullvm and native Arch Linux WSL each pass 431 library tests, one
+component-interface probe, 10 conformance tests, and 335 replacement tests: 777
+compiler tests per host. This is not generic unification, where-clause solving,
+projection normalization, recursive goal handling, specialization, complete
+coherence, or source-level trait support.
+
 The nested conditional tuple-origin milestone walks each leaf's bounded
 conditional-parent chain to the outermost generation before grouping reference
 origins by field ordinal. The exact oracle rejects a three-leaf returned field

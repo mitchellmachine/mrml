@@ -611,6 +611,16 @@ overflow fail explicitly. Windows gnullvm and native Arch Linux WSL each pass
 replacement tests: 771 compiler tests per host. The unchanged driver was not
 re-executed.
 
+The exact trait-impl selection milestone adds a fixed 64-header database.
+Duplicate implementation IDs and overlapping exact heads fail; rigid concrete
+queries return one exact implementation or no solution; inference-bearing
+matches remain ambiguous without manufacturing substitutions; repeated
+canonical variables must bind to equal concrete types. Windows gnullvm and
+native Arch Linux WSL each pass 431 library tests, one component-interface
+probe, 10 conformance tests, and 335 replacement tests: 777 compiler tests per
+host. Generic impls, where-clauses, projections, cycles, and source integration
+remain unsupported.
+
 At compiler path checkpoint `9a950ae9`, the Windows gnullvm core suite passed
 765 tests: 420 library tests, 10 conformance tests, and 335 replacement tests.
 Core formatting, warnings-denied Clippy, the no-`std`/no-`alloc`/unsafe hygiene

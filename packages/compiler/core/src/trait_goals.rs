@@ -7,6 +7,7 @@
 
 pub const MAX_TRAIT_GOAL_ARGUMENTS: usize = 8;
 pub const MAX_CANONICAL_TRAIT_VARIABLES: usize = 8;
+pub const MAX_TRAIT_IMPLEMENTATIONS: usize = 64;
 
 #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
 pub struct TraitId(u32);
@@ -131,6 +132,185 @@ pub enum TraitGoalError {
     TooManyArguments,
     TooManyCanonicalVariables,
     InvalidGoal,
+    TooManyImplementations,
+    DuplicateImplementationId,
+    OverlappingImplementation,
+}
+
+#[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
+pub struct TraitImplementationId(u32);
+
+impl TraitImplementationId {
+    pub const fn new(value: u32) -> Self {
+        Self(value)
+    }
+
+    pub const fn get(self) -> u32 {
+        self.0
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct TraitImplementationHeader {
+    pub id: TraitImplementationId,
+    pub trait_id: TraitId,
+    pub self_type: TraitTypeId,
+    arguments: [Option<TraitTypeId>; MAX_TRAIT_GOAL_ARGUMENTS],
+    argument_count: usize,
+}
+
+impl TraitImplementationHeader {
+    pub const fn new(id: TraitImplementationId, trait_id: TraitId, self_type: TraitTypeId) -> Self {
+        Self {
+            id,
+            trait_id,
+            self_type,
+            arguments: [None; MAX_TRAIT_GOAL_ARGUMENTS],
+            argument_count: 0,
+        }
+    }
+
+    pub fn push_argument(&mut self, argument: TraitTypeId) -> Result<(), TraitGoalError> {
+        let slot = self
+            .arguments
+            .get_mut(self.argument_count)
+            .ok_or(TraitGoalError::TooManyArguments)?;
+        *slot = Some(argument);
+        self.argument_count += 1;
+        Ok(())
+    }
+
+    pub fn arguments(&self) -> &[Option<TraitTypeId>] {
+        &self.arguments[..self.argument_count]
+    }
+
+    fn head_matches(self, other: Self) -> bool {
+        self.trait_id == other.trait_id
+            && self.self_type == other.self_type
+            && self.arguments() == other.arguments()
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum TraitGoalSolution {
+    Unique(TraitImplementationId),
+    Ambiguous,
+    NoSolution,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct TraitImplementationDatabase {
+    implementations: [Option<TraitImplementationHeader>; MAX_TRAIT_IMPLEMENTATIONS],
+    implementation_count: usize,
+}
+
+impl TraitImplementationDatabase {
+    pub const EMPTY: Self = Self {
+        implementations: [None; MAX_TRAIT_IMPLEMENTATIONS],
+        implementation_count: 0,
+    };
+
+    pub fn insert(
+        &mut self,
+        implementation: TraitImplementationHeader,
+    ) -> Result<(), TraitGoalError> {
+        if implementation.argument_count > implementation.arguments.len()
+            || implementation.arguments[..implementation.argument_count]
+                .iter()
+                .any(Option::is_none)
+            || implementation.arguments[implementation.argument_count..]
+                .iter()
+                .any(Option::is_some)
+        {
+            return Err(TraitGoalError::InvalidGoal);
+        }
+        for existing in self.implementations[..self.implementation_count]
+            .iter()
+            .flatten()
+            .copied()
+        {
+            if existing.id == implementation.id {
+                return Err(TraitGoalError::DuplicateImplementationId);
+            }
+            if existing.head_matches(implementation) {
+                return Err(TraitGoalError::OverlappingImplementation);
+            }
+        }
+        let slot = self
+            .implementations
+            .get_mut(self.implementation_count)
+            .ok_or(TraitGoalError::TooManyImplementations)?;
+        *slot = Some(implementation);
+        self.implementation_count += 1;
+        Ok(())
+    }
+
+    pub fn solve(&self, goal: CanonicalImplementedTraitGoal) -> TraitGoalSolution {
+        let mut selected = None;
+        let mut unresolved = matches!(goal.self_type, CanonicalTraitGoalType::BoundVariable(_));
+        for argument in goal.arguments().iter().flatten() {
+            unresolved |= matches!(argument, CanonicalTraitGoalType::BoundVariable(_));
+        }
+        for implementation in self.implementations[..self.implementation_count]
+            .iter()
+            .flatten()
+            .copied()
+        {
+            if !implementation_matches_goal(implementation, goal) {
+                continue;
+            }
+            if selected.is_some() || unresolved {
+                return TraitGoalSolution::Ambiguous;
+            }
+            selected = Some(implementation.id);
+        }
+        selected.map_or(TraitGoalSolution::NoSolution, TraitGoalSolution::Unique)
+    }
+}
+
+fn implementation_matches_goal(
+    implementation: TraitImplementationHeader,
+    goal: CanonicalImplementedTraitGoal,
+) -> bool {
+    let mut bindings = [None; MAX_CANONICAL_TRAIT_VARIABLES];
+    if implementation.trait_id != goal.trait_id
+        || implementation.argument_count != goal.argument_count
+        || !canonical_type_matches_concrete(goal.self_type, implementation.self_type, &mut bindings)
+    {
+        return false;
+    }
+    goal.arguments()
+        .iter()
+        .zip(implementation.arguments())
+        .all(|(goal, implementation)| {
+            goal.zip(*implementation)
+                .is_some_and(|(goal, implementation)| {
+                    canonical_type_matches_concrete(goal, implementation, &mut bindings)
+                })
+        })
+}
+
+fn canonical_type_matches_concrete(
+    goal: CanonicalTraitGoalType,
+    implementation: TraitTypeId,
+    bindings: &mut [Option<TraitTypeId>; MAX_CANONICAL_TRAIT_VARIABLES],
+) -> bool {
+    match goal {
+        CanonicalTraitGoalType::Concrete(goal) => goal.0 == implementation.0,
+        CanonicalTraitGoalType::BoundVariable(variable) => {
+            let Some(binding) = bindings.get_mut(variable as usize) else {
+                return false;
+            };
+            match *binding {
+                Some(bound) => bound == implementation,
+                None => {
+                    *binding = Some(implementation);
+                    true
+                }
+            }
+        }
+        CanonicalTraitGoalType::Placeholder(_) => false,
+    }
 }
 
 pub fn canonicalize_implemented_trait_goal(
@@ -299,6 +479,141 @@ mod tests {
         assert_eq!(
             canonicalize_implemented_trait_goal(goal),
             Err(TraitGoalError::TooManyCanonicalVariables)
+        );
+    }
+
+    #[test]
+    fn selects_one_exact_concrete_implementation() {
+        let mut database = TraitImplementationDatabase::EMPTY;
+        let mut implementation = TraitImplementationHeader::new(
+            TraitImplementationId::new(12),
+            TraitId::new(3),
+            TraitTypeId::new(8),
+        );
+        implementation.push_argument(TraitTypeId::new(9)).unwrap();
+        database.insert(implementation).unwrap();
+        let mut goal = ImplementedTraitGoal::new(
+            TraitId::new(3),
+            TraitGoalType::Concrete(TraitTypeId::new(8)),
+        );
+        goal.push_argument(TraitGoalType::Concrete(TraitTypeId::new(9)))
+            .unwrap();
+
+        assert_eq!(
+            database.solve(canonicalize_implemented_trait_goal(goal).unwrap()),
+            TraitGoalSolution::Unique(TraitImplementationId::new(12))
+        );
+    }
+
+    #[test]
+    fn reports_no_solution_for_rigid_mismatches() {
+        let mut database = TraitImplementationDatabase::EMPTY;
+        database
+            .insert(TraitImplementationHeader::new(
+                TraitImplementationId::new(1),
+                TraitId::new(2),
+                TraitTypeId::new(3),
+            ))
+            .unwrap();
+        for self_type in [
+            TraitGoalType::Concrete(TraitTypeId::new(4)),
+            TraitGoalType::Placeholder(TraitPlaceholderId::new(3)),
+        ] {
+            let goal = ImplementedTraitGoal::new(TraitId::new(2), self_type);
+            assert_eq!(
+                database.solve(canonicalize_implemented_trait_goal(goal).unwrap()),
+                TraitGoalSolution::NoSolution
+            );
+        }
+    }
+
+    #[test]
+    fn leaves_matching_inference_goals_ambiguous_without_constraints() {
+        let mut database = TraitImplementationDatabase::EMPTY;
+        database
+            .insert(TraitImplementationHeader::new(
+                TraitImplementationId::new(1),
+                TraitId::new(2),
+                TraitTypeId::new(3),
+            ))
+            .unwrap();
+        let goal = ImplementedTraitGoal::new(
+            TraitId::new(2),
+            TraitGoalType::InferenceVariable(TraitInferenceVariableId::new(99)),
+        );
+        assert_eq!(
+            database.solve(canonicalize_implemented_trait_goal(goal).unwrap()),
+            TraitGoalSolution::Ambiguous
+        );
+    }
+
+    #[test]
+    fn repeated_canonical_variables_require_equal_concrete_types() {
+        let mut database = TraitImplementationDatabase::EMPTY;
+        let mut implementation = TraitImplementationHeader::new(
+            TraitImplementationId::new(1),
+            TraitId::new(2),
+            TraitTypeId::new(3),
+        );
+        implementation.push_argument(TraitTypeId::new(4)).unwrap();
+        database.insert(implementation).unwrap();
+        let variable = TraitInferenceVariableId::new(9);
+        let mut goal =
+            ImplementedTraitGoal::new(TraitId::new(2), TraitGoalType::InferenceVariable(variable));
+        goal.push_argument(TraitGoalType::InferenceVariable(variable))
+            .unwrap();
+        assert_eq!(
+            database.solve(canonicalize_implemented_trait_goal(goal).unwrap()),
+            TraitGoalSolution::NoSolution
+        );
+    }
+
+    #[test]
+    fn rejects_duplicate_ids_and_overlapping_exact_headers() {
+        let mut database = TraitImplementationDatabase::EMPTY;
+        let first = TraitImplementationHeader::new(
+            TraitImplementationId::new(1),
+            TraitId::new(2),
+            TraitTypeId::new(3),
+        );
+        database.insert(first).unwrap();
+        assert_eq!(
+            database.insert(TraitImplementationHeader::new(
+                TraitImplementationId::new(1),
+                TraitId::new(4),
+                TraitTypeId::new(5),
+            )),
+            Err(TraitGoalError::DuplicateImplementationId)
+        );
+        assert_eq!(
+            database.insert(TraitImplementationHeader::new(
+                TraitImplementationId::new(7),
+                TraitId::new(2),
+                TraitTypeId::new(3),
+            )),
+            Err(TraitGoalError::OverlappingImplementation)
+        );
+    }
+
+    #[test]
+    fn rejects_implementation_capacity_overflow() {
+        let mut database = TraitImplementationDatabase::EMPTY;
+        for index in 0..MAX_TRAIT_IMPLEMENTATIONS {
+            database
+                .insert(TraitImplementationHeader::new(
+                    TraitImplementationId::new(index as u32),
+                    TraitId::new(1),
+                    TraitTypeId::new(index as u32),
+                ))
+                .unwrap();
+        }
+        assert_eq!(
+            database.insert(TraitImplementationHeader::new(
+                TraitImplementationId::new(999),
+                TraitId::new(1),
+                TraitTypeId::new(999),
+            )),
+            Err(TraitGoalError::TooManyImplementations)
         );
     }
 }
