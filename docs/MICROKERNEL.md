@@ -64,15 +64,19 @@ capability, revalidates its VM/task binding, copies only the declared compressed
 input into private scratch, invokes the existing provider, writes only the exact
 successful output range, and erases scratch on every return path. The Zstd and
 ZIM manifests now select `isolated-service`; Zstd permits native-service or
-microVM placement with a native-service floor. Sixteen focused Zstd tests pass
+microVM placement with a native-service floor. Nineteen focused Zstd tests pass
 on Windows and Arch Linux, including actual inbox delivery, revocation, wrong-
 task rejection, distinct VM/task projections, invalid-frame no-write, and
 scratch exhaustion. The provider now also has a bounded userspace receive/reply
 loop behind a narrow unsafe runtime trait; its tests prove exact envelope shape,
 range-limited buffer use, response ordering, received-leaf release, and erasure
-on success and failure. This is hosted unit/simulation and mock-runtime evidence.
-It does not launch an MRML service process or guest, implement the concrete
-syscall adapter, connect the generation resolver to launch, integrate
+on success and failure. A hosted `TaskRuntime` adapter also completes the full
+authenticated request/
+reply path: only the launch-bound sender is accepted, reply authority is
+separate, the transferred leaf is revoked before reply visibility, and
+revocation failure suppresses the response. This is hosted unit/simulation
+evidence. It does not launch an MRML service process or guest, implement the
+concrete syscall adapter, connect the generation resolver to launch, integrate
 supervision/resource pools, or prove WHP/KVM parity, so the representative dual-
 placement service remains **PARTIALLY IMPLEMENTED**.
 

@@ -105,11 +105,17 @@ impl ZstdServiceLoop {
             .transpose()
             .map(|_| ())
             .map_err(ZstdServiceLoopError::Syscall);
+        let completion = match result.and(release) {
+            Ok(()) => syscalls
+                .send_response(response_buffer)
+                .map_err(ZstdServiceLoopError::Syscall),
+            Err(error) => Err(error),
+        };
         request_buffer.fill(0);
         capability_tokens.fill(0);
         scratch.fill(0);
         response_buffer.fill(0);
-        result.and(release)
+        completion
     }
 
     fn serve_one_inner<S: ZstdServiceSyscalls>(
@@ -193,9 +199,7 @@ impl ZstdServiceLoop {
                     .map_err(ZstdServiceLoopError::Syscall)?;
             }
         }
-        syscalls
-            .send_response(response_buffer)
-            .map_err(ZstdServiceLoopError::Syscall)
+        Ok(())
     }
 }
 
@@ -218,6 +222,7 @@ mod tests {
         reads: usize,
         writes: usize,
         releases: usize,
+        fail_release: bool,
     }
 
     unsafe impl ZstdServiceSyscalls for Syscalls {
@@ -282,7 +287,7 @@ mod tests {
                 return Err(());
             }
             self.releases += 1;
-            Ok(())
+            if self.fail_release { Err(()) } else { Ok(()) }
         }
     }
 
@@ -302,6 +307,7 @@ mod tests {
             reads: 0,
             writes: 0,
             releases: 0,
+            fail_release: false,
         }
     }
 
@@ -407,5 +413,28 @@ mod tests {
         );
         assert_eq!((bounded.reads, bounded.writes, bounded.releases), (0, 0, 1));
         assert_eq!(small, [0; 68]);
+    }
+
+    #[test]
+    fn revocation_failure_suppresses_response_and_erases_buffers() {
+        let mut syscalls = syscalls();
+        syscalls.fail_release = true;
+        let (mut request, mut tokens, mut scratch, mut response) = buffers();
+        assert_eq!(
+            ZstdServiceLoop::new().serve_one(
+                &mut syscalls,
+                &mut request,
+                &mut tokens,
+                &mut scratch,
+                &mut response,
+            ),
+            Err(ZstdServiceLoopError::Syscall(()))
+        );
+        assert!(syscalls.response.is_none());
+        assert_eq!(syscalls.releases, 1);
+        assert_eq!(request, [0; DECOMPRESS_REQUEST_BYTES]);
+        assert_eq!(tokens, [0]);
+        assert_eq!(scratch, [0; 128]);
+        assert_eq!(response, [0; DECOMPRESS_RESPONSE_BYTES]);
     }
 }

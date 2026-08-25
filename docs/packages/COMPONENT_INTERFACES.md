@@ -91,8 +91,12 @@ exhaustion. A separate bounded userspace loop receives the same request and one
 capability through a narrow unsafe runtime trait, reads/writes only the declared
 ranges, sends the exact response to a launch-bound reply peer, releases the
 received leaf, and erases every caller-owned buffer. This is hosted kernel-
-policy and mock-runtime evidence only: no MRML-target service binary, concrete
-syscall adapter, VMM guest invocation, resolver-to-launch binding, supervision
+policy evidence. A hosted `TaskRuntime` adapter now additionally rejects any
+sender except the launch-bound caller, resolves the transferred leaf against
+the exact provider VM/task, revokes it before making the response visible, and
+sends the response over a separate launch-bound endpoint. Revocation failure
+suppresses the response. No MRML-target service binary, concrete syscall
+adapter, VMM guest invocation, resolver-to-launch binding, supervision
 integration, or WHP/KVM service parity is proved.
 
 > Functionality historically embedded in a Rust binary may instead be supplied

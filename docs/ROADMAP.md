@@ -57,8 +57,9 @@ Three new persistent deltas are documented before implementation:
   Settings/shell projection of owner policy, VM construction, resource
   projection, resolver-to-launch binding, concrete service syscalls, and WHP/KVM
   runtime transport remain **PLANNED**. A bounded userspace receive/reply loop
-  now exists behind a launch-bound unsafe runtime trait, but only mock-runtime
-  tests exercise it.
+  and hosted `TaskRuntime` adapter now prove the full authenticated round trip,
+  including sender binding, separate reply authority, and revocation-before-
+  reply ordering.
   The configuration service now provides a bounded typed persistence
   prerequisite for component placement preference and system isolation-mode
   selection, using exact setting/root capabilities and its authenticated
@@ -236,7 +237,10 @@ inbox and one attenuated read/write shared-buffer capability, with exact
 VM/task projection, private erased scratch, and bounded output. Windows and
 Arch Linux host suites pass. A bounded userspace loop also receives one exact
 request/capability, sends one exact response through a launch-bound runtime
-trait, releases the leaf, and erases all buffers. No MRML-target service process,
+trait, releases the leaf, and erases all buffers. A hosted `TaskRuntime` adapter
+exercises a complete request/reply round trip,
+rejects an unexpected sender, uses separate reply authority, and withholds the
+reply unless received-leaf revocation succeeds. No MRML-target service process,
 concrete syscall adapter, resolver-to-launch binding, supervision, CPU/RAM pool
 integration, WHP/KVM guest call, or physical isolation was exercised.
 
