@@ -268,7 +268,7 @@ compiler category.
 ## 2026-08-23 — native guest-mapping revocation ordering
 
 MRML source: `system/kernel/src/vm.rs`,
-`crates/mrml-kvm/src/{abi,native.rs,native/launch.rs}`, and
+`system/vmm/kvm/src/{abi,native.rs,native/launch.rs}`, and
 `crates/mrml-whp/src/{abi,native.rs,native/launch.rs}`.
 
 The VMM adapters now remove exact second-level guest mappings before the common
@@ -325,7 +325,7 @@ operations.
 ## 2026-08-23 — pinned cross-core and live WHP mapping benchmarks
 
 MRML source: `tests/kernel-bench/src/lib.rs`,
-`crates/mrml-whp/src/native.rs`, and `crates/mrml-kvm/src/native.rs`.
+`crates/mrml-whp/src/native.rs`, and `system/vmm/kvm/src/native.rs`.
 
 The host-only harness parses documented Windows processor topology, pins two
 threads to distinct reported cores, and measures the existing ownership

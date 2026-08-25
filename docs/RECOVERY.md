@@ -153,7 +153,7 @@ explicitly and downgrade the status rather than guessing.
 - Boot image and loader: `system/bootloader/`, `packages/libraries/uefi/`
 - CPL3 service image: `system/service-image/`
 - Shared VM policy: `vm.rs`, `vm_dispatch.rs`, `vm_interrupt.rs`
-- Linux KVM: `crates/mrml-kvm/`, `crates/mrml-kvm-run/`
+- Linux KVM: `system/vmm/kvm/`, `crates/mrml-kvm-run/`
 - Windows WHP: `crates/mrml-whp/`, `crates/mrml-whp-run/`
 - VBS and protected execution: search for `Vbs`, `Vtl1`, `ProtectionMode`,
   `AuthenticatedAdmission`, `receipt`, and `sealed` across the workspace.

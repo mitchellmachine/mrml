@@ -410,6 +410,24 @@ Windows host without changing signing source behavior:
 No Linux host/runtime, live signing key, Secure Boot enrollment, firmware,
 bare-metal, or physical-hardware execution was exercised by this path-only move.
 
+The KVM-library move from `crates/mrml-kvm` to `system/vmm/kvm` was checked on a
+Windows host without changing VMM source behavior:
+
+- `cargo metadata --no-deps --format-version 1`, formatting, strict Clippy,
+  `.\target\debug\mrml.exe doctor`, and `.\target\debug\mrml.exe audit`
+  — PASS;
+- `cargo +nightly-2026-08-24-x86_64-pc-windows-gnullvm test -p mrml-kvm`
+  — PASS, 7 portable ABI tests;
+- `.\target\debug\mrml.exe build mrml-kvm` — FAIL closed with
+  `NoMatchingComponents { target: WINDOWS }` because KVM is Linux-only;
+- `rustup target list --installed` showed no Linux target, so Linux cross-check
+  compilation was unavailable in this host toolchain;
+- `git grep -n 'crates/mrml-kvm/' -- ':!docs/build/MIGRATION_INVENTORY.md'`
+  — PASS with no stale exact KVM-library path matches.
+
+No Linux host/runtime, `/dev/kvm`, nested virtualization, VM launch, or physical-
+hardware execution was exercised by this path-only move.
+
 `package`, `release`, `image`, and `publish` deliberately fail as `PLANNED`.
 Linux, KVM, cross-host equivalence, physical UEFI/GPU, and release functionality
 were not exercised by the Windows implementation environment.
