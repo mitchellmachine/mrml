@@ -3669,3 +3669,19 @@ closed independently; its borrow-analysis control is not promoted to native
 execution evidence. This does not claim general place overlap, unrestricted
 regions, or arbitrary alias analysis. The `no_std`/allocation/unsafe hygiene
 scan remained empty.
+
+The moved-reference loan-identity milestone passed all 754 compiler and driver
+tests on Windows gnullvm and all 754 in release mode on native Arch Linux WSL,
+plus warnings-denied compiler-only Clippy on both hosts using pinned rustc commit
+`f7d782a3be46d6bb4b9792fe69a61db389ba1769`. Moving a direct `&mut`
+value into an inferred local now transfers its single direct loan origin through
+one-hop and chained moves. A later child therefore continues to protect the
+ultimate owner, while the consumed source remains subject to initializedness.
+The lookup follows bounded earlier events and selects the source's latest direct
+assignment generation, preventing revival of its prior owner. The pinned oracle
+rejected live shared and mutable descendants and latest-owner mutation with
+E0503, while accepting post-last-use mutation, direct use through the moved
+binding, and mutation of the superseded owner. Existing conditional-generation
+regressions remain green, but conditional multi-origin and projected reference-
+value moves are not claimed. This does not claim general alias tracking or
+regions. The `no_std`/allocation/unsafe hygiene scan remained empty.

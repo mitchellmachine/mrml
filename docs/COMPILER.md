@@ -567,6 +567,14 @@ sibling field or a generation-replacing destination write. This is bounded loan
 liveness and invalidation, not unrestricted alias tracking, regions, reborrow
 completion, or a complete borrow checker.
 
+Inferred direct mutable-reference moves now propagate a single direct loan
+origin into the destination local instead of discarding it. Event-decreasing,
+fixed-capacity lookup supports chained moves and selects the source binding's
+latest direct initialization or assignment generation. The consumed source
+still participates in initializedness, while conflicts and last-use restoration
+follow the moved destination. Conditional multi-origin moves, projected
+reference-value moves, and general alias/region propagation remain unimplemented.
+
 Explicit direct mutable reborrows additionally derive their parent loan and
 bounded ultimate owner path. A mutable parent is suspended when it is used
 before a later child use, restored after the child’s last reachable use, and
