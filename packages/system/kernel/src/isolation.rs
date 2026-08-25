@@ -379,6 +379,17 @@ impl PreparedComponentServiceLaunch {
     pub fn into_route(self) -> PreparedIsolationServiceRoute {
         self.route
     }
+
+    /// Consumes an exact component launch that could not be constructed and
+    /// records the bounded failure without publishing either artifact or
+    /// permitting an alternate placement.
+    pub fn unavailable<const DOMAINS: usize>(
+        self,
+        admission: &mut IsolationAdmissionTable<DOMAINS>,
+        reason: IsolationUnavailableReason,
+    ) -> Result<(), IsolationLaunchError> {
+        self.route.unavailable(admission, reason)
+    }
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -1275,6 +1286,37 @@ mod tests {
         assert_eq!(table.running().count(), 0);
         launch.into_route().commit(&mut table, 0x55aa_u64).unwrap();
         assert!(table.total_microvm_report().satisfied());
+    }
+
+    #[test]
+    fn failed_component_construction_records_unavailable_without_native_fallback() {
+        let mut table = IsolationAdmissionTable::<1>::new(IsolationMode::TotalMicrovm, 7).unwrap();
+        let spec = service_spec(IsolationPlacement::Microvm);
+        let route = prepare_isolation_service_route(&mut table, spec).unwrap();
+        let launch = PreparedComponentServiceLaunch::bind(
+            route,
+            spec.interface(),
+            spec.interface_generation(),
+            spec.provider_generation(),
+            [0x3a; 32],
+            [0x18; 64],
+            [0x2f; 64],
+        )
+        .unwrap();
+        launch
+            .unavailable(&mut table, IsolationUnavailableReason::VmmResource)
+            .unwrap();
+        assert_eq!(table.running().count(), 0);
+        let unavailable = table.unavailable_domains().next().unwrap();
+        assert_eq!(unavailable.domain(), spec.domain());
+        assert_eq!(
+            unavailable.reason(),
+            IsolationUnavailableReason::VmmResource
+        );
+        let report = table.total_microvm_report();
+        assert_eq!(report.running_microvm_eligible, 0);
+        assert_eq!(report.native_fallback, 0);
+        assert_eq!(report.unavailable_microvm_eligible, 1);
     }
 
     #[test]

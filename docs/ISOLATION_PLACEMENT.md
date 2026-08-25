@@ -106,6 +106,13 @@ their real guest and projected-service construction. The prepared transaction
 exists before either backend creates the guest and binds provider generation to
 the verified service artifact version; only the fully attached guest is
 committed as the endpoint, after which execution receives it back unchanged.
+The signed component-service probes now apply the same rule at each unpublished
+construction boundary. Kernel-guest construction, exact component binding, or
+atomic consumer/provider attachment failure consumes the prepared route into
+the kernel's typed unavailable ledger as `VMM_RESOURCE` and returns the error;
+none of those paths can attempt native execution. A focused kernel test proves
+the unavailable count advances while the native-fallback count remains zero,
+and both hosted runner suites compile and pass with the same failure shape.
 The committed guest now remains inside the common configuration lifecycle until
 explicit terminal retirement. Both runners build and their focused host tests
 pass. Newly built one-time-signed kernel and service artifacts completed the

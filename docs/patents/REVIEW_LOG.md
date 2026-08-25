@@ -4093,6 +4093,18 @@ shared-memory protocol, compression method, or reclamation heuristic. The
 broader independently serviced component lifecycle remains `TRIGGERED`; agent
 review does not replace independent human dual review.
 
+# 2026-08-25 — Fail-closed hosted component construction publication
+
+**Result: NOT_TRIGGERED within the reviewed component lifecycle shape.** The
+KVM and WHP runners now consume the existing prepared component route into the
+existing typed `VMM_RESOURCE` unavailable ledger when guest construction,
+exact handoff binding, or atomic pair attachment fails. This is conventional
+failure-state publication through the already reviewed bounded admission
+lifecycle and adds no placement selector, fallback path, transport, resolver,
+allocation algorithm, update mechanism, or reclamation policy. The broader
+independently serviced component lifecycle remains `TRIGGERED`; agent review
+does not replace independent human dual review.
+
 # 2026-08-25 — Bounded identified trait-clause database
 
 **Result: NOT_TRIGGERED.** This compiler-only increment stores fixed identified

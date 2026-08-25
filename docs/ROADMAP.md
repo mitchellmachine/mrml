@@ -48,7 +48,10 @@ Three new persistent deltas are documented before implementation:
   it on the successful terminal path. Their builds and focused tests pass. Fresh
   one-time-signed identical artifacts completed the full hosted service probe on
   both backends with one eligible domain, one microVM domain, and zero native
-  fallback. This is hosted controlled-probe evidence, not required-system Total
+  fallback. Component guest construction, exact binding, and atomic pair
+  attachment failures now consume the prepared route as typed `VMM_RESOURCE`
+  unavailability on both runners instead of attempting native execution; a
+  focused kernel test proves zero fallback. This is hosted controlled-probe evidence, not required-system Total
   readiness. The canonical Zstd provider/ZIM consumer now use the isolated-
   service form, and a bounded hosted adapter carries the exact ABI-3 request
   through `TaskRuntime` plus one attenuated shared-buffer capability under

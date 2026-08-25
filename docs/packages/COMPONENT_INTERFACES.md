@@ -535,13 +535,15 @@ any substitution returns that route for fail-closed unavailable/cancel
 handling. Both WHP and KVM now consume that same handoff, reject wrong service
 kinds or either digest before mapping, and attach the consumer/provider through
 an unpublished builder so a second-image failure cannot return a partially
-prepared guest. Neither artifact has
-been launched. The package resolver still must
+prepared guest. Failure while constructing the guest, binding that handoff, or
+attaching either exact image consumes the route into typed `VMM_RESOURCE`
+unavailability, with no native fallback. Both exact signed artifacts have now
+completed the hosted controlled probe on WHP and nested KVM. The package resolver still must
 connect the recorded generational `InterfaceBinding` to native call dispatch;
 the current Wikipedia composition root constructs the provider for hosted
 tests. This does not establish dynamic loading, service isolation,
 update-without-rebuild, retention/GC, performance, fuzzing, WHP/KVM execution,
-or physical-system evidence.
+or physical-system evidence beyond that bounded hosted path.
 
 The cross-compiler probe is deliberately narrower than binding compatibility.
 Pinned upstream `nightly-2026-08-24` executes the exact generation, operation,

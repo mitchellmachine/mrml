@@ -22,9 +22,9 @@ use mrml_kernel::{
     ArtifactKind, CapabilitySpace, GPU_DOORBELL_PORT, GPU_QUEUE_MESSAGE_BYTES, GpuCommandRing,
     GpuQueueIdentity, GpuQueueReceiver, GpuResourceResponse, GpuResourceResponseSender,
     GpuSharedQueueLayout, GpuVmmQueueBridge, GuestMemory, HypercallRouter, InterruptPolicy,
-    IsolationAdmissionTable, IsolationMode, IsolationPlacement, ObjectId,
-    PreparedComponentServiceLaunch, PreparedIsolationServiceRoute, ResourceCommand, Rights,
-    SIGNED_ARTIFACT_OVERHEAD_BYTES, SignedArtifact, TotalMicrovmClass, TrustRoot,
+    IsolationAdmissionTable, IsolationMode, IsolationPlacement, IsolationUnavailableReason,
+    ObjectId, PreparedComponentServiceLaunch, PreparedIsolationServiceRoute, ResourceCommand,
+    Rights, SIGNED_ARTIFACT_OVERHEAD_BYTES, SignedArtifact, TotalMicrovmClass, TrustRoot,
     VIRTUAL_BLOCK_FEATURE_FLUSH, VerifiedExecutable, VerifiedGpuKernelBundle, VirtualBlockBackend,
     VirtualBlockBackendAuthority, VirtualBlockCompletionStatus, VirtualBlockConfigurationPage,
     VirtualBlockDevice, VirtualBlockDeviceState, VirtualBlockError, VirtualBlockMutationError,
@@ -1717,7 +1717,7 @@ fn application_main() -> Result<()> {
     } else {
         None
     };
-    let mut guest = if boot_mode {
+    let guest_preparation = if boot_mode {
         system.prepare_boot_kernel(&executable, handoff.as_slice(), layout)
     } else if pci_configuration_mode {
         system.prepare_kernel_block_dynamic_mmio_guest(
@@ -1766,8 +1766,30 @@ fn application_main() -> Result<()> {
         system.prepare_smp_kernel(&executable, handoff.as_slice(), layout)
     } else {
         system.prepare_kernel_gpu_guest(&executable, handoff.as_slice(), layout, queue)
-    }
-    .map_err(|error| anyhow!("verified WHP kernel preparation failed: {:?}", error))?;
+    };
+    let mut guest = match guest_preparation {
+        Ok(guest) => guest,
+        Err(error) => {
+            if component_service_mode {
+                isolation_preparation
+                    .take()
+                    .ok_or_else(|| anyhow!("missing prepared component isolation route"))?
+                    .unavailable(
+                        isolation_admission
+                            .as_mut()
+                            .ok_or_else(|| anyhow!("missing component isolation admission"))?,
+                        IsolationUnavailableReason::VmmResource,
+                    )
+                    .map_err(|failure| {
+                        anyhow!("component unavailability publication failed: {:?}", failure)
+                    })?;
+            }
+            return Err(anyhow!(
+                "verified WHP kernel preparation failed: {:?}",
+                error
+            ));
+        }
+    };
     let mut component_launch = if component_service_mode {
         let prepared = isolation_preparation
             .take()
@@ -1779,7 +1801,7 @@ fn application_main() -> Result<()> {
             .as_ref()
             .ok_or_else(|| anyhow!("missing verified Zstd provider"))?;
         Some(
-            PreparedComponentServiceLaunch::bind(
+            match PreparedComponentServiceLaunch::bind(
                 prepared,
                 ObjectId(0x5a53_5444_0000_0003),
                 3,
@@ -1787,8 +1809,22 @@ fn application_main() -> Result<()> {
                 ZSTD_INTERFACE_FINGERPRINT,
                 *consumer.artifact().digest(),
                 *provider.artifact().digest(),
-            )
-            .map_err(|(_, error)| anyhow!("component launch binding failed: {:?}", error))?,
+            ) {
+                Ok(launch) => launch,
+                Err((route, error)) => {
+                    route
+                        .unavailable(
+                            isolation_admission
+                                .as_mut()
+                                .ok_or_else(|| anyhow!("missing component isolation admission"))?,
+                            IsolationUnavailableReason::VmmResource,
+                        )
+                        .map_err(|failure| {
+                            anyhow!("component unavailability publication failed: {:?}", failure)
+                        })?;
+                    return Err(anyhow!("component launch binding failed: {:?}", error));
+                }
+            },
         )
     } else {
         None
@@ -1796,36 +1832,52 @@ fn application_main() -> Result<()> {
     if service_artifact_mode {
         let local_apic = service_preemption_mode || smp_service_migration_mode;
         guest = if let Some(launch) = component_launch.as_ref() {
-            guest
-                .attach_component_service_pair(
-                    launch,
-                    &executable,
-                    layout,
-                    service_executable
-                        .as_ref()
-                        .ok_or_else(|| anyhow!("missing verified ZIM consumer"))?,
-                    SERVICE_PHYSICAL,
-                    SERVICE_VIRTUAL,
-                    SERVICE_STACK_PHYSICAL,
-                    SERVICE_STACK_VIRTUAL,
-                    8,
-                    SERVICE_TABLE_PHYSICAL,
-                    32,
-                    provider_executable
-                        .as_ref()
-                        .ok_or_else(|| anyhow!("missing verified Zstd provider"))?,
-                    SERVICE_B_PHYSICAL,
-                    SERVICE_VIRTUAL,
-                    SERVICE_B_STACK_PHYSICAL,
-                    SERVICE_STACK_VIRTUAL,
-                    8,
-                    SERVICE_B_TABLE_PHYSICAL,
-                    32,
-                    local_apic,
-                )
-                .map_err(|error| {
-                    anyhow!("component service pair preparation failed: {:?}", error)
-                })?
+            match guest.attach_component_service_pair(
+                launch,
+                &executable,
+                layout,
+                service_executable
+                    .as_ref()
+                    .ok_or_else(|| anyhow!("missing verified ZIM consumer"))?,
+                SERVICE_PHYSICAL,
+                SERVICE_VIRTUAL,
+                SERVICE_STACK_PHYSICAL,
+                SERVICE_STACK_VIRTUAL,
+                8,
+                SERVICE_TABLE_PHYSICAL,
+                32,
+                provider_executable
+                    .as_ref()
+                    .ok_or_else(|| anyhow!("missing verified Zstd provider"))?,
+                SERVICE_B_PHYSICAL,
+                SERVICE_VIRTUAL,
+                SERVICE_B_STACK_PHYSICAL,
+                SERVICE_STACK_VIRTUAL,
+                8,
+                SERVICE_B_TABLE_PHYSICAL,
+                32,
+                local_apic,
+            ) {
+                Ok(guest) => guest,
+                Err(error) => {
+                    component_launch
+                        .take()
+                        .ok_or_else(|| anyhow!("missing prepared component launch"))?
+                        .unavailable(
+                            isolation_admission
+                                .as_mut()
+                                .ok_or_else(|| anyhow!("missing component isolation admission"))?,
+                            IsolationUnavailableReason::VmmResource,
+                        )
+                        .map_err(|failure| {
+                            anyhow!("component unavailability publication failed: {:?}", failure)
+                        })?;
+                    return Err(anyhow!(
+                        "component service pair preparation failed: {:?}",
+                        error
+                    ));
+                }
+            }
         } else {
             let guest = guest
                 .attach_isolated_service_at(
