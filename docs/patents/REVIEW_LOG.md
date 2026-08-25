@@ -2945,3 +2945,13 @@ adds no optimization, authority model, compatibility protocol, host-share
 mechanism, accessibility or browser-semantic interface, JavaScript/WebAssembly
 runtime, AI mechanism, media mechanism, or other patent-candidate mechanism.
 This agent review does not replace required independent human dual review.
+
+# 2026-08-25 — Nested-loop return outlives
+
+**Result: NOT_TRIGGERED.** The compiler conventionally applies return-context
+preanalysis and bounded reference-origin escape checks to existing shape-
+validated nested-loop return controls mapped to existing CFG return edges. It
+adds no optimization, authority model, compatibility protocol, host-share
+mechanism, accessibility or browser-semantic interface, JavaScript/WebAssembly
+runtime, AI mechanism, media mechanism, or other patent-candidate mechanism.
+This agent review does not replace required independent human dual review.
