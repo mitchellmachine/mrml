@@ -3,6 +3,7 @@ pub mod binding;
 pub mod generation;
 pub mod loader;
 pub mod manifest;
+pub mod migration;
 pub mod package;
 pub mod resolver;
 pub mod schema;
@@ -229,7 +230,8 @@ fn run() -> Result<(), String> {
 fn print_help() {
     println!("mrml - canonical MRML repository build frontend (native migration stage)");
     println!("usage: mrml <list|doctor|audit|build|test|manifest|interface> [component] [options]");
-    println!("       mrml manifest <check|fmt> [--check]");
+    println!("       mrml manifest <check|fmt|lock> [--check]");
+    println!("       mrml manifest migrate LEGACY_WORKSPACE NEW_ROOT");
     println!(
         "       mrml package create ID CLASS VERSION ARCH PURPOSE INPUT OUTPUT [--compress] [--private-key KEY]"
     );
@@ -493,6 +495,11 @@ fn manifest_command(workspace: &Workspace, args: &[String]) -> Result<(), String
                 return Err("ManifestUsageError { expected: lock [--check] }".into());
             }
             write_workspace_lock(workspace, check)
+        }
+        Some("migrate") if args.len() == 3 => {
+            let packages = migration::migrate(Path::new(&args[1]), Path::new(&args[2]))?;
+            println!("manifest-migrate|status=PASS|source=v1|destination=v2|packages={packages}");
+            Ok(())
         }
         _ => Err(
             "ManifestUsageError { expected: check | fmt [--check] | lock [--check] | migrate }"
