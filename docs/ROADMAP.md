@@ -201,7 +201,9 @@ The separate fixed lifecycle owner is now **PARTIALLY IMPLEMENTED** with an
 opt-in accounted `ServiceSupervisor`: its complete service/task, restart-policy,
 budget, generation, and cleanup-ticket capacity is committed before
 registration. Release is unsafe until no task, cleanup, prepared plan, peer,
-recovery path, or external policy depends on it. Live composition is pending.
+recovery path, or external policy depends on it. An opt-in aggregate substrate
+now commits the task runtime, supervisor, and configuration service atomically;
+live composition remains pending.
 
 1. Implement the policy/configuration service and service supervision protocol.
    **PARTIALLY IMPLEMENTED:** `mrml-config` provides a no-allocation typed
@@ -212,8 +214,11 @@ recovery path, or external policy depends on it. Live composition is pending.
    `AccountedConfigurationService` charges its complete fixed settings and audit
    capacity before fresh or checkpoint-recovered publication; live image and
    reboot integration remain pending. `AccountedServiceSupervisor` separately
-   charges the complete fixed lifecycle/restart/cleanup table before use, but
-   live supervisor construction remains unaccounted. Kernel service-state
+   charges the complete fixed lifecycle/restart/cleanup table before use.
+   `AccountedPolicyServiceSubstrate` instead supports one exact aggregate charge
+   after scheduler and schema validation; exact-limit admission succeeds and a
+   one-page shortage leaves usage unchanged. Live image construction remains
+   unaccounted. Kernel service-state
    introspection now requires exact READ authority rather than a service token.
    Syscall operation 9 now exposes only that authorized state query to CPL3: it
    accepts an opaque generational service token plus an exact task-local READ

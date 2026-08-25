@@ -7208,6 +7208,56 @@ JavaScript/WebAssembly runtime, AI mechanism, or media mechanism. Planned scopes
 recorded as `TRIGGERED` in [patents/REVIEW_LOG.md](patents/REVIEW_LOG.md) remain
 unchanged; agent review does not replace independent human dual review.
 
+### Atomic policy-service substrate commitment
+
+The aggregate Phase 2 service foundation is **PARTIALLY IMPLEMENTED** as an
+opt-in `AccountedPolicyServiceSubstrate`. It directly owns one fixed-capacity
+`TaskRuntime`, `ServiceSupervisor`, and `ConfigurationService`, rounds that
+concrete aggregate footprint to pages, and admits it with one anonymous
+`MemoryObject`. This avoids partial sequential charges and double charging the
+standalone accounted wrappers. Scheduler and configuration-schema inputs are
+fully validated before the single allocation. Exact-limit construction
+succeeds; a one-page shortage, invalid scheduler, or invalid schema publishes
+no substrate and leaves committed usage unchanged. Runtime task creation and
+service registration reuse the existing commitment.
+
+Consuming release is unsafe and is demonstrated only for an empty substrate:
+the caller must first prove that no task, service, cleanup ticket, prepared
+registration/restart, peer, recovery path, or external policy state depends on
+it. Failure returns the complete still-accounted substrate. Standalone wrappers
+remain valid for components with separate owners or lifetimes. Live kernel and
+service images have not adopted the aggregate, and page-table arenas,
+transport/checkpoint scratch, shared buffers, mappings, physical backing, and
+caches remain outside this charge. No hosted, reboot, or physical-hardware
+evidence is claimed.
+
+Engineering Constitution complexity score: complexity impact `MODERATE`, TCB
+impact `LOW`, new parser `NO`, new authority model `NO`, new persistent state
+`NO`, external dependency `NO`, failure isolated `YES`, and existing-object
+reuse `YES` through `TaskRuntime`, `ServiceSupervisor`,
+`ConfigurationService`, `MemoryPoolTable`, and `CapabilitySpace`.
+
+DIGITAL-RIGHTS REVIEW: the single local charge changes no configuration, task,
+supervision, AI, accessibility, vendor, publisher, provider, verifier, DRM, or
+attestation authority. It records only a bounded page commitment, reveals no
+service or configuration contents, and cannot draw from another pool.
+
+HOSTILE SECURITY REVIEW: generic capacities, scheduler parameters, schemas,
+concrete layout arithmetic, pool/object/capability generations, exhaustion,
+lifecycle state, and release timing are hostile. Inner constructors validate
+before the one charge; charging completes before publication; exact exhaustion
+is fail-closed and atomic. Accounting never replaces capability, generation,
+revocation, cleanup, or recovery checks, and unsafe release requires every
+dependent authority and state transition to be retired first.
+
+Patent review: `NOT_TRIGGERED` — atomic page-rounded composition of existing
+fixed-capacity local objects is conventional resource accounting and adds no
+compatibility transport, host-share protocol, accessibility device, browser
+semantic interface, JavaScript/WebAssembly runtime, AI mechanism, or media
+mechanism. Planned scopes recorded as `TRIGGERED` in
+[patents/REVIEW_LOG.md](patents/REVIEW_LOG.md) remain unchanged; agent review
+does not replace independent human dual review.
+
 ## Milestones
 
 This historical list is retained for continuity. The current dependency-ordered

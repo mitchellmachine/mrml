@@ -17,7 +17,7 @@ use mrml_kernel::{
     Capability, CapabilityError, CapabilitySpace, MemoryBackingKind, MemoryObjectId, MemoryPoolId,
     MemoryPoolTable, MemoryResourceError, Message, ObjectId, PAGE_SIZE, Priority, RestartPolicy,
     Rights, ServiceError, ServiceId, ServiceRegistrationPlan, ServiceState, ServiceSupervisor,
-    TaskId, TaskRuntime,
+    TaskId, TaskRuntime, TaskRuntimeError,
 };
 use mrml_storage::{
     AuthorityRecoveryValidator, BlockFileSession, BlockVolume, BlockVolumeError,
@@ -1486,6 +1486,225 @@ impl<const SETTINGS: usize, const AUDIT: usize> DerefMut
     }
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum AccountedPolicyServiceError {
+    Runtime(TaskRuntimeError),
+    Configuration(ConfigError),
+    Memory(MemoryResourceError),
+    Arithmetic,
+}
+
+impl From<TaskRuntimeError> for AccountedPolicyServiceError {
+    fn from(value: TaskRuntimeError) -> Self {
+        Self::Runtime(value)
+    }
+}
+
+impl From<ConfigError> for AccountedPolicyServiceError {
+    fn from(value: ConfigError) -> Self {
+        Self::Configuration(value)
+    }
+}
+
+impl From<MemoryResourceError> for AccountedPolicyServiceError {
+    fn from(value: MemoryResourceError) -> Self {
+        Self::Memory(value)
+    }
+}
+
+/// One fixed-capacity Phase 2 policy-service substrate admitted by one atomic
+/// memory commitment.
+///
+/// The task runtime, service supervisor, and configuration state are owned
+/// directly so their concrete aggregate footprint is charged once. Standalone
+/// accounted wrappers remain appropriate when those components have separate
+/// owners and lifetimes.
+pub struct AccountedPolicyServiceSubstrate<
+    const TASKS: usize,
+    const CAPS: usize,
+    const SERVICES: usize,
+    const SETTINGS: usize,
+    const AUDIT: usize,
+> {
+    runtime: TaskRuntime<TASKS, CAPS>,
+    supervisor: ServiceSupervisor<SERVICES>,
+    configuration: ConfigurationService<SETTINGS, AUDIT>,
+    charge: MemoryObjectId,
+    charge_capability: Capability,
+    committed_pages: u64,
+}
+
+impl<
+    const TASKS: usize,
+    const CAPS: usize,
+    const SERVICES: usize,
+    const SETTINGS: usize,
+    const AUDIT: usize,
+> AccountedPolicyServiceSubstrate<TASKS, CAPS, SERVICES, SETTINGS, AUDIT>
+{
+    #[allow(clippy::too_many_arguments)]
+    pub fn new<const POOLS: usize, const OBJECTS: usize, const AUTHORITIES: usize>(
+        ticks_per_second: u32,
+        quantum_ticks: u32,
+        root: ObjectId,
+        schemas: &[SettingSchema],
+        pool: MemoryPoolId,
+        pool_capability: Capability,
+        memory: &mut MemoryPoolTable<POOLS, OBJECTS>,
+        authorities: &mut CapabilitySpace<AUTHORITIES>,
+    ) -> Result<Self, AccountedPolicyServiceError> {
+        Self::account(
+            TaskRuntime::new(ticks_per_second, quantum_ticks)?,
+            ConfigurationService::new(root, schemas)?,
+            pool,
+            pool_capability,
+            memory,
+            authorities,
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub fn empty<const POOLS: usize, const OBJECTS: usize, const AUTHORITIES: usize>(
+        ticks_per_second: u32,
+        quantum_ticks: u32,
+        root: ObjectId,
+        pool: MemoryPoolId,
+        pool_capability: Capability,
+        memory: &mut MemoryPoolTable<POOLS, OBJECTS>,
+        authorities: &mut CapabilitySpace<AUTHORITIES>,
+    ) -> Result<Self, AccountedPolicyServiceError> {
+        Self::account(
+            TaskRuntime::new(ticks_per_second, quantum_ticks)?,
+            ConfigurationService::empty(root)?,
+            pool,
+            pool_capability,
+            memory,
+            authorities,
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub fn recover_checkpoint<
+        A: CapabilityAuthorizer + ?Sized,
+        const POOLS: usize,
+        const OBJECTS: usize,
+        const AUTHORITIES: usize,
+    >(
+        ticks_per_second: u32,
+        quantum_ticks: u32,
+        capabilities: &A,
+        root_capability: Capability,
+        input: &[u8],
+        expected_digest: [u8; CONFIG_CHECKPOINT_DIGEST_BYTES],
+        pool: MemoryPoolId,
+        pool_capability: Capability,
+        memory: &mut MemoryPoolTable<POOLS, OBJECTS>,
+        authorities: &mut CapabilitySpace<AUTHORITIES>,
+    ) -> Result<Self, AccountedPolicyServiceError> {
+        Self::account(
+            TaskRuntime::new(ticks_per_second, quantum_ticks)?,
+            ConfigurationService::recover_checkpoint(
+                capabilities,
+                root_capability,
+                input,
+                expected_digest,
+            )?,
+            pool,
+            pool_capability,
+            memory,
+            authorities,
+        )
+    }
+
+    pub fn required_pages() -> Result<u64, AccountedPolicyServiceError> {
+        let bytes = u64::try_from(size_of::<Self>())
+            .map_err(|_| AccountedPolicyServiceError::Arithmetic)?;
+        bytes
+            .checked_add(PAGE_SIZE - 1)
+            .map(|rounded| rounded / PAGE_SIZE)
+            .filter(|pages| *pages != 0)
+            .ok_or(AccountedPolicyServiceError::Arithmetic)
+    }
+
+    pub const fn runtime(&self) -> &TaskRuntime<TASKS, CAPS> {
+        &self.runtime
+    }
+
+    pub fn runtime_mut(&mut self) -> &mut TaskRuntime<TASKS, CAPS> {
+        &mut self.runtime
+    }
+
+    pub const fn supervisor(&self) -> &ServiceSupervisor<SERVICES> {
+        &self.supervisor
+    }
+
+    pub fn supervisor_mut(&mut self) -> &mut ServiceSupervisor<SERVICES> {
+        &mut self.supervisor
+    }
+
+    pub const fn configuration(&self) -> &ConfigurationService<SETTINGS, AUDIT> {
+        &self.configuration
+    }
+
+    pub fn configuration_mut(&mut self) -> &mut ConfigurationService<SETTINGS, AUDIT> {
+        &mut self.configuration
+    }
+
+    pub const fn charge(&self) -> MemoryObjectId {
+        self.charge
+    }
+
+    pub const fn committed_pages(&self) -> u64 {
+        self.committed_pages
+    }
+
+    /// Returns the aggregate commitment only after every dependent task and
+    /// lifecycle authority has been retired externally.
+    ///
+    /// # Safety
+    ///
+    /// No task, service, cleanup ticket, prepared registration/restart, peer,
+    /// recovery path, or external policy state may depend on this substrate.
+    #[allow(clippy::result_large_err)]
+    pub unsafe fn release<const POOLS: usize, const OBJECTS: usize, const AUTHORITIES: usize>(
+        self,
+        memory: &mut MemoryPoolTable<POOLS, OBJECTS>,
+        authorities: &mut CapabilitySpace<AUTHORITIES>,
+    ) -> Result<u64, (Self, MemoryResourceError)> {
+        match memory.release_object(self.charge, self.charge_capability, authorities) {
+            Ok(pages) => Ok(pages),
+            Err(error) => Err((self, error)),
+        }
+    }
+
+    fn account<const POOLS: usize, const OBJECTS: usize, const AUTHORITIES: usize>(
+        runtime: TaskRuntime<TASKS, CAPS>,
+        configuration: ConfigurationService<SETTINGS, AUDIT>,
+        pool: MemoryPoolId,
+        pool_capability: Capability,
+        memory: &mut MemoryPoolTable<POOLS, OBJECTS>,
+        authorities: &mut CapabilitySpace<AUTHORITIES>,
+    ) -> Result<Self, AccountedPolicyServiceError> {
+        let committed_pages = Self::required_pages()?;
+        let (charge, charge_capability) = memory.allocate_object(
+            pool,
+            pool_capability,
+            committed_pages,
+            MemoryBackingKind::Anonymous,
+            Rights::CONTROL,
+            authorities,
+        )?;
+        Ok(Self {
+            runtime,
+            supervisor: ServiceSupervisor::new(),
+            configuration,
+            charge,
+            charge_capability,
+            committed_pages,
+        })
+    }
+}
+
 impl<const SETTINGS: usize, const AUDIT: usize> ConfigurationService<SETTINGS, AUDIT> {
     pub fn empty(root: ObjectId) -> Result<Self, ConfigError> {
         if root.0 == 0 {
@@ -2916,6 +3135,151 @@ mod tests {
     };
 
     const MEMORY_POOL_RIGHTS: Rights = Rights::ALLOCATE.union(Rights::INSPECT);
+
+    type TestPolicySubstrate = AccountedPolicyServiceSubstrate<2, 4, 2, 3, 2>;
+
+    #[test]
+    fn policy_substrate_uses_one_exact_aggregate_commitment_for_all_components() {
+        let pages = TestPolicySubstrate::required_pages().unwrap();
+        let mut memory = MemoryPoolTable::<1, 1>::new(32).unwrap();
+        let mut authorities = CapabilitySpace::<3>::new();
+        let (pool, pool_capability) = memory
+            .create_root(pages, 1, 0, MEMORY_POOL_RIGHTS, &mut authorities)
+            .unwrap();
+        let schema = SettingSchema::boolean(SettingId::new(1).unwrap(), ObjectId(11)).unwrap();
+        let mut substrate = TestPolicySubstrate::new(
+            1_000,
+            1,
+            ObjectId(10),
+            &[schema],
+            pool,
+            pool_capability,
+            &mut memory,
+            &mut authorities,
+        )
+        .unwrap();
+        assert_eq!(substrate.committed_pages(), pages);
+        assert_eq!(memory.object_pool(substrate.charge()), Ok(pool));
+        let usage = memory.usage(pool, pool_capability, &authorities).unwrap();
+        assert_eq!((usage.committed_pages(), usage.live_objects()), (pages, 1));
+        assert_eq!(substrate.configuration().setting_count(), 1);
+        let task = substrate
+            .runtime_mut()
+            .create(
+                Priority::NORMAL,
+                UserContext::new(
+                    mrml_kernel::PhysAddr::new(0x20_0000).unwrap(),
+                    0x40_0000,
+                    0x7000_0000,
+                )
+                .unwrap(),
+            )
+            .unwrap();
+        let service = substrate
+            .supervisor_mut()
+            .register(ObjectId(0x90), task)
+            .unwrap();
+        assert_eq!(
+            substrate.supervisor().state(service),
+            Ok(ServiceState::Running)
+        );
+        assert_eq!(
+            memory
+                .usage(pool, pool_capability, &authorities)
+                .unwrap()
+                .committed_pages(),
+            pages
+        );
+    }
+
+    #[test]
+    fn policy_substrate_failure_is_atomic_and_empty_release_returns_one_charge() {
+        let pages = TestPolicySubstrate::required_pages().unwrap();
+        assert!(pages > 1);
+        let mut memory = MemoryPoolTable::<1, 1>::new(33).unwrap();
+        let mut authorities = CapabilitySpace::<3>::new();
+        let (pool, pool_capability) = memory
+            .create_root(pages - 1, 1, 0, MEMORY_POOL_RIGHTS, &mut authorities)
+            .unwrap();
+        let schema = SettingSchema::boolean(SettingId::new(1).unwrap(), ObjectId(11)).unwrap();
+        assert!(matches!(
+            TestPolicySubstrate::new(
+                1_000,
+                1,
+                ObjectId(10),
+                &[schema],
+                pool,
+                pool_capability,
+                &mut memory,
+                &mut authorities,
+            ),
+            Err(AccountedPolicyServiceError::Memory(
+                MemoryResourceError::PoolExhausted
+            ))
+        ));
+        assert!(matches!(
+            TestPolicySubstrate::new(
+                0,
+                1,
+                ObjectId(10),
+                &[schema],
+                pool,
+                pool_capability,
+                &mut memory,
+                &mut authorities,
+            ),
+            Err(AccountedPolicyServiceError::Runtime(_))
+        ));
+        assert!(matches!(
+            TestPolicySubstrate::new(
+                1_000,
+                1,
+                ObjectId(10),
+                &[],
+                pool,
+                pool_capability,
+                &mut memory,
+                &mut authorities,
+            ),
+            Err(AccountedPolicyServiceError::Configuration(
+                ConfigError::Capacity
+            ))
+        ));
+        assert_eq!(
+            memory
+                .usage(pool, pool_capability, &authorities)
+                .unwrap()
+                .committed_pages(),
+            0
+        );
+
+        let mut exact_memory = MemoryPoolTable::<1, 1>::new(34).unwrap();
+        let mut exact_authorities = CapabilitySpace::<3>::new();
+        let (exact_pool, exact_pool_capability) = exact_memory
+            .create_root(pages, 1, 0, MEMORY_POOL_RIGHTS, &mut exact_authorities)
+            .unwrap();
+        let substrate = TestPolicySubstrate::empty(
+            1_000,
+            1,
+            ObjectId(10),
+            exact_pool,
+            exact_pool_capability,
+            &mut exact_memory,
+            &mut exact_authorities,
+        )
+        .unwrap();
+        assert!(matches!(
+            unsafe { substrate.release(&mut exact_memory, &mut exact_authorities) },
+            Ok(released) if released == pages
+        ));
+        assert_eq!(
+            exact_memory
+                .usage(exact_pool, exact_pool_capability, &exact_authorities)
+                .unwrap()
+                .committed_pages(),
+            0
+        );
+    }
 
     #[test]
     fn accounted_configuration_charges_complete_state_until_consuming_release() {
