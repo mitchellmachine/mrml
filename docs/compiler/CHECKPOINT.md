@@ -698,6 +698,16 @@ library tests, one component-interface probe, 10 conformance tests, and 335
 replacement tests: 796 compiler tests per host. Generic associated values,
 nested projections, source syntax, and recursive normalization remain absent.
 
+The rigid-placeholder universe milestone distinguishes a placeholder's stable ID
+from its explicit 16-bit universe. Bound clauses instantiate each parameter as a
+distinct rigid placeholder in a caller-selected universe; canonicalization
+preserves universe identity, separate universes remain unequal, and advancing
+past the universe ceiling fails explicitly. Windows gnullvm and native Arch
+Linux WSL each pass 452 library tests, one component-interface probe, 10
+conformance tests, and 335 replacement tests: 798 compiler tests per host. Leak
+checking, higher-ranked matching, universe relations, and `for<...>` syntax are
+not implemented.
+
 At compiler path checkpoint `9a950ae9`, the Windows gnullvm core suite passed
 765 tests: 420 library tests, 10 conformance tests, and 335 replacement tests.
 Core formatting, warnings-denied Clippy, the no-`std`/no-`alloc`/unsafe hygiene

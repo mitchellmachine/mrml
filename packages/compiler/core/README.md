@@ -3932,6 +3932,16 @@ replacement tests: 796 compiler tests per host. Values cannot contain generic
 parameters or nested projections, and there is no source integration or
 recursive normalization.
 
+The rigid-placeholder universe milestone adds an explicit 16-bit universe to
+each stable placeholder identity. A bound clause can instantiate its parameters
+as distinct rigid placeholders in a caller-selected fresh universe;
+canonicalization preserves them, placeholders from separate universes do not
+alias, and universe increment overflow fails explicitly. Windows gnullvm and
+native Arch Linux WSL each pass 452 library tests, one component-interface
+probe, 10 conformance tests, and 335 replacement tests: 798 compiler tests per
+host. This is a higher-ranked prerequisite, not leak checking, universe-relation
+reasoning, higher-ranked matching, or source `for<...>` support.
+
 The nested conditional tuple-origin milestone walks each leaf's bounded
 conditional-parent chain to the outermost generation before grouping reference
 origins by field ordinal. The exact oracle rejects a three-leaf returned field

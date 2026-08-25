@@ -79,11 +79,45 @@ impl TraitPlaceholderId {
     }
 }
 
+#[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
+pub struct TraitUniverseIndex(u16);
+
+impl TraitUniverseIndex {
+    pub const ROOT: Self = Self(0);
+
+    pub const fn new(value: u16) -> Self {
+        Self(value)
+    }
+
+    pub const fn get(self) -> u16 {
+        self.0
+    }
+
+    pub fn next(self) -> Result<Self, TraitGoalError> {
+        self.0
+            .checked_add(1)
+            .map(Self)
+            .ok_or(TraitGoalError::UniverseOverflow)
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
+pub struct TraitPlaceholder {
+    pub universe: TraitUniverseIndex,
+    pub id: TraitPlaceholderId,
+}
+
+impl TraitPlaceholder {
+    pub const fn new(universe: TraitUniverseIndex, id: TraitPlaceholderId) -> Self {
+        Self { universe, id }
+    }
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum TraitGoalType {
     Concrete(TraitTypeId),
     InferenceVariable(TraitInferenceVariableId),
-    Placeholder(TraitPlaceholderId),
+    Placeholder(TraitPlaceholder),
 }
 
 #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
@@ -109,7 +143,7 @@ pub enum BoundTraitGoalType {
 pub enum CanonicalTraitGoalType {
     Concrete(TraitTypeId),
     BoundVariable(u8),
-    Placeholder(TraitPlaceholderId),
+    Placeholder(TraitPlaceholder),
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -268,6 +302,38 @@ impl TraitWhereClause {
     pub fn instantiate(
         self,
         arguments: &[TraitTypeId],
+    ) -> Result<InstantiatedTraitWhereClause, TraitGoalError> {
+        if arguments.len() != self.parameter_count {
+            return Err(TraitGoalError::WrongGenericArgumentCount);
+        }
+        let mut goal_arguments =
+            [TraitGoalType::Concrete(TraitTypeId::new(0)); MAX_TRAIT_GENERIC_PARAMETERS];
+        for (index, argument) in arguments.iter().copied().enumerate() {
+            goal_arguments[index] = TraitGoalType::Concrete(argument);
+        }
+        self.instantiate_goal_types(&goal_arguments[..arguments.len()])
+    }
+
+    pub fn instantiate_rigid(
+        self,
+        universe: TraitUniverseIndex,
+    ) -> Result<InstantiatedTraitWhereClause, TraitGoalError> {
+        let mut arguments = [TraitGoalType::Placeholder(TraitPlaceholder::new(
+            universe,
+            TraitPlaceholderId::new(0),
+        )); MAX_TRAIT_GENERIC_PARAMETERS];
+        for (index, argument) in arguments[..self.parameter_count].iter_mut().enumerate() {
+            *argument = TraitGoalType::Placeholder(TraitPlaceholder::new(
+                universe,
+                TraitPlaceholderId::new(index as u32),
+            ));
+        }
+        self.instantiate_goal_types(&arguments[..self.parameter_count])
+    }
+
+    fn instantiate_goal_types(
+        self,
+        arguments: &[TraitGoalType],
     ) -> Result<InstantiatedTraitWhereClause, TraitGoalError> {
         if arguments.len() != self.parameter_count {
             return Err(TraitGoalError::WrongGenericArgumentCount);
@@ -559,6 +625,7 @@ pub enum TraitGoalError {
     TooManyAssociatedTypeValues,
     DuplicateAssociatedTypeValue,
     UnknownImplementationId,
+    UniverseOverflow,
     NonConcreteClauseQuery,
     UnboundGenericParameter,
     WrongGenericArgumentCount,
@@ -663,7 +730,7 @@ fn validate_bound_type(
 
 fn instantiate_bound_goal(
     goal: BoundImplementedTraitGoal,
-    arguments: &[TraitTypeId],
+    arguments: &[TraitGoalType],
 ) -> Result<ImplementedTraitGoal, TraitGoalError> {
     validate_bound_goal(goal, arguments.len())?;
     let mut instantiated = ImplementedTraitGoal::new(
@@ -684,14 +751,13 @@ fn instantiate_bound_goal(
 
 fn instantiate_bound_type(
     ty: BoundTraitGoalType,
-    arguments: &[TraitTypeId],
+    arguments: &[TraitGoalType],
 ) -> Result<TraitGoalType, TraitGoalError> {
     match ty {
         BoundTraitGoalType::Concrete(ty) => Ok(TraitGoalType::Concrete(ty)),
         BoundTraitGoalType::Parameter(parameter) => arguments
             .get(parameter.get() as usize)
             .copied()
-            .map(TraitGoalType::Concrete)
             .ok_or(TraitGoalError::UnboundGenericParameter),
     }
 }
@@ -1391,6 +1457,66 @@ mod tests {
     }
 
     #[test]
+    fn instantiates_where_clause_parameters_as_rigid_universe_placeholders() {
+        let mut consequence = BoundImplementedTraitGoal::new(
+            TraitId::new(20),
+            BoundTraitGoalType::Parameter(TraitGenericParameterId::new(0)),
+        );
+        consequence
+            .push_argument(BoundTraitGoalType::Parameter(TraitGenericParameterId::new(
+                1,
+            )))
+            .unwrap();
+        let mut clause = TraitWhereClause::new(2, consequence).unwrap();
+        clause
+            .push_premise(BoundImplementedTraitGoal::new(
+                TraitId::new(21),
+                BoundTraitGoalType::Parameter(TraitGenericParameterId::new(0)),
+            ))
+            .unwrap();
+        let universe = TraitUniverseIndex::new(7);
+        let instantiated = clause.instantiate_rigid(universe).unwrap();
+        let first = TraitPlaceholder::new(universe, TraitPlaceholderId::new(0));
+        let second = TraitPlaceholder::new(universe, TraitPlaceholderId::new(1));
+        assert_eq!(
+            instantiated.consequence.self_type,
+            TraitGoalType::Placeholder(first)
+        );
+        assert_eq!(
+            instantiated.consequence.arguments(),
+            &[Some(TraitGoalType::Placeholder(second))]
+        );
+        assert_eq!(
+            instantiated.premises.predicates()[0].unwrap().self_type,
+            TraitGoalType::Placeholder(first)
+        );
+        assert_ne!(
+            instantiated,
+            clause
+                .instantiate_rigid(TraitUniverseIndex::new(8))
+                .unwrap()
+        );
+        assert_eq!(
+            canonicalize_implemented_trait_goal(instantiated.consequence)
+                .unwrap()
+                .self_type,
+            CanonicalTraitGoalType::Placeholder(first)
+        );
+    }
+
+    #[test]
+    fn bounds_trait_placeholder_universe_creation() {
+        assert_eq!(
+            TraitUniverseIndex::ROOT.next(),
+            Ok(TraitUniverseIndex::new(1))
+        );
+        assert_eq!(
+            TraitUniverseIndex::new(u16::MAX).next(),
+            Err(TraitGoalError::UniverseOverflow)
+        );
+    }
+
+    #[test]
     fn rejects_unbound_or_wrong_arity_where_clause_parameters() {
         let unbound = BoundImplementedTraitGoal::new(
             TraitId::new(1),
@@ -1789,7 +1915,10 @@ mod tests {
     fn preserves_placeholders_and_concrete_types_without_binding_them() {
         let mut goal = ImplementedTraitGoal::new(
             TraitId::new(1),
-            TraitGoalType::Placeholder(TraitPlaceholderId::new(4)),
+            TraitGoalType::Placeholder(TraitPlaceholder::new(
+                TraitUniverseIndex::ROOT,
+                TraitPlaceholderId::new(4),
+            )),
         );
         goal.push_argument(TraitGoalType::Concrete(TraitTypeId::new(8)))
             .unwrap();
@@ -1797,7 +1926,10 @@ mod tests {
         assert_eq!(canonical.variable_count(), 0);
         assert_eq!(
             canonical.self_type,
-            CanonicalTraitGoalType::Placeholder(TraitPlaceholderId::new(4))
+            CanonicalTraitGoalType::Placeholder(TraitPlaceholder::new(
+                TraitUniverseIndex::ROOT,
+                TraitPlaceholderId::new(4),
+            ))
         );
     }
 
@@ -2015,7 +2147,10 @@ mod tests {
             .unwrap();
         for self_type in [
             TraitGoalType::Concrete(TraitTypeId::new(4)),
-            TraitGoalType::Placeholder(TraitPlaceholderId::new(3)),
+            TraitGoalType::Placeholder(TraitPlaceholder::new(
+                TraitUniverseIndex::ROOT,
+                TraitPlaceholderId::new(3),
+            )),
         ] {
             let goal = ImplementedTraitGoal::new(TraitId::new(2), self_type);
             assert_eq!(
