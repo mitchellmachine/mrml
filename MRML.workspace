@@ -1,7 +1,7 @@
 # MRML native workspace graph v3. Cargo fields are a temporary stage-zero bridge.
 version|3
 # id|path|cargo-package|class|targets|default|dependencies|features|outputs|input-policy
-component|org.mrml.tool.build|tools/mrml|mrml|BOOTSTRAP_ONLY|WINDOWS,LINUX|true|||mrml:bin|build-script:0,proc-macro:0,native-link:0,compile-env:0,included-file:0,external-command:4
+component|org.mrml.tool.build|tools/mrml|mrml|BOOTSTRAP_ONLY|WINDOWS,LINUX|true|||mrml:bin|build-script:0,proc-macro:0,native-link:0,compile-env:0,included-file:0,external-command:3
 component|org.mrml.compiler.core|compiler/core|mrml-rustc|COMPILER|WINDOWS,LINUX|true|||conformance:test,mrml_rustc:lib,rustc_nightly_replacements:test|build-script:0,proc-macro:0,native-link:0,compile-env:0,included-file:0,external-command:0
 component|org.mrml.compiler.driver|compiler/driver|mrml-rustc-driver|COMPILER|WINDOWS,LINUX|true|mrml-error,mrml-runtime,mrml-rustc||mrml-rustc:bin|build-script:0,proc-macro:0,native-link:0,compile-env:0,included-file:0,external-command:0
 component|org.mrml.system.kernel|system/kernel|mrml-kernel|MRML_NATIVE|MRML_NATIVE|true|mrml-crypto||mrml_kernel:lib|build-script:0,proc-macro:0,native-link:0,compile-env:0,included-file:0,external-command:0

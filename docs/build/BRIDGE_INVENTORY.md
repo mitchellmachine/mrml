@@ -1,13 +1,14 @@
 # Cargo bridge inventory
 
-**Status: IMPLEMENTED AUDIT / TRANSITIONAL BRIDGE.** The dependency-free `mrml`
-frontend obtains Cargo's locked version-1 metadata, parses it with a bounded
-repository-owned JSON parser, and verifies one-to-one package/name/manifest-path
-coverage against `MRML.workspace`. Version 3 persists exact dependency, feature,
-output, and per-component input-policy declarations. Cargo facts are compared
-with locked metadata; input policies are compared with the bounded source scan;
-and every local dependency must resolve to another declared MRML component.
-Cargo metadata does not become MRML package identity or runtime authority.
+**Status: IMPLEMENTED NATIVE AUDIT / TRANSITIONAL COMPILATION BRIDGE.** The
+dependency-free `mrml` frontend resolves version-3 `MRML.workspace` declarations
+without invoking Cargo metadata. It rejects duplicate MRML/path/Cargo-stage
+identities while loading, then rejects missing dependencies, self-dependencies,
+cycles, unknown targets, and empty output sets with bounded structured errors.
+Its deterministic dependency-first order is repository-owned. Input policies
+are compared with the bounded source scan. Cargo remains only as the current
+compilation bridge while direct-rustc actions are made exact; Cargo identity is
+not MRML package identity or runtime authority.
 
 Run the human or stable structured inventory with the pinned toolchain:
 
@@ -22,17 +23,17 @@ The 2026-08-25 Windows gnullvm result is:
 42 components
 118 deduplicated local dependency records
 72 feature names
-64 Cargo targets
+64 declared outputs
 1 custom build target
 0 procedural-macro targets
 9 native-link source sites
 31 compile-time environment source sites
 1 included-file source site
-43 external-command source sites
+42 external-command source sites
 ```
 
-The structured output emits every Cargo package, dependency list, feature list,
-target name/kind, and source-input location before its final summary. Source
+The structured output emits every native component, dependency list, feature
+list, output declaration, and source-input location before its final summary. Source
 scanning is bounded to declared component roots, rejects symlinks, caps paths and
 file sizes, and reports exact repository-relative file and line locations.
 
@@ -48,45 +49,21 @@ file sizes, and reports exact repository-relative file and line locations.
   must become explicit per-node declarations before direct-rustc execution.
 
 This inventory is lexical risk discovery, not proof that arbitrary macro output
-cannot create another input. The Cargo metadata comparison covers declared
-targets; the source scan identifies known direct sites. Both must pass before a
-semantic path move or Cargo-removal step.
+cannot create another input. The native resolver covers declared graph facts;
+the source scan identifies known direct sites. Both must pass before a direct-
+rustc or Cargo-removal step.
 
 ## Next gate
 
-The first eighteen library components have moved: dependency-free `mrml-math` to
-`packages/libraries/math`, and `mrml-percent-encoding` to
-`packages/libraries/percent-encoding`, and `mrml-tokenizer` to
-`packages/libraries/tokenizer`, `mrml-zstd` to `packages/libraries/zstd`, and
-`mrml-zim` to `packages/libraries/zim`, and `mrml-json` to
-`packages/libraries/json`, and `mrml-wikipedia` to
-`packages/libraries/wikipedia`, and `mrml-opus` to
-`packages/libraries/opus`, and `mrml-windows` to
-`packages/libraries/windows`, and `mrml-linux` to
-`packages/libraries/linux`, and `mrml-runtime` to
-`packages/libraries/runtime`, and `mrml-crypto` to
-`packages/libraries/crypto`, and `mrml-tls` to
-`packages/libraries/tls`, and `mrml-http` to
-`packages/libraries/http`, and `mrml-ssh` to
-`packages/libraries/ssh`, and `mrml-error` to
-`packages/libraries/error`, and `mrml-terminal-style` to
-`packages/libraries/terminal-style`, and `mrml-av1` to
-`packages/libraries/av1`.
-Their Cargo bridges remain. Extend moves one
-dependency-light leaf at a time after checking every path reference and the v3
-graph/audit. Do not remove Cargo bridge entries until Windows/Linux build
+All 42 tracked components now live in semantic `apps/`, `compiler/`, `packages/`,
+`services/`, `system/`, `tests/`, or `tools/` homes; no tracked component remains
+under generic `crates/`. The next gate makes source roots, crate types, editions,
+target cfgs, feature activation, extern names/artifacts, build actions, compiler
+flags, and lock/digest inputs exact enough for direct rustc. Cargo must then be
+confined to clean-source stage-zero bootstrap only after Windows/Linux build
 equivalence is demonstrated. Treat input-policy changes as explicit review items,
 never automatically accepted count updates.
 
-The compiler lane has moved dependency-free `mrml-rustc` to `compiler/core`
-and its separate driver to `compiler/driver`; both Cargo bridges remain.
-`mrml-git` has moved to `tools/git` after all four dependency gates; its
-Cargo bridge remains.
-`mrml-tools` has moved to `tools/host` after all eight dependency gates; its
-four consumers, audited input policy, and Cargo bridge remain.
-
-Patent review: `NOT_TRIGGERED`. This increment adds conventional bounded metadata
-parsing, graph consistency checks, and lexical source inventory. It does not
-implement the future cache, package, resolver, provenance, or publication
-mechanisms already marked `TRIGGERED` in
+Patent review: `TRIGGERED`. This increment implements the first native dependency
+resolver, within the package/cache/resolver review already recorded in
 [`../patents/REVIEW_LOG.md`](../patents/REVIEW_LOG.md).

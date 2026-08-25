@@ -1,9 +1,11 @@
+use std::collections::BTreeMap;
 use std::env;
 use std::fs;
 use std::path::PathBuf;
 use std::process::{Command, ExitCode};
 
-mod metadata;
+const MAX_WORKSPACE_BYTES: u64 = 1024 * 1024;
+const MAX_COMPONENTS: usize = 256;
 
 #[derive(Clone, Debug)]
 struct Component {
@@ -85,7 +87,16 @@ fn find_root() -> Result<PathBuf, String> {
 
 fn load_workspace() -> Result<Workspace, String> {
     let root = find_root()?;
-    let text = fs::read_to_string(root.join("MRML.workspace"))
+    let workspace_path = root.join("MRML.workspace");
+    let bytes = fs::metadata(&workspace_path)
+        .map_err(|e| format!("WorkspaceMetadataError {{ detail: {e} }}"))?
+        .len();
+    if bytes > MAX_WORKSPACE_BYTES {
+        return Err(format!(
+            "WorkspaceSizeLimit {{ bytes: {bytes}, limit: {MAX_WORKSPACE_BYTES} }}"
+        ));
+    }
+    let text = fs::read_to_string(workspace_path)
         .map_err(|e| format!("WorkspaceReadError {{ detail: {e} }}"))?;
     let mut version = None;
     let mut components = Vec::new();
@@ -110,10 +121,12 @@ fn load_workspace() -> Result<Workspace, String> {
                 outputs,
                 input_policy,
             ] => {
-                if components
-                    .iter()
-                    .any(|item: &Component| item.id == *id || item.path == *path)
-                {
+                if components.len() >= MAX_COMPONENTS {
+                    return Err(format!("ComponentCountLimit {{ limit: {MAX_COMPONENTS} }}"));
+                }
+                if components.iter().any(|item: &Component| {
+                    item.id == *id || item.path == *path || item.cargo_package == *cargo
+                }) {
                     return Err(format!(
                         "DuplicateComponent {{ line: {}, id: {id} }}",
                         index + 1
@@ -422,114 +435,144 @@ fn emit(mode: OutputMode, operation: &str, component: &Component, target: &str, 
 fn doctor(workspace: &Workspace, args: &[String]) -> Result<(), String> {
     let mode = output_mode(args);
     let host = host_family()?;
-    let cargo = tool_version("cargo")?;
     let rustc = tool_version("rustc")?;
-    let packages = verify_cargo_graph(workspace)?;
+    let graph = verify_native_graph(workspace)?;
     if mode == OutputMode::Structured {
         println!(
-            "doctor|host={host}|workspace_version=3|components={}|cargo_packages={}|cargo={}|rustc={}",
+            "doctor|host={host}|workspace_version=3|components={}|dependencies={}|resolver=native|rustc={}",
             workspace.components.len(),
-            packages.len(),
-            clean(&cargo),
+            graph.dependency_count,
             clean(&rustc)
         );
     } else {
         println!(
-            "host: {host}\nworkspace: v3 ({} components; {} Cargo bridge packages verified)\ncargo: {}\nrustc: {}",
+            "host: {host}\nworkspace: v3 ({} components; {} native dependency edges verified)\nresolver: native\nrustc: {}",
             workspace.components.len(),
-            packages.len(),
-            cargo.trim(),
+            graph.dependency_count,
             rustc.trim()
         );
     }
     Ok(())
 }
 
-fn verify_cargo_graph(workspace: &Workspace) -> Result<Vec<metadata::CargoPackage>, String> {
-    let packages = metadata::load(&workspace.root)?;
-    if packages.len() != workspace.components.len() {
-        return Err(format!(
-            "CargoGraphCountMismatch {{ components: {}, packages: {} }}",
-            workspace.components.len(),
-            packages.len()
-        ));
-    }
-    for component in &workspace.components {
-        let package = packages
-            .iter()
-            .find(|package| package.name == component.cargo_package)
-            .ok_or_else(|| {
-                format!(
-                    "CargoPackageMissing {{ component: {}, cargo_package: {} }}",
-                    component.id, component.cargo_package
-                )
-            })?;
-        let expected = format!("{}/Cargo.toml", component.path).replace('\\', "/");
-        let actual = package.manifest_path.replace('\\', "/");
-        if !actual.ends_with(&expected) {
-            return Err(format!(
-                "CargoManifestMismatch {{ component: {}, expected: {}, actual: {} }}",
-                component.id,
-                expected,
-                clean(&actual)
-            ));
-        }
-        for dependency in &package.dependencies {
-            if !workspace
-                .components
+#[derive(Debug, Eq, PartialEq)]
+struct NativeGraph {
+    dependency_count: usize,
+    order: Vec<usize>,
+}
+
+fn verify_native_graph(workspace: &Workspace) -> Result<NativeGraph, String> {
+    const TARGETS: [&str; 5] = ["WINDOWS", "LINUX", "MRML_NATIVE", "UEFI", "CUDA"];
+    let mut packages = BTreeMap::new();
+    for (index, component) in workspace.components.iter().enumerate() {
+        if component.targets.is_empty()
+            || component
+                .targets
                 .iter()
-                .any(|candidate| candidate.cargo_package == *dependency)
-            {
-                return Err(format!(
-                    "UnmappedCargoDependency {{ component: {}, dependency: {} }}",
-                    component.id, dependency
-                ));
-            }
-        }
-        if component.dependencies != package.dependencies {
-            return Err(format!(
-                "CargoDependencyDrift {{ component: {}, declared: {}, actual: {} }}",
-                component.id,
-                component.dependencies.join(","),
-                package.dependencies.join(",")
-            ));
-        }
-        if component.features != package.features {
-            return Err(format!(
-                "CargoFeatureDrift {{ component: {}, declared: {}, actual: {} }}",
-                component.id,
-                component.features.join(","),
-                package.features.join(",")
-            ));
-        }
-        let mut outputs: Vec<_> = package
-            .targets
-            .iter()
-            .map(|target| format!("{}:{}", target.name, target.kinds.join("+")))
-            .collect();
-        outputs.sort();
-        if component.outputs != outputs {
-            return Err(format!(
-                "CargoOutputDrift {{ component: {}, declared: {}, actual: {} }}",
-                component.id,
-                component.outputs.join(","),
-                outputs.join(",")
-            ));
-        }
-    }
-    for package in &packages {
-        if !workspace
-            .components
-            .iter()
-            .any(|component| component.cargo_package == package.name)
+                .any(|target| !TARGETS.contains(&target.as_str()))
         {
             return Err(format!(
-                "UnmappedCargoPackage {{ cargo_package: {} }}",
-                package.name
+                "InvalidComponentTarget {{ component: {}, targets: {} }}",
+                component.id,
+                component.targets.join(",")
+            ));
+        }
+        if component.outputs.is_empty() {
+            return Err(format!(
+                "MissingComponentOutput {{ component: {} }}",
+                component.id
+            ));
+        }
+        if packages
+            .insert(component.cargo_package.as_str(), index)
+            .is_some()
+        {
+            return Err(format!(
+                "DuplicatePackageIdentity {{ package: {} }}",
+                component.cargo_package
             ));
         }
     }
-    Ok(packages)
+
+    let mut dependency_count = 0_usize;
+    let mut edges = Vec::with_capacity(workspace.components.len());
+    for component in &workspace.components {
+        let mut component_edges = Vec::with_capacity(component.dependencies.len());
+        for dependency in &component.dependencies {
+            let index = *packages.get(dependency.as_str()).ok_or_else(|| {
+                format!(
+                    "MissingDependency {{ component: {}, dependency: {dependency} }}",
+                    component.id
+                )
+            })?;
+            if workspace.components[index].id == component.id {
+                return Err(format!("SelfDependency {{ component: {} }}", component.id));
+            }
+            component_edges.push(index);
+            dependency_count = dependency_count
+                .checked_add(1)
+                .ok_or("DependencyCountOverflow")?;
+        }
+        edges.push(component_edges);
+    }
+
+    let mut states = vec![0_u8; workspace.components.len()];
+    let mut stack = Vec::new();
+    let mut order = Vec::with_capacity(workspace.components.len());
+    for index in 0..workspace.components.len() {
+        visit_component(
+            index,
+            workspace,
+            &edges,
+            &mut states,
+            &mut stack,
+            &mut order,
+        )?;
+    }
+    Ok(NativeGraph {
+        dependency_count,
+        order,
+    })
+}
+
+fn visit_component(
+    index: usize,
+    workspace: &Workspace,
+    edges: &[Vec<usize>],
+    states: &mut [u8],
+    stack: &mut Vec<usize>,
+    order: &mut Vec<usize>,
+) -> Result<(), String> {
+    if stack.len() >= MAX_COMPONENTS {
+        return Err(format!(
+            "DependencyDepthLimit {{ limit: {MAX_COMPONENTS} }}"
+        ));
+    }
+    match states[index] {
+        2 => return Ok(()),
+        1 => {
+            let start = stack.iter().position(|item| *item == index).unwrap_or(0);
+            let mut cycle: Vec<_> = stack[start..]
+                .iter()
+                .map(|item| workspace.components[*item].id.as_str())
+                .collect();
+            cycle.push(workspace.components[index].id.as_str());
+            return Err(format!(
+                "DependencyCycle {{ path: {} }}",
+                cycle.join(" -> ")
+            ));
+        }
+        _ => {}
+    }
+    states[index] = 1;
+    stack.push(index);
+    for dependency in &edges[index] {
+        visit_component(*dependency, workspace, edges, states, stack, order)?;
+    }
+    stack.pop();
+    states[index] = 2;
+    order.push(index);
+    Ok(())
 }
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
@@ -586,55 +629,48 @@ impl InputCounts {
 
 fn audit(workspace: &Workspace, args: &[String]) -> Result<(), String> {
     let mode = output_mode(args);
-    let packages = verify_cargo_graph(workspace)?;
-    let mut dependency_count = 0_usize;
+    let graph = verify_native_graph(workspace)?;
+    let dependency_count = graph.dependency_count;
     let mut feature_count = 0_usize;
     let mut target_count = 0_usize;
     let mut counts = InputCounts::default();
-    for package in &packages {
-        dependency_count = dependency_count
-            .checked_add(package.dependencies.len())
-            .ok_or("AuditCountOverflow")?;
+    for index in &graph.order {
+        let component = &workspace.components[*index];
         feature_count = feature_count
-            .checked_add(package.features.len())
+            .checked_add(component.features.len())
             .ok_or("AuditCountOverflow")?;
         target_count = target_count
-            .checked_add(package.targets.len())
+            .checked_add(component.outputs.len())
             .ok_or("AuditCountOverflow")?;
-        for target in &package.targets {
+        for output in &component.outputs {
             if mode == OutputMode::Structured {
                 println!(
-                    "cargo-target|package={}|name={}|kinds={}",
-                    clean(&package.name),
-                    clean(&target.name),
-                    target.kinds.join(",")
+                    "native-output|component={}|declaration={}",
+                    clean(&component.id),
+                    clean(output)
                 );
             }
         }
         if mode == OutputMode::Structured {
             println!(
-                "cargo-package|name={}|dependencies={}|features={}",
-                clean(&package.name),
-                package.dependencies.join(","),
-                package.features.join(",")
+                "native-component|id={}|dependencies={}|features={}",
+                clean(&component.id),
+                component.dependencies.join(","),
+                component.features.join(",")
             );
         }
     }
     for component in &workspace.components {
-        let package = packages
-            .iter()
-            .find(|package| package.name == component.cargo_package)
-            .ok_or("AuditPackageDisappeared")?;
         let mut component_counts = InputCounts {
-            build_scripts: package
-                .targets
+            build_scripts: component
+                .outputs
                 .iter()
-                .filter(|target| target.kinds.iter().any(|kind| kind == "custom-build"))
+                .filter(|output| output.ends_with(":custom-build"))
                 .count(),
-            proc_macros: package
-                .targets
+            proc_macros: component
+                .outputs
                 .iter()
-                .filter(|target| target.kinds.iter().any(|kind| kind == "proc-macro"))
+                .filter(|output| output.ends_with(":proc-macro"))
                 .count(),
             ..InputCounts::default()
         };
@@ -651,7 +687,7 @@ fn audit(workspace: &Workspace, args: &[String]) -> Result<(), String> {
     }
     if mode == OutputMode::Structured {
         println!(
-            "audit|status=PASS|components={}|dependencies={dependency_count}|features={feature_count}|targets={target_count}|build_scripts={}|proc_macros={}|native_links={}|compile_env={}|included_files={}|external_commands={}",
+            "audit|status=PASS|resolver=native|components={}|dependencies={dependency_count}|features={feature_count}|outputs={target_count}|build_scripts={}|proc_macros={}|native_links={}|compile_env={}|included_files={}|external_commands={}",
             workspace.components.len(),
             counts.build_scripts,
             counts.proc_macros,
@@ -662,7 +698,7 @@ fn audit(workspace: &Workspace, args: &[String]) -> Result<(), String> {
         );
     } else {
         println!(
-            "audit PASS: {} components, {dependency_count} dependency records, {feature_count} features, {target_count} targets\ninputs: {} build scripts, {} proc macros, {} native links, {} compile-time environment reads, {} included files, {} external command sites",
+            "audit PASS (native resolver): {} components, {dependency_count} dependency records, {feature_count} features, {target_count} outputs\ninputs: {} build scripts, {} proc macros, {} native links, {} compile-time environment reads, {} included files, {} external command sites",
             workspace.components.len(),
             counts.build_scripts,
             counts.proc_macros,
@@ -832,6 +868,29 @@ fn clean(value: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn component(package: &str, dependencies: &[&str]) -> Component {
+        Component {
+            id: format!("org.mrml.{package}"),
+            path: package.into(),
+            cargo_package: package.into(),
+            class: "TEST".into(),
+            targets: vec!["WINDOWS".into(), "LINUX".into()],
+            default: false,
+            dependencies: dependencies.iter().map(|value| (*value).into()).collect(),
+            features: Vec::new(),
+            outputs: vec![format!("{package}:lib")],
+            input_policy: InputCounts::default(),
+        }
+    }
+
+    fn workspace(components: Vec<Component>) -> Workspace {
+        Workspace {
+            root: PathBuf::new(),
+            components,
+        }
+    }
+
     #[test]
     fn output_mode_is_explicit() {
         assert_eq!(
@@ -874,5 +933,62 @@ mod tests {
             7
         )
         .is_err());
+    }
+
+    #[test]
+    fn native_graph_orders_dependencies_before_consumers() {
+        let workspace = workspace(vec![
+            component("application", &["service", "library"]),
+            component("service", &["library"]),
+            component("library", &[]),
+        ]);
+        let graph = verify_native_graph(&workspace).unwrap();
+        let order: Vec<_> = graph
+            .order
+            .iter()
+            .map(|index| workspace.components[*index].cargo_package.as_str())
+            .collect();
+        assert_eq!(graph.dependency_count, 3);
+        assert_eq!(order, ["library", "service", "application"]);
+    }
+
+    #[test]
+    fn native_graph_rejects_missing_dependencies() {
+        let error = verify_native_graph(&workspace(vec![component("application", &["missing"])]))
+            .unwrap_err();
+        assert!(error.contains("MissingDependency"));
+        assert!(error.contains("missing"));
+    }
+
+    #[test]
+    fn native_graph_reports_the_cycle_path() {
+        let error = verify_native_graph(&workspace(vec![
+            component("alpha", &["beta"]),
+            component("beta", &["alpha"]),
+        ]))
+        .unwrap_err();
+        assert_eq!(
+            error,
+            "DependencyCycle { path: org.mrml.alpha -> org.mrml.beta -> org.mrml.alpha }"
+        );
+    }
+
+    #[test]
+    fn native_graph_rejects_unknown_targets_and_empty_outputs() {
+        let mut invalid_target = component("invalid-target", &[]);
+        invalid_target.targets = vec!["PLAN9".into()];
+        assert!(
+            verify_native_graph(&workspace(vec![invalid_target]))
+                .unwrap_err()
+                .contains("InvalidComponentTarget")
+        );
+
+        let mut missing_output = component("missing-output", &[]);
+        missing_output.outputs.clear();
+        assert!(
+            verify_native_graph(&workspace(vec![missing_output]))
+                .unwrap_err()
+                .contains("MissingComponentOutput")
+        );
     }
 }

@@ -2,14 +2,11 @@
 
 **Status: PARTIALLY IMPLEMENTED.** The authoritative machine-readable inventory
 is [`../../MRML.workspace`](../../MRML.workspace). All 42 current components are
-classified and reachable through the Cargo bridge. Eighteen libraries—`mrml-math`,
-`mrml-percent-encoding`, `mrml-tokenizer`, `mrml-zstd`, `mrml-zim`,
-`mrml-json`, `mrml-wikipedia`, `mrml-opus`, `mrml-windows`,
-`mrml-linux`, `mrml-runtime`, `mrml-crypto`, `mrml-tls`, and
-`mrml-http`, `mrml-ssh`, `mrml-error`, `mrml-terminal-style`, and
-`mrml-av1`—have moved under `packages/libraries/`,
-and stage-zero lives at `tools/mrml`; other source remains under `crates/`.
-No claim is made that semantic moves or Cargo bridge removal are complete.
+classified and live in semantic `apps/`, `compiler/`, `packages/`, `services/`,
+`system/`, `tests/`, or `tools/` homes; no tracked component remains under generic
+`crates/`. The native resolver validates all 118 declared dependency edges
+without Cargo metadata. Cargo remains a compilation bridge, so no claim is made
+that direct-rustc migration or Cargo bridge removal is complete.
 
 ## Implemented first gate
 
@@ -20,9 +17,9 @@ No claim is made that semantic moves or Cargo bridge removal are complete.
 - Windows/Linux host recognition and MRML/Windows/Linux/UEFI/CUDA target families;
 - structured list, doctor, build, test, target/toolchain failure, and planned-
   command results;
-- bounded Cargo metadata parsing and `mrml audit` verification of component
-  names, manifest paths, local dependencies, features, outputs, build scripts,
-  procedural macros, and direct source-input sites; see
+- bounded native graph resolution and `mrml audit` verification of component
+  identities, local dependencies, features, outputs, build scripts, procedural
+  macros, and direct source-input sites; see
   [BRIDGE_INVENTORY.md](BRIDGE_INVENTORY.md);
 - stage1 `mrml` selection, `mrml-rustc-driver`, current-host WHP/KVM selection,
   x86-64 UEFI routing, and lazy CUDA/PTX routing;
@@ -627,11 +624,9 @@ second inventory.
    keep compiler and bootstrap roots distinct.
 3. Prove Windows WHP and Linux KVM matrices, then remove generic `crates/` only
    after repository-wide stale-path search returns none.
-4. Add direct-rustc nodes/native resolver, leaving Cargo required only for clean-
-   source stage-zero `mrml` bootstrap.
+4. Add direct-rustc nodes using the implemented native resolver, leaving Cargo
+   required only for clean-source stage-zero `mrml` bootstrap.
 
-Patent review: `NOT_TRIGGERED` for this incremental implementation—the parser,
-process orchestration, explicit graph inventory, target dispatch, and structured
-errors are conventional build-tool mechanisms. Package/cache/resolver mechanisms
-remain under the existing triggered review in
+Patent review: `TRIGGERED` for the native dependency-resolver increment under the
+existing package/cache/resolver review in
 [`../patents/REVIEW_LOG.md`](../patents/REVIEW_LOG.md).

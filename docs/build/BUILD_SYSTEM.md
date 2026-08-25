@@ -1,14 +1,16 @@
 # MRML bootstrap build and packaging toolchain
 
 **Status: PARTIALLY IMPLEMENTED.** `tools/mrml` now parses the versioned root
-`MRML.workspace`, emits typed list/doctor/audit/build/test results, verifies the
-Cargo bridge graph and inventories unusual build inputs, uses a locked Cargo/
-upstream-rustc bridge, selects current-host WHP/KVM VMM adapters, builds an
+`MRML.workspace`, emits typed list/doctor/audit/build/test results, resolves and
+validates the declared dependency graph natively, inventories unusual build
+inputs, uses a locked Cargo/upstream-rustc compilation bridge, selects current-
+host WHP/KVM VMM adapters, builds an
 x86-64 UEFI artifact, recognizes the CUDA target with explicit architecture and
 toolchain checks, and rejects unimplemented package/release/image/publish
-commands. Component moves, native dependency resolution, direct rustc, Linux
-execution evidence, package/release/image builders, sandboxing, and publication
-remain planned. See [MIGRATION_INVENTORY.md](MIGRATION_INVENTORY.md).
+commands. All tracked components have semantic homes outside generic `crates/`.
+Direct rustc, Linux execution evidence, package/release/image builders,
+sandboxing, and publication remain planned. See
+[MIGRATION_INVENTORY.md](MIGRATION_INVENTORY.md).
 
 > Until `mrml-rustc` satisfies the defined production-readiness gate, the MRML
 > build tool MUST use upstream Rust tooling for production MRML artifacts.
@@ -99,8 +101,8 @@ target/profile graph. During migration its `cargo-package` field bridges exact u
 dependency compilation; Cargo package identity is not MRML identity. Every
 existing component is classified `MRML_NATIVE`, `HOST_WINDOWS_LINUX`, `COMPILER`,
 `UEFI`, `GPU`, `TEST`, `SHARED`, or `BOOTSTRAP_ONLY`. The generic `crates/`
-layout remains transitional and moves only after `mrml` graph/path parity is
-verified. The first eighteen library components, `mrml-math`,
+layout has been eliminated for tracked components after `mrml` graph/path parity
+was verified. The first eighteen library components, `mrml-math`,
 `mrml-percent-encoding`, `mrml-tokenizer`, `mrml-zstd`, `mrml-zim`, `mrml-json`,
 `mrml-wikipedia`, `mrml-opus`, `mrml-windows`, `mrml-linux`, and
 `mrml-runtime`, `mrml-crypto`, `mrml-tls`, `mrml-http`, `mrml-ssh`,
@@ -124,10 +126,11 @@ are distinct. The runtime component model is specified in
 `DYNAMIC_INTERFACE`, `SERVICE_INTERFACE`, and `BUILD_ONLY` package edges. Cargo's
 graph never becomes the permanent runtime resolver.
 
-`mrml doctor` fails unless locked Cargo metadata has exact one-to-one package
-and manifest-path coverage with that inventory and every local Cargo dependency
-maps to a declared component. `mrml audit` emits dependencies, features,
-targets/outputs, custom builds, proc macros, native links, compile-time
+`mrml doctor` now validates the native graph without invoking Cargo: component
+and bridge-package identities are unique, targets and outputs are bounded,
+every declared local dependency resolves, and self-dependencies and cycles fail
+with structured diagnostics. `mrml audit` emits dependencies, features,
+outputs, custom builds, proc macros, native links, compile-time
 environment reads, included files, and external-command sites. The bounded
 parser validates native dependency/feature/output declarations. The lexical scan
 validates per-component input policies and fails closed on count drift. A policy

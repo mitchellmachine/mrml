@@ -123,18 +123,21 @@ release/image/publication, provenance, experimental `mrml-rustc`, then per-profi
 promotion. It cannot redirect this compiler lane or the foundational OS gate.
 
 **PARTIALLY IMPLEMENTED:** stage-zero `tools/mrml`, `MRML.workspace`, structured
-Cargo-bridge build/test dispatch, current-host VMM selection, UEFI routing, and
-CUDA target validation now exist. Follow
-[build/MIGRATION_INVENTORY.md](build/MIGRATION_INVENTORY.md): enrich graph edges,
-inventory build scripts/proc macros/native inputs, migrate semantic leaf packages,
-prove Windows/Linux parity, then remove generic `crates/` and the internal Cargo
-bridge incrementally. Package/release/image/publication remain planned.
+Cargo-bridge build/test dispatch, native dependency resolution, current-host VMM
+selection, UEFI routing, and CUDA target validation now exist. All tracked
+components have semantic homes outside generic `crates/`. Follow
+[build/MIGRATION_INVENTORY.md](build/MIGRATION_INVENTORY.md): make compiler inputs
+and actions exact, replace compilation with direct rustc, prove Windows/Linux
+parity, then confine Cargo to clean-source bootstrap. Package/release/image/
+publication remain planned.
 
-The bridge-audit increment is now implemented: `mrml doctor` compares all 42
-components with locked Cargo metadata, and `mrml audit` emits dependencies,
-features, targets, build scripts, proc macros, and bounded source-input sites.
-Dependency, feature, output, and per-component input-policy facts are now native
-version-3 declarations that fail on Cargo or lexical-audit drift. The first
+The native-resolver audit increment is now implemented: `mrml doctor` validates
+all 42 components and 118 declared edges without invoking Cargo metadata, and
+`mrml audit` emits dependencies, features, outputs, build scripts, proc macros,
+and bounded source-input sites. Missing dependencies, invalid targets, empty
+outputs, self-dependencies, and cycles fail closed. Dependency, feature, output,
+and per-component input-policy facts are native version-3 declarations that fail
+on graph or lexical-audit drift. The first
 semantic leaf move is complete: dependency-free `mrml-math` now resides under
 `packages/libraries/math` with its Cargo bridge retained. The next leaf,
 `mrml-percent-encoding`, now resides under `packages/libraries/percent-encoding`
