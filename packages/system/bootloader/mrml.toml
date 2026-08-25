@@ -122,6 +122,16 @@ source = "packages/system/bootloader/src/main.rs"
 features = ["kernel-image"]
 targets = ["UEFI"]
 
+[[feature_profile]]
+features = ["vmx-root-probe"]
+name = "vmx_root_probe"
+targets = ["UEFI"]
+
+[[feature_profile]]
+features = ["pci-configuration-probe"]
+name = "pci_configuration_probe"
+targets = ["UEFI"]
+
 [[absent_compile_env]]
 name = "MRML_EMULATED_TSC_HZ"
 

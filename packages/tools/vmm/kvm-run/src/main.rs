@@ -35,7 +35,11 @@ use mrml_kernel::{
 #[cfg(target_os = "linux")]
 use mrml_kvm::{KvmLaunchLayout, KvmSystem, PreparedKvmGuest};
 #[cfg(target_os = "linux")]
+use mrml_package_format::{MAX_BOOT_PACKAGE_BYTES, parse as parse_package};
+#[cfg(target_os = "linux")]
 use mrml_runtime::Instant;
+#[cfg(target_os = "linux")]
+use mrml_runtime::Vector;
 #[cfg(target_os = "linux")]
 use mrml_runtime::mrml_println as println;
 
@@ -1230,6 +1234,40 @@ fn run_pci_configuration_probe(
 
 #[cfg(target_os = "linux")]
 #[cfg_attr(test, allow(dead_code))]
+fn read_kernel_package(path: &str, public_path: &str, minimum: u64) -> Result<Vector<u8>> {
+    let bytes = mrml_runtime::read_file_bounded(path, MAX_BOOT_PACKAGE_BYTES)?;
+    let public = mrml_runtime::read_file_bounded(public_path, LAMPORT_PUBLIC_KEY_BYTES)?;
+    if public.len() != LAMPORT_PUBLIC_KEY_BYTES {
+        return Err(anyhow!("invalid package public-key length"));
+    }
+    let package =
+        parse_package(&bytes, true, true).map_err(|_| anyhow!("invalid signed kernel package"))?;
+    if package.id != "org.mrml.system.kernel"
+        || package.class != "kernel"
+        || package.version < minimum
+        || package.key_id != Sha3_512::digest(&public)
+    {
+        return Err(anyhow!(
+            "kernel package identity, version, or trust root rejected"
+        ));
+    }
+    let payload = package
+        .select("kernel", "x86_64")
+        .map_err(|_| anyhow!("kernel package payload selection rejected"))?;
+    if payload.raw_len == 0 || payload.raw_len > MAX_KERNEL_BUNDLE {
+        return Err(anyhow!("kernel package payload size rejected"));
+    }
+    let mut output = Vector::with_capacity(payload.raw_len)
+        .map_err(|_| anyhow!("kernel package allocation failed"))?;
+    output.resize(payload.raw_len, 0);
+    payload
+        .decode(&mut output)
+        .map_err(|_| anyhow!("kernel package decompression rejected"))?;
+    Ok(output)
+}
+
+#[cfg(target_os = "linux")]
+#[cfg_attr(test, allow(dead_code))]
 fn application_main() -> Result<()> {
     let total_started = Instant::now();
     let arguments = mrml_runtime::command_arguments();
@@ -1238,17 +1276,17 @@ fn application_main() -> Result<()> {
         println!("wrote exact embedded CUDA PTX bundle to {}", arguments[2]);
         return Ok(());
     }
-    if arguments.len() != 5 && arguments.len() != 8 {
+    if arguments.len() != 6 && arguments.len() != 9 {
         return Err(anyhow!(
-            "usage: mrml-kvm-run KERNEL.signed RELEASE.public MINIMUM_VERSION MODE [CUDA.signed CUDA.public CUDA_MINIMUM_VERSION]\n       mrml-kvm-run --export-cuda-bundle OUTPUT.ptx"
+            "usage: mrml-kvm-run KERNEL.package PACKAGE.public RELEASE.public MINIMUM_VERSION MODE [ARTIFACT.signed ARTIFACT.public ARTIFACT_MINIMUM_VERSION]\n       mrml-kvm-run --export-cuda-bundle OUTPUT.ptx"
         ));
     }
-    let minimum_version = arguments[3]
+    let minimum_version = arguments[4]
         .parse::<u64>()
         .ok()
         .filter(|version| *version != 0)
         .ok_or_else(|| anyhow!("minimum version must be a nonzero integer"))?;
-    let mode = LaunchMode::parse(&arguments[4])?;
+    let mode = LaunchMode::parse(&arguments[5])?;
     if matches!(
         mode,
         LaunchMode::GpuBenchmark
@@ -1257,14 +1295,14 @@ fn application_main() -> Result<()> {
             | LaunchMode::ServiceRestartRequestProbe
             | LaunchMode::ServicePreemptionProbe
             | LaunchMode::SmpServiceMigrationProbe
-    ) != (arguments.len() == 8)
+    ) != (arguments.len() == 9)
     {
         return Err(anyhow!(
             "gpu-benchmark and service modes require exactly one matching signed artifact, public key, and minimum version"
         ));
     }
-    let bundle = mrml_runtime::read_file_bounded(&arguments[1], MAX_KERNEL_BUNDLE)?;
-    let public = mrml_runtime::read_file_bounded(&arguments[2], LAMPORT_PUBLIC_KEY_BYTES)?;
+    let bundle = read_kernel_package(&arguments[1], &arguments[2], minimum_version)?;
+    let public = mrml_runtime::read_file_bounded(&arguments[3], LAMPORT_PUBLIC_KEY_BYTES)?;
     if public.len() != LAMPORT_PUBLIC_KEY_BYTES {
         return Err(anyhow!("invalid release public-key length"));
     }
@@ -1288,14 +1326,14 @@ fn application_main() -> Result<()> {
     );
     let service_bundle = if service_mode {
         Some(mrml_runtime::read_file_bounded(
-            &arguments[5],
+            &arguments[6],
             SIGNED_ARTIFACT_OVERHEAD_BYTES + mrml_kernel::MAX_SERVICE_IMAGE_BYTES as usize,
         )?)
     } else {
         None
     };
     let service_public = if service_mode {
-        let public = mrml_runtime::read_file_bounded(&arguments[6], LAMPORT_PUBLIC_KEY_BYTES)?;
+        let public = mrml_runtime::read_file_bounded(&arguments[7], LAMPORT_PUBLIC_KEY_BYTES)?;
         if public.len() != LAMPORT_PUBLIC_KEY_BYTES {
             return Err(anyhow!("invalid service public-key length"));
         }
@@ -1305,7 +1343,7 @@ fn application_main() -> Result<()> {
     };
     let service_executable = match (&service_bundle, &service_public) {
         (Some(bundle), Some(public)) => {
-            let minimum = arguments[7]
+            let minimum = arguments[8]
                 .parse::<u64>()
                 .ok()
                 .filter(|version| *version != 0)
@@ -1328,9 +1366,9 @@ fn application_main() -> Result<()> {
     };
     let cuda_bundle = if mode == LaunchMode::GpuBenchmark {
         Some(verify_cuda_bundle(
-            &arguments[5],
             &arguments[6],
             &arguments[7],
+            &arguments[8],
         )?)
     } else {
         None

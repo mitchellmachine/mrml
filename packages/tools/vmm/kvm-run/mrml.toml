@@ -52,6 +52,13 @@ scope = "compile"
 targets = ["LINUX"]
 
 [[dependency]]
+alias = "mrml_package_format"
+compile_name = "mrml-package-format"
+package = "org.mrml.library.package-format"
+scope = "compile"
+targets = ["LINUX"]
+
+[[dependency]]
 alias = "mrml_runtime"
 compile_name = "mrml-runtime"
 package = "org.mrml.library.runtime"

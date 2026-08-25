@@ -35,10 +35,10 @@ use mrml_kernel::{
     FramebufferInfo, MemoryKind, MemoryRegion, PhysAddr, PixelFormat, RecoveryStateMetadata,
     encode_handoff, encode_handoff_with_recovery, encode_handoff_with_smp,
 };
-#[cfg(all(target_os = "windows", feature = "cuda"))]
-use mrml_runtime::Vector;
 #[cfg(target_os = "windows")]
-use mrml_runtime::{Instant, mrml_println as println};
+use mrml_package_format::{MAX_BOOT_PACKAGE_BYTES, parse as parse_package};
+#[cfg(target_os = "windows")]
+use mrml_runtime::{Instant, Vector, mrml_println as println};
 #[cfg(target_os = "windows")]
 use mrml_whp::{PreparedWhpGuest, WhpLaunchLayout, WhpSystem};
 
@@ -1144,6 +1144,39 @@ fn run_pci_configuration_probe<'system>(
 }
 
 #[cfg(target_os = "windows")]
+fn read_kernel_package(path: &str, public_path: &str, minimum: u64) -> Result<Vector<u8>> {
+    let bytes = mrml_runtime::read_file_bounded(path, MAX_BOOT_PACKAGE_BYTES)?;
+    let public = mrml_runtime::read_file_bounded(public_path, LAMPORT_PUBLIC_KEY_BYTES)?;
+    if public.len() != LAMPORT_PUBLIC_KEY_BYTES {
+        return Err(anyhow!("invalid package public-key length"));
+    }
+    let package =
+        parse_package(&bytes, true, true).map_err(|_| anyhow!("invalid signed kernel package"))?;
+    if package.id != "org.mrml.system.kernel"
+        || package.class != "kernel"
+        || package.version < minimum
+        || package.key_id != Sha3_512::digest(&public)
+    {
+        return Err(anyhow!(
+            "kernel package identity, version, or trust root rejected"
+        ));
+    }
+    let payload = package
+        .select("kernel", "x86_64")
+        .map_err(|_| anyhow!("kernel package payload selection rejected"))?;
+    if payload.raw_len == 0 || payload.raw_len > MAX_KERNEL_BUNDLE {
+        return Err(anyhow!("kernel package payload size rejected"));
+    }
+    let mut output = Vector::with_capacity(payload.raw_len)
+        .map_err(|_| anyhow!("kernel package allocation failed"))?;
+    output.resize(payload.raw_len, 0);
+    payload
+        .decode(&mut output)
+        .map_err(|_| anyhow!("kernel package decompression rejected"))?;
+    Ok(output)
+}
+
+#[cfg(target_os = "windows")]
 fn application_main() -> Result<()> {
     let total_started = Instant::now();
     let arguments = mrml_runtime::command_arguments();
@@ -1159,31 +1192,31 @@ fn application_main() -> Result<()> {
             "CUDA support was excluded from this launcher build"
         ));
     }
-    let service_mode = arguments.len() == 8 && arguments[4] == "service-probe";
-    let block_service_mode = arguments.len() == 8 && arguments[4] == "block-service-probe";
+    let service_mode = arguments.len() == 9 && arguments[5] == "service-probe";
+    let block_service_mode = arguments.len() == 9 && arguments[5] == "block-service-probe";
     let service_restart_request_mode =
-        arguments.len() == 8 && arguments[4] == "service-restart-request-probe";
+        arguments.len() == 9 && arguments[5] == "service-restart-request-probe";
     let service_preemption_mode =
-        arguments.len() == 8 && arguments[4] == "service-preemption-probe";
+        arguments.len() == 9 && arguments[5] == "service-preemption-probe";
     let smp_service_migration_mode =
-        arguments.len() == 8 && arguments[4] == "smp-service-migration-probe";
+        arguments.len() == 9 && arguments[5] == "smp-service-migration-probe";
     let service_artifact_mode = service_mode
         || block_service_mode
         || service_restart_request_mode
         || service_preemption_mode
         || smp_service_migration_mode;
-    let timer_mode = arguments.len() == 5 && arguments[4] == "timer-probe";
+    let timer_mode = arguments.len() == 6 && arguments[5] == "timer-probe";
     let block_guest_driver_mode =
-        arguments.len() == 5 && arguments[4] == "block-guest-driver-probe";
-    let pci_configuration_mode = arguments.len() == 5 && arguments[4] == "pci-configuration-probe";
-    let preemption_mode = arguments.len() == 5 && arguments[4] == "preemption-probe";
-    let vmx_root_mode = arguments.len() == 5 && arguments[4] == "vmx-root-probe";
-    let smp_mode = arguments.len() == 5 && arguments[4] == "smp-probe";
-    let smp_scheduler_mode = arguments.len() == 5 && arguments[4] == "smp-scheduler-probe";
-    let smp_ipi_mode = arguments.len() == 5 && arguments[4] == "smp-ipi-probe";
+        arguments.len() == 6 && arguments[5] == "block-guest-driver-probe";
+    let pci_configuration_mode = arguments.len() == 6 && arguments[5] == "pci-configuration-probe";
+    let preemption_mode = arguments.len() == 6 && arguments[5] == "preemption-probe";
+    let vmx_root_mode = arguments.len() == 6 && arguments[5] == "vmx-root-probe";
+    let smp_mode = arguments.len() == 6 && arguments[5] == "smp-probe";
+    let smp_scheduler_mode = arguments.len() == 6 && arguments[5] == "smp-scheduler-probe";
+    let smp_ipi_mode = arguments.len() == 6 && arguments[5] == "smp-ipi-probe";
     let smp_periodic_balance_mode =
-        arguments.len() == 5 && arguments[4] == "smp-periodic-balance-probe";
-    if arguments.len() != 7
+        arguments.len() == 6 && arguments[5] == "smp-periodic-balance-probe";
+    if arguments.len() != 8
         && !service_artifact_mode
         && !timer_mode
         && !block_guest_driver_mode
@@ -1196,16 +1229,16 @@ fn application_main() -> Result<()> {
         && !smp_periodic_balance_mode
     {
         return Err(anyhow!(
-            "usage: mrml-whp-run KERNEL.signed RELEASE.public MINIMUM_VERSION CUDA.signed CUDA.public CUDA_MINIMUM_VERSION\n       mrml-whp-run KERNEL.signed RELEASE.public MINIMUM_VERSION vmx-root-probe\n       mrml-whp-run KERNEL.signed RELEASE.public MINIMUM_VERSION timer-probe\n       mrml-whp-run KERNEL.signed RELEASE.public MINIMUM_VERSION block-guest-driver-probe\n       mrml-whp-run KERNEL.signed RELEASE.public MINIMUM_VERSION pci-configuration-probe\n       mrml-whp-run KERNEL.signed RELEASE.public MINIMUM_VERSION preemption-probe\n       mrml-whp-run KERNEL.signed RELEASE.public MINIMUM_VERSION smp-probe\n       mrml-whp-run KERNEL.signed RELEASE.public MINIMUM_VERSION smp-scheduler-probe\n       mrml-whp-run KERNEL.signed RELEASE.public MINIMUM_VERSION smp-ipi-probe\n       mrml-whp-run KERNEL.signed RELEASE.public MINIMUM_VERSION smp-periodic-balance-probe\n       mrml-whp-run KERNEL.signed RELEASE.public MINIMUM_VERSION service-probe SERVICE.signed SERVICE.public SERVICE_MINIMUM_VERSION\n       mrml-whp-run KERNEL.signed RELEASE.public MINIMUM_VERSION block-service-probe SERVICE.signed SERVICE.public SERVICE_MINIMUM_VERSION\n       mrml-whp-run KERNEL.signed RELEASE.public MINIMUM_VERSION service-restart-request-probe SERVICE.signed SERVICE.public SERVICE_MINIMUM_VERSION\n       mrml-whp-run KERNEL.signed RELEASE.public MINIMUM_VERSION service-preemption-probe SERVICE.signed SERVICE.public SERVICE_MINIMUM_VERSION\n       mrml-whp-run KERNEL.signed RELEASE.public MINIMUM_VERSION smp-service-migration-probe SERVICE.signed SERVICE.public SERVICE_MINIMUM_VERSION\n       mrml-whp-run --export-cuda-bundle OUTPUT.ptx"
+            "usage: mrml-whp-run KERNEL.package PACKAGE.public RELEASE.public MINIMUM_VERSION MODE [ARTIFACT.signed ARTIFACT.public ARTIFACT_MINIMUM_VERSION]\n       mrml-whp-run --export-cuda-bundle OUTPUT.ptx"
         ));
     }
-    let minimum_version = arguments[3]
+    let minimum_version = arguments[4]
         .parse::<u64>()
         .ok()
         .filter(|version| *version != 0)
         .ok_or_else(|| anyhow!("minimum version must be a nonzero integer"))?;
-    let bundle = mrml_runtime::read_file_bounded(&arguments[1], MAX_KERNEL_BUNDLE)?;
-    let public = mrml_runtime::read_file_bounded(&arguments[2], LAMPORT_PUBLIC_KEY_BYTES)?;
+    let bundle = read_kernel_package(&arguments[1], &arguments[2], minimum_version)?;
+    let public = mrml_runtime::read_file_bounded(&arguments[3], LAMPORT_PUBLIC_KEY_BYTES)?;
     if public.len() != LAMPORT_PUBLIC_KEY_BYTES {
         return Err(anyhow!("invalid release public-key length"));
     }
@@ -1221,14 +1254,14 @@ fn application_main() -> Result<()> {
         .map_err(|_| anyhow!("kernel signature or PE policy rejected"))?;
     let service_bundle = if service_artifact_mode {
         Some(mrml_runtime::read_file_bounded(
-            &arguments[5],
+            &arguments[6],
             SIGNED_ARTIFACT_OVERHEAD_BYTES + mrml_kernel::MAX_SERVICE_IMAGE_BYTES as usize,
         )?)
     } else {
         None
     };
     let service_public = if service_artifact_mode {
-        let public = mrml_runtime::read_file_bounded(&arguments[6], LAMPORT_PUBLIC_KEY_BYTES)?;
+        let public = mrml_runtime::read_file_bounded(&arguments[7], LAMPORT_PUBLIC_KEY_BYTES)?;
         if public.len() != LAMPORT_PUBLIC_KEY_BYTES {
             return Err(anyhow!("invalid service public-key length"));
         }
@@ -1238,7 +1271,7 @@ fn application_main() -> Result<()> {
     };
     let service_executable = match (&service_bundle, &service_public) {
         (Some(bundle), Some(public)) => {
-            let minimum = arguments[7]
+            let minimum = arguments[8]
                 .parse::<u64>()
                 .ok()
                 .filter(|version| *version != 0)
@@ -1273,9 +1306,9 @@ fn application_main() -> Result<()> {
         None
     } else {
         Some(verify_cuda_bundle(
-            &arguments[4],
             &arguments[5],
             &arguments[6],
+            &arguments[7],
         )?)
     };
     let verification_micros = verification_started.elapsed().as_micros();
