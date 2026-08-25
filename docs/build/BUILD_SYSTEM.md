@@ -388,6 +388,16 @@ package, authenticate its package key, select/decompress its x86-64 kernel
 payload, authenticate the inner signed PE, and construct their native guest
 launch state. The shared package's SHA-256 transport checksum in the refreshed
 probe was `30ded12b7c772d88ec442b62a0afb2dd0347f100f2e09bbe037f1acae483f1e4`.
+Structured `mrml package verify` output now reports an exact size breakdown and
+single-sample parse/signature/decode timings. A 2026-08-25 optimized Windows
+measurement of that package reported 2,336,389 total bytes: 2,237,552 raw
+payload bytes, 2,237,615 stored boot-profile Zstd bytes, 470 format-metadata
+bytes, and 98,304 Lamport public-key/signature bytes. The constrained raw-block
+Zstd representation expanded this already-built PE by 63 bytes. The same run
+measured 9,048 microseconds for parse/signature verification and 9,504
+microseconds for payload decoding, 18,553 microseconds total. These are one
+controlled host sample and exact artifact accounting, not portable performance
+or compression-ratio claims.
 It reached the authenticated framebuffer marker and terminal halt under nested
 KVM and WHP. WHP's ordinary `boot` preparation deliberately omits emulated xAPIC
 state so the terminal HLT remains observable; specialized timer/SMP/device

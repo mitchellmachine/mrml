@@ -65,6 +65,47 @@ pub struct BuildPayload<'a> {
     pub bytes: &'a [u8],
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct PackageSizeBreakdown {
+    pub total_bytes: usize,
+    pub raw_payload_bytes: usize,
+    pub stored_payload_bytes: usize,
+    pub format_metadata_bytes: usize,
+    pub signature_bytes: usize,
+}
+
+pub fn size_breakdown(
+    package: &Package<'_>,
+    total_bytes: usize,
+) -> Result<PackageSizeBreakdown, Error> {
+    let raw_payload_bytes = package.payloads.iter().try_fold(0usize, |total, payload| {
+        total.checked_add(payload.raw_len).ok_or(Error::Overflow)
+    })?;
+    let stored_payload_bytes = package.payloads.iter().try_fold(0usize, |total, payload| {
+        total
+            .checked_add(payload.bytes.len())
+            .ok_or(Error::Overflow)
+    })?;
+    let signature_bytes = if package.signed {
+        LAMPORT_PUBLIC_KEY_BYTES
+            .checked_add(LAMPORT_SIGNATURE_BYTES)
+            .ok_or(Error::Overflow)?
+    } else {
+        0
+    };
+    let accounted = stored_payload_bytes
+        .checked_add(signature_bytes)
+        .ok_or(Error::Overflow)?;
+    let format_metadata_bytes = total_bytes.checked_sub(accounted).ok_or(Error::Size)?;
+    Ok(PackageSizeBreakdown {
+        total_bytes,
+        raw_payload_bytes,
+        stored_payload_bytes,
+        format_metadata_bytes,
+        signature_bytes,
+    })
+}
+
 pub fn build_release(
     version: u64,
     bootloader: &[u8],
@@ -1051,6 +1092,26 @@ mod tests {
         assert_eq!(
             parse(&unsigned, false).unwrap().content_digest,
             package.content_digest
+        );
+        let signed_sizes = size_breakdown(&package, bytes.len()).unwrap();
+        assert_eq!(signed_sizes.raw_payload_bytes, 14);
+        assert_eq!(signed_sizes.stored_payload_bytes, 26);
+        assert_eq!(
+            signed_sizes.signature_bytes,
+            LAMPORT_PUBLIC_KEY_BYTES + LAMPORT_SIGNATURE_BYTES
+        );
+        assert_eq!(
+            signed_sizes.format_metadata_bytes
+                + signed_sizes.stored_payload_bytes
+                + signed_sizes.signature_bytes,
+            signed_sizes.total_bytes
+        );
+        let unsigned_package = parse(&unsigned, false).unwrap();
+        let unsigned_sizes = size_breakdown(&unsigned_package, unsigned.len()).unwrap();
+        assert_eq!(unsigned_sizes.signature_bytes, 0);
+        assert_eq!(
+            unsigned_sizes.format_metadata_bytes + unsigned_sizes.stored_payload_bytes,
+            unsigned_sizes.total_bytes
         );
     }
 

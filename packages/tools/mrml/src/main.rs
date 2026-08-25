@@ -17,6 +17,7 @@ use std::fs;
 use std::io::Write as _;
 use std::path::{Component as PathComponent, Path, PathBuf};
 use std::process::{Command, ExitCode};
+use std::time::Instant;
 
 use generation::mrml_package_identifier;
 use manifest::Document as ManifestDocument;
@@ -445,8 +446,11 @@ fn package_command(workspace: &Workspace, args: &[String]) -> Result<(), String>
                 .any(|pair| pair == ["--output", "structured"]);
             let bytes = fs::read(&args[1])
                 .map_err(|error| format!("PackageReadError {{ detail: {error} }}"))?;
+            let verification_started = Instant::now();
             let parsed = package::parse(&bytes, require_signature)
                 .map_err(|error| format!("PackageVerifyError {{ detail: {error:?} }}"))?;
+            let parse_signature_us = verification_started.elapsed().as_micros();
+            let decode_started = Instant::now();
             for payload in &parsed.payloads {
                 let mut decoded = vec![0_u8; payload.raw_len];
                 payload.decode(&mut decoded).map_err(|error| {
@@ -455,7 +459,13 @@ fn package_command(workspace: &Workspace, args: &[String]) -> Result<(), String>
                         payload.name
                     )
                 })?;
-                if structured {
+            }
+            let decode_us = decode_started.elapsed().as_micros();
+            let total_us = verification_started.elapsed().as_micros();
+            let sizes = package::size_breakdown(&parsed, bytes.len())
+                .map_err(|error| format!("PackageSizeError {{ detail: {error:?} }}"))?;
+            if structured {
+                for payload in &parsed.payloads {
                     println!(
                         "package-payload|name={}|purpose={}|architecture={}|compression={}|stored_bytes={}|raw_bytes={}",
                         payload.name,
@@ -466,6 +476,14 @@ fn package_command(workspace: &Workspace, args: &[String]) -> Result<(), String>
                         payload.raw_len
                     );
                 }
+                println!(
+                    "package-measure|total_bytes={}|raw_payload_bytes={}|stored_payload_bytes={}|format_metadata_bytes={}|signature_bytes={}|parse_signature_us={parse_signature_us}|decode_us={decode_us}|total_us={total_us}|samples=1",
+                    sizes.total_bytes,
+                    sizes.raw_payload_bytes,
+                    sizes.stored_payload_bytes,
+                    sizes.format_metadata_bytes,
+                    sizes.signature_bytes,
+                );
             }
             let digest = parsed
                 .content_digest
