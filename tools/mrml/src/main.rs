@@ -33,6 +33,8 @@ struct RustAction {
     tests: Vec<RustTest>,
     test_stack_bytes: Option<usize>,
     examples: Vec<RustExample>,
+    features: Vec<String>,
+    feature_set_declared: bool,
 }
 
 #[derive(Clone, Debug)]
@@ -40,6 +42,7 @@ struct RustExtern {
     package: String,
     crate_name: String,
     targets: Vec<String>,
+    feature: Option<String>,
 }
 
 #[derive(Clone, Debug)]
@@ -138,6 +141,7 @@ fn load_workspace() -> Result<Workspace, String> {
     let mut rust_tests = Vec::new();
     let mut rust_test_policies = Vec::new();
     let mut rust_examples = Vec::new();
+    let mut rust_feature_sets = Vec::new();
     for (index, raw) in text.lines().enumerate() {
         let line = raw.trim();
         if line.is_empty() || line.starts_with('#') {
@@ -234,6 +238,9 @@ fn load_workspace() -> Result<Workspace, String> {
                     (*source).to_owned(),
                 ));
             }
+            ["rust-feature-set", component, features] => {
+                rust_feature_sets.push(((*component).to_owned(), (*features).to_owned()));
+            }
             _ => return Err(format!("WorkspaceSyntaxError {{ line: {} }}", index + 1)),
         }
     }
@@ -259,6 +266,16 @@ fn load_workspace() -> Result<Workspace, String> {
             ));
         }
         let externs = parse_rust_externs(&externs)?;
+        if externs.iter().any(|external| {
+            external
+                .feature
+                .as_ref()
+                .is_some_and(|feature| !component.features.iter().any(|known| known == feature))
+        }) {
+            return Err(format!(
+                "RustExternFeatureDrift {{ component: {component_id} }}"
+            ));
+        }
         let mut extern_packages: Vec<_> = externs
             .iter()
             .map(|external| external.package.clone())
@@ -289,7 +306,33 @@ fn load_workspace() -> Result<Workspace, String> {
             tests: Vec::new(),
             test_stack_bytes: None,
             examples: Vec::new(),
+            features: Vec::new(),
+            feature_set_declared: false,
         });
+    }
+    for (component_id, features) in rust_feature_sets {
+        let component = components
+            .iter_mut()
+            .find(|component| component.id == component_id)
+            .ok_or_else(|| {
+                format!("RustFeatureComponentMissing {{ component: {component_id} }}")
+            })?;
+        let action = component
+            .rust_action
+            .as_mut()
+            .ok_or_else(|| format!("RustFeatureActionMissing {{ component: {component_id} }}"))?;
+        let features = split_declaration(&features);
+        if features.iter().any(|feature| {
+            feature == "default" || !component.features.iter().any(|known| known == feature)
+        }) || !action.features.is_empty()
+        {
+            return Err(format!(
+                "RustFeatureSetInvalid {{ component: {component_id}, features: {} }}",
+                features.join(",")
+            ));
+        }
+        action.features = features;
+        action.feature_set_declared = true;
     }
     for (component_id, stack_bytes) in rust_test_policies {
         let component = components
@@ -363,6 +406,12 @@ fn load_workspace() -> Result<Workspace, String> {
     }
     for component in &components {
         if let Some(action) = &component.rust_action {
+            if !component.features.is_empty() && !action.feature_set_declared {
+                return Err(format!(
+                    "RustFeatureSetMissing {{ component: {} }}",
+                    component.id
+                ));
+            }
             let mut declared: Vec<_> = component
                 .outputs
                 .iter()
@@ -424,7 +473,7 @@ fn parse_rust_externs(value: &str) -> Result<Vec<RustExtern>, String> {
     }
     let mut result = Vec::new();
     for declaration in value.split(';') {
-        let (binding, targets) = declaration
+        let (binding, target_and_feature) = declaration
             .split_once('@')
             .ok_or_else(|| format!("RustExternSyntaxError {{ declaration: {declaration} }}"))?;
         let (package, crate_name) = binding
@@ -433,6 +482,18 @@ fn parse_rust_externs(value: &str) -> Result<Vec<RustExtern>, String> {
         if package.is_empty() || !rust_identifier(crate_name) {
             return Err(format!(
                 "RustExternIdentityInvalid {{ declaration: {declaration} }}"
+            ));
+        }
+        let (targets, feature) = target_and_feature
+            .split_once('?')
+            .map(|(targets, feature)| (targets, Some(feature.to_owned())))
+            .unwrap_or((target_and_feature, None));
+        if feature
+            .as_deref()
+            .is_some_and(|feature| !rust_identifier(feature))
+        {
+            return Err(format!(
+                "RustExternFeatureInvalid {{ declaration: {declaration} }}"
             ));
         }
         let targets = if targets == "*" {
@@ -463,10 +524,35 @@ fn parse_rust_externs(value: &str) -> Result<Vec<RustExtern>, String> {
             package: package.into(),
             crate_name: crate_name.into(),
             targets,
+            feature,
         });
     }
     result.sort_by(|left, right| left.package.cmp(&right.package));
     Ok(result)
+}
+
+fn rust_extern_active(external: &RustExtern, action: &RustAction, target: &str) -> bool {
+    external.targets.iter().any(|family| family == target)
+        && external
+            .feature
+            .as_ref()
+            .is_none_or(|feature| action.features.iter().any(|active| active == feature))
+}
+
+fn apply_rust_features(command: &mut Command, component: &Component, action: &RustAction) {
+    for feature in &action.features {
+        command.arg("--cfg").arg(format!("feature=\"{feature}\""));
+    }
+    let values = component
+        .features
+        .iter()
+        .filter(|feature| feature.as_str() != "default")
+        .map(|feature| format!("\"{feature}\""))
+        .collect::<Vec<_>>()
+        .join(",");
+    command
+        .arg("--check-cfg")
+        .arg(format!("cfg(feature, values({values}))"));
 }
 
 fn parse_input_policy(value: &str, line: usize) -> Result<InputCounts, String> {
@@ -756,7 +842,7 @@ fn compile_rust_component(
     for external in action
         .externs
         .iter()
-        .filter(|external| external.targets.iter().any(|family| family == target))
+        .filter(|external| rust_extern_active(external, action, target))
     {
         let dependency = workspace
             .components
@@ -809,10 +895,11 @@ fn compile_rust_component(
         .arg(format!("dependency={}", output_dir.display()))
         .arg("-o")
         .arg(&output);
+    apply_rust_features(&mut command, component, action);
     for external in action
         .externs
         .iter()
-        .filter(|external| external.targets.iter().any(|family| family == target))
+        .filter(|external| rust_extern_active(external, action, target))
     {
         let dependency = workspace
             .components
@@ -905,6 +992,7 @@ fn run_declared_test(
         .arg(format!("dependency={}", output_dir.display()))
         .arg("-o")
         .arg(&output);
+    apply_rust_features(&mut command, component, action);
     if test.self_extern {
         command.arg("--extern").arg(format!(
             "{}={}",
@@ -916,7 +1004,7 @@ fn run_declared_test(
     for external in action
         .externs
         .iter()
-        .filter(|external| external.targets.iter().any(|family| family == target))
+        .filter(|external| rust_extern_active(external, action, target))
     {
         let dependency = workspace
             .components
@@ -992,10 +1080,11 @@ fn compile_declared_example(
         ))
         .arg("-o")
         .arg(&output);
+    apply_rust_features(&mut command, component, action);
     for external in action
         .externs
         .iter()
-        .filter(|external| external.targets.iter().any(|family| family == target))
+        .filter(|external| rust_extern_active(external, action, target))
     {
         let dependency = workspace
             .components

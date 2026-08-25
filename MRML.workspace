@@ -63,3 +63,6 @@ rust-action|org.mrml.library.opus|mrml_opus|lib|packages/libraries/opus/src/lib.
 rust-example|org.mrml.library.opus|inspect_range|packages/libraries/opus/examples/inspect_range.rs
 rust-example|org.mrml.library.opus|opus_range_diff|packages/libraries/opus/examples/opus_range_diff.rs
 rust-example|org.mrml.library.opus|rfc8251_audit|packages/libraries/opus/examples/rfc8251_audit.rs
+rust-action|org.mrml.library.av1|mrml_av1|lib|packages/libraries/av1/src/lib.rs|mrml-linux=mrml_linux@LINUX?nvidia;mrml-runtime=mrml_runtime@*;mrml-windows=mrml_windows@WINDOWS?nvidia
+rust-feature-set|org.mrml.library.av1|
+rust-example|org.mrml.library.av1|decode_ivf|packages/libraries/av1/examples/decode_ivf.rs
