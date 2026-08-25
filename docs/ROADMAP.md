@@ -321,6 +321,12 @@ at four passing tests. Thirty-six of 42 components are native; six remain
 transitional. Only bounded generated test data ran; this is not production
 corpus, sustained training, CUDA, or physical-hardware evidence.
 
+The WHP runner now has an exact Windows bin-only action matching the bridge's
+deliberate `--no-default-features` build. Native and Cargo suites both pass its
+seven tests. Thirty-seven of 42 components are native; five remain
+transitional. The declared CUDA edge remains inactive, and no VM, VBS/VTL1,
+IOMMU, or physical-hardware execution occurred.
+
 `mrml-zstd` is the fourth migrated leaf; its Wikipedia edge and patent-review
 source path now resolve to `packages/libraries/zstd` without changing codec
 behavior.

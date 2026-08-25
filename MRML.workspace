@@ -161,3 +161,6 @@ rust-feature-set|org.mrml.library.agent|runtime
 rust-compile-env|org.mrml.library.agent|CARGO_PKG_VERSION|0.0.1|2
 rust-action|org.mrml.tool.trainer|mrml_trainer_action|none|-|mrml-math=mrml_math@*;mrml-runtime=mrml_runtime@*;mrml-tensor=mrml_tensor@*;mrml-tokenizer=mrml_tokenizer@*;mrml-wikipedia=mrml_wikipedia@*
 rust-binary|org.mrml.tool.trainer|mrml-trainer|mrml_trainer|tools/trainer/src/main.rs|false
+rust-action|org.mrml.tool.vmm-whp-run|mrml_whp_run_action|none|-|mrml-crypto=mrml_crypto@WINDOWS#core;mrml-error=mrml_error@WINDOWS;mrml-kernel=mrml_kernel@WINDOWS;mrml-runtime=mrml_runtime@WINDOWS;mrml-tensor=mrml_tensor@WINDOWS?cuda;mrml-whp=mrml_whp@WINDOWS
+rust-feature-set|org.mrml.tool.vmm-whp-run|WINDOWS|
+rust-binary|org.mrml.tool.vmm-whp-run|mrml-whp-run|mrml_whp_run|tools/vmm/whp-run/src/main.rs|false

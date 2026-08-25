@@ -464,6 +464,12 @@ Cargo at four passing unit tests. Thirty-six components are native and six
 remain transitional. The tests use bounded generated data; no production
 corpus, long-running training, CUDA path, or physical hardware was exercised.
 
+The WHP runner now directly binds its core-only crypto profile and its exact
+Windows launcher dependencies under the bridge's intentional empty feature
+set. Its native and Cargo `--no-default-features` suites both pass seven tests.
+Thirty-seven components are native and five remain transitional. No CUDA
+runner feature, VM launch, VBS/VTL1, IOMMU, or physical hardware was exercised.
+
 MRML uses Rust 2024 and the exact `nightly-2026-08-24` build toolchain pinned in
 `rust-toolchain.toml`. It is also the current `mrml-rustc` behavioral reference
 recorded as [ORACLE-0002](docs/compiler/oracles/ORACLE-0002.md); a floating

@@ -205,6 +205,12 @@ match Cargo at four passing tests. Thirty-six components are native; six remain
 transitional. The bounded generated-data tests establish neither production
 training nor CUDA or physical-hardware behavior.
 
+`mrml-whp-run` now binds core crypto, error, kernel, runtime, and WHP directly
+under the same empty Windows feature set previously selected by the transition
+bridge. Native and Cargo `--no-default-features` suites pass seven tests.
+Thirty-seven components are native; five remain transitional. Its CUDA/tensor
+edge remains declared but inactive; no VM or physical hardware ran.
+
 Native actions now bind one exact feature set and may gate an extern by both
 target family and selected feature. `mrml-av1` declares the empty default set,
 so its `nvidia` platform extern is inactive while `mrml-runtime` remains active.

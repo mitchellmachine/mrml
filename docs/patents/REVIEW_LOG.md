@@ -3273,3 +3273,11 @@ independent human dual review.
 and bin-only action model to the unchanged trainer source and its exact existing
 dependency graph. It adds no training, model, export, resolver, cache, CUDA, or
 runtime mechanism. Agent review does not replace independent human dual review.
+
+# 2026-08-25 — Native WHP runner action
+
+**Result: NOT_TRIGGERED.** This increment applies the existing native resolver,
+feature gating, and bin-only action model to the unchanged WHP launcher under
+its pre-existing no-default-features build. It adds no hypervisor, VM, mapping,
+CUDA, resolver, cache, or runtime mechanism. Agent review does not replace
+independent human dual review.
