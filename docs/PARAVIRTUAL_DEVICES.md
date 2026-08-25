@@ -316,6 +316,10 @@ Compatibility success does not prove host containment.
 
 ## Testing and fuzzing
 
+VirtualGPU uses these lifecycle/queue rules while projecting the native GPU
+objects defined in [gpu/VIRTUAL_GPU.md](gpu/VIRTUAL_GPU.md). VirtIO-GPU may be a
+display compatibility transport; it is not MRML's native GPU authority model.
+
 Evidence is recorded by layer: `UNIT` for common queue/lifecycle state;
 `SIMULATION` for deterministic backends; `VMM` for real KVM/WHP guests;
 `QEMU-DIFFERENTIAL` for advertised compatibility; `PHYSICAL` for real hardware

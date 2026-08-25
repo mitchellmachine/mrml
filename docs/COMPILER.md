@@ -664,6 +664,11 @@ and call-derived assignments retain their existing classifications.
 
 ## Roadmap selection
 
+Future GPU compiler work follows [gpu/GPU_ARCHITECTURE.md](gpu/GPU_ARCHITECTURE.md)
+only after the current CPU typed-place/CFG/ownership dependency gates. It adds a
+safe typed kernel subset, explicit address spaces, High/Machine IR, and metadata
+admission without displacing the Polonius-direction critical path.
+
 Score candidate work by MRML usefulness, modern Rust relevance, security
 relevance, dependency unlocks, implementation complexity, oracle stability, and
 testability. Prefer high-value dependency unlocks rather than a superficial

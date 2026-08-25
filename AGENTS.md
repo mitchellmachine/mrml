@@ -115,6 +115,11 @@ Architectural invariants:
 - preserve MRML's signed-kernel CUDA compute mediation alongside any future
   VirtIO-GPU display path; do not distort VirtIO-GPU or remove stronger MRML
   capability, authentication, queue, and CUDA semantics to claim compatibility;
+- follow `docs/gpu/GPU_ARCHITECTURE.md`: MRML's native capability/object model is
+  not Vulkan/CUDA/WebGPU; VirtualGPU is GPU priority 1, Blackwell priority 2,
+  AMD/Intel later; safe kernels, exact generations, bounded resources, DMA/IOMMU
+  revocation, and hosted/virtual/native-physical evidence separation are hard
+  gates; Linux traces are oracle evidence, never trusted production replay;
 - treat every guest descriptor, queue, feature, interrupt, reset, removal, and
   device-state transition as hostile; reset invalidates stale queue state, and
   no guest-provided pointer, length, or host address is trusted;

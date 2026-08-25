@@ -1186,6 +1186,16 @@ passthrough remain distinct authorities.
 
 ## Phase 3 — Safe applications and trusted GUI foundation
 
+The GPU dependency lane is canonical in
+[gpu/GPU_ARCHITECTURE.md](gpu/GPU_ARCHITECTURE.md): native semantic/object and
+capability specification; safe command/IR and GPU-0 reference transfer;
+VirtualGPU control, accounting, timelines, compute, rendering/presentation,
+reset, fuzzing, and conformance; Linux oracle tooling; then physical Blackwell
+transfer/compute/matrix/desktop/VirtualGPU host and later advanced features, AMD,
+Intel, optimized libraries, and compatibility expansion. VirtualGPU is GPU
+priority 1 and Blackwell is priority 2; compositor/application prerequisites
+remain in their existing order.
+
 Before trusted consent UI, establish the application-facing foundation:
 
 1. Specify bounded versioned service protocols and a safe SDK without freezing

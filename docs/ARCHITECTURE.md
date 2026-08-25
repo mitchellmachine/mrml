@@ -12,6 +12,8 @@ complexity rules are in
 inspiration in [EULOGY.md](../EULOGY.md) is not architecture policy. Relevant
 predecessors and deliberately bounded comparison claims are recorded in
 [HISTORY_AND_PRIOR_ART.md](HISTORY_AND_PRIOR_ART.md).
+The native cross-vendor GPU object/security model, VirtualGPU priority, and
+physical-driver strategy are canonical under [gpu/](gpu/GPU_ARCHITECTURE.md).
 The browser's canonical accessibility/AI semantic interface, no-JIT script/Wasm
 rules, origin model, and media boundary are in
 [BROWSER_SEMANTICS.md](BROWSER_SEMANTICS.md).

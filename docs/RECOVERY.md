@@ -701,6 +701,12 @@ explicitly and downgrade the status rather than guessing.
   bring-up/diagnostic mechanisms. `virtual_gpu.rs` is experimental mediated GPU
   machinery. None is a compositor, surface protocol, display backend, fence
   model, or accelerated desktop implementation.
+- GPU recovery starts with `docs/gpu/GPU_ARCHITECTURE.md`, `VIRTUAL_GPU.md`, and
+  `DRIVER_BRINGUP.md`. MRML owns the native capability/object model; VirtualGPU
+  is priority 1, Blackwell priority 2, and AMD/Intel later. Linux/vendor drivers
+  are oracle evidence, not native proof or replay architecture. CUDA/Vulkan/
+  WebGPU are compatibility/frontends, GPU generations and DMA revocation are
+  mandatory, and GPU compiler work cannot derail the CPU ownership/CFG lane.
 - VMM device inventory: inspect `vm.rs`, `vm_dispatch.rs`, `vm_interrupt.rs`,
   `virtual_block.rs`, `virtual_gpu.rs`, and both native backends. Currently the common lifecycle,
   guest-memory, exit, I/O-policy, hypercall, and interrupt mechanisms are

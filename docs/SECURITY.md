@@ -539,6 +539,11 @@ bounded and generational.
 
 ## Virtual-device invariants
 
+GPU authority, memory/DMA, profiling, media, presentation, peer/RDMA, reset, and
+driver-TCB rules are canonical in
+[gpu/GPU_ARCHITECTURE.md](gpu/GPU_ARCHITECTURE.md). A GPU is not an exception to
+capability attenuation, generational revocation, or physical-evidence rules.
+
 The complete reusable queue, lifecycle, restart, block, host-share, accessibility,
 hotplug, parity, fuzzing, and evidence rules are in
 [PARAVIRTUAL_DEVICES.md](PARAVIRTUAL_DEVICES.md). They preserve the existing

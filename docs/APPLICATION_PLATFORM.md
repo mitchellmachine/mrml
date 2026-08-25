@@ -277,6 +277,11 @@ privileged semantic backdoor.
 
 ## AI and multimodal access
 
+Applications, compositor, media, and AI acceleration use capability-derived GPU
+domains from [gpu/GPU_ARCHITECTURE.md](gpu/GPU_ARCHITECTURE.md). Rendering,
+presentation, surface readback, media inspection, compute, and encode remain
+separate authority.
+
 Semantic/text state is the default AI path. Screenshots, image bytes, or video
 frames are requested lazily only when semantics are insufficient and the agent
 has the relevant capability. Images, video, and audio are capability-controlled

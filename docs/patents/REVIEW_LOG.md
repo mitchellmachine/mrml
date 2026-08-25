@@ -1577,6 +1577,15 @@ and verify every material right in authoritative territorial registers. This
 documentation adds no runtime mechanism and makes no clearance or infringement
 claim. See [`docs/BROWSER_SEMANTICS.md`](../BROWSER_SEMANTICS.md).
 
+# 2026-08-24 — Native GPU, VirtualGPU, and accelerator-driver architecture
+
+**Result: TRIGGERED.** Planned GPU capability objects, safe kernel/IR model,
+VirtualGPU protocol, physical Blackwell/AMD/Intel drivers, media/fabric/RDMA,
+oracle tooling, and compatibility layers are substantial future mechanisms.
+Targeted claim/family and authoritative territorial review is required before
+implementation. These documents add no runtime and make no clearance or
+infringement claim. See [`docs/gpu/GPU_ARCHITECTURE.md`](../gpu/GPU_ARCHITECTURE.md).
+
 # 2026-08-24 — Read-only virtual-block configuration page
 
 **Result: NOT_TRIGGERED.** The change conventionally validates a page-aligned
