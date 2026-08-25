@@ -7,6 +7,7 @@ use crate::generation::{SystemGeneration, SystemPackage};
 use crate::isolation::{EffectivePlacement, IsolationPlacement, PlacementSource};
 use crate::loader::ImmutableLoadPlan;
 use crate::resolver::{ProviderForm, ResolvedInterfaceProvider};
+use crate::system_generation::{SystemGenerationDigestRecord, system_generation_digest};
 
 /// One exact, immutable handoff from generation-bound interface resolution to
 /// an already selected isolated-service placement. Package and interface names
@@ -170,6 +171,7 @@ pub enum ServiceLaunchAdmissionError {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct PreparedGenerationBoundServiceLaunch {
     system_generation: u64,
+    system_generation_digest: [u8; 64],
     resolved: ResolvedInterfaceProvider,
     placement: IsolationPlacement,
     source: PlacementSource,
@@ -240,8 +242,21 @@ impl PreparedGenerationBoundServiceLaunch {
         if provider.package() != resolved.provider() {
             return Err(PreparedServiceLaunchError::ProviderArtifactMismatch);
         }
+        let generation_records = system
+            .packages()
+            .iter()
+            .map(|package| SystemGenerationDigestRecord {
+                package_id: package.package_id(),
+                version: package.version(),
+                artifact_digest: package.artifact_digest(),
+            })
+            .collect::<Vec<_>>();
+        let system_generation_digest =
+            system_generation_digest(system.generation(), &generation_records)
+                .map_err(|_| PreparedServiceLaunchError::InvalidSystemGeneration)?;
         Ok(Self {
             system_generation: system.generation(),
+            system_generation_digest,
             resolved,
             placement: effective.placement(),
             source: effective.source(),
@@ -292,6 +307,7 @@ impl PreparedGenerationBoundServiceLaunch {
             self.resolved.interface().generation(),
             self.resolved.provider().version(),
             placement,
+            self.system_generation_digest,
             self.resolved.fingerprint(),
             *self.consumer.package().artifact_digest(),
             *self.provider.package().artifact_digest(),
@@ -342,6 +358,7 @@ impl PreparedGenerationBoundServiceLaunch {
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum PreparedServiceLaunchError {
+    InvalidSystemGeneration,
     TotalMicrovmException,
     UnsupportedServicePlacement,
     ProviderFormMismatch,
@@ -644,6 +661,22 @@ mod tests {
         assert_eq!(handoff.policy_generation(), 7);
         assert_eq!(handoff.interface_generation(), 3);
         assert_eq!(handoff.provider_generation(), 15);
+        assert_eq!(
+            handoff.system_generation_digest(),
+            &system_generation_digest(
+                system.generation(),
+                &system
+                    .packages()
+                    .iter()
+                    .map(|package| SystemGenerationDigestRecord {
+                        package_id: package.package_id(),
+                        version: package.version(),
+                        artifact_digest: package.artifact_digest(),
+                    })
+                    .collect::<Vec<_>>(),
+            )
+            .unwrap()
+        );
         assert_eq!(handoff.interface_fingerprint(), &ZSTD3);
         assert_eq!(
             ComponentServiceLaunchHandoff::decode(&handoff.encode()),

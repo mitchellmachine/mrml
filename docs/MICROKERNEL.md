@@ -7878,12 +7878,14 @@ The supervised Zstd endpoint and data-plane adapter recheck and retain the
 system generation as well as the exact provider and policy generations. The
 focused WHP and KVM runners currently designate transient local generation 1;
 this does not prove persistent generation activation or recovery.
-The kernel can now decode a canonical 216-byte component-service launch
+The kernel can now decode a canonical 280-byte component-service launch
 handoff emitted from the build tool's resolved launch model. It validates the
 complete record before reserving admission, or binds the identical decoded
 record to an already CPU/RAM-reserved route without rebuilding that route.
 Route domain, interface, provider, system/policy generations, placement, class,
-fingerprint, and both artifact digests must remain exact. The focused WHP/KVM
+the complete canonical `SystemGeneration` SHA3-512 digest, fingerprint, and
+both artifact digests must remain exact. A reused generation number with
+different generation bytes fails before backend construction. The focused WHP/KVM
 runners use this shared package-format codec before attaching either verified
 image. This is hosted canonical-codec and parity evidence, not persistent
 `DeploymentService` activation or physical isolation.

@@ -214,13 +214,14 @@ value before opening the data plane. Windows and Arch Linux kernel, Zstd, and
 configuration suites plus WHP/KVM runner suites pass. The runners use a
 transient local generation, so persisted `DeploymentService` activation and
 general resolver-driven launch remain **PLANNED**. The canonical build-tool-to-
-kernel format itself is now **PARTIALLY IMPLEMENTED**: a shared fixed 216-byte
+kernel format itself is now **PARTIALLY IMPLEMENTED**: a shared fixed 280-byte
 record carries the resolved system/provider/interface generations,
 fingerprint, placement, applied policy generation, capability-selected object
-IDs, and exact consumer/provider digests. Kernel decoding and both focused VMM
-runners reject substitutions before backend invocation. Windows/Arch Linux
-package-format 3, build-tool 78, and kernel 509 test suites pass; WHP passes 7
-and KVM passes 8.
+IDs, the SHA3-512 digest of the complete canonical `SystemGeneration`, and exact
+consumer/provider digests. Kernel decoding and both focused VMM runners reject
+substitutions—including reused generation numbers with different canonical
+bytes—before backend invocation. Windows/Arch Linux package-format 5,
+build-tool 80, and kernel 509 test suites pass; WHP passes 7 and KVM passes 8.
 A backend-neutral linear control-plane admission now binds those two immutable
 load plans to the exact generation/interface placement before an endpoint
 exists. Only a subsequently returned backend endpoint can be published into the

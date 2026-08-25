@@ -4950,6 +4950,20 @@ protocol. The broader package, component-interface, adaptive-placement,
 microVM, and deployment mechanisms retain their existing `TRIGGERED` reviews;
 this agent review does not replace targeted independent human review.
 
+# 2026-08-25 — Canonical SystemGeneration digest binding
+
+**Result: NOT_TRIGGERED after the existing package-format review.** This
+increment streams the already specified canonical `MRMLSG2` generation bytes
+through the repository's existing SHA3-512 implementation and carries that
+digest in the fixed component-launch record. Kernel, WHP, and KVM admission use
+exact equality to reject a reused generation number with different canonical
+package records before backend launch. It adds no package-selection, resolver,
+activation, rollback, persistence, cryptographic, virtualization, scheduling,
+queue, compression, or hardware mechanism. The broader package, deployment,
+component-interface, adaptive-placement, and microVM mechanisms retain their
+existing `TRIGGERED` reviews; this agent review does not replace targeted
+independent human review.
+
 # 2026-08-25 — Artifact-bound component control/data-plane handoff
 
 **Result: NOT_TRIGGERED after the existing component-interface and adaptive-

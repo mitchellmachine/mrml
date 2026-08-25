@@ -2,6 +2,8 @@ pub mod abi;
 pub mod binding;
 #[path = "../../../libraries/package-format/src/component_launch.rs"]
 pub mod component_launch;
+#[path = "../../../libraries/package-format/src/system_generation.rs"]
+pub mod system_generation;
 pub mod generation;
 pub mod isolation;
 pub mod loader;

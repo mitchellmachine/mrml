@@ -559,10 +559,12 @@ hostile; remove ambient credentials/keys/network, differential-test parsers, and
 make fallback or authority amplification impossible to hide.
 
 **PARTIALLY IMPLEMENTED runtime handoff prerequisite:** the build tool's linear
-`PreparedGenerationBoundServiceLaunch` now emits the canonical fixed 216-byte
+`PreparedGenerationBoundServiceLaunch` now emits the canonical fixed 280-byte
 component-service record defined by the shared package-format library. Package,
 interface, placement, fingerprint, generation, and artifact fields are derived
-from the already resolved immutable graph; caller-supplied kernel object IDs
+from the already resolved immutable graph. The build tool streams the complete
+canonical `MRMLSG2` package set into the same SHA3-512 generation digest used
+by hosted WHP/KVM admission; caller-supplied kernel object IDs
 and policy generation remain identity inputs and grant no capability. The
 kernel and focused WHP/KVM runners decode the same record. This does not make
 the build tool a runtime authority or implement persistent `DeploymentService`

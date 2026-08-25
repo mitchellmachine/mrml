@@ -1,5 +1,5 @@
-pub const COMPONENT_SERVICE_LAUNCH_HANDOFF_BYTES: usize = 216;
-const MAGIC: [u8; 8] = *b"MRMLCSL1";
+pub const COMPONENT_SERVICE_LAUNCH_HANDOFF_BYTES: usize = 280;
+const MAGIC: [u8; 8] = *b"MRMLCSL2";
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 #[repr(u8)]
@@ -27,6 +27,7 @@ pub struct ComponentServiceLaunchHandoff {
     interface_generation: u32,
     provider_generation: u64,
     placement: ComponentServicePlacement,
+    system_generation_digest: [u8; 64],
     interface_fingerprint: [u8; 32],
     consumer_artifact: [u8; 64],
     provider_artifact: [u8; 64],
@@ -42,6 +43,7 @@ impl ComponentServiceLaunchHandoff {
         interface_generation: u32,
         provider_generation: u64,
         placement: ComponentServicePlacement,
+        system_generation_digest: [u8; 64],
         interface_fingerprint: [u8; 32],
         consumer_artifact: [u8; 64],
         provider_artifact: [u8; 64],
@@ -54,6 +56,9 @@ impl ComponentServiceLaunchHandoff {
         }
         if interface_generation == 0 || provider_generation == 0 {
             return Err(ComponentServiceLaunchHandoffError::Generation);
+        }
+        if all_zero_64(&system_generation_digest) {
+            return Err(ComponentServiceLaunchHandoffError::SystemGenerationDigest);
         }
         if all_zero_32(&interface_fingerprint) {
             return Err(ComponentServiceLaunchHandoffError::Fingerprint);
@@ -72,6 +77,7 @@ impl ComponentServiceLaunchHandoff {
             interface_generation,
             provider_generation,
             placement,
+            system_generation_digest,
             interface_fingerprint,
             consumer_artifact,
             provider_artifact,
@@ -99,6 +105,9 @@ impl ComponentServiceLaunchHandoff {
     pub const fn placement(self) -> ComponentServicePlacement {
         self.placement
     }
+    pub const fn system_generation_digest(&self) -> &[u8; 64] {
+        &self.system_generation_digest
+    }
     pub const fn interface_fingerprint(&self) -> &[u8; 32] {
         &self.interface_fingerprint
     }
@@ -119,9 +128,10 @@ impl ComponentServiceLaunchHandoff {
         bytes[40..44].copy_from_slice(&self.interface_generation.to_le_bytes());
         bytes[44] = self.placement as u8;
         bytes[48..56].copy_from_slice(&self.provider_generation.to_le_bytes());
-        bytes[56..88].copy_from_slice(&self.interface_fingerprint);
-        bytes[88..152].copy_from_slice(&self.consumer_artifact);
-        bytes[152..216].copy_from_slice(&self.provider_artifact);
+        bytes[56..120].copy_from_slice(&self.system_generation_digest);
+        bytes[120..152].copy_from_slice(&self.interface_fingerprint);
+        bytes[152..216].copy_from_slice(&self.consumer_artifact);
+        bytes[216..280].copy_from_slice(&self.provider_artifact);
         bytes
     }
 
@@ -133,11 +143,13 @@ impl ComponentServiceLaunchHandoff {
             return Err(ComponentServiceLaunchHandoffError::Reserved);
         }
         let mut fingerprint = [0; 32];
-        fingerprint.copy_from_slice(&bytes[56..88]);
+        let mut system_generation_digest = [0; 64];
+        system_generation_digest.copy_from_slice(&bytes[56..120]);
+        fingerprint.copy_from_slice(&bytes[120..152]);
         let mut consumer = [0; 64];
-        consumer.copy_from_slice(&bytes[88..152]);
+        consumer.copy_from_slice(&bytes[152..216]);
         let mut provider = [0; 64];
-        provider.copy_from_slice(&bytes[152..216]);
+        provider.copy_from_slice(&bytes[216..280]);
         Self::new(
             read_u64(bytes, 8)?,
             read_u64(bytes, 16)?,
@@ -146,6 +158,7 @@ impl ComponentServiceLaunchHandoff {
             read_u32(bytes, 40)?,
             read_u64(bytes, 48)?,
             ComponentServicePlacement::decode(bytes[44])?,
+            system_generation_digest,
             fingerprint,
             consumer,
             provider,
@@ -160,6 +173,7 @@ pub enum ComponentServiceLaunchHandoffError {
     Placement,
     Generation,
     Object,
+    SystemGenerationDigest,
     Fingerprint,
     Artifact,
     ArtifactSubstitution,
@@ -227,6 +241,7 @@ mod tests {
             3,
             11,
             ComponentServicePlacement::Microvm,
+            [0x51; 64],
             [0x3a; 32],
             [0x18; 64],
             [0x2f; 64],

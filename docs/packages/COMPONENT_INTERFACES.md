@@ -130,14 +130,17 @@ construct a transient local generation rather than consuming persisted
 `DeploymentService` activation state, so the general generation-to-launch
 handoff remains **PLANNED**.
 The canonical build-tool-to-kernel representation is now **PARTIALLY
-IMPLEMENTED** as `ComponentServiceLaunchHandoff`: a fixed 216-byte little-
+IMPLEMENTED** as `ComponentServiceLaunchHandoff`: a fixed 280-byte little-
 endian record shared by the package-format library, `mrml`, kernel, WHP, and
 KVM. It contains no pointers, paths, filenames, capabilities, or endpoint. The
 build side derives all package/interface fields from
 `PreparedGenerationBoundServiceLaunch`; the kernel side revalidates the record
 against active system/policy admission and the exact resource-reserved route.
-Windows and Arch Linux package-format suites pass 3 tests, build-tool suites
-pass 78, kernel suites pass 509, WHP passes 7, and KVM passes 8. Persistent
+The record also binds the SHA3-512 digest of the complete canonical
+`SystemGeneration`; matching numeric generations with different package bytes
+fail before backend invocation. Windows and Arch Linux package-format suites
+pass 5 tests, build-tool suites pass 80, kernel suites pass 509, WHP passes 7,
+and KVM passes 8. Persistent
 activation, authenticated delivery from `DeploymentService`, and general
 resolver-driven launching remain **PLANNED**.
 The canonical provider now builds its own `mrml-zstd-service.efi` artifact—never

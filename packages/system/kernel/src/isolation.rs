@@ -502,6 +502,7 @@ pub enum PreparedComponentServiceRouteError<E, Endpoint> {
 #[derive(Debug, Eq, PartialEq)]
 pub enum ComponentServiceHandoffError {
     Decode(ComponentServiceLaunchHandoffError),
+    SystemGenerationDigestMismatch,
     Spec(IsolationServiceSpecError),
     Admission(IsolationLaunchError),
     Binding {
@@ -520,6 +521,9 @@ pub fn prepare_component_service_handoff<const DOMAINS: usize>(
 ) -> Result<PreparedComponentServiceLaunch, ComponentServiceHandoffError> {
     let handoff = ComponentServiceLaunchHandoff::decode(bytes)
         .map_err(ComponentServiceHandoffError::Decode)?;
+    if admission.system_generation_digest() != Some(handoff.system_generation_digest()) {
+        return Err(ComponentServiceHandoffError::SystemGenerationDigestMismatch);
+    }
     let placement = match handoff.placement() {
         ComponentServicePlacement::NativeService => IsolationPlacement::NativeService,
         ComponentServicePlacement::Microvm => IsolationPlacement::Microvm,
@@ -857,6 +861,7 @@ impl TotalMicrovmReport {
 pub struct IsolationAdmissionTable<const DOMAINS: usize> {
     mode: IsolationMode,
     system_generation: u64,
+    system_generation_digest: Option<[u8; 64]>,
     policy_generation: u64,
     slots: [Option<LaunchSlot>; DOMAINS],
     unavailable: [Option<UnavailableIsolationDomain>; DOMAINS],
@@ -881,6 +886,7 @@ impl<const DOMAINS: usize> IsolationAdmissionTable<DOMAINS> {
         Ok(Self {
             mode,
             system_generation,
+            system_generation_digest: None,
             policy_generation,
             slots: array::from_fn(|_| None),
             unavailable: array::from_fn(|_| None),
@@ -889,6 +895,23 @@ impl<const DOMAINS: usize> IsolationAdmissionTable<DOMAINS> {
             next_slot_generation: 1,
             next_unavailable_sequence: 1,
         })
+    }
+
+    /// Constructs admission bound to one exact canonical SystemGeneration.
+    /// A component handoff is accepted only when its generation number and
+    /// digest both match this active control-plane selection.
+    pub fn new_generation_bound(
+        mode: IsolationMode,
+        system_generation: u64,
+        system_generation_digest: [u8; 64],
+        policy_generation: u64,
+    ) -> Result<Self, IsolationLaunchError> {
+        if system_generation_digest.iter().all(|byte| *byte == 0) {
+            return Err(IsolationLaunchError::InvalidSystemGeneration);
+        }
+        let mut table = Self::new(mode, system_generation, policy_generation)?;
+        table.system_generation_digest = Some(system_generation_digest);
+        Ok(table)
     }
 
     pub const fn mode(&self) -> IsolationMode {
@@ -901,6 +924,10 @@ impl<const DOMAINS: usize> IsolationAdmissionTable<DOMAINS> {
 
     pub const fn system_generation(&self) -> u64 {
         self.system_generation
+    }
+
+    pub const fn system_generation_digest(&self) -> Option<&[u8; 64]> {
+        self.system_generation_digest.as_ref()
     }
 
     pub fn prepare(
@@ -1641,14 +1668,19 @@ mod tests {
             1,
             9,
             ComponentServicePlacement::Microvm,
+            [0x51; 64],
             [0x3a; 32],
             [0x18; 64],
             [0x2f; 64],
         )
         .unwrap();
-        let mut table =
-            IsolationAdmissionTable::<1>::new(IsolationMode::TotalMicrovm, SYSTEM_GENERATION, 7)
-                .unwrap();
+        let mut table = IsolationAdmissionTable::<1>::new_generation_bound(
+            IsolationMode::TotalMicrovm,
+            SYSTEM_GENERATION,
+            [0x51; 64],
+            7,
+        )
+        .unwrap();
         let launch = prepare_component_service_handoff(&mut table, &handoff.encode()).unwrap();
         let mut backend = backend();
         let routed = launch_prepared_component_service(
@@ -1673,6 +1705,7 @@ mod tests {
             1,
             9,
             ComponentServicePlacement::Microvm,
+            [0x51; 64],
             [0x3a; 32],
             [0x18; 64],
             [0x2f; 64],
@@ -1683,6 +1716,26 @@ mod tests {
             Err(ComponentServiceHandoffError::Admission(
                 IsolationLaunchError::InvalidSystemGeneration
             ))
+        );
+        assert_eq!((backend.native_launches, backend.microvm_launches), (0, 1));
+
+        let substituted_generation = ComponentServiceLaunchHandoff::new(
+            SYSTEM_GENERATION,
+            7,
+            0x45,
+            0x434f_4e46_4947,
+            1,
+            9,
+            ComponentServicePlacement::Microvm,
+            [0x52; 64],
+            [0x3a; 32],
+            [0x18; 64],
+            [0x2f; 64],
+        )
+        .unwrap();
+        assert_eq!(
+            prepare_component_service_handoff(&mut table, &substituted_generation.encode()),
+            Err(ComponentServiceHandoffError::SystemGenerationDigestMismatch)
         );
         assert_eq!((backend.native_launches, backend.microvm_launches), (0, 1));
     }

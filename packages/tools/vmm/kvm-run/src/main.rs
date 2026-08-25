@@ -52,7 +52,8 @@ use mrml_kvm::{KvmLaunchLayout, KvmSystem, PreparedKvmGuest};
 #[cfg(target_os = "linux")]
 use mrml_package_format::{
     admit_kernel_payload, ComponentServiceLaunchHandoff, ComponentServicePlacement,
-    MAX_BOOT_PACKAGE_BYTES, MAX_BOOT_RELEASE_BYTES,
+    system_generation_digest, SystemGenerationDigestRecord, MAX_BOOT_PACKAGE_BYTES,
+    MAX_BOOT_RELEASE_BYTES,
 };
 #[cfg(target_os = "linux")]
 use mrml_runtime::mrml_println as println;
@@ -1954,10 +1955,46 @@ fn application_main() -> Result<()> {
         mode,
         LaunchMode::ServiceProbe | LaunchMode::ComponentServiceProbe
     );
+    let component_generation_digest = if component_service_mode {
+        let consumer = service_executable
+            .as_ref()
+            .ok_or_else(|| anyhow!("missing verified ZIM consumer"))?;
+        let provider = provider_executable
+            .as_ref()
+            .ok_or_else(|| anyhow!("missing verified Zstd provider"))?;
+        Some(
+            system_generation_digest(
+                1,
+                &[
+                    SystemGenerationDigestRecord {
+                        package_id: "org.mrml.zim",
+                        version: consumer.artifact().version(),
+                        artifact_digest: consumer.artifact().digest(),
+                    },
+                    SystemGenerationDigestRecord {
+                        package_id: "org.mrml.zstd",
+                        version: provider.artifact().version(),
+                        artifact_digest: provider.artifact().digest(),
+                    },
+                ],
+            )
+            .map_err(|error| anyhow!("KVM SystemGeneration digest failed: {:?}", error))?,
+        )
+    } else {
+        None
+    };
     let mut isolation_admission = if total_service_mode {
         Some(
-            IsolationAdmissionTable::<1>::new(IsolationMode::TotalMicrovm, 1, 1)
-                .map_err(|error| anyhow!("KVM isolation admission failed: {:?}", error))?,
+            match component_generation_digest {
+                Some(digest) => IsolationAdmissionTable::<1>::new_generation_bound(
+                    IsolationMode::TotalMicrovm,
+                    1,
+                    digest,
+                    1,
+                ),
+                None => IsolationAdmissionTable::<1>::new(IsolationMode::TotalMicrovm, 1, 1),
+            }
+            .map_err(|error| anyhow!("KVM isolation admission failed: {:?}", error))?,
         )
     } else {
         None
@@ -2144,6 +2181,8 @@ fn application_main() -> Result<()> {
             3,
             provider.artifact().version(),
             ComponentServicePlacement::Microvm,
+            component_generation_digest
+                .ok_or_else(|| anyhow!("missing active component SystemGeneration digest"))?,
             ZSTD_INTERFACE_FINGERPRINT,
             *consumer.artifact().digest(),
             *provider.artifact().digest(),
