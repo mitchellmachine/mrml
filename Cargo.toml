@@ -17,7 +17,7 @@ members = [
     "crates/mrml-http",
     "crates/mrml-runtime",
     "crates/mrml-model",
-    "crates/mrml-math",
+    "packages/libraries/math",
     "crates/mrml-tensor",
     "crates/mrml-agent",
     "crates/mrml-cli",

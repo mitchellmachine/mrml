@@ -124,7 +124,9 @@ components with locked Cargo metadata, and `mrml audit` emits dependencies,
 features, targets, build scripts, proc macros, and bounded source-input sites.
 Dependency, feature, output, and per-component input-policy facts are now native
 version-3 declarations that fail on Cargo or lexical-audit drift. The first
-semantic leaf move is next; see
+semantic leaf move is complete: dependency-free `mrml-math` now resides under
+`packages/libraries/math` with its Cargo bridge retained. Continue with another
+dependency-light leaf before group moves; see
 [build/BRIDGE_INVENTORY.md](build/BRIDGE_INVENTORY.md).
 
 The independently scoped compiler lane follows

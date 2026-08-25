@@ -32,6 +32,11 @@ drift. **Result for these schema increments: NOT_TRIGGERED.** Declarative build
 graphs and input allowlists are conventional tooling mechanisms; the future
 resolver/cache/package mechanisms retain their triggered review.
 
+The first semantic source move relocates dependency-free `mrml-math` without
+changing its implementation or public behavior and improves discovery of
+conditional native-link attributes. **Result: NOT_TRIGGERED.** Repository path
+organization and lexical audit correction introduce no new technical mechanism.
+
 ## 2026-08-25 — Deployment, package, image, installer, and shell architecture
 
 **Result: TRIGGERED.** The documentation composes package/image containers,

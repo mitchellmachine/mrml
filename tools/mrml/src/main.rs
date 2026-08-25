@@ -750,7 +750,7 @@ fn scan_rust_file(
         .replace('\\', "/");
     for (index, line) in text.lines().enumerate() {
         let line_number = index + 1;
-        if line.contains(concat!("#[", "link(")) {
+        if line.contains(concat!("#[", "link(")) || line.contains(concat!("link", "(name")) {
             record_input(
                 mode,
                 component,

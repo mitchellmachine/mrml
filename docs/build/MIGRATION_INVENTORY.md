@@ -2,9 +2,10 @@
 
 **Status: PARTIALLY IMPLEMENTED.** The authoritative machine-readable inventory
 is [`../../MRML.workspace`](../../MRML.workspace). All 42 current components are
-classified and reachable through the Cargo bridge. Source remains under
-`crates/` except stage-zero `tools/mrml`; no claim is made that semantic moves or
-Cargo bridge removal are complete.
+classified and reachable through the Cargo bridge. `mrml-math` has moved to
+`packages/libraries/math` and stage-zero lives at `tools/mrml`; other source
+remains under `crates/`. No claim is made that semantic moves or Cargo bridge
+removal are complete.
 
 ## Implemented first gate
 
@@ -22,6 +23,8 @@ Cargo bridge removal are complete.
 - stage1 `mrml` selection, `mrml-rustc-driver`, current-host WHP/KVM selection,
   x86-64 UEFI routing, and lazy CUDA/PTX routing;
 - duplicate `mrml-opus` root workspace member removed.
+- dependency-free `mrml-math` moved to its semantic library home with all three
+  consumer paths and the native graph updated; its Cargo bridge remains.
 
 `package`, `release`, `image`, and `publish` deliberately fail as `PLANNED`.
 Linux, KVM, cross-host equivalence, physical UEFI/GPU, and release functionality
@@ -45,9 +48,9 @@ second inventory.
 
 ## Cargo-removal blockers
 
-- Every component still has Cargo dependency metadata and a path beneath
-  `crates/`; the root Cargo workspace still contains them so the bridge resolves
-  today’s exact graph.
+- Every component still has Cargo dependency metadata; all except `mrml-math`
+  and stage-zero remain beneath `crates/`. The root Cargo workspace still
+  contains every component so the bridge resolves today’s exact graph.
 - `crates/mrml-tensor/build.rs` invokes rustc for CUDA PTX and is the one current
   build script. It must become an explicit structured build action.
 - Dependency, feature, output, and source-input facts are persisted and fail
@@ -62,8 +65,8 @@ second inventory.
 
 ## Next safe migration order
 
-1. Move one leaf library into `packages/libraries/`, update every reference, and
-   prove old and `mrml` builds agree.
+1. Move the next dependency-light leaf into `packages/libraries/`, update every
+   reference, and prove Cargo-bridge and `mrml` builds agree.
 2. Expand by semantic groups: shared libraries, services, system, host tools;
    keep compiler and bootstrap roots distinct.
 3. Prove Windows WHP and Linux KVM matrices, then remove generic `crates/` only

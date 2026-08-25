@@ -25,7 +25,7 @@ The 2026-08-25 Windows gnullvm result is:
 64 Cargo targets
 1 custom build target
 0 procedural-macro targets
-7 native-link source sites
+9 native-link source sites
 31 compile-time environment source sites
 1 included-file source site
 43 external-command source sites
@@ -42,8 +42,8 @@ file sizes, and reports exact repository-relative file and line locations.
   pinned rustc CUDA target and materializes PTX consumed through `include_bytes!`.
 - There are no procedural-macro targets.
 - Native link attributes occur only in the Windows/Linux platform layers, KVM,
-  WHP, the hosted kernel benchmark, and the Opus differential example. They are
-  host/compatibility inputs, not MRML-native application ABI.
+  WHP, `mrml-math`, the hosted kernel benchmark, and the Opus differential
+  example. They are host/compatibility inputs, not MRML-native application ABI.
 - Compile-time environment and external-command sites remain bridge inputs and
   must become explicit per-node declarations before direct-rustc execution.
 
@@ -54,10 +54,12 @@ semantic path move or Cargo-removal step.
 
 ## Next gate
 
-Move one dependency-light leaf library into `packages/libraries/`. Do not remove
-its Cargo bridge entry until old/new graph and Windows/Linux build equivalence
-are demonstrated. Treat an input-policy change during that move as an explicit
-review item, never an automatically accepted count update.
+`mrml-math` is the first dependency-free leaf moved to
+`packages/libraries/math`; its Cargo bridge remains. Extend semantic moves to
+another dependency-light leaf only after checking every path reference and the
+v3 graph/audit. Do not remove Cargo bridge entries until Windows/Linux build
+equivalence is demonstrated. Treat input-policy changes as explicit review
+items, never automatically accepted count updates.
 
 Patent review: `NOT_TRIGGERED`. This increment adds conventional bounded metadata
 parsing, graph consistency checks, and lexical source inventory. It does not
