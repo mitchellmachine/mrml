@@ -10,6 +10,7 @@ pub const MAX_CANONICAL_TRAIT_VARIABLES: usize = 8;
 pub const MAX_TRAIT_IMPLEMENTATIONS: usize = 64;
 pub const MAX_TRAIT_PREDICATES: usize = 8;
 pub const MAX_TRAIT_GENERIC_PARAMETERS: usize = 8;
+pub const MAX_TRAIT_WHERE_CLAUSES: usize = 64;
 
 #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
 pub struct TraitId(u32);
@@ -318,6 +319,102 @@ impl TraitWhereClause {
     }
 }
 
+#[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
+pub struct TraitWhereClauseId(u32);
+
+impl TraitWhereClauseId {
+    pub const fn new(value: u32) -> Self {
+        Self(value)
+    }
+
+    pub const fn get(self) -> u32 {
+        self.0
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct TraitWhereClauseAnswer {
+    pub clause_id: TraitWhereClauseId,
+    pub instantiated: InstantiatedTraitWhereClause,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum TraitWhereClauseSolution {
+    Unique(TraitWhereClauseAnswer),
+    Ambiguous,
+    NoSolution,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct IdentifiedTraitWhereClause {
+    id: TraitWhereClauseId,
+    clause: TraitWhereClause,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct TraitWhereClauseDatabase {
+    clauses: [Option<IdentifiedTraitWhereClause>; MAX_TRAIT_WHERE_CLAUSES],
+    clause_count: usize,
+}
+
+impl TraitWhereClauseDatabase {
+    pub const EMPTY: Self = Self {
+        clauses: [None; MAX_TRAIT_WHERE_CLAUSES],
+        clause_count: 0,
+    };
+
+    pub fn insert(
+        &mut self,
+        id: TraitWhereClauseId,
+        clause: TraitWhereClause,
+    ) -> Result<(), TraitGoalError> {
+        for existing in self.clauses[..self.clause_count].iter().flatten().copied() {
+            if existing.id == id {
+                return Err(TraitGoalError::DuplicateWhereClauseId);
+            }
+            if existing.clause == clause {
+                return Err(TraitGoalError::DuplicateWhereClause);
+            }
+        }
+        let slot = self
+            .clauses
+            .get_mut(self.clause_count)
+            .ok_or(TraitGoalError::TooManyWhereClauses)?;
+        *slot = Some(IdentifiedTraitWhereClause { id, clause });
+        self.clause_count += 1;
+        Ok(())
+    }
+
+    pub fn elaborate(
+        &self,
+        consequence: ImplementedTraitGoal,
+    ) -> Result<TraitWhereClauseSolution, TraitGoalError> {
+        validate_concrete_goal(consequence)?;
+        let mut selected = None;
+        for candidate in self.clauses[..self.clause_count].iter().flatten().copied() {
+            match candidate.clause.elaborate(consequence)? {
+                TraitWhereClauseElaboration::Unique(instantiated) => {
+                    if selected.is_some() {
+                        return Ok(TraitWhereClauseSolution::Ambiguous);
+                    }
+                    selected = Some(TraitWhereClauseAnswer {
+                        clause_id: candidate.id,
+                        instantiated,
+                    });
+                }
+                TraitWhereClauseElaboration::Ambiguous => {
+                    return Ok(TraitWhereClauseSolution::Ambiguous);
+                }
+                TraitWhereClauseElaboration::NoSolution => {}
+            }
+        }
+        Ok(selected.map_or(
+            TraitWhereClauseSolution::NoSolution,
+            TraitWhereClauseSolution::Unique,
+        ))
+    }
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct CanonicalImplementedTraitGoal {
     pub trait_id: TraitId,
@@ -374,6 +471,9 @@ pub enum TraitGoalError {
     TooManyCanonicalVariables,
     TooManyGenericParameters,
     TooManyPredicates,
+    TooManyWhereClauses,
+    DuplicateWhereClauseId,
+    DuplicateWhereClause,
     NonConcreteClauseQuery,
     UnboundGenericParameter,
     WrongGenericArgumentCount,
@@ -1164,6 +1264,164 @@ mod tests {
         assert_eq!(
             unconstrained.elaborate(inference),
             Err(TraitGoalError::NonConcreteClauseQuery)
+        );
+    }
+
+    #[test]
+    fn clause_database_returns_identified_unique_answers_or_no_solution() {
+        let parameter = TraitGenericParameterId::new(0);
+        let consequence = BoundImplementedTraitGoal::new(
+            TraitId::new(40),
+            BoundTraitGoalType::Parameter(parameter),
+        );
+        let mut clause = TraitWhereClause::new(1, consequence).unwrap();
+        clause
+            .push_premise(BoundImplementedTraitGoal::new(
+                TraitId::new(41),
+                BoundTraitGoalType::Parameter(parameter),
+            ))
+            .unwrap();
+        let mut database = TraitWhereClauseDatabase::EMPTY;
+        let id = TraitWhereClauseId::new(9);
+        database.insert(id, clause).unwrap();
+        let query = ImplementedTraitGoal::new(
+            TraitId::new(40),
+            TraitGoalType::Concrete(TraitTypeId::new(70)),
+        );
+        let TraitWhereClauseElaboration::Unique(instantiated) = clause.elaborate(query).unwrap()
+        else {
+            panic!("expected direct clause elaboration");
+        };
+        assert_eq!(
+            database.elaborate(query),
+            Ok(TraitWhereClauseSolution::Unique(TraitWhereClauseAnswer {
+                clause_id: id,
+                instantiated,
+            }))
+        );
+        assert_eq!(
+            database.elaborate(ImplementedTraitGoal::new(
+                TraitId::new(99),
+                TraitGoalType::Concrete(TraitTypeId::new(70)),
+            )),
+            Ok(TraitWhereClauseSolution::NoSolution)
+        );
+    }
+
+    #[test]
+    fn clause_database_reports_overlapping_candidates_as_ambiguous() {
+        let generic = TraitWhereClause::new(
+            1,
+            BoundImplementedTraitGoal::new(
+                TraitId::new(1),
+                BoundTraitGoalType::Parameter(TraitGenericParameterId::new(0)),
+            ),
+        )
+        .unwrap();
+        let concrete = TraitWhereClause::new(
+            0,
+            BoundImplementedTraitGoal::new(
+                TraitId::new(1),
+                BoundTraitGoalType::Concrete(TraitTypeId::new(5)),
+            ),
+        )
+        .unwrap();
+        let mut database = TraitWhereClauseDatabase::EMPTY;
+        database
+            .insert(TraitWhereClauseId::new(1), generic)
+            .unwrap();
+        database
+            .insert(TraitWhereClauseId::new(2), concrete)
+            .unwrap();
+        assert_eq!(
+            database.elaborate(ImplementedTraitGoal::new(
+                TraitId::new(1),
+                TraitGoalType::Concrete(TraitTypeId::new(5)),
+            )),
+            Ok(TraitWhereClauseSolution::Ambiguous)
+        );
+    }
+
+    #[test]
+    fn clause_database_preserves_unconstrained_candidate_ambiguity() {
+        let clause = TraitWhereClause::new(
+            1,
+            BoundImplementedTraitGoal::new(
+                TraitId::new(2),
+                BoundTraitGoalType::Concrete(TraitTypeId::new(8)),
+            ),
+        )
+        .unwrap();
+        let mut database = TraitWhereClauseDatabase::EMPTY;
+        database.insert(TraitWhereClauseId::new(3), clause).unwrap();
+        assert_eq!(
+            database.elaborate(ImplementedTraitGoal::new(
+                TraitId::new(2),
+                TraitGoalType::Concrete(TraitTypeId::new(8)),
+            )),
+            Ok(TraitWhereClauseSolution::Ambiguous)
+        );
+    }
+
+    #[test]
+    fn clause_database_rejects_duplicates_and_capacity_overflow() {
+        let clause = TraitWhereClause::new(
+            0,
+            BoundImplementedTraitGoal::new(
+                TraitId::new(1),
+                BoundTraitGoalType::Concrete(TraitTypeId::new(1)),
+            ),
+        )
+        .unwrap();
+        let distinct = TraitWhereClause::new(
+            0,
+            BoundImplementedTraitGoal::new(
+                TraitId::new(2),
+                BoundTraitGoalType::Concrete(TraitTypeId::new(2)),
+            ),
+        )
+        .unwrap();
+        let mut duplicates = TraitWhereClauseDatabase::EMPTY;
+        duplicates
+            .insert(TraitWhereClauseId::new(1), clause)
+            .unwrap();
+        assert_eq!(
+            duplicates.insert(TraitWhereClauseId::new(1), distinct),
+            Err(TraitGoalError::DuplicateWhereClauseId)
+        );
+        assert_eq!(
+            duplicates.insert(TraitWhereClauseId::new(2), clause),
+            Err(TraitGoalError::DuplicateWhereClause)
+        );
+
+        let mut full = TraitWhereClauseDatabase::EMPTY;
+        for index in 0..MAX_TRAIT_WHERE_CLAUSES {
+            full.insert(
+                TraitWhereClauseId::new(index as u32),
+                TraitWhereClause::new(
+                    0,
+                    BoundImplementedTraitGoal::new(
+                        TraitId::new(index as u32),
+                        BoundTraitGoalType::Concrete(TraitTypeId::new(index as u32)),
+                    ),
+                )
+                .unwrap(),
+            )
+            .unwrap();
+        }
+        assert_eq!(
+            full.insert(
+                TraitWhereClauseId::new(100),
+                TraitWhereClause::new(
+                    0,
+                    BoundImplementedTraitGoal::new(
+                        TraitId::new(100),
+                        BoundTraitGoalType::Concrete(TraitTypeId::new(100)),
+                    ),
+                )
+                .unwrap(),
+            ),
+            Err(TraitGoalError::TooManyWhereClauses)
         );
     }
 

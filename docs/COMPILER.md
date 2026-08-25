@@ -108,7 +108,7 @@ language as a whole.
 | Let chains | **NOT IMPLEMENTED** | Boolean short-circuit expressions exist, but `if let`/`while let` chains and their pattern scopes do not. |
 | Async closures | **NOT IMPLEMENTED** | There is no async/await, generator, future, or async-closure lowering. |
 | Modern borrowing / Polonius | **PARTIAL** | References, explicit and expected-type implicit reborrow ancestry, return coercion-site reborrows, mutable pointee operations, bounded ownership/place/effect facts, fixed-point definite-initialization, direct shared/mutable-loan conflicts, and bounded intermediate-ancestor invalidation across the supported statement/loop CFG exist. Conditional expressions retain bounded program points and canonical nested/sequential edges. General indirect loan identity, regions/outlives reasoning, and complete Polonius-compatible analysis remain unimplemented. |
-| Next-generation trait solving | **PARTIAL** | Method-like built-ins remain recognized directly. Allocation-free implemented goals distinguish concrete types, inference variables, rigid placeholders, and generic binder parameters. Up to eight predicates share one canonical-variable universe; a bounded where clause validates eight parameters, structurally infers them from one concrete consequence, and instantiates eight premises. Repeated parameters must match equally and unconstrained parameters remain ambiguous. A bounded exact-header table returns fixed substitutions without allocation. There is no trait syntax, generic impl database, multi-clause/recursive solving, projection, complete coherence/specialization, answer composition, or source integration. |
+| Next-generation trait solving | **PARTIAL** | Method-like built-ins remain recognized directly. Allocation-free implemented goals distinguish concrete types, inference variables, rigid placeholders, and generic binder parameters. Up to eight predicates share one canonical-variable universe. A 64-entry identified where-clause database infers up to eight parameters from concrete consequences and instantiates eight premises; duplicate clauses fail and overlapping or unconstrained candidates remain ambiguous. A separate bounded exact-header table returns fixed substitutions. There is no trait syntax, recursive premise solving, projection, complete coherence/specialization, answer composition, or source integration. |
 | Naked functions / `naked_asm!` | **NOT IMPLEMENTED** | High-priority **STABLE** systems-language target. No implementation may insert an ordinary prologue or epilogue into a naked function. |
 | Modern inline assembly | **NOT IMPLEMENTED** | No `asm!`, register/operand validation, options, clobber model, or architecture-specific assembly lowering exists. |
 | Pointer/provenance APIs | **PARTIAL** | Raw-pointer casts, `addr`, `with_addr`, `expose_provenance`, integer-address reconstruction, offsets, comparisons, alignment, copying, writes, references, and metadata operations have bounded tests. The current scalar machine representation cannot establish a complete provenance/alias model and must not equate equal integer addresses with interchangeable provenance. |
@@ -814,6 +814,13 @@ parameters require equal concrete types; mismatches return no solution,
 unconstrained parameters remain ambiguous, and inference-bearing or placeholder
 queries fail closed. There is no clause database, candidate combination,
 recursion, or cycle handling.
+
+The first clause database stores 64 stable identified clauses. Duplicate IDs and
+structurally identical clauses fail at insertion. Distinct clauses that may
+overlap remain representable, but a concrete query with multiple unique matches
+or any unconstrained matching candidate is ambiguous; exactly one match returns
+its clause identity and instantiated premises. This deliberately does not solve
+those premises or recurse.
 
 ```text
 Complexity impact: LOW

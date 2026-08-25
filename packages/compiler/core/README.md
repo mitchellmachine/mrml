@@ -3901,6 +3901,16 @@ conformance tests, and 335 replacement tests: 785 compiler tests per host. This
 does not add a clause database, multi-candidate combination, recursion, cycles,
 projection normalization, or source syntax.
 
+The identified clause-database milestone adds a fixed 64-clause table. Insertion
+rejects duplicate stable IDs and structurally identical clauses. Potentially
+overlapping distinct clauses remain stored, but a query with multiple unique
+matches or any unconstrained matching candidate fails closed as ambiguous; one
+match returns the stable clause ID and instantiated premises. Windows gnullvm
+and native Arch Linux WSL each pass 443 library tests, one component-interface
+probe, 10 conformance tests, and 335 replacement tests: 789 compiler tests per
+host. The database performs no recursive premise solving, cycle handling,
+projection normalization, or source integration.
+
 The nested conditional tuple-origin milestone walks each leaf's bounded
 conditional-parent chain to the outermost generation before grouping reference
 origins by field ordinal. The exact oracle rejects a three-leaf returned field

@@ -671,6 +671,15 @@ Linux WSL each pass 439 library tests, one component-interface probe, 10
 conformance tests, and 335 replacement tests: 785 compiler tests per host. No
 clause database, multi-candidate combination, recursion, or cycle handling exists.
 
+The identified clause-database milestone stores up to 64 bounded where clauses.
+Duplicate stable IDs and structurally identical clauses fail; distinct
+potentially overlapping clauses are retained, while queries with multiple
+matching candidates or an unconstrained candidate return ambiguity. One unique
+candidate returns its stable clause ID and instantiated premises. Windows
+gnullvm and native Arch Linux WSL each pass 443 library tests, one component-
+interface probe, 10 conformance tests, and 335 replacement tests: 789 compiler
+tests per host. Premises are not recursively solved and cycles are not entered.
+
 At compiler path checkpoint `9a950ae9`, the Windows gnullvm core suite passed
 765 tests: 420 library tests, 10 conformance tests, and 335 replacement tests.
 Core formatting, warnings-denied Clippy, the no-`std`/no-`alloc`/unsafe hygiene
