@@ -18,7 +18,7 @@ members = [
     "packages/libraries/runtime",
     "crates/mrml-model",
     "packages/libraries/math",
-    "crates/mrml-tensor",
+    "packages/gpu/tensor",
     "crates/mrml-agent",
     "crates/mrml-cli",
     "tools/git",

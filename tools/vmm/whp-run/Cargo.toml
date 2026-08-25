@@ -22,4 +22,4 @@ mrml-runtime = { path = "../../../packages/libraries/runtime" }
 mrml-whp = { path = "../../../system/vmm/whp" }
 
 [target.'cfg(target_os = "windows")'.dependencies]
-mrml-tensor = { path = "../../../crates/mrml-tensor", features = ["cuda"], optional = true }
+mrml-tensor = { path = "../../../packages/gpu/tensor", features = ["cuda"], optional = true }

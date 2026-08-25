@@ -18,4 +18,4 @@ mrml-kvm = { path = "../../../system/vmm/kvm" }
 mrml-runtime = { path = "../../../packages/libraries/runtime" }
 
 [target.'cfg(target_os = "linux")'.dependencies]
-mrml-tensor = { path = "../../../crates/mrml-tensor", features = ["cuda"] }
+mrml-tensor = { path = "../../../packages/gpu/tensor", features = ["cuda"] }

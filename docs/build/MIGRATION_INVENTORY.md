@@ -474,6 +474,28 @@ on a Windows host without changing launcher source behavior:
 No GPU execution, VM launch, nested virtualization, physical hardware, VTL1,
 TPM, IOMMU, or remote-attestation evidence was established by this move.
 
+The tensor/GPU-package move from `crates/mrml-tensor` to `packages/gpu/tensor`
+was checked on a Windows host without changing tensor, CUDA, or build-script
+source behavior:
+
+- workspace metadata, formatting, `mrml doctor`, and `mrml audit` — PASS; the
+  audit retained exactly one build script, one included file, and one external
+  command for this package;
+- pinned-nightly `cargo test -p mrml-tensor --lib` — PASS, 14 tests;
+- strict all-target Clippy — FAIL on 38 existing warning/lint sites in unchanged
+  tensor source and tests;
+- `.\target\debug\mrml.exe build mrml-tensor` — FAIL while compiling the
+  `no_std` build script for the selected MSVC target because its prebuilt core
+  uses unwinding;
+- stale exact `crates/mrml-tensor/` path scan — PASS.
+
+No Linux runtime, CUDA execution, native GPU, WHP/KVM launch, or physical-
+hardware evidence was established by this path-only move.
+
+Patent review: `TRIGGERED` remains in force for the existing tensor/GPU
+mechanisms; see [`../patents/REVIEW_LOG.md`](../patents/REVIEW_LOG.md). The
+relocation itself introduced no new mechanism.
+
 `package`, `release`, `image`, and `publish` deliberately fail as `PLANNED`.
 Linux, KVM, cross-host equivalence, physical UEFI/GPU, and release functionality
 were not exercised by the Windows implementation environment.
@@ -501,7 +523,7 @@ second inventory.
   remain beneath `crates/`. The
   root Cargo workspace still contains every component so the bridge resolves
   today’s exact graph.
-- `crates/mrml-tensor/build.rs` invokes rustc for CUDA PTX and is the one current
+- `packages/gpu/tensor/build.rs` invokes rustc for CUDA PTX and is the one current
   build script. It must become an explicit structured build action.
 - Dependency, feature, output, and source-input facts are persisted and fail
   closed on Cargo metadata or lexical-audit drift. Lexical discovery still
