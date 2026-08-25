@@ -4289,6 +4289,8 @@ fn rustc_function_return_references_must_outlive_local_storage() {
         "#[unsafe(no_mangle)] pub extern \"C\" fn probe(input: &u16, choose: bool) -> &u16 { let local = *input; if choose { return &local; } input }",
         "#[unsafe(no_mangle)] pub extern \"C\" fn probe(input: &u16, choose: bool) -> &u16 { let local = *input; let mut selected: &u16 = &local; if choose { selected = input; } selected }",
         "#[unsafe(no_mangle)] pub extern \"C\" fn probe(input: &u16) -> &u16 { let local = *input; let source: &u16 = &local; let returned = source; returned }",
+        "fn identity(value: &mut u16) -> &mut u16 { value } #[unsafe(no_mangle)] pub extern \"C\" fn probe(input: &mut u16, choose: bool) -> &mut u16 { let mut local = *input; if choose { return identity(&mut local); } input }",
+        "fn identity(value: &mut u16) -> &mut u16 { value } #[unsafe(no_mangle)] pub extern \"C\" fn probe(input: &mut u16, choose: bool) -> &mut u16 { let mut local = *input; if choose { let returned = identity(&mut local); return returned; } input }",
     ];
     for source in rejected {
         for format in [ObjectFormat::Elf64, ObjectFormat::Coff] {
@@ -4308,6 +4310,8 @@ fn rustc_function_return_references_must_outlive_local_storage() {
         "#[unsafe(no_mangle)] pub extern \"C\" fn probe(input: &mut u16) -> &u16 { let moved = input; let returned: &u16 = &*moved; returned }",
         "#[unsafe(no_mangle)] pub extern \"C\" fn probe(input: &u16) -> &u16 { let returned = input; returned }",
         "#[unsafe(no_mangle)] pub extern \"C\" fn probe(input: &u16) -> &u16 { let first = input; let second = first; second }",
+        "fn identity(value: &mut u16) -> &mut u16 { value } #[unsafe(no_mangle)] pub extern \"C\" fn probe(input: &mut u16) -> &mut u16 { identity(input) }",
+        "fn identity(value: &mut u16) -> &mut u16 { value } #[unsafe(no_mangle)] pub extern \"C\" fn probe(input: &mut u16) -> &mut u16 { let returned = identity(input); returned }",
     ];
     for source in accepted {
         assert_eq!(compile_wide(source, ObjectFormat::Elf64), Ok(()));

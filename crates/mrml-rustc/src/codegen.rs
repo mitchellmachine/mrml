@@ -2426,6 +2426,11 @@ enum RuntimeOwnershipEventLocation {
         branch_index: Option<usize>,
         action_index: usize,
     },
+    ConditionalAssignmentReturnValue {
+        statement_index: usize,
+        branch_index: Option<usize>,
+        action_index: usize,
+    },
     LoopHeader {
         statement_index: usize,
     },
@@ -2505,6 +2510,9 @@ const fn runtime_ownership_location_statement_index(
             statement_index, ..
         }
         | RuntimeOwnershipEventLocation::ConditionalAssignmentAction {
+            statement_index, ..
+        }
+        | RuntimeOwnershipEventLocation::ConditionalAssignmentReturnValue {
             statement_index, ..
         }
         | RuntimeOwnershipEventLocation::LoopHeader { statement_index }
@@ -3110,6 +3118,11 @@ impl<'source> RuntimeBodyFacts<'source> {
                     branch_index,
                     action_index,
                     ..
+                }
+                | RuntimeOwnershipEventLocation::ConditionalAssignmentReturnValue {
+                    branch_index,
+                    action_index,
+                    ..
                 },
                 Some(RuntimeOwnershipStatementShape::ConditionalAssignment {
                     branch_count,
@@ -3174,6 +3187,7 @@ impl<'source> RuntimeBodyFacts<'source> {
             | (RuntimeOwnershipEventLocation::ConditionalReturnElseValue { .. }, _)
             | (RuntimeOwnershipEventLocation::ConditionalAssignmentCondition { .. }, _)
             | (RuntimeOwnershipEventLocation::ConditionalAssignmentAction { .. }, _)
+            | (RuntimeOwnershipEventLocation::ConditionalAssignmentReturnValue { .. }, _)
             | (RuntimeOwnershipEventLocation::LoopHeader { .. }, _)
             | (RuntimeOwnershipEventLocation::LoopOperation { .. }, _)
             | (RuntimeOwnershipEventLocation::LoopConditionalReturnCondition { .. }, _)
@@ -3456,6 +3470,19 @@ impl<'source> RuntimeBodyFacts<'source> {
             } => self
                 .conditional_assignment_action_block(statement_index, branch_index, action_index)
                 .map(RuntimeOwnershipControlPoint::Block),
+            RuntimeOwnershipEventLocation::ConditionalAssignmentReturnValue {
+                statement_index,
+                branch_index,
+                action_index,
+            } => {
+                let block = self.conditional_assignment_action_block(
+                    statement_index,
+                    branch_index,
+                    action_index,
+                )?;
+                self.return_edge(block, RuntimeControlFlowEdgeKind::Unconditional)
+                    .map(RuntimeOwnershipControlPoint::Edge)
+            }
             RuntimeOwnershipEventLocation::LoopHeader { statement_index } => self
                 .top_level_block_for_statement(statement_index)
                 .map(RuntimeOwnershipControlPoint::Block),
@@ -7936,6 +7963,12 @@ fn preanalyze_runtime_conditional_actions<
                 )?;
             }
             crate::ConditionalAssignmentAction::Return(value) => {
+                facts.current_ownership_event_location =
+                    RuntimeOwnershipEventLocation::ConditionalAssignmentReturnValue {
+                        statement_index,
+                        branch_index,
+                        action_index,
+                    };
                 preanalyze_runtime_return_expression_reads::<
                     R,
                     MAX_PARAMETERS,
@@ -11246,6 +11279,7 @@ const fn runtime_location_is_exact_function_return_value(
         location,
         RuntimeOwnershipEventLocation::ConditionalReturnValue { .. }
             | RuntimeOwnershipEventLocation::ConditionalReturnElseValue { .. }
+            | RuntimeOwnershipEventLocation::ConditionalAssignmentReturnValue { .. }
             | RuntimeOwnershipEventLocation::LoopConditionalReturnValue { .. }
             | RuntimeOwnershipEventLocation::LoopReturnValue { .. }
             | RuntimeOwnershipEventLocation::ReturnValue { .. }
@@ -11362,10 +11396,20 @@ fn validate_runtime_function_return_outlives(
         .iter()
         .flatten()
         .filter(|effect| {
-            matches!(
-                effect.kind,
-                RuntimePlaceEffectKind::SharedBorrow | RuntimePlaceEffectKind::MutableBorrow
-            ) && runtime_location_is_exact_function_return_value(effect.location)
+            runtime_location_is_exact_function_return_value(effect.location)
+                && (matches!(
+                    effect.kind,
+                    RuntimePlaceEffectKind::SharedBorrow | RuntimePlaceEffectKind::MutableBorrow
+                ) || (matches!(
+                    effect.kind,
+                    RuntimePlaceEffectKind::Copy | RuntimePlaceEffectKind::Move
+                ) && facts
+                    .move_paths
+                    .get(effect.path.0)
+                    .and_then(|path| *path)
+                    .is_some_and(|path| {
+                        matches!(path.ty, RuntimeExpressionType::Reference { .. })
+                    })))
         })
     {
         if !runtime_path_outlives_function_at_effect(facts, returned.path, *returned, 0).ok_or(
@@ -29240,6 +29284,42 @@ mod tests {
             "fn value(input: &u16) -> &u16 { let first = input; let second = first; second }",
         ] {
             analyze(accepted).unwrap_or_else(|error| panic!("{accepted}: {error:?}"));
+        }
+    }
+
+    #[test]
+    fn runtime_function_return_outlives_follow_identity_call_arguments() {
+        fn analyze(source: &str) -> Result<usize, CodegenError> {
+            let module = Parser::new(source).parse_module::<1, 8>().unwrap();
+            let Some(Item::Function(function)) = module.items()[0] else {
+                panic!("expected function")
+            };
+            let body = function.parse_body::<8>().unwrap();
+            let mut facts = RuntimeBodyFacts::EMPTY;
+            preanalyze_runtime_body_declarations::<_, 8, 32>(
+                &function,
+                &MutableReferenceCallResolver,
+                &body,
+                "&mut u16",
+                function.body_expression_span.start,
+                &mut facts,
+            )
+        }
+
+        for rejected in [
+            "fn value(input: &mut u16, choose: bool) -> &mut u16 { let mut local = *input; if choose { return identity(&mut local); } input }",
+            "fn value(input: &mut u16, choose: bool) -> &mut u16 { let mut local = *input; if choose { let returned = identity(&mut local); return returned; } input }",
+        ] {
+            assert_eq!(
+                analyze(rejected).unwrap_err().kind,
+                CodegenErrorKind::RuntimeReferenceOutlivesFunction
+            );
+        }
+        for accepted in [
+            "fn value(input: &mut u16) -> &mut u16 { identity(input) }",
+            "fn value(input: &mut u16) -> &mut u16 { let returned = identity(input); returned }",
+        ] {
+            analyze(accepted).unwrap();
         }
     }
 
