@@ -19,6 +19,7 @@ mod handoff;
 mod host_resource;
 mod ipc;
 mod memory;
+mod memory_resource;
 mod pe;
 mod platform;
 mod policy;
@@ -77,6 +78,10 @@ pub use ipc::{
 };
 pub use memory::{
     FrameAllocator, MemoryError, MemoryKind, MemoryMap, MemoryRegion, PAGE_SIZE, PhysAddr,
+};
+pub use memory_resource::{
+    MemoryBackingKind, MemoryObjectId, MemoryPoolId, MemoryPoolTable, MemoryResourceError,
+    MemoryRevocationSummary, MemoryUsage,
 };
 pub use pe::{
     MAX_PE_IMAGE_BYTES, MAX_PE_RELOCATIONS, MAX_PE_SECTIONS, PeAllocatedRegion, PeAllocationError,

@@ -166,6 +166,16 @@ current storage/service critical path; VMM guest-pool accounting follows its
 memory dependencies, while resize, NUMA, huge pages, swap/compression, and QoS
 remain later work. This does not displace VirtualGPU or compiler ownership/CFG.
 
+**PARTIALLY IMPLEMENTED memory-resource prerequisite:** the kernel policy core
+now represents fixed-capacity generational `MemoryPool` and `MemoryObject`
+identities. Root creation and child delegation bound page commitments, mapping
+reservations, child counts, and rights; exact allocation limits fail locally;
+content-free usage inspection is independent from control; release and
+recursive pool revocation stale object and descendant-pool identities. This is
+accounting rather than frame allocation. Mapping, sharing, pinning, DMA,
+resize/COW, IPC and cache charging, VMM guest projection, userspace policy, and
+hardware evidence remain pending before this prerequisite is complete.
+
 1. Implement the policy/configuration service and service supervision protocol.
    **PARTIALLY IMPLEMENTED:** `mrml-config` provides a no-allocation typed
    schema, exact-object capability checks for reads and every transaction

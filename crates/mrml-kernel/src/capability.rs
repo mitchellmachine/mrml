@@ -16,6 +16,10 @@ impl Rights {
     pub const DELEGATE: Self = Self(1 << 5);
     pub const CONTROL: Self = Self(1 << 6);
     pub const FLUSH: Self = Self(1 << 7);
+    pub const ALLOCATE: Self = Self(1 << 8);
+    pub const SHARE: Self = Self(1 << 9);
+    pub const PIN: Self = Self(1 << 10);
+    pub const INSPECT: Self = Self(1 << 11);
 
     pub const fn union(self, other: Self) -> Self {
         Self(self.0 | other.0)
@@ -37,7 +41,11 @@ impl Rights {
             | Self::SIGNAL.0
             | Self::DELEGATE.0
             | Self::CONTROL.0
-            | Self::FLUSH.0;
+            | Self::FLUSH.0
+            | Self::ALLOCATE.0
+            | Self::SHARE.0
+            | Self::PIN.0
+            | Self::INSPECT.0;
         if bits == 0 || bits & !known != 0 {
             return Err(CapabilityError::Invalid);
         }

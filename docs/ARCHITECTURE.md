@@ -67,6 +67,12 @@ descendants are covered in `TaskRuntime`; the broader derived-state revocation
 requirement still includes mappings, shared memory, DMA, devices, cached
 decisions, and service-specific state. These pieces do not yet form a complete
 production service substrate or hardware-validated security boundary.
+Quantitative memory-resource policy now has fixed-capacity generational pools
+and objects, attenuated child page/mapping/count reservations, content-free
+usage inspection, exact capability checks, and recursive pool revocation. This
+accounts commitments only; frame allocation, mapping, sharing, pinning, DMA,
+IPC/cache charging, VMM projection, and userspace policy integration remain
+unimplemented.
 The UEFI measured-boot path now extends the individually authenticated kernel
 and service payloads and then a canonical 192-byte selected-set record binding
 their fixed order, kinds, nonzero versions, and verified SHA3-512 digests. The

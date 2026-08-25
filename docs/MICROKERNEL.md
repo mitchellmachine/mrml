@@ -6981,6 +6981,55 @@ runtime, AI mechanism, or media mechanism. Planned scopes recorded as
 `TRIGGERED` in [patents/REVIEW_LOG.md](patents/REVIEW_LOG.md) remain unchanged;
 agent review does not replace independent human dual review.
 
+### Quantitative memory commitment core
+
+The first Phase 2 memory-resource prerequisite is **PARTIALLY IMPLEMENTED**.
+The no-allocation kernel policy table gives every pool and object a fixed-slot,
+generational identity backed by a distinct capability object. Root pools carry
+bounded page, mapping, and child budgets. Child creation atomically reserves a
+non-amplifying subset of each parent budget and attenuates rights through the
+existing capability machinery. Object creation commits an exact nonzero page
+count; exact-limit allocation succeeds and one page over fails without changing
+state. Object release advances its generation. Controlling-pool revocation
+preflights every descendant generation and counter, then invalidates all
+descendant pools and objects while returning only aggregate page/object counts.
+Inspection is a separate right and exposes quantities, never memory content.
+
+This milestone records commitments only. It does not allocate physical frames,
+create mappings or shared views, pin pages, authorize DMA, resize or copy on
+write, charge IPC/cache/page-table metadata, project guest pools through the
+VMM, select userspace policy, or provide hosted or physical-hardware evidence.
+
+Engineering Constitution complexity score: complexity impact `MODERATE`, TCB
+impact `LOW`, new parser `NO`, new authority model `YES` (the documented
+quantitative memory authority is now represented in code), new persistent state
+`NO`, external dependency `NO`, failure isolated `YES`, and existing-object
+reuse `YES` through the capability space.
+
+DIGITAL-RIGHTS REVIEW: the mechanism authenticates owner-selected local
+resource policy; it introduces no vendor, publisher, provider, verifier, DRM,
+attestation, telemetry, AI-only, first-party, or accessibility authority.
+Delegation can only reduce quantity and rights. Usage inspection is separately
+authorized and data-minimized, and revocation remains under exact capability
+control.
+
+HOSTILE SECURITY REVIEW: namespace and table capacities, page and mapping
+quantities, rights, slot/generation identities, parent ancestry, counters,
+capabilities, exhaustion, and replay are hostile. Construction rejects zero,
+overflowing, unknown-right, over-budget, and stale inputs before publication.
+All recursive-revocation generations, sums, and parent counter updates are
+preflighted before mutation. Generational reuse prevents stale identities from
+recovering authority.
+
+Patent review: `NOT_TRIGGERED` — fixed-capacity generational tables,
+capability-attenuated quantitative reservations, checked counters, and
+content-free usage accounting are conventional resource-accounting mechanisms.
+No compatibility transport, host-share protocol, accessibility device, browser
+semantic interface, JavaScript/WebAssembly runtime, AI mechanism, or media
+mechanism is implemented. Planned scopes recorded as `TRIGGERED` in
+[patents/REVIEW_LOG.md](patents/REVIEW_LOG.md) remain unchanged; agent review
+does not replace independent human dual review.
+
 ## Milestones
 
 This historical list is retained for continuity. The current dependency-ordered
