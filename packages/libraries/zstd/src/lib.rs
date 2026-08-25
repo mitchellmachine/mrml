@@ -7,6 +7,7 @@ mod kernel_transport;
 mod sequences;
 mod service_loop;
 mod task_runtime_adapter;
+mod userspace_syscall_adapter;
 
 use core::fmt;
 use mrml_interface_zstd_v3::{
@@ -22,6 +23,9 @@ pub use service_loop::{
 pub use task_runtime_adapter::{
     ZstdAdmittedTaskRuntimeEndpoint, ZstdResolvedServiceBinding, ZstdServiceBindingError,
     ZstdTaskRuntimeAdapter, ZstdTaskRuntimeAdapterError, ZstdTaskRuntimeEndpoint,
+};
+pub use userspace_syscall_adapter::{
+    ZstdRawSyscall, ZstdSyscallFrame, ZstdUserspaceSyscallError, ZstdUserspaceSyscalls,
 };
 
 pub const FRAME_MAGIC: u32 = 0xfd2f_b528;

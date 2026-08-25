@@ -4320,3 +4320,14 @@ shape, placement algorithm, provider-selection algorithm, synchronization,
 compression, cryptography, or hardware mechanism. The broader independently
 serviced component transport remains `TRIGGERED`, including the design-around
 limits recorded in the bounded component-transport review above.
+
+# 2026-08-25 — Zstd service syscall-frame adapter
+
+**Result: NOT_TRIGGERED.** This increment maps the already reviewed bounded
+Zstd request, one shared-buffer capability, revocation, and response operations
+onto MRML's existing general userspace syscall register frames. It selects no
+new syscall, transport, queue, shared-memory shape, proxy, placement,
+synchronization, compression, cryptographic, or hardware mechanism. The exact
+component transport remains subject to its `TRIGGERED` review and bounded
+design-around; this adapter neither broadens that shape nor supplies a new
+cross-placement RPC design.

@@ -86,10 +86,12 @@ plus a no-delete retention/inspection decision model. The committed service
 route now retains exact domain, interface, provider, policy, class, and placement
 identity, and the Zstd adapter consumes that route only when it matches an exact
 resolver/policy binding. This is a binding prerequisite, not an operating
-resolver connection. No admitted native dynamic loader-to-call path,
-independently serviced activation, concrete component syscall adapter, launched
-MRML service or guest, resolver-to-launch dispatch, persistent root discovery,
-or actual reclamation lifecycle is implemented.
+resolver connection. A host-tested register-level adapter now maps the service
+loop to the existing receive, shared-read/write, release, and send syscall
+frames, but no MRML-target trap implementation invokes it. No admitted native
+dynamic loader-to-call path, independently serviced activation, launched MRML
+service or guest, resolver-to-launch dispatch, persistent root discovery, or
+actual reclamation lifecycle is implemented.
 
 CPU support-floor, vendor microcode, vulnerability, heterogeneous scheduling,
 quantitative CPU authority, power, telemetry, and thermal policy are canonical

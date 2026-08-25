@@ -100,9 +100,11 @@ committed isolation route whose exact interface object, ABI generation,
 provider generation, and policy generation match the expected resolver/policy
 binding; the route also retains immutable domain, Total-mode class, and
 placement evidence. This does not connect the actual resolver to the launcher.
-No MRML-target service binary, concrete syscall adapter, VMM guest invocation,
-resolver-to-launch dispatch, supervision integration, or WHP/KVM service parity
-is proved.
+No MRML-target service binary, target-architecture syscall trap, VMM guest
+invocation, resolver-to-launch dispatch, supervision integration, or WHP/KVM
+service parity is proved. A host-tested register adapter now covers the exact
+existing receive, shared-read/write, capability-release, and response syscall
+frames, but it does not supply or execute the MRML-target architecture trap.
 
 > Functionality historically embedded in a Rust binary may instead be supplied
 > by an independently signed and serviced MRML component through an explicit,

@@ -244,8 +244,10 @@ reply unless received-leaf revocation succeeds. Its construction now consumes a
 committed route retaining domain, interface/provider/policy generations,
 Total-mode class, and placement, and rejects disagreement with the expected
 resolver/policy binding. No MRML-target service process, concrete syscall
-adapter, actual resolver-to-launch dispatch, supervision, CPU/RAM pool
-integration, WHP/KVM guest call, or physical isolation was exercised.
+trap, actual resolver-to-launch dispatch, supervision, CPU/RAM pool integration,
+WHP/KVM guest call, or physical isolation was exercised. The host-tested
+register adapter does map the loop to exact operations 5, 7/8, 12, and 4 and
+proves capability release precedes response visibility.
 
 Cross-compiler evidence is **PARTIALLY IMPLEMENTED** for one narrow descriptor
 identity projection. On both Windows gnullvm and Arch Linux, the canonical MRML
