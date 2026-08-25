@@ -364,6 +364,14 @@ Linux WSL2 cross-build the kernel and pass all 474 host tests. Twenty-three
 components are native and 19 remain transitional; no target execution or
 physical-hardware verification is implied.
 
+Explicit host-build projections allow a target-only dependency to be rebuilt
+for an approved host without widening the component's public target families.
+`mrml-storage` now directly binds crypto's empty `core` profile and the kernel,
+cross-builds for `x86_64-unknown-none`, and passes all 121 tests in its declared
+64 MiB host harness on Windows and Arch Linux WSL2. Twenty-four components are
+native and 18 remain transitional; this is cross-build and hosted-test evidence,
+not native-storage or physical-device execution.
+
 MRML uses Rust 2024 and the exact `nightly-2026-08-24` build toolchain pinned in
 `rust-toolchain.toml`. It is also the current `mrml-rustc` behavioral reference
 recorded as [ORACLE-0002](docs/compiler/oracles/ORACLE-0002.md); a floating

@@ -223,6 +223,14 @@ declared 64 MiB host harness with 474 passing tests. Twenty-three of 42
 components are native; 19 remain transitional. This does not establish target,
 bare-metal, virtualization, or physical-hardware execution.
 
+The kernel now declares Windows/Linux as exact host-build projections without
+adding them to its public `MRML_NATIVE` target set. Storage uses that projection
+to bind native kernel mechanics plus crypto's empty `core` profile. Both hosts
+cross-build `mrml-storage` for `x86_64-unknown-none` and pass its declared 64 MiB
+host harness with 121 tests. Twenty-four of 42 components are native; 18 remain
+transitional. No physical storage, target execution, or durability evidence is
+claimed by this build migration.
+
 `mrml-zstd` is the fourth migrated leaf; its Wikipedia edge and patent-review
 source path now resolve to `packages/libraries/zstd` without changing codec
 behavior.

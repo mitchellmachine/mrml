@@ -728,7 +728,7 @@ second inventory.
   explicit, native example outputs are checked and compiled, and exact feature
   sets can gate optional target-specific externs. Exact binary outputs, binary
   test harnesses, compile-time environment values, and bin-only actions are
-  explicit. Twenty-three
+  explicit. Twenty-four
   components now have native actions. Direct-rustc expansion still needs
   lock/digest validation and the remaining non-library actions before
   Cargo can be removed behind the remaining nodes.
@@ -746,6 +746,14 @@ tests and clippy, `mrml doctor`, `mrml audit`, the native kernel cross-build,
 and all 474 kernel host tests on Windows gnullvm and Arch Linux WSL2. The
 separate `libmrml_crypto__core.rlib` artifact was observed; this remains hosted
 and cross-build evidence only.
+
+The next bounded action adds explicit host-build projections without widening a
+provider's public target declaration. Kernel permits Windows/Linux projection;
+storage binds that artifact and crypto's empty `core` profile. With both exact
+dated toolchains, `mrml` unit tests, clippy, doctor, and audit pass; storage
+cross-builds for `x86_64-unknown-none` and its 64 MiB host harness passes all 121
+tests on Windows gnullvm and Arch Linux WSL2. Twenty-four components are native
+and 18 remain transitional. This is not physical-device or durability evidence.
 
 ## Next safe migration order
 

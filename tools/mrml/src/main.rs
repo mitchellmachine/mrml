@@ -32,6 +32,7 @@ struct RustAction {
     externs: Vec<RustExtern>,
     tests: Vec<RustTest>,
     test_stack_bytes: Option<usize>,
+    host_build_targets: Vec<String>,
     host_test_targets: Vec<String>,
     examples: Vec<RustExample>,
     binaries: Vec<RustBinary>,
@@ -165,6 +166,7 @@ fn load_workspace() -> Result<Workspace, String> {
     let mut rust_actions = Vec::new();
     let mut rust_tests = Vec::new();
     let mut rust_test_policies = Vec::new();
+    let mut rust_host_builds = Vec::new();
     let mut rust_host_tests = Vec::new();
     let mut rust_examples = Vec::new();
     let mut rust_binaries = Vec::new();
@@ -259,6 +261,9 @@ fn load_workspace() -> Result<Workspace, String> {
             }
             ["rust-test-policy", component, stack_bytes] => {
                 rust_test_policies.push(((*component).to_owned(), (*stack_bytes).to_owned()));
+            }
+            ["rust-host-builds", component, targets] => {
+                rust_host_builds.push(((*component).to_owned(), (*targets).to_owned()));
             }
             ["rust-host-tests", component, targets] => {
                 rust_host_tests.push(((*component).to_owned(), (*targets).to_owned()));
@@ -383,6 +388,7 @@ fn load_workspace() -> Result<Workspace, String> {
             externs,
             tests: Vec::new(),
             test_stack_bytes: None,
+            host_build_targets: Vec::new(),
             host_test_targets: Vec::new(),
             examples: Vec::new(),
             binaries: Vec::new(),
@@ -492,6 +498,31 @@ fn load_workspace() -> Result<Workspace, String> {
                 "RustTestStackInvalid {{ component: {component_id}, bytes: {bytes} }}"
             ));
         }
+    }
+    for (component_id, targets) in rust_host_builds {
+        let component = components
+            .iter_mut()
+            .find(|component| component.id == component_id)
+            .ok_or_else(|| {
+                format!("RustHostBuildComponentMissing {{ component: {component_id} }}")
+            })?;
+        let action = component
+            .rust_action
+            .as_mut()
+            .ok_or_else(|| format!("RustHostBuildActionMissing {{ component: {component_id} }}"))?;
+        let targets = split_declaration(&targets);
+        if targets.is_empty()
+            || targets
+                .iter()
+                .any(|target| !matches!(target.as_str(), "WINDOWS" | "LINUX"))
+            || !action.host_build_targets.is_empty()
+        {
+            return Err(format!(
+                "RustHostBuildTargetInvalid {{ component: {component_id}, targets: {} }}",
+                targets.join(",")
+            ));
+        }
+        action.host_build_targets = targets;
     }
     for (component_id, targets) in rust_host_tests {
         let component = components
@@ -687,6 +718,7 @@ fn load_workspace() -> Result<Workspace, String> {
                     for target in component
                         .targets
                         .iter()
+                        .chain(action.host_build_targets.iter())
                         .chain(action.host_test_targets.iter())
                         .filter(|target| external.targets.contains(target))
                     {
@@ -1262,7 +1294,18 @@ fn compile_rust_component(
                     component.id, external.package
                 )
             })?;
-        if !dependency.targets.iter().any(|family| family == target) {
+        let dependency_action = dependency.rust_action.as_ref().ok_or_else(|| {
+            format!(
+                "NativeDependencyActionMissing {{ component: {}, dependency: {} }}",
+                component.id, dependency.id
+            )
+        })?;
+        if !dependency.targets.iter().any(|family| family == target)
+            && !dependency_action
+                .host_build_targets
+                .iter()
+                .any(|family| family == target)
+        {
             return Err(format!(
                 "NativeDependencyTargetMismatch {{ component: {}, dependency: {}, target: {target} }}",
                 component.id, dependency.id

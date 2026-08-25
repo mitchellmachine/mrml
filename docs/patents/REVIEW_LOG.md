@@ -3151,3 +3151,13 @@ it does not establish patent clearance or infringement. Search and worldwide
 authoritative-register verification remain required for any material selected
 resolver or cache mechanism before release. Agent review does not replace
 independent human dual review.
+
+# 2026-08-25 — Native host-build projections and storage action
+
+**Result: TRIGGERED.** The native resolver now admits an explicitly declared
+host projection of a target-only provider and uses it to build the existing
+storage service graph. This remains within the package/cache/resolver risk area;
+no storage mechanism changed. It does not establish patent clearance or
+infringement, and release still requires the recorded worldwide authoritative-
+register review of any material resolver/cache mechanism. Agent review does not
+replace independent human dual review.

@@ -109,6 +109,13 @@ artifact. The kernel cross-builds for `x86_64-unknown-none` on both hosts, then
 uses a fresh host dependency graph and 64 MiB harness for 474 passing tests.
 Twenty-three components are native; 19 remain transitional.
 
+Target-only native providers may now declare exact Windows/Linux host-build
+projections. They remain unavailable as public host targets, but approved
+dependents can compile the same source graph for a hosted harness. Storage uses
+the kernel projection and crypto's `core` provider profile, cross-builds for
+`x86_64-unknown-none`, and passes all 121 tests on Windows and Arch Linux WSL2.
+Twenty-four components are native; 18 remain transitional.
+
 Native actions now bind one exact feature set and may gate an extern by both
 target family and selected feature. `mrml-av1` declares the empty default set,
 so its `nvidia` platform extern is inactive while `mrml-runtime` remains active.
