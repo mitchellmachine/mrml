@@ -359,6 +359,25 @@ checked on a Windows host without changing storage source behavior:
 No Linux host/runtime, live block device, signed service, WHP/KVM, bare-metal,
 or physical-storage execution was exercised by this path-only move.
 
+The shared UEFI-library move from `crates/mrml-uefi` to
+`packages/libraries/uefi` was checked on a Windows host without changing source
+behavior:
+
+- `cargo metadata --no-deps --format-version 1`,
+  `cargo +nightly-2026-08-24-x86_64-pc-windows-gnullvm fmt -p mrml-uefi -- --check`,
+  `.\target\debug\mrml.exe doctor`, and `.\target\debug\mrml.exe audit`
+  — PASS;
+- `cargo +nightly-2026-08-24-x86_64-pc-windows-gnullvm test -p mrml-uefi --lib`
+  — PASS, 24 tests;
+- UEFI-target `check` and strict `clippy` for `mrml-uefi` with the `uefi-image`
+  feature — PASS;
+- `.\target\debug\mrml.exe build mrml-uefi` — PASS;
+- `git grep -n 'crates/mrml-uefi/' -- ':!docs/build/MIGRATION_INVENTORY.md'`
+  — PASS with no stale exact UEFI-library path matches.
+
+No Linux host/runtime, UEFI firmware, Secure Boot, TPM, bare-metal, or physical-
+hardware execution was exercised by this path-only move.
+
 `package`, `release`, `image`, and `publish` deliberately fail as `PLANNED`.
 Linux, KVM, cross-host equivalence, physical UEFI/GPU, and release functionality
 were not exercised by the Windows implementation environment.

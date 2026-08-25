@@ -8,7 +8,7 @@ members = [
     "system/service-image",
     "services/config",
     "services/storage",
-    "crates/mrml-uefi",
+    "packages/libraries/uefi",
     "system/kernel",
     "crates/mrml-kernel-bench",
     "crates/mrml-sign",
