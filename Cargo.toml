@@ -9,7 +9,7 @@ members = [
     "crates/mrml-config",
     "crates/mrml-storage",
     "crates/mrml-uefi",
-    "crates/mrml-kernel",
+    "system/kernel",
     "crates/mrml-kernel-bench",
     "crates/mrml-sign",
     "packages/libraries/crypto",

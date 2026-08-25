@@ -143,8 +143,8 @@ explicitly and downgrade the status rather than guessing.
   and ABI generations differ, boot/recovery codecs may remain pinned/static, and
   `mrml-rustc` will eventually validate the same explicit ABI as upstream rustc.
 
-- Kernel mechanisms: `crates/mrml-kernel/src/`
-- x86_64 CPU, memory, SMP, VMX, EPT, VT-d: `crates/mrml-kernel/src/arch/x86_64/`
+- Kernel mechanisms: `system/kernel/src/`
+- x86_64 CPU, memory, SMP, VMX, EPT, VT-d: `system/kernel/src/arch/x86_64/`
 - CPU support floor, Intel/AMD microcode, post-update vulnerability state,
   heterogeneous scheduling, CPU budgets, power, telemetry, thermal safety,
   monitor, and hardware milestones: `docs/platform/CPU_PLATFORM.md`. These are

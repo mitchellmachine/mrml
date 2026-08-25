@@ -256,6 +256,30 @@ The host-tool move was checked on a Windows host:
 No Linux host-tool execution, live remote web service, physical desktop/audio
 route, or accessibility hardware was exercised by this move.
 
+The kernel move from `crates/mrml-kernel` to `system/kernel` was checked on a
+Windows host without changing kernel source behavior:
+
+- `cargo metadata --no-deps --format-version 1`,
+  `cargo +nightly-2026-08-24-x86_64-pc-windows-gnullvm fmt -p mrml-kernel -- --check`,
+  `.\target\debug\mrml.exe doctor`, and `.\target\debug\mrml.exe audit`
+  — PASS;
+- `cargo +nightly-2026-08-24-x86_64-pc-windows-gnullvm test -p mrml-kernel`
+  — FAIL, 472 passed and 2 existing stack-heavy tests overflowed the default
+  Windows test-harness stack;
+- the same test with `RUST_MIN_STACK=33554432` — FAIL with the same 472/2
+  result because those tests execute on the harness main thread;
+- the same test with `RUSTFLAGS=-C link-arg=/stack:67108864` — PASS, 474 tests;
+- `cargo +nightly-2026-08-24-x86_64-pc-windows-gnullvm clippy -p mrml-kernel --all-targets --no-deps -- -D warnings`
+  — FAIL on one existing `drop_non_drop` lint in unchanged kernel test code;
+- `.\target\debug\mrml.exe build mrml-kernel` — FAIL closed with
+  `NoMatchingComponents { target: WINDOWS }` because the kernel is declared
+  only for the `MRML_NATIVE` target, not the Windows host target;
+- `git grep -n 'crates/mrml-kernel/' -- ':!docs/build/MIGRATION_INVENTORY.md'`
+  — PASS with no stale exact kernel-package path matches.
+
+No Linux, KVM, WHP, nested-virtualization, UEFI, Secure Boot, TPM, IOMMU,
+bare-metal, or physical-hardware execution was exercised by this path-only move.
+
 `package`, `release`, `image`, and `publish` deliberately fail as `PLANNED`.
 Linux, KVM, cross-host equivalence, physical UEFI/GPU, and release functionality
 were not exercised by the Windows implementation environment.
@@ -279,7 +303,8 @@ second inventory.
 ## Cargo-removal blockers
 
 - Every component still has Cargo dependency metadata; all except the eighteen
-  moved libraries, compiler core/driver, Git/host tools, and stage-zero remain beneath `crates/`. The
+  moved libraries, compiler core/driver, kernel, Git/host tools, and stage-zero
+  remain beneath `crates/`. The
   root Cargo workspace still contains every component so the bridge resolves
   today’s exact graph.
 - `crates/mrml-tensor/build.rs` invokes rustc for CUDA PTX and is the one current

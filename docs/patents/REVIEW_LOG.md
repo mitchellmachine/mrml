@@ -172,11 +172,11 @@ AV1, and Opus. Roadmap-only systems were not treated as implemented.
 | --- | --- | --- | --- |
 | Highest | AV1 coding tools, restoration, prediction, transforms, entropy, film grain | `packages/libraries/av1/src/` | AOMedia patent terms require exact license review; third-party assertions remain possible. |
 | Highest | Opus SILK/CELT, PVQ, range coding, stereo/pitch tools | `packages/libraries/opus/src/` | RFC 6716 records multiple IETF IPR disclosures; terms and worldwide family members need claims review. |
-| High | GPU mediation, authenticated rings, reset, EPT/VT-d, CUDA | `crates/mrml-kernel/src/virtual_gpu.rs`, `arch/x86_64/{ept,vtd,vtd_tables}.rs`, `crates/mrml-{kvm,whp}/`, `crates/mrml-tensor/src/cuda.rs` | Distinctive hardware-facing composition; no candidate verified. |
+| High | GPU mediation, authenticated rings, reset, EPT/VT-d, CUDA | `system/kernel/src/virtual_gpu.rs`, `arch/x86_64/{ept,vtd,vtd_tables}.rs`, `crates/mrml-{kvm,whp}/`, `crates/mrml-tensor/src/cuda.rs` | Distinctive hardware-facing composition; no candidate verified. |
 | High | Quantized inference, planning, KV cache, speculative decoding | `crates/mrml-tensor/src/{quant,ops,execution_plan,kv_cache,speculative}.rs` | Must distinguish standard formats from MRML scheduling/layout. |
 | High | Zstandard FSE/Huffman/sequences | `packages/libraries/zstd/src/` | Compression and upstream grant review required. |
 | High | Hybrid X25519/ML-KEM TLS and AEAD | `packages/libraries/tls/`, `packages/libraries/crypto/` | Standards/IPR and exact protocol-version review required. |
-| Medium-high | Protected receipts, sealed-key gates, VMX-root custody | `crates/mrml-kernel/src/protected_*.rs`, `crates/mrml-whp/src/protected_broker.rs` | Unusual composed state machine; search confidence low. |
+| Medium-high | Protected receipts, sealed-key gates, VMX-root custody | `system/kernel/src/protected_*.rs`, `crates/mrml-whp/src/protected_broker.rs` | Unusual composed state machine; search confidence low. |
 | Medium | Rust-subset lowering/object generation | `compiler/core/src/` | Review distinctive optimizations only, not ordinary compiler structure. |
 
 ### Discovery performed
@@ -267,7 +267,7 @@ compiler category.
 
 ## 2026-08-23 — native guest-mapping revocation ordering
 
-MRML source: `crates/mrml-kernel/src/vm.rs`,
+MRML source: `system/kernel/src/vm.rs`,
 `crates/mrml-kvm/src/{abi,native.rs,native/launch.rs}`, and
 `crates/mrml-whp/src/{abi,native.rs,native/launch.rs}`.
 
@@ -282,7 +282,7 @@ enforcement over existing hypervisor APIs.
 
 ## 2026-08-23 — cleanup-gated service restart
 
-MRML source: `crates/mrml-kernel/src/{task_runtime,service_lifecycle}.rs` and
+MRML source: `system/kernel/src/{task_runtime,service_lifecycle}.rs` and
 `crates/mrml-{kvm,whp}/src/native/launch.rs`.
 
 Service retirement now preflights restart timing, retains an exact one-use
@@ -297,7 +297,7 @@ zeroization gating over existing service reset mechanisms.
 
 ## 2026-08-23 — task-owned shared-resource cleanup
 
-MRML source: `crates/mrml-kernel/src/shared_memory.rs`.
+MRML source: `system/kernel/src/shared_memory.rs`.
 
 Shared mappings may now bind an exact task generation. Service cleanup removes
 each native mapping before its policy identity and binding, retains peer
@@ -339,7 +339,7 @@ hypervisor operations.
 
 ## 2026-08-23 — transitive IPC capability revocation
 
-MRML source: `crates/mrml-kernel/src/task_runtime.rs`.
+MRML source: `system/kernel/src/task_runtime.rs`.
 
 IPC transfers now record bounded parent/child relations between exact
 generational capability handles. Explicit revocation and task retirement walk
@@ -353,7 +353,7 @@ lifecycle revocation.
 
 ## 2026-08-23 — supervised fault cleanup and restart composition
 
-MRML source: `crates/mrml-kernel/src/{service_lifecycle,shared_memory}.rs`.
+MRML source: `system/kernel/src/{service_lifecycle,shared_memory}.rs`.
 
 Service recovery now sequences existing task retirement, peer notification,
 native shared-mapping revocation, resource/address-space erasure, and bounded
@@ -440,7 +440,7 @@ lifecycle revocation.
 
 ## 2026-08-23 — signed surviving-peer fault notification
 
-MRML source: `crates/mrml-kernel/src/task_runtime.rs`,
+MRML source: `system/kernel/src/task_runtime.rs`,
 `crates/mrml-kernel-image/src/main.rs`, `crates/mrml-service-image/src/main.rs`,
 and `crates/mrml-{kvm,whp}-run/src/main.rs`.
 
@@ -457,7 +457,7 @@ lifecycle verification.
 ## 2026-08-23 — typed configuration and supervision protocol foundation
 
 MRML source: `crates/mrml-config/src/lib.rs` and
-`crates/mrml-kernel/src/{capability,service_lifecycle}.rs`.
+`system/kernel/src/{capability,service_lifecycle}.rs`.
 
 The service foundation applies fixed schemas, ordinary optimistic transaction
 revision checks, exact capability authorization, a bounded overwrite-detecting
@@ -473,7 +473,7 @@ service-control message handling.
 ## 2026-08-23 — IPC-derived configuration and supervision dispatch
 
 MRML source: `crates/mrml-config/src/lib.rs` and
-`crates/mrml-kernel/src/ipc.rs`.
+`system/kernel/src/ipc.rs`.
 
 Configuration and supervision dispatch now separates payload data from
 authority by resolving operations from the receiver-space capabilities that
@@ -488,8 +488,8 @@ and service dispatch.
 
 ## 2026-08-23 — bounded CPL3 buffer validation foundation
 
-MRML source: `crates/mrml-kernel/src/{syscall,capability}.rs` and
-`crates/mrml-kernel/src/arch/x86_64/{address_space,page_table,service_space}.rs`.
+MRML source: `system/kernel/src/{syscall,capability}.rs` and
+`system/kernel/src/arch/x86_64/{address_space,page_table,service_space}.rs`.
 
 The kernel now decodes bounded buffer descriptors, validates canonical
 capability-transfer records, resolves complete ranges against user mappings,
@@ -581,7 +581,7 @@ Patent review: `NOT_TRIGGERED` — ordinary compiler access classification.
 
 MRML source: `crates/mrml-kernel-image/src/main.rs`,
 `crates/mrml-service-image/src/main.rs`,
-`crates/mrml-kernel/src/arch/x86_64/context.rs`, and hosted launchers.
+`system/kernel/src/arch/x86_64/context.rs`, and hosted launchers.
 
 The signed service probe now performs bounded user-buffer validation, ordinary
 capability-message delivery, blocked-receiver wakeup, address-space switching,
@@ -660,7 +660,7 @@ category.
 
 ## 2026-08-23 — signed CPL3 configuration read dispatch
 
-MRML source: `crates/mrml-config`, `crates/mrml-kernel`, the signed kernel and
+MRML source: `crates/mrml-config`, `system/kernel`, the signed kernel and
 service images, and the WHP/KVM hosted launch paths.
 
 The signed service now decodes a conventional fixed-record configuration read,
@@ -1215,7 +1215,7 @@ Patent review: `NOT_TRIGGERED` — conventional bounded control protocol.
 
 ## 2026-08-23 — exact received-buffer capability shape
 
-MRML source: `crates/mrml-kernel/src/{capability,ipc}.rs` and
+MRML source: `system/kernel/src/{capability,ipc}.rs` and
 `crates/mrml-storage/src/block_protocol.rs`.
 
 The kernel conventionally requires zero capabilities or one live transferred
@@ -1228,7 +1228,7 @@ Patent review: `NOT_TRIGGERED` — conventional exact capability authorization.
 
 ## 2026-08-23 — received capability to shared-binding resolution
 
-MRML source: `crates/mrml-kernel/src/{ipc,shared_memory}.rs`.
+MRML source: `system/kernel/src/{ipc,shared_memory}.rs`.
 
 The kernel conventionally composes exact receiver-capability authorization with
 an exact live shared-memory binding check and returns an opaque resource handle
@@ -1269,7 +1269,7 @@ and source-order traversal.
 
 ## 2026-08-23 — authorized opaque shared-buffer I/O
 
-MRML source: `crates/mrml-kernel/src/{ipc,shared_memory}.rs`.
+MRML source: `system/kernel/src/{ipc,shared_memory}.rs`.
 
 The kernel conventionally repeats exact receiver-capability and live
 shared-binding validation before a bounded read or write through an opaque
@@ -1280,7 +1280,7 @@ Patent review: `NOT_TRIGGERED` — conventional authorized bounded I/O.
 
 ## 2026-08-23 — authenticated shared-binding selection
 
-MRML source: `crates/mrml-kernel/src/{ipc,shared_memory}.rs`.
+MRML source: `system/kernel/src/{ipc,shared_memory}.rs`.
 
 The kernel conventionally selects exactly one bounded table entry by an
 already-authorized object plus kernel-known VM/task identity and access mode,
@@ -1293,7 +1293,7 @@ Patent review: `NOT_TRIGGERED` — conventional bounded authorized lookup.
 ## 2026-08-23 — capability-bound block transport composition
 
 MRML source: `crates/mrml-storage/src/{block_protocol,kernel_transport}.rs`
-and `crates/mrml-kernel/src/ipc.rs`.
+and `system/kernel/src/ipc.rs`.
 
 The storage service conventionally separates replay/poison admission from
 execution, copies exact capability-authorized buffer ranges through bounded
@@ -1305,7 +1305,7 @@ Patent review: `NOT_TRIGGERED` — conventional authorized service dispatch.
 
 ## 2026-08-23 — capability-selected shared-buffer syscall ABI
 
-MRML source: `crates/mrml-kernel/src/syscall.rs` and
+MRML source: `system/kernel/src/syscall.rs` and
 `crates/mrml-kernel-image/src/main.rs`.
 
 The kernel conventionally decodes opaque capability, offset, userspace address,
@@ -1317,7 +1317,7 @@ Patent review: `NOT_TRIGGERED` — conventional bounded syscall validation.
 
 ## 2026-08-23 — shared-buffer syscall execution composition
 
-MRML source: `crates/mrml-kernel/src/shared_buffer_syscall.rs` and
+MRML source: `system/kernel/src/shared_buffer_syscall.rs` and
 `task_runtime.rs`.
 
 The kernel conventionally combines task-local capability lookup, live binding
@@ -1329,7 +1329,7 @@ Patent review: `NOT_TRIGGERED` — conventional authorized copy composition.
 
 ## 2026-08-23 — active-page shared-buffer user copy
 
-MRML source: `crates/mrml-kernel/src/arch/x86_64/active_user_copy.rs` and
+MRML source: `system/kernel/src/arch/x86_64/active_user_copy.rs` and
 `shared_buffer_syscall.rs`.
 
 The x86-64 adapter conventionally binds an active page-table range validation
@@ -1341,7 +1341,7 @@ Patent review: `NOT_TRIGGERED` — conventional validated active-memory copy.
 
 ## 2026-08-23 — bounded opaque host-resource table
 
-MRML source: `crates/mrml-kernel/src/host_resource.rs`.
+MRML source: `system/kernel/src/host_resource.rs`.
 
 The kernel conventionally assigns monotonic opaque handles to fixed-capacity
 resource entries, rejects live aliases and stale handles, checks transfer bounds
@@ -1354,8 +1354,8 @@ Patent review: `NOT_TRIGGERED` — conventional bounded resource indirection.
 
 ## 2026-08-23 — active service mapping revocation adapter
 
-MRML source: `crates/mrml-kernel/src/{vm,shared_memory}.rs` and
-`crates/mrml-kernel/src/arch/x86_64/page_table.rs`.
+MRML source: `system/kernel/src/{vm,shared_memory}.rs` and
+`system/kernel/src/arch/x86_64/page_table.rs`.
 
 Shared cleanup conventionally consumes a narrow native mapping-removal
 interface. The x86-64 service adapter binds one active root and exact mapping,
@@ -1367,7 +1367,7 @@ Patent review: `NOT_TRIGGERED` — conventional exact mapping teardown.
 
 ## 2026-08-23 — hosted observation of kernel-side leaf retirement
 
-MRML source: `crates/mrml-kernel/src/arch/x86_64/page_table.rs` and
+MRML source: `system/kernel/src/arch/x86_64/page_table.rs` and
 `crates/mrml-{kvm,whp}/src/native/launch.rs`.
 
 KVM and WHP conventionally verify that every leaf in one recorded service
@@ -1407,7 +1407,7 @@ Patent review: `NOT_TRIGGERED` — conventional authorized resource lifecycle.
 
 ## 2026-08-24 — exact service-resource operation capabilities
 
-MRML source: `crates/mrml-kernel/src/shared_memory.rs`,
+MRML source: `system/kernel/src/shared_memory.rs`,
 `crates/mrml-kernel-image/src/main.rs`, and
 `crates/mrml-service-image/src/main.rs`.
 
@@ -1421,7 +1421,7 @@ Patent review: `NOT_TRIGGERED` — conventional least-authority separation.
 
 ## 2026-08-24 — authorized service-state query syscall
 
-MRML source: `crates/mrml-kernel/src/syscall.rs`,
+MRML source: `system/kernel/src/syscall.rs`,
 `crates/mrml-kernel-image/src/main.rs`, and
 `crates/mrml-service-image/src/main.rs`.
 
@@ -1449,8 +1449,8 @@ with least-authority capability transfer.
 
 ## 2026-08-24 — split-phase trusted service restart planning
 
-MRML source: `crates/mrml-kernel/src/service_lifecycle.rs`,
-`crates/mrml-kernel/src/syscall.rs`, and
+MRML source: `system/kernel/src/service_lifecycle.rs`,
+`system/kernel/src/syscall.rs`, and
 `crates/mrml-config/src/lib.rs`.
 
 The kernel conventionally separates authorization and validation from commit so

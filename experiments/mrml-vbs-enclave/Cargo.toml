@@ -10,7 +10,7 @@ description = "Original dependency-free MRML VBS enclave feasibility image"
 
 [dependencies]
 mrml-crypto = { path = "../../packages/libraries/crypto", default-features = false }
-mrml-kernel = { path = "../../crates/mrml-kernel" }
+mrml-kernel = { path = "../../system/kernel" }
 
 [lib]
 crate-type = ["cdylib"]
