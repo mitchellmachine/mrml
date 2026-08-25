@@ -2,6 +2,11 @@
 #![cfg_attr(not(test), no_main)]
 
 #[cfg(target_os = "linux")]
+use mrml_config::{
+    AdmittedConfigurationGuestFactory, ConfigurationMicrovmEndpoint,
+    MicrovmConfigurationServiceLauncher, PreparedMicrovmConfigurationLauncher,
+};
+#[cfg(target_os = "linux")]
 use mrml_crypto::{LAMPORT_PUBLIC_KEY_BYTES, Sha3_512};
 use mrml_error::{Result, anyhow};
 #[cfg(target_os = "linux")]
@@ -45,6 +50,103 @@ use mrml_runtime::Instant;
 use mrml_runtime::Vector;
 #[cfg(target_os = "linux")]
 use mrml_runtime::mrml_println as println;
+
+#[cfg(target_os = "linux")]
+type KvmConfigurationLauncher =
+    PreparedMicrovmConfigurationLauncher<AdmittedConfigurationGuestFactory<PreparedKvmGuest<16>>>;
+
+#[cfg(target_os = "linux")]
+enum KvmGuestOwner {
+    Direct(PreparedKvmGuest<16>),
+    Configuration {
+        launcher: KvmConfigurationLauncher,
+        endpoint: ConfigurationMicrovmEndpoint,
+    },
+}
+
+#[cfg(target_os = "linux")]
+impl KvmGuestOwner {
+    fn guest(&self) -> &PreparedKvmGuest<16> {
+        match self {
+            Self::Direct(guest) => guest,
+            Self::Configuration { launcher, endpoint } => launcher
+                .active_guest(*endpoint)
+                .expect("stored configuration endpoint must select its retained guest"),
+        }
+    }
+
+    fn guest_mut(&mut self) -> &mut PreparedKvmGuest<16> {
+        match self {
+            Self::Direct(guest) => guest,
+            Self::Configuration { launcher, endpoint } => launcher
+                .active_guest_mut(*endpoint)
+                .expect("stored configuration endpoint must select its retained guest"),
+        }
+    }
+
+    fn into_direct(self) -> Result<PreparedKvmGuest<16>> {
+        match self {
+            Self::Direct(guest) => Ok(guest),
+            Self::Configuration { .. } => Err(anyhow!(
+                "configuration microVM cannot enter an unrelated launch path"
+            )),
+        }
+    }
+
+    fn finish(mut self) -> Result<()> {
+        if let Self::Configuration { launcher, endpoint } = &mut self {
+            launcher
+                .revoke_microvm(endpoint)
+                .map_err(|error| anyhow!("KVM configuration teardown failed: {:?}", error))?;
+        }
+        Ok(())
+    }
+}
+
+#[cfg(target_os = "linux")]
+impl core::ops::Deref for KvmGuestOwner {
+    type Target = PreparedKvmGuest<16>;
+
+    fn deref(&self) -> &Self::Target {
+        self.guest()
+    }
+}
+
+#[cfg(target_os = "linux")]
+impl core::ops::DerefMut for KvmGuestOwner {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        self.guest_mut()
+    }
+}
+
+#[cfg(target_os = "linux")]
+impl VmBackend for KvmGuestOwner {
+    type Error = <PreparedKvmGuest<16> as VmBackend>::Error;
+
+    fn run(&mut self, vcpu: u32) -> core::result::Result<VmExit, Self::Error> {
+        VmBackend::run(self.guest_mut(), vcpu)
+    }
+
+    fn read_guest(
+        &self,
+        guest_address: u64,
+        output: &mut [u8],
+    ) -> core::result::Result<(), Self::Error> {
+        VmBackend::read_guest(self.guest(), guest_address, output)
+    }
+
+    fn write_guest(
+        &mut self,
+        guest_address: u64,
+        input: &[u8],
+    ) -> core::result::Result<(), Self::Error> {
+        VmBackend::write_guest(self.guest_mut(), guest_address, input)
+    }
+
+    fn inject_interrupt(&mut self, vcpu: u32, vector: u8) -> core::result::Result<(), Self::Error> {
+        VmBackend::inject_interrupt(self.guest_mut(), vcpu, vector)
+    }
+}
 
 #[cfg(target_os = "linux")]
 #[cfg_attr(test, allow(dead_code))]
@@ -1705,20 +1807,37 @@ fn application_main() -> Result<()> {
         )
         .map_err(|_| anyhow!("failed to publish KVM service entry"))?;
     }
-    if let (Some(admission), Some(prepared)) = (isolation_admission.as_mut(), isolation_preparation)
+    let mut guest = if let (Some(admission), Some(prepared)) =
+        (isolation_admission.as_mut(), isolation_preparation)
     {
-        guest = prepared
+        let spec = prepared.spec();
+        let admitted_guest = prepared
             .commit(admission, guest)
             .map_err(|(_, error, _)| anyhow!("KVM isolation commit failed: {:?}", error))?
             .into_endpoint();
         if !admission.total_microvm_report().satisfied() {
             return Err(anyhow!("KVM Total MicroVM admission was not satisfied"));
         }
-    }
+        let mut launcher = PreparedMicrovmConfigurationLauncher::new(
+            AdmittedConfigurationGuestFactory::new(spec, admitted_guest),
+        );
+        let endpoint = launcher
+            .launch_microvm(spec)
+            .map_err(|(_, error)| anyhow!("KVM configuration lifecycle failed: {:?}", error))?;
+        KvmGuestOwner::Configuration { launcher, endpoint }
+    } else {
+        KvmGuestOwner::Direct(guest)
+    };
     let preparation_micros = preparation_started.elapsed().as_micros();
     let execution_started = Instant::now();
     if mode == LaunchMode::PciConfigurationProbe {
-        run_pci_configuration_probe(guest, &system, &executable, handoff.as_slice(), layout)?;
+        run_pci_configuration_probe(
+            guest.into_direct()?,
+            &system,
+            &executable,
+            handoff.as_slice(),
+            layout,
+        )?;
         println!(
             "verified signed test-only attached MRML block PCI-MMIO write/read/flush, decode-coupled native BAR install/withdraw with checked CR3 reload and continuation, orderly VM replacement, and pending-I/O reset isolation under KVM: verify={}us prepare={}us execute={}us total={}us",
             verification_micros,
@@ -1730,7 +1849,7 @@ fn application_main() -> Result<()> {
     }
     if mode == LaunchMode::BlockGuestDriverProbe {
         run_block_guest_driver_probe(
-            guest,
+            guest.into_direct()?,
             &system,
             &executable,
             handoff.as_slice(),
@@ -2589,6 +2708,7 @@ fn application_main() -> Result<()> {
         }
         _ => {}
     }
+    guest.finish()?;
     if let Some(admission) = isolation_admission.as_ref() {
         let report = admission.total_microvm_report();
         println!(

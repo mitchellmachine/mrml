@@ -4,10 +4,10 @@ version = 2
 toolchain = "nightly-2026-08-24"
 
 [graphs]
-compile_edges = 131
+compile_edges = 133
 build_tool_edges = 0
 runtime_interface_edges = 1
-package_edges = 127
+package_edges = 129
 system_release_edges = 3
 
 [[package]]
@@ -563,9 +563,9 @@ isolation_default = "native-process"
 isolation_minimum = "native-process"
 isolation_maximum = "native-process"
 isolation_supported = ["native-process"]
-compile_dependencies = ["org.mrml.library.crypto", "org.mrml.library.error", "org.mrml.library.package-format", "org.mrml.library.runtime", "org.mrml.library.tensor", "org.mrml.system.kernel", "org.mrml.system.vmm-kvm"]
+compile_dependencies = ["org.mrml.library.crypto", "org.mrml.library.error", "org.mrml.library.package-format", "org.mrml.library.runtime", "org.mrml.library.tensor", "org.mrml.service.config", "org.mrml.system.kernel", "org.mrml.system.vmm-kvm"]
 
-static_runtime = ["org.mrml.library.crypto", "org.mrml.library.error", "org.mrml.library.package-format", "org.mrml.library.runtime", "org.mrml.library.tensor", "org.mrml.system.kernel", "org.mrml.system.vmm-kvm"]
+static_runtime = ["org.mrml.library.crypto", "org.mrml.library.error", "org.mrml.library.package-format", "org.mrml.library.runtime", "org.mrml.library.tensor", "org.mrml.service.config", "org.mrml.system.kernel", "org.mrml.system.vmm-kvm"]
 boot_bound = []
 system_release_bound = []
 
@@ -576,9 +576,9 @@ isolation_default = "native-process"
 isolation_minimum = "native-process"
 isolation_maximum = "native-process"
 isolation_supported = ["native-process"]
-compile_dependencies = ["org.mrml.library.crypto", "org.mrml.library.error", "org.mrml.library.package-format", "org.mrml.library.runtime", "org.mrml.library.tensor", "org.mrml.system.kernel", "org.mrml.system.vmm-whp"]
+compile_dependencies = ["org.mrml.library.crypto", "org.mrml.library.error", "org.mrml.library.package-format", "org.mrml.library.runtime", "org.mrml.library.tensor", "org.mrml.service.config", "org.mrml.system.kernel", "org.mrml.system.vmm-whp"]
 
-static_runtime = ["org.mrml.library.crypto", "org.mrml.library.error", "org.mrml.library.package-format", "org.mrml.library.runtime", "org.mrml.library.tensor", "org.mrml.system.kernel", "org.mrml.system.vmm-whp"]
+static_runtime = ["org.mrml.library.crypto", "org.mrml.library.error", "org.mrml.library.package-format", "org.mrml.library.runtime", "org.mrml.library.tensor", "org.mrml.service.config", "org.mrml.system.kernel", "org.mrml.system.vmm-whp"]
 boot_bound = []
 system_release_bound = []
 

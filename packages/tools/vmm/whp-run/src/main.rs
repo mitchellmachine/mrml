@@ -3,6 +3,11 @@
 #![cfg_attr(test, allow(dead_code))]
 
 #[cfg(target_os = "windows")]
+use mrml_config::{
+    AdmittedConfigurationGuestFactory, ConfigurationMicrovmEndpoint,
+    MicrovmConfigurationServiceLauncher, PreparedMicrovmConfigurationLauncher,
+};
+#[cfg(target_os = "windows")]
 use mrml_crypto::{LAMPORT_PUBLIC_KEY_BYTES, Sha3_512};
 use mrml_error::{Result, anyhow};
 #[cfg(target_os = "windows")]
@@ -43,6 +48,104 @@ use mrml_package_format::{MAX_BOOT_PACKAGE_BYTES, MAX_BOOT_RELEASE_BYTES, admit_
 use mrml_runtime::{Instant, Vector, mrml_println as println};
 #[cfg(target_os = "windows")]
 use mrml_whp::{PreparedWhpGuest, WhpLaunchLayout, WhpSystem};
+
+#[cfg(target_os = "windows")]
+type WhpConfigurationLauncher<'system> = PreparedMicrovmConfigurationLauncher<
+    AdmittedConfigurationGuestFactory<PreparedWhpGuest<'system>>,
+>;
+
+#[cfg(target_os = "windows")]
+enum WhpGuestOwner<'system> {
+    Direct(PreparedWhpGuest<'system>),
+    Configuration {
+        launcher: WhpConfigurationLauncher<'system>,
+        endpoint: ConfigurationMicrovmEndpoint,
+    },
+}
+
+#[cfg(target_os = "windows")]
+impl<'system> WhpGuestOwner<'system> {
+    fn guest(&self) -> &PreparedWhpGuest<'system> {
+        match self {
+            Self::Direct(guest) => guest,
+            Self::Configuration { launcher, endpoint } => launcher
+                .active_guest(*endpoint)
+                .expect("stored configuration endpoint must select its retained guest"),
+        }
+    }
+
+    fn guest_mut(&mut self) -> &mut PreparedWhpGuest<'system> {
+        match self {
+            Self::Direct(guest) => guest,
+            Self::Configuration { launcher, endpoint } => launcher
+                .active_guest_mut(*endpoint)
+                .expect("stored configuration endpoint must select its retained guest"),
+        }
+    }
+
+    fn into_direct(self) -> Result<PreparedWhpGuest<'system>> {
+        match self {
+            Self::Direct(guest) => Ok(guest),
+            Self::Configuration { .. } => Err(anyhow!(
+                "configuration microVM cannot enter an unrelated launch path"
+            )),
+        }
+    }
+
+    fn finish(mut self) -> Result<()> {
+        if let Self::Configuration { launcher, endpoint } = &mut self {
+            launcher
+                .revoke_microvm(endpoint)
+                .map_err(|error| anyhow!("WHP configuration teardown failed: {:?}", error))?;
+        }
+        Ok(())
+    }
+}
+
+#[cfg(target_os = "windows")]
+impl<'system> core::ops::Deref for WhpGuestOwner<'system> {
+    type Target = PreparedWhpGuest<'system>;
+
+    fn deref(&self) -> &Self::Target {
+        self.guest()
+    }
+}
+
+#[cfg(target_os = "windows")]
+impl core::ops::DerefMut for WhpGuestOwner<'_> {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        self.guest_mut()
+    }
+}
+
+#[cfg(target_os = "windows")]
+impl VmBackend for WhpGuestOwner<'_> {
+    type Error = <PreparedWhpGuest<'static> as VmBackend>::Error;
+
+    fn run(&mut self, vcpu: u32) -> core::result::Result<VmExit, Self::Error> {
+        VmBackend::run(self.guest_mut(), vcpu)
+    }
+
+    fn read_guest(
+        &self,
+        guest_address: u64,
+        output: &mut [u8],
+    ) -> core::result::Result<(), Self::Error> {
+        VmBackend::read_guest(self.guest(), guest_address, output)
+    }
+
+    fn write_guest(
+        &mut self,
+        guest_address: u64,
+        input: &[u8],
+    ) -> core::result::Result<(), Self::Error> {
+        VmBackend::write_guest(self.guest_mut(), guest_address, input)
+    }
+
+    fn inject_interrupt(&mut self, vcpu: u32, vector: u8) -> core::result::Result<(), Self::Error> {
+        VmBackend::inject_interrupt(self.guest_mut(), vcpu, vector)
+    }
+}
 
 #[cfg(target_os = "windows")]
 const MAX_KERNEL_BUNDLE: usize = SIGNED_ARTIFACT_OVERHEAD_BYTES + 16 * 1024 * 1024;
@@ -1611,20 +1714,37 @@ fn application_main() -> Result<()> {
         )
         .map_err(|_| anyhow!("failed to publish WHP service entry"))?;
     }
-    if let (Some(admission), Some(prepared)) = (isolation_admission.as_mut(), isolation_preparation)
+    let mut guest = if let (Some(admission), Some(prepared)) =
+        (isolation_admission.as_mut(), isolation_preparation)
     {
-        guest = prepared
+        let spec = prepared.spec();
+        let admitted_guest = prepared
             .commit(admission, guest)
             .map_err(|(_, error, _)| anyhow!("WHP isolation commit failed: {:?}", error))?
             .into_endpoint();
         if !admission.total_microvm_report().satisfied() {
             return Err(anyhow!("WHP Total MicroVM admission was not satisfied"));
         }
-    }
+        let mut launcher = PreparedMicrovmConfigurationLauncher::new(
+            AdmittedConfigurationGuestFactory::new(spec, admitted_guest),
+        );
+        let endpoint = launcher
+            .launch_microvm(spec)
+            .map_err(|(_, error)| anyhow!("WHP configuration lifecycle failed: {:?}", error))?;
+        WhpGuestOwner::Configuration { launcher, endpoint }
+    } else {
+        WhpGuestOwner::Direct(guest)
+    };
     let preparation_micros = preparation_started.elapsed().as_micros();
     let execution_started = Instant::now();
     if pci_configuration_mode {
-        run_pci_configuration_probe(guest, &system, &executable, handoff.as_slice(), layout)?;
+        run_pci_configuration_probe(
+            guest.into_direct()?,
+            &system,
+            &executable,
+            handoff.as_slice(),
+            layout,
+        )?;
         println!(
             "verified signed test-only attached MRML block PCI-MMIO write/read/flush, decode-coupled native BAR install/withdraw with checked CR3 reload and continuation, orderly VM replacement, and pending-I/O reset isolation under WHP: verify={}us prepare={}us execute={}us total={}us",
             verification_micros,
@@ -1636,7 +1756,7 @@ fn application_main() -> Result<()> {
     }
     if block_guest_driver_mode {
         run_block_guest_driver_probe(
-            guest,
+            guest.into_direct()?,
             &system,
             &executable,
             handoff.as_slice(),
@@ -2364,6 +2484,7 @@ fn application_main() -> Result<()> {
         {
             return Err(anyhow!("restarted WHP service proof mismatch: {:?}", exit));
         }
+        guest.finish()?;
         if let Some(admission) = isolation_admission.as_ref() {
             let report = admission.total_microvm_report();
             println!(
@@ -2425,6 +2546,7 @@ fn application_main() -> Result<()> {
         execution_started.elapsed().as_micros(),
         total_started.elapsed().as_micros()
     );
+    guest.finish()?;
     Ok(())
 }
 

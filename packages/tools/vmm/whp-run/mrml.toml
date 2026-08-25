@@ -29,6 +29,13 @@ crate_type = "none"
 source = "-"
 
 [[dependency]]
+alias = "mrml_config"
+compile_name = "mrml-config"
+package = "org.mrml.service.config"
+scope = "compile"
+targets = ["WINDOWS"]
+
+[[dependency]]
 alias = "mrml_crypto"
 compile_name = "mrml-crypto"
 package = "org.mrml.library.crypto"

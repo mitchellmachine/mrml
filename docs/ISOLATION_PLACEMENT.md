@@ -54,13 +54,18 @@ construction publishes only an opaque generational endpoint bound to the exact
 domain, interface, provider, and policy generations; confirmed destruction
 retires it; uncertain destruction retains the guest and endpoint for exact
 retry. Forged or stale endpoint tokens never reach backend teardown. Concrete
-KVM and WHP factories are not yet wired to this owner, so the dual-placement
-milestone remains **PARTIALLY IMPLEMENTED** rather than complete.
+The KVM and WHP hosted configuration probes now transfer their transaction-
+committed prepared guest into this owner, use the retained guest through its
+exact endpoint, and explicitly retire the lifecycle on the successful terminal
+path. Unrelated launch modes cannot consume a configuration-owned guest. Both
+runner builds and focused unit suites pass with this identical ownership shape.
+The dual-placement milestone remains **PARTIALLY IMPLEMENTED** rather than
+complete because fresh live execution has not passed.
 An admitted-guest transfer factory now accepts one backend-constructed guest
 only when the complete `IsolationServiceSpec` matches, consumes it once, and
 permits trusted mutable guest access only through the matching generational
 endpoint. This is the explicit bridge the existing KVM/WHP construction
-transactions will use; it is not yet runner integration evidence.
+transactions use; it grants no new guest authority.
 
 The kernel routing API now also exposes a one-use prepared service transaction
 for VMM launchers whose construction spans multiple backend operations. The
@@ -74,10 +79,12 @@ their real guest and projected-service construction. The prepared transaction
 exists before either backend creates the guest and binds provider generation to
 the verified service artifact version; only the fully attached guest is
 committed as the endpoint, after which execution receives it back unchanged.
-Both runners build and their focused host tests pass. Fresh signed execution did
-not complete on either backend with the available retained artifacts, so live
-transaction execution parity remains **PLANNED** and no new hosted-execution
-claim is made.
+The committed guest now remains inside the common configuration lifecycle until
+explicit terminal retirement. Both runners build and their focused host tests
+pass. Fresh signed execution with the available retained diagnostic artifacts
+still failed before the expected receiver-block stage on both backends, so live
+transaction/lifecycle execution parity remains **PLANNED** and no new hosted-
+execution claim is made.
 
 The build tool now has a bounded composition prerequisite between exact package
 resolution and kernel launch routing. A `GenerationBoundServicePlacement`
