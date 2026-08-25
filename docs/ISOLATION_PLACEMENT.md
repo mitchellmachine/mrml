@@ -6,8 +6,10 @@ placements, and requires a reason for fixed platform policy. Current application
 and service manifests explicitly record native singleton policies. The bounded
 resolver applies package defaults, owner requests, and total-mode requests; an
 unsupported total promotion is reported as an exception and launches nothing.
-Workspace/lock retention, MicroVM launch, persistent settings, boot overrides,
-eligibility metadata, and cross-placement runtime transport remain **PLANNED**.
+The workspace model retains each validated policy and `mrml.lock` records its
+default, floor, ceiling, and supported set. MicroVM launch, persistent settings,
+boot overrides, eligibility metadata, and cross-placement runtime transport
+remain **PLANNED**.
 
 ## One policy, several placements
 
@@ -244,7 +246,8 @@ secrets.
 
 Documentation is not implementation evidence. Implement bounded milestones:
 
-1. policy/object schema and validation (**PARTIALLY IMPLEMENTED**);
+1. policy/object schema, validation, workspace retention, and lock output
+   (**PARTIALLY IMPLEMENTED**);
 2. one representative dual-placement service;
 3. one representative dual-placement GUI application;
 4. monitor placement visibility;

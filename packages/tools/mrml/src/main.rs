@@ -57,6 +57,7 @@ struct Component {
     features: Vec<String>,
     outputs: Vec<String>,
     input_policy: InputCounts,
+    isolation: IsolationPolicy,
     rust_action: Option<RustAction>,
 }
 
@@ -191,6 +192,7 @@ struct InterfaceBindingLock {
 struct ManifestDeclarations {
     records: Vec<Vec<String>>,
     interface_bindings: Vec<InterfaceBindingLock>,
+    isolation_policies: BTreeMap<String, IsolationPolicy>,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -677,6 +679,28 @@ fn write_workspace_lock(workspace: &Workspace, check: bool) -> Result<(), String
         encoded.push_str("[[package]]\n");
         encoded.push_str(&format!("id = \"{}\"\n", component.id));
         encoded.push_str(&format!("path = \"{}\"\n", component.path));
+        encoded.push_str(&format!(
+            "isolation_default = \"{}\"\n",
+            component.isolation.preferred().token()
+        ));
+        encoded.push_str(&format!(
+            "isolation_minimum = \"{}\"\n",
+            component.isolation.minimum().token()
+        ));
+        encoded.push_str(&format!(
+            "isolation_maximum = \"{}\"\n",
+            component.isolation.maximum().token()
+        ));
+        encoded.push_str("isolation_supported = [");
+        for (index, placement) in component.isolation.supported().iter().enumerate() {
+            if index != 0 {
+                encoded.push_str(", ");
+            }
+            encoded.push('"');
+            encoded.push_str(placement.token());
+            encoded.push('"');
+        }
+        encoded.push_str("]\n");
         encoded.push_str("compile_dependencies = [");
         for (index, dependency) in dependencies.iter().enumerate() {
             if index != 0 {
@@ -929,6 +953,7 @@ fn load_manifest_declarations(root: &Path) -> Result<ManifestDeclarations, Strin
     let mut interface_definitions = BTreeMap::new();
     let mut providers = Vec::new();
     let mut requirements = Vec::new();
+    let mut isolation_policies = BTreeMap::new();
     for member in members {
         if !safe_relative_path(member) || !seen.insert(member.clone()) {
             return Err(format!("InvalidWorkspaceMember {{ path: {member} }}"));
@@ -946,7 +971,15 @@ fn load_manifest_declarations(root: &Path) -> Result<ManifestDeclarations, Strin
         let package_kind = package
             .string("kind")
             .map_err(|error| manifest_error(&relative, error))?;
-        IsolationPolicy::parse(&document, package_kind, package_id)?;
+        let isolation = IsolationPolicy::parse(&document, package_kind, package_id)?;
+        if isolation_policies
+            .insert(package_id.to_owned(), isolation)
+            .is_some()
+        {
+            return Err(format!(
+                "DuplicateIsolationPolicy {{ package: {package_id} }}"
+            ));
+        }
         let target_families: Vec<_> = document
             .array_sections("target")
             .map(v2_target_family)
@@ -1112,6 +1145,7 @@ fn load_manifest_declarations(root: &Path) -> Result<ManifestDeclarations, Strin
     Ok(ManifestDeclarations {
         records: declarations,
         interface_bindings,
+        isolation_policies,
     })
 }
 
@@ -1662,6 +1696,11 @@ fn load_workspace() -> Result<Workspace, String> {
                     features: split_declaration(features),
                     outputs: split_declaration(outputs),
                     input_policy: parse_input_policy(input_policy, index + 1)?,
+                    isolation: declarations
+                        .isolation_policies
+                        .get(*id)
+                        .cloned()
+                        .ok_or_else(|| format!("IsolationPolicyMissing {{ package: {id} }}"))?,
                     rust_action: None,
                 });
             }
@@ -4688,6 +4727,7 @@ mod tests {
             features: Vec::new(),
             outputs: vec![format!("{package}:lib")],
             input_policy: InputCounts::default(),
+            isolation: IsolationPolicy::default_for_kind("test"),
             rust_action: None,
         }
     }

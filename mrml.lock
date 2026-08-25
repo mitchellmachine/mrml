@@ -13,6 +13,10 @@ system_release_edges = 3
 [[package]]
 id = "org.mrml.app.cli"
 path = "packages/apps/cli"
+isolation_default = "native-process"
+isolation_minimum = "native-process"
+isolation_maximum = "native-process"
+isolation_supported = ["native-process"]
 compile_dependencies = ["org.mrml.library.agent", "org.mrml.library.error", "org.mrml.library.runtime", "org.mrml.library.terminal-style", "org.mrml.tool.host"]
 
 static_runtime = ["org.mrml.library.agent", "org.mrml.library.error", "org.mrml.library.runtime", "org.mrml.library.terminal-style", "org.mrml.tool.host"]
@@ -22,6 +26,10 @@ system_release_bound = []
 [[package]]
 id = "org.mrml.app.server"
 path = "packages/apps/server"
+isolation_default = "native-process"
+isolation_minimum = "native-process"
+isolation_maximum = "native-process"
+isolation_supported = ["native-process"]
 compile_dependencies = ["org.mrml.library.agent", "org.mrml.library.error", "org.mrml.library.json", "org.mrml.library.model", "org.mrml.library.runtime", "org.mrml.library.terminal-style", "org.mrml.library.tls", "org.mrml.tool.host"]
 
 static_runtime = ["org.mrml.library.agent", "org.mrml.library.error", "org.mrml.library.json", "org.mrml.library.model", "org.mrml.library.runtime", "org.mrml.library.terminal-style", "org.mrml.library.tls", "org.mrml.tool.host"]
@@ -31,6 +39,10 @@ system_release_bound = []
 [[package]]
 id = "org.mrml.compiler.core"
 path = "packages/compiler/core"
+isolation_default = "native-process"
+isolation_minimum = "native-process"
+isolation_maximum = "native-process"
+isolation_supported = ["native-process"]
 compile_dependencies = []
 
 static_runtime = []
@@ -40,6 +52,10 @@ system_release_bound = []
 [[package]]
 id = "org.mrml.compiler.driver"
 path = "packages/compiler/driver"
+isolation_default = "native-process"
+isolation_minimum = "native-process"
+isolation_maximum = "native-process"
+isolation_supported = ["native-process"]
 compile_dependencies = ["org.mrml.compiler.core", "org.mrml.library.error", "org.mrml.library.runtime"]
 
 static_runtime = ["org.mrml.compiler.core", "org.mrml.library.error", "org.mrml.library.runtime"]
@@ -49,6 +65,10 @@ system_release_bound = []
 [[package]]
 id = "org.mrml.experiment.vbs-enclave"
 path = "packages/experiments/mrml-vbs-enclave"
+isolation_default = "native-process"
+isolation_minimum = "native-process"
+isolation_maximum = "native-process"
+isolation_supported = ["native-process"]
 compile_dependencies = ["org.mrml.library.crypto", "org.mrml.system.kernel"]
 
 static_runtime = ["org.mrml.library.crypto", "org.mrml.system.kernel"]
@@ -58,6 +78,10 @@ system_release_bound = []
 [[package]]
 id = "org.mrml.experiment.vbs-host"
 path = "packages/experiments/mrml-vbs-host"
+isolation_default = "native-process"
+isolation_minimum = "native-process"
+isolation_maximum = "native-process"
+isolation_supported = ["native-process"]
 compile_dependencies = ["org.mrml.library.error", "org.mrml.library.runtime", "org.mrml.library.windows", "org.mrml.system.kernel", "org.mrml.system.vmm-whp"]
 
 static_runtime = ["org.mrml.library.error", "org.mrml.library.runtime", "org.mrml.library.windows", "org.mrml.system.kernel", "org.mrml.system.vmm-whp"]
@@ -67,6 +91,10 @@ system_release_bound = []
 [[package]]
 id = "org.mrml.interface.compression.zstd"
 path = "packages/interfaces/org.mrml.interface.compression.zstd"
+isolation_default = "platform"
+isolation_minimum = "platform"
+isolation_maximum = "platform"
+isolation_supported = ["platform"]
 compile_dependencies = []
 
 static_runtime = []
@@ -76,6 +104,10 @@ system_release_bound = []
 [[package]]
 id = "org.mrml.library.agent"
 path = "packages/libraries/agent"
+isolation_default = "in-process"
+isolation_minimum = "in-process"
+isolation_maximum = "in-process"
+isolation_supported = ["in-process"]
 compile_dependencies = ["org.mrml.library.crypto", "org.mrml.library.error", "org.mrml.library.http", "org.mrml.library.json", "org.mrml.library.model", "org.mrml.library.runtime", "org.mrml.library.terminal-style", "org.mrml.tool.host"]
 
 static_runtime = ["org.mrml.library.crypto", "org.mrml.library.error", "org.mrml.library.http", "org.mrml.library.json", "org.mrml.library.model", "org.mrml.library.runtime", "org.mrml.library.terminal-style", "org.mrml.tool.host"]
@@ -85,6 +117,10 @@ system_release_bound = []
 [[package]]
 id = "org.mrml.library.av1"
 path = "packages/libraries/av1"
+isolation_default = "in-process"
+isolation_minimum = "in-process"
+isolation_maximum = "in-process"
+isolation_supported = ["in-process"]
 compile_dependencies = ["org.mrml.library.linux", "org.mrml.library.runtime", "org.mrml.library.windows"]
 
 static_runtime = ["org.mrml.library.linux", "org.mrml.library.runtime", "org.mrml.library.windows"]
@@ -94,6 +130,10 @@ system_release_bound = []
 [[package]]
 id = "org.mrml.library.crypto"
 path = "packages/libraries/crypto"
+isolation_default = "in-process"
+isolation_minimum = "in-process"
+isolation_maximum = "in-process"
+isolation_supported = ["in-process"]
 compile_dependencies = ["org.mrml.library.runtime"]
 
 static_runtime = ["org.mrml.library.runtime"]
@@ -103,6 +143,10 @@ system_release_bound = []
 [[package]]
 id = "org.mrml.library.error"
 path = "packages/libraries/error"
+isolation_default = "in-process"
+isolation_minimum = "in-process"
+isolation_maximum = "in-process"
+isolation_supported = ["in-process"]
 compile_dependencies = ["org.mrml.library.json", "org.mrml.library.runtime"]
 
 static_runtime = ["org.mrml.library.json", "org.mrml.library.runtime"]
@@ -112,6 +156,10 @@ system_release_bound = []
 [[package]]
 id = "org.mrml.library.http"
 path = "packages/libraries/http"
+isolation_default = "in-process"
+isolation_minimum = "in-process"
+isolation_maximum = "in-process"
+isolation_supported = ["in-process"]
 compile_dependencies = ["org.mrml.library.runtime", "org.mrml.library.tls"]
 
 static_runtime = ["org.mrml.library.runtime", "org.mrml.library.tls"]
@@ -121,6 +169,10 @@ system_release_bound = []
 [[package]]
 id = "org.mrml.library.json"
 path = "packages/libraries/json"
+isolation_default = "in-process"
+isolation_minimum = "in-process"
+isolation_maximum = "in-process"
+isolation_supported = ["in-process"]
 compile_dependencies = ["org.mrml.library.runtime"]
 
 static_runtime = ["org.mrml.library.runtime"]
@@ -130,6 +182,10 @@ system_release_bound = []
 [[package]]
 id = "org.mrml.library.linux"
 path = "packages/libraries/linux"
+isolation_default = "in-process"
+isolation_minimum = "in-process"
+isolation_maximum = "in-process"
+isolation_supported = ["in-process"]
 compile_dependencies = []
 
 static_runtime = []
@@ -139,6 +195,10 @@ system_release_bound = []
 [[package]]
 id = "org.mrml.library.machine"
 path = "packages/apps/machine"
+isolation_default = "in-process"
+isolation_minimum = "in-process"
+isolation_maximum = "in-process"
+isolation_supported = ["in-process"]
 compile_dependencies = ["org.mrml.library.agent", "org.mrml.library.error", "org.mrml.library.json", "org.mrml.library.runtime", "org.mrml.tool.host"]
 
 static_runtime = ["org.mrml.library.agent", "org.mrml.library.error", "org.mrml.library.json", "org.mrml.library.runtime", "org.mrml.tool.host"]
@@ -148,6 +208,10 @@ system_release_bound = []
 [[package]]
 id = "org.mrml.library.math"
 path = "packages/libraries/math"
+isolation_default = "in-process"
+isolation_minimum = "in-process"
+isolation_maximum = "in-process"
+isolation_supported = ["in-process"]
 compile_dependencies = []
 
 static_runtime = []
@@ -157,6 +221,10 @@ system_release_bound = []
 [[package]]
 id = "org.mrml.library.model"
 path = "packages/libraries/model"
+isolation_default = "in-process"
+isolation_minimum = "in-process"
+isolation_maximum = "in-process"
+isolation_supported = ["in-process"]
 compile_dependencies = ["org.mrml.library.json", "org.mrml.library.runtime", "org.mrml.library.tensor"]
 
 static_runtime = ["org.mrml.library.json", "org.mrml.library.runtime", "org.mrml.library.tensor"]
@@ -166,6 +234,10 @@ system_release_bound = []
 [[package]]
 id = "org.mrml.library.opus"
 path = "packages/libraries/opus"
+isolation_default = "in-process"
+isolation_minimum = "in-process"
+isolation_maximum = "in-process"
+isolation_supported = ["in-process"]
 compile_dependencies = ["org.mrml.library.math"]
 
 static_runtime = ["org.mrml.library.math"]
@@ -175,6 +247,10 @@ system_release_bound = []
 [[package]]
 id = "org.mrml.library.package-format"
 path = "packages/libraries/package-format"
+isolation_default = "in-process"
+isolation_minimum = "in-process"
+isolation_maximum = "in-process"
+isolation_supported = ["in-process"]
 compile_dependencies = ["org.mrml.library.crypto"]
 
 static_runtime = ["org.mrml.library.crypto"]
@@ -184,6 +260,10 @@ system_release_bound = []
 [[package]]
 id = "org.mrml.library.percent-encoding"
 path = "packages/libraries/percent-encoding"
+isolation_default = "in-process"
+isolation_minimum = "in-process"
+isolation_maximum = "in-process"
+isolation_supported = ["in-process"]
 compile_dependencies = ["org.mrml.library.runtime"]
 
 static_runtime = ["org.mrml.library.runtime"]
@@ -193,6 +273,10 @@ system_release_bound = []
 [[package]]
 id = "org.mrml.library.runtime"
 path = "packages/libraries/runtime"
+isolation_default = "in-process"
+isolation_minimum = "in-process"
+isolation_maximum = "in-process"
+isolation_supported = ["in-process"]
 compile_dependencies = ["org.mrml.library.linux", "org.mrml.library.windows"]
 
 static_runtime = ["org.mrml.library.linux", "org.mrml.library.windows"]
@@ -202,6 +286,10 @@ system_release_bound = []
 [[package]]
 id = "org.mrml.library.ssh"
 path = "packages/libraries/ssh"
+isolation_default = "in-process"
+isolation_minimum = "in-process"
+isolation_maximum = "in-process"
+isolation_supported = ["in-process"]
 compile_dependencies = ["org.mrml.library.crypto", "org.mrml.library.runtime"]
 
 static_runtime = ["org.mrml.library.crypto", "org.mrml.library.runtime"]
@@ -211,6 +299,10 @@ system_release_bound = []
 [[package]]
 id = "org.mrml.library.tensor"
 path = "packages/gpu/tensor"
+isolation_default = "in-process"
+isolation_minimum = "in-process"
+isolation_maximum = "in-process"
+isolation_supported = ["in-process"]
 compile_dependencies = ["org.mrml.library.linux", "org.mrml.library.math", "org.mrml.library.runtime", "org.mrml.library.windows", "org.mrml.system.kernel"]
 
 static_runtime = ["org.mrml.library.linux", "org.mrml.library.math", "org.mrml.library.runtime", "org.mrml.library.windows", "org.mrml.system.kernel"]
@@ -220,6 +312,10 @@ system_release_bound = []
 [[package]]
 id = "org.mrml.library.terminal-style"
 path = "packages/libraries/terminal-style"
+isolation_default = "in-process"
+isolation_minimum = "in-process"
+isolation_maximum = "in-process"
+isolation_supported = ["in-process"]
 compile_dependencies = ["org.mrml.library.linux", "org.mrml.library.runtime", "org.mrml.library.windows"]
 
 static_runtime = ["org.mrml.library.linux", "org.mrml.library.runtime", "org.mrml.library.windows"]
@@ -229,6 +325,10 @@ system_release_bound = []
 [[package]]
 id = "org.mrml.library.tls"
 path = "packages/libraries/tls"
+isolation_default = "in-process"
+isolation_minimum = "in-process"
+isolation_maximum = "in-process"
+isolation_supported = ["in-process"]
 compile_dependencies = ["org.mrml.library.crypto", "org.mrml.library.runtime"]
 
 static_runtime = ["org.mrml.library.crypto", "org.mrml.library.runtime"]
@@ -238,6 +338,10 @@ system_release_bound = []
 [[package]]
 id = "org.mrml.library.tokenizer"
 path = "packages/libraries/tokenizer"
+isolation_default = "in-process"
+isolation_minimum = "in-process"
+isolation_maximum = "in-process"
+isolation_supported = ["in-process"]
 compile_dependencies = ["org.mrml.library.runtime"]
 
 static_runtime = ["org.mrml.library.runtime"]
@@ -247,6 +351,10 @@ system_release_bound = []
 [[package]]
 id = "org.mrml.library.uefi"
 path = "packages/libraries/uefi"
+isolation_default = "in-process"
+isolation_minimum = "in-process"
+isolation_maximum = "in-process"
+isolation_supported = ["in-process"]
 compile_dependencies = ["org.mrml.library.crypto", "org.mrml.library.package-format", "org.mrml.service.storage", "org.mrml.system.kernel"]
 
 static_runtime = []
@@ -256,6 +364,10 @@ system_release_bound = []
 [[package]]
 id = "org.mrml.library.wikipedia"
 path = "packages/libraries/wikipedia"
+isolation_default = "in-process"
+isolation_minimum = "in-process"
+isolation_maximum = "in-process"
+isolation_supported = ["in-process"]
 compile_dependencies = ["org.mrml.library.runtime", "org.mrml.zim", "org.mrml.zstd"]
 
 static_runtime = ["org.mrml.library.runtime", "org.mrml.zim", "org.mrml.zstd"]
@@ -265,6 +377,10 @@ system_release_bound = []
 [[package]]
 id = "org.mrml.library.windows"
 path = "packages/libraries/windows"
+isolation_default = "in-process"
+isolation_minimum = "in-process"
+isolation_maximum = "in-process"
+isolation_supported = ["in-process"]
 compile_dependencies = []
 
 static_runtime = []
@@ -274,6 +390,10 @@ system_release_bound = []
 [[package]]
 id = "org.mrml.service.config"
 path = "packages/services/config"
+isolation_default = "native-service"
+isolation_minimum = "native-service"
+isolation_maximum = "native-service"
+isolation_supported = ["native-service"]
 compile_dependencies = ["org.mrml.library.crypto", "org.mrml.service.storage", "org.mrml.system.kernel"]
 
 static_runtime = ["org.mrml.library.crypto", "org.mrml.service.storage", "org.mrml.system.kernel"]
@@ -283,6 +403,10 @@ system_release_bound = []
 [[package]]
 id = "org.mrml.service.storage"
 path = "packages/services/storage"
+isolation_default = "native-service"
+isolation_minimum = "native-service"
+isolation_maximum = "native-service"
+isolation_supported = ["native-service"]
 compile_dependencies = ["org.mrml.library.crypto", "org.mrml.system.kernel"]
 
 static_runtime = ["org.mrml.library.crypto", "org.mrml.system.kernel"]
@@ -292,6 +416,10 @@ system_release_bound = []
 [[package]]
 id = "org.mrml.system.bootloader"
 path = "packages/system/bootloader"
+isolation_default = "platform"
+isolation_minimum = "platform"
+isolation_maximum = "platform"
+isolation_supported = ["platform"]
 compile_dependencies = ["org.mrml.system.kernel"]
 
 static_runtime = []
@@ -301,6 +429,10 @@ system_release_bound = []
 [[package]]
 id = "org.mrml.system.kernel"
 path = "packages/system/kernel"
+isolation_default = "platform"
+isolation_minimum = "platform"
+isolation_maximum = "platform"
+isolation_supported = ["platform"]
 compile_dependencies = ["org.mrml.library.crypto"]
 
 static_runtime = ["org.mrml.library.crypto"]
@@ -310,6 +442,10 @@ system_release_bound = []
 [[package]]
 id = "org.mrml.system.kernel-bench"
 path = "packages/tests/kernel-bench"
+isolation_default = "native-process"
+isolation_minimum = "native-process"
+isolation_maximum = "native-process"
+isolation_supported = ["native-process"]
 compile_dependencies = ["org.mrml.library.runtime", "org.mrml.system.kernel"]
 
 static_runtime = ["org.mrml.library.runtime", "org.mrml.system.kernel"]
@@ -319,6 +455,10 @@ system_release_bound = []
 [[package]]
 id = "org.mrml.system.service-image"
 path = "packages/system/service-image"
+isolation_default = "native-service"
+isolation_minimum = "native-service"
+isolation_maximum = "native-service"
+isolation_supported = ["native-service"]
 compile_dependencies = ["org.mrml.library.crypto", "org.mrml.service.config", "org.mrml.service.storage", "org.mrml.system.kernel"]
 
 static_runtime = []
@@ -328,6 +468,10 @@ system_release_bound = ["org.mrml.library.crypto", "org.mrml.service.config", "o
 [[package]]
 id = "org.mrml.system.vmm-kvm"
 path = "packages/system/vmm/kvm"
+isolation_default = "platform"
+isolation_minimum = "platform"
+isolation_maximum = "platform"
+isolation_supported = ["platform"]
 compile_dependencies = ["org.mrml.library.crypto", "org.mrml.library.runtime", "org.mrml.system.kernel"]
 
 static_runtime = ["org.mrml.library.runtime", "org.mrml.system.kernel"]
@@ -337,6 +481,10 @@ system_release_bound = []
 [[package]]
 id = "org.mrml.system.vmm-whp"
 path = "packages/system/vmm/whp"
+isolation_default = "platform"
+isolation_minimum = "platform"
+isolation_maximum = "platform"
+isolation_supported = ["platform"]
 compile_dependencies = ["org.mrml.library.crypto", "org.mrml.library.runtime", "org.mrml.system.kernel"]
 
 static_runtime = ["org.mrml.library.runtime", "org.mrml.system.kernel"]
@@ -346,6 +494,10 @@ system_release_bound = []
 [[package]]
 id = "org.mrml.tool.build"
 path = "packages/tools/mrml"
+isolation_default = "platform"
+isolation_minimum = "platform"
+isolation_maximum = "platform"
+isolation_supported = ["platform"]
 compile_dependencies = []
 
 static_runtime = []
@@ -355,6 +507,10 @@ system_release_bound = []
 [[package]]
 id = "org.mrml.tool.git"
 path = "packages/tools/git"
+isolation_default = "native-process"
+isolation_minimum = "native-process"
+isolation_maximum = "native-process"
+isolation_supported = ["native-process"]
 compile_dependencies = ["org.mrml.library.error", "org.mrml.library.runtime", "org.mrml.library.ssh", "org.mrml.library.terminal-style"]
 
 static_runtime = ["org.mrml.library.error", "org.mrml.library.runtime", "org.mrml.library.ssh", "org.mrml.library.terminal-style"]
@@ -364,6 +520,10 @@ system_release_bound = []
 [[package]]
 id = "org.mrml.tool.host"
 path = "packages/tools/host"
+isolation_default = "native-process"
+isolation_minimum = "native-process"
+isolation_maximum = "native-process"
+isolation_supported = ["native-process"]
 compile_dependencies = ["org.mrml.library.error", "org.mrml.library.http", "org.mrml.library.json", "org.mrml.library.linux", "org.mrml.library.percent-encoding", "org.mrml.library.runtime", "org.mrml.library.terminal-style", "org.mrml.library.windows"]
 
 static_runtime = ["org.mrml.library.error", "org.mrml.library.http", "org.mrml.library.json", "org.mrml.library.linux", "org.mrml.library.percent-encoding", "org.mrml.library.runtime", "org.mrml.library.terminal-style", "org.mrml.library.windows"]
@@ -373,6 +533,10 @@ system_release_bound = []
 [[package]]
 id = "org.mrml.tool.sign"
 path = "packages/tools/sign"
+isolation_default = "native-process"
+isolation_minimum = "native-process"
+isolation_maximum = "native-process"
+isolation_supported = ["native-process"]
 compile_dependencies = ["org.mrml.library.crypto", "org.mrml.library.error", "org.mrml.library.runtime", "org.mrml.system.kernel"]
 
 static_runtime = ["org.mrml.library.crypto", "org.mrml.library.error", "org.mrml.library.runtime", "org.mrml.system.kernel"]
@@ -382,6 +546,10 @@ system_release_bound = []
 [[package]]
 id = "org.mrml.tool.trainer"
 path = "packages/tools/trainer"
+isolation_default = "native-process"
+isolation_minimum = "native-process"
+isolation_maximum = "native-process"
+isolation_supported = ["native-process"]
 compile_dependencies = ["org.mrml.library.math", "org.mrml.library.runtime", "org.mrml.library.tensor", "org.mrml.library.tokenizer", "org.mrml.library.wikipedia"]
 
 static_runtime = ["org.mrml.library.math", "org.mrml.library.runtime", "org.mrml.library.tensor", "org.mrml.library.tokenizer", "org.mrml.library.wikipedia"]
@@ -391,6 +559,10 @@ system_release_bound = []
 [[package]]
 id = "org.mrml.tool.vmm-kvm-run"
 path = "packages/tools/vmm/kvm-run"
+isolation_default = "native-process"
+isolation_minimum = "native-process"
+isolation_maximum = "native-process"
+isolation_supported = ["native-process"]
 compile_dependencies = ["org.mrml.library.crypto", "org.mrml.library.error", "org.mrml.library.package-format", "org.mrml.library.runtime", "org.mrml.library.tensor", "org.mrml.system.kernel", "org.mrml.system.vmm-kvm"]
 
 static_runtime = ["org.mrml.library.crypto", "org.mrml.library.error", "org.mrml.library.package-format", "org.mrml.library.runtime", "org.mrml.library.tensor", "org.mrml.system.kernel", "org.mrml.system.vmm-kvm"]
@@ -400,6 +572,10 @@ system_release_bound = []
 [[package]]
 id = "org.mrml.tool.vmm-whp-run"
 path = "packages/tools/vmm/whp-run"
+isolation_default = "native-process"
+isolation_minimum = "native-process"
+isolation_maximum = "native-process"
+isolation_supported = ["native-process"]
 compile_dependencies = ["org.mrml.library.crypto", "org.mrml.library.error", "org.mrml.library.package-format", "org.mrml.library.runtime", "org.mrml.library.tensor", "org.mrml.system.kernel", "org.mrml.system.vmm-whp"]
 
 static_runtime = ["org.mrml.library.crypto", "org.mrml.library.error", "org.mrml.library.package-format", "org.mrml.library.runtime", "org.mrml.library.tensor", "org.mrml.system.kernel", "org.mrml.system.vmm-whp"]
@@ -409,6 +585,10 @@ system_release_bound = []
 [[package]]
 id = "org.mrml.zim"
 path = "packages/libraries/zim"
+isolation_default = "in-process"
+isolation_minimum = "in-process"
+isolation_maximum = "in-process"
+isolation_supported = ["in-process"]
 compile_dependencies = ["org.mrml.interface.compression.zstd", "org.mrml.library.runtime"]
 
 static_runtime = ["org.mrml.library.runtime"]
@@ -418,6 +598,10 @@ system_release_bound = []
 [[package]]
 id = "org.mrml.zstd"
 path = "packages/libraries/zstd"
+isolation_default = "in-process"
+isolation_minimum = "in-process"
+isolation_maximum = "in-process"
+isolation_supported = ["in-process"]
 compile_dependencies = ["org.mrml.interface.compression.zstd", "org.mrml.library.runtime"]
 
 static_runtime = ["org.mrml.library.runtime"]

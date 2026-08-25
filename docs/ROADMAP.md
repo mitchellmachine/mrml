@@ -29,8 +29,8 @@ Three new persistent deltas are documented before implementation:
   Manifest V2 validation and explicit current application/service native
   policies are **IMPLEMENTED**. The
   resolver handles defaults, owner selection, total-mode promotion, and visible
-  unsupported exceptions; workspace/lock retention, owner-setting persistence,
-  and runtime work remain **PLANNED**.
+  unsupported exceptions, and the workspace/lock retains each validated policy;
+  owner-setting persistence and runtime work remain **PLANNED**.
 - [storage/STORAGE_AND_OPTICAL.md](storage/STORAGE_AND_OPTICAL.md) defines the
   disk/image, GPT/FAT, UDF/ISO, MMC, AHCI/USB optical, burning, and virtual-
   optical dependency order. New optical mechanisms are **PLANNED**.
