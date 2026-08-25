@@ -130,6 +130,19 @@ explicitly and downgrade the status rather than guessing.
   candidate health/known-good rollback, typed progress/errors, offline install,
   owner-built/third-party sources, and exact transaction-bound disk operations.
 
+- Dynamic components are **PLANNED** in
+  `docs/packages/COMPONENT_INTERFACES.md`. Rust crates are not automatically
+  packages; packages are not interfaces. `org.mrml.zstd` is the canonical first
+  independently serviced provider and `org.mrml.zim` consumes
+  `org.mrml.interface.compression.zstd@3`. Compatible provider updates do not
+  rebuild ZIM; running consumers retain exact old provider generations; mapped
+  executable pages are never patched; old providers remain until live bindings,
+  retained/rollback generations, snapshots, and GC permit reclamation. In-
+  process and service providers remain distinct, there is no DLL/SO path-search
+  model, metadata grants no capability, substitution is explicit policy, package
+  and ABI generations differ, boot/recovery codecs may remain pinned/static, and
+  `mrml-rustc` will eventually validate the same explicit ABI as upstream rustc.
+
 - Kernel mechanisms: `crates/mrml-kernel/src/`
 - x86_64 CPU, memory, SMP, VMX, EPT, VT-d: `crates/mrml-kernel/src/arch/x86_64/`
 - CPU support floor, Intel/AMD microcode, post-update vulnerability state,

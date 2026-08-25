@@ -37,6 +37,14 @@ WebAssembly runtime, or CET/IBT application-admission enforcement.
 
 ## Foundational application model
 
+Native application packages may use static dependencies, in-process dynamic
+interfaces, or isolated service interfaces. The stable component contract is an
+explicit MRML interface—not Rust's compiler ABI, a provider package name, or a
+DLL/SO filename. Exact resolution, loading, lifetime, and update behavior are
+specified in [packages/COMPONENT_INTERFACES.md](packages/COMPONENT_INTERFACES.md).
+Loading an in-process provider grants no new authority; an isolated provider
+receives separately projected capabilities.
+
 Applications receive explicit quantitative memory pools according to
 [memory/MEMORY_RESOURCE_MODEL.md](memory/MEMORY_RESOURCE_MODEL.md), not ambient
 unlimited allocation. Usage introspection is separate from memory-content access.

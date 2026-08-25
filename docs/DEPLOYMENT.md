@@ -3,6 +3,9 @@
 Source-to-artifact/package/sign/release/image orchestration is canonical in
 [build/BUILD_SYSTEM.md](build/BUILD_SYSTEM.md). Deployment consumes verified
 outputs and does not silently select compilers or hold ordinary build/signing keys.
+Versioned independently serviced component interfaces, provider bindings, and
+their exact-generation lifetime rules are canonical in
+[packages/COMPONENT_INTERFACES.md](packages/COMPONENT_INTERFACES.md).
 
 **Status: PLANNED.** Existing signed-container parsing, UEFI loading, measured-
 boot plumbing, release/recovery journals, rollback policy, native storage
@@ -55,6 +58,13 @@ packages may carry `META/`, shared `RESOURCES/`, and payloads for `x86_64`,
 `aarch64`, and `riscv64`; this does not promote architectures beyond the current
 roadmap. Large releases may use architecture-specific split artifacts under one
 logical release.
+
+Package identity is not interface identity. A package such as `org.mrml.zstd`
+may provide `org.mrml.interface.compression.zstd@3`, while `org.mrml.zim`
+requires that interface rather than a provider name or filename. Package
+versions and interface generations are separate. A compatible independently
+serviced provider change creates a candidate generation without rebuilding the
+consumer; runtime edges are not Cargo dependencies or path-based DLL/SO lookup.
 
 Zstandard is the preferred package/image compression family. Canonical bounded
 profiles support deterministic hashing, signing, reproducibility, and content
@@ -143,6 +153,13 @@ The Store may authenticate and download kernel, VMM, bootloader, services,
 drivers, modules, or applications, but only a generation builder performs
 admission and constructs a candidate. Download does not grant kernel, MMIO, DMA,
 filesystem, network, device, or other capability.
+
+For component updates the Store also resolves typed `PROVIDES`/`REQUIRES`, major
+interface generation, dependency form, and update policy before activation. It
+never overwrites mapped code. Existing consumers retain exact old provider
+generations; new consumers may bind a compatible newly admitted generation; ABI-
+incompatible substitution fails. Previews expose affected dependents and whether
+the consumer itself changed.
 
 ## System images, export, and servicing
 

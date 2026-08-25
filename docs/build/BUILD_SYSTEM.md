@@ -108,6 +108,13 @@ verified. The first nine library components, `mrml-math`,
 bootstrap tool under `tools/mrml` and compiler tooling under a clear compiler
 location. Do not create empty speculative directories.
 
+Rust crate identity, MRML package identity, and stable MRML interface identity
+are distinct. The runtime component model is specified in
+[../packages/COMPONENT_INTERFACES.md](../packages/COMPONENT_INTERFACES.md).
+`mrml` must resolve compile-time crate edges separately from `STATIC`,
+`DYNAMIC_INTERFACE`, `SERVICE_INTERFACE`, and `BUILD_ONLY` package edges. Cargo's
+graph never becomes the permanent runtime resolver.
+
 `mrml doctor` fails unless locked Cargo metadata has exact one-to-one package
 and manifest-path coverage with that inventory and every local Cargo dependency
 maps to a declared component. `mrml audit` emits dependencies, features,
@@ -124,6 +131,14 @@ profile/compiler mode, target slices, capability requests, dependencies/interfac
 and resources. It grants no authority. An exact lockfile binds dependency identity,
 version, digest, source, and relevant compiler/tool inputs; system graphs are
 especially strict.
+
+For versioned components, manifests additionally distinguish provided and
+required interface identities/major generations, dependency form, and update
+policy. Runtime locks record the exact provider package generation and digest
+selected for each `InterfaceBinding`. Canonical schemas eventually drive safe
+generated bindings, ABI fingerprints/conformance checks, and structured ABI
+diffs for both upstream rustc and `mrml-rustc`; neither Rust's native ABI nor a
+package name is the stable interface.
 
 Profiles define compiler restrictions, ABI, unsafe/FFI policy, format, metadata,
 signing, and admission:

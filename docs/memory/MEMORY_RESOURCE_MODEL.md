@@ -86,6 +86,14 @@ accounted bounded memory. Reclaimable cache is still inspectable resource use.
 Sparse VA or cheap requests cannot force unbounded privileged page-table/kernel
 growth. Charge policy avoids denial-of-service amplification.
 
+Future in-process components may share one immutable executable `MemoryObject`
+physically across consumers, as specified in
+[../packages/COMPONENT_INTERFACES.md](../packages/COMPONENT_INTERFACES.md).
+Accounting charges physical backing once under explicit system/cache policy and
+charges every consumer for bounded mapping metadata and private component state.
+Mapping fanout is bounded. Sharing never hides RAM, creates allocation authority,
+permits writable executable code, or lets a stale mapping select newer code.
+
 Pinning is separate scarce authority because it limits reclamation and may enable
 device visibility. Object ownership never implies DMA. DMA requires the exact
 object plus device/DMA authority and a valid IOMMU mapping; invalidation completes

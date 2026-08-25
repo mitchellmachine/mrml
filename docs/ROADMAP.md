@@ -25,6 +25,17 @@ Its first end-to-end acceptance target is the same signed image and text install
 creating and independently booting generation 1 on supported KVM and WHP. Physical
 UEFI/NVMe/power-cut work is a later, separately evidenced gate.
 
+The independently serviced component lane is **PLANNED** in
+[packages/COMPONENT_INTERFACES.md](packages/COMPONENT_INTERFACES.md) and follows,
+without blocking earlier foundations: canonical package identity;
+`SystemGeneration`; package resolver; loader and stable MRML ABI primitives; and
+quantitative memory accounting. Then add the interface schema, typed
+provides/requires metadata, exact resolver, immutable in-process loader,
+generation-safe binding, Zstd ABI-3 provider, ZIM migration, Store servicing,
+retention/GC and inspection, optional service form, and cross-compiler evidence.
+Do not convert kernel dependencies or every Rust crate, and do not claim any of
+these steps implemented before code and focused tests exist.
+
 Within existing boot/deployment phases, add typed UEFI objects, verified installer
 entry creation, shell boot administration, owner/compatibility/dbx policy, then
 physical firmware tests per

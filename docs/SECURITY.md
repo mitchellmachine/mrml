@@ -63,6 +63,15 @@ formats, service messages, and host inputs are untrusted.
 
 ## Admission, receipts, and secrets
 
+Versioned component admission follows
+[packages/COMPONENT_INTERFACES.md](packages/COMPONENT_INTERFACES.md): signatures
+authenticate provider provenance but do not prove ABI conformance, memory safety,
+semantic correctness, or authorization. Metadata grants no capability. Bindings
+select exact immutable generations, incompatible major ABIs fail closed,
+executable pages are never patched in place, and prohibited generations receive
+no new bindings. In-process providers share caller fault impact; service
+providers remain isolated and explicitly capable.
+
 Raw and receipt-authenticated admissions remain distinct types. An authenticated
 receipt binds the exact canonical request digest, independently expected policy,
 backend/mode, claims, image measurement, security version, nonce, sequence, and

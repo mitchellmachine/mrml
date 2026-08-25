@@ -54,6 +54,12 @@ and typed administration are **PLANNED** in [DEPLOYMENT.md](DEPLOYMENT.md).
 Existing signed-container, release-journal, boot, storage, and recovery work does
 not by itself implement that deployment architecture.
 
+Versioned independently serviced component interfaces are likewise **PLANNED**
+in [packages/COMPONENT_INTERFACES.md](packages/COMPONENT_INTERFACES.md). Package,
+interface, and Rust crate identity are separate; no dynamic loader, interface
+resolver, shared code mapping, Zstd provider binding, or ZIM dynamic consumption
+is currently implemented.
+
 CPU support-floor, vendor microcode, vulnerability, heterogeneous scheduling,
 quantitative CPU authority, power, telemetry, and thermal policy are canonical
 in [platform/CPU_PLATFORM.md](platform/CPU_PLATFORM.md). Those mechanisms are
