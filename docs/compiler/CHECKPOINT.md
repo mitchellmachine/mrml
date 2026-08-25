@@ -961,3 +961,13 @@ pass 513 library tests, one component-interface probe, 10 conformance tests,
 and 335 replacement tests: 859 compiler tests per host. Concrete/rigid
 projection-premise proof, general projection-bearing type terms, backtracking,
 caching, coinduction, and source syntax remain unsupported.
+
+The projection-bearing term milestone interns up to 64 leaf or projection nodes
+in an acyclic backward-referenced arena. Projection trait self/argument positions
+may reference earlier terms, and 16-frame normalization uses the projection-
+aware environment while retaining root inference substitutions. Windows gnullvm
+and native Arch Linux WSL each pass 518 library tests, one component-interface
+probe, 10 conformance tests, and 335 replacement tests: 864 compiler tests per
+host. Whole term-bearing goal selection, projection terms in binders,
+concrete/rigid projection-premise proof, backtracking, caching, coinduction, and
+source syntax remain unsupported.

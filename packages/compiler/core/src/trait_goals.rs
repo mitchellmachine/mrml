@@ -15,6 +15,7 @@ pub const MAX_TRAIT_PROOF_DEPTH: usize = 16;
 pub const MAX_TRAIT_ASSOCIATED_TYPE_VALUES: usize = 64;
 pub const MAX_TRAIT_PROJECTION_DEPTH: usize = 16;
 pub const MAX_GENERIC_TRAIT_IMPLEMENTATIONS: usize = 64;
+pub const MAX_TRAIT_GOAL_TERMS: usize = 64;
 
 #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
 pub struct TraitId(u32);
@@ -224,6 +225,142 @@ impl ImplementedTraitGoal {
     pub fn arguments(&self) -> &[Option<TraitGoalType>] {
         &self.arguments[..self.argument_count]
     }
+}
+
+#[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
+pub struct TraitGoalTermId(u8);
+
+impl TraitGoalTermId {
+    pub const fn new(value: u8) -> Self {
+        Self(value)
+    }
+
+    pub const fn get(self) -> u8 {
+        self.0
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct ProjectionBearingTraitGoal {
+    pub trait_id: TraitId,
+    pub self_type: TraitGoalTermId,
+    arguments: [Option<TraitGoalTermId>; MAX_TRAIT_GOAL_ARGUMENTS],
+    argument_count: usize,
+}
+
+impl ProjectionBearingTraitGoal {
+    pub const fn new(trait_id: TraitId, self_type: TraitGoalTermId) -> Self {
+        Self {
+            trait_id,
+            self_type,
+            arguments: [None; MAX_TRAIT_GOAL_ARGUMENTS],
+            argument_count: 0,
+        }
+    }
+
+    pub fn push_argument(&mut self, argument: TraitGoalTermId) -> Result<(), TraitGoalError> {
+        let slot = self
+            .arguments
+            .get_mut(self.argument_count)
+            .ok_or(TraitGoalError::TooManyArguments)?;
+        *slot = Some(argument);
+        self.argument_count += 1;
+        Ok(())
+    }
+
+    pub fn arguments(&self) -> &[Option<TraitGoalTermId>] {
+        &self.arguments[..self.argument_count]
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum TraitGoalTerm {
+    Type(TraitGoalType),
+    Projection {
+        goal: ProjectionBearingTraitGoal,
+        associated_type_id: TraitAssociatedTypeId,
+    },
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct TraitGoalTermArena {
+    terms: [Option<TraitGoalTerm>; MAX_TRAIT_GOAL_TERMS],
+    term_count: usize,
+}
+
+impl TraitGoalTermArena {
+    pub const EMPTY: Self = Self {
+        terms: [None; MAX_TRAIT_GOAL_TERMS],
+        term_count: 0,
+    };
+
+    pub fn intern_type(&mut self, ty: TraitGoalType) -> Result<TraitGoalTermId, TraitGoalError> {
+        self.intern(TraitGoalTerm::Type(ty))
+    }
+
+    pub fn intern_projection(
+        &mut self,
+        goal: ProjectionBearingTraitGoal,
+        associated_type_id: TraitAssociatedTypeId,
+    ) -> Result<TraitGoalTermId, TraitGoalError> {
+        validate_projection_bearing_goal(goal, self.term_count)?;
+        self.intern(TraitGoalTerm::Projection {
+            goal,
+            associated_type_id,
+        })
+    }
+
+    pub fn get(&self, id: TraitGoalTermId) -> Option<TraitGoalTerm> {
+        self.terms.get(id.get() as usize).copied().flatten()
+    }
+
+    pub fn terms(&self) -> &[Option<TraitGoalTerm>] {
+        &self.terms[..self.term_count]
+    }
+
+    fn intern(&mut self, term: TraitGoalTerm) -> Result<TraitGoalTermId, TraitGoalError> {
+        if let Some((index, _)) = self.terms[..self.term_count]
+            .iter()
+            .enumerate()
+            .find(|(_, existing)| **existing == Some(term))
+        {
+            return Ok(TraitGoalTermId::new(index as u8));
+        }
+        let slot = self
+            .terms
+            .get_mut(self.term_count)
+            .ok_or(TraitGoalError::TooManyTraitGoalTerms)?;
+        let id = TraitGoalTermId::new(self.term_count as u8);
+        *slot = Some(term);
+        self.term_count += 1;
+        Ok(id)
+    }
+}
+
+fn validate_projection_bearing_goal(
+    goal: ProjectionBearingTraitGoal,
+    term_count: usize,
+) -> Result<(), TraitGoalError> {
+    if goal.argument_count > goal.arguments.len()
+        || goal.arguments[..goal.argument_count]
+            .iter()
+            .any(Option::is_none)
+        || goal.arguments[goal.argument_count..]
+            .iter()
+            .any(Option::is_some)
+    {
+        return Err(TraitGoalError::InvalidGoal);
+    }
+    if goal.self_type.get() as usize >= term_count
+        || goal.arguments().iter().any(|argument| {
+            argument
+                .as_ref()
+                .is_none_or(|argument| argument.get() as usize >= term_count)
+        })
+    {
+        return Err(TraitGoalError::InvalidTraitGoalTermReference);
+    }
+    Ok(())
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -764,6 +901,21 @@ pub struct InferredTraitProjectionAnswer {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum InferredTraitProjectionSolution {
     Unique(InferredTraitProjectionAnswer),
+    Ambiguous,
+    NoSolution,
+    Cycle,
+    Overflow,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct TraitGoalTermNormalizationAnswer {
+    pub value: TraitGoalType,
+    pub substitution: SymbolicTraitGoalSubstitution,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum TraitGoalTermNormalizationSolution {
+    Unique(TraitGoalTermNormalizationAnswer),
     Ambiguous,
     NoSolution,
     Cycle,
@@ -1894,6 +2046,8 @@ pub enum TraitGoalError {
     TooManyCanonicalVariables,
     TooManyGenericParameters,
     TooManyPredicates,
+    TooManyTraitGoalTerms,
+    InvalidTraitGoalTermReference,
     TooManyWhereClauses,
     DuplicateWhereClauseId,
     DuplicateWhereClause,
@@ -2776,6 +2930,77 @@ impl TraitProjectionEnvironment<'_> {
             }
         }
     }
+
+    fn normalize_goal_term_inner(
+        self,
+        arena: &TraitGoalTermArena,
+        term_id: TraitGoalTermId,
+        state: &mut InferenceConstraintState,
+        stack: &mut [Option<TraitGoalTermId>; MAX_TRAIT_PROJECTION_DEPTH],
+        depth: usize,
+    ) -> Result<InferredProjectionValueSolution, TraitGoalError> {
+        if stack[..depth].contains(&Some(term_id)) {
+            return Ok(InferredProjectionValueSolution::Cycle);
+        }
+        if depth >= MAX_TRAIT_PROJECTION_DEPTH {
+            return Ok(InferredProjectionValueSolution::Overflow);
+        }
+        let term = arena
+            .get(term_id)
+            .ok_or(TraitGoalError::InvalidTraitGoalTermReference)?;
+        stack[depth] = Some(term_id);
+        let result = (|| match term {
+            TraitGoalTerm::Type(ty) => Ok(InferredProjectionValueSolution::Unique(
+                state.apply_type(ty)?,
+            )),
+            TraitGoalTerm::Projection {
+                goal,
+                associated_type_id,
+            } => {
+                let self_type = match self.normalize_goal_term_inner(
+                    arena,
+                    goal.self_type,
+                    state,
+                    stack,
+                    depth + 1,
+                )? {
+                    InferredProjectionValueSolution::Unique(value) => value,
+                    other => return Ok(other),
+                };
+                let mut normalized = ImplementedTraitGoal::new(goal.trait_id, self_type);
+                for argument in goal.arguments() {
+                    let argument = argument
+                        .as_ref()
+                        .copied()
+                        .ok_or(TraitGoalError::InvalidGoal)?;
+                    let argument = match self.normalize_goal_term_inner(
+                        arena,
+                        argument,
+                        state,
+                        stack,
+                        depth + 1,
+                    )? {
+                        InferredProjectionValueSolution::Unique(value) => value,
+                        other => return Ok(other),
+                    };
+                    normalized.push_argument(argument)?;
+                }
+                let mut projection_stack = [None; MAX_TRAIT_PROJECTION_DEPTH];
+                self.normalize_inferred_inner(
+                    ConcreteTraitProjectionGoal {
+                        goal: normalized,
+                        associated_type_id,
+                    },
+                    state,
+                    &mut projection_stack,
+                    0,
+                    0,
+                )
+            }
+        })();
+        stack[depth] = None;
+        result
+    }
 }
 
 fn instantiate_generic_associated_type(
@@ -2834,6 +3059,44 @@ pub fn normalize_concrete_trait_projection(
         &mut stack,
         0,
     )
+}
+
+pub fn normalize_inferred_trait_goal_term(
+    exact_implementations: &TraitImplementationDatabase,
+    generic_implementations: &GenericTraitImplementationDatabase,
+    clauses: &TraitWhereClauseDatabase,
+    exact_values: &TraitAssociatedTypeDatabase,
+    generic_values: &GenericTraitAssociatedTypeDatabase,
+    arena: &TraitGoalTermArena,
+    term_id: TraitGoalTermId,
+) -> Result<TraitGoalTermNormalizationSolution, TraitGoalError> {
+    let mut state = InferenceConstraintState::from_term_arena(arena)?;
+    let environment = TraitProjectionEnvironment {
+        exact_implementations,
+        generic_implementations,
+        clauses,
+        exact_values,
+        generic_values,
+    };
+    let mut stack = [None; MAX_TRAIT_PROJECTION_DEPTH];
+    match environment.normalize_goal_term_inner(arena, term_id, &mut state, &mut stack, 0)? {
+        InferredProjectionValueSolution::Unique(value) => Ok(
+            TraitGoalTermNormalizationSolution::Unique(TraitGoalTermNormalizationAnswer {
+                value: state.apply_type(value)?,
+                substitution: state.substitution()?,
+            }),
+        ),
+        InferredProjectionValueSolution::Ambiguous => {
+            Ok(TraitGoalTermNormalizationSolution::Ambiguous)
+        }
+        InferredProjectionValueSolution::NoSolution => {
+            Ok(TraitGoalTermNormalizationSolution::NoSolution)
+        }
+        InferredProjectionValueSolution::Cycle => Ok(TraitGoalTermNormalizationSolution::Cycle),
+        InferredProjectionValueSolution::Overflow => {
+            Ok(TraitGoalTermNormalizationSolution::Overflow)
+        }
+    }
 }
 
 pub fn solve_exists_trait_projection_equality(
@@ -3560,6 +3823,30 @@ impl InferenceConstraintState {
         })
     }
 
+    fn from_term_arena(arena: &TraitGoalTermArena) -> Result<Self, TraitGoalError> {
+        let mut variables = [None; MAX_CANONICAL_TRAIT_VARIABLES];
+        let mut variable_count = 0usize;
+        for term in arena.terms().iter().flatten() {
+            let TraitGoalTerm::Type(TraitGoalType::InferenceVariable(variable)) = term else {
+                continue;
+            };
+            if variables[..variable_count].contains(&Some(*variable)) {
+                continue;
+            }
+            let slot = variables
+                .get_mut(variable_count)
+                .ok_or(TraitGoalError::TooManyCanonicalVariables)?;
+            *slot = Some(*variable);
+            variable_count += 1;
+        }
+        Ok(Self {
+            variables,
+            parents: [0, 1, 2, 3, 4, 5, 6, 7],
+            concrete: [None; MAX_CANONICAL_TRAIT_VARIABLES],
+            variable_count,
+        })
+    }
+
     fn merge_concrete(
         &mut self,
         substitution: TraitGoalSubstitution,
@@ -3976,6 +4263,211 @@ mod tests {
         assert_eq!(
             canonicalize_implemented_trait_goal(left),
             canonicalize_implemented_trait_goal(right)
+        );
+    }
+
+    #[test]
+    fn projection_bearing_term_arena_interns_acyclic_nested_terms() {
+        let mut arena = TraitGoalTermArena::EMPTY;
+        let leaf = arena
+            .intern_type(TraitGoalType::Concrete(TraitTypeId::new(10)))
+            .unwrap();
+        assert_eq!(
+            arena
+                .intern_type(TraitGoalType::Concrete(TraitTypeId::new(10)))
+                .unwrap(),
+            leaf
+        );
+        let projection_goal = ProjectionBearingTraitGoal::new(TraitId::new(900), leaf);
+        let projection = arena
+            .intern_projection(projection_goal, TraitAssociatedTypeId::new(1))
+            .unwrap();
+        assert_eq!(
+            arena
+                .intern_projection(projection_goal, TraitAssociatedTypeId::new(1))
+                .unwrap(),
+            projection
+        );
+        let mut nested_goal = ProjectionBearingTraitGoal::new(TraitId::new(901), projection);
+        nested_goal.push_argument(leaf).unwrap();
+        let nested = arena
+            .intern_projection(nested_goal, TraitAssociatedTypeId::new(2))
+            .unwrap();
+        assert_eq!(nested.get(), 2);
+        assert_eq!(arena.terms().len(), 3);
+        assert_eq!(
+            arena.get(nested),
+            Some(TraitGoalTerm::Projection {
+                goal: nested_goal,
+                associated_type_id: TraitAssociatedTypeId::new(2),
+            })
+        );
+    }
+
+    #[test]
+    fn projection_bearing_term_arena_rejects_forward_references() {
+        let mut arena = TraitGoalTermArena::EMPTY;
+        assert_eq!(
+            arena.intern_projection(
+                ProjectionBearingTraitGoal::new(TraitId::new(902), TraitGoalTermId::new(0)),
+                TraitAssociatedTypeId::new(1),
+            ),
+            Err(TraitGoalError::InvalidTraitGoalTermReference)
+        );
+        let leaf = arena
+            .intern_type(TraitGoalType::Concrete(TraitTypeId::new(1)))
+            .unwrap();
+        let mut invalid = ProjectionBearingTraitGoal::new(TraitId::new(903), leaf);
+        invalid.push_argument(TraitGoalTermId::new(63)).unwrap();
+        assert_eq!(
+            arena.intern_projection(invalid, TraitAssociatedTypeId::new(1)),
+            Err(TraitGoalError::InvalidTraitGoalTermReference)
+        );
+    }
+
+    #[test]
+    fn projection_bearing_term_arena_has_fixed_capacity() {
+        let mut arena = TraitGoalTermArena::EMPTY;
+        for index in 0..MAX_TRAIT_GOAL_TERMS {
+            assert_eq!(
+                arena
+                    .intern_type(TraitGoalType::Concrete(TraitTypeId::new(index as u32)))
+                    .unwrap(),
+                TraitGoalTermId::new(index as u8)
+            );
+        }
+        assert_eq!(
+            arena.intern_type(TraitGoalType::Concrete(TraitTypeId::new(999))),
+            Err(TraitGoalError::TooManyTraitGoalTerms)
+        );
+    }
+
+    #[test]
+    fn normalizes_projection_bearing_argument_terms_and_inference() {
+        let variable = TraitInferenceVariableId::in_universe(TraitUniverseIndex::new(16), 0);
+        let associated = TraitAssociatedTypeId::new(1);
+        let mut arena = TraitGoalTermArena::EMPTY;
+        let inferred = arena
+            .intern_type(TraitGoalType::InferenceVariable(variable))
+            .unwrap();
+        let concrete = arena
+            .intern_type(TraitGoalType::Concrete(TraitTypeId::new(20)))
+            .unwrap();
+        let inner = arena
+            .intern_projection(
+                ProjectionBearingTraitGoal::new(TraitId::new(910), inferred),
+                associated,
+            )
+            .unwrap();
+        let mut outer_goal = ProjectionBearingTraitGoal::new(TraitId::new(911), concrete);
+        outer_goal.push_argument(inner).unwrap();
+        let outer = arena.intern_projection(outer_goal, associated).unwrap();
+
+        let inner_implementation = TraitImplementationId::new(230);
+        let outer_implementation = TraitImplementationId::new(231);
+        let mut exact = TraitImplementationDatabase::EMPTY;
+        exact
+            .insert(TraitImplementationHeader::new(
+                inner_implementation,
+                TraitId::new(910),
+                TraitTypeId::new(10),
+            ))
+            .unwrap();
+        let mut outer_header = TraitImplementationHeader::new(
+            outer_implementation,
+            TraitId::new(911),
+            TraitTypeId::new(20),
+        );
+        outer_header.push_argument(TraitTypeId::new(30)).unwrap();
+        exact.insert(outer_header).unwrap();
+        let mut values = TraitAssociatedTypeDatabase::EMPTY;
+        values
+            .insert(
+                &exact,
+                TraitAssociatedTypeValue::new(
+                    inner_implementation,
+                    associated,
+                    TraitTypeId::new(30),
+                ),
+            )
+            .unwrap();
+        values
+            .insert(
+                &exact,
+                TraitAssociatedTypeValue::new(
+                    outer_implementation,
+                    associated,
+                    TraitTypeId::new(40),
+                ),
+            )
+            .unwrap();
+        let TraitGoalTermNormalizationSolution::Unique(answer) =
+            normalize_inferred_trait_goal_term(
+                &exact,
+                &GenericTraitImplementationDatabase::EMPTY,
+                &TraitWhereClauseDatabase::EMPTY,
+                &values,
+                &GenericTraitAssociatedTypeDatabase::EMPTY,
+                &arena,
+                outer,
+            )
+            .unwrap()
+        else {
+            panic!("projection-bearing argument should normalize");
+        };
+        assert_eq!(answer.value, TraitGoalType::Concrete(TraitTypeId::new(40)));
+        assert_eq!(
+            answer.substitution.binding(variable),
+            Some(TraitGoalType::Concrete(TraitTypeId::new(10)))
+        );
+    }
+
+    #[test]
+    fn projection_bearing_term_normalization_reports_depth_overflow() {
+        let associated = TraitAssociatedTypeId::new(1);
+        let mut arena = TraitGoalTermArena::EMPTY;
+        let mut term = arena
+            .intern_type(TraitGoalType::Concrete(TraitTypeId::new(0)))
+            .unwrap();
+        let mut exact = TraitImplementationDatabase::EMPTY;
+        let mut values = TraitAssociatedTypeDatabase::EMPTY;
+        for index in 0..=MAX_TRAIT_PROJECTION_DEPTH {
+            let implementation_id = TraitImplementationId::new(240 + index as u32);
+            exact
+                .insert(TraitImplementationHeader::new(
+                    implementation_id,
+                    TraitId::new(920 + index as u32),
+                    TraitTypeId::new(index as u32),
+                ))
+                .unwrap();
+            values
+                .insert(
+                    &exact,
+                    TraitAssociatedTypeValue::new(
+                        implementation_id,
+                        associated,
+                        TraitTypeId::new(index as u32 + 1),
+                    ),
+                )
+                .unwrap();
+            term = arena
+                .intern_projection(
+                    ProjectionBearingTraitGoal::new(TraitId::new(920 + index as u32), term),
+                    associated,
+                )
+                .unwrap();
+        }
+        assert_eq!(
+            normalize_inferred_trait_goal_term(
+                &exact,
+                &GenericTraitImplementationDatabase::EMPTY,
+                &TraitWhereClauseDatabase::EMPTY,
+                &values,
+                &GenericTraitAssociatedTypeDatabase::EMPTY,
+                &arena,
+                term,
+            ),
+            Ok(TraitGoalTermNormalizationSolution::Overflow)
         );
     }
 

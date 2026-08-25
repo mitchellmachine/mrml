@@ -4170,6 +4170,20 @@ Concrete/rigid projection-premise proof, general projection-bearing type terms,
 backtracking, caching, coinduction, source syntax, and general normalization
 remain unsupported.
 
+The projection-bearing term milestone uses a fixed 64-node arena for flat leaf
+terms and associated-type projections whose trait self/argument positions refer
+only to earlier nodes. Identical nodes intern to one stable identity; invalid
+forward references and capacity overflow fail explicitly. A separate 16-frame
+walk normalizes nested terms through the projection-aware environment and
+returns the resulting flat type plus inference substitution. Nested argument
+projection, inference refinement, invalid references, arena bounds, and depth
+overflow have focused tests. Windows gnullvm and native Arch Linux WSL each pass
+518 library tests, one component-interface probe, 10 conformance tests, and 335
+replacement tests: 864 compiler tests per host. Whole term-bearing goal
+selection, projection terms in binders, concrete/rigid projection-premise proof,
+backtracking, caching, coinduction, source syntax, and general normalization
+remain unsupported.
+
 The nested conditional tuple-origin milestone walks each leaf's bounded
 conditional-parent chain to the outermost generation before grouping reference
 origins by field ordinal. The exact oracle rejects a three-leaf returned field

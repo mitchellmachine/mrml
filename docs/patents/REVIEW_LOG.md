@@ -4561,3 +4561,12 @@ nesting counter bounds projection-to-proof recursion. It adds no new term
 grammar, branching search, specialization order, cache, parser, runtime
 mechanism, allocation, synchronization, protocol, cryptography, or hardware
 behavior.
+
+# 2026-08-25 — Bounded projection-bearing trait terms
+
+**Result: NOT_TRIGGERED.** This compiler-only increment interns existing leaf
+types and projection equalities in a fixed backward-referenced arena, then
+normalizes them through the existing bounded projection environment. It adds no
+new source type grammar, branching search, specialization order, cache, parser,
+runtime mechanism, allocation, synchronization, protocol, cryptography, or
+hardware behavior.
