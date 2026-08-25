@@ -241,6 +241,12 @@ to-action, and semantic-delta latency. Braille and speech consume incremental
 
 ## Testing
 
+The unified system monitor's task, integrity, security, resource, and recovery
+views use this same semantic system. Keyboard, speech, and Braille must convey
+equivalent status, evidence limits, event gaps, severity, relationships, and
+authorized actions without relying on color or charts; see
+[monitor/SYSTEM_MONITOR.md](monitor/SYSTEM_MONITOR.md). This remains **PLANNED**.
+
 Future tests cover semantic completeness, focus order, keyboard-only workflows,
 Braille/speech representations, redaction, trusted prompts, VM/browser
 projection, render-backend and HiDPI independence, and capability enforcement.

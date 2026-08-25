@@ -957,6 +957,12 @@ workspace because inheriting packages require their own unstable-edition opt-in.
 
 ## 4. Select the next work
 
+For system-monitor work, recover the single canonical observer from
+[monitor/SYSTEM_MONITOR.md](monitor/SYSTEM_MONITOR.md). Its caches are
+disposable: after restart, reconstruct scoped snapshots from authoritative
+services, expose sequence gaps and incomplete sources, and never infer
+completeness or execute remediation from stale state.
+
 Compare the current source and tests with the first incomplete security gate in
 ROADMAP. Choose the smallest coherent end-to-end milestone that advances that
 gate and can be tested in the available environments. Preserve backend-neutral

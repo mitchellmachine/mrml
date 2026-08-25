@@ -1349,6 +1349,12 @@ global accessibility input. See [ACCESSIBILITY.md](ACCESSIBILITY.md).
 
 ## Planned system services
 
+The existing semantic system monitor is the single **PLANNED** observer for
+authorized task, resource, integrity, device, platform-security, and recovery
+state. Its canonical model is in
+[monitor/SYSTEM_MONITOR.md](monitor/SYSTEM_MONITOR.md); monitoring does not join
+the microkernel or replace supervision, policy, or owning services.
+
 The capability-native authority broker will evaluate narrow requests and may
 deny, allow, request trusted user consent, grant once, grant until process exit,
 or grant for a duration. Consent UI remains outside the kernel and must be

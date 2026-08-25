@@ -342,7 +342,8 @@ objects—not rendered text or pixels—cross administration interfaces. The GUI
 a projection over the same `InstallPlan` and exact destructive authorization as
 the text installer, and neither terminal nor first-party origin grants authority.
 
-The planned semantic system monitor follows
+The planned semantic system monitor follows the canonical
+[unified system-monitor architecture](monitor/SYSTEM_MONITOR.md) and
 [CPU_PLATFORM.md](platform/CPU_PLATFORM.md): CPU, resource, power, sensor, and
 thermal observation is capability-scoped and does not imply budget changes,
 process-memory access, task termination, or hardware control. The native
@@ -354,7 +355,7 @@ containing directory. Save delegates only the create/replace authority required
 for the selected destination. Picker UI and the delegation transaction are
 trusted-system surfaces that applications cannot spoof.
 
-The system monitor combines CPU, memory, GPU, and I/O usage with each process,
+The one system monitor combines CPU, memory, GPU, and I/O usage with each process,
 application, VM, and AI principal's isolation class, filesystem/network/device/
 audio/debug/AI authority, temporary elevation, and active security exceptions.
 Where semantically safe, live revoke invokes the actual capability mechanism,

@@ -445,6 +445,11 @@ reproducibility, and independent review exist.
 
 ## Security events and monitoring
 
+The canonical **PLANNED** state, event, integrity, privacy, resynchronization,
+and response boundaries are in
+[monitor/SYSTEM_MONITOR.md](monitor/SYSTEM_MONITOR.md). It extends this observer;
+it does not introduce a parallel security or integrity authority.
+
 Planned privileged audit events use stable typed classes, monotonic sequences,
 actor/target/object identities, decisions, and reason codes. Time is included
 only when trustworthy. Events must avoid secrets and cannot be forgeable or

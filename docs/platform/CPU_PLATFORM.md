@@ -170,6 +170,10 @@ per-process temperature causation.
 
 ## System monitor and physical-device milestones
 
+The cross-subsystem model and observation/remediation boundary are canonical in
+[the unified system-monitor design](../monitor/SYSTEM_MONITOR.md). This section
+remains authoritative for CPU, power, thermal, and physical-device facts.
+
 The semantic system monitor may show authorized CPU topology/class utilization,
 frequency, package power and temperature; RAM commitment/limits; GPU engines,
 VRAM, temperature and power; storage I/O and NVMe temperature; network activity;

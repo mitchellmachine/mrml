@@ -82,7 +82,8 @@ state. SSID/device selection is never visual-only. AI may inspect connection sta
 without credential export, arbitrary pairing, route modification, or a privileged
 special API. Intelligence does not imply authority.
 
-System monitoring may show adapter/link/connection state, throughput, safe
+The [unified system monitor](../monitor/SYSTEM_MONITOR.md) may show
+adapter/link/connection state, throughput, safe
 connection-capability use, Wi-Fi signal, Bluetooth devices, and power state, not
 other domains' traffic content. Trusted notifications cover disconnect/change,
 device connect, and pairing. Applications cannot impersonate trusted prompts.

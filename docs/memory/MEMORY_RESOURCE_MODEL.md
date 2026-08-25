@@ -146,6 +146,10 @@ See [GPU_ARCHITECTURE.md](../gpu/GPU_ARCHITECTURE.md).
 
 ## Introspection and broader resources
 
+The [unified system monitor](../monitor/SYSTEM_MONITOR.md) projects these
+accounted objects and shared-page costs without acquiring mapping, content,
+debug, or budget authority. This integration remains **PLANNED**.
+
 Authorized monitors may inspect pool limit, committed/shared/pinned quantities,
 descendant pools, and pressure without reading memory contents. Observation,
 content read, limit increase, modification, and termination are separate

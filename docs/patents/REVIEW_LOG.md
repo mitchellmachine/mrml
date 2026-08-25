@@ -1,5 +1,18 @@
 # Patent review log
 
+## 2026-08-25 — Unified system-monitor architecture
+
+Status: **TRIGGERED** for implementation; documentation only in this increment.
+
+The planned observer includes continuous expected-versus-observed runtime
+integrity, sequenced cross-service event correlation, scoped participating-
+application integrity, and optional minimized remote claims. Those mechanisms
+require targeted claim-limitation searches, worldwide family discovery, and
+status verification in each material national or regional register before
+implementation selection. This entry records no clearance or infringement
+conclusion. Conventional resource display and typed local administration views
+do not settle the review for the security-sensitive mechanisms.
+
 ## 2026-08-25 — collision-free native artifact directory
 
 The build frontend now writes direct-rustc artifacts under

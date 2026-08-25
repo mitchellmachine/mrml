@@ -117,6 +117,11 @@ high-risk actions; application-rendered prompts are not trusted consent.
 
 ## Audit, recovery, and evidence
 
+The [unified system monitor](../monitor/SYSTEM_MONITOR.md) may project these
+typed boot, trust, rollback, and recovery facts with their exact evidence limits;
+it receives no firmware-variable or trust-policy mutation authority. This is
+**PLANNED**.
+
 Bounded audits record entry create/delete, order/next change, trust add/remove,
 dbx update, and owner-key change by identities/digests, never secrets. Recovery
 can repair typed boot state and owner policy only with narrow capabilities.

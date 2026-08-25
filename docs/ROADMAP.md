@@ -1826,6 +1826,16 @@ Physical hardware and disabled-user evidence remain distinct from simulation.
 
 ## Phase 5 — Authority, consent, and observation
 
+The unified system-monitor lane is **PLANNED** and follows
+[monitor/SYSTEM_MONITOR.md](monitor/SYSTEM_MONITOR.md). It depends on the
+relevant lifecycle, capability, accounting, package/component, and event sources.
+Progress through bounded gates: core snapshots; sequenced events and restart/
+resync; generation/executable integrity; GPU/network/storage/device/DMA/power/
+thermal views; platform/recovery evidence; separately authorized response;
+accessible GUI and structured shell; then scoped participating-application
+integrity after privacy, hostile-security, digital-rights, and patent review.
+Do not combine these gates into one cross-cutting implementation patch.
+
 After the core capability/service substrate and trusted compositor exist:
 
 1. Add bounded capability provenance tracking and delegation audit events.

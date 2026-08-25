@@ -1,5 +1,10 @@
 # MRML packages, deployment, installation, and system administration
 
+The **PLANNED** [unified system monitor](monitor/SYSTEM_MONITOR.md) projects
+authorized package, component, executable, retained-root, rollback, and
+`SystemGeneration` facts from this model. It neither changes a generation nor
+grants deployment authority.
+
 Source-to-artifact/package/sign/release/image orchestration is canonical in
 [build/BUILD_SYSTEM.md](build/BUILD_SYSTEM.md). Deployment consumes verified
 outputs and does not silently select compilers or hold ordinary build/signing keys.

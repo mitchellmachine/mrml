@@ -253,6 +253,11 @@ are separate rights.
 
 ## Immutability, lifetime, and accounting
 
+The [unified system monitor](../monitor/SYSTEM_MONITOR.md) may report exact
+provider bindings, live/retained generations, accounting, and collection
+eligibility. Observation grants neither rebinding nor reclamation authority and
+remains **PLANNED**.
+
 Dynamic does not mean mutable. Once admitted, code and read-only data are exact
 immutable generational objects. Updates never patch executable pages beneath a
 running process and preserve W^X.

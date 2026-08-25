@@ -141,6 +141,10 @@ authority channel.
 
 ## Security, recovery, and evidence
 
+The [unified system monitor](../monitor/SYSTEM_MONITOR.md) projects authorized
+GPU, VRAM, queue, reset, thermal, power, and `VirtualGPU` facts while preserving
+the object and authority separations below. This integration is **PLANNED**.
+
 Fuzz object tables, ranges/shapes, graphs/cycles, bindings, timelines, pipeline/
 module/IR/tensor/media metadata, topology, budgets, rights, stale generations,
 overflow, exhaustion, and native packet construction. Driver services receive
