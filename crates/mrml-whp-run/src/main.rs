@@ -114,6 +114,7 @@ const BLOCK_CONFIGURATION_BASE: u64 = 0x0060_4000;
 const BLOCK_RESUME_BASE: u64 = 0x0060_5000;
 #[cfg(target_os = "windows")]
 const PCI_PROOF_PORT: u16 = 0x4d66;
+const PCI_WITHDRAW_PROOF_PORT: u16 = 0x4d67;
 #[cfg(target_os = "windows")]
 const PCI_TEST_SELECTOR: u32 = 0x8000_2000;
 #[cfg(target_os = "windows")]
@@ -999,6 +1000,22 @@ fn run_pci_configuration_probe<'system>(
     if guest.withdraw_trapped_mmio(PCI_TEST_MMIO_BASE).is_ok() {
         return Err(anyhow!("WHP PCI MMIO withdrawal accepted replay"));
     }
+    let continued = VmBackend::run(&mut guest, 0)
+        .map_err(|error| anyhow!("WHP post-withdrawal execution failed: {:?}", error))?;
+    if continued
+        != (VmExit::Io {
+            port: PCI_WITHDRAW_PROOF_PORT,
+            size: 4,
+            write: true,
+            value: PCI_BLOCK_PROBE_OPERATIONS,
+        })
+    {
+        return Err(anyhow!(
+            "WHP post-withdrawal proof mismatch: {:?}",
+            continued
+        ));
+    }
+    println!("WHP_PCI_WITHDRAW continued=1");
     window_backend.confirm_retired(PCI_TEST_MMIO_BASE)?;
     let disable = {
         let mut mapper =
@@ -1486,7 +1503,7 @@ fn application_main() -> Result<()> {
     if pci_configuration_mode {
         run_pci_configuration_probe(guest, &system, &executable, handoff.as_slice(), layout)?;
         println!(
-            "verified signed test-only attached MRML block PCI-MMIO write/read/flush, orderly VM replacement, exact stopped-guest BAR-leaf withdrawal with checked CR3 reload, and pending-I/O reset isolation under WHP: verify={}us prepare={}us execute={}us total={}us",
+            "verified signed test-only attached MRML block PCI-MMIO write/read/flush, orderly VM replacement, exact stopped-guest BAR-leaf withdrawal with checked CR3 reload and post-withdrawal continuation, and pending-I/O reset isolation under WHP: verify={}us prepare={}us execute={}us total={}us",
             verification_micros,
             preparation_micros,
             execution_started.elapsed().as_micros(),

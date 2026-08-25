@@ -96,8 +96,9 @@ verify absence of the preinstalled non-global first-level BAR trap leaf from
 the stopped sole-vCPU guest. They retain a no-reentry quarantine until KVM/WHP
 exact-match and rewrite the prepared non-PCID CR3 and read it back. Any
 uncertain step keeps the quarantine permanent; success permits later entry and
-exact mapper cleanup. The current signed artifact proves successful withdrawal
-and cleanup, not post-withdrawal guest continuation. This is not SMP shootdown,
+exact mapper cleanup. A fresh one-use-signed artifact emits a second bounded
+proof exit after withdrawal; both KVM and WHP resume the same guest and return
+that exact port/width/value before cleanup. This is not SMP shootdown,
 asynchronous unmapping, TLB-coherent hotplug, or production hotplug.
 
 ## Capability projection into application microVMs

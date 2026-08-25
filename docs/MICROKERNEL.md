@@ -6883,16 +6883,18 @@ CR3/CR4 back before the prepared guest clears quarantine and consumes the
 one-use trapped-leaf identity. A wrong leaf and replay fail before mutation.
 Any failure after quarantine publication leaves execution forbidden.
 
-Recorded controlled-probe results on 2026-08-24 were 134,291 us total under
-Arch Linux/WSL2 KVM (`verify=17598us`, `prepare=2240us`, `execute=93550us`) and
-30,984 us total under Windows WHP (`verify=17965us`, `prepare=3543us`,
-`execute=5520us`). Both reused the previously signed test artifact and printed
-the backend-specific `PCI_WITHDRAW coherent=1` checkpoint. The artifact enters
-`cli; hlt` immediately after its proof output, and WHP does not return that run,
-so this evidence covers successful checked withdrawal and subsequent lifecycle
-cleanup, not post-withdrawal guest continuation. It is not SMP/asynchronous
-shootdown, hotplug, production mapping, QEMU-differential, physical-device,
-bare-metal, or host-resistant evidence.
+Fresh controlled-probe results on 2026-08-24 were 132,780 us total under Arch
+Linux/WSL2 KVM (`verify=17277us`, `prepare=1989us`, `execute=90865us`) and
+30,056 us total under Windows WHP (`verify=17940us`, `prepare=3401us`,
+`execute=5318us`). One newly generated one-use Lamport key signed the exact
+shared UEFI image once; the signer consumed the private key. After the existing
+proof exit, the guest contains a second fixed 32-bit output on port `0x4d67`.
+The host accepts it only after successful withdrawal and exact CR3 reload. Both
+backends printed `PCI_WITHDRAW coherent=1` and `continued=1`, proving the same
+guest resumed far enough to return the exact post-withdrawal port/width/value
+before cleanup. This is not SMP/asynchronous shootdown, hotplug, production
+mapping, QEMU-differential, physical-device, bare-metal, or host-resistant
+evidence.
 
 Engineering Constitution complexity score: complexity impact `LOW`, TCB impact
 `NONE` for the hosted adapter, new parser `NO`, new authority model `NO`, new
@@ -6905,10 +6907,12 @@ priority, attestation, telemetry, secret export, accessibility restriction, or
 AI-only interface. Fresh device and capability generations remain necessary.
 
 HOSTILE SECURITY REVIEW: the requested leaf, root, vCPU count, pending-emulation
-state, CR4 mode, native register operation, read-back, mapper record, and replay
-are hostile. Exact checks precede mutation; quarantine precedes uncertainty;
-only verified leaf absence plus exact non-PCID CR3 rewrite/read-back permits
-later entry. Failure cannot clear mapping state or advance device generations.
+state, CR4 mode, native register operation, read-back, continuation exit,
+mapper record, and replay are hostile. Exact checks precede mutation;
+quarantine precedes uncertainty; only verified leaf absence plus exact
+non-PCID CR3 rewrite/read-back permits later entry. The runner exact-matches the
+post-withdrawal port, width, direction, and value. Failure cannot clear mapping
+state or advance device generations.
 
 Patent review: `NOT_TRIGGERED` — this is conventional non-global page-table
 withdrawal and native stopped-vCPU control-register synchronization. It adds no

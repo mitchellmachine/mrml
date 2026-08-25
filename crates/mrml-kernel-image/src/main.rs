@@ -196,6 +196,8 @@ const BLOCK_VECTOR: u8 = 48;
 #[cfg(feature = "pci-configuration-probe")]
 const PCI_PROOF_PORT: u16 = 0x4d66;
 #[cfg(feature = "pci-configuration-probe")]
+const PCI_WITHDRAW_PROOF_PORT: u16 = 0x4d67;
+#[cfg(feature = "pci-configuration-probe")]
 const PCI_TEST_SELECTOR: u32 = 0x8000_2000;
 #[cfg(feature = "pci-configuration-probe")]
 const PCI_TEST_CLASS_SELECTOR: u32 = PCI_TEST_SELECTOR + 8;
@@ -2626,6 +2628,14 @@ unsafe fn run_pci_configuration_probe() -> ! {
                 options(nomem, nostack)
             )
         };
+        unsafe {
+            asm!(
+                "out dx, eax",
+                in("dx") PCI_WITHDRAW_PROOF_PORT,
+                in("eax") PCI_BLOCK_PROBE_OPERATIONS,
+                options(nomem, nostack)
+            )
+        };
         halt();
     }
     if !fresh {
@@ -2831,6 +2841,14 @@ unsafe fn run_pci_configuration_probe() -> ! {
         asm!(
             "out dx, eax",
             in("dx") PCI_PROOF_PORT,
+            in("eax") PCI_BLOCK_PROBE_OPERATIONS,
+            options(nomem, nostack)
+        )
+    };
+    unsafe {
+        asm!(
+            "out dx, eax",
+            in("dx") PCI_WITHDRAW_PROOF_PORT,
             in("eax") PCI_BLOCK_PROBE_OPERATIONS,
             options(nomem, nostack)
         )

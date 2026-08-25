@@ -963,8 +963,9 @@ KVM and WHP then require the exact prepared CR3, reject pending emulation and
 PCID, rewrite that CR3 through the native backend, and read it back before
 lifting the no-reentry quarantine. MRML leaf construction never marks this
 mapping global. Any page-table or register uncertainty leaves the guest
-permanently quarantined. The signed probes exercise successful withdrawal and
-lifecycle cleanup but do not yet prove post-withdrawal guest continuation.
+permanently quarantined. A fresh one-use-signed probe emits a second exact
+test-only proof only after withdrawal; both KVM and WHP resume the same guest
+and return that port/width/value before lifecycle cleanup.
 This is not asynchronous or SMP shootdown, hotplug, durable recovery, QEMU
 comparison, or physical-device evidence.
 Memory-decode command transitions now require a separate unsafe native mapper.

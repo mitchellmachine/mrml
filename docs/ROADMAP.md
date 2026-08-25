@@ -1082,10 +1082,11 @@ the sole vCPU is stopped. It publishes a no-reentry quarantine before mutation,
 rejects pending emulation, a changed root, PCID, or a multi-vCPU backend,
 rewrites the exact CR3 through KVM/WHP, and reads it back before permitting
 later entry. Failure leaves the quarantine permanent. Controlled signed probes
-cover the successful withdrawal and cleanup path on both backends, but the
-current guest halts after its proof and does not supply post-withdrawal
-continuation evidence. SMP/asynchronous shootdown, hotplug, and production
-native revokers remain pending.
+cover successful withdrawal on both backends. A fresh one-use-signed artifact
+emits a second exact port/width/value proof after that withdrawal; KVM and WHP
+both resume the same guest and return the marker before cleanup.
+SMP/asynchronous shootdown, hotplug, and production native revokers remain
+pending.
 Memory-decode command writes are now transactionally coupled to native BAR
 state. `VirtualPciMemoryMapper` is an unsafe exact-generation boundary: enable
 must map the complete assigned window before the command bit publishes, while
