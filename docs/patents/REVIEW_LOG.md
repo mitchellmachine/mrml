@@ -4173,3 +4173,77 @@ generation, and prepared kernel transaction before their existing guest
 construction. This adds no workload classification, provider/template/resource
 selection, VM construction algorithm, transport, or fallback. Automated
 adaptive selection and broad cross-placement transport remain `TRIGGERED`.
+
+# 2026-08-25 — Capability-bound inline IPC plus one shared component buffer
+
+**Result: TRIGGERED; bounded design-around selected for implementation.** This
+review covers only the first real `org.mrml.interface.compression.zstd@3`
+isolated-service transport: one canonical 104-byte request travels in MRML's
+existing authenticated inline IPC, exactly one already-created read/write
+shared-buffer capability is attenuated to the exact provider instance, payload
+bytes remain in that capability-bound `MemoryObject`, and one canonical 16-byte
+response returns over the launch-bound reply relation. The provider copies
+bounded input into private scratch before decoding and writes only the admitted
+output range. No data byte, offset, interface name, or endpoint token grants
+authority. Native-service and microVM placement use the same interface bytes,
+capability projection, exact provider generation, and fail-closed lifecycle.
+
+The selected mechanism deliberately has no descriptor ring, shared queue,
+connection negotiation, proxy interception, path/name lookup, same-address
+mapping, shared heap, shared pointer/reference argument frame, per-thread
+partition, inherited handle flag, runtime size-based transport selection,
+network/cloud offload, or automatic alternate transport. Control-plane
+admission establishes the exact endpoint and buffer once; the data plane then
+uses the existing IPC and buffer operations without rerunning policy.
+
+Claim-focused discovery on 2026-08-25 compared the selected mechanism with:
+
+- [US 10,585,689 B1](https://patents.google.com/patent/US10585689B1/en),
+  whose independent shape requires a master/slave shared-memory interface with
+  paired unidirectional descriptor rings and a packet buffer; this design has
+  neither descriptors nor rings;
+- [US 2021/0328972 A1](https://patents.google.com/patent/US20210328972A1/en),
+  whose relevant claims intercept a bind request, substitute a proxy port, and
+  analyze/forward traffic; this design has no proxy or interception;
+- [CN 117667451 A/B](https://patents.google.com/patent/CN117667451A/en),
+  whose translated claims use per-thread partitions at reserved or pre-agreed
+  virtual addresses and send a next-available head address; this design sends
+  canonical offsets into a kernel-selected object and shares no address;
+- [US 10,846,155 B2](https://patents.google.com/patent/US10846155B2/en),
+  whose relevant claims redirect captured RPC to NVMe storage through PCIe
+  tunnel agents and buffers; no such storage or tunnel exists here;
+- [US 8,954,964 B2](https://patents.google.com/patent/US8954964B2/en),
+  whose relevant claims route VM traffic addressed to a predetermined
+  nonexistent network destination through a security appliance; this transport
+  has no network address or appliance;
+- [US 11,892,953 B2](https://patents.google.com/patent/US11892953B2/en),
+  whose relevant claims select memory sharing or file sharing according to a
+  data-length threshold; this design never switches transport by size;
+- [US 7,870,558 B2](https://patents.google.com/patent/US7870558B2/en),
+  whose independent claim includes connection establishment and sender-buffer
+  metadata specifying a file/synchronization resource type and whether a
+  duplicate handle may be inherited; MRML transfers one attenuated memory-
+  object capability with no resource-interest negotiation or inheritance flag;
+- [US 2024/0241775 A1](https://patents.google.com/patent/US20240241775A1/en)
+  and its listed CN family member, whose independent claims require allocating
+  a shared heap at matching virtual-address ranges; MRML uses no shared heap,
+  common virtual address, pointer, or argument frame;
+- [EP 4 632 577 A1](https://patents.google.com/patent/EP4632577A1/en),
+  whose first claim requires a shared-memory data-reference queue with separate
+  sender/receiver read and write indices; this design uses inline kernel IPC
+  for its request and response and creates no shared queue; and
+- [US 2024/0250970 A1](https://patents.google.com/patent/US20240250970A1/en),
+  whose independent claims require inline network-security processing, a
+  decision to offload to a cloud security entity, and quotas in multi-service
+  shared memory; none is part of local component invocation.
+
+These limitations do not survive technical comparison with the selected
+bounded mechanism, so no discovered family is added to `ACTIVE`/`PENDING` for
+this exact increment. This is not a legal clearance or non-infringement opinion.
+Google Patents supplied worldwide discovery and English/translated claim text;
+its status labels are not authoritative, translations may omit nuance, and the
+search cannot prove completeness. The design does not depend on expiry or
+abandonment. Any shared queue/ring, proxy, shared heap/address, automatic
+transport choice, capability-transfer generalization, or broader component RPC
+requires a new claim-focused review; the general cross-placement transport
+review therefore remains `TRIGGERED` outside this exact shape.
