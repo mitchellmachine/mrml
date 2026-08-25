@@ -228,9 +228,12 @@ pub enum IsolationServiceRouteError<E, Endpoint> {
 #[derive(Debug, Eq, PartialEq)]
 pub struct RoutedIsolationService<E> {
     endpoint: E,
+    domain: ObjectId,
     interface: ObjectId,
     interface_generation: u32,
     provider_generation: u64,
+    policy_generation: u64,
+    class: TotalMicrovmClass,
     placement: IsolationPlacement,
 }
 
@@ -275,9 +278,12 @@ impl PreparedIsolationServiceRoute {
         }
         Ok(RoutedIsolationService {
             endpoint,
+            domain: self.spec.domain,
             interface: self.spec.interface,
             interface_generation: self.spec.interface_generation,
             provider_generation: self.spec.provider_generation,
+            policy_generation: self.spec.policy_generation,
+            class: self.spec.class,
             placement: self.spec.placement,
         })
     }
@@ -306,6 +312,9 @@ impl<E> RoutedIsolationService<E> {
     pub fn into_endpoint(self) -> E {
         self.endpoint
     }
+    pub const fn domain(&self) -> ObjectId {
+        self.domain
+    }
     pub const fn interface(&self) -> ObjectId {
         self.interface
     }
@@ -314,6 +323,12 @@ impl<E> RoutedIsolationService<E> {
     }
     pub const fn provider_generation(&self) -> u64 {
         self.provider_generation
+    }
+    pub const fn policy_generation(&self) -> u64 {
+        self.policy_generation
+    }
+    pub const fn class(&self) -> TotalMicrovmClass {
+        self.class
     }
     pub const fn placement(&self) -> IsolationPlacement {
         self.placement

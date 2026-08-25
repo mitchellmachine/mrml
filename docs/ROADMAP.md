@@ -240,8 +240,11 @@ request/capability, sends one exact response through a launch-bound runtime
 trait, releases the leaf, and erases all buffers. A hosted `TaskRuntime` adapter
 exercises a complete request/reply round trip,
 rejects an unexpected sender, uses separate reply authority, and withholds the
-reply unless received-leaf revocation succeeds. No MRML-target service process,
-concrete syscall adapter, resolver-to-launch binding, supervision, CPU/RAM pool
+reply unless received-leaf revocation succeeds. Its construction now consumes a
+committed route retaining domain, interface/provider/policy generations,
+Total-mode class, and placement, and rejects disagreement with the expected
+resolver/policy binding. No MRML-target service process, concrete syscall
+adapter, actual resolver-to-launch dispatch, supervision, CPU/RAM pool
 integration, WHP/KVM guest call, or physical isolation was exercised.
 
 Cross-compiler evidence is **PARTIALLY IMPLEMENTED** for one narrow descriptor

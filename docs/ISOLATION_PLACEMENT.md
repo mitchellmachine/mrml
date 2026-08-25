@@ -57,9 +57,13 @@ launch-bound runtime trait, releases the received leaf, and erases its buffers.
 A hosted `TaskRuntime` adapter now completes the full authenticated request and
 reply path: it rejects a non-bound sender, uses a separate reply capability,
 revokes the received leaf before response visibility, and suppresses the reply
-if revocation fails. It is not a launched native service or microVM: resolver-
-to-launch binding, a concrete syscall adapter, supervision, and WHP/KVM
-invocation remain **PLANNED**.
+if revocation fails. Construction now consumes one committed service route and
+requires exact agreement with the expected interface object, ABI generation,
+immutable provider generation, and policy generation. The retained domain,
+Total-mode class, and placement cannot be replaced by data-plane messages. It is
+not a launched native service or microVM: actual resolver-to-launch dispatch, a
+concrete syscall adapter, supervision, and WHP/KVM invocation remain
+**PLANNED**.
 
 The native configuration form now has its first real supervised launcher. It
 preflights one vacant supervisor slot before creating a task, publishes the task

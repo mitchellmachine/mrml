@@ -19,7 +19,10 @@ pub use kernel_transport::{ZstdKernelTransport, ZstdKernelTransportError};
 pub use service_loop::{
     ReceivedZstdEnvelope, ZstdServiceLoop, ZstdServiceLoopError, ZstdServiceSyscalls,
 };
-pub use task_runtime_adapter::{ZstdTaskRuntimeAdapter, ZstdTaskRuntimeAdapterError};
+pub use task_runtime_adapter::{
+    ZstdAdmittedTaskRuntimeEndpoint, ZstdResolvedServiceBinding, ZstdServiceBindingError,
+    ZstdTaskRuntimeAdapter, ZstdTaskRuntimeAdapterError, ZstdTaskRuntimeEndpoint,
+};
 
 pub const FRAME_MAGIC: u32 = 0xfd2f_b528;
 

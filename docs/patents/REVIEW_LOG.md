@@ -4299,3 +4299,16 @@ and associated-value tables, retaining existing proof and ambiguity outcomes.
 It adds no new search strategy, specialization order, cache, parser, runtime
 mechanism, allocation, synchronization, protocol, cryptography, or hardware
 behavior.
+
+# 2026-08-25 — Exact committed component-route binding
+
+**Result: NOT_TRIGGERED.** This increment retains existing domain, policy,
+classification, and placement fields in the already reviewed service-route
+result and requires exact equality with the existing interface, ABI, provider,
+and policy generations before constructing the already reviewed bounded Zstd
+transport adapter. It is conventional immutable identity comparison and
+one-use typed composition. It adds no new transport, queue, proxy, shared-memory
+shape, placement algorithm, provider-selection algorithm, synchronization,
+compression, cryptography, or hardware mechanism. The broader independently
+serviced component transport remains `TRIGGERED`, including the design-around
+limits recorded in the bounded component-transport review above.

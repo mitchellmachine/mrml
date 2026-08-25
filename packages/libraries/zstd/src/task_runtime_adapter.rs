@@ -1,10 +1,112 @@
 use crate::{ReceivedZstdEnvelope, ZstdServiceSyscalls};
-use mrml_interface_zstd_v3::{DECOMPRESS_REQUEST_BYTES, DECOMPRESS_RESPONSE_BYTES};
+use mrml_interface_zstd_v3::{
+    DECOMPRESS_REQUEST_BYTES, DECOMPRESS_RESPONSE_BYTES, INTERFACE_GENERATION,
+};
 use mrml_kernel::{
     Capability, ControlEvent, Endpoint, GuestMemory, IpcSharedBufferBackend,
-    IpcSharedBufferIoError, ReceivedMessage, Rights, SharedMemoryBindings, TaskId, TaskRuntime,
-    TaskRuntimeError, VmId,
+    IpcSharedBufferIoError, IsolationPlacement, ObjectId, ReceivedMessage, Rights,
+    RoutedIsolationService, SharedMemoryBindings, TaskId, TaskRuntime, TaskRuntimeError,
+    TotalMicrovmClass, VmId,
 };
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum ZstdServiceBindingError {
+    InvalidGeneration,
+    InvalidEndpoint,
+    AdmissionMismatch,
+}
+
+/// Exact resolver and policy result expected by the caller. Names identify the
+/// interface elsewhere; this object binds its capability-selected object and
+/// immutable generations without granting authority.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct ZstdResolvedServiceBinding {
+    interface: ObjectId,
+    provider_generation: u64,
+    policy_generation: u64,
+}
+
+impl ZstdResolvedServiceBinding {
+    pub const fn new(
+        interface: ObjectId,
+        provider_generation: u64,
+        policy_generation: u64,
+    ) -> Result<Self, ZstdServiceBindingError> {
+        if provider_generation == 0 || policy_generation == 0 {
+            return Err(ZstdServiceBindingError::InvalidGeneration);
+        }
+        Ok(Self {
+            interface,
+            provider_generation,
+            policy_generation,
+        })
+    }
+}
+
+/// Runtime identities and reply authority created by the isolation backend.
+/// The endpoint becomes usable only after its route is committed.
+pub struct ZstdTaskRuntimeEndpoint {
+    caller: TaskId,
+    provider: TaskId,
+    vm: VmId,
+    reply_endpoint: Endpoint,
+    reply_capability: Capability,
+}
+
+impl ZstdTaskRuntimeEndpoint {
+    pub fn new(
+        caller: TaskId,
+        provider: TaskId,
+        vm: VmId,
+        reply_endpoint: Endpoint,
+        reply_capability: Capability,
+    ) -> Result<Self, ZstdServiceBindingError> {
+        if caller == provider {
+            return Err(ZstdServiceBindingError::InvalidEndpoint);
+        }
+        Ok(Self {
+            caller,
+            provider,
+            vm,
+            reply_endpoint,
+            reply_capability,
+        })
+    }
+}
+
+/// A committed route whose immutable identity matches the resolver and policy
+/// result. A mismatch returns the complete live route so its endpoint can be
+/// revoked through the normal isolation lifecycle.
+pub struct ZstdAdmittedTaskRuntimeEndpoint {
+    routed: RoutedIsolationService<ZstdTaskRuntimeEndpoint>,
+}
+
+impl ZstdAdmittedTaskRuntimeEndpoint {
+    pub fn bind(
+        routed: RoutedIsolationService<ZstdTaskRuntimeEndpoint>,
+        expected: ZstdResolvedServiceBinding,
+    ) -> Result<
+        Self,
+        (
+            RoutedIsolationService<ZstdTaskRuntimeEndpoint>,
+            ZstdServiceBindingError,
+        ),
+    > {
+        if routed.interface() != expected.interface
+            || routed.interface_generation() != INTERFACE_GENERATION
+            || routed.provider_generation() != expected.provider_generation
+            || routed.policy_generation() != expected.policy_generation
+            || routed.class() != TotalMicrovmClass::MicrovmEligible
+            || !matches!(
+                routed.placement(),
+                IsolationPlacement::NativeService | IsolationPlacement::Microvm
+            )
+        {
+            return Err((routed, ZstdServiceBindingError::AdmissionMismatch));
+        }
+        Ok(Self { routed })
+    }
+}
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum ZstdTaskRuntimeAdapterError<E> {
@@ -32,11 +134,15 @@ pub struct ZstdTaskRuntimeAdapter<
     caller: TaskId,
     provider: TaskId,
     vm: VmId,
-    reply_endpoint: &'a mut Endpoint,
+    reply_endpoint: Endpoint,
     reply_capability: Capability,
     bindings: &'a SharedMemoryBindings<BINDINGS>,
     memory: &'a GuestMemory<MAPPINGS>,
     backend: &'a mut B,
+    domain: ObjectId,
+    provider_generation: u64,
+    policy_generation: u64,
+    placement: IsolationPlacement,
     received: Option<ReceivedMessage>,
     reply_ready: bool,
 }
@@ -53,31 +159,50 @@ impl<
     #[allow(clippy::too_many_arguments)]
     pub fn new(
         runtime: &'a mut TaskRuntime<TASKS, CAPS>,
-        caller: TaskId,
-        provider: TaskId,
-        vm: VmId,
-        reply_endpoint: &'a mut Endpoint,
-        reply_capability: Capability,
+        admitted: ZstdAdmittedTaskRuntimeEndpoint,
         bindings: &'a SharedMemoryBindings<BINDINGS>,
         memory: &'a GuestMemory<MAPPINGS>,
         backend: &'a mut B,
-    ) -> Result<Self, ZstdTaskRuntimeAdapterError<B::Error>> {
-        if caller == provider {
-            return Err(ZstdTaskRuntimeAdapterError::UnexpectedSender);
-        }
-        Ok(Self {
+    ) -> Self {
+        let routed = admitted.routed;
+        let domain = routed.domain();
+        let provider_generation = routed.provider_generation();
+        let policy_generation = routed.policy_generation();
+        let placement = routed.placement();
+        let endpoint = routed.into_endpoint();
+        Self {
             runtime,
-            caller,
-            provider,
-            vm,
-            reply_endpoint,
-            reply_capability,
+            caller: endpoint.caller,
+            provider: endpoint.provider,
+            vm: endpoint.vm,
+            reply_endpoint: endpoint.reply_endpoint,
+            reply_capability: endpoint.reply_capability,
             bindings,
             memory,
             backend,
+            domain,
+            provider_generation,
+            policy_generation,
+            placement,
             received: None,
             reply_ready: false,
-        })
+        }
+    }
+
+    pub const fn domain(&self) -> ObjectId {
+        self.domain
+    }
+
+    pub const fn provider_generation(&self) -> u64 {
+        self.provider_generation
+    }
+
+    pub const fn policy_generation(&self) -> u64 {
+        self.policy_generation
+    }
+
+    pub const fn placement(&self) -> IsolationPlacement {
+        self.placement
     }
 
     fn reject_received(
@@ -234,7 +359,7 @@ unsafe impl<
             .deliver_ipc(
                 self.provider,
                 self.caller,
-                self.reply_endpoint,
+                &mut self.reply_endpoint,
                 self.reply_capability,
                 response,
                 &[],
@@ -270,8 +395,9 @@ mod tests {
     };
     use mrml_kernel::arch::x86_64::UserContext;
     use mrml_kernel::{
-        GuestRegion, HostResourceHandle, ObjectId, PhysAddr, Priority, SharedAccess,
-        SharedEndpoint, VmTable,
+        GuestRegion, HostResourceHandle, IsolationAdmissionTable, IsolationMode,
+        IsolationServiceSpec, PhysAddr, Priority, SharedAccess, SharedEndpoint, VmTable,
+        prepare_isolation_service_route,
     };
 
     const PAGE_BYTES: usize = 4096;
@@ -319,6 +445,46 @@ mod tests {
 
     fn context(root: u64, entry: u64, stack: u64) -> UserContext {
         UserContext::new(PhysAddr::new(root).unwrap(), entry, stack).unwrap()
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn admitted_endpoint(
+        caller: TaskId,
+        provider: TaskId,
+        vm: VmId,
+        reply_object: ObjectId,
+        reply_capability: Capability,
+        interface: ObjectId,
+        interface_generation: u32,
+        provider_generation: u64,
+        policy_generation: u64,
+        placement: IsolationPlacement,
+    ) -> RoutedIsolationService<ZstdTaskRuntimeEndpoint> {
+        let endpoint = ZstdTaskRuntimeEndpoint::new(
+            caller,
+            provider,
+            vm,
+            Endpoint::new(reply_object),
+            reply_capability,
+        )
+        .unwrap();
+        let spec = IsolationServiceSpec::new(
+            ObjectId(0x500),
+            interface,
+            interface_generation,
+            provider_generation,
+            policy_generation,
+            TotalMicrovmClass::MicrovmEligible,
+            placement,
+        )
+        .unwrap();
+        let mut admission =
+            IsolationAdmissionTable::<1>::new(IsolationMode::Balanced, policy_generation).unwrap();
+        prepare_isolation_service_route(&mut admission, spec)
+            .unwrap()
+            .commit(&mut admission, endpoint)
+            .map_err(|(_, error, _)| error)
+            .unwrap()
     }
 
     #[test]
@@ -392,25 +558,36 @@ mod tests {
             bytes: [0xa5; PAGE_BYTES],
         };
         backend.bytes[..FRAME.len()].copy_from_slice(&FRAME);
-        let mut reply_channel = Endpoint::new(reply_object);
+        let interface = ObjectId(0x406);
+        let routed = admitted_endpoint(
+            caller,
+            provider,
+            vm,
+            reply_object,
+            reply_capability,
+            interface,
+            INTERFACE_GENERATION,
+            11,
+            7,
+            IsolationPlacement::Microvm,
+        );
+        let expected = ZstdResolvedServiceBinding::new(interface, 11, 7).unwrap();
+        let admitted = ZstdAdmittedTaskRuntimeEndpoint::bind(routed, expected)
+            .map_err(|(_, error)| error)
+            .unwrap();
         let mut request_buffer = [0xcc; DECOMPRESS_REQUEST_BYTES];
         let mut capability_tokens = [u64::MAX; 1];
         let mut scratch = [0xcc; 128];
         let mut response_buffer = [0xcc; DECOMPRESS_RESPONSE_BYTES];
+        let mut adapter =
+            ZstdTaskRuntimeAdapter::new(&mut runtime, admitted, &bindings, &memory, &mut backend);
+        assert_eq!(adapter.domain(), ObjectId(0x500));
+        assert_eq!(adapter.provider_generation(), 11);
+        assert_eq!(adapter.policy_generation(), 7);
+        assert_eq!(adapter.placement(), IsolationPlacement::Microvm);
         ZstdServiceLoop::new()
             .serve_one(
-                &mut ZstdTaskRuntimeAdapter::new(
-                    &mut runtime,
-                    caller,
-                    provider,
-                    vm,
-                    &mut reply_channel,
-                    reply_capability,
-                    &bindings,
-                    &memory,
-                    &mut backend,
-                )
-                .unwrap(),
+                &mut adapter,
                 &mut request_buffer,
                 &mut capability_tokens,
                 &mut scratch,
@@ -432,6 +609,62 @@ mod tests {
         assert_eq!(capability_tokens, [0]);
         assert_eq!(scratch, [0; 128]);
         assert_eq!(response_buffer, [0; DECOMPRESS_RESPONSE_BYTES]);
+    }
+
+    #[test]
+    fn adapter_requires_the_exact_committed_resolver_and_policy_binding() {
+        assert_eq!(
+            ZstdResolvedServiceBinding::new(ObjectId(1), 0, 1),
+            Err(ZstdServiceBindingError::InvalidGeneration)
+        );
+        assert_eq!(
+            ZstdResolvedServiceBinding::new(ObjectId(1), 1, 0),
+            Err(ZstdServiceBindingError::InvalidGeneration)
+        );
+
+        let mut runtime = TaskRuntime::<2, 1>::new(1_000, 1).unwrap();
+        let caller = runtime
+            .create(
+                Priority::NORMAL,
+                context(0x20_0000, 0x40_0000, 0x0000_7000_0000_0000),
+            )
+            .unwrap();
+        let provider = runtime
+            .create(
+                Priority::NORMAL,
+                context(0x30_0000, 0x50_0000, 0x0000_7000_0000_1000),
+            )
+            .unwrap();
+        let reply_object = ObjectId(0x421);
+        let reply_capability = runtime
+            .capabilities_mut(provider)
+            .unwrap()
+            .insert(reply_object, Rights::SIGNAL)
+            .unwrap();
+        let vm = VmTable::<1>::new().create(0x422).unwrap();
+        let interface = ObjectId(0x423);
+        let routed = admitted_endpoint(
+            caller,
+            provider,
+            vm,
+            reply_object,
+            reply_capability,
+            interface,
+            INTERFACE_GENERATION,
+            17,
+            5,
+            IsolationPlacement::NativeService,
+        );
+        let (returned, error) = ZstdAdmittedTaskRuntimeEndpoint::bind(
+            routed,
+            ZstdResolvedServiceBinding::new(interface, 18, 5).unwrap(),
+        )
+        .err()
+        .expect("mismatched provider generation must be rejected");
+        assert_eq!(error, ZstdServiceBindingError::AdmissionMismatch);
+        assert_eq!(returned.provider_generation(), 17);
+        assert_eq!(returned.policy_generation(), 5);
+        assert_eq!(returned.placement(), IsolationPlacement::NativeService);
     }
 
     #[test]
@@ -491,25 +724,38 @@ mod tests {
             handle,
             bytes: [0; PAGE_BYTES],
         };
-        let mut reply_channel = Endpoint::new(reply_object);
+        let interface = ObjectId(0x418);
+        let routed = admitted_endpoint(
+            caller,
+            provider,
+            vm,
+            reply_object,
+            reply_capability,
+            interface,
+            INTERFACE_GENERATION,
+            13,
+            9,
+            IsolationPlacement::NativeService,
+        );
         let mut request_buffer = [0xcc; DECOMPRESS_REQUEST_BYTES];
         let mut capability_tokens = [u64::MAX; 1];
         let mut scratch = [0xcc; 128];
         let mut response_buffer = [0xcc; DECOMPRESS_RESPONSE_BYTES];
+        let admitted = ZstdAdmittedTaskRuntimeEndpoint::bind(
+            routed,
+            ZstdResolvedServiceBinding::new(interface, 13, 9).unwrap(),
+        )
+        .map_err(|(_, error)| error)
+        .unwrap();
         assert_eq!(
             ZstdServiceLoop::new().serve_one(
                 &mut ZstdTaskRuntimeAdapter::new(
                     &mut runtime,
-                    caller,
-                    provider,
-                    vm,
-                    &mut reply_channel,
-                    reply_capability,
+                    admitted,
                     &bindings,
                     &memory,
                     &mut backend,
-                )
-                .unwrap(),
+                ),
                 &mut request_buffer,
                 &mut capability_tokens,
                 &mut scratch,

@@ -95,9 +95,14 @@ policy evidence. A hosted `TaskRuntime` adapter now additionally rejects any
 sender except the launch-bound caller, resolves the transferred leaf against
 the exact provider VM/task, revokes it before making the response visible, and
 sends the response over a separate launch-bound endpoint. Revocation failure
-suppresses the response. No MRML-target service binary, concrete syscall
-adapter, VMM guest invocation, resolver-to-launch binding, supervision
-integration, or WHP/KVM service parity is proved.
+suppresses the response. The adapter can now be constructed only by consuming a
+committed isolation route whose exact interface object, ABI generation,
+provider generation, and policy generation match the expected resolver/policy
+binding; the route also retains immutable domain, Total-mode class, and
+placement evidence. This does not connect the actual resolver to the launcher.
+No MRML-target service binary, concrete syscall adapter, VMM guest invocation,
+resolver-to-launch dispatch, supervision integration, or WHP/KVM service parity
+is proved.
 
 > Functionality historically embedded in a Rust binary may instead be supplied
 > by an independently signed and serviced MRML component through an explicit,
