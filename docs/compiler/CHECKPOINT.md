@@ -1577,6 +1577,16 @@ places. Windows gnullvm and native Arch Linux WSL each continue to pass 985
 compiler tests. Dynamic indexes, nested aggregates, dereference outputs, and
 general place lowering remain absent.
 
+The static inline-output place consolidation replaces the separate scalar,
+tuple, and array preanalysis/emission paths with one typed record carrying the
+resolved local, bounded projection sequence, and checked stack offset. A common
+preanalysis boundary records the write or read-modify-write fact and any exact
+move-path effect; a common emission boundary verifies fact order and resolves
+the destination slot. This removed 561 duplicated lines while preserving the
+same fail-closed syntax and behavior. Both canonical hosts pass the same 985
+compiler tests. This is a structural dependency for dynamic-index and
+dereference places, not a claim that either is implemented.
+
 The premise-bearing rigid-normalization milestone proves the selected generic
 implementation's instantiated trait and projection predicates before exposing
 its associated value. It shares the caller's 16-frame rigid proof stack and

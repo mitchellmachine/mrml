@@ -4750,6 +4750,14 @@ The pinned oracle accepted original `lateout`, same-place `inout`, and split
 compiler tests. Dynamic indexes, nested aggregates, dereference outputs, and
 general place lowering remain unsupported.
 
+Static inline outputs now use one typed place record for scalar locals, tuple
+fields, and constant array elements. It carries the resolved local, bounded
+projection sequence, and checked stack offset through shared preanalysis and
+emission boundaries, including exact assignment-fact ordering. The consolidation
+removed 561 duplicated lines without broadening accepted syntax. Windows and
+native Arch Linux WSL each pass the unchanged 985-test compiler suite. Dynamic
+indexes and dereference outputs remain fail-closed.
+
 The projection-bearing term milestone uses a fixed 64-node arena for flat leaf
 terms and associated-type projections whose trait self/argument positions refer
 only to earlier nodes. Identical nodes intern to one stable identity; invalid
