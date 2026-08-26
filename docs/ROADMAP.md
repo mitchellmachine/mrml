@@ -180,11 +180,19 @@ Resource/device projection is now **PARTIALLY IMPLEMENTED** at the next kernel
 control-plane boundary. A linear plan validates exact route generations, guest
 RAM pages and object authority, same-domain live vCPU identity/count, and an
 exact no-duplicate set of interface/device capability projections before any
-backend allocation phase. Focused Windows and Arch Linux suites each pass 545
-kernel tests. The plan is not yet consumed by the WHP/KVM application factories,
-so live attachment, teardown accounting, device-specific reset/revocation, and
-physical evidence remain **PLANNED**. That consumption is the next gate before
-persistent Settings and shell policy.
+backend allocation phase. The application factories now prepare that plan
+before WHP/KVM construction, seal it into an immutable active data-plane state
+only after native construction and application-resource attachment succeed,
+and retire the native guest before revoking projected capabilities and
+releasing exact RAM/vCPU reservations. The first signed WHP probe exposed and
+rejected an invalid CPU-resource namespace before VM construction; both runners
+now use an admissible explicit namespace and carry a focused regression test.
+Fresh identical signed artifacts then completed the Total-mode CPL3 application
+path and teardown on WHP and nested KVM. Windows and Arch Linux each pass 545
+kernel tests; WHP passes 9 runner tests and KVM passes 10. Device-specific
+projection, reset/revocation, broader application/service integration, and
+physical evidence remain **PLANNED**. Persistent Settings and shell policy is
+the next dependency gate.
 
 The deployment lane is defined in [DEPLOYMENT.md](DEPLOYMENT.md) and must not
 displace the current foundational gate. Later work proceeds as separate bounded

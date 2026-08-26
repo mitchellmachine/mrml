@@ -696,9 +696,15 @@ cases fail before any backend allocation phase and map to `MEMORY_BUDGET`,
 Validation failure returns the exact unpublished RAM and vCPU reservations for
 explicit cleanup or retry; it never selects native placement. Application
 requirements can be derived only from a `MICROVM` route and retain that route's
-domain and system/policy generations. General service integration, actual
-WHP/KVM guest construction from this plan, device-specific lifecycle proofs,
-and physical isolation remain **PLANNED**.
+domain and system/policy generations. The WHP and KVM application factories now
+consume this boundary: they create the route and reserve exact guest RAM, one
+same-domain vCPU, and interface-transport authority before native guest
+construction. After construction and resource attachment, the one-use
+`activate_data_plane` transition seals the immutable projection; after native
+guest destruction, retirement revokes the projected capability and releases
+the exact RAM and vCPU reservations. No per-message policy lookup or native
+fallback is added to the data plane. General service integration,
+device-specific lifecycle proofs, and physical isolation remain **PLANNED**.
 
 ```text
 Complexity impact: MEDIUM
@@ -771,8 +777,9 @@ Documentation is not implementation evidence. Implement bounded milestones:
    capability-scoped aggregate kernel snapshot; per-domain/service/UI projections
    remain **PLANNED**);
 5. resource and device projections (**PARTIALLY IMPLEMENTED** for the linear
-   kernel pre-construction plan; live WHP/KVM and device-specific integration
-   remain **PLANNED**);
+   kernel plan and its live WHP/KVM application consumption/retirement;
+   device-specific and broader service/application integration remain
+   **PLANNED**);
 6. persistent Settings and shell policy;
 7. strict Total runtime enforcement;
 8. bootloader and EFI Shell selectors;

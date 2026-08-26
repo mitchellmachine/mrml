@@ -1024,8 +1024,13 @@ same `MicrovmGuestRam`; later validation failure aborts the untouched prepared
 RAM back to that reservation; the live vCPU reservation and descriptor set are
 also returned. Recovery may explicitly release or retry them, but must not
 reconstruct identities from names, substitute generations or capabilities, or
-use projection failure to launch natively. Live backend teardown integration is
-still **PLANNED**, so this is hosted kernel lifecycle evidence only.
+use projection failure to launch natively. The WHP/KVM application owners now
+retain the sealed projection alongside the exact guest endpoint. They destroy
+the native guest first, then retire the projection, revoke descriptor
+capabilities, and release the exact RAM and vCPU reservations. If destruction
+is uncertain, those resources must remain retained for exact retry; recovery
+must never release them merely because the application endpoint is no longer
+visible. Device-specific and general service teardown remain **PLANNED**.
 
 Application-launch recovery must retain the exact runtime domain, application
 object, immutable application generation and artifact digest, active system

@@ -81,6 +81,11 @@ type KvmApplicationLauncher =
     PreparedMicrovmApplicationBackend<AdmittedApplicationGuestFactory<PreparedKvmGuest<16>>>;
 
 #[cfg(target_os = "linux")]
+const APPLICATION_MEMORY_NAMESPACE: u16 = 0x3a50;
+#[cfg(target_os = "linux")]
+const APPLICATION_CPU_NAMESPACE: u16 = 0x3a51;
+
+#[cfg(target_os = "linux")]
 struct KvmApplicationProjection {
     prepared: Option<MicrovmProjectionPlan<1>>,
     active: Option<ActiveMicrovmProjectionPlan<1>>,
@@ -95,7 +100,7 @@ struct KvmApplicationProjection {
 impl KvmApplicationProjection {
     fn prepare(spec: IsolationApplicationSpec, guest_pages: u64) -> Result<Self> {
         let mut capabilities = CapabilitySpace::<4>::new();
-        let mut memory = MemoryPoolTable::<1, 1>::new(0x7a50)
+        let mut memory = MemoryPoolTable::<1, 1>::new(APPLICATION_MEMORY_NAMESPACE)
             .map_err(|error| anyhow!("application RAM table failed: {:?}", error))?;
         let (pool, pool_capability) = memory
             .create_root(
@@ -116,7 +121,7 @@ impl KvmApplicationProjection {
             &mut capabilities,
         )
         .map_err(|error| anyhow!("application RAM reservation failed: {:?}", error))?;
-        let mut cpu = CpuBudgetTable::<1, 1>::new(0x7a51)
+        let mut cpu = CpuBudgetTable::<1, 1>::new(APPLICATION_CPU_NAMESPACE)
             .map_err(|error| anyhow!("application CPU table failed: {:?}", error))?;
         let budget_spec = CpuBudgetSpec::new(1, 100_000, 100_000, 0, 1)
             .map_err(|error| anyhow!("application CPU budget failed: {:?}", error))?;
@@ -4944,6 +4949,12 @@ mrml_runtime::mrml_entrypoint!(application_main);
 mod tests {
     use super::*;
     use mrml_kernel::BootHandoff;
+
+    #[test]
+    fn application_projection_namespaces_are_admissible() {
+        assert!(MemoryPoolTable::<1, 1>::new(APPLICATION_MEMORY_NAMESPACE).is_ok());
+        assert!(CpuBudgetTable::<1, 1>::new(APPLICATION_CPU_NAMESPACE).is_ok());
+    }
 
     #[test]
     fn handoff_binds_verified_version_entropy_and_measurement() {

@@ -8041,6 +8041,33 @@ hosted controlled application evidence, not general application loading, GUI or
 Semantic Scene Graph integration, required-system Total readiness, host
 resistance, bare metal, physical isolation, or recovery evidence.
 
+The application runners now also consume the kernel's linear quantitative and
+capability projection plan around that real guest lifecycle. Route identity,
+exact guest pages, one same-domain vCPU, and interface-transport authority are
+admitted before WHP/KVM construction. Successful construction and application
+attachment consume the plan into an immutable active data-plane state; guest
+destruction precedes descriptor revocation and exact RAM/vCPU release. The
+first fresh WHP attempt failed closed before VM construction because the new
+CPU table used namespace `0x7a51`, outside the kernel's admitted `1..=0x3fff`
+range. Both runners now use explicit namespace `0x3a51` and test its admission.
+With that correction, the same freshly signed kernel package (SHA-256
+`f6dc65b4bf20a9d7598009cc225bd2fc22c0dca26ff3368d4d60216267c39207`)
+and application bundle (SHA-256
+`21099faef2ecf2704a46922af01f8f3d9dee13b8c5a3c43e98b904f04e242336`)
+completed the CPL3 Total-mode application and teardown on WHP
+(`verify=17928us`, `prepare=3860us`, `execute=4319us`, `total=48267us`)
+and nested KVM (`verify=21283us`, `prepare=2423us`, `execute=1246us`,
+`total=102019us`). WHP passes 9 runner tests and KVM passes 10; both kernel
+suites pass 545 tests. This is controlled hosted evidence only. It does not
+prove host resistance, device-specific projection/revocation, physical
+hardware, or complete Total readiness.
+
+Patent review: `NOT_TRIGGERED` for the runner consumption and namespace fix.
+They apply the already reviewed linear projection, capability, quantitative
+resource, and backend lifecycle mechanisms without a new algorithm or wire
+format. The broader adaptive-isolation, VMM, and device-projection reviews
+remain `TRIGGERED` in [patents/REVIEW_LOG.md](patents/REVIEW_LOG.md).
+
 Exact commands and outcomes:
 
 ```text

@@ -199,8 +199,13 @@ reservation on validation failure rather than losing quantitative authority.
 The plan also retains the exact required capability projections. Windows and
 Arch Linux unit tests cover successful consumption, RAM/vCPU mismatch, missing
 `VirtualGPU`, stale interface authority, and recoverable RAM failure. Native
-WHP/KVM construction from this plan and teardown/accounting integration remain
-**PLANNED**.
+WHP/KVM application construction now consumes this plan: the exact aggregate
+guest-page charge is reserved before construction, sealed only after native
+construction and application attachment, retained for the active guest, and
+returned only after guest destruction. The same signed application completed
+this lifecycle on WHP and nested KVM. Device-specific memory/reset accounting,
+general service integration, opaque host-hypervisor allocations, and physical
+backing evidence remain **PLANNED**.
 
 Default policy selects NUMA placement, migration, tiering, and huge pages while
 preserving object identity. Advanced authority may request node/device locality,
