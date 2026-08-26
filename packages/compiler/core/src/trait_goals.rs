@@ -255,15 +255,20 @@ impl<'source> SourceTraitDeclarationTable<'source> {
                 }
             }
             let mut saw_default = false;
-            for default in declaration.generic_parameter_defaults() {
+            for (default_index, default) in
+                declaration.generic_parameter_defaults().iter().enumerate()
+            {
                 match default {
                     Some(default) => {
                         saw_default = true;
-                        if declaration
+                        let parameter_index = declaration
                             .generic_parameters()
-                            .contains(&Some(default.text))
-                            || default.text == "Self"
-                            || !supported_source_trait_type(default.text)
+                            .iter()
+                            .position(|parameter| *parameter == Some(default.text));
+                        if default.text == "Self"
+                            || parameter_index.is_some_and(|index| index >= default_index)
+                            || (parameter_index.is_none()
+                                && !supported_source_trait_type(default.text))
                         {
                             return Err(
                                 SourceTraitDeclarationError::UnsupportedGenericParameterDefault,
@@ -398,14 +403,21 @@ impl<'source> SourceTraitDeclarationTable<'source> {
                         return Err(SourceTraitDeclarationError::UnsupportedSupertraitArgument);
                     });
                 }
-                for (argument_index, default) in target.generic_parameter_defaults()
-                    [source_supertrait.argument_count()..]
-                    .iter()
-                    .flatten()
-                    .enumerate()
+                for argument_index in
+                    source_supertrait.argument_count()..target.generic_parameter_count
                 {
-                    arguments[source_supertrait.argument_count() + argument_index] =
-                        Some(SourceTraitSupertraitArgument::Concrete(*default));
+                    let default = target.generic_parameter_defaults()[argument_index].unwrap();
+                    arguments[argument_index] = Some(
+                        if let Some(parameter_index) = target
+                            .generic_parameters()
+                            .iter()
+                            .position(|parameter| *parameter == Some(default.text))
+                        {
+                            arguments[parameter_index].unwrap()
+                        } else {
+                            SourceTraitSupertraitArgument::Concrete(default)
+                        },
+                    );
                 }
                 let resolved = SourceTraitSupertrait {
                     trait_id: target.id,
@@ -737,7 +749,12 @@ impl<'source> SourceTraitImplementationTable<'source> {
                 }
                 Item::Trait(declaration) => {
                     for default in declaration.generic_parameter_defaults().iter().flatten() {
-                        table.intern_type(*default)?;
+                        if !declaration
+                            .generic_parameters()
+                            .contains(&Some(default.text))
+                        {
+                            table.intern_type(*default)?;
+                        }
                     }
                     for supertrait in declaration.supertraits().iter().flatten() {
                         for argument in supertrait.arguments().iter().flatten() {
@@ -855,13 +872,18 @@ impl<'source> SourceTraitImplementationTable<'source> {
                         span: argument.span,
                     })?;
             }
-            for default in declaration.generic_parameter_defaults()
-                [implementation.trait_argument_count()..]
-                .iter()
-                .flatten()
+            for argument_index in
+                implementation.trait_argument_count()..declaration.generic_parameter_count
             {
+                let default = declaration.generic_parameter_defaults()[argument_index].unwrap();
+                let value = declaration
+                    .generic_parameters()
+                    .iter()
+                    .position(|parameter| *parameter == Some(default.text))
+                    .map(|parameter_index| header.arguments()[parameter_index].unwrap())
+                    .unwrap_or_else(|| table.get_type(default.text).unwrap().id);
                 header
-                    .push_argument(table.get_type(default.text).unwrap().id)
+                    .push_argument(value)
                     .map_err(|kind| SourceTraitImplementationError {
                         kind: SourceTraitImplementationErrorKind::Goal(kind),
                         span: default.span,
@@ -921,19 +943,24 @@ impl<'source> SourceTraitImplementationTable<'source> {
                         span: argument.span,
                     })?;
             }
-            for default in declaration.generic_parameter_defaults()
-                [implementation.trait_argument_count()..]
-                .iter()
-                .flatten()
+            for argument_index in
+                implementation.trait_argument_count()..declaration.generic_parameter_count
             {
-                consequence
-                    .push_argument(BoundTraitGoalType::Concrete(
-                        table.get_type(default.text).unwrap().id,
-                    ))
-                    .map_err(|kind| SourceTraitImplementationError {
+                let default = declaration.generic_parameter_defaults()[argument_index].unwrap();
+                let value = declaration
+                    .generic_parameters()
+                    .iter()
+                    .position(|parameter| *parameter == Some(default.text))
+                    .map(|parameter_index| consequence.arguments()[parameter_index].unwrap())
+                    .unwrap_or_else(|| {
+                        BoundTraitGoalType::Concrete(table.get_type(default.text).unwrap().id)
+                    });
+                consequence.push_argument(value).map_err(|kind| {
+                    SourceTraitImplementationError {
                         kind: SourceTraitImplementationErrorKind::Goal(kind),
                         span: default.span,
-                    })?;
+                    }
+                })?;
             }
             for parameter_index in 0..implementation.generic_parameter_count() {
                 let parameter = BoundTraitGoalType::Parameter(TraitGenericParameterId::new(
@@ -995,20 +1022,12 @@ impl<'source> SourceTraitImplementationTable<'source> {
                             span: argument.span,
                         })?;
                 }
-                for default in premise_trait.generic_parameter_defaults()
-                    [predicate.trait_argument_count()..]
-                    .iter()
-                    .flatten()
-                {
-                    premise
-                        .push_argument(BoundTraitGoalType::Concrete(
-                            table.get_type(default.text).unwrap().id,
-                        ))
-                        .map_err(|kind| SourceTraitImplementationError {
-                            kind: SourceTraitImplementationErrorKind::Goal(kind),
-                            span: default.span,
-                        })?;
-                }
+                push_source_bound_trait_defaults(
+                    &mut premise,
+                    &premise_trait,
+                    predicate.trait_argument_count(),
+                    &table,
+                )?;
                 match predicate {
                     crate::TraitImplementationWherePredicate::Implemented { .. } => clause
                         .push_premise(premise)
@@ -1096,20 +1115,12 @@ impl<'source> SourceTraitImplementationTable<'source> {
                             span: argument.span,
                         })?;
                 }
-                for default in required_trait.generic_parameter_defaults()
-                    [predicate.trait_argument_count()..]
-                    .iter()
-                    .flatten()
-                {
-                    required
-                        .push_argument(BoundTraitGoalType::Concrete(
-                            table.get_type(default.text).unwrap().id,
-                        ))
-                        .map_err(|kind| SourceTraitImplementationError {
-                            kind: SourceTraitImplementationErrorKind::Goal(kind),
-                            span: default.span,
-                        })?;
-                }
+                push_source_bound_trait_defaults(
+                    &mut required,
+                    &required_trait,
+                    predicate.trait_argument_count(),
+                    &table,
+                )?;
                 match predicate {
                     crate::TraitImplementationWherePredicate::Implemented { .. } => {
                         if !clause.premises().contains(&Some(required)) {
@@ -1220,9 +1231,7 @@ impl<'source> SourceTraitImplementationTable<'source> {
                     .iter()
                     .position(|parameter| *parameter == Some(default.text))
                 {
-                    implementation.trait_arguments()[index]
-                        .or(declaration.generic_parameter_defaults()[index])
-                        .unwrap()
+                    source_declaration_implementation_argument(index, &declaration, implementation)
                 } else {
                     default
                 };
@@ -1316,21 +1325,12 @@ impl<'source> SourceTraitImplementationTable<'source> {
                                 span: argument.span,
                             })?;
                     }
-                    for default in projected_trait.generic_parameter_defaults()
-                        [projection.trait_argument_count()..]
-                        .iter()
-                        .flatten()
-                    {
-                        goal.push_argument(BoundTraitGoalType::Concrete(
-                            table.get_type(default.text).unwrap().id,
-                        ))
-                        .map_err(|kind| {
-                            SourceTraitImplementationError {
-                                kind: SourceTraitImplementationErrorKind::Goal(kind),
-                                span: default.span,
-                            }
-                        })?;
-                    }
+                    push_source_bound_trait_defaults(
+                        &mut goal,
+                        &projected_trait,
+                        projection.trait_argument_count(),
+                        &table,
+                    )?;
                     GenericTraitAssociatedTypeValue::new_projection(
                         GenericTraitImplementationId::new(generic_implementation_index),
                         associated.id,
@@ -1389,21 +1389,12 @@ impl<'source> SourceTraitImplementationTable<'source> {
                             }
                         })?;
                     }
-                    for default in projected_trait.generic_parameter_defaults()
-                        [projection.trait_argument_count()..]
-                        .iter()
-                        .flatten()
-                    {
-                        goal.push_argument(BoundTraitGoalType::Concrete(
-                            table.get_type(default.text).unwrap().id,
-                        ))
-                        .map_err(|kind| {
-                            SourceTraitImplementationError {
-                                kind: SourceTraitImplementationErrorKind::Goal(kind),
-                                span: default.span,
-                            }
-                        })?;
-                    }
+                    push_source_bound_trait_defaults(
+                        &mut goal,
+                        &projected_trait,
+                        projection.trait_argument_count(),
+                        &table,
+                    )?;
                     GenericTraitAssociatedTypeValue::new_projection(
                         GenericTraitImplementationId::new(generic_implementation_index),
                         associated.id,
@@ -1458,14 +1449,16 @@ impl<'source> SourceTraitImplementationTable<'source> {
             {
                 trait_arguments[index] = table.get_type(argument.text).unwrap().id;
             }
-            for (index, default) in declaration.generic_parameter_defaults()
-                [implementation.trait_argument_count()..]
-                .iter()
-                .flatten()
-                .enumerate()
+            for argument_index in
+                implementation.trait_argument_count()..declaration.generic_parameter_count
             {
-                trait_arguments[implementation.trait_argument_count() + index] =
-                    table.get_type(default.text).unwrap().id;
+                let default = declaration.generic_parameter_defaults()[argument_index].unwrap();
+                trait_arguments[argument_index] = declaration
+                    .generic_parameters()
+                    .iter()
+                    .position(|parameter| *parameter == Some(default.text))
+                    .map(|parameter_index| trait_arguments[parameter_index])
+                    .unwrap_or_else(|| table.get_type(default.text).unwrap().id);
             }
             table
                 .prove_supertraits(
@@ -1666,18 +1659,18 @@ impl<'source> SourceTraitImplementationTable<'source> {
                         span: argument.span,
                     })?;
             }
-            for default in declaration.generic_parameter_defaults()[trait_argument_count..]
-                .iter()
-                .flatten()
-            {
-                let argument_type =
-                    self.get_type(default.text)
-                        .ok_or(SourceTraitObligationError {
-                            kind: SourceTraitObligationErrorKind::UnknownType,
-                            span: default.span,
-                        })?;
+            for argument_index in trait_argument_count..declaration.generic_parameter_count {
+                let default = declaration.generic_parameter_defaults()[argument_index].unwrap();
+                let argument = declaration
+                    .generic_parameters()
+                    .iter()
+                    .position(|parameter| *parameter == Some(default.text))
+                    .map(|parameter_index| source_goal.arguments()[parameter_index].unwrap())
+                    .unwrap_or_else(|| {
+                        TraitGoalType::Concrete(self.get_type(default.text).unwrap().id)
+                    });
                 source_goal
-                    .push_argument(TraitGoalType::Concrete(argument_type.id))
+                    .push_argument(argument)
                     .map_err(|kind| SourceTraitObligationError {
                         kind: SourceTraitObligationErrorKind::Goal(kind),
                         span: default.span,
@@ -1940,26 +1933,8 @@ fn source_implementation_predicates_same(
     let common = left.self_type().text == right.self_type().text
         && left.trait_name() == right.trait_name()
         && (0..declaration.generic_parameter_count).all(|index| {
-            let left = left
-                .trait_arguments()
-                .get(index)
-                .copied()
-                .flatten()
-                .or(declaration
-                    .generic_parameter_defaults()
-                    .get(index)
-                    .copied()
-                    .flatten());
-            let right = right
-                .trait_arguments()
-                .get(index)
-                .copied()
-                .flatten()
-                .or(declaration
-                    .generic_parameter_defaults()
-                    .get(index)
-                    .copied()
-                    .flatten());
+            let left = source_predicate_effective_argument(left, &declaration, index);
+            let right = source_predicate_effective_argument(right, &declaration, index);
             left.zip(right)
                 .is_some_and(|(left, right)| left.text == right.text)
         });
@@ -2049,9 +2024,8 @@ fn source_declaration_implementation_bound_type(
         .iter()
         .position(|parameter| *parameter == Some(source.text))
     {
-        let source_argument = implementation.trait_arguments()[index]
-            .or(declaration.generic_parameter_defaults()[index])
-            .unwrap();
+        let source_argument =
+            source_declaration_implementation_argument(index, declaration, implementation);
         return source_bound_type(source_argument, implementation, table);
     }
     table
@@ -2061,6 +2035,78 @@ fn source_declaration_implementation_bound_type(
             kind: SourceTraitImplementationErrorKind::UnsupportedSelfType,
             span: source.span,
         })
+}
+
+fn source_declaration_implementation_argument<'source>(
+    index: usize,
+    declaration: &SourceTraitDeclaration<'source>,
+    implementation: &crate::TraitImplementation<'source>,
+) -> TypeRef<'source> {
+    if let Some(argument) = implementation
+        .trait_arguments()
+        .get(index)
+        .copied()
+        .flatten()
+    {
+        return argument;
+    }
+    let default = declaration.generic_parameter_defaults()[index].unwrap();
+    declaration
+        .generic_parameters()
+        .iter()
+        .position(|parameter| *parameter == Some(default.text))
+        .map(|parameter_index| {
+            source_declaration_implementation_argument(parameter_index, declaration, implementation)
+        })
+        .unwrap_or(default)
+}
+
+fn source_predicate_effective_argument<'source>(
+    predicate: &crate::TraitImplementationWherePredicate<'source>,
+    declaration: &SourceTraitDeclaration<'source>,
+    index: usize,
+) -> Option<TypeRef<'source>> {
+    if let Some(argument) = predicate.trait_arguments().get(index).copied().flatten() {
+        return Some(argument);
+    }
+    let default = declaration
+        .generic_parameter_defaults()
+        .get(index)
+        .copied()
+        .flatten()?;
+    declaration
+        .generic_parameters()
+        .iter()
+        .position(|parameter| *parameter == Some(default.text))
+        .and_then(|parameter_index| {
+            source_predicate_effective_argument(predicate, declaration, parameter_index)
+        })
+        .or(Some(default))
+}
+
+fn push_source_bound_trait_defaults(
+    goal: &mut BoundImplementedTraitGoal,
+    declaration: &SourceTraitDeclaration<'_>,
+    provided_count: usize,
+    table: &SourceTraitImplementationTable<'_>,
+) -> Result<(), SourceTraitImplementationError> {
+    for argument_index in provided_count..declaration.generic_parameter_count {
+        let default = declaration.generic_parameter_defaults()[argument_index].unwrap();
+        let value = declaration
+            .generic_parameters()
+            .iter()
+            .position(|parameter| *parameter == Some(default.text))
+            .map(|parameter_index| goal.arguments()[parameter_index].unwrap())
+            .unwrap_or_else(|| {
+                BoundTraitGoalType::Concrete(table.get_type(default.text).unwrap().id)
+            });
+        goal.push_argument(value)
+            .map_err(|kind| SourceTraitImplementationError {
+                kind: SourceTraitImplementationErrorKind::Goal(kind),
+                span: default.span,
+            })?;
+    }
+    Ok(())
 }
 
 fn supported_source_trait_type(name: &str) -> bool {
@@ -9289,7 +9335,7 @@ mod tests {
     }
 
     #[test]
-    fn materializes_trailing_concrete_source_trait_defaults() {
+    fn materializes_trailing_source_trait_defaults() {
         let exact = concat!(
             "trait Convert<Input = u8> { type Output; } ",
             "impl Convert for u32 { type Output = u16; } ",
@@ -9304,6 +9350,18 @@ mod tests {
                 .required_generic_parameter_count(),
             0
         );
+        let implementations =
+            SourceTraitImplementationTable::from_module(&module, &traits).unwrap();
+        implementations.prove_module(&module, &traits).unwrap();
+
+        let dependent = concat!(
+            "trait Pair<T = u8, U = T> { type Output = U; } ",
+            "impl Pair for u32 {} impl Pair<u16> for u16 {} ",
+            "fn check() where u32: Pair, <u32 as Pair>::Output = u8, ",
+            "u16: Pair<u16>, <u16 as Pair<u16>>::Output = u16 {}"
+        );
+        let module = Parser::new(dependent).parse_module::<12, 1>().unwrap();
+        let traits = SourceTraitDeclarationTable::from_module(&module).unwrap();
         let implementations =
             SourceTraitImplementationTable::from_module(&module, &traits).unwrap();
         implementations.prove_module(&module, &traits).unwrap();
@@ -9328,13 +9386,13 @@ mod tests {
             SourceTraitDeclarationError::NonTrailingGenericParameterDefault
         );
         assert_eq!(
-            invalid("trait Bad<T, U = T> {}"),
+            invalid("trait Bad<T = U, U = u8> {}"),
             SourceTraitDeclarationError::UnsupportedGenericParameterDefault
         );
 
         let duplicate_declaration = Parser::new(concat!(
-            "trait Parent<T = u8> {} ",
-            "trait Child where Self: Parent, Self: Parent<u8> {}"
+            "trait Parent<T = u8, U = T> {} ",
+            "trait Child where Self: Parent, Self: Parent<u8, u8> {}"
         ))
         .parse_module::<4, 1>()
         .unwrap();
@@ -9344,8 +9402,8 @@ mod tests {
         );
 
         let duplicate_implementation = Parser::new(concat!(
-            "trait Parent<T = u8> {} trait Child {} ",
-            "impl<T> Child for T where T: Parent, T: Parent<u8> {}"
+            "trait Parent<T = u8, U = T> {} trait Child {} ",
+            "impl<T> Child for T where T: Parent, T: Parent<u8, u8> {}"
         ))
         .parse_module::<6, 1>()
         .unwrap();

@@ -453,12 +453,12 @@ mod tests {
     }
 
     #[test]
-    fn materializes_trailing_concrete_trait_defaults_before_codegen() {
+    fn materializes_trailing_trait_defaults_before_codegen() {
         let source = concat!(
-            "trait Convert<Input = u8> { type Output; } ",
-            "impl<T> Convert for T { type Output = T; } ",
+            "trait Convert<Input = u8, Output = Input> { type Value = Output; } ",
+            "impl<T> Convert for T {} ",
             "#[unsafe(no_mangle)] pub extern \"C\" fn answer() -> u64 ",
-            "where u32: Convert, <u32 as Convert>::Output = u32 { 42 }"
+            "where u32: Convert, <u32 as Convert>::Value = u8 { 42 }"
         );
         compile(source, "answer", ObjectFormat::Coff).unwrap();
     }
