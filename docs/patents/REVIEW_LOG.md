@@ -862,6 +862,11 @@ volume header, geometry, and one of two existing redundant-root locations is
 conventional identity/geometry validation. Separating that control-plane check
 from independently authorized block reads adds no discovery, storage,
 recovery-selection, isolation, scheduling, or virtualization algorithm.
+Bounded iteration over validated device/header records, exact volume equality,
+duplicate rejection, and joining the result to an existing capability session
+are conventional inventory validation and API composition. The adapter adds no
+bus enumeration, device protocol, filesystem, recovery-selection, placement,
+or virtualization algorithm, so the broader review remains `TRIGGERED`.
 Because the
 broader combination of
 signed release classification, automated placement, isolation, recovery, and
@@ -7116,3 +7121,15 @@ borrow-checking, region-inference, alias-analysis, optimization, or code-
 generation algorithm. General loop fixed points remain absent. Broader compiler
 completion remains partial; this technical screen is not a clearance or
 infringement conclusion and does not replace independent human dual review.
+
+# 2026-08-26 — Call-derived shared-child invalidation evidence
+
+**Result: NOT_TRIGGERED after the call-derived evidence review.** This increment
+adds independently authored regression evidence that MRML's existing bounded
+identity and same-parameter conditional call summaries feed the established
+loan-ancestry and liveness checks through one shared child. It introduces no new
+interprocedural analysis, borrow-checking, region-inference, alias-analysis,
+optimization, or code-generation algorithm. General call summaries remain
+absent. Broader compiler completion remains partial; this technical screen is
+not a clearance or infringement conclusion and does not replace independent
+human dual review.
