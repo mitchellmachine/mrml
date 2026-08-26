@@ -4587,10 +4587,11 @@ The trailing trait-default milestone admits defaults such as
 `trait Convert<Input = u8, Output = Input>` and materializes omitted arguments consistently in
 exact and generic implementation heads, supertraits, declaration and
 implementation premises, projection values/defaults, and function obligations.
-Only a trailing run of complete concrete nominal defaults or references to an
-earlier trait type parameter is accepted; forward/self-referential, `Self`,
-lifetime/const, and compound defaults fail closed. Earlier-parameter defaults
-copy the already materialized typed argument rather than introducing inference.
+Only a trailing run of complete concrete nominal defaults, `Self`, or references
+to an earlier trait type parameter is accepted; forward/self-referential type-
+parameter, lifetime/const, and compound defaults fail closed. `Self` and
+earlier-parameter defaults copy already materialized typed terms rather than
+introducing inference.
 Predicate duplicate admission compares materialized argument tuples, so
 `Parent` and `Parent<u8, u8>` are the same requirement for
 `trait Parent<T = u8, U = T>` and cannot bypass duplicate rejection through

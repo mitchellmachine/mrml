@@ -1383,10 +1383,10 @@ The trailing trait-default milestone parses defaults such as
 `trait Convert<Input = u8, Output = Input>` and materializes omitted arguments in exact and
 generic implementation heads, supertraits, declaration/implementation
 premises, projection values/defaults, and function obligations. Defaults must
-form a trailing run of complete concrete nominal types or references to an
-earlier trait type parameter. Forward/self-referential, `Self`, lifetime/const,
-and compound defaults fail closed. Earlier-parameter defaults copy the already
-materialized typed argument without introducing inference. Windows gnullvm and
+form a trailing run of complete concrete nominal types, `Self`, or references
+to an earlier trait type parameter. Forward/self-referential type-parameter,
+lifetime/const, and compound defaults fail closed. `Self` and earlier-parameter
+defaults copy already materialized typed terms without introducing inference. Windows gnullvm and
 native Arch Linux WSL each pass 630 library tests, one component-interface
 probe, 10 conformance tests, and 335 replacement tests: 976 compiler tests per
 host.

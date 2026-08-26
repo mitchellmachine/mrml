@@ -5611,3 +5611,15 @@ code-generation mechanism. Forward/self-referential and compound defaults
 remain rejected. Broader trait solving and Rust conformance remain partial;
 this technical screen does not establish clearance or infringement and does
 not replace independent human dual review.
+
+# 2026-08-26 — `Self` source trait defaults
+
+**Result: NOT_TRIGGERED after the typed self-substitution review.** This
+increment conventionally copies the already materialized bounded self term into
+a missing trailing type argument and uses that same effective term during
+duplicate admission. It introduces no inference, unification, normalization,
+candidate selection, proof-search, caching, or code-generation mechanism.
+Forward/self-referential type-parameter and compound defaults remain rejected.
+Broader trait solving and Rust conformance remain partial; this technical screen
+does not establish clearance or infringement and does not replace independent
+human dual review.
