@@ -3470,6 +3470,108 @@ impl<'source> Parser<'source> {
         Ok((where_predicates, where_predicate_count))
     }
 
+    fn push_trait_parameter_bound(
+        &self,
+        parameter: Token<'source>,
+        bound: Token<'source>,
+        trait_arguments: [Option<TypeRef<'source>>; MAX_SOURCE_TRAIT_ARGUMENTS],
+        trait_argument_count: usize,
+        predicates: &mut [Option<TraitImplementationWherePredicate<'source>>;
+                 MAX_FUNCTION_WHERE_PREDICATES],
+        predicate_count: &mut usize,
+    ) -> Result<(), ParseError> {
+        let has_binding = trait_arguments[..trait_argument_count]
+            .iter()
+            .flatten()
+            .any(|argument| argument.text.contains('='));
+        if !has_binding {
+            if *predicate_count == MAX_FUNCTION_WHERE_PREDICATES {
+                return Err(self.error(ParseErrorKind::TooManyWherePredicates, None));
+            }
+            predicates[*predicate_count] = Some(TraitImplementationWherePredicate::Implemented {
+                self_type: TypeRef {
+                    text: parameter.text,
+                    span: parameter.span,
+                },
+                trait_name: bound.text,
+                trait_name_span: bound.span,
+                trait_arguments,
+                trait_argument_count,
+            });
+            *predicate_count += 1;
+            return Ok(());
+        }
+        if trait_arguments[..trait_argument_count]
+            .iter()
+            .flatten()
+            .any(|argument| !argument.text.contains('='))
+        {
+            return Err(self.error(ParseErrorKind::ExpectedType, None));
+        }
+        if *predicate_count + 1 + trait_argument_count > MAX_FUNCTION_WHERE_PREDICATES {
+            return Err(self.error(ParseErrorKind::TooManyWherePredicates, None));
+        }
+        predicates[*predicate_count] = Some(TraitImplementationWherePredicate::Implemented {
+            self_type: TypeRef {
+                text: parameter.text,
+                span: parameter.span,
+            },
+            trait_name: bound.text,
+            trait_name_span: bound.span,
+            trait_arguments: [None; MAX_SOURCE_TRAIT_ARGUMENTS],
+            trait_argument_count: 0,
+        });
+        *predicate_count += 1;
+        for argument in trait_arguments[..trait_argument_count].iter().flatten() {
+            let Some(equals) = argument.text.find('=') else {
+                unreachable!()
+            };
+            if argument.text[equals + 1..].contains('=') {
+                return Err(self.error(ParseErrorKind::ExpectedType, None));
+            }
+            let name_text = argument.text[..equals].trim();
+            let expected_text = argument.text[equals + 1..].trim();
+            if name_text.is_empty()
+                || expected_text.is_empty()
+                || !name_text.bytes().enumerate().all(|(index, byte)| {
+                    byte == b'_'
+                        || byte.is_ascii_alphabetic()
+                        || (index != 0 && byte.is_ascii_digit())
+                })
+            {
+                return Err(self.error(ParseErrorKind::ExpectedType, None));
+            }
+            let name_offset = argument.text[..equals].find(name_text).unwrap();
+            let expected_offset =
+                equals + 1 + argument.text[equals + 1..].find(expected_text).unwrap();
+            predicates[*predicate_count] =
+                Some(TraitImplementationWherePredicate::ProjectionEquality {
+                    self_type: TypeRef {
+                        text: parameter.text,
+                        span: parameter.span,
+                    },
+                    trait_name: bound.text,
+                    trait_name_span: bound.span,
+                    trait_arguments: [None; MAX_SOURCE_TRAIT_ARGUMENTS],
+                    trait_argument_count: 0,
+                    associated_type: name_text,
+                    associated_type_span: Span {
+                        start: argument.span.start + name_offset,
+                        end: argument.span.start + name_offset + name_text.len(),
+                    },
+                    expected_type: TypeRef {
+                        text: expected_text,
+                        span: Span {
+                            start: argument.span.start + expected_offset,
+                            end: argument.span.start + expected_offset + expected_text.len(),
+                        },
+                    },
+                });
+            *predicate_count += 1;
+        }
+        Ok(())
+    }
+
     fn trait_declaration(&mut self, public: bool) -> Result<TraitDeclaration<'source>, ParseError> {
         let name = self.identifier()?;
         let mut generic_parameters = [None; MAX_SOURCE_TRAIT_ARGUMENTS];
@@ -3488,25 +3590,17 @@ impl<'source> Parser<'source> {
                 let mut consumed_declaration_close = false;
                 if self.take_text(":")?.is_some() {
                     loop {
-                        if where_predicate_count == MAX_FUNCTION_WHERE_PREDICATES {
-                            let token = self.peek()?;
-                            return Err(self.error(ParseErrorKind::TooManyWherePredicates, token));
-                        }
                         let bound = self.identifier()?;
                         let (trait_arguments, trait_argument_count, consumed_outer_close) =
                             self.source_trait_arguments()?;
-                        where_predicates[where_predicate_count] =
-                            Some(TraitImplementationWherePredicate::Implemented {
-                                self_type: TypeRef {
-                                    text: parameter.text,
-                                    span: parameter.span,
-                                },
-                                trait_name: bound.text,
-                                trait_name_span: bound.span,
-                                trait_arguments,
-                                trait_argument_count,
-                            });
-                        where_predicate_count += 1;
+                        self.push_trait_parameter_bound(
+                            parameter,
+                            bound,
+                            trait_arguments,
+                            trait_argument_count,
+                            &mut where_predicates,
+                            &mut where_predicate_count,
+                        )?;
                         if consumed_outer_close {
                             consumed_declaration_close = true;
                             break;
@@ -3632,25 +3726,17 @@ impl<'source> Parser<'source> {
                 let mut consumed_implementation_close = false;
                 if self.take_text(":")?.is_some() {
                     loop {
-                        if where_predicate_count == MAX_FUNCTION_WHERE_PREDICATES {
-                            let token = self.peek()?;
-                            return Err(self.error(ParseErrorKind::TooManyWherePredicates, token));
-                        }
                         let bound = self.identifier()?;
                         let (trait_arguments, trait_argument_count, consumed_outer_close) =
                             self.source_trait_arguments()?;
-                        where_predicates[where_predicate_count] =
-                            Some(TraitImplementationWherePredicate::Implemented {
-                                self_type: TypeRef {
-                                    text: parameter.text,
-                                    span: parameter.span,
-                                },
-                                trait_name: bound.text,
-                                trait_name_span: bound.span,
-                                trait_arguments,
-                                trait_argument_count,
-                            });
-                        where_predicate_count += 1;
+                        self.push_trait_parameter_bound(
+                            parameter,
+                            bound,
+                            trait_arguments,
+                            trait_argument_count,
+                            &mut where_predicates,
+                            &mut where_predicate_count,
+                        )?;
                         if consumed_outer_close {
                             consumed_implementation_close = true;
                             break;
@@ -4035,6 +4121,38 @@ mod tests {
     }
 
     #[test]
+    fn desugars_associated_bindings_on_trait_parameter_bounds() {
+        let source = "trait Child<T: Iterator<Item = T>> {}";
+        let module: TestModule<'_> = Parser::new(source).parse_module().unwrap();
+        let Some(Item::Trait(child)) = module.items()[0] else {
+            panic!("expected trait")
+        };
+        assert_eq!(child.where_predicate_count(), 2);
+        assert!(matches!(
+            child.where_predicates()[0],
+            Some(TraitImplementationWherePredicate::Implemented {
+                trait_name: "Iterator",
+                trait_argument_count: 0,
+                ..
+            })
+        ));
+        assert!(matches!(
+            child.where_predicates()[1],
+            Some(TraitImplementationWherePredicate::ProjectionEquality {
+                trait_name: "Iterator",
+                associated_type: "Item",
+                expected_type: TypeRef { text: "T", .. },
+                ..
+            })
+        ));
+
+        let mixed = Parser::new("trait Child<T: Parent<T, Output = T>> {}")
+            .parse_module::<2, 1>()
+            .unwrap_err();
+        assert_eq!(mixed.kind, ParseErrorKind::ExpectedType);
+    }
+
+    #[test]
     fn parses_bounded_trait_associated_types_and_exact_values() {
         let source = concat!(
             "trait Iterator { type Item; type Error; } ",
@@ -4197,6 +4315,27 @@ mod tests {
             implementation.where_predicates()[1].unwrap().trait_name(),
             "Visible"
         );
+    }
+
+    #[test]
+    fn desugars_associated_bindings_on_implementation_parameter_bounds() {
+        let source = concat!(
+            "trait Iterator { type Item; } trait Child<T> {} ",
+            "impl<T: Iterator<Item = T>> Child<T> for T {}"
+        );
+        let module: TestModule<'_> = Parser::new(source).parse_module().unwrap();
+        let Some(Item::TraitImplementation(implementation)) = module.items()[2] else {
+            panic!("expected implementation")
+        };
+        assert_eq!(implementation.where_predicate_count(), 2);
+        assert!(matches!(
+            implementation.where_predicates()[1],
+            Some(TraitImplementationWherePredicate::ProjectionEquality {
+                associated_type: "Item",
+                expected_type: TypeRef { text: "T", .. },
+                ..
+            })
+        ));
     }
 
     #[test]

@@ -561,6 +561,28 @@ mod tests {
     }
 
     #[test]
+    fn proves_associated_bindings_on_parameter_bounds_before_codegen() {
+        let source = concat!(
+            "trait Iterator { type Item; } trait Child<T> {} ",
+            "impl<T> Iterator for T { type Item = T; } ",
+            "impl<T: Iterator<Item = T>> Child<T> for T {} ",
+            "#[unsafe(no_mangle)] pub extern \"C\" fn answer() -> u64 ",
+            "where u32: Child<u32> { 42 }"
+        );
+        compile(source, "answer", ObjectFormat::Coff).unwrap();
+
+        let mismatch = source.replace("type Item = T", "type Item = u8");
+        let error = compile(&mismatch, "answer", ObjectFormat::Coff).unwrap_err();
+        assert!(matches!(
+            error.kind,
+            CompileErrorKind::TraitObligation(SourceTraitObligationError {
+                kind: crate::SourceTraitObligationErrorKind::Unsatisfied,
+                ..
+            })
+        ));
+    }
+
+    #[test]
     fn proves_trait_declaration_where_requirements_before_codegen() {
         let source = concat!(
             "trait Parent<T> {} trait Child<T> where T: Parent<T> {} ",

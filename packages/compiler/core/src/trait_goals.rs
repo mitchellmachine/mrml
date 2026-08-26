@@ -9381,6 +9381,49 @@ mod tests {
     }
 
     #[test]
+    fn proves_associated_bindings_on_source_parameter_bounds() {
+        let declaration_bound = concat!(
+            "trait Iterator { type Item; } trait Child<T: Iterator<Item = T>> {} ",
+            "impl<T> Iterator for T { type Item = T; } impl<T> Child<T> for T {} ",
+            "fn check() where u32: Child<u32> {}"
+        );
+        let module = Parser::new(declaration_bound)
+            .parse_module::<10, 1>()
+            .unwrap();
+        let traits = SourceTraitDeclarationTable::from_module(&module).unwrap();
+        let implementations =
+            SourceTraitImplementationTable::from_module(&module, &traits).unwrap();
+        implementations.prove_module(&module, &traits).unwrap();
+
+        let implementation_bound = concat!(
+            "trait Iterator { type Item; } trait Child<T> {} ",
+            "impl<T> Iterator for T { type Item = T; } ",
+            "impl<T: Iterator<Item = T>> Child<T> for T {} ",
+            "fn check() where u32: Child<u32> {}"
+        );
+        let module = Parser::new(implementation_bound)
+            .parse_module::<10, 1>()
+            .unwrap();
+        let traits = SourceTraitDeclarationTable::from_module(&module).unwrap();
+        let implementations =
+            SourceTraitImplementationTable::from_module(&module, &traits).unwrap();
+        implementations.prove_module(&module, &traits).unwrap();
+
+        let mismatch = implementation_bound.replace("type Item = T", "type Item = u8");
+        let module = Parser::new(&mismatch).parse_module::<10, 1>().unwrap();
+        let traits = SourceTraitDeclarationTable::from_module(&module).unwrap();
+        let implementations =
+            SourceTraitImplementationTable::from_module(&module, &traits).unwrap();
+        assert_eq!(
+            implementations
+                .prove_module(&module, &traits)
+                .unwrap_err()
+                .kind,
+            SourceTraitObligationErrorKind::Unsatisfied
+        );
+    }
+
+    #[test]
     fn proves_inherited_source_supertrait_premises() {
         let satisfied = concat!(
             "trait Parent {} trait Child<Input>: Parent {} ",
