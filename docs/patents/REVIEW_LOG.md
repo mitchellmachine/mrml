@@ -1,5 +1,15 @@
 # Patent review log
 
+## 2026-08-26 — Alias assignment type validation
+
+Patent review: **NOT_TRIGGERED** for this bounded compiler-analysis hardening.
+It applies the existing directional reference compatibility comparison before
+an existing origin-state assignment. It adds no type-inference or alias-
+analysis algorithm, region solver, optimization, runtime enforcement, authority
+model, or external dependency. Broader compiler completion remains partial;
+this technical screen establishes neither clearance nor infringement and does
+not replace independent human dual review.
+
 ## 2026-08-26 — Shared fat-slice origin evidence
 
 Patent review: **NOT_TRIGGERED**. This increment adds direct two-word slice

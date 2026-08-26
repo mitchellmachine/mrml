@@ -923,6 +923,11 @@ references through a mutable subslice local and a second shared local alias.
 Indexing the returned shared slice keeps its originating loan live; this is
 direct fat-reference evidence rather than an inference from thin elements.
 
+Plain callee-local assignment now also derives the RHS reference type and
+checks it against the retained local type before updating origin state. The
+directional rule permits mutable-to-shared assignment and rejects shared-to-
+mutable assignment even when the function's return itself is shared.
+
 The first modern trait-solver foundation is an explicit bounded implemented-
 goal representation. Stable trait/type/inference/placeholder identities remain
 distinct; canonicalization replaces inference identities with first-occurrence

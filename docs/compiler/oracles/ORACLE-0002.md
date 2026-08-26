@@ -242,6 +242,10 @@ and shared slice locals and returned as `&[u16]`, followed by mutation after its
 last indexed use. Mutating the same owner before that indexed use was rejected
 with two E0503 diagnostics.
 
+Assignment-direction probes accepted replacing a shared alias with an indexed
+mutable reference and rejected assigning a shared reference into a mutable
+alias with E0308. MRML performs that check inside callee-origin transfer.
+
 An independently authored Rust 2024 metadata-only probe against this exact
 toolchain and commit separately accepted a mutable scalar reference returned
 from index zero of a mutable slice-reference parameter, followed by owner reuse

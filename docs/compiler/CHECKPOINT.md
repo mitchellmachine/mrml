@@ -648,6 +648,12 @@ loan liveness: a live mutation conflicts and post-last-use mutation succeeds.
 ORACLE-0002 rejects the live case with two E0503 diagnostics. Both hosts pass
 986 compiler tests.
 
+Alias assignment transfer now checks the inferred RHS reference type against
+the retained local type before changing its origin. Mutable-to-shared remains
+accepted; shared-to-mutable fails the standalone callee proof closed rather
+than exploiting a compatible shared function return. ORACLE-0002 accepts the
+former and rejects the latter with E0308. Both hosts pass 986 tests.
+
 Inferred locals now become reassignment-origin eligible only when their
 initializer already proved a compatible parameter origin. This preserves valid
 indexed scalar alias replacement while preventing an inferred slice alias from
