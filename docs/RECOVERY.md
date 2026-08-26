@@ -1723,6 +1723,15 @@ whose consumer and provider bytes were identical failed before launch with
 `ArtifactSubstitution`. This remains hosted recovery evidence, not native-media
 or physical installed recovery.
 
+Before any profile-specific kernel probe runs, the kernel now constructs its
+early context from the exact decoded handoff and retains the one-boot isolation
+request only as non-authorizing evidence. This closes the first-kernel-entry
+scalar-reconstruction gap; later recovered configuration and authenticated
+release admission remain mandatory to establish any actual placement. Windows
+and Arch kernel suites pass 564 tests, and standard plus component-SMP UEFI
+images cross-build on both hosts. No native-media or physical recovery claim is
+made.
+
 For system-monitor work, recover the single canonical observer from
 [monitor/SYSTEM_MONITOR.md](monitor/SYSTEM_MONITOR.md). Its caches are
 disposable: after restart, reconstruct scoped snapshots from authoritative

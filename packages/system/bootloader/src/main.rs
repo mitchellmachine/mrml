@@ -130,8 +130,8 @@ use mrml_kernel::{
 };
 #[cfg(not(feature = "fault-probe"))]
 use mrml_kernel::{
-    BootHandoff, HANDOFF_HEADER_BYTES, MAX_HANDOFF_BYTES, MAX_HANDOFF_REGIONS, MemoryKind,
-    MemoryRegion, PhysAddr,
+    BootHandoff, EarlyKernelContext, HANDOFF_HEADER_BYTES, MAX_HANDOFF_BYTES, MAX_HANDOFF_REGIONS,
+    MemoryKind, MemoryRegion, PhysAddr,
 };
 #[cfg(all(
     not(feature = "fault-probe"),
@@ -142,7 +142,7 @@ use mrml_kernel::{
     not(feature = "user-probe"),
     not(feature = "service-probe")
 ))]
-use mrml_kernel::{Color, EarlyKernelContext, FramebufferSurface};
+use mrml_kernel::{Color, FramebufferSurface};
 #[cfg(feature = "smp-ipi-probe")]
 use mrml_kernel::{DetachedTaskDomain, OwnershipMailbox, SchedulerLoad};
 #[cfg(feature = "smp-periodic-balance-probe")]
@@ -3004,6 +3004,8 @@ unsafe fn run_kernel(bytes: *const u8, length: usize) -> ! {
     if region_count != handoff.region_count() {
         halt();
     }
+    let _early = EarlyKernelContext::from_handoff(&handoff, &regions[..region_count])
+        .unwrap_or_else(|_| halt());
     #[cfg(feature = "pci-configuration-probe")]
     unsafe {
         run_pci_configuration_probe()
@@ -3758,15 +3760,6 @@ unsafe fn run_kernel(bytes: *const u8, length: usize) -> ! {
             }
         }
         let framebuffer = handoff.framebuffer();
-        let _early = match EarlyKernelContext::new(
-            *handoff.evidence().entropy(),
-            handoff.acpi_root(),
-            framebuffer,
-            &regions[..region_count],
-        ) {
-            Ok(value) => value,
-            Err(_) => halt(),
-        };
         let framebuffer_bytes = unsafe {
             core::slice::from_raw_parts_mut(
                 framebuffer.base().get() as *mut u8,

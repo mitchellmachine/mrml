@@ -1,6 +1,6 @@
 use crate::{
-    Color, FramebufferError, FramebufferInfo, FramebufferSurface, MemoryError, MemoryKind,
-    MemoryMap, MemoryRegion,
+    BootHandoff, BootIsolationOverride, Color, FramebufferError, FramebufferInfo,
+    FramebufferSurface, MemoryError, MemoryKind, MemoryMap, MemoryRegion,
 };
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -20,6 +20,7 @@ pub struct EarlyKernelContext<'a> {
     acpi_root: u64,
     framebuffer: FramebufferInfo,
     memory: MemoryMap<'a>,
+    isolation_override: Option<BootIsolationOverride>,
 }
 
 impl<'a> EarlyKernelContext<'a> {
@@ -48,7 +49,25 @@ impl<'a> EarlyKernelContext<'a> {
             acpi_root,
             framebuffer,
             memory,
+            isolation_override: None,
         })
+    }
+
+    /// Consumes the exact decoded loader handoff for early kernel state. The
+    /// one-boot isolation request remains evidence only; later configuration
+    /// and release admission must establish effective placement.
+    pub fn from_handoff(
+        handoff: &BootHandoff,
+        regions: &'a [MemoryRegion],
+    ) -> Result<Self, EarlyKernelError> {
+        let mut context = Self::new(
+            *handoff.evidence().entropy(),
+            handoff.acpi_root(),
+            handoff.framebuffer(),
+            regions,
+        )?;
+        context.isolation_override = handoff.isolation_override();
+        Ok(context)
     }
 
     pub const fn entropy(&self) -> &[u8; 32] {
@@ -59,6 +78,12 @@ impl<'a> EarlyKernelContext<'a> {
     }
     pub fn memory(&self) -> &MemoryMap<'a> {
         &self.memory
+    }
+
+    /// Returns the canonical one-boot request carried by the decoded handoff.
+    /// This identifies no capability and does not prove effective placement.
+    pub const fn isolation_override(&self) -> Option<BootIsolationOverride> {
+        self.isolation_override
     }
 
     /// Visible proof that execution crossed into validated kernel code. A
@@ -100,7 +125,10 @@ impl<'a> EarlyKernelContext<'a> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{PAGE_SIZE, PhysAddr, PixelFormat};
+    use crate::{
+        BootIsolationOverride, PAGE_SIZE, PhysAddr, PixelFormat, RecoveryStateMetadata,
+        encode_handoff_with_recovery_and_isolation,
+    };
 
     #[test]
     fn early_entry_requires_mmio_and_renders_marker() {
@@ -122,5 +150,47 @@ mod tests {
         context.render_booted(&mut bytes).unwrap();
         assert_eq!(&bytes[..4], &[0xf2, 0xf2, 0xf2, 0]);
         assert_eq!(&bytes[8 * 16 * 4..8 * 16 * 4 + 4], &[0x16, 0x61, 0x3a, 0]);
+    }
+
+    #[test]
+    fn decoded_handoff_retains_only_the_loader_isolation_request() {
+        let framebuffer = FramebufferInfo::new(
+            0xa0000,
+            PAGE_SIZE,
+            16,
+            16,
+            16,
+            PixelFormat::RedGreenBlueReserved,
+        )
+        .unwrap();
+        let regions = [
+            MemoryRegion::new(PhysAddr::new(0x1000).unwrap(), 4, MemoryKind::Free).unwrap(),
+            MemoryRegion::new(PhysAddr::new(0xa0000).unwrap(), 1, MemoryKind::Mmio).unwrap(),
+        ];
+        let recovery = RecoveryStateMetadata::new(8, 1, Some([0x51; 16]), 14).unwrap();
+        let mut encoded = [0; 512];
+        let length = encode_handoff_with_recovery_and_isolation(
+            1,
+            [1; 32],
+            [2; 64],
+            true,
+            true,
+            true,
+            true,
+            0x1234,
+            framebuffer,
+            &regions,
+            recovery,
+            Some(BootIsolationOverride::TotalMicrovmOnce),
+            &mut encoded,
+        )
+        .unwrap();
+        let handoff = BootHandoff::decode(&encoded[..length], |_| {}).unwrap();
+        let context = EarlyKernelContext::from_handoff(&handoff, &regions).unwrap();
+        assert_eq!(
+            context.isolation_override(),
+            Some(BootIsolationOverride::TotalMicrovmOnce)
+        );
+        assert_eq!(context.entropy(), handoff.evidence().entropy());
     }
 }

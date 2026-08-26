@@ -1,5 +1,15 @@
 # Patent review log
 
+## 2026-08-26 — Canonical handoff retention at first kernel entry
+
+Patent review: **NOT_TRIGGERED** for copying the existing decoded one-boot
+isolation enum into the existing early-kernel context before profile dispatch.
+This is conventional bounded data retention and failure ordering; it adds no
+placement algorithm, VM mechanism, queue protocol, scheduler, device, DMA,
+interrupt, or hardware behavior. The broader adaptive/Total-MicroVM and
+native-storage work retain their existing `TRIGGERED` reviews; this technical
+screen is not patent clearance.
+
 ## 2026-08-26 — Installed Total SMP handoff and page-table preparation repair
 
 Patent review: **NOT_TRIGGERED** for retaining an already authenticated installed

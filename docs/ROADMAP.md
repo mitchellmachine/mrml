@@ -3124,4 +3124,11 @@ policy, and one-boot Total override, and their control planes reserve the
 mappings. Fresh one-use-signed distinct ZIM/Zstd artifacts completed the sealed
 two-vCPU component path on WHP and nested KVM with `eligible=1`, `microvm=1`,
 and `native_fallback=0`. This is hosted controlled evidence; production
-installed-kernel wiring and native/physical evidence remain **PLANNED**.
+installed configuration/release wiring and native/physical evidence remain
+**PLANNED**. The first kernel-entry portion is now **PARTIALLY IMPLEMENTED**:
+all profiles construct `EarlyKernelContext` only from the decoded canonical
+handoff before profile work, retaining the non-authorizing one-boot override
+without reconstructing it from scalar input. Windows/Arch kernel suites pass
+564 tests, and standard plus component-SMP UEFI images cross-build on both
+hosts. It does not establish effective placement or replace the later recovery
+and admission control planes.

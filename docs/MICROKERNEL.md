@@ -8727,3 +8727,15 @@ completed the two-vCPU component data path on WHP and nested KVM on 2026-08-26;
 both reported `eligible=1`, `microvm=1`, and `native_fallback=0`. This is hosted
 controlled evidence, not native installed-media, host-resistant, or physical
 hardware evidence.
+
+The first kernel entry now **PARTIALLY IMPLEMENTS** the matching handoff
+boundary. Immediately after canonical decode and region collection, every
+kernel profile constructs `EarlyKernelContext` from that same `BootHandoff`; it
+retains only the authority-free one-boot isolation request and exposes no
+placement, capability, or fallback authority. Thus a component/SMP profile
+cannot replace the loader request with detached scalars before later
+configuration and release admission. Kernel suites pass 564 tests on Windows
+and Arch Linux, and the standard plus WHP/KVM component-SMP UEFI images
+cross-build on both hosts. This is decode/compile evidence, not persistent
+configuration recovery, admitted-system proof, native installed-media, or
+physical execution.
