@@ -1445,6 +1445,20 @@ Windows gnullvm and native Arch Linux WSL each pass 638 library tests,
 one component-interface probe, 10 conformance tests, and 335 replacement tests:
 984 compiler tests per host.
 
+The first validated inline-assembly milestone operates inside ordinary x86-64
+function lowering rather than the naked-function path. An unsafe function may
+use a statement-position fixed `asm!("nop")` template with no operands and may
+spell the exact-oracle-observed `nomem`, `nostack`, and `preserves_flags`
+options once each. Exact byte comparison proves that one `nop` is inserted
+while the existing prologue, return lowering, and epilogue remain unchanged.
+Safe functions, operands, unknown templates, and duplicate, empty, or
+unsupported options fail closed. Register allocation, register operands,
+clobbers, memory effects beyond this fixed no-op, symbols, labels, control flow,
+additional instructions/architectures, and general inline assembly remain
+unimplemented. Windows gnullvm and native Arch Linux WSL each pass 639 library
+tests, one component-interface probe, 10 conformance tests, and 335 replacement
+tests: 985 compiler tests per host.
+
 The premise-bearing rigid-normalization milestone proves the selected generic
 implementation's instantiated trait and projection predicates before exposing
 its associated value. It shares the caller's 16-frame rigid proof stack and

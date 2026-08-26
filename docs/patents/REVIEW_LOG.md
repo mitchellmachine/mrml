@@ -5944,3 +5944,15 @@ Symbol addends, additional relocation families, and linking remain absent.
 Broader assembly support and compiler completion remain partial; this technical
 screen does not establish clearance or infringement and does not replace
 independent human dual review.
+
+# 2026-08-26 — Fixed no-op inline assembly
+
+**Result: NOT_TRIGGERED after the fixed-template review.** This increment
+validates one conventional x86-64 `nop` template and three declarative effect
+options before inserting the published one-byte encoding into ordinary function
+lowering. Safety gating, duplicate/unsupported-option rejection, and exact byte
+comparison introduce no novel assembler, optimization, register-allocation,
+instruction-selection, relocation, or code-generation algorithm. Operands,
+clobbers, general effects, and general assembly remain absent. Broader compiler
+completion remains partial; this technical screen does not establish clearance
+or infringement and does not replace independent human dual review.

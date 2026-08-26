@@ -4639,6 +4639,17 @@ native Arch Linux WSL each pass 635 library tests,
 one component probe, 10 conformance tests, and 335 replacement tests: 981
 compiler tests per host.
 
+The first ordinary inline-assembly increment admits only statement-position
+`asm!("nop")` in unsafe x86-64 functions, optionally with unique `nomem`,
+`nostack`, and `preserves_flags` options observed against ORACLE-0002. It emits
+the no-op through ordinary function lowering and retains the existing prologue,
+return, and epilogue. Safe use, operands, other templates, and invalid options
+fail closed. Windows gnullvm and native Arch Linux WSL each pass 639 library
+tests, one component-interface probe, 10 conformance tests, and 335 replacement
+tests: 985 compiler tests per host. This is **PARTIAL** inline-assembly evidence,
+not a clobber, register-allocation, memory-effect, control-flow, or general
+assembly claim.
+
 The projection-bearing term milestone uses a fixed 64-node arena for flat leaf
 terms and associated-type projections whose trait self/argument positions refer
 only to earlier nodes. Identical nodes intern to one stable identity; invalid
