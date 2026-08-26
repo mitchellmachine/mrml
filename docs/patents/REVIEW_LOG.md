@@ -10,6 +10,12 @@ no placement algorithm, VM mechanism, scheduler, storage protocol, DMA, queue,
 interrupt, or hardware behavior. The broader adaptive/Total MicroVM mechanism
 remains **TRIGGERED**; this technical screen is not patent clearance.
 
+The follow-on exact activated-source file read is also **NOT_TRIGGERED**. It is
+conventional capability checking, immutable object/generation equality, bounded
+chunked reads, parser reuse, and failure cleanup. It adds no placement
+algorithm, VM mechanism, scheduler, storage protocol, DMA, queue, interrupt, or
+hardware behavior.
+
 ## 2026-08-26 — Canonical one-use installed recovery envelope
 
 Patent review: **NOT_TRIGGERED** for extending the existing one-use boot-recovery

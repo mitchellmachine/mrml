@@ -62,3 +62,6 @@ scope = "compile"
 
 [[host_test]]
 targets = ["WINDOWS", "LINUX"]
+
+[test_policy]
+stack_bytes = 8388608

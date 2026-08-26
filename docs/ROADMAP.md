@@ -468,9 +468,19 @@ SystemRelease and signer retained by `DeploymentService`, then verifies supplied
 canonical release bytes before returning the existing fixed-capacity complete
 assignment plan. Missing release identity, corrupt/substituted bytes, or wrong
 inspection authority fail before enumeration; the plan remains non-authorizing.
-Deployment passes 6 tests on Windows. Capability-selected installed release-byte
-retrieval, general owner-policy assignment, and launch of the complete resulting
-domain set remain **PLANNED**.
+Deployment passes 6 tests on Windows. Live recovered-file selection, general
+owner-policy assignment, and launch of the complete resulting domain set remain
+**PLANNED**.
+
+The capability-selected release-byte read is now **PARTIALLY IMPLEMENTED**.
+`read_active_runtime_assignment` authorizes deployment inspection before I/O,
+exact-matches the storage file object/generation to the activated source, bounds
+the complete image, performs verified capability-selected reads in bounded
+chunks, and feeds only the resulting exact bytes into active-release assignment.
+Short buffers and source, authority, read, or release substitution fail before
+enumeration; partial output is erased on read failure. Deployment passes 6 tests
+on Windows. Live recovered file selection, general policy assignment, and full
+domain construction remain **PLANNED**.
 
 The first half of that gate is now **PARTIALLY IMPLEMENTED**: `MRMLRI1` is a
 bounded canonical runtime-inventory catalog whose records exact-bind every

@@ -1175,8 +1175,18 @@ service's retained `ActivatedSystemRelease`, and accepts only canonical release
 bytes matching that identity. A caller cannot pair arbitrary bytes with a
 detached active identity. The resulting plan remains non-authorizing and still
 requires complete policy assignment and later route admission. Deployment
-passes 6 tests on Windows; installed-storage retrieval, complete policy lookup,
-and live boot launch remain **PLANNED**.
+passes 6 tests on Windows; live recovered-file selection, complete policy
+lookup, and live boot launch remain **PLANNED**.
+
+Installed-storage retrieval is now **PARTIALLY IMPLEMENTED** at the typed
+deployment/storage boundary. Deployment inspection is authorized before I/O;
+the file object and immutable generation must exactly match the active
+SystemRelease source, and verified file reads fill a bounded caller-owned image
+in chunks before the existing assignment plan parses it. Source, authority,
+length, read, signer, content, generation, catalog, or runtime-inventory
+substitution fails before policy enumeration. This grants no storage or launch
+authority beyond the supplied capabilities. Live recovery must still select the
+file and general policy must still assign and launch every domain.
 
 Its canonical package-to-runtime classification prerequisite is now
 **PARTIALLY IMPLEMENTED** as the allocation-free `MRMLRI1` runtime-inventory

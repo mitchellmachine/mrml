@@ -202,9 +202,22 @@ canonical release bytes. The caller cannot supply a replacement active identity
 or signer; corruption, legacy activation without release identity, and identity
 substitution fail before enumeration. The returned fixed-capacity plan still
 grants no capability and seals only after every authenticated runtime member is
-assigned. Deployment passes 6 tests on Windows. Reading the release image from
-installed capability-selected storage, general owner-policy decisions, and
-launching every resulting domain remain **PLANNED**.
+assigned. Deployment passes 6 tests on Windows. Live recovery selection of the
+installed release file, general owner-policy decisions, and launching every
+resulting domain remain **PLANNED**.
+
+The installed release-image read is now **PARTIALLY IMPLEMENTED**. The same
+deployment owner checks exact `READ` authority before touching storage, requires
+the authorized file's stable object and generation to equal the activated
+generation's retained source, bounds the complete length to the canonical
+SystemRelease maximum, and reads through an exact storage file capability.
+Large valid releases are read in bounded chunks because their maximum size can
+exceed one storage read. Short output, source substitution, missing authority,
+verified-read failure, and release-identity mismatch fail before assignment;
+partial bytes are erased after read failure. Deployment passes 6 tests on
+Windows using a real `FileState`, storage authority, verified extent backend,
+and signed runtime release. Recovery-to-file selection in the live service and
+general owner-policy assignment remain **PLANNED**.
 
 - Complexity impact: MEDIUM
 - TCB impact: LOW

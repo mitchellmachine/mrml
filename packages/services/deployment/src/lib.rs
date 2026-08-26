@@ -16,13 +16,14 @@ use mrml_kernel::{
 };
 use mrml_package_format::{
     ActivatedSystemGeneration, ActivatedSystemGenerationError, ActivatedSystemRelease,
-    InterfaceCatalogError, InterfaceCatalogView, SystemGenerationDecodeError, SystemGenerationView,
-    SystemReleaseError, SystemReleaseIdentity, parse_system_release,
+    InterfaceCatalogError, InterfaceCatalogView, MAX_SYSTEM_RELEASE_BYTES,
+    SystemGenerationDecodeError, SystemGenerationView, SystemReleaseError, SystemReleaseIdentity,
+    parse_system_release,
 };
 use mrml_storage::{
     ExtentMap, FileMetadata, FileReadBackend, FileReadError, FileState, FileWriteBackend,
-    FileWriteError, MetadataPointer, PreparedFileWrite, StorageAuthorityTable, StorageHandle,
-    StoragePrincipal, StorageTransaction, TransactionError, TransactionReceipt,
+    FileWriteError, MAX_FILE_READ_BYTES, MetadataPointer, PreparedFileWrite, StorageAuthorityTable,
+    StorageHandle, StoragePrincipal, StorageTransaction, TransactionError, TransactionReceipt,
 };
 
 pub const DEPLOYMENT_CHECKPOINT_BYTES: usize = 424;
@@ -370,6 +371,76 @@ impl<const CANDIDATES: usize> DeploymentService<CANDIDATES> {
             policy_generation,
         )
         .map_err(DeploymentError::ReleaseInventory)
+    }
+
+    /// Reads the exact activated release source through storage authority and
+    /// begins complete runtime assignment from those verified bytes. Deployment
+    /// authority is checked before storage access. Reads are bounded and may be
+    /// chunked because a maximum canonical release can exceed one storage read.
+    #[allow(clippy::too_many_arguments)]
+    pub fn read_active_runtime_assignment<
+        'a,
+        const DOMAINS: usize,
+        const CAPS: usize,
+        const EXTENTS: usize,
+        const AUTHORITIES: usize,
+        B: FileReadBackend,
+    >(
+        &self,
+        capabilities: &CapabilitySpace<CAPS>,
+        inspect: Capability,
+        file_state: &FileState<EXTENTS>,
+        storage_authority: &StorageAuthorityTable<AUTHORITIES>,
+        file: StorageHandle,
+        principal: StoragePrincipal,
+        output: &'a mut [u8],
+        backend: &mut B,
+        policy_generation: u64,
+    ) -> Result<RuntimeDomainAssignmentPlan<'a, DOMAINS>, DeploymentStorageError<B::Error>> {
+        self.authorize(capabilities, inspect, Rights::READ)
+            .map_err(DeploymentStorageError::Deployment)?;
+        let active = self
+            .active_release
+            .ok_or(DeploymentStorageError::Deployment(
+                DeploymentError::MissingActiveRelease,
+            ))?;
+        let generation = active.generation();
+        let length = usize::try_from(file_state.length())
+            .map_err(|_| DeploymentStorageError::InvalidBinding)?;
+        if file_state.object().local() != generation.source_object()
+            || file_state.generation() != generation.source_generation()
+            || length == 0
+            || length > MAX_SYSTEM_RELEASE_BYTES
+            || output.len() < length
+        {
+            return Err(DeploymentStorageError::InvalidBinding);
+        }
+        output.fill(0);
+        let mut offset = 0usize;
+        while offset < length {
+            let end = offset.saturating_add(MAX_FILE_READ_BYTES).min(length);
+            if let Err(error) = file_state.read(
+                storage_authority,
+                file,
+                principal,
+                offset as u64,
+                &mut output[offset..end],
+                backend,
+            ) {
+                output.fill(0);
+                return Err(DeploymentStorageError::Read(error));
+            }
+            offset = end;
+        }
+        RuntimeDomainAssignmentPlan::new(
+            &output[..length],
+            active.release().key_id(),
+            active,
+            policy_generation,
+        )
+        .map_err(|error| {
+            DeploymentStorageError::Deployment(DeploymentError::ReleaseInventory(error))
+        })
     }
 
     fn authorize<const N: usize>(
@@ -1424,6 +1495,40 @@ mod tests {
         + 256
         + LAMPORT_PUBLIC_KEY_BYTES
         + LAMPORT_SIGNATURE_BYTES;
+    const TEST_RUNTIME_EXTENT_BLOCKS: usize = TEST_RUNTIME_RELEASE_BYTES.div_ceil(BLOCK_BYTES);
+    const TEST_RUNTIME_EXTENT_BYTES: usize = TEST_RUNTIME_EXTENT_BLOCKS * BLOCK_BYTES;
+
+    struct RuntimeReleaseBackend {
+        bytes: [u8; TEST_RUNTIME_EXTENT_BYTES],
+        reads: usize,
+        fail: bool,
+    }
+
+    unsafe impl FileReadBackend for RuntimeReleaseBackend {
+        type Error = u8;
+
+        fn read_verified_extent(
+            &mut self,
+            record: ExtentRecord,
+            byte_offset: u64,
+            output: &mut [u8],
+        ) -> Result<(), Self::Error> {
+            self.reads += 1;
+            if self.fail
+                || record.file() != object(0x700)
+                || record.metadata_generation() != 2
+                || record.physical_block() != Some(40)
+                || record.block_count() as usize != TEST_RUNTIME_EXTENT_BLOCKS
+                || record.content_digest() != digest(&self.bytes)
+            {
+                return Err(1);
+            }
+            let start = usize::try_from(byte_offset).map_err(|_| 2)?;
+            let end = start.checked_add(output.len()).ok_or(2)?;
+            output.copy_from_slice(self.bytes.get(start..end).ok_or(2)?);
+            Ok(())
+        }
+    }
 
     fn signed_runtime_candidate() -> (
         GenerationCandidate,
@@ -1537,6 +1642,103 @@ mod tests {
         assert_eq!(inventory.active_release(), activated_release);
         assert_eq!(inventory.policy_generation(), 4);
         assert_eq!(inventory.release().len(), 1);
+
+        let mut release_extent = [0; TEST_RUNTIME_EXTENT_BYTES];
+        release_extent[..release_length].copy_from_slice(&release[..release_length]);
+        let release_record = ExtentRecord::data(
+            object(0x700),
+            2,
+            0,
+            TEST_RUNTIME_EXTENT_BLOCKS as u32,
+            40,
+            digest(&release_extent),
+        )
+        .unwrap();
+        let release_file = FileState::new(
+            object(0x700),
+            2,
+            release_length as u64,
+            ExtentMap::<1>::build(
+                header(),
+                object(0x700),
+                2,
+                release_length as u64,
+                &[release_record],
+            )
+            .unwrap(),
+        )
+        .unwrap();
+        let mut release_authority = StorageAuthorityTable::<1>::new();
+        let release_handle = release_authority
+            .insert(
+                object(0x700),
+                StorageObjectKind::File,
+                StorageRights::READ,
+                principal(),
+            )
+            .unwrap();
+        let mut release_backend = RuntimeReleaseBackend {
+            bytes: release_extent,
+            reads: 0,
+            fail: false,
+        };
+        let mut short_output = [0xa5; TEST_RUNTIME_RELEASE_BYTES];
+        assert!(matches!(
+            service.read_active_runtime_assignment::<1, 3, 1, 1, _>(
+                &capabilities,
+                inspect,
+                &release_file,
+                &release_authority,
+                release_handle,
+                principal(),
+                &mut short_output[..release_length - 1],
+                &mut release_backend,
+                4,
+            ),
+            Err(DeploymentStorageError::InvalidBinding)
+        ));
+        assert_eq!(release_backend.reads, 0);
+
+        let mut read_output = [0xa5; TEST_RUNTIME_RELEASE_BYTES];
+        let mut read_assignment = service
+            .read_active_runtime_assignment::<1, 3, 1, 1, _>(
+                &capabilities,
+                inspect,
+                &release_file,
+                &release_authority,
+                release_handle,
+                principal(),
+                &mut read_output,
+                &mut release_backend,
+                4,
+            )
+            .unwrap();
+        read_assignment
+            .assign_from_policy(|record| {
+                mrml_kernel::RuntimeDomainAssignment::new(record.package_id, ObjectId(0x5a53_5444))
+            })
+            .unwrap();
+        let read_inventory = read_assignment.seal().unwrap();
+        assert_eq!(read_inventory.active_release(), activated_release);
+        assert_eq!(release_backend.reads, 1);
+
+        let mut failed_output = [0xa5; TEST_RUNTIME_RELEASE_BYTES];
+        release_backend.fail = true;
+        assert!(matches!(
+            service.read_active_runtime_assignment::<1, 3, 1, 1, _>(
+                &capabilities,
+                inspect,
+                &release_file,
+                &release_authority,
+                release_handle,
+                principal(),
+                &mut failed_output,
+                &mut release_backend,
+                4,
+            ),
+            Err(DeploymentStorageError::Read(_))
+        ));
+        assert!(failed_output.iter().all(|byte| *byte == 0));
 
         let wrong_inspect = capabilities.insert(ObjectId(9), Rights::READ).unwrap();
         assert!(matches!(
