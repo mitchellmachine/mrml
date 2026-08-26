@@ -103,3 +103,11 @@ commit compiled a two-operand named template with one `inout(reg)` and one
 invocations rejected a duplicate named operand, an unknown `clobber_abi`, and a
 generic register-class output combined with `clobber_abi("C")`, which requires
 explicit output registers. Temporary probe sources and metadata were removed.
+
+An independently authored Rust 2024 metadata-only probe on 2026-08-26 against
+the same `nightly-2026-08-24-x86_64-pc-windows-gnullvm` toolchain and exact
+`fb6531d550e0075b9eb9a51464f404805eec87d9` commit compiled a named
+`inout(reg)` operand whose place was the second `u64` field of a mutable tuple.
+This establishes only the black-box acceptance of that projected operand shape;
+it does not establish general place, register-allocation, or assembly semantics.
+Temporary probe source and metadata were removed after recording the outcome.
