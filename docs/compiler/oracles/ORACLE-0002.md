@@ -73,3 +73,17 @@ component-interface, 10 conformance, and 335 nightly-replacement tests on each
 host. This does not revise the earlier Linux release-build regression, claim
 full binding-source compatibility, compare object semantics byte-for-byte, or
 make Rust/C ABI part of the stable MRML interface.
+
+## Inline-assembly validation follow-up
+
+On 2026-08-26, independently authored Rust 2024 metadata-only probes against
+the exact `nightly-2026-08-24-x86_64-pc-windows-gnullvm` oracle compiled a
+fixed `asm!("nop")` template with `nomem`, `nostack`, and `preserves_flags`; a
+named `inout(reg)` operand referenced from the template; and explicit
+`in("rax")` plus `lateout("rax")` operands. A separate probe invocation rejected
+`pure` without `nomem` or `readonly` and without an output, rejected combined
+`readonly` and `nomem`, and rejected `rsp` as an explicit operand register.
+These are black-box syntax and validation observations from original probes,
+not copied upstream source or tests. They establish neither general inline-
+assembly compatibility nor permission to omit MRML's independent bounded
+register, option, template, clobber, control-flow, and safety validation.
