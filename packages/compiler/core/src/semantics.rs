@@ -1524,6 +1524,9 @@ fn evaluate_const_loop<'source, const MAX_ITEMS: usize, const MAX_PARAMETERS: us
                                     {
                                         continue;
                                     }
+                                    if branch.else_arm().is_some() {
+                                        return Err(SemanticErrorKind::UnsupportedConstCall);
+                                    }
                                     let condition = branch
                                         .parse_condition::<MAX_CONST_FUNCTION_EXPRESSION_NODES>()
                                         .map_err(|error| {

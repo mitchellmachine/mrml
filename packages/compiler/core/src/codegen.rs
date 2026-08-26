@@ -635,6 +635,19 @@ pub fn compile_x86_64_function_with_options<
             kind: CodegenErrorKind::Body(error.kind),
             span: translate_span(function.body_expression_span.start, error.span),
         })?;
+    if parsed_body
+        .while_loops()
+        .iter()
+        .flatten()
+        .flat_map(|loop_statement| loop_statement.nested_blocks().iter().flatten())
+        .flat_map(|block| block.conditional_blocks().iter().flatten())
+        .any(|branch| branch.else_arm().is_some())
+    {
+        return Err(CodegenError {
+            kind: CodegenErrorKind::RuntimeExpressionUnsupported,
+            span: function.body_expression_span,
+        });
+    }
     let mut body_has_aggregate_local = false;
     for local in parsed_body.locals().iter().flatten() {
         if local
@@ -11946,6 +11959,9 @@ fn nested_loop_has_supported_control_flow(
 ) -> Result<bool, CodegenErrorKind> {
     for branch in block.conditional_blocks() {
         let branch = branch.ok_or(CodegenErrorKind::InvalidRuntimeControlFlowFacts)?;
+        if branch.else_arm().is_some() {
+            return Ok(false);
+        }
         for action in branch.actions() {
             action.ok_or(CodegenErrorKind::InvalidRuntimeControlFlowFacts)?;
         }
@@ -41335,6 +41351,18 @@ mod tests {
                 "failed to compile {source}",
             );
         }
+
+        let source = "#[unsafe(no_mangle)] pub extern \"C\" fn value(input: u64, stop: bool) -> u64 { loop { loop { if stop { let result: u64 = input + 1; return result; } else { input; continue; } } } }";
+        let module = Parser::new(source).parse_module::<2, 2>().unwrap();
+        let Some(Item::Function(function)) = module.items()[0] else {
+            panic!("expected function")
+        };
+        assert_eq!(
+            compile_x86_64_function::<_, 256, 2, 16>(&function, &NoConstants, X86_64Abi::SystemV,)
+                .unwrap_err()
+                .kind,
+            CodegenErrorKind::RuntimeExpressionUnsupported,
+        );
     }
 
     #[test]
