@@ -31,11 +31,11 @@ use mrml_kernel::{
     MAX_COMPONENT_IMAGE_REGIONS, MemoryPoolTable, MicrovmPageProjectionKind,
     MicrovmProjectionDescriptor, MicrovmProjectionKind, MicrovmProjectionPlan,
     MicrovmProjectionRequirements, ObjectId, PAGE_SIZE, PreparedIsolationServiceRoute,
-    PreparedMicrovmApplicationBackend, ResourceCommand, Rights, RuntimeDomainAssignmentPlan,
-    SIGNED_ARTIFACT_OVERHEAD_BYTES, ScheduledDeadlineVmBackend, ScheduledSmpVmBackend,
-    SignedArtifact, TotalMicrovmClass, TotalMicrovmInventory, TotalMicrovmInventoryEntry,
-    TrustRoot, VIRTUAL_BLOCK_FEATURE_FLUSH, VcpuReservationId, VerifiedExecutable,
-    VerifiedGpuKernelBundle, VirtualBlockBackend, VirtualBlockBackendAuthority,
+    PreparedMicrovmApplicationBackend, ResourceCommand, Rights, RuntimeDomainAssignment,
+    RuntimeDomainAssignmentPlan, SIGNED_ARTIFACT_OVERHEAD_BYTES, ScheduledDeadlineVmBackend,
+    ScheduledSmpVmBackend, SignedArtifact, TotalMicrovmClass, TotalMicrovmInventory,
+    TotalMicrovmInventoryEntry, TrustRoot, VIRTUAL_BLOCK_FEATURE_FLUSH, VcpuReservationId,
+    VerifiedExecutable, VerifiedGpuKernelBundle, VirtualBlockBackend, VirtualBlockBackendAuthority,
     VirtualBlockCompletionStatus, VirtualBlockConfigurationPage, VirtualBlockDevice,
     VirtualBlockDeviceState, VirtualBlockError, VirtualBlockMutationError,
     VirtualBlockPciAttachment, VirtualBlockPciAttachmentState, VirtualBlockPciCleanupMode,
@@ -2887,10 +2887,10 @@ fn application_main() -> Result<()> {
             spec.policy_generation(),
         )
         .map_err(|error| anyhow!("KVM installed assignment plan failed: {:?}", error))?;
-        plan.assign("org.mrml.zim", spec.domain())
-            .map_err(|error| anyhow!("KVM ZIM runtime assignment failed: {:?}", error))?;
-        plan.assign("org.mrml.zstd", spec.domain())
-            .map_err(|error| anyhow!("KVM Zstd runtime assignment failed: {:?}", error))?;
+        plan.assign_from_policy(|record| {
+            RuntimeDomainAssignment::new(record.package_id, spec.domain())
+        })
+        .map_err(|error| anyhow!("KVM runtime assignment policy failed: {:?}", error))?;
         Some(
             plan.seal()
                 .map_err(|error| anyhow!("KVM release inventory sealing failed: {:?}", error))?,

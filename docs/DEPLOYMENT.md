@@ -187,8 +187,12 @@ member and can seal only after each has one policy-selected domain; unknown,
 duplicate, omitted, or excess members fail closed. This is an authority-free
 control-plane transaction: normal capability-authorized launch admission must
 still establish each route before its shortest-safe-path data plane may run.
-Automatic policy selection and complete installed-system orchestration remain
-**PLANNED**.
+Its policy callback now receives each complete authenticated runtime record and
+publishes assignments atomically only after every callback succeeds; identity
+substitution or one rejected member publishes none. The WHP/KVM runners no
+longer carry a detached ZIM/Zstd package list. General per-package owner-policy
+lookup, distinct-domain construction, and complete installed-system
+orchestration remain **PLANNED**.
 
 - Complexity impact: MEDIUM
 - TCB impact: LOW

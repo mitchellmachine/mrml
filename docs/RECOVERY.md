@@ -1123,7 +1123,10 @@ assignment plan now enumerates the exact activated release and refuses to seal
 with an unknown, duplicate, omitted, or excess package. It carries no authority:
 recovery must still recreate every route through normal capability/resource
 admission before the shortest-safe-path data plane is reopened. That transient
-hosted probe does not persist or recover the binding and therefore does not
+hosted path now obtains assignments through an atomic callback over every full
+authenticated runtime record; a rejected or substituted decision publishes no
+partial assignment, and the runners no longer maintain a detached package
+list. It still does not persist or recover the binding and therefore does not
 advance recovery status. Recovered end-to-end Total finalization remains
 **PLANNED**.
 

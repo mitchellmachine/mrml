@@ -188,6 +188,54 @@ impl<'a, const N: usize> RuntimeDomainAssignmentPlan<'a, N> {
         self.runtime.records().map(|record| record.package_id)
     }
 
+    /// Enumerates the exact authenticated runtime records through one
+    /// caller-supplied policy decision. The callback may select only the
+    /// domain and typed host-substrate reason for the record currently being
+    /// visited; substituting an identity, omitting a record, or returning an
+    /// error leaves the plan unsealed. This transaction carries no capability
+    /// and does not itself authorize any returned domain.
+    pub fn assign_from_policy<F>(&mut self, mut decide: F) -> Result<(), ReleaseInventoryError>
+    where
+        F: FnMut(
+            mrml_package_format::RuntimeInventoryRecord<'a>,
+        ) -> Result<RuntimeDomainAssignment<'a>, ReleaseInventoryError>,
+    {
+        if self.count != 0 {
+            return Err(ReleaseInventoryError::BindingCount);
+        }
+        let placeholder = RuntimeDomainAssignment {
+            package_id: "",
+            domain: ObjectId(0),
+            host_substrate_reason: None,
+        };
+        let mut assignments = [placeholder; N];
+        let mut count = 0;
+        let runtime = self.runtime;
+        for record in runtime.records() {
+            let assignment = decide(record)?;
+            if assignment.package_id != record.package_id {
+                return Err(ReleaseInventoryError::MissingBinding);
+            }
+            if count >= self.expected_len() || count >= N {
+                return Err(ReleaseInventoryError::BindingCount);
+            }
+            if assignments[..count]
+                .iter()
+                .any(|present| present.package_id == assignment.package_id)
+            {
+                return Err(ReleaseInventoryError::DuplicateBinding);
+            }
+            assignments[count] = assignment;
+            count += 1;
+        }
+        if count != self.expected_len() {
+            return Err(ReleaseInventoryError::BindingCount);
+        }
+        self.assignments = assignments;
+        self.count = count;
+        Ok(())
+    }
+
     pub fn assign(
         &mut self,
         package_id: &'a str,
@@ -1154,6 +1202,94 @@ mod tests {
             ),
             Err(ReleaseInventoryError::BindingCount)
         ));
+    }
+
+    #[test]
+    fn installed_assignment_policy_visits_every_authenticated_record_exactly_once() {
+        let (release, release_length, key_id) = build_colocated_release();
+        let parsed = parse_system_release(&release[..release_length]).unwrap();
+        let generation = ActivatedSystemGeneration::new(
+            parsed.generation().generation(),
+            parsed.generation().digest(),
+            parsed.interface_catalog().digest(),
+            7,
+            0x5155,
+            3,
+        )
+        .unwrap();
+        let active = ActivatedSystemRelease::new(generation, parsed.identity());
+        let domain = ObjectId(0x504f_4c49_4359_0001);
+        let mut visited = 0;
+        let mut plan = RuntimeDomainAssignmentPlan::<2>::new(
+            &release[..release_length],
+            &key_id,
+            active,
+            POLICY,
+        )
+        .unwrap();
+        plan.assign_from_policy(|record| {
+            assert_eq!(record.class, RuntimeIsolationClass::MicrovmEligible);
+            assert!(record.supported & RuntimeIsolationPlacement::Microvm.bit() != 0);
+            visited += 1;
+            RuntimeDomainAssignment::new(record.package_id, domain)
+        })
+        .unwrap();
+        assert_eq!(visited, 2);
+        assert_eq!(plan.assigned_len(), plan.expected_len());
+        assert_eq!(plan.seal().unwrap().release().len(), 1);
+
+        let mut substituted = RuntimeDomainAssignmentPlan::<2>::new(
+            &release[..release_length],
+            &key_id,
+            active,
+            POLICY,
+        )
+        .unwrap();
+        assert_eq!(
+            substituted
+                .assign_from_policy(|_| RuntimeDomainAssignment::new("org.mrml.other", domain)),
+            Err(ReleaseInventoryError::MissingBinding)
+        );
+
+        let mut rejected = RuntimeDomainAssignmentPlan::<2>::new(
+            &release[..release_length],
+            &key_id,
+            active,
+            POLICY,
+        )
+        .unwrap();
+        let mut decisions = 0;
+        assert_eq!(
+            rejected.assign_from_policy(|record| {
+                decisions += 1;
+                if decisions == 2 {
+                    return Err(ReleaseInventoryError::InvalidBinding);
+                }
+                RuntimeDomainAssignment::new(record.package_id, domain)
+            }),
+            Err(ReleaseInventoryError::InvalidBinding)
+        );
+        assert_eq!(rejected.assigned_len(), 0);
+        assert!(matches!(
+            rejected.seal(),
+            Err(ReleaseInventoryError::BindingCount)
+        ));
+
+        let mut mixed = RuntimeDomainAssignmentPlan::<2>::new(
+            &release[..release_length],
+            &key_id,
+            active,
+            POLICY,
+        )
+        .unwrap();
+        mixed.assign("org.mrml.zim", domain).unwrap();
+        assert_eq!(
+            mixed.assign_from_policy(|record| RuntimeDomainAssignment::new(
+                record.package_id,
+                domain
+            )),
+            Err(ReleaseInventoryError::BindingCount)
+        );
     }
 
     #[test]

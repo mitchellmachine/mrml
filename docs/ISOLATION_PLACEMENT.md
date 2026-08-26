@@ -927,7 +927,11 @@ release membership, rejects unknown, duplicate, omitted, and excess members,
 and yields an activated inventory only when complete. Assignments and metadata
 remain non-authorizing: the normal control plane establishes each domain's
 capabilities and resources before its established data plane can take the
-shortest safe path. General policy selection and boot orchestration remain
+shortest safe path. The policy callback now receives each full authenticated
+runtime record and commits no assignments unless every decision succeeds with
+the same package identity. Both focused runners therefore enumerate the signed
+release instead of naming ZIM/Zstd themselves. General per-package owner-policy
+lookup, distinct-domain construction, and boot orchestration remain
 **PLANNED**.
 
 Its canonical package-to-runtime classification prerequisite is now

@@ -1,5 +1,18 @@
 # Patent review log
 
+## 2026-08-26 — Atomic authenticated runtime-policy enumeration
+
+Patent review: **TRIGGERED** under the existing SystemRelease,
+adaptive-isolation, Total-MicroVM, and VMM reviews. This increment replaces a
+detached package-name list with a conventional bounded iteration over the
+already authenticated runtime records, stages callback results in a fixed
+array, and publishes them only after every identity matches and every decision
+succeeds. It adds no policy-selection heuristic, parser or signature format,
+capability grant, native fallback, VM/device protocol, DMA mechanism, or
+hardware-specific isolation mechanism. General owner-policy lookup and
+distinct-domain construction remain unimplemented. No patent-clearance or
+non-infringement conclusion is made; independent human review remains required.
+
 ## 2026-08-26 — Sealed installed-domain assignment plan
 
 Patent review: **TRIGGERED** under the existing SystemRelease, deployment,

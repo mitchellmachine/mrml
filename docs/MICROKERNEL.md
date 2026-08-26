@@ -3059,8 +3059,12 @@ the exact activated signed release, enumerates its runtime members, and refuses
 to seal on an unknown, duplicate, omitted, or excess package. This is a
 control-plane completeness boundary, not a capability: ordinary launch
 admission must establish authority before the resulting stable interface data
-plane takes its shortest safe path. General policy-driven installed-generation
-planning remains **PLANNED**.
+plane takes its shortest safe path. The plan now invokes one policy callback
+with each authenticated class, placement bound, supported-form mask, and
+must-run value, then publishes the assignments atomically only if every result
+retains the exact package identity. The WHP/KVM runners no longer name the
+ZIM/Zstd members independently. General per-package owner-policy lookup and
+distinct-domain launch construction remain **PLANNED**.
 
 Patent review: `TRIGGERED` under the existing signed-release, adaptive
 isolation, Total-MicroVM, automated VMM placement, and device-projection reviews

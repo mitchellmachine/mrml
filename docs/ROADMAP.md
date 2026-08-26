@@ -255,8 +255,14 @@ the exact activated release membership and seals only after every member has
 one assignment; unknown, duplicate, omitted, and excess packages fail. The plan
 is non-authorizing control-plane data, so normal capability/resource admission
 still precedes the shortest-safe-path interface data plane. General policy
-selection, complete installed-generation orchestration, and live boot recovery
-remain **PLANNED**.
+enumeration is now **PARTIALLY IMPLEMENTED**: an atomic callback receives every
+full authenticated runtime record and publishes nothing if any decision rejects
+or substitutes its identity. WHP and KVM use that enumeration rather than a
+detached ZIM/Zstd list. Windows and Linux kernel suites pass 559 tests, WHP
+passes 9, KVM passes 10, and fresh signed probes retain one eligible microVM
+with zero native fallback. Per-package owner-policy lookup, distinct-domain
+construction, complete installed-generation orchestration, and live boot
+recovery remain **PLANNED**.
 
 The first half of that gate is now **PARTIALLY IMPLEMENTED**: `MRMLRI1` is a
 bounded canonical runtime-inventory catalog whose records exact-bind every
