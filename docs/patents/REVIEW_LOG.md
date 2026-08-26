@@ -1,5 +1,14 @@
 # Patent review log
 
+## 2026-08-26 — Handoff-selected recovery session composition
+
+Patent review: **NOT_TRIGGERED** for this increment. It composes existing exact
+session authorization, canonical block-zero decoding, equality checks, redundant
+root selection, and failure cleanup. It adds no new storage encoding, selection
+algorithm, device protocol, virtualization mechanism, or hardware technique.
+Native transport correlation, the broader storage stack, and adaptive/Total
+MicroVM execution retain their existing `TRIGGERED` reviews.
+
 ## 2026-08-26 — Installed recovery identity/session correlation
 
 Patent review: **NOT_TRIGGERED** for this increment. It adds a bounded exact

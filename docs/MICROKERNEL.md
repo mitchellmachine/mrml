@@ -3138,6 +3138,15 @@ both records and the session; identity bytes cannot perform I/O, and ordinary
 per-operation session checks remain on the shortest-safe-path block data plane.
 Focused Windows and Arch Linux storage suites pass 125 tests. Native driver
 enumeration/correlation and hardware-backed execution remain **PLANNED**.
+
+Configuration recovery now consumes that service join without widening it. A
+fresh read session reads block zero, canonical header validation exact-matches
+the handoff volume and geometry, and the handed root block must name one of the
+header's two redundant roots. Every failure revokes the session before return;
+the successful `InstalledRecoveryDeviceSelection` retains the ordinary
+principal/session checks for later graph reads. Configuration passes 49 tests
+on Windows and Arch Linux, with WHP/KVM runner parity at 11/12. Full native
+driver and recovered-graph integration remains **PLANNED**.
 The controlled path now retains the installed side of that binding as well.
 `RecoveredInstalledTotalAdmission` owns the exact serviced device selection,
 volume header, active root, recovered volume/root generation, activated release,

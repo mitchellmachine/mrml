@@ -147,6 +147,18 @@ passes 125 tests on Windows and Arch Linux. Native AHCI/USB/VirtIO enumeration,
 transport-specific correlation evidence, configuration recovery composition,
 WHP/KVM integration, and physical execution remain next gates.
 
+Configuration recovery now **PARTIALLY IMPLEMENTS** the next composition. It
+consumes the newly reacquired read session, reads block zero only through that
+session, validates the canonical volume header, and binds the handoff-selected
+redundant root rather than silently choosing a default. Any header, volume,
+geometry, or root mismatch revokes the fresh session before returning; a
+focused test proves the single session slot can then be safely reacquired.
+Configuration passes 49 tests on Windows and Arch Linux; WHP runner parity
+passes 11 and KVM runner parity passes 12. WHP/KVM backend suites pass 24/25 and
+21/22 respectively, with only their existing manual live-mapping performance
+tests ignored. Native transport enumeration/correlation and complete recovered
+graph-to-Total-owner integration remain next.
+
 Selected-device reopening and redundant-root reads are now **PARTIALLY
 IMPLEMENTED**. Exact path/media/geometry and block-zero header revalidation
 precedes both root reads; any mismatch, second-read failure, or protocol-close

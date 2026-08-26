@@ -18,26 +18,26 @@ use mrml_crypto::Sha3_256;
 use mrml_kernel::arch::x86_64::UserContext;
 use mrml_kernel::{
     ActivatedReleaseTotalMicrovmInventory, BootHandoff, BootIsolationOverride, Capability,
-    CapabilityError, CapabilitySpace, IsolationAdmissionTable, IsolationBackendFailure,
-    IsolationMode, IsolationPlacement, IsolationServiceBackend, IsolationServiceRouteError,
-    IsolationServiceSpec, IsolationStatusSnapshot, IsolationUnavailableReason, MemoryBackingKind,
-    MemoryObjectId, MemoryPoolId, MemoryPoolTable, MemoryResourceError, Message, ObjectId,
-    PAGE_SIZE, PreparedIsolationServiceRoute, Priority, RestartPolicy, Rights,
-    RoutedIsolationService, ServiceAddressSpaceEraser, ServiceCleanupError, ServiceError,
-    ServiceId, ServiceRegistrationPlan, ServiceState, ServiceSupervisor, TaskId, TaskRuntime,
-    TaskRuntimeError, prepare_isolation_service_route, route_isolation_service,
+    CapabilityError, CapabilitySpace, InstalledRecoveryBootIdentity, IsolationAdmissionTable,
+    IsolationBackendFailure, IsolationMode, IsolationPlacement, IsolationServiceBackend,
+    IsolationServiceRouteError, IsolationServiceSpec, IsolationStatusSnapshot,
+    IsolationUnavailableReason, MemoryBackingKind, MemoryObjectId, MemoryPoolId, MemoryPoolTable,
+    MemoryResourceError, Message, ObjectId, PAGE_SIZE, PreparedIsolationServiceRoute, Priority,
+    RestartPolicy, Rights, RoutedIsolationService, ServiceAddressSpaceEraser, ServiceCleanupError,
+    ServiceError, ServiceId, ServiceRegistrationPlan, ServiceState, ServiceSupervisor, TaskId,
+    TaskRuntime, TaskRuntimeError, prepare_isolation_service_route, route_isolation_service,
 };
 use mrml_storage::{
     AuthorityRecoveryValidator, BlockDeviceDescriptor, BlockDeviceId, BlockFileSession,
     BlockService, BlockServiceBackend, BlockServiceError, BlockSessionHandle, BlockVolume,
     BlockVolumeError, CommittedRecoveredStorageAuthorities, ExtentMap, FileMetadata,
-    FileReadBackend, FileReadError, FileState, FileWriteBackend, FileWriteError, MetadataPointer,
-    PlatformBlockDeviceDescriptor, PlatformBlockDeviceIdentity, PreparedFileWrite,
-    ReachableFileSelection, RecoveredReachableState, RecoveredStorageAuthorities, RecoveryError,
-    RecoveryMetadataBackend, SUPERBLOCK_BYTES, ServicedBlockDevice, StorageAuthorityTable,
-    StorageBlockDevice, StorageHandle, StorageObjectId, StoragePrincipal, StorageTransaction,
-    TransactionError, TransactionReceipt, VOLUME_HEADER_BYTES, VolumeHeader, VolumeId,
-    recover_reachable_state,
+    FileReadBackend, FileReadError, FileState, FileWriteBackend, FileWriteError,
+    InstalledRecoverySessionError, MetadataError, MetadataPointer, PlatformBlockDeviceDescriptor,
+    PlatformBlockDeviceIdentity, PreparedFileWrite, ReachableFileSelection,
+    RecoveredReachableState, RecoveredStorageAuthorities, RecoveryError, RecoveryMetadataBackend,
+    SUPERBLOCK_BYTES, ServicedBlockDevice, StorageAuthorityTable, StorageBlockDevice,
+    StorageHandle, StorageObjectId, StoragePrincipal, StorageTransaction, TransactionError,
+    TransactionReceipt, VOLUME_HEADER_BYTES, VolumeHeader, VolumeId, recover_reachable_state,
 };
 
 #[cfg(any(test, target_os = "windows", target_os = "linux"))]
@@ -1547,6 +1547,65 @@ pub enum InstalledRecoveryDeviceSelectionError {
     VolumeMismatch,
     GeometryMismatch,
     InvalidActiveRoot,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum HandoffInstalledRecoveryError<E> {
+    Session(InstalledRecoverySessionError),
+    Scratch,
+    Read(BlockServiceError<E>),
+    Header(MetadataError),
+    Selection(InstalledRecoveryDeviceSelectionError),
+    Cleanup,
+}
+
+/// Converts one canonical boot identity into the existing installed-device
+/// recovery owner. The identity first has to reacquire a fresh read-only block
+/// session; block zero is then read through that session and exact-matched to
+/// the handed volume, geometry, and selected redundant root. Every failure
+/// revokes the newly created session before returning.
+pub fn reacquire_handoff_installed_recovery_device<
+    B: BlockServiceBackend,
+    const DEVICES: usize,
+    const SESSIONS: usize,
+>(
+    service: &mut BlockService<DEVICES, SESSIONS>,
+    backend: &mut B,
+    boot: InstalledRecoveryBootIdentity,
+    principal: StoragePrincipal,
+    scratch: &mut [u8],
+) -> Result<InstalledRecoveryDeviceSelection, HandoffInstalledRecoveryError<B::Error>> {
+    let bound = service
+        .grant_installed_recovery_read_session(boot, principal)
+        .map_err(HandoffInstalledRecoveryError::Session)?;
+    let result = (|| {
+        let block_size = usize::try_from(boot.block_size())
+            .map_err(|_| HandoffInstalledRecoveryError::Scratch)?;
+        let block = scratch
+            .get_mut(..block_size)
+            .ok_or(HandoffInstalledRecoveryError::Scratch)?;
+        service
+            .read_blocks(backend, bound.session(), principal, 0, block)
+            .map_err(HandoffInstalledRecoveryError::Read)?;
+        let header = VolumeHeader::decode(&block[..VOLUME_HEADER_BYTES])
+            .map_err(HandoffInstalledRecoveryError::Header)?;
+        let expected_volume = VolumeId::new(boot.volume())
+            .expect("installed recovery identity validates a nonzero volume");
+        InstalledRecoveryDeviceSelection::new_platform(
+            service,
+            bound.session(),
+            principal,
+            bound.platform_descriptor(),
+            expected_volume,
+            header,
+            boot.root_block(),
+        )
+        .map_err(HandoffInstalledRecoveryError::Selection)
+    })();
+    if result.is_err() && service.revoke(bound.session(), principal).is_err() {
+        return Err(HandoffInstalledRecoveryError::Cleanup);
+    }
+    result
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -5931,8 +5990,9 @@ mod tests {
         LAMPORT_PRIVATE_KEY_BYTES, LAMPORT_PUBLIC_KEY_BYTES, Sha3_512, lamport_public_key,
     };
     use mrml_kernel::{
-        HostSubstrateCounts, IsolationUnavailableCounts, RuntimeDomainAssignment,
-        RuntimeDomainAssignmentPlan, TotalMicrovmClass, TotalMicrovmState, route_isolation_service,
+        HostSubstrateCounts, InstalledRecoverySource, IsolationUnavailableCounts,
+        RuntimeDomainAssignment, RuntimeDomainAssignmentPlan, TotalMicrovmClass, TotalMicrovmState,
+        route_isolation_service,
     };
     use mrml_package_format::{
         ActivatedSystemGeneration, ActivatedSystemRelease, ComponentInterfaceProvider,
@@ -5948,7 +6008,8 @@ mod tests {
         BlockDeviceDescriptor, BlockDeviceId, BlockRights, BlockService, BlockServiceBackend,
         BlockServiceError, BlockSessionGrant, BlockVolume, BootRecoveryAdmission, CowMetadataImage,
         CowMetadataWrite, CowPublicationBackend, CowPublicationPlan, ExtentRecord, FileReadBackend,
-        FileWriteBackend, OwnerApprovedAuthorityCheckpoint, ServicedBlockDevice, StorageObjectId,
+        FileWriteBackend, OwnerApprovedAuthorityCheckpoint, PlatformBlockDeviceDescriptor,
+        PlatformBlockDeviceIdentity, PlatformBlockTransport, ServicedBlockDevice, StorageObjectId,
         StorageObjectKind, StorageRecoveryGrant, StorageRights, StorageTransactionId, Superblock,
         VolumeHeader, VolumeId, authority_checkpoint_digest, encode_authority_checkpoint,
         recover_validate_and_commit_stable_authorities,
@@ -8544,6 +8605,71 @@ mod tests {
             ))
         ));
         assert_eq!(backend.reads, 0);
+    }
+
+    #[test]
+    fn handoff_reacquisition_uses_selected_root_and_cleans_failed_session() {
+        let device = BlockDeviceId::new(7).unwrap();
+        let descriptor = BlockDeviceDescriptor::new(
+            device,
+            STABLE_BLOCK_BYTES as u32,
+            stable_header().block_count(),
+        )
+        .unwrap();
+        let identity =
+            PlatformBlockDeviceIdentity::new(PlatformBlockTransport::Hosted, [0x41; 32], 3, 5)
+                .unwrap();
+        let platform = PlatformBlockDeviceDescriptor::new(descriptor, identity);
+        let mut service = BlockService::<1, 1>::new();
+        service
+            .register_platform_devices_atomic(&[platform])
+            .unwrap();
+        let mut backend = StableBlockBackend::new(device);
+        let mut encoded_header = [0; VOLUME_HEADER_BYTES];
+        stable_header().encode(&mut encoded_header);
+        backend.bytes[..VOLUME_HEADER_BYTES].copy_from_slice(&encoded_header);
+        let boot = |root_block| {
+            InstalledRecoveryBootIdentity::new(
+                InstalledRecoverySource::Hosted,
+                [0x41; 32],
+                3,
+                5,
+                STABLE_BLOCK_BYTES as u32,
+                stable_header().block_count(),
+                stable_volume().bytes(),
+                root_block,
+                14,
+            )
+            .unwrap()
+        };
+        let mut scratch = [0xa5; STABLE_BLOCK_BYTES];
+        assert_eq!(
+            reacquire_handoff_installed_recovery_device(
+                &mut service,
+                &mut backend,
+                boot(3),
+                stable_principal(),
+                &mut scratch,
+            ),
+            Err(HandoffInstalledRecoveryError::Selection(
+                InstalledRecoveryDeviceSelectionError::InvalidActiveRoot
+            ))
+        );
+        let selected = reacquire_handoff_installed_recovery_device(
+            &mut service,
+            &mut backend,
+            boot(stable_header().primary_superblock()),
+            stable_principal(),
+            &mut scratch,
+        )
+        .unwrap();
+        assert_eq!(selected.platform_identity(), Some(identity));
+        assert_eq!(selected.header(), stable_header());
+        assert_eq!(
+            selected.active_superblock(),
+            stable_header().primary_superblock()
+        );
+        assert_eq!(backend.reads, 2);
     }
 
     fn stable_layout(

@@ -1267,6 +1267,16 @@ ordinary block data plane. Windows and Arch Linux storage suites pass 125 tests.
 This is controlled service/type evidence, not native-driver correlation,
 WHP/KVM recovery execution, or physical storage evidence.
 
+The configuration service now **PARTIALLY IMPLEMENTS** the consuming side of
+that boundary. It reads the canonical volume header through the newly granted
+session and requires the handed volume, geometry, and exact selected redundant
+root before constructing the existing installed recovery owner. Failure revokes
+the fresh session, including malformed-header and invalid-root paths, so retry
+cannot be converted into leaked authority. Configuration passes 49 tests on
+Windows and Arch Linux; the existing WHP/KVM runner parity suites pass 11/12.
+This does not yet prove native enumeration, full recovered-graph composition,
+installed Total admission, or physical execution.
+
 The recovered installed selection is now retained across the boot-policy to
 Total-admission boundary. `RecoveredInstalledTotalAdmission` binds its exact
 device descriptor, serviced session selection, volume header, active root,

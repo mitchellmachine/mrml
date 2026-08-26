@@ -169,6 +169,15 @@ tests. Native transport enumeration, the proof that its derived identity
 corresponds to the firmware source, configuration-service composition, and
 physical-media execution remain **PLANNED**.
 
+Configuration-service composition is now **PARTIALLY IMPLEMENTED** through the
+same boundary. It reads and validates block zero via the reacquired session,
+then exact-matches the handoff volume, geometry, and selected primary/secondary
+root before creating the installed selection consumed by graph recovery. Any
+failure revokes the new session before return. Configuration passes 49 tests on
+Windows and Arch Linux; WHP/KVM runner parity remains 11/12. Native driver
+correlation, complete graph/Total-owner composition, and physical media remain
+**PLANNED**.
+
 The `mrml` frontend may expose structured `disk`, `filesystem`, `optical`, and
 `media` operations. The PowerShell-inspired shell projects the same backend as
 typed `Get-*`, `Test-*`, `Initialize-*`, `New-*`, `Format-*`, `Write-*`, and
