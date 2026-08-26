@@ -4169,6 +4169,12 @@ fallthrough contribute to the same intersection before a `while` natural exit
 is computed. The pinned oracle accepts stable parameter-backed outcomes and
 rejects a local-backed fallthrough backedge with E0515. Both hosts remain at 989
 compiler tests; conditional-block terminal continue remains conservative.
+Conditional action-block terminal break and continue arms now route their
+post-action origin state to loop exits and backedges instead of contaminating
+the later-operation fallthrough join. The pinned oracle accepts parameter-
+backed terminal controls and rejects a local-backed break arm with E0515. Both
+hosts remain at 989 compiler tests; nested-loop state transfer and general fixed
+points remain incomplete.
 
 Exact typed tuple literals now seed the same projected state when a local is
 declared. Every reference field is checked against the declared tuple element

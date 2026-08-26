@@ -828,6 +828,14 @@ unreachable. This is black-box evidence for that exact terminating suffix and
 backedge, not general loop or region inference. Temporary source and metadata
 were removed.
 
+An independently authored Rust 2024 metadata-only conditional action-block set
+against this exact toolchain and commit accepted exhaustive parameter-backed
+terminal break arms and a parameter-backed terminal continue paired with a
+fallthrough return. Replacing one break-arm result with local storage failed at
+the post-loop tail with E0515. This is black-box evidence for those exact arm
+destinations, not general loop or region inference. Temporary sources and
+metadata were removed.
+
 An independently authored Rust 2024 metadata-only conditional-continue pair
 against this exact toolchain and commit accepted continue and normal-fallthrough
 backedges that both restored the same parameter origin. A condition-headed

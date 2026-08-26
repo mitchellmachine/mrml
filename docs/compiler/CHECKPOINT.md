@@ -536,6 +536,15 @@ library tests, one component-interface probe, 10 conformance tests, and 335
 replacement tests: 989 compiler tests per host. Conditional-block terminal
 continue remains unsupported.
 
+Conditional action-block terminal break and continue arms now feed the bounded
+loop-exit and backedge accumulators respectively. Terminal arms do not join the
+state that reaches later operations; nonterminal arms and an implicit missing
+else remain fallthrough outcomes. ORACLE-0002 accepts parameter-backed terminal
+break/continue arms and rejects a local-backed break arm with E0515. Windows and
+Arch each pass 643 library tests, one component-interface probe, 10 conformance
+tests, and 335 replacement tests: 989 compiler tests per host. Nested-loop state
+transfer and general fixed points remain incomplete.
+
 The conditional callee-local reassignment milestone evaluates supported direct
 assignments from a copy of the incoming fixed local-origin state for every
 conditional outcome, then joins each local independently. A missing `else`

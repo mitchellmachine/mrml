@@ -1298,6 +1298,11 @@ fallthrough and direct continue add further outcomes; the joined backedge feeds
 the existing condition-headed natural-exit calculation. ORACLE-0002 accepts
 stable parameter-backed backedges and rejects a local-backed fallthrough
 backedge reaching a `while` tail with E0515.
+Conditional action-block terminal `break` and `continue` arms now route their
+post-action state directly to the loop-exit and backedge accumulators. They are
+excluded from the later-operation fallthrough join; only nonterminal arms and an
+implicit missing `else` continue. ORACLE-0002 accepts parameter-backed break and
+continue arms and rejects a local-backed break arm with E0515.
 
 The first modern trait-solver foundation is an explicit bounded implemented-
 goal representation. Stable trait/type/inference/placeholder identities remain
