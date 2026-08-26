@@ -6,6 +6,7 @@
 //! narrow types so their unsafe boundaries can be reviewed independently.
 
 pub mod arch;
+mod application_lifecycle;
 mod artifact;
 mod boot;
 mod boot_recovery;
@@ -49,6 +50,9 @@ pub use artifact::{
     RELEASE_MANIFEST_BYTES, ReleaseManifest, SIGNED_ARTIFACT_HEADER_BYTES,
     SIGNED_ARTIFACT_OVERHEAD_BYTES, SignedArtifact, TrustRoot, VerifiedArtifact,
     VerifiedExecutable, VerifiedRelease, artifact_statement, executable_image_limit,
+};
+pub use application_lifecycle::{
+    NativeApplicationBackend, NativeApplicationEndpoint, NativeApplicationError,
 };
 pub use boot::{BootEvidence, BootPolicy, BootValidationError, ValidatedBoot};
 pub use boot_recovery::{BootRecoveryDelivery, BootRecoveryDeliveryError};

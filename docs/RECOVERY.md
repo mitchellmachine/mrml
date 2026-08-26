@@ -1013,6 +1013,14 @@ unavailable without probing the native backend. These are hosted unit-tested
 control-plane invariants, not evidence of a GUI application or WHP/KVM
 application execution.
 
+The first native-process lifecycle adapter uses a dedicated caller-owned task
+runtime. Cleanup removes the complete task context/capability domain before
+erasing its exact address space; erasure uncertainty retains the immutable
+application endpoint and retired context for explicit retry. Recovery must not
+recreate that endpoint, reuse its task identity, or report cleanup complete
+until erasure succeeds. Current tests use an unaccounted hosted runtime and do
+not prove application-image, GUI, physical, WHP, or KVM execution.
+
 The focused recovery oracle now includes the two-vCPU component profiles
 `whp_component_service_smp_probe` and `kvm_component_service_smp_probe`. Each
 must use fresh signed kernel/package artifacts, the exact signed ZIM/Zstd

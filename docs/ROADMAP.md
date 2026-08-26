@@ -41,10 +41,15 @@ Three new persistent deltas are documented before implementation:
   application generation and artifact digest, active system generation, and
   policy generation to either native-process or microVM execution. It invokes
   only the selected backend, rejects stale identities before launch, and makes
-  a failed Total-mode microVM unavailable with zero native fallback. This is
-  kernel control-plane groundwork; the representative GUI application,
-  compositor/Semantic Scene Graph integration, application supervisor adapter,
-  and WHP/KVM application probes remain **PLANNED**.
+  a failed Total-mode microVM unavailable with zero native fallback. A concrete
+  native-process lifecycle adapter now creates one ordinary task in a dedicated
+  caller-owned runtime, creates no service identity or authority from metadata,
+  and retires the complete task domain before retryable address-space erasure.
+  Focused tests use an unaccounted runtime, so production quantitative
+  allocation remains a caller obligation. This is kernel control/lifecycle
+  groundwork; the representative GUI application, compositor/Semantic Scene
+  Graph integration, application image execution, microVM adapter, and WHP/KVM
+  application probes remain **PLANNED**.
   The configuration package now admits both forms and supplies a concrete
   configuration-specific adapter with focused fail-closed tests. The native
   form now uses a real accounted `TaskRuntime`/`ServiceSupervisor` launch and

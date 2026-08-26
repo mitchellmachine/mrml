@@ -53,10 +53,17 @@ Total mode rejects native-process placement before construction; failed
 microVM construction records typed unavailability and never tries the native
 backend. Focused hosted kernel tests cover both placements, immutable identity,
 stale generations, backend exclusivity, and zero fallback. This is
-**PARTIALLY IMPLEMENTED** application-launch control-plane groundwork, not the
-representative dual-placement GUI application: no GUI package, compositor,
-Semantic Scene Graph integration, application supervisor adapter, or WHP/KVM
-application probe exists yet.
+**PARTIALLY IMPLEMENTED** application-launch control-plane groundwork. A
+concrete native-process adapter now creates one ordinary task in a dedicated
+caller-owned `TaskRuntime`, without a service identity or metadata-derived
+capability. It retains exact route identity, refuses microVM dispatch, revokes
+the complete task domain before address-space erasure, and retains an uncertain
+erase for exact retry. Focused Windows/Linux unit tests use an unaccounted test
+runtime; production quantitative runtime allocation remains the caller's
+separate obligation. This is not the representative dual-placement GUI
+application: no GUI package, compositor, Semantic Scene Graph integration,
+application image execution, microVM adapter, or WHP/KVM application probe
+exists yet.
 
 The kernel admission prerequisite now binds every prepared, running,
 unavailable, and routed domain to both a nonzero active `SystemGeneration` and
@@ -678,8 +685,9 @@ Documentation is not implementation evidence. Implement bounded milestones:
    manifest policy, a hosted supervised native-service ABI-3 call, and the
    separately hosted WHP/KVM microVM call; general resolver dispatch remains);
 3. one representative dual-placement GUI application (**PARTIALLY IMPLEMENTED**
-   only for the separate generation-bound kernel application route; GUI,
-   supervisor, semantic, and backend adapters remain **PLANNED**);
+   for the generation-bound kernel route and dedicated native-process lifecycle
+   adapter; GUI, semantic, image-execution, microVM-adapter, and live backend
+   work remain **PLANNED**);
 4. monitor placement visibility;
 5. resource and device projections;
 6. persistent Settings and shell policy;
