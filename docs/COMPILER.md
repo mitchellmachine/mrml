@@ -1145,6 +1145,12 @@ return, while identical local-backed results fail closed. ORACLE-0002 accepts
 both parameter-backed returns and rejects both local escapes with E0515. General
 interprocedural lifetime inference remains unsupported.
 
+The same call-derived shared-child outlives proof now covers explicit returns
+and a conditional early-return plus tail-return join. Parameter-backed children
+remain accepted at every site, while the matching local-backed sites fail
+closed. ORACLE-0002 accepts both parameter forms and reports E0515 for both
+local escapes. This is bounded return-site coverage, not general regions.
+
 The first modern trait-solver foundation is an explicit bounded implemented-
 goal representation. Stable trait/type/inference/placeholder identities remain
 distinct; canonicalization replaces inference identities with first-occurrence

@@ -3993,6 +3993,12 @@ rejects both local escapes with E0515. Windows and Arch each pass 642 library
 tests, one component-interface probe, 10 conformance tests, and 335 replacement
 tests: 988 compiler tests per host.
 
+Explicit return and conditional early-return/tail joins now retain that same
+call-derived shared-child origin. Parameter-backed children remain valid at all
+sites; equivalent local-backed children fail the bounded outlives check. The
+pinned oracle accepts both parameter forms and rejects both local escapes with
+E0515. Windows and Arch remain at 988 compiler tests per host.
+
 Exact typed tuple literals now seed the same projected state when a local is
 declared. Every reference field is checked against the declared tuple element
 and return type; only a parameter-backed element records an origin. Scalar and

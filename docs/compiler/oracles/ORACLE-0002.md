@@ -343,6 +343,14 @@ is exact black-box outlives evidence for those call shapes, not general
 interprocedural lifetime inference. Temporary probe sources and metadata were
 removed.
 
+An independently authored Rust 2024 metadata-only probe against this exact
+toolchain and commit returned call-derived shared children through an explicit
+return and through a conditional early-return plus tail-return path. Both
+parameter-backed forms compiled. Equivalent local-backed forms failed with
+E0515 at the explicit and conditional return sites. This is exact black-box
+evidence for those return shapes, not general region inference. Temporary probe
+sources and metadata were removed.
+
 ## Straight-line tuple-field callee-origin follow-up
 
 On 2026-08-26, an independently authored Rust 2024 metadata-only probe against

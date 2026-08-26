@@ -836,6 +836,12 @@ ORACLE-0002 accepts both parameter cases and rejects both local escapes with
 E0515. Windows and Arch each pass 642 library tests, one component-interface
 probe, 10 conformance tests, and 335 replacement tests: 988 tests per host.
 
+Explicit and conditional return sites now preserve the same call-derived shared-
+child outlives result as the tail. Parameter-backed identity and conditional
+same-parameter children return successfully; equivalent local-backed sites fail
+closed. ORACLE-0002 accepts both parameter cases and rejects both local escapes
+with E0515. Windows and Arch remain at 988 compiler tests per host.
+
 Multi-field tuple literals retain a separate projected origin per field. A
 conditional reference element seeds its field only when both arms prove the
 same parameter; unequal first/second origins fail closed. Focused caller tests
