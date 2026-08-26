@@ -1,0 +1,51 @@
+[manifest]
+format = "mrml"
+version = 2
+
+[package]
+default = false
+id = "org.mrml.service.compositor"
+kind = "service"
+name = "mrml-compositor"
+profile = "system-service"
+
+[isolation]
+default = "native-service"
+minimum = "native-service"
+supported = ["native-service", "microvm"]
+
+[[target]]
+arch = "x86_64"
+environment = "mrml"
+
+[[target]]
+arch = "x86_64"
+environment = "windows"
+
+[[target]]
+arch = "x86_64"
+environment = "linux"
+
+[[artifact]]
+kind = "lib"
+name = "mrml_compositor"
+
+[rust]
+crate_name = "mrml_compositor"
+crate_type = "lib"
+source = "packages/services/compositor/src/lib.rs"
+
+[[dependency]]
+alias = "mrml_interface_gui_surface_v1"
+compile_name = "mrml-interface-gui-surface-v1"
+package = "org.mrml.interface.gui.surface"
+scope = "compile"
+
+[[dependency]]
+alias = "mrml_kernel"
+compile_name = "mrml-kernel"
+package = "org.mrml.system.kernel"
+scope = "compile"
+
+[[host_test]]
+targets = ["WINDOWS", "LINUX"]

@@ -88,6 +88,15 @@ The stable wire-protocol portion is now **PARTIALLY IMPLEMENTED** as
 codec feeds the same admission through a trusted handle resolver. The resolver,
 not interface bytes, supplies live capabilities and authoritative descriptors.
 Native IPC and microVM transports for these bytes remain **PLANNED**.
+The first compositor-side object registry is **PARTIALLY IMPLEMENTED** as a
+fixed-capacity `no_std` service component. It retains already-created exact
+capabilities and authoritative descriptors behind generational interface
+handles, rejects duplicates and wrong kinds, and makes retired handles stale
+before slot reuse. A supervisor-supplied service generation separates restarts
+from per-slot reuse, and counter exhaustion never wraps. This is host-unit-tested
+resolver state, not a running
+compositor, capability mint, desktop object policy, presentation backend, or
+Total-mode execution claim.
 
 Canonical packages, coherent `SystemRelease` graphs, immutable local
 `SystemGeneration` state, Store transport, system images, servicing, installation,

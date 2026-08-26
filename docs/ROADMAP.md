@@ -2153,8 +2153,22 @@ eight-rectangle damage ceiling, and typed response. A kernel adapter revalidates
 the source-level state, resolves opaque handles through a trusted object resolver,
 compares wire buffer metadata with the authoritative descriptor, and invokes the
 same capability admission. Windows and Arch Linux/WSL pass three interface tests
-and 535 kernel tests. Native IPC, microVM queue transport, the concrete registry,
-compositor, and representative dual-placement GUI application remain next.
+and 535 kernel tests. Native IPC, microVM queue transport, registry lifecycle in
+a running compositor, and the representative dual-placement GUI application
+remain next.
+
+**PARTIALLY IMPLEMENTED (step 6 registry prerequisite):** the new
+`org.mrml.service.compositor` package owns a bounded volatile generational table
+for surfaces, display outputs, and graphics buffers. It retains exact existing
+capabilities/descriptors, rejects duplicate identity/authority, wrong-kind and
+stale lookups, returns authority on retirement, and permanently stops reusing a
+slot if its generation exhausts. A nonzero supervisor-supplied service generation
+occupies separate handle bits, so restart does not reset the per-slot namespace.
+Five Windows and five Arch Linux/WSL tests
+include a canonical interface-decode -> registry-resolve -> kernel-admit ->
+revocation-aware binding path. The package manifest declares both native-service
+and microVM support, but metadata is not runtime evidence: neither placement,
+IPC/queue transport, composition, nor presentation has run.
 
 The graphics device may add VirtIO-GPU compatibility for guest display and 3D
 interoperability, with QEMU differential tests. It must preserve the existing

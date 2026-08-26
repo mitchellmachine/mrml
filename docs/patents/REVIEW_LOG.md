@@ -6107,3 +6107,15 @@ Native IPC/microVM transport, trusted composition, and presentation remain
 unimplemented pending targeted worldwide claim-family and applicable grant
 review. No patent-clearance, non-infringement, or infringement conclusion is
 made, and independent human dual review remains required.
+
+# 2026-08-26 — Volatile compositor object registry
+
+**Result: NOT_TRIGGERED for the registry increment.** This service-side table
+uses conventional fixed-capacity array lookup, separate service/slot generation
+fields, exact enum-kind matching, duplicate rejection, and non-wrapping retirement
+to resolve the already reviewed interface handles to existing capabilities and
+descriptors. It adds no capability derivation, compositor algorithm, damage
+discovery, layout, synchronization, rendering, presentation, migration, or
+resource-optimization mechanism. The broader surface/compositor/microVM work
+remains `TRIGGERED` as recorded above. This technical screen is not a legal
+opinion or clearance conclusion and does not replace independent human review.

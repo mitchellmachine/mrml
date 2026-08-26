@@ -200,8 +200,18 @@ and slot reuse still stop the short path without replaying placement policy. The
 trusted registry/compositor must supply the authoritative object generations;
 the new generation-1 `org.mrml.interface.gui.surface` adapter resolves its
 opaque generational handles through that trusted boundary before calling the
-same admission path. Interface bytes and handles grant no capability. The
-actual persistent registry and compositor service remain unimplemented.
+same admission path. Interface bytes and handles grant no capability. The new
+`org.mrml.service.compositor` package now supplies a fixed-capacity volatile
+registry for that resolver. It rejects duplicate object identity or capability,
+wrong object kind, capacity exhaustion, stale generations, and reuse; retirement
+advances the slot generation and returns retained authority for explicit cleanup.
+Each service instance also requires a nonzero supervisor generation encoded
+separately from the slot counter, so a restarted registry cannot accept an old
+same-slot handle. Slot-counter exhaustion permanently retires that slot rather
+than wrapping. It does not mint capabilities. The compositor runtime,
+object-creation policy,
+native/microVM transport, presentation, and persistent desktop state remain
+unimplemented.
 
 Constitution review for this bounded foundation:
 
@@ -217,8 +227,9 @@ Existing-object reuse: HIGH
 ```
 
 It reuses the existing capability space and fixed-capacity, checked `no_std`
-kernel style. Presentation policy and mutable desktop state remain outside the
-kernel; the future wire decoder and compositor are separate review gates.
+style. Presentation policy and mutable desktop state remain outside the kernel;
+the fixed registry is in the compositor service package. The compositor runtime
+and presentation path are separate review gates.
 
 **PARTIALLY IMPLEMENTED:** the canonical generation-1 surface interface has a
 SHA3-256-fingerprinted `mrml-call-v1` schema, fixed 112-byte commit envelope,

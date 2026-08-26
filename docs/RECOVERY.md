@@ -1109,6 +1109,21 @@ three tests on both Windows and Arch Linux/WSL, while the integrated kernel suit
 passed 535 tests on each host. No compositor, WHP/KVM GUI, or recovery execution
 was exercised.
 
+The compositor registry is deliberately volatile and is never a recovery root.
+Recovery discards its handles, reconstructs object entries only after the normal
+control plane recreates exact capabilities and authoritative descriptors, and
+does not preserve slot generations as authority. The supervisor must supply a
+fresh nonzero service-instance generation; it occupies separate handle bits from
+the per-slot reuse counter. If freshness cannot be established, the compositor
+session remains unavailable rather than starting at a guessed generation.
+Retirement returns the retained object/capability record for explicit lifecycle
+cleanup before reuse. A stale pre-restart handle cannot resolve in the new
+registry merely because it has the same numeric slot. Five host tests on both
+Windows and Arch Linux/WSL cover
+wrong-kind lookup, stale reuse, duplicate rejection, exact descriptor retention,
+and the canonical interface-to-kernel admission path; recovered execution was
+not tested.
+
 The focused recovery oracle now includes the two-vCPU component profiles
 `whp_component_service_smp_probe` and `kvm_component_service_smp_probe`. Each
 must use fresh signed kernel/package artifacts, the exact signed ZIM/Zstd
