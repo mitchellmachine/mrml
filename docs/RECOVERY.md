@@ -1047,6 +1047,10 @@ creation.
 Recovery signing workflows must select the explicit `application` signer kind;
 using `service` changes the authenticated artifact statement and is rejected by
 application admission rather than treated as a compatible encoding.
+Recovery code must likewise retain typed `ApplicationLaunch` identity. The
+current descriptor shares only internal bounded image-layout validation with
+`ServiceLaunch`; it is not yet encoded in the canonical handoff and must not be
+reconstructed by relabeling a recovered service descriptor.
 
 The canonical workspace and lock now retain the syscall-only
 `org.mrml.app.isolation-probe` as a `system-application` with both supported

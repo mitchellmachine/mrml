@@ -126,6 +126,41 @@ impl ServiceLaunch {
         version: u64,
         measurement: [u8; 64],
     ) -> Result<Self, HandoffError> {
+        Self::new_bounded(
+            artifact_physical,
+            artifact_length,
+            image_physical,
+            image_pages,
+            image_virtual,
+            entry,
+            stack_physical,
+            stack_pages,
+            stack_top,
+            table_physical,
+            table_pages,
+            version,
+            measurement,
+            crate::MAX_SERVICE_IMAGE_BYTES,
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn new_bounded(
+        artifact_physical: PhysAddr,
+        artifact_length: u64,
+        image_physical: PhysAddr,
+        image_pages: u64,
+        image_virtual: u64,
+        entry: u64,
+        stack_physical: PhysAddr,
+        stack_pages: u64,
+        stack_top: u64,
+        table_physical: PhysAddr,
+        table_pages: u64,
+        version: u64,
+        measurement: [u8; 64],
+        maximum_image_bytes: u32,
+    ) -> Result<Self, HandoffError> {
         let artifact_pages = artifact_length.div_ceil(crate::PAGE_SIZE);
         let _ = checked_pages(artifact_physical, artifact_pages)?;
         let image_bytes = checked_pages(image_physical, image_pages)?;
@@ -137,12 +172,12 @@ impl ServiceLaunch {
         let stack_base = stack_top
             .checked_sub(stack_bytes)
             .ok_or(HandoffError::NonCanonical)?;
-        if image_pages > u64::from(crate::MAX_SERVICE_IMAGE_BYTES).div_ceil(crate::PAGE_SIZE)
+        if image_pages > u64::from(maximum_image_bytes).div_ceil(crate::PAGE_SIZE)
             || stack_pages > 256
             || !(4..=256).contains(&table_pages)
             || version == 0
             || artifact_length
-                > (crate::MAX_SERVICE_IMAGE_BYTES as u64)
+                > (maximum_image_bytes as u64)
                     .checked_add(crate::SIGNED_ARTIFACT_OVERHEAD_BYTES as u64)
                     .ok_or(HandoffError::NonCanonical)?
             || measurement.iter().all(|byte| *byte == 0)
@@ -233,6 +268,90 @@ impl ServiceLaunch {
     }
     pub const fn measurement(self) -> [u8; 64] {
         self.measurement
+    }
+}
+
+/// Typed ordinary-application launch layout. The physical/virtual layout
+/// mechanism is shared with service images, but this distinct type prevents an
+/// application from acquiring service identity or lifecycle semantics merely
+/// because both are bounded PE32+ user images.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct ApplicationLaunch(ServiceLaunch);
+
+impl ApplicationLaunch {
+    #[allow(clippy::too_many_arguments)]
+    pub fn new(
+        artifact_physical: PhysAddr,
+        artifact_length: u64,
+        image_physical: PhysAddr,
+        image_pages: u64,
+        image_virtual: u64,
+        entry: u64,
+        stack_physical: PhysAddr,
+        stack_pages: u64,
+        stack_top: u64,
+        table_physical: PhysAddr,
+        table_pages: u64,
+        version: u64,
+        measurement: [u8; 64],
+    ) -> Result<Self, HandoffError> {
+        ServiceLaunch::new_bounded(
+            artifact_physical,
+            artifact_length,
+            image_physical,
+            image_pages,
+            image_virtual,
+            entry,
+            stack_physical,
+            stack_pages,
+            stack_top,
+            table_physical,
+            table_pages,
+            version,
+            measurement,
+            crate::artifact::MAX_APPLICATION_IMAGE_BYTES,
+        )
+        .map(Self)
+    }
+
+    pub const fn artifact_physical(self) -> PhysAddr {
+        self.0.artifact_physical()
+    }
+    pub const fn artifact_length(self) -> u64 {
+        self.0.artifact_length()
+    }
+    pub const fn image_physical(self) -> PhysAddr {
+        self.0.image_physical()
+    }
+    pub const fn image_pages(self) -> u64 {
+        self.0.image_pages()
+    }
+    pub const fn image_virtual(self) -> u64 {
+        self.0.image_virtual()
+    }
+    pub const fn entry(self) -> u64 {
+        self.0.entry()
+    }
+    pub const fn stack_physical(self) -> PhysAddr {
+        self.0.stack_physical()
+    }
+    pub const fn stack_pages(self) -> u64 {
+        self.0.stack_pages()
+    }
+    pub const fn stack_top(self) -> u64 {
+        self.0.stack_top()
+    }
+    pub const fn table_physical(self) -> PhysAddr {
+        self.0.table_physical()
+    }
+    pub const fn table_pages(self) -> u64 {
+        self.0.table_pages()
+    }
+    pub const fn version(self) -> u64 {
+        self.0.version()
+    }
+    pub const fn measurement(self) -> [u8; 64] {
+        self.0.measurement()
     }
 }
 
@@ -1223,6 +1342,48 @@ mod tests {
         assert_eq!(
             BootHandoff::decode(&with_madt, |_| {}).err(),
             Some(HandoffError::NonCanonical)
+        );
+    }
+
+    #[test]
+    fn application_descriptor_is_typed_but_reuses_bounded_user_layout() {
+        let application = ApplicationLaunch::new(
+            PhysAddr::new(0x11_0000).unwrap(),
+            1024,
+            PhysAddr::new(0x10_0000).unwrap(),
+            2,
+            0x1_4000_0000,
+            0x1_4000_0080,
+            PhysAddr::new(0x10_4000).unwrap(),
+            2,
+            0x2_0000_2000,
+            PhysAddr::new(0x10_8000).unwrap(),
+            4,
+            13,
+            [0x4a; 64],
+        )
+        .unwrap();
+        assert_eq!(application.version(), 13);
+        assert_eq!(application.measurement(), [0x4a; 64]);
+        assert_eq!(application.entry(), 0x1_4000_0080);
+        assert_eq!(application.image_pages(), 2);
+        assert!(
+            ApplicationLaunch::new(
+                PhysAddr::new(0x11_0000).unwrap(),
+                1024,
+                PhysAddr::new(0x10_0000).unwrap(),
+                2,
+                0x1_4000_0000,
+                0x1_4000_0080,
+                PhysAddr::new(0x10_4000).unwrap(),
+                2,
+                0x2_0000_2000,
+                PhysAddr::new(0x10_8000).unwrap(),
+                4,
+                0,
+                [0x4a; 64],
+            )
+            .is_err()
         );
     }
 

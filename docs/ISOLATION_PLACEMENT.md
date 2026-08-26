@@ -77,6 +77,10 @@ digest exactly match the named package record in one canonical active
 `SystemGeneration`; absence or substitution produces no route specification.
 The first-party signing tool also exposes an explicit `application` kind rather
 than requiring these bytes to masquerade as a service or boot artifact.
+The kernel handoff model now likewise has a distinct typed `ApplicationLaunch`
+descriptor. It reuses the reviewed bounded user-image layout checks internally
+but cannot be passed as `ServiceLaunch` or thereby acquire a service identity.
+Wire encoding and boot consumption of that descriptor remain **PLANNED**.
 No application loader or runtime consumes the verified bytes yet. A
 backend-neutral microVM owner now accepts one already constructed guest only
 after rechecking the complete immutable application route, consumes that guest

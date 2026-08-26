@@ -53,7 +53,10 @@ Three new persistent deltas are documented before implementation:
   root. Route-ready application identity is now derived only when the verified
   artifact kind, version, and SHA3-512 payload digest exactly match the named
   package in one canonical `SystemGeneration`; mismatches publish no route
-  specification. The distinct syscall-only `org.mrml.app.isolation-probe` is
+  specification. A distinct typed `ApplicationLaunch` handoff descriptor now
+  reuses the bounded user-image layout validation without becoming a
+  `ServiceLaunch`; its wire encoding and boot consumption remain **PLANNED**.
+  The distinct syscall-only `org.mrml.app.isolation-probe` is
   now a real Manifest V2 `system-application` supporting native-process and microVM forms;
   Windows and Arch Linux cross-build identical 3,072-byte PE output. It has not
   been loaded or executed. The representative GUI application,
