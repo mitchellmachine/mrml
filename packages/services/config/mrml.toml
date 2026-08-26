@@ -13,6 +13,8 @@ profile = "system-service"
 default = "native-service"
 minimum = "native-service"
 supported = ["native-service", "microvm"]
+runtime_class = "microvm-eligible"
+must_run = true
 
 [[target]]
 arch = "x86_64"

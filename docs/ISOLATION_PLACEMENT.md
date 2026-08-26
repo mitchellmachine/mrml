@@ -888,9 +888,13 @@ supported forms, and the explicit reason required for every non-eligible
 exception. A catalog is accepted only when its generation, count, and every
 identity/version/digest exactly match the complete canonical `MRMLSG2` object;
 subsets and detached substitutions fail. Windows and Linux package-format
-suites each pass 16 tests. Manifest V2 derivation, signed `SystemRelease`
-delivery, kernel inventory construction, and complete runtime proof remain
-**PLANNED**.
+suites each pass 16 tests. Manifest V2 now accepts explicit `runtime_class` and
+`must_run` fields, requires a reason for every non-eligible class, forbids a
+reason for eligible work, and requires eligible work to support `MICROVM`.
+The public frontend derives `MRMLRI1` only from those manifests and the exact
+canonical generation; unclassified members fail closed. Windows and Arch Linux
+each pass 99 build-tool tests. Signed `SystemRelease` delivery, kernel inventory
+construction, and complete runtime proof remain **PLANNED**.
 
 ```text
 Complexity impact: MEDIUM

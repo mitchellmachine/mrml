@@ -9,6 +9,14 @@ kind = "kernel"
 name = "mrml-kernel"
 profile = "kernel"
 
+[isolation]
+default = "platform"
+minimum = "platform"
+supported = ["platform"]
+runtime_class = "boot-only"
+must_run = true
+reason = "privileged kernel is fixed outside userspace placement"
+
 [[target]]
 arch = "x86_64"
 environment = "mrml"

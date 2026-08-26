@@ -1,5 +1,18 @@
 # Patent review log
 
+## 2026-08-26 — Manifest-derived runtime inventory
+
+Patent review: **TRIGGERED** under the existing adaptive-isolation,
+Total-MicroVM, package-generation, and signed-release reviews. This increment
+parses explicit caller-authored Manifest V2 classification, must-run, placement,
+supported-form, and exception-reason fields, then conventionally copies them
+into the already reviewed bounded `MRMLRI1` catalog while retaining each exact
+`MRMLSG2` identity, version, and digest. It adds no placement heuristic, VM
+construction, fallback, resource selection, scheduling, migration, transport,
+or hardware mechanism. Signed release delivery and runtime enforcement remain
+separate pending increments. No patent-clearance or non-infringement conclusion
+is made; independent human review remains required.
+
 ## 2026-08-26 — Stable loop callee reference-origin join
 
 Patent review: **NOT_TRIGGERED** for this bounded compiler-analysis increment.

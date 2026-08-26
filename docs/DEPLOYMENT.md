@@ -126,8 +126,14 @@ class, must-run state, placement bounds, supported forms, and explicit exception
 reason. Decode rejects malformed fields, unknown classes/placements, invalid
 bounds, platform mixing, missing reasons, noncanonical order, and trailing data;
 exact validation rejects any subset or substituted generation member. This
-catalog is metadata and grants no capability. Manifest derivation and inclusion
-in the signed general `SystemRelease` remain **PLANNED**.
+catalog is metadata and grants no capability. Manifest V2 derivation is now
+**IMPLEMENTED** in the public build frontend: every generation member must have
+an explicit complete runtime classification, and `mrml release
+runtime-inventory-create` derives the catalog from the workspace manifest plus
+the generation's exact version and digest. Missing classifications, unknown
+generation members, malformed policy, subsets, and substitutions fail closed.
+Windows and Arch Linux each pass 99 focused build-tool tests. Inclusion in the
+signed general `SystemRelease` remains **PLANNED**.
 
 - Complexity impact: MEDIUM
 - TCB impact: LOW

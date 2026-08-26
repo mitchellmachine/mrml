@@ -5,6 +5,8 @@ const HEADER_BYTES: usize = 24;
 const RECORD_BYTES: usize = 88;
 pub const MAX_RUNTIME_INVENTORY_PACKAGES: usize = 256;
 pub const MAX_RUNTIME_REASON_BYTES: usize = 255;
+pub const MAX_RUNTIME_INVENTORY_BYTES: usize =
+    HEADER_BYTES + MAX_RUNTIME_INVENTORY_PACKAGES * (RECORD_BYTES + 255 + MAX_RUNTIME_REASON_BYTES);
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 #[repr(u8)]

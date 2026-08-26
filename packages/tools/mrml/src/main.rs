@@ -16,6 +16,8 @@ pub mod manifest_catalog;
 pub mod migration;
 pub mod package;
 pub mod resolver;
+#[path = "../../../libraries/package-format/src/runtime_inventory.rs"]
+pub mod runtime_inventory;
 pub mod runtime_placement;
 pub mod schema;
 pub mod servicing;
@@ -28,6 +30,7 @@ pub use activation::*;
 pub use component_launch::*;
 pub use component_resolution::*;
 pub use interface_catalog::*;
+pub use runtime_inventory::*;
 pub use system_generation::*;
 pub use system_release::*;
 
@@ -276,6 +279,7 @@ fn print_help() {
     println!(
         "       mrml release system-create GENERATION.mrmlbin INTERFACES.mrmlbin PRIVATE_KEY OUTPUT.mrs"
     );
+    println!("       mrml release runtime-inventory-create GENERATION.mrmlbin OUTPUT.mrmlbin");
     println!("       mrml release system-verify RELEASE.mrs PUBLIC_KEY");
     println!(
         "       mrml package adversarial-boot-fixture CASE BOOTLOADER_PACKAGE CONFIGURATION_PACKAGE KERNEL_SIGNED PACKAGE_PRIVATE RELEASE_PRIVATE KERNEL_OUTPUT RELEASE_OUTPUT"
@@ -296,15 +300,93 @@ fn print_help() {
     println!("  --output structured   emit stable key=value records");
 }
 
+fn derive_runtime_inventory(
+    workspace: &Workspace,
+    generation_bytes: &[u8],
+) -> Result<Vec<u8>, String> {
+    let generation = SystemGenerationView::decode(generation_bytes)
+        .map_err(|error| format!("RuntimeInventoryGenerationInvalid {{ detail: {error:?} }}"))?;
+    let mut records = Vec::with_capacity(generation.package_count() as usize);
+    for package in generation.packages() {
+        let component = workspace
+            .components
+            .iter()
+            .find(|component| component.id == package.package_id())
+            .ok_or_else(|| {
+                format!(
+                    "RuntimeInventoryPackageUnknown {{ package: {} }}",
+                    package.package_id()
+                )
+            })?;
+        let runtime = component.isolation.runtime().ok_or_else(|| {
+            format!(
+                "RuntimeInventoryClassificationMissing {{ package: {} }}",
+                package.package_id()
+            )
+        })?;
+        let class = match runtime.class() {
+            isolation::RuntimeClass::MicrovmEligible => RuntimeIsolationClass::MicrovmEligible,
+            isolation::RuntimeClass::HostSubstrateRequired => {
+                RuntimeIsolationClass::HostSubstrateRequired
+            }
+            isolation::RuntimeClass::BootOnly => RuntimeIsolationClass::BootOnly,
+            isolation::RuntimeClass::RecoveryOnly => RuntimeIsolationClass::RecoveryOnly,
+            isolation::RuntimeClass::UnsupportedBlocker => {
+                RuntimeIsolationClass::UnsupportedBlocker
+            }
+        };
+        let map_placement = |placement: isolation::IsolationPlacement| match placement {
+            isolation::IsolationPlacement::InProcess => RuntimeIsolationPlacement::InProcess,
+            isolation::IsolationPlacement::NativeProcess => {
+                RuntimeIsolationPlacement::NativeProcess
+            }
+            isolation::IsolationPlacement::NativeService => {
+                RuntimeIsolationPlacement::NativeService
+            }
+            isolation::IsolationPlacement::Microvm => RuntimeIsolationPlacement::Microvm,
+            isolation::IsolationPlacement::Platform => RuntimeIsolationPlacement::Platform,
+        };
+        let supported = component
+            .isolation
+            .supported()
+            .iter()
+            .copied()
+            .fold(0, |bits, placement| bits | map_placement(placement).bit());
+        records.push(RuntimeInventoryRecord {
+            package_id: package.package_id(),
+            version: package.version(),
+            artifact_digest: package.artifact_digest(),
+            class,
+            must_run: runtime.must_run(),
+            preferred: map_placement(component.isolation.preferred()),
+            minimum: map_placement(component.isolation.minimum()),
+            maximum: map_placement(component.isolation.maximum()),
+            supported,
+            reason: runtime.reason(),
+        });
+    }
+    let mut output = vec![0; MAX_RUNTIME_INVENTORY_BYTES];
+    let length = encode_runtime_inventory(generation.generation(), &records, &mut output)
+        .map_err(|error| format!("RuntimeInventoryEncode {{ detail: {error:?} }}"))?;
+    output.truncate(length);
+    let inventory = RuntimeInventoryView::decode(&output)
+        .map_err(|error| format!("RuntimeInventoryDecode {{ detail: {error:?} }}"))?;
+    inventory
+        .validate_system_generation(generation)
+        .map_err(|error| format!("RuntimeInventoryGenerationMismatch {{ detail: {error:?} }}"))?;
+    Ok(output)
+}
+
 fn release_command(workspace: &Workspace, args: &[String]) -> Result<(), String> {
     let operation = match args.first().map(String::as_str) {
         Some("create") if matches!(args.len(), 6 | 7) => "release-create",
         Some("verify") if args.len() == 3 => "release-verify",
         Some("system-create") if args.len() == 5 => "system-release-create",
         Some("system-verify") if args.len() == 3 => "system-release-verify",
+        Some("runtime-inventory-create") if args.len() == 3 => "runtime-inventory-create",
         _ => {
             return Err(
-                "ReleaseUsageError { expected: create VERSION BOOTLOADER.mrp KERNEL.mrp CONFIGURATION.mrp PRIVATE_KEY [OUTPUT.mrs] | verify RELEASE.mrs PUBLIC_KEY | system-create GENERATION.mrmlbin INTERFACES.mrmlbin PRIVATE_KEY OUTPUT.mrs | system-verify RELEASE.mrs PUBLIC_KEY }"
+                "ReleaseUsageError { expected: create VERSION BOOTLOADER.mrp KERNEL.mrp CONFIGURATION.mrp PRIVATE_KEY [OUTPUT.mrs] | verify RELEASE.mrs PUBLIC_KEY | runtime-inventory-create GENERATION.mrmlbin OUTPUT.mrmlbin | system-create GENERATION.mrmlbin INTERFACES.mrmlbin PRIVATE_KEY OUTPUT.mrs | system-verify RELEASE.mrs PUBLIC_KEY }"
                     .into(),
             );
         }
@@ -316,6 +398,22 @@ fn release_command(workspace: &Workspace, args: &[String]) -> Result<(), String>
 
 fn package_command(workspace: &Workspace, args: &[String]) -> Result<(), String> {
     match args.first().map(String::as_str) {
+        Some("runtime-inventory-create") if args.len() == 3 => {
+            let generation = fs::read(&args[1])
+                .map_err(|error| format!("RuntimeInventoryGenerationRead {{ detail: {error} }}"))?;
+            let encoded = derive_runtime_inventory(workspace, &generation)?;
+            write_new(&args[2], &encoded, "runtime-inventory")?;
+            let view = RuntimeInventoryView::decode(&encoded)
+                .map_err(|error| format!("RuntimeInventorySelfVerify {{ detail: {error:?} }}"))?;
+            println!(
+                "runtime-inventory|operation=create|status=PASS|generation={}|packages={}|bytes={}|output={}",
+                view.generation(),
+                view.package_count(),
+                encoded.len(),
+                args[2]
+            );
+            Ok(())
+        }
         Some("adversarial-boot-fixture") if args.len() == 9 => {
             let bootloader = fs::read(&args[2]).map_err(|error| {
                 format!("AdversarialBootFixtureRead {{ role: bootloader, detail: {error} }}")
@@ -4873,6 +4971,78 @@ mod tests {
                 .starts_with("ReleaseUsageError")
         );
     }
+
+    fn runtime_policy(kind: &str, package: &str, body: &str) -> IsolationPolicy {
+        let manifest = format!("[manifest]\nformat = \"mrml\"\nversion = 2\n\n[isolation]\n{body}");
+        let document = manifest::Document::parse(manifest.as_bytes()).unwrap();
+        IsolationPolicy::parse(&document, kind, package).unwrap()
+    }
+
+    #[test]
+    fn runtime_inventory_is_derived_from_exact_manifest_classification() {
+        let mut application = component("app.runtime", &[]);
+        application.isolation = runtime_policy(
+            "application",
+            &application.id,
+            "default = \"native-process\"\nminimum = \"native-process\"\nmaximum = \"microvm\"\nsupported = [\"native-process\", \"microvm\"]\nruntime_class = \"microvm-eligible\"\nmust_run = true\n",
+        );
+        let digest = [0x52; 64];
+        let records = [SystemGenerationDigestRecord {
+            package_id: application.id.as_str(),
+            version: 9,
+            artifact_digest: &digest,
+        }];
+        let mut generation = [0; 256];
+        let generation_length = encode_system_generation(41, &records, &mut generation).unwrap();
+
+        let encoded = derive_runtime_inventory(
+            &workspace(vec![application]),
+            &generation[..generation_length],
+        )
+        .unwrap();
+        let inventory = RuntimeInventoryView::decode(&encoded).unwrap();
+        let record = inventory.records().next().unwrap();
+        assert_eq!(inventory.generation(), 41);
+        assert_eq!(record.package_id, "org.mrml.app.runtime");
+        assert_eq!(record.version, 9);
+        assert_eq!(*record.artifact_digest, digest);
+        assert_eq!(record.class, RuntimeIsolationClass::MicrovmEligible);
+        assert!(record.must_run);
+        assert_eq!(record.preferred, RuntimeIsolationPlacement::NativeProcess);
+        assert_eq!(record.minimum, RuntimeIsolationPlacement::NativeProcess);
+        assert_eq!(record.maximum, RuntimeIsolationPlacement::Microvm);
+        assert_ne!(
+            record.supported & RuntimeIsolationPlacement::NativeProcess.bit(),
+            0
+        );
+        assert_ne!(
+            record.supported & RuntimeIsolationPlacement::Microvm.bit(),
+            0
+        );
+        assert_eq!(record.reason, "");
+    }
+
+    #[test]
+    fn runtime_inventory_rejects_unclassified_generation_members() {
+        let application = component("app.unclassified", &[]);
+        let digest = [0x63; 64];
+        let records = [SystemGenerationDigestRecord {
+            package_id: application.id.as_str(),
+            version: 1,
+            artifact_digest: &digest,
+        }];
+        let mut generation = [0; 256];
+        let generation_length = encode_system_generation(7, &records, &mut generation).unwrap();
+        assert_eq!(
+            derive_runtime_inventory(
+                &workspace(vec![application]),
+                &generation[..generation_length],
+            )
+            .unwrap_err(),
+            "RuntimeInventoryClassificationMissing { package: org.mrml.app.unclassified }"
+        );
+    }
+
     #[test]
     fn general_release_cli_consumes_one_use_key_and_verifies_explicit_root() {
         let suffix = std::time::SystemTime::now()

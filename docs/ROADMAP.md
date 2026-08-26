@@ -228,8 +228,12 @@ bounded canonical runtime-inventory catalog whose records exact-bind every
 must-run state, placement bounds/forms, and explicit exception reason. Complete
 membership equality is mandatory; subsets, substitutions, unknown values,
 invalid bounds, and noncanonical bytes fail. Package-format suites pass 16 tests
-on Windows and Linux. Manifest derivation, signed release delivery, kernel
-inventory construction, and system-wide runtime proof remain next.
+on Windows and Linux. Manifest V2 classification and public `MRMLRI1`
+derivation are now **IMPLEMENTED**: the builder rejects every unclassified or
+unknown generation member and retains the generation's exact versions and
+digests. Build-tool suites pass 99 tests on Windows and Arch Linux. Signed
+release delivery, kernel inventory construction, and system-wide runtime proof
+remain next.
 
 Boot-selector groundwork is now **PARTIALLY IMPLEMENTED** without skipping that
 runtime gate. The common UEFI library has one bounded allocation-free UTF-16

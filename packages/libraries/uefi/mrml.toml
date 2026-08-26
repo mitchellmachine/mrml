@@ -9,6 +9,14 @@ kind = "library"
 name = "mrml-uefi"
 profile = "library"
 
+[isolation]
+default = "platform"
+minimum = "platform"
+supported = ["platform"]
+runtime_class = "boot-only"
+must_run = false
+reason = "loader exits before userspace and before the VM substrate exists"
+
 [[target]]
 arch = "x86_64"
 environment = "uefi"

@@ -1079,8 +1079,10 @@ exact release-bound `MRMLRI1` catalog. Its implemented decoder requires the
 catalog to match every identity, version, and artifact digest in canonical
 `MRMLSG2`; a subset, reordered catalog, detached replacement, missing exception
 reason, or changed placement bound is invalid. The catalog carries no recovery,
-launch, or policy authority. Signed release delivery and kernel construction
-from these records remain **PLANNED**.
+launch, or policy authority. The build frontend now derives it from explicit
+Manifest V2 runtime classifications and rejects any unclassified generation
+member; recovery must not synthesize a missing classification. Signed release
+delivery and kernel construction from these records remain **PLANNED**.
 
 Application-launch recovery must retain the exact runtime domain, application
 object, immutable application generation and artifact digest, active system

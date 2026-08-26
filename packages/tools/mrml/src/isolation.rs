@@ -47,6 +47,37 @@ pub struct IsolationPolicy {
     minimum: IsolationPlacement,
     maximum: IsolationPlacement,
     supported: Vec<IsolationPlacement>,
+    runtime: Option<RuntimeClassification>,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum RuntimeClass {
+    MicrovmEligible,
+    HostSubstrateRequired,
+    BootOnly,
+    RecoveryOnly,
+    UnsupportedBlocker,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct RuntimeClassification {
+    class: RuntimeClass,
+    must_run: bool,
+    reason: String,
+}
+
+impl RuntimeClassification {
+    pub const fn class(&self) -> RuntimeClass {
+        self.class
+    }
+
+    pub const fn must_run(&self) -> bool {
+        self.must_run
+    }
+
+    pub fn reason(&self) -> &str {
+        &self.reason
+    }
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -91,7 +122,13 @@ impl IsolationPolicy {
         if section.fields.keys().any(|key| {
             !matches!(
                 key.as_str(),
-                "default" | "minimum" | "maximum" | "supported" | "reason"
+                "default"
+                    | "minimum"
+                    | "maximum"
+                    | "supported"
+                    | "runtime_class"
+                    | "must_run"
+                    | "reason"
             )
         }) {
             return Err(format!("IsolationFieldInvalid {{ package: {package} }}"));
@@ -158,11 +195,57 @@ impl IsolationPolicy {
         } else if minimum.rank() > preferred.rank() || preferred.rank() > maximum.rank() {
             return Err(format!("IsolationBoundsInvalid {{ package: {package} }}"));
         }
+        let runtime_class = section
+            .optional_string("runtime_class")
+            .map_err(|_| format!("IsolationRuntimeClassInvalid {{ package: {package} }}"))?;
+        let must_run = section
+            .optional_boolean("must_run")
+            .map_err(|_| format!("IsolationMustRunInvalid {{ package: {package} }}"))?;
+        let reason = section
+            .optional_string("reason")
+            .map_err(|_| format!("IsolationReasonInvalid {{ package: {package} }}"))?;
+        let runtime = match (runtime_class, must_run) {
+            (None, None) => None,
+            (Some(class), Some(must_run)) => {
+                let class = match class {
+                    "microvm-eligible" => RuntimeClass::MicrovmEligible,
+                    "host-substrate-required" => RuntimeClass::HostSubstrateRequired,
+                    "boot-only" => RuntimeClass::BootOnly,
+                    "recovery-only" => RuntimeClass::RecoveryOnly,
+                    "unsupported-blocker" => RuntimeClass::UnsupportedBlocker,
+                    _ => {
+                        return Err(format!(
+                            "IsolationRuntimeClassInvalid {{ package: {package} }}"
+                        ));
+                    }
+                };
+                let reason = reason.unwrap_or("");
+                if (class == RuntimeClass::MicrovmEligible
+                    && (!supported.contains(&IsolationPlacement::Microvm) || !reason.is_empty()))
+                    || (class != RuntimeClass::MicrovmEligible && reason.is_empty())
+                {
+                    return Err(format!(
+                        "IsolationRuntimeClassificationInvalid {{ package: {package} }}"
+                    ));
+                }
+                Some(RuntimeClassification {
+                    class,
+                    must_run,
+                    reason: reason.into(),
+                })
+            }
+            _ => {
+                return Err(format!(
+                    "IsolationRuntimeClassificationIncomplete {{ package: {package} }}"
+                ));
+            }
+        };
         Ok(Self {
             preferred,
             minimum,
             maximum,
             supported,
+            runtime,
         })
     }
 
@@ -180,6 +263,7 @@ impl IsolationPolicy {
             minimum: placement,
             maximum: placement,
             supported: vec![placement],
+            runtime: None,
         }
     }
 
@@ -194,6 +278,10 @@ impl IsolationPolicy {
     }
     pub fn supported(&self) -> &[IsolationPlacement] {
         &self.supported
+    }
+
+    pub const fn runtime(&self) -> Option<&RuntimeClassification> {
+        self.runtime.as_ref()
     }
 
     pub fn resolve(&self, request: PlacementRequest) -> Result<EffectivePlacement, String> {
@@ -222,6 +310,9 @@ impl IsolationPolicy {
 }
 
 fn allowed_for_kind(kind: &str, values: &[IsolationPlacement]) -> bool {
+    if values == [IsolationPlacement::Platform] {
+        return true;
+    }
     values.iter().all(|placement| match kind {
         "application" => matches!(
             placement,
@@ -331,5 +422,34 @@ mod tests {
                 .resolve(PlacementRequest::Owner(IsolationPlacement::Microvm))
                 .is_err()
         );
+    }
+
+    #[test]
+    fn runtime_classification_is_explicit_complete_and_reasoned() {
+        let eligible = manifest(
+            "\n[isolation]\ndefault = \"native-process\"\nminimum = \"native-process\"\nmaximum = \"microvm\"\nsupported = [\"native-process\", \"microvm\"]\nruntime_class = \"microvm-eligible\"\nmust_run = true\n",
+        );
+        let policy = IsolationPolicy::parse(&eligible, "application", "org.mrml.app.test").unwrap();
+        let runtime = policy.runtime().unwrap();
+        assert_eq!(runtime.class(), RuntimeClass::MicrovmEligible);
+        assert!(runtime.must_run());
+        assert_eq!(runtime.reason(), "");
+
+        let boot = manifest(
+            "\n[isolation]\ndefault = \"platform\"\nminimum = \"platform\"\nsupported = [\"platform\"]\nruntime_class = \"boot-only\"\nmust_run = true\nreason = \"required before VM substrate exists\"\n",
+        );
+        let policy = IsolationPolicy::parse(&boot, "kernel", "org.mrml.system.kernel").unwrap();
+        assert_eq!(policy.runtime().unwrap().class(), RuntimeClass::BootOnly);
+
+        for invalid in [
+            "\n[isolation]\ndefault = \"native-process\"\nminimum = \"native-process\"\nsupported = [\"native-process\", \"microvm\"]\nruntime_class = \"microvm-eligible\"\n",
+            "\n[isolation]\ndefault = \"native-process\"\nminimum = \"native-process\"\nsupported = [\"native-process\"]\nruntime_class = \"microvm-eligible\"\nmust_run = true\n",
+            "\n[isolation]\ndefault = \"native-process\"\nminimum = \"native-process\"\nsupported = [\"native-process\"]\nruntime_class = \"unsupported-blocker\"\nmust_run = false\n",
+        ] {
+            assert!(
+                IsolationPolicy::parse(&manifest(invalid), "application", "org.mrml.app.test")
+                    .is_err()
+            );
+        }
     }
 }
