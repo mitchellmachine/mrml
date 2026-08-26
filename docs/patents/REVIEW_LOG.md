@@ -7685,6 +7685,28 @@ fail closed. Broader compiler completion remains partial; this technical screen
 is not a clearance or infringement conclusion and does not replace independent
 human dual review.
 
+# 2026-08-26 — Terminal-bounded joined nested-loop header
+
+**Result: NOT_TRIGGERED after the terminal-bounded header review.** This
+increment applies the existing fixed-capacity meet and exact convergence replay
+only to conditional backedges ordered before the first unconditional nested-
+loop exit. It adds no general fixed-point solver, region or alias analysis,
+optimization, or code-generation algorithm. Early exits and nonconvergent
+states fail closed. Broader compiler completion remains partial; this technical
+screen is not a clearance or infringement conclusion and does not replace
+independent human dual review.
+
+# 2026-08-26 — Joined unconditional nested-loop backedge
+
+**Result: NOT_TRIGGERED after the unconditional-backedge review.** This
+increment classifies an unconditional inner continue's bounded prefix as one
+more input to the existing joined-header meet and convergence replay. It adds no
+general solver, region or alias analysis, optimization, or code-generation
+algorithm. Early returns, unreachable suffixes, and nonconvergent states remain
+explicitly bounded or fail closed. Broader compiler completion remains partial;
+this technical screen is not a clearance or infringement conclusion and does
+not replace independent human dual review.
+
 # 2026-08-26 — Conditional call-argument reborrow evidence
 
 **Result: NOT_TRIGGERED after the conditional reborrow evidence review.** This
