@@ -4055,6 +4055,10 @@ The same joined origin set now has return-outlives coverage. An all-parameter
 conditional call result may return a shared child; substituting local storage in
 either possible origin set fails closed and matches pinned-oracle E0515. Both
 hosts remain at 988 compiler tests.
+Scalar shared-reference parameters/results now have a bounded identity-call
+path. The returned shared loan blocks owner mutation while live and releases
+after last use, matching pinned-oracle E0502 and acceptance. Both hosts remain
+at 988 compiler tests; general shared-reference call inference is unsupported.
 
 Exact typed tuple literals now seed the same projected state when a local is
 declared. Every reference field is checked against the declared tuple element

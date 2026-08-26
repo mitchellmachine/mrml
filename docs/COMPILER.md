@@ -1202,6 +1202,9 @@ mutations.
 Returning a shared child through the same conditional call join accepts an all-
 parameter origin set and fails closed when either arm is local-backed.
 ORACLE-0002 accepts the former and rejects the latter with E0515.
+Scalar shared-reference call parameters and results now exercise the same
+bounded loan model. A live shared result blocks owner mutation, while last use
+releases the loan; ORACLE-0002 matches with E0502 and acceptance respectively.
 
 The first modern trait-solver foundation is an explicit bounded implemented-
 goal representation. Stable trait/type/inference/placeholder identities remain

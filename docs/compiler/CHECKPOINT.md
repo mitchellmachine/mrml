@@ -907,6 +907,11 @@ backed arms may return a shared child, while a parameter/local pair fails with
 `RuntimeReferenceOutlivesFunction`, matching ORACLE-0002 E0515. Both hosts
 remain at 988 compiler tests; general region inference remains unsupported.
 
+A bounded scalar `shared_identity(&u16) -> &u16` call target now covers shared-
+reference parameter/result liveness. A live result rejects owner mutation with
+`RuntimeBorrowConflict`, matching ORACLE-0002 E0502; after copying the pointee,
+owner mutation succeeds. Windows and Arch remain at 988 compiler tests.
+
 Multi-field tuple literals retain a separate projected origin per field. A
 conditional reference element seeds its field only when both arms prove the
 same parameter; unequal first/second origins fail closed. Focused caller tests

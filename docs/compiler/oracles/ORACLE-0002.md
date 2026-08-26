@@ -417,6 +417,13 @@ parameter case and rejected the mixed local case with E0515. This is exact
 evidence for the bounded conditional call-result origin join, not general
 interprocedural region inference. Temporary sources and metadata were removed.
 
+An independently authored scalar `shared_identity(&u16) -> &u16` probe kept the
+returned shared reference live across a competing mutable owner borrow. This
+exact toolchain rejected the borrow with E0502. A companion copied the pointee
+before mutating the owner and compiled successfully. This is exact shared-call
+loan-liveness evidence, not general call or region inference. Temporary sources
+and metadata were removed.
+
 An independently authored Rust 2024 metadata-only probe against this exact
 toolchain and commit returned call-derived shared children through an explicit
 return and through a conditional early-return plus tail-return path. Both
