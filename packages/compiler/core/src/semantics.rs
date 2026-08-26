@@ -1498,9 +1498,12 @@ fn evaluate_const_loop<'source, const MAX_ITEMS: usize, const MAX_PARAMETERS: us
                         let nested_checkpoint = resolver.count;
                         for action_index in 0..=block.action_count() {
                             let control_count = block
-                                .conditional_returns()
+                                .conditional_blocks()
                                 .len()
-                                .checked_add(block.conditional_continues().len())
+                                .checked_add(block.conditional_returns().len())
+                                .and_then(|count| {
+                                    count.checked_add(block.conditional_continues().len())
+                                })
                                 .and_then(|count| {
                                     count.checked_add(block.conditional_breaks().len())
                                 })
@@ -1509,6 +1512,97 @@ fn evaluate_const_loop<'source, const MAX_ITEMS: usize, const MAX_PARAMETERS: us
                                 })
                                 .ok_or(SemanticErrorKind::UnsupportedConstCall)?;
                             for control_order in 0..control_count {
+                                for ((branch, branch_action_index), branch_control_order) in block
+                                    .conditional_blocks()
+                                    .iter()
+                                    .flatten()
+                                    .zip(block.conditional_block_action_indices())
+                                    .zip(block.conditional_block_control_orders())
+                                {
+                                    if action_index != *branch_action_index
+                                        || control_order != *branch_control_order
+                                    {
+                                        continue;
+                                    }
+                                    let condition = branch
+                                        .parse_condition::<MAX_CONST_FUNCTION_EXPRESSION_NODES>()
+                                        .map_err(|error| {
+                                            SemanticErrorKind::Expression(error.kind)
+                                        })?;
+                                    if !evaluate_boolean_const_expression(
+                                        context,
+                                        symbol_count,
+                                        &condition,
+                                        condition.root(),
+                                        resolver,
+                                        depth,
+                                    )? {
+                                        continue;
+                                    }
+                                    let branch_checkpoint = resolver.count;
+                                    for action in branch.actions().iter().flatten() {
+                                        match action {
+                                            crate::ConditionalLoopAction::Local(local) => {
+                                                evaluate_const_local(
+                                                    context,
+                                                    symbol_count,
+                                                    local,
+                                                    resolver,
+                                                    depth,
+                                                )?;
+                                            }
+                                            crate::ConditionalLoopAction::Assignment(
+                                                assignment,
+                                            ) => {
+                                                evaluate_const_assignment(
+                                                    context,
+                                                    symbol_count,
+                                                    assignment,
+                                                    resolver,
+                                                    depth,
+                                                )?;
+                                            }
+                                            crate::ConditionalLoopAction::Expression(statement) => {
+                                                evaluate_const_expression_statement(
+                                                    context,
+                                                    symbol_count,
+                                                    statement,
+                                                    resolver,
+                                                    depth,
+                                                )?;
+                                            }
+                                        }
+                                    }
+                                    match branch.terminal {
+                                        crate::NestedLoopUnconditionalControl::Break(target) => {
+                                            resolver.truncate(branch_checkpoint)?;
+                                            resolver.truncate(nested_checkpoint)?;
+                                            if target == crate::NestedLoopControlTarget::Outer {
+                                                break_loop = true;
+                                            }
+                                            break 'nested;
+                                        }
+                                        crate::NestedLoopUnconditionalControl::Continue(target) => {
+                                            resolver.truncate(branch_checkpoint)?;
+                                            resolver.truncate(nested_checkpoint)?;
+                                            if target == crate::NestedLoopControlTarget::Outer {
+                                                continue_loop = true;
+                                                break 'nested;
+                                            }
+                                            continue 'nested;
+                                        }
+                                        crate::NestedLoopUnconditionalControl::Return(value) => {
+                                            return Ok(Some(evaluate_const_return_statement(
+                                                context,
+                                                symbol_count,
+                                                &value,
+                                                return_type,
+                                                resolver,
+                                                depth,
+                                            )?));
+                                        }
+                                    }
+                                }
                                 for ((control, action_index_for_control), stored_control_order) in
                                     block
                                         .unconditional_controls()
@@ -5665,6 +5759,20 @@ mod tests {
         assert_eq!(values.resolve("SECOND"), Some(3));
         assert_eq!(values.resolve("LATE"), Some(6));
         assert_eq!(values.resolve("NATURAL"), Some(15));
+    }
+
+    #[test]
+    fn evaluates_actions_before_nested_branch_terminals() {
+        let module = Parser::new(
+            "const fn choose(mode: u8) -> u8 { let mut inner: u8 = 0; loop { loop { inner += 1; if mode == 0 { let result: u8 = inner + 40; result + 1; return result; } if mode == 1 && inner < 3 { inner += 1; continue; } if mode == 2 { inner += 4; break; } break; } return inner; } } const RETURNED: u8 = choose(0); const CONTINUED: u8 = choose(1); const BROKEN: u8 = choose(2); const FALLTHROUGH: u8 = choose(3);",
+        )
+        .parse_module::<6, 4>()
+        .unwrap();
+        let values = analyze_constants::<4, 128, 6, 4>(&module, TargetLayout::X86_64).unwrap();
+        assert_eq!(values.resolve("RETURNED"), Some(41));
+        assert_eq!(values.resolve("CONTINUED"), Some(3));
+        assert_eq!(values.resolve("BROKEN"), Some(5));
+        assert_eq!(values.resolve("FALLTHROUGH"), Some(1));
     }
 
     #[test]
