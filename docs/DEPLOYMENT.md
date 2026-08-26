@@ -152,9 +152,11 @@ runner consumption is now **PARTIALLY IMPLEMENTED** for the focused ZIM/Zstd
 component release. WHP and KVM each derive the same 201-byte generation,
 207-byte interface catalog, and 225-byte runtime inventory; all three records
 are byte-identical across backends. One freshly signed 99,369-byte v2 release
-then authenticated those records, bound both packages to one admitted microVM
-domain, and finalized `classified=1`, `eligible=1`, `microvm=1`, and
-`native_fallback=0` before guest execution on WHP and nested KVM. This is hosted
+then authenticated those records and bound both packages to the prepared exact
+domain before CPU, RAM, or VMM guest construction. Both runners retained the
+immutable inventory across construction and finalized `classified=1`,
+`eligible=1`, `microvm=1`, and `native_fallback=0` only after exact microVM
+admission and before guest execution on WHP and nested KVM. This is hosted
 controlled-probe evidence for one focused release, not a complete installed-
 system inventory, recovery proof, or host-resistant isolation. Full-system
 generation admission remains **PLANNED**.

@@ -892,13 +892,15 @@ every live eligible domain is in a microVM, every active substrate/boot/recovery
 exception is classified, no unsupported blocker runs, and native fallback is
 zero. A required unavailable component is failure, not permission to omit or
 launch it natively. Windows and Arch Linux each pass 553 kernel tests. The WHP
-and KVM component runners now finalize one release-derived colocated ZIM/Zstd
-domain after Total admission and before guest execution; fresh signed probes on
-2026-08-26 emitted the same generation-bound proof with `classified=1`,
-`eligible=1`, `microvm=1`, and `native_fallback=0`. The kernel now returns that
-result as `ReleaseTotalMicrovmInventory`, a private-field wrapper that safe code
-cannot construct from ad hoc domain records. It retains the authenticated
-signer, system generation, and policy generation. Recovered policy can bind only
+and KVM component runners now authenticate and construct one release-derived
+colocated ZIM/Zstd inventory before CPU, RAM, or VMM guest construction. They
+retain that immutable inventory across construction, then finalize it only
+after exact Total microVM admission and before guest execution. Fresh signed
+probes on 2026-08-26 emitted the same generation-bound proof with
+`classified=1`, `eligible=1`, `microvm=1`, and `native_fallback=0`. The kernel
+returns that result as `ReleaseTotalMicrovmInventory`, a private-field wrapper
+that safe code cannot construct from ad hoc domain records. It retains the
+authenticated signer, system generation, and policy generation. Recovered policy can bind only
 this wrapper to create the admission table for that exact release; non-Total or
 policy-generation mismatch fails. Complete installed-system enumeration and
 live boot consumption remain **PLANNED**, so this focused component evidence

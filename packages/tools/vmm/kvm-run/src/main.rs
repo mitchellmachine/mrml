@@ -2854,6 +2854,46 @@ fn application_main() -> Result<()> {
     } else {
         None
     };
+    // Strict Total classification is authenticated and bound to the exact
+    // control-plane domain before CPU, RAM, or KVM guest construction begins.
+    // The immutable inventory is retained across construction and finalized
+    // only after the same domain has been committed as a running microVM.
+    let component_release_inventory = if component_service_mode {
+        let spec = isolation_preparation
+            .as_ref()
+            .ok_or_else(|| anyhow!("missing prepared KVM component isolation route"))?
+            .spec();
+        let (release_bytes, expected_release_key) = component_release_authority
+            .as_ref()
+            .ok_or_else(|| anyhow!("missing authenticated KVM component release"))?;
+        let bindings = [
+            RuntimeDomainBinding::new(
+                "org.mrml.zim",
+                spec.domain(),
+                TotalMicrovmClass::MicrovmEligible,
+                "",
+            )
+            .map_err(|error| anyhow!("KVM ZIM runtime binding failed: {:?}", error))?,
+            RuntimeDomainBinding::new(
+                "org.mrml.zstd",
+                spec.domain(),
+                TotalMicrovmClass::MicrovmEligible,
+                "",
+            )
+            .map_err(|error| anyhow!("KVM Zstd runtime binding failed: {:?}", error))?,
+        ];
+        Some(
+            total_inventory_from_system_release::<2>(
+                release_bytes,
+                expected_release_key,
+                spec.policy_generation(),
+                &bindings,
+            )
+            .map_err(|error| anyhow!("KVM release inventory admission failed: {:?}", error))?,
+        )
+    } else {
+        None
+    };
     let mut component_cpu = if component_service_mode {
         let mut capabilities = CapabilitySpace::<1>::new();
         let mut budgets = CpuBudgetTable::<1, 1>::new(0x1a53)
@@ -3380,32 +3420,9 @@ fn application_main() -> Result<()> {
             return Err(anyhow!("KVM Total MicroVM admission was not satisfied"));
         }
         if component_service_mode {
-            let (release_bytes, expected_release_key) = component_release_authority
+            let inventory = component_release_inventory
                 .as_ref()
-                .ok_or_else(|| anyhow!("missing authenticated KVM component release"))?;
-            let bindings = [
-                RuntimeDomainBinding::new(
-                    "org.mrml.zim",
-                    spec.domain(),
-                    TotalMicrovmClass::MicrovmEligible,
-                    "",
-                )
-                .map_err(|error| anyhow!("KVM ZIM runtime binding failed: {:?}", error))?,
-                RuntimeDomainBinding::new(
-                    "org.mrml.zstd",
-                    spec.domain(),
-                    TotalMicrovmClass::MicrovmEligible,
-                    "",
-                )
-                .map_err(|error| anyhow!("KVM Zstd runtime binding failed: {:?}", error))?,
-            ];
-            let inventory = total_inventory_from_system_release::<2>(
-                release_bytes,
-                expected_release_key,
-                spec.policy_generation(),
-                &bindings,
-            )
-            .map_err(|error| anyhow!("KVM release inventory admission failed: {:?}", error))?;
+                .ok_or_else(|| anyhow!("missing pre-construction KVM release inventory"))?;
             let proof = inventory.finalize(admission).map_err(|error| {
                 anyhow!("KVM release inventory finalization failed: {:?}", error)
             })?;

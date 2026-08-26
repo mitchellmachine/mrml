@@ -214,13 +214,14 @@ running/unavailable domain and mark each must-run component. The finalizer
 rejects missing or unavailable required domains, unknown active domains, class
 substitution, eligible execution outside a microVM, unsupported blockers, and
 native fallback before producing a bounded runtime proof. Windows and Arch
-Linux each pass 553 kernel tests. WHP and KVM now consume the release-derived
-inventory after exact Total admission and before focused component execution.
-Their suites pass 9 and 10 tests respectively, and fresh signed probes on
-2026-08-26 each emitted `classified=1`, `eligible=1`, `microvm=1`, and
-`native_fallback=0` for the exact system/policy generation. That inventory is
-now a private-field authenticated-release wrapper rather than a publicly
-constructible mutable value. Recovered Total policy accepts only this wrapper
+Linux each pass 553 kernel tests. WHP and KVM now authenticate and construct the
+release-derived inventory before CPU, RAM, or guest construction, retain it
+across construction, and finalize it after exact Total admission but before
+focused component execution. Their suites pass 9 and 10 tests respectively,
+and fresh signed probes on 2026-08-26 each emitted `classified=1`, `eligible=1`,
+`microvm=1`, and `native_fallback=0` for the exact system/policy generation.
+That inventory is now a private-field authenticated-release wrapper rather
+than a publicly constructible mutable value. Recovered Total policy accepts only this wrapper
 when creating the exact release admission table. Complete installed-system
 enumeration and live boot consumption remain the next gate; this one-component
 proof does not establish required-system Total readiness.

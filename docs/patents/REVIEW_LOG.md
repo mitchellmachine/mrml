@@ -1,5 +1,18 @@
 # Patent review log
 
+## 2026-08-26 — Pre-construction authenticated Total inventory ordering
+
+Patent review: **TRIGGERED** under the existing SystemRelease, runtime-
+inventory, adaptive-isolation, Total-MicroVM, and VMM reviews. This increment
+moves the existing authenticated release-to-domain inventory construction ahead
+of CPU, RAM, and WHP/KVM guest construction, retains the resulting immutable
+private-field wrapper across construction, and leaves finalization after exact
+microVM admission. It adds no parser, signature scheme, placement or scheduling
+heuristic, native fallback, VM/device protocol, DMA mechanism, or hardware-
+specific isolation mechanism. Complete installed-generation enumeration and
+live recovered boot orchestration remain unimplemented. No patent-clearance or
+non-infringement conclusion is made; independent human review remains required.
+
 ## 2026-08-26 — Inferred alias reassignment gate
 
 Patent review: **NOT_TRIGGERED** for this bounded compiler-analysis hardening.

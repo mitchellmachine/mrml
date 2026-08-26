@@ -3023,11 +3023,13 @@ domain authority. Windows and Arch Linux each pass 553 kernel tests. WHP/KVM
 runner consumption is now **PARTIALLY IMPLEMENTED** for the focused ZIM/Zstd
 component generation. Both runners produce byte-identical 201-byte `MRMLSG2`,
 207-byte `MRMLIC1`, and 225-byte `MRMLRI1` records. The same freshly signed
-99,369-byte SystemRelease v2 authenticated all three, joined both packages to
-one already admitted microVM domain, and finalized `classified=1`, `eligible=1`,
-`microvm=1`, and `native_fallback=0` before guest execution on WHP and nested
-KVM. The stable component ABI data plane then ran without per-request package or
-policy resolution. Kernel construction now returns a private-field
+99,369-byte SystemRelease v2 authenticated all three and joined both packages
+to one exact prepared domain before CPU, RAM, or VMM guest construction. Each
+runner retained that immutable inventory across construction and finalized
+`classified=1`, `eligible=1`, `microvm=1`, and `native_fallback=0` only after
+exact microVM admission and before guest execution on WHP and nested KVM. The
+stable component ABI data plane then ran without per-request package or policy
+resolution. Kernel construction returns a private-field
 `ReleaseTotalMicrovmInventory` retaining the authenticated signer, system
 generation, and policy generation; safe code cannot substitute an ad hoc
 inventory with matching numeric generations. The recovered configuration path
