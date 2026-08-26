@@ -768,6 +768,22 @@ registers and general assembly remain absent. Broader compiler completion remain
 partial; this technical screen is not a clearance or infringement conclusion and
 does not replace independent human dual review.
 
+# 2026-08-26 — Hosted committed-recovery consumption in Total MicroVM runners
+
+**Result: TRIGGERED under the existing adaptive-placement and Total MicroVM
+review.** This increment composes MRML's existing canonical configuration
+checkpoint, exact-generation file read, owner-approved authority checkpoint,
+boot-bound monotonic recovery-state comparison, dependent validation, service
+publication, signed-release inventory, and fail-closed microVM admission. The
+shared hosted source adds no new placement algorithm, authority class,
+cryptographic primitive, storage format, scheduler, VMM backend, or fallback.
+Its fixed in-memory source state remains independently bound from decoded
+handoff data so stale epochs fail closed. Because the broader combination of
+signed release classification, automated placement, isolation, recovery, and
+device projection is already under targeted worldwide review, that status
+remains `TRIGGERED`; no patent-clearance, non-infringement, or infringement
+conclusion is made, and independent human review remains required.
+
 # 2026-08-26 — Discarded explicit inline-assembly output
 
 **Result: NOT_TRIGGERED after the discarded-output review.** This increment

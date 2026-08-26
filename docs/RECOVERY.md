@@ -1137,10 +1137,16 @@ service-preparation operation accepts only a domain/class already classified by
 that release, reapplies the recovered package bounds, and reserves that owned
 table. An unclassified domain, policy-generation mismatch, or release
 substitution fails before launch state changes. Windows and Arch Linux each
-pass 43 configuration-service tests. The focused proof constructs the typed
-recovered result in a hosted unit test; the live WHP/KVM runners do not yet
-consume the committed stable-recovery object, so live early-boot recovery and
-end-to-end Total finalization remain **PLANNED**.
+pass 44 configuration-service tests. A shared hosted-only source now
+reconstructs this owner through the existing exact-file, authenticated
+authority-checkpoint, boot-bound monotonic-state, dependent-validation, and
+recovered-service publication transaction. Its independently fixed accepted
+epoch is 8 and successor authority epoch is 9; a handoff carrying epoch 7 fails
+rather than redefining the source. Live WHP and nested-KVM component probes now
+consume this recovered owner through route commit and final proof. This is
+controlled in-memory recovery evidence, not production stable media,
+owner-presence, TPM, firmware, or installed early-boot recovery, which remain
+**PLANNED**.
 
 WHP and nested KVM now consume the common inner `BootTotalAdmission` owner from
 effective-policy/release binding through classified route preparation,
@@ -1149,23 +1155,23 @@ creates an activated admission table from the retained release generation, so
 generation and interface-catalog digests survive instead of being reduced to a
 numeric generation. `RecoveredTotalAdmission` wraps this exact same owner; it
 does not build a second table. Fresh signed probes on both backends report one
-eligible microVM and zero fallback. This proves the shared live ownership path,
-not recovery: the runners still create focused transient configuration policy
-and do not consume the stable committed recovered system object.
+eligible microVM and zero fallback. The component-service path now receives
+this owner from the shared hosted recovery source rather than the former
+transient release binding. This proves controlled live recovered-owner
+consumption, not production durable recovery or installed boot orchestration.
 
 The next handoff boundary is now **PARTIALLY IMPLEMENTED** without promoting
 that transient policy to recovery evidence. WHP and KVM place neutral accepted
 recovery metadata and the one-boot Total request in the exact canonical handoff
 installed for the guest, decode it, and derive the effective overlay only from
 that decoded object. Missing recovery metadata or a missing Total flag rejects
-before admission. The decoded accepted epoch is retained in diagnostic output,
-but it is not yet compared with a live `RecoveredSystemState`; that existing
-committed-state predecessor check remains the next required join. Retained older
+before admission. The decoded accepted epoch is retained in diagnostic output
+and the shared hosted recovery source now compares it against independently
+fixed authenticated state before authority reconstruction. Retained older
 signed guest artifacts were rejected as execution evidence; a fresh
 current-source one-use-signed kernel package subsequently completed the decoded
 handoff and zero-fallback guest path on both backends. That proves hosted live
-handoff parity, not recovered boot, because neither runner yet obtains its
-effective policy from the committed recovered system object.
+handoff and recovered-owner parity, not production recovered boot.
 
 `RecoveredSystemState` now provides an atomic
 `bind_total_boot_admission` transition. It joins the committed recovered
@@ -1174,9 +1180,10 @@ capability-revalidated policy settings, and authenticated activated release
 before returning any launch owner. The full block-backed stable recovery test
 then prepares and commits a classified microVM route and obtains the final
 generation-bound Total proof from that same owner. Windows and Arch Linux each
-pass 43 configuration tests. This closes the detached-policy API gap, but the
-hosted runners still need a real recovered-state source before it is live boot
-evidence.
+pass 44 configuration tests. This closes the detached-policy API gap. The
+hosted runners now use the shared controlled recovered-state source; a
+production stable-storage selector and installed boot orchestration are still
+required before claiming live recovered boot.
 
 Application-launch recovery must retain the exact runtime domain, application
 object, immutable application generation and artifact digest, active system

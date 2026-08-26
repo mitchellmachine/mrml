@@ -3117,9 +3117,20 @@ the activated signed release without exposing a detached effective policy. The
 full hosted stable-storage test advances authority epoch 8 to 9, commits the
 recovered configuration service, consumes a decoded Total handoff, prepares and
 commits one classified microVM route, and finalizes the generation-bound Total
-proof through the single recovered owner. Configuration passes 43 tests on both
-Windows and Arch Linux. The live runners do not yet source this committed state,
-so this is typed recovery evidence rather than live recovered boot.
+proof through the single recovered owner. Configuration passes 44 tests on both
+Windows and Arch Linux. A shared hosted-only recovery source now uses the
+existing exact-file and authenticated-authority recovery transaction to produce
+that same committed owner. Its authenticated accepted epoch 8 is independent
+of the decoded handoff and advances to authority epoch 9; a stale epoch-7
+handoff fails before release. Fresh live WHP and nested-KVM probes retain the
+recovered owner through route commit and final proof. WHP reported
+`cpu_runtime=1019us`, `verify=18399us`, `prepare=6871us`, `execute=2070us`, and
+`total=49892us`; KVM reported `component_runtime=1455us`, `verify=24924us`,
+`prepare=8085us`, `execute=1461us`, and `total=122412us`. Both reported
+authority epoch 9, configuration revision 1, one eligible microVM, and zero
+native fallback. This is controlled hosted recovery evidence, not durable-media,
+owner-presence, TPM, firmware, physical rollback, installed early-boot, or
+host-resistant evidence.
 
 Patent review: `TRIGGERED` under the existing signed-release, adaptive
 isolation, Total-MicroVM, automated VMM placement, and device-projection reviews

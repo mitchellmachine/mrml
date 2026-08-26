@@ -36,6 +36,9 @@ use mrml_storage::{
     VolumeId,
 };
 
+#[cfg(any(test, target_os = "windows", target_os = "linux"))]
+pub mod hosted_recovery_probe;
+
 pub const MAX_CONFIG_VALUE_BYTES: usize = 64;
 pub const MAX_WIRE_UPDATES: usize = 4;
 pub const CONFIG_REQUEST_HEADER_BYTES: usize = 48;
@@ -5110,6 +5113,81 @@ mod tests {
         plan.assign_from_policy(|record| RuntimeDomainAssignment::new(record.package_id, domain))
             .unwrap();
         plan.seal().unwrap()
+    }
+
+    fn hosted_total_handoff(accepted_epoch: u64) -> ([u8; 512], usize) {
+        let framebuffer = mrml_kernel::FramebufferInfo::new(
+            0xa0000,
+            0x1000,
+            16,
+            16,
+            16,
+            mrml_kernel::PixelFormat::BlueGreenRedReserved,
+        )
+        .unwrap();
+        let regions = [
+            mrml_kernel::MemoryRegion::new(
+                mrml_kernel::PhysAddr::new(0xa0000).unwrap(),
+                1,
+                mrml_kernel::MemoryKind::Mmio,
+            )
+            .unwrap(),
+            mrml_kernel::MemoryRegion::new(
+                mrml_kernel::PhysAddr::new(0x10_0000).unwrap(),
+                64,
+                mrml_kernel::MemoryKind::Reserved,
+            )
+            .unwrap(),
+        ];
+        let recovery = mrml_kernel::RecoveryStateMetadata::new(accepted_epoch, 1, None, 0).unwrap();
+        let mut bytes = [0; 512];
+        let length = mrml_kernel::encode_handoff_with_recovery_and_isolation(
+            7,
+            [1; 32],
+            [2; 64],
+            true,
+            true,
+            false,
+            true,
+            0x9000,
+            framebuffer,
+            &regions,
+            recovery,
+            Some(BootIsolationOverride::TotalMicrovmOnce),
+            &mut bytes,
+        )
+        .unwrap();
+        (bytes, length)
+    }
+
+    #[test]
+    fn hosted_recovery_source_is_independent_of_the_decoded_handoff_epoch() {
+        let domain = ObjectId(0x434f_4e46_4947_0001);
+        let (current_bytes, current_length) = hosted_total_handoff(8);
+        let current = BootHandoff::decode(&current_bytes[..current_length], |_| {}).unwrap();
+        // SAFETY: this is the controlled hosted fixture named by the helper's
+        // contract; it does not represent owner presence or durable hardware.
+        let total = unsafe {
+            hosted_recovery_probe::recover_total_admission(
+                &current,
+                activated_configuration_release(domain, 1),
+            )
+        }
+        .unwrap();
+        assert_eq!(total.policy().authority_epoch(), 9);
+        assert_eq!(total.policy().boot_accepted_epoch(), 8);
+
+        let (stale_bytes, stale_length) = hosted_total_handoff(7);
+        let stale = BootHandoff::decode(&stale_bytes[..stale_length], |_| {}).unwrap();
+        // SAFETY: same controlled hosted fixture; the stale handoff must not
+        // redefine its independently fixed authenticated recovery state.
+        assert!(unsafe {
+            hosted_recovery_probe::recover_total_admission(
+                &stale,
+                activated_configuration_release(domain, 1),
+            )
+        }
+        .is_err());
     }
     const SYSTEM_GENERATION: u64 = 108;
 

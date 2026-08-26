@@ -740,12 +740,19 @@ activated release, constructs an activated admission table retaining the exact
 generation and catalog digests, prepares the classified route through that
 same owner, retains it across vCPU/RAM/VMM construction, commits the microVM,
 and finalizes the release proof without a parallel table. Recovery wraps this
-same owner with committed recovery provenance. Fresh WHP and nested-KVM signed
-probes each report one eligible microVM and zero native fallback; WHP passes 9
-runner tests, KVM passes 10, and configuration passes 43 on both hosts. The
-runners still synthesize their focused configuration state rather than consume
-the committed stable-recovery object, so live recovered boot remains
-**PLANNED**.
+same owner with committed recovery provenance. A shared hosted-only source now
+exercises the normal exact-generation configuration-file read, owner-approved
+authority checkpoint, boot-bound monotonic state comparison, dependent policy
+validation, recovered service publication, and atomic release binding. Its
+authenticated fixture state is independent of the handoff: accepted epoch 8
+advances to authority epoch 9, while a decoded epoch-7 handoff fails before
+authority reconstruction. Fresh WHP and nested-KVM signed probes consume the
+resulting `RecoveredTotalAdmission`, each report one eligible microVM and zero
+native fallback, and complete the same exact-generation component path. WHP
+passes 11 runner tests, KVM passes 12, and configuration passes 44 on both
+hosts. The in-memory source is controlled hosted evidence, not durable media,
+owner-presence, TPM, firmware, physical rollback, or installed early-boot
+orchestration; live recovered boot remains **PLANNED**.
 
 The runner-side boot overlay is no longer injected as an independent enum
 literal. Both hosted backends encode neutral accepted recovery state and the
@@ -765,8 +772,11 @@ requiring callers to retain an intermediate effective policy.
 the decoded handoff epoch against the committed authority epoch, and returns the
 same `RecoveredTotalAdmission` owner used for route preparation and final proof.
 The stable recovery test commits one eligible microVM route and finalizes its
-signed release inventory through that owner on Windows and Arch Linux. Hosted
-runner construction of the recovered state remains **PLANNED**.
+signed release inventory through that owner on Windows and Arch Linux. The
+hosted WHP/KVM component path now constructs that recovered owner through the
+shared controlled source and retains it through preparation, microVM commit,
+and final proof. Production stable-storage selection and installed early-boot
+construction remain **PLANNED**.
 
 ## Resources, devices, security, and monitoring
 

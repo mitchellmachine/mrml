@@ -3,11 +3,12 @@
 
 #[cfg(target_os = "linux")]
 use mrml_config::{
-    AdmittedConfigurationGuestFactory, BootTotalAdmission, ConfigTransaction,
-    ConfigurationMicrovmEndpoint, ConfigurationService, EffectiveBootIsolationPolicy,
-    IsolationPolicyApplicationPlan, IsolationPolicySetting, IsolationServiceBounds,
-    IsolationServiceIdentity, MicrovmConfigurationServiceLauncher, OwnerIsolationSelection,
-    PreparedMicrovmConfigurationLauncher, SettingId,
+    AdmittedConfigurationGuestFactory, ConfigTransaction, ConfigurationMicrovmEndpoint,
+    ConfigurationService, EffectiveBootIsolationPolicy, IsolationPolicyApplicationPlan,
+    IsolationPolicySetting, IsolationServiceBounds, IsolationServiceIdentity,
+    MicrovmConfigurationServiceLauncher, OwnerIsolationSelection,
+    PreparedMicrovmConfigurationLauncher, RecoveredTotalAdmission, SettingId,
+    hosted_recovery_probe::recover_total_admission,
 };
 #[cfg(target_os = "linux")]
 use mrml_crypto::{LAMPORT_PUBLIC_KEY_BYTES, Sha3_512};
@@ -98,7 +99,7 @@ struct ConfiguredTotalServicePolicy {
 #[cfg(target_os = "linux")]
 enum KvmTotalAdmission {
     Standalone(IsolationAdmissionTable<2>),
-    Release(BootTotalAdmission<2>),
+    Recovered(RecoveredTotalAdmission<2>),
 }
 
 #[cfg(target_os = "linux")]
@@ -108,7 +109,7 @@ impl core::ops::Deref for KvmTotalAdmission {
     fn deref(&self) -> &Self::Target {
         match self {
             Self::Standalone(admission) => admission,
-            Self::Release(total) => total.admission(),
+            Self::Recovered(total) => total.admission(),
         }
     }
 }
@@ -118,7 +119,7 @@ impl core::ops::DerefMut for KvmTotalAdmission {
     fn deref_mut(&mut self) -> &mut Self::Target {
         match self {
             Self::Standalone(admission) => admission,
-            Self::Release(total) => total.admission_mut(),
+            Self::Recovered(total) => total.admission_mut(),
         }
     }
 }
@@ -2937,11 +2938,18 @@ fn application_main() -> Result<()> {
         let release = plan
             .seal()
             .map_err(|error| anyhow!("KVM release inventory sealing failed: {:?}", error))?;
-        let total = configured
-            .effective
-            .bind_release_inventory(release)
-            .map_err(|error| anyhow!("KVM boot Total admission failed: {:?}", error))?;
-        Some(KvmTotalAdmission::Release(total))
+        // SAFETY: this executable mode is a hosted controlled probe. The
+        // helper's synthesized owner approval is never production recovery or
+        // physical rollback evidence.
+        let total = unsafe { recover_total_admission(&decoded_boot_handoff, release) }
+            .map_err(|error| anyhow!("KVM recovered boot Total admission failed: {:?}", error))?;
+        println!(
+            "isolation-recovery|status=PASS|backend=kvm|authority_epoch={}|boot_accepted_epoch={}|configuration_revision={}",
+            total.policy().authority_epoch(),
+            total.policy().boot_accepted_epoch(),
+            total.policy().configuration_revision(),
+        );
+        Some(KvmTotalAdmission::Recovered(total))
     } else if total_service_mode {
         let configured = configured_total_policy
             .as_ref()
@@ -2959,10 +2967,10 @@ fn application_main() -> Result<()> {
         isolation_admission.as_mut(),
         configured_total_policy.as_ref(),
     ) {
-        (Some(KvmTotalAdmission::Release(total)), Some(configured)) => Some(
+        (Some(KvmTotalAdmission::Recovered(total)), Some(configured)) => Some(
             total
                 .prepare_service(configured.bounds, configured.identity)
-                .map_err(|error| anyhow!("KVM release-owned preparation failed: {:?}", error))?,
+                .map_err(|error| anyhow!("KVM recovered preparation failed: {:?}", error))?,
         ),
         (Some(KvmTotalAdmission::Standalone(admission)), Some(configured)) => {
             let admitted = configured
@@ -3515,9 +3523,9 @@ fn application_main() -> Result<()> {
         }
         if component_service_mode {
             let proof = match admission {
-                KvmTotalAdmission::Release(total) => total.finalize().map_err(|error| {
-                    anyhow!("KVM release-owned finalization failed: {:?}", error)
-                })?,
+                KvmTotalAdmission::Recovered(total) => total
+                    .finalize()
+                    .map_err(|error| anyhow!("KVM recovered finalization failed: {:?}", error))?,
                 KvmTotalAdmission::Standalone(_) => {
                     return Err(anyhow!("KVM component route lost release-owned admission"));
                 }

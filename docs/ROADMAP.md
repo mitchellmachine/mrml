@@ -315,21 +315,26 @@ a stale recovery epoch fails. The resulting `RecoveredTotalAdmission` now owns
 the activated release and its sole policy-derived admission table. Route
 preparation exact-matches domain/class against that release before reserving the
 same table; unclassified-domain and policy-generation substitutions leave no
-launch state. Configuration suites pass 43 tests on Windows and Arch Linux.
-Live WHP/KVM consumption of that recovered owner, early-boot orchestration,
-menu presentation, OVMF/EFI-Shell execution, complete installed-system
-inventory, and end-to-end runtime enforcement remain **PLANNED**.
+launch state. Configuration suites pass 44 tests on Windows and Arch Linux.
+Live WHP and nested KVM now consume that recovered owner from a shared
+hosted-only exact-file and authenticated-authority recovery source through
+route commit and final proof. The source independently fixes accepted epoch 8
+and successor authority epoch 9, and rejects a stale epoch-7 handoff. Production
+stable-media recovery, early-boot orchestration, menu presentation,
+OVMF/EFI-Shell execution, complete installed-system inventory, and end-to-end
+runtime enforcement remain **PLANNED**.
 
 The shared live Total owner is now **PARTIALLY IMPLEMENTED**. WHP and nested
 KVM bind the effective boot policy and activated signed release into one
 `BootTotalAdmission`, preserve exact generation/catalog digests, prepare and
 commit the classified route through its owned table, and finalize from that
 same owner after vCPU/RAM/VMM construction. `RecoveredTotalAdmission` wraps the
-same object rather than creating a parallel table. Configuration passes 43
-tests on both hosts, WHP passes 9, KVM passes 10, and fresh signed probes report
-one eligible microVM with zero fallback. Replacing the runners' transient
-configuration fixture with the committed stable-recovery object is the next
-gate; live recovered boot remains **PLANNED**.
+same object rather than creating a parallel table. Configuration passes 44
+tests on both hosts, WHP passes 11, KVM passes 12, and fresh signed probes report
+one eligible microVM with zero fallback. The component-service runners now
+replace their release-owned transient admission with `RecoveredTotalAdmission`
+produced by the shared hosted recovery source. Production stable-storage
+selection is the next gate; live recovered boot remains **PLANNED**.
 
 The hosted service runners now take the one-boot Total overlay from the exact
 canonical `BootHandoff` bytes installed for the guest rather than constructing
@@ -344,8 +349,9 @@ then signed with one-use kernel/package keys and packaged as SHA-256
 Both WHP and nested KVM consumed it, reported `handoff=decoded`, accepted epoch
 8, one eligible microVM, and zero fallback, then completed the expected guest
 lifecycle/data path. This is **PARTIALLY IMPLEMENTED** live hosted handoff
-parity, not recovered boot or complete Total satisfaction. Committed
-stable-recovery consumption remains the next gate.
+parity, not recovered boot or complete Total satisfaction. The shared hosted
+recovery source now consumes the committed owner as described below; production
+stable-media recovery remains the next gate.
 
 The committed-recovery API now **PARTIALLY IMPLEMENTS** that join as one atomic
 operation. `RecoveredSystemState::bind_total_boot_admission` capability-
@@ -354,10 +360,13 @@ handoff's accepted epoch is the predecessor of the committed authority epoch,
 composes the one-boot overlay, and binds the authenticated activated release
 without returning a detached effective policy. The full stable-storage test now
 continues through classified microVM route commit and
-`TotalMicrovmRuntimeProof`; Windows and Arch Linux each pass all 43
-configuration tests. This remains hosted typed-state evidence. The WHP/KVM
-runners do not yet construct this committed recovered owner, so live recovered
-boot remains **PLANNED**.
+`TotalMicrovmRuntimeProof`; Windows and Arch Linux each pass all 44
+configuration tests. The WHP/KVM component runners now construct and consume
+this committed owner through the controlled hosted source. Fresh signed probes
+report authority epoch 9, boot accepted epoch 8, configuration revision 1, one
+eligible microVM, and zero native fallback on both backends. Production
+stable-storage selection and installed early-boot orchestration remain
+**PLANNED**, so this is not yet live recovered boot.
 
 The deployment lane is defined in [DEPLOYMENT.md](DEPLOYMENT.md) and must not
 displace the current foundational gate. Later work proceeds as separate bounded
