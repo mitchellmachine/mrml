@@ -1185,8 +1185,16 @@ SystemRelease source, and verified file reads fill a bounded caller-owned image
 in chunks before the existing assignment plan parses it. Source, authority,
 length, read, signer, content, generation, catalog, or runtime-inventory
 substitution fails before policy enumeration. This grants no storage or launch
-authority beyond the supplied capabilities. Live recovery must still select the
-file and general policy must still assign and launch every domain.
+authority beyond the supplied capabilities. The real service must still invoke
+this path, and general policy must still assign and launch every domain.
+
+The authenticated deployment checkpoint and active release-file read now form
+one retained `RecoveredRuntimeAssignment`. Rollback-resistant recovery produces
+the exact active deployment owner, and that owner immediately selects and reads
+its source before returning the assignment plan; callers cannot interpose a
+detached active identity. Controlled Windows evidence covers both authorized
+files and the signed release. Real service invocation, owner-policy lookup, and
+complete domain launch remain **PLANNED**.
 
 Its canonical package-to-runtime classification prerequisite is now
 **PARTIALLY IMPLEMENTED** as the allocation-free `MRMLRI1` runtime-inventory

@@ -479,8 +479,17 @@ the complete image, performs verified capability-selected reads in bounded
 chunks, and feeds only the resulting exact bytes into active-release assignment.
 Short buffers and source, authority, read, or release substitution fail before
 enumeration; partial output is erased on read failure. Deployment passes 6 tests
-on Windows. Live recovered file selection, general policy assignment, and full
-domain construction remain **PLANNED**.
+on Windows. Real service invocation, general policy assignment, and full domain
+construction remain **PLANNED**.
+
+Recovery and source selection are now **PARTIALLY IMPLEMENTED** as one typed
+operation. `recover_and_read_runtime_assignment` authenticates the deployment
+recovery state and checkpoint, retains the recovered deployment service, reads
+that service's exact active release source through separate storage authority,
+and returns both beside one complete assignment plan. The focused Windows test
+seals the plan only after both file reads and active-release equality succeed.
+Real configuration-service invocation, general owner policy, and construction
+of every enumerated domain remain **PLANNED**.
 
 The first half of that gate is now **PARTIALLY IMPLEMENTED**: `MRMLRI1` is a
 bounded canonical runtime-inventory catalog whose records exact-bind every

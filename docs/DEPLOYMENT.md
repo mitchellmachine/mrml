@@ -216,8 +216,19 @@ exceed one storage read. Short output, source substitution, missing authority,
 verified-read failure, and release-identity mismatch fail before assignment;
 partial bytes are erased after read failure. Deployment passes 6 tests on
 Windows using a real `FileState`, storage authority, verified extent backend,
-and signed runtime release. Recovery-to-file selection in the live service and
-general owner-policy assignment remain **PLANNED**.
+and signed runtime release. Invocation by the live service and general
+owner-policy assignment remain **PLANNED**.
+
+Authenticated checkpoint recovery and that source-file read are now joined by
+`recover_and_read_runtime_assignment`. It returns one
+`RecoveredRuntimeAssignment` retaining the recovered `DeploymentService` beside
+the complete assignment plan built from its exact active release. No detached
+active identity is exposed between rollback-resistant checkpoint validation and
+release enumeration. The focused test authenticates the recovery state, reads
+the checkpoint and release through separate exact file capabilities, and seals
+the recovered plan. Deployment remains 6 passing tests on Windows. Invocation
+from the real configuration/service boot path and general owner-policy
+assignment remain **PLANNED**.
 
 - Complexity impact: MEDIUM
 - TCB impact: LOW

@@ -16,6 +16,12 @@ chunked reads, parser reuse, and failure cleanup. It adds no placement
 algorithm, VM mechanism, scheduler, storage protocol, DMA, queue, interrupt, or
 hardware behavior.
 
+Retaining authenticated deployment recovery beside the assignment produced by
+its exact source read is likewise **NOT_TRIGGERED**. It is conventional typed
+ownership and sequencing of the same existing checks and introduces no new
+placement, VM, scheduling, storage-protocol, DMA, queue, interrupt, or hardware
+mechanism.
+
 ## 2026-08-26 — Canonical one-use installed recovery envelope
 
 Patent review: **NOT_TRIGGERED** for extending the existing one-use boot-recovery

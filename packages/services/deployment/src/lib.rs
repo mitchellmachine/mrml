@@ -1107,6 +1107,42 @@ pub enum AuthenticatedActivationRecoveryError<StorageError, StateError> {
     InvalidRecoveryState,
 }
 
+pub struct RecoveredRuntimeAssignment<'a, const CANDIDATES: usize, const DOMAINS: usize> {
+    service: DeploymentService<CANDIDATES>,
+    assignment: RuntimeDomainAssignmentPlan<'a, DOMAINS>,
+}
+
+impl<'a, const CANDIDATES: usize, const DOMAINS: usize>
+    RecoveredRuntimeAssignment<'a, CANDIDATES, DOMAINS>
+{
+    pub const fn service(&self) -> &DeploymentService<CANDIDATES> {
+        &self.service
+    }
+
+    pub const fn assignment(&self) -> &RuntimeDomainAssignmentPlan<'a, DOMAINS> {
+        &self.assignment
+    }
+
+    pub fn assignment_mut(&mut self) -> &mut RuntimeDomainAssignmentPlan<'a, DOMAINS> {
+        &mut self.assignment
+    }
+
+    pub fn into_parts(
+        self,
+    ) -> (
+        DeploymentService<CANDIDATES>,
+        RuntimeDomainAssignmentPlan<'a, DOMAINS>,
+    ) {
+        (self.service, self.assignment)
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum RecoveredRuntimeAssignmentError<CheckpointError, ReleaseError, StateError> {
+    Recovery(AuthenticatedActivationRecoveryError<CheckpointError, StateError>),
+    Release(DeploymentStorageError<ReleaseError>),
+}
+
 #[allow(clippy::too_many_arguments)]
 pub fn recover_authenticated_activation<
     const CANDIDATES: usize,
@@ -1155,6 +1191,71 @@ pub fn recover_authenticated_activation<
         return Err(AuthenticatedActivationRecoveryError::InvalidRecoveryState);
     }
     Ok(service)
+}
+
+/// Recovers the authenticated deployment checkpoint and reads the exact active
+/// SystemRelease source into one retained owner. No detached active identity is
+/// exposed between recovery and complete runtime enumeration.
+#[allow(clippy::too_many_arguments)]
+pub fn recover_and_read_runtime_assignment<
+    'a,
+    const CANDIDATES: usize,
+    const DOMAINS: usize,
+    const CAPS: usize,
+    const CHECKPOINT_EXTENTS: usize,
+    const RELEASE_EXTENTS: usize,
+    const CHECKPOINT_AUTHORITIES: usize,
+    const RELEASE_AUTHORITIES: usize,
+    CB: FileReadBackend,
+    RB: FileReadBackend,
+    S: DeploymentRecoveryStateStore,
+>(
+    root: ObjectId,
+    checkpoint_file: &FileState<CHECKPOINT_EXTENTS>,
+    checkpoint_authority: &StorageAuthorityTable<CHECKPOINT_AUTHORITIES>,
+    checkpoint_handle: StorageHandle,
+    release_file: &FileState<RELEASE_EXTENTS>,
+    release_authority: &StorageAuthorityTable<RELEASE_AUTHORITIES>,
+    release_handle: StorageHandle,
+    principal: StoragePrincipal,
+    state_store: &S,
+    checkpoint_backend: &mut CB,
+    release_backend: &mut RB,
+    capabilities: &CapabilitySpace<CAPS>,
+    inspect: Capability,
+    output: &'a mut [u8],
+    policy_generation: u64,
+) -> Result<
+    RecoveredRuntimeAssignment<'a, CANDIDATES, DOMAINS>,
+    RecoveredRuntimeAssignmentError<CB::Error, RB::Error, S::Error>,
+> {
+    let service = recover_authenticated_activation::<CANDIDATES, _, _, _, _>(
+        root,
+        checkpoint_file,
+        checkpoint_authority,
+        checkpoint_handle,
+        principal,
+        state_store,
+        checkpoint_backend,
+    )
+    .map_err(RecoveredRuntimeAssignmentError::Recovery)?;
+    let assignment = service
+        .read_active_runtime_assignment::<DOMAINS, CAPS, _, _, _>(
+            capabilities,
+            inspect,
+            release_file,
+            release_authority,
+            release_handle,
+            principal,
+            output,
+            release_backend,
+            policy_generation,
+        )
+        .map_err(RecoveredRuntimeAssignmentError::Release)?;
+    Ok(RecoveredRuntimeAssignment {
+        service,
+        assignment,
+    })
 }
 
 fn read_u16(bytes: &[u8], offset: usize) -> Result<u16, DeploymentError> {
@@ -1778,6 +1879,77 @@ mod tests {
                 .unwrap()
                 .checkpoint_digest,
             Sha3_256::digest(&checkpoint)
+        );
+        let mut checkpoint_block = [0; BLOCK_BYTES];
+        checkpoint_block[..checkpoint.len()].copy_from_slice(&checkpoint);
+        let checkpoint_record =
+            ExtentRecord::data(object(9), 2, 0, 1, 10, digest(&checkpoint_block)).unwrap();
+        let checkpoint_file = FileState::new(
+            object(9),
+            2,
+            checkpoint.len() as u64,
+            ExtentMap::<1>::build(
+                header(),
+                object(9),
+                2,
+                checkpoint.len() as u64,
+                &[checkpoint_record],
+            )
+            .unwrap(),
+        )
+        .unwrap();
+        let mut checkpoint_authority = StorageAuthorityTable::<1>::new();
+        let checkpoint_handle = checkpoint_authority
+            .insert(
+                object(9),
+                StorageObjectKind::File,
+                StorageRights::READ,
+                principal(),
+            )
+            .unwrap();
+        let state_store = RecoveryStateStore {
+            bytes: recovery_state,
+        };
+        let mut checkpoint_backend = StableBackend {
+            bytes: checkpoint_block,
+        };
+        release_backend.fail = false;
+        let mut recovered_output = [0xa5; TEST_RUNTIME_RELEASE_BYTES];
+        let mut recovered_assignment =
+            recover_and_read_runtime_assignment::<1, 1, 3, 1, 1, 1, 1, _, _, _>(
+                root,
+                &checkpoint_file,
+                &checkpoint_authority,
+                checkpoint_handle,
+                &release_file,
+                &release_authority,
+                release_handle,
+                principal(),
+                &state_store,
+                &mut checkpoint_backend,
+                &mut release_backend,
+                &capabilities,
+                inspect,
+                &mut recovered_output,
+                4,
+            )
+            .unwrap();
+        assert_eq!(
+            recovered_assignment
+                .service()
+                .active_release(&capabilities, inspect),
+            Ok(Some(activated_release))
+        );
+        recovered_assignment
+            .assignment_mut()
+            .assign_from_policy(|record| {
+                mrml_kernel::RuntimeDomainAssignment::new(record.package_id, ObjectId(0x5a53_5444))
+            })
+            .unwrap();
+        let (_, recovered_plan) = recovered_assignment.into_parts();
+        assert_eq!(
+            recovered_plan.seal().unwrap().active_release(),
+            activated_release
         );
         let (decoded_root, decoded_active, decoded_release) =
             decode_deployment_checkpoint_release(&checkpoint).unwrap();
