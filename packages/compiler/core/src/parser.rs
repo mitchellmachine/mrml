@@ -206,6 +206,7 @@ impl<'source, const MAX_PARAMETERS: usize> Function<'source, MAX_PARAMETERS> {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct LocalBinding<'source> {
     pub mutable: bool,
+    pub initialized: bool,
     pub name: &'source str,
     pub name_span: Span,
     pub ty: Option<TypeRef<'source>>,
@@ -1424,6 +1425,28 @@ impl<'source> BodyParser<'source> {
             .is_some_and(|token| token.kind == TokenKind::Colon)
         {
             self.take()?;
+            let mut uninitialized_probe = self.clone();
+            let explicit_type = uninitialized_probe.take()?;
+            let terminator = uninitialized_probe.peek()?;
+            if let (Some(explicit_type), Some(terminator)) = (explicit_type, terminator)
+                && explicit_type.kind == TokenKind::Identifier
+                && terminator.text == ";"
+            {
+                uninitialized_probe.take()?;
+                *self = uninitialized_probe;
+                return Ok(Some(LocalBinding {
+                    mutable,
+                    initialized: false,
+                    name: name.text,
+                    name_span: name.span,
+                    ty: Some(TypeRef {
+                        text: explicit_type.text,
+                        span: explicit_type.span,
+                    }),
+                    initializer: "",
+                    initializer_span: terminator.span,
+                }));
+            }
             let (ty_span, _) = self.delimited_until("=", ParseErrorKind::ExpectedEquals)?;
             Some(TypeRef {
                 text: &self.source[ty_span.start..ty_span.end],
@@ -1439,6 +1462,7 @@ impl<'source> BodyParser<'source> {
         let (initializer_span, _) = self.delimited_until(";", ParseErrorKind::ExpectedSemicolon)?;
         Ok(Some(LocalBinding {
             mutable,
+            initialized: true,
             name: name.text,
             name_span: name.span,
             ty,
@@ -5162,6 +5186,22 @@ mod tests {
         assert_eq!(locals[0].unwrap().initializer, "15");
         assert_eq!(locals[1].unwrap().name, "y");
         assert_eq!(body.tail_expression, "x / y");
+    }
+
+    #[test]
+    fn parses_explicitly_uninitialized_scalar_local() {
+        let module: TestModule<'_> = Parser::new("fn probe() -> u64 { let value: u64; value }")
+            .parse_module()
+            .unwrap();
+        let Some(Item::Function(function)) = module.items()[0] else {
+            panic!("expected function")
+        };
+        let body = function.parse_body::<1>().unwrap();
+        let local = body.locals()[0].unwrap();
+        assert_eq!(local.name, "value");
+        assert_eq!(local.ty.unwrap().text, "u64");
+        assert!(!local.initialized);
+        assert!(local.initializer.is_empty());
     }
 
     #[test]

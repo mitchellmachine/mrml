@@ -6107,7 +6107,7 @@ fn rustc_terminal_int80_inline_assembly_reaches_native_objects() {
 fn rustc_returning_int80_inline_assembly_reaches_native_objects() {
     let source = concat!(
         "#[unsafe(no_mangle)] pub extern \"C\" fn probe(operation: u64) -> u64 { ",
-        "let mut status: u64 = operation; let mut state: u64 = 0; unsafe { ",
+        "let mut status: u64 = operation; let state: u64; unsafe { ",
         "asm!(\"int 0x80\", inlateout(\"rax\") status, in(\"rdi\") 1u64, ",
         "in(\"rsi\") 2u64, inlateout(\"rdx\") 0u64 => state, ",
         "inlateout(\"r10\") 0u64 => _, inlateout(\"r8\") 0u64 => _, ",

@@ -2817,6 +2817,7 @@ fn x86_64_inline_output_local<'source, const MAX_PARAMETERS: usize>(
     function: &Function<'source, MAX_PARAMETERS>,
     locals: &[Option<RuntimeLocal<'source>>],
     output: &str,
+    allow_immutable: bool,
 ) -> Result<(usize, RuntimeLocal<'source>), CodegenErrorKind> {
     if x86_64_naked_external_symbol(output) != Some(output) {
         return Err(CodegenErrorKind::InvalidInlineAssembly);
@@ -2826,7 +2827,7 @@ fn x86_64_inline_output_local<'source, const MAX_PARAMETERS: usize>(
             .filter(|local| local.name == output)
             .map(|local| (index, local))
     }) {
-        if !local.mutable {
+        if !local.mutable && !allow_immutable {
             return Err(CodegenErrorKind::ImmutableAssignment);
         }
         if local.ty != RuntimeExpressionType::Integer(Some(crate::IntegerType::U64)) {
@@ -3306,7 +3307,7 @@ fn x86_64_inline_output_place<'source, const MAX_PARAMETERS: usize>(
         }
         return Err(CodegenErrorKind::UnknownRuntimeName);
     }
-    let (local_index, local) = x86_64_inline_output_local(function, locals, output)?;
+    let (local_index, local) = x86_64_inline_output_local(function, locals, output, false)?;
     Ok(X86_64InlineOutputPlace {
         base: RuntimePlaceIdentity::Local(local.id),
         ty: local.ty,
@@ -4609,6 +4610,7 @@ struct RuntimeLocalFact<'source> {
     name: &'source str,
     ty: RuntimeExpressionType,
     mutable: bool,
+    initialized: bool,
     declaration_span: Option<Span>,
 }
 
@@ -6185,23 +6187,26 @@ impl<'source> RuntimeBodyFacts<'source> {
         name: &'source str,
         ty: RuntimeExpressionType,
         mutable: bool,
+        initialized: bool,
         declaration_span: Option<Span>,
     ) -> Result<RuntimeLocalId, CodegenErrorKind> {
         if self.local_count >= self.locals.len() {
             return Err(CodegenErrorKind::TooManyRuntimeLocalFacts);
         }
         let id = RuntimeLocalId(self.local_count);
-        self.push_initialized_move_path_root(
+        self.push_move_path_root(
             RuntimePlaceIdentity::Local(id),
             ty,
             RuntimeInitializationOrigin::LocalDeclaration,
             declaration_span,
+            initialized,
         )?;
         self.locals[self.local_count] = Some(RuntimeLocalFact {
             id,
             name,
             ty,
             mutable,
+            initialized,
             declaration_span,
         });
         self.local_count += 1;
@@ -6214,6 +6219,17 @@ impl<'source> RuntimeBodyFacts<'source> {
         ty: RuntimeExpressionType,
         origin: RuntimeInitializationOrigin,
         span: Option<Span>,
+    ) -> Result<RuntimeMovePathId, CodegenErrorKind> {
+        self.push_move_path_root(base, ty, origin, span, true)
+    }
+
+    fn push_move_path_root(
+        &mut self,
+        base: RuntimePlaceIdentity,
+        ty: RuntimeExpressionType,
+        origin: RuntimeInitializationOrigin,
+        span: Option<Span>,
+        initialized: bool,
     ) -> Result<RuntimeMovePathId, CodegenErrorKind> {
         let child_count = match ty {
             RuntimeExpressionType::Tuple {
@@ -6236,10 +6252,10 @@ impl<'source> RuntimeBodyFacts<'source> {
         if required_paths > self.move_paths.len() {
             return Err(CodegenErrorKind::TooManyRuntimeMovePathFacts);
         }
-        if self.initialization_count >= self.initializations.len() {
+        if initialized && self.initialization_count >= self.initializations.len() {
             return Err(CodegenErrorKind::TooManyRuntimeInitializationFacts);
         }
-        if self.ownership_event_count >= MAX_RUNTIME_OWNERSHIP_EVENT_FACTS {
+        if initialized && self.ownership_event_count >= MAX_RUNTIME_OWNERSHIP_EVENT_FACTS {
             return Err(CodegenErrorKind::TooManyRuntimeOwnershipEventFacts);
         }
         let root = RuntimeMovePathId(self.move_path_count);
@@ -6271,40 +6287,42 @@ impl<'source> RuntimeBodyFacts<'source> {
                 self.move_path_count += 1;
             }
         }
-        self.initializations[self.initialization_count] = Some(RuntimeInitializationFact {
-            path: root,
-            origin,
-            span,
-            event: RuntimeOwnershipEventId(self.ownership_event_count),
-            location: match origin {
-                RuntimeInitializationOrigin::Parameter => {
-                    RuntimeOwnershipEventLocation::ParameterEntry
-                }
-                RuntimeInitializationOrigin::LocalDeclaration => {
-                    self.current_ownership_event_location
-                }
-            },
-            expression_path: match origin {
-                RuntimeInitializationOrigin::Parameter => RuntimeOwnershipExpressionPath::ROOT,
-                RuntimeInitializationOrigin::LocalDeclaration => {
-                    self.current_ownership_expression_path
-                }
-            },
-            expression_conditional: match origin {
-                RuntimeInitializationOrigin::Parameter => None,
-                RuntimeInitializationOrigin::LocalDeclaration => {
-                    self.current_conditional_expression
-                }
-            },
-            expression_point: match origin {
-                RuntimeInitializationOrigin::Parameter => None,
-                RuntimeInitializationOrigin::LocalDeclaration => {
-                    self.current_expression_program_point_at_location()
-                }
-            },
-        });
-        self.initialization_count += 1;
-        self.ownership_event_count += 1;
+        if initialized {
+            self.initializations[self.initialization_count] = Some(RuntimeInitializationFact {
+                path: root,
+                origin,
+                span,
+                event: RuntimeOwnershipEventId(self.ownership_event_count),
+                location: match origin {
+                    RuntimeInitializationOrigin::Parameter => {
+                        RuntimeOwnershipEventLocation::ParameterEntry
+                    }
+                    RuntimeInitializationOrigin::LocalDeclaration => {
+                        self.current_ownership_event_location
+                    }
+                },
+                expression_path: match origin {
+                    RuntimeInitializationOrigin::Parameter => RuntimeOwnershipExpressionPath::ROOT,
+                    RuntimeInitializationOrigin::LocalDeclaration => {
+                        self.current_ownership_expression_path
+                    }
+                },
+                expression_conditional: match origin {
+                    RuntimeInitializationOrigin::Parameter => None,
+                    RuntimeInitializationOrigin::LocalDeclaration => {
+                        self.current_conditional_expression
+                    }
+                },
+                expression_point: match origin {
+                    RuntimeInitializationOrigin::Parameter => None,
+                    RuntimeInitializationOrigin::LocalDeclaration => {
+                        self.current_expression_program_point_at_location()
+                    }
+                },
+            });
+            self.initialization_count += 1;
+            self.ownership_event_count += 1;
+        }
         Ok(root)
     }
 
@@ -7914,6 +7932,42 @@ fn preanalyze_runtime_local_binding<
     locals: &mut [Option<RuntimeLocal<'source>>; MAX_PARAMETERS],
     local_count: &mut usize,
 ) -> Result<(), CodegenError> {
+    if !local.initialized {
+        let ty = local
+            .ty
+            .and_then(|ty| runtime_type_from_text(ty.text))
+            .filter(|ty| *ty == RuntimeExpressionType::Integer(Some(crate::IntegerType::U64)))
+            .ok_or(CodegenError {
+                kind: CodegenErrorKind::UnsupportedRuntimeType,
+                span: translate_span(body_start, local.name_span),
+            })?;
+        let stack_slots = runtime_local_stack_slots(ty);
+        let id = facts
+            .push_local(
+                local.name,
+                ty,
+                local.mutable,
+                false,
+                Some(translate_span(body_start, local.name_span)),
+            )
+            .map_err(|kind| CodegenError {
+                kind,
+                span: translate_span(body_start, local.name_span),
+            })?;
+        let slot = locals.get_mut(*local_count).ok_or(CodegenError {
+            kind: CodegenErrorKind::TooManyRuntimeLocals,
+            span: translate_span(body_start, local.name_span),
+        })?;
+        *slot = Some(RuntimeLocal {
+            id,
+            name: local.name,
+            ty,
+            mutable: local.mutable,
+            stack_slots,
+        });
+        *local_count += 1;
+        return Ok(());
+    }
     let ty = resolve_runtime_local_type::<R, MAX_PARAMETERS, MAX_EXPRESSION_NODES>(
         function,
         resolver,
@@ -8324,6 +8378,7 @@ fn preanalyze_runtime_local_binding<
             local.name,
             ty,
             local.mutable,
+            local.initialized,
             Some(translate_span(body_start, local.name_span)),
         )
         .map_err(|kind| CodegenError {
@@ -10096,13 +10151,39 @@ fn preanalyze_runtime_expression_statement_reads<
                 if output == "_" {
                     continue;
                 }
-                let (_, local) =
-                    x86_64_inline_output_local(function, locals, output).map_err(|kind| {
-                        CodegenError {
-                            kind,
-                            span: translate_span(body_start, statement.span),
-                        }
+                let (_, local) = x86_64_inline_output_local(function, locals, output, true)
+                    .map_err(|kind| CodegenError {
+                        kind,
+                        span: translate_span(body_start, statement.span),
                     })?;
+                if !local.mutable {
+                    let path = facts
+                        .find_move_path(
+                            RuntimePlaceIdentity::Local(local.id),
+                            RuntimePlaceProjections::EMPTY,
+                        )
+                        .ok_or(CodegenError {
+                            kind: CodegenErrorKind::InvalidRuntimePlaceFacts,
+                            span: translate_span(body_start, statement.span),
+                        })?;
+                    if facts.initializations[..facts.initialization_count]
+                        .iter()
+                        .flatten()
+                        .any(|initialization| initialization.path == path)
+                        || facts.effects[..facts.effect_count]
+                            .iter()
+                            .flatten()
+                            .any(|effect| {
+                                effect.path == path
+                                    && matches!(effect.kind, RuntimePlaceEffectKind::Write)
+                            })
+                    {
+                        return Err(CodegenError {
+                            kind: CodegenErrorKind::ImmutableAssignment,
+                            span: translate_span(body_start, statement.span),
+                        });
+                    }
+                }
                 preanalyze_x86_64_inline_local_access(
                     facts,
                     local,
@@ -10260,7 +10341,7 @@ fn preanalyze_runtime_expression_statement_reads<
         }
         Ok(Some(X86_64InlineAssembly::AddRaxRcx { left, right })) => {
             let (_, local) =
-                x86_64_inline_output_local(function, locals, left).map_err(|kind| {
+                x86_64_inline_output_local(function, locals, left, false).map_err(|kind| {
                     CodegenError {
                         kind,
                         span: translate_span(body_start, statement.span),
@@ -23213,6 +23294,7 @@ impl<
         name: &'tree str,
         ty: RuntimeExpressionType,
         mutable: bool,
+        initialized: bool,
         stack_slots: usize,
         declaration_span: Option<Span>,
     ) -> Result<(), CodegenError> {
@@ -23224,6 +23306,7 @@ impl<
                 fact.name == name
                     && fact.ty == ty
                     && fact.mutable == mutable
+                    && fact.initialized == initialized
                     && fact.declaration_span == declaration_span
             });
         let id = if preanalyzed {
@@ -23236,7 +23319,7 @@ impl<
             fact.id
         } else {
             self.body_facts
-                .push_local(name, ty, mutable, declaration_span)
+                .push_local(name, ty, mutable, initialized, declaration_span)
                 .map_err(|kind| self.error(kind))?
         };
         self.locals[self.saved_locals] = Some(RuntimeLocal {
@@ -24143,7 +24226,11 @@ impl<
                         RuntimeExpressionType::Reference { .. }
                     )
                 );
-                if fact.access != RuntimePlaceAccess::Read && mutates_binding && !local.mutable {
+                if fact.access != RuntimePlaceAccess::Read
+                    && mutates_binding
+                    && !local.mutable
+                    && (local.initialized || fact.access != RuntimePlaceAccess::Write)
+                {
                     return Err(self.error(CodegenErrorKind::InvalidRuntimePlaceFacts));
                 }
             }
@@ -24366,7 +24453,7 @@ impl<
         let required_root_count = parameter_count
             .checked_add(self.body_facts.local_count)
             .ok_or(self.error(CodegenErrorKind::InvalidRuntimePlaceFacts))?;
-        if self.body_facts.initialization_count != required_root_count
+        if self.body_facts.initialization_count > required_root_count
             || self.body_facts.move_path_count < required_root_count
             || self.body_facts.move_paths[..self.body_facts.move_path_count]
                 .iter()
@@ -24381,9 +24468,7 @@ impl<
         for root_index in 0..required_root_count {
             let root = self.body_facts.move_paths[path_index]
                 .ok_or(self.error(CodegenErrorKind::InvalidRuntimePlaceFacts))?;
-            let initialization = self.body_facts.initializations[root_index]
-                .ok_or(self.error(CodegenErrorKind::InvalidRuntimePlaceFacts))?;
-            let (expected_base, expected_type, expected_origin, expected_span) =
+            let (expected_base, expected_type, expected_origin, expected_span, initialized) =
                 if root_index < parameter_count {
                     let parameter = self
                         .function
@@ -24397,6 +24482,7 @@ impl<
                             .ok_or(self.error(CodegenErrorKind::InvalidRuntimePlaceFacts))?,
                         RuntimeInitializationOrigin::Parameter,
                         Some(parameter.span),
+                        true,
                     )
                 } else {
                     let id = RuntimeLocalId(root_index - parameter_count);
@@ -24411,52 +24497,64 @@ impl<
                         local.ty,
                         RuntimeInitializationOrigin::LocalDeclaration,
                         local.declaration_span,
+                        local.initialized,
                     )
                 };
+            let initialization = self.body_facts.initializations
+                [..self.body_facts.initialization_count]
+                .iter()
+                .flatten()
+                .find(|initialization| initialization.path == root.id)
+                .copied();
             if root.id != RuntimeMovePathId(path_index)
                 || root.parent.is_some()
                 || root.base != expected_base
                 || root.projections != RuntimePlaceProjections::EMPTY
                 || root.ty != expected_type
-                || initialization.path != root.id
-                || initialization.origin != expected_origin
-                || initialization.span != expected_span
-                || !self.body_facts.expression_origin_is_valid(
-                    initialization.location,
-                    initialization.expression_path,
-                    initialization.expression_conditional,
-                )
-                || initialization.expression_point.is_some_and(|point| {
-                    !self
-                        .body_facts
-                        .expression_program_point_is_valid(initialization.location, point)
-                })
-                || (self.body_facts.control_flow_complete
-                    && initialization.location != RuntimeOwnershipEventLocation::EmissionExpansion
-                    && self
-                        .body_facts
-                        .ownership_control_point(initialization.location)
-                        .is_none())
-                || match initialization.origin {
-                    RuntimeInitializationOrigin::Parameter => {
-                        initialization.location != RuntimeOwnershipEventLocation::ParameterEntry
-                            || initialization.expression_point.is_some()
-                    }
-                    RuntimeInitializationOrigin::LocalDeclaration => {
+                || initialization.is_some() != initialized
+            {
+                return Err(self.error(CodegenErrorKind::InvalidRuntimePlaceFacts));
+            }
+            if let Some(initialization) = initialization
+                && (initialization.origin != expected_origin
+                    || initialization.span != expected_span
+                    || !self.body_facts.expression_origin_is_valid(
+                        initialization.location,
+                        initialization.expression_path,
+                        initialization.expression_conditional,
+                    )
+                    || initialization.expression_point.is_some_and(|point| {
                         !self
                             .body_facts
-                            .ownership_location_is_valid(initialization.location)
-                            || matches!(
-                                initialization.location,
-                                RuntimeOwnershipEventLocation::ParameterEntry
-                                    | RuntimeOwnershipEventLocation::Tail
-                                    | RuntimeOwnershipEventLocation::Unassigned
-                            )
+                            .expression_program_point_is_valid(initialization.location, point)
+                    })
+                    || (self.body_facts.control_flow_complete
+                        && initialization.location
+                            != RuntimeOwnershipEventLocation::EmissionExpansion
+                        && self
+                            .body_facts
+                            .ownership_control_point(initialization.location)
+                            .is_none())
+                    || match initialization.origin {
+                        RuntimeInitializationOrigin::Parameter => {
+                            initialization.location != RuntimeOwnershipEventLocation::ParameterEntry
+                                || initialization.expression_point.is_some()
+                        }
+                        RuntimeInitializationOrigin::LocalDeclaration => {
+                            !self
+                                .body_facts
+                                .ownership_location_is_valid(initialization.location)
+                                || matches!(
+                                    initialization.location,
+                                    RuntimeOwnershipEventLocation::ParameterEntry
+                                        | RuntimeOwnershipEventLocation::Tail
+                                        | RuntimeOwnershipEventLocation::Unassigned
+                                )
+                        }
                     }
-                }
-                || initialization
-                    .span
-                    .is_some_and(|span| span.end < span.start)
+                    || initialization
+                        .span
+                        .is_some_and(|span| span.end < span.start))
             {
                 return Err(self.error(CodegenErrorKind::InvalidRuntimePlaceFacts));
             }
@@ -24819,6 +24917,7 @@ impl<
                 parameter.name,
                 ty,
                 false,
+                true,
                 runtime_local_stack_slots(ty),
                 None,
             )?;
@@ -30299,6 +30398,31 @@ impl<
         operand_type: &str,
         body_start: usize,
     ) -> Result<(), CodegenError> {
+        if !local.initialized {
+            let local_type = local
+                .ty
+                .and_then(|ty| runtime_type_from_text(ty.text))
+                .filter(|ty| *ty == RuntimeExpressionType::Integer(Some(crate::IntegerType::U64)))
+                .ok_or(CodegenError {
+                    kind: CodegenErrorKind::UnsupportedRuntimeType,
+                    span: translate_span(body_start, local.name_span),
+                })?;
+            if self.saved_locals == MAX_PARAMETERS {
+                return Err(CodegenError {
+                    kind: CodegenErrorKind::TooManyRuntimeLocals,
+                    span: translate_span(body_start, local.name_span),
+                });
+            }
+            self.emit(&[0x31, 0xc0, 0x50])?;
+            return self.push_runtime_local(
+                local.name,
+                local_type,
+                local.mutable,
+                false,
+                1,
+                Some(translate_span(body_start, local.name_span)),
+            );
+        }
         let tree = local
             .parse_initializer::<MAX_EXPRESSION_NODES>()
             .map_err(|error| CodegenError {
@@ -30357,6 +30481,7 @@ impl<
             local.name,
             local_type,
             local.mutable,
+            true,
             stack_slots,
             Some(translate_span(body_start, local.name_span)),
         )
@@ -30601,15 +30726,26 @@ impl<
                     if output == "_" {
                         continue;
                     }
-                    let place = x86_64_inline_output_place(
+                    let (local_index, local) = x86_64_inline_output_local(
                         self.function,
                         &self.locals[..self.saved_locals],
                         output,
+                        true,
                     )
                     .map_err(|kind| CodegenError {
                         kind,
                         span: translate_span(body_start, statement.span),
                     })?;
+                    let place = X86_64InlineOutputPlace {
+                        base: RuntimePlaceIdentity::Local(local.id),
+                        ty: local.ty,
+                        projections: RuntimePlaceProjections::EMPTY,
+                        storage: X86_64InlineOutputStorage::LocalStack {
+                            local_index,
+                            offset: 0,
+                        },
+                        marker: core::marker::PhantomData,
+                    };
                     let destination = self.record_x86_64_inline_output_place(
                         place,
                         RuntimePlaceAccess::Write,
@@ -30779,6 +30915,7 @@ impl<
                     self.function,
                     &self.locals[..self.saved_locals],
                     left,
+                    false,
                 )
                 .map_err(|kind| CodegenError {
                     kind,
@@ -35294,11 +35431,11 @@ mod tests {
     #[test]
     fn emits_validated_fixed_inline_assembly() {
         let compile = |source| {
-            let module = Parser::new(source).parse_module::<1, 1>().unwrap();
+            let module = Parser::new(source).parse_module::<1, 2>().unwrap();
             let Some(Item::Function(function)) = module.items()[0] else {
                 panic!("expected function")
             };
-            compile_x86_64_function::<_, 256, 1, 8>(&function, &NoConstants, X86_64Abi::SystemV)
+            compile_x86_64_function::<_, 256, 2, 8>(&function, &NoConstants, X86_64Abi::SystemV)
         };
         let baseline =
             compile("#[unsafe(no_mangle)] pub unsafe extern \"C\" fn answer() -> u64 { 42 }")
@@ -35372,11 +35509,11 @@ mod tests {
 
         let returning_syscall = compile(concat!(
             "#[unsafe(no_mangle)] pub extern \"C\" fn answer(operation: u64) -> u64 { ",
-            "let mut status: u64 = operation; unsafe { ",
+            "let mut status: u64 = operation; let state: u64; unsafe { ",
             "asm!(\"int 0x80\", inlateout(\"rax\") status, in(\"rdi\") 1u64, ",
-            "in(\"rsi\") 2u64, inlateout(\"rdx\") 0u64 => _, ",
+            "in(\"rsi\") 2u64, inlateout(\"rdx\") 0u64 => state, ",
             "inlateout(\"r10\") 0u64 => _, inlateout(\"r8\") 0u64 => _, ",
-            "inlateout(\"r9\") 0u64 => _, options(nostack)); } status }"
+            "inlateout(\"r9\") 0u64 => _, options(nostack)); } status + state }"
         ))
         .unwrap();
         assert!(
@@ -35385,7 +35522,7 @@ mod tests {
                 .windows(2)
                 .any(|bytes| bytes == [0xcd, 0x80])
         );
-        assert_eq!(returning_syscall.bytes().last(), Some(&0xc3));
+        assert!(returning_syscall.bytes().contains(&0xc3));
 
         for source in [
             "#[unsafe(no_mangle)] pub unsafe extern \"C\" fn answer() -> u64 { asm!(\"pause\"); 42 }",
@@ -35896,6 +36033,10 @@ mod tests {
             (
                 "#[unsafe(no_mangle)] pub unsafe extern \"C\" fn halt() -> u64 { asm!(\"cli\", \"2:\", \"hlt\", \"jmp 2b\", options(noreturn, nomem, nostack)); 42 }",
                 CodegenErrorKind::InvalidInlineAssembly,
+            ),
+            (
+                "#[unsafe(no_mangle)] pub extern \"C\" fn answer() -> u64 { let value: u64; unsafe { asm!(\"nop\"); } value }",
+                CodegenErrorKind::RuntimeUseAfterMove,
             ),
             (
                 concat!(
@@ -36556,6 +36697,7 @@ mod tests {
                 "value",
                 RuntimeExpressionType::Integer(Some(crate::IntegerType::U64)),
                 true,
+                true,
                 1,
                 None,
             )
@@ -36564,6 +36706,7 @@ mod tests {
             .push_runtime_local(
                 "value",
                 RuntimeExpressionType::Integer(Some(crate::IntegerType::U64)),
+                true,
                 true,
                 1,
                 None,
@@ -36626,6 +36769,7 @@ mod tests {
             .push_runtime_local(
                 "value",
                 RuntimeExpressionType::Integer(Some(crate::IntegerType::U64)),
+                true,
                 true,
                 1,
                 None,
@@ -36787,6 +36931,7 @@ mod tests {
                     "bounded",
                     RuntimeExpressionType::Integer(Some(crate::IntegerType::U64)),
                     true,
+                    true,
                     1,
                     None,
                 )
@@ -36798,6 +36943,7 @@ mod tests {
                 .push_runtime_local(
                     "overflow",
                     RuntimeExpressionType::Integer(Some(crate::IntegerType::U64)),
+                    true,
                     true,
                     1,
                     None,
@@ -36890,6 +37036,7 @@ mod tests {
                 name: "first",
                 ty: RuntimeExpressionType::Integer(Some(crate::IntegerType::U16)),
                 mutable: false,
+                initialized: true,
                 declaration_span: Some(translate_span(
                     function.body_expression_span.start,
                     body.locals()[0].unwrap().name_span,
@@ -36903,6 +37050,7 @@ mod tests {
                 name: "second",
                 ty: RuntimeExpressionType::Integer(Some(crate::IntegerType::U16)),
                 mutable: false,
+                initialized: true,
                 declaration_span: Some(translate_span(
                     function.body_expression_span.start,
                     body.locals()[1].unwrap().name_span,
@@ -36976,6 +37124,7 @@ mod tests {
                 "second",
                 RuntimeExpressionType::Integer(Some(crate::IntegerType::U16)),
                 false,
+                true,
                 1,
                 Some(translate_span(
                     function.body_expression_span.start,
