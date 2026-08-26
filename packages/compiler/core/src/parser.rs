@@ -480,8 +480,8 @@ impl<'source> NestedLoopConditionalBlock<'source> {
         self.action_count
     }
 
-    pub const fn else_arm(&self) -> Option<NestedLoopConditionalArm<'source>> {
-        self.else_arm
+    pub const fn else_arm(&self) -> Option<&NestedLoopConditionalArm<'source>> {
+        self.else_arm.as_ref()
     }
 
     pub fn parse_condition<const MAX_NODES: usize>(

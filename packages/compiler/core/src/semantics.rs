@@ -1524,26 +1524,29 @@ fn evaluate_const_loop<'source, const MAX_ITEMS: usize, const MAX_PARAMETERS: us
                                     {
                                         continue;
                                     }
-                                    if branch.else_arm().is_some() {
-                                        return Err(SemanticErrorKind::UnsupportedConstCall);
-                                    }
                                     let condition = branch
                                         .parse_condition::<MAX_CONST_FUNCTION_EXPRESSION_NODES>()
                                         .map_err(|error| {
                                             SemanticErrorKind::Expression(error.kind)
                                         })?;
-                                    if !evaluate_boolean_const_expression(
+                                    let condition_is_true = evaluate_boolean_const_expression(
                                         context,
                                         symbol_count,
                                         &condition,
                                         condition.root(),
                                         resolver,
                                         depth,
-                                    )? {
+                                    )?;
+                                    let (selected_actions, selected_terminal) = if condition_is_true
+                                    {
+                                        (branch.actions(), branch.terminal)
+                                    } else if let Some(else_arm) = branch.else_arm() {
+                                        (else_arm.actions(), else_arm.terminal)
+                                    } else {
                                         continue;
-                                    }
+                                    };
                                     let branch_checkpoint = resolver.count;
-                                    for action in branch.actions().iter().flatten() {
+                                    for action in selected_actions.iter().flatten() {
                                         match action {
                                             crate::ConditionalLoopAction::Local(local) => {
                                                 evaluate_const_local(
@@ -1576,7 +1579,7 @@ fn evaluate_const_loop<'source, const MAX_ITEMS: usize, const MAX_PARAMETERS: us
                                             }
                                         }
                                     }
-                                    match branch.terminal {
+                                    match selected_terminal {
                                         crate::NestedLoopUnconditionalControl::Break(target) => {
                                             resolver.truncate(branch_checkpoint)?;
                                             resolver.truncate(nested_checkpoint)?;
@@ -5767,15 +5770,17 @@ mod tests {
     #[test]
     fn evaluates_actions_before_nested_branch_terminals() {
         let module = Parser::new(
-            "const fn choose(mode: u8) -> u8 { let mut inner: u8 = 0; loop { loop { inner += 1; if mode == 0 { let result: u8 = inner + 40; result + 1; return result; } if mode == 1 && inner < 3 { inner += 1; continue; } if mode == 2 { inner += 4; break; } break; } return inner; } } const RETURNED: u8 = choose(0); const CONTINUED: u8 = choose(1); const BROKEN: u8 = choose(2); const FALLTHROUGH: u8 = choose(3);",
+            "const fn choose(mode: u8) -> u8 { let mut inner: u8 = 0; loop { loop { inner += 1; if mode == 0 { let result: u8 = inner + 40; result + 1; return result; } if mode == 1 && inner < 3 { inner += 1; continue; } if mode == 2 { inner += 4; break; } break; } return inner; } } const fn choose_else(primary: bool) -> u8 { loop { loop { if primary { let result: u8 = 40; return result; } else { let result: u8 = 50; return result; } } } } const RETURNED: u8 = choose(0); const CONTINUED: u8 = choose(1); const BROKEN: u8 = choose(2); const FALLTHROUGH: u8 = choose(3); const PRIMARY: u8 = choose_else(true); const ELSE: u8 = choose_else(false);",
         )
-        .parse_module::<6, 4>()
+        .parse_module::<9, 4>()
         .unwrap();
-        let values = analyze_constants::<4, 128, 6, 4>(&module, TargetLayout::X86_64).unwrap();
+        let values = analyze_constants::<6, 128, 9, 4>(&module, TargetLayout::X86_64).unwrap();
         assert_eq!(values.resolve("RETURNED"), Some(41));
         assert_eq!(values.resolve("CONTINUED"), Some(3));
         assert_eq!(values.resolve("BROKEN"), Some(5));
         assert_eq!(values.resolve("FALLTHROUGH"), Some(1));
+        assert_eq!(values.resolve("PRIMARY"), Some(40));
+        assert_eq!(values.resolve("ELSE"), Some(50));
     }
 
     #[test]
