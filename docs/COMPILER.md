@@ -976,6 +976,13 @@ locals. ORACLE-0002 accepts direct field return and a loop-carried identity
 reborrow from an initialized parameter field, accepts owner reuse after last
 use, and rejects a live competing owner borrow with E0499.
 
+The same initializer transfer covers multiple tuple fields independently and
+joins a conditional element only when both expression arms resolve to the same
+parameter origin. A differing-origin element remains unknown rather than
+borrowing authority from a sibling field. ORACLE-0002 accepts the equal-second-
+parameter conditional element, permits reuse after last use, and rejects a live
+competing borrow of that second owner with E0499.
+
 The first modern trait-solver foundation is an explicit bounded implemented-
 goal representation. Stable trait/type/inference/placeholder identities remain
 distinct; canonicalization replaces inference identities with first-occurrence

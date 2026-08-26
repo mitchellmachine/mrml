@@ -331,6 +331,15 @@ returned child remained live with E0499. Temporary sources and metadata were
 removed. This records only exact tuple-literal parameter origins, not general
 aggregate initialization, loop fixed points, or region inference.
 
+A subsequent independently authored Rust 2024 metadata-only probe against the
+same exact toolchain and commit accepted a two-field mutable-reference tuple
+whose second element selected the same second parameter in both conditional
+arms, then returned that second field. The caller could reuse the second owner
+after the returned child's last use. A separate invocation rejected a competing
+mutable borrow while the child remained live with E0499. Temporary sources and
+metadata were removed. This is exact equal-origin conditional initializer
+evidence, not arbitrary aggregate or path-sensitive origin inference.
+
 An independently authored Rust 2024 metadata-only probe against that same exact
 toolchain and commit compiled `asm!("cmp rcx, rcx", in("rcx") value,
 options(nomem, nostack))`. This records black-box acceptance of that exact

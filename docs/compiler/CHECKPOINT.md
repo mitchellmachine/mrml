@@ -700,6 +700,13 @@ field return and a loop identity-reborrow from that field, accepts owner reuse
 after last use, and rejects a live competing borrow with E0499. Windows and Arch
 remain at 987 tests per host.
 
+Multi-field tuple literals retain a separate projected origin per field. A
+conditional reference element seeds its field only when both arms prove the
+same parameter; unequal first/second origins fail closed. Focused caller tests
+retain the second owner's loan, reject a live competitor, and accept restoration
+after last use. ORACLE-0002 accepts the exact equal-origin conditional element
+and rejects the competitor with E0499. Both hosts remain at 987 tests.
+
 Inferred locals now become reassignment-origin eligible only when their
 initializer already proved a compatible parameter origin. This preserves valid
 indexed scalar alias replacement while preventing an inferred slice alias from

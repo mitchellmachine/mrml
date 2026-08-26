@@ -3989,6 +3989,13 @@ and post-last-use restoration. The pinned oracle accepts those exact parameter-
 backed shapes and rejects the live competitor with E0499. Both hosts remain at
 987 tests.
 
+Multi-field initialization uses one independent key per tuple field. An exact
+conditional reference element records an origin only when both arms resolve to
+the same parameter; differing first/second origins remain unavailable. Focused
+direct and caller tests cover the equal-origin result, ambiguity, live conflict,
+and post-last-use restoration. The pinned oracle accepts the equal-second-
+parameter conditional element and rejects its live competing borrow with E0499.
+
 The conditional projected-reassignment milestone extends the bounded tuple-field
 loan chain across a conditional shared-reference assignment. The exact dated
 oracle rejects mutation of either conditional owner and of the field's replaced
