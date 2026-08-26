@@ -5654,6 +5654,25 @@ does not claim nested projections, general aggregate provenance, named regions,
 or complete Polonius semantics. The `no_std`/allocation/unsafe hygiene scan
 remained empty.
 
+The scoped unsafe ordinary-assembly milestone at `46ee91d8` preserves one
+`unsafe { asm!(...); }` statement as an explicitly authorized bounded statement
+rather than leaking authority to adjacent assembly. The typed terminal assembly
+milestones add exact x86-64 `int3`, seven-register `int 0x80`, and the first-
+party `cli`/`hlt` loop. Terminal forms omit fabricated returns; returning
+syscalls evaluate seven `u64` inputs left-to-right, preserve every result before
+writing mutable named-local outputs, and discard only explicit `_` outputs.
+Unsupported scopes, registers, operand types/orders, output places, labels,
+options, and nonterminal noreturn forms fail closed.
+
+The pinned ORACLE-0002 toolchain accepted independently authored probes for all
+four source families. ELF64 and COFF replacements cover native object admission;
+the interrupt and privileged instructions were not executed. After commit
+`9a312d4e`, Windows gnullvm and native Arch Linux WSL each pass 646 library
+tests, one component-interface probe, 10 conformance tests, and 342 replacement
+tests: 999 compiler tests per host. General unsafe statement blocks, arbitrary
+assembly, general labels, unrestricted output places, runtime interrupt
+behavior, and physical privileged-mode evidence remain unsupported.
+
 The bounded function-return outlives milestone at `962aedcc` passed all 764
 compiler and driver tests on Windows gnullvm and all 764 in release mode on
 native Arch Linux WSL, plus warnings-denied compiler-only Clippy on both hosts
