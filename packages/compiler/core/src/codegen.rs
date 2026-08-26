@@ -2556,7 +2556,7 @@ fn x86_64_inline_output_place<'source, const MAX_PARAMETERS: usize>(
             .ok_or(CodegenErrorKind::InvalidInlineAssembly)?;
         if name.contains(['[', ']'])
             || x86_64_naked_external_symbol(name) != Some(name)
-            || x86_64_naked_external_symbol(index) != Some(index)
+            || index.is_empty()
         {
             return Err(CodegenErrorKind::InvalidInlineAssembly);
         }
@@ -2579,24 +2579,6 @@ fn x86_64_inline_output_place<'source, const MAX_PARAMETERS: usize>(
         if runtime_type_from_array_element(element)
             != RuntimeExpressionType::Integer(Some(crate::IntegerType::U64))
         {
-            return Err(CodegenErrorKind::RuntimeTypeMismatch);
-        }
-        let index_ty = locals
-            .iter()
-            .rev()
-            .flatten()
-            .find(|local| local.name == index)
-            .map(|local| local.ty)
-            .or_else(|| {
-                function
-                    .parameters()
-                    .iter()
-                    .flatten()
-                    .find(|parameter| parameter.name == index)
-                    .and_then(|parameter| runtime_type_from_text(parameter.ty.text))
-            })
-            .ok_or(CodegenErrorKind::UnknownRuntimeName)?;
-        if index_ty != RuntimeExpressionType::Integer(Some(crate::IntegerType::Usize)) {
             return Err(CodegenErrorKind::RuntimeTypeMismatch);
         }
         return Ok(X86_64InlineOutputPlace {
@@ -8947,6 +8929,18 @@ fn preanalyze_x86_64_inline_output_index<
             kind: CodegenErrorKind::Expression(error.kind),
             span,
         })?;
+    let ty = runtime_expression_type_with_locals(function, resolver, locals, &tree, tree.root(), 0)
+        .map_err(|kind| CodegenError { kind, span })?;
+    if !matches!(
+        ty,
+        RuntimeExpressionType::Integer(None)
+            | RuntimeExpressionType::Integer(Some(crate::IntegerType::Usize))
+    ) {
+        return Err(CodegenError {
+            kind: CodegenErrorKind::RuntimeTypeMismatch,
+            span,
+        });
+    }
     preanalyze_runtime_expression_reads(facts, locals, function, resolver, &tree, span)
 }
 
@@ -19635,20 +19629,18 @@ impl<
         }
     }
 
-    fn emit_x86_64_inline_output_prepare(
+    fn emit_x86_64_inline_output_prepare<const MAX_EXPRESSION_NODES: usize>(
         &mut self,
         storage: X86_64InlineResolvedOutputStorage<'tree>,
     ) -> Result<(), CodegenError> {
         if let X86_64InlineResolvedOutputStorage::DynamicArray { index, count, .. } = storage {
-            self.record_identifier_read(
-                index,
-                RuntimePlaceProjections::EMPTY,
-                Span {
-                    start: 0,
-                    end: index.len(),
-                },
-            )?;
-            self.emit_identifier(index)?;
+            let tree = crate::ExpressionParser::<MAX_EXPRESSION_NODES>::new(index)
+                .parse()
+                .map_err(|error| CodegenError {
+                    kind: CodegenErrorKind::Expression(error.kind),
+                    span: error.span,
+                })?;
+            self.emit_expression(&tree, tree.root(), 0)?;
             self.emit(&[0x48, 0x83, 0xf8, count as u8])?;
             self.emit_trap_branch(0x83)?;
             self.emit(&[0x50])?;
@@ -26435,7 +26427,7 @@ impl<
                     RuntimePlaceAccess::Write,
                     statement.span,
                 )?;
-                self.emit_x86_64_inline_output_prepare(destination)?;
+                self.emit_x86_64_inline_output_prepare::<MAX_EXPRESSION_NODES>(destination)?;
                 self.emit(&[0x48, 0xc7, 0xc0, 0x07, 0x00, 0x00, 0x00])?;
                 return self.emit_x86_64_inline_output_store(destination);
             }
@@ -26479,7 +26471,7 @@ impl<
                         RuntimePlaceAccess::Write,
                         statement.span,
                     )?;
-                    self.emit_x86_64_inline_output_prepare(destination)?;
+                    self.emit_x86_64_inline_output_prepare::<MAX_EXPRESSION_NODES>(destination)?;
                     let previous_width = self.width;
                     self.width = runtime_expression_width(ty)
                         .ok_or(self.error(CodegenErrorKind::RuntimeTypeMismatch))?;
@@ -26503,7 +26495,7 @@ impl<
                     RuntimePlaceAccess::ReadModifyWrite,
                     statement.span,
                 )?;
-                self.emit_x86_64_inline_output_prepare(destination)?;
+                self.emit_x86_64_inline_output_prepare::<MAX_EXPRESSION_NODES>(destination)?;
                 self.emit_x86_64_inline_output_load(destination)?;
                 self.emit(&[0x48, 0xff, 0xc0])?;
                 return self.emit_x86_64_inline_output_store(destination);
@@ -30576,12 +30568,12 @@ mod tests {
             concat!(
                 "#[unsafe(no_mangle)] pub unsafe extern \"C\" fn answer(index: usize) -> u64 { ",
                 "let mut values: [u64; 2] = [1, 2]; ",
-                "asm!(\"mov rax, 7\", lateout(\"rax\") values[index]); values[0] }"
+                "asm!(\"mov rax, 7\", lateout(\"rax\") values[index % 2]); values[0] }"
             ),
             concat!(
                 "#[unsafe(no_mangle)] pub unsafe extern \"C\" fn answer(index: usize) -> u64 { ",
                 "let mut values: [u64; 2] = [1, 2]; ",
-                "asm!(\"inc rax\", inout(\"rax\") values[index]); values[0] }"
+                "asm!(\"inc rax\", inout(\"rax\") values[(index + 1) % 2]); values[0] }"
             ),
             concat!(
                 "#[unsafe(no_mangle)] pub unsafe extern \"C\" fn answer(index: usize) -> u64 { ",
@@ -30783,6 +30775,10 @@ mod tests {
             ),
             (
                 "#[unsafe(no_mangle)] pub unsafe extern \"C\" fn answer(index: u64) -> u64 { let mut values: [u64; 2] = [1, 2]; asm!(\"inc rax\", inout(\"rax\") values[index]); values[0] }",
+                CodegenErrorKind::RuntimeTypeMismatch,
+            ),
+            (
+                "#[unsafe(no_mangle)] pub unsafe extern \"C\" fn answer(index: bool) -> u64 { let mut values: [u64; 2] = [1, 2]; asm!(\"inc rax\", inout(\"rax\") values[index]); values[0] }",
                 CodegenErrorKind::RuntimeTypeMismatch,
             ),
             (
