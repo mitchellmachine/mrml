@@ -1114,6 +1114,17 @@ WSL each pass 546 library tests, one component-interface probe, 10 conformance
 tests, and 335 replacement tests: 892 compiler tests per host. General candidate
 backtracking and source integration remain unsupported.
 
+The source marker-trait milestone integrates the first trait syntax with the
+canonical allocation-free module parser. It accepts bounded empty marker
+declarations, preserves visibility and source spans, and lowers declarations in
+source order into a separate fixed 64-entry table of stable solver `TraitId`
+identities. Duplicate trait names, cross-kind duplicate definitions, and table
+overflow fail explicitly. Unsupported generic parameters, supertraits,
+associated items, methods, implementations, and trait-bearing types remain
+closed. Windows gnullvm and native Arch Linux WSL each pass 551 library tests,
+one component-interface probe, 10 conformance tests, and 335 replacement tests:
+897 compiler tests per host.
+
 The premise-bearing rigid-normalization milestone proves the selected generic
 implementation's instantiated trait and projection predicates before exposing
 its associated value. It shares the caller's 16-frame rigid proof stack and
