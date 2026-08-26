@@ -127,6 +127,13 @@ constant array-element output shapes only, not for dynamic indexing, general
 places, register allocation, or assembly semantics. Temporary source and
 metadata were removed.
 
+An independently authored Rust 2024 metadata-only composed-loop pair against
+this exact toolchain and commit accepted an outer-loop same-origin mutable
+reassignment followed by an inner-loop conditional return. Replacing that outer
+alias with local storage failed at the nested return with E0515. This is black-
+box evidence for that exact composed incoming state, not general nested-loop or
+region inference. Temporary sources and metadata were removed.
+
 An independently authored Rust 2024 metadata-only loop probe against this exact
 toolchain and commit accepted a same-origin mutable reborrow assignment before a
 direct conditional return. The matching probe that replaced the alias with

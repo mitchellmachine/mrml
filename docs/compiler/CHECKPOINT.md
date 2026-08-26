@@ -545,6 +545,16 @@ Arch each pass 643 library tests, one component-interface probe, 10 conformance
 tests, and 335 replacement tests: 989 compiler tests per host. Nested-loop state
 transfer and general fixed points remain incomplete.
 
+Nested-loop return/stability analysis now accepts an explicit incoming local,
+projected, type, mutability, and compatibility state. The same implementation is
+used both at function-level loop state and after outer-loop declarations,
+assignments, and branch joins. Proven-stable nested edges preserve that outer
+state. ORACLE-0002 accepts an outer same-origin reassignment before a nested
+conditional return and rejects a local-backed reassignment with E0515. Windows
+and Arch each pass 643 library tests, one component-interface probe, 10
+conformance tests, and 335 replacement tests: 989 compiler tests per host.
+General nested-loop exit-state transfer and fixed points remain incomplete.
+
 The conditional callee-local reassignment milestone evaluates supported direct
 assignments from a copy of the incoming fixed local-origin state for every
 conditional outcome, then joins each local independently. A missing `else`

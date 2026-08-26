@@ -1303,6 +1303,12 @@ post-action state directly to the loop-exit and backedge accumulators. They are
 excluded from the later-operation fallthrough join; only nonterminal arms and an
 implicit missing `else` continue. ORACLE-0002 accepts parameter-backed break and
 continue arms and rejects a local-backed break arm with E0515.
+Nested-loop ordered-return and stable-edge analysis is now state-parameterized
+and reused after outer-loop declarations, assignments, and branch transfers.
+The nested block observes the exact active outer state while its proven stable
+edges leave that state unchanged for later outer operations. ORACLE-0002 accepts
+an outer same-origin reassignment followed by a nested conditional return and
+rejects the corresponding local-backed reassignment with E0515.
 
 The first modern trait-solver foundation is an explicit bounded implemented-
 goal representation. Stable trait/type/inference/placeholder identities remain

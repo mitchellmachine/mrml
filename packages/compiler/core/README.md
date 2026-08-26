@@ -4175,6 +4175,13 @@ the later-operation fallthrough join. The pinned oracle accepts parameter-
 backed terminal controls and rejects a local-backed break arm with E0515. Both
 hosts remain at 989 compiler tests; nested-loop state transfer and general fixed
 points remain incomplete.
+Nested-loop ordered-return and stable-edge analysis is now factored over an
+explicit incoming state and composes after outer-loop declarations, assignments,
+and branch joins. Stable nested edges preserve that state for later outer
+operations. The pinned oracle accepts an outer same-origin reassignment before a
+nested return and rejects the local-backed counterpart with E0515. Both hosts
+remain at 989 compiler tests; general nested-loop exit-state transfer and fixed
+points remain incomplete.
 
 Exact typed tuple literals now seed the same projected state when a local is
 declared. Every reference field is checked against the declared tuple element
