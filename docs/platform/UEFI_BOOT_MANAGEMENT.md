@@ -81,10 +81,16 @@ exact `BOOTX64.EFI` shell program token and produces one authority-free
 `TotalMicrovmOnce` selection. Empty options select the configured default;
 non-ASCII input, embedded NULs, ambiguous whitespace, unknown programs,
 additional tokens, and every other isolation spelling fail closed. Windows and
-Linux each pass 26 focused UEFI-library tests and the UEFI target builds. The
-loader does not yet consume this selection or authenticate it into the kernel
-handoff, so the menu, EFI Shell selector, and runtime boot effect remain
-**PLANNED**.
+Linux each pass 27 focused UEFI-library tests and the UEFI target builds. The
+real loader now obtains `LoadedImageProtocol.LoadOptions` before boot-services
+exit, checks the byte bound, UTF-16 width, pointer nullness and alignment, and
+feeds only that validated slice to the shared parser. It encodes
+`TotalMicrovmOnce` as a distinct canonical flag in the same trusted-loader
+handoff that binds the authenticated kernel and release evidence; the kernel
+decoder retains it as an authority-free `BootIsolationOverride`. Empty options
+produce no override, and malformed options stop the boot. Menu presentation,
+OVMF/EFI-Shell execution evidence, policy composition, and runtime Total effect
+remain **PLANNED**.
 
 The conventional fallback `\EFI\BOOT\BOOTX64.EFI` may be installed only under
 policy that proves ownership/non-conflict and previews backup/recovery or exact

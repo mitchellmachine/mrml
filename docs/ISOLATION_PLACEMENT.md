@@ -701,10 +701,14 @@ this selector. It accepts only empty LoadOptions, the exact Total option, or an
 exact `BOOTX64.EFI` shell program token followed by that option, and maps both
 menu optional data and shell input to the same authority-free typed selection.
 It rejects non-ASCII, oversized, embedded-NUL, ambiguous-whitespace, unknown,
-and extra-token inputs. Focused Windows/Linux tests pass and the UEFI target
-builds. Loader consumption, authenticated handoff binding, one-boot expiry, and
-strict runtime effect remain **PLANNED**; parser success is not a Total-mode
-boot or satisfaction claim.
+and extra-token inputs. The real loader now bounds and validates the firmware
+buffer before parsing, then places `TotalMicrovmOnce` in one new canonical
+trusted-loader handoff flag. The kernel decoder exposes the typed request
+separately from policy authority or effective-state proof; empty options carry
+no override. Windows and Linux each pass 549 kernel and 27 UEFI-library tests,
+and the UEFI target builds. Menu presentation, live OVMF/EFI-Shell selection,
+base-policy composition, and strict runtime effect remain **PLANNED**; a decoded
+request is not a Total-mode boot or satisfaction claim.
 
 ## Resources, devices, security, and monitoring
 

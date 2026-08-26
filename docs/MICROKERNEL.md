@@ -3020,6 +3020,17 @@ admission table. Broader adaptive isolation, automated VMM placement, and
 device projection remain `TRIGGERED` in
 [patents/REVIEW_LOG.md](patents/REVIEW_LOG.md).
 
+The UEFI boot path now carries the first typed one-boot isolation request across
+the trusted-loader boundary. The loader validates bounded firmware LoadOptions,
+uses the common exact-token parser, and sets one canonical handoff flag only for
+`TotalMicrovmOnce`. `BootHandoff` retains that authority-free override while an
+ordinary/default boot retains `None`; unknown flags and malformed options fail
+closed. Windows and Arch Linux each pass 549 kernel tests, both pass 27 UEFI
+library tests, and the UEFI target builds. No kernel policy composition or
+required-system runtime proof consumes this flag yet, so this is handoff
+integrity evidence—not a successful Total boot, OVMF/EFI-Shell execution, or
+physical firmware evidence.
+
 The hosted WHP and nested-KVM service runners now exercise the configured
 preparation path before real guest construction. Both build component and system
 policy records under separate setting capabilities, atomically commit revision

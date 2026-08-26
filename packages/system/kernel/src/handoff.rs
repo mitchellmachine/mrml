@@ -27,6 +27,7 @@ const FLAG_SERVICE_IMAGE: u16 = 1 << 5;
 const FLAG_RECOVERY_STATE: u16 = 1 << 6;
 const FLAG_COHERENT_RELEASE: u16 = 1 << 7;
 const FLAG_APPLICATION_IMAGE: u16 = 1 << 8;
+const FLAG_TOTAL_MICROVM_ONCE: u16 = 1 << 9;
 const KNOWN_FLAGS: u16 = FLAG_SECURE_BOOT
     | FLAG_MEASURED_BOOT
     | FLAG_ROLLBACK_PROTECTED
@@ -35,7 +36,16 @@ const KNOWN_FLAGS: u16 = FLAG_SECURE_BOOT
     | FLAG_SERVICE_IMAGE
     | FLAG_RECOVERY_STATE
     | FLAG_COHERENT_RELEASE
-    | FLAG_APPLICATION_IMAGE;
+    | FLAG_APPLICATION_IMAGE
+    | FLAG_TOTAL_MICROVM_ONCE;
+
+/// Authority-free, nonpersistent isolation overlay requested by the trusted
+/// loader for this boot. Runtime admission must still prove that Total mode is
+/// effective; this request cannot grant capabilities or authorize fallback.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum BootIsolationOverride {
+    TotalMicrovmOnce,
+}
 
 /// Canonical rollback-state metadata handed off by the authenticated loader.
 /// It is evidence data only and carries no recovery or storage authority.
@@ -391,6 +401,7 @@ pub struct BootHandoff {
     service: Option<ServiceLaunch>,
     application: Option<ApplicationLaunch>,
     recovery_state: Option<RecoveryStateMetadata>,
+    isolation_override: Option<BootIsolationOverride>,
 }
 
 impl BootHandoff {
@@ -433,6 +444,10 @@ impl BootHandoff {
 
     pub const fn recovery_state(&self) -> Option<RecoveryStateMetadata> {
         self.recovery_state
+    }
+
+    pub const fn isolation_override(&self) -> Option<BootIsolationOverride> {
+        self.isolation_override
     }
 
     /// Parses a bounded canonical handoff and emits validated regions in
@@ -549,6 +564,8 @@ impl BootHandoff {
         } else {
             None
         };
+        let isolation_override = (flags & FLAG_TOTAL_MICROVM_ONCE != 0)
+            .then_some(BootIsolationOverride::TotalMicrovmOnce);
         let pixel_format = match input[164] {
             0 => PixelFormat::RedGreenBlueReserved,
             1 => PixelFormat::BlueGreenRedReserved,
@@ -664,6 +681,7 @@ impl BootHandoff {
             service,
             application,
             recovery_state,
+            isolation_override,
         })
     }
 }
@@ -1007,6 +1025,54 @@ pub fn encode_handoff_with_smp_service_and_recovery(
         recovery_state,
         output,
     )
+}
+
+/// Encodes the ordinary authenticated loader handoff plus an optional strict
+/// one-boot isolation request. The request is a flag within the same canonical
+/// handoff; it is neither persistent policy nor evidence of runtime success.
+#[allow(clippy::too_many_arguments)]
+pub fn encode_handoff_with_smp_service_recovery_and_isolation(
+    image_version: u64,
+    entropy: [u8; 32],
+    image_measurement: [u8; 64],
+    secure_boot: bool,
+    measured_boot: bool,
+    rollback_protected: bool,
+    coherent_release: bool,
+    acpi_root: u64,
+    framebuffer: FramebufferInfo,
+    regions: &[MemoryRegion],
+    ap_trampoline: u64,
+    ap_stack_arena: u64,
+    service: ServiceLaunch,
+    recovery_state: Option<RecoveryStateMetadata>,
+    isolation_override: Option<BootIsolationOverride>,
+    madt: &[u8],
+    output: &mut [u8],
+) -> Result<usize, HandoffError> {
+    let length = encode_handoff_with_smp_service_and_recovery(
+        image_version,
+        entropy,
+        image_measurement,
+        secure_boot,
+        measured_boot,
+        rollback_protected,
+        coherent_release,
+        acpi_root,
+        framebuffer,
+        regions,
+        ap_trampoline,
+        ap_stack_arena,
+        service,
+        recovery_state,
+        madt,
+        output,
+    )?;
+    if isolation_override == Some(BootIsolationOverride::TotalMicrovmOnce) {
+        let flags = read_u16(output, 22) | FLAG_TOTAL_MICROVM_ONCE;
+        output[22..24].copy_from_slice(&flags.to_le_bytes());
+    }
+    Ok(length)
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -1918,8 +1984,39 @@ mod tests {
         );
         let decoded = BootHandoff::decode(&with_recovery, |_| {}).unwrap();
         assert_eq!(decoded.recovery_state(), Some(recovery));
+        assert_eq!(decoded.isolation_override(), None);
         assert!(!decoded.evidence().rollback_protected());
         assert!(decoded.evidence().coherent_release());
+
+        let mut with_isolation = [0u8; WITH_RECOVERY_LENGTH];
+        assert_eq!(
+            encode_handoff_with_smp_service_recovery_and_isolation(
+                7,
+                [1; 32],
+                [2; 64],
+                true,
+                true,
+                false,
+                true,
+                0x9000,
+                framebuffer,
+                &regions,
+                0x8000,
+                0x40_0000,
+                service,
+                Some(recovery),
+                Some(BootIsolationOverride::TotalMicrovmOnce),
+                &madt,
+                &mut with_isolation,
+            ),
+            Ok(WITH_RECOVERY_LENGTH)
+        );
+        let decoded = BootHandoff::decode(&with_isolation, |_| {}).unwrap();
+        assert_eq!(
+            decoded.isolation_override(),
+            Some(BootIsolationOverride::TotalMicrovmOnce)
+        );
+        assert_eq!(decoded.recovery_state(), Some(recovery));
 
         let recovery_offset =
             HANDOFF_HEADER_BYTES + 2 * HANDOFF_REGION_BYTES + HANDOFF_SERVICE_BYTES;

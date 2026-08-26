@@ -25,11 +25,51 @@ pub enum BootIsolationSelection {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum BootLoadOptionError {
     TooLong,
+    OddByteLength,
+    MissingBuffer,
+    MisalignedBuffer,
     NonAscii,
     EmbeddedNull,
     NonCanonicalWhitespace,
     UnknownProgram,
     UnknownOption,
+}
+
+/// Validates and parses the firmware-owned LoadOptions buffer from a loaded
+/// image. No firmware pointer is dereferenced until its byte length, nullness,
+/// and `u16` alignment have been checked.
+///
+/// # Safety
+///
+/// A non-null `loaded.load_options` must remain readable for exactly
+/// `loaded.load_options_size` bytes for the duration of this call.
+pub unsafe fn parse_loaded_image_boot_isolation(
+    loaded: &LoadedImageProtocol,
+) -> Result<BootIsolationSelection, BootLoadOptionError> {
+    let byte_length = loaded.load_options_size as usize;
+    let maximum_bytes = MAX_BOOT_LOAD_OPTION_UNITS * core::mem::size_of::<u16>();
+    if byte_length > maximum_bytes {
+        return Err(BootLoadOptionError::TooLong);
+    }
+    if !byte_length.is_multiple_of(core::mem::size_of::<u16>()) {
+        return Err(BootLoadOptionError::OddByteLength);
+    }
+    if byte_length == 0 {
+        return parse_boot_isolation_selection(&[]);
+    }
+    if loaded.load_options.is_null() {
+        return Err(BootLoadOptionError::MissingBuffer);
+    }
+    if !(loaded.load_options as usize).is_multiple_of(core::mem::align_of::<u16>()) {
+        return Err(BootLoadOptionError::MisalignedBuffer);
+    }
+    let options = unsafe {
+        core::slice::from_raw_parts(
+            loaded.load_options.cast::<u16>(),
+            byte_length / core::mem::size_of::<u16>(),
+        )
+    };
+    parse_boot_isolation_selection(options)
 }
 
 /// Parses the same bounded UEFI LoadOptions representation for a firmware boot
@@ -828,6 +868,24 @@ mod tests {
         output
     }
 
+    fn loaded_image(load_options: *mut c_void, load_options_size: u32) -> LoadedImageProtocol {
+        LoadedImageProtocol {
+            revision: 0,
+            parent_handle: core::ptr::null_mut(),
+            system_table: core::ptr::null_mut(),
+            device_handle: core::ptr::null_mut(),
+            file_path: core::ptr::null_mut(),
+            reserved: core::ptr::null_mut(),
+            load_options_size,
+            load_options,
+            image_base: core::ptr::null_mut(),
+            image_size: 0,
+            image_code_type: 0,
+            image_data_type: 0,
+            unload: 0,
+        }
+    }
+
     #[test]
     fn boot_isolation_options_share_one_exact_menu_and_shell_policy() {
         assert_eq!(
@@ -899,6 +957,46 @@ mod tests {
         );
         assert_eq!(
             parse_boot_isolation_selection(&[b'x' as u16; MAX_BOOT_LOAD_OPTION_UNITS + 1]),
+            Err(BootLoadOptionError::TooLong)
+        );
+    }
+
+    #[test]
+    fn loaded_image_boot_options_validate_firmware_buffer_before_parsing() {
+        let mut options = utf16_ascii("--isolation=total-microvm");
+        let byte_length = ("--isolation=total-microvm".len() * 2) as u32;
+        let loaded = loaded_image(options.as_mut_ptr().cast(), byte_length);
+        assert_eq!(
+            unsafe { parse_loaded_image_boot_isolation(&loaded) },
+            Ok(BootIsolationSelection::TotalMicrovmOnce)
+        );
+
+        let empty = loaded_image(core::ptr::null_mut(), 0);
+        assert_eq!(
+            unsafe { parse_loaded_image_boot_isolation(&empty) },
+            Ok(BootIsolationSelection::ConfiguredDefault)
+        );
+        let missing = loaded_image(core::ptr::null_mut(), 2);
+        assert_eq!(
+            unsafe { parse_loaded_image_boot_isolation(&missing) },
+            Err(BootLoadOptionError::MissingBuffer)
+        );
+        let odd = loaded_image(options.as_mut_ptr().cast(), 1);
+        assert_eq!(
+            unsafe { parse_loaded_image_boot_isolation(&odd) },
+            Err(BootLoadOptionError::OddByteLength)
+        );
+        let misaligned = loaded_image(options.as_mut_ptr().cast::<u8>().wrapping_add(1).cast(), 2);
+        assert_eq!(
+            unsafe { parse_loaded_image_boot_isolation(&misaligned) },
+            Err(BootLoadOptionError::MisalignedBuffer)
+        );
+        let oversized = loaded_image(
+            options.as_mut_ptr().cast(),
+            (MAX_BOOT_LOAD_OPTION_UNITS as u32 + 1) * 2,
+        );
+        assert_eq!(
+            unsafe { parse_loaded_image_boot_isolation(&oversized) },
             Err(BootLoadOptionError::TooLong)
         );
     }

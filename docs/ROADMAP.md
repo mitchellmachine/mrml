@@ -225,10 +225,14 @@ one-application proof does not establish required-system Total readiness.
 Boot-selector groundwork is now **PARTIALLY IMPLEMENTED** without skipping that
 runtime gate. The common UEFI library has one bounded allocation-free UTF-16
 LoadOptions parser for both boot-entry optional data and the EFI Shell form. It
-accepts only the configured-default form or the exact one-boot Total option,
-rejects ambiguity and additional tokens, passes 26 tests on Windows and Linux,
-and builds for UEFI. Actual loader consumption, authenticated handoff binding,
-expiry, menu presentation, and runtime enforcement remain **PLANNED**.
+accepts only the configured-default form or the exact one-boot Total option and
+rejects ambiguity and additional tokens. The real loader now validates the
+firmware buffer and carries that request through a canonical trusted-loader
+handoff flag; the kernel retains the typed authority-free override separately
+from effective runtime state. Windows/Linux pass 549 kernel and 27 UEFI tests,
+and the UEFI target builds. Menu presentation, live OVMF/EFI-Shell execution,
+base-policy composition, required-system inventory, and runtime enforcement
+remain **PLANNED**.
 
 The deployment lane is defined in [DEPLOYMENT.md](DEPLOYMENT.md) and must not
 displace the current foundational gate. Later work proceeds as separate bounded

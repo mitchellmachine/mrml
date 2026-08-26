@@ -12,6 +12,18 @@ isolation/Total MicroVM architecture remain **TRIGGERED** under the existing
 worldwide review. This technical screen establishes neither clearance nor
 infringement and does not replace independent human dual review.
 
+## 2026-08-26 — Trusted-loader Total-once handoff flag
+
+Patent review: **TRIGGERED** under the existing authenticated boot-time policy
+composition and adaptive-isolation/Total MicroVM worldwide review. This bounded
+increment reads the already parsed exact selection, sets one otherwise-unused
+canonical handoff flag, and retains the typed request in the kernel decoder. It
+adds no placement heuristic, fallback, VM construction, device projection,
+transport, persistence, or runtime satisfaction rule, but it is now actual
+boot-time policy input crossing the trusted-loader boundary rather than an
+isolated parser. No patent clearance or non-infringement conclusion is made;
+independent human dual review remains required before production deployment.
+
 Historical paths in this log are intentionally preserved. The canonical
 [old-to-current source-path map](PATH_MIGRATION.md) locates their present
 implementations without altering the original review evidence.

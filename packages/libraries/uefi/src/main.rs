@@ -7,7 +7,7 @@ use core::cell::UnsafeCell;
 use mrml_crypto::Sha3_512;
 use mrml_crypto::{LAMPORT_PUBLIC_KEY_BYTES, LAMPORT_SIGNATURE_BYTES};
 use mrml_kernel::{
-    ArtifactKind, BOOTSTRAP_STATE_BYTES, BuildReceipt, FramebufferInfo,
+    ArtifactKind, BOOTSTRAP_STATE_BYTES, BootIsolationOverride, BuildReceipt, FramebufferInfo,
     MAX_CUDA_KERNEL_BUNDLE_BYTES, MAX_HANDOFF_BYTES, MAX_HANDOFF_MADT_BYTES,
     MAX_KERNEL_IMAGE_BYTES, MAX_LAUNCH_POLICY_BYTES, MAX_SERVICE_IMAGE_BYTES, MAX_VM_IMAGE_BYTES,
     MemoryKind, MemoryRegion, MonotonicStateStore, PeImage, PendingBootRelease, PhysAddr,
@@ -18,7 +18,7 @@ use mrml_kernel::{
         PageTableBuildError, PageTableBuilder, PageTableStore, PerCpuPrivilegeStacks, VirtAddr,
         copy_madt,
     },
-    encode_handoff_with_smp_service_and_recovery,
+    encode_handoff_with_smp_service_recovery_and_isolation,
 };
 #[cfg(feature = "package-boot")]
 use mrml_package_format::{
@@ -317,6 +317,7 @@ pub unsafe extern "efiapi" fn efi_main(image: Handle, table: *mut SystemTable) -
 unsafe fn boot(image: Handle, table: *mut SystemTable) -> Result<(), Status> {
     let system = unsafe { table.as_mut() }.ok_or(LOAD_ERROR)?;
     let services = unsafe { system.boot_services.as_mut() }.ok_or(LOAD_ERROR)?;
+    let isolation_selection = unsafe { loaded_boot_isolation_selection(image, services) }?;
     let secure_boot = detect_secure_boot(system.runtime_services)?;
     if require_secure_boot() && !secure_boot {
         return Err(LOAD_ERROR);
@@ -717,6 +718,7 @@ unsafe fn boot(image: Handle, table: *mut SystemTable) -> Result<(), Status> {
             framebuffer,
             prepared_service,
             recovery_state,
+            isolation_selection,
         )
     }
 }
@@ -747,6 +749,7 @@ unsafe fn launch_after_exit(
     framebuffer: Framebuffer,
     service: PreparedService,
     recovery_state: Option<RecoveryStateMetadata>,
+    isolation_selection: BootIsolationSelection,
 ) -> ! {
     let map_bytes = unsafe { core::slice::from_raw_parts(MEMORY_MAP.0.get().cast(), map_size) };
     let regions = unsafe { &mut *REGIONS.0.get() };
@@ -789,6 +792,7 @@ unsafe fn launch_after_exit(
         &madt_storage[..madt_length],
         service,
         recovery_state,
+        isolation_selection,
     )
     .is_err()
     {
@@ -1399,6 +1403,20 @@ unsafe fn load_file(
     Ok(loaded)
 }
 
+/// Reads the current image's bounded UEFI LoadOptions before any boot-service
+/// exit. Firmware supplies the buffer, so size, nullness, alignment, and the
+/// complete UTF-16 token stream are validated before the shared parser runs.
+unsafe fn loaded_boot_isolation_selection(
+    image: Handle,
+    services: &BootServices,
+) -> Result<BootIsolationSelection, Status> {
+    let mut loaded_pointer = core::ptr::null_mut();
+    check(unsafe { (services.handle_protocol)(image, &LOADED_IMAGE_GUID, &mut loaded_pointer) })?;
+    let loaded =
+        unsafe { (loaded_pointer as *const LoadedImageProtocol).as_ref() }.ok_or(LOAD_ERROR)?;
+    unsafe { parse_loaded_image_boot_isolation(loaded) }.map_err(|_| LOAD_ERROR)
+}
+
 unsafe fn read_file_pages(
     file: &mut FileProtocol,
     services: &BootServices,
@@ -1474,6 +1492,7 @@ fn enter_kernel(
     madt: &[u8],
     service: PreparedService,
     recovery_state: Option<RecoveryStateMetadata>,
+    isolation_selection: BootIsolationSelection,
 ) -> Result<(), Status> {
     let placeholder = MemoryRegion::new(
         PhysAddr::new(0).map_err(|_| LOAD_ERROR)?,
@@ -1515,7 +1534,11 @@ fn enter_kernel(
     let handoff_page = unsafe { &mut *HANDOFF.0.get() };
     handoff_page.fill(0);
     let handoff = &mut handoff_page[..HANDOFF_BYTES];
-    let handoff_length = encode_handoff_with_smp_service_and_recovery(
+    let isolation_override = match isolation_selection {
+        BootIsolationSelection::ConfiguredDefault => None,
+        BootIsolationSelection::TotalMicrovmOnce => Some(BootIsolationOverride::TotalMicrovmOnce),
+    };
+    let handoff_length = encode_handoff_with_smp_service_recovery_and_isolation(
         kernel_version,
         entropy,
         kernel_measurement,
@@ -1530,6 +1553,7 @@ fn enter_kernel(
         transition.ap_stack_arena,
         service.launch,
         recovery_state,
+        isolation_override,
         madt,
         handoff,
     )

@@ -1011,10 +1011,13 @@ recovery policy changes are recorded where audit support exists.
 
 The UEFI library's bounded LoadOptions parser now recognizes the configured
 default or exact one-boot Total request identically for boot-entry optional data
-and an exact `BOOTX64.EFI` shell invocation. Recovery must still treat that
-decoded value as authority-free input: loader handoff binding, expiry, and
-runtime effect remain **PLANNED**, and malformed or unknown options fail rather
-than selecting Balanced or Recovery implicitly.
+and an exact `BOOTX64.EFI` shell invocation. The loader now validates the
+firmware-owned buffer and carries `TotalMicrovmOnce` in the canonical handoff;
+the kernel retains it only for that boot. Recovery must still treat the decoded
+value as authority-free input: it cannot prove effective placement, mutate the
+persistent default, or select fallback. Runtime composition and recovery UI
+remain **PLANNED**, and malformed or unknown options fail rather than selecting
+Balanced or Recovery implicitly.
 
 The kernel now exposes a **PARTIALLY IMPLEMENTED**, read-only aggregate recovery
 view of isolation state. Recovery must possess `INSPECT` for the exact monitor
