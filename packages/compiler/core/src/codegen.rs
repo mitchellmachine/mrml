@@ -35296,6 +35296,42 @@ mod tests {
     }
 
     #[test]
+    fn runtime_function_return_outlives_follow_shared_children_of_call_results() {
+        fn analyze(source: &str) -> Result<usize, CodegenError> {
+            let module = Parser::new(source).parse_module::<1, 8>().unwrap();
+            let Some(Item::Function(function)) = module.items()[0] else {
+                panic!("expected function")
+            };
+            let body = function.parse_body::<8>().unwrap();
+            let mut facts = RuntimeBodyFacts::EMPTY;
+            preanalyze_runtime_body_declarations::<_, 8, 40>(
+                &function,
+                &MutableReferenceCallResolver,
+                &body,
+                "&u16",
+                function.body_expression_span.start,
+                &mut facts,
+            )
+        }
+
+        for source in [
+            "fn value(input: &mut u16) -> &u16 { let returned: &mut u16 = identity(input); let child: &u16 = &*returned; child }",
+            "fn value(input: &mut u16, choose: bool) -> &u16 { let returned: &mut u16 = choose(input, choose); let child: &u16 = &*returned; child }",
+        ] {
+            analyze(source).unwrap();
+        }
+        for source in [
+            "fn value(input: &mut u16) -> &u16 { let mut local = *input; let returned: &mut u16 = identity(&mut local); let child: &u16 = &*returned; child }",
+            "fn value(input: &mut u16, choose: bool) -> &u16 { let mut local = *input; let returned: &mut u16 = choose(&mut local, choose); let child: &u16 = &*returned; child }",
+        ] {
+            assert_eq!(
+                analyze(source).unwrap_err().kind,
+                CodegenErrorKind::RuntimeReferenceOutlivesFunction
+            );
+        }
+    }
+
+    #[test]
     fn runtime_function_return_outlives_follow_loop_conditional_terminals() {
         fn analyze(source: &str) -> Result<usize, CodegenError> {
             let module = Parser::new(source).parse_module::<1, 8>().unwrap();
