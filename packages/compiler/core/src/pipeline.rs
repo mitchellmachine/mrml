@@ -816,6 +816,28 @@ mod tests {
     }
 
     #[test]
+    fn proves_associated_bindings_on_supertraits_before_codegen() {
+        let source = concat!(
+            "trait Parent<Input> { type Output; } ",
+            "trait Child: Parent<u8, Output = u16> {} ",
+            "impl Parent<u8> for u32 { type Output = u16; } impl Child for u32 {} ",
+            "#[unsafe(no_mangle)] pub extern \"C\" fn answer() -> u64 ",
+            "where u32: Child { 42 }"
+        );
+        compile(source, "answer", ObjectFormat::Coff).unwrap();
+
+        let mismatch = source.replace("{ type Output = u16; }", "{ type Output = u8; }");
+        let error = compile(&mismatch, "answer", ObjectFormat::Coff).unwrap_err();
+        assert!(matches!(
+            error.kind,
+            CompileErrorKind::TraitObligation(SourceTraitObligationError {
+                kind: crate::SourceTraitObligationErrorKind::Unsatisfied,
+                ..
+            })
+        ));
+    }
+
+    #[test]
     fn proves_generic_source_projection_premises_before_codegen() {
         let source = concat!(
             "trait Parent<Input> { type Output; } trait Child<Input> {} ",

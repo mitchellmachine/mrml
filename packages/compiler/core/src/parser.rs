@@ -3639,11 +3639,49 @@ impl<'source> Parser<'source> {
                     return Err(self.error(ParseErrorKind::TooManySupertraits, token));
                 }
                 let supertrait = self.identifier()?;
-                let (arguments, argument_count, consumed_outer_close) =
+                let (mut arguments, mut argument_count, consumed_outer_close) =
                     self.source_trait_arguments()?;
                 if consumed_outer_close {
                     let token = self.peek()?;
                     return Err(self.error(ParseErrorKind::ExpectedBody, token));
+                }
+                if arguments[..argument_count]
+                    .iter()
+                    .flatten()
+                    .any(|argument| argument.text.contains('='))
+                {
+                    let mut desugared = [None; MAX_FUNCTION_WHERE_PREDICATES];
+                    let mut desugared_count = 0usize;
+                    self.push_implemented_trait_bound(
+                        TypeRef {
+                            text: "Self",
+                            span: name.span,
+                        },
+                        supertrait,
+                        arguments,
+                        argument_count,
+                        &mut desugared,
+                        &mut desugared_count,
+                    )?;
+                    let Some(TraitImplementationWherePredicate::Implemented {
+                        trait_arguments,
+                        trait_argument_count,
+                        ..
+                    }) = desugared[0]
+                    else {
+                        unreachable!()
+                    };
+                    arguments = trait_arguments;
+                    argument_count = trait_argument_count;
+                    if where_predicate_count + desugared_count - 1 > MAX_FUNCTION_WHERE_PREDICATES {
+                        return Err(
+                            self.error(ParseErrorKind::TooManyWherePredicates, Some(supertrait))
+                        );
+                    }
+                    for predicate in desugared[1..desugared_count].iter().flatten() {
+                        where_predicates[where_predicate_count] = Some(*predicate);
+                        where_predicate_count += 1;
+                    }
                 }
                 supertraits[supertrait_count] = Some(TraitSupertrait {
                     name: supertrait.text,
@@ -4090,6 +4128,30 @@ mod tests {
             child.supertraits()[1].unwrap().arguments()[1].unwrap().text,
             "U"
         );
+    }
+
+    #[test]
+    fn desugars_associated_bindings_on_supertrait_paths() {
+        let source = "trait Child: Parent<u8, Output = u16> {}";
+        let module: TestModule<'_> = Parser::new(source).parse_module().unwrap();
+        let Some(Item::Trait(child)) = module.items()[0] else {
+            panic!("expected trait")
+        };
+        assert_eq!(child.supertraits()[0].unwrap().argument_count(), 1);
+        assert_eq!(
+            child.supertraits()[0].unwrap().arguments()[0].unwrap().text,
+            "u8"
+        );
+        assert_eq!(child.where_predicate_count(), 1);
+        assert!(matches!(
+            child.where_predicates()[0],
+            Some(TraitImplementationWherePredicate::ProjectionEquality {
+                self_type: TypeRef { text: "Self", .. },
+                associated_type: "Output",
+                expected_type: TypeRef { text: "u16", .. },
+                ..
+            })
+        ));
     }
 
     #[test]

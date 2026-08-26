@@ -9916,6 +9916,34 @@ mod tests {
     }
 
     #[test]
+    fn proves_associated_bindings_on_source_supertraits() {
+        let source = concat!(
+            "trait Parent<Input> { type Output; } ",
+            "trait Child: Parent<u8, Output = u16> {} ",
+            "impl Parent<u8> for u32 { type Output = u16; } impl Child for u32 {} ",
+            "fn check() where u32: Child {}"
+        );
+        let module = Parser::new(source).parse_module::<8, 1>().unwrap();
+        let traits = SourceTraitDeclarationTable::from_module(&module).unwrap();
+        let implementations =
+            SourceTraitImplementationTable::from_module(&module, &traits).unwrap();
+        implementations.prove_module(&module, &traits).unwrap();
+
+        let mismatch = source.replace("{ type Output = u16; }", "{ type Output = u8; }");
+        let module = Parser::new(&mismatch).parse_module::<8, 1>().unwrap();
+        let traits = SourceTraitDeclarationTable::from_module(&module).unwrap();
+        let implementations =
+            SourceTraitImplementationTable::from_module(&module, &traits).unwrap();
+        assert_eq!(
+            implementations
+                .prove_module(&module, &traits)
+                .unwrap_err()
+                .kind,
+            SourceTraitObligationErrorKind::Unsatisfied
+        );
+    }
+
+    #[test]
     fn lowers_exact_source_associated_type_values_for_projection() {
         let source = concat!(
             "trait Iterator { type Item; } ",
