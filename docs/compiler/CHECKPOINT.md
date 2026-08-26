@@ -1650,6 +1650,15 @@ tests, one component-interface probe, 10 conformance tests, and 335 replacement
 tests: 985 compiler tests per host. Deeper nested places, other element types,
 general memory effects, and general assembly remain absent.
 
+The discarded explicit-output milestone accepts exact `lateout("rax") _` on the
+fixed `mov rax, 7` template. It preserves the register-write declaration and
+machine instruction while deliberately creating no destination place, write
+fact, or writeback. The exact dated oracle accepted the independently authored
+Rust 2024 form. Windows gnullvm and native Arch Linux WSL each pass 639 library
+tests, one component-interface probe, 10 conformance tests, and 335 replacement
+tests: 985 compiler tests per host. Other explicit clobbers, additional registers,
+general effects, and general assembly remain absent.
+
 The premise-bearing rigid-normalization milestone proves the selected generic
 implementation's instantiated trait and projection predicates before exposing
 its associated value. It shares the caller's 16-frame rigid proof stack and

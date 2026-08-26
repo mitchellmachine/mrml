@@ -91,6 +91,18 @@ or new scheduling policy. Those adaptive-isolation mechanisms remain
 **TRIGGERED** under the existing review. Agent review is not legal clearance and
 does not replace independent human dual review.
 
+# 2026-08-26 — Discarded explicit inline-assembly output
+
+**Result: NOT_TRIGGERED after the discarded-output review.** This increment
+recognizes the conventional underscore discard marker on an already reviewed
+explicit RAX `lateout`, omits language-place bookkeeping and writeback, and emits
+the existing fixed instruction. It introduces no assembler, register-allocation,
+optimization, instruction-selection, alias-analysis, or code-generation
+algorithm. Other explicit clobbers, additional registers, general effects, and
+general assembly remain absent. Broader compiler completion remains partial;
+this technical screen is not a clearance or infringement conclusion and does
+not replace independent human dual review.
+
 ## 2026-08-25 — Caller-selected dual-placement service routing prerequisite
 
 Patent review: **NOT_TRIGGERED** for this bounded composition increment. One

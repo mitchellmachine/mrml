@@ -4791,6 +4791,12 @@ shared slices and non-`u64` elements fail closed. The pinned oracle accepted all
 three forms and both canonical hosts pass 985 compiler tests. Deeper places and
 general assembly remain unsupported.
 
+Exact `asm!("mov rax, 7", lateout("rax") _)` is a discarded explicit output.
+Preanalysis records no language-place access, while emission still performs the
+declared RAX write. The exact dated oracle accepted the original Rust 2024 form,
+and both canonical hosts pass 985 compiler tests. Other explicit clobbers and
+general assembly remain unsupported.
+
 The projection-bearing term milestone uses a fixed 64-node arena for flat leaf
 terms and associated-type projections whose trait self/argument positions refer
 only to earlier nodes. Identical nodes intern to one stable identity; invalid
