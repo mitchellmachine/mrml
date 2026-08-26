@@ -4047,6 +4047,10 @@ Conditional same-place arguments also inherit the expected call-reference
 reborrow context in both arms. A live result blocks a competing borrow, while
 post-last-use mutation succeeds; the pinned oracle matches with E0499 and
 acceptance respectively. Both hosts remain at 988 compiler tests.
+When the two conditional arms select distinct owners, the joined result retains
+both possible loans while live and releases both after last use. MRML's two
+`RuntimeBorrowConflict` cases match pinned-oracle E0503, and both post-use
+mutations are accepted. Both hosts remain at 988 compiler tests.
 
 Exact typed tuple literals now seed the same projected state when a local is
 declared. Every reference field is checked against the declared tuple element

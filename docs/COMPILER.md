@@ -1195,6 +1195,10 @@ Conditional reference arguments now inherit the call parameter's expected
 reborrow context in both arms: a live result blocks a competing owner borrow,
 and last use releases the joined loan. ORACLE-0002 matches with E0499 and an
 accepted post-use mutation respectively.
+Distinct-owner branches preserve both possible loans at the join: live-result
+access to either owner fails, while both owners become available after last use.
+ORACLE-0002 matches with E0503 for each live access and accepts both post-use
+mutations.
 
 The first modern trait-solver foundation is an explicit bounded implemented-
 goal representation. Stable trait/type/inference/placeholder identities remain

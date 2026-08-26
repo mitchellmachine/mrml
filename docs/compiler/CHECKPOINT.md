@@ -897,6 +897,11 @@ Both arms borrow under the expected mutable-reference parameter type; a live
 result rejects a competing owner borrow with `RuntimeBorrowConflict`/E0499, and
 post-last-use mutation succeeds. Both hosts remain at 988 compiler tests.
 
+Distinct-owner conditional arguments retain both possible loans at the join.
+A live result blocks competing access to either owner with
+`RuntimeBorrowConflict`, matching ORACLE-0002 E0503; after the result's last use,
+both owners can be mutated. Windows and Arch remain at 988 compiler tests.
+
 Multi-field tuple literals retain a separate projected origin per field. A
 conditional reference element seeds its field only when both arms prove the
 same parameter; unequal first/second origins fail closed. Focused caller tests

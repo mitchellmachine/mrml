@@ -403,6 +403,13 @@ mutable borrow before the result's later use with E0499. This is exact evidence
 for expected-reference reborrows across that conditional join, not general call
 coercion or region inference. Temporary sources and metadata were removed.
 
+A distinct-owner follow-up selected the first or second mutable parameter in
+the two conditional argument arms. This exact toolchain rejected direct access
+to either possible owner before a later result use with E0503, then compiled a
+separate case that copied the result and mutated both owners afterward. This is
+exact evidence for the joined loan set and its last-use release, not general
+path-sensitive regions. Temporary sources and metadata were removed.
+
 An independently authored Rust 2024 metadata-only probe against this exact
 toolchain and commit returned call-derived shared children through an explicit
 return and through a conditional early-return plus tail-return path. Both
