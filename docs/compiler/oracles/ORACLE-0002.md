@@ -193,6 +193,15 @@ conditional break before normalization failed at the enclosing return with
 E0515. This is black-box evidence for that exact terminal boundary, not general
 fixed-point or region inference. Temporary source and metadata were removed.
 
+Another independently authored Rust 2024 metadata-only pair against this exact
+toolchain and commit accepted parameter-backed and local-backed conditional
+inner continues joined with a final unconditional inner continue when a
+parameter overwrite preceded the only return. Rustc reported the final
+continue's suffix as unreachable; moving the return before normalization failed
+with E0515. This is black-box evidence for those exact mixed backedges, not
+general fixed-point or region inference. Temporary source and metadata were
+removed.
+
 An independently authored Rust 2024 metadata-only composed-loop pair against
 this exact toolchain and commit accepted an outer-loop same-origin mutable
 reassignment followed by an inner-loop conditional return. Replacing that outer

@@ -635,6 +635,17 @@ interface probe, 10 conformance tests, and 335 replacement tests: 989 compiler
 tests per host. Nested branching transfers and broader iterative fixed points
 remain incomplete.
 
+An unconditional inner-continue terminal now contributes its exact prefix as
+another backedge rather than an exit. It joins initial entry and every earlier
+conditional inner continue, must reproduce the same header on replay, and keeps
+its suffix unreachable; only returns and other exits require header-invariant
+prefixes. ORACLE-0002 accepts mixed parameter/local backedges after a parameter-
+backed return prefix and rejects the same return before normalization with
+E0515. Windows and Arch each pass 643 library tests, one component-interface
+probe, 10 conformance tests, and 335 replacement tests: 989 compiler tests per
+host. Nested branching transfers and broader iterative fixed points remain
+incomplete.
+
 The conditional callee-local reassignment milestone evaluates supported direct
 assignments from a copy of the incoming fixed local-origin state for every
 conditional outcome, then joins each local independently. A missing `else`

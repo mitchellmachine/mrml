@@ -1354,6 +1354,12 @@ nested-loop exit. Only conditional inner continues ordered before that terminal
 feed the header; the terminal prefix is checked as an exit, and its suffix is
 unreachable. ORACLE-0002 accepts differing backedges followed by a normalized
 unconditional break and rejects an earlier local-backed break with E0515.
+When the unconditional terminal is an inner continue, its exact prefix joins
+the earlier conditional backedges instead of being checked as an exit. The same
+single convergence replay and exit-prefix invariance rules apply, while the
+continue suffix remains unreachable. ORACLE-0002 accepts mixed parameter/local
+backedges normalized before a return and rejects a return before normalization
+with E0515.
 
 The first modern trait-solver foundation is an explicit bounded implemented-
 goal representation. Stable trait/type/inference/placeholder identities remain
