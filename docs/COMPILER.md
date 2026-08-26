@@ -1199,6 +1199,9 @@ Distinct-owner branches preserve both possible loans at the join: live-result
 access to either owner fails, while both owners become available after last use.
 ORACLE-0002 matches with E0503 for each live access and accepts both post-use
 mutations.
+Returning a shared child through the same conditional call join accepts an all-
+parameter origin set and fails closed when either arm is local-backed.
+ORACLE-0002 accepts the former and rejects the latter with E0515.
 
 The first modern trait-solver foundation is an explicit bounded implemented-
 goal representation. Stable trait/type/inference/placeholder identities remain

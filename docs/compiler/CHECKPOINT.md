@@ -902,6 +902,11 @@ A live result blocks competing access to either owner with
 `RuntimeBorrowConflict`, matching ORACLE-0002 E0503; after the result's last use,
 both owners can be mutated. Windows and Arch remain at 988 compiler tests.
 
+Conditional call-result escape joins now have direct evidence: two parameter-
+backed arms may return a shared child, while a parameter/local pair fails with
+`RuntimeReferenceOutlivesFunction`, matching ORACLE-0002 E0515. Both hosts
+remain at 988 compiler tests; general region inference remains unsupported.
+
 Multi-field tuple literals retain a separate projected origin per field. A
 conditional reference element seeds its field only when both arms prove the
 same parameter; unequal first/second origins fail closed. Focused caller tests

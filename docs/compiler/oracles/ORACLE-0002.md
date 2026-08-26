@@ -410,6 +410,13 @@ separate case that copied the result and mutated both owners afterward. This is
 exact evidence for the joined loan set and its last-use release, not general
 path-sensitive regions. Temporary sources and metadata were removed.
 
+An independently authored escape pair returned a shared child of an identity
+call whose argument conditionally selected two parameters or selected a
+parameter and function-local storage. This exact toolchain compiled the all-
+parameter case and rejected the mixed local case with E0515. This is exact
+evidence for the bounded conditional call-result origin join, not general
+interprocedural region inference. Temporary sources and metadata were removed.
+
 An independently authored Rust 2024 metadata-only probe against this exact
 toolchain and commit returned call-derived shared children through an explicit
 return and through a conditional early-return plus tail-return path. Both

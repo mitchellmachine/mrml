@@ -4051,6 +4051,10 @@ When the two conditional arms select distinct owners, the joined result retains
 both possible loans while live and releases both after last use. MRML's two
 `RuntimeBorrowConflict` cases match pinned-oracle E0503, and both post-use
 mutations are accepted. Both hosts remain at 988 compiler tests.
+The same joined origin set now has return-outlives coverage. An all-parameter
+conditional call result may return a shared child; substituting local storage in
+either possible origin set fails closed and matches pinned-oracle E0515. Both
+hosts remain at 988 compiler tests.
 
 Exact typed tuple literals now seed the same projected state when a local is
 declared. Every reference field is checked against the declared tuple element
