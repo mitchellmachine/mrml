@@ -5727,6 +5727,18 @@ nested-loop return coverage, general regions, named lifetime inference, or
 complete Polonius semantics. The `no_std`/allocation/unsafe hygiene scan
 remained empty.
 
+The direct string-reference delayed-initialization milestone at `1a177dea`
+replaces the uninitialized emitter's one-slot assumption with the exact bounded
+slot count and admits shared `&str` through the existing fat-reference
+assignment store. The assigned-loan and return-outlives paths remain unchanged.
+The pinned ORACLE-0002 toolchain accepted a direct parameter-backed `&str`
+assignment and return and rejected a missing-arm form with E0381. ELF64 and COFF
+replacements passed on Windows and native Arch Linux WSL: each host ran 647
+library tests, 1 component probe, 10 conformance tests, and 349 replacement
+tests, for 1,007 compiler tests. Conditional fat-reference assignment still
+fails closed pending a separate branch value/origin path; slices, mutable `str`,
+and general fat-pointer semantics are not claimed.
+
 The conditional thin-reference conformance milestone at `7847c11f` proves that
 the existing mutually exclusive first-write logic and assigned-loan relation
 retain all exhaustive branch origins through the CFG and return-outlives joins.

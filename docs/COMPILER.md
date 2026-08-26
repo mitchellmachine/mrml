@@ -2014,6 +2014,22 @@ component, 10 conformance, and 347 replacement tests (1,005 total). This does
 not claim named lifetime inference, fat references, aggregates, or complete
 Polonius semantics.
 
+### Direct string-reference delayed-initialization checkpoint
+
+Uninitialized shared `&str` locals now allocate their exact two bounded stack
+slots rather than using the former scalar-only placeholder. Preanalysis and
+emission agree on the same type-derived slot count, and direct assignment uses
+the existing fat-reference value store and assigned-loan/outlives relation.
+
+The exact ORACLE-0002 Rust 2024 toolchain accepted an independently authored
+direct parameter-backed `&str` assignment and return and rejected a missing-arm
+read with E0381. ELF64 and COFF replacements cover the accepted form and a
+focused control covers rejection. Windows and Arch each passed 647 unit, 1
+component, 10 conformance, and 349 replacement tests (1,007 total). Conditional
+fat-reference assignment remains fail-closed pending its distinct branch value-
+materialization/origin path; slices, mutable `str`, aggregates, and general fat-
+pointer semantics are not claimed.
+
 ### Conditional thin-reference first-write checkpoint
 
 Exhaustive conditional first writes to one uninitialized thin-reference local

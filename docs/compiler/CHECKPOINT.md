@@ -58,7 +58,18 @@ oracle upgrade receives a new immutable record and differential classification
 against all prior accepted probes. Keep Cargo on edition 2024 until a newer
 named edition can be adopted through a pinned, workspace-wide migration.
 
-## Latest conditional thin-reference initialization milestone
+## Latest direct string-reference initialization milestone
+
+Commit `1a177dea` makes uninitialized-local emission allocate the exact bounded
+slot count and admits direct shared `&str` delayed initialization through the
+existing fat-value store and outlives relation. ORACLE-0002 accepts the direct
+parameter-backed return and rejects a missing arm with E0381. Windows and native
+Arch Linux WSL each passed 647 library tests, 1 component probe, 10 conformance
+tests, and 349 replacement tests: 1,007 compiler tests per host. Conditional
+fat-reference assignment, slices, mutable `str`, and general fat-pointer
+semantics remain fail-closed.
+
+### Preceding conditional thin-reference initialization milestone
 
 Commit `7847c11f` proves that exhaustive conditional first writes retain every
 thin-reference assignment origin through the existing CFG and outlives joins.

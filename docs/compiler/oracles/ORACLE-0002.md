@@ -1121,3 +1121,11 @@ E0381. This is black-box evidence for those exact structured thin-reference
 origins and joins only; it does not establish named lifetimes, arbitrary nested
 joins, fat references, or complete Polonius semantics. Temporary sources and
 metadata were removed.
+
+An independently authored Rust 2024 metadata-only string-reference delayed-
+initialization pair against this exact toolchain and commit accepted direct
+assignment of a parameter-backed `&str` local followed by return. A conditional
+form without an `else` arm failed with E0381. This is black-box evidence for the
+exact direct two-word reference and missing-arm positions only; it does not
+establish conditional fat-reference value joins, slices, mutable `str`, or
+general fat-pointer semantics. Temporary sources and metadata were removed.
