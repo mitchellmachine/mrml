@@ -8409,3 +8409,15 @@ inference, optimization, instruction-selection, or runtime mechanism. CFG and
 native lowering remain fail-closed. Broader compiler completion remains partial;
 this technical screen is not a clearance or infringement conclusion and does
 not replace independent human dual review.
+
+# 2026-08-26 — Nested loop else-if CFG and ownership mapping
+
+**Result: NOT_TRIGGERED after the CFG/ownership review.** This increment maps a
+conventional conditional alternative into a distinct condition block, true
+action edge, false fallthrough edge, and existing target-aware terminal, then
+records expression reads under the existing ownership-event model. It adds no
+novel control-flow, region, alias, inference, fixed-point, optimization,
+instruction-selection, or runtime mechanism. Native lowering remains
+fail-closed. Broader compiler completion remains partial; this technical screen
+is not a clearance or infringement conclusion and does not replace independent
+human dual review.

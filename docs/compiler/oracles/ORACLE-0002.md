@@ -167,8 +167,9 @@ An independently authored Rust 2024 metadata-only nested-loop `else if` probe
 against this exact toolchain and commit accepted a scoped local followed by a
 return in both the primary and conditional alternative, plus false-path
 fallthrough to an inner break. MRML now retains one such alternative condition
-and evaluates its constant semantics, while CFG, ownership, and native emission
-remain fail-closed. This is syntax and control-shape evidence only, not general
+and evaluates its constant semantics. MRML also maps its distinct condition,
+true action successor, and false fallthrough into CFG and ownership facts, while
+native emission remains fail-closed. This is syntax and control-shape evidence only, not general
 branch-chain, region, or native-code evidence. Temporary source and metadata
 were removed.
 

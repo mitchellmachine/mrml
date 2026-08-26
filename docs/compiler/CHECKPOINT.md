@@ -698,8 +698,12 @@ The nested branch alternative record now distinguishes an unconditional
 span. Parsing remains bounded to one alternative arm and four scoped actions.
 Constant evaluation lazily tests the alternative only after a false primary,
 executes only the selected scoped actions, and preserves fallthrough when both
-conditions are false. CFG, ownership, direct/inline native emission, and longer
-alternative chains remain fail-closed. The exact dated oracle accepts the same
+conditions are false. CFG construction now gives the alternative condition a
+distinct sourced block, routes primary false into it, routes alternative true
+into scoped actions, and retains alternative false as fallthrough. Ownership
+preanalysis records and maps the alternative-condition reads separately from
+its actions and terminal. Direct/inline native emission and longer alternative
+chains remain fail-closed. The exact dated oracle accepts the same
 independently authored Rust 2024 control shape. Windows and Arch each continue
 to pass 645 library tests, one component-interface probe, 10 conformance tests,
 and 336 replacement tests: 992 compiler tests per host.

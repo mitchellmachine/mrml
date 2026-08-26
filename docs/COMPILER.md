@@ -1380,8 +1380,10 @@ that the returned origin outlives the function.
 The alternative record may instead retain one explicit `else if` condition and
 its exact source span. The bounded constant evaluator tests that condition only
 after the primary condition is false and preserves fallthrough when both are
-false. CFG, ownership, and native emission for the conditional alternative
-remain fail-closed; longer alternative chains remain unrepresented.
+false. CFG and ownership now use a distinct condition block and ownership
+location: primary false enters the alternative condition, alternative true
+enters its scoped actions, and alternative false preserves fallthrough. Native
+emission remains fail-closed; longer alternative chains remain unrepresented.
 The bounded constant evaluator selects
 exactly one arm, executes its actions under a lexical resolver checkpoint, and
 routes its target-aware terminal under the existing iteration limit. CFG
