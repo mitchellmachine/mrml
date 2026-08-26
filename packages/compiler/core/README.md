@@ -4145,6 +4145,12 @@ backedge. Condition-headed loops preserve only their zero-iteration input as a
 continuation. The pinned oracle accepts a stable parameter reborrow followed by
 an unreachable suffix and rejects a local-backed return with E0515. Both hosts
 remain at 989 compiler tests; mixed break/continue exits remain conservative.
+Direct break exits now carry the current outer origin state past the loop.
+Condition-headed loops join it with the zero-iteration input, whereas an
+unconditional loop has only the break outcome. Loop-local facts are discarded.
+The pinned oracle accepts an unconditional parameter overwrite and rejects the
+equivalent `while` zero-iteration/local path with E0515. Both hosts remain at
+989 compiler tests; conditional break/continue transfer remains conservative.
 
 Exact typed tuple literals now seed the same projected state when a local is
 declared. Every reference field is checked against the declared tuple element

@@ -502,6 +502,15 @@ with E0515. Windows and Arch each pass 643 library tests, one component-interfac
 probe, 10 conformance tests, and 335 replacement tests: 989 compiler tests per
 host. Mixed break/continue exit-state joining remains unsupported.
 
+Direct break exits now retain the current outer local/projected origin state.
+Condition-headed loops intersect that exit with the incoming zero-iteration
+path; unconditional loops use the exact break state, and loop-scoped locals are
+discarded. ORACLE-0002 accepts the unconditional parameter overwrite and rejects
+the corresponding `while` with E0515 because zero iterations retain local
+storage. Windows and Arch each pass 643 library tests, one component-interface
+probe, 10 conformance tests, and 335 replacement tests: 989 compiler tests per
+host. Conditional break/continue joins remain unsupported.
+
 The conditional callee-local reassignment milestone evaluates supported direct
 assignments from a copy of the incoming fixed local-origin state for every
 conditional outcome, then joins each local independently. A missing `else`

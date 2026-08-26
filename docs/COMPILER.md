@@ -1274,6 +1274,13 @@ backedge. A condition-headed loop retains only its zero-iteration input as a
 possible continuation. ORACLE-0002 accepts a stable reborrow with an unreachable
 suffix and rejects a local-backed return with E0515. Mixed break/continue exit
 state remains incomplete.
+Direct `break` now exports the current outer-local and projected origin state.
+A condition-headed loop intersects that exit with its zero-iteration input; an
+unconditional `loop` uses only the break state. Loop-scoped locals are discarded
+at the exit. ORACLE-0002 accepts a local-initialized alias overwritten by the
+parameter before an unconditional break and rejects the equivalent `while`
+because its zero-iteration path remains local-backed with E0515. Conditional
+break and continue joins remain incomplete.
 
 The first modern trait-solver foundation is an explicit bounded implemented-
 goal representation. Stable trait/type/inference/placeholder identities remain

@@ -135,6 +135,14 @@ evidence for that exact conditional exit after local-origin transfer, not a
 general loop fixed point, region inference, or complete Polonius semantics.
 Temporary sources and metadata were removed.
 
+An independently authored Rust 2024 metadata-only break pair against this exact
+toolchain and commit accepted a local-initialized mutable alias overwritten by a
+parameter before breaking from an unconditional loop. The equivalent condition-
+headed loop failed at its tail with E0515 because the zero-iteration path still
+referenced local storage. This is black-box evidence for those exact break and
+zero-iteration joins, not general loop or region inference. Temporary sources
+and metadata were removed.
+
 An independently authored Rust 2024 metadata-only unconditional-loop-return
 pair against this exact toolchain and commit accepted a same-origin mutable
 reborrow followed by an unreachable reassignment. The matching local-backed
