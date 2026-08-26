@@ -5783,3 +5783,15 @@ introduces no novel assembler, optimization, instruction-selection, relocation,
 or code-generation algorithm. Broader assembly support and compiler completion
 remain partial; this technical screen does not establish clearance or
 infringement and does not replace independent human dual review.
+
+# 2026-08-26 — Bounded naked local-label resolution
+
+**Result: NOT_TRIGGERED after the local-branch review.** This increment uses a
+conventional two-pass fixed-capacity layout to bind numeric local labels and
+calculate the published x86-64 near-jump rel32 displacement. Direction checks,
+duplicate rejection, checked offset arithmetic, and range validation introduce
+no novel assembler, linker, relocation, optimization, instruction-selection,
+or code-generation algorithm. External symbols and object relocations remain
+absent. Broader assembly support and compiler completion remain partial; this
+technical screen does not establish clearance or infringement and does not
+replace independent human dual review.
