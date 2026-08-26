@@ -15982,7 +15982,7 @@ fn runtime_reference_call_origin_parameter<const MAX_PARAMETERS: usize, const MA
                                             &mut arm_mutability,
                                             &mut arm_return_compatibility,
                                             &mut arm_local_count,
-                                            terminal.is_none(),
+                                            true,
                                         )?;
                                         match terminal {
                                             None => merge_outcome(
@@ -37599,6 +37599,17 @@ mod tests {
                 body_expression: concat!(
                     "loop { if first { let mut changed: &mut u16 = value; ",
                     "changed = &mut *changed; return changed; } else { return value; } }"
+                ),
+                ..loop_branch
+            }),
+            Some(0)
+        );
+        assert_eq!(
+            runtime_reference_call_origin_parameter::<2, 32>(RuntimeCallTarget {
+                body_expression: concat!(
+                    "let mut local: u16 = 1; loop { if first { ",
+                    "let mut changed: &mut u16 = value; changed = &mut local; ",
+                    "return changed; } else { return value; } }"
                 ),
                 ..loop_branch
             }),
