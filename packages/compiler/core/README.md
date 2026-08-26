@@ -4189,6 +4189,12 @@ continue paths and rejects local-backed equivalents with E0515. Both hosts pass
 643 library tests, one component-interface probe, 10 conformance tests, and 335
 replacement tests: 989 compiler tests per host. General nested fixed points
 remain incomplete.
+Focused mixed-path cases now pair a conditional outer-target break or continue
+with an independently reachable inner exit. Parameter-backed states remain
+exact at both destinations; making either selected path local-backed fails
+closed and matches pinned-oracle E0515. Windows and Arch remain at 989 compiler
+tests per host. This is destination-separation evidence, not a general nested-
+loop fixed point.
 Nested-loop ordered-return and stable-edge analysis is now factored over an
 explicit incoming state and composes after outer-loop declarations, assignments,
 and branch joins. Stable nested edges preserve that state for later outer

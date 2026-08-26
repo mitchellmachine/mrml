@@ -143,6 +143,15 @@ storage failed at the post-loop return with E0515. This is black-box evidence
 for those exact labeled destinations and joins, not general nested-loop fixed
 points or region inference. Temporary source and metadata were removed.
 
+A follow-up independently authored Rust 2024 metadata-only set against this
+exact toolchain and commit combined a conditional outer-target break or
+continue with a separately reachable inner exit. Both all-parameter forms
+compiled; making the conditional-break path or the inner-exit path local-backed
+failed at the post-loop return with E0515. This is black-box evidence that those
+exact mixed destinations participate in outlives checking, not general nested-
+loop fixed points or region inference. Temporary source and metadata were
+removed.
+
 An independently authored Rust 2024 metadata-only composed-loop pair against
 this exact toolchain and commit accepted an outer-loop same-origin mutable
 reassignment followed by an inner-loop conditional return. Replacing that outer

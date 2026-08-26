@@ -574,6 +574,15 @@ backed escapes with E0515. Windows and Arch each pass 643 library tests, one
 component-interface probe, 10 conformance tests, and 335 replacement tests: 989
 compiler tests per host. General nested-loop fixed points remain incomplete.
 
+Conditional labeled-control coverage now combines an outer-target break or
+continue with a separately reachable inner exit. Focused cases prove that the
+outer destination and inner fallthrough states remain independently joined;
+local-backed alternatives fail closed. ORACLE-0002 accepts both parameter-
+backed mixed paths and rejects both local-backed variants with E0515. Windows
+and Arch each pass 643 library tests, one component-interface probe, 10
+conformance tests, and 335 replacement tests: 989 compiler tests per host.
+General nested-loop fixed points remain incomplete.
+
 The conditional callee-local reassignment milestone evaluates supported direct
 assignments from a copy of the incoming fixed local-origin state for every
 conditional outcome, then joins each local independently. A missing `else`

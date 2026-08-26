@@ -1321,6 +1321,12 @@ feed its backedge join, and only inner exits reach later enclosing-loop
 operations. Source-order filtering excludes controls after an earlier
 unconditional edge. ORACLE-0002 accepts parameter-backed labeled break and
 continue paths and rejects their local-backed counterparts with E0515.
+Mixed conditional labeled-control probes now cover an outer-target edge and an
+inner exit in the same nested block. The two destinations retain independent
+states: a conditional outer break does not replace the inner exit used by later
+outer operations, and a conditional outer continue does not replace the inner
+exit routed to an enclosing break. ORACLE-0002 accepts the parameter-backed
+forms and rejects the local-backed alternatives with E0515.
 
 The first modern trait-solver foundation is an explicit bounded implemented-
 goal representation. Stable trait/type/inference/placeholder identities remain
