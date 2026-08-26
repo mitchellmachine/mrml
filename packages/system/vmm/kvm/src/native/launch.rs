@@ -1955,23 +1955,6 @@ impl KvmSystem {
                 )
                 .map_err(|_| KvmError::PageTable)?;
         }
-        if smp {
-            let mut frame_index = 0;
-            while frame_index < tables.store().allocated_pages() {
-                let frame = tables
-                    .store()
-                    .allocated_frame(frame_index)
-                    .ok_or(KvmError::PageTable)?;
-                tables
-                    .map_page(
-                        VirtAddr::new(frame.get()).map_err(|_| KvmError::InvalidMapping)?,
-                        frame,
-                        PagePermissions::KERNEL_READ_WRITE,
-                    )
-                    .map_err(|_| KvmError::PageTable)?;
-                frame_index += 1;
-            }
-        }
         let root = tables.root();
         let _ = tables.into_store();
         backend.vcpu.configure_long_mode_entry(

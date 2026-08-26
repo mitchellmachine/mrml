@@ -1,5 +1,17 @@
 # Patent review log
 
+## 2026-08-26 — Installed Total SMP handoff and page-table preparation repair
+
+Patent review: **NOT_TRIGGERED** for retaining an already authenticated installed
+identity in the existing canonical handoff, selecting the existing larger SMP
+resource budget, and removing duplicate mappings already covered by one
+supervisor-only RW/NX page-table arena. These are conventional fixed-record
+composition, quantitative reservation, and duplicate-mapping correction; they
+add no placement algorithm, queue protocol, scheduling, device, DMA, interrupt,
+or hardware mechanism. The broader adaptive/Total-MicroVM and native-storage
+work retain their existing `TRIGGERED` reviews; this technical screen is not
+patent clearance.
+
 ## 2026-08-26 — Consuming installed Total runtime authorization
 
 Patent review: **NOT_TRIGGERED** for consuming the existing installed admission

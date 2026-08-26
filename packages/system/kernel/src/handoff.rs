@@ -1113,6 +1113,61 @@ pub fn encode_handoff_with_smp_recovery_and_isolation(
     Ok(length)
 }
 
+/// Extends an SMP recovery handoff without a service launch record with the
+/// exact installed source that produced the recovered state. The installed
+/// identity is inserted before SMP/MADT bytes so both hosted and installed
+/// Total-mode launchers consume the same canonical field ordering.
+#[allow(clippy::too_many_arguments)]
+pub fn encode_handoff_with_smp_recovery_isolation_and_installed(
+    image_version: u64,
+    entropy: [u8; 32],
+    image_measurement: [u8; 64],
+    secure_boot: bool,
+    measured_boot: bool,
+    rollback_protected: bool,
+    coherent_release: bool,
+    acpi_root: u64,
+    framebuffer: FramebufferInfo,
+    regions: &[MemoryRegion],
+    ap_trampoline: u64,
+    ap_stack_arena: u64,
+    recovery_state: RecoveryStateMetadata,
+    installed_recovery: InstalledRecoveryBootIdentity,
+    isolation_override: Option<BootIsolationOverride>,
+    madt: &[u8],
+    output: &mut [u8],
+) -> Result<usize, HandoffError> {
+    validate_installed_recovery(recovery_state, installed_recovery)?;
+    let length = encode_handoff_with_smp_recovery_and_isolation(
+        image_version,
+        entropy,
+        image_measurement,
+        secure_boot,
+        measured_boot,
+        rollback_protected,
+        coherent_release,
+        acpi_root,
+        framebuffer,
+        regions,
+        ap_trampoline,
+        ap_stack_arena,
+        recovery_state,
+        isolation_override,
+        madt,
+        output,
+    )?;
+    let installed_offset = HANDOFF_HEADER_BYTES
+        .checked_add(
+            regions
+                .len()
+                .checked_mul(HANDOFF_REGION_BYTES)
+                .ok_or(HandoffError::NonCanonical)?,
+        )
+        .and_then(|offset| offset.checked_add(HANDOFF_RECOVERY_STATE_BYTES))
+        .ok_or(HandoffError::NonCanonical)?;
+    append_installed_recovery(length, installed_offset, installed_recovery, output)
+}
+
 #[allow(clippy::too_many_arguments)]
 pub fn encode_handoff_with_application(
     image_version: u64,

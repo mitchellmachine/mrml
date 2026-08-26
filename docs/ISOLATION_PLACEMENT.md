@@ -1194,4 +1194,10 @@ it exposes inspection but no further route preparation or admission mutation.
 Required-domain absence produces no runtime owner. WHP and KVM component paths
 retain the seal across execution, so a detached scalar proof cannot replace the
 control-plane owner. Current evidence is Windows/Arch configuration unit tests
-and WHP/KVM runner regression, not fresh signed or physical execution.
+plus fresh signed hosted execution on WHP and nested KVM. The SMP handoff retains
+the exact installed source identity, policy, and one-boot override, while the
+VMM control plane establishes one supervisor-only RW/NX page-table arena before
+the running data path and does not remap its pages. Both backends reported
+`eligible=1`, `microvm=1`, and `native_fallback=0`. This does not establish
+native installed-media, host-resistant, or physical execution, so Total mode
+remains **PLANNED** end to end.

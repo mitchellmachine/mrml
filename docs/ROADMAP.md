@@ -3117,5 +3117,11 @@ required domain returns `RequiredDomainMissing` and produces no runtime owner.
 WHP and KVM component launch paths now retain this sealed owner for the guest
 execution lifetime instead of separating a proof from mutable admission state.
 Configuration passes 51 tests on Windows and Arch Linux; WHP/KVM runner suites
-pass 11/12. This is compile, unit, and hosted regression evidence; a fresh signed
-component execution and production installed-kernel wiring remain **PLANNED**.
+pass 12/13 and their backend suites pass 24/21 with one manual test ignored in
+each. Their SMP handoffs retain the exact installed source identity, recovered
+policy, and one-boot Total override, and their control planes reserve the
+64-page SMP page-table arena without duplicating already established RW/NX
+mappings. Fresh one-use-signed distinct ZIM/Zstd artifacts completed the sealed
+two-vCPU component path on WHP and nested KVM with `eligible=1`, `microvm=1`,
+and `native_fallback=0`. This is hosted controlled evidence; production
+installed-kernel wiring and native/physical evidence remain **PLANNED**.

@@ -8714,5 +8714,16 @@ authenticated release, immutable completed admission view, and final proof in
 one `RecoveredInstalledTotalRuntime`. Callers cannot prepare another route or
 mutate admission through that owner. Incomplete classification yields no runtime
 owner. The WHP and KVM component launch implementations keep this owner alive
-through guest execution. Configuration passes 51 tests on both hosts and runner
-regressions pass 11/12; fresh signed execution was not rerun for this increment.
+through guest execution. The SMP launch handoff now also retains the exact
+installed source identity beside recovered policy and the one-boot Total
+override; absence of an accepted volume cannot produce the handoff. The hosted
+component profiles reserve the existing 64-page SMP page-table arena, and both
+VMM builders avoid remapping pages already covered by that supervisor-only
+RW/NX arena. Configuration passes 51 tests on both hosts, kernel passes 563,
+WHP passes 24 backend tests with one manual test ignored plus 12 runner tests,
+and KVM passes 21 backend tests with one manual test ignored plus 13 runner
+tests. A fresh one-use-signed SystemRelease with distinct ZIM/Zstd artifacts
+completed the two-vCPU component data path on WHP and nested KVM on 2026-08-26;
+both reported `eligible=1`, `microvm=1`, and `native_fallback=0`. This is hosted
+controlled evidence, not native installed-media, host-resistant, or physical
+hardware evidence.

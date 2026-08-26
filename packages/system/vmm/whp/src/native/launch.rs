@@ -2508,23 +2508,6 @@ fn build_page_tables(
             )
             .map_err(|_| WhpError::PageTable)?;
     }
-    if cpus == 2 {
-        let mut frame_index = 0;
-        while frame_index < tables.store().allocated_pages() {
-            let frame = tables
-                .store()
-                .allocated_frame(frame_index)
-                .ok_or(WhpError::PageTable)?;
-            tables
-                .map_page(
-                    VirtAddr::new(frame.get()).map_err(|_| WhpError::InvalidMapping)?,
-                    frame,
-                    PagePermissions::KERNEL_LOW_READ_WRITE,
-                )
-                .map_err(|_| WhpError::PageTable)?;
-            frame_index += 1;
-        }
-    }
     Ok(tables.root())
 }
 

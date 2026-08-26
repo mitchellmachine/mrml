@@ -63,7 +63,7 @@ use mrml_kernel::{
     encode_handoff_with_application, encode_handoff_with_recovery,
     encode_handoff_with_recovery_and_isolation,
     encode_handoff_with_recovery_isolation_and_installed, encode_handoff_with_smp,
-    encode_handoff_with_smp_recovery_and_isolation,
+    encode_handoff_with_smp_recovery_isolation_and_installed,
 };
 #[cfg(target_os = "linux")]
 use mrml_kvm::{KvmLaunchLayout, KvmSystem, PreparedKvmGuest};
@@ -2523,12 +2523,14 @@ fn application_main() -> Result<()> {
     };
     let table_pages = if mode.application_package_id().is_some() {
         40
-    } else if matches!(
-        mode,
-        LaunchMode::SmpIpiProbe
-            | LaunchMode::SmpServiceMigrationProbe
-            | LaunchMode::SmpPeriodicBalanceProbe
-    ) {
+    } else if component_smp_mode
+        || matches!(
+            mode,
+            LaunchMode::SmpIpiProbe
+                | LaunchMode::SmpServiceMigrationProbe
+                | LaunchMode::SmpPeriodicBalanceProbe
+        )
+    {
         64
     } else {
         32
@@ -5266,7 +5268,21 @@ fn smp_boot_handoff(
     madt[9] = madt[9].wrapping_sub(checksum);
     let mut encoded = [0u8; 512];
     let length = if let Some(recovery_state) = recovery_state {
-        encode_handoff_with_smp_recovery_and_isolation(
+        let installed = InstalledRecoveryBootIdentity::new(
+            InstalledRecoverySource::Hosted,
+            [0x42; 32],
+            1,
+            1,
+            4096,
+            100,
+            recovery_state
+                .accepted_volume()
+                .ok_or_else(|| anyhow!("SMP Total recovery requires an installed volume"))?,
+            1,
+            recovery_state.accepted_root_generation(),
+        )
+        .map_err(|_| anyhow!("invalid hosted installed recovery identity"))?;
+        encode_handoff_with_smp_recovery_isolation_and_installed(
             version,
             entropy,
             measurement,
@@ -5280,6 +5296,7 @@ fn smp_boot_handoff(
             0x8000,
             0x100_0000,
             recovery_state,
+            installed,
             isolation_override,
             &madt,
             &mut encoded,
@@ -5304,7 +5321,7 @@ fn smp_boot_handoff(
         return Err(anyhow!("SMP isolation override requires recovery metadata"));
     }
     .map_err(|_| anyhow!("canonical SMP handoff construction failed"))?;
-    if length != 316 + usize::from(recovery_state.is_some()) * 40 {
+    if length != 316 + usize::from(recovery_state.is_some()) * (40 + 104) {
         return Err(anyhow!("unexpected canonical SMP handoff length"));
     }
     Ok(EncodedHandoff {
@@ -5561,5 +5578,29 @@ mod tests {
         assert_eq!(topology.len(), 2);
         assert_eq!(topology.cpu(0).unwrap().apic_id(), 0);
         assert_eq!(topology.cpu(1).unwrap().apic_id(), 1);
+    }
+
+    #[test]
+    fn smp_total_handoff_retains_installed_recovery_identity() {
+        let recovery = RecoveryStateMetadata::new(8, 1, Some([0x51; 16]), 14).unwrap();
+        let encoded = smp_boot_handoff(
+            7,
+            [0x51; 32],
+            [0xa3; 64],
+            Some(recovery),
+            Some(BootIsolationOverride::TotalMicrovmOnce),
+            true,
+        )
+        .unwrap();
+        let decoded = BootHandoff::decode(encoded.as_slice(), |_| {}).unwrap();
+        let installed = decoded.installed_recovery().unwrap();
+        assert_eq!(installed.source(), InstalledRecoverySource::Hosted);
+        assert_eq!(installed.volume(), [0x51; 16]);
+        assert_eq!(installed.root_generation(), 14);
+        assert_eq!(decoded.recovery_state(), Some(recovery));
+        assert_eq!(
+            decoded.isolation_override(),
+            Some(BootIsolationOverride::TotalMicrovmOnce)
+        );
     }
 }

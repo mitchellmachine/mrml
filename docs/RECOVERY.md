@@ -1712,6 +1712,17 @@ and (where structured output is emitted) `native_fallback=0`. WHP evidence on
 microseconds. Both reported one eligible microVM, one running microVM, and zero
 native fallback. This is hosted controlled evidence only.
 
+The sealed installed-runtime increment reran that oracle on 2026-08-26 with a
+fresh one-use-signed general SystemRelease and distinct retained ZIM/Zstd
+artifacts. The canonical SMP handoff retained the hosted installed volume/root
+generation, recovered policy, and one-boot Total override through guest
+execution. WHP measured 6,524/3,659 microseconds for bootstrap/application and
+nested KVM measured 4,684/4,194 microseconds; both again reported one eligible
+microVM, one running microVM, and zero native fallback. An attempted release
+whose consumer and provider bytes were identical failed before launch with
+`ArtifactSubstitution`. This remains hosted recovery evidence, not native-media
+or physical installed recovery.
+
 For system-monitor work, recover the single canonical observer from
 [monitor/SYSTEM_MONITOR.md](monitor/SYSTEM_MONITOR.md). Its caches are
 disposable: after restart, reconstruct scoped snapshots from authoritative
