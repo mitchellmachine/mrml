@@ -7685,3 +7685,15 @@ generation algorithm. Local-backed exits fail closed, and mixed break/continue
 state remains unsupported. Broader compiler completion remains partial; this
 technical screen is not a clearance or infringement conclusion and does not
 replace independent human dual review.
+
+# 2026-08-26 — Direct loop-break origin join
+
+**Result: NOT_TRIGGERED after the direct-break origin review.** This increment
+uses conventional fixed-capacity state selection for an unconditional-loop
+break and intersection with an existing zero-iteration path for a condition-
+headed loop. It adds no fixed-point solver, region or alias analysis, path-
+sensitive inference, optimization, or code-generation algorithm. Ambiguous or
+local-backed joins fail closed, and conditional break/continue transfer remains
+unsupported. Broader compiler completion remains partial; this technical screen
+is not a clearance or infringement conclusion and does not replace independent
+human dual review.
