@@ -95,6 +95,14 @@ Arch Linux each pass 34 focused tests and cross-build the UEFI target. Exact
 reopening for redundant-root recovery and real-loader ownership transfer are
 the next gate.
 
+Selected-device reopening and redundant-root reads are now **PARTIALLY
+IMPLEMENTED**. Exact path/media/geometry and block-zero header revalidation
+precedes both root reads; any mismatch, second-read failure, or protocol-close
+uncertainty erases both roots. Windows and Arch Linux each pass 35 focused tests
+and cross-build the UEFI target. Connecting these roots to the existing
+reachable-graph recovery and transferring that owner from the real loader are
+the next gate.
+
 Installed recovery ownership now crosses the Total-admission boundary in the
 controlled backend-parity path. `RecoveredInstalledTotalAdmission` retains the
 exact serviced device selection and recovered volume/root identity beside the

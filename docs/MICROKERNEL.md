@@ -3285,6 +3285,13 @@ matches, or uncertain probes fail closed. Reversed-order tests retain the same
 stable identity. Windows and Arch Linux each pass 34 library tests and
 cross-build the UEFI artifact. Root reads and loader execution remain absent.
 
+The selected handle can now be reopened for both redundant roots only after its
+stable path/media/native geometry and canonical block-zero header exact-match
+the prior selection. Both output blocks are erased on mismatch, a failed second
+read, or close uncertainty. Windows and Arch Linux each pass 35 library tests
+and cross-build the UEFI artifact. Reachable graph recovery and real loader
+execution remain absent.
+
 The bounded discovery result now remains owned through the complete serviced
 recovery read. `RecoveredInstalledStableSystemSelection` retains the exact
 installed selection beside the `BlockVolume` and reachable graph produced from

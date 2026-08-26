@@ -1,5 +1,16 @@
 # Patent review log
 
+## 2026-08-26 — Exact UEFI selected-device redundant-root reopen
+
+Patent review: **NOT_TRIGGERED** for this recovery-lifecycle integration. It
+uses conventional reopen/revalidate, exact equality, two fixed block reads,
+all-or-nothing output erasure, and existing UEFI protocol cleanup around the
+already reviewed redundant-root format. It adds no new storage layout or
+selection algorithm, driver scheduling, cryptography, placement policy, native
+fallback, queue/DMA mechanism, or hardware isolation method. Broader storage,
+firmware, adaptive-isolation, and Total-MicroVM reviews remain `TRIGGERED`; no
+patent-clearance or non-infringement conclusion is made.
+
 ## 2026-08-26 — Order-independent UEFI expected-volume selection
 
 Patent review: **NOT_TRIGGERED** for this bounded selection integration. It uses

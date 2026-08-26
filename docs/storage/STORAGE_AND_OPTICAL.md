@@ -101,6 +101,15 @@ Reversing firmware enumeration order selects the same stable identity. Windows
 and Arch Linux each pass 34 UEFI-library tests and cross-build the target; real
 loader invocation and root reads remain **PLANNED**.
 
+Selected-device redundant-root reopening is now **PARTIALLY IMPLEMENTED**. The
+ephemeral handle is reopened, its complete path/media/native geometry descriptor
+is exact-matched, and block zero must reproduce the selected canonical header
+before primary and secondary roots are read. Neither root buffer survives a
+header/path/media mismatch, failure of the second read, or failure to close
+either protocol after successful I/O. Windows and Arch Linux each pass 35 UEFI-
+library tests and cross-build the target. Root graph validation and real-loader
+ownership transfer remain **PLANNED**.
+
 The `mrml` frontend may expose structured `disk`, `filesystem`, `optical`, and
 `media` operations. The PowerShell-inspired shell projects the same backend as
 typed `Get-*`, `Test-*`, `Initialize-*`, `New-*`, `Format-*`, `Write-*`, and

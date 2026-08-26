@@ -130,6 +130,12 @@ results, and requires exactly one canonical header for the expected volume.
 Reordering firmware handles does not alter stable selection. The production
 loader still does not invoke this path or read redundant roots.
 
+The selected handle can now be reopened and exact-revalidated before both
+redundant roots are read. Its path, media generation, converted geometry, and
+block-zero header must remain identical; root bytes are erased if either read or
+protocol close fails. This remains library/mock evidence rather than production
+loader execution.
+
 The conventional fallback `\EFI\BOOT\BOOTX64.EFI` may be installed only under
 policy that proves ownership/non-conflict and previews backup/recovery or exact
 replacement. A shared ESP's existing fallback is never casually overwritten.

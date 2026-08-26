@@ -349,6 +349,8 @@ pub enum UefiBlockDescriptorError {
     FreeHandleBuffer(Status),
     InvalidVolumeHeader,
     VolumeGeometryMismatch,
+    SelectedDeviceChanged,
+    VolumeHeaderChanged,
 }
 
 pub const OPEN_PROTOCOL_GET_PROTOCOL: u32 = 0x0000_0002;
@@ -852,6 +854,72 @@ fn select_uefi_recovery_volume_with<const N: usize>(
         }
     }
     selected.ok_or(UefiRecoveryVolumeScanError::ExpectedVolumeMissing)
+}
+
+/// Reopens one selected candidate, exact-revalidates its path/media/geometry and
+/// block-zero header, then reads both redundant roots. No root bytes survive an
+/// error, including protocol-close uncertainty after otherwise successful I/O.
+///
+/// # Safety
+///
+/// The selected handle and boot services must retain the firmware validity
+/// required by `probe_uefi_recovery_header` for this complete transaction.
+pub unsafe fn read_selected_uefi_recovery_roots(
+    services: &BootServices,
+    image: Handle,
+    selected: UefiRecoveryHeaderCandidate,
+    device_path_scratch: &mut [u8; MAX_UEFI_DEVICE_PATH_BYTES],
+    primary: &mut UefiRecoveryBlock,
+    secondary: &mut UefiRecoveryBlock,
+) -> Result<(), UefiBlockDescriptorError> {
+    primary.erase();
+    secondary.erase();
+    let result = unsafe {
+        with_opened_uefi_block_protocols(services, image, selected.handle, |protocol, path| {
+            let media = snapshot_uefi_block_media(protocol)?;
+            if media != selected.media {
+                return Err(UefiBlockDescriptorError::SelectedDeviceChanged);
+            }
+            let path_length = copy_single_device_path(path, device_path_scratch)?;
+            let descriptor = uefi_platform_block_descriptor(
+                selected.descriptor.block().id(),
+                media,
+                &device_path_scratch[..path_length],
+            )?;
+            if descriptor != selected.descriptor {
+                return Err(UefiBlockDescriptorError::SelectedDeviceChanged);
+            }
+
+            read_uefi_recovery_block(protocol, media, 0, primary)?;
+            let header = VolumeHeader::decode(&primary.as_slice()[..VOLUME_HEADER_BYTES])
+                .map_err(|_| UefiBlockDescriptorError::VolumeHeaderChanged)?;
+            primary.erase();
+            if header != selected.header {
+                return Err(UefiBlockDescriptorError::VolumeHeaderChanged);
+            }
+            read_uefi_recovery_block(
+                protocol,
+                media,
+                selected.header.primary_superblock(),
+                primary,
+            )?;
+            if let Err(error) = read_uefi_recovery_block(
+                protocol,
+                media,
+                selected.header.secondary_superblock(),
+                secondary,
+            ) {
+                primary.erase();
+                return Err(error);
+            }
+            Ok(())
+        })
+    };
+    if result.is_err() {
+        primary.erase();
+        secondary.erase();
+    }
+    result
 }
 
 unsafe fn with_opened_uefi_block_protocols<R>(
@@ -1649,6 +1717,10 @@ mod tests {
     static MOCK_LOCATE_STATUS: AtomicUsize = AtomicUsize::new(SUCCESS);
     static MOCK_FREE_STATUS: AtomicUsize = AtomicUsize::new(SUCCESS);
     static MOCK_FREE_CALLS: AtomicUsize = AtomicUsize::new(0);
+    static ROOT_HEADER_SOURCE: AtomicPtr<u8> = AtomicPtr::new(core::ptr::null_mut());
+    static ROOT_PRIMARY_SOURCE: AtomicPtr<u8> = AtomicPtr::new(core::ptr::null_mut());
+    static ROOT_SECONDARY_SOURCE: AtomicPtr<u8> = AtomicPtr::new(core::ptr::null_mut());
+    static ROOT_FAIL_LBA: AtomicUsize = AtomicUsize::new(usize::MAX);
 
     unsafe extern "efiapi" fn mock_get_memory_map(
         _: *mut usize,
@@ -1842,6 +1914,33 @@ mod tests {
             media.media_id = media.media_id.wrapping_add(1);
         }
         RECOVERY_READ_STATUS.load(Ordering::SeqCst)
+    }
+
+    unsafe extern "efiapi" fn recovery_root_read(
+        _: *mut BlockIoProtocol,
+        media_id: u32,
+        lba: u64,
+        bytes: usize,
+        output: *mut c_void,
+    ) -> Status {
+        if media_id != 7 || bytes != UEFI_RECOVERY_BLOCK_BYTES || output.is_null() {
+            return LOAD_ERROR;
+        }
+        let source = match lba {
+            0 => ROOT_HEADER_SOURCE.load(Ordering::SeqCst),
+            8 => ROOT_PRIMARY_SOURCE.load(Ordering::SeqCst),
+            16 => ROOT_SECONDARY_SOURCE.load(Ordering::SeqCst),
+            _ => return LOAD_ERROR,
+        };
+        if source.is_null() {
+            return LOAD_ERROR;
+        }
+        unsafe { core::ptr::copy_nonoverlapping(source, output.cast::<u8>(), bytes) };
+        if usize::try_from(lba).ok() == Some(ROOT_FAIL_LBA.load(Ordering::SeqCst)) {
+            LOAD_ERROR
+        } else {
+            SUCCESS
+        }
     }
 
     unsafe extern "efiapi" fn block_write(
@@ -2522,6 +2621,155 @@ mod tests {
             }),
             Err(UefiRecoveryVolumeScanError::CandidateSubstitution)
         );
+    }
+
+    #[test]
+    fn selected_recovery_roots_require_exact_reopen_header_and_complete_close() {
+        let _guard = MockFirmwareGuard::acquire();
+        let mut media = valid_block_media();
+        media.media_id = 7;
+        media.block_size = 512;
+        media.last_block = 63;
+        let mut protocol = block_protocol(&mut media);
+        protocol.read_blocks = recovery_root_read;
+        let mut path = [1u8, 1, 8, 0, 0xaa, 0xbb, 0xcc, 0xdd, 0x7f, 0xff, 4, 0];
+        let header = VolumeHeader::new(VolumeId::new([0x51; 16]).unwrap(), 4096, 8, 1, 2).unwrap();
+        let mut header_source = [0u8; UEFI_RECOVERY_BLOCK_BYTES];
+        header.encode(
+            (&mut header_source[..VOLUME_HEADER_BYTES])
+                .try_into()
+                .unwrap(),
+        );
+        let mut primary_source = [0x31u8; UEFI_RECOVERY_BLOCK_BYTES];
+        let mut secondary_source = [0x32u8; UEFI_RECOVERY_BLOCK_BYTES];
+        ROOT_HEADER_SOURCE.store(header_source.as_mut_ptr(), Ordering::SeqCst);
+        ROOT_PRIMARY_SOURCE.store(primary_source.as_mut_ptr(), Ordering::SeqCst);
+        ROOT_SECONDARY_SOURCE.store(secondary_source.as_mut_ptr(), Ordering::SeqCst);
+        ROOT_FAIL_LBA.store(usize::MAX, Ordering::SeqCst);
+        MOCK_BLOCK_PROTOCOL.store(
+            (&mut protocol as *mut BlockIoProtocol).cast(),
+            Ordering::SeqCst,
+        );
+        MOCK_DEVICE_PATH.store(path.as_mut_ptr().cast(), Ordering::SeqCst);
+        MOCK_CLOSE_STATUS.store(SUCCESS, Ordering::SeqCst);
+        MOCK_CLOSE_CALLS.store(0, Ordering::SeqCst);
+        let services = mock_boot_services();
+        let image = core::ptr::without_provenance_mut::<c_void>(1);
+        let device = core::ptr::without_provenance_mut::<c_void>(2);
+        let mut path_scratch = [0u8; MAX_UEFI_DEVICE_PATH_BYTES];
+        let mut primary = UefiRecoveryBlock::new();
+        let mut secondary = UefiRecoveryBlock::new();
+        let selected = unsafe {
+            probe_uefi_recovery_header(
+                &services,
+                image,
+                device,
+                BlockDeviceId::new(1).unwrap(),
+                &mut path_scratch,
+                &mut primary,
+            )
+        }
+        .unwrap();
+
+        MOCK_CLOSE_CALLS.store(0, Ordering::SeqCst);
+        assert_eq!(
+            unsafe {
+                read_selected_uefi_recovery_roots(
+                    &services,
+                    image,
+                    selected,
+                    &mut path_scratch,
+                    &mut primary,
+                    &mut secondary,
+                )
+            },
+            Ok(())
+        );
+        assert_eq!(primary.as_slice(), &primary_source);
+        assert_eq!(secondary.as_slice(), &secondary_source);
+        assert_eq!(MOCK_CLOSE_CALLS.load(Ordering::SeqCst), 2);
+
+        header_source[..VOLUME_HEADER_BYTES].fill(0);
+        assert!(matches!(
+            unsafe {
+                read_selected_uefi_recovery_roots(
+                    &services,
+                    image,
+                    selected,
+                    &mut path_scratch,
+                    &mut primary,
+                    &mut secondary,
+                )
+            },
+            Err(UefiBlockDescriptorError::VolumeHeaderChanged)
+        ));
+        assert!(primary.as_slice().iter().all(|byte| *byte == 0));
+        assert!(secondary.as_slice().iter().all(|byte| *byte == 0));
+        header.encode(
+            (&mut header_source[..VOLUME_HEADER_BYTES])
+                .try_into()
+                .unwrap(),
+        );
+
+        let mut changed_path = path;
+        changed_path[4] ^= 1;
+        MOCK_DEVICE_PATH.store(changed_path.as_mut_ptr().cast(), Ordering::SeqCst);
+        assert!(matches!(
+            unsafe {
+                read_selected_uefi_recovery_roots(
+                    &services,
+                    image,
+                    selected,
+                    &mut path_scratch,
+                    &mut primary,
+                    &mut secondary,
+                )
+            },
+            Err(UefiBlockDescriptorError::SelectedDeviceChanged)
+        ));
+        MOCK_DEVICE_PATH.store(path.as_mut_ptr().cast(), Ordering::SeqCst);
+
+        ROOT_FAIL_LBA.store(16, Ordering::SeqCst);
+        assert!(matches!(
+            unsafe {
+                read_selected_uefi_recovery_roots(
+                    &services,
+                    image,
+                    selected,
+                    &mut path_scratch,
+                    &mut primary,
+                    &mut secondary,
+                )
+            },
+            Err(UefiBlockDescriptorError::ReadBlock(LOAD_ERROR))
+        ));
+        assert!(primary.as_slice().iter().all(|byte| *byte == 0));
+        assert!(secondary.as_slice().iter().all(|byte| *byte == 0));
+
+        ROOT_FAIL_LBA.store(usize::MAX, Ordering::SeqCst);
+        MOCK_CLOSE_STATUS.store(LOAD_ERROR, Ordering::SeqCst);
+        assert!(matches!(
+            unsafe {
+                read_selected_uefi_recovery_roots(
+                    &services,
+                    image,
+                    selected,
+                    &mut path_scratch,
+                    &mut primary,
+                    &mut secondary,
+                )
+            },
+            Err(UefiBlockDescriptorError::CloseProtocol(LOAD_ERROR))
+        ));
+        assert!(primary.as_slice().iter().all(|byte| *byte == 0));
+        assert!(secondary.as_slice().iter().all(|byte| *byte == 0));
+
+        MOCK_CLOSE_STATUS.store(SUCCESS, Ordering::SeqCst);
+        MOCK_BLOCK_PROTOCOL.store(core::ptr::null_mut(), Ordering::SeqCst);
+        MOCK_DEVICE_PATH.store(core::ptr::null_mut(), Ordering::SeqCst);
+        ROOT_HEADER_SOURCE.store(core::ptr::null_mut(), Ordering::SeqCst);
+        ROOT_PRIMARY_SOURCE.store(core::ptr::null_mut(), Ordering::SeqCst);
+        ROOT_SECONDARY_SOURCE.store(core::ptr::null_mut(), Ordering::SeqCst);
     }
 
     #[test]

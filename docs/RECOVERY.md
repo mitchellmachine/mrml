@@ -1197,6 +1197,14 @@ handle-order reversal. Windows and Arch Linux each pass 34 UEFI-library tests
 and cross-build the target. Reopening the selection for redundant roots and
 real-loader ownership transfer remain next.
 
+Selected UEFI device reopen and redundant-root acquisition are now **PARTIALLY
+IMPLEMENTED**. Reopening rederives and exact-matches the
+path, media generation, native geometry, and block-zero header before reading
+both selected root blocks. A mismatch, failed second read, or either close
+failure erases both outputs. Windows and Arch Linux each pass 35 UEFI-library
+tests and cross-build the target. Reachable-root validation, stable authority
+recovery, and loader-to-kernel ownership transfer remain next.
+
 The recovered installed selection is now retained across the boot-policy to
 Total-admission boundary. `RecoveredInstalledTotalAdmission` binds its exact
 device descriptor, serviced session selection, volume header, active root,
