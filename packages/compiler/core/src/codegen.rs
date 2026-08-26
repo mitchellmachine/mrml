@@ -2448,7 +2448,7 @@ fn x86_64_inline_output_array_element<'source, const MAX_PARAMETERS: usize>(
             if matches!(
                 ty,
                 RuntimeExpressionType::Reference {
-                    target: RuntimeReferenceTarget::Array { .. },
+                    target: RuntimeReferenceTarget::Array { .. } | RuntimeReferenceTarget::Slice(_),
                     mutable: true,
                 }
             ) {
@@ -2484,7 +2484,7 @@ fn x86_64_inline_output_array_element<'source, const MAX_PARAMETERS: usize>(
         if matches!(
             local.ty,
             RuntimeExpressionType::Reference {
-                target: RuntimeReferenceTarget::Array { .. },
+                target: RuntimeReferenceTarget::Array { .. } | RuntimeReferenceTarget::Slice(_),
                 mutable: true,
             }
         ) {
@@ -2544,6 +2544,16 @@ enum X86_64InlineOutputStorage<'source> {
         layout: RuntimeReferenceArrayLayout,
         index: &'source str,
     },
+    LocalDynamicSlice {
+        local_index: usize,
+        element: RuntimeArrayElementType,
+        index: &'source str,
+    },
+    ParameterDynamicSlice {
+        parameter_index: usize,
+        element: RuntimeArrayElementType,
+        index: &'source str,
+    },
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -2561,6 +2571,12 @@ enum X86_64InlineResolvedOutputStorage<'source> {
         element: RuntimeArrayElementType,
         count: usize,
         layout: RuntimeReferenceArrayLayout,
+        index: &'source str,
+    },
+    DynamicSlice {
+        pointer_slot: usize,
+        length_slot: usize,
+        element: RuntimeArrayElementType,
         index: &'source str,
     },
 }
@@ -2624,8 +2640,10 @@ fn x86_64_inline_output_place<'source, const MAX_PARAMETERS: usize>(
             if !local.mutable {
                 return Err(CodegenErrorKind::ImmutableAssignment);
             }
-            let (element, count, layout, reference) = match local.ty {
-                RuntimeExpressionType::Array { element, count } => (element, count, None, false),
+            let (element, count, layout, reference, slice) = match local.ty {
+                RuntimeExpressionType::Array { element, count } => {
+                    (element, count, None, false, false)
+                }
                 RuntimeExpressionType::Reference {
                     target:
                         RuntimeReferenceTarget::Array {
@@ -2634,7 +2652,11 @@ fn x86_64_inline_output_place<'source, const MAX_PARAMETERS: usize>(
                             layout,
                         },
                     mutable: true,
-                } => (element, count, Some(layout), true),
+                } => (element, count, Some(layout), true, false),
+                RuntimeExpressionType::Reference {
+                    target: RuntimeReferenceTarget::Slice(element),
+                    mutable: true,
+                } => (element, 0, None, true, true),
                 _ => return Err(CodegenErrorKind::RuntimeTypeMismatch),
             };
             if runtime_type_from_array_element(element)
@@ -2643,7 +2665,7 @@ fn x86_64_inline_output_place<'source, const MAX_PARAMETERS: usize>(
                 return Err(CodegenErrorKind::RuntimeTypeMismatch);
             }
             let mut projections = RuntimePlaceProjections::EMPTY;
-            if reference {
+            if reference && !slice {
                 projections.push(RuntimePlaceProjection::Dereference)?;
             }
             projections.push(RuntimePlaceProjection::Index)?;
@@ -2651,7 +2673,13 @@ fn x86_64_inline_output_place<'source, const MAX_PARAMETERS: usize>(
                 base: RuntimePlaceIdentity::Local(local.id),
                 ty: local.ty,
                 projections,
-                storage: if let Some(layout) = layout {
+                storage: if slice {
+                    X86_64InlineOutputStorage::LocalDynamicSlice {
+                        local_index,
+                        element,
+                        index,
+                    }
+                } else if let Some(layout) = layout {
                     X86_64InlineOutputStorage::LocalDynamicReferenceArray {
                         local_index,
                         element,
@@ -2679,17 +2707,42 @@ fn x86_64_inline_output_place<'source, const MAX_PARAMETERS: usize>(
         {
             let ty = runtime_type_from_text(parameter.ty.text)
                 .ok_or(CodegenErrorKind::RuntimeTypeMismatch)?;
-            let RuntimeExpressionType::Reference {
-                target:
-                    RuntimeReferenceTarget::Array {
+            let (element, storage, slice) = match ty {
+                RuntimeExpressionType::Reference {
+                    target:
+                        RuntimeReferenceTarget::Array {
+                            element,
+                            count,
+                            layout,
+                        },
+                    mutable: true,
+                } => (
+                    element,
+                    X86_64InlineOutputStorage::ParameterDynamicReferenceArray {
+                        parameter_index,
                         element,
                         count,
                         layout,
+                        index,
                     },
-                mutable: true,
-            } = ty
-            else {
-                return Err(CodegenErrorKind::ImmutableAssignment);
+                    false,
+                ),
+                RuntimeExpressionType::Reference {
+                    target: RuntimeReferenceTarget::Slice(element),
+                    mutable: true,
+                } => (
+                    element,
+                    X86_64InlineOutputStorage::ParameterDynamicSlice {
+                        parameter_index,
+                        element,
+                        index,
+                    },
+                    true,
+                ),
+                RuntimeExpressionType::Reference { mutable: false, .. } => {
+                    return Err(CodegenErrorKind::ImmutableAssignment);
+                }
+                _ => return Err(CodegenErrorKind::RuntimeTypeMismatch),
             };
             if runtime_type_from_array_element(element)
                 != RuntimeExpressionType::Integer(Some(crate::IntegerType::U64))
@@ -2697,19 +2750,15 @@ fn x86_64_inline_output_place<'source, const MAX_PARAMETERS: usize>(
                 return Err(CodegenErrorKind::RuntimeTypeMismatch);
             }
             let mut projections = RuntimePlaceProjections::EMPTY;
-            projections.push(RuntimePlaceProjection::Dereference)?;
+            if !slice {
+                projections.push(RuntimePlaceProjection::Dereference)?;
+            }
             projections.push(RuntimePlaceProjection::Index)?;
             return Ok(X86_64InlineOutputPlace {
                 base: RuntimePlaceIdentity::Parameter(parameter_index),
                 ty,
                 projections,
-                storage: X86_64InlineOutputStorage::ParameterDynamicReferenceArray {
-                    parameter_index,
-                    element,
-                    count,
-                    layout,
-                    index,
-                },
+                storage,
                 marker: core::marker::PhantomData,
             });
         }
@@ -9044,7 +9093,9 @@ fn preanalyze_x86_64_inline_output_index<
     let index = match place.storage {
         X86_64InlineOutputStorage::LocalDynamicArray { index, .. }
         | X86_64InlineOutputStorage::LocalDynamicReferenceArray { index, .. }
-        | X86_64InlineOutputStorage::ParameterDynamicReferenceArray { index, .. } => index,
+        | X86_64InlineOutputStorage::ParameterDynamicReferenceArray { index, .. }
+        | X86_64InlineOutputStorage::LocalDynamicSlice { index, .. }
+        | X86_64InlineOutputStorage::ParameterDynamicSlice { index, .. } => index,
         _ => return Ok(()),
     };
     let tree = crate::ExpressionParser::<MAX_EXPRESSION_NODES>::new(index)
@@ -19781,6 +19832,39 @@ impl<
                 layout,
                 index,
             }),
+            X86_64InlineOutputStorage::LocalDynamicSlice {
+                local_index,
+                element,
+                index,
+            } => {
+                let length_slot = self.local_stack_slots_from(local_index + 1)?;
+                Ok(X86_64InlineResolvedOutputStorage::DynamicSlice {
+                    pointer_slot: length_slot
+                        .checked_add(1)
+                        .ok_or(self.error(CodegenErrorKind::OutputTooSmall))?,
+                    length_slot,
+                    element,
+                    index,
+                })
+            }
+            X86_64InlineOutputStorage::ParameterDynamicSlice {
+                parameter_index,
+                element,
+                index,
+            } => {
+                let length_slot = self
+                    .local_stack_slots()?
+                    .checked_add(self.parameter_stack_slots_from(parameter_index + 1)?)
+                    .ok_or(self.error(CodegenErrorKind::OutputTooSmall))?;
+                Ok(X86_64InlineResolvedOutputStorage::DynamicSlice {
+                    pointer_slot: length_slot
+                        .checked_add(1)
+                        .ok_or(self.error(CodegenErrorKind::OutputTooSmall))?,
+                    length_slot,
+                    element,
+                    index,
+                })
+            }
         }
     }
 
@@ -19791,8 +19875,9 @@ impl<
         let (index, count) = match storage {
             X86_64InlineResolvedOutputStorage::DynamicArray { index, count, .. }
             | X86_64InlineResolvedOutputStorage::DynamicReferenceArray { index, count, .. } => {
-                (index, count)
+                (index, Some(count))
             }
+            X86_64InlineResolvedOutputStorage::DynamicSlice { index, .. } => (index, None),
             _ => return Ok(()),
         };
         let tree = crate::ExpressionParser::<MAX_EXPRESSION_NODES>::new(index)
@@ -19802,10 +19887,21 @@ impl<
                 span: error.span,
             })?;
         self.emit_expression(&tree, tree.root(), 0)?;
-        self.emit(&[0x48, 0x83, 0xf8, count as u8])?;
-        self.emit_trap_branch(0x83)?;
-        self.emit(&[0x50])?;
-        self.evaluation_depth += 1;
+        if let Some(count) = count {
+            self.emit(&[0x48, 0x83, 0xf8, count as u8])?;
+            self.emit_trap_branch(0x83)?;
+            self.emit(&[0x50])?;
+            self.evaluation_depth += 1;
+        } else if let X86_64InlineResolvedOutputStorage::DynamicSlice { length_slot, .. } = storage
+        {
+            self.emit(&[0x50])?;
+            self.evaluation_depth += 1;
+            self.emit_stack_slot(length_slot + self.evaluation_depth)?;
+            self.emit(&[0x48, 0x39, 0x04, 0x24])?;
+            let in_bounds = self.emit_forward_branch(0x82)?;
+            self.emit(&[0x0f, 0x0b])?;
+            self.patch_forward_branch(in_bounds)?;
+        }
         Ok(())
     }
 
@@ -19835,6 +19931,21 @@ impl<
                 let element_bytes = runtime_array_element_bytes(element)
                     .ok_or(self.error(CodegenErrorKind::UnsupportedRuntimeType))?;
                 self.emit_reference_array_address_from_stack_index(element_bytes, layout, 0)?;
+                self.emit_reference_load(element)
+            }
+            X86_64InlineResolvedOutputStorage::DynamicSlice {
+                pointer_slot,
+                element,
+                ..
+            } => {
+                self.emit_stack_slot(pointer_slot + self.evaluation_depth)?;
+                let element_bytes = runtime_array_element_bytes(element)
+                    .ok_or(self.error(CodegenErrorKind::UnsupportedRuntimeType))?;
+                self.emit_reference_array_address_from_stack_index(
+                    element_bytes,
+                    RuntimeReferenceArrayLayout::Native,
+                    0,
+                )?;
                 self.emit_reference_load(element)
             }
         }
@@ -19876,6 +19987,27 @@ impl<
                 let element_bytes = runtime_array_element_bytes(element)
                     .ok_or(self.error(CodegenErrorKind::UnsupportedRuntimeType))?;
                 self.emit_reference_array_store_address_from_stack_index(element_bytes, layout, 1)?;
+                self.emit_stack_slot(0)?;
+                self.emit_reference_store(element)?;
+                self.evaluation_depth -= 2;
+                self.emit(&[0x48, 0x83, 0xc4, 16])
+            }
+            X86_64InlineResolvedOutputStorage::DynamicSlice {
+                pointer_slot,
+                element,
+                ..
+            } => {
+                self.emit(&[0x50])?;
+                self.evaluation_depth += 1;
+                self.emit_stack_slot(pointer_slot + self.evaluation_depth)?;
+                self.emit(&[0x48, 0x89, 0xc2])?;
+                let element_bytes = runtime_array_element_bytes(element)
+                    .ok_or(self.error(CodegenErrorKind::UnsupportedRuntimeType))?;
+                self.emit_reference_array_store_address_from_stack_index(
+                    element_bytes,
+                    RuntimeReferenceArrayLayout::Native,
+                    1,
+                )?;
                 self.emit_stack_slot(0)?;
                 self.emit_reference_store(element)?;
                 self.evaluation_depth -= 2;
@@ -30806,6 +30938,32 @@ mod tests {
         }
         for source in [
             concat!(
+                "#[unsafe(no_mangle)] pub unsafe extern \"C\" fn answer(values: &mut [u64]) -> u64 { ",
+                "let index: usize = 1; asm!(\"mov rax, 7\", lateout(\"rax\") values[index % 2]); values[0] }"
+            ),
+            concat!(
+                "#[unsafe(no_mangle)] pub unsafe extern \"C\" fn answer(values: &mut [u64]) -> u64 { ",
+                "let index: usize = 1; asm!(\"inc rax\", inout(\"rax\") values[index]); values[0] }"
+            ),
+            concat!(
+                "#[unsafe(no_mangle)] pub unsafe extern \"C\" fn answer(values: &mut [u64]) -> u64 { ",
+                "let index: usize = 1; asm!(\"inc rax\", inout(\"rax\") 6u64 => values[index]); values[0] }"
+            ),
+            concat!(
+                "#[unsafe(no_mangle)] pub unsafe extern \"C\" fn answer(values: &mut [u64]) -> u64 { ",
+                "let mut target: &mut [u64] = values; ",
+                "asm!(\"inc rax\", inout(\"rax\") target[1]); target[0] }"
+            ),
+        ] {
+            let code = compile(source).unwrap_or_else(|error| panic!("{source}: {error:?}"));
+            assert!(
+                code.bytes()
+                    .windows(4)
+                    .any(|bytes| bytes == [0x48, 0x39, 0x04, 0x24])
+            );
+        }
+        for source in [
+            concat!(
                 "#[unsafe(no_mangle)] pub unsafe extern \"C\" fn answer() -> u64 { ",
                 "let mut value: u64 = 6; asm!(\"inc {value}\", value = inout(reg) value); value }"
             ),
@@ -30987,6 +31145,14 @@ mod tests {
             ),
             (
                 "#[unsafe(no_mangle)] pub unsafe extern \"C\" fn answer(values: &mut [u32; 2]) { asm!(\"inc rax\", inout(\"rax\") values[1]); }",
+                CodegenErrorKind::RuntimeTypeMismatch,
+            ),
+            (
+                "#[unsafe(no_mangle)] pub unsafe extern \"C\" fn answer(values: &[u64]) { asm!(\"inc rax\", inout(\"rax\") values[1]); }",
+                CodegenErrorKind::ImmutableAssignment,
+            ),
+            (
+                "#[unsafe(no_mangle)] pub unsafe extern \"C\" fn answer(values: &mut [u32]) { asm!(\"inc rax\", inout(\"rax\") values[1]); }",
                 CodegenErrorKind::RuntimeTypeMismatch,
             ),
             (
