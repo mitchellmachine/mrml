@@ -256,9 +256,14 @@ driver supplies bounded ACPI/PCI/SATA/optional-partition fields with no copied
 stable ID or authority. The verifier exact-matches every field against the
 handed route and separately requires the boot stable ID, AHCI transport,
 controller/media generations, and geometry before existing atomic registration.
-Storage passes 130 tests on Windows and Arch Linux. Native controller discovery,
-AHCI register/DMA/interrupt mechanics, reacquisition, and physical evidence
-remain **PLANNED**.
+The first native AHCI discovery boundary is also **PARTIALLY IMPLEMENTED**: an
+immutable PCI-enumerator snapshot must carry the exact mass-storage/SATA/AHCI
+class tuple, a live nonzero configuration generation, a type-zero function, and
+a bounded non-prefetchable 32-bit ABAR with valid power-of-two size and
+alignment. Its result is identity and geometry, never mapping or I/O authority.
+Storage passes 135 tests on Windows. Native PCI enumeration, ABAR mapping, AHCI
+register/DMA/interrupt mechanics, reacquisition, Arch Linux parity, and physical
+evidence remain **PLANNED**.
 
 The configuration service now **PARTIALLY IMPLEMENTS** an atomic
 correlate/register/reacquire operation for this route. It admits the descriptor

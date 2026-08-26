@@ -8,6 +8,7 @@
 //! Physical device drivers and durability evidence remain later layers.
 
 mod allocation;
+mod ahci_discovery;
 mod authority;
 mod authority_checkpoint;
 mod block;
@@ -32,6 +33,11 @@ pub use allocation::{
     ALLOCATION_IMAGE_HEADER_BYTES, ALLOCATION_RECORD_BYTES, AllocationChange, AllocationError,
     AllocationImage, AllocationIndex, AllocationKind, AllocationRecord, AllocationUpdateError,
     AllocationWriteBackend, MAX_ALLOCATION_BLOCKS, PreparedAllocationUpdate,
+};
+pub use ahci_discovery::{
+    AHCI_ABAR_MINIMUM_BYTES, AHCI_PCI_CLASS, AHCI_PCI_PROGRAMMING_INTERFACE,
+    AHCI_PCI_SUBCLASS, AhciAbarDescriptor, AhciDiscoveryError, AhciPciFunctionSnapshot,
+    PciFunctionLocation,
 };
 pub use authority::{
     StorageAuthorityError, StorageAuthorityReservation, StorageAuthorityTable, StorageHandle,

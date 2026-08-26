@@ -1,5 +1,62 @@
 # Patent review log
 
+## 2026-08-26 — Canadian AHCI software-driver re-evaluation narrows the hold
+
+Patent review: **TRIGGERED**. This entry supersedes the blanket implementation
+hold in the following AHCI entry only for a conventional software-only AHCI
+driver developed and used in Canada. It is a technical claim screen, not legal
+advice or a representation that AHCI is patent-free. Intel's AHCI agreement has
+not been signed or accepted, and MRML does not rely on it as a patent grant.
+The agreement and Intel's statement that a license is required are contractual
+questions distinct from whether an enforceable Canadian claim is necessary to
+this deliberately narrow implementation. See Intel's
+[AHCI specification page](https://www.intel.com/content/www/us/en/io/serial-ata/ahci.html)
+and the official
+[Canadian Patents Database](https://cipo.ic.gc.ca/opic-cipo/cpd/eng/searchMenu.html).
+
+The Canadian database was searched by exact title, PCT/international
+publication where available, and claim terms for AHCI, Advanced Host Controller
+Interface, native command queuing, PxSACT, PxCI, FPDMA QUEUED, DMA Setup FIS,
+ATAPI PACKET, IDENTIFY PACKET DEVICE, and ordinary extended DMA commands. No
+Canadian counterpart or claim necessary to the scoped standard host-software
+operations was identified for the reviewed NVIDIA, Intel, Apple, or Chinese
+families. In particular:
+
+- NVIDIA US 7,620,747's independent software-NCQ path requires interrupt-driven
+  termination/re-receipt and software loading of bus-master DMA contexts; MRML
+  must not implement that architecture.
+- Intel US 7,805,543 concerns controller-hardware tag-selection/mapping circuitry
+  and state machines; MRML supplies host software and must not reproduce such
+  controller circuitry.
+- Apple's US 8,713,204 family concerns storage-device-controller concurrency and
+  deferred progress reporting; MRML must not implement or depend on that
+  internal device behavior. Searches for PCT/US2012/065428 and WO 2013/101357
+  found no Canadian record.
+- Intel US 9,128,699 concerns a single command aggregating multiple
+  non-contiguous logical-address ranges through tagged command-list structures;
+  MRML must not implement that aggregation. A normal PRDT may scatter/gather
+  host physical-memory buffers for one ordinary ATA command. Searches for
+  PCT/US2009/067031 and WO 2010/074944 found no Canadian record.
+- CN 101840306 is tied to a VxWorks SATA/AHCI driver method; MRML is not VxWorks,
+  and the exact-title Canadian search found no record.
+- Canadian patent 2,567,219, surfaced by searches for READ/WRITE DMA EXT, claims
+  a cryptographic SATA apparatus. MRML's scoped AHCI driver performs no inline
+  SATA encryption/decryption and must not implement that apparatus.
+
+The scoped Canadian implementation may therefore proceed without accepting
+Intel's agreement: PCI discovery of an AHCI-class function, validated ABAR
+mapping, conventional controller/port reset and status handling, ordinary
+single-command ATA DMA reads/writes, ATAPI packet commands, standard AHCI
+command-list/table/PRDT use, interrupts, and ordinary NCQ only after each layer
+has focused adversarial tests. This permission excludes PHY or controller
+hardware, RAID, vendor extensions, proprietary aggregation, emulation,
+commercial-DRM circumvention, and every architecture listed above. Each new
+mechanism still requires its own claim-oriented review, and distribution or use
+outside Canada requires the repository's worldwide family/status review. The
+current increment is limited to non-authorizing typed PCI-class and ABAR
+validation; it performs no MMIO, DMA, command submission, interrupt handling,
+reset, NCQ, or block I/O.
+
 ## 2026-08-26 — AHCI licensing prerequisite and continuing native-driver hold
 
 Patent review: **TRIGGERED**. Intel's published AHCI page says implementation

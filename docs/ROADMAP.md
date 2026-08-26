@@ -177,9 +177,12 @@ USB, or VirtIO descriptor before atomic registration retains that correlation.
 Hosted sources/transports, geometry mismatch, verifier failure, duplicate
 identity, and capacity failure publish nothing. Correlation remains
 non-authorizing; the later exact handoff reacquisition creates only a read
-session. Storage passes 126 tests on Windows and Arch Linux; WHP/KVM runner
-regression parity passes 11/12. Actual AHCI, USB mass-storage, and native VirtIO
-verifier implementations and hardware evidence remain **PLANNED**.
+session. Storage's first AHCI discovery boundary now validates a generation-
+bound exact PCI class tuple and conventional ABAR geometry without granting
+mapping or I/O authority; its Windows suite passes 135 tests. Live PCI
+enumeration, ABAR mapping, AHCI commands/DMA/interrupts, USB mass-storage,
+native VirtIO, Arch Linux parity for this increment, and hardware evidence
+remain **PLANNED**. WHP/KVM runner regression parity remains 11/12.
 
 Selected-device reopening and redundant-root reads are now **PARTIALLY
 IMPLEMENTED**. Exact path/media/geometry and block-zero header revalidation
