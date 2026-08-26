@@ -1076,6 +1076,26 @@ provenance evidence only. Fresh separately signed bytes now provide hosted
 runtime evidence on WHP and nested KVM, but do not establish recovered
 execution, host resistance, bare metal, or physical isolation.
 
+The bounded graphics-object foundation adds no recoverable display authority.
+After compositor or application restart, discard every
+`SurfaceDataPlaneBinding`; reconstruct it only by looking up the exact live
+generational surface, graphics-buffer, and display-output objects and
+reauthorizing the separate surface-control, output-inspection, and buffer-read
+capabilities. Live bindings retain those exact handles and revalidate them before
+mapping, copy, or presentation; revocation and slot reuse fail closed. A
+serialized rectangle, scale, buffer descriptor, damage list, or
+old binding is data, not authority. Missing/stale identity, revoked capability,
+invalid geometry, or uncertain presentation state fails closed. The compositor,
+stable surface wire protocol, application/microVM adapter, presentation backend,
+and recovered Semantic Scene Graph remain planned.
+
+Focused host-unit evidence on 2026-08-26 used the canonical frontend:
+`mrml test org.mrml.system.kernel --target windows` and
+`mrml test org.mrml.system.kernel --target linux` each passed 534 tests with
+zero failures. The Linux command ran in Arch Linux under WSL. These tests cover
+the bounded type/admission contract; they are not WHP/KVM GUI execution,
+compositor, GOP, native GPU, recovery execution, or physical-display evidence.
+
 The focused recovery oracle now includes the two-vCPU component profiles
 `whp_component_service_smp_probe` and `kvm_component_service_smp_probe`. Each
 must use fresh signed kernel/package artifacts, the exact signed ZIM/Zstd

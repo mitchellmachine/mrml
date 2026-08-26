@@ -186,8 +186,40 @@ proprietary assets, names, icons, or another OS's exact design is forbidden.
 
 ### Graphics object and backend model
 
-**PLANNED:** applications and application VMs submit surfaces and buffers through
-an MRML surface protocol. They never render directly to GOP, the VGPU, a native
+**PARTIALLY IMPLEMENTED:** the kernel foundation now has bounded logical
+rectangles and fractional scales, generational `Surface`, `GraphicsBuffer`, and
+`DisplayOutput` identities, validated physical buffer layout, and a one-use
+capability-admitted atomic surface binding. The admission boundary requires
+separate surface-control, output-inspection, and buffer-read capabilities,
+rejects substituted objects, stale/revoked handles, overflowing geometry,
+undersized buffers, and out-of-bounds damage, and retains the exact identities,
+scale, serial, and damage in the resulting immutable data-plane binding. The
+binding retains the exact capability handles and performs a bounded
+exact-object recheck before later mapping, copy, or presentation, so revocation
+and slot reuse still stop the short path without replaying placement policy. The
+trusted registry/compositor must supply the authoritative object generations;
+untrusted wire decoding and stale-generation lookup are not implemented by
+this bounded kernel type alone.
+
+Constitution review for this bounded foundation:
+
+```text
+Complexity impact: LOW
+TCB impact: LOW
+New parser boundary: NO
+New authority model: NO
+New persistent state: NO
+External dependency: NO
+Failure isolated: YES
+Existing-object reuse: HIGH
+```
+
+It reuses the existing capability space and fixed-capacity, checked `no_std`
+kernel style. Presentation policy and mutable desktop state remain outside the
+kernel; the future wire decoder and compositor are separate review gates.
+
+**PLANNED:** applications and application VMs submit those objects through an
+MRML surface protocol. They never render directly to GOP, the VGPU, a native
 physical GPU, or scanout during normal desktop operation. The trusted compositor
 owns final presentation through a backend-neutral render/display interface with
 GOP initially, VGPU acceleration later, and native GPU backends after that.

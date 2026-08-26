@@ -72,6 +72,18 @@ byte/dispatch budgets, and consumes itself to create disjoint command and
 completion endpoints. This is **PARTIALLY IMPLEMENTED** queue-boundary evidence,
 not a complete GPU broker, hardware data path, or physical isolation claim.
 
+The same rule now has a bounded graphics-object foundation. Kernel admission
+checks separate capabilities for one exact surface, output, and graphics buffer,
+validates bounded logical/physical geometry and damage, and then consumes the
+admitted atomic update into an immutable `SurfaceDataPlaneBinding`. Buffer bytes
+therefore take a direct established path without becoming presentation,
+display-configuration, cross-surface, or object-selection authority. The binding
+retains the exact handles for a bounded object/revocation recheck before use;
+the short path does not detach lifecycle enforcement. This is
+**PARTIALLY IMPLEMENTED** type and unit-test evidence only; the trusted object
+registry, compositor service, stable surface wire protocol, application and
+microVM adapters, GOP presentation, and Semantic Scene Graph remain **PLANNED**.
+
 Canonical packages, coherent `SystemRelease` graphs, immutable local
 `SystemGeneration` state, Store transport, system images, servicing, installation,
 and typed administration are **PLANNED** in [DEPLOYMENT.md](DEPLOYMENT.md).

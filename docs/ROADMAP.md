@@ -2132,6 +2132,20 @@ Before trusted consent UI, establish the application-facing foundation:
 15. Benchmark scene updates, input-to-action latency, composition, damage,
     synchronization, scaling, takeover, and recovery.
 
+**PARTIALLY IMPLEMENTED (steps 4-5 foundation):** the kernel now validates
+bounded signed logical rectangles, rational scale values, physical extents,
+buffer format/stride/length, and damage confined to one surface. Exact
+generational `Surface`, `GraphicsBuffer`, and `DisplayOutput` identities remain
+distinct. One atomic admission checks separate control/inspect/read capabilities
+and consumes itself into an immutable data-plane binding, so buffer traffic
+cannot select a different surface, output, generation, or authority. The
+binding retains exact handles and fails revalidation after revocation or slot
+reuse without replaying placement policy. This is a
+host unit-tested kernel contract, not the stable application wire protocol,
+trusted registry/compositor, dual-placement GUI application, GOP presentation,
+fence path, Semantic Scene Graph, WHP/KVM GUI parity, or physical display
+evidence. Those steps remain in the listed dependency order.
+
 The graphics device may add VirtIO-GPU compatibility for guest display and 3D
 interoperability, with QEMU differential tests. It must preserve the existing
 MRML-specific CUDA compute protocol as a separate capability surface carrying

@@ -6048,3 +6048,20 @@ instruction-selection, or code-generation algorithm. Actual assembly memory
 accesses, general clobbers/effects, and general assembly remain absent. Broader
 compiler completion remains partial; this technical screen does not establish
 clearance or infringement and does not replace independent human dual review.
+
+# 2026-08-26 — Capability-bound graphics-object admission foundation
+
+**Result: TRIGGERED.** The bounded kernel increment uses conventional checked
+integer geometry, explicit generational identities, ordinary capability checks,
+fixed pixel-layout arithmetic, damage containment, and a one-use immutable
+control-plane result. It implements no compositor algorithm, window-layout
+policy, damage-discovery algorithm, synchronization primitive, remote-display
+method, codec, GPU command format, or hardware presentation path. However, the
+planned composition of atomic surface commits, shared graphics buffers,
+incremental damage, cross-placement application projection, trusted composition,
+and display presentation is a substantial mechanism whose worldwide claim
+families and any applicable royalty-free grants have not yet been reviewed.
+Broader compositor/surface-protocol implementation therefore remains subject to
+targeted review and design-around where necessary. This screening is not a legal
+opinion, clearance conclusion, or infringement determination and does not
+replace independent human dual review.

@@ -20,6 +20,7 @@ mod cpu_resource;
 mod early;
 mod framebuffer;
 mod grant;
+mod graphics;
 mod handoff;
 mod host_resource;
 mod ipc;
@@ -92,6 +93,11 @@ pub use cpu_resource::{
 pub use early::{EarlyKernelContext, EarlyKernelError};
 pub use framebuffer::{Color, FramebufferError, FramebufferInfo, FramebufferSurface, PixelFormat};
 pub use grant::{DirectoryGrant, GrantError, GrantMode, MAX_HOST_PATH};
+pub use graphics::{
+    AdmittedSurfaceCommit, DisplayOutputIdentity, GraphicsBufferDescriptor, GraphicsFormat,
+    GraphicsProtocolError, LogicalRect, LogicalScale, PhysicalExtent, SurfaceDataPlaneBinding,
+    SurfaceIdentity, authorize_surface_commit,
+};
 pub use handoff::{
     ApplicationLaunch, BootHandoff, HANDOFF_APPLICATION_BYTES, HANDOFF_HEADER_BYTES,
     HANDOFF_RECOVERY_STATE_BYTES, HANDOFF_REGION_BYTES, HANDOFF_SERVICE_BYTES, HandoffError, MAX_HANDOFF_BYTES,
