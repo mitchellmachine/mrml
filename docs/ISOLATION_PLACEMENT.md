@@ -849,6 +849,30 @@ fallback, and an enumerated justified host/boot/recovery substrate.
 
 ## Total MicroVM invariants
 
+Strict runtime finalization is now **PARTIALLY IMPLEMENTED** in the kernel. A
+fixed-capacity `TotalMicrovmInventory` is bound to one exact system and policy
+generation. Every running or retained-unavailable domain must have one exact
+domain/class entry; duplicate, unknown, or class-substituted entries fail.
+Entries explicitly state whether the domain must be running. Finalization
+produces a `TotalMicrovmRuntimeProof` only when every required domain is live,
+every live eligible domain is in a microVM, every active substrate/boot/recovery
+exception is classified, no unsupported blocker runs, and native fallback is
+zero. A required unavailable component is failure, not permission to omit or
+launch it natively. Windows and Arch Linux each pass 549 kernel tests. Complete
+required-system inventory derivation and live WHP/KVM runner consumption remain
+**PLANNED**, so Total mode itself is not promoted.
+
+```text
+Complexity impact: MEDIUM
+TCB impact: LOW
+New parser boundary: NO
+New authority model: NO
+New persistent state: NO
+External dependency: NO
+Failure isolated: YES
+Existing-object reuse: HIGH
+```
+
 1. Every running `MICROVM_ELIGIBLE` domain MUST execute within an admitted
    microVM boundary.
 2. Failure to create that boundary MUST NOT cause automatic native fallback.

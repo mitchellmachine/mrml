@@ -208,6 +208,16 @@ produce the same canonical edit, and shell text cannot select authority,
 objects, providers, paths, or fallback. Rendered/interactive processes and
 trusted accessibility presentation remain **PLANNED**.
 
+Strict Total runtime enforcement is now **PARTIALLY IMPLEMENTED** at its kernel
+finalization boundary. A generation-bound fixed inventory must classify every
+running/unavailable domain and mark each must-run component. The finalizer
+rejects missing or unavailable required domains, unknown active domains, class
+substitution, eligible execution outside a microVM, unsupported blockers, and
+native fallback before producing a bounded runtime proof. Windows and Arch
+Linux each pass 549 kernel tests. Complete SystemGeneration-derived inventory
+and live WHP/KVM consumption are the next gate; this does not yet establish
+required-system Total readiness.
+
 The deployment lane is defined in [DEPLOYMENT.md](DEPLOYMENT.md) and must not
 displace the current foundational gate. Later work proceeds as separate bounded
 milestones: package/boot-safe formats; release/generation state; Store/catalog;

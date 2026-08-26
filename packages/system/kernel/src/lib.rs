@@ -26,6 +26,7 @@ mod host_resource;
 mod ipc;
 mod isolation;
 mod isolation_monitor;
+mod isolation_total_runtime;
 mod memory;
 mod memory_resource;
 mod microvm_projection;
@@ -142,6 +143,10 @@ pub use isolation::{
 pub use isolation_monitor::{
     HostSubstrateCounts, IsolationMonitorError, IsolationStatusSnapshot,
     IsolationUnavailableCounts, TotalMicrovmState, inspect_isolation_status,
+};
+pub use isolation_total_runtime::{
+    TotalMicrovmInventory, TotalMicrovmInventoryEntry, TotalMicrovmRuntimeError,
+    TotalMicrovmRuntimeProof,
 };
 pub use memory::{
     FrameAllocator, MemoryError, MemoryKind, MemoryMap, MemoryRegion, PAGE_SIZE, PhysAddr,

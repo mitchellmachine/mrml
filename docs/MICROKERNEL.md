@@ -2998,6 +2998,24 @@ transaction composition. The
 broader adaptive placement and automated VMM/resource selection reviews remain
 `TRIGGERED` in [patents/REVIEW_LOG.md](patents/REVIEW_LOG.md).
 
+The first strict system-level Total finalizer now sits above the per-launch
+admission table. `TotalMicrovmInventory` binds an exact system/policy generation
+to unique domain/class entries plus an explicit must-run bit. It refuses unknown
+running or unavailable domains, duplicate identity, class substitution, missing
+or unavailable must-run components, eligible execution outside a microVM,
+running unsupported blockers, and any native fallback. Only an exact complete
+state yields `TotalMicrovmRuntimeProof` with bounded counts and generations;
+the proof carries no capability or launch authority. Windows and Arch Linux each
+pass 549 kernel tests. Required-system inventory derivation and real WHP/KVM
+runner consumption remain **PLANNED**, so this is unit-tested kernel mechanism,
+not end-to-end Total readiness.
+
+Patent review: `NOT_TRIGGERED` for this conventional fixed-capacity inventory,
+exact-match validation, and aggregate finalization over the already reviewed
+admission table. Broader adaptive isolation, automated VMM placement, and
+device projection remain `TRIGGERED` in
+[patents/REVIEW_LOG.md](patents/REVIEW_LOG.md).
+
 The hosted WHP and nested-KVM service runners now exercise the configured
 preparation path before real guest construction. Both build component and system
 policy records under separate setting capabilities, atomically commit revision

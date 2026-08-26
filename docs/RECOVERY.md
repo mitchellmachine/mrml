@@ -1052,6 +1052,16 @@ attempts to place object IDs, capability tokens, provider names, paths, or
 fallback directives in shell text. Settings actions have the same authority-
 free shape. Concrete recovery UI and shell execution remain **PLANNED**.
 
+Recovery must treat `TotalMicrovmRuntimeProof` as generation-bound output, not
+as a setting or reusable assertion. The kernel finalizer now requires an exact
+inventory entry for every running or retained-unavailable domain and refuses a
+proof when a must-run domain is missing/unavailable, a class changes, an active
+domain is unclassified, eligible work runs outside a microVM, a blocker runs,
+or fallback is nonzero. Recovery may diagnose these typed failures but cannot
+delete an inventory requirement or relabel a substrate reason to make Total
+appear satisfied. Live runner recovery and complete required-system inventory
+remain **PLANNED**.
+
 Application-launch recovery must retain the exact runtime domain, application
 object, immutable application generation and artifact digest, active system
 generation, and applied policy generation. The kernel application route accepts
