@@ -857,6 +857,11 @@ scheduling, or virtualization algorithm.
 Adopting that existing serviced-device path in the controlled WHP/KVM recovery
 source changes only composition and lifetime retention; it adds no new
 mechanism to the triggered combination.
+Binding an authenticated session's existing device descriptor to an expected
+volume header, geometry, and one of two existing redundant-root locations is
+conventional identity/geometry validation. Separating that control-plane check
+from independently authorized block reads adds no discovery, storage,
+recovery-selection, isolation, scheduling, or virtualization algorithm.
 Because the
 broader combination of
 signed release classification, automated placement, isolation, recovery, and
@@ -7098,5 +7103,16 @@ bounded reaching-definition, loan-ancestry, and liveness checks when an optional
 reference reassignment leaves two possible owner generations. It introduces no
 new borrow-checking, region-inference, alias-analysis, optimization, or code-
 generation algorithm. Path-sensitive regions remain absent. Broader compiler
+completion remains partial; this technical screen is not a clearance or
+infringement conclusion and does not replace independent human dual review.
+
+# 2026-08-26 — Loop-carried owner-generation invalidation evidence
+
+**Result: NOT_TRIGGERED after the loop-generation evidence review.** This
+increment adds independently authored regression evidence for MRML's existing
+bounded control-flow, reaching-definition, loan-ancestry, and liveness checks in
+one conventional single-exit loop shape. It introduces no new loop dataflow,
+borrow-checking, region-inference, alias-analysis, optimization, or code-
+generation algorithm. General loop fixed points remain absent. Broader compiler
 completion remains partial; this technical screen is not a clearance or
 infringement conclusion and does not replace independent human dual review.
