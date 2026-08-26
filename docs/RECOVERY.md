@@ -798,6 +798,11 @@ explicitly and downgrade the status rather than guessing.
   but AI algorithms outside stable device ABI, preserve Safe/Advanced/Raw
   profiles without universal `unsafe_gpu`, measure escape hatches, and never let
   Blackwell define the portable API.
+  Preserve the control/data-plane boundary during recovery: policy and the GPU
+  broker must recreate and reauthorize the exact domain, policy/device
+  generations, budgets, mappings, and queue identity before a new direct queue
+  data path opens. Queue contents, retained pages, or a stale
+  `GpuDataPlaneBinding` never recreate authority after reset or generation loss.
 - VMM device inventory: inspect `vm.rs`, `vm_dispatch.rs`, `vm_interrupt.rs`,
   `virtual_block.rs`, `virtual_gpu.rs`, and both native backends. Currently the common lifecycle,
   guest-memory, exit, I/O-policy, hypercall, and interrupt mechanisms are

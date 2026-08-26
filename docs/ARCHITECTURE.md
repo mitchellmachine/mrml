@@ -65,6 +65,12 @@ For example, VirtualGPU policy and the GPU broker establish the exact domain,
 queues, mappings, budgets, and generations once. The App VM and GPU backend may
 then exchange bounded authenticated commands and completions through the
 established shared queues without routing every command back through policy.
+The current kernel foundation represents that handoff as a one-use
+`GpuDataPlaneBinding`: it rejects zero authority identities and mismatched queue
+capacity, retains the exact domain, policy/device generations, and admitted
+byte/dispatch budgets, and consumes itself to create disjoint command and
+completion endpoints. This is **PARTIALLY IMPLEMENTED** queue-boundary evidence,
+not a complete GPU broker, hardware data path, or physical isolation claim.
 
 Canonical packages, coherent `SystemRelease` graphs, immutable local
 `SystemGeneration` state, Store transport, system images, servicing, installation,

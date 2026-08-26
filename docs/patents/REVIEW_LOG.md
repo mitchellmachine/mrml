@@ -4,6 +4,18 @@ Historical paths in this log are intentionally preserved. The canonical
 [old-to-current source-path map](PATH_MIGRATION.md) locates their present
 implementations without altering the original review evidence.
 
+## 2026-08-26 — VirtualGPU control/data-plane authority binding
+
+Patent review: **TRIGGERED** under the existing native GPU, VirtualGPU, queue,
+resource-accounting, and DMA reviews. This bounded increment makes an existing
+design boundary explicit: one conventional immutable control-plane record binds
+caller-supplied domain, policy/device generations, byte/dispatch budgets,
+authenticated queue identity, and disjoint queue layout before constructing the
+existing direct command/completion endpoints. It adds no provider or placement
+selection, hardware packet format, scheduling optimization, driver algorithm,
+DMA mechanism, or native-hardware integration. No patent-clearance or
+non-infringement conclusion is made; independent human review remains required.
+
 ## 2026-08-25 — KVM/WHP configuration transaction and retained lifecycle integration
 
 Patent review: **NOT_TRIGGERED** for this integration increment. The existing

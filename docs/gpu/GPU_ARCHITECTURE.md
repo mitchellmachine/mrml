@@ -16,6 +16,15 @@ queues, mappings, budgets, and generations once. Steady-state commands then use
 the established bounded shared queues directly; they do not repeat policy IPC or
 gain authority from queue contents.
 
+The kernel's **PARTIALLY IMPLEMENTED** boundary uses a one-use
+`GpuDataPlaneBinding`. Control-plane construction binds a nonzero domain,
+policy generation, device generation, byte budget, dispatch budget, queue
+identity, and disjoint queue layout. Only then can it be consumed into command
+and completion endpoints. Queue messages carry work within that immutable
+authority; they cannot select a domain, policy, device generation, placement,
+provider, or larger budget. The complete broker, native hardware connection,
+and physical DMA/IOMMU proof remain **PLANNED**.
+
 ```text
 CONTROL PLANE
 App -> request GPU capability -> policy -> GPU broker

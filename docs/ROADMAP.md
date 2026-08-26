@@ -16,6 +16,15 @@ remain independently attributable.
 
 ## Current priority
 
+The VirtualGPU queue foundation now makes the control/data-plane rule concrete:
+one consumed control-plane binding retains the exact domain, policy/device
+generations, byte/dispatch budgets, authenticated queue identity, and disjoint
+layout before creating direct steady-state command/completion endpoints. Focused
+tests reject zero authority and capacity mismatch. This is **PARTIALLY
+IMPLEMENTED** queue-boundary evidence only; broker integration, hardware
+execution, and physical isolation remain **PLANNED** and do not displace the
+current adaptive-isolation dependency gate.
+
 Three new persistent deltas are documented before implementation:
 
 - [packages/ARTIFACT_EXTENSIONS.md](packages/ARTIFACT_EXTENSIONS.md) defines

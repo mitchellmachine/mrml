@@ -58,6 +58,7 @@ pub enum GpuError {
     UntrustedKernelBundle,
     UnsupportedKernelSchema,
     InvalidKernelSchema,
+    InvalidControlPlaneAuthority,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -376,17 +377,69 @@ impl GpuSharedQueueLayout {
     }
 }
 
-/// One control-plane result authorizing an already validated VirtualGPU queue
-/// identity and shared-memory layout. Consuming it constructs the steady-state
-/// data-plane endpoints; data-plane traffic cannot change policy, mappings, or
-/// queue authority.
+/// One immutable control-plane result for an already validated VirtualGPU.
+/// Consuming it constructs steady-state data-plane endpoints; traffic cannot
+/// change policy, mappings, placement, generations, budgets, or queue authority.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct GpuControlPlaneAuthority {
+    domain: u64,
+    policy_generation: u64,
+    device_generation: u64,
+    byte_budget: u64,
+    dispatch_budget: u64,
+}
+
+impl GpuControlPlaneAuthority {
+    pub const fn new(
+        domain: u64,
+        policy_generation: u64,
+        device_generation: u64,
+        byte_budget: u64,
+        dispatch_budget: u64,
+    ) -> Result<Self, GpuError> {
+        if domain == 0
+            || policy_generation == 0
+            || device_generation == 0
+            || byte_budget == 0
+            || dispatch_budget == 0
+        {
+            return Err(GpuError::InvalidControlPlaneAuthority);
+        }
+        Ok(Self {
+            domain,
+            policy_generation,
+            device_generation,
+            byte_budget,
+            dispatch_budget,
+        })
+    }
+
+    pub const fn domain(self) -> u64 {
+        self.domain
+    }
+    pub const fn policy_generation(self) -> u64 {
+        self.policy_generation
+    }
+    pub const fn device_generation(self) -> u64 {
+        self.device_generation
+    }
+    pub const fn byte_budget(self) -> u64 {
+        self.byte_budget
+    }
+    pub const fn dispatch_budget(self) -> u64 {
+        self.dispatch_budget
+    }
+}
+
 pub struct GpuDataPlaneBinding<const N: usize> {
+    authority: GpuControlPlaneAuthority,
     identity: GpuQueueIdentity,
     layout: GpuSharedQueueLayout,
 }
 
 impl<const N: usize> GpuDataPlaneBinding<N> {
     pub fn establish(
+        authority: GpuControlPlaneAuthority,
         identity: GpuQueueIdentity,
         layout: GpuSharedQueueLayout,
     ) -> Result<Self, GpuError> {
@@ -394,7 +447,15 @@ impl<const N: usize> GpuDataPlaneBinding<N> {
             return Err(GpuError::InvalidQueueCapacity);
         }
         validate_queue_identity(identity.session(), &identity.key())?;
-        Ok(Self { identity, layout })
+        Ok(Self {
+            authority,
+            identity,
+            layout,
+        })
+    }
+
+    pub const fn authority(&self) -> GpuControlPlaneAuthority {
+        self.authority
     }
 
     pub fn into_endpoints(
@@ -6054,17 +6115,20 @@ mod tests {
 
     #[test]
     fn control_plane_establishes_one_bounded_data_plane() {
+        assert_eq!(
+            GpuControlPlaneAuthority::new(0, 2, 3, 4096, 8),
+            Err(GpuError::InvalidControlPlaneAuthority)
+        );
+        let authority = GpuControlPlaneAuthority::new(1, 2, 3, 4096, 8).unwrap();
         let identity = GpuQueueIdentity::from_boot_entropy(&[0x5a; 32]).unwrap();
         let layout = GpuSharedQueueLayout::new(0x1000, 0x3000, 2).unwrap();
         assert!(matches!(
-            GpuDataPlaneBinding::<1>::establish(identity, layout),
+            GpuDataPlaneBinding::<1>::establish(authority, identity, layout),
             Err(GpuError::InvalidQueueCapacity)
         ));
-        let (publisher, bridge, mut sender, mut receiver) =
-            GpuDataPlaneBinding::<2>::establish(identity, layout)
-                .unwrap()
-                .into_endpoints()
-                .unwrap();
+        let binding = GpuDataPlaneBinding::<2>::establish(authority, identity, layout).unwrap();
+        assert_eq!(binding.authority(), authority);
+        let (publisher, bridge, mut sender, mut receiver) = binding.into_endpoints().unwrap();
         assert!(!publisher.is_poisoned());
         assert!(!bridge.is_poisoned());
         let mut message = [0; GPU_QUEUE_MESSAGE_BYTES];

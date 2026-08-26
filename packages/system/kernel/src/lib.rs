@@ -240,7 +240,7 @@ pub use virtual_gpu::{
     Dispatch, DispatchId, DispatchTable, GPU_DOORBELL_PORT, GPU_QUEUE_MESSAGE_BYTES,
     GpuBatchExecutor, GpuCommandRing, GpuCommandServiceError, GpuCompletion, GpuCompletionReceiver,
     GpuCompletionRing, GpuCompletionSender, GpuCompletionStatus, GpuDataPlaneBinding,
-    GpuDispatchBatch, GpuError,
+    GpuControlPlaneAuthority, GpuDispatchBatch, GpuError,
     GpuGuestCommandPublisher, GpuHostBackend, GpuLifecycleError, GpuQueueIdentity,
     GpuQueueReceiver, GpuQueueSender, GpuResourceBackend, GpuResourceOutcome, GpuResourceResponse,
     GpuResourceResponseReceiver, GpuResourceResponseSender, GpuRingConsumer, GpuRingProducer,
