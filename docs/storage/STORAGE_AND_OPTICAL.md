@@ -74,6 +74,15 @@ media replacement erases all output; incompatible block size/alignment fails
 before firmware access. This is host-mocked and cross-build evidence, not a
 running loader, durable storage, OVMF, or physical-device result.
 
+Bounded UEFI Block I/O handle enumeration is now **PARTIALLY IMPLEMENTED**.
+`LocateHandleBuffer(ByProtocol)` output is treated as firmware-owned hostile
+storage: count, fixed caller capacity, alignment, null handles, and duplicates
+are checked before publication; the array is copied locally and `FreePool` is
+required on every allocated result, including locate failure. Free uncertainty
+rejects the operation. Handle values and firmware order remain ephemeral
+presentation and never form stable identity or authority. Per-handle descriptor
+opening, block-zero volume matching, and real-loader execution remain next.
+
 The `mrml` frontend may expose structured `disk`, `filesystem`, `optical`, and
 `media` operations. The PowerShell-inspired shell projects the same backend as
 typed `Get-*`, `Test-*`, `Initialize-*`, `New-*`, `Format-*`, `Write-*`, and

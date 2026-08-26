@@ -111,6 +111,13 @@ failed or stale read erases its complete output. This has only run against a
 host mock; the production loader still does not enumerate or read installed
 media through it.
 
+Block I/O handle discovery is now **PARTIALLY IMPLEMENTED** as a fixed-capacity
+copy of `LocateHandleBuffer(ByProtocol)`. It rejects malformed, duplicate, or
+excess entries and requires `FreePool` for every firmware allocation before
+return. Handle values and enumeration order are explicitly non-authoritative
+and are not persistent identity. The production loader has not yet opened and
+scanned this set.
+
 The conventional fallback `\EFI\BOOT\BOOTX64.EFI` may be installed only under
 policy that proves ownership/non-conflict and previews backup/recovery or exact
 replacement. A shared ESP's existing fallback is never casually overwritten.

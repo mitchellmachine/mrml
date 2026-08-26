@@ -73,6 +73,14 @@ pass 31 focused tests and cross-build the UEFI target. Bounded handle
 enumeration, expected-volume selection, real-loader composition, and installed
 ownership transfer remain next.
 
+Bounded Block I/O handle enumeration is now **PARTIALLY IMPLEMENTED**. The UEFI
+library copies at most a caller-fixed capacity from firmware, rejects nulls and
+duplicates, and requires release of every returned allocation on success or
+failure. Firmware order and handle values never become device identity. Windows
+and Arch Linux each pass 32 focused tests and cross-build the UEFI target.
+Opening/scanning each handle and selecting exactly one expected installed volume
+remain the next gate.
+
 Installed recovery ownership now crosses the Total-admission boundary in the
 controlled backend-parity path. `RecoveredInstalledTotalAdmission` retains the
 exact serviced device selection and recovered volume/root identity beside the

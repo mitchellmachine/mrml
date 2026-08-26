@@ -3263,6 +3263,14 @@ pass 31 library tests and cross-build the UEFI artifact. This remains mocked
 protocol evidence; enumeration, installed selection, and firmware execution are
 not implemented.
 
+The UEFI library now copies bounded `LocateHandleBuffer(ByProtocol)` results
+into a fixed local set and releases firmware storage before return. Capacity,
+pointer alignment, null entries, and duplicate handles fail closed; release
+failure overrides otherwise valid discovery. Neither handle bits nor order are
+stable identity. Windows and Arch Linux each pass 32 library tests and
+cross-build the UEFI artifact. Per-handle volume inspection and loader execution
+remain absent.
+
 The bounded discovery result now remains owned through the complete serviced
 recovery read. `RecoveredInstalledStableSystemSelection` retains the exact
 installed selection beside the `BlockVolume` and reachable graph produced from

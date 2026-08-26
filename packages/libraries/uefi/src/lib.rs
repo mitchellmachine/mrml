@@ -266,6 +266,14 @@ pub type HandleProtocol =
 pub type OpenProtocol =
     unsafe extern "efiapi" fn(Handle, *const Guid, *mut *mut c_void, Handle, Handle, u32) -> Status;
 pub type CloseProtocol = unsafe extern "efiapi" fn(Handle, *const Guid, Handle, Handle) -> Status;
+pub type FreePool = unsafe extern "efiapi" fn(*mut c_void) -> Status;
+pub type LocateHandleBuffer = unsafe extern "efiapi" fn(
+    u32,
+    *const Guid,
+    *mut c_void,
+    *mut usize,
+    *mut *mut Handle,
+) -> Status;
 pub type AllocatePages = unsafe extern "efiapi" fn(u32, u32, usize, *mut u64) -> Status;
 pub type FreePages = unsafe extern "efiapi" fn(u64, usize) -> Status;
 pub type Tcg2HashLogExtendEvent =
@@ -332,9 +340,100 @@ pub enum UefiBlockDescriptorError {
     RecoveryRange,
     MediaChanged,
     ReadBlock(Status),
+    LocateHandles(Status),
+    NoBlockDevices,
+    HandleCapacity,
+    InvalidHandleBuffer,
+    DuplicateHandle,
+    FreeHandleBuffer(Status),
 }
 
 pub const OPEN_PROTOCOL_GET_PROTOCOL: u32 = 0x0000_0002;
+pub const LOCATE_BY_PROTOCOL: u32 = 2;
+
+pub struct UefiBlockHandleSet<const N: usize> {
+    handles: [Handle; N],
+    count: usize,
+}
+
+impl<const N: usize> UefiBlockHandleSet<N> {
+    pub fn as_slice(&self) -> &[Handle] {
+        &self.handles[..self.count]
+    }
+}
+
+/// Copies a firmware-allocated Block I/O handle array into a fixed-capacity
+/// local set and releases the firmware allocation before returning. Handle
+/// values and their enumeration order identify neither devices nor authority.
+///
+/// # Safety
+///
+/// `services` must be a live boot-services table. On successful return from
+/// `locate_handle_buffer`, firmware must provide `count` readable handles in
+/// the returned allocation, which must be releasable through `free_pool`.
+pub unsafe fn locate_block_io_handles<const N: usize>(
+    services: &BootServices,
+) -> Result<UefiBlockHandleSet<N>, UefiBlockDescriptorError> {
+    if N == 0 {
+        return Err(UefiBlockDescriptorError::HandleCapacity);
+    }
+    let mut count = 0usize;
+    let mut firmware_buffer = core::ptr::null_mut();
+    let locate_status = unsafe {
+        (services.locate_handle_buffer)(
+            LOCATE_BY_PROTOCOL,
+            &BLOCK_IO_PROTOCOL_GUID,
+            core::ptr::null_mut(),
+            &mut count,
+            &mut firmware_buffer,
+        )
+    };
+    if locate_status != SUCCESS {
+        if !firmware_buffer.is_null() {
+            let free_status = unsafe { (services.free_pool)(firmware_buffer.cast()) };
+            if free_status != SUCCESS {
+                return Err(UefiBlockDescriptorError::FreeHandleBuffer(free_status));
+            }
+        }
+        return Err(UefiBlockDescriptorError::LocateHandles(locate_status));
+    }
+
+    let validation = if count == 0 {
+        Err(UefiBlockDescriptorError::NoBlockDevices)
+    } else if count > N {
+        Err(UefiBlockDescriptorError::HandleCapacity)
+    } else if firmware_buffer.is_null()
+        || !(firmware_buffer as usize).is_multiple_of(core::mem::align_of::<Handle>())
+    {
+        Err(UefiBlockDescriptorError::InvalidHandleBuffer)
+    } else {
+        let source = unsafe { core::slice::from_raw_parts(firmware_buffer, count) };
+        let mut handles = [core::ptr::null_mut(); N];
+        let mut error = None;
+        for (index, handle) in source.iter().copied().enumerate() {
+            if handle.is_null() {
+                error = Some(UefiBlockDescriptorError::InvalidHandleBuffer);
+                break;
+            }
+            if source[..index].contains(&handle) {
+                error = Some(UefiBlockDescriptorError::DuplicateHandle);
+                break;
+            }
+            handles[index] = handle;
+        }
+        match error {
+            Some(error) => Err(error),
+            None => Ok(UefiBlockHandleSet { handles, count }),
+        }
+    };
+    if !firmware_buffer.is_null() {
+        let free_status = unsafe { (services.free_pool)(firmware_buffer.cast()) };
+        if free_status != SUCCESS {
+            return Err(UefiBlockDescriptorError::FreeHandleBuffer(free_status));
+        }
+    }
+    validation
+}
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct UefiBlockMediaSnapshot {
@@ -758,7 +857,7 @@ pub struct BootServices {
     pub free_pages: FreePages,
     pub get_memory_map: GetMemoryMap,
     pub allocate_pool: usize,
-    pub free_pool: usize,
+    pub free_pool: FreePool,
     pub create_event: usize,
     pub set_timer: usize,
     pub wait_for_event: usize,
@@ -788,7 +887,7 @@ pub struct BootServices {
     pub close_protocol: CloseProtocol,
     pub open_protocol_information: usize,
     pub protocols_per_handle: usize,
-    pub locate_handle_buffer: usize,
+    pub locate_handle_buffer: LocateHandleBuffer,
     pub locate_protocol: LocateProtocol,
 }
 
@@ -1339,6 +1438,11 @@ mod tests {
     static RECOVERY_READ_CALLS: AtomicUsize = AtomicUsize::new(0);
     static RECOVERY_READ_STATUS: AtomicUsize = AtomicUsize::new(SUCCESS);
     static RECOVERY_MUTATE_MEDIA: AtomicPtr<BlockIoMedia> = AtomicPtr::new(core::ptr::null_mut());
+    static MOCK_HANDLE_BUFFER: AtomicPtr<Handle> = AtomicPtr::new(core::ptr::null_mut());
+    static MOCK_HANDLE_COUNT: AtomicUsize = AtomicUsize::new(0);
+    static MOCK_LOCATE_STATUS: AtomicUsize = AtomicUsize::new(SUCCESS);
+    static MOCK_FREE_STATUS: AtomicUsize = AtomicUsize::new(SUCCESS);
+    static MOCK_FREE_CALLS: AtomicUsize = AtomicUsize::new(0);
 
     unsafe extern "efiapi" fn mock_get_memory_map(
         _: *mut usize,
@@ -1368,6 +1472,34 @@ mod tests {
 
     unsafe extern "efiapi" fn mock_free_pages(_: u64, _: usize) -> Status {
         NOT_FOUND
+    }
+
+    unsafe extern "efiapi" fn mock_free_pool(_: *mut c_void) -> Status {
+        MOCK_FREE_CALLS.fetch_add(1, Ordering::SeqCst);
+        MOCK_FREE_STATUS.load(Ordering::SeqCst)
+    }
+
+    unsafe extern "efiapi" fn mock_locate_handle_buffer(
+        search: u32,
+        protocol: *const Guid,
+        search_key: *mut c_void,
+        count: *mut usize,
+        buffer: *mut *mut Handle,
+    ) -> Status {
+        if search != LOCATE_BY_PROTOCOL
+            || protocol.is_null()
+            || !unsafe { &*protocol }.equals(&BLOCK_IO_PROTOCOL_GUID)
+            || !search_key.is_null()
+            || count.is_null()
+            || buffer.is_null()
+        {
+            return LOAD_ERROR;
+        }
+        unsafe {
+            *count = MOCK_HANDLE_COUNT.load(Ordering::SeqCst);
+            *buffer = MOCK_HANDLE_BUFFER.load(Ordering::SeqCst);
+        }
+        MOCK_LOCATE_STATUS.load(Ordering::SeqCst)
     }
 
     unsafe extern "efiapi" fn mock_locate_protocol(
@@ -1429,7 +1561,7 @@ mod tests {
             free_pages: mock_free_pages,
             get_memory_map: mock_get_memory_map,
             allocate_pool: 0,
-            free_pool: 0,
+            free_pool: mock_free_pool,
             create_event: 0,
             set_timer: 0,
             wait_for_event: 0,
@@ -1459,7 +1591,7 @@ mod tests {
             close_protocol: mock_close_protocol,
             open_protocol_information: 0,
             protocols_per_handle: 0,
-            locate_handle_buffer: 0,
+            locate_handle_buffer: mock_locate_handle_buffer,
             locate_protocol: mock_locate_protocol,
         }
     }
@@ -1952,6 +2084,61 @@ mod tests {
             unsafe { read_uefi_recovery_block(&mut protocol, unsupported, 0, &mut output) },
             Err(UefiBlockDescriptorError::UnsupportedRecoveryGeometry)
         );
+    }
+
+    #[test]
+    fn block_handle_enumeration_is_bounded_unique_and_always_releases_firmware_memory() {
+        let mut handles = [
+            core::ptr::without_provenance_mut::<c_void>(1),
+            core::ptr::without_provenance_mut::<c_void>(2),
+        ];
+        MOCK_HANDLE_BUFFER.store(handles.as_mut_ptr(), Ordering::SeqCst);
+        MOCK_HANDLE_COUNT.store(2, Ordering::SeqCst);
+        MOCK_LOCATE_STATUS.store(SUCCESS, Ordering::SeqCst);
+        MOCK_FREE_STATUS.store(SUCCESS, Ordering::SeqCst);
+        MOCK_FREE_CALLS.store(0, Ordering::SeqCst);
+        let services = mock_boot_services();
+        let set = unsafe { locate_block_io_handles::<4>(&services) }.unwrap();
+        assert_eq!(set.as_slice(), handles.as_slice());
+        assert_eq!(MOCK_FREE_CALLS.load(Ordering::SeqCst), 1);
+
+        MOCK_FREE_CALLS.store(0, Ordering::SeqCst);
+        assert!(matches!(
+            unsafe { locate_block_io_handles::<1>(&services) },
+            Err(UefiBlockDescriptorError::HandleCapacity)
+        ));
+        assert_eq!(MOCK_FREE_CALLS.load(Ordering::SeqCst), 1);
+
+        let mut duplicates = [handles[0], handles[0]];
+        MOCK_HANDLE_BUFFER.store(duplicates.as_mut_ptr(), Ordering::SeqCst);
+        MOCK_FREE_CALLS.store(0, Ordering::SeqCst);
+        assert!(matches!(
+            unsafe { locate_block_io_handles::<4>(&services) },
+            Err(UefiBlockDescriptorError::DuplicateHandle)
+        ));
+        assert_eq!(MOCK_FREE_CALLS.load(Ordering::SeqCst), 1);
+
+        MOCK_LOCATE_STATUS.store(LOAD_ERROR, Ordering::SeqCst);
+        MOCK_FREE_CALLS.store(0, Ordering::SeqCst);
+        assert!(matches!(
+            unsafe { locate_block_io_handles::<4>(&services) },
+            Err(UefiBlockDescriptorError::LocateHandles(LOAD_ERROR))
+        ));
+        assert_eq!(MOCK_FREE_CALLS.load(Ordering::SeqCst), 1);
+
+        MOCK_LOCATE_STATUS.store(SUCCESS, Ordering::SeqCst);
+        MOCK_FREE_STATUS.store(LOAD_ERROR, Ordering::SeqCst);
+        MOCK_FREE_CALLS.store(0, Ordering::SeqCst);
+        assert!(matches!(
+            unsafe { locate_block_io_handles::<4>(&services) },
+            Err(UefiBlockDescriptorError::FreeHandleBuffer(LOAD_ERROR))
+        ));
+        assert_eq!(MOCK_FREE_CALLS.load(Ordering::SeqCst), 1);
+
+        MOCK_HANDLE_BUFFER.store(core::ptr::null_mut(), Ordering::SeqCst);
+        MOCK_HANDLE_COUNT.store(0, Ordering::SeqCst);
+        MOCK_LOCATE_STATUS.store(SUCCESS, Ordering::SeqCst);
+        MOCK_FREE_STATUS.store(SUCCESS, Ordering::SeqCst);
     }
 
     #[test]

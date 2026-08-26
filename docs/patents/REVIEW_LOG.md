@@ -1,5 +1,16 @@
 # Patent review log
 
+## 2026-08-26 — Bounded UEFI Block I/O handle enumeration
+
+Patent review: **NOT_TRIGGERED** for this firmware-array lifecycle increment. It
+uses the published UEFI `LocateHandleBuffer(ByProtocol)`/`FreePool` operations,
+fixed-capacity copying, and conventional null/duplicate/bounds validation. It
+adds no device-selection or discovery-ranking algorithm, driver scheduling,
+storage layout, cryptography, placement heuristic, native fallback, queue/DMA
+mechanism, or hardware isolation method. Broader storage/device, firmware,
+adaptive-isolation, and Total-MicroVM reviews remain `TRIGGERED`; no patent-
+clearance or non-infringement conclusion is made.
+
 ## 2026-08-26 — Exact 4 KiB UEFI recovery-read bridge
 
 Patent review: **NOT_TRIGGERED** for this geometry adapter. It uses conventional

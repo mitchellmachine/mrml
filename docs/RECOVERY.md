@@ -1171,6 +1171,14 @@ output. Windows and Arch Linux each pass 31 UEFI-library tests and cross-build
 the target. No real firmware read, volume scan, installed selection, or early-
 boot transfer has run.
 
+Firmware Block I/O enumeration is now **PARTIALLY IMPLEMENTED** as a bounded
+copy-and-release transaction. The source rejects zero capacity, excess count,
+null/misaligned storage, null or duplicate handles, and release uncertainty; it
+frees any firmware allocation even when locate itself reports failure. Handles
+and ordering grant no identity or authority. Windows and Arch Linux each pass
+32 UEFI-library tests and cross-build the target. Per-handle header scanning,
+expected-volume selection, and real-loader recovery remain **PLANNED**.
+
 The recovered installed selection is now retained across the boot-policy to
 Total-admission boundary. `RecoveredInstalledTotalAdmission` binds its exact
 device descriptor, serviced session selection, volume header, active root,
