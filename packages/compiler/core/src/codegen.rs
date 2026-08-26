@@ -2258,6 +2258,9 @@ enum X86_64InlineAssembly<'source> {
     Int80Noreturn {
         inputs: [&'source str; 7],
     },
+    Int80Returning {
+        operands: [X86_64Int80Operand<'source>; 7],
+    },
     CompareRegister {
         register: X86_64InlineRegister,
         input: &'source str,
@@ -2298,6 +2301,13 @@ enum X86_64InlineOperandKind {
     Input,
     Output,
     InOut,
+}
+
+#[derive(Clone, Copy)]
+struct X86_64Int80Operand<'source> {
+    input: &'source str,
+    inout: bool,
+    output: Option<&'source str>,
 }
 
 fn x86_64_inline_assembly(
@@ -2353,7 +2363,7 @@ fn x86_64_inline_assembly(
         };
     }
     if let Some(arguments) = arguments.strip_prefix("\"int 0x80\"") {
-        return x86_64_int80_noreturn(arguments).map(Some);
+        return x86_64_int80(arguments).map(Some);
     }
     if let Some(named) = arguments.strip_prefix("\"add {") {
         let separator = named
@@ -2498,7 +2508,7 @@ fn x86_64_body_tail_diverges<const MAX_LOCALS: usize>(
         })
 }
 
-fn x86_64_int80_noreturn(arguments: &str) -> Result<X86_64InlineAssembly<'_>, CodegenErrorKind> {
+fn x86_64_int80_fields(arguments: &str) -> Result<[&str; 9], CodegenErrorKind> {
     let mut fields = [""; 9];
     let mut field_count = 0usize;
     let mut start = 0usize;
@@ -2531,32 +2541,92 @@ fn x86_64_int80_noreturn(arguments: &str) -> Result<X86_64InlineAssembly<'_>, Co
     }
     fields[field_count] = arguments[start..].trim();
     field_count += 1;
-    if field_count != fields.len()
-        || fields[0] != ""
-        || fields[8] != "options(noreturn, nostack)" && fields[8] != "options(nostack, noreturn)"
-    {
+    if field_count != fields.len() || fields[0] != "" {
         return Err(CodegenErrorKind::InvalidInlineAssembly);
     }
+    Ok(fields)
+}
+
+fn x86_64_int80(arguments: &str) -> Result<X86_64InlineAssembly<'_>, CodegenErrorKind> {
+    let fields = x86_64_int80_fields(arguments)?;
     let registers = ["rax", "rdi", "rsi", "rdx", "r10", "r8", "r9"];
-    let mut inputs = [""; 7];
-    for (index, register) in registers.iter().enumerate() {
-        let prefix = match *register {
-            "rax" => "in(\"rax\")",
-            "rdi" => "in(\"rdi\")",
-            "rsi" => "in(\"rsi\")",
-            "rdx" => "in(\"rdx\")",
-            "r10" => "in(\"r10\")",
-            "r8" => "in(\"r8\")",
-            "r9" => "in(\"r9\")",
-            _ => unreachable!(),
-        };
-        inputs[index] = fields[index + 1]
-            .strip_prefix(prefix)
-            .map(str::trim)
-            .filter(|input| !input.is_empty())
-            .ok_or(CodegenErrorKind::InvalidInlineAssembly)?;
+    if fields[8] == "options(noreturn, nostack)" || fields[8] == "options(nostack, noreturn)" {
+        let mut inputs = [""; 7];
+        for (index, register) in registers.iter().enumerate() {
+            let prefix = x86_64_int80_operand_prefix("in", register)?;
+            inputs[index] = fields[index + 1]
+                .strip_prefix(prefix)
+                .map(str::trim)
+                .filter(|input| !input.is_empty())
+                .ok_or(CodegenErrorKind::InvalidInlineAssembly)?;
+        }
+        return Ok(X86_64InlineAssembly::Int80Noreturn { inputs });
     }
-    Ok(X86_64InlineAssembly::Int80Noreturn { inputs })
+    if fields[8] != "options(nostack)" {
+        return Err(CodegenErrorKind::InvalidInlineAssembly);
+    }
+    let empty = X86_64Int80Operand {
+        input: "",
+        inout: false,
+        output: None,
+    };
+    let mut operands = [empty; 7];
+    for (index, register) in registers.iter().enumerate() {
+        let field = fields[index + 1];
+        let input_prefix = x86_64_int80_operand_prefix("in", register)?;
+        if index != 0
+            && let Some(input) = field.strip_prefix(input_prefix).map(str::trim)
+            && !input.is_empty()
+        {
+            operands[index] = X86_64Int80Operand {
+                input,
+                inout: false,
+                output: None,
+            };
+            continue;
+        }
+        let inout_prefix = x86_64_int80_operand_prefix("inlateout", register)?;
+        let declaration = field
+            .strip_prefix(inout_prefix)
+            .map(str::trim)
+            .ok_or(CodegenErrorKind::InvalidInlineAssembly)?;
+        let (input, output) = x86_64_inline_inout_places(declaration)?;
+        let effective_output = output.unwrap_or(input);
+        if effective_output != "_"
+            && x86_64_naked_external_symbol(effective_output) != Some(effective_output)
+        {
+            return Err(CodegenErrorKind::InvalidInlineAssembly);
+        }
+        operands[index] = X86_64Int80Operand {
+            input,
+            inout: true,
+            output,
+        };
+    }
+    Ok(X86_64InlineAssembly::Int80Returning { operands })
+}
+
+fn x86_64_int80_operand_prefix(
+    kind: &str,
+    register: &str,
+) -> Result<&'static str, CodegenErrorKind> {
+    match (kind, register) {
+        ("in", "rax") => Ok("in(\"rax\")"),
+        ("in", "rdi") => Ok("in(\"rdi\")"),
+        ("in", "rsi") => Ok("in(\"rsi\")"),
+        ("in", "rdx") => Ok("in(\"rdx\")"),
+        ("in", "r10") => Ok("in(\"r10\")"),
+        ("in", "r8") => Ok("in(\"r8\")"),
+        ("in", "r9") => Ok("in(\"r9\")"),
+        ("inlateout", "rax") => Ok("inlateout(\"rax\")"),
+        ("inlateout", "rdi") => Ok("inlateout(\"rdi\")"),
+        ("inlateout", "rsi") => Ok("inlateout(\"rsi\")"),
+        ("inlateout", "rdx") => Ok("inlateout(\"rdx\")"),
+        ("inlateout", "r10") => Ok("inlateout(\"r10\")"),
+        ("inlateout", "r8") => Ok("inlateout(\"r8\")"),
+        ("inlateout", "r9") => Ok("inlateout(\"r9\")"),
+        _ => Err(CodegenErrorKind::InvalidInlineAssembly),
+    }
 }
 
 fn x86_64_inline_fixed_register_operand(
@@ -9945,6 +10015,66 @@ fn preanalyze_runtime_expression_statement_reads<
                 kind: CodegenErrorKind::InvalidInlineAssembly,
                 span: translate_span(body_start, statement.span),
             });
+        }
+        Ok(Some(X86_64InlineAssembly::Int80Returning { operands })) => {
+            for operand in operands {
+                let tree = crate::ExpressionParser::<MAX_EXPRESSION_NODES>::new(operand.input)
+                    .parse()
+                    .map_err(|error| CodegenError {
+                        kind: CodegenErrorKind::Expression(error.kind),
+                        span: translate_span(body_start + statement.span.start, error.span),
+                    })?;
+                let ty = runtime_expression_type_with_locals(
+                    function,
+                    resolver,
+                    locals,
+                    &tree,
+                    tree.root(),
+                    0,
+                )
+                .map_err(|kind| CodegenError {
+                    kind,
+                    span: translate_span(body_start, statement.span),
+                })?;
+                if ty != RuntimeExpressionType::Integer(Some(crate::IntegerType::U64)) {
+                    return Err(CodegenError {
+                        kind: CodegenErrorKind::RuntimeTypeMismatch,
+                        span: translate_span(body_start, statement.span),
+                    });
+                }
+                preanalyze_runtime_expression_reads(
+                    facts,
+                    locals,
+                    function,
+                    resolver,
+                    &tree,
+                    statement.span,
+                )?;
+            }
+            for operand in operands {
+                if !operand.inout {
+                    continue;
+                }
+                let output = operand.output.unwrap_or(operand.input);
+                if output == "_" {
+                    continue;
+                }
+                let (_, local) =
+                    x86_64_inline_output_local(function, locals, output).map_err(|kind| {
+                        CodegenError {
+                            kind,
+                            span: translate_span(body_start, statement.span),
+                        }
+                    })?;
+                preanalyze_x86_64_inline_local_access(
+                    facts,
+                    local,
+                    RuntimePlaceAccess::Write,
+                    statement.span,
+                    body_start,
+                )?;
+            }
+            return Ok(());
         }
         Ok(Some(X86_64InlineAssembly::CompareRegister { input, .. })) => {
             let tree = crate::ExpressionParser::<MAX_EXPRESSION_NODES>::new(input)
@@ -30357,6 +30487,101 @@ impl<
                     span: translate_span(body_start, statement.span),
                 });
             }
+            Ok(Some(X86_64InlineAssembly::Int80Returning { operands })) => {
+                for operand in operands {
+                    let tree = crate::ExpressionParser::<MAX_EXPRESSION_NODES>::new(operand.input)
+                        .parse()
+                        .map_err(|error| CodegenError {
+                            kind: CodegenErrorKind::Expression(error.kind),
+                            span: translate_span(body_start + statement.span.start, error.span),
+                        })?;
+                    let ty = runtime_expression_type_with_locals(
+                        self.function,
+                        self.resolver,
+                        &self.locals[..self.saved_locals],
+                        &tree,
+                        tree.root(),
+                        0,
+                    )
+                    .map_err(|kind| CodegenError {
+                        kind,
+                        span: translate_span(body_start, statement.span),
+                    })?;
+                    if ty != RuntimeExpressionType::Integer(Some(crate::IntegerType::U64)) {
+                        return Err(CodegenError {
+                            kind: CodegenErrorKind::RuntimeTypeMismatch,
+                            span: translate_span(body_start, statement.span),
+                        });
+                    }
+                    let previous_width = self.width;
+                    self.width = runtime_expression_width(ty)
+                        .ok_or(self.error(CodegenErrorKind::RuntimeTypeMismatch))?;
+                    let emission = self.emit_expression(&tree, tree.root(), 0);
+                    self.width = previous_width;
+                    emission?;
+                    self.emit(&[0x50])?;
+                    self.evaluation_depth += 1;
+                }
+                for pop in [
+                    &[0x41, 0x59][..],
+                    &[0x41, 0x58][..],
+                    &[0x41, 0x5a][..],
+                    &[0x5a][..],
+                    &[0x5e][..],
+                    &[0x5f][..],
+                    &[0x58][..],
+                ] {
+                    self.emit(pop)?;
+                    self.evaluation_depth -= 1;
+                }
+                self.emit(&[0xcd, 0x80])?;
+                for push in [
+                    &[0x50][..],
+                    &[0x57][..],
+                    &[0x56][..],
+                    &[0x52][..],
+                    &[0x41, 0x52][..],
+                    &[0x41, 0x50][..],
+                    &[0x41, 0x51][..],
+                ] {
+                    self.emit(push)?;
+                    self.evaluation_depth += 1;
+                }
+                for (index, operand) in operands.iter().copied().enumerate() {
+                    if !operand.inout {
+                        continue;
+                    }
+                    let output = operand.output.unwrap_or(operand.input);
+                    if output == "_" {
+                        continue;
+                    }
+                    let place = x86_64_inline_output_place(
+                        self.function,
+                        &self.locals[..self.saved_locals],
+                        output,
+                    )
+                    .map_err(|kind| CodegenError {
+                        kind,
+                        span: translate_span(body_start, statement.span),
+                    })?;
+                    let destination = self.record_x86_64_inline_output_place(
+                        place,
+                        RuntimePlaceAccess::Write,
+                        statement.span,
+                    )?;
+                    let X86_64InlineResolvedOutputStorage::StackSlot(slot) = destination else {
+                        return Err(self.error(CodegenErrorKind::InvalidInlineAssembly));
+                    };
+                    self.emit_stack_slot(6 - index)?;
+                    self.emit_store_stack_slot(
+                        slot.checked_add(self.evaluation_depth)
+                            .ok_or(self.error(CodegenErrorKind::OutputTooSmall))?,
+                    )?;
+                }
+                self.evaluation_depth -= 7;
+                self.emit_stack_cleanup_bytes(56)?;
+                return Ok(());
+            }
             Ok(Some(X86_64InlineAssembly::CompareRegister { register, input })) => {
                 let tree = crate::ExpressionParser::<MAX_EXPRESSION_NODES>::new(input)
                     .parse()
@@ -35087,6 +35312,23 @@ mod tests {
             assert!(!code.bytes().contains(&0xc3), "{source}");
         }
 
+        let returning_syscall = compile(concat!(
+            "#[unsafe(no_mangle)] pub extern \"C\" fn answer(operation: u64) -> u64 { ",
+            "let mut status: u64 = operation; unsafe { ",
+            "asm!(\"int 0x80\", inlateout(\"rax\") status, in(\"rdi\") 1u64, ",
+            "in(\"rsi\") 2u64, inlateout(\"rdx\") 0u64 => _, ",
+            "inlateout(\"r10\") 0u64 => _, inlateout(\"r8\") 0u64 => _, ",
+            "inlateout(\"r9\") 0u64 => _, options(nostack)); } status }"
+        ))
+        .unwrap();
+        assert!(
+            returning_syscall
+                .bytes()
+                .windows(2)
+                .any(|bytes| bytes == [0xcd, 0x80])
+        );
+        assert_eq!(returning_syscall.bytes().last(), Some(&0xc3));
+
         for source in [
             "#[unsafe(no_mangle)] pub unsafe extern \"C\" fn answer() -> u64 { asm!(\"pause\"); 42 }",
             "#[unsafe(no_mangle)] pub extern \"C\" fn answer() -> u64 { unsafe { asm!(\"pause\"); } 42 }",
@@ -35609,6 +35851,15 @@ mod tests {
                     "asm!(\"int 0x80\", in(\"rdi\") operation, in(\"rax\") 0u64, ",
                     "in(\"rsi\") 0u64, in(\"rdx\") 0u64, in(\"r10\") 0u64, ",
                     "in(\"r8\") 0u64, in(\"r9\") 0u64, options(noreturn, nostack)); }"
+                ),
+                CodegenErrorKind::InvalidInlineAssembly,
+            ),
+            (
+                concat!(
+                    "#[unsafe(no_mangle)] pub unsafe extern \"C\" fn answer(operation: u64) -> u64 { ",
+                    "asm!(\"int 0x80\", in(\"rax\") operation, in(\"rdi\") 0u64, ",
+                    "in(\"rsi\") 0u64, in(\"rdx\") 0u64, in(\"r10\") 0u64, ",
+                    "in(\"r8\") 0u64, in(\"r9\") 0u64, options(nostack)); operation }"
                 ),
                 CodegenErrorKind::InvalidInlineAssembly,
             ),
