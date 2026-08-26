@@ -19028,6 +19028,10 @@ fn runtime_type_supports_uninitialized_scalar(ty: RuntimeExpressionType) -> bool
                 target: RuntimeReferenceTarget::Scalar(_),
                 ..
             }
+            | RuntimeExpressionType::Reference {
+                target: RuntimeReferenceTarget::Str,
+                mutable: false,
+            }
     )
 }
 
@@ -30494,13 +30498,17 @@ impl<
                     span: translate_span(body_start, local.name_span),
                 });
             }
-            self.emit(&[0x31, 0xc0, 0x50])?;
+            let stack_slots = runtime_local_stack_slots(local_type);
+            self.emit(&[0x31, 0xc0])?;
+            for _ in 0..stack_slots {
+                self.emit(&[0x50])?;
+            }
             return self.push_runtime_local(
                 local.name,
                 local_type,
                 local.mutable,
                 false,
-                1,
+                stack_slots,
                 Some(translate_span(body_start, local.name_span)),
             );
         }
