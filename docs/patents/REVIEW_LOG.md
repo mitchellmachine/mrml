@@ -7674,3 +7674,14 @@ code-generation algorithm. Local-backed exits fail closed, and unconditional
 or mixed loop-control transfer remains unsupported. Broader compiler completion
 remains partial; this technical screen is not a clearance or infringement
 conclusion and does not replace independent human dual review.
+
+# 2026-08-26 — Loop unconditional-return origin transfer
+
+**Result: NOT_TRIGGERED after the loop return review.** This increment routes an
+already parsed unconditional return through the existing fixed-capacity origin
+state and marks its iteration suffix unreachable. It adds no fixed-point solver,
+region or alias analysis, path-sensitive inference, optimization, or code-
+generation algorithm. Local-backed exits fail closed, and mixed break/continue
+state remains unsupported. Broader compiler completion remains partial; this
+technical screen is not a clearance or infringement conclusion and does not
+replace independent human dual review.
