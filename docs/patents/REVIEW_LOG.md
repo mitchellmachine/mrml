@@ -5139,3 +5139,16 @@ mechanism. Broader modern trait solving retains its existing `TRIGGERED`
 review; generic associated types and source projection semantics require review
 when their mechanisms are concrete. This agent review does not replace targeted
 independent human review.
+
+# 2026-08-25 — Manifest V2 interface-catalog derivation
+
+**Result: NOT_TRIGGERED after the activated canonical interface-catalog
+review.** This build-tool increment maps explicit Manifest V2 requirement,
+provider, and supported-placement fields into the already reviewed canonical
+catalog records, sorts them by their existing exact keys, and invokes the
+existing encoder. It adds no provider discovery, ranking, dependency solving,
+update selection, transport, virtualization, recovery, or cryptographic
+mechanism. Workspace/release delivery, servicing, adaptive placement, and
+microVM mechanisms retain their existing `TRIGGERED` reviews; this agent review
+does not establish clearance or infringement and does not replace independent
+human dual review.

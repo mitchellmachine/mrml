@@ -237,9 +237,11 @@ digests. The shared no-allocation resolver derives the handoff from the two
 active records without accepting requirement/provider declarations after
 activation. Kernel decoding and both focused VMM runners reject substitutions—
 including reused generation numbers with different generation or catalog
-bytes—before backend invocation. Complete workspace-wide catalog construction
-from every Manifest V2 declaration remains **PLANNED**. Windows/Arch Linux
-package-format 12, DeploymentService 3, build-tool 87, and kernel 509 test
+bytes—before backend invocation. A canonical build-tool builder now derives
+requirements and provider forms from Manifest V2 declarations and passes two
+focused malformed/order tests on Windows and Linux; wiring those bytes into
+workspace/release construction and both VMM runners remains **PLANNED**.
+Windows/Arch Linux package-format 12, DeploymentService 3, build-tool 89, and kernel 509 test
 suites pass; WHP passes
 7 and KVM passes 8.
 A backend-neutral linear control-plane admission now binds those two immutable

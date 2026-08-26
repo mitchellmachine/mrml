@@ -143,8 +143,11 @@ closed.
 It then emits the existing immutable component launch handoff; names and
 metadata still grant no capability. Both focused WHP/KVM component paths use
 this resolver instead of assembling the ZIM/Zstd tuple directly. General
-complete catalog derivation from every Manifest V2 declaration, persistent
-authenticated generation/catalog storage,
+The build frontend now has a focused canonical builder for deriving these
+records from Manifest V2 declarations, with malformed-field and manifest-order
+tests on Windows and Linux. Workspace/release construction and the VMM runners
+do not yet consume that builder output. Persistent authenticated generation/
+catalog storage
 and resolver-driven native-service dispatch remain **PLANNED**.
 The canonical build-tool-to-kernel representation is now **PARTIALLY
 IMPLEMENTED** as `ComponentServiceLaunchHandoff`: a fixed 344-byte little-

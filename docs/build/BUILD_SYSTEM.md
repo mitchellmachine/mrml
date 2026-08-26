@@ -564,10 +564,15 @@ component-service record defined by the shared package-format library. Package,
 interface, placement, fingerprint, generation, and artifact fields are derived
 from the already resolved immutable graph. The build tool streams the complete
 canonical `MRMLSG2` package set into the same SHA3-512 generation digest used
-by hosted WHP/KVM admission. It also emits a bounded single-binding `MRMLIC1`
-catalog and binds its independent SHA3-512 digest into activation and the
-handoff; complete workspace-wide catalog emission from all Manifest V2
-declarations remains **PLANNED**. Caller-supplied kernel object IDs
+by hosted WHP/KVM admission. A focused canonical builder now derives bounded
+`MRMLIC1` requirements/providers directly from Manifest V2 `[[requires]]`,
+`[[provides]]`, and `[isolation].supported` records, rejects unknown bindings,
+forms, placements, generations, and fingerprints, and produces identical bytes
+for reordered manifest inputs. The existing resolved launch also emits a
+single-binding catalog and binds its independent SHA3-512 digest into activation
+and the handoff. Workspace/release construction and both VMM runners do not yet
+consume the manifest-derived builder output, so that delivery remains
+**PLANNED**. Caller-supplied kernel object IDs
 and policy generation remain identity inputs and grant no capability. The
 kernel and focused WHP/KVM runners decode the same record. This does not make
 the build tool a runtime authority or implement persistent `DeploymentService`

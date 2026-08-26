@@ -12,6 +12,7 @@ pub mod interface_catalog;
 pub mod isolation;
 pub mod loader;
 pub mod manifest;
+pub mod manifest_catalog;
 pub mod migration;
 pub mod package;
 pub mod resolver;
