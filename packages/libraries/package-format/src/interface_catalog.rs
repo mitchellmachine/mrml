@@ -89,25 +89,19 @@ pub fn decode_canonical_manifest_interface(
             }
             continue;
         }
-        let (key, value) = line
-            .split_once('=')
-            .ok_or(InterfaceCatalogError::Format)?;
+        let (key, value) = line.split_once('=').ok_or(InterfaceCatalogError::Format)?;
         let key = key.trim();
         let value = value.trim();
         match (section, key) {
             ("[manifest]", "format") => format = quoted(value)? == "mrml",
             ("[manifest]", "version") => version = value == "2",
             ("[package]", "id") => package = Some(quoted(value)?),
-            ("[[requires]]" | "[[provides]]", "binding") => {
-                binding = Some(quoted(value)?)
-            }
+            ("[[requires]]" | "[[provides]]", "binding") => binding = Some(quoted(value)?),
             ("[[requires]]" | "[[provides]]", "form") => form = Some(quoted(value)?),
             ("[[requires]]" | "[[provides]]", "fingerprint") => {
                 fingerprint = Some(decode_fingerprint(quoted(value)?)?)
             }
-            ("[[requires]]" | "[[provides]]", "interface") => {
-                interface = Some(quoted(value)?)
-            }
+            ("[[requires]]" | "[[provides]]", "interface") => interface = Some(quoted(value)?),
             ("[[requires]]" | "[[provides]]", "generation") => {
                 generation = Some(
                     value
@@ -121,11 +115,7 @@ pub fn decode_canonical_manifest_interface(
             _ => {}
         }
     }
-    if !format
-        || !version
-        || binding != Some("dynamic")
-        || form != Some("isolated-service")
-    {
+    if !format || !version || binding != Some("dynamic") || form != Some("isolated-service") {
         return Err(InterfaceCatalogError::Format);
     }
     let package = package.ok_or(InterfaceCatalogError::PackageIdentity)?;
@@ -725,15 +715,11 @@ mod tests {
         const REQUIREMENT: &[u8] = b"[manifest]\nformat = \"mrml\"\nversion = 2\n\n[package]\nid = \"org.mrml.zim\"\n\n[[requires]]\nbinding = \"dynamic\"\nfingerprint = \"6a6a6a6a6a6a6a6a6a6a6a6a6a6a6a6a6a6a6a6a6a6a6a6a6a6a6a6a6a6a6a6a\"\nform = \"isolated-service\"\ngeneration = 3\ninterface = \"org.mrml.interface.compression.zstd\"\n";
         const PROVIDER: &[u8] = b"[manifest]\nformat = \"mrml\"\nversion = 2\n\n[package]\nid = \"org.mrml.zstd\"\n\n[isolation]\nsupported = [\"native-service\", \"microvm\"]\n\n[[provides]]\nbinding = \"dynamic\"\nfingerprint = \"6a6a6a6a6a6a6a6a6a6a6a6a6a6a6a6a6a6a6a6a6a6a6a6a6a6a6a6a6a6a6a6a\"\nform = \"isolated-service\"\ngeneration = 3\ninterface = \"org.mrml.interface.compression.zstd\"\n";
         const MALFORMED: &[u8] = b"[manifest]\nformat = \"mrml\"\nversion = 2\n\n[package]\nid = \"org.mrml.zstd\"\n\n[isolation]\nsupported = [\"microvm\"]\n\n[[provides]]\nbinding = \"path\"\nfingerprint = \"6a6a6a6a6a6a6a6a6a6a6a6a6a6a6a6a6a6a6a6a6a6a6a6a6a6a6a6a6a6a6a6a\"\nform = \"isolated-service\"\ngeneration = 3\ninterface = \"org.mrml.interface.compression.zstd\"\n";
-        let requirement = match decode_canonical_manifest_interface(REQUIREMENT)
-            .unwrap()
-        {
+        let requirement = match decode_canonical_manifest_interface(REQUIREMENT).unwrap() {
             ManifestInterfaceDeclaration::Requirement(value) => value,
             ManifestInterfaceDeclaration::Provider(_) => panic!("wrong declaration kind"),
         };
-        let provider = match decode_canonical_manifest_interface(PROVIDER)
-            .unwrap()
-        {
+        let provider = match decode_canonical_manifest_interface(PROVIDER).unwrap() {
             ManifestInterfaceDeclaration::Provider(value) => value,
             ManifestInterfaceDeclaration::Requirement(_) => panic!("wrong declaration kind"),
         };

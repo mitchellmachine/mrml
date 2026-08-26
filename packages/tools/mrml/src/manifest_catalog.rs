@@ -38,15 +38,27 @@ pub fn encode_manifest_interface_catalog(
             {
                 return Err(ManifestCatalogError::UnsupportedBinding);
             }
-            validate_service_form(declaration.string("form").map_err(ManifestCatalogError::Manifest)?)?;
+            validate_service_form(
+                declaration
+                    .string("form")
+                    .map_err(ManifestCatalogError::Manifest)?,
+            )?;
             requirements.push(
                 ComponentInterfaceRequirement::exact(
                     package,
                     declaration
                         .string("interface")
                         .map_err(ManifestCatalogError::Manifest)?,
-                    interface_generation(declaration.integer("generation").map_err(ManifestCatalogError::Manifest)?)?,
-                    fingerprint(declaration.string("fingerprint").map_err(ManifestCatalogError::Manifest)?)?,
+                    interface_generation(
+                        declaration
+                            .integer("generation")
+                            .map_err(ManifestCatalogError::Manifest)?,
+                    )?,
+                    fingerprint(
+                        declaration
+                            .string("fingerprint")
+                            .map_err(ManifestCatalogError::Manifest)?,
+                    )?,
                 )
                 .map_err(ManifestCatalogError::Declaration)?,
             );
@@ -59,7 +71,11 @@ pub fn encode_manifest_interface_catalog(
             {
                 return Err(ManifestCatalogError::UnsupportedBinding);
             }
-            validate_service_form(declaration.string("form").map_err(ManifestCatalogError::Manifest)?)?;
+            validate_service_form(
+                declaration
+                    .string("form")
+                    .map_err(ManifestCatalogError::Manifest)?,
+            )?;
             let isolation = manifest
                 .section("isolation")
                 .map_err(ManifestCatalogError::Manifest)?;
@@ -82,8 +98,16 @@ pub fn encode_manifest_interface_catalog(
                     declaration
                         .string("interface")
                         .map_err(ManifestCatalogError::Manifest)?,
-                    interface_generation(declaration.integer("generation").map_err(ManifestCatalogError::Manifest)?)?,
-                    fingerprint(declaration.string("fingerprint").map_err(ManifestCatalogError::Manifest)?)?,
+                    interface_generation(
+                        declaration
+                            .integer("generation")
+                            .map_err(ManifestCatalogError::Manifest)?,
+                    )?,
+                    fingerprint(
+                        declaration
+                            .string("fingerprint")
+                            .map_err(ManifestCatalogError::Manifest)?,
+                    )?,
                     forms,
                 )
                 .map_err(ManifestCatalogError::Declaration)?,
@@ -150,8 +174,7 @@ mod tests {
     use super::*;
     use crate::InterfaceCatalogView;
 
-    const FINGERPRINT: &str =
-        "6a62bdd594af284f51edc1734aa15851e5de37ef7e21103b665454c743e2126c";
+    const FINGERPRINT: &str = "6a62bdd594af284f51edc1734aa15851e5de37ef7e21103b665454c743e2126c";
 
     fn manifest(package: &str, declaration: &str, isolation: &str) -> Document {
         Document::parse(
@@ -180,20 +203,23 @@ mod tests {
             "\n[isolation]\ndefault = \"native-service\"\nminimum = \"native-service\"\nsupported = [\"native-service\", \"microvm\"]\n",
         );
         let mut first = [0; 256];
-        let first_len = encode_manifest_interface_catalog(
-            9,
-            &[consumer.clone(), provider.clone()],
-            &mut first,
-        )
-        .unwrap();
+        let first_len =
+            encode_manifest_interface_catalog(9, &[consumer.clone(), provider.clone()], &mut first)
+                .unwrap();
         let mut reordered = [0; 256];
         let reordered_len =
             encode_manifest_interface_catalog(9, &[provider, consumer], &mut reordered).unwrap();
         assert_eq!(&first[..first_len], &reordered[..reordered_len]);
         let view = InterfaceCatalogView::decode(&first[..first_len]).unwrap();
         assert_eq!(view.generation(), 9);
-        assert_eq!(view.requirements().next().unwrap().consumer_package(), "org.mrml.zim");
-        assert_eq!(view.providers().next().unwrap().provider_package(), "org.mrml.zstd");
+        assert_eq!(
+            view.requirements().next().unwrap().consumer_package(),
+            "org.mrml.zim"
+        );
+        assert_eq!(
+            view.providers().next().unwrap().provider_package(),
+            "org.mrml.zstd"
+        );
     }
 
     #[test]
@@ -210,7 +236,13 @@ mod tests {
             encode_manifest_interface_catalog(1, &[invalid], &mut [0; 256]),
             Err(ManifestCatalogError::UnsupportedBinding)
         );
-        assert_eq!(fingerprint(&zero), Err(ManifestCatalogError::InvalidFingerprint));
-        assert_eq!(interface_generation(0), Err(ManifestCatalogError::InvalidGeneration));
+        assert_eq!(
+            fingerprint(&zero),
+            Err(ManifestCatalogError::InvalidFingerprint)
+        );
+        assert_eq!(
+            interface_generation(0),
+            Err(ManifestCatalogError::InvalidGeneration)
+        );
     }
 }
