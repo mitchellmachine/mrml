@@ -3042,24 +3042,35 @@ the trusted-loader boundary. The loader validates bounded firmware LoadOptions,
 uses the common exact-token parser, and sets one canonical handoff flag only for
 `TotalMicrovmOnce`. `BootHandoff` retains that authority-free override while an
 ordinary/default boot retains `None`; unknown flags and malformed options fail
-closed. Windows and Arch Linux each pass 549 kernel tests, both pass 27 UEFI
-library tests, and the UEFI target builds. No kernel policy composition or
-required-system runtime proof consumes this flag yet, so this is handoff
-integrity evidence—not a successful Total boot, OVMF/EFI-Shell execution, or
-physical firmware evidence.
+closed. The configuration control plane now **PARTIALLY IMPLEMENTS** explicit
+composition: it retains the immutable applied persistent policy, records the
+typed overlay separately, strengthens the effective mode to Total for that boot,
+and preserves the exact configuration policy generation. Native-only bounds
+fail before backend invocation. WHP and nested KVM both inject this same typed
+overlay over a Balanced/native configuration before their release-derived
+eligible component route; neither adds native fallback. The real loader-decoded
+`BootHandoff` is not yet fed through recovered configuration into that control
+plane, and complete required-system runtime proof is absent. This is hosted
+composition and handoff-integrity evidence—not a successful Total boot,
+OVMF/EFI-Shell execution, or physical firmware evidence.
 
-The hosted WHP and nested-KVM service runners now exercise the configured
+The hosted WHP and nested-KVM service runners exercise the configured
 preparation path before real guest construction. Both build component and system
-policy records under separate setting capabilities, atomically commit revision
-1, reauthorize the plan, apply the same native-service/microVM package bounds,
-bind the verified provider generation, and reserve the kernel transaction before
-the VMM constructs the guest. The previously implemented retained lifecycle
-consumes the resulting exact specification. Fresh same-artifact runs on
-2026-08-25 reported `eligible=1`, `microvm=1`, and `native_fallback=0` on both;
-WHP timings were `24643/4337/3497/64082us` and KVM timings were
-`21416/2747/1527/116185us` for verify/prepare/execute/total. This is hosted
-controlled-probe parity with transient policy state, not disk recovery, boot
-selection, host-resistant isolation, or physical-hardware evidence.
+policy records under separate setting capabilities, atomically commit a
+Balanced/native revision, reauthorize the plan, compose the explicit one-boot
+Total overlay, apply the same native-service/microVM package bounds, bind the
+verified provider generation, and reserve the kernel transaction before the VMM
+constructs the guest. The previously implemented retained lifecycle consumes
+the resulting exact specification. Fresh same-release runs on 2026-08-26
+reported `configured=balanced`, `component=native-service`,
+`override=total-microvm-once`, `effective=total-microvm`, `eligible=1`,
+`microvm=1`, and `native_fallback=0` on both. WHP timings were
+`19755/5559/2254/52085us` and KVM timings were
+`25493/7131/1207/124163us` for verify/prepare/execute/total. Configuration
+suites pass 42 tests on Windows and Arch Linux, the WHP runner passes 9, and the
+KVM runner passes 10. This is hosted controlled-probe parity with transient
+policy state, not disk recovery, actual boot selection, host-resistant
+isolation, or physical-hardware evidence.
 
 The fixed supervision protocol binds request identity, opaque generational
 `ServiceId`, operation, and restart time while likewise resolving authority

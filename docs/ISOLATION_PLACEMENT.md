@@ -705,10 +705,21 @@ and extra-token inputs. The real loader now bounds and validates the firmware
 buffer before parsing, then places `TotalMicrovmOnce` in one new canonical
 trusted-loader handoff flag. The kernel decoder exposes the typed request
 separately from policy authority or effective-state proof; empty options carry
-no override. Windows and Linux each pass 549 kernel and 27 UEFI-library tests,
-and the UEFI target builds. Menu presentation, live OVMF/EFI-Shell selection,
-base-policy composition, and strict runtime effect remain **PLANNED**; a decoded
-request is not a Total-mode boot or satisfaction claim.
+no override. One-boot base-policy composition is now **PARTIALLY IMPLEMENTED**
+in the configuration control plane: an immutable applied persistent policy can
+be combined with the typed `TotalMicrovmOnce` overlay to produce an explicit
+effective policy for that boot. The overlay strengthens Balanced to strict
+Total without changing the stored owner selections or policy generation;
+native-only package bounds fail before VMM construction. WHP and nested KVM
+inject that same typed overlay over a Balanced/native configuration and exercise
+one release-derived eligible component as a microVM with zero native fallback.
+The focused configuration suites pass 42 tests on Windows and Arch Linux; the
+WHP runner passes 9 tests and the KVM runner passes 10.
+The actual UEFI-decoded handoff is not yet connected through recovered
+persistent configuration to complete installed-generation admission. Menu
+presentation, live OVMF/EFI-Shell selection, that end-to-end boot connection,
+and complete strict runtime proof remain **PLANNED**; a decoded request or hosted
+injection is not a successful Total-mode boot or satisfaction claim.
 
 ## Resources, devices, security, and monitoring
 

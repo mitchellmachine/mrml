@@ -1,5 +1,32 @@
 # Patent review log
 
+## 2026-08-26 — Subslice callee origins and fat-reference loan use
+
+Patent review: **NOT_TRIGGERED** for this bounded compiler-analysis increment.
+It conventionally compares an existing `Subslice` place, element type, and
+mutability with an array/slice-reference parameter, retains that parameter
+identifier, and classifies an existing loan-backed fat-reference root read as a
+loan use. Mismatched and unsupported shapes fail conservative. It adds no novel
+range-disjointness or alias-analysis algorithm, region solver, optimization,
+runtime enforcement, authority model, or external dependency. Broader compiler
+completion remains partial; this technical screen establishes neither clearance
+nor infringement and does not replace independent human dual review.
+
+## 2026-08-26 — One-boot Total policy composition
+
+Patent review: **TRIGGERED** under the existing adaptive-isolation,
+Total-MicroVM, authenticated-boot, configuration, and VMM reviews. This increment
+conventionally composes one explicit typed loader overlay over an already
+validated immutable persistent policy, permits only strengthening to strict
+Total, preserves the policy generation and stored owner selections, and invokes
+the existing admission path before backend construction. The hosted WHP and KVM
+runners inject the same typed value for controlled parity evidence. It adds no
+placement heuristic, native fallback, VM or device protocol, scheduler, DMA
+mechanism, or hardware-specific isolation mechanism. The actual decoded UEFI
+handoff-to-recovered-policy connection remains unimplemented. No patent-
+clearance or non-infringement conclusion is made; independent human review
+remains required.
+
 ## 2026-08-26 — Indexed slice callee-origin evidence
 
 Patent review: **NOT_TRIGGERED**. This increment adds a distinct slice target,

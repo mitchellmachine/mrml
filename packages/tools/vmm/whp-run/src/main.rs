@@ -8,7 +8,7 @@ use mrml_config::{
     ConfigurationService, IsolationPolicyApplicationPlan, IsolationPolicySetting,
     IsolationServiceBounds, IsolationServiceIdentity, MicrovmConfigurationServiceLauncher,
     OwnerIsolationSelection, PreparedMicrovmConfigurationLauncher, SettingId,
-    prepare_configured_isolation_service_route,
+    prepare_boot_configured_isolation_service_route,
 };
 #[cfg(target_os = "windows")]
 use mrml_crypto::{LAMPORT_PUBLIC_KEY_BYTES, Sha3_512};
@@ -22,20 +22,21 @@ use mrml_kernel::verify_gpu_kernel_bundle;
 #[cfg(target_os = "windows")]
 use mrml_kernel::{
     ActiveMicrovmProjectionPlan, AdmittedApplicationGuestFactory, AffinityDeadlineVmBackend,
-    ApplicationLaunch, ApplicationMicrovmEndpoint, ArtifactKind, Capability, CapabilitySpace,
-    CpuBudgetId, CpuBudgetSpec, CpuBudgetTable, CpuRuntimeSlice, DeadlineVmBackend,
-    GPU_DOORBELL_PORT, GPU_QUEUE_MESSAGE_BYTES, GpuCommandRing, GpuQueueIdentity, GpuQueueReceiver,
-    GpuResourceResponse, GpuResourceResponseSender, GpuSharedQueueLayout, GpuVmmQueueBridge,
-    GuestMemory, HypercallRouter, InterruptPolicy, IsolationAdmissionTable,
-    IsolationApplicationBackend, IsolationApplicationSpec, IsolationMode, IsolationPlacement,
-    IsolationUnavailableReason, MAX_APPLICATION_IMAGE_BYTES, MAX_COMPONENT_IMAGE_REGIONS,
-    MemoryPoolTable, MicrovmPageProjectionKind, MicrovmProjectionDescriptor, MicrovmProjectionKind,
-    MicrovmProjectionPlan, MicrovmProjectionRequirements, ObjectId, PAGE_SIZE,
-    PreparedIsolationServiceRoute, PreparedMicrovmApplicationBackend, ResourceCommand, Rights,
-    RuntimeDomainBinding, SIGNED_ARTIFACT_OVERHEAD_BYTES, ScheduledDeadlineVmBackend,
-    ScheduledSmpVmBackend, SignedArtifact, TotalMicrovmClass, TotalMicrovmInventory,
-    TotalMicrovmInventoryEntry, TrustRoot, VIRTUAL_BLOCK_FEATURE_FLUSH, VcpuReservationId,
-    VerifiedExecutable, VerifiedGpuKernelBundle, VirtualBlockBackend, VirtualBlockBackendAuthority,
+    ApplicationLaunch, ApplicationMicrovmEndpoint, ArtifactKind, BootIsolationOverride, Capability,
+    CapabilitySpace, CpuBudgetId, CpuBudgetSpec, CpuBudgetTable, CpuRuntimeSlice,
+    DeadlineVmBackend, GPU_DOORBELL_PORT, GPU_QUEUE_MESSAGE_BYTES, GpuCommandRing,
+    GpuQueueIdentity, GpuQueueReceiver, GpuResourceResponse, GpuResourceResponseSender,
+    GpuSharedQueueLayout, GpuVmmQueueBridge, GuestMemory, HypercallRouter, InterruptPolicy,
+    IsolationAdmissionTable, IsolationApplicationBackend, IsolationApplicationSpec, IsolationMode,
+    IsolationPlacement, IsolationUnavailableReason, MAX_APPLICATION_IMAGE_BYTES,
+    MAX_COMPONENT_IMAGE_REGIONS, MemoryPoolTable, MicrovmPageProjectionKind,
+    MicrovmProjectionDescriptor, MicrovmProjectionKind, MicrovmProjectionPlan,
+    MicrovmProjectionRequirements, ObjectId, PAGE_SIZE, PreparedIsolationServiceRoute,
+    PreparedMicrovmApplicationBackend, ResourceCommand, Rights, RuntimeDomainBinding,
+    SIGNED_ARTIFACT_OVERHEAD_BYTES, ScheduledDeadlineVmBackend, ScheduledSmpVmBackend,
+    SignedArtifact, TotalMicrovmClass, TotalMicrovmInventory, TotalMicrovmInventoryEntry,
+    TrustRoot, VIRTUAL_BLOCK_FEATURE_FLUSH, VcpuReservationId, VerifiedExecutable,
+    VerifiedGpuKernelBundle, VirtualBlockBackend, VirtualBlockBackendAuthority,
     VirtualBlockCompletionStatus, VirtualBlockConfigurationPage, VirtualBlockDevice,
     VirtualBlockDeviceState, VirtualBlockError, VirtualBlockMutationError,
     VirtualBlockPciAttachment, VirtualBlockPciAttachmentState, VirtualBlockPciCleanupMode,
@@ -602,14 +603,14 @@ fn prepare_configured_total_service(
         .stage(
             &mut transaction,
             component_access,
-            OwnerIsolationSelection::Microvm,
+            OwnerIsolationSelection::Native,
         )
         .map_err(|error| anyhow!("WHP component policy staging failed: {:?}", error))?;
     system
         .stage(
             &mut transaction,
             system_access,
-            OwnerIsolationSelection::TotalMicrovm,
+            OwnerIsolationSelection::Balanced,
         )
         .map_err(|error| anyhow!("WHP system policy staging failed: {:?}", error))?;
     configuration
@@ -640,15 +641,21 @@ fn prepare_configured_total_service(
         TotalMicrovmClass::MicrovmEligible,
     )
     .map_err(|error| anyhow!("WHP service identity failed: {:?}", error))?;
-    prepare_configured_isolation_service_route(
+    let prepared = prepare_boot_configured_isolation_service_route(
         &configuration,
         &capabilities,
         plan,
+        BootIsolationOverride::TotalMicrovmOnce,
         bounds,
         identity,
         admission,
     )
-    .map_err(|error| anyhow!("WHP configured isolation preparation failed: {:?}", error))
+    .map_err(|error| anyhow!("WHP configured isolation preparation failed: {:?}", error))?;
+    println!(
+        "isolation-boot-policy|status=PASS|backend=whp|configured=balanced|component=native-service|override=total-microvm-once|effective=total-microvm|policy_generation={}",
+        admission.policy_generation()
+    );
+    Ok(prepared)
 }
 
 #[cfg(target_os = "windows")]

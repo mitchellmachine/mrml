@@ -17,15 +17,14 @@ use core::ops::{Deref, DerefMut};
 use mrml_crypto::Sha3_256;
 use mrml_kernel::arch::x86_64::UserContext;
 use mrml_kernel::{
-    prepare_isolation_service_route, route_isolation_service, Capability, CapabilityError,
-    CapabilitySpace, IsolationAdmissionTable, IsolationBackendFailure, IsolationMode,
-    IsolationPlacement, IsolationServiceBackend, IsolationServiceRouteError, IsolationServiceSpec,
-    IsolationStatusSnapshot, IsolationUnavailableReason, MemoryBackingKind, MemoryObjectId,
-    MemoryPoolId, MemoryPoolTable, MemoryResourceError, Message, ObjectId,
-    PreparedIsolationServiceRoute, Priority, RestartPolicy, Rights, RoutedIsolationService,
-    ServiceAddressSpaceEraser, ServiceCleanupError, ServiceError, ServiceId,
-    ServiceRegistrationPlan, ServiceState, ServiceSupervisor, TaskId, TaskRuntime,
-    TaskRuntimeError, PAGE_SIZE,
+    BootIsolationOverride, Capability, CapabilityError, CapabilitySpace, IsolationAdmissionTable,
+    IsolationBackendFailure, IsolationMode, IsolationPlacement, IsolationServiceBackend,
+    IsolationServiceRouteError, IsolationServiceSpec, IsolationStatusSnapshot,
+    IsolationUnavailableReason, MemoryBackingKind, MemoryObjectId, MemoryPoolId, MemoryPoolTable,
+    MemoryResourceError, Message, ObjectId, PAGE_SIZE, PreparedIsolationServiceRoute, Priority,
+    RestartPolicy, Rights, RoutedIsolationService, ServiceAddressSpaceEraser, ServiceCleanupError,
+    ServiceError, ServiceId, ServiceRegistrationPlan, ServiceState, ServiceSupervisor, TaskId,
+    TaskRuntime, TaskRuntimeError, prepare_isolation_service_route, route_isolation_service,
 };
 use mrml_storage::{
     AuthorityRecoveryValidator, BlockFileSession, BlockVolume, BlockVolumeError,
@@ -449,13 +448,13 @@ pub struct SupervisedNativeConfigurationLauncher<
 }
 
 impl<
-        E,
-        const TASKS: usize,
-        const CAPS: usize,
-        const SERVICES: usize,
-        const SETTINGS: usize,
-        const AUDIT: usize,
-    > SupervisedNativeConfigurationLauncher<E, TASKS, CAPS, SERVICES, SETTINGS, AUDIT>
+    E,
+    const TASKS: usize,
+    const CAPS: usize,
+    const SERVICES: usize,
+    const SETTINGS: usize,
+    const AUDIT: usize,
+> SupervisedNativeConfigurationLauncher<E, TASKS, CAPS, SERVICES, SETTINGS, AUDIT>
 {
     pub const fn new(
         substrate: AccountedPolicyServiceSubstrate<TASKS, CAPS, SERVICES, SETTINGS, AUDIT>,
@@ -488,13 +487,13 @@ impl<
 }
 
 impl<
-        E: ServiceAddressSpaceEraser,
-        const TASKS: usize,
-        const CAPS: usize,
-        const SERVICES: usize,
-        const SETTINGS: usize,
-        const AUDIT: usize,
-    > NativeConfigurationServiceLauncher
+    E: ServiceAddressSpaceEraser,
+    const TASKS: usize,
+    const CAPS: usize,
+    const SERVICES: usize,
+    const SETTINGS: usize,
+    const AUDIT: usize,
+> NativeConfigurationServiceLauncher
     for SupervisedNativeConfigurationLauncher<E, TASKS, CAPS, SERVICES, SETTINGS, AUDIT>
 {
     type Endpoint = NativeConfigurationEndpoint;
@@ -1474,13 +1473,13 @@ pub struct StableConfigurationRecoveryValidator<
 }
 
 impl<
-        'a,
-        const SETTINGS: usize,
-        const AUDIT: usize,
-        const EXTENTS: usize,
-        A: CapabilityAuthorizer + ?Sized,
-        B: FileReadBackend,
-    > StableConfigurationRecoveryValidator<'a, SETTINGS, AUDIT, EXTENTS, A, B>
+    'a,
+    const SETTINGS: usize,
+    const AUDIT: usize,
+    const EXTENTS: usize,
+    A: CapabilityAuthorizer + ?Sized,
+    B: FileReadBackend,
+> StableConfigurationRecoveryValidator<'a, SETTINGS, AUDIT, EXTENTS, A, B>
 {
     #[allow(clippy::too_many_arguments)]
     pub fn new(
@@ -1548,13 +1547,13 @@ impl<
 // table and builds unpublished in-memory configuration/policy values. It
 // retains no storage handle or table reference and performs no mutation.
 unsafe impl<
-        const GRANTS: usize,
-        const SETTINGS: usize,
-        const AUDIT: usize,
-        const EXTENTS: usize,
-        A: CapabilityAuthorizer + ?Sized,
-        B: FileReadBackend,
-    > AuthorityRecoveryValidator<GRANTS>
+    const GRANTS: usize,
+    const SETTINGS: usize,
+    const AUDIT: usize,
+    const EXTENTS: usize,
+    A: CapabilityAuthorizer + ?Sized,
+    B: FileReadBackend,
+> AuthorityRecoveryValidator<GRANTS>
     for StableConfigurationRecoveryValidator<'_, SETTINGS, AUDIT, EXTENTS, A, B>
 {
     type Output = RecoveredStableConfiguration<SETTINGS, AUDIT>;
@@ -1702,14 +1701,14 @@ pub struct StableServiceRecoveryValidator<
 }
 
 impl<
-        'a,
-        const SETTINGS: usize,
-        const AUDIT: usize,
-        const EXTENTS: usize,
-        const SERVICES: usize,
-        A: CapabilityAuthorizer + ?Sized,
-        B: FileReadBackend,
-    > StableServiceRecoveryValidator<'a, SETTINGS, AUDIT, EXTENTS, SERVICES, A, B>
+    'a,
+    const SETTINGS: usize,
+    const AUDIT: usize,
+    const EXTENTS: usize,
+    const SERVICES: usize,
+    A: CapabilityAuthorizer + ?Sized,
+    B: FileReadBackend,
+> StableServiceRecoveryValidator<'a, SETTINGS, AUDIT, EXTENTS, SERVICES, A, B>
 {
     pub const fn new(
         configuration: StableConfigurationRecoveryValidator<'a, SETTINGS, AUDIT, EXTENTS, A, B>,
@@ -1728,14 +1727,14 @@ impl<
 // only planned against immutable supervisor state; no lifecycle mutation occurs
 // until a committed-authority wrapper later consumes the output.
 unsafe impl<
-        const GRANTS: usize,
-        const SETTINGS: usize,
-        const AUDIT: usize,
-        const EXTENTS: usize,
-        const SERVICES: usize,
-        A: CapabilityAuthorizer + ?Sized,
-        B: FileReadBackend,
-    > AuthorityRecoveryValidator<GRANTS>
+    const GRANTS: usize,
+    const SETTINGS: usize,
+    const AUDIT: usize,
+    const EXTENTS: usize,
+    const SERVICES: usize,
+    A: CapabilityAuthorizer + ?Sized,
+    B: FileReadBackend,
+> AuthorityRecoveryValidator<GRANTS>
     for StableServiceRecoveryValidator<'_, SETTINGS, AUDIT, EXTENTS, SERVICES, A, B>
 {
     type Output = PreparedRecoveredService<SETTINGS, AUDIT>;
@@ -2362,6 +2361,25 @@ impl AppliedIsolationPolicy {
         self.policy_generation
     }
 
+    /// Composes authority-free trusted-loader input over one exact persistent
+    /// policy generation. The overlay can strengthen this boot to strict Total
+    /// mode but cannot mutate the stored owner selection, invent a new policy
+    /// generation, weaken a mandatory floor, or authorize fallback.
+    pub const fn compose_boot_override(
+        self,
+        boot_override: Option<BootIsolationOverride>,
+    ) -> EffectiveBootIsolationPolicy {
+        let mode = match boot_override {
+            Some(BootIsolationOverride::TotalMicrovmOnce) => IsolationMode::TotalMicrovm,
+            None => self.mode,
+        };
+        EffectiveBootIsolationPolicy {
+            persistent: self,
+            mode,
+            boot_override,
+        }
+    }
+
     pub fn admission_table<const DOMAINS: usize>(
         self,
         system_generation: u64,
@@ -2374,7 +2392,15 @@ impl AppliedIsolationPolicy {
         self,
         bounds: IsolationServiceBounds,
     ) -> Result<AdmittedIsolationServicePolicy, ConfigError> {
-        let (placement, source) = if self.mode == IsolationMode::TotalMicrovm {
+        self.admit_service_for_mode(self.mode, bounds)
+    }
+
+    fn admit_service_for_mode(
+        self,
+        mode: IsolationMode,
+        bounds: IsolationServiceBounds,
+    ) -> Result<AdmittedIsolationServicePolicy, ConfigError> {
+        let (placement, source) = if mode == IsolationMode::TotalMicrovm {
             (
                 IsolationPlacement::Microvm,
                 IsolationPolicySource::TotalMicrovm,
@@ -2405,11 +2431,19 @@ impl AppliedIsolationPolicy {
         bounds: IsolationServiceBounds,
         status: IsolationStatusSnapshot,
     ) -> Result<IsolationPolicySemanticView, ConfigError> {
-        if status.policy_generation != self.policy_generation || status.requested_mode != self.mode
-        {
+        self.semantic_view_for_mode(self.mode, bounds, status)
+    }
+
+    fn semantic_view_for_mode(
+        self,
+        mode: IsolationMode,
+        bounds: IsolationServiceBounds,
+        status: IsolationStatusSnapshot,
+    ) -> Result<IsolationPolicySemanticView, ConfigError> {
+        if status.policy_generation != self.policy_generation || status.requested_mode != mode {
             return Err(ConfigError::IsolationPolicyMismatch);
         }
-        let admitted = self.admit_service(bounds).ok();
+        let admitted = self.admit_service_for_mode(mode, bounds).ok();
         Ok(IsolationPolicySemanticView {
             configured_system: self.system_selection,
             configured_component: self.component_selection,
@@ -2423,6 +2457,59 @@ impl AppliedIsolationPolicy {
             component_blocked: admitted.is_none(),
             status,
         })
+    }
+}
+
+/// One boot's effective isolation control-plane input. The persistent policy
+/// remains separately inspectable and unchanged; the loader overlay is retained
+/// explicitly so monitoring and recovery never infer it from the resulting
+/// mode. This value grants no capability and proves no runtime placement.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct EffectiveBootIsolationPolicy {
+    persistent: AppliedIsolationPolicy,
+    mode: IsolationMode,
+    boot_override: Option<BootIsolationOverride>,
+}
+
+impl EffectiveBootIsolationPolicy {
+    pub const fn configured(self) -> AppliedIsolationPolicy {
+        self.persistent
+    }
+
+    pub const fn mode(self) -> IsolationMode {
+        self.mode
+    }
+
+    pub const fn boot_override(self) -> Option<BootIsolationOverride> {
+        self.boot_override
+    }
+
+    pub const fn policy_generation(self) -> u64 {
+        self.persistent.policy_generation
+    }
+
+    pub fn admission_table<const DOMAINS: usize>(
+        self,
+        system_generation: u64,
+    ) -> Result<IsolationAdmissionTable<DOMAINS>, ConfigError> {
+        IsolationAdmissionTable::new(self.mode, system_generation, self.policy_generation())
+            .map_err(|_| ConfigError::InvalidValue)
+    }
+
+    pub fn admit_service(
+        self,
+        bounds: IsolationServiceBounds,
+    ) -> Result<AdmittedIsolationServicePolicy, ConfigError> {
+        self.persistent.admit_service_for_mode(self.mode, bounds)
+    }
+
+    pub fn semantic_view(
+        self,
+        bounds: IsolationServiceBounds,
+        status: IsolationStatusSnapshot,
+    ) -> Result<IsolationPolicySemanticView, ConfigError> {
+        self.persistent
+            .semantic_view_for_mode(self.mode, bounds, status)
     }
 }
 
@@ -2663,17 +2750,20 @@ fn configured_isolation_service_spec<
     configuration: &ConfigurationService<SETTINGS, AUDIT>,
     capabilities: &A,
     plan: IsolationPolicyApplicationPlan,
+    boot_override: Option<BootIsolationOverride>,
     bounds: IsolationServiceBounds,
     identity: IsolationServiceIdentity,
     admission: &IsolationAdmissionTable<DOMAINS>,
 ) -> Result<IsolationServiceSpec, ConfigError> {
-    let applied = plan.apply(configuration, capabilities)?;
-    if admission.mode() != applied.mode()
-        || admission.policy_generation() != applied.policy_generation()
+    let effective = plan
+        .apply(configuration, capabilities)?
+        .compose_boot_override(boot_override);
+    if admission.mode() != effective.mode()
+        || admission.policy_generation() != effective.policy_generation()
     {
         return Err(ConfigError::IsolationPolicyMismatch);
     }
-    applied.admit_service(bounds)?.service_spec(
+    effective.admit_service(bounds)?.service_spec(
         admission.system_generation(),
         identity.domain,
         identity.interface,
@@ -2703,6 +2793,39 @@ pub fn prepare_configured_isolation_service_route<
         configuration,
         capabilities,
         plan,
+        None,
+        bounds,
+        identity,
+        admission,
+    )
+    .map_err(ConfiguredIsolationPreparationError::Configuration)?;
+    prepare_isolation_service_route(admission, spec)
+        .map_err(ConfiguredIsolationPreparationError::Admission)
+}
+
+/// Applies one authority-free trusted-loader overlay after revalidating the
+/// exact persistent policy revision, then reserves kernel admission before VMM
+/// construction. The overlay is retained separately from persistent state and
+/// can only select the strict Total mode represented by `BootIsolationOverride`.
+pub fn prepare_boot_configured_isolation_service_route<
+    const SETTINGS: usize,
+    const AUDIT: usize,
+    const DOMAINS: usize,
+    A: CapabilityAuthorizer + ?Sized,
+>(
+    configuration: &ConfigurationService<SETTINGS, AUDIT>,
+    capabilities: &A,
+    plan: IsolationPolicyApplicationPlan,
+    boot_override: BootIsolationOverride,
+    bounds: IsolationServiceBounds,
+    identity: IsolationServiceIdentity,
+    admission: &mut IsolationAdmissionTable<DOMAINS>,
+) -> Result<PreparedIsolationServiceRoute, ConfiguredIsolationPreparationError> {
+    let spec = configured_isolation_service_spec(
+        configuration,
+        capabilities,
+        plan,
+        Some(boot_override),
         bounds,
         identity,
         admission,
@@ -2736,6 +2859,7 @@ pub fn route_configured_isolation_service<
         configuration,
         capabilities,
         plan,
+        None,
         bounds,
         identity,
         admission,
@@ -3008,12 +3132,12 @@ pub struct AccountedPolicyServiceSubstrate<
 }
 
 impl<
-        const TASKS: usize,
-        const CAPS: usize,
-        const SERVICES: usize,
-        const SETTINGS: usize,
-        const AUDIT: usize,
-    > AccountedPolicyServiceSubstrate<TASKS, CAPS, SERVICES, SETTINGS, AUDIT>
+    const TASKS: usize,
+    const CAPS: usize,
+    const SERVICES: usize,
+    const SETTINGS: usize,
+    const AUDIT: usize,
+> AccountedPolicyServiceSubstrate<TASKS, CAPS, SERVICES, SETTINGS, AUDIT>
 {
     #[allow(clippy::too_many_arguments)]
     pub fn new<const POOLS: usize, const OBJECTS: usize, const AUTHORITIES: usize>(
@@ -4596,19 +4720,19 @@ fn write_u64(output: &mut [u8], offset: usize, value: u64) -> Result<(), ConfigE
 mod tests {
     use super::*;
     use mrml_kernel::{
-        route_isolation_service, HostSubstrateCounts, IsolationUnavailableCounts,
-        TotalMicrovmClass, TotalMicrovmState,
+        HostSubstrateCounts, IsolationUnavailableCounts, TotalMicrovmClass, TotalMicrovmState,
+        route_isolation_service,
     };
     use mrml_storage::{
-        authority_checkpoint_digest, encode_authority_checkpoint,
-        recover_validate_and_commit_stable_authorities, AuthenticatedAuthorityRecoveryState,
+        AUTHORITY_RECOVERY_STATE_BYTES, AuthenticatedAuthorityRecoveryState,
         AuthorityCheckpointProofIssuer, AuthorityRecoveryGuard, AuthorityRecoveryStateStore,
         BlockDeviceDescriptor, BlockDeviceId, BlockRights, BlockService, BlockServiceBackend,
         BlockServiceError, BlockVolume, BootRecoveryAdmission, CowMetadataImage, CowMetadataWrite,
         CowPublicationBackend, CowPublicationPlan, ExtentRecord, FileReadBackend, FileWriteBackend,
         OwnerApprovedAuthorityCheckpoint, ServicedBlockDevice, StorageObjectId, StorageObjectKind,
         StorageRecoveryGrant, StorageRights, StorageTransactionId, Superblock, VolumeHeader,
-        VolumeId, AUTHORITY_RECOVERY_STATE_BYTES,
+        VolumeId, authority_checkpoint_digest, encode_authority_checkpoint,
+        recover_validate_and_commit_stable_authorities,
     };
 
     const MEMORY_POOL_RIGHTS: Rights = Rights::ALLOCATE.union(Rights::INSPECT);
@@ -6972,23 +7096,25 @@ mod tests {
             .unwrap();
             let mut denied_file_scratch = [0; STABLE_BLOCK_BYTES];
             let mut denied_export = [0; 512];
-            assert!(prepare_block_stable_configuration(
-                &configuration,
-                &capabilities,
-                root,
-                &current,
-                &storage_authority,
-                file,
-                stable_principal(),
-                denied_next,
-                denied_metadata,
-                MetadataPointer::new(5, 1).unwrap(),
-                &[],
-                &mut denied_export,
-                &mut denied_volume,
-                &mut denied_file_scratch,
-            )
-            .is_err());
+            assert!(
+                prepare_block_stable_configuration(
+                    &configuration,
+                    &capabilities,
+                    root,
+                    &current,
+                    &storage_authority,
+                    file,
+                    stable_principal(),
+                    denied_next,
+                    denied_metadata,
+                    MetadataPointer::new(5, 1).unwrap(),
+                    &[],
+                    &mut denied_export,
+                    &mut denied_volume,
+                    &mut denied_file_scratch,
+                )
+                .is_err()
+            );
         }
         assert_eq!(backend.writes, 0);
 
@@ -7134,9 +7260,11 @@ mod tests {
                 )
                 .unwrap();
             drop(boot_store);
-            assert!(supervisor
-                .plan_registration(ObjectId(82), task, RestartPolicy::ONCE_IMMEDIATE)
-                .is_ok());
+            assert!(
+                supervisor
+                    .plan_registration(ObjectId(82), task, RestartPolicy::ONCE_IMMEDIATE)
+                    .is_ok()
+            );
             let recovered = prepared_service
                 .commit(authorities, &mut supervisor)
                 .unwrap();
@@ -8368,14 +8496,76 @@ mod tests {
             .admit_service(microvm_required),
             Err(ConfigError::SchemaViolation)
         );
-        assert!(IsolationServiceBounds::new(
+        assert!(
+            IsolationServiceBounds::new(
+                IsolationPlacement::NativeService,
+                IsolationPlacement::Microvm,
+                IsolationPlacement::Microvm,
+                true,
+                true,
+            )
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn one_boot_total_overlay_strengthens_without_mutating_persistent_policy() {
+        let configured = AppliedIsolationPolicy {
+            mode: IsolationMode::Balanced,
+            component_request: Some(IsolationPlacement::NativeService),
+            system_selection: OwnerIsolationSelection::Balanced,
+            component_selection: OwnerIsolationSelection::Native,
+            policy_generation: 27,
+        };
+        let ordinary = configured.compose_boot_override(None);
+        assert_eq!(ordinary.configured(), configured);
+        assert_eq!(ordinary.mode(), IsolationMode::Balanced);
+        assert_eq!(ordinary.boot_override(), None);
+        assert_eq!(ordinary.policy_generation(), 27);
+
+        let total = configured.compose_boot_override(Some(BootIsolationOverride::TotalMicrovmOnce));
+        assert_eq!(total.configured(), configured);
+        assert_eq!(total.configured().mode(), IsolationMode::Balanced);
+        assert_eq!(total.mode(), IsolationMode::TotalMicrovm);
+        assert_eq!(
+            total.boot_override(),
+            Some(BootIsolationOverride::TotalMicrovmOnce)
+        );
+        assert_eq!(total.policy_generation(), 27);
+        let admission = total.admission_table::<1>(SYSTEM_GENERATION).unwrap();
+        assert_eq!(admission.mode(), IsolationMode::TotalMicrovm);
+        assert_eq!(admission.policy_generation(), 27);
+
+        let dual = IsolationServiceBounds::new(
             IsolationPlacement::NativeService,
-            IsolationPlacement::Microvm,
+            IsolationPlacement::NativeService,
             IsolationPlacement::Microvm,
             true,
             true,
         )
-        .is_err());
+        .unwrap();
+        let admitted = total.admit_service(dual).unwrap();
+        assert_eq!(admitted.placement(), IsolationPlacement::Microvm);
+        assert_eq!(admitted.source(), IsolationPolicySource::TotalMicrovm);
+        assert_eq!(admitted.policy_generation(), 27);
+
+        let native_only = IsolationServiceBounds::new(
+            IsolationPlacement::NativeService,
+            IsolationPlacement::NativeService,
+            IsolationPlacement::NativeService,
+            true,
+            false,
+        )
+        .unwrap();
+        assert_eq!(
+            total.admit_service(native_only),
+            Err(ConfigError::SchemaViolation)
+        );
+        assert_eq!(configured.mode(), IsolationMode::Balanced);
+        assert_eq!(
+            configured.component_request(),
+            Some(IsolationPlacement::NativeService)
+        );
     }
 
     #[test]

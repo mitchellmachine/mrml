@@ -1015,9 +1015,14 @@ and an exact `BOOTX64.EFI` shell invocation. The loader now validates the
 firmware-owned buffer and carries `TotalMicrovmOnce` in the canonical handoff;
 the kernel retains it only for that boot. Recovery must still treat the decoded
 value as authority-free input: it cannot prove effective placement, mutate the
-persistent default, or select fallback. Runtime composition and recovery UI
-remain **PLANNED**, and malformed or unknown options fail rather than selecting
-Balanced or Recovery implicitly.
+persistent default, or select fallback. The configuration control plane now
+**PARTIALLY IMPLEMENTS** immutable composition of a validated applied policy and
+that typed overlay; the effective boot becomes strict Total while the stored
+owner selections and policy generation remain unchanged. Recovery must still
+authenticate and restore the persistent configuration and feed the actual
+decoded handoff into that composition path. That recovered end-to-end path and
+recovery UI remain **PLANNED**, and malformed or unknown options fail rather
+than selecting Balanced or Recovery implicitly.
 
 The kernel now exposes a **PARTIALLY IMPLEMENTED**, read-only aggregate recovery
 view of isolation state. Recovery must possess `INSPECT` for the exact monitor

@@ -256,10 +256,18 @@ accepts only the configured-default form or the exact one-boot Total option and
 rejects ambiguity and additional tokens. The real loader now validates the
 firmware buffer and carries that request through a canonical trusted-loader
 handoff flag; the kernel retains the typed authority-free override separately
-from effective runtime state. Windows/Linux pass 549 kernel and 27 UEFI tests,
-and the UEFI target builds. Menu presentation, live OVMF/EFI-Shell execution,
-base-policy composition, required-system inventory, and runtime enforcement
-remain **PLANNED**.
+from effective runtime state. Windows/Linux pass 553 kernel and 27 UEFI tests,
+and the UEFI target builds. Base-policy composition is now **PARTIALLY
+IMPLEMENTED** as an explicit configuration control-plane value: the one-boot
+overlay strengthens a validated immutable Balanced/native policy to Total while
+preserving its stored selections and generation, and native-only bounds fail
+closed. WHP and nested KVM inject that typed overlay and route the same
+release-derived eligible component to a microVM with zero native fallback.
+Configuration passes 42 tests on each host; WHP passes 9 runner tests and KVM
+passes 10.
+Actual decoded-handoff delivery into recovered configuration, menu presentation,
+live OVMF/EFI-Shell execution, complete installed-system inventory, and
+end-to-end runtime enforcement remain **PLANNED**.
 
 The deployment lane is defined in [DEPLOYMENT.md](DEPLOYMENT.md) and must not
 displace the current foundational gate. Later work proceeds as separate bounded
