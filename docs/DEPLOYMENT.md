@@ -221,14 +221,15 @@ owner-policy assignment remain **PLANNED**.
 
 Authenticated checkpoint recovery and that source-file read are now joined by
 `recover_and_read_runtime_assignment`. It returns one
-`RecoveredRuntimeAssignment` retaining the recovered `DeploymentService` beside
-the complete assignment plan built from its exact active release. No detached
-active identity is exposed between rollback-resistant checkpoint validation and
-release enumeration. The focused test authenticates the recovery state, reads
-the checkpoint and release through separate exact file capabilities, and seals
-the recovered plan. Deployment remains 6 passing tests on Windows. Invocation
-from the real configuration/service boot path and general owner-policy
-assignment remain **PLANNED**.
+`RecoveredRuntimeAssignment` retaining the recovered `DeploymentService`, the
+authenticated recovery epoch and exact checkpoint file/digest evidence, and the
+complete assignment plan built from its exact active release. No detached active
+identity or recovery evidence is discarded between rollback-resistant checkpoint
+validation and release enumeration. The focused test authenticates and retains
+that recovery state, reads the checkpoint and release through separate exact file
+capabilities, and seals the recovered plan. Deployment remains 6 passing tests
+on Windows. Joining this owner to recovered configuration in the real service
+boot path and general owner-policy assignment remain **PLANNED**.
 
 Recovered configuration now **PARTIALLY IMPLEMENTS** complete owner-policy
 assignment over that plan. Its committed revision must equal the plan's policy

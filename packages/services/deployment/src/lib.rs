@@ -856,6 +856,22 @@ impl DeploymentRecoveryState {
         self.active
     }
 
+    pub const fn volume(self) -> Option<mrml_storage::VolumeId> {
+        self.volume
+    }
+
+    pub const fn file_object(self) -> u64 {
+        self.file_object
+    }
+
+    pub const fn file_generation(self) -> u64 {
+        self.file_generation
+    }
+
+    pub const fn checkpoint_digest(self) -> [u8; 32] {
+        self.checkpoint_digest
+    }
+
     pub fn matches_active(self, active: Option<ActivatedSystemGeneration>) -> bool {
         self.active == active
     }
@@ -1109,6 +1125,7 @@ pub enum AuthenticatedActivationRecoveryError<StorageError, StateError> {
 
 pub struct RecoveredRuntimeAssignment<'a, const CANDIDATES: usize, const DOMAINS: usize> {
     service: DeploymentService<CANDIDATES>,
+    recovery: DeploymentRecoveryState,
     assignment: RuntimeDomainAssignmentPlan<'a, DOMAINS>,
 }
 
@@ -1117,6 +1134,10 @@ impl<'a, const CANDIDATES: usize, const DOMAINS: usize>
 {
     pub const fn service(&self) -> &DeploymentService<CANDIDATES> {
         &self.service
+    }
+
+    pub const fn recovery(&self) -> DeploymentRecoveryState {
+        self.recovery
     }
 
     pub const fn assignment(&self) -> &RuntimeDomainAssignmentPlan<'a, DOMAINS> {
@@ -1131,9 +1152,10 @@ impl<'a, const CANDIDATES: usize, const DOMAINS: usize>
         self,
     ) -> (
         DeploymentService<CANDIDATES>,
+        DeploymentRecoveryState,
         RuntimeDomainAssignmentPlan<'a, DOMAINS>,
     ) {
-        (self.service, self.assignment)
+        (self.service, self.recovery, self.assignment)
     }
 }
 
@@ -1160,6 +1182,37 @@ pub fn recover_authenticated_activation<
     backend: &mut B,
 ) -> Result<DeploymentService<CANDIDATES>, AuthenticatedActivationRecoveryError<B::Error, S::Error>>
 {
+    recover_authenticated_activation_with_state(
+        root,
+        file_state,
+        storage_authority,
+        file,
+        principal,
+        state_store,
+        backend,
+    )
+    .map(|(service, _)| service)
+}
+
+#[allow(clippy::too_many_arguments)]
+fn recover_authenticated_activation_with_state<
+    const CANDIDATES: usize,
+    const EXTENTS: usize,
+    const AUTHORITIES: usize,
+    B: FileReadBackend,
+    S: DeploymentRecoveryStateStore,
+>(
+    root: ObjectId,
+    file_state: &FileState<EXTENTS>,
+    storage_authority: &StorageAuthorityTable<AUTHORITIES>,
+    file: StorageHandle,
+    principal: StoragePrincipal,
+    state_store: &S,
+    backend: &mut B,
+) -> Result<
+    (DeploymentService<CANDIDATES>, DeploymentRecoveryState),
+    AuthenticatedActivationRecoveryError<B::Error, S::Error>,
+> {
     let mut encoded_state = [0; DEPLOYMENT_RECOVERY_STATE_BYTES];
     state_store
         .load_authenticated(&mut encoded_state)
@@ -1190,7 +1243,7 @@ pub fn recover_authenticated_activation<
     if state.active != Some(active) || state.checkpoint_digest != Sha3_256::digest(&checkpoint) {
         return Err(AuthenticatedActivationRecoveryError::InvalidRecoveryState);
     }
-    Ok(service)
+    Ok((service, state))
 }
 
 /// Recovers the authenticated deployment checkpoint and reads the exact active
@@ -1229,16 +1282,17 @@ pub fn recover_and_read_runtime_assignment<
     RecoveredRuntimeAssignment<'a, CANDIDATES, DOMAINS>,
     RecoveredRuntimeAssignmentError<CB::Error, RB::Error, S::Error>,
 > {
-    let service = recover_authenticated_activation::<CANDIDATES, _, _, _, _>(
-        root,
-        checkpoint_file,
-        checkpoint_authority,
-        checkpoint_handle,
-        principal,
-        state_store,
-        checkpoint_backend,
-    )
-    .map_err(RecoveredRuntimeAssignmentError::Recovery)?;
+    let (service, recovery) =
+        recover_authenticated_activation_with_state::<CANDIDATES, _, _, _, _>(
+            root,
+            checkpoint_file,
+            checkpoint_authority,
+            checkpoint_handle,
+            principal,
+            state_store,
+            checkpoint_backend,
+        )
+        .map_err(RecoveredRuntimeAssignmentError::Recovery)?;
     let assignment = service
         .read_active_runtime_assignment::<DOMAINS, CAPS, _, _, _>(
             capabilities,
@@ -1254,6 +1308,7 @@ pub fn recover_and_read_runtime_assignment<
         .map_err(RecoveredRuntimeAssignmentError::Release)?;
     Ok(RecoveredRuntimeAssignment {
         service,
+        recovery,
         assignment,
     })
 }
@@ -1940,13 +1995,24 @@ mod tests {
                 .active_release(&capabilities, inspect),
             Ok(Some(activated_release))
         );
+        let retained_recovery = recovered_assignment.recovery();
+        assert_eq!(retained_recovery.epoch(), 9);
+        assert_eq!(retained_recovery.active(), Some(active));
+        assert_eq!(retained_recovery.volume(), Some(volume()));
+        assert_eq!(retained_recovery.file_object(), object(9).local());
+        assert_eq!(retained_recovery.file_generation(), 2);
+        assert_eq!(
+            retained_recovery.checkpoint_digest(),
+            Sha3_256::digest(&checkpoint)
+        );
         recovered_assignment
             .assignment_mut()
             .assign_from_policy(|record| {
                 mrml_kernel::RuntimeDomainAssignment::new(record.package_id, ObjectId(0x5a53_5444))
             })
             .unwrap();
-        let (_, recovered_plan) = recovered_assignment.into_parts();
+        let (_, recovered_state, recovered_plan) = recovered_assignment.into_parts();
+        assert_eq!(recovered_state, retained_recovery);
         assert_eq!(
             recovered_plan.seal().unwrap().active_release(),
             activated_release

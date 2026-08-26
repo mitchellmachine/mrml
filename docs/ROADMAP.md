@@ -486,10 +486,12 @@ Recovery and source selection are now **PARTIALLY IMPLEMENTED** as one typed
 operation. `recover_and_read_runtime_assignment` authenticates the deployment
 recovery state and checkpoint, retains the recovered deployment service, reads
 that service's exact active release source through separate storage authority,
-and returns both beside one complete assignment plan. The focused Windows test
-seals the plan only after both file reads and active-release equality succeed.
-Real configuration-service invocation, general owner policy, and construction
-of every enumerated domain remain **PLANNED**.
+and returns both beside one complete assignment plan and the authenticated
+recovery epoch/checkpoint file/digest evidence. The focused Windows test retains
+and exact-checks that evidence, then seals the plan only after both file reads
+and active-release equality succeed. Joining this deployment owner to the
+recovered configuration owner, general policy, and construction of every
+enumerated domain remain **PLANNED**.
 
 Recovered configuration now **PARTIALLY IMPLEMENTS** general per-package
 runtime assignment over that authenticated activated release. The assignment

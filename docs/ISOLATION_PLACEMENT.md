@@ -1191,10 +1191,13 @@ this path, and general policy must still assign and launch every domain.
 The authenticated deployment checkpoint and active release-file read now form
 one retained `RecoveredRuntimeAssignment`. Rollback-resistant recovery produces
 the exact active deployment owner, and that owner immediately selects and reads
-its source before returning the assignment plan; callers cannot interpose a
-detached active identity. Controlled Windows evidence covers both authorized
-files and the signed release. Real service invocation, owner-policy lookup, and
-complete domain launch remain **PLANNED**.
+its source before returning the assignment plan. The retained owner also carries
+the authenticated recovery epoch, selected generation, checkpoint file
+object/generation, and checkpoint digest, so callers cannot interpose a detached
+active identity or silently discard the evidence needed for the later
+configuration/deployment join. Controlled Windows evidence covers both
+authorized files and the signed release. Real service invocation, owner-policy
+lookup, and complete domain launch remain **PLANNED**.
 
 General recovered owner-policy assignment is now **PARTIALLY IMPLEMENTED**.
 `RecoveredSystemState::assign_runtime_domains` requires the recovered
