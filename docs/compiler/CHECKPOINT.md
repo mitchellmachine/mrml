@@ -822,6 +822,13 @@ fail while the post-loop shared child remains live, and both owners are restored
 after its last use. ORACLE-0002 reports E0503 for each conflict and accepts the
 combined control. Windows and Arch each pass 987 compiler tests.
 
+Call-derived mutable references now have focused shared-child invalidation
+coverage for the exact identity and conditional same-parameter summaries. A
+direct owner write fails while the child is live and succeeds after its last
+use. ORACLE-0002 reports E0503 for both call shapes and accepts both controls.
+Windows and Arch each pass 987 compiler tests; general call summaries remain
+unsupported.
+
 Multi-field tuple literals retain a separate projected origin per field. A
 conditional reference element seeds its field only when both arms prove the
 same parameter; unequal first/second origins fail closed. Focused caller tests

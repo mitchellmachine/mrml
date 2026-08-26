@@ -1131,6 +1131,13 @@ protected while a shared child formed after the loop is live and are restored
 after its last use. ORACLE-0002 rejects both overlaps with E0503 and accepts the
 combined restoration control. General loop fixed points remain unsupported.
 
+Bounded call-result origins now have direct owner-mutation evidence through an
+additional shared child. Both the exact identity summary and the conditional
+same-parameter return summary protect the original parameter until the child's
+last use. ORACLE-0002 rejects both overlaps with E0503 and accepts both controls.
+Unknown call results remain conservative; this is not general interprocedural
+region inference.
+
 The first modern trait-solver foundation is an explicit bounded implemented-
 goal representation. Stable trait/type/inference/placeholder identities remain
 distinct; canonicalization replaces inference identities with first-occurrence

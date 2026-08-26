@@ -324,6 +324,16 @@ A control used the child before mutating both owners and compiled. This is exact
 black-box evidence for the bounded single-exit loop shape, not a general loop
 fixed point. Temporary probe sources and metadata were removed.
 
+An independently authored Rust 2024 metadata-only probe against this exact
+toolchain and commit passed a mutable-reference parameter through a direct
+identity function and through a conditional function whose two returns were the
+same parameter. Each returned mutable reference was reborrowed into a shared
+child. Direct mutation of the original parameter while the child was used later
+failed with E0503 in both cases; moving the child's last use before mutation
+compiled. This is exact black-box evidence for those two call shapes, not
+general interprocedural regions. Temporary probe sources and metadata were
+removed.
+
 ## Straight-line tuple-field callee-origin follow-up
 
 On 2026-08-26, an independently authored Rust 2024 metadata-only probe against

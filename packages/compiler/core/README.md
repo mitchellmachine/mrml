@@ -3978,6 +3978,13 @@ use. ORACLE-0002 accepts the same exact shape and rejects the competitor with
 E0499. Both hosts remain at 987 tests; arbitrary loop fixed points remain
 unsupported.
 
+Exact identity and conditional same-parameter call summaries now have focused
+owner-invalidation evidence through a shared child of the returned mutable
+reference. Direct mutation of the original parameter fails while that child is
+live and succeeds after its last use. The pinned oracle rejects both overlaps
+with E0503 and accepts both controls; Windows and Arch remain at 987 tests.
+Unknown call-result ancestry remains conservative.
+
 Exact typed tuple literals now seed the same projected state when a local is
 declared. Every reference field is checked against the declared tuple element
 and return type; only a parameter-backed element records an origin. Scalar and
