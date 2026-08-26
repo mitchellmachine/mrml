@@ -35329,12 +35329,19 @@ mod tests {
         }
 
         analyze("fn value(input: &u16) -> &u16 { shared_identity(input) }").unwrap();
+        analyze("fn value(first: &u16, second: &u16, choose: bool) -> &u16 { shared_identity(if choose { first } else { second }) }").unwrap();
         assert_eq!(
             analyze(
                 "fn value(input: &u16) -> &u16 { let local = *input; shared_identity(&local) }"
             )
             .unwrap_err()
             .kind,
+            CodegenErrorKind::RuntimeReferenceOutlivesFunction
+        );
+        assert_eq!(
+            analyze("fn value(input: &u16, choose: bool) -> &u16 { let local = *input; shared_identity(if choose { input } else { &local }) }")
+                .unwrap_err()
+                .kind,
             CodegenErrorKind::RuntimeReferenceOutlivesFunction
         );
     }
