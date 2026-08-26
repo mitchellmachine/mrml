@@ -795,6 +795,15 @@ live competing mutable reborrows and accept restoration after last use.
 ORACLE-0002 rejected direct live-owner use with E0503 and accepted the same
 restoration controls. Windows and Arch each pass 987 compiler tests.
 
+Direct dereference writes through mutable-reference parameters now produce
+loan-mutation effects as well as equivalent writes through proven local
+reference loans. Focused coverage rejects mutation after direct shared
+assignment, exact tuple-field assignment, and either arm of a conditional
+tuple-field assignment while the child remains live; last-use controls remain
+accepted. ORACLE-0002 rejected the direct form with E0506 and the conditional
+projected form with E0503, and accepted the direct last-use control. Windows and
+Arch each pass 987 compiler tests.
+
 Multi-field tuple literals retain a separate projected origin per field. A
 conditional reference element seeds its field only when both arms prove the
 same parameter; unequal first/second origins fail closed. Focused caller tests

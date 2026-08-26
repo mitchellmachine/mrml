@@ -1101,6 +1101,16 @@ competing mutable reborrow, and releases those owners after the shared child's
 last use. ORACLE-0002 rejects the corresponding direct owner uses with E0503 and
 accepts the post-last-use controls. General coercion sites remain partial.
 
+Dereference mutation through an incoming mutable-reference parameter now emits
+the same bounded loan-mutation fact already used for a proven local reference
+loan. A shared reference assigned directly from that parameter, from its exact
+tuple field, or from a conditional choice of two exact tuple fields therefore
+blocks direct mutation of every possible live owner until the shared child's
+last use. ORACLE-0002 rejects the direct parameter case with E0506, rejects the
+conditional projected case with E0503, and accepts the post-last-use control.
+This is parameter-root invalidation for the existing bounded place model, not
+general region inference.
+
 The first modern trait-solver foundation is an explicit bounded implemented-
 goal representation. Stable trait/type/inference/placeholder identities remain
 distinct; canonicalization replaces inference identities with first-occurrence

@@ -288,6 +288,16 @@ expression-indexed output shapes only; it does not establish general expression,
 evaluation-order, place, register-allocation, memory-effect, or assembly
 semantics. Temporary source and metadata were removed.
 
+An independently authored Rust 2024 metadata-only probe on 2026-08-26 against
+this exact toolchain and commit rejected mutation through a mutable-reference
+parameter after a shared-reference local was assigned from that parameter and
+used later, reporting E0506. A conditional shared reference selecting either of
+two exact mutable tuple fields rejected direct mutation of the first owner with
+E0503. Moving the shared child's last use before the direct parameter mutation
+compiled successfully. These are black-box observations for those exact
+straight-line and conditional shapes, not evidence of general region behavior.
+Temporary probe sources and metadata were removed.
+
 ## Straight-line tuple-field callee-origin follow-up
 
 On 2026-08-26, an independently authored Rust 2024 metadata-only probe against

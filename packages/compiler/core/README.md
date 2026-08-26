@@ -4121,6 +4121,17 @@ claim path-sensitive branch selection, nested projections, general aggregate
 provenance, named regions, or complete Polonius semantics. The
 `no_std`/allocation/unsafe hygiene scan remained empty.
 
+Mutable-reference parameter roots now participate in dereference-write loan
+invalidation. A direct shared assignment, an exact tuple-field shared
+assignment, and a conditional choice between two such fields all reject direct
+owner mutation while the assigned child remains live and accept owner mutation
+after its last use. The pinned oracle rejects the direct parameter form with
+E0506, rejects the conditional projected form with E0503, and accepts the
+last-use control. Windows gnullvm and native Arch Linux WSL each pass 641
+library tests, one component-interface probe, 10 conformance tests, and 335
+replacement tests: 987 compiler tests per host. This does not establish general
+regions or arbitrary projected-place invalidation.
+
 The projected conditional-return outlives milestone validates every retained
 origin of the latest reference assignment when an exact tuple field is returned.
 The exact dated oracle rejects a conditional local/parameter generation with
