@@ -875,6 +875,14 @@ Both the fixed-array-reference and slice-reference paths now have direct caller
 conflict, post-last-use, and exact dated-oracle evidence; slice evidence is not
 inferred from the array implementation.
 
+An array-reference or slice-reference parameter may now also retain its origin
+through an exact `Subslice` place into a compatible slice-reference result. The
+element type and mutability must match and at most one explicit `Dereference`
+may precede `Subslice`. Caller preanalysis classifies an unprojected,
+unclassified read of a loan-backed fat-reference local as `LoanUse`, so later
+indexing keeps the call-result loan live. Scalar `Index` and `Subslice` remain
+distinct; mismatched, deeper, and unsupported shapes fail closed.
+
 The first modern trait-solver foundation is an explicit bounded implemented-
 goal representation. Stable trait/type/inference/placeholder identities remain
 distinct; canonicalization replaces inference identities with first-occurrence

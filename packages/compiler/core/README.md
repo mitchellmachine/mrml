@@ -3886,6 +3886,18 @@ returned child's last use and rejected a live indexed competitor with E0499 and
 E0503. This adds direct evidence for the already bounded slice projection path;
 it does not add general subslice, disjoint-index, or aggregate alias analysis.
 
+The subslice call-origin milestone retains an array/slice-reference parameter
+origin through an exact `Subslice` place into a matching slice-reference result,
+with at most one explicit preceding dereference. Element type and mutability must
+match. An unprojected unclassified read of a loan-backed fat-reference local is
+now a `LoanUse`; this keeps a returned subslice live when later indexed without
+forging a projected access fact. Array and slice live competitors conflict,
+while post-last-use restoration succeeds. ORACLE-0002 rejected both live cases
+with E0499 and additionally reported E0503 for the slice case. Both canonical
+hosts pass 640 library tests, one component-interface probe, 10 conformance
+tests, and 335 replacement tests: 986 compiler tests per host. General subslice
+disjointness, deeper projections, and region inference remain unsupported.
+
 The conditional projected-reassignment milestone extends the bounded tuple-field
 loan chain across a conditional shared-reference assignment. The exact dated
 oracle rejects mutation of either conditional owner and of the field's replaced

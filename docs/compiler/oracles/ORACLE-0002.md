@@ -219,6 +219,15 @@ slice evidence rather than an inference from the fixed-array probe; it does not
 establish subslice or disjoint-index alias analysis. Temporary sources and
 metadata were removed.
 
+Independent Rust 2024 metadata-only probes against this exact toolchain and
+commit accepted mutable slice references returned from `[1..]` of both a mutable
+two-element array-reference parameter and a mutable slice-reference parameter,
+followed by owner access after the returned subslice's last use. Separate
+invocations rejected a live mutable borrow of element one with E0499 in both
+cases and E0503 additionally for the slice. This is black-box evidence for those
+exact subslice shapes, not general range-disjointness or region inference.
+Temporary sources and metadata were removed.
+
 An independently authored Rust 2024 metadata-only probe against the same exact
 toolchain and commit compiled three explicit RAX forms whose output place was
 `*target` for `target: &mut u64`: `lateout`, same-place `inout`, and a distinct-

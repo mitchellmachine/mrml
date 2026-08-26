@@ -597,6 +597,18 @@ component-interface probe, 10 conformance tests, and 335 replacement tests: 986
 compiler tests per host. Subslice and disjoint-index alias analysis remain
 unsupported.
 
+The subslice call-origin milestone retains a compatible array/slice-reference
+parameter origin through exact `Subslice` into a slice-reference result. Element
+type and mutability must match and at most one explicit dereference may precede
+the subslice. Caller preanalysis now classifies an unprojected unclassified read
+of a loan-backed fat-reference local as `LoanUse`, preserving liveness when the
+returned subslice is indexed. ORACLE-0002 accepted array and slice post-last-use
+restoration, rejected both live competitors with E0499, and additionally emitted
+E0503 for the slice. Windows gnullvm and native Arch Linux WSL each pass 640
+library tests, one component-interface probe, 10 conformance tests, and 335
+replacement tests: 986 compiler tests per host. General subslice disjointness,
+deeper projections, and regions remain unsupported.
+
 This is an initial typed body-fact slice, not a complete typed body IR and not a
 borrow checker. Unsupported aggregate-leaf call arguments, other aggregate-
 argument and call-derived fat-reference initializers, unsupported compound array
