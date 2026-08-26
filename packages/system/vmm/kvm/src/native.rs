@@ -1,14 +1,16 @@
 use core::ffi::{c_char, c_int, c_ulong, c_void};
 use core::ptr::NonNull;
 use core::slice;
+use core::sync::atomic::{AtomicBool, AtomicU8, Ordering};
 use core::time::Duration;
 use mrml_kernel::arch::x86_64::{
     AddressSpace, Mapping, PagePermissions, PageTableBuildError, PageTableBuilder, PageTableStore,
     VirtAddr,
 };
 use mrml_kernel::{
-    BootHandoff, IoReadCompleter, MAX_PE_SECTIONS, MmioWriteCompleter, PAGE_SIZE, PeImage,
-    PhysAddr, RevocableVmBackend, VerifiedExecutable, VmBackend, VmExit,
+    BootHandoff, DeadlineVmBackend, IoReadCompleter, MAX_PE_SECTIONS, MmioWriteCompleter,
+    PAGE_SIZE, PeImage, PhysAddr, RevocableVmBackend, VerifiedExecutable, VmBackend,
+    VmDeadlineOutcome, VmExit,
 };
 
 use crate::{KVM_API_VERSION, KvmError, KvmMemoryRegion, complete_io_read, decode_run_page};
@@ -52,6 +54,12 @@ const KVM_CAP_USER_MEMORY: u32 = 3;
 const KVM_CAP_NR_MEMSLOTS: u32 = 10;
 const REQUIRED_MEMORY_SLOTS: i32 = 5;
 const MAX_CPUID_ENTRIES: usize = 128;
+const KVM_KICK_SIGNAL: c_int = 10;
+const SIGNAL_UNINITIALIZED: u8 = 0;
+const SIGNAL_INSTALLING: u8 = 1;
+const SIGNAL_INSTALLED: u8 = 2;
+const SIGNAL_UNAVAILABLE: u8 = 3;
+static KVM_KICK_SIGNAL_STATE: AtomicU8 = AtomicU8::new(SIGNAL_UNINITIALIZED);
 
 #[derive(Clone, Copy)]
 #[repr(C)]
@@ -109,6 +117,48 @@ unsafe extern "C" {
         offset: isize,
     ) -> *mut c_void;
     fn munmap(address: *mut c_void, length: usize) -> c_int;
+    fn pthread_self() -> usize;
+    fn pthread_kill(thread: usize, signal: c_int) -> c_int;
+    fn signal(signal: c_int, handler: usize) -> usize;
+}
+
+unsafe extern "C" fn kvm_kick_signal_handler(_signal: c_int) {}
+
+fn install_kvm_kick_signal() -> Result<(), KvmError> {
+    loop {
+        match KVM_KICK_SIGNAL_STATE.load(Ordering::Acquire) {
+            SIGNAL_INSTALLED => return Ok(()),
+            SIGNAL_UNAVAILABLE => return Err(KvmError::SystemCall),
+            SIGNAL_UNINITIALIZED => {
+                if KVM_KICK_SIGNAL_STATE
+                    .compare_exchange(
+                        SIGNAL_UNINITIALIZED,
+                        SIGNAL_INSTALLING,
+                        Ordering::AcqRel,
+                        Ordering::Acquire,
+                    )
+                    .is_err()
+                {
+                    continue;
+                }
+                let handler = kvm_kick_signal_handler as *const () as usize;
+                let previous = unsafe { signal(KVM_KICK_SIGNAL, handler) };
+                if previous == usize::MAX || previous != 0 && previous != handler {
+                    if previous != usize::MAX {
+                        unsafe {
+                            signal(KVM_KICK_SIGNAL, previous);
+                        }
+                    }
+                    KVM_KICK_SIGNAL_STATE.store(SIGNAL_UNAVAILABLE, Ordering::Release);
+                    return Err(KvmError::SystemCall);
+                }
+                KVM_KICK_SIGNAL_STATE.store(SIGNAL_INSTALLED, Ordering::Release);
+                return Ok(());
+            }
+            SIGNAL_INSTALLING => mrml_runtime::yield_now(),
+            _ => return Err(KvmError::SystemCall),
+        }
+    }
 }
 
 struct OwnedFd(c_int);
@@ -367,6 +417,18 @@ impl KvmRunCancellation {
     fn request(self) {
         unsafe { self.0.as_ptr().add(1).write_volatile(1) };
     }
+
+    fn request_and_kick(self, thread: usize) -> Result<(), KvmError> {
+        self.request();
+        if unsafe { pthread_kill(thread, KVM_KICK_SIGNAL) } != 0 {
+            return Err(KvmError::SystemCall);
+        }
+        Ok(())
+    }
+
+    fn clear(self) {
+        unsafe { self.0.as_ptr().add(1).write_volatile(0) };
+    }
 }
 
 impl KvmVcpu {
@@ -480,6 +542,60 @@ impl KvmVcpu {
             self.pending_mmio_write = Some((guest_address, size, value));
         }
         Ok(exit)
+    }
+
+    fn run_with_deadline(&mut self, maximum_micros: u32) -> Result<VmDeadlineOutcome, KvmError> {
+        if maximum_micros == 0 {
+            return Err(KvmError::InvalidDeadline);
+        }
+        if self.pending_io_read.is_some() || self.pending_mmio_write.is_some() {
+            return Err(KvmError::InvalidRegisterState);
+        }
+        install_kvm_kick_signal()?;
+        const ARMED: u8 = 0;
+        const RETURNED: u8 = 1;
+        const EXPIRED: u8 = 2;
+        const CANCEL_FAILED: u8 = 3;
+        let phase = mrml_runtime::Shared::new(AtomicU8::new(ARMED));
+        let retired = mrml_runtime::Shared::new(AtomicBool::new(false));
+        let worker_phase = phase.clone();
+        let worker_retired = retired.clone();
+        let cancellation = self.cancellation();
+        let runner_thread = unsafe { pthread_self() };
+        mrml_runtime::spawn_detached(move || {
+            let started = mrml_runtime::Instant::now();
+            loop {
+                if worker_phase.load(Ordering::Acquire) != ARMED {
+                    break;
+                }
+                if started.elapsed() >= Duration::from_micros(u64::from(maximum_micros)) {
+                    if worker_phase
+                        .compare_exchange(ARMED, EXPIRED, Ordering::AcqRel, Ordering::Acquire)
+                        .is_ok()
+                        && cancellation.request_and_kick(runner_thread).is_err()
+                    {
+                        worker_phase.store(CANCEL_FAILED, Ordering::Release);
+                    }
+                    break;
+                }
+                mrml_runtime::yield_now();
+            }
+            worker_retired.store(true, Ordering::Release);
+        })
+        .map_err(|_| KvmError::SystemCall)?;
+
+        let result = self.run();
+        let _ = phase.compare_exchange(ARMED, RETURNED, Ordering::AcqRel, Ordering::Acquire);
+        while !retired.load(Ordering::Acquire) {
+            mrml_runtime::yield_now();
+        }
+        cancellation.clear();
+        match phase.load(Ordering::Acquire) {
+            RETURNED => result.map(VmDeadlineOutcome::Exit),
+            EXPIRED => Ok(VmDeadlineOutcome::Expired),
+            CANCEL_FAILED => Err(KvmError::SystemCall),
+            _ => Err(KvmError::InvalidRegisterState),
+        }
     }
 
     fn complete_mmio_write(
@@ -1557,6 +1673,22 @@ impl<const N: usize> VmBackend for KvmBackend<N> {
             return Err(KvmError::SystemCall);
         }
         Ok(())
+    }
+}
+
+impl<const N: usize> DeadlineVmBackend for KvmBackend<N> {
+    fn run_with_deadline(
+        &mut self,
+        vcpu: u32,
+        maximum_micros: u32,
+    ) -> Result<VmDeadlineOutcome, Self::Error> {
+        if self.mapping_poisoned {
+            return Err(KvmError::MappingStateUncertain);
+        }
+        if vcpu != self.vcpu_id {
+            return Err(KvmError::InvalidVcpu);
+        }
+        self.vcpu.run_with_deadline(maximum_micros)
     }
 }
 

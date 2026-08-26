@@ -155,6 +155,10 @@ explicitly and downgrade the status rather than guessing.
   refund it from reconstructed data. Retain its full charge and fail the domain
   closed unless the exact live accounting instance can reconcile the matching
   slice; reservation release and period rollover remain blocked meanwhile.
+  A hosted deadline worker is also linear transient state: VM teardown, run-page
+  unmapping, VP deletion, and accounting reconciliation must wait until the
+  exact worker has retired. Recovery must never reconstruct a cancellation
+  pointer, signal target, or partition handle from persisted data.
 - Boot image and loader: `packages/system/bootloader/`, `packages/libraries/uefi/`
 - CPL3 service image: `packages/system/service-image/`
 - Shared VM policy: `vm.rs`, `vm_dispatch.rs`, `vm_interrupt.rs`

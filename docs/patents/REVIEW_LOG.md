@@ -5261,6 +5261,20 @@ enforcement retain their existing `TRIGGERED` reviews; this agent review does
 not establish clearance or infringement and does not replace independent human
 dual review.
 
+# 2026-08-26 — Hosted vCPU deadline cancellation
+
+**Result: NOT_TRIGGERED after the existing CPU-budget and VMM reviews.** This
+increment conventionally arms a bounded host timer around an existing vCPU run
+call and invokes the platform's documented cancellation mechanism: the public
+WHP cancellation API on Windows, and the documented KVM `immediate_exit` plus
+ordinary POSIX thread signal wakeup on Linux. MRML adds exact worker retirement
+and fail-closed state handling but no scheduler-selection algorithm, hypervisor,
+timer implementation, device protocol, topology policy, or hardware mechanism.
+General scheduling, adaptive placement, microVM construction, and native APIC
+work retain their existing `TRIGGERED` reviews; this agent review does not
+establish clearance or infringement and does not replace independent human dual
+review.
+
 # 2026-08-25 — Signed general SystemRelease envelope admission
 
 **Result: NOT_TRIGGERED after the existing package/release, Lamport-signature,

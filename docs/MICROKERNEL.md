@@ -7847,12 +7847,23 @@ and fails closed.
 Both runners now precharge the remaining bounded 100-millisecond controlled-
 probe allowance and reconcile host-wall elapsed time around every component
 backend entry. Teardown compares the cumulative reconciled runtime before
-retiring the budget. Windows and Arch Linux kernel suites passed 510 tests, WHP
-passed 7, and KVM passed 8. Fresh signed hosted probes reported 764 microseconds
-under WHP and 1,181 microseconds under KVM; KVM reported `eligible=1`,
-`microvm=1`, and `native_fallback=0`. This is hosted conservative accounting,
-not trusted guest CPU-time, hardware timer, APIC deadline, or physical-hardware
-evidence. Backend deadline programming remains planned.
+retiring the budget. A backend-neutral `DeadlineVmBackend` contract now requires
+the cancellation mechanism to be armed before vCPU entry and its worker to be
+fully retired before return or native teardown. WHP dynamically resolves and
+uses `WHvCancelRunVirtualProcessor` for the exact VP. KVM first sets the exact
+run page's `immediate_exit` byte, then sends a reserved no-op signal to the
+runner thread so a concurrent `KVM_RUN` returns; the byte covers the documented
+pre-entry signal race and is cleared only after both run and worker retire. A
+conflicting process signal disposition fails before entry.
+
+Focused live signed infinite-loop guests expire on WHP and nested KVM. The
+ordinary signed component probes also complete through the deadline path:
+Windows and Arch Linux kernel suites pass 510 tests, WHP passes 7, and KVM
+passes 8. Fresh probes reported 901 microseconds under WHP and 1,194 microseconds
+under KVM; KVM reported `eligible=1`, `microvm=1`, and `native_fallback=0`.
+This is hosted conservative accounting and cancellation evidence, not trusted
+guest CPU-time, exact deadline latency, native APIC enforcement, physical-
+hardware evidence, or a security boundary against the host.
 
 ### Hosted supervised native Zstd service lifecycle
 

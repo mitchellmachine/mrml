@@ -149,10 +149,15 @@ Rejected vCPU, affinity, or priority choices consume no runtime. Each issued
 slice is now linear and blocks reservation release and period rollover until
 exactly reconciled. Reconciliation uses the observed backend-entry wall elapsed
 time, refunds only a verified underrun, rejects replay or substitution, and
-retains the full precharge on overrun. Focused Windows and Arch Linux tests
-pass. This does not yet program a host or APIC deadline from the slice, prove a
-trusted CPU-time source, enforce priority/class/affinity, derive child budgets,
-or prove physical topology behavior. Those integrations remain **PLANNED**.
+retains the full precharge on overrun. A shared `DeadlineVmBackend` contract now
+requires cancellation to be armed before entry and the cancellation worker to
+retire before native VM state may be released. WHP cancels the exact VP through
+the platform API. KVM sets `kvm_run.immediate_exit` before sending a reserved
+no-op signal to interrupt the exact runner thread, covering the pre-entry signal
+race. Focused infinite-loop guests expire on both live hosted backends. This
+does not prove a trusted CPU-time source, exact cancellation latency, native
+APIC enforcement, priority/class/affinity, child budgets, or physical topology
+behavior. Those integrations remain **PLANNED**.
 
 The focused signed ZIM/Zstd component profile now consumes one exact
 domain-bound vCPU reservation before either hosted backend constructs its
@@ -164,19 +169,21 @@ reserved parallelism and retire the root. Every focused component vCPU entry is
 now preceded by precharging the remaining bounded 100-millisecond controlled-
 probe allowance. The runner measures host-wall elapsed time across the backend
 entry, reconciles exactly once, and teardown verifies the resulting cumulative
-runtime before retiring authority. Fresh signed probes reported 764 microseconds
-under WHP and 1,181 microseconds under nested KVM. The charge is authorized for
+runtime before retiring authority. Fresh signed probes reported 901 microseconds
+under WHP and 1,194 microseconds under nested KVM. The charge is authorized for
 vCPU 0 on allowed logical CPU 0 at the exact budget ceiling on both runners.
-This is hosted controlled elapsed-accounting evidence, not trusted guest CPU
-time or a host/APIC deadline guarantee; deadline programming, priority,
-affinity, general scheduler, multi-vCPU, and physical-topology enforcement
-remain **PLANNED**.
+This is hosted controlled elapsed-accounting and cancellation evidence, not
+trusted guest CPU time, exact deadline latency, native APIC enforcement, or a
+host-security boundary. Priority, affinity, general scheduler, multi-vCPU, and
+physical-topology enforcement remain **PLANNED**.
 
 Engineering Constitution complexity score: complexity impact `MEDIUM`, TCB
 impact `MEDIUM`, new parser `NO`, new authority model `NO`, new persistent state
 `NO`, external dependency `NO`, failure isolated `YES`, and existing-object
 reuse `YES` through `CpuBudgetTable`, exact reservations, and the shared
-KVM/WHP runner boundary.
+KVM/WHP runner boundary. The KVM implementation additionally reserves one
+process-wide no-op signal only when the existing disposition is default or
+already MRML's handler; a conflicting disposition fails before vCPU entry.
 
 ## System power policy
 

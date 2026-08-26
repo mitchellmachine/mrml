@@ -5,10 +5,11 @@ use mrml_kernel::arch::x86_64::{
     PerCpuPrivilegeStacks, PrivilegeStackLayout, VirtAddr,
 };
 use mrml_kernel::{
-    ArtifactKind, BootHandoff, GpuSharedQueueLayout, GpuVmmMemory, MAX_PE_SECTIONS, PAGE_SIZE,
-    PeImage, PhysAddr, PreparedComponentServiceLaunch, RevocableVmBackend,
-    ServiceAddressSpaceEraser, TaskId, VerifiedExecutable, VirtualBlockConfigurationPage,
-    VirtualBlockQueueLayout, VirtualBlockResumePage, VirtualBlockVmmMemory, VmBackend, VmExit,
+    ArtifactKind, BootHandoff, DeadlineVmBackend, GpuSharedQueueLayout, GpuVmmMemory,
+    MAX_PE_SECTIONS, PAGE_SIZE, PeImage, PhysAddr, PreparedComponentServiceLaunch,
+    RevocableVmBackend, ServiceAddressSpaceEraser, TaskId, VerifiedExecutable,
+    VirtualBlockConfigurationPage, VirtualBlockQueueLayout, VirtualBlockResumePage,
+    VirtualBlockVmmMemory, VmBackend, VmExit,
 };
 
 use crate::{GuestRange, MapPermissions, WhpError};
@@ -1140,6 +1141,19 @@ impl VmBackend for PreparedWhpGuest<'_> {
             return Err(WhpError::InvalidVcpu);
         }
         self.partition.inject_interrupt(vector)
+    }
+}
+
+impl DeadlineVmBackend for PreparedWhpGuest<'_> {
+    fn run_with_deadline(
+        &mut self,
+        vcpu: u32,
+        maximum_micros: u32,
+    ) -> Result<mrml_kernel::VmDeadlineOutcome, Self::Error> {
+        if self.trapped_mmio_retired {
+            return Err(WhpError::InvalidMapping);
+        }
+        self.partition.run_vp_with_deadline(vcpu, maximum_micros)
     }
 }
 
@@ -2683,7 +2697,7 @@ mod tests {
     }
 
     #[test]
-    fn live_long_mode_guest_reaches_breakpoint_exit() {
+    fn live_long_mode_guest_reaches_breakpoint_and_deadline_exits() {
         let system = WhpSystem::open().unwrap();
         if !system.hypervisor_present().unwrap() {
             return;
@@ -2699,6 +2713,12 @@ mod tests {
             )
             .unwrap();
         partition
+            .map_initialized(
+                GuestRange::new(0x21_0000, 0x1000, MapPermissions::read_execute()).unwrap(),
+                &[0xeb, 0xfe],
+            )
+            .unwrap();
+        partition
             .map_zeroed(GuestRange::new(0x30_0000, 0x1000, MapPermissions::read_write()).unwrap())
             .unwrap();
         let root = {
@@ -2710,6 +2730,7 @@ mod tests {
             for (address, permissions) in [
                 (0x10_0000, PagePermissions::KERNEL_READ),
                 (0x20_0000, PagePermissions::KERNEL_READ_EXECUTE),
+                (0x21_0000, PagePermissions::KERNEL_READ_EXECUTE),
                 (0x30_0000, PagePermissions::KERNEL_READ_WRITE),
             ] {
                 tables
@@ -2739,6 +2760,26 @@ mod tests {
             Ok(VmExit::Unknown {
                 reason: (0x1002u64 << 32) | 3,
             })
+        );
+        partition
+            .configure_long_mode(
+                0x21_0000,
+                0x30_0ff8,
+                root.get(),
+                0x10_0000,
+                0x30_0000,
+                8,
+                0x50_0000,
+                0x60_0000,
+            )
+            .unwrap();
+        assert_eq!(
+            partition.run_vp_with_deadline(0, 0),
+            Err(WhpError::InvalidDeadline)
+        );
+        assert_eq!(
+            partition.run_vp_with_deadline(0, 10_000),
+            Ok(mrml_kernel::VmDeadlineOutcome::Expired)
         );
     }
 

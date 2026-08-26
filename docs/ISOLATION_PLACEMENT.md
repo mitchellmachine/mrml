@@ -335,10 +335,14 @@ reservation release, and period rollover are denied until exact reconciliation.
 The runner measures host-wall elapsed time around backend entry, refunds only a
 verified underrun, and retains the complete precharge on overrun. Replay,
 substitution, exhaustion, invalid time, affinity, priority, or vCPU selection
-fails closed. Fresh signed WHP and nested-KVM probes reconciled 764 and 1,181
-microseconds respectively; KVM retained zero native fallback. These hosted
-measurements do not prove trusted CPU time or a hardware deadline. Backend
-deadline programming and general scheduler enforcement remain **PLANNED**.
+fails closed. The backend-neutral deadline contract now arms cancellation before
+entry and withholds return and teardown until its worker retires. Focused live
+infinite-loop guests expire through WHP cancellation and KVM
+`immediate_exit` plus a runner-thread signal. Fresh signed WHP and nested-KVM
+component probes completed normally and reconciled 901 and 1,194 microseconds
+respectively; KVM retained zero native fallback. These hosted mechanisms do not
+prove trusted CPU time, exact deadline latency, native APIC enforcement, or a
+boundary against the host. General scheduler enforcement remains **PLANNED**.
 
 ## One policy, several placements
 

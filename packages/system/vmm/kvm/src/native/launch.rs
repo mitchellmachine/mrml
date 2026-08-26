@@ -5,9 +5,9 @@ use mrml_kernel::arch::x86_64::{
     VirtAddr,
 };
 use mrml_kernel::{
-    ArtifactKind, BootHandoff, GpuSharedQueueLayout, GpuVmmMemory, PAGE_SIZE, PhysAddr,
-    PreparedComponentServiceLaunch, RevocableVmBackend, ServiceAddressSpaceEraser, TaskId,
-    VerifiedExecutable, VirtualBlockConfigurationPage, VirtualBlockQueueLayout,
+    ArtifactKind, BootHandoff, DeadlineVmBackend, GpuSharedQueueLayout, GpuVmmMemory, PAGE_SIZE,
+    PhysAddr, PreparedComponentServiceLaunch, RevocableVmBackend, ServiceAddressSpaceEraser,
+    TaskId, VerifiedExecutable, VirtualBlockConfigurationPage, VirtualBlockQueueLayout,
     VirtualBlockResumePage, VirtualBlockVmmMemory, VmBackend, VmExit,
 };
 
@@ -998,6 +998,19 @@ impl<const N: usize> VmBackend for PreparedKvmGuest<N> {
     }
 }
 
+impl<const N: usize> DeadlineVmBackend for PreparedKvmGuest<N> {
+    fn run_with_deadline(
+        &mut self,
+        vcpu: u32,
+        maximum_micros: u32,
+    ) -> Result<mrml_kernel::VmDeadlineOutcome, Self::Error> {
+        if self.trapped_mmio_retired {
+            return Err(KvmError::InvalidMapping);
+        }
+        self.backend.run_with_deadline(vcpu, maximum_micros)
+    }
+}
+
 impl<const N: usize> mrml_kernel::IoReadCompleter for PreparedKvmGuest<N> {
     fn complete_io_read(
         &mut self,
@@ -1903,6 +1916,13 @@ mod tests {
         pe
     }
 
+    fn deadline_pe() -> [u8; 1024] {
+        let mut pe = framebuffer_pe();
+        pe[0x200..0x211].fill(0x90);
+        pe[0x200..0x202].copy_from_slice(&[0xeb, 0xfe]);
+        pe
+    }
+
     fn emit(code: &mut [u8; 512], at: &mut usize, bytes: &[u8]) {
         let end = *at + bytes.len();
         code[*at..end].copy_from_slice(bytes);
@@ -2334,6 +2354,51 @@ mod tests {
         let mut pixel = [0u8; 4];
         VmBackend::read_guest(&guest, 0xa0000, &mut pixel).unwrap();
         assert_eq!(pixel, [0x57, 0xc8, 0xff, 0x00]);
+    }
+
+    #[test]
+    fn live_signed_high_half_pe_is_cancelled_at_deadline() {
+        let system = match KvmSystem::open() {
+            Ok(system) => system,
+            Err(KvmError::SystemCall) => return,
+            Err(error) => panic!("available KVM failed validation: {error:?}"),
+        };
+        let encoded = signed_payload(deadline_pe());
+        let public_at = SIGNED_ARTIFACT_HEADER_BYTES;
+        let public_end = public_at + LAMPORT_PUBLIC_KEY_BYTES;
+        let root = TrustRoot::new(
+            ArtifactKind::VmImage,
+            Sha3_512::digest(&encoded[public_at..public_end]),
+            1,
+        );
+        let executable = SignedArtifact::decode(&encoded)
+            .unwrap()
+            .verify_executable(&root, ArtifactKind::VmImage)
+            .unwrap();
+        let layout = KvmLaunchLayout::new(
+            0x10_0000,
+            16,
+            0x20_0000,
+            0xffff_8001_4000_0000,
+            0x30_0000,
+            0xffff_8001_5000_0000,
+            0x40_0000,
+            0xffff_8001_6000_0000,
+            PRIVILEGE_STACK_ARENA_PAGES,
+            false,
+        )
+        .unwrap();
+        let mut guest = system
+            .prepare_kernel_guest::<7>(0, &executable, &valid_handoff(), layout)
+            .unwrap();
+        assert_eq!(
+            DeadlineVmBackend::run_with_deadline(&mut guest, 0, 0),
+            Err(KvmError::InvalidDeadline)
+        );
+        assert_eq!(
+            DeadlineVmBackend::run_with_deadline(&mut guest, 0, 10_000),
+            Ok(mrml_kernel::VmDeadlineOutcome::Expired)
+        );
     }
 
     #[test]

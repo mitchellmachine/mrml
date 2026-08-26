@@ -1,11 +1,13 @@
 use core::ffi::{c_char, c_void};
 use core::ptr::NonNull;
 use core::slice;
+use core::sync::atomic::{AtomicBool, AtomicU8, Ordering};
+use core::time::Duration;
 
 use mrml_kernel::arch::x86_64::{
     ApTrampolineImage, ApTrampolinePage, InstalledApTrampoline, TrampolinePermissions,
 };
-use mrml_kernel::{MAX_PE_SECTIONS, PAGE_SIZE, PeImage, VmExit};
+use mrml_kernel::{MAX_PE_SECTIONS, PAGE_SIZE, PeImage, VmDeadlineOutcome, VmExit};
 
 use crate::{GuestRange, MapPermissions, WHP_EXIT_CONTEXT_BYTES, WhpError, decode_exit_context};
 
@@ -27,6 +29,7 @@ type UnmapGpaRange = unsafe extern "system" fn(Handle, u64, u64) -> Hresult;
 type CreateVirtualProcessor = unsafe extern "system" fn(Handle, u32, u32) -> Hresult;
 type DeleteVirtualProcessor = unsafe extern "system" fn(Handle, u32) -> Hresult;
 type RunVirtualProcessor = unsafe extern "system" fn(Handle, u32, *mut c_void, u32) -> Hresult;
+type CancelRunVirtualProcessor = unsafe extern "system" fn(Handle, u32, u32) -> Hresult;
 type SetVirtualProcessorRegisters =
     unsafe extern "system" fn(Handle, u32, *const u32, u32, *const RegisterValue) -> Hresult;
 type GetVirtualProcessorRegisters =
@@ -106,6 +109,7 @@ struct Api {
     create_vp: CreateVirtualProcessor,
     delete_vp: DeleteVirtualProcessor,
     run_vp: RunVirtualProcessor,
+    cancel_run_vp: CancelRunVirtualProcessor,
     set_registers: SetVirtualProcessorRegisters,
     get_registers: GetVirtualProcessorRegisters,
     request_interrupt: RequestInterrupt,
@@ -161,6 +165,7 @@ impl WhpSystem {
                 create_vp: resolve(module, b"WHvCreateVirtualProcessor\0")?,
                 delete_vp: resolve(module, b"WHvDeleteVirtualProcessor\0")?,
                 run_vp: resolve(module, b"WHvRunVirtualProcessor\0")?,
+                cancel_run_vp: resolve(module, b"WHvCancelRunVirtualProcessor\0")?,
                 set_registers: resolve(module, b"WHvSetVirtualProcessorRegisters\0")?,
                 get_registers: resolve(module, b"WHvGetVirtualProcessorRegisters\0")?,
                 request_interrupt: resolve(module, b"WHvRequestInterrupt\0")?,
@@ -311,6 +316,25 @@ struct PendingMmioWrite {
     size: u8,
     value: u64,
     instruction_bytes: u8,
+}
+
+#[derive(Clone, Copy)]
+struct WhpRunCancellation {
+    partition: NonNull<c_void>,
+    api: Api,
+    index: u32,
+}
+
+// SAFETY: WHP explicitly permits cancellation of one running virtual
+// processor from another host thread. The caller retains the partition until
+// the worker publishes retirement.
+unsafe impl Send for WhpRunCancellation {}
+unsafe impl Sync for WhpRunCancellation {}
+
+impl WhpRunCancellation {
+    fn request(self) -> Result<(), WhpError> {
+        check(unsafe { (self.api.cancel_run_vp)(self.partition.as_ptr(), self.index, 0) })
+    }
 }
 
 fn completed_io_registers(
@@ -909,6 +933,71 @@ impl PreparedWhpPartition<'_> {
             });
         }
         Ok(exit)
+    }
+
+    pub(crate) fn run_vp_with_deadline(
+        &mut self,
+        index: u32,
+        maximum_micros: u32,
+    ) -> Result<VmDeadlineOutcome, WhpError> {
+        self.ensure_mapping_coherent()?;
+        if maximum_micros == 0 {
+            return Err(WhpError::InvalidDeadline);
+        }
+        if index >= self.vp_count {
+            return Err(WhpError::InvalidVcpu);
+        }
+        if self.pending_io_reads[index as usize].is_some()
+            || self.pending_mmio_writes[index as usize].is_some()
+        {
+            return Err(WhpError::InvalidRegisterState);
+        }
+        const ARMED: u8 = 0;
+        const RETURNED: u8 = 1;
+        const EXPIRED: u8 = 2;
+        const CANCEL_FAILED: u8 = 3;
+        let phase = mrml_runtime::Shared::new(AtomicU8::new(ARMED));
+        let retired = mrml_runtime::Shared::new(AtomicBool::new(false));
+        let worker_phase = phase.clone();
+        let worker_retired = retired.clone();
+        let cancellation = WhpRunCancellation {
+            partition: self.partition,
+            api: self.api,
+            index,
+        };
+        mrml_runtime::spawn_detached(move || {
+            let started = mrml_runtime::Instant::now();
+            loop {
+                if worker_phase.load(Ordering::Acquire) != ARMED {
+                    break;
+                }
+                if started.elapsed() >= Duration::from_micros(u64::from(maximum_micros)) {
+                    if worker_phase
+                        .compare_exchange(ARMED, EXPIRED, Ordering::AcqRel, Ordering::Acquire)
+                        .is_ok()
+                        && cancellation.request().is_err()
+                    {
+                        worker_phase.store(CANCEL_FAILED, Ordering::Release);
+                    }
+                    break;
+                }
+                mrml_runtime::yield_now();
+            }
+            worker_retired.store(true, Ordering::Release);
+        })
+        .map_err(|_| WhpError::SystemCall(-1))?;
+
+        let result = self.run_vp(index);
+        let _ = phase.compare_exchange(ARMED, RETURNED, Ordering::AcqRel, Ordering::Acquire);
+        while !retired.load(Ordering::Acquire) {
+            mrml_runtime::yield_now();
+        }
+        match phase.load(Ordering::Acquire) {
+            RETURNED => result.map(VmDeadlineOutcome::Exit),
+            EXPIRED => Ok(VmDeadlineOutcome::Expired),
+            CANCEL_FAILED => Err(WhpError::SystemCall(-1)),
+            _ => Err(WhpError::InvalidRegisterState),
+        }
     }
 
     fn complete_mmio_write(

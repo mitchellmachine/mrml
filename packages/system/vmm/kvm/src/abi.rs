@@ -35,6 +35,7 @@ pub enum KvmError {
     UnmappedMemory,
     ReadOnlyMemory,
     InvalidVcpu,
+    InvalidDeadline,
     InvalidRegisterState,
     Pe(PeError),
     InvalidMapping,

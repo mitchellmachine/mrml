@@ -662,6 +662,25 @@ pub trait VmBackend {
     fn inject_interrupt(&mut self, vcpu: u32, vector: u8) -> Result<(), Self::Error>;
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum VmDeadlineOutcome {
+    Exit(VmExit),
+    Expired,
+}
+
+/// Backend-neutral contract for one bounded vCPU entry. The backend must arm
+/// cancellation before entering the vCPU, must not return until every
+/// cancellation worker can no longer access native VM state, and must report
+/// expiry even when an ordinary exit races the deadline. A zero deadline is
+/// invalid and must cause no vCPU entry.
+pub trait DeadlineVmBackend: VmBackend {
+    fn run_with_deadline(
+        &mut self,
+        vcpu: u32,
+        maximum_micros: u32,
+    ) -> Result<VmDeadlineOutcome, Self::Error>;
+}
+
 /// Backend contract for completing one exact scalar input exit before another
 /// vCPU entry. Implementations must bind completion to the still-pending exit's
 /// vCPU, port, and width and must not report success after partial register or

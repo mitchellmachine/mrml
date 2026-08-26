@@ -333,13 +333,18 @@ closed. An overrun retains the full charge and reports failure. Successful
 authorization retains the exact domain, vCPU, logical CPU, and priority
 decision for the runner.
 Windows and Arch Linux kernel suites pass 510 tests, the WHP runner passes 7,
-and the KVM runner passes 8. Fresh signed hosted probes measured and reconciled
-764 microseconds on WHP and 1,181 microseconds on KVM; KVM reported one eligible
-microVM and zero native fallback. These are conservative host-wall elapsed
-measurements around hosted backend entry, not trusted CPU-time or hardware-
-deadline evidence. Backend timer/APIC deadline programming, priority/affinity,
-multiple profiles/vCPUs, and general scheduler integration remain current
-gates.
+and the KVM runner passes 8. A backend-neutral deadline contract now arms
+cancellation before entry and waits for the cancellation worker to retire before
+return or teardown. WHP uses `WHvCancelRunVirtualProcessor`; KVM sets
+`immediate_exit` and sends a reserved no-op signal to interrupt `KVM_RUN`.
+Focused live infinite-loop guests expire on both backends. Fresh signed hosted
+component probes completed normally and reconciled 901 microseconds on WHP and
+1,194 microseconds on KVM; KVM reported one eligible microVM and zero native
+fallback. These are host-scheduled cancellation deadlines and conservative
+host-wall measurements, not trusted CPU-time, exact latency, APIC enforcement,
+or a boundary against a compromised host. Native APIC deadlines,
+priority/affinity, multiple profiles/vCPUs, and general scheduler integration
+remain current gates.
 
 Typed provider-resolution groundwork now matches canonical `REQUIRES` and
 `PROVIDES` edges only inside an immutable `SystemGeneration`. Interface name,
