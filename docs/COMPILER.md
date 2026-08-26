@@ -1383,7 +1383,10 @@ after the primary condition is false and preserves fallthrough when both are
 false. CFG and ownership now use a distinct condition block and ownership
 location: primary false enters the alternative condition, alternative true
 enters its scoped actions, and alternative false preserves fallthrough. Native
-emission remains fail-closed; longer alternative chains remain unrepresented.
+emission now mirrors that two-stage decision for direct and helper-inlined
+x86-64 functions: the alternative is evaluated exactly once only after primary
+false, and its false edge preserves fallthrough. ELF64 and COFF probes cover
+both emission paths. Longer alternative chains remain unrepresented.
 The bounded constant evaluator selects
 exactly one arm, executes its actions under a lexical resolver checkpoint, and
 routes its target-aware terminal under the existing iteration limit. CFG
@@ -1412,8 +1415,9 @@ returns now both enter the exact function-return outlives classifier:
 parameter-backed origins are admitted and branch-local origins fail closed.
 Reference break/continue forms use the bounded destination and backedge transfer
 described above. ELF64 and COFF object probes cover separate return, continue,
-and break prefixes, direct and helper-inlined scalar else returns, and an exact
-parameter-backed mutable-reference else return. Windows and
+and break prefixes, direct and helper-inlined scalar else and conditional-
+alternative returns, and an exact parameter-backed mutable-reference else
+return. Windows and
 native Arch Linux WSL each pass 645 library tests, one component-interface
 probe, 10 conformance tests, and 336 replacement tests: 992 compiler tests per
 host.

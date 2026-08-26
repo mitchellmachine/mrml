@@ -702,8 +702,11 @@ conditions are false. CFG construction now gives the alternative condition a
 distinct sourced block, routes primary false into it, routes alternative true
 into scoped actions, and retains alternative false as fallthrough. Ownership
 preanalysis records and maps the alternative-condition reads separately from
-its actions and terminal. Direct/inline native emission and longer alternative
-chains remain fail-closed. The exact dated oracle accepts the same
+its actions and terminal. Direct and helper-inlined x86-64 emission now lazily
+tests the alternative condition after primary false, routes true through the
+existing scoped actions and terminal, and preserves false fallthrough. ELF64
+and COFF probes cover both native paths. Longer alternative chains remain
+fail-closed. The exact dated oracle accepts the same
 independently authored Rust 2024 control shape. Windows and Arch each continue
 to pass 645 library tests, one component-interface probe, 10 conformance tests,
 and 336 replacement tests: 992 compiler tests per host.

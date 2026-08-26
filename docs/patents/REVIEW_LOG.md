@@ -8421,3 +8421,14 @@ instruction-selection, or runtime mechanism. Native lowering remains
 fail-closed. Broader compiler completion remains partial; this technical screen
 is not a clearance or infringement conclusion and does not replace independent
 human dual review.
+
+# 2026-08-26 — Nested loop else-if native lowering
+
+**Result: NOT_TRIGGERED after the native-lowering review.** This increment
+emits a conventional conditional forward branch after the primary false edge
+and reuses the compiler's existing scoped action, stack cleanup, return, break,
+continue, direct-call, and inline-call machinery. It adds no novel control-flow,
+region, alias, inference, optimization, or instruction-selection algorithm.
+Longer alternative chains remain fail-closed. Broader compiler completion
+remains partial; this technical screen is not a clearance or infringement
+conclusion and does not replace independent human dual review.
