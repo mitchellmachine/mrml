@@ -33,7 +33,10 @@ pub use ir::{
     lower_expression_with_pointer_bits,
 };
 pub use lexer::{LexError, LexErrorKind, Lexer, Span, Token, TokenKind};
-pub use object::{ObjectError, ObjectFile, emit_elf64_x86_64, emit_x86_64_coff};
+pub use object::{
+    ObjectError, ObjectFile, X86_64PcRelativeRelocation, emit_elf64_x86_64,
+    emit_elf64_x86_64_with_relocation, emit_x86_64_coff, emit_x86_64_coff_with_relocation,
+};
 pub use parser::{
     Assignment, AssignmentOperator, BodyStatement, ConditionalAssignment,
     ConditionalAssignmentAction, ConditionalAssignmentBranch, ConditionalLoopAction,
