@@ -48,8 +48,12 @@ Three new persistent deltas are documented before implementation:
   Focused tests use an unaccounted runtime, so production quantitative
   allocation remains a caller obligation. This is kernel control/lifecycle
   groundwork; the representative GUI application, compositor/Semantic Scene
-  Graph integration, application image execution, microVM adapter, and WHP/KVM
-  application probes remain **PLANNED**.
+  Graph integration, application image execution, and WHP/KVM application
+  probes remain **PLANNED**. A backend-neutral microVM owner now rechecks and
+  consumes one already constructed application guest, retains it behind an
+  exact generational endpoint, refuses native dispatch, and preserves uncertain
+  teardown for retry. Focused tests use mock guests; VM construction and live
+  backend execution remain **PLANNED**.
   The configuration package now admits both forms and supplies a concrete
   configuration-specific adapter with focused fail-closed tests. The native
   form now uses a real accounted `TaskRuntime`/`ServiceSupervisor` launch and

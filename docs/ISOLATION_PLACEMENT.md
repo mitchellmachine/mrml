@@ -62,8 +62,13 @@ erase for exact retry. Focused Windows/Linux unit tests use an unaccounted test
 runtime; production quantitative runtime allocation remains the caller's
 separate obligation. This is not the representative dual-placement GUI
 application: no GUI package, compositor, Semantic Scene Graph integration,
-application image execution, microVM adapter, or WHP/KVM application probe
-exists yet.
+application image execution or WHP/KVM application probe exists yet. A
+backend-neutral microVM owner now accepts one already constructed guest only
+after rechecking the complete immutable application route, consumes that guest
+once, exposes it solely through a generational endpoint, refuses native-process
+dispatch, and retains guest plus endpoint when teardown is uncertain. Its
+focused tests use mock guests; it is ownership groundwork, not a VM constructor
+or backend execution result.
 
 The kernel admission prerequisite now binds every prepared, running,
 unavailable, and routed domain to both a nonzero active `SystemGeneration` and
@@ -686,8 +691,8 @@ Documentation is not implementation evidence. Implement bounded milestones:
    separately hosted WHP/KVM microVM call; general resolver dispatch remains);
 3. one representative dual-placement GUI application (**PARTIALLY IMPLEMENTED**
    for the generation-bound kernel route and dedicated native-process lifecycle
-   adapter; GUI, semantic, image-execution, microVM-adapter, and live backend
-   work remain **PLANNED**);
+   adapter and backend-neutral microVM guest owner; GUI, semantic,
+   image-execution, VM construction, and live backend work remain **PLANNED**);
 4. monitor placement visibility;
 5. resource and device projections;
 6. persistent Settings and shell policy;

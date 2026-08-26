@@ -7,6 +7,7 @@
 
 pub mod arch;
 mod application_lifecycle;
+mod application_microvm;
 mod artifact;
 mod boot;
 mod boot_recovery;
@@ -53,6 +54,11 @@ pub use artifact::{
 };
 pub use application_lifecycle::{
     NativeApplicationBackend, NativeApplicationEndpoint, NativeApplicationError,
+};
+pub use application_microvm::{
+    AdmittedApplicationGuestError, AdmittedApplicationGuestFactory, ApplicationMicrovmAccessError,
+    ApplicationMicrovmEndpoint, ApplicationMicrovmError, ApplicationMicrovmFactory,
+    PreparedMicrovmApplicationBackend,
 };
 pub use boot::{BootEvidence, BootPolicy, BootValidationError, ValidatedBoot};
 pub use boot_recovery::{BootRecoveryDelivery, BootRecoveryDeliveryError};

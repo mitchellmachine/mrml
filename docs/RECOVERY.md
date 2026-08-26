@@ -1021,6 +1021,14 @@ recreate that endpoint, reuse its task identity, or report cleanup complete
 until erasure succeeds. Current tests use an unaccounted hosted runtime and do
 not prove application-image, GUI, physical, WHP, or KVM execution.
 
+The backend-neutral application microVM owner retains an admitted guest behind
+an endpoint that includes a separate launch generation and the complete
+immutable application route. Recovered or replacement code must not recreate
+that endpoint from scalar fields, transfer a second guest through a consumed
+factory, or drop a guest after uncertain teardown. Exact teardown retry is
+required. Current coverage uses mock guests and is not WHP/KVM execution
+evidence.
+
 The focused recovery oracle now includes the two-vCPU component profiles
 `whp_component_service_smp_probe` and `kvm_component_service_smp_probe`. Each
 must use fresh signed kernel/package artifacts, the exact signed ZIM/Zstd
