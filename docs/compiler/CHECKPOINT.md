@@ -1413,10 +1413,14 @@ admits one optional index GPR at scale 1/2/4/8 and an optional checked signed `i
 displacement; the encoder selects canonical no-displacement, disp8, or disp32
 forms and rejects `rsp` as an index. It requires an
 explicit terminating instruction and emits those exact bytes without ordinary function lowering.
+The bounded two-pass layout recognizes numeric local definitions `2:` through
+`9:` and direction-checked `jmp 2f`/`2b` references, rejects duplicate, missing,
+or wrong-direction labels, and emits a checked rel32 displacement without an
+object relocation.
 Focused tests compare the complete machine-code slice to prove that no prologue
 or epilogue is inserted and reject unsupported safety, ABI, signature,
-instruction, register, immediate, and fallthrough cases. RIP-relative/base-less
-memory operands, labels, symbols, options,
+instruction, register, immediate, label, and fallthrough cases. RIP-relative/base-less
+memory operands, external symbols/relocations, options,
 additional architectures, and general inline assembly remain fail-closed.
 Windows gnullvm and native Arch Linux WSL each pass 633 library tests,
 one component-interface probe, 10 conformance tests, and 335 replacement tests:
