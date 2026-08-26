@@ -359,6 +359,16 @@ chain result remained live with E0499. Temporary sources and metadata were
 removed. This is bounded move-chain evidence, not general alias or region
 inference.
 
+Another independently authored Rust 2024 metadata-only probe against the same
+exact toolchain and commit accepted assigning a parameter-backed tuple field
+into an existing mutable-reference local and returning that local. The same
+probe accepted an inferred alias initially moved from a local-backed tuple field,
+then replaced by a parameter reference before return. The caller could reuse the
+projected owner after the returned child's last use. A separate invocation
+rejected a live competing owner borrow with E0499. Temporary sources and metadata
+were removed. This is exact typed projected-assignment evidence, not general
+assignment, alias, or region inference.
+
 An independently authored Rust 2024 metadata-only probe against that same exact
 toolchain and commit compiled `asm!("cmp rcx, rcx", in("rcx") value,
 options(nomem, nostack))`. This records black-box acceptance of that exact

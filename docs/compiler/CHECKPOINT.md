@@ -724,6 +724,15 @@ proof. ORACLE-0002 accepts the chain, conditional, and loop forms, accepts owner
 restoration after last use, and rejects the live chain competitor with E0499.
 Windows and Arch remain at 987 tests per host.
 
+Numeric tuple fields now participate in bounded reference RHS type inference.
+Assignment from a compatible field into an existing root reference alias carries
+the field's parameter origin; a local-backed field clears it. The established
+inferred local-backed alias replacement remains accepted because type eligibility
+is not incorrectly equated with initializer origin. ORACLE-0002 accepts the
+projected and inferred replacement forms, accepts restoration after last use,
+and rejects the live projected-owner competitor with E0499. Windows and Arch
+remain at 987 tests per host.
+
 Inferred locals now become reassignment-origin eligible only when their
 initializer already proved a compatible parameter origin. This preserves valid
 indexed scalar alias replacement while preventing an inferred slice alias from

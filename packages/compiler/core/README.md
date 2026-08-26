@@ -4013,6 +4013,15 @@ chain and both post-control-flow forms, accepts restoration after last use, and
 rejects the live move-chain competitor with E0499. Both hosts remain at 987
 tests; this is bounded move propagation, not general alias or region inference.
 
+The reference RHS type walker now resolves exact numeric tuple fields. A field
+may replace a compatible root reference alias and transfer its parameter origin;
+a local-backed field clears that origin. Inferred local-backed aliases still
+accept a later compatible parameter replacement, as the exact oracle does, so
+initializer origin is not used as a substitute for type compatibility. Focused
+tests and ORACLE-0002 cover both accepted replacements, local-backed clearing,
+live E0499 conflict, and post-last-use restoration. Both hosts remain at 987
+tests.
+
 The conditional projected-reassignment milestone extends the bounded tuple-field
 loan chain across a conditional shared-reference assignment. The exact dated
 oracle rejects mutation of either conditional owner and of the field's replaced

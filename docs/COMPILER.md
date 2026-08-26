@@ -998,6 +998,15 @@ generation carries the same parameter origin without collapsing the preceding
 projected/control-flow proof. ORACLE-0002 accepts all three forms, permits owner
 reuse after last use, and rejects the live move-chain competitor with E0499.
 
+The bounded reference-type walker now derives the exact type of a numeric tuple-
+field RHS. A compatible projected field can therefore replace an existing root
+reference alias while carrying its field origin; a local-backed projected RHS
+clears the alias origin. Inferred local-backed aliases remain eligible for a
+later compatible parameter replacement, matching ORACLE-0002 rather than using
+initializer origin as a false type gate. The oracle accepts both replacement
+forms, permits owner reuse after last use, and rejects a live competing borrow
+of the projected owner with E0499.
+
 The first modern trait-solver foundation is an explicit bounded implemented-
 goal representation. Stable trait/type/inference/placeholder identities remain
 distinct; canonicalization replaces inference identities with first-occurrence
