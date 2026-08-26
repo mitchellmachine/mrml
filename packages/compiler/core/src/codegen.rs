@@ -14738,6 +14738,30 @@ fn runtime_reference_call_origin_parameter<const MAX_PARAMETERS: usize, const MA
         }
     }
 
+    fn local_origin<const MAX_PARAMETERS: usize, const MAX_NODES: usize>(
+        target: crate::RuntimeCallTarget<'_, MAX_PARAMETERS>,
+        local: crate::LocalBinding<'_>,
+        tree: &crate::ExpressionTree<'_, MAX_NODES>,
+        local_names: &[Option<&str>; MAX_PARAMETERS],
+        local_origins: &[Option<usize>; MAX_PARAMETERS],
+        local_count: usize,
+    ) -> Option<usize> {
+        if local.ty.is_some_and(|ty| {
+            runtime_type_from_text(ty.text) != Some(runtime_type_from_scalar(target.return_type))
+        }) {
+            return None;
+        }
+        recurse(
+            target,
+            tree,
+            tree.root(),
+            0,
+            local_names,
+            local_origins,
+            local_count,
+        )
+    }
+
     fn apply_assignment<const MAX_PARAMETERS: usize, const MAX_NODES: usize>(
         target: crate::RuntimeCallTarget<'_, MAX_PARAMETERS>,
         assignment: crate::Assignment<'_>,
@@ -14790,11 +14814,10 @@ fn runtime_reference_call_origin_parameter<const MAX_PARAMETERS: usize, const MA
             match *action {
                 crate::ConditionalAssignmentAction::Local(local) => {
                     let tree = local.parse_initializer::<MAX_NODES>().ok()?;
-                    let local_origin = recurse(
+                    let local_origin = local_origin(
                         target,
+                        local,
                         &tree,
-                        tree.root(),
-                        0,
                         local_names,
                         local_origins,
                         *local_count,
@@ -14853,11 +14876,10 @@ fn runtime_reference_call_origin_parameter<const MAX_PARAMETERS: usize, const MA
                 return None;
             };
             let tree = local.parse_initializer::<MAX_NODES>().ok()?;
-            let local_origin = recurse(
+            let local_origin = local_origin(
                 target,
+                local,
                 &tree,
-                tree.root(),
-                0,
                 local_names,
                 local_origins,
                 *local_count,
@@ -14949,11 +14971,10 @@ fn runtime_reference_call_origin_parameter<const MAX_PARAMETERS: usize, const MA
             crate::BodyStatement::Local(index) => {
                 let local = body.locals().get(index).and_then(|local| *local)?;
                 let tree = local.parse_initializer::<MAX_NODES>().ok()?;
-                let local_origin = recurse(
+                let local_origin = local_origin(
                     target,
+                    local,
                     &tree,
-                    tree.root(),
-                    0,
                     &local_names,
                     &local_origins,
                     local_count,
@@ -15069,11 +15090,10 @@ fn runtime_reference_call_origin_parameter<const MAX_PARAMETERS: usize, const MA
                         match *operation {
                             crate::LoopOperation::Local(local) => {
                                 let tree = local.parse_initializer::<MAX_NODES>().ok()?;
-                                let local_origin = recurse(
+                                let local_origin = local_origin(
                                     target,
+                                    local,
                                     &tree,
-                                    tree.root(),
-                                    0,
                                     &iteration_names,
                                     &iteration_origins,
                                     iteration_local_count,
@@ -30907,6 +30927,34 @@ mod tests {
                         body_expression: "&mut values[1..]",
                     })
                 }
+                ("array_element_alias", 1) => {
+                    parameters[0] = Some(RuntimeCallParameter {
+                        name: "values",
+                        ty: array_reference,
+                    });
+                    Some(RuntimeCallTarget {
+                        name: "array_element_alias",
+                        parameters,
+                        parameter_count: 1,
+                        return_type: reference,
+                        return_type_name: "&mut u16",
+                        body_expression: "let alias: &mut u16 = &mut values[0]; alias",
+                    })
+                }
+                ("slice_subslice_alias", 1) => {
+                    parameters[0] = Some(RuntimeCallParameter {
+                        name: "values",
+                        ty: slice_reference,
+                    });
+                    Some(RuntimeCallTarget {
+                        name: "slice_subslice_alias",
+                        parameters,
+                        parameter_count: 1,
+                        return_type: slice_reference,
+                        return_type_name: "&mut [u16]",
+                        body_expression: "let alias: &mut [u16] = &mut values[1..]; alias",
+                    })
+                }
                 ("identity", 1) => {
                     parameters[0] = Some(RuntimeCallParameter {
                         name: "value",
@@ -35247,6 +35295,23 @@ mod tests {
         .unwrap();
         assert_eq!(
             analyze(concat!(
+                "fn value(input: &mut [u16; 2]) -> u16 { ",
+                "let returned: &mut u16 = array_element_alias(input); ",
+                "let competing: &mut u16 = &mut input[0]; ",
+                "*competing += 1; *returned }"
+            ))
+            .unwrap_err()
+            .kind,
+            CodegenErrorKind::RuntimeBorrowConflict
+        );
+        analyze(concat!(
+            "fn value(input: &mut [u16; 2]) -> u16 { ",
+            "let returned: &mut u16 = array_element_alias(input); *returned += 1; ",
+            "let restored: &mut u16 = &mut input[0]; *restored }"
+        ))
+        .unwrap();
+        assert_eq!(
+            analyze(concat!(
                 "fn value(input: &mut [u16]) -> u16 { ",
                 "let returned: &mut u16 = slice_element(input); ",
                 "let competing: &mut u16 = &mut input[0]; ",
@@ -35275,6 +35340,12 @@ mod tests {
                 "let competing: &mut u16 = &mut input[1]; ",
                 "*competing += 1; returned[0] }"
             ),
+            concat!(
+                "fn value(input: &mut [u16]) -> u16 { ",
+                "let returned: &mut [u16] = slice_subslice_alias(input); ",
+                "let competing: &mut u16 = &mut input[1]; ",
+                "*competing += 1; returned[0] }"
+            ),
         ] {
             assert_eq!(
                 analyze(rejected).unwrap_err().kind,
@@ -35290,6 +35361,11 @@ mod tests {
             concat!(
                 "fn value(input: &mut [u16]) -> u16 { ",
                 "let returned: &mut [u16] = slice_subslice(input); returned[0] += 1; ",
+                "let restored: &mut u16 = &mut input[1]; *restored }"
+            ),
+            concat!(
+                "fn value(input: &mut [u16]) -> u16 { ",
+                "let returned: &mut [u16] = slice_subslice_alias(input); returned[0] += 1; ",
                 "let restored: &mut u16 = &mut input[1]; *restored }"
             ),
         ] {
@@ -35323,6 +35399,27 @@ mod tests {
         assert_eq!(
             runtime_reference_call_origin_parameter::<2, 16>(slice_subslice),
             Some(0)
+        );
+        let array_element_alias = MutableReferenceCallResolver
+            .resolve_runtime_call::<2>("array_element_alias", 1)
+            .unwrap();
+        let slice_subslice_alias = MutableReferenceCallResolver
+            .resolve_runtime_call::<2>("slice_subslice_alias", 1)
+            .unwrap();
+        assert_eq!(
+            runtime_reference_call_origin_parameter::<2, 16>(array_element_alias),
+            Some(0)
+        );
+        assert_eq!(
+            runtime_reference_call_origin_parameter::<2, 16>(slice_subslice_alias),
+            Some(0)
+        );
+        assert_eq!(
+            runtime_reference_call_origin_parameter::<2, 16>(RuntimeCallTarget {
+                body_expression: "let alias: &mut [u16] = &mut values[0]; alias",
+                ..array_element_alias
+            }),
+            None
         );
         assert_eq!(
             runtime_reference_call_origin_parameter::<2, 16>(RuntimeCallTarget {
