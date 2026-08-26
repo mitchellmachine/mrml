@@ -1017,3 +1017,12 @@ function. This records black-box acceptance of that exact fixed x86-64 template
 and option set only; it does not establish other templates, operands, effects,
 register allocation, architectures, or general inline-assembly semantics.
 Temporary source and metadata were removed.
+
+An independently authored Rust 2024 metadata-only ordinary-assembly pair
+against this exact toolchain and commit compiled a safe function containing
+`unsafe { asm!("pause", options(nomem, nostack, preserves_flags)); }`. A
+control placed the same assembly after a separate unrelated unsafe block and
+failed with E0133. This records black-box acceptance and lexical containment for
+that exact statement form only; it does not establish multiple-statement unsafe
+blocks, nested blocks, arbitrary macros, other templates, general effects, or
+general inline-assembly semantics. Temporary sources and metadata were removed.

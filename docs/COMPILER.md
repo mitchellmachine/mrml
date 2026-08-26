@@ -120,6 +120,7 @@ language as a whole.
 | Modern patterns and match | **PARTIAL** | Bounded scalar constant/range/wildcard patterns and limited matches exist. Destructuring, match ergonomics, guards and ownership-sensitive patterns are incomplete. |
 | Modern unsafe rules | **PARTIAL** | Unsafe functions gate a bounded unchecked integer/raw-pointer subset and unsupported operations fail closed. General unsafe blocks, unsafe traits/impls, extern rules, assembly, provenance, and complete `unsafe_op_in_unsafe_fn` semantics are absent. |
 | Modern unsafe-block delta | **PARTIAL** | A typed bounded `UnsafeBlock` expression now scopes the supported unchecked integer operations, unchecked casts/option extraction, and dangerous scalar raw-pointer dereference, reference conversion, read/write/fill/copy/swap/drop, non-wrapping offset, and pointer-difference operations. Nested blocks and bounded scalar locals are retained through constant, IR, semantic, type, and native-emission consumers. Lexically adjacent operations outside the block fail closed. Unsafe blocks around ordinary assembly statements, general statements, unsupported operations, unsafe traits/implementations, extern rules, complete provenance, and complete `unsafe_op_in_unsafe_fn` semantics remain absent; this row supersedes the general-unsafe-block wording above. |
+| Unsafe inline-assembly statement delta | **PARTIAL** | A bounded `ExpressionStatement` now carries an explicit unsafe-context property when the parser recognizes one `unsafe { asm!(...); }` statement, with an optional semicolon after the block. Both read preanalysis and native emission require that property or an unsafe function. Adjacent assembly after an unrelated unsafe block remains unauthorized. Multiple statements in the same unsafe block, nested unsafe assembly blocks, general macro statements, other unsupported assembly, and general statement-block lowering remain absent; this row narrows the assembly limitation in the unsafe-block delta above. |
 | Modern `no_std` systems features | **PARTIAL** | Dependency-free native code generation covers integers, control flow, arrays, bounded scalar tuples, references, slices, raw pointers, COFF/ELF64, UEFI checks, and NVPTX checks. Up to eight typed x86-64 PC-relative branch-or-data relocations are structurally emitted for both native object formats. General assembly, naked entry-point integration, atomics, SIMD, full ABI/layout, general relocation families, linking, and package compilation remain missing. |
 
 Already implemented post-2024 or forward-looking work should be preserved rather
@@ -1808,9 +1809,29 @@ Independently authored ELF64 and COFF probes cover nested blocks, block-local
 bindings, integer operations, and raw-pointer operations. ORACLE-0002 accepts
 the scoped forms and rejects the escaped dereference with E0133. Windows and
 Arch each passed 645 unit, 1 component, 10 conformance, and 338 replacement
-tests (994 total). General statement blocks, assembly inside unsafe blocks,
-unsafe traits/implementations, full raw-pointer provenance, complete const
-unsafe rules, and `unsafe_op_in_unsafe_fn` lint semantics remain unsupported.
+tests (994 total). General statement blocks, assembly inside unsafe blocks
+beyond the exact later checkpoint, unsafe traits/implementations, full raw-
+pointer provenance, complete const unsafe rules, and `unsafe_op_in_unsafe_fn`
+lint semantics remain unsupported.
+
+### Scoped unsafe ordinary-assembly statement checkpoint
+
+The bounded function-body parser now preserves one
+`unsafe { asm!(...); }` block as an `ExpressionStatement` with explicit unsafe
+context. The ordinary inline-assembly read-preanalysis and native-emission paths
+accept that property in an otherwise safe function; they do not infer authority
+from neighboring blocks or values. An optional semicolon after the unsafe block
+is consumed without extending its scope. The existing fixed templates, operand
+types, option validation, effects, output-place checks, and x86-64-only boundary
+remain unchanged.
+
+The exact ORACLE-0002 Rust 2024 toolchain accepted the scoped `pause` probe and
+reported E0133 when `asm!("pause")` followed a separate unrelated unsafe block.
+Independently authored ELF64 and COFF probes cover the accepted form and the
+leakage control. Windows and Arch each passed 646 unit, 1 component, 10
+conformance, and 338 replacement tests (995 total). Multiple statements inside
+one unsafe block, nested unsafe assembly blocks, arbitrary macros, general
+assembly, and general statement-block lowering remain unsupported.
 
 ## Non-negotiable implementation rules
 

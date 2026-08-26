@@ -8548,3 +8548,13 @@ unsafe function or block. It introduces no new alias, provenance, optimization,
 instruction-selection, memory-management, or runtime algorithm. Broader
 compiler completion remains partial; this technical screen is not a clearance
 or infringement conclusion and does not replace independent human dual review.
+
+# 2026-08-26 — Scoped unsafe ordinary-assembly statement
+
+**Result: NOT_TRIGGERED.** This increment records conventional lexical unsafe
+context on one already-supported expression statement and consults that context
+at the existing ordinary-inline-assembly admission checks. It introduces no new
+assembly template, encoding, allocation, effect, optimization,
+instruction-selection, or runtime algorithm. Broader compiler completion
+remains partial; this technical screen is not a clearance or infringement
+conclusion and does not replace independent human dual review.
