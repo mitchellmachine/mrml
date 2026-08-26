@@ -14698,6 +14698,40 @@ fn runtime_reference_call_origin_parameter<const MAX_PARAMETERS: usize, const MA
         }
     }
 
+    fn apply_assignment<const MAX_PARAMETERS: usize, const MAX_NODES: usize>(
+        target: crate::RuntimeCallTarget<'_, MAX_PARAMETERS>,
+        assignment: crate::Assignment<'_>,
+        local_names: &[Option<&str>; MAX_PARAMETERS],
+        local_origins: &mut [Option<usize>; MAX_PARAMETERS],
+        local_mutability: &[bool; MAX_PARAMETERS],
+        local_count: usize,
+    ) -> Option<()> {
+        if assignment.projection.is_some()
+            || assignment.operator != crate::AssignmentOperator::Assign
+        {
+            return None;
+        }
+        let local_index = (0..local_count)
+            .rev()
+            .find(|index| local_names[*index] == Some(assignment.name))?;
+        if !local_mutability[local_index] {
+            return None;
+        }
+        let tree = crate::ExpressionParser::<MAX_NODES>::new(assignment.value)
+            .parse()
+            .ok()?;
+        local_origins[local_index] = recurse(
+            target,
+            &tree,
+            tree.root(),
+            0,
+            local_names,
+            local_origins,
+            local_count,
+        );
+        Some(())
+    }
+
     let body =
         crate::parser::parse_function_body::<MAX_PARAMETERS, MAX_NODES>(target.body_expression)
             .ok()?;
@@ -14793,29 +14827,81 @@ fn runtime_reference_call_origin_parameter<const MAX_PARAMETERS: usize, const MA
             }
             crate::BodyStatement::Assignment(index) => {
                 let assignment = body.assignments().get(index).and_then(|value| *value)?;
-                if assignment.projection.is_some()
-                    || assignment.operator != crate::AssignmentOperator::Assign
-                {
-                    return None;
-                }
-                let local_index = (0..local_count)
-                    .rev()
-                    .find(|index| local_names[*index] == Some(assignment.name))?;
-                if !local_mutability[local_index] {
-                    return None;
-                }
-                let tree = crate::ExpressionParser::<MAX_NODES>::new(assignment.value)
-                    .parse()
-                    .ok()?;
-                local_origins[local_index] = recurse(
+                apply_assignment::<MAX_PARAMETERS, MAX_NODES>(
                     target,
-                    &tree,
-                    tree.root(),
-                    0,
+                    assignment,
                     &local_names,
-                    &local_origins,
+                    &mut local_origins,
+                    &local_mutability,
                     local_count,
-                );
+                )?;
+            }
+            crate::BodyStatement::ConditionalAssignment(index) => {
+                let conditional = body
+                    .conditional_assignments()
+                    .get(index)
+                    .and_then(|value| *value)?;
+                let base_origins = local_origins;
+                let mut joined_origins = [None; MAX_PARAMETERS];
+                let mut ambiguous = [false; MAX_PARAMETERS];
+                let mut outcome_count = 0usize;
+                let mut merge_outcome = |outcome: [Option<usize>; MAX_PARAMETERS]| -> Option<()> {
+                    if outcome_count == 0 {
+                        joined_origins = outcome;
+                    } else {
+                        for local_index in 0..local_count {
+                            if joined_origins[local_index] != outcome[local_index] {
+                                joined_origins[local_index] = None;
+                                ambiguous[local_index] = true;
+                            }
+                        }
+                    }
+                    outcome_count = outcome_count.checked_add(1)?;
+                    Some(())
+                };
+                for branch in conditional.branches().iter().flatten() {
+                    let mut branch_origins = base_origins;
+                    for action in branch.actions().iter().flatten() {
+                        let crate::ConditionalAssignmentAction::Assignment(assignment) = *action
+                        else {
+                            return None;
+                        };
+                        apply_assignment::<MAX_PARAMETERS, MAX_NODES>(
+                            target,
+                            assignment,
+                            &local_names,
+                            &mut branch_origins,
+                            &local_mutability,
+                            local_count,
+                        )?;
+                    }
+                    merge_outcome(branch_origins)?;
+                }
+                if conditional.else_action_count() == 0 {
+                    merge_outcome(base_origins)?;
+                } else {
+                    let mut else_origins = base_origins;
+                    for action in conditional.else_actions().iter().flatten() {
+                        let crate::ConditionalAssignmentAction::Assignment(assignment) = *action
+                        else {
+                            return None;
+                        };
+                        apply_assignment::<MAX_PARAMETERS, MAX_NODES>(
+                            target,
+                            assignment,
+                            &local_names,
+                            &mut else_origins,
+                            &local_mutability,
+                            local_count,
+                        )?;
+                    }
+                    merge_outcome(else_origins)?;
+                }
+                for local_index in 0..local_count {
+                    local_origins[local_index] = (!ambiguous[local_index])
+                        .then_some(joined_origins[local_index])
+                        .flatten();
+                }
             }
             crate::BodyStatement::Loop(index) => {
                 let loop_statement = body.while_loops().get(index).and_then(|value| *value)?;
@@ -14941,8 +15027,7 @@ fn runtime_reference_call_origin_parameter<const MAX_PARAMETERS: usize, const MA
                     }
                 }
             }
-            crate::BodyStatement::ConditionalAssignment(_)
-            | crate::BodyStatement::Expression(_) => return None,
+            crate::BodyStatement::Expression(_) => return None,
         }
     }
     if !body.tail_diverges && !body.tail_expression.is_empty() {
@@ -30575,6 +30660,28 @@ mod tests {
                         ),
                     })
                 }
+                ("branch_forward", 2) if MAX_PARAMETERS >= 2 => {
+                    parameters[0] = Some(RuntimeCallParameter {
+                        name: "value",
+                        ty: reference,
+                    });
+                    parameters[1] = Some(RuntimeCallParameter {
+                        name: "first",
+                        ty: ScalarType::Bool,
+                    });
+                    Some(RuntimeCallTarget {
+                        name: "branch_forward",
+                        parameters,
+                        parameter_count: 2,
+                        return_type: reference,
+                        return_type_name: "&mut u16",
+                        body_expression: concat!(
+                            "let mut alias: &mut u16 = value; ",
+                            "if first { alias = &mut *alias; } ",
+                            "else { alias = &mut *alias; } alias"
+                        ),
+                    })
+                }
                 ("touch", 1) => {
                     parameters[0] = Some(RuntimeCallParameter {
                         name: "value",
@@ -34530,6 +34637,7 @@ mod tests {
             "fn value(input: &mut u16) -> u16 { let returned: &mut u16 = forward(input); let competing: &mut u16 = &mut *input; *competing += 1; *returned }",
             "fn value(first: &mut u16, second: &mut u16) -> u16 { let mut returned: &mut u16 = second; returned = forward(first); let competing: &mut u16 = &mut *first; *competing += 1; *returned }",
             "fn value(input: &mut u16) -> u16 { let returned: &mut u16 = reassign_forward(input); let competing: &mut u16 = &mut *input; *competing += 1; *returned }",
+            "fn value(input: &mut u16, first: bool) -> u16 { let returned: &mut u16 = branch_forward(input, first); let competing: &mut u16 = &mut *input; *competing += 1; *returned }",
         ] {
             assert_eq!(
                 analyze(source).unwrap_err().kind,
@@ -34541,6 +34649,7 @@ mod tests {
             "fn value(input: &mut u16) -> u16 { let returned: &mut u16 = forward(input); *returned += 1; let restored: &mut u16 = &mut *input; *restored }",
             "fn value(first: &mut u16, second: &mut u16) -> u16 { let mut returned: &mut u16 = second; returned = forward(first); *returned += 1; let restored: &mut u16 = &mut *first; *restored }",
             "fn value(input: &mut u16) -> u16 { let returned: &mut u16 = reassign_forward(input); *returned += 1; let restored: &mut u16 = &mut *input; *restored }",
+            "fn value(input: &mut u16, first: bool) -> u16 { let returned: &mut u16 = branch_forward(input, first); *returned += 1; let restored: &mut u16 = &mut *input; *restored }",
         ] {
             analyze(source).unwrap();
         }
@@ -34558,6 +34667,46 @@ mod tests {
         assert_eq!(
             runtime_reference_call_origin_parameter::<2, 16>(reassign_forward),
             Some(0)
+        );
+        let branch_forward = MutableReferenceCallResolver
+            .resolve_runtime_call::<3>("branch_forward", 2)
+            .unwrap();
+        assert_eq!(
+            runtime_reference_call_origin_parameter::<3, 32>(branch_forward),
+            Some(0)
+        );
+        assert_eq!(
+            runtime_reference_call_origin_parameter::<3, 32>(RuntimeCallTarget {
+                body_expression: concat!(
+                    "let mut alias: &mut u16 = value; ",
+                    "if first { alias = &mut *alias; } alias"
+                ),
+                ..branch_forward
+            }),
+            Some(0)
+        );
+        let reference = branch_forward.parameters[0].unwrap().ty;
+        let mut ambiguous_parameters = branch_forward.parameters;
+        ambiguous_parameters[1] = Some(RuntimeCallParameter {
+            name: "alternate",
+            ty: reference,
+        });
+        ambiguous_parameters[2] = Some(RuntimeCallParameter {
+            name: "first",
+            ty: ScalarType::Bool,
+        });
+        assert_eq!(
+            runtime_reference_call_origin_parameter::<3, 32>(RuntimeCallTarget {
+                name: "ambiguous_branch_forward",
+                parameters: ambiguous_parameters,
+                parameter_count: 3,
+                body_expression: concat!(
+                    "let mut alias: &mut u16 = value; ",
+                    "if first { alias = value; } else { alias = alternate; } alias"
+                ),
+                ..branch_forward
+            }),
+            None
         );
         assert_eq!(
             runtime_reference_call_origin_parameter::<2, 16>(RuntimeCallTarget {
