@@ -21,19 +21,20 @@ use mrml_kernel::arch::x86_64::{Mapping, PRIVILEGE_STACK_ARENA_PAGES, PagePermis
 use mrml_kernel::verify_gpu_kernel_bundle;
 #[cfg(target_os = "windows")]
 use mrml_kernel::{
-    AdmittedApplicationGuestFactory, AffinityDeadlineVmBackend, ApplicationLaunch,
-    ApplicationMicrovmEndpoint, ArtifactKind, Capability, CapabilitySpace, CpuBudgetId,
-    CpuBudgetSpec, CpuBudgetTable, CpuRuntimeSlice, DeadlineVmBackend, GPU_DOORBELL_PORT,
-    GPU_QUEUE_MESSAGE_BYTES, GpuCommandRing, GpuQueueIdentity, GpuQueueReceiver,
+    ActiveMicrovmProjectionPlan, AdmittedApplicationGuestFactory, AffinityDeadlineVmBackend,
+    ApplicationLaunch, ApplicationMicrovmEndpoint, ArtifactKind, Capability, CapabilitySpace,
+    CpuBudgetId, CpuBudgetSpec, CpuBudgetTable, CpuRuntimeSlice, DeadlineVmBackend,
+    GPU_DOORBELL_PORT, GPU_QUEUE_MESSAGE_BYTES, GpuCommandRing, GpuQueueIdentity, GpuQueueReceiver,
     GpuResourceResponse, GpuResourceResponseSender, GpuSharedQueueLayout, GpuVmmQueueBridge,
     GuestMemory, HypercallRouter, InterruptPolicy, IsolationAdmissionTable,
-    IsolationApplicationBackend, IsolationMode, IsolationPlacement, IsolationUnavailableReason,
-    MAX_APPLICATION_IMAGE_BYTES, MAX_COMPONENT_IMAGE_REGIONS, MemoryPoolTable,
-    MicrovmPageProjectionKind, ObjectId, PAGE_SIZE, PreparedIsolationServiceRoute,
-    PreparedMicrovmApplicationBackend, ResourceCommand, Rights, SIGNED_ARTIFACT_OVERHEAD_BYTES,
-    ScheduledDeadlineVmBackend, ScheduledSmpVmBackend, SignedArtifact, TotalMicrovmClass,
-    TrustRoot, VIRTUAL_BLOCK_FEATURE_FLUSH, VcpuReservationId, VerifiedExecutable,
-    VerifiedGpuKernelBundle, VirtualBlockBackend, VirtualBlockBackendAuthority,
+    IsolationApplicationBackend, IsolationApplicationSpec, IsolationMode, IsolationPlacement,
+    IsolationUnavailableReason, MAX_APPLICATION_IMAGE_BYTES, MAX_COMPONENT_IMAGE_REGIONS,
+    MemoryPoolTable, MicrovmPageProjectionKind, MicrovmProjectionDescriptor, MicrovmProjectionKind,
+    MicrovmProjectionPlan, MicrovmProjectionRequirements, ObjectId, PAGE_SIZE,
+    PreparedIsolationServiceRoute, PreparedMicrovmApplicationBackend, ResourceCommand, Rights,
+    SIGNED_ARTIFACT_OVERHEAD_BYTES, ScheduledDeadlineVmBackend, ScheduledSmpVmBackend,
+    SignedArtifact, TotalMicrovmClass, TrustRoot, VIRTUAL_BLOCK_FEATURE_FLUSH, VcpuReservationId,
+    VerifiedExecutable, VerifiedGpuKernelBundle, VirtualBlockBackend, VirtualBlockBackendAuthority,
     VirtualBlockCompletionStatus, VirtualBlockConfigurationPage, VirtualBlockDevice,
     VirtualBlockDeviceState, VirtualBlockError, VirtualBlockMutationError,
     VirtualBlockPciAttachment, VirtualBlockPciAttachmentState, VirtualBlockPciCleanupMode,
@@ -45,12 +46,12 @@ use mrml_kernel::{
     VirtualPciConfigurationRouter, VirtualPciIdentity, VirtualPciIoOutcome, VirtualPciLocation,
     VirtualPciMemoryBar, VirtualPciMmioWindow, VirtualPciNativeResourceError,
     VirtualPciType0Function, VmBackend, VmDeadlineOutcome, VmExit, VmTable,
-    bind_component_service_handoff, bind_verified_application_image, component_image_page_plan,
-    prepare_microvm_guest_ram, release_component_image, release_microvm_guest_ram,
-    reserve_component_image, reserve_isolation_vcpus, reserve_microvm_guest_ram,
-    reserve_microvm_page_projection, route_isolation_application, run_pci_configuration_once,
-    run_pci_configuration_once_with_backend_mapper, run_virtual_block_mmio_transaction_once,
-    run_virtual_block_transaction_once,
+    admit_microvm_projection, bind_component_service_handoff, bind_verified_application_image,
+    component_image_page_plan, prepare_microvm_guest_ram, release_component_image,
+    release_microvm_guest_ram, reserve_component_image, reserve_isolation_vcpus,
+    reserve_microvm_guest_ram, reserve_microvm_page_projection, route_isolation_application,
+    run_pci_configuration_once, run_pci_configuration_once_with_backend_mapper,
+    run_virtual_block_mmio_transaction_once, run_virtual_block_transaction_once,
 };
 #[cfg(any(test, target_os = "windows"))]
 use mrml_kernel::{
@@ -79,6 +80,178 @@ type WhpConfigurationLauncher<'system> = PreparedMicrovmConfigurationLauncher<
 #[cfg(target_os = "windows")]
 type WhpApplicationLauncher<'system> =
     PreparedMicrovmApplicationBackend<AdmittedApplicationGuestFactory<PreparedWhpGuest<'system>>>;
+
+#[cfg(target_os = "windows")]
+struct WhpApplicationProjection {
+    prepared: Option<MicrovmProjectionPlan<1>>,
+    active: Option<ActiveMicrovmProjectionPlan<1>>,
+    memory: MemoryPoolTable<1, 1>,
+    cpu: CpuBudgetTable<1, 1>,
+    capabilities: CapabilitySpace<4>,
+    ram_capability: Capability,
+    cpu_capability: Capability,
+}
+
+#[cfg(target_os = "windows")]
+impl WhpApplicationProjection {
+    fn prepare(spec: IsolationApplicationSpec, guest_pages: u64) -> Result<Self> {
+        let mut capabilities = CapabilitySpace::<4>::new();
+        let mut memory = MemoryPoolTable::<1, 1>::new(0x7a50)
+            .map_err(|error| anyhow!("application RAM table failed: {:?}", error))?;
+        let (pool, pool_capability) = memory
+            .create_root(
+                guest_pages,
+                1,
+                0,
+                Rights::ALLOCATE
+                    .union(Rights::CONTROL)
+                    .union(Rights::INSPECT),
+                &mut capabilities,
+            )
+            .map_err(|error| anyhow!("application RAM pool failed: {:?}", error))?;
+        let (ram, ram_capability) = reserve_microvm_guest_ram(
+            &mut memory,
+            pool,
+            pool_capability,
+            guest_pages,
+            &mut capabilities,
+        )
+        .map_err(|error| anyhow!("application RAM reservation failed: {:?}", error))?;
+        let mut cpu = CpuBudgetTable::<1, 1>::new(0x7a51)
+            .map_err(|error| anyhow!("application CPU table failed: {:?}", error))?;
+        let budget_spec = CpuBudgetSpec::new(1, 100_000, 100_000, 0, 1)
+            .map_err(|error| anyhow!("application CPU budget failed: {:?}", error))?;
+        let (budget, cpu_capability) = cpu
+            .create_root(budget_spec, &mut capabilities)
+            .map_err(|error| anyhow!("application CPU root failed: {:?}", error))?;
+        let vcpus = cpu
+            .reserve_vcpus(budget, cpu_capability, spec.domain(), 1, &capabilities)
+            .map_err(|error| anyhow!("application vCPU reservation failed: {:?}", error))?;
+        let interface_object = ObjectId(0x4150_505f_4950_4301);
+        let interface_capability = capabilities
+            .insert(interface_object, Rights::SIGNAL)
+            .map_err(|error| anyhow!("application interface authority failed: {:?}", error))?;
+        let interface = MicrovmProjectionDescriptor::new(
+            MicrovmProjectionKind::InterfaceTransport,
+            interface_object,
+            1,
+            interface_capability,
+            Rights::SIGNAL,
+        )
+        .map_err(|error| anyhow!("application interface projection failed: {:?}", error))?;
+        let requirements = MicrovmProjectionRequirements::for_application(
+            spec,
+            guest_pages,
+            1,
+            &[MicrovmProjectionKind::InterfaceTransport],
+        )
+        .map_err(|error| anyhow!("application projection requirements failed: {:?}", error))?;
+        let prepared = admit_microvm_projection(
+            requirements,
+            ram,
+            ram_capability,
+            &memory,
+            vcpus,
+            cpu_capability,
+            &cpu,
+            [Some(interface)],
+            &capabilities,
+        )
+        .map_err(|failure| anyhow!("application projection admission failed: {:?}", failure))?;
+        Ok(Self {
+            prepared: Some(prepared),
+            active: None,
+            memory,
+            cpu,
+            capabilities,
+            ram_capability,
+            cpu_capability,
+        })
+    }
+
+    fn activate(&mut self) -> Result<()> {
+        let active = self
+            .prepared
+            .take()
+            .ok_or_else(|| anyhow!("application projection was already consumed"))?
+            .activate_data_plane()
+            .map_err(|error| anyhow!("application RAM activation failed: {:?}", error))?;
+        self.active = Some(active);
+        Ok(())
+    }
+
+    fn finish(&mut self) -> Result<()> {
+        let active = self
+            .active
+            .take()
+            .ok_or_else(|| anyhow!("application projection was not active"))?;
+        let (ram, vcpus, descriptors) = unsafe { active.retire() };
+        for descriptor in descriptors.into_iter().flatten() {
+            self.capabilities
+                .revoke(descriptor.capability())
+                .map_err(|error| anyhow!("application projection revoke failed: {:?}", error))?;
+        }
+        unsafe {
+            release_microvm_guest_ram(
+                &mut self.memory,
+                ram,
+                self.ram_capability,
+                &mut self.capabilities,
+            )
+        }
+        .map_err(|error| anyhow!("application RAM release failed: {:?}", error))?;
+        self.cpu
+            .release_vcpus(vcpus, self.cpu_capability, &self.capabilities)
+            .map_err(|error| anyhow!("application vCPU release failed: {:?}", error))?;
+        Ok(())
+    }
+}
+
+#[cfg(target_os = "windows")]
+fn total_application_spec(
+    package_id: &'static str,
+    executable: &VerifiedExecutable<'_>,
+) -> Result<IsolationApplicationSpec> {
+    let record = SystemGenerationDigestRecord {
+        package_id,
+        version: executable.artifact().version(),
+        artifact_digest: executable.artifact().digest(),
+    };
+    let mut generation_bytes = [0u8; 256];
+    let generation_length = encode_system_generation(1, &[record], &mut generation_bytes)
+        .map_err(|error| anyhow!("application SystemGeneration encoding failed: {:?}", error))?;
+    let generation = SystemGenerationView::decode(&generation_bytes[..generation_length])
+        .map_err(|error| anyhow!("application SystemGeneration decoding failed: {:?}", error))?;
+    let bound = bind_verified_application_image(package_id, generation, executable.artifact())
+        .map_err(|error| anyhow!("application generation binding failed: {:?}", error))?;
+    bound
+        .route_spec(
+            ObjectId(0x4150_505f_444f_4d),
+            ObjectId(0x4150_505f_5052_4f42),
+            1,
+            IsolationPlacement::Microvm,
+        )
+        .map_err(|error| anyhow!("application route specification failed: {:?}", error))
+}
+
+#[cfg(target_os = "windows")]
+fn application_guest_pages(
+    table_pages: u64,
+    kernel: &VerifiedExecutable<'_>,
+    handoff_bytes: usize,
+    application: ApplicationLaunch,
+    application_bundle_bytes: usize,
+) -> Result<u64> {
+    table_pages
+        .checked_add(accounted_pages(u64::from(kernel.image().image_size()))?)
+        .and_then(|pages| pages.checked_add(accounted_pages(handoff_bytes as u64).ok()?))
+        .and_then(|pages| pages.checked_add(PRIVILEGE_STACK_ARENA_PAGES))
+        .and_then(|pages| pages.checked_add(accounted_pages(application_bundle_bytes as u64).ok()?))
+        .and_then(|pages| pages.checked_add(application.image_pages()))
+        .and_then(|pages| pages.checked_add(application.stack_pages()))
+        .and_then(|pages| pages.checked_add(application.table_pages()))
+        .ok_or_else(|| anyhow!("application guest RAM commitment overflow"))
+}
 
 #[cfg(target_os = "windows")]
 const COMPONENT_MEMORY_OBJECTS: usize = 4 + 2 * (MAX_COMPONENT_IMAGE_REGIONS + 1);
@@ -476,6 +649,7 @@ enum WhpGuestOwner<'system> {
     Application {
         launcher: WhpApplicationLauncher<'system>,
         endpoint: ApplicationMicrovmEndpoint,
+        projection: WhpApplicationProjection,
     },
     Configuration {
         launcher: WhpConfigurationLauncher<'system>,
@@ -488,7 +662,9 @@ impl<'system> WhpGuestOwner<'system> {
     fn guest(&self) -> &PreparedWhpGuest<'system> {
         match self {
             Self::Direct(guest) => guest,
-            Self::Application { launcher, endpoint } => launcher
+            Self::Application {
+                launcher, endpoint, ..
+            } => launcher
                 .active_guest(*endpoint)
                 .expect("stored application endpoint must select its retained guest"),
             Self::Configuration { launcher, endpoint } => launcher
@@ -500,7 +676,9 @@ impl<'system> WhpGuestOwner<'system> {
     fn guest_mut(&mut self) -> &mut PreparedWhpGuest<'system> {
         match self {
             Self::Direct(guest) => guest,
-            Self::Application { launcher, endpoint } => launcher
+            Self::Application {
+                launcher, endpoint, ..
+            } => launcher
                 .active_guest_mut(*endpoint)
                 .expect("stored application endpoint must select its retained guest"),
             Self::Configuration { launcher, endpoint } => launcher
@@ -520,9 +698,16 @@ impl<'system> WhpGuestOwner<'system> {
 
     fn finish(mut self) -> Result<()> {
         match &mut self {
-            Self::Application { launcher, endpoint } => launcher
-                .revoke(endpoint)
-                .map_err(|error| anyhow!("WHP application teardown failed: {:?}", error))?,
+            Self::Application {
+                launcher,
+                endpoint,
+                projection,
+            } => {
+                launcher
+                    .revoke(endpoint)
+                    .map_err(|error| anyhow!("WHP application teardown failed: {:?}", error))?;
+                projection.finish()?;
+            }
             Self::Configuration { launcher, endpoint } => launcher
                 .revoke_microvm(endpoint)
                 .map_err(|error| anyhow!("WHP configuration teardown failed: {:?}", error))?,
@@ -2569,6 +2754,32 @@ fn application_main() -> Result<()> {
     } else {
         None
     };
+    let application_spec = match (application_package_id, application_executable.as_ref()) {
+        (Some(package_id), Some(application)) => {
+            Some(total_application_spec(package_id, application)?)
+        }
+        (None, None) => None,
+        _ => return Err(anyhow!("incomplete WHP application identity")),
+    };
+    let mut application_projection = match (
+        application_spec,
+        application_launch,
+        application_bundle.as_ref(),
+        application_executable.as_ref(),
+    ) {
+        (Some(spec), Some(application), Some(bundle), Some(_)) => {
+            let pages = application_guest_pages(
+                table_pages,
+                &executable,
+                handoff.as_slice().len(),
+                application,
+                bundle.len(),
+            )?;
+            Some(WhpApplicationProjection::prepare(spec, pages)?)
+        }
+        (None, None, None, None) => None,
+        _ => return Err(anyhow!("incomplete WHP application projection inputs")),
+    };
     let guest_preparation = if boot_mode || application_mode {
         system.prepare_boot_kernel(&executable, handoff.as_slice(), layout)
     } else if pci_configuration_mode {
@@ -2652,6 +2863,10 @@ fn application_main() -> Result<()> {
         guest = guest
             .attach_application_boot_resources(application, bundle, application_executable)
             .map_err(|error| anyhow!("application boot-resource attachment failed: {:?}", error))?;
+        application_projection
+            .as_mut()
+            .ok_or_else(|| anyhow!("missing admitted WHP application projection"))?
+            .activate()?;
     }
     let mut component_launch = if component_service_mode {
         let prepared = isolation_preparation
@@ -2917,40 +3132,12 @@ fn application_main() -> Result<()> {
     if let Some(launch) = component_launch.take() {
         isolation_preparation = Some(launch.into_route());
     }
-    let mut guest = if let Some(application_executable) = application_executable.as_ref() {
-        let package_id = application_package_id
-            .ok_or_else(|| anyhow!("missing WHP application package identity"))?;
-        let record = SystemGenerationDigestRecord {
-            package_id,
-            version: application_executable.artifact().version(),
-            artifact_digest: application_executable.artifact().digest(),
-        };
-        let mut generation_bytes = [0u8; 256];
-        let generation_length = encode_system_generation(1, &[record], &mut generation_bytes)
-            .map_err(|error| {
-                anyhow!("application SystemGeneration encoding failed: {:?}", error)
-            })?;
-        let generation = SystemGenerationView::decode(&generation_bytes[..generation_length])
-            .map_err(|error| {
-                anyhow!("application SystemGeneration decoding failed: {:?}", error)
-            })?;
-        let bound = bind_verified_application_image(
-            package_id,
-            generation,
-            application_executable.artifact(),
-        )
-        .map_err(|error| anyhow!("application generation binding failed: {:?}", error))?;
-        let spec = bound
-            .route_spec(
-                ObjectId(0x4150_505f_444f_4d),
-                ObjectId(0x4150_505f_5052_4f42),
-                1,
-                IsolationPlacement::Microvm,
-            )
-            .map_err(|error| anyhow!("application route specification failed: {:?}", error))?;
+    let mut guest = if application_executable.is_some() {
+        let spec = application_spec
+            .ok_or_else(|| anyhow!("missing WHP application route specification"))?;
         let mut admission = IsolationAdmissionTable::<1>::new(
             IsolationMode::TotalMicrovm,
-            generation.generation(),
+            spec.system_generation(),
             1,
         )
         .map_err(|error| anyhow!("application Total admission failed: {:?}", error))?;
@@ -2965,7 +3152,13 @@ fn application_main() -> Result<()> {
                 "application Total MicroVM admission was not satisfied"
             ));
         }
-        WhpGuestOwner::Application { launcher, endpoint }
+        WhpGuestOwner::Application {
+            launcher,
+            endpoint,
+            projection: application_projection
+                .take()
+                .ok_or_else(|| anyhow!("missing active WHP application projection"))?,
+        }
     } else if let (Some(admission), Some(prepared)) =
         (isolation_admission.as_mut(), isolation_preparation)
     {

@@ -221,6 +221,19 @@ pub struct MicrovmProjectionPlan<const N: usize> {
     descriptors: [Option<MicrovmProjectionDescriptor>; N],
 }
 
+/// Immutable authority retained while the admitted microVM data plane is live.
+///
+/// Control planes establish authority; data planes should take the shortest
+/// safe path. The descriptors in this state therefore identify only the exact
+/// objects and generations admitted before backend construction. Data-plane
+/// traffic cannot add descriptors or widen their rights.
+pub struct ActiveMicrovmProjectionPlan<const N: usize> {
+    requirements: MicrovmProjectionRequirements,
+    guest_ram: crate::ActiveMicrovmGuestRam,
+    vcpus: VcpuReservationId,
+    descriptors: [Option<MicrovmProjectionDescriptor>; N],
+}
+
 impl<const N: usize> MicrovmProjectionPlan<N> {
     pub const fn requirements(&self) -> MicrovmProjectionRequirements {
         self.requirements
@@ -250,6 +263,56 @@ impl<const N: usize> MicrovmProjectionPlan<N> {
         [Option<MicrovmProjectionDescriptor>; N],
     ) {
         (self.guest_ram, self.vcpus, self.descriptors)
+    }
+
+    /// Seals the control-plane plan after native guest construction and opens
+    /// its already-authorized data plane. No policy lookup occurs here and the
+    /// returned state cannot widen or replace a projected capability.
+    pub fn activate_data_plane(
+        mut self,
+    ) -> Result<ActiveMicrovmProjectionPlan<N>, MicrovmGuestRamError> {
+        let pages = self.guest_ram.remaining_pages();
+        self.guest_ram.consume_phase(pages)?;
+        Ok(ActiveMicrovmProjectionPlan {
+            requirements: self.requirements,
+            guest_ram: self.guest_ram.complete()?,
+            vcpus: self.vcpus,
+            descriptors: self.descriptors,
+        })
+    }
+}
+
+impl<const N: usize> ActiveMicrovmProjectionPlan<N> {
+    pub const fn requirements(&self) -> MicrovmProjectionRequirements {
+        self.requirements
+    }
+
+    pub const fn guest_ram(&self) -> &crate::ActiveMicrovmGuestRam {
+        &self.guest_ram
+    }
+
+    pub const fn vcpus(&self) -> VcpuReservationId {
+        self.vcpus
+    }
+
+    pub fn descriptors(&self) -> impl Iterator<Item = MicrovmProjectionDescriptor> + '_ {
+        self.descriptors.iter().flatten().copied()
+    }
+
+    /// Returns quantitative and projected authority only after the native guest
+    /// and every backend mapping/queue using them are confirmed destroyed.
+    pub unsafe fn retire(
+        self,
+    ) -> (
+        MicrovmGuestRam,
+        VcpuReservationId,
+        [Option<MicrovmProjectionDescriptor>; N],
+    ) {
+        (
+            unsafe { self.guest_ram.retire() },
+            self.vcpus,
+            self.descriptors,
+        )
     }
 }
 
@@ -503,7 +566,7 @@ mod tests {
                 MicrovmProjectionKind::VirtualGpu,
             ],
         );
-        let mut plan = admit_microvm_projection(
+        let plan = admit_microvm_projection(
             required,
             fixture.ram,
             fixture.ram_capability,
@@ -520,9 +583,10 @@ mod tests {
         assert_eq!(plan.guest_ram().total_pages(), 16);
         assert_eq!(plan.vcpus(), fixture.vcpus);
         assert_eq!(plan.descriptors().count(), 2);
-        plan.guest_ram_mut().consume_phase(16).unwrap();
-        let (ram, vcpus, descriptors) = plan.into_parts();
-        assert_eq!(ram.complete().unwrap().pages(), 16);
+        let active = plan.activate_data_plane().unwrap();
+        assert_eq!(active.guest_ram().pages(), 16);
+        let (ram, vcpus, descriptors) = unsafe { active.retire() };
+        assert_eq!(ram.pages(), 16);
         assert_eq!(vcpus, fixture.vcpus);
         assert_eq!(descriptors[1], Some(gpu));
     }

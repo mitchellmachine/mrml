@@ -153,9 +153,9 @@ pub use memory_resource::{
     MemoryPoolId, MemoryPoolTable, MemoryResourceError, MemoryRevocationSummary, MemoryUsage,
 };
 pub use microvm_projection::{
-    MicrovmProjectionDescriptor, MicrovmProjectionError, MicrovmProjectionFailure,
-    MicrovmProjectionIdentity, MicrovmProjectionKind, MicrovmProjectionPlan,
-    MicrovmProjectionRequirements, admit_microvm_projection,
+    ActiveMicrovmProjectionPlan, MicrovmProjectionDescriptor, MicrovmProjectionError,
+    MicrovmProjectionFailure, MicrovmProjectionIdentity, MicrovmProjectionKind,
+    MicrovmProjectionPlan, MicrovmProjectionRequirements, admit_microvm_projection,
 };
 pub use pe::{
     MAX_PE_IMAGE_BYTES, MAX_PE_RELOCATIONS, MAX_PE_SECTIONS, PeAllocatedRegion, PeAllocationError,
