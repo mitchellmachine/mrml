@@ -1096,6 +1096,19 @@ zero failures. The Linux command ran in Arch Linux under WSL. These tests cover
 the bounded type/admission contract; they are not WHP/KVM GUI execution,
 compositor, GOP, native GPU, recovery execution, or physical-display evidence.
 
+Recovery recognizes the surface contract only by exact interface identity
+`org.mrml.interface.gui.surface@1` and schema fingerprint
+`c58bc4d9f7bb0679dcca749301e4ded0289bb1a8ba206564ffab4df06a6e49d9`.
+The fixed request/state bytes, opaque handles, and response never reconstruct
+capabilities. After restart, the trusted registry must resolve every handle to
+the exact live object generation and authoritative buffer descriptor before the
+kernel adapter can admit the commit; stale, substituted, or absent objects fail
+closed. The checked-in generated Rust type is reproducible protocol evidence,
+not Rust ABI or recovered authority. On 2026-08-26 the interface package passed
+three tests on both Windows and Arch Linux/WSL, while the integrated kernel suite
+passed 535 tests on each host. No compositor, WHP/KVM GUI, or recovery execution
+was exercised.
+
 The focused recovery oracle now includes the two-vCPU component profiles
 `whp_component_service_smp_probe` and `kvm_component_service_smp_probe`. Each
 must use fresh signed kernel/package artifacts, the exact signed ZIM/Zstd

@@ -2141,10 +2141,20 @@ and consumes itself into an immutable data-plane binding, so buffer traffic
 cannot select a different surface, output, generation, or authority. The
 binding retains exact handles and fails revalidation after revocation or slot
 reuse without replaying placement policy. This is a
-host unit-tested kernel contract, not the stable application wire protocol,
+host unit-tested kernel contract, not a complete application wire path,
 trusted registry/compositor, dual-placement GUI application, GOP presentation,
 fence path, Semantic Scene Graph, WHP/KVM GUI parity, or physical display
 evidence. Those steps remain in the listed dependency order.
+
+**PARTIALLY IMPLEMENTED (step 1 surface slice):**
+`org.mrml.interface.gui.surface@1` now fixes a SHA3-256-fingerprinted
+`mrml-call-v1` commit envelope, canonical bounded surface-state record, explicit
+eight-rectangle damage ceiling, and typed response. A kernel adapter revalidates
+the source-level state, resolves opaque handles through a trusted object resolver,
+compares wire buffer metadata with the authoritative descriptor, and invokes the
+same capability admission. Windows and Arch Linux/WSL pass three interface tests
+and 535 kernel tests. Native IPC, microVM queue transport, the concrete registry,
+compositor, and representative dual-placement GUI application remain next.
 
 The graphics device may add VirtIO-GPU compatibility for guest display and 3D
 interoperability, with QEMU differential tests. It must preserve the existing

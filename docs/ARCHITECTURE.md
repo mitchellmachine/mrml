@@ -83,6 +83,11 @@ the short path does not detach lifecycle enforcement. This is
 **PARTIALLY IMPLEMENTED** type and unit-test evidence only; the trusted object
 registry, compositor service, stable surface wire protocol, application and
 microVM adapters, GOP presentation, and Semantic Scene Graph remain **PLANNED**.
+The stable wire-protocol portion is now **PARTIALLY IMPLEMENTED** as
+`org.mrml.interface.gui.surface@1`: a fingerprinted fixed commit/state/response
+codec feeds the same admission through a trusted handle resolver. The resolver,
+not interface bytes, supplies live capabilities and authoritative descriptors.
+Native IPC and microVM transports for these bytes remain **PLANNED**.
 
 Canonical packages, coherent `SystemRelease` graphs, immutable local
 `SystemGeneration` state, Store transport, system images, servicing, installation,

@@ -14,6 +14,15 @@ version-1 `mrml-call-v1` format, rejects noncanonical or unbounded definitions,
 computes a SHA3-256 ABI fingerprint, and deterministically emits pointer-free
 safe Rust request/error types. The canonical Zstd ABI-3 schema and generated
 binding live under `packages/interfaces/org.mrml.interface.compression.zstd/`.
+The same generator now owns the canonical generation-1
+`org.mrml.interface.gui.surface` identity and fingerprint. Its fixed commit
+envelope carries three opaque generational handles and one bounded borrowed
+state view; the checked-in adapter validates a canonical fixed state and
+response. Those handles identify candidates only: the kernel-side integration
+requires a trusted resolver to return exact live surface/output/buffer
+capabilities and authoritative descriptors before using the existing graphics
+admission path. The interface declares no capability transfer, and its metadata
+or bytes grant no authority.
 This does not implement native call lowering, executable mapping, a provider,
 consumer migration, or runtime interface resolution.
 

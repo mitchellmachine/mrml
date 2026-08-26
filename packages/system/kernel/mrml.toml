@@ -35,6 +35,12 @@ compile_name = "mrml-package-format"
 package = "org.mrml.library.package-format"
 scope = "compile"
 
+[[dependency]]
+alias = "mrml_interface_gui_surface_v1"
+compile_name = "mrml-interface-gui-surface-v1"
+package = "org.mrml.interface.gui.surface"
+scope = "compile"
+
 [[host_build]]
 targets = ["WINDOWS", "LINUX"]
 

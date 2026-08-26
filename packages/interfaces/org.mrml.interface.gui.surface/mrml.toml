@@ -1,0 +1,43 @@
+[manifest]
+format = "mrml"
+version = 2
+
+[package]
+default = false
+id = "org.mrml.interface.gui.surface"
+kind = "interface"
+name = "mrml-interface-gui-surface-v1"
+profile = "interface"
+
+[interface]
+abi = "mrml-call-v1"
+fingerprint = "c58bc4d9f7bb0679dcca749301e4ded0289bb1a8ba206564ffab4df06a6e49d9"
+generation = 1
+schema = "1.mri"
+
+[[target]]
+arch = "x86_64"
+environment = "windows"
+
+[[target]]
+arch = "x86_64"
+environment = "linux"
+
+[[target]]
+arch = "x86_64"
+environment = "mrml"
+
+[[artifact]]
+kind = "lib"
+name = "mrml_interface_gui_surface_v1"
+
+[rust]
+crate_name = "mrml_interface_gui_surface_v1"
+crate_type = "lib"
+source = "packages/interfaces/org.mrml.interface.gui.surface/src/lib.rs"
+
+[[host_build]]
+targets = ["WINDOWS", "LINUX"]
+
+[[host_test]]
+targets = ["WINDOWS", "LINUX"]

@@ -1,8 +1,10 @@
 use crate::{Capability, CapabilitySpace, ObjectId, Rights};
+use mrml_interface_gui_surface_v1 as surface_abi;
 
 pub const MAX_GRAPHICS_DIMENSION: u32 = 16_384;
 pub const MAX_GRAPHICS_BUFFER_BYTES: u64 = 1 << 30;
 pub const MAX_LOGICAL_COORDINATE: i32 = 1 << 20;
+pub const MAX_SURFACE_DAMAGE_RECTS: usize = 8;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum GraphicsProtocolError {
@@ -14,6 +16,28 @@ pub enum GraphicsProtocolError {
     InvalidDamage,
     InvalidCapability,
     WrongObject,
+    InterfaceRejected,
+}
+
+/// Trusted compositor-side lookup of generational interface handles.
+///
+/// Interface bytes identify candidate objects. Only this resolver supplies the
+/// live kernel capabilities and authoritative object generations/descriptors.
+pub trait SurfaceObjectResolver {
+    fn resolve_surface(
+        &mut self,
+        handle: surface_abi::OpaqueHandle,
+    ) -> Result<(Capability, SurfaceIdentity), GraphicsProtocolError>;
+
+    fn resolve_output(
+        &mut self,
+        handle: surface_abi::OpaqueHandle,
+    ) -> Result<(Capability, DisplayOutputIdentity), GraphicsProtocolError>;
+
+    fn resolve_buffer(
+        &mut self,
+        handle: surface_abi::OpaqueHandle,
+    ) -> Result<(Capability, GraphicsBufferDescriptor), GraphicsProtocolError>;
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -103,6 +127,13 @@ pub struct LogicalRect {
 }
 
 impl LogicalRect {
+    pub const EMPTY: Self = Self {
+        x: 0,
+        y: 0,
+        width: 0,
+        height: 0,
+    };
+
     pub const fn new(
         x: i32,
         y: i32,
@@ -167,6 +198,45 @@ impl LogicalRect {
             && other.y >= self.y
             && other_right <= self_right
             && other_bottom <= self_bottom
+    }
+
+    pub const fn is_empty(self) -> bool {
+        self.width == 0 || self.height == 0
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct SurfaceDamage {
+    count: u8,
+    rects: [LogicalRect; MAX_SURFACE_DAMAGE_RECTS],
+}
+
+impl SurfaceDamage {
+    pub const fn new(
+        count: u8,
+        rects: [LogicalRect; MAX_SURFACE_DAMAGE_RECTS],
+    ) -> Result<Self, GraphicsProtocolError> {
+        if count as usize > MAX_SURFACE_DAMAGE_RECTS {
+            return Err(GraphicsProtocolError::InvalidDamage);
+        }
+        let mut index = 0;
+        while index < MAX_SURFACE_DAMAGE_RECTS {
+            if (index < count as usize && rects[index].is_empty())
+                || (index >= count as usize && !rects[index].is_empty())
+            {
+                return Err(GraphicsProtocolError::InvalidDamage);
+            }
+            index += 1;
+        }
+        Ok(Self { count, rects })
+    }
+
+    pub const fn count(self) -> u8 {
+        self.count
+    }
+
+    pub const fn rects(self) -> [LogicalRect; MAX_SURFACE_DAMAGE_RECTS] {
+        self.rects
     }
 }
 
@@ -288,7 +358,7 @@ impl GraphicsBufferDescriptor {
 /// Capability validation happens once. Consuming this value establishes the
 /// shortest safe data-plane binding; buffer bytes still cannot confer surface,
 /// output, presentation, or configuration authority.
-pub struct AdmittedSurfaceCommit<const DAMAGE: usize> {
+pub struct AdmittedSurfaceCommit {
     surface_capability: Capability,
     output_capability: Capability,
     buffer_capability: Capability,
@@ -298,11 +368,11 @@ pub struct AdmittedSurfaceCommit<const DAMAGE: usize> {
     logical_bounds: LogicalRect,
     scale: LogicalScale,
     serial: u64,
-    damage: [LogicalRect; DAMAGE],
+    damage: SurfaceDamage,
 }
 
-impl<const DAMAGE: usize> AdmittedSurfaceCommit<DAMAGE> {
-    pub fn into_data_plane(self) -> SurfaceDataPlaneBinding<DAMAGE> {
+impl AdmittedSurfaceCommit {
+    pub fn into_data_plane(self) -> SurfaceDataPlaneBinding {
         SurfaceDataPlaneBinding {
             surface_capability: self.surface_capability,
             output_capability: self.output_capability,
@@ -319,7 +389,7 @@ impl<const DAMAGE: usize> AdmittedSurfaceCommit<DAMAGE> {
 }
 
 #[derive(Debug, Eq, PartialEq)]
-pub struct SurfaceDataPlaneBinding<const DAMAGE: usize> {
+pub struct SurfaceDataPlaneBinding {
     surface_capability: Capability,
     output_capability: Capability,
     buffer_capability: Capability,
@@ -329,10 +399,10 @@ pub struct SurfaceDataPlaneBinding<const DAMAGE: usize> {
     logical_bounds: LogicalRect,
     scale: LogicalScale,
     serial: u64,
-    damage: [LogicalRect; DAMAGE],
+    damage: SurfaceDamage,
 }
 
-impl<const DAMAGE: usize> SurfaceDataPlaneBinding<DAMAGE> {
+impl SurfaceDataPlaneBinding {
     pub const fn surface(&self) -> SurfaceIdentity {
         self.surface
     }
@@ -357,7 +427,7 @@ impl<const DAMAGE: usize> SurfaceDataPlaneBinding<DAMAGE> {
         self.serial
     }
 
-    pub const fn damage(&self) -> [LogicalRect; DAMAGE] {
+    pub const fn damage(&self) -> SurfaceDamage {
         self.damage
     }
 
@@ -387,8 +457,68 @@ impl<const DAMAGE: usize> SurfaceDataPlaneBinding<DAMAGE> {
     }
 }
 
+pub fn admit_surface_interface_commit<const CAPABILITIES: usize, R: SurfaceObjectResolver>(
+    capabilities: &CapabilitySpace<CAPABILITIES>,
+    resolver: &mut R,
+    envelope: surface_abi::CommitEnvelope,
+    state: surface_abi::SurfaceState,
+) -> Result<AdmittedSurfaceCommit, GraphicsProtocolError> {
+    // `SurfaceState` is source-level convenience, not a proof that bytes were
+    // decoded canonically. Re-encoding applies the complete generation-1
+    // interface validation before any resolver or capability-table access.
+    surface_abi::encode_surface_state(state)
+        .map_err(|_| GraphicsProtocolError::InterfaceRejected)?;
+
+    let (surface_capability, surface) = resolver.resolve_surface(envelope.surface)?;
+    let (output_capability, output) = resolver.resolve_output(envelope.output)?;
+    let (buffer_capability, buffer) = resolver.resolve_buffer(envelope.buffer)?;
+
+    let expected_format = match state.format {
+        surface_abi::SurfaceFormat::Bgra8Srgb => GraphicsFormat::Bgra8Srgb,
+        surface_abi::SurfaceFormat::Rgba8Srgb => GraphicsFormat::Rgba8Srgb,
+    };
+    if buffer.extent().width() != state.buffer_width
+        || buffer.extent().height() != state.buffer_height
+        || buffer.stride() != state.buffer_stride
+        || buffer.byte_length() != state.buffer_byte_length
+        || buffer.format() != expected_format
+    {
+        return Err(GraphicsProtocolError::InvalidBuffer);
+    }
+
+    let logical_bounds = LogicalRect::new(
+        state.logical_bounds.x,
+        state.logical_bounds.y,
+        state.logical_bounds.width,
+        state.logical_bounds.height,
+    )?;
+    let scale = LogicalScale::new(state.scale_numerator, state.scale_denominator)?;
+    let mut damage_rects = [LogicalRect::EMPTY; MAX_SURFACE_DAMAGE_RECTS];
+    for (target, source) in damage_rects
+        .iter_mut()
+        .zip(state.damage.iter())
+        .take(state.damage_count as usize)
+    {
+        *target = LogicalRect::new(source.x, source.y, source.width, source.height)?;
+    }
+    let damage = SurfaceDamage::new(state.damage_count as u8, damage_rects)?;
+    authorize_surface_commit(
+        capabilities,
+        surface_capability,
+        surface,
+        output_capability,
+        output,
+        buffer_capability,
+        buffer,
+        logical_bounds,
+        scale,
+        state.serial,
+        damage,
+    )
+}
+
 #[allow(clippy::too_many_arguments)]
-pub fn authorize_surface_commit<const CAPABILITIES: usize, const DAMAGE: usize>(
+pub fn authorize_surface_commit<const CAPABILITIES: usize>(
     capabilities: &CapabilitySpace<CAPABILITIES>,
     surface_capability: Capability,
     surface: SurfaceIdentity,
@@ -399,8 +529,8 @@ pub fn authorize_surface_commit<const CAPABILITIES: usize, const DAMAGE: usize>(
     logical_bounds: LogicalRect,
     scale: LogicalScale,
     serial: u64,
-    damage: [LogicalRect; DAMAGE],
-) -> Result<AdmittedSurfaceCommit<DAMAGE>, GraphicsProtocolError> {
+    damage: SurfaceDamage,
+) -> Result<AdmittedSurfaceCommit, GraphicsProtocolError> {
     if serial == 0 {
         return Err(GraphicsProtocolError::InvalidGeneration);
     }
@@ -419,8 +549,11 @@ pub fn authorize_surface_commit<const CAPABILITIES: usize, const DAMAGE: usize>(
     {
         return Err(GraphicsProtocolError::WrongObject);
     }
-    if damage.iter().any(|rect| !logical_bounds.contains(*rect)) {
-        return Err(GraphicsProtocolError::InvalidDamage);
+    let rects = damage.rects();
+    for rect in &rects[..damage.count() as usize] {
+        if !logical_bounds.contains(*rect) {
+            return Err(GraphicsProtocolError::InvalidDamage);
+        }
     }
     Ok(AdmittedSurfaceCommit {
         surface_capability,
@@ -439,6 +572,50 @@ pub fn authorize_surface_commit<const CAPABILITIES: usize, const DAMAGE: usize>(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    struct Resolver {
+        surface_handle: surface_abi::OpaqueHandle,
+        surface: (Capability, SurfaceIdentity),
+        output_handle: surface_abi::OpaqueHandle,
+        output: (Capability, DisplayOutputIdentity),
+        buffer_handle: surface_abi::OpaqueHandle,
+        buffer: (Capability, GraphicsBufferDescriptor),
+    }
+
+    impl SurfaceObjectResolver for Resolver {
+        fn resolve_surface(
+            &mut self,
+            handle: surface_abi::OpaqueHandle,
+        ) -> Result<(Capability, SurfaceIdentity), GraphicsProtocolError> {
+            (handle == self.surface_handle)
+                .then_some(self.surface)
+                .ok_or(GraphicsProtocolError::InvalidIdentity)
+        }
+
+        fn resolve_output(
+            &mut self,
+            handle: surface_abi::OpaqueHandle,
+        ) -> Result<(Capability, DisplayOutputIdentity), GraphicsProtocolError> {
+            (handle == self.output_handle)
+                .then_some(self.output)
+                .ok_or(GraphicsProtocolError::InvalidIdentity)
+        }
+
+        fn resolve_buffer(
+            &mut self,
+            handle: surface_abi::OpaqueHandle,
+        ) -> Result<(Capability, GraphicsBufferDescriptor), GraphicsProtocolError> {
+            (handle == self.buffer_handle)
+                .then_some(self.buffer)
+                .ok_or(GraphicsProtocolError::InvalidIdentity)
+        }
+    }
+
+    fn one_damage(rect: LogicalRect) -> SurfaceDamage {
+        let mut rects = [LogicalRect::EMPTY; MAX_SURFACE_DAMAGE_RECTS];
+        rects[0] = rect;
+        SurfaceDamage::new(1, rects).unwrap()
+    }
 
     fn fixture() -> (
         CapabilitySpace<4>,
@@ -507,7 +684,7 @@ mod tests {
         let (capabilities, surface_cap, surface, output_cap, output, buffer_cap, buffer) =
             fixture();
         let bounds = LogicalRect::new(10, 20, 800, 600).unwrap();
-        let damage = [LogicalRect::new(10, 20, 100, 50).unwrap()];
+        let damage = one_damage(LogicalRect::new(10, 20, 100, 50).unwrap());
         let admitted = authorize_surface_commit(
             &capabilities,
             surface_cap,
@@ -553,7 +730,7 @@ mod tests {
         let (mut capabilities, surface_cap, surface, output_cap, output, buffer_cap, buffer) =
             fixture();
         let bounds = LogicalRect::new(0, 0, 800, 600).unwrap();
-        let outside = [LogicalRect::new(799, 599, 2, 1).unwrap()];
+        let outside = one_damage(LogicalRect::new(799, 599, 2, 1).unwrap());
         assert!(matches!(
             authorize_surface_commit(
                 &capabilities,
@@ -581,7 +758,7 @@ mod tests {
             bounds,
             LogicalScale::new(1, 1).unwrap(),
             2,
-            [bounds],
+            one_damage(bounds),
         )
         .unwrap()
         .into_data_plane();
@@ -602,9 +779,86 @@ mod tests {
                 bounds,
                 LogicalScale::new(1, 1).unwrap(),
                 3,
-                [bounds],
+                one_damage(bounds),
             ),
             Err(GraphicsProtocolError::InvalidCapability)
+        ));
+    }
+
+    #[test]
+    fn stable_interface_handles_resolve_into_the_same_revocable_binding() {
+        let (capabilities, surface_cap, surface, output_cap, output, buffer_cap, buffer) =
+            fixture();
+        let surface_handle = surface_abi::OpaqueHandle::new(1, 4).unwrap();
+        let output_handle = surface_abi::OpaqueHandle::new(2, 8).unwrap();
+        let buffer_handle = surface_abi::OpaqueHandle::new(3, 12).unwrap();
+        let mut resolver = Resolver {
+            surface_handle,
+            surface: (surface_cap, surface),
+            output_handle,
+            output: (output_cap, output),
+            buffer_handle,
+            buffer: (buffer_cap, buffer),
+        };
+        let view = surface_abi::BorrowedReadView::within(
+            0,
+            surface_abi::SURFACE_STATE_BYTES as u64,
+            surface_abi::SURFACE_STATE_BYTES as u64,
+        )
+        .unwrap();
+        let request =
+            surface_abi::encode_commit_request(surface_handle, output_handle, buffer_handle, view)
+                .unwrap();
+        let envelope =
+            surface_abi::decode_commit_request(&request, surface_abi::SURFACE_STATE_BYTES as u64)
+                .unwrap();
+        let mut damage = [surface_abi::LogicalRect {
+            x: 0,
+            y: 0,
+            width: 0,
+            height: 0,
+        }; surface_abi::MAX_DAMAGE_RECTS];
+        damage[0] = surface_abi::LogicalRect {
+            x: 10,
+            y: 20,
+            width: 100,
+            height: 50,
+        };
+        let state = surface_abi::SurfaceState {
+            logical_bounds: surface_abi::LogicalRect {
+                x: 10,
+                y: 20,
+                width: 800,
+                height: 600,
+            },
+            scale_numerator: 1,
+            scale_denominator: 1,
+            buffer_width: 800,
+            buffer_height: 600,
+            buffer_stride: 3200,
+            buffer_byte_length: 1_920_000,
+            format: surface_abi::SurfaceFormat::Bgra8Srgb,
+            serial: 21,
+            damage_count: 1,
+            damage,
+        };
+        let canonical_state = surface_abi::encode_surface_state(state).unwrap();
+        let decoded_state = surface_abi::decode_surface_state(&canonical_state).unwrap();
+        let binding =
+            admit_surface_interface_commit(&capabilities, &mut resolver, envelope, decoded_state)
+                .unwrap()
+                .into_data_plane();
+        assert_eq!(binding.serial(), 21);
+        assert_eq!(binding.damage().count(), 1);
+        assert_eq!(binding.revalidate(&capabilities), Ok(()));
+
+        let substituted = surface_abi::CommitEnvelope {
+            buffer: surface_abi::OpaqueHandle::new(4, 12).unwrap(),
+            ..envelope
+        };
+        assert!(matches!(
+            admit_surface_interface_commit(&capabilities, &mut resolver, substituted, state),
+            Err(GraphicsProtocolError::InvalidIdentity)
         ));
     }
 }

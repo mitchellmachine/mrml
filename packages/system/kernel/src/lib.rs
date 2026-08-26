@@ -96,7 +96,8 @@ pub use grant::{DirectoryGrant, GrantError, GrantMode, MAX_HOST_PATH};
 pub use graphics::{
     AdmittedSurfaceCommit, DisplayOutputIdentity, GraphicsBufferDescriptor, GraphicsFormat,
     GraphicsProtocolError, LogicalRect, LogicalScale, PhysicalExtent, SurfaceDataPlaneBinding,
-    SurfaceIdentity, authorize_surface_commit,
+    SurfaceDamage, SurfaceIdentity, SurfaceObjectResolver, MAX_SURFACE_DAMAGE_RECTS,
+    admit_surface_interface_commit, authorize_surface_commit,
 };
 pub use handoff::{
     ApplicationLaunch, BootHandoff, HANDOFF_APPLICATION_BYTES, HANDOFF_HEADER_BYTES,

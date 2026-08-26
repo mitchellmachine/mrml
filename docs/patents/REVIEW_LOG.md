@@ -6090,3 +6090,20 @@ Broader compositor/surface-protocol implementation therefore remains subject to
 targeted review and design-around where necessary. This screening is not a legal
 opinion, clearance conclusion, or infringement determination and does not
 replace independent human dual review.
+
+# 2026-08-26 — Fixed generation-1 GUI surface interface
+
+**Result: TRIGGERED under the graphics-object/compositor review.** This bounded
+increment defines conventional fixed little-endian records for three opaque
+generational handles, one borrowed state view, complete logical/physical surface
+state, up to eight caller-supplied damage rectangles, and a typed response. Its
+adapter performs checked arithmetic, canonical reserved-byte validation, exact
+descriptor comparison, ordinary handle resolution, and existing capability
+admission. As an initial design-around, it transmits explicit complete state and
+treats damage only as bounded caller-supplied rectangles: it implements no
+damage-discovery, delta-compression, composition, occlusion, layout, scheduling,
+remote-display, synchronization, rendering, GPU, or presentation algorithm.
+Native IPC/microVM transport, trusted composition, and presentation remain
+unimplemented pending targeted worldwide claim-family and applicable grant
+review. No patent-clearance, non-infringement, or infringement conclusion is
+made, and independent human dual review remains required.

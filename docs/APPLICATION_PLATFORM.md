@@ -198,8 +198,10 @@ binding retains the exact capability handles and performs a bounded
 exact-object recheck before later mapping, copy, or presentation, so revocation
 and slot reuse still stop the short path without replaying placement policy. The
 trusted registry/compositor must supply the authoritative object generations;
-untrusted wire decoding and stale-generation lookup are not implemented by
-this bounded kernel type alone.
+the new generation-1 `org.mrml.interface.gui.surface` adapter resolves its
+opaque generational handles through that trusted boundary before calling the
+same admission path. Interface bytes and handles grant no capability. The
+actual persistent registry and compositor service remain unimplemented.
 
 Constitution review for this bounded foundation:
 
@@ -218,8 +220,17 @@ It reuses the existing capability space and fixed-capacity, checked `no_std`
 kernel style. Presentation policy and mutable desktop state remain outside the
 kernel; the future wire decoder and compositor are separate review gates.
 
-**PLANNED:** applications and application VMs submit those objects through an
-MRML surface protocol. They never render directly to GOP, the VGPU, a native
+**PARTIALLY IMPLEMENTED:** the canonical generation-1 surface interface has a
+SHA3-256-fingerprinted `mrml-call-v1` schema, fixed 112-byte commit envelope,
+fixed 200-byte canonical state, at most eight explicit damage rectangles, and a
+16-byte response. It bounds and canonicalizes handles, borrowed-memory extent,
+logical/physical geometry, rational scale, buffer layout, format, serial, damage,
+reserved bytes, status, and response serial. Native IPC and microVM transports
+will carry these identical bytes; neither transport exists for this interface
+yet, and Rust's ABI is not the contract.
+
+**PLANNED:** applications and application VMs submit those protocol objects to
+the trusted compositor. They never render directly to GOP, the VGPU, a native
 physical GPU, or scanout during normal desktop operation. The trusted compositor
 owns final presentation through a backend-neutral render/display interface with
 GOP initially, VGPU acceleration later, and native GPU backends after that.

@@ -327,7 +327,12 @@ implemented as `mrml interface generate-rust SCHEMA OUTPUT`. It bounds input at
 64 KiB, exclusively creates output, accepts only the explicit version-1 policy
 profile, computes a SHA3-256 fingerprint, and emits deterministic pointer-free
 Rust types. The Zstd ABI-3 schema and checked-in generated output are the first
-golden fixture. Native call lowering, conformance execution, ABI diffs, and
+golden fixture. The generation-1 GUI surface schema is now a second checked-in
+fixture. Its fingerprinted fixed request/state/response codec is a separate
+interface package and the kernel policy-model crate consumes it statically for
+bounded admission tests. That compile edge is not a dynamic provider binding,
+Rust ABI promise, compositor execution, or runtime capability grant. Native
+call lowering, conformance execution, ABI diffs, and
 `mrml-rustc` emission remain **PLANNED**. A bounded hosted ABI-3 byte-call
 adapter exercises the generated request/response contract for Zstd and ZIM,
 but is not native loader dispatch; neither Rust's native ABI nor a package name
