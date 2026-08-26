@@ -57,8 +57,12 @@ block-count, and overflow validation. A maximum-4096-byte, single-instance UEFI
 device path is structurally validated through its exact end node and hashed with
 an MRML domain separator into the opaque boot-scoped stable identifier;
 firmware `MediaId` maps injectively to a nonzero media generation. This creates
-non-authorizing descriptor input only. Protocol discovery/opening, device-path
-buffer acquisition, actual reads, multi-device enumeration, persistence across
+non-authorizing descriptor input only. The loaded-image source now opens the
+exact device handle's Block I/O and Device Path protocols with UEFI
+`GET_PROTOCOL`, copies all inputs into caller-owned bounded memory, and closes
+both relationships before returning. Failure to open the second protocol cleans
+up the first; both closes are attempted and any close failure rejects discovery.
+Actual loader integration, reads, multi-device enumeration, persistence across
 boots, and physical firmware evidence remain **PLANNED**.
 
 The `mrml` frontend may expose structured `disk`, `filesystem`, `optical`, and

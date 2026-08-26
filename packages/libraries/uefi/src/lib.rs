@@ -263,6 +263,9 @@ pub type LocateProtocol =
     unsafe extern "efiapi" fn(*const Guid, *mut c_void, *mut *mut c_void) -> Status;
 pub type HandleProtocol =
     unsafe extern "efiapi" fn(Handle, *const Guid, *mut *mut c_void) -> Status;
+pub type OpenProtocol =
+    unsafe extern "efiapi" fn(Handle, *const Guid, *mut *mut c_void, Handle, Handle, u32) -> Status;
+pub type CloseProtocol = unsafe extern "efiapi" fn(Handle, *const Guid, Handle, Handle) -> Status;
 pub type AllocatePages = unsafe extern "efiapi" fn(u32, u32, usize, *mut u64) -> Status;
 pub type FreePages = unsafe extern "efiapi" fn(u64, usize) -> Status;
 pub type Tcg2HashLogExtendEvent =
@@ -310,6 +313,11 @@ const DEVICE_PATH_HEADER_BYTES: usize = 4;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum UefiBlockDescriptorError {
+    MissingImageHandle,
+    MissingDeviceHandle,
+    OpenBlockIo(Status),
+    OpenDevicePath(Status),
+    CloseProtocol(Status),
     MissingMedia,
     MediaAbsent,
     NonCanonicalBoolean,
@@ -321,6 +329,8 @@ pub enum UefiBlockDescriptorError {
     UnsupportedDevicePathInstance,
     MissingDevicePathEnd,
 }
+
+pub const OPEN_PROTOCOL_GET_PROTOCOL: u32 = 0x0000_0002;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct UefiBlockMediaSnapshot {
@@ -431,6 +441,162 @@ pub fn uefi_platform_block_descriptor(
     Ok(PlatformBlockDeviceDescriptor::new(block, identity))
 }
 
+/// Opens the exact loaded-image device's Block I/O and Device Path protocols,
+/// copies all descriptor input into caller-owned bounded memory, then closes
+/// both firmware protocol relationships before returning. The returned value
+/// identifies geometry/generation but grants no persistent firmware or block
+/// authority.
+///
+/// # Safety
+///
+/// `services` must be the live boot-services table for `image`; `loaded` must
+/// remain valid; successful protocol opens must return valid protocol pointers;
+/// and the returned device-path protocol must remain readable through its end
+/// node (bounded by `MAX_UEFI_DEVICE_PATH_BYTES`) until it is closed here.
+pub unsafe fn discover_loaded_image_block_descriptor(
+    services: &BootServices,
+    image: Handle,
+    loaded: &LoadedImageProtocol,
+    id: BlockDeviceId,
+    device_path_scratch: &mut [u8; MAX_UEFI_DEVICE_PATH_BYTES],
+) -> Result<PlatformBlockDeviceDescriptor, UefiBlockDescriptorError> {
+    if image.is_null() {
+        return Err(UefiBlockDescriptorError::MissingImageHandle);
+    }
+    let device = loaded.device_handle;
+    if device.is_null() {
+        return Err(UefiBlockDescriptorError::MissingDeviceHandle);
+    }
+
+    let mut block_pointer = core::ptr::null_mut();
+    let status = unsafe {
+        (services.open_protocol)(
+            device,
+            &BLOCK_IO_PROTOCOL_GUID,
+            &mut block_pointer,
+            image,
+            core::ptr::null_mut(),
+            OPEN_PROTOCOL_GET_PROTOCOL,
+        )
+    };
+    if status != SUCCESS {
+        return Err(UefiBlockDescriptorError::OpenBlockIo(status));
+    }
+
+    let mut path_pointer = core::ptr::null_mut();
+    let path_status = unsafe {
+        (services.open_protocol)(
+            device,
+            &DEVICE_PATH_PROTOCOL_GUID,
+            &mut path_pointer,
+            image,
+            core::ptr::null_mut(),
+            OPEN_PROTOCOL_GET_PROTOCOL,
+        )
+    };
+    if path_status != SUCCESS {
+        let close_status = unsafe {
+            (services.close_protocol)(
+                device,
+                &BLOCK_IO_PROTOCOL_GUID,
+                image,
+                core::ptr::null_mut(),
+            )
+        };
+        return if close_status == SUCCESS {
+            Err(UefiBlockDescriptorError::OpenDevicePath(path_status))
+        } else {
+            Err(UefiBlockDescriptorError::CloseProtocol(close_status))
+        };
+    }
+
+    let discovered = unsafe {
+        opened_uefi_block_descriptor(
+            block_pointer.cast::<BlockIoProtocol>(),
+            path_pointer.cast_const().cast::<u8>(),
+            id,
+            device_path_scratch,
+        )
+    };
+    let path_close = unsafe {
+        (services.close_protocol)(
+            device,
+            &DEVICE_PATH_PROTOCOL_GUID,
+            image,
+            core::ptr::null_mut(),
+        )
+    };
+    let block_close = unsafe {
+        (services.close_protocol)(
+            device,
+            &BLOCK_IO_PROTOCOL_GUID,
+            image,
+            core::ptr::null_mut(),
+        )
+    };
+    if path_close != SUCCESS {
+        return Err(UefiBlockDescriptorError::CloseProtocol(path_close));
+    }
+    if block_close != SUCCESS {
+        return Err(UefiBlockDescriptorError::CloseProtocol(block_close));
+    }
+    discovered
+}
+
+unsafe fn opened_uefi_block_descriptor(
+    block: *mut BlockIoProtocol,
+    device_path: *const u8,
+    id: BlockDeviceId,
+    scratch: &mut [u8; MAX_UEFI_DEVICE_PATH_BYTES],
+) -> Result<PlatformBlockDeviceDescriptor, UefiBlockDescriptorError> {
+    let block = unsafe { block.as_ref() }.ok_or(UefiBlockDescriptorError::MissingMedia)?;
+    let media = unsafe { snapshot_uefi_block_media(block) }?;
+    let path_length = unsafe { copy_single_device_path(device_path, scratch) }?;
+    uefi_platform_block_descriptor(id, media, &scratch[..path_length])
+}
+
+unsafe fn copy_single_device_path(
+    path: *const u8,
+    output: &mut [u8; MAX_UEFI_DEVICE_PATH_BYTES],
+) -> Result<usize, UefiBlockDescriptorError> {
+    if path.is_null() {
+        return Err(UefiBlockDescriptorError::TruncatedDevicePath);
+    }
+    let mut offset = 0usize;
+    loop {
+        let header_end = offset
+            .checked_add(DEVICE_PATH_HEADER_BYTES)
+            .filter(|end| *end <= output.len())
+            .ok_or(UefiBlockDescriptorError::DevicePathTooLong)?;
+        let header = unsafe { core::slice::from_raw_parts(path.add(offset), 4) };
+        let length = usize::from(u16::from_le_bytes([header[2], header[3]]));
+        if length < DEVICE_PATH_HEADER_BYTES {
+            return Err(UefiBlockDescriptorError::InvalidDevicePathNode);
+        }
+        let next = offset
+            .checked_add(length)
+            .filter(|next| *next <= output.len())
+            .ok_or(UefiBlockDescriptorError::DevicePathTooLong)?;
+        unsafe {
+            core::ptr::copy_nonoverlapping(
+                path.add(offset),
+                output.as_mut_ptr().add(offset),
+                length,
+            )
+        };
+        if header[0] == DEVICE_PATH_END_TYPE {
+            if header[1] != DEVICE_PATH_END_ENTIRE_SUBTYPE {
+                return Err(UefiBlockDescriptorError::UnsupportedDevicePathInstance);
+            }
+            if next != header_end || length != DEVICE_PATH_HEADER_BYTES {
+                return Err(UefiBlockDescriptorError::InvalidDevicePathNode);
+            }
+            return Ok(next);
+        }
+        offset = next;
+    }
+}
+
 fn validate_single_device_path(path: &[u8]) -> Result<(), UefiBlockDescriptorError> {
     if path.len() > MAX_UEFI_DEVICE_PATH_BYTES {
         return Err(UefiBlockDescriptorError::DevicePathTooLong);
@@ -524,8 +690,8 @@ pub struct BootServices {
     pub set_watchdog_timer: usize,
     pub connect_controller: usize,
     pub disconnect_controller: usize,
-    pub open_protocol: usize,
-    pub close_protocol: usize,
+    pub open_protocol: OpenProtocol,
+    pub close_protocol: CloseProtocol,
     pub open_protocol_information: usize,
     pub protocols_per_handle: usize,
     pub locate_handle_buffer: usize,
@@ -1068,6 +1234,136 @@ fn hex(byte: u8) -> Option<u8> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use core::sync::atomic::{AtomicPtr, AtomicUsize, Ordering};
+
+    static MOCK_BLOCK_PROTOCOL: AtomicPtr<c_void> = AtomicPtr::new(core::ptr::null_mut());
+    static MOCK_DEVICE_PATH: AtomicPtr<c_void> = AtomicPtr::new(core::ptr::null_mut());
+    static MOCK_CLOSE_STATUS: AtomicUsize = AtomicUsize::new(SUCCESS);
+    static MOCK_CLOSE_CALLS: AtomicUsize = AtomicUsize::new(0);
+
+    unsafe extern "efiapi" fn mock_get_memory_map(
+        _: *mut usize,
+        _: *mut MemoryDescriptor,
+        _: *mut usize,
+        _: *mut usize,
+        _: *mut u32,
+    ) -> Status {
+        NOT_FOUND
+    }
+
+    unsafe extern "efiapi" fn mock_exit_boot_services(_: Handle, _: usize) -> Status {
+        NOT_FOUND
+    }
+
+    unsafe extern "efiapi" fn mock_handle_protocol(
+        _: Handle,
+        _: *const Guid,
+        _: *mut *mut c_void,
+    ) -> Status {
+        NOT_FOUND
+    }
+
+    unsafe extern "efiapi" fn mock_allocate_pages(_: u32, _: u32, _: usize, _: *mut u64) -> Status {
+        NOT_FOUND
+    }
+
+    unsafe extern "efiapi" fn mock_free_pages(_: u64, _: usize) -> Status {
+        NOT_FOUND
+    }
+
+    unsafe extern "efiapi" fn mock_locate_protocol(
+        _: *const Guid,
+        _: *mut c_void,
+        _: *mut *mut c_void,
+    ) -> Status {
+        NOT_FOUND
+    }
+
+    unsafe extern "efiapi" fn mock_open_protocol(
+        _: Handle,
+        guid: *const Guid,
+        interface: *mut *mut c_void,
+        _: Handle,
+        _: Handle,
+        attributes: u32,
+    ) -> Status {
+        if guid.is_null() || interface.is_null() || attributes != OPEN_PROTOCOL_GET_PROTOCOL {
+            return LOAD_ERROR;
+        }
+        let guid = unsafe { &*guid };
+        let pointer = if guid.equals(&BLOCK_IO_PROTOCOL_GUID) {
+            MOCK_BLOCK_PROTOCOL.load(Ordering::SeqCst)
+        } else if guid.equals(&DEVICE_PATH_PROTOCOL_GUID) {
+            MOCK_DEVICE_PATH.load(Ordering::SeqCst)
+        } else {
+            return NOT_FOUND;
+        };
+        if pointer.is_null() {
+            return NOT_FOUND;
+        }
+        unsafe { *interface = pointer };
+        SUCCESS
+    }
+
+    unsafe extern "efiapi" fn mock_close_protocol(
+        _: Handle,
+        _: *const Guid,
+        _: Handle,
+        _: Handle,
+    ) -> Status {
+        MOCK_CLOSE_CALLS.fetch_add(1, Ordering::SeqCst);
+        MOCK_CLOSE_STATUS.load(Ordering::SeqCst)
+    }
+
+    fn mock_boot_services() -> BootServices {
+        BootServices {
+            header: TableHeader {
+                signature: 0,
+                revision: 0,
+                header_size: 0,
+                crc32: 0,
+                reserved: 0,
+            },
+            raise_tpl: 0,
+            restore_tpl: 0,
+            allocate_pages: mock_allocate_pages,
+            free_pages: mock_free_pages,
+            get_memory_map: mock_get_memory_map,
+            allocate_pool: 0,
+            free_pool: 0,
+            create_event: 0,
+            set_timer: 0,
+            wait_for_event: 0,
+            signal_event: 0,
+            close_event: 0,
+            check_event: 0,
+            install_protocol_interface: 0,
+            reinstall_protocol_interface: 0,
+            uninstall_protocol_interface: 0,
+            handle_protocol: mock_handle_protocol,
+            reserved: 0,
+            register_protocol_notify: 0,
+            locate_handle: 0,
+            locate_device_path: 0,
+            install_configuration_table: 0,
+            load_image: 0,
+            start_image: 0,
+            exit: 0,
+            unload_image: 0,
+            exit_boot_services: mock_exit_boot_services,
+            get_next_monotonic_count: 0,
+            stall: 0,
+            set_watchdog_timer: 0,
+            connect_controller: 0,
+            disconnect_controller: 0,
+            open_protocol: mock_open_protocol,
+            close_protocol: mock_close_protocol,
+            open_protocol_information: 0,
+            protocols_per_handle: 0,
+            locate_handle_buffer: 0,
+            locate_protocol: mock_locate_protocol,
+        }
+    }
 
     unsafe extern "efiapi" fn block_reset(_: *mut BlockIoProtocol, _: u8) -> Status {
         SUCCESS
@@ -1409,6 +1705,75 @@ mod tests {
             uefi_platform_block_descriptor(id, snapshot, &[1, 1, 4, 0]),
             Err(UefiBlockDescriptorError::MissingDevicePathEnd)
         );
+    }
+
+    #[test]
+    fn loaded_image_protocol_acquisition_closes_every_open_relationship() {
+        let mut media = valid_block_media();
+        media.media_id = 9;
+        let mut block = block_protocol(&mut media);
+        let mut path = [1u8, 1, 8, 0, 0xaa, 0xbb, 0xcc, 0xdd, 0x7f, 0xff, 4, 0];
+        MOCK_BLOCK_PROTOCOL.store(
+            (&mut block as *mut BlockIoProtocol).cast(),
+            Ordering::SeqCst,
+        );
+        MOCK_DEVICE_PATH.store(path.as_mut_ptr().cast(), Ordering::SeqCst);
+        MOCK_CLOSE_STATUS.store(SUCCESS, Ordering::SeqCst);
+        MOCK_CLOSE_CALLS.store(0, Ordering::SeqCst);
+        let services = mock_boot_services();
+        let image = core::ptr::without_provenance_mut::<c_void>(1);
+        let device = core::ptr::without_provenance_mut::<c_void>(2);
+        let mut loaded = loaded_image(core::ptr::null_mut(), 0);
+        loaded.device_handle = device;
+        let mut scratch = [0u8; MAX_UEFI_DEVICE_PATH_BYTES];
+        let descriptor = unsafe {
+            discover_loaded_image_block_descriptor(
+                &services,
+                image,
+                &loaded,
+                BlockDeviceId::new(7).unwrap(),
+                &mut scratch,
+            )
+        }
+        .unwrap();
+        assert_eq!(descriptor.identity().media_generation(), 10);
+        assert_eq!(MOCK_CLOSE_CALLS.load(Ordering::SeqCst), 2);
+
+        MOCK_DEVICE_PATH.store(core::ptr::null_mut(), Ordering::SeqCst);
+        MOCK_CLOSE_CALLS.store(0, Ordering::SeqCst);
+        assert_eq!(
+            unsafe {
+                discover_loaded_image_block_descriptor(
+                    &services,
+                    image,
+                    &loaded,
+                    BlockDeviceId::new(7).unwrap(),
+                    &mut scratch,
+                )
+            },
+            Err(UefiBlockDescriptorError::OpenDevicePath(NOT_FOUND))
+        );
+        assert_eq!(MOCK_CLOSE_CALLS.load(Ordering::SeqCst), 1);
+
+        MOCK_DEVICE_PATH.store(path.as_mut_ptr().cast(), Ordering::SeqCst);
+        MOCK_CLOSE_STATUS.store(LOAD_ERROR, Ordering::SeqCst);
+        MOCK_CLOSE_CALLS.store(0, Ordering::SeqCst);
+        assert_eq!(
+            unsafe {
+                discover_loaded_image_block_descriptor(
+                    &services,
+                    image,
+                    &loaded,
+                    BlockDeviceId::new(7).unwrap(),
+                    &mut scratch,
+                )
+            },
+            Err(UefiBlockDescriptorError::CloseProtocol(LOAD_ERROR))
+        );
+        assert_eq!(MOCK_CLOSE_CALLS.load(Ordering::SeqCst), 2);
+        MOCK_CLOSE_STATUS.store(SUCCESS, Ordering::SeqCst);
+        MOCK_BLOCK_PROTOCOL.store(core::ptr::null_mut(), Ordering::SeqCst);
+        MOCK_DEVICE_PATH.store(core::ptr::null_mut(), Ordering::SeqCst);
     }
 
     #[test]

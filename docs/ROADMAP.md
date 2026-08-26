@@ -58,9 +58,12 @@ IMPLEMENTED**. The shared UEFI library defines ABI-checked Block I/O protocol
 and media layouts, validates a bounded media snapshot and canonical
 single-instance device path, and derives a domain-separated boot-scoped stable
 identity with an injective nonzero generation for every firmware `MediaId`.
-Windows and Arch Linux each pass 29 focused tests and cross-build the UEFI
-target. Firmware protocol discovery/opening and installed early-boot ownership
-transfer remain next; no OVMF or physical firmware was exercised.
+The loaded-image source now opens both protocols on the exact firmware device
+handle, copies bounded state, closes both relationships, and rejects partial
+open or uncertain close. Windows and Arch Linux each pass 30 focused tests and
+cross-build the UEFI target. Calling this source from the real loader and
+transferring installed early-boot ownership remain next; no OVMF or physical
+firmware was exercised.
 
 Installed recovery ownership now crosses the Total-admission boundary in the
 controlled backend-parity path. `RecoveredInstalledTotalAdmission` retains the

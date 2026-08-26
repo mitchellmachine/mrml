@@ -1154,11 +1154,13 @@ The shared UEFI library now **PARTIALLY IMPLEMENTS** the preceding firmware
 descriptor boundary: it snapshots an ABI-checked Block I/O media record,
 rejects absent/noncanonical/overflowing geometry, validates one bounded complete
 device path, and derives a domain-separated boot-scoped identity plus exact
-firmware media generation. Windows and Arch Linux each pass 29 UEFI-library
-tests, and both hosts cross-build the UEFI target. No firmware handle was
-enumerated or opened and no block was read, so installed-device discovery,
-durable identity, OVMF, EFI Shell, and physical-firmware recovery remain
-**PLANNED**.
+firmware media generation. The source now opens both protocols on the loaded
+image's exact device handle, copies the bounded state, and closes both before
+returning; partial-open cleanup and close uncertainty fail closed. Windows and
+Arch Linux each pass 30 UEFI-library tests, and both hosts cross-build the UEFI
+target. The real loader has not invoked this source and no block was read, so
+installed-device discovery, durable identity, OVMF, EFI Shell, and physical-
+firmware recovery remain **PLANNED**.
 
 The recovered installed selection is now retained across the boot-policy to
 Total-admission boundary. `RecoveredInstalledTotalAdmission` binds its exact

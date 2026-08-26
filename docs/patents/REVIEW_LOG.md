@@ -1,5 +1,16 @@
 # Patent review log
 
+## 2026-08-26 — Exact UEFI loaded-device protocol acquisition
+
+Patent review: **NOT_TRIGGERED** for this firmware-lifecycle integration. It
+uses the published UEFI `OpenProtocol(GET_PROTOCOL)` and `CloseProtocol`
+relationships, caller-owned bounded copying, conventional all-path cleanup, and
+the already reviewed descriptor validation. It adds no discovery algorithm,
+driver or block scheduling, storage layout, cryptography, placement heuristic,
+native fallback, queue/DMA mechanism, or hardware isolation method. Broader
+storage/device, firmware, adaptive-isolation, and Total-MicroVM reviews remain
+`TRIGGERED`; no patent-clearance or non-infringement conclusion is made.
+
 ## 2026-08-26 — Bounded UEFI Block I/O descriptor source
 
 Patent review: **NOT_TRIGGERED** for this firmware-parsing increment. It models
