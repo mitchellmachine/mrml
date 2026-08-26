@@ -56,9 +56,9 @@ On 2026-08-26, an independently authored Rust 2024 probe against this exact
 oracle compiled `naked_asm!("ud2")`, `options(raw)`, and
 `options(att_syntax)` with `rustc --edition 2024 --emit metadata`. A separate
 probe invocation rejected `noreturn`, `nomem`, `nostack`, `preserves_flags`,
-and `pure` as options that cannot be used with `naked_asm!`. MRML currently
-admits only `raw` because its restricted Intel-syntax encoder does not yet
-implement AT&T operand syntax; unsupported options fail closed. These are
+and `pure` as options that cannot be used with `naked_asm!`. MRML admits `raw`
+and implements a distinct bounded AT&T operand grammar when `att_syntax` is
+selected; unsupported options fail closed. These are
 black-box syntax/validation observations, not copied upstream source or tests,
 and do not establish general inline-assembly compatibility.
 

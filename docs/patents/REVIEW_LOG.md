@@ -5832,3 +5832,26 @@ or code-generation algorithm. External symbols and object relocations remain
 absent. Broader assembly support and compiler completion remain partial; this
 technical screen does not establish clearance or infringement and does not
 replace independent human dual review.
+
+# 2026-08-26 — Naked raw-option validation
+
+**Result: NOT_TRIGGERED after the option-validation review.** This increment
+recognizes one conventional trailing `options(raw)` marker already accepted by
+the exact dated Rust oracle and rejects all other option syntax before machine
+code emission. It introduces no assembly transformation, optimization,
+instruction-selection, relocation, or code-generation algorithm. General inline
+assembly remains absent. Broader assembly support and compiler
+completion remain partial; this technical screen does not establish clearance
+or infringement and does not replace independent human dual review.
+
+# 2026-08-26 — Bounded naked AT&T operand syntax
+
+**Result: NOT_TRIGGERED after the syntax-translation review.** This increment
+parses the conventional published AT&T spelling of the already supported
+x86-64 instruction subset and feeds the same reviewed register, immediate,
+memory-address, and opcode encoders. Parenthesis-aware operand splitting and
+fixed-capacity validation introduce no novel assembler, optimization,
+instruction-selection, relocation, or code-generation algorithm. Broader
+assembly support and compiler completion remain partial; this technical screen
+does not establish clearance or infringement and does not replace independent
+human dual review.

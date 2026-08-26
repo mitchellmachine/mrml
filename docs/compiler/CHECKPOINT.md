@@ -1418,13 +1418,14 @@ The bounded two-pass layout recognizes numeric local definitions `2:` through
 or wrong-direction labels, and emits a checked rel32 displacement without an
 object relocation.
 The exact dated oracle accepts `raw` and `att_syntax` for `naked_asm!` while
-rejecting inline-only options. The restricted MRML encoder admits a single
-trailing `options(raw)` marker and fails closed on AT&T syntax until its operand
-grammar is implemented.
+rejecting inline-only options. The restricted MRML encoder admits either marker
+alone or together. Its distinct AT&T grammar parses `%` registers, `$`
+immediates, source-first moves, `disp(base,index,scale)` addresses, and indirect
+`*` jumps for the supported instruction set; cross-syntax inputs fail closed.
 Focused tests compare the complete machine-code slice to prove that no prologue
 or epilogue is inserted and reject unsupported safety, ABI, signature,
 instruction, register, immediate, label, and fallthrough cases. RIP-relative/base-less
-memory operands, external symbols/relocations, AT&T syntax,
+memory operands and external symbols/relocations,
 additional architectures, and general inline assembly remain fail-closed.
 Windows gnullvm and native Arch Linux WSL each pass 633 library tests,
 one component-interface probe, 10 conformance tests, and 335 replacement tests:
