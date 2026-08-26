@@ -1944,7 +1944,7 @@ fn application_main() -> Result<()> {
         None
     };
     let active_component_generation =
-        if let Some((_, _, digest, _, _, catalog_digest)) = component_generation.as_ref() {
+        if let Some((bytes, length, _, catalog, catalog_length, _)) = component_generation.as_ref() {
             let deployment_root = ObjectId(0x4445_504c_4f59);
             let mut capabilities = CapabilitySpace::<2>::new();
             let control = capabilities
@@ -1959,7 +1959,12 @@ fn application_main() -> Result<()> {
                 .stage(
                     &capabilities,
                     control,
-                    GenerationCandidate::new(1, *digest, *catalog_digest, 0x5359_5347_454e, 1)
+                    GenerationCandidate::from_canonical_records(
+                        &bytes[..*length],
+                        &catalog[..*catalog_length],
+                        0x5359_5347_454e,
+                        1,
+                    )
                         .map_err(|error| anyhow!("WHP generation candidate failed: {:?}", error))?,
                 )
                 .map_err(|error| anyhow!("WHP candidate staging failed: {:?}", error))?;

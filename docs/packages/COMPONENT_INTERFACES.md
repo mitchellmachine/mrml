@@ -163,7 +163,7 @@ The record also binds separate SHA3-512 digests of the complete canonical
 `SystemGeneration` and its canonical interface catalog; matching numeric
 generations with different package or declaration bytes fail before backend
 invocation. Windows and Arch Linux package-format suites pass 13 tests,
-DeploymentService suites pass 3, build-tool suites pass 89,
+DeploymentService suites pass 4, build-tool suites pass 89,
 kernel suites pass 509, WHP passes 7, and KVM passes 8. The activation record
 also round-trips a canonical digest-bound checkpoint; focused deployment tests
 publish and recover it through one exact stable COW file-generation receipt,
@@ -172,6 +172,10 @@ authenticated-store record now pins the accepted monotonic epoch and exact
 stable-file/object/checkpoint identity, rejecting an older valid file in
 Windows/Linux unit simulation. Concrete TPM/NVRAM/recovery-journal integration
 and general manifest-driven declaration delivery remain **PLANNED**.
+Both focused VMM paths now pass the complete canonical generation/catalog byte
+pair into `DeploymentService`, which derives both activation roots and rejects
+cross-generation pairing before staging. General signed SystemRelease catalog
+artifact delivery remains **PLANNED**.
 The canonical provider now builds its own `mrml-zstd-service.efi` artifact—never
 an alias of the generic configuration service—with an x86-64 architecture trap,
 one private 4 KiB scratch page, and exact launch-register endpoint/caller/

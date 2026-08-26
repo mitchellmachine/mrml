@@ -11,7 +11,10 @@ use core::array;
 
 use mrml_crypto::Sha3_256;
 use mrml_kernel::{Capability, CapabilitySpace, ObjectId, Rights};
-use mrml_package_format::{ActivatedSystemGeneration, ActivatedSystemGenerationError};
+use mrml_package_format::{
+    ActivatedSystemGeneration, ActivatedSystemGenerationError, InterfaceCatalogError,
+    InterfaceCatalogView, SystemGenerationDecodeError, SystemGenerationView,
+};
 use mrml_storage::{
     ExtentMap, FileMetadata, FileReadBackend, FileReadError, FileState, FileWriteBackend,
     FileWriteError, MetadataPointer, PreparedFileWrite, StorageAuthorityTable, StorageHandle,
@@ -61,6 +64,32 @@ impl GenerationCandidate {
 
     pub const fn generation(self) -> u64 {
         self.generation
+    }
+
+    /// Constructs a candidate only from the complete canonical runtime records
+    /// that recovery and component resolution will later consume. Callers
+    /// cannot supply detached digests or reuse one generation number for
+    /// different catalog bytes through this path.
+    pub fn from_canonical_records(
+        generation_bytes: &[u8],
+        interface_catalog_bytes: &[u8],
+        source_object: u64,
+        source_generation: u64,
+    ) -> Result<Self, DeploymentError> {
+        let generation = SystemGenerationView::decode(generation_bytes)
+            .map_err(DeploymentError::InvalidGenerationRecord)?;
+        let catalog = InterfaceCatalogView::decode(interface_catalog_bytes)
+            .map_err(DeploymentError::InvalidInterfaceCatalog)?;
+        if generation.generation() != catalog.generation() {
+            return Err(DeploymentError::GenerationRecordMismatch);
+        }
+        Self::new(
+            generation.generation(),
+            generation.digest(),
+            catalog.digest(),
+            source_object,
+            source_generation,
+        )
     }
 }
 
@@ -285,6 +314,9 @@ impl<const CANDIDATES: usize> DeploymentService<CANDIDATES> {
 pub enum DeploymentError {
     InvalidService,
     InvalidGeneration,
+    InvalidGenerationRecord(SystemGenerationDecodeError),
+    InvalidInterfaceCatalog(InterfaceCatalogError),
+    GenerationRecordMismatch,
     InvalidDigest,
     InvalidSource,
     Unauthorized,
@@ -832,6 +864,10 @@ const fn all_zero(value: &[u8; 64]) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use mrml_package_format::{
+        ComponentInterfaceProvider, ComponentInterfaceRequirement, ComponentProviderForms,
+        SystemGenerationDigestRecord, encode_interface_catalog, encode_system_generation,
+    };
     use mrml_storage::{
         CowMetadataImage, CowMetadataWrite, CowPublicationBackend, CowPublicationPlan,
         ExtentRecord, StorageObjectId, StorageObjectKind, StorageRights, StorageTransactionId,
@@ -1113,6 +1149,54 @@ mod tests {
             generation + 10,
         )
         .unwrap()
+    }
+
+    #[test]
+    fn canonical_records_derive_both_activation_roots_and_reject_cross_generation_pairing() {
+        let records = [SystemGenerationDigestRecord {
+            package_id: "org.mrml.zstd",
+            version: 3,
+            artifact_digest: &[0x2f; 64],
+        }];
+        let mut generation = [0; 128];
+        let generation_length = encode_system_generation(7, &records, &mut generation).unwrap();
+        let requirement = ComponentInterfaceRequirement::exact(
+            "org.mrml.zstd",
+            "org.mrml.interface.compression.zstd",
+            3,
+            [0x6a; 32],
+        )
+        .unwrap();
+        let provider = ComponentInterfaceProvider::exact(
+            "org.mrml.zstd",
+            "org.mrml.interface.compression.zstd",
+            3,
+            [0x6a; 32],
+            ComponentProviderForms::MICROVM,
+        )
+        .unwrap();
+        let mut catalog = [0; 256];
+        let catalog_length =
+            encode_interface_catalog(7, &[requirement], &[provider], &mut catalog).unwrap();
+        let candidate = GenerationCandidate::from_canonical_records(
+            &generation[..generation_length],
+            &catalog[..catalog_length],
+            0x700,
+            2,
+        )
+        .unwrap();
+        assert_eq!(candidate.generation(), 7);
+
+        catalog[8..16].copy_from_slice(&8u64.to_le_bytes());
+        assert_eq!(
+            GenerationCandidate::from_canonical_records(
+                &generation[..generation_length],
+                &catalog[..catalog_length],
+                0x700,
+                2,
+            ),
+            Err(DeploymentError::GenerationRecordMismatch)
+        );
     }
 
     #[test]

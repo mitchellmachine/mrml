@@ -66,7 +66,7 @@ generation and canonical interface catalog, activation sequence, and source
 object/generation identity. Kernel isolation
 admission consumes that typed record, and both focused WHP/KVM component paths
 now construct admission only after this activation transaction. Windows and
-Arch Linux deployment-service suites pass 3 tests; package-format suites pass
+Arch Linux deployment-service suites pass 4 tests; package-format suites pass
 12, kernel suites pass 509, WHP passes 7, and KVM passes 8. The current hosted
 probe stages an already verified transient local generation. The activation
 checkpoint now has a canonical fixed 224-byte SHA3-256-bound version-2
@@ -88,6 +88,16 @@ This is Windows/Linux unit simulation against an abstract authenticated store,
 not TPM/NVRAM evidence. Concrete recovery-journal/TPM integration, physical durability,
 SystemRelease admission, rollback authorization, retained-root integration,
 and general runtime delivery remain **PLANNED**.
+
+The candidate boundary now accepts complete canonical `MRMLSG2` generation and
+`MRMLIC1` interface-catalog records through
+`GenerationCandidate::from_canonical_records`. It decodes both records, requires
+their numeric generations to match, and derives both activation digests itself;
+callers on this path cannot pair detached digests with substituted bytes. The
+focused WHP/KVM paths use this constructor before capability-authorized staging.
+Windows and Linux tests include cross-generation catalog rejection. This is
+canonical-record admission, not yet general signed `SystemRelease` artifact
+delivery.
 
 > Installation, updating, offline servicing, recovery, system imaging, and
 > system snapshots are different operations over the same immutable package and
