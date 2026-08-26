@@ -57,9 +57,10 @@ use mrml_kernel::{
 };
 #[cfg(any(test, target_os = "linux"))]
 use mrml_kernel::{
-    FramebufferInfo, MemoryKind, MemoryRegion, PhysAddr, PixelFormat, RecoveryStateMetadata,
-    encode_handoff, encode_handoff_with_application, encode_handoff_with_recovery,
-    encode_handoff_with_smp,
+    BootHandoff, FramebufferInfo, MemoryKind, MemoryRegion, PhysAddr, PixelFormat,
+    RecoveryStateMetadata, encode_handoff, encode_handoff_with_application,
+    encode_handoff_with_recovery, encode_handoff_with_recovery_and_isolation,
+    encode_handoff_with_smp, encode_handoff_with_smp_recovery_and_isolation,
 };
 #[cfg(target_os = "linux")]
 use mrml_kvm::{KvmLaunchLayout, KvmSystem, PreparedKvmGuest};
@@ -597,6 +598,7 @@ fn configured_total_service_policy(
     interface: ObjectId,
     interface_generation: u32,
     provider_generation: u64,
+    handoff: &BootHandoff,
 ) -> Result<ConfiguredTotalServicePolicy> {
     let root_object = ObjectId(0x4953_4f4c_4154_494f);
     let component_object = ObjectId(0x434f_4e46_504f_4c59);
@@ -677,12 +679,23 @@ fn configured_total_service_policy(
         TotalMicrovmClass::MicrovmEligible,
     )
     .map_err(|error| anyhow!("KVM service identity failed: {:?}", error))?;
+    let recovery = handoff
+        .recovery_state()
+        .ok_or_else(|| anyhow!("KVM Total policy requires decoded recovery metadata"))?;
     let effective = plan
         .apply(&configuration, &capabilities)
         .map_err(|error| anyhow!("KVM configured isolation application failed: {:?}", error))?
-        .compose_boot_override(Some(BootIsolationOverride::TotalMicrovmOnce));
+        .compose_boot_override(handoff.isolation_override());
+    if effective.mode() != IsolationMode::TotalMicrovm
+        || effective.boot_override() != Some(BootIsolationOverride::TotalMicrovmOnce)
+    {
+        return Err(anyhow!(
+            "KVM canonical boot handoff did not request strict Total MicroVM isolation"
+        ));
+    }
     println!(
-        "isolation-boot-policy|status=PASS|backend=kvm|configured=balanced|component=native-service|override=total-microvm-once|effective=total-microvm|policy_generation={}",
+        "isolation-boot-policy|status=PASS|backend=kvm|configured=balanced|component=native-service|handoff=decoded|accepted_epoch={}|override=total-microvm-once|effective=total-microvm|policy_generation={}",
+        recovery.accepted_epoch(),
         effective.policy_generation()
     );
     Ok(ConfiguredTotalServicePolicy {
@@ -2198,6 +2211,12 @@ fn application_main() -> Result<()> {
     let component_service_mode = component_release_input_mode
         || mode == LaunchMode::ComponentServiceProbe
         || component_smp_mode;
+    let total_service_mode = matches!(
+        mode,
+        LaunchMode::ServiceProbe
+            | LaunchMode::ComponentServiceProbe
+            | LaunchMode::ComponentServiceSmpProbe
+    );
     let component_argument_count = if component_release_input_mode { 15 } else { 14 };
     if component_service_mode != (arguments.len() == component_argument_count) {
         return Err(anyhow!(
@@ -2429,6 +2448,11 @@ fn application_main() -> Result<()> {
             | LaunchMode::SmpServiceMigrationProbe
             | LaunchMode::SmpPeriodicBalanceProbe
     );
+    let total_recovery = total_service_mode.then(|| {
+        RecoveryStateMetadata::new(8, 1, None, 0)
+            .expect("fixed Total recovery metadata")
+    });
+    let total_override = total_service_mode.then_some(BootIsolationOverride::TotalMicrovmOnce);
     let handoff = if let Some(application) = application_launch {
         application_boot_handoff(
             executable.artifact().version(),
@@ -2441,6 +2465,9 @@ fn application_main() -> Result<()> {
             executable.artifact().version(),
             entropy,
             *executable.artifact().digest(),
+            total_recovery,
+            total_override,
+            false,
         )?
     } else {
         boot_handoff(
@@ -2451,12 +2478,18 @@ fn application_main() -> Result<()> {
                 mode,
                 LaunchMode::BlockGuestDriverProbe | LaunchMode::PciConfigurationProbe
             )) + 1,
-            (mode == LaunchMode::BlockServiceProbe).then(|| {
-                RecoveryStateMetadata::new(8, 2, Some([0x51; 16]), 1)
-                    .expect("fixed recovery metadata")
+            total_recovery.or_else(|| {
+                (mode == LaunchMode::BlockServiceProbe).then(|| {
+                    RecoveryStateMetadata::new(8, 2, Some([0x51; 16]), 1)
+                        .expect("fixed recovery metadata")
+                })
             }),
+            total_override,
+            false,
         )?
     };
+    let decoded_boot_handoff = BootHandoff::decode(handoff.as_slice(), |_| {})
+        .map_err(|error| anyhow!("KVM canonical boot handoff decode failed: {:?}", error))?;
     let user_probe = matches!(mode, LaunchMode::UserProbe | LaunchMode::PreemptionProbe);
     let (image_virtual, handoff_virtual, stack_virtual) = if smp_mode || component_smp_mode {
         (0xffff_8001_4000_0000, 0xffff_8001_5000_0000, 0x100_0000)
@@ -2649,12 +2682,6 @@ fn application_main() -> Result<()> {
     };
     let mut active_component_ram = None;
     let preparation_started = Instant::now();
-    let total_service_mode = matches!(
-        mode,
-        LaunchMode::ServiceProbe
-            | LaunchMode::ComponentServiceProbe
-            | LaunchMode::ComponentServiceSmpProbe
-    );
     let component_generation = if component_service_mode {
         let consumer = service_executable
             .as_ref()
@@ -2879,6 +2906,7 @@ fn application_main() -> Result<()> {
             interface,
             interface_generation,
             provider_generation,
+            &decoded_boot_handoff,
         )?)
     } else {
         None
@@ -4980,6 +5008,8 @@ fn boot_handoff(
     measurement: [u8; 64],
     framebuffer_pages: u64,
     recovery_state: Option<RecoveryStateMetadata>,
+    isolation_override: Option<BootIsolationOverride>,
+    coherent_release: bool,
 ) -> Result<EncodedHandoff> {
     let framebuffer_bytes = framebuffer_pages
         .checked_mul(4096)
@@ -5004,8 +5034,25 @@ fn boot_handoff(
         region(FRAMEBUFFER, framebuffer_pages, MemoryKind::Mmio)?,
     ];
     let mut encoded = [0u8; 512];
-    let length = match recovery_state {
-        Some(recovery_state) => encode_handoff_with_recovery(
+    let length = match (recovery_state, isolation_override) {
+        (Some(recovery_state), Some(isolation_override)) => {
+            encode_handoff_with_recovery_and_isolation(
+                version,
+                entropy,
+                measurement,
+                true,
+                false,
+                false,
+                coherent_release,
+                0x9000,
+                framebuffer,
+                &regions,
+                recovery_state,
+                Some(isolation_override),
+                &mut encoded,
+            )
+        }
+        (Some(recovery_state), None) => encode_handoff_with_recovery(
             version,
             entropy,
             measurement,
@@ -5018,7 +5065,7 @@ fn boot_handoff(
             recovery_state,
             &mut encoded,
         ),
-        None => encode_handoff(
+        (None, None) => encode_handoff(
             version,
             entropy,
             measurement,
@@ -5030,6 +5077,7 @@ fn boot_handoff(
             &regions,
             &mut encoded,
         ),
+        (None, Some(_)) => return Err(anyhow!("isolation override requires recovery metadata")),
     }
     .map_err(|_| anyhow!("canonical boot handoff construction failed"))?;
     if length != 240 + usize::from(recovery_state.is_some()) * 40 {
@@ -5096,6 +5144,9 @@ fn smp_boot_handoff(
     version: u64,
     entropy: [u8; 32],
     measurement: [u8; 64],
+    recovery_state: Option<RecoveryStateMetadata>,
+    isolation_override: Option<BootIsolationOverride>,
+    coherent_release: bool,
 ) -> Result<EncodedHandoff> {
     let framebuffer = FramebufferInfo::new(
         FRAMEBUFFER,
@@ -5125,23 +5176,46 @@ fn smp_boot_handoff(
     let checksum = madt.iter().fold(0u8, |sum, byte| sum.wrapping_add(*byte));
     madt[9] = madt[9].wrapping_sub(checksum);
     let mut encoded = [0u8; 512];
-    let length = encode_handoff_with_smp(
-        version,
-        entropy,
-        measurement,
-        true,
-        false,
-        false,
-        0x9000,
-        framebuffer,
-        &regions,
-        0x8000,
-        0x100_0000,
-        &madt,
-        &mut encoded,
-    )
+    let length = if let Some(recovery_state) = recovery_state {
+        encode_handoff_with_smp_recovery_and_isolation(
+            version,
+            entropy,
+            measurement,
+            true,
+            false,
+            false,
+            coherent_release,
+            0x9000,
+            framebuffer,
+            &regions,
+            0x8000,
+            0x100_0000,
+            recovery_state,
+            isolation_override,
+            &madt,
+            &mut encoded,
+        )
+    } else if isolation_override.is_none() {
+        encode_handoff_with_smp(
+            version,
+            entropy,
+            measurement,
+            true,
+            false,
+            false,
+            0x9000,
+            framebuffer,
+            &regions,
+            0x8000,
+            0x100_0000,
+            &madt,
+            &mut encoded,
+        )
+    } else {
+        return Err(anyhow!("SMP isolation override requires recovery metadata"));
+    }
     .map_err(|_| anyhow!("canonical SMP handoff construction failed"))?;
-    if length != 316 {
+    if length != 316 + usize::from(recovery_state.is_some()) * 40 {
         return Err(anyhow!("unexpected canonical SMP handoff length"));
     }
     Ok(EncodedHandoff {
@@ -5167,7 +5241,7 @@ mod tests {
     fn handoff_binds_verified_version_entropy_and_measurement() {
         let entropy = [0x35; 32];
         let measurement = [0xa7; 64];
-        let encoded = boot_handoff(19, entropy, measurement, 1, None).unwrap();
+        let encoded = boot_handoff(19, entropy, measurement, 1, None, None, false).unwrap();
         let decoded = BootHandoff::decode(encoded.as_slice(), |_| {}).unwrap();
         assert_eq!(decoded.evidence().image_version(), 19);
         assert_eq!(decoded.evidence().entropy(), &entropy);
@@ -5205,19 +5279,56 @@ mod tests {
 
     #[test]
     fn block_handoff_binds_two_disjoint_payload_pages() {
-        let encoded = boot_handoff(20, [0x36; 32], [0xa8; 64], 2, None).unwrap();
+        let encoded = boot_handoff(20, [0x36; 32], [0xa8; 64], 2, None, None, false).unwrap();
         let decoded = BootHandoff::decode(encoded.as_slice(), |_| {}).unwrap();
         assert_eq!(decoded.framebuffer().base().get(), FRAMEBUFFER);
         assert_eq!(decoded.framebuffer().byte_length(), 8192);
-        assert!(boot_handoff(20, [0x36; 32], [0xa8; 64], 3, None).is_err());
+        assert!(boot_handoff(20, [0x36; 32], [0xa8; 64], 3, None, None, false).is_err());
     }
 
     #[test]
     fn recovery_handoff_binds_fixed_probe_metadata() {
         let recovery = RecoveryStateMetadata::new(8, 2, Some([0x51; 16]), 1).unwrap();
-        let encoded = boot_handoff(21, [0x38; 32], [0xaa; 64], 1, Some(recovery)).unwrap();
+        let encoded =
+            boot_handoff(21, [0x38; 32], [0xaa; 64], 1, Some(recovery), None, false).unwrap();
         let decoded = BootHandoff::decode(encoded.as_slice(), |_| {}).unwrap();
         assert_eq!(decoded.recovery_state(), Some(recovery));
+    }
+
+    #[test]
+    fn total_override_is_consumed_from_the_decoded_recovery_handoff() {
+        let recovery = RecoveryStateMetadata::new(8, 1, None, 0).unwrap();
+        let encoded = boot_handoff(
+            21,
+            [0x38; 32],
+            [0xaa; 64],
+            1,
+            Some(recovery),
+            Some(BootIsolationOverride::TotalMicrovmOnce),
+            true,
+        )
+        .unwrap();
+        let decoded = BootHandoff::decode(encoded.as_slice(), |_| {}).unwrap();
+        assert_eq!(decoded.recovery_state(), Some(recovery));
+        assert_eq!(
+            decoded.isolation_override(),
+            Some(BootIsolationOverride::TotalMicrovmOnce)
+        );
+        assert!(decoded.evidence().coherent_release());
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn total_policy_rejects_a_decoded_handoff_without_the_override() {
+        let recovery = RecoveryStateMetadata::new(8, 1, None, 0).unwrap();
+        let encoded = boot_handoff(
+            21, [0x38; 32], [0xaa; 64], 1, Some(recovery), None, false,
+        )
+        .unwrap();
+        let decoded = BootHandoff::decode(encoded.as_slice(), |_| {}).unwrap();
+        assert!(
+            configured_total_service_policy(ObjectId(1), ObjectId(2), 1, 1, &decoded).is_err()
+        );
     }
 
     #[cfg(target_os = "linux")]
@@ -5347,7 +5458,7 @@ mod tests {
 
     #[test]
     fn smp_handoff_binds_two_cpus_and_launch_resources() {
-        let encoded = smp_boot_handoff(7, [0x51; 32], [0xa3; 64]).unwrap();
+        let encoded = smp_boot_handoff(7, [0x51; 32], [0xa3; 64], None, None, false).unwrap();
         let decoded = BootHandoff::decode(encoded.as_slice(), |_| {}).unwrap();
         assert_eq!(decoded.ap_trampoline(), Some(0x8000));
         assert_eq!(decoded.ap_stack_arena(), Some(0x100_0000));

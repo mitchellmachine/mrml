@@ -3088,6 +3088,20 @@ retaining recovery provenance. Fresh WHP and nested-KVM probes each report
 focused transient configuration fixture, not the committed stable-recovery
 object; real recovered boot remains **PLANNED**.
 
+The WHP/KVM runners now consume the one-boot Total request from the same
+canonical `BootHandoff` installed for the guest. Two allocation-free kernel
+encoders cover ordinary and SMP handoffs with neutral recovery metadata plus the
+typed isolation flag. Each runner decodes those bytes, requires recovery state,
+and passes only `BootHandoff::isolation_override()` into effective-policy
+composition; a missing flag fails before admission instead of falling back to
+native execution. WHP passes 11 focused runner tests, KVM passes 12, and the
+kernel passes 559 tests on Windows and Arch Linux. Live retained-artifact
+attempts on both backends reached `handoff=decoded`, `eligible=1`, `microvm=1`,
+and `native_fallback=0`, but guest execution ended in WHP `RuntimeOverrun` and
+KVM `Halted`. Those failures are recorded rather than converted into successful
+live or recovery evidence; fresh signed current-source guest artifacts and the
+committed `RecoveredSystemState` join remain required.
+
 Patent review: `TRIGGERED` under the existing signed-release, adaptive
 isolation, Total-MicroVM, automated VMM placement, and device-projection reviews
 now that authenticated package classifications are joined to live domain

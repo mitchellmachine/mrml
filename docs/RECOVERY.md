@@ -1153,6 +1153,18 @@ eligible microVM and zero fallback. This proves the shared live ownership path,
 not recovery: the runners still create focused transient configuration policy
 and do not consume the stable committed recovered system object.
 
+The next handoff boundary is now **PARTIALLY IMPLEMENTED** without promoting
+that transient policy to recovery evidence. WHP and KVM place neutral accepted
+recovery metadata and the one-boot Total request in the exact canonical handoff
+installed for the guest, decode it, and derive the effective overlay only from
+that decoded object. Missing recovery metadata or a missing Total flag rejects
+before admission. The decoded accepted epoch is retained in diagnostic output,
+but it is not yet compared with a live `RecoveredSystemState`; that existing
+committed-state predecessor check remains the next required join. Retained
+signed guest artifacts reached the identical zero-fallback control-plane proof
+on both backends but halted before a successful service ABI completion, so they
+provide no new recovered-boot execution claim.
+
 Application-launch recovery must retain the exact runtime domain, application
 object, immutable application generation and artifact digest, active system
 generation, and applied policy generation. The kernel application route accepts

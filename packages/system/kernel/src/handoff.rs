@@ -755,6 +755,47 @@ pub fn encode_handoff_with_recovery(
     )
 }
 
+/// Encodes recovered boot state and the optional one-boot isolation request in
+/// the same canonical handoff consumed by the kernel. The request remains
+/// authority-free and does not itself prove that Total placement succeeded.
+#[allow(clippy::too_many_arguments)]
+pub fn encode_handoff_with_recovery_and_isolation(
+    image_version: u64,
+    entropy: [u8; 32],
+    image_measurement: [u8; 64],
+    secure_boot: bool,
+    measured_boot: bool,
+    rollback_protected: bool,
+    coherent_release: bool,
+    acpi_root: u64,
+    framebuffer: FramebufferInfo,
+    regions: &[MemoryRegion],
+    recovery_state: RecoveryStateMetadata,
+    isolation_override: Option<BootIsolationOverride>,
+    output: &mut [u8],
+) -> Result<usize, HandoffError> {
+    let length = encode_handoff_inner(
+        image_version,
+        entropy,
+        image_measurement,
+        secure_boot,
+        measured_boot,
+        rollback_protected,
+        coherent_release,
+        acpi_root,
+        framebuffer,
+        regions,
+        None,
+        None,
+        None,
+        None,
+        Some(recovery_state),
+        output,
+    )?;
+    apply_isolation_override(isolation_override, output);
+    Ok(length)
+}
+
 #[allow(clippy::too_many_arguments)]
 pub fn encode_handoff_with_madt(
     image_version: u64,
@@ -842,6 +883,61 @@ pub fn encode_handoff_with_smp(
         None,
         output,
     )
+}
+
+/// Encodes SMP topology, recovered boot state, and the optional one-boot
+/// isolation request as one canonical trusted-loader handoff.
+#[allow(clippy::too_many_arguments)]
+pub fn encode_handoff_with_smp_recovery_and_isolation(
+    image_version: u64,
+    entropy: [u8; 32],
+    image_measurement: [u8; 64],
+    secure_boot: bool,
+    measured_boot: bool,
+    rollback_protected: bool,
+    coherent_release: bool,
+    acpi_root: u64,
+    framebuffer: FramebufferInfo,
+    regions: &[MemoryRegion],
+    ap_trampoline: u64,
+    ap_stack_arena: u64,
+    recovery_state: RecoveryStateMetadata,
+    isolation_override: Option<BootIsolationOverride>,
+    madt: &[u8],
+    output: &mut [u8],
+) -> Result<usize, HandoffError> {
+    if !(crate::PAGE_SIZE..0x10_0000).contains(&ap_trampoline)
+        || !ap_trampoline.is_multiple_of(crate::PAGE_SIZE)
+        || ap_stack_arena == 0
+        || !ap_stack_arena.is_multiple_of(crate::PAGE_SIZE)
+        || ap_stack_arena >> 52 != 0
+        || !(44..=MAX_HANDOFF_MADT_BYTES).contains(&madt.len())
+        || &madt[..4] != b"APIC"
+        || read_u32(madt, 4) as usize != madt.len()
+        || madt.iter().fold(0u8, |sum, byte| sum.wrapping_add(*byte)) != 0
+    {
+        return Err(HandoffError::NonCanonical);
+    }
+    let length = encode_handoff_inner(
+        image_version,
+        entropy,
+        image_measurement,
+        secure_boot,
+        measured_boot,
+        rollback_protected,
+        coherent_release,
+        acpi_root,
+        framebuffer,
+        regions,
+        Some(madt),
+        Some((ap_trampoline, ap_stack_arena)),
+        None,
+        None,
+        Some(recovery_state),
+        output,
+    )?;
+    apply_isolation_override(isolation_override, output);
+    Ok(length)
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -1027,6 +1123,13 @@ pub fn encode_handoff_with_smp_service_and_recovery(
     )
 }
 
+fn apply_isolation_override(isolation_override: Option<BootIsolationOverride>, output: &mut [u8]) {
+    if isolation_override == Some(BootIsolationOverride::TotalMicrovmOnce) {
+        let flags = read_u16(output, 22) | FLAG_TOTAL_MICROVM_ONCE;
+        output[22..24].copy_from_slice(&flags.to_le_bytes());
+    }
+}
+
 /// Encodes the ordinary authenticated loader handoff plus an optional strict
 /// one-boot isolation request. The request is a flag within the same canonical
 /// handoff; it is neither persistent policy nor evidence of runtime success.
@@ -1068,10 +1171,7 @@ pub fn encode_handoff_with_smp_service_recovery_and_isolation(
         madt,
         output,
     )?;
-    if isolation_override == Some(BootIsolationOverride::TotalMicrovmOnce) {
-        let flags = read_u16(output, 22) | FLAG_TOTAL_MICROVM_ONCE;
-        output[22..24].copy_from_slice(&flags.to_le_bytes());
-    }
+    apply_isolation_override(isolation_override, output);
     Ok(length)
 }
 

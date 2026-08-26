@@ -747,6 +747,17 @@ runners still synthesize their focused configuration state rather than consume
 the committed stable-recovery object, so live recovered boot remains
 **PLANNED**.
 
+The runner-side boot overlay is no longer injected as an independent enum
+literal. Both hosted backends encode neutral accepted recovery state and the
+one-boot request into the same canonical handoff installed for the guest, decode
+that object, and compose policy only from `BootHandoff::isolation_override()`.
+Absent recovery metadata or an absent decoded Total request rejects the focused
+Total path before admission. Focused WHP/KVM tests cover the accepted and
+missing-override cases. Retained signed-artifact live attempts reached identical
+decoded-policy and zero-fallback inventory proofs but did not complete guest
+execution, so current-source re-signing and stable recovered-state binding are
+still required before claiming live recovered Total mode.
+
 ## Resources, devices, security, and monitoring
 
 RAM, vCPU, `VirtualGPU`, VirtIO, device-projection, or VMM exhaustion in Total
