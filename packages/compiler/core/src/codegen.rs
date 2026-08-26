@@ -14732,6 +14732,11 @@ fn runtime_reference_call_origin_parameter<const MAX_PARAMETERS: usize, const MA
         Some(())
     }
 
+    enum ConditionalActionOutcome {
+        FallsThrough,
+        Returns(usize),
+    }
+
     fn apply_conditional_actions<'source, const MAX_PARAMETERS: usize, const MAX_NODES: usize>(
         target: crate::RuntimeCallTarget<'source, MAX_PARAMETERS>,
         actions: &[Option<crate::ConditionalAssignmentAction<'source>>],
@@ -14739,8 +14744,9 @@ fn runtime_reference_call_origin_parameter<const MAX_PARAMETERS: usize, const MA
         local_origins: &mut [Option<usize>; MAX_PARAMETERS],
         local_mutability: &mut [bool; MAX_PARAMETERS],
         local_count: &mut usize,
-    ) -> Option<()> {
-        for action in actions.iter().flatten() {
+    ) -> Option<ConditionalActionOutcome> {
+        for (action_index, action) in actions.iter().enumerate() {
+            let action = action.as_ref()?;
             match *action {
                 crate::ConditionalAssignmentAction::Local(local) => {
                     let tree = local.parse_initializer::<MAX_NODES>().ok()?;
@@ -14768,11 +14774,26 @@ fn runtime_reference_call_origin_parameter<const MAX_PARAMETERS: usize, const MA
                         *local_count,
                     )?;
                 }
-                crate::ConditionalAssignmentAction::Expression(_)
-                | crate::ConditionalAssignmentAction::Return(_) => return None,
+                crate::ConditionalAssignmentAction::Expression(_) => return None,
+                crate::ConditionalAssignmentAction::Return(value) => {
+                    if actions[action_index + 1..].iter().any(Option::is_some) {
+                        return None;
+                    }
+                    let tree = value.parse_value::<MAX_NODES>().ok()?;
+                    let origin = recurse(
+                        target,
+                        &tree,
+                        tree.root(),
+                        0,
+                        local_names,
+                        local_origins,
+                        *local_count,
+                    )?;
+                    return Some(ConditionalActionOutcome::Returns(origin));
+                }
             }
         }
-        Some(())
+        Some(ConditionalActionOutcome::FallsThrough)
     }
 
     let body =
@@ -14907,7 +14928,7 @@ fn runtime_reference_call_origin_parameter<const MAX_PARAMETERS: usize, const MA
                     let mut branch_origins = base_origins;
                     let mut branch_mutability = local_mutability;
                     let mut branch_local_count = local_count;
-                    apply_conditional_actions::<MAX_PARAMETERS, MAX_NODES>(
+                    let outcome = apply_conditional_actions::<MAX_PARAMETERS, MAX_NODES>(
                         target,
                         branch.actions(),
                         &mut branch_names,
@@ -14915,7 +14936,12 @@ fn runtime_reference_call_origin_parameter<const MAX_PARAMETERS: usize, const MA
                         &mut branch_mutability,
                         &mut branch_local_count,
                     )?;
-                    merge_outcome(branch_origins)?;
+                    match outcome {
+                        ConditionalActionOutcome::FallsThrough => {
+                            merge_outcome(branch_origins)?;
+                        }
+                        ConditionalActionOutcome::Returns(candidate) => merge(candidate)?,
+                    }
                 }
                 if conditional.else_action_count() == 0 {
                     merge_outcome(base_origins)?;
@@ -14924,7 +14950,7 @@ fn runtime_reference_call_origin_parameter<const MAX_PARAMETERS: usize, const MA
                     let mut else_origins = base_origins;
                     let mut else_mutability = local_mutability;
                     let mut else_local_count = local_count;
-                    apply_conditional_actions::<MAX_PARAMETERS, MAX_NODES>(
+                    let outcome = apply_conditional_actions::<MAX_PARAMETERS, MAX_NODES>(
                         target,
                         conditional.else_actions(),
                         &mut else_names,
@@ -14932,12 +14958,17 @@ fn runtime_reference_call_origin_parameter<const MAX_PARAMETERS: usize, const MA
                         &mut else_mutability,
                         &mut else_local_count,
                     )?;
-                    merge_outcome(else_origins)?;
+                    match outcome {
+                        ConditionalActionOutcome::FallsThrough => merge_outcome(else_origins)?,
+                        ConditionalActionOutcome::Returns(candidate) => merge(candidate)?,
+                    }
                 }
-                for local_index in 0..local_count {
-                    local_origins[local_index] = (!ambiguous[local_index])
-                        .then_some(joined_origins[local_index])
-                        .flatten();
+                if outcome_count != 0 {
+                    for local_index in 0..local_count {
+                        local_origins[local_index] = (!ambiguous[local_index])
+                            .then_some(joined_origins[local_index])
+                            .flatten();
+                    }
                 }
             }
             crate::BodyStatement::Loop(index) => {
@@ -30791,6 +30822,27 @@ mod tests {
                         ),
                     })
                 }
+                ("branch_local_return", 2) if MAX_PARAMETERS >= 2 => {
+                    parameters[0] = Some(RuntimeCallParameter {
+                        name: "value",
+                        ty: reference,
+                    });
+                    parameters[1] = Some(RuntimeCallParameter {
+                        name: "first",
+                        ty: ScalarType::Bool,
+                    });
+                    Some(RuntimeCallTarget {
+                        name: "branch_local_return",
+                        parameters,
+                        parameter_count: 2,
+                        return_type: reference,
+                        return_type_name: "&mut u16",
+                        body_expression: concat!(
+                            "if first { let branch: &mut u16 = &mut *value; return branch; } ",
+                            "let tail: &mut u16 = &mut *value; tail"
+                        ),
+                    })
+                }
                 ("touch", 1) => {
                     parameters[0] = Some(RuntimeCallParameter {
                         name: "value",
@@ -34749,6 +34801,7 @@ mod tests {
             "fn value(input: &mut u16, first: bool) -> u16 { let returned: &mut u16 = branch_forward(input, first); let competing: &mut u16 = &mut *input; *competing += 1; *returned }",
             "fn value(input: &mut u16, repeat: bool) -> u16 { let returned: &mut u16 = loop_forward(input, repeat); let competing: &mut u16 = &mut *input; *competing += 1; *returned }",
             "fn value(input: &mut u16, first: bool) -> u16 { let returned: &mut u16 = branch_local_forward(input, first); let competing: &mut u16 = &mut *input; *competing += 1; *returned }",
+            "fn value(input: &mut u16, first: bool) -> u16 { let returned: &mut u16 = branch_local_return(input, first); let competing: &mut u16 = &mut *input; *competing += 1; *returned }",
         ] {
             assert_eq!(
                 analyze(source).unwrap_err().kind,
@@ -34763,6 +34816,7 @@ mod tests {
             "fn value(input: &mut u16, first: bool) -> u16 { let returned: &mut u16 = branch_forward(input, first); *returned += 1; let restored: &mut u16 = &mut *input; *restored }",
             "fn value(input: &mut u16, repeat: bool) -> u16 { let returned: &mut u16 = loop_forward(input, repeat); *returned += 1; let restored: &mut u16 = &mut *input; *restored }",
             "fn value(input: &mut u16, first: bool) -> u16 { let returned: &mut u16 = branch_local_forward(input, first); *returned += 1; let restored: &mut u16 = &mut *input; *restored }",
+            "fn value(input: &mut u16, first: bool) -> u16 { let returned: &mut u16 = branch_local_return(input, first); *returned += 1; let restored: &mut u16 = &mut *input; *restored }",
         ] {
             analyze(source).unwrap();
         }
@@ -34801,6 +34855,22 @@ mod tests {
         assert_eq!(
             runtime_reference_call_origin_parameter::<3, 32>(branch_local_forward),
             Some(0)
+        );
+        let branch_local_return = MutableReferenceCallResolver
+            .resolve_runtime_call::<3>("branch_local_return", 2)
+            .unwrap();
+        assert_eq!(
+            runtime_reference_call_origin_parameter::<3, 32>(branch_local_return),
+            Some(0)
+        );
+        assert_eq!(
+            runtime_reference_call_origin_parameter::<3, 32>(RuntimeCallTarget {
+                body_expression: concat!(
+                    "if first { let mut local: u16 = 1; return &mut local; } value"
+                ),
+                ..branch_local_return
+            }),
+            None
         );
         assert_eq!(
             runtime_reference_call_origin_parameter::<3, 32>(RuntimeCallTarget {
