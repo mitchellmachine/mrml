@@ -1044,6 +1044,9 @@ in a decoded canonical `SystemGeneration`. Recovery must retain both inputs and
 must never reconstruct this binding from scalar cache fields, a filename, or a
 newer package. Kind, absence, version, and digest mismatch fail before route
 creation.
+Recovery signing workflows must select the explicit `application` signer kind;
+using `service` changes the authenticated artifact statement and is rejected by
+application admission rather than treated as a compatible encoding.
 
 The canonical workspace and lock now retain the syscall-only
 `org.mrml.app.isolation-probe` as a `system-application` with both supported

@@ -3931,6 +3931,18 @@ mechanism. The broader adaptive-placement and Total MicroVM architecture remains
 unimplemented. This technical screen does not establish clearance or
 infringement and does not replace independent human dual review.
 
+# 2026-08-26 — Explicit application signer kind
+
+**Result: NOT_TRIGGERED after the existing signed-artifact and application-
+classification reviews.** This increment maps one new CLI token to the existing
+typed `ApplicationImage` discriminant, after which the signer reuses the same
+Lamport statement, canonical bundle, bounded PE parser, and one-use-key flow.
+It adds no signature scheme, key lifecycle, digest, container, parser,
+placement, loader, VM, transport, queue, or hardware mechanism. The broader
+adaptive-placement and Total MicroVM architecture remains `TRIGGERED`; this
+technical screen does not establish clearance or infringement and does not
+replace independent human dual review.
+
 # 2026-08-25 — Component-interface cross-compiler conformance probe
 
 **Result: NOT_TRIGGERED.** This increment adds only an independently authored

@@ -61,7 +61,7 @@ fn application_main() -> Result<()> {
             build_receipt::compare(&args[2], &args[3])
         }
         _ => Err(anyhow!(
-            "usage:\n  mrml-sign keygen PRIVATE PUBLIC\n  mrml-sign sign KIND VERSION ARTIFACT PRIVATE SIGNATURE\n  mrml-sign sign-bundle KIND VERSION ARTIFACT PRIVATE OUTPUT\n  mrml-sign key-digest PUBLIC\n  mrml-sign authenticode-digest IMAGE.efi\n  mrml-sign attach-authenticode IMAGE.efi SIGNATURE.p7b OUTPUT.efi\n  mrml-sign finalize-vbs-enclave INPUT.dll OUTPUT.dll\n  mrml-sign manifest VERSION OUTPUT NEXT_ROOT KERNEL VM SERVICE CUDA POLICY\n  mrml-sign bootstrap-state MINIMUM_RELEASE OUTPUT OWNER_PUBLIC\n  mrml-sign inspect-bootstrap-state STATE\n  mrml-sign build-receipt OUTPUT SOURCE_ARCHIVE RUSTC_VERSION TARGET PROFILE WORKSPACE_MANIFEST WORKSPACE_LOCK TOOLCHAIN_LOCK KERNEL SERVICE LOADER CONFIG\n  mrml-sign compare-build-receipts FIRST SECOND"
+            "usage:\n  mrml-sign keygen PRIVATE PUBLIC\n  mrml-sign sign KIND VERSION ARTIFACT PRIVATE SIGNATURE\n  mrml-sign sign-bundle KIND VERSION ARTIFACT PRIVATE OUTPUT\n    KIND: kernel | vm | service | application | cuda | policy\n  mrml-sign key-digest PUBLIC\n  mrml-sign authenticode-digest IMAGE.efi\n  mrml-sign attach-authenticode IMAGE.efi SIGNATURE.p7b OUTPUT.efi\n  mrml-sign finalize-vbs-enclave INPUT.dll OUTPUT.dll\n  mrml-sign manifest VERSION OUTPUT NEXT_ROOT KERNEL VM SERVICE CUDA POLICY\n  mrml-sign bootstrap-state MINIMUM_RELEASE OUTPUT OWNER_PUBLIC\n  mrml-sign inspect-bootstrap-state STATE\n  mrml-sign build-receipt OUTPUT SOURCE_ARCHIVE RUSTC_VERSION TARGET PROFILE WORKSPACE_MANIFEST WORKSPACE_LOCK TOOLCHAIN_LOCK KERNEL SERVICE LOADER CONFIG\n  mrml-sign compare-build-receipts FIRST SECOND"
         )),
     }
 }
@@ -288,9 +288,12 @@ fn parse_kind(value: &str) -> Result<ArtifactKind> {
         "kernel" => Ok(ArtifactKind::Kernel),
         "vm" => Ok(ArtifactKind::VmImage),
         "service" => Ok(ArtifactKind::ServiceImage),
+        "application" => Ok(ArtifactKind::ApplicationImage),
         "cuda" => Ok(ArtifactKind::CudaKernelBundle),
         "policy" => Ok(ArtifactKind::LaunchPolicy),
-        _ => Err(anyhow!("kind must be kernel, vm, service, cuda, or policy")),
+        _ => Err(anyhow!(
+            "kind must be kernel, vm, service, application, cuda, or policy"
+        )),
     }
 }
 
@@ -299,6 +302,20 @@ mrml_runtime::mrml_entrypoint!(application_main);
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn application_kind_is_explicit_and_never_aliases_service() {
+        assert_eq!(
+            parse_kind("application").unwrap(),
+            ArtifactKind::ApplicationImage
+        );
+        assert_eq!(parse_kind("service").unwrap(), ArtifactKind::ServiceImage);
+        assert_ne!(
+            parse_kind("application").unwrap(),
+            parse_kind("service").unwrap()
+        );
+        assert!(parse_kind("app").is_err());
+    }
 
     #[test]
     fn signer_never_replaces_output_and_consumes_key_before_publication() {

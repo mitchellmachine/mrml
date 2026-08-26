@@ -158,6 +158,10 @@ GNU/LLVM and Arch Linux GNU builds produced the same 3,072-byte image with
 SHA-256 `4798770920b2ffffa301242299c4525bff672c7d7f744d4bf62bac6eb36290f5`.
 This is cross-build evidence only: neither output was loaded or executed, and
 the PE target does not make it a UEFI loader or service.
+The first-party signer now names `application` as a distinct
+`ApplicationImage` input for both detached statements and canonical signed
+bundles. It cannot alias the image as `service`, and executable application
+bytes pass the same bounded PE/W^X admission used by the artifact layer.
 
 The dependency-free `mrml-rustc` core lives at `packages/compiler/core`, and its
 separate driver lives at `packages/compiler/driver`.
