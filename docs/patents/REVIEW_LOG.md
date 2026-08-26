@@ -228,6 +228,16 @@ mechanism. Broader loop and compiler completion remain partial; this technical
 screen establishes neither clearance nor infringement and does not replace
 independent human dual review.
 
+## 2026-08-26 — Nested projected-return evidence
+
+Patent review: **NOT_TRIGGERED**. This compiler evidence increment exercises the
+existing bounded tuple-field assignment action in the already parsed nested-loop
+return path. It adds no new analysis algorithm, fixed-point, region solver,
+optimization, runtime, authority, or dependency mechanism. Broader nested-loop
+and compiler completion remain partial; this technical screen establishes
+neither clearance nor infringement and does not replace independent human dual
+review.
+
 ## 2026-08-26 — Activated-generation binding for Total inventory
 
 Patent review: **TRIGGERED** under the existing SystemRelease, deployment,
