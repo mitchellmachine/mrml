@@ -5126,3 +5126,16 @@ applicable. Complete Manifest V2 catalog delivery, persistent servicing,
 adaptive placement, and microVM mechanisms remain `TRIGGERED`; this agent
 review establishes neither clearance nor infringement and does not replace
 independent human dual review.
+
+# 2026-08-25 — Exact source associated-type lowering
+
+**Result: NOT_TRIGGERED after the existing trait-solver review.** This compiler
+increment parses bounded associated-type declarations and exact implementation
+values, assigns stable source identities, enforces completeness, and feeds the
+existing exact associated-value database. It adds no new normalization,
+candidate-selection, coherence, specialization, dispatch, runtime,
+cryptographic, storage, transport, codec, virtualization, or hardware
+mechanism. Broader modern trait solving retains its existing `TRIGGERED`
+review; generic associated types and source projection semantics require review
+when their mechanisms are concrete. This agent review does not replace targeted
+independent human review.
