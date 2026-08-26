@@ -150,6 +150,8 @@ pub enum CodegenErrorKind {
     NakedFunctionParametersUnsupported,
     NakedFunctionReturnUnsupported,
     InvalidNakedAssembly,
+    InlineAssemblyRequiresUnsafe,
+    InvalidInlineAssembly,
 }
 
 #[derive(Clone, Copy)]
@@ -2070,6 +2072,52 @@ pub fn compile_x86_64_naked_relocatable<
         relocations,
         relocation_count,
     })
+}
+
+fn x86_64_inline_assembly_nop(expression: &str) -> Result<Option<()>, CodegenErrorKind> {
+    let expression = expression.trim();
+    let Some(arguments) = expression.strip_prefix("asm!(") else {
+        return Ok(None);
+    };
+    let arguments = arguments
+        .strip_suffix(')')
+        .ok_or(CodegenErrorKind::InvalidInlineAssembly)?
+        .trim();
+    let Some(arguments) = arguments.strip_prefix("\"nop\"") else {
+        return Err(CodegenErrorKind::InvalidInlineAssembly);
+    };
+    let arguments = arguments.trim();
+    if arguments.is_empty() {
+        return Ok(Some(()));
+    }
+    let options = arguments
+        .strip_prefix(',')
+        .ok_or(CodegenErrorKind::InvalidInlineAssembly)?
+        .trim()
+        .strip_prefix("options(")
+        .and_then(|options| options.strip_suffix(')'))
+        .ok_or(CodegenErrorKind::InvalidInlineAssembly)?;
+    let mut seen_nomem = false;
+    let mut seen_nostack = false;
+    let mut seen_preserves_flags = false;
+    let mut option_count = 0usize;
+    for option in options.split(',').map(str::trim) {
+        let seen = match option {
+            "nomem" => &mut seen_nomem,
+            "nostack" => &mut seen_nostack,
+            "preserves_flags" => &mut seen_preserves_flags,
+            _ => return Err(CodegenErrorKind::InvalidInlineAssembly),
+        };
+        if option.is_empty() || *seen {
+            return Err(CodegenErrorKind::InvalidInlineAssembly);
+        }
+        *seen = true;
+        option_count += 1;
+    }
+    if option_count == 0 {
+        return Err(CodegenErrorKind::InvalidInlineAssembly);
+    }
+    Ok(Some(()))
 }
 
 fn encode_x86_64_naked_instruction_for_syntax(
@@ -8262,6 +8310,22 @@ fn preanalyze_runtime_expression_statement_reads<
 ) -> Result<(), CodegenError> {
     if statement.expression.is_empty() {
         return Ok(());
+    }
+    match x86_64_inline_assembly_nop(statement.expression) {
+        Ok(Some(())) if function.unsafe_function => return Ok(()),
+        Ok(Some(())) => {
+            return Err(CodegenError {
+                kind: CodegenErrorKind::InlineAssemblyRequiresUnsafe,
+                span: translate_span(body_start, statement.span),
+            });
+        }
+        Ok(None) => {}
+        Err(kind) => {
+            return Err(CodegenError {
+                kind,
+                span: translate_span(body_start, statement.span),
+            });
+        }
     }
     let tree = statement
         .parse::<MAX_EXPRESSION_NODES>()
@@ -25342,6 +25406,22 @@ impl<
         if statement.expression.is_empty() {
             return Ok(());
         }
+        match x86_64_inline_assembly_nop(statement.expression) {
+            Ok(Some(())) if self.function.unsafe_function => return self.emit(&[0x90]),
+            Ok(Some(())) => {
+                return Err(CodegenError {
+                    kind: CodegenErrorKind::InlineAssemblyRequiresUnsafe,
+                    span: translate_span(body_start, statement.span),
+                });
+            }
+            Ok(None) => {}
+            Err(kind) => {
+                return Err(CodegenError {
+                    kind,
+                    span: translate_span(body_start, statement.span),
+                });
+            }
+        }
         let tree = statement
             .parse::<MAX_EXPRESSION_NODES>()
             .map_err(|error| CodegenError {
@@ -29151,6 +29231,61 @@ mod tests {
                 return_type_name: "&[usize]",
                 body_expression: "{ if bias == 0 { &values[start..end] } else { values } }",
             })
+        }
+    }
+
+    #[test]
+    fn emits_validated_fixed_inline_assembly() {
+        let compile = |source| {
+            let module = Parser::new(source).parse_module::<1, 1>().unwrap();
+            let Some(Item::Function(function)) = module.items()[0] else {
+                panic!("expected function")
+            };
+            compile_x86_64_function::<_, 64, 1, 8>(&function, &NoConstants, X86_64Abi::SystemV)
+        };
+        let baseline =
+            compile("#[unsafe(no_mangle)] pub unsafe extern \"C\" fn answer() -> u64 { 42 }")
+                .unwrap();
+        for source in [
+            "#[unsafe(no_mangle)] pub unsafe extern \"C\" fn answer() -> u64 { asm!(\"nop\"); 42 }",
+            "#[unsafe(no_mangle)] pub unsafe extern \"C\" fn answer() -> u64 { asm!(\"nop\", options(nomem, nostack, preserves_flags)); 42 }",
+            "#[unsafe(no_mangle)] pub unsafe extern \"C\" fn answer() -> u64 { asm!(\"nop\", options(preserves_flags, nomem)); 42 }",
+        ] {
+            let code = compile(source).unwrap();
+            assert_eq!(code.len(), baseline.len() + 1);
+            let insertion = (0..code.len())
+                .find(|index| {
+                    code.bytes()[*index] == 0x90
+                        && code.bytes()[..*index] == baseline.bytes()[..*index]
+                        && code.bytes()[*index + 1..] == baseline.bytes()[*index..]
+                })
+                .expect("one inline nop must be inserted into ordinary lowering");
+            assert!(insertion < code.len());
+        }
+
+        for (source, expected) in [
+            (
+                "#[unsafe(no_mangle)] pub extern \"C\" fn answer() -> u64 { asm!(\"nop\"); 42 }",
+                CodegenErrorKind::InlineAssemblyRequiresUnsafe,
+            ),
+            (
+                "#[unsafe(no_mangle)] pub unsafe extern \"C\" fn answer() -> u64 { asm!(\"ret\"); 42 }",
+                CodegenErrorKind::InvalidInlineAssembly,
+            ),
+            (
+                "#[unsafe(no_mangle)] pub unsafe extern \"C\" fn answer() -> u64 { asm!(\"nop\", options(nomem, nomem)); 42 }",
+                CodegenErrorKind::InvalidInlineAssembly,
+            ),
+            (
+                "#[unsafe(no_mangle)] pub unsafe extern \"C\" fn answer() -> u64 { asm!(\"nop\", options(readonly)); 42 }",
+                CodegenErrorKind::InvalidInlineAssembly,
+            ),
+            (
+                "#[unsafe(no_mangle)] pub unsafe extern \"C\" fn answer() -> u64 { asm!(\"nop\", in(\"rax\") 1); 42 }",
+                CodegenErrorKind::InvalidInlineAssembly,
+            ),
+        ] {
+            assert_eq!(compile(source).unwrap_err().kind, expected);
         }
     }
 
