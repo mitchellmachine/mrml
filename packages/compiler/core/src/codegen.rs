@@ -35832,6 +35832,13 @@ mod tests {
         ] {
             analyze(source).unwrap();
         }
+
+        let projected_grandchild_live = "fn value(first: &mut u16, second: &mut u16) -> u16 { let pair = (&mut *first,); let child: &mut u16 = pair.0; let grandchild: &mut u16 = &mut *child; let competing: &mut u16 = &mut *first; *competing += 1; *grandchild }";
+        assert_eq!(
+            analyze(projected_grandchild_live).unwrap_err().kind,
+            CodegenErrorKind::RuntimeBorrowConflict
+        );
+        analyze("fn value(first: &mut u16, second: &mut u16) -> u16 { let pair = (&mut *first,); let child: &mut u16 = pair.0; let grandchild: &mut u16 = &mut *child; *grandchild += 1; let restored: &mut u16 = &mut *first; *restored }").unwrap();
     }
 
     #[test]
