@@ -5035,3 +5035,15 @@ mechanism, or hardware protocol. The broader component-interface, Zstd,
 adaptive-placement, microVM, and VirtualGPU mechanisms retain their existing
 `TRIGGERED` reviews; this agent review does not replace targeted independent
 human review.
+
+# 2026-08-25 — Bounded source marker-trait admission
+
+**Result: NOT_TRIGGERED.** This compiler increment recognizes empty Rust marker-
+trait declarations in the existing bounded parser and maps their source-order
+names to fixed-capacity internal identities. It adds no trait-selection
+algorithm, coherence rule, proof procedure, language runtime mechanism,
+cryptographic construction, storage or transport protocol, codec operation, or
+hardware technique. This classification covers only parsing and identity
+admission; later trait semantics require their own review when their mechanisms
+are concrete. This agent review does not replace targeted independent human
+review.
