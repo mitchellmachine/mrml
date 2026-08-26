@@ -31720,7 +31720,7 @@ mod tests {
                         body_expression: "let pair: (&mut u16,) = (value,); pair.0",
                     })
                 }
-                ("tuple_field_move", 1) if MAX_PARAMETERS >= 3 => {
+                ("tuple_field_move", 1) if MAX_PARAMETERS >= 4 => {
                     parameters[0] = Some(RuntimeCallParameter {
                         name: "value",
                         ty: reference,
@@ -31733,7 +31733,8 @@ mod tests {
                         return_type_name: "&mut u16",
                         body_expression: concat!(
                             "let pair: (&mut u16,) = (value,); ",
-                            "let alias: &mut u16 = pair.0; alias"
+                            "let alias: &mut u16 = pair.0; ",
+                            "let result: &mut u16 = alias; result"
                         ),
                     })
                 }
@@ -31785,7 +31786,8 @@ mod tests {
                         body_expression: concat!(
                             "let mut pair: (&mut u16,) = (first,); ",
                             "if choose { pair.0 = second; } ",
-                            "else { pair.0 = second; } pair.0"
+                            "else { pair.0 = second; } ",
+                            "let alias: &mut u16 = pair.0; alias"
                         ),
                     })
                 }
@@ -31810,7 +31812,8 @@ mod tests {
                         return_type_name: "&mut u16",
                         body_expression: concat!(
                             "let mut pair: (&mut u16,) = (second,); ",
-                            "while repeat { pair.0 = &mut *pair.0; } pair.0"
+                            "while repeat { pair.0 = &mut *pair.0; } ",
+                            "let alias: &mut u16 = pair.0; alias"
                         ),
                     })
                 }
@@ -35972,18 +35975,19 @@ mod tests {
             Some(0)
         );
         let tuple_field_move = MutableReferenceCallResolver
-            .resolve_runtime_call::<3>("tuple_field_move", 1)
+            .resolve_runtime_call::<4>("tuple_field_move", 1)
             .unwrap();
         assert_eq!(
-            runtime_reference_call_origin_parameter::<3, 24>(tuple_field_move),
+            runtime_reference_call_origin_parameter::<4, 32>(tuple_field_move),
             Some(0)
         );
         assert_eq!(
-            runtime_reference_call_origin_parameter::<3, 24>(RuntimeCallTarget {
+            runtime_reference_call_origin_parameter::<4, 32>(RuntimeCallTarget {
                 body_expression: concat!(
                     "let mut local_value: u16 = 1; ",
                     "let pair: (&mut u16,) = (&mut local_value,); ",
-                    "let alias: &mut u16 = pair.0; alias"
+                    "let alias: &mut u16 = pair.0; ",
+                    "let result: &mut u16 = alias; result"
                 ),
                 ..tuple_field_move
             }),
