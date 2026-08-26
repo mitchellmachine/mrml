@@ -2419,6 +2419,61 @@ fn x86_64_inline_output_tuple_field<'source, const MAX_PARAMETERS: usize>(
     Ok(Some((index, local, field)))
 }
 
+fn x86_64_inline_output_array_element<'source, const MAX_PARAMETERS: usize>(
+    function: &Function<'source, MAX_PARAMETERS>,
+    locals: &[Option<RuntimeLocal<'source>>],
+    output: &str,
+) -> Result<Option<(usize, RuntimeLocal<'source>, usize)>, CodegenErrorKind> {
+    let Some(output) = output.strip_suffix(']') else {
+        return Ok(None);
+    };
+    let Some((name, element)) = output.rsplit_once('[') else {
+        return Err(CodegenErrorKind::InvalidInlineAssembly);
+    };
+    if name.contains(['[', ']']) || x86_64_naked_external_symbol(name) != Some(name) {
+        return Err(CodegenErrorKind::InvalidInlineAssembly);
+    }
+    let element = element
+        .parse::<usize>()
+        .map_err(|_| CodegenErrorKind::InvalidInlineAssembly)?;
+    let (index, local) = locals
+        .iter()
+        .enumerate()
+        .rev()
+        .find_map(|(index, local)| {
+            local
+                .filter(|local| local.name == name)
+                .map(|local| (index, local))
+        })
+        .ok_or_else(|| {
+            if function
+                .parameters()
+                .iter()
+                .flatten()
+                .any(|parameter| parameter.name == name)
+            {
+                CodegenErrorKind::ImmutableAssignment
+            } else {
+                CodegenErrorKind::UnknownRuntimeName
+            }
+        })?;
+    if !local.mutable {
+        return Err(CodegenErrorKind::ImmutableAssignment);
+    }
+    let RuntimeExpressionType::Array { element: ty, count } = local.ty else {
+        return Err(CodegenErrorKind::RuntimeTypeMismatch);
+    };
+    if element >= count {
+        return Err(CodegenErrorKind::ValueOutOfRange);
+    }
+    if runtime_type_from_array_element(ty)
+        != RuntimeExpressionType::Integer(Some(crate::IntegerType::U64))
+    {
+        return Err(CodegenErrorKind::RuntimeTypeMismatch);
+    }
+    Ok(Some((index, local, element)))
+}
+
 fn encode_x86_64_naked_instruction_for_syntax(
     instruction: &str,
     att_syntax: bool,
@@ -8732,6 +8787,39 @@ fn preanalyze_runtime_expression_statement_reads<
                 }
                 return Ok(());
             }
+            if let Some((_, local, element)) =
+                x86_64_inline_output_array_element(function, locals, output).map_err(|kind| {
+                    CodegenError {
+                        kind,
+                        span: translate_span(body_start, statement.span),
+                    }
+                })?
+            {
+                let base = RuntimePlaceIdentity::Local(local.id);
+                let projections =
+                    RuntimePlaceProjections::single(RuntimePlaceProjection::ArrayElement(element));
+                facts
+                    .push_assignment_access(RuntimePlaceAccessFact {
+                        base,
+                        projections,
+                        ty: local.ty,
+                        access: RuntimePlaceAccess::Write,
+                        span: statement.span,
+                    })
+                    .map_err(|kind| CodegenError {
+                        kind,
+                        span: translate_span(body_start, statement.span),
+                    })?;
+                if let Some(path) = facts.find_move_path(base, projections) {
+                    facts
+                        .push_place_effect(path, RuntimePlaceEffectKind::Write, statement.span)
+                        .map_err(|kind| CodegenError {
+                            kind,
+                            span: translate_span(body_start, statement.span),
+                        })?;
+                }
+                return Ok(());
+            }
             let (_, local) =
                 x86_64_inline_output_local(function, locals, output).map_err(|kind| {
                     CodegenError {
@@ -8814,6 +8902,39 @@ fn preanalyze_runtime_expression_statement_reads<
                     }
                     return Ok(());
                 }
+                if let Some((_, local, element)) = x86_64_inline_output_array_element(
+                    function, locals, output,
+                )
+                .map_err(|kind| CodegenError {
+                    kind,
+                    span: translate_span(body_start, statement.span),
+                })? {
+                    let base = RuntimePlaceIdentity::Local(local.id);
+                    let projections = RuntimePlaceProjections::single(
+                        RuntimePlaceProjection::ArrayElement(element),
+                    );
+                    facts
+                        .push_assignment_access(RuntimePlaceAccessFact {
+                            base,
+                            projections,
+                            ty: local.ty,
+                            access: RuntimePlaceAccess::Write,
+                            span: statement.span,
+                        })
+                        .map_err(|kind| CodegenError {
+                            kind,
+                            span: translate_span(body_start, statement.span),
+                        })?;
+                    if let Some(path) = facts.find_move_path(base, projections) {
+                        facts
+                            .push_place_effect(path, RuntimePlaceEffectKind::Write, statement.span)
+                            .map_err(|kind| CodegenError {
+                                kind,
+                                span: translate_span(body_start, statement.span),
+                            })?;
+                    }
+                    return Ok(());
+                }
                 let (_, local) =
                     x86_64_inline_output_local(function, locals, output).map_err(|kind| {
                         CodegenError {
@@ -8840,6 +8961,43 @@ fn preanalyze_runtime_expression_statement_reads<
                 let base = RuntimePlaceIdentity::Local(local.id);
                 let projections =
                     RuntimePlaceProjections::single(RuntimePlaceProjection::TupleField(field));
+                facts
+                    .push_assignment_access(RuntimePlaceAccessFact {
+                        base,
+                        projections,
+                        ty: local.ty,
+                        access: RuntimePlaceAccess::ReadModifyWrite,
+                        span: statement.span,
+                    })
+                    .map_err(|kind| CodegenError {
+                        kind,
+                        span: translate_span(body_start, statement.span),
+                    })?;
+                if let Some(path) = facts.find_move_path(base, projections) {
+                    facts
+                        .push_place_effect(
+                            path,
+                            RuntimePlaceEffectKind::ReadModifyWrite,
+                            statement.span,
+                        )
+                        .map_err(|kind| CodegenError {
+                            kind,
+                            span: translate_span(body_start, statement.span),
+                        })?;
+                }
+                return Ok(());
+            }
+            if let Some((_, local, element)) =
+                x86_64_inline_output_array_element(function, locals, input).map_err(|kind| {
+                    CodegenError {
+                        kind,
+                        span: translate_span(body_start, statement.span),
+                    }
+                })?
+            {
+                let base = RuntimePlaceIdentity::Local(local.id);
+                let projections =
+                    RuntimePlaceProjections::single(RuntimePlaceProjection::ArrayElement(element));
                 facts
                     .push_assignment_access(RuntimePlaceAccessFact {
                         base,
@@ -26100,6 +26258,46 @@ impl<
                         .ok_or(self.error(CodegenErrorKind::OutputTooSmall))?;
                     return self.emit_store_stack_slot(destination);
                 }
+                if let Some((index, local, element)) = x86_64_inline_output_array_element(
+                    self.function,
+                    &self.locals[..self.saved_locals],
+                    output,
+                )
+                .map_err(|kind| CodegenError {
+                    kind,
+                    span: translate_span(body_start, statement.span),
+                })? {
+                    let fact = RuntimePlaceAccessFact {
+                        base: RuntimePlaceIdentity::Local(local.id),
+                        projections: RuntimePlaceProjections::single(
+                            RuntimePlaceProjection::ArrayElement(element),
+                        ),
+                        ty: local.ty,
+                        access: RuntimePlaceAccess::Write,
+                        span: statement.span,
+                    };
+                    if self.preanalyzed_assignment_access_cursor
+                        < self.body_facts.assignment_access_count
+                        && self.body_facts.assignment_accesses
+                            [self.preanalyzed_assignment_access_cursor]
+                            == Some(fact)
+                    {
+                        self.preanalyzed_assignment_access_cursor += 1;
+                    }
+                    self.record_place_access_fact(
+                        fact.base,
+                        fact.projections,
+                        fact.ty,
+                        fact.access,
+                        fact.span,
+                    )?;
+                    self.emit(&[0x48, 0xc7, 0xc0, 0x07, 0x00, 0x00, 0x00])?;
+                    let destination = self
+                        .local_stack_slots_from(index + 1)?
+                        .checked_add(element)
+                        .ok_or(self.error(CodegenErrorKind::OutputTooSmall))?;
+                    return self.emit_store_stack_slot(destination);
+                }
                 let (index, local) = x86_64_inline_output_local(
                     self.function,
                     &self.locals[..self.saved_locals],
@@ -26206,6 +26404,52 @@ impl<
                             .ok_or(self.error(CodegenErrorKind::OutputTooSmall))?;
                         return self.emit_store_stack_slot(stack_slot);
                     }
+                    if let Some((index, local, element)) = x86_64_inline_output_array_element(
+                        self.function,
+                        &self.locals[..self.saved_locals],
+                        output,
+                    )
+                    .map_err(|kind| CodegenError {
+                        kind,
+                        span: translate_span(body_start, statement.span),
+                    })? {
+                        let fact = RuntimePlaceAccessFact {
+                            base: RuntimePlaceIdentity::Local(local.id),
+                            projections: RuntimePlaceProjections::single(
+                                RuntimePlaceProjection::ArrayElement(element),
+                            ),
+                            ty: local.ty,
+                            access: RuntimePlaceAccess::Write,
+                            span: statement.span,
+                        };
+                        if self.preanalyzed_assignment_access_cursor
+                            < self.body_facts.assignment_access_count
+                            && self.body_facts.assignment_accesses
+                                [self.preanalyzed_assignment_access_cursor]
+                                == Some(fact)
+                        {
+                            self.preanalyzed_assignment_access_cursor += 1;
+                        }
+                        self.record_place_access_fact(
+                            fact.base,
+                            fact.projections,
+                            fact.ty,
+                            fact.access,
+                            fact.span,
+                        )?;
+                        let previous_width = self.width;
+                        self.width = runtime_expression_width(ty)
+                            .ok_or(self.error(CodegenErrorKind::RuntimeTypeMismatch))?;
+                        let emission = self.emit_expression(&tree, tree.root(), 0);
+                        self.width = previous_width;
+                        emission?;
+                        self.emit(&[0x48, 0xff, 0xc0])?;
+                        let stack_slot = self
+                            .local_stack_slots_from(index + 1)?
+                            .checked_add(element)
+                            .ok_or(self.error(CodegenErrorKind::OutputTooSmall))?;
+                        return self.emit_store_stack_slot(stack_slot);
+                    }
                     let (index, local) = x86_64_inline_output_local(
                         self.function,
                         &self.locals[..self.saved_locals],
@@ -26283,6 +26527,47 @@ impl<
                     let stack_slot = self
                         .local_stack_slots_from(index + 1)?
                         .checked_add(field)
+                        .ok_or(self.error(CodegenErrorKind::OutputTooSmall))?;
+                    self.emit_stack_slot(stack_slot)?;
+                    self.emit(&[0x48, 0xff, 0xc0])?;
+                    return self.emit_store_stack_slot(stack_slot);
+                }
+                if let Some((index, local, element)) = x86_64_inline_output_array_element(
+                    self.function,
+                    &self.locals[..self.saved_locals],
+                    input,
+                )
+                .map_err(|kind| CodegenError {
+                    kind,
+                    span: translate_span(body_start, statement.span),
+                })? {
+                    let fact = RuntimePlaceAccessFact {
+                        base: RuntimePlaceIdentity::Local(local.id),
+                        projections: RuntimePlaceProjections::single(
+                            RuntimePlaceProjection::ArrayElement(element),
+                        ),
+                        ty: local.ty,
+                        access: RuntimePlaceAccess::ReadModifyWrite,
+                        span: statement.span,
+                    };
+                    if self.preanalyzed_assignment_access_cursor
+                        < self.body_facts.assignment_access_count
+                        && self.body_facts.assignment_accesses
+                            [self.preanalyzed_assignment_access_cursor]
+                            == Some(fact)
+                    {
+                        self.preanalyzed_assignment_access_cursor += 1;
+                    }
+                    self.record_place_access_fact(
+                        fact.base,
+                        fact.projections,
+                        fact.ty,
+                        fact.access,
+                        fact.span,
+                    )?;
+                    let stack_slot = self
+                        .local_stack_slots_from(index + 1)?
+                        .checked_add(element)
                         .ok_or(self.error(CodegenErrorKind::OutputTooSmall))?;
                     self.emit_stack_slot(stack_slot)?;
                     self.emit(&[0x48, 0xff, 0xc0])?;
@@ -30346,6 +30631,30 @@ mod tests {
         for source in [
             concat!(
                 "#[unsafe(no_mangle)] pub unsafe extern \"C\" fn answer() -> u64 { ",
+                "let mut values: [u64; 2] = [1, 2]; ",
+                "asm!(\"mov rax, 7\", lateout(\"rax\") values[1]); values[1] }"
+            ),
+            concat!(
+                "#[unsafe(no_mangle)] pub unsafe extern \"C\" fn answer() -> u64 { ",
+                "let mut values: [u64; 2] = [1, 2]; ",
+                "asm!(\"inc rax\", inout(\"rax\") values[1]); values[1] }"
+            ),
+            concat!(
+                "#[unsafe(no_mangle)] pub unsafe extern \"C\" fn answer(input: u64) -> u64 { ",
+                "let mut values: [u64; 2] = [1, 2]; ",
+                "asm!(\"inc rax\", inout(\"rax\") input => values[1]); values[1] }"
+            ),
+        ] {
+            let code = compile(source).unwrap();
+            assert!(
+                code.bytes()
+                    .windows(3)
+                    .any(|bytes| { bytes == [0x48, 0xff, 0xc0] || bytes == [0x48, 0xc7, 0xc0] })
+            );
+        }
+        for source in [
+            concat!(
+                "#[unsafe(no_mangle)] pub unsafe extern \"C\" fn answer() -> u64 { ",
                 "let mut value: u64 = 6; asm!(\"inc {value}\", value = inout(reg) value); value }"
             ),
             concat!(
@@ -30507,6 +30816,18 @@ mod tests {
             (
                 "#[unsafe(no_mangle)] pub unsafe extern \"C\" fn answer(input: u64) -> u64 { let values: (u64, u64) = (0, 1); asm!(\"inc rax\", inout(\"rax\") input => values.1); values.1 }",
                 CodegenErrorKind::ImmutableAssignment,
+            ),
+            (
+                "#[unsafe(no_mangle)] pub unsafe extern \"C\" fn answer() -> u64 { let values: [u64; 2] = [1, 2]; asm!(\"mov rax, 7\", lateout(\"rax\") values[1]); values[1] }",
+                CodegenErrorKind::ImmutableAssignment,
+            ),
+            (
+                "#[unsafe(no_mangle)] pub unsafe extern \"C\" fn answer() -> u64 { let mut values: [u64; 2] = [1, 2]; asm!(\"inc rax\", inout(\"rax\") values[2]); values[1] }",
+                CodegenErrorKind::ValueOutOfRange,
+            ),
+            (
+                "#[unsafe(no_mangle)] pub unsafe extern \"C\" fn answer() -> bool { let mut values: [bool; 2] = [false, true]; asm!(\"inc rax\", inout(\"rax\") values[1]); values[1] }",
+                CodegenErrorKind::RuntimeTypeMismatch,
             ),
             (
                 "#[unsafe(no_mangle)] pub unsafe extern \"C\" fn answer(input: u64) -> u64 { let mut output: u64 = 0; asm!(\"inc rax\", inout(\"rax\") input =>); output }",
