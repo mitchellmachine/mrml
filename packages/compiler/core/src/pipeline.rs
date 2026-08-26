@@ -353,6 +353,22 @@ mod tests {
     }
 
     #[test]
+    fn rejects_source_implementations_with_missing_supertraits_before_codegen() {
+        let source = concat!(
+            "trait Parent {} trait Child: Parent {} impl Child for u32 {} ",
+            "#[unsafe(no_mangle)] pub extern \"C\" fn answer() -> u64 { 42 }"
+        );
+        let error = compile(source, "answer", ObjectFormat::Coff).unwrap_err();
+        assert!(matches!(
+            error.kind,
+            CompileErrorKind::TraitImplementation(SourceTraitImplementationError {
+                kind: crate::SourceTraitImplementationErrorKind::MissingSupertraitImplementation,
+                ..
+            })
+        ));
+    }
+
+    #[test]
     fn reports_each_pipeline_boundary() {
         let parse = compile("fn broken(", "broken", ObjectFormat::Elf64).unwrap_err();
         assert!(matches!(parse.kind, CompileErrorKind::Parse(_)));

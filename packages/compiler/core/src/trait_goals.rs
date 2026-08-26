@@ -5,7 +5,7 @@
 //! substitutions without confusing inference variables, placeholders, or
 //! concrete types.
 
-use crate::{Function, Item, Module, Span, TypeRef};
+use crate::{Function, Item, MAX_TRAIT_SUPERTRAITS, Module, Span, TypeRef};
 
 pub const MAX_TRAIT_GOAL_ARGUMENTS: usize = 8;
 pub const MAX_CANONICAL_TRAIT_VARIABLES: usize = 8;
@@ -41,12 +41,27 @@ pub struct SourceTraitDeclaration<'source> {
     pub name: &'source str,
     pub name_span: Span,
     pub public: bool,
+    supertraits: [Option<TraitId>; MAX_TRAIT_SUPERTRAITS],
+    supertrait_count: usize,
+}
+
+impl SourceTraitDeclaration<'_> {
+    pub fn supertraits(&self) -> &[Option<TraitId>] {
+        &self.supertraits[..self.supertrait_count]
+    }
+
+    pub const fn supertrait_count(&self) -> usize {
+        self.supertrait_count
+    }
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum SourceTraitDeclarationError {
     TooManyDeclarations,
     DuplicateName,
+    UnknownSupertrait,
+    DuplicateSupertrait,
+    CyclicSupertrait,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -82,8 +97,36 @@ impl<'source> SourceTraitDeclarationTable<'source> {
                 name: declaration.name,
                 name_span: declaration.name_span,
                 public: declaration.public,
+                supertraits: [None; MAX_TRAIT_SUPERTRAITS],
+                supertrait_count: 0,
             });
             table.count += 1;
+        }
+        for item in module.items().iter().flatten() {
+            let Item::Trait(declaration) = item else {
+                continue;
+            };
+            let index = table.get(declaration.name).unwrap().id.get() as usize;
+            let mut supertraits = [None; MAX_TRAIT_SUPERTRAITS];
+            let mut supertrait_count = 0usize;
+            for source_supertrait in declaration.supertraits().iter().flatten() {
+                let supertrait = table
+                    .get(source_supertrait.name)
+                    .ok_or(SourceTraitDeclarationError::UnknownSupertrait)?
+                    .id;
+                if supertraits[..supertrait_count].contains(&Some(supertrait)) {
+                    return Err(SourceTraitDeclarationError::DuplicateSupertrait);
+                }
+                supertraits[supertrait_count] = Some(supertrait);
+                supertrait_count += 1;
+            }
+            let resolved = table.declarations[index].as_mut().unwrap();
+            resolved.supertraits = supertraits;
+            resolved.supertrait_count = supertrait_count;
+        }
+        let mut states = [0u8; MAX_SOURCE_TRAIT_DECLARATIONS];
+        for index in 0..table.count {
+            table.visit_supertraits(index, &mut states)?;
         }
         Ok(table)
     }
@@ -107,6 +150,32 @@ impl<'source> SourceTraitDeclarationTable<'source> {
             .copied()
             .find(|declaration| declaration.name == name)
     }
+
+    pub fn get_by_id(&self, id: TraitId) -> Option<SourceTraitDeclaration<'source>> {
+        self.declarations()
+            .get(id.get() as usize)
+            .copied()
+            .flatten()
+    }
+
+    fn visit_supertraits(
+        &self,
+        index: usize,
+        states: &mut [u8; MAX_SOURCE_TRAIT_DECLARATIONS],
+    ) -> Result<(), SourceTraitDeclarationError> {
+        match states[index] {
+            1 => return Err(SourceTraitDeclarationError::CyclicSupertrait),
+            2 => return Ok(()),
+            _ => {}
+        }
+        states[index] = 1;
+        let declaration = self.declarations[index].unwrap();
+        for supertrait in declaration.supertraits().iter().flatten() {
+            self.visit_supertraits(supertrait.get() as usize, states)?;
+        }
+        states[index] = 2;
+        Ok(())
+    }
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -121,6 +190,8 @@ pub enum SourceTraitImplementationErrorKind {
     UnknownTrait,
     UnsupportedSelfType,
     TooManyTypes,
+    MissingSupertraitImplementation,
+    AmbiguousSupertraitImplementation,
     Goal(TraitGoalError),
 }
 
@@ -201,6 +272,19 @@ impl<'source> SourceTraitImplementationTable<'source> {
                     span: implementation.trait_name_span,
                 })?;
             implementation_count += 1;
+        }
+        for item in module.items().iter().flatten() {
+            let Item::TraitImplementation(implementation) = item else {
+                continue;
+            };
+            let trait_id = traits.get(implementation.trait_name).unwrap().id;
+            let self_type = table.get_type(implementation.self_type.text).unwrap().id;
+            table
+                .prove_supertraits(trait_id, self_type, traits, 0)
+                .map_err(|kind| SourceTraitImplementationError {
+                    kind,
+                    span: implementation.trait_name_span,
+                })?;
         }
         Ok(table)
     }
@@ -322,6 +406,45 @@ impl<'source> SourceTraitImplementationTable<'source> {
         });
         self.type_count += 1;
         Ok(id)
+    }
+
+    fn prove_supertraits(
+        &self,
+        trait_id: TraitId,
+        self_type: TraitTypeId,
+        traits: &SourceTraitDeclarationTable<'source>,
+        depth: usize,
+    ) -> Result<(), SourceTraitImplementationErrorKind> {
+        if depth == MAX_SOURCE_TRAIT_DECLARATIONS {
+            return Err(SourceTraitImplementationErrorKind::Goal(
+                TraitGoalError::InvalidGoal,
+            ));
+        }
+        let declaration = traits
+            .get_by_id(trait_id)
+            .ok_or(SourceTraitImplementationErrorKind::UnknownTrait)?;
+        for supertrait in declaration.supertraits().iter().flatten() {
+            let goal = canonicalize_implemented_trait_goal(ImplementedTraitGoal::new(
+                *supertrait,
+                TraitGoalType::Concrete(self_type),
+            ))
+            .map_err(SourceTraitImplementationErrorKind::Goal)?;
+            match self.implementations.solve(goal) {
+                TraitGoalSolution::Unique(_) => {}
+                TraitGoalSolution::NoSolution => {
+                    return Err(
+                        SourceTraitImplementationErrorKind::MissingSupertraitImplementation,
+                    );
+                }
+                TraitGoalSolution::Ambiguous => {
+                    return Err(
+                        SourceTraitImplementationErrorKind::AmbiguousSupertraitImplementation,
+                    );
+                }
+            }
+            self.prove_supertraits(*supertrait, self_type, traits, depth + 1)?;
+        }
+        Ok(())
     }
 }
 
@@ -7389,6 +7512,44 @@ mod tests {
     }
 
     #[test]
+    fn resolves_forward_supertraits_and_rejects_invalid_graphs() {
+        let module = Parser::new("trait Child: Parent {} trait Parent {}")
+            .parse_module::<4, 1>()
+            .unwrap();
+        let traits = SourceTraitDeclarationTable::from_module(&module).unwrap();
+        let child = traits.get("Child").unwrap();
+        assert_eq!(child.supertrait_count(), 1);
+        assert_eq!(
+            child.supertraits()[0],
+            Some(traits.get("Parent").unwrap().id)
+        );
+
+        let unknown = Parser::new("trait Child: Missing {}")
+            .parse_module::<2, 1>()
+            .unwrap();
+        assert_eq!(
+            SourceTraitDeclarationTable::from_module(&unknown),
+            Err(SourceTraitDeclarationError::UnknownSupertrait)
+        );
+
+        let duplicate = Parser::new("trait Child: Parent + Parent {} trait Parent {}")
+            .parse_module::<3, 1>()
+            .unwrap();
+        assert_eq!(
+            SourceTraitDeclarationTable::from_module(&duplicate),
+            Err(SourceTraitDeclarationError::DuplicateSupertrait)
+        );
+
+        let cyclic = Parser::new("trait First: Second {} trait Second: First {}")
+            .parse_module::<3, 1>()
+            .unwrap();
+        assert_eq!(
+            SourceTraitDeclarationTable::from_module(&cyclic),
+            Err(SourceTraitDeclarationError::CyclicSupertrait)
+        );
+    }
+
+    #[test]
     fn lowers_exact_source_trait_implementations_into_solver_facts() {
         let source = concat!(
             "trait Visible {} trait Persisted {} ",
@@ -7465,6 +7626,31 @@ mod tests {
         let traits = SourceTraitDeclarationTable::from_module(&overflow).unwrap();
         let error = SourceTraitImplementationTable::from_module(&overflow, &traits).unwrap_err();
         assert_eq!(error.kind, SourceTraitImplementationErrorKind::TooManyTypes);
+    }
+
+    #[test]
+    fn exact_source_implementations_require_transitive_supertraits() {
+        let satisfied = Parser::new(concat!(
+            "trait Leaf {} trait Parent: Leaf {} trait Child: Parent {} ",
+            "impl Child for u32 {} impl Leaf for u32 {} impl Parent for u32 {}"
+        ))
+        .parse_module::<8, 1>()
+        .unwrap();
+        let traits = SourceTraitDeclarationTable::from_module(&satisfied).unwrap();
+        SourceTraitImplementationTable::from_module(&satisfied, &traits).unwrap();
+
+        let missing = Parser::new(concat!(
+            "trait Leaf {} trait Parent: Leaf {} trait Child: Parent {} ",
+            "impl Child for u32 {} impl Parent for u32 {}"
+        ))
+        .parse_module::<8, 1>()
+        .unwrap();
+        let traits = SourceTraitDeclarationTable::from_module(&missing).unwrap();
+        let error = SourceTraitImplementationTable::from_module(&missing, &traits).unwrap_err();
+        assert_eq!(
+            error.kind,
+            SourceTraitImplementationErrorKind::MissingSupertraitImplementation
+        );
     }
 
     #[test]

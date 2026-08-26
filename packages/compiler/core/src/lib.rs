@@ -46,9 +46,9 @@ pub use parser::{
     MAX_FUNCTION_WHERE_PREDICATES, MAX_LOOP_OPERATIONS, MAX_NESTED_LOOP_ACTIONS,
     MAX_NESTED_LOOP_BLOCKS, MAX_NESTED_LOOP_CONDITIONAL_BREAKS,
     MAX_NESTED_LOOP_CONDITIONAL_CONTINUES, MAX_NESTED_LOOP_CONDITIONAL_RETURNS,
-    MAX_NESTED_LOOP_UNCONDITIONAL_CONTROLS, Module, NestedLoopBlock, NestedLoopControlTarget,
-    NestedLoopUnconditionalControl, Parameter, ParseError, ParseErrorKind, Parser,
-    TraitDeclaration, TraitImplementation, TypeRef, WhileLoop,
+    MAX_NESTED_LOOP_UNCONDITIONAL_CONTROLS, MAX_TRAIT_SUPERTRAITS, Module, NestedLoopBlock,
+    NestedLoopControlTarget, NestedLoopUnconditionalControl, Parameter, ParseError, ParseErrorKind,
+    Parser, TraitDeclaration, TraitImplementation, TraitSupertrait, TypeRef, WhileLoop,
 };
 pub use pipeline::{
     CompileError, CompileErrorKind, ObjectFormat, compile_source_function,

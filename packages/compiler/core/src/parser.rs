@@ -19,6 +19,7 @@ pub const MAX_BODY_RETURNS: usize = 8;
 pub const MAX_CONDITIONAL_RETURN_BRANCHES: usize = 4;
 pub const MAX_BODY_CONDITIONAL_ASSIGNMENTS: usize = 8;
 pub const MAX_FUNCTION_WHERE_PREDICATES: usize = 8;
+pub const MAX_TRAIT_SUPERTRAITS: usize = 8;
 pub const MAX_CONDITIONAL_ASSIGNMENT_BRANCHES: usize = 4;
 pub const MAX_CONDITIONAL_BRANCH_ACTIONS: usize = 4;
 const MAX_BODY_TAIL_EXPRESSION_NODES: usize = 128;
@@ -765,7 +766,25 @@ pub struct TraitDeclaration<'source> {
     pub public: bool,
     pub name: &'source str,
     pub name_span: Span,
+    supertraits: [Option<TraitSupertrait<'source>>; MAX_TRAIT_SUPERTRAITS],
+    supertrait_count: usize,
     pub body: Span,
+}
+
+impl<'source> TraitDeclaration<'source> {
+    pub fn supertraits(&self) -> &[Option<TraitSupertrait<'source>>] {
+        &self.supertraits[..self.supertrait_count]
+    }
+
+    pub const fn supertrait_count(&self) -> usize {
+        self.supertrait_count
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct TraitSupertrait<'source> {
+    pub name: &'source str,
+    pub span: Span,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -837,6 +856,7 @@ pub enum ParseErrorKind {
     TooManyItems,
     TooManyParameters,
     TooManyWherePredicates,
+    TooManySupertraits,
     TooManyLocals,
     TooManyLoopAssignments,
     TooManyLoopOperations,
@@ -2961,6 +2981,25 @@ impl<'source> Parser<'source> {
 
     fn trait_declaration(&mut self, public: bool) -> Result<TraitDeclaration<'source>, ParseError> {
         let name = self.identifier()?;
+        let mut supertraits = [None; MAX_TRAIT_SUPERTRAITS];
+        let mut supertrait_count = 0usize;
+        if self.take_text(":")?.is_some() {
+            loop {
+                if supertrait_count == MAX_TRAIT_SUPERTRAITS {
+                    let token = self.peek()?;
+                    return Err(self.error(ParseErrorKind::TooManySupertraits, token));
+                }
+                let supertrait = self.identifier()?;
+                supertraits[supertrait_count] = Some(TraitSupertrait {
+                    name: supertrait.text,
+                    span: supertrait.span,
+                });
+                supertrait_count += 1;
+                if self.take_text("+")?.is_none() {
+                    break;
+                }
+            }
+        }
         let body = self.body()?;
         let contents = &self.source[body.start + 1..body.end - 1];
         if Parser::new(contents).peek()?.is_none() {
@@ -2968,6 +3007,8 @@ impl<'source> Parser<'source> {
                 public,
                 name: name.text,
                 name_span: name.span,
+                supertraits,
+                supertrait_count,
                 body,
             })
         } else {
@@ -3213,6 +3254,25 @@ mod tests {
         assert_eq!(&source[sendable.body.start..sendable.body.end], "{}");
         assert!(!local.public);
         assert_eq!(local.name, "Local");
+    }
+
+    #[test]
+    fn parses_and_bounds_marker_supertraits() {
+        let source = "trait Child: Parent + Visible {}";
+        let module: TestModule<'_> = Parser::new(source).parse_module().unwrap();
+        let Some(Item::Trait(child)) = module.items()[0] else {
+            panic!("expected trait")
+        };
+        assert_eq!(child.supertrait_count(), 2);
+        assert_eq!(child.supertraits()[0].unwrap().name, "Parent");
+        assert_eq!(child.supertraits()[1].unwrap().name, "Visible");
+
+        let overflow = Parser::new(concat!(
+            "trait Child: T0 + T1 + T2 + T3 + T4 + T5 + T6 + T7 + T8 {}"
+        ))
+        .parse_module::<2, 1>()
+        .unwrap_err();
+        assert_eq!(overflow.kind, ParseErrorKind::TooManySupertraits);
     }
 
     #[test]
