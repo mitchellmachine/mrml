@@ -110,6 +110,15 @@ tests and cross-build the UEFI target. This is **PARTIALLY IMPLEMENTED** mocked-
 firmware integration evidence. Invoking it from the real loader and transferring
 the resulting exact installed-recovery owner into early boot are the next gate.
 
+The real loader now invokes installed recovery before `ExitBootServices` when
+the authenticated journal names a volume/root. It scans at most 32 handles,
+requires one exact volume, traverses the graph under explicit boot bounds, and
+exact-matches the recovered root generation to the journal. A missing,
+ambiguous, changed, oversized, or invalid graph fails boot. The UEFI target
+cross-builds on Windows and Arch Linux. This is **PARTIALLY IMPLEMENTED** compile evidence;
+OVMF/physical execution and typed installed-device identity transfer for native
+kernel reacquisition remain the next gate.
+
 Selected-device reopening and redundant-root reads are now **PARTIALLY
 IMPLEMENTED**. Exact path/media/geometry and block-zero header revalidation
 precedes both root reads; any mismatch, second-read failure, or protocol-close

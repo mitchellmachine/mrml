@@ -1223,6 +1223,17 @@ publishes no recovered state. Windows and Arch Linux each pass 37 UEFI-library
 tests and cross-build the target. Real-loader invocation and loader-to-kernel
 transfer of the exact recovered owner remain next.
 
+The real loader now invokes that transaction before leaving firmware whenever
+the authenticated recovery journal names an accepted volume/root. It scans a
+bounded complete handle set, requires one exact volume, validates the reachable
+graph, and rejects any recovered volume or root-generation mismatch. Its boot
+graph bounds are 256 allocation records, 64 directories, 64 extents per file,
+64 objects, and 64 KiB metadata scratch; bound exhaustion fails boot. The UEFI
+target cross-builds on Windows and Arch Linux. This is **PARTIALLY IMPLEMENTED** compile and
+mocked-library evidence, not execution under OVMF or physical firmware. The
+current handoff remains non-authorizing recovery metadata and does not yet carry
+the installed device identity needed for native-kernel reacquisition.
+
 The recovered installed selection is now retained across the boot-policy to
 Total-admission boundary. `RecoveredInstalledTotalAdmission` binds its exact
 device descriptor, serviced session selection, volume header, active root,

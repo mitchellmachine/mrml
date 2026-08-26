@@ -1,5 +1,16 @@
 # Patent review log
 
+## 2026-08-26 — Real-loader installed recovery admission
+
+Patent review: **NOT_TRIGGERED** for this loader integration. It invokes the
+already reviewed bounded UEFI enumeration, exact volume selection, scoped block
+adapter, reachable-graph validator, and exact journal equality checks before
+`ExitBootServices`. The fixed capacity limits and fail-closed composition add no
+storage layout, selection or recovery algorithm, cryptography, placement policy,
+native fallback, queue/DMA mechanism, or hardware isolation method. Broader
+storage, firmware, adaptive-isolation, and Total-MicroVM reviews remain
+`TRIGGERED`; no patent-clearance or non-infringement conclusion is made.
+
 ## 2026-08-26 — UEFI reachable-graph recovery composition
 
 Patent review: **NOT_TRIGGERED** for this integration increment. It composes the

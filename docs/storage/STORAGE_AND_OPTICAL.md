@@ -130,6 +130,17 @@ an otherwise valid recovered graph. Windows and Arch Linux each pass 37 UEFI-
 library tests and cross-build the target. Real-loader invocation and transfer of
 the recovered installed owner into early boot remain **PLANNED**.
 
+The real UEFI loader now **PARTIALLY IMPLEMENTS** installed-graph admission
+before `ExitBootServices`. When the authenticated recovery journal names a
+volume/root, the loader enumerates at most 32 Block I/O handles, selects exactly
+one matching volume, validates its complete graph through the scoped adapter,
+and exact-matches the recovered root generation with the journal. The boot
+validator is explicitly bounded to 256 allocation records, 64 directories, 64
+extents per file, 64 objects, and 64 KiB metadata scratch; exceeding a bound
+fails boot rather than weakening validation. The UEFI target cross-builds on
+Windows and Arch Linux. This is compile evidence, not firmware execution, physical-media
+evidence, or transfer of device identity into the kernel.
+
 The `mrml` frontend may expose structured `disk`, `filesystem`, `optical`, and
 `media` operations. The PowerShell-inspired shell projects the same backend as
 typed `Get-*`, `Test-*`, `Initialize-*`, `New-*`, `Format-*`, `Write-*`, and

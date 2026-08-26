@@ -26,7 +26,7 @@ use mrml_package_format::{
     parse as parse_package, parse_release,
 };
 use mrml_storage::{
-    AUTHORITY_RECOVERY_STATE_BYTES, AuthorityRecoveryStateStore,
+    AUTHORITY_RECOVERY_STATE_BYTES, AuthorityRecoveryStateStore, VolumeId,
     decode_canonical_authority_recovery_state,
 };
 use mrml_uefi::tpm::{
@@ -63,6 +63,32 @@ const _: () = assert!(core::mem::size_of::<HandoffBuffer>() == HANDOFF_ALLOCATIO
 struct MadtBuffer(UnsafeCell<[u8; MAX_HANDOFF_MADT_BYTES]>);
 unsafe impl Sync for MadtBuffer {}
 static MADT: MadtBuffer = MadtBuffer(UnsafeCell::new([0; MAX_HANDOFF_MADT_BYTES]));
+const INSTALLED_RECOVERY_HANDLES: usize = 32;
+const INSTALLED_RECOVERY_ALLOCATIONS: usize = 256;
+const INSTALLED_RECOVERY_DIRECTORIES: usize = 64;
+const INSTALLED_RECOVERY_EXTENTS: usize = 64;
+const INSTALLED_RECOVERY_OBJECTS: usize = 64;
+const INSTALLED_RECOVERY_METADATA_BYTES: usize = 64 * 1024;
+struct RecoveryPathBuffer(UnsafeCell<[u8; MAX_UEFI_DEVICE_PATH_BYTES]>);
+unsafe impl Sync for RecoveryPathBuffer {}
+static RECOVERY_DEVICE_PATH: RecoveryPathBuffer =
+    RecoveryPathBuffer(UnsafeCell::new([0; MAX_UEFI_DEVICE_PATH_BYTES]));
+struct RecoveryFirmwareBlock(UnsafeCell<UefiRecoveryBlock>);
+unsafe impl Sync for RecoveryFirmwareBlock {}
+static RECOVERY_PROBE: RecoveryFirmwareBlock =
+    RecoveryFirmwareBlock(UnsafeCell::new(UefiRecoveryBlock::new()));
+struct RecoveryNativeBlock(UnsafeCell<[u8; UEFI_RECOVERY_BLOCK_BYTES]>);
+unsafe impl Sync for RecoveryNativeBlock {}
+static RECOVERY_VOLUME_SCRATCH: RecoveryNativeBlock =
+    RecoveryNativeBlock(UnsafeCell::new([0; UEFI_RECOVERY_BLOCK_BYTES]));
+static RECOVERY_PRIMARY: RecoveryNativeBlock =
+    RecoveryNativeBlock(UnsafeCell::new([0; UEFI_RECOVERY_BLOCK_BYTES]));
+static RECOVERY_SECONDARY: RecoveryNativeBlock =
+    RecoveryNativeBlock(UnsafeCell::new([0; UEFI_RECOVERY_BLOCK_BYTES]));
+struct RecoveryMetadataBuffer(UnsafeCell<[u8; INSTALLED_RECOVERY_METADATA_BYTES]>);
+unsafe impl Sync for RecoveryMetadataBuffer {}
+static RECOVERY_METADATA: RecoveryMetadataBuffer =
+    RecoveryMetadataBuffer(UnsafeCell::new([0; INSTALLED_RECOVERY_METADATA_BYTES]));
 const KERNEL_STACK_GUARD_PAGES: usize = 1;
 const KERNEL_PATH: &[u16] = &[
     92, 69, 70, 73, 92, 77, 82, 77, 76, 92, 75, 69, 82, 78, 69, 76, 46, 83, 73, 71, 78, 69, 68, 0,
@@ -697,6 +723,7 @@ unsafe fn boot(image: Handle, table: *mut SystemTable) -> Result<(), Status> {
     }
     let recovery_state =
         admit_configured_recovery_journal(services, rng_pointer.cast(), recovery_configuration)?;
+    validate_configured_installed_recovery(services, image, recovery_state)?;
     let coherent_release = prepared_release.is_some();
 
     loader_trace(0xa8);
@@ -1079,6 +1106,58 @@ fn admit_configured_recovery_journal(
         });
     state.fill(0);
     result
+}
+
+/// Requires an authenticated journal volume/root selection to exist as one
+/// exact, completely reachable installed graph before firmware services exit.
+/// The retained identity is evidence only; UEFI protocol authority is closed
+/// inside the recovery operation and never crosses the kernel handoff.
+fn validate_configured_installed_recovery(
+    services: &BootServices,
+    image: Handle,
+    recovery: Option<RecoveryStateMetadata>,
+) -> Result<(), Status> {
+    let Some(recovery) = recovery else {
+        return Ok(());
+    };
+    let Some(expected_volume) = recovery.accepted_volume() else {
+        return Ok(());
+    };
+    let expected_volume = VolumeId::new(expected_volume).map_err(|_| LOAD_ERROR)?;
+    let handles = unsafe { locate_block_io_handles::<INSTALLED_RECOVERY_HANDLES>(services) }
+        .map_err(|_| LOAD_ERROR)?;
+    let path = unsafe { &mut *RECOVERY_DEVICE_PATH.0.get() };
+    let probe = unsafe { &mut *RECOVERY_PROBE.0.get() };
+    let selected = unsafe {
+        select_uefi_recovery_volume(services, image, &handles, expected_volume, path, probe)
+    }
+    .map_err(|_| LOAD_ERROR)?;
+    let recovered = unsafe {
+        recover_selected_uefi_reachable_state::<
+            INSTALLED_RECOVERY_ALLOCATIONS,
+            INSTALLED_RECOVERY_DIRECTORIES,
+            INSTALLED_RECOVERY_EXTENTS,
+            INSTALLED_RECOVERY_OBJECTS,
+        >(
+            services,
+            image,
+            selected,
+            path,
+            &mut *RECOVERY_VOLUME_SCRATCH.0.get(),
+            &mut *RECOVERY_PRIMARY.0.get(),
+            &mut *RECOVERY_SECONDARY.0.get(),
+            &mut *RECOVERY_METADATA.0.get(),
+        )
+    }
+    .map_err(|_| LOAD_ERROR)?;
+    bind_recovered_uefi_installed_identity(
+        selected,
+        &recovered,
+        expected_volume,
+        recovery.accepted_root_generation(),
+    )
+    .map_err(|_| LOAD_ERROR)?;
+    Ok(())
 }
 
 fn detect_secure_boot(runtime: *mut RuntimeServices) -> Result<bool, Status> {

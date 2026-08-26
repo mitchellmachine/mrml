@@ -1042,6 +1042,66 @@ pub enum UefiReachableRecoveryError {
     Recovery(RecoveryError<BlockVolumeError<UefiBlockDescriptorError>>),
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum UefiInstalledRecoveryIdentityError {
+    VolumeMismatch,
+    RootGenerationMismatch,
+}
+
+/// Authority-free identity retained after one exact installed graph has been
+/// recovered. It records what the scoped UEFI control plane proved but grants
+/// no firmware protocol, block read, capability, rollback, or launch authority.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct UefiRecoveredInstalledIdentity {
+    descriptor: PlatformBlockDeviceDescriptor,
+    volume: VolumeId,
+    root_block: u64,
+    root_generation: u64,
+}
+
+impl UefiRecoveredInstalledIdentity {
+    pub const fn descriptor(self) -> PlatformBlockDeviceDescriptor {
+        self.descriptor
+    }
+
+    pub const fn volume(self) -> VolumeId {
+        self.volume
+    }
+
+    pub const fn root_block(self) -> u64 {
+        self.root_block
+    }
+
+    pub const fn root_generation(self) -> u64 {
+        self.root_generation
+    }
+}
+
+/// Exact-matches a recovered graph with the independently authenticated volume
+/// and root generation expected by boot recovery policy. This comparison is
+/// non-authorizing and must precede any handoff publication.
+pub fn bind_recovered_uefi_installed_identity<const EXTENTS: usize, const OBJECTS: usize>(
+    selected: UefiRecoveryHeaderCandidate,
+    recovered: &RecoveredReachableState<EXTENTS, OBJECTS>,
+    expected_volume: VolumeId,
+    expected_root_generation: u64,
+) -> Result<UefiRecoveredInstalledIdentity, UefiInstalledRecoveryIdentityError> {
+    let root = recovered.selected();
+    if selected.header.volume() != expected_volume || root.superblock().volume() != expected_volume
+    {
+        return Err(UefiInstalledRecoveryIdentityError::VolumeMismatch);
+    }
+    if expected_root_generation == 0 || root.superblock().generation() != expected_root_generation {
+        return Err(UefiInstalledRecoveryIdentityError::RootGenerationMismatch);
+    }
+    Ok(UefiRecoveredInstalledIdentity {
+        descriptor: selected.descriptor,
+        volume: expected_volume,
+        root_block: root.block(),
+        root_generation: expected_root_generation,
+    })
+}
+
 /// Reopens one exact selected UEFI media generation and validates its complete
 /// reachable metadata graph through the shared storage recovery implementation.
 /// The firmware protocol remains open across redundant-root selection and every
@@ -3216,6 +3276,25 @@ mod tests {
         assert_eq!(recovered.selected().superblock(), candidate);
         assert_eq!(recovered.file_count(), 0);
         assert!(!recovered.selected().used_fallback());
+        let identity =
+            bind_recovered_uefi_installed_identity(selected, &recovered, volume_id, 5).unwrap();
+        assert_eq!(identity.descriptor(), selected.descriptor());
+        assert_eq!(identity.volume(), volume_id);
+        assert_eq!(identity.root_block(), 1);
+        assert_eq!(identity.root_generation(), 5);
+        assert_eq!(
+            bind_recovered_uefi_installed_identity(
+                selected,
+                &recovered,
+                VolumeId::new([0x72; 16]).unwrap(),
+                5,
+            ),
+            Err(UefiInstalledRecoveryIdentityError::VolumeMismatch)
+        );
+        assert_eq!(
+            bind_recovered_uefi_installed_identity(selected, &recovered, volume_id, 4),
+            Err(UefiInstalledRecoveryIdentityError::RootGenerationMismatch)
+        );
         assert_eq!(MOCK_CLOSE_CALLS.load(Ordering::SeqCst), 2);
         assert!(volume_scratch.iter().all(|byte| *byte == 0));
         assert!(primary.iter().all(|byte| *byte == 0));

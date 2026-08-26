@@ -3308,6 +3308,16 @@ and Arch Linux each pass 37 library tests and cross-build the UEFI artifact.
 This is mocked firmware evidence; real-loader invocation and early-boot owner
 transfer remain **PLANNED**.
 
+The real loader now conditionally invokes this installed recovery path before
+`ExitBootServices`. An authenticated journal volume/root requires complete
+bounded enumeration, unique selection, reachable-graph validation, and exact
+root-generation equality. The loader admits at most 32 handles, 256 allocation
+records, 64 directories, 64 extents per file, 64 objects, and 64 KiB metadata
+scratch; exceeding those bounds fails boot. The UEFI target cross-builds on
+Windows and Arch Linux. No firmware protocol authority crosses the handoff, and the current
+authority-free recovery metadata does not yet carry installed device identity
+for native-kernel reacquisition.
+
 The bounded discovery result now remains owned through the complete serviced
 recovery read. `RecoveredInstalledStableSystemSelection` retains the exact
 installed selection beside the `BlockVolume` and reachable graph produced from
