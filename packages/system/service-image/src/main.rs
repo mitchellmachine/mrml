@@ -25,7 +25,7 @@ use mrml_kernel::{
     Capability, CapabilityError, ObjectId, RestartPolicy, Rights, ServiceId, ServiceState,
 };
 #[cfg(all(not(feature = "preemption-probe"), feature = "block-service-loop"))]
-use mrml_kernel::{HANDOFF_RECOVERY_STATE_BYTES, RecoveryStateMetadata};
+use mrml_kernel::{BOOT_RECOVERY_ENVELOPE_BYTES, BootRecoveryEnvelope, RecoveryStateMetadata};
 #[cfg(all(not(feature = "preemption-probe"), feature = "block-service-loop"))]
 use mrml_storage::{
     AUTHORITY_RECOVERY_STATE_BYTES, AuthorityCheckpointProofIssuer, AuthorityRecoveryStateStore,
@@ -395,7 +395,8 @@ unsafe extern "sysv64" fn mrml_configuration_receiver(
     if recovery_capability == 0 {
         halt();
     }
-    let recovery = unsafe { verify_recovery_metadata(recovery_capability) };
+    let recovery_envelope = unsafe { verify_recovery_envelope(recovery_capability) };
+    let recovery = recovery_envelope.recovery();
     let device = BlockDeviceId::new(1).unwrap_or_else(|| halt());
     let principal = StoragePrincipal::new(1).unwrap_or_else(|_| halt());
     let mut service = BlockService::<1, 1>::new();
@@ -445,8 +446,8 @@ unsafe extern "sysv64" fn mrml_configuration_receiver(
 }
 
 #[cfg(all(not(feature = "preemption-probe"), feature = "block-service-loop"))]
-unsafe fn verify_recovery_metadata(capability: u64) -> RecoveryStateMetadata {
-    let mut encoded = [0xa5; HANDOFF_RECOVERY_STATE_BYTES];
+unsafe fn verify_recovery_envelope(capability: u64) -> BootRecoveryEnvelope {
+    let mut encoded = [0xa5; BOOT_RECOVERY_ENVELOPE_BYTES];
     let mut status = 13u64;
     unsafe {
         asm!(
@@ -462,15 +463,15 @@ unsafe fn verify_recovery_metadata(capability: u64) -> RecoveryStateMetadata {
         )
     };
     let expected = RecoveryStateMetadata::new(8, 2, Some([0x51; 16]), 1).unwrap_or_else(|_| halt());
-    let delivered = RecoveryStateMetadata::decode(&encoded);
-    if status != 0 || delivered != Ok(expected) {
+    let delivered = BootRecoveryEnvelope::decode(&encoded);
+    if status != 0 || delivered.map(|value| value.recovery()) != Ok(expected) {
         encoded.fill(0);
         halt();
     }
     let delivered = delivered.unwrap_or_else(|_| halt());
     let mut store = ControlledRecoveryStateStore::new();
     {
-        let bound = BootRecoveryAdmission::new(delivered)
+        let bound = BootRecoveryAdmission::new(delivered.recovery())
             .unwrap_or_else(|_| halt())
             .bind(&mut store);
         let mut authenticated = [0xa5; AUTHORITY_RECOVERY_STATE_BYTES];

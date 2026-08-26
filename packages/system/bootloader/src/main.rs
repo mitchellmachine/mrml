@@ -3004,7 +3004,7 @@ unsafe fn run_kernel(bytes: *const u8, length: usize) -> ! {
     if region_count != handoff.region_count() {
         halt();
     }
-    let _early = EarlyKernelContext::from_handoff(&handoff, &regions[..region_count])
+    let early = EarlyKernelContext::from_handoff(&handoff, &regions[..region_count])
         .unwrap_or_else(|_| halt());
     #[cfg(feature = "pci-configuration-probe")]
     unsafe {
@@ -3070,6 +3070,7 @@ unsafe fn run_kernel(bytes: *const u8, length: usize) -> ! {
     #[cfg(feature = "service-probe")]
     unsafe {
         run_service_probe(&handoff, |handoff| {
+            let _ = handoff;
             let service_entry = hosted_service_entry();
             let mut context_a = UserContext::new(
                 PhysAddr::new(SERVICE_ROOT).unwrap_or_else(|_| halt()),
@@ -3206,7 +3207,7 @@ unsafe fn run_kernel(bytes: *const u8, length: usize) -> ! {
                         .map_err(|_| mrml_kernel::TaskRuntimeError::IntegrityFailure)
                 })
                 .unwrap_or_else(|_| halt());
-            let recovery_capability = handoff.recovery_state().map(|metadata| {
+            let recovery_capability = early.recovery_state().map(|_| {
                 let object = ObjectId(0xa3);
                 let capability = runtime
                     .capabilities_mut(receiver)
@@ -3216,7 +3217,7 @@ unsafe fn run_kernel(bytes: *const u8, length: usize) -> ! {
                             .map_err(|_| mrml_kernel::TaskRuntimeError::IntegrityFailure)
                     })
                     .unwrap_or_else(|_| halt());
-                let delivery = BootRecoveryDelivery::new(receiver, object, metadata)
+                let delivery = BootRecoveryDelivery::from_early(receiver, object, &early)
                     .unwrap_or_else(|_| halt());
                 core::ptr::addr_of_mut!(SERVICE_BOOT_RECOVERY).write(Some(delivery));
                 capability

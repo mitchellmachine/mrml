@@ -1,5 +1,17 @@
 # Patent review log
 
+## 2026-08-26 — Canonical one-use installed recovery envelope
+
+Patent review: **NOT_TRIGGERED** for extending the existing one-use boot-recovery
+delivery with a fixed versioned record containing already decoded recovery,
+installed identity, typed route, and isolation-request values. The increment is
+conventional bounded encoding/decoding, exact capability/task checking, reserved-
+zero validation, one-use state transfer, and scratch erasure. It adds no
+placement algorithm, VM mechanism, scheduler, storage protocol, DMA, queue,
+interrupt, or hardware behavior. Broader Total MicroVM and native-storage work
+retain their existing **TRIGGERED** reviews; this technical screen is not patent
+clearance.
+
 ## 2026-08-26 — First-entry owner to installed Total admission
 
 Patent review: **NOT_TRIGGERED** for refactoring the existing recovered-policy

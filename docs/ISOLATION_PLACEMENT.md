@@ -915,6 +915,18 @@ runtime without accepting a replacement `BootHandoff`. Configuration passes 51
 tests and the WHP runner cross-builds on Windows. Real early-boot service wiring
 and complete domain enumeration remain **PLANNED**.
 
+The real service-delivery boundary now **PARTIALLY IMPLEMENTS** the next step.
+One versioned 280-byte canonical envelope carries the retained recovery state,
+optional installed identity, required UEFI SATA route, and one-boot Total request
+through the existing exact-task, exact-object, `READ`-only, one-use syscall.
+Unknown flags, hidden absent-section bytes, root/volume mismatch, route/source or
+stable-ID substitution, replay, wrong task, and copy uncertainty fail closed.
+The service image decodes the same envelope and uses its recovery subsection for
+the existing storage path. Kernel passes 566 tests; configuration passes 51;
+service image, component-profile UEFI image, and WHP runner cross-build on
+Windows. Service-side installed Total construction and KVM execution for this
+increment remain **PLANNED**.
+
 Committed recovery now exposes one atomic release-binding operation rather than
 requiring callers to retain an intermediate effective policy.
 `bind_total_boot_admission` revalidates both capabilities and settings, checks

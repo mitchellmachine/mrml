@@ -3886,6 +3886,7 @@ fn validate_installed_selection_for_parts(
 }
 
 impl<const DOMAINS: usize> RecoveredInstalledTotalAdmission<DOMAINS> {
+    #[allow(dead_code)]
     fn bind<
         B: BlockServiceBackend,
         const DEVICES: usize,
@@ -9978,11 +9979,13 @@ mod tests {
             let mut delivery =
                 mrml_kernel::BootRecoveryDelivery::new(task, recovery_object, recovery_metadata)
                     .unwrap();
-            let mut delivered = [0xa5; mrml_kernel::HANDOFF_RECOVERY_STATE_BYTES];
+            let mut delivered = [0xa5; mrml_kernel::BOOT_RECOVERY_ENVELOPE_BYTES];
             delivery
                 .deliver(&mut runtime, task, recovery_capability, &mut delivered)
                 .unwrap();
-            let delivered = mrml_kernel::RecoveryStateMetadata::decode(&delivered).unwrap();
+            let delivered = mrml_kernel::BootRecoveryEnvelope::decode(&delivered)
+                .unwrap()
+                .recovery();
             let mut boot_store = BootRecoveryAdmission::new(delivered)
                 .unwrap()
                 .bind(&mut state_store);

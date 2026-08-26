@@ -71,7 +71,10 @@ pub use artifact::{
     VerifiedExecutable, VerifiedRelease, artifact_statement, executable_image_limit,
 };
 pub use boot::{BootEvidence, BootPolicy, BootValidationError, ValidatedBoot};
-pub use boot_recovery::{BootRecoveryDelivery, BootRecoveryDeliveryError};
+pub use boot_recovery::{
+    BOOT_RECOVERY_ENVELOPE_BYTES, BootRecoveryDelivery, BootRecoveryDeliveryError,
+    BootRecoveryEnvelope, BootRecoveryEnvelopeError,
+};
 pub use boot_recovery_syscall::{
     BOOT_RECOVERY_SYSCALL_OPERATION, BootRecoverySyscallError, BootRecoverySyscallExecutor,
     BootRecoverySyscallRequest,

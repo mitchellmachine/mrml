@@ -1572,6 +1572,18 @@ runtime authorization. Configuration passes 51 tests and the WHP runner
 cross-builds on Windows. Actual early-boot service invocation and complete
 installed runtime enumeration remain **PLANNED**.
 
+The boot-recovery syscall now **PARTIALLY IMPLEMENTS** live transfer of that
+owner's typed facts. Its fixed 280-byte `MRBR` v1 envelope contains recovery,
+optional installed identity, optional UEFI route, and the one-boot Total flag.
+Canonical decoding rejects unknown flags, nonzero bytes in absent sections, and
+every cross-record mismatch before use. Delivery remains exact-task,
+capability-scoped, one-use, and erases scratch after the validated user copy;
+copy uncertainty consumes the delivery rather than permitting replay. The real
+service image decodes the envelope, while its current storage recovery consumes
+only the recovery subsection. Kernel passes 566 tests and the service/UEFI
+images cross-build on Windows. Complete service-side installed Total admission
+remains **PLANNED**.
+
 `RecoveredSystemState` now provides an atomic
 `bind_total_boot_admission` transition. It joins the committed recovered
 authorities and configuration service, exact decoded handoff epoch/override,

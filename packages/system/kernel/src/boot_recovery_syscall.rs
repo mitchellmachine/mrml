@@ -1,5 +1,5 @@
 use crate::{
-    BootRecoveryDelivery, BootRecoveryDeliveryError, Capability, HANDOFF_RECOVERY_STATE_BYTES,
+    BOOT_RECOVERY_ENVELOPE_BYTES, BootRecoveryDelivery, BootRecoveryDeliveryError, Capability,
     SharedBufferUserAccess, SharedBufferUserCopy, TaskId, TaskRuntime, UserCallFrame,
 };
 
@@ -40,7 +40,7 @@ impl BootRecoverySyscallRequest {
             return Err(BootRecoverySyscallError::Malformed);
         }
         let end = output_address
-            .checked_add(HANDOFF_RECOVERY_STATE_BYTES as u64)
+            .checked_add(BOOT_RECOVERY_ENVELOPE_BYTES as u64)
             .ok_or(BootRecoverySyscallError::Malformed)?;
         if output_address == 0 || output_address >= 1 << 47 || end > 1 << 47 {
             return Err(BootRecoverySyscallError::Malformed);
@@ -70,7 +70,7 @@ impl BootRecoverySyscallExecutor {
         delivery: &mut BootRecoveryDelivery,
         user: &mut U,
     ) -> Result<(), BootRecoverySyscallError<U::Error, BootRecoveryDeliveryError>> {
-        let mut scratch = [0u8; HANDOFF_RECOVERY_STATE_BYTES];
+        let mut scratch = [0u8; BOOT_RECOVERY_ENVELOPE_BYTES];
         let result = Self::execute_inner(request, runtime, task, delivery, user, &mut scratch);
         user.cancel();
         scratch.fill(0);
@@ -83,12 +83,12 @@ impl BootRecoverySyscallExecutor {
         task: TaskId,
         delivery: &mut BootRecoveryDelivery,
         user: &mut U,
-        scratch: &mut [u8; HANDOFF_RECOVERY_STATE_BYTES],
+        scratch: &mut [u8; BOOT_RECOVERY_ENVELOPE_BYTES],
     ) -> Result<(), BootRecoverySyscallError<U::Error, BootRecoveryDeliveryError>> {
         user.validate(
             task,
             request.output_address,
-            HANDOFF_RECOVERY_STATE_BYTES,
+            BOOT_RECOVERY_ENVELOPE_BYTES,
             SharedBufferUserAccess::Write,
         )
         .map_err(BootRecoverySyscallError::User)?;
@@ -118,7 +118,7 @@ mod tests {
         fail_validate: bool,
         fail_write: bool,
         ticket: bool,
-        output: [u8; HANDOFF_RECOVERY_STATE_BYTES],
+        output: [u8; BOOT_RECOVERY_ENVELOPE_BYTES],
     }
 
     unsafe impl SharedBufferUserCopy for UserCopy {
@@ -135,7 +135,7 @@ mod tests {
                 return Err(CopyError::Validate);
             }
             assert_eq!(address, 0x6000);
-            assert_eq!(length, HANDOFF_RECOVERY_STATE_BYTES);
+            assert_eq!(length, BOOT_RECOVERY_ENVELOPE_BYTES);
             assert_eq!(access, SharedBufferUserAccess::Write);
             assert!(!self.ticket);
             self.ticket = true;
@@ -192,7 +192,7 @@ mod tests {
             fail_validate,
             fail_write,
             ticket: false,
-            output: [0xa5; HANDOFF_RECOVERY_STATE_BYTES],
+            output: [0xa5; BOOT_RECOVERY_ENVELOPE_BYTES],
         }
     }
 
@@ -266,7 +266,10 @@ mod tests {
             ),
             Ok(())
         );
-        assert_eq!(RecoveryStateMetadata::decode(&user.output), Ok(metadata));
+        assert_eq!(
+            crate::BootRecoveryEnvelope::decode(&user.output).map(|value| value.recovery()),
+            Ok(metadata)
+        );
         assert!(
             runtime
                 .authorize_capability_exact(task, capability, Rights::READ, ObjectId(0x99))
