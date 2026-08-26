@@ -799,7 +799,15 @@ point: it registers the controlled device, grants the exact recovery principal
 a read-only session, and retains service, session, backend, volume, and selected
 graph through authority recovery. Fresh signed WHP and nested-KVM probes each
 reported recovery root 14, one eligible microVM, and zero native fallback.
-Installed discovery remains next.
+The next installed-device control-plane gate is also **PARTIALLY IMPLEMENTED**.
+`InstalledRecoveryDeviceSelection` authenticates that live session, then binds
+its registered device identity and geometry to the expected volume identity,
+volume geometry, and one exact redundant-root slot before recovery can issue a
+data-plane read. Wrong owner, stale session, device/volume/geometry substitution,
+and an invalid active root all fail with zero backend reads. The hosted recovery
+source consumes this typed selection. This remains controlled in-memory evidence;
+platform enumeration, physical media, and installed early-boot orchestration
+remain **PLANNED**.
 
 The runner-side boot overlay is no longer injected as an independent enum
 literal. Both hosted backends encode neutral accepted recovery state and the

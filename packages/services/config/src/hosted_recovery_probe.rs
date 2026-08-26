@@ -8,10 +8,10 @@
 //! rollback evidence.
 
 use super::{
-    ConfigTransaction, ConfigUpdate, ConfigValue, ConfigurationService, IsolationPolicySetting,
-    OwnerIsolationSelection, PERSISTED_RESTART_POLICY_BYTES, PersistedRestartPolicy,
-    RecoveredBlockStableSystemSelection, RecoveredTotalAdmission,
-    RecoveredTotalAdmissionBuildError, SettingId, SettingSchema,
+    ConfigTransaction, ConfigUpdate, ConfigValue, ConfigurationService,
+    InstalledRecoveryDeviceSelection, IsolationPolicySetting, OwnerIsolationSelection,
+    PERSISTED_RESTART_POLICY_BYTES, PersistedRestartPolicy, RecoveredBlockStableSystemSelection,
+    RecoveredTotalAdmission, RecoveredTotalAdmissionBuildError, SettingId, SettingSchema,
     StableConfigurationRecoveryValidator, StableServiceRecoveryValidator,
     recover_serviced_stable_system_selection,
 };
@@ -501,16 +501,23 @@ fn recover_reachable_files<'a>(
     >,
     HostedRecoveryProbeError,
 > {
+    let installed = InstalledRecoveryDeviceSelection::new(
+        service,
+        session,
+        principal(),
+        recovery_device(),
+        volume(),
+        header(),
+        header().primary_superblock(),
+    )
+    .map_err(|_| HostedRecoveryProbeError::StorageLayout)?;
     let mut primary_read = [0; BLOCK_BYTES];
     let mut secondary_read = [0; BLOCK_BYTES];
     let mut metadata_scratch = [0; BLOCK_BYTES];
     recover_serviced_stable_system_selection::<_, 1, 1, 10, 2, 1, 3>(
         service,
         backend,
-        session,
-        principal(),
-        header(),
-        header().primary_superblock(),
+        installed,
         volume_scratch,
         &mut primary_read,
         &mut secondary_read,

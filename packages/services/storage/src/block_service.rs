@@ -247,6 +247,21 @@ impl<const DEVICES: usize, const SESSIONS: usize> BlockService<DEVICES, SESSIONS
         Ok(())
     }
 
+    /// Returns non-authorizing geometry for the exact live session after
+    /// authenticating its owner. The descriptor identifies the bound device;
+    /// every I/O operation still checks its independent right.
+    pub fn session_descriptor(
+        &self,
+        handle: BlockSessionHandle,
+        owner: StoragePrincipal,
+    ) -> Result<BlockDeviceDescriptor, BlockServiceError<core::convert::Infallible>> {
+        let session = self.session(handle)?;
+        if session.owner != Some(owner) {
+            return Err(BlockServiceError::Denied);
+        }
+        self.descriptor(session.device)
+    }
+
     pub fn read_blocks<B: BlockServiceBackend>(
         &self,
         backend: &mut B,

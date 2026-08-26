@@ -1194,6 +1194,17 @@ authority recovery. Fresh signed WHP and nested-KVM probes reported root 14,
 one eligible microVM, and zero fallback. Installed-device discovery and early
 boot remain next.
 
+The typed installed-device selection boundary is now **PARTIALLY IMPLEMENTED**.
+Before either redundant-root read, `InstalledRecoveryDeviceSelection` binds the
+authenticated session's exact `BlockDeviceDescriptor` to the expected device,
+volume identity, block size/count, and selected primary or secondary root. None
+of those names or geometry fields authorize I/O; every later read still checks
+the retained session's independent `READ` right and principal. Focused tests
+reject wrong-owner, stale-generation, device, volume, geometry, and active-root
+substitution with zero backend reads. Storage passes 121 tests and configuration
+46 on both Windows and Arch Linux; WHP passes 11 and KVM 12. Platform discovery,
+real installed media, and early-boot construction remain **PLANNED**.
+
 WHP and nested KVM now consume the common inner `BootTotalAdmission` owner from
 effective-policy/release binding through classified route preparation,
 vCPU/RAM/VMM construction, microVM commit, and final release proof. The owner

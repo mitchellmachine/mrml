@@ -3173,6 +3173,17 @@ authority chain through recovery. Fresh signed WHP and nested-KVM probes each
 reported root 14, one eligible microVM, and zero native fallback. Installed-
 device discovery remains **PLANNED**.
 
+The installed-device handoff now has a typed **PARTIALLY IMPLEMENTED**
+control-plane boundary. `InstalledRecoveryDeviceSelection` authenticates the
+generational session owner and fixes its descriptor, expected device and volume,
+block geometry, and active redundant-root slot before the shortest-safe-path
+block data plane opens. The retained descriptor grants no authority; each read
+still reauthorizes the same session, principal, and `READ` right. Focused tests
+reject wrong owners, stale handles, device/volume/geometry substitution, and
+invalid roots before any backend read. The hosted source consumes this binding,
+but platform enumeration, real media, and installed early boot remain
+**PLANNED**.
+
 Patent review: `TRIGGERED` under the existing signed-release, adaptive
 isolation, Total-MicroVM, automated VMM placement, and device-projection reviews
 now that authenticated package classifications are joined to live domain

@@ -28,14 +28,15 @@ use mrml_kernel::{
     TaskRuntimeError, prepare_isolation_service_route, route_isolation_service,
 };
 use mrml_storage::{
-    AuthorityRecoveryValidator, BlockFileSession, BlockService, BlockServiceBackend,
-    BlockServiceError, BlockSessionHandle, BlockVolume, BlockVolumeError,
-    CommittedRecoveredStorageAuthorities, ExtentMap, FileMetadata, FileReadBackend, FileReadError,
-    FileState, FileWriteBackend, FileWriteError, MetadataPointer, PreparedFileWrite,
-    ReachableFileSelection, RecoveredReachableState, RecoveredStorageAuthorities, RecoveryError,
-    RecoveryMetadataBackend, SUPERBLOCK_BYTES, ServicedBlockDevice, StorageAuthorityTable,
-    StorageBlockDevice, StorageHandle, StorageObjectId, StoragePrincipal, StorageTransaction,
-    TransactionError, TransactionReceipt, VolumeHeader, VolumeId, recover_reachable_state,
+    AuthorityRecoveryValidator, BlockDeviceDescriptor, BlockDeviceId, BlockFileSession,
+    BlockService, BlockServiceBackend, BlockServiceError, BlockSessionHandle, BlockVolume,
+    BlockVolumeError, CommittedRecoveredStorageAuthorities, ExtentMap, FileMetadata,
+    FileReadBackend, FileReadError, FileState, FileWriteBackend, FileWriteError, MetadataPointer,
+    PreparedFileWrite, ReachableFileSelection, RecoveredReachableState,
+    RecoveredStorageAuthorities, RecoveryError, RecoveryMetadataBackend, SUPERBLOCK_BYTES,
+    ServicedBlockDevice, StorageAuthorityTable, StorageBlockDevice, StorageHandle, StorageObjectId,
+    StoragePrincipal, StorageTransaction, TransactionError, TransactionReceipt, VolumeHeader,
+    VolumeId, recover_reachable_state,
 };
 
 #[cfg(any(test, target_os = "windows", target_os = "linux"))]
@@ -1538,9 +1539,86 @@ pub enum ServicedStableSystemSelectionError<E> {
     Selection(BlockStableSystemSelectionError<BlockServiceError<E>>),
 }
 
-/// Establishes exact block-device authority through `BlockService` before any
-/// redundant-root or metadata read. Names and device identity do not authorize;
-/// the generational session and exact principal must validate first.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum InstalledRecoveryDeviceSelectionError {
+    Session(BlockServiceError<core::convert::Infallible>),
+    DeviceMismatch,
+    VolumeMismatch,
+    GeometryMismatch,
+    InvalidActiveRoot,
+}
+
+/// Typed control-plane binding for one installed recovery volume.
+///
+/// Device and volume identities describe the intended object but grant no I/O.
+/// Construction authenticates the exact live session owner, binds the session's
+/// registered device geometry to the expected volume header, and fixes one of
+/// that header's redundant roots. The retained session is still reauthorized
+/// for every data-plane read by `BlockService`.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct InstalledRecoveryDeviceSelection {
+    session: BlockSessionHandle,
+    principal: StoragePrincipal,
+    descriptor: BlockDeviceDescriptor,
+    header: VolumeHeader,
+    active_superblock: u64,
+}
+
+impl InstalledRecoveryDeviceSelection {
+    pub fn new<const DEVICES: usize, const SESSIONS: usize>(
+        service: &BlockService<DEVICES, SESSIONS>,
+        session: BlockSessionHandle,
+        principal: StoragePrincipal,
+        expected_device: BlockDeviceId,
+        expected_volume: VolumeId,
+        header: VolumeHeader,
+        active_superblock: u64,
+    ) -> Result<Self, InstalledRecoveryDeviceSelectionError> {
+        let descriptor = service
+            .session_descriptor(session, principal)
+            .map_err(InstalledRecoveryDeviceSelectionError::Session)?;
+        if descriptor.id() != expected_device {
+            return Err(InstalledRecoveryDeviceSelectionError::DeviceMismatch);
+        }
+        if header.volume() != expected_volume {
+            return Err(InstalledRecoveryDeviceSelectionError::VolumeMismatch);
+        }
+        if descriptor.block_size() != header.block_size()
+            || descriptor.block_count() != header.block_count()
+        {
+            return Err(InstalledRecoveryDeviceSelectionError::GeometryMismatch);
+        }
+        if active_superblock != header.primary_superblock()
+            && active_superblock != header.secondary_superblock()
+        {
+            return Err(InstalledRecoveryDeviceSelectionError::InvalidActiveRoot);
+        }
+        Ok(Self {
+            session,
+            principal,
+            descriptor,
+            header,
+            active_superblock,
+        })
+    }
+
+    pub const fn descriptor(self) -> BlockDeviceDescriptor {
+        self.descriptor
+    }
+
+    pub const fn header(self) -> VolumeHeader {
+        self.header
+    }
+
+    pub const fn active_superblock(self) -> u64 {
+        self.active_superblock
+    }
+}
+
+/// Consumes one completely established recovery-device control-plane binding
+/// before any redundant-root or metadata data-plane read. Names and identities
+/// do not authorize: the retained session and principal are checked again on
+/// every block operation.
 #[allow(clippy::too_many_arguments)]
 pub fn recover_serviced_stable_system_selection<
     'a,
@@ -1554,10 +1632,7 @@ pub fn recover_serviced_stable_system_selection<
 >(
     service: &'a BlockService<DEVICES, SESSIONS>,
     backend: &'a mut B,
-    session: BlockSessionHandle,
-    principal: StoragePrincipal,
-    header: VolumeHeader,
-    active_superblock: u64,
+    installed: InstalledRecoveryDeviceSelection,
     volume_scratch: &'a mut [u8],
     primary_block: &mut [u8],
     secondary_block: &mut [u8],
@@ -1573,11 +1648,11 @@ pub fn recover_serviced_stable_system_selection<
     >,
     ServicedStableSystemSelectionError<B::Error>,
 > {
-    let device = ServicedBlockDevice::new(service, backend, session, principal)
+    let device = ServicedBlockDevice::new(service, backend, installed.session, installed.principal)
         .map_err(ServicedStableSystemSelectionError::Session)?;
     recover_block_stable_system_selection::<_, ALLOCATIONS, DIRECTORIES, EXTENTS, OBJECTS>(
-        header,
-        active_superblock,
+        installed.header,
+        installed.active_superblock,
         device,
         volume_scratch,
         primary_block,
@@ -7510,12 +7585,12 @@ mod tests {
     }
 
     #[test]
-    fn serviced_stable_selection_rejects_wrong_or_stale_session_before_device_io() {
+    fn installed_recovery_device_selection_rejects_substitution_before_device_io() {
         let device = BlockDeviceId::new(7).unwrap();
         let descriptor = BlockDeviceDescriptor::new(
             device,
             STABLE_BLOCK_BYTES as u32,
-            STABLE_BLOCK_COUNT as u64,
+            stable_header().block_count(),
         )
         .unwrap();
         let mut service = BlockService::<1, 1>::new();
@@ -7523,50 +7598,112 @@ mod tests {
         let session = service
             .grant(device, stable_principal(), BlockRights::READ)
             .unwrap();
-        let mut backend = StableBlockBackend::new(device);
-        let mut volume_scratch = [0; STABLE_BLOCK_BYTES];
-        let mut primary = [0; STABLE_BLOCK_BYTES];
-        let mut secondary = [0; STABLE_BLOCK_BYTES];
-        let mut metadata = [0; STABLE_BLOCK_BYTES];
+        let backend = StableBlockBackend::new(device);
         let wrong_principal = StoragePrincipal::new(8).unwrap();
         assert!(matches!(
-            recover_serviced_stable_system_selection::<_, 1, 1, 10, 2, 1, 3>(
+            InstalledRecoveryDeviceSelection::new(
                 &service,
-                &mut backend,
                 session,
                 wrong_principal,
+                device,
+                stable_header().volume(),
                 stable_header(),
                 stable_header().primary_superblock(),
-                &mut volume_scratch,
-                &mut primary,
-                &mut secondary,
-                &mut metadata,
-                stable_object(9),
-                stable_object(10),
             ),
-            Err(ServicedStableSystemSelectionError::Session(
+            Err(InstalledRecoveryDeviceSelectionError::Session(
                 BlockServiceError::Denied
             ))
         ));
         assert_eq!(backend.reads, 0);
 
-        service.revoke(session, stable_principal()).unwrap();
-        assert!(matches!(
-            recover_serviced_stable_system_selection::<_, 1, 1, 10, 2, 1, 3>(
+        assert_eq!(
+            InstalledRecoveryDeviceSelection::new(
                 &service,
-                &mut backend,
                 session,
                 stable_principal(),
+                BlockDeviceId::new(8).unwrap(),
+                stable_header().volume(),
                 stable_header(),
                 stable_header().primary_superblock(),
-                &mut volume_scratch,
-                &mut primary,
-                &mut secondary,
-                &mut metadata,
-                stable_object(9),
-                stable_object(10),
             ),
-            Err(ServicedStableSystemSelectionError::Session(
+            Err(InstalledRecoveryDeviceSelectionError::DeviceMismatch)
+        );
+        let wrong_volume = VolumeId::new([0x82; 16]).unwrap();
+        assert_eq!(
+            InstalledRecoveryDeviceSelection::new(
+                &service,
+                session,
+                stable_principal(),
+                device,
+                wrong_volume,
+                stable_header(),
+                stable_header().primary_superblock(),
+            ),
+            Err(InstalledRecoveryDeviceSelectionError::VolumeMismatch)
+        );
+        let wrong_geometry = VolumeHeader::new(
+            stable_header().volume(),
+            (STABLE_BLOCK_BYTES * 2) as u32,
+            stable_header().block_count(),
+            stable_header().primary_superblock(),
+            stable_header().secondary_superblock(),
+        )
+        .unwrap();
+        assert_eq!(
+            InstalledRecoveryDeviceSelection::new(
+                &service,
+                session,
+                stable_principal(),
+                device,
+                stable_header().volume(),
+                wrong_geometry,
+                wrong_geometry.primary_superblock(),
+            ),
+            Err(InstalledRecoveryDeviceSelectionError::GeometryMismatch)
+        );
+        assert_eq!(
+            InstalledRecoveryDeviceSelection::new(
+                &service,
+                session,
+                stable_principal(),
+                device,
+                stable_header().volume(),
+                stable_header(),
+                3,
+            ),
+            Err(InstalledRecoveryDeviceSelectionError::InvalidActiveRoot)
+        );
+        assert_eq!(backend.reads, 0);
+
+        let selected = InstalledRecoveryDeviceSelection::new(
+            &service,
+            session,
+            stable_principal(),
+            device,
+            stable_header().volume(),
+            stable_header(),
+            stable_header().primary_superblock(),
+        )
+        .unwrap();
+        assert_eq!(selected.descriptor(), descriptor);
+        assert_eq!(selected.header(), stable_header());
+        assert_eq!(
+            selected.active_superblock(),
+            stable_header().primary_superblock()
+        );
+
+        service.revoke(session, stable_principal()).unwrap();
+        assert!(matches!(
+            InstalledRecoveryDeviceSelection::new(
+                &service,
+                session,
+                stable_principal(),
+                device,
+                stable_header().volume(),
+                stable_header(),
+                stable_header().primary_superblock(),
+            ),
+            Err(InstalledRecoveryDeviceSelectionError::Session(
                 BlockServiceError::StaleHandle
             ))
         ));

@@ -360,6 +360,17 @@ chain through committed recovery. Fresh signed probes on both backends reported
 root generation 14, one eligible microVM, and zero native fallback. Installed
 discovery and early-boot orchestration remain next.
 
+Installed recovery-device binding is now **PARTIALLY IMPLEMENTED** at the
+service boundary. One typed `InstalledRecoveryDeviceSelection` authenticates
+the exact session/principal and binds its registered device descriptor to the
+expected device, volume, geometry, and active redundant-root slot before any
+backend read. All six substitution classes fail before I/O, while the steady
+data plane continues through the existing independently authorized block
+session. Windows and Arch Linux pass 121 storage and 46 configuration tests;
+WHP passes 11 and KVM 12. The next dependency gate is platform enumeration that
+constructs this selection from an actually installed device, followed by
+early-boot ownership and lifecycle integration.
+
 The next storage connection is now **PARTIALLY IMPLEMENTED** without claiming
 media evidence. `recover_stable_system_selection` accepts the existing hostile
 metadata backend implemented by `BlockVolume`, selects one complete redundant-
