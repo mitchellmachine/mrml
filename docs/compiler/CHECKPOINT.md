@@ -663,9 +663,10 @@ The nested branch-action representation now has a bounded parser-level record.
 It preserves a branch condition, up to four scoped local/assignment/expression
 actions, a target-aware terminal, and exact ordering relative to surrounding
 nested-loop actions and controls. One explicit `else` arm can now retain the
-same bounded actions and terminal; execution rejects the record before CFG,
-constant evaluation, or native emission until its second successor is modeled.
-The CFG now assigns separate condition and
+same bounded actions and terminal. The CFG models that successor with a distinct
+else-action block, false edge, and independent terminal target; ownership
+locations distinguish else actions and return values. Native and constant
+execution remain rejected. The single-arm CFG assigns separate condition and
 scoped-action blocks, routes false fallthrough and target-aware true terminals,
 and maps condition/action/return ownership locations back to those control
 points. Branch-return origin transfer applies the exact scoped action prefix:
@@ -679,7 +680,8 @@ the existing bounded loop evaluator. Direct
 and inline native x86-64 lowering mirrors those actions, scoped cleanup, and
 terminals for scalar-only functions. Native reference-return branches are
 admitted only after that exact origin proof; reference break/continue branches
-remain rejected. ELF64 and COFF probes cover separate
+use the bounded destination/backedge transfer above. ELF64 and COFF probes
+cover separate
 return, continue, and break prefixes. Windows and Arch each pass 645 library
 tests, one component-interface probe, 10 conformance tests, and 336 replacement
 tests: 992 compiler tests per host.

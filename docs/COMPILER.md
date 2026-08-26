@@ -1374,8 +1374,11 @@ target-aware terminal, and its position among surrounding flat actions and
 controls. Parser tests cover local and expression actions followed by a return.
 The same bounded record can now retain one explicit `else` arm with its own
 four-action limit and target-aware terminal. All execution paths reject that
-arm before CFG, evaluator, or emitter selection until both successors are
-modeled; no consumer silently treats it as false fallthrough.
+arm before evaluator or emitter selection. CFG construction now assigns a
+separate else-action block, routes the condition's false edge into it, and
+routes each arm's terminal independently. Ownership preanalysis gives else
+actions and return values distinct mapped locations. No consumer silently
+treats the explicit arm as false fallthrough.
 CFG construction now gives the condition and scoped action body distinct basic
 blocks and routes true, false, and target-aware terminal edges. Ownership
 preanalysis assigns distinct condition, action, and return-value locations and
@@ -1399,6 +1402,12 @@ cover separate return, continue, and break prefixes. Windows and
 native Arch Linux WSL each pass 645 library tests, one component-interface
 probe, 10 conformance tests, and 336 replacement tests: 992 compiler tests per
 host.
+
+Mapping nested branch actions into ownership facts also closes an earlier
+omission in direct reference-assignment origin reconstruction. Primary and else
+branch assignment locations now reuse the same bounded generation rule as flat
+nested actions; a loop-carried self-reborrow resolves through its preceding
+parameter-backed generation instead of failing outlives validation.
 
 The first modern trait-solver foundation is an explicit bounded implemented-
 goal representation. Stable trait/type/inference/placeholder identities remain

@@ -4245,8 +4245,11 @@ Nested conditional branches can now retain up to four scoped actions before a
 target-aware terminal in a dedicated parser record, including their exact
 position among surrounding actions and controls. The record now also retains
 one explicit bounded `else` action/terminal arm. Compilation, constant
-evaluation, and CFG preanalysis reject that form until both successors are
-implemented. CFG construction for the single-arm form emits
+evaluation, and native emission reject that form. CFG preanalysis now emits a
+distinct else-action block from the condition's false edge, routes both
+terminals independently, and maps else actions/returns to distinct ownership
+locations. Branch assignment generations in either arm reuse the bounded
+direct-assignment origin rule. CFG construction for the single-arm form emits
 separate condition and action blocks with explicit false fallthrough and true
 terminal routing; ownership preanalysis gives conditions, scoped actions, and
 return values distinct mapped locations. Reference-return records apply their
