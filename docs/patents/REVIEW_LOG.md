@@ -6136,13 +6136,15 @@ opinion or clearance conclusion and does not replace independent human review.
 
 # 2026-08-26 — Projected inline-assembly output
 
-**Result: NOT_TRIGGERED after the projected-output review.** This increment
-extends the previously reviewed explicit RAX `lateout` path with conventional
-tuple-field selection and stack-slot writeback. Bounded numeric-field parsing,
-ordinary typed place projection, element bounds/type/mutability validation,
-checked offset arithmetic, and fail-closed rejection introduce no novel
+**Result: NOT_TRIGGERED after the projected-operand review.** These increments
+extend the previously reviewed explicit RAX `lateout` and same-place `inout`
+paths with conventional tuple-field selection, stack-slot load, and writeback.
+Bounded numeric-field parsing, ordinary typed place projection, element bounds/
+type/mutability validation, checked offset arithmetic, and fail-closed rejection
+introduce no novel
 assembler, register-allocation, optimization, instruction-selection, or code-
 generation algorithm. Nested/indexed/dereferenced projections, projected
-`inout`, and general assembly remain absent. Broader compiler completion remains
+distinct input/output forms, and general assembly remain absent. Broader compiler
+completion remains
 partial; this technical screen does not establish clearance or infringement and
 does not replace independent human dual review.
