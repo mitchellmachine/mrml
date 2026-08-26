@@ -1079,3 +1079,12 @@ black-box evidence for those exact straight-line scalar forms only; it does not
 establish conditional joins, loop-carried initialization, projected writes, or
 general definite-assignment semantics. Temporary sources and metadata were
 removed.
+
+An independently authored Rust 2024 metadata-only conditional delayed-
+initialization pair against this exact toolchain and commit accepted an
+immutable `u64` initialized in both arms of an `if`/`else` before a post-join
+read. Removing the `else` arm failed with E0381 because the binding was possibly
+uninitialized. This is black-box evidence for those exact scalar branch and join
+positions only; it does not establish nested/general joins, loop-carried
+initialization, or complete definite-assignment semantics. Temporary sources
+and metadata were removed.

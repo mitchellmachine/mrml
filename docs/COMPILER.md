@@ -124,7 +124,7 @@ language as a whole.
 | Terminal noreturn assembly delta | **PARTIAL** | The parser marks only the final top-level expression statement as terminal. On x86-64, exact `asm!("int3", options(noreturn, nostack))` (with either option order) is admitted only in that position and an unsafe context, emits `CC`, suppresses the ordinary return sequence, and permits `!` function returns or never-to-value coercion. A following unreachable suffix, conditional placement, other templates/options, general never expressions, and broader unreachable-code lowering fail closed. |
 | Syscall assembly delta | **PARTIAL** | Exact x86-64 `asm!("int 0x80", ...)` accepts seven ordered `u64` operands in RAX, RDI, RSI, RDX, R10, R8, and R9. The terminal form requires inputs plus exact `noreturn, nostack`; the returning form requires RAX `inlateout`, input or `inlateout` for the remaining registers, mutable named-local or discarded outputs, and exact `nostack`. Inputs are preanalyzed/evaluated left-to-right, all post-interrupt results are preserved before output stores, and unsupported scopes, orderings, types, places, or options fail closed. General output places and other syscall/assembly shapes remain unsupported. |
 | Terminal halt-loop assembly delta | **PARTIAL** | Exact x86-64 `asm!("cli", "2:", "hlt", "jmp 2b", options(noreturn, nomem, nostack))` is recognized as one typed terminal form, accepts every option permutation, and emits fixed `FA F4 EB FD` without a return sequence. Unsafe scope and terminal placement are mandatory; altered templates, labels, options, or suffixes fail closed. This is native-object encoding evidence, not physical privileged-instruction execution. |
-| Definite scalar initialization delta | **PARTIAL** | Explicit `let name: u64;` declarations create a typed local and move path without an initialization event. Reads fail until a proven write. A direct ordinary `=` or returning `int 0x80` named output may perform the first write to a mutable or immutable local; immutable locals reject later writes. Other uninitialized types, control-flow joins, projected first writes, and general assembly output places remain unsupported. |
+| Definite scalar initialization delta | **PARTIAL** | Explicit `let name: u64;` declarations create a typed local and move path without an initialization event. Reads fail until a proven write. A direct ordinary `=` or returning `int 0x80` named output may perform the first write to a mutable or immutable local; immutable locals reject later writes. Exhaustive bounded conditional-assignment arms may each perform the mutually exclusive first write, and the existing CFG intersection proves the join. Other uninitialized types, loop-carried initialization, projected first writes, and general assembly output places remain unsupported. |
 | Modern `no_std` systems features | **PARTIAL** | Dependency-free native code generation covers integers, control flow, arrays, bounded scalar tuples, references, slices, raw pointers, COFF/ELF64, UEFI checks, and NVPTX checks. Up to eight typed x86-64 PC-relative branch-or-data relocations are structurally emitted for both native object formats. General assembly, naked entry-point integration, atomics, SIMD, full ABI/layout, general relocation families, linking, and package compilation remain missing. |
 
 Already implemented post-2024 or forward-looking work should be preserved rather
@@ -1945,6 +1945,23 @@ focused control covers rejection. Windows and Arch each passed 647 unit, 1
 component, 10 conformance, and 343 replacement tests (1,001 total). This is
 straight-line scalar initialization only, not general types, conditional joins,
 loop-carried initialization, or complete Rust definite-assignment semantics.
+
+### Conditional delayed-initialization checkpoint
+
+Different arms of the same bounded conditional assignment may now each perform
+the first direct write to one immutable uninitialized `u64`. The immutable-write
+check treats only those exact arm locations as mutually exclusive. Writes in the
+same arm, before the conditional, or after its join remain conflicting. The
+existing CFG initializedness intersection admits a post-join read only when
+every reachable branch, including `else`, writes the move path.
+
+The exact ORACLE-0002 Rust 2024 toolchain accepted the exhaustive two-arm probe
+and rejected a missing-else probe with E0381. Independent ELF64 and COFF
+replacements cover the accepted form. Windows and Arch each passed 647 unit, 1
+component, 10 conformance, and 344 replacement tests (1,002 total). This is one
+bounded scalar conditional statement, not nested/general control-flow joins,
+loop-carried initialization, other types, or complete Rust definite-assignment
+semantics.
 
 ## Non-negotiable implementation rules
 

@@ -58,7 +58,19 @@ oracle upgrade receives a new immutable record and differential classification
 against all prior accepted probes. Keep Cargo on edition 2024 until a newer
 named edition can be adopted through a pinned, workspace-wide migration.
 
-## Latest direct delayed-initialization milestone
+## Latest conditional delayed-initialization milestone
+
+Commit `d032d92c` lets different arms of the same bounded conditional each
+perform the mutually exclusive first write to an immutable uninitialized `u64`.
+The existing CFG intersection admits the post-join read only when every
+reachable arm initializes the path. ORACLE-0002 accepts the exhaustive pair and
+rejects the missing-else form with E0381. Windows and native Arch Linux WSL each
+passed 647 library tests, 1 component probe, 10 conformance tests, and 344
+replacement tests: 1,002 compiler tests per host. Nested/general joins,
+loop-carried initialization, projected first writes, and other types remain
+fail-closed.
+
+### Preceding direct delayed-initialization milestone
 
 Commit `b02037df` lets direct ordinary `=` perform the first write to an
 explicitly uninitialized `u64` local. Immutable locals admit exactly that first

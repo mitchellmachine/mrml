@@ -5727,6 +5727,18 @@ nested-loop return coverage, general regions, named lifetime inference, or
 complete Polonius semantics. The `no_std`/allocation/unsafe hygiene scan
 remained empty.
 
+The conditional delayed-initialization milestone at `d032d92c` treats first
+writes in different arms of the same bounded conditional assignment as mutually
+exclusive. The existing CFG initializedness intersection admits a post-join
+read only when every reachable arm, including `else`, initializes the path.
+Same-arm, preceding, and post-join repeated writes remain immutable-assignment
+errors. The pinned ORACLE-0002 toolchain accepted the exhaustive two-arm probe
+and rejected the missing-else form with E0381. ELF64 and COFF replacements
+passed. Windows and native Arch Linux WSL each passed 647 library tests, 1
+component probe, 10 conformance tests, and 344 replacement tests: 1,002 compiler
+tests per host. This does not claim nested/general joins, loop-carried
+initialization, other types, or complete Rust definite-assignment semantics.
+
 The direct delayed-initialization milestone at `b02037df` permits an ordinary
 direct `=` to perform the first write to an explicitly uninitialized `u64`
 local. The bounded move-path write event is the semantic initialization;
