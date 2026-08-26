@@ -2097,11 +2097,20 @@ enum X86_64InlineAssembly<'source> {
     },
 }
 
-#[derive(Clone, Copy)]
-enum X86_64InlineRegister {
-    Rax,
-    Rcx,
-    Rdx,
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct X86_64InlineRegister(u8);
+
+impl X86_64InlineRegister {
+    const RAX: Self = Self(0);
+
+    fn from_name(name: &str) -> Option<Self> {
+        let code = x86_64_naked_register(name)?;
+        (!matches!(code, 3..=5)).then_some(Self(code))
+    }
+
+    fn code(self) -> u8 {
+        self.0
+    }
 }
 
 #[derive(Clone, Copy)]
@@ -2221,95 +2230,14 @@ fn x86_64_inline_assembly(
         let operand = x86_64_inline_operand_with_options(operand, false, true)?;
         let (input, output) = x86_64_inline_inout_places(operand)?;
         return Ok(Some(X86_64InlineAssembly::IncrementRegister {
-            register: X86_64InlineRegister::Rax,
+            register: X86_64InlineRegister::RAX,
             input,
             output,
         }));
     }
-    let (arguments, operand_prefix, preserves_flags, operand_kind, output_register) =
-        if let Some(arguments) = arguments.strip_prefix("\"cmp rax, rax\"") {
-            (
-                arguments,
-                "in(\"rax\")",
-                false,
-                X86_64InlineOperandKind::Input,
-                Some(X86_64InlineRegister::Rax),
-            )
-        } else if let Some(arguments) = arguments.strip_prefix("\"cmp rcx, rcx\"") {
-            (
-                arguments,
-                "in(\"rcx\")",
-                false,
-                X86_64InlineOperandKind::Input,
-                Some(X86_64InlineRegister::Rcx),
-            )
-        } else if let Some(arguments) = arguments.strip_prefix("\"cmp rdx, rdx\"") {
-            (
-                arguments,
-                "in(\"rdx\")",
-                false,
-                X86_64InlineOperandKind::Input,
-                Some(X86_64InlineRegister::Rdx),
-            )
-        } else if let Some(arguments) = arguments.strip_prefix("\"mov rax, 7\"") {
-            (
-                arguments,
-                "lateout(\"rax\")",
-                true,
-                X86_64InlineOperandKind::Output,
-                Some(X86_64InlineRegister::Rax),
-            )
-        } else if let Some(arguments) = arguments.strip_prefix("\"mov rcx, 7\"") {
-            (
-                arguments,
-                "lateout(\"rcx\")",
-                true,
-                X86_64InlineOperandKind::Output,
-                Some(X86_64InlineRegister::Rcx),
-            )
-        } else if let Some(arguments) = arguments.strip_prefix("\"mov rdx, 7\"") {
-            (
-                arguments,
-                "lateout(\"rdx\")",
-                true,
-                X86_64InlineOperandKind::Output,
-                Some(X86_64InlineRegister::Rdx),
-            )
-        } else if let Some(arguments) = arguments.strip_prefix("\"inc rax\"") {
-            (
-                arguments,
-                "inout(\"rax\")",
-                false,
-                X86_64InlineOperandKind::InOut,
-                Some(X86_64InlineRegister::Rax),
-            )
-        } else if let Some(arguments) = arguments.strip_prefix("\"inc rcx\"") {
-            (
-                arguments,
-                "inout(\"rcx\")",
-                false,
-                X86_64InlineOperandKind::InOut,
-                Some(X86_64InlineRegister::Rcx),
-            )
-        } else if let Some(arguments) = arguments.strip_prefix("\"inc rdx\"") {
-            (
-                arguments,
-                "inout(\"rdx\")",
-                false,
-                X86_64InlineOperandKind::InOut,
-                Some(X86_64InlineRegister::Rdx),
-            )
-        } else {
-            return Err(CodegenErrorKind::InvalidInlineAssembly);
-        };
-    let arguments = arguments
-        .trim()
-        .strip_prefix(',')
-        .ok_or(CodegenErrorKind::InvalidInlineAssembly)?
-        .trim()
-        .strip_prefix(operand_prefix)
-        .ok_or(CodegenErrorKind::InvalidInlineAssembly)?
-        .trim();
+    let (arguments, preserves_flags, operand_kind, register) =
+        x86_64_inline_fixed_register_operand(arguments)
+            .ok_or(CodegenErrorKind::InvalidInlineAssembly)?;
     let has_output = matches!(
         operand_kind,
         X86_64InlineOperandKind::Output | X86_64InlineOperandKind::InOut
@@ -2317,22 +2245,107 @@ fn x86_64_inline_assembly(
     let input = x86_64_inline_operand_with_options(arguments, preserves_flags, has_output)?;
     match operand_kind {
         X86_64InlineOperandKind::Input => Ok(Some(X86_64InlineAssembly::CompareRegister {
-            register: output_register.ok_or(CodegenErrorKind::InvalidInlineAssembly)?,
+            register,
             input,
         })),
         X86_64InlineOperandKind::Output => Ok(Some(X86_64InlineAssembly::SetRegister {
-            register: output_register.ok_or(CodegenErrorKind::InvalidInlineAssembly)?,
+            register,
             output: input,
         })),
         X86_64InlineOperandKind::InOut => {
             let (input, output) = x86_64_inline_inout_places(input)?;
             Ok(Some(X86_64InlineAssembly::IncrementRegister {
-                register: output_register.ok_or(CodegenErrorKind::InvalidInlineAssembly)?,
+                register,
                 input,
                 output,
             }))
         }
     }
+}
+
+fn x86_64_inline_fixed_register_operand(
+    arguments: &str,
+) -> Option<(&str, bool, X86_64InlineOperandKind, X86_64InlineRegister)> {
+    let template = arguments.strip_prefix('"')?;
+    let template_end = template.find('"')?;
+    let instruction = &template[..template_end];
+    let (register_name, operand_kind, operand_keyword, preserves_flags) =
+        if let Some(operands) = instruction.strip_prefix("cmp ") {
+            let (left, right) = operands.split_once(", ")?;
+            if left != right {
+                return None;
+            }
+            (left, X86_64InlineOperandKind::Input, "in", false)
+        } else if let Some(operands) = instruction.strip_prefix("mov ") {
+            let (destination, source) = operands.split_once(", ")?;
+            if source != "7" {
+                return None;
+            }
+            (
+                destination,
+                X86_64InlineOperandKind::Output,
+                "lateout",
+                true,
+            )
+        } else if let Some(register) = instruction.strip_prefix("inc ") {
+            (register, X86_64InlineOperandKind::InOut, "inout", false)
+        } else {
+            return None;
+        };
+    let register = X86_64InlineRegister::from_name(register_name)?;
+    let operand = template[template_end + 1..]
+        .trim()
+        .strip_prefix(',')?
+        .trim()
+        .strip_prefix(operand_keyword)?
+        .strip_prefix("(\"")?;
+    let declared_end = operand.find("\")")?;
+    if &operand[..declared_end] != register_name {
+        return None;
+    }
+    Some((
+        operand[declared_end + 2..].trim(),
+        preserves_flags,
+        operand_kind,
+        register,
+    ))
+}
+
+fn x86_64_inline_move_from_rax(register: X86_64InlineRegister) -> [u8; 3] {
+    let code = register.code();
+    [0x48 | (code >> 3), 0x89, 0xc0 | (code & 7)]
+}
+
+fn x86_64_inline_move_to_rax(register: X86_64InlineRegister) -> [u8; 3] {
+    let code = register.code();
+    [0x48 | ((code >> 3) << 2), 0x89, 0xc0 | ((code & 7) << 3)]
+}
+
+fn x86_64_inline_compare_self(register: X86_64InlineRegister) -> [u8; 3] {
+    let code = register.code();
+    [
+        0x48 | ((code >> 3) * 5),
+        0x39,
+        0xc0 | ((code & 7) << 3) | (code & 7),
+    ]
+}
+
+fn x86_64_inline_increment(register: X86_64InlineRegister) -> [u8; 3] {
+    let code = register.code();
+    [0x48 | (code >> 3), 0xff, 0xc0 | (code & 7)]
+}
+
+fn x86_64_inline_set_seven(register: X86_64InlineRegister) -> [u8; 7] {
+    let code = register.code();
+    [
+        0x48 | (code >> 3),
+        0xc7,
+        0xc0 | (code & 7),
+        0x07,
+        0x00,
+        0x00,
+        0x00,
+    ]
 }
 
 fn x86_64_inline_operand_with_options(
@@ -26810,19 +26823,14 @@ impl<
                 let emission = self.emit_expression(&tree, tree.root(), 0);
                 self.width = previous_width;
                 emission?;
-                return match register {
-                    X86_64InlineRegister::Rax => self.emit(&[0x48, 0x39, 0xc0]),
-                    X86_64InlineRegister::Rcx => self.emit(&[0x48, 0x89, 0xc1, 0x48, 0x39, 0xc9]),
-                    X86_64InlineRegister::Rdx => self.emit(&[0x48, 0x89, 0xc2, 0x48, 0x39, 0xd2]),
-                };
+                if register != X86_64InlineRegister::RAX {
+                    self.emit(&x86_64_inline_move_from_rax(register))?;
+                }
+                return self.emit(&x86_64_inline_compare_self(register));
             }
             Ok(Some(X86_64InlineAssembly::SetRegister { register, output })) => {
                 if output == "_" {
-                    return self.emit(match register {
-                        X86_64InlineRegister::Rax => &[0x48, 0xc7, 0xc0, 0x07, 0x00, 0x00, 0x00],
-                        X86_64InlineRegister::Rcx => &[0x48, 0xc7, 0xc1, 0x07, 0x00, 0x00, 0x00],
-                        X86_64InlineRegister::Rdx => &[0x48, 0xc7, 0xc2, 0x07, 0x00, 0x00, 0x00],
-                    });
+                    return self.emit(&x86_64_inline_set_seven(register));
                 }
                 let place = x86_64_inline_output_place(
                     self.function,
@@ -26839,15 +26847,9 @@ impl<
                     statement.span,
                 )?;
                 self.emit_x86_64_inline_output_prepare::<MAX_EXPRESSION_NODES>(destination)?;
-                self.emit(match register {
-                    X86_64InlineRegister::Rax => &[0x48, 0xc7, 0xc0, 0x07, 0x00, 0x00, 0x00],
-                    X86_64InlineRegister::Rcx => &[0x48, 0xc7, 0xc1, 0x07, 0x00, 0x00, 0x00],
-                    X86_64InlineRegister::Rdx => &[0x48, 0xc7, 0xc2, 0x07, 0x00, 0x00, 0x00],
-                })?;
-                match register {
-                    X86_64InlineRegister::Rax => {}
-                    X86_64InlineRegister::Rcx => self.emit(&[0x48, 0x89, 0xc8])?,
-                    X86_64InlineRegister::Rdx => self.emit(&[0x48, 0x89, 0xd0])?,
+                self.emit(&x86_64_inline_set_seven(register))?;
+                if register != X86_64InlineRegister::RAX {
+                    self.emit(&x86_64_inline_move_to_rax(register))?;
                 }
                 return self.emit_x86_64_inline_output_store(destination);
             }
@@ -26902,14 +26904,12 @@ impl<
                     let emission = self.emit_expression(&tree, tree.root(), 0);
                     self.width = previous_width;
                     emission?;
-                    match register {
-                        X86_64InlineRegister::Rax => self.emit(&[0x48, 0xff, 0xc0])?,
-                        X86_64InlineRegister::Rcx => {
-                            self.emit(&[0x48, 0x89, 0xc1, 0x48, 0xff, 0xc1, 0x48, 0x89, 0xc8])?
-                        }
-                        X86_64InlineRegister::Rdx => {
-                            self.emit(&[0x48, 0x89, 0xc2, 0x48, 0xff, 0xc2, 0x48, 0x89, 0xd0])?
-                        }
+                    if register != X86_64InlineRegister::RAX {
+                        self.emit(&x86_64_inline_move_from_rax(register))?;
+                    }
+                    self.emit(&x86_64_inline_increment(register))?;
+                    if register != X86_64InlineRegister::RAX {
+                        self.emit(&x86_64_inline_move_to_rax(register))?;
                     }
                     return self.emit_x86_64_inline_output_store(destination);
                 }
@@ -26929,14 +26929,12 @@ impl<
                 )?;
                 self.emit_x86_64_inline_output_prepare::<MAX_EXPRESSION_NODES>(destination)?;
                 self.emit_x86_64_inline_output_load(destination)?;
-                match register {
-                    X86_64InlineRegister::Rax => self.emit(&[0x48, 0xff, 0xc0])?,
-                    X86_64InlineRegister::Rcx => {
-                        self.emit(&[0x48, 0x89, 0xc1, 0x48, 0xff, 0xc1, 0x48, 0x89, 0xc8])?
-                    }
-                    X86_64InlineRegister::Rdx => {
-                        self.emit(&[0x48, 0x89, 0xc2, 0x48, 0xff, 0xc2, 0x48, 0x89, 0xd0])?
-                    }
+                if register != X86_64InlineRegister::RAX {
+                    self.emit(&x86_64_inline_move_from_rax(register))?;
+                }
+                self.emit(&x86_64_inline_increment(register))?;
+                if register != X86_64InlineRegister::RAX {
+                    self.emit(&x86_64_inline_move_to_rax(register))?;
                 }
                 return self.emit_x86_64_inline_output_store(destination);
             }
@@ -30897,6 +30895,25 @@ mod tests {
                 .windows(6)
                 .any(|bytes| bytes == [0x48, 0x89, 0xc2, 0x48, 0x39, 0xd2])
         );
+        for (source, expected) in [
+            (
+                concat!(
+                    "#[unsafe(no_mangle)] pub unsafe extern \"C\" fn answer(value: u64) -> u64 { ",
+                    "asm!(\"cmp rsi, rsi\", in(\"rsi\") value); value }"
+                ),
+                [0x48, 0x89, 0xc6, 0x48, 0x39, 0xf6],
+            ),
+            (
+                concat!(
+                    "#[unsafe(no_mangle)] pub unsafe extern \"C\" fn answer(value: u64) -> u64 { ",
+                    "asm!(\"cmp r15, r15\", in(\"r15\") value); value }"
+                ),
+                [0x49, 0x89, 0xc7, 0x4d, 0x39, 0xff],
+            ),
+        ] {
+            let code = compile(source).unwrap();
+            assert!(code.bytes().windows(6).any(|bytes| bytes == expected));
+        }
         for source in [
             concat!(
                 "#[unsafe(no_mangle)] pub unsafe extern \"C\" fn answer() -> u64 { ",
@@ -30915,6 +30932,17 @@ mod tests {
                     .any(|bytes| bytes == [0x48, 0xc7, 0xc0, 0x07, 0, 0, 0])
             );
         }
+        let r15_output = compile(concat!(
+            "#[unsafe(no_mangle)] pub unsafe extern \"C\" fn answer() -> u64 { ",
+            "let mut value: u64 = 0; asm!(\"mov r15, 7\", lateout(\"r15\") value); value }"
+        ))
+        .unwrap();
+        assert!(
+            r15_output
+                .bytes()
+                .windows(10)
+                .any(|bytes| bytes == [0x49, 0xc7, 0xc7, 0x07, 0, 0, 0, 0x4c, 0x89, 0xf8])
+        );
         for source in [
             concat!(
                 "#[unsafe(no_mangle)] pub unsafe extern \"C\" fn answer() -> u64 { ",
@@ -30937,6 +30965,18 @@ mod tests {
                     .any(|bytes| bytes == [0x48, 0xc7, 0xc2, 0x07, 0, 0, 0])
             );
         }
+        let r15_inout = compile(concat!(
+            "#[unsafe(no_mangle)] pub unsafe extern \"C\" fn answer(input: u64) -> u64 { ",
+            "let mut output: u64 = 0; ",
+            "asm!(\"inc r15\", inout(\"r15\") input => output); output }"
+        ))
+        .unwrap();
+        assert!(
+            r15_inout
+                .bytes()
+                .windows(9)
+                .any(|bytes| bytes == [0x49, 0x89, 0xc7, 0x49, 0xff, 0xc7, 0x4c, 0x89, 0xf8])
+        );
         let discarded_output = compile(concat!(
             "#[unsafe(no_mangle)] pub unsafe extern \"C\" fn answer() -> u64 { ",
             "asm!(\"mov rax, 7\", lateout(\"rax\") _); 42 }"
@@ -31297,6 +31337,18 @@ mod tests {
             ),
             (
                 "#[unsafe(no_mangle)] pub unsafe extern \"C\" fn answer(value: u64) -> u64 { asm!(\"cmp rdx, rdx\", in(\"rcx\") value); value }",
+                CodegenErrorKind::InvalidInlineAssembly,
+            ),
+            (
+                "#[unsafe(no_mangle)] pub unsafe extern \"C\" fn answer(value: u64) -> u64 { asm!(\"cmp rbx, rbx\", in(\"rbx\") value); value }",
+                CodegenErrorKind::InvalidInlineAssembly,
+            ),
+            (
+                "#[unsafe(no_mangle)] pub unsafe extern \"C\" fn answer(value: u64) -> u64 { asm!(\"cmp rsp, rsp\", in(\"rsp\") value); value }",
+                CodegenErrorKind::InvalidInlineAssembly,
+            ),
+            (
+                "#[unsafe(no_mangle)] pub unsafe extern \"C\" fn answer(value: u64) -> u64 { asm!(\"cmp rbp, rbp\", in(\"rbp\") value); value }",
                 CodegenErrorKind::InvalidInlineAssembly,
             ),
             (
