@@ -526,17 +526,18 @@ join. Deployment passes 6 tests and configuration 51 tests on Windows. The next
 gate is real service-loop construction followed by distinct-domain backend
 construction and cleanup; end-to-end Total mode remains **PLANNED**.
 
-Backend probe wiring now **PARTIALLY IMPLEMENTS** the recovered assignment
-path on both WHP and KVM sources. Each runner enumerates the exact two signed
-release records, capability-reads their persisted component policy through the
-shared hosted recovery transaction, atomically assigns them, and seals the
-activated inventory before guest construction; runner code no longer directly
-creates package/domain assignments. Windows passes 566 kernel tests, 51
-configuration tests, and 12 WHP runner tests, and the WHP runner cross-builds.
-The KVM build is unavailable on this Windows host because the configured Linux
-cross-host Rust target is absent, so parity remains source-level for this
-increment. Complete production service-loop and multi-domain orchestration
-remain **PLANNED**.
+Backend probe wiring now **PARTIALLY IMPLEMENTS** recovered cross-service
+ownership on both WHP and KVM sources. The shared probe authenticates separate
+configuration and deployment recovery state, reads the exact activated
+SystemRelease through bounded immutable extents, capability-assigns every
+package, and returns one owner retaining both recoveries beside installed Total
+admission. Runners retain it through route commitment and strict runtime
+authorization; they no longer receive a detached release-builder callback.
+Release substitution and stale recovery roots fail before a joined owner is
+returned. Configuration passes 51 tests and WHP 12 runner tests on Windows. The
+KVM build remains unavailable here because the configured Linux cross-host Rust
+target is absent, so parity is source-level for this increment. Production
+service-loop and distinct-domain orchestration remain **PLANNED**.
 
 The kernel now **PARTIALLY IMPLEMENTS** focused complete multi-domain
 finalization evidence. An authenticated two-package release assigns two

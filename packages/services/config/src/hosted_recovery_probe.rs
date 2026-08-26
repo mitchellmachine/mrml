@@ -10,32 +10,42 @@
 use super::{
     ConfigTransaction, ConfigUpdate, ConfigValue, ConfigurationService, IsolationPolicySetting,
     OwnerIsolationSelection, PERSISTED_RESTART_POLICY_BYTES, PersistedRestartPolicy,
-    RecoveredInstalledStableSystemSelection, RecoveredInstalledTotalAdmission, SettingId,
-    SettingSchema, StableConfigurationRecoveryValidator, StableServiceRecoveryValidator,
-    reacquire_handoff_installed_recovery_device, recover_serviced_stable_system_selection,
+    RecoveredDeploymentTotalControlPlane, RecoveredInstalledStableSystemSelection,
+    RuntimeDomainPolicyBinding, SettingId, SettingSchema, StableConfigurationRecoveryValidator,
+    StableServiceRecoveryValidator, reacquire_handoff_installed_recovery_device,
+    recover_serviced_stable_system_selection,
 };
 use mrml_crypto::Sha3_256;
+use mrml_deployment::{
+    DEPLOYMENT_RECOVERY_STATE_BYTES, DeploymentRecoveryStateStore, DeploymentService,
+    GenerationCandidate, encode_deployment_recovery_state_with_release,
+    encode_deployment_release_checkpoint, recover_and_read_runtime_assignment,
+};
 #[cfg(test)]
 use mrml_kernel::InstalledRecoverySource;
 use mrml_kernel::arch::x86_64::UserContext;
 use mrml_kernel::{
-    ActivatedReleaseTotalMicrovmInventory, BootHandoff, Capability, CapabilitySpace,
-    InstalledRecoveryBootIdentity, ObjectId, Priority, Rights, ServiceSupervisor, TaskRuntime,
+    BootHandoff, BootRecoveryEnvelope, CapabilitySpace, InstalledRecoveryBootIdentity, ObjectId,
+    Priority, Rights, ServiceSupervisor, TaskRuntime,
 };
+use mrml_package_format::MAX_SYSTEM_RELEASE_BYTES;
 use mrml_storage::{
     AUTHORITY_RECOVERY_STATE_BYTES, AllocationImage, AllocationKind, AllocationRecord,
     AuthorityCheckpointProofIssuer, AuthorityRecoveryStateStore, BlockDeviceDescriptor,
     BlockDeviceId, BlockService, BlockServiceBackend, BootRecoveryAdmission, DirectoryEntry,
-    DirectoryImage, DirectoryMetadata, ExtentImage, ExtentRecord, FileMetadata, FileReadBackend,
-    MetadataPointer, ObjectIdAllocatorImage, OwnerApprovedAuthorityCheckpoint,
-    PlatformBlockDeviceDescriptor, PlatformBlockDeviceIdentity, PlatformBlockTransport,
-    SUPERBLOCK_BYTES, StorageAuthorityTable, StorageName, StorageObjectId, StorageObjectKind,
-    StoragePrincipal, StorageRecoveryGrant, StorageRights, Superblock, VolumeHeader, VolumeId,
-    authority_checkpoint_digest, encode_authority_checkpoint,
+    DirectoryImage, DirectoryMetadata, ExtentImage, ExtentMap, ExtentRecord, FileMetadata,
+    FileReadBackend, FileState, MetadataPointer, ObjectIdAllocatorImage,
+    OwnerApprovedAuthorityCheckpoint, PlatformBlockDeviceDescriptor, PlatformBlockDeviceIdentity,
+    PlatformBlockTransport, SUPERBLOCK_BYTES, StorageAuthorityTable, StorageName, StorageObjectId,
+    StorageObjectKind, StoragePrincipal, StorageRecoveryGrant, StorageRights, Superblock,
+    VolumeHeader, VolumeId, authority_checkpoint_digest, encode_authority_checkpoint,
     recover_selected_validate_and_commit_stable_authorities,
 };
 
 const BLOCK_BYTES: usize = 4096;
+const MAX_HOSTED_RELEASE_BYTES: usize = 512 * 1024;
+const MAX_RELEASE_EXTENTS: usize = MAX_HOSTED_RELEASE_BYTES.div_ceil(BLOCK_BYTES);
+const RELEASE_BLOCK_BASE: u64 = 32;
 const CONFIGURATION_GENERATION: u64 = 2;
 const ROOT_GENERATION: u64 = 14;
 const POLICY_GENERATION: u64 = 1;
@@ -54,6 +64,7 @@ pub enum HostedRecoveryProbeError {
     AuthorityCheckpoint,
     Recovery,
     ServicePublication,
+    Deployment,
     Admission,
 }
 
@@ -72,6 +83,101 @@ impl<E> From<HostedRecoveryProbeError> for HostedRecoveryProbeBuildError<E> {
 struct CheckpointBackend {
     object: StorageObjectId,
     bytes: [u8; BLOCK_BYTES],
+}
+
+struct DeploymentFileBackend {
+    object: StorageObjectId,
+    generation: u64,
+    bytes: [u8; BLOCK_BYTES],
+}
+
+struct DeploymentReleaseBackend<'a> {
+    object: StorageObjectId,
+    generation: u64,
+    bytes: &'a [u8],
+}
+
+unsafe impl FileReadBackend for DeploymentReleaseBackend<'_> {
+    type Error = ();
+
+    fn read_verified_extent(
+        &mut self,
+        record: ExtentRecord,
+        byte_offset: u64,
+        output: &mut [u8],
+    ) -> Result<(), Self::Error> {
+        let physical_block = record.physical_block().ok_or(())?;
+        if record.file() != self.object
+            || record.metadata_generation() != self.generation
+            || record.block_count() != 1
+            || physical_block < RELEASE_BLOCK_BASE
+        {
+            return Err(());
+        }
+        let block = usize::try_from(physical_block - RELEASE_BLOCK_BASE).map_err(|_| ())?;
+        let start = block.checked_mul(BLOCK_BYTES).ok_or(())?;
+        let available_end = start.saturating_add(BLOCK_BYTES).min(self.bytes.len());
+        let mut padded = [0; BLOCK_BYTES];
+        padded[..available_end.saturating_sub(start)]
+            .copy_from_slice(self.bytes.get(start..available_end).ok_or(())?);
+        if record.content_digest() != digest(&padded) {
+            return Err(());
+        }
+        let within = usize::try_from(byte_offset).map_err(|_| ())?;
+        let end = within.checked_add(output.len()).ok_or(())?;
+        output.copy_from_slice(padded.get(within..end).ok_or(())?);
+        Ok(())
+    }
+}
+
+unsafe impl FileReadBackend for DeploymentFileBackend {
+    type Error = ();
+
+    fn read_verified_extent(
+        &mut self,
+        record: ExtentRecord,
+        byte_offset: u64,
+        output: &mut [u8],
+    ) -> Result<(), Self::Error> {
+        if record.file() != self.object
+            || record.metadata_generation() != self.generation
+            || record.content_digest() != digest(&self.bytes)
+        {
+            return Err(());
+        }
+        let start = usize::try_from(byte_offset).map_err(|_| ())?;
+        let end = start.checked_add(output.len()).ok_or(())?;
+        output.copy_from_slice(self.bytes.get(start..end).ok_or(())?);
+        Ok(())
+    }
+}
+
+struct DeploymentStateStore {
+    bytes: [u8; DEPLOYMENT_RECOVERY_STATE_BYTES],
+}
+
+impl DeploymentRecoveryStateStore for DeploymentStateStore {
+    type Error = ();
+
+    fn load_authenticated(
+        &self,
+        output: &mut [u8; DEPLOYMENT_RECOVERY_STATE_BYTES],
+    ) -> Result<(), Self::Error> {
+        *output = self.bytes;
+        Ok(())
+    }
+
+    fn compare_and_store(
+        &mut self,
+        expected: &[u8; DEPLOYMENT_RECOVERY_STATE_BYTES],
+        replacement: &[u8; DEPLOYMENT_RECOVERY_STATE_BYTES],
+    ) -> Result<(), Self::Error> {
+        if self.bytes != *expected {
+            return Err(());
+        }
+        self.bytes = *replacement;
+        Ok(())
+    }
 }
 
 unsafe impl FileReadBackend for CheckpointBackend {
@@ -558,6 +664,95 @@ fn recover_reachable_files<'a>(
     })
 }
 
+fn deployment_file(
+    object: StorageObjectId,
+    generation: u64,
+    length: usize,
+    physical_block: u64,
+    bytes: &[u8; BLOCK_BYTES],
+) -> Result<FileState<1>, HostedRecoveryProbeError> {
+    if length == 0 || length > BLOCK_BYTES {
+        return Err(HostedRecoveryProbeError::Deployment);
+    }
+    let extent = ExtentRecord::data(object, generation, 0, 1, physical_block, digest(bytes))
+        .map_err(|_| HostedRecoveryProbeError::Deployment)?;
+    FileState::new(
+        object,
+        generation,
+        u64::try_from(length).map_err(|_| HostedRecoveryProbeError::Deployment)?,
+        ExtentMap::<1>::build(
+            header(),
+            object,
+            generation,
+            u64::try_from(length).map_err(|_| HostedRecoveryProbeError::Deployment)?,
+            &[extent],
+        )
+        .map_err(|_| HostedRecoveryProbeError::Deployment)?,
+    )
+    .map_err(|_| HostedRecoveryProbeError::Deployment)
+}
+
+fn deployment_release_file(
+    object: StorageObjectId,
+    generation: u64,
+    bytes: &[u8],
+) -> Result<FileState<MAX_RELEASE_EXTENTS>, HostedRecoveryProbeError> {
+    if bytes.is_empty()
+        || bytes.len() > MAX_HOSTED_RELEASE_BYTES
+        || bytes.len() > MAX_SYSTEM_RELEASE_BYTES
+    {
+        return Err(HostedRecoveryProbeError::Deployment);
+    }
+    let count = bytes.len().div_ceil(BLOCK_BYTES);
+    let first = {
+        let mut padded = [0; BLOCK_BYTES];
+        let first_length = bytes.len().min(BLOCK_BYTES);
+        padded[..first_length].copy_from_slice(&bytes[..first_length]);
+        ExtentRecord::data(
+            object,
+            generation,
+            0,
+            1,
+            RELEASE_BLOCK_BASE,
+            digest(&padded),
+        )
+        .map_err(|_| HostedRecoveryProbeError::Deployment)?
+    };
+    let mut records = [first; MAX_RELEASE_EXTENTS];
+    for (index, record) in records[..count].iter_mut().enumerate() {
+        let start = index
+            .checked_mul(BLOCK_BYTES)
+            .ok_or(HostedRecoveryProbeError::Deployment)?;
+        let end = start.saturating_add(BLOCK_BYTES).min(bytes.len());
+        let mut padded = [0; BLOCK_BYTES];
+        padded[..end - start].copy_from_slice(&bytes[start..end]);
+        *record = ExtentRecord::data(
+            object,
+            generation,
+            u64::try_from(index).map_err(|_| HostedRecoveryProbeError::Deployment)?,
+            1,
+            RELEASE_BLOCK_BASE
+                + u64::try_from(index).map_err(|_| HostedRecoveryProbeError::Deployment)?,
+            digest(&padded),
+        )
+        .map_err(|_| HostedRecoveryProbeError::Deployment)?;
+    }
+    FileState::new(
+        object,
+        generation,
+        u64::try_from(bytes.len()).map_err(|_| HostedRecoveryProbeError::Deployment)?,
+        ExtentMap::<MAX_RELEASE_EXTENTS>::build(
+            header(),
+            object,
+            generation,
+            u64::try_from(bytes.len()).map_err(|_| HostedRecoveryProbeError::Deployment)?,
+            &records[..count],
+        )
+        .map_err(|_| HostedRecoveryProbeError::Deployment)?,
+    )
+    .map_err(|_| HostedRecoveryProbeError::Deployment)
+}
+
 /// Builds one hosted, authenticated recovery transaction and atomically binds
 /// its committed persistent policy plus decoded loader override to `release`.
 ///
@@ -566,19 +761,14 @@ fn recover_reachable_files<'a>(
 /// The caller must use this only as a controlled hosted probe. This function
 /// synthesizes the owner-approved checkpoint proof for its private in-memory
 /// fixture; it is not an owner-presence or production recovery boundary.
-pub unsafe fn recover_total_admission_with<const DOMAINS: usize, F, E>(
+pub unsafe fn recover_total_control_plane<const DOMAINS: usize>(
     handoff: &BootHandoff,
-    build_release: F,
-) -> Result<RecoveredInstalledTotalAdmission<DOMAINS>, HostedRecoveryProbeBuildError<E>>
-where
-    F: FnOnce(
-        u64,
-        &super::RecoveredSystemState<1, 3, 2>,
-        &CapabilitySpace<4>,
-        IsolationPolicySetting,
-        Capability,
-    ) -> Result<ActivatedReleaseTotalMicrovmInventory<DOMAINS>, E>,
-{
+    release_bytes: &[u8],
+    expected_release_key: &[u8; 64],
+) -> Result<
+    RecoveredDeploymentTotalControlPlane<1, 3, 2, 1, DOMAINS>,
+    HostedRecoveryProbeBuildError<()>,
+> {
     let recovery = handoff
         .recovery_state()
         .ok_or(HostedRecoveryProbeError::MissingRecoveryState)
@@ -807,29 +997,159 @@ where
             HostedRecoveryProbeError::Configuration,
         ));
     }
-    let policy = recovered
-        .compose_boot_isolation_policy(
+    let delivered = BootRecoveryEnvelope::new(
+        recovery,
+        handoff.installed_recovery(),
+        handoff.installed_recovery_sata_route(),
+        handoff.isolation_override(),
+    )
+    .map_err(|_| HostedRecoveryProbeBuildError::Probe(HostedRecoveryProbeError::Admission))?;
+    let recovered = recovered
+        .bind_delivered_boot(delivered)
+        .map_err(|_| HostedRecoveryProbeBuildError::Probe(HostedRecoveryProbeError::Admission))?;
+
+    let deployment_root = ObjectId(0x4445_504c_4f59);
+    let mut deployment_capabilities = CapabilitySpace::<2>::new();
+    let control = deployment_capabilities
+        .insert(deployment_root, Rights::CONTROL)
+        .map_err(|_| HostedRecoveryProbeError::Deployment)?;
+    let inspect = deployment_capabilities
+        .insert(deployment_root, Rights::READ)
+        .map_err(|_| HostedRecoveryProbeError::Deployment)?;
+    let mut deployment = DeploymentService::<1>::new(deployment_root)
+        .map_err(|_| HostedRecoveryProbeError::Deployment)?;
+    let release_object = object(41);
+    let candidate = deployment
+        .stage(
+            &deployment_capabilities,
+            control,
+            GenerationCandidate::from_system_release(
+                release_bytes,
+                expected_release_key,
+                release_object.local(),
+                1,
+            )
+            .map_err(|_| HostedRecoveryProbeError::Deployment)?,
+        )
+        .map_err(|_| HostedRecoveryProbeError::Deployment)?;
+    let prepared = deployment
+        .prepare_activation(&deployment_capabilities, control, candidate, None)
+        .map_err(|_| HostedRecoveryProbeError::Deployment)?;
+    let active = deployment
+        .commit_activation(prepared)
+        .map_err(|_| HostedRecoveryProbeError::Deployment)?;
+    let active_release = deployment
+        .active_release(&deployment_capabilities, inspect)
+        .map_err(|_| HostedRecoveryProbeError::Deployment)?
+        .ok_or(HostedRecoveryProbeError::Deployment)?;
+
+    let checkpoint_object = object(40);
+    let checkpoint = encode_deployment_release_checkpoint(deployment_root, active_release)
+        .map_err(|_| HostedRecoveryProbeError::Deployment)?;
+    let state_store = DeploymentStateStore {
+        bytes: encode_deployment_recovery_state_with_release(
+            1,
+            deployment_root,
+            active,
+            Some(active_release),
+            checkpoint_object,
+            2,
+        )
+        .map_err(|_| HostedRecoveryProbeError::Deployment)?,
+    };
+    let mut checkpoint_backend = DeploymentFileBackend {
+        object: checkpoint_object,
+        generation: 2,
+        bytes: [0; BLOCK_BYTES],
+    };
+    checkpoint_backend.bytes[..checkpoint.len()].copy_from_slice(&checkpoint);
+    let checkpoint_file = deployment_file(
+        checkpoint_object,
+        2,
+        checkpoint.len(),
+        40,
+        &checkpoint_backend.bytes,
+    )?;
+    let mut release_backend = DeploymentReleaseBackend {
+        object: release_object,
+        generation: 1,
+        bytes: release_bytes,
+    };
+    let release_file = deployment_release_file(release_object, 1, release_bytes)?;
+    let mut checkpoint_authority = StorageAuthorityTable::<1>::new();
+    let checkpoint_handle = checkpoint_authority
+        .insert(
+            checkpoint_object,
+            StorageObjectKind::File,
+            StorageRights::READ,
+            principal(),
+        )
+        .map_err(|_| HostedRecoveryProbeError::Deployment)?;
+    let mut release_authority = StorageAuthorityTable::<1>::new();
+    let release_handle = release_authority
+        .insert(
+            release_object,
+            StorageObjectKind::File,
+            StorageRights::READ,
+            principal(),
+        )
+        .map_err(|_| HostedRecoveryProbeError::Deployment)?;
+    let mut release_output = [0; MAX_HOSTED_RELEASE_BYTES];
+    let deployment = recover_and_read_runtime_assignment::<
+        1,
+        DOMAINS,
+        2,
+        1,
+        MAX_RELEASE_EXTENTS,
+        1,
+        1,
+        _,
+        _,
+        _,
+    >(
+        deployment_root,
+        &checkpoint_file,
+        &checkpoint_authority,
+        checkpoint_handle,
+        &release_file,
+        &release_authority,
+        release_handle,
+        principal(),
+        &state_store,
+        &mut checkpoint_backend,
+        &mut release_backend,
+        &deployment_capabilities,
+        inspect,
+        &mut release_output,
+        POLICY_GENERATION,
+    )
+    .map_err(|_| HostedRecoveryProbeError::Deployment)?;
+    if deployment.assignment().expected_len() != DOMAINS {
+        return Err(HostedRecoveryProbeError::Deployment.into());
+    }
+    let bindings: [RuntimeDomainPolicyBinding<'_>; DOMAINS] = core::array::from_fn(|index| {
+        RuntimeDomainPolicyBinding::new(
+            deployment
+                .assignment()
+                .package_at(index)
+                .expect("complete hosted runtime inventory"),
+            component,
+            component_access,
+        )
+        .expect("validated hosted component binding")
+    });
+    recovered
+        .build_recovered_deployment_total_control_plane(
+            reachable.installed(),
             &capabilities,
             system,
             system_access,
             component,
             component_access,
-            handoff,
+            deployment,
+            &bindings,
         )
-        .map_err(|_| HostedRecoveryProbeBuildError::Probe(HostedRecoveryProbeError::Admission))?;
-    let release = build_release(
-        policy.effective().policy_generation(),
-        &recovered,
-        &capabilities,
-        component,
-        component_access,
-    )
-    .map_err(HostedRecoveryProbeBuildError::ReleaseBuilder)?;
-    let total = policy
-        .bind_release_inventory(release)
-        .map_err(|_| HostedRecoveryProbeBuildError::Probe(HostedRecoveryProbeError::Admission))?;
-    RecoveredInstalledTotalAdmission::bind(&reachable, total)
-        .map_err(|_| HostedRecoveryProbeBuildError::Probe(HostedRecoveryProbeError::Admission))
+        .map_err(|_| HostedRecoveryProbeError::Admission.into())
 }
 
 #[cfg(test)]

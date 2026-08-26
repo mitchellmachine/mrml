@@ -8,9 +8,8 @@ use mrml_config::{
     ConfigurationService, EffectiveBootIsolationPolicy, IsolationPolicyApplicationPlan,
     IsolationPolicySetting, IsolationServiceBounds, IsolationServiceIdentity,
     MicrovmConfigurationServiceLauncher, OwnerIsolationSelection,
-    PreparedMicrovmConfigurationLauncher, RecoveredInstalledTotalAdmission,
-    RecoveredInstalledTotalRuntime, RuntimeDomainPolicyBinding, SettingId,
-    hosted_recovery_probe::recover_total_admission_with,
+    PreparedMicrovmConfigurationLauncher, RecoveredDeploymentTotalControlPlane,
+    RecoveredDeploymentTotalRuntime, SettingId, hosted_recovery_probe::recover_total_control_plane,
 };
 #[cfg(target_os = "windows")]
 use mrml_crypto::{LAMPORT_PUBLIC_KEY_BYTES, Sha3_512};
@@ -36,16 +35,16 @@ use mrml_kernel::{
     MAX_COMPONENT_IMAGE_REGIONS, MemoryPoolTable, MicrovmPageProjectionKind,
     MicrovmProjectionDescriptor, MicrovmProjectionKind, MicrovmProjectionPlan,
     MicrovmProjectionRequirements, ObjectId, PAGE_SIZE, PreparedMicrovmApplicationBackend,
-    ResourceCommand, Rights, RuntimeDomainAssignmentPlan, SIGNED_ARTIFACT_OVERHEAD_BYTES,
-    ScheduledDeadlineVmBackend, ScheduledSmpVmBackend, SignedArtifact, TotalMicrovmClass,
-    TrustRoot, VIRTUAL_BLOCK_FEATURE_FLUSH, VcpuReservationId, VerifiedExecutable,
-    VerifiedGpuKernelBundle, VirtualBlockBackend, VirtualBlockBackendAuthority,
-    VirtualBlockCompletionStatus, VirtualBlockConfigurationPage, VirtualBlockDevice,
-    VirtualBlockDeviceState, VirtualBlockError, VirtualBlockMutationError,
-    VirtualBlockPciAttachment, VirtualBlockPciAttachmentState, VirtualBlockPciCleanupMode,
-    VirtualBlockPciCleanupRecord, VirtualBlockPciFunctionRevoker, VirtualBlockPciGuestMemoryMapper,
-    VirtualBlockPciGuestWindowBackend, VirtualBlockPciResourceRevoker, VirtualBlockProcessOutcome,
-    VirtualBlockQueueBridge, VirtualBlockQueueLayout, VirtualBlockRequest, VirtualBlockResumePage,
+    ResourceCommand, Rights, SIGNED_ARTIFACT_OVERHEAD_BYTES, ScheduledDeadlineVmBackend,
+    ScheduledSmpVmBackend, SignedArtifact, TotalMicrovmClass, TrustRoot,
+    VIRTUAL_BLOCK_FEATURE_FLUSH, VcpuReservationId, VerifiedExecutable, VerifiedGpuKernelBundle,
+    VirtualBlockBackend, VirtualBlockBackendAuthority, VirtualBlockCompletionStatus,
+    VirtualBlockConfigurationPage, VirtualBlockDevice, VirtualBlockDeviceState, VirtualBlockError,
+    VirtualBlockMutationError, VirtualBlockPciAttachment, VirtualBlockPciAttachmentState,
+    VirtualBlockPciCleanupMode, VirtualBlockPciCleanupRecord, VirtualBlockPciFunctionRevoker,
+    VirtualBlockPciGuestMemoryMapper, VirtualBlockPciGuestWindowBackend,
+    VirtualBlockPciResourceRevoker, VirtualBlockProcessOutcome, VirtualBlockQueueBridge,
+    VirtualBlockQueueLayout, VirtualBlockRequest, VirtualBlockResumePage,
     VirtualBlockTransactionOutcome, VirtualBlockTransport, VirtualBlockVmmMemory,
     VirtualPciAttachedResources, VirtualPciConfigurationMechanismOne,
     VirtualPciConfigurationRouter, VirtualPciIdentity, VirtualPciIoOutcome, VirtualPciLocation,
@@ -101,7 +100,7 @@ struct ConfiguredTotalServicePolicy {
 #[cfg(target_os = "windows")]
 enum WhpTotalAdmission {
     Standalone(IsolationAdmissionTable<2>),
-    Recovered(RecoveredInstalledTotalAdmission<2>),
+    Recovered(RecoveredDeploymentTotalControlPlane<1, 3, 2, 1, 2>),
 }
 
 #[cfg(target_os = "windows")]
@@ -2873,40 +2872,10 @@ fn application_main() -> Result<()> {
         // helper's synthesized owner approval is never production recovery or
         // physical rollback evidence.
         let total = unsafe {
-            recover_total_admission_with(
+            recover_total_control_plane::<2>(
                 &decoded_boot_handoff,
-                |policy_generation, recovered, capabilities, component, component_access| {
-                    let mut plan = RuntimeDomainAssignmentPlan::<2>::new(
-                        release_bytes,
-                        expected_release_key,
-                        active_component_generation
-                            .ok_or_else(|| anyhow!("missing activated WHP component release"))?,
-                        policy_generation,
-                    )
-                    .map_err(|error| {
-                        anyhow!("WHP installed assignment plan failed: {:?}", error)
-                    })?;
-                    let first = plan
-                        .package_at(0)
-                        .ok_or_else(|| anyhow!("missing first WHP runtime package"))?;
-                    let second = plan
-                        .package_at(1)
-                        .ok_or_else(|| anyhow!("missing second WHP runtime package"))?;
-                    if plan.package_at(2).is_some() {
-                        return Err(anyhow!("unexpected extra WHP runtime package"));
-                    }
-                    let bindings = [
-                        RuntimeDomainPolicyBinding::new(first, component, component_access)
-                            .map_err(|error| anyhow!("WHP first policy binding: {:?}", error))?,
-                        RuntimeDomainPolicyBinding::new(second, component, component_access)
-                            .map_err(|error| anyhow!("WHP second policy binding: {:?}", error))?,
-                    ];
-                    recovered
-                        .assign_runtime_domains(capabilities, &mut plan, &bindings)
-                        .map_err(|error| anyhow!("WHP runtime policy failed: {:?}", error))?;
-                    plan.seal()
-                        .map_err(|error| anyhow!("WHP release sealing failed: {:?}", error))
-                },
+                release_bytes,
+                expected_release_key,
             )
         }
         .map_err(|error| anyhow!("WHP recovered boot Total admission failed: {:?}", error))?;
@@ -2965,7 +2934,7 @@ fn application_main() -> Result<()> {
         (None, None) => None,
         _ => return Err(anyhow!("WHP Total policy/admission ownership mismatch")),
     };
-    let mut installed_total_runtime: Option<RecoveredInstalledTotalRuntime<2>> = None;
+    let mut installed_total_runtime: Option<RecoveredDeploymentTotalRuntime<1, 3, 2, 1, 2>> = None;
     let mut component_cpu = if component_service_mode {
         let mut capabilities = CapabilitySpace::<1>::new();
         let mut budgets = CpuBudgetTable::<1, 1>::new(0x1a53)
@@ -4124,7 +4093,7 @@ fn application_main() -> Result<()> {
                             })?;
                         let admission = installed_total_runtime
                             .as_ref()
-                            .map(RecoveredInstalledTotalRuntime::admission)
+                            .map(RecoveredDeploymentTotalRuntime::admission)
                             .or_else(|| isolation_admission.as_ref().map(|value| &**value))
                             .ok_or_else(|| anyhow!("missing component isolation admission"))?;
                         let report = admission.total_microvm_report();
@@ -4623,7 +4592,7 @@ fn application_main() -> Result<()> {
         guest.finish()?;
         if let Some(admission) = installed_total_runtime
             .as_ref()
-            .map(RecoveredInstalledTotalRuntime::admission)
+            .map(RecoveredDeploymentTotalRuntime::admission)
             .or_else(|| isolation_admission.as_ref().map(|value| &**value))
         {
             let report = admission.total_microvm_report();

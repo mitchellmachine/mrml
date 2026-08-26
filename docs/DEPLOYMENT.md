@@ -260,8 +260,13 @@ Configuration then returns one `RecoveredDeploymentTotalControlPlane` retaining
 both delivered configuration recovery and deployment recovery beside the sole
 installed admission table. Assignment, sealing, policy binding, or installed
 identity failure returns no joined owner. Deployment passes 6 tests and
-configuration 51 tests on Windows. Real service-loop construction of this owner,
-all-domain launch/cleanup, and end-to-end backend execution remain **PLANNED**.
+configuration 51 tests on Windows. The shared hosted recovery probe now builds
+this owner from separate authenticated configuration and deployment checkpoints,
+and WHP/KVM retain it through strict runtime authorization rather than accepting
+a detached release callback. WHP passes 12 runner tests; KVM uses the same source
+path but cannot cross-build on this Windows host without `cross_host_rust_target`.
+Real service-loop construction, distinct-domain launch/cleanup, and end-to-end
+system execution remain **PLANNED**.
 
 - Complexity impact: MEDIUM
 - TCB impact: LOW

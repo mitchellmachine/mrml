@@ -29,6 +29,13 @@ construction, placement algorithm, scheduler, interface transport, device, DMA,
 queue, interrupt, or hardware mechanism. The broader adaptive/Total MicroVM
 mechanism remains **TRIGGERED**.
 
+Using the same retained owner in the controlled WHP/KVM recovery probe is also
+**NOT_TRIGGERED**. The increment composes existing authenticated file reads,
+exact generation checks, capability-authorized assignment, and typed ownership;
+it adds no VM construction, placement algorithm, scheduling policy, interface
+transport, device, DMA, queue, interrupt, or hardware mechanism. Broader
+adaptive/Total MicroVM execution remains **TRIGGERED**.
+
 ## 2026-08-26 — Canonical one-use installed recovery envelope
 
 Patent review: **NOT_TRIGGERED** for extending the existing one-use boot-recovery

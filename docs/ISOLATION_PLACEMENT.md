@@ -1236,17 +1236,17 @@ tests and configuration 51 tests on Windows. Service-loop invocation, distinct
 domain construction/cleanup, and complete WHP/KVM execution remain **PLANNED**.
 
 The shared hosted recovery probe and both backend runners now
-**PARTIALLY IMPLEMENT** recovered owner-policy assignment instead of minting a
-release inventory directly in a runner callback. The callback receives the
-committed recovered configuration and its capability space; WHP and KVM build
-the exact activated two-package plan, inspect its release-lifetime package
-identities, capability-read the persisted component setting for each record,
-atomically assign, and seal before any guest construction. WHP cross-builds and
-passes 12 runner tests on Windows. KVM source uses the identical path, but its
-Linux build is unavailable on this Windows host because the configured
-`cross_host_rust_target` is absent; no new KVM execution claim is made. The
-probe still colocates compatible ZIM/Zstd packages in one domain and remains
-hosted controlled evidence, not complete production-system orchestration.
+**PARTIALLY IMPLEMENT** the retained cross-service owner rather than minting a
+release inventory in a runner callback. The probe independently authenticates
+the configuration checkpoint and a separate deployment recovery state, reads
+the exact activated SystemRelease through its immutable file generation,
+capability-assigns every package, and returns the joined configuration,
+deployment, installed-recovery, and admission owner. WHP/KVM retain that owner
+through route commitment and strict runtime authorization. Substituted release
+bytes and stale recovery roots fail before publication. WHP passes 12 runner
+tests on Windows. KVM source uses the identical path, but its Linux build is
+unavailable here because `cross_host_rust_target` is absent. The probe remains
+controlled hosted evidence, not production service-loop or full-system proof.
 
 Complete distinct-domain finalization now has focused **PARTIALLY IMPLEMENTED**
 kernel evidence. A signed two-package fixture assigns both must-run packages to

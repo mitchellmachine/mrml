@@ -2643,6 +2643,18 @@ pub struct RecoveredDeploymentTotalControlPlane<
     admission: RecoveredInstalledTotalAdmission<DOMAINS>,
 }
 
+pub struct RecoveredDeploymentTotalRuntime<
+    const GRANTS: usize,
+    const SETTINGS: usize,
+    const AUDIT: usize,
+    const CANDIDATES: usize,
+    const DOMAINS: usize,
+> {
+    configuration: DeliveredRecoveredSystemState<GRANTS, SETTINGS, AUDIT>,
+    deployment: RecoveredDeploymentOwner<CANDIDATES>,
+    runtime: RecoveredInstalledTotalRuntime<DOMAINS>,
+}
+
 impl<const GRANTS: usize, const SETTINGS: usize, const AUDIT: usize>
     RecoveredSystemState<GRANTS, SETTINGS, AUDIT>
 {
@@ -3340,12 +3352,42 @@ impl<
         &self.deployment
     }
 
-    pub const fn admission(&self) -> &RecoveredInstalledTotalAdmission<DOMAINS> {
+    pub const fn installed_admission(&self) -> &RecoveredInstalledTotalAdmission<DOMAINS> {
         &self.admission
     }
 
-    pub fn admission_mut(&mut self) -> &mut RecoveredInstalledTotalAdmission<DOMAINS> {
-        &mut self.admission
+    pub const fn policy(&self) -> RecoveredBootIsolationPolicy {
+        self.admission.policy()
+    }
+
+    pub const fn admission(&self) -> &IsolationAdmissionTable<DOMAINS> {
+        self.admission.admission()
+    }
+
+    pub fn admission_mut(&mut self) -> &mut IsolationAdmissionTable<DOMAINS> {
+        self.admission.admission_mut()
+    }
+
+    pub fn prepare_service(
+        &mut self,
+        bounds: IsolationServiceBounds,
+        identity: IsolationServiceIdentity,
+    ) -> Result<PreparedIsolationServiceRoute, ConfiguredIsolationPreparationError> {
+        self.admission.prepare_service(bounds, identity)
+    }
+
+    pub fn authorize_runtime(
+        self,
+    ) -> Result<
+        RecoveredDeploymentTotalRuntime<GRANTS, SETTINGS, AUDIT, CANDIDATES, DOMAINS>,
+        mrml_kernel::TotalMicrovmRuntimeError,
+    > {
+        let runtime = self.admission.authorize_runtime()?;
+        Ok(RecoveredDeploymentTotalRuntime {
+            configuration: self.configuration,
+            deployment: self.deployment,
+            runtime,
+        })
     }
 
     pub fn into_parts(
@@ -3356,6 +3398,35 @@ impl<
         RecoveredInstalledTotalAdmission<DOMAINS>,
     ) {
         (self.configuration, self.deployment, self.admission)
+    }
+}
+
+impl<
+    const GRANTS: usize,
+    const SETTINGS: usize,
+    const AUDIT: usize,
+    const CANDIDATES: usize,
+    const DOMAINS: usize,
+> RecoveredDeploymentTotalRuntime<GRANTS, SETTINGS, AUDIT, CANDIDATES, DOMAINS>
+{
+    pub const fn configuration(&self) -> &DeliveredRecoveredSystemState<GRANTS, SETTINGS, AUDIT> {
+        &self.configuration
+    }
+
+    pub const fn deployment(&self) -> &RecoveredDeploymentOwner<CANDIDATES> {
+        &self.deployment
+    }
+
+    pub const fn installed(&self) -> InstalledRecoveryDeviceSelection {
+        self.runtime.installed()
+    }
+
+    pub const fn admission(&self) -> &IsolationAdmissionTable<DOMAINS> {
+        self.runtime.admission()
+    }
+
+    pub const fn proof(&self) -> &mrml_kernel::TotalMicrovmRuntimeProof {
+        self.runtime.proof()
     }
 }
 
@@ -7061,54 +7132,58 @@ mod tests {
 
     #[test]
     fn hosted_recovery_source_is_independent_of_the_decoded_handoff_epoch() {
-        let domain = ObjectId(0x434f_4e46_4947_0001);
+        let (release, release_length, key_id, _) = configuration_release_records();
         let (current_bytes, current_length) = hosted_total_handoff(8, Some([0x51; 16]), 14);
         let current = BootHandoff::decode(&current_bytes[..current_length], |_| {}).unwrap();
         // SAFETY: this is the controlled hosted fixture named by the helper's
         // contract; it does not represent owner presence or durable hardware.
         let total = unsafe {
-            hosted_recovery_probe::recover_total_admission_with(
+            hosted_recovery_probe::recover_total_control_plane::<1>(
                 &current,
-                |policy_generation, _, _, _, _| {
-                    Ok::<_, ()>(activated_configuration_release(domain, policy_generation))
-                },
+                &release[..release_length],
+                &key_id,
             )
         }
         .unwrap();
-        assert_eq!(total.installed().descriptor().block_size(), 4096);
-        assert_eq!(total.installed().header().volume(), total.recovery_volume());
         assert_eq!(
-            total.installed().active_superblock(),
-            total.installed().header().primary_superblock()
+            total
+                .installed_admission()
+                .installed()
+                .descriptor()
+                .block_size(),
+            4096
         );
-        assert_eq!(total.recovery_root_generation(), 14);
+        assert_eq!(
+            total.installed_admission().installed().header().volume(),
+            total.installed_admission().recovery_volume()
+        );
+        assert_eq!(
+            total.installed_admission().installed().active_superblock(),
+            total
+                .installed_admission()
+                .installed()
+                .header()
+                .primary_superblock()
+        );
+        assert_eq!(total.installed_admission().recovery_root_generation(), 14);
         assert_eq!(total.policy().authority_epoch(), 9);
         assert_eq!(total.policy().boot_accepted_epoch(), 8);
+        assert_eq!(total.deployment().recovery().epoch(), 1);
 
-        let substituted_root = total.recovery_root_generation() - 1;
-        assert!(matches!(
-            RecoveredInstalledTotalAdmission::bind_identity(
-                total.installed,
-                total.recovery_volume,
-                substituted_root,
-                total.total,
-            ),
-            Err(ConfigError::RecoveryHandoffMismatch)
-        ));
-
-        // The inventory builder sees only the recovered policy generation;
-        // failure returns no detached policy or admission owner.
+        // A substituted release fails before a joined owner is returned.
+        let mut substituted_release = release.clone();
+        substituted_release[release_length - 1] ^= 1;
         assert!(matches!(
             unsafe {
-                hosted_recovery_probe::recover_total_admission_with::<1, _, _>(
+                hosted_recovery_probe::recover_total_control_plane::<1>(
                     &current,
-                    |policy_generation, _, _, _, _| {
-                        assert_eq!(policy_generation, 1);
-                        Err(7u8)
-                    },
+                    &substituted_release[..release_length],
+                    &key_id,
                 )
             },
-            Err(hosted_recovery_probe::HostedRecoveryProbeBuildError::ReleaseBuilder(7))
+            Err(hosted_recovery_probe::HostedRecoveryProbeBuildError::Probe(
+                hosted_recovery_probe::HostedRecoveryProbeError::Deployment
+            ))
         ));
 
         let (stale_bytes, stale_length) = hosted_total_handoff(7, Some([0x51; 16]), 14);
@@ -7117,11 +7192,10 @@ mod tests {
         // redefine its independently fixed authenticated recovery state.
         assert!(
             unsafe {
-                hosted_recovery_probe::recover_total_admission_with(
+                hosted_recovery_probe::recover_total_control_plane::<1>(
                     &stale,
-                    |policy_generation, _, _, _, _| {
-                        Ok::<_, ()>(activated_configuration_release(domain, policy_generation))
-                    },
+                    &release[..release_length],
+                    &key_id,
                 )
             }
             .is_err()
@@ -7132,11 +7206,10 @@ mod tests {
             BootHandoff::decode(&wrong_root_bytes[..wrong_root_length], |_| {}).unwrap();
         assert!(matches!(
             unsafe {
-                hosted_recovery_probe::recover_total_admission_with::<1, _, _>(
+                hosted_recovery_probe::recover_total_control_plane::<1>(
                     &wrong_root,
-                    |policy_generation, _, _, _, _| {
-                        Ok::<_, ()>(activated_configuration_release(domain, policy_generation))
-                    },
+                    &release[..release_length],
+                    &key_id,
                 )
             },
             Err(hosted_recovery_probe::HostedRecoveryProbeBuildError::Probe(
