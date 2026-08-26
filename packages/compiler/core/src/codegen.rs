@@ -13405,6 +13405,9 @@ fn runtime_effect_reaches_specific_loan_use(
     {
         return false;
     }
+    if later.event.0 < earlier.event.0 && loan.generation_event.0 <= later.event.0 {
+        return false;
+    }
     let (Some(earlier_point), Some(later_point)) = (
         facts.ownership_control_point(earlier.location),
         facts.ownership_control_point(later.location),
@@ -13412,6 +13415,18 @@ fn runtime_effect_reaches_specific_loan_use(
         return false;
     };
     let mut blocked = [false; MAX_RUNTIME_OWNERSHIP_CONTROL_POINTS];
+    let Some((_, generation_location)) = facts.direct_loan_generation_position(loan) else {
+        return false;
+    };
+    let Some(generation_point) = facts.ownership_control_point(generation_location) else {
+        return false;
+    };
+    if generation_point != earlier_point && generation_point != later_point {
+        let Some(index) = runtime_ownership_point_index(facts, generation_point) else {
+            return false;
+        };
+        blocked[index] = true;
+    }
     for replacement in (0..facts.initialization_count)
         .filter_map(|index| facts.direct_loan_fact(index))
         .chain((0..facts.effect_count).filter_map(|index| facts.direct_assigned_loan_fact(index)))
@@ -36451,6 +36466,7 @@ mod tests {
             "fn value(input: &mut u16) -> u16 { let shared: &u16 = &*input; let returned: &u16 = shared_identity(shared); let competing: &mut u16 = &mut *input; *competing += 1; *returned }",
             "fn value(first: &mut u16, second: &mut u16, choose: bool) -> u16 { let returned: &u16 = shared_identity(if choose { &*first } else { &*second }); let competing: &mut u16 = &mut *first; *competing += 1; *returned }",
             "fn value(first: &mut u16, second: &mut u16, choose: bool) -> u16 { let returned: &u16 = shared_identity(if choose { &*first } else { &*second }); let competing: &mut u16 = &mut *second; *competing += 1; *returned }",
+            "fn value(input: &mut u16, repeat: bool) -> u16 { while repeat { let returned: &u16 = shared_identity(&*input); *input += 1; if *returned == 0 { return *input; } } *input }",
             "fn value(input: &mut u16) -> u16 { let returned: &mut u16 = forward(input); let competing: &mut u16 = &mut *input; *competing += 1; *returned }",
             "fn value(input: &mut u16, choose: bool) -> u16 { let returned: &mut u16 = forward(if choose { input } else { input }); let competing: &mut u16 = &mut *input; *competing += 1; *returned }",
             "fn value(first: &mut u16, second: &mut u16, choose: bool) -> u16 { let returned: &mut u16 = forward(if choose { first } else { second }); let competing: &mut u16 = &mut *first; *competing += 1; *returned }",
@@ -36486,6 +36502,7 @@ mod tests {
         for source in [
             "fn value(input: &mut u16) -> u16 { let shared: &u16 = &*input; let returned: &u16 = shared_identity(shared); let copied = *returned; *input += 1; copied + *input }",
             "fn value(first: &mut u16, second: &mut u16, choose: bool) -> u16 { let returned: &u16 = shared_identity(if choose { &*first } else { &*second }); let copied = *returned; *first += 1; *second += 1; copied + *first + *second }",
+            "fn value(input: &mut u16, repeat: bool) -> u16 { while repeat { let returned: &u16 = shared_identity(&*input); let copied = *returned; *input += 1; if copied == 0 { return *input; } } *input }",
             "fn value(input: &mut u16) -> u16 { let returned: &mut u16 = forward(input); *returned += 1; let restored: &mut u16 = &mut *input; *restored }",
             "fn value(input: &mut u16, choose: bool) -> u16 { let returned: &mut u16 = forward(if choose { input } else { input }); let copied = *returned; *input += 1; copied + *input }",
             "fn value(first: &mut u16, second: &mut u16, choose: bool) -> u16 { let returned: &mut u16 = forward(if choose { first } else { second }); let copied = *returned; *first += 1; *second += 1; copied + *first + *second }",
