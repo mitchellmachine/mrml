@@ -15722,16 +15722,14 @@ fn runtime_reference_call_origin_parameter<const MAX_PARAMETERS: usize, const MA
                     terminal = Some((*control, *action_index, *control_order));
                 }
             }
-            if terminal.is_some_and(|(control, _, _)| {
+            let terminal_is_inner_continue = terminal.is_some_and(|(control, _, _)| {
                 matches!(
                     control,
                     crate::NestedLoopUnconditionalControl::Continue(
                         crate::NestedLoopControlTarget::Inner
                     )
                 )
-            }) {
-                return Some(false);
-            }
+            });
             let terminal_order = terminal.map_or(usize::MAX, |(_, _, order)| order);
             let mut header_origins = local_origins;
             let mut header_projected = projected_origins.retain_local_prefix(local_count);
@@ -15757,7 +15755,18 @@ fn runtime_reference_call_origin_parameter<const MAX_PARAMETERS: usize, const MA
                     local_count,
                 )?;
             }
-            if terminal.is_none() {
+            if terminal_is_inner_continue {
+                let (_, action_index, _) = terminal?;
+                let (_, origins, projected, _, _, _, _) = state_at(action_index)?;
+                merge_loop_exit_origins(
+                    &mut header_origins,
+                    &mut header_projected,
+                    &mut header_count,
+                    origins,
+                    projected.retain_local_prefix(local_count),
+                    local_count,
+                )?;
+            } else if terminal.is_none() {
                 let (_, origins, projected, _, _, _, _) = state_at(block.action_count())?;
                 merge_loop_exit_origins(
                     &mut header_origins,
@@ -15794,7 +15803,19 @@ fn runtime_reference_call_origin_parameter<const MAX_PARAMETERS: usize, const MA
                     local_count,
                 )?;
             }
-            if terminal.is_none() {
+            if terminal_is_inner_continue {
+                let (_, action_index, _) = terminal?;
+                let (_, origins, projected, _, _, _, _) =
+                    state_at_from(action_index, header_origins, header_projected)?;
+                merge_loop_exit_origins(
+                    &mut repeated_origins,
+                    &mut repeated_projected,
+                    &mut repeated_count,
+                    origins,
+                    projected.retain_local_prefix(local_count),
+                    local_count,
+                )?;
+            } else if terminal.is_none() {
                 let (_, origins, projected, _, _, _, _) =
                     state_at_from(block.action_count(), header_origins, header_projected)?;
                 merge_loop_exit_origins(
@@ -15855,7 +15876,8 @@ fn runtime_reference_call_origin_parameter<const MAX_PARAMETERS: usize, const MA
                     return Some(false);
                 }
             }
-            if let Some((_, action_index, _)) = terminal
+            if !terminal_is_inner_continue
+                && let Some((_, action_index, _)) = terminal
                 && !prefix_matches(action_index)?
             {
                 return Some(false);
@@ -15972,7 +15994,8 @@ fn runtime_reference_call_origin_parameter<const MAX_PARAMETERS: usize, const MA
                 crate::NestedLoopUnconditionalControl::Continue(
                     crate::NestedLoopControlTarget::Inner,
                 ) if prefix_preserves_state(*action_index)?
-                    || normalized_backedge_is_stable(*action_index, true)? => {}
+                    || normalized_backedge_is_stable(*action_index, true)?
+                    || joined_backedge_header_is_stable()? => {}
                 crate::NestedLoopUnconditionalControl::Break(
                     crate::NestedLoopControlTarget::Outer,
                 ) => {
@@ -38871,6 +38894,31 @@ mod tests {
                     "if first { continue; } changed = &mut local; ",
                     "if second { continue; } changed = value; break; } ",
                     "return changed; }"
+                ),
+                ..nested_multi_backedge
+            }),
+            None
+        );
+        assert_eq!(
+            runtime_reference_call_origin_parameter::<4, 64>(RuntimeCallTarget {
+                body_expression: concat!(
+                    "let mut local: u16 = 1; let mut changed: &mut u16 = &mut local; ",
+                    "loop { loop { changed = value; if first { return changed; } ",
+                    "if second { continue; } changed = &mut local; ",
+                    "if third { continue; } changed = value; continue; ",
+                    "changed = &mut local; } }"
+                ),
+                ..nested_multi_backedge
+            }),
+            Some(0)
+        );
+        assert_eq!(
+            runtime_reference_call_origin_parameter::<4, 64>(RuntimeCallTarget {
+                body_expression: concat!(
+                    "let mut local: u16 = 1; let mut changed: &mut u16 = &mut local; ",
+                    "loop { loop { if first { return changed; } changed = value; ",
+                    "if second { continue; } changed = &mut local; ",
+                    "if third { continue; } changed = value; continue; } }"
                 ),
                 ..nested_multi_backedge
             }),
