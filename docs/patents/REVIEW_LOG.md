@@ -269,6 +269,16 @@ Broader compiler completion remains partial; this technical screen establishes
 neither clearance nor infringement and does not replace independent human dual
 review.
 
+## 2026-08-26 — Projected mutable-call invalidation evidence
+
+Patent review: **NOT_TRIGGERED**. This compiler evidence increment exercises the
+existing bounded call-reborrow and exact tuple-field ancestry mechanisms for a
+mutable call with a shared child. It adds no new interprocedural analysis, alias
+algorithm, fixed-point, region solver, optimization, runtime, authority, or
+dependency mechanism. Broader compiler completion remains partial; this screen
+establishes neither clearance nor infringement and does not replace independent
+human dual review.
+
 ## 2026-08-26 — Activated-generation binding for Total inventory
 
 Patent review: **TRIGGERED** under the existing SystemRelease, deployment,
