@@ -21,21 +21,22 @@ use mrml_kernel::arch::x86_64::{Mapping, PRIVILEGE_STACK_ARENA_PAGES, PagePermis
 use mrml_kernel::verify_gpu_kernel_bundle;
 #[cfg(target_os = "windows")]
 use mrml_kernel::{
-    ArtifactKind, Capability, CapabilitySpace, CpuBudgetId, CpuBudgetSpec, CpuBudgetTable,
-    CpuRuntimeSlice, DeadlineVmBackend, GPU_DOORBELL_PORT, GPU_QUEUE_MESSAGE_BYTES, GpuCommandRing,
-    GpuQueueIdentity, GpuQueueReceiver, GpuResourceResponse, GpuResourceResponseSender,
-    GpuSharedQueueLayout, GpuVmmQueueBridge, GuestMemory, HypercallRouter, InterruptPolicy,
-    IsolationAdmissionTable, IsolationMode, IsolationPlacement, IsolationUnavailableReason,
-    MAX_COMPONENT_IMAGE_REGIONS, MemoryPoolTable, MicrovmPageProjectionKind, ObjectId, PAGE_SIZE,
-    PreparedIsolationServiceRoute, ResourceCommand, Rights, SIGNED_ARTIFACT_OVERHEAD_BYTES,
-    SignedArtifact, TotalMicrovmClass, TrustRoot, VIRTUAL_BLOCK_FEATURE_FLUSH, VcpuReservationId,
-    VerifiedExecutable, VerifiedGpuKernelBundle, VirtualBlockBackend, VirtualBlockBackendAuthority,
-    VirtualBlockCompletionStatus, VirtualBlockConfigurationPage, VirtualBlockDevice,
-    VirtualBlockDeviceState, VirtualBlockError, VirtualBlockMutationError,
-    VirtualBlockPciAttachment, VirtualBlockPciAttachmentState, VirtualBlockPciCleanupMode,
-    VirtualBlockPciCleanupRecord, VirtualBlockPciFunctionRevoker, VirtualBlockPciGuestMemoryMapper,
-    VirtualBlockPciGuestWindowBackend, VirtualBlockPciResourceRevoker, VirtualBlockProcessOutcome,
-    VirtualBlockQueueBridge, VirtualBlockQueueLayout, VirtualBlockRequest, VirtualBlockResumePage,
+    AffinityDeadlineVmBackend, ArtifactKind, Capability, CapabilitySpace, CpuBudgetId,
+    CpuBudgetSpec, CpuBudgetTable, CpuRuntimeSlice, DeadlineVmBackend, GPU_DOORBELL_PORT,
+    GPU_QUEUE_MESSAGE_BYTES, GpuCommandRing, GpuQueueIdentity, GpuQueueReceiver,
+    GpuResourceResponse, GpuResourceResponseSender, GpuSharedQueueLayout, GpuVmmQueueBridge,
+    GuestMemory, HypercallRouter, InterruptPolicy, IsolationAdmissionTable, IsolationMode,
+    IsolationPlacement, IsolationUnavailableReason, MAX_COMPONENT_IMAGE_REGIONS, MemoryPoolTable,
+    MicrovmPageProjectionKind, ObjectId, PAGE_SIZE, PreparedIsolationServiceRoute, ResourceCommand,
+    Rights, SIGNED_ARTIFACT_OVERHEAD_BYTES, SignedArtifact, TotalMicrovmClass, TrustRoot,
+    VIRTUAL_BLOCK_FEATURE_FLUSH, VcpuReservationId, VerifiedExecutable, VerifiedGpuKernelBundle,
+    VirtualBlockBackend, VirtualBlockBackendAuthority, VirtualBlockCompletionStatus,
+    VirtualBlockConfigurationPage, VirtualBlockDevice, VirtualBlockDeviceState, VirtualBlockError,
+    VirtualBlockMutationError, VirtualBlockPciAttachment, VirtualBlockPciAttachmentState,
+    VirtualBlockPciCleanupMode, VirtualBlockPciCleanupRecord, VirtualBlockPciFunctionRevoker,
+    VirtualBlockPciGuestMemoryMapper, VirtualBlockPciGuestWindowBackend,
+    VirtualBlockPciResourceRevoker, VirtualBlockProcessOutcome, VirtualBlockQueueBridge,
+    VirtualBlockQueueLayout, VirtualBlockRequest, VirtualBlockResumePage,
     VirtualBlockTransactionOutcome, VirtualBlockTransport, VirtualBlockVmmMemory,
     VirtualPciAttachedResources, VirtualPciConfigurationMechanismOne,
     VirtualPciConfigurationRouter, VirtualPciIdentity, VirtualPciIoOutcome, VirtualPciLocation,
@@ -90,7 +91,7 @@ type ComponentCpuAuthority = (
 #[cfg(target_os = "windows")]
 fn run_component_vcpu<T>(
     cpu: &mut Option<ComponentCpuAuthority>,
-    run: impl FnOnce(u32) -> Result<T>,
+    run: impl FnOnce(CpuRuntimeSlice) -> Result<T>,
 ) -> Result<T> {
     let (budgets, capabilities, budget, capability, reservation, next_start) = cpu
         .as_mut()
@@ -125,7 +126,7 @@ fn run_component_vcpu<T>(
         )
         .map_err(|error| anyhow!("component vCPU runtime charge failed: {:?}", error))?;
     let started = Instant::now();
-    let result = run(maximum);
+    let result = run(slice);
     let elapsed = u64::try_from(started.elapsed().as_micros())
         .map_err(|_| anyhow!("component vCPU elapsed time overflow"))?;
     let end = next_start
@@ -337,6 +338,23 @@ impl DeadlineVmBackend for WhpGuestOwner<'_> {
         maximum_micros: u32,
     ) -> core::result::Result<VmDeadlineOutcome, Self::Error> {
         DeadlineVmBackend::run_with_deadline(self.guest_mut(), vcpu, maximum_micros)
+    }
+}
+
+#[cfg(target_os = "windows")]
+impl AffinityDeadlineVmBackend for WhpGuestOwner<'_> {
+    fn run_with_affinity_deadline(
+        &mut self,
+        vcpu: u32,
+        logical_cpu: u8,
+        maximum_micros: u32,
+    ) -> core::result::Result<VmDeadlineOutcome, Self::Error> {
+        AffinityDeadlineVmBackend::run_with_affinity_deadline(
+            self.guest_mut(),
+            vcpu,
+            logical_cpu,
+            maximum_micros,
+        )
     }
 }
 
@@ -2598,8 +2616,13 @@ fn application_main() -> Result<()> {
         return Ok(());
     } else {
         let run_result = if component_service_mode {
-            run_component_vcpu(&mut component_cpu, |maximum_micros| {
-                match DeadlineVmBackend::run_with_deadline(&mut guest, 0, maximum_micros) {
+            run_component_vcpu(&mut component_cpu, |slice| {
+                match AffinityDeadlineVmBackend::run_with_affinity_deadline(
+                    &mut guest,
+                    0,
+                    slice.logical_cpu(),
+                    slice.charged_micros(),
+                ) {
                     Ok(VmDeadlineOutcome::Exit(exit)) => Ok(exit),
                     Ok(VmDeadlineOutcome::Expired) => {
                         Err(anyhow!("WHP component vCPU deadline expired"))
@@ -3056,7 +3079,7 @@ fn application_main() -> Result<()> {
                                 anyhow!("component CPU root retirement failed: {:?}", error)
                             })?;
                         println!(
-                            "verified exact-generation ZIM/Zstd component data path and lifecycle cleanup under WHP: cpu_runtime={}us verify={}us prepare={}us execute={}us total={}us",
+                            "verified exact-generation ZIM/Zstd component data path and lifecycle cleanup under WHP: cpu_runtime={}us logical_cpu=0 affinity=host-enforced verify={}us prepare={}us execute={}us total={}us",
                             cpu_runtime_micros,
                             verification_micros,
                             preparation_micros,
@@ -3068,8 +3091,13 @@ fn application_main() -> Result<()> {
                 }
                 _ => return Err(anyhow!("WHP component service stage mismatch: {:?}", exit)),
             }
-            exit = run_component_vcpu(&mut component_cpu, |maximum_micros| {
-                match DeadlineVmBackend::run_with_deadline(&mut guest, 0, maximum_micros) {
+            exit = run_component_vcpu(&mut component_cpu, |slice| {
+                match AffinityDeadlineVmBackend::run_with_affinity_deadline(
+                    &mut guest,
+                    0,
+                    slice.logical_cpu(),
+                    slice.charged_micros(),
+                ) {
                     Ok(VmDeadlineOutcome::Exit(exit)) => Ok(exit),
                     Ok(VmDeadlineOutcome::Expired) => {
                         Err(anyhow!("WHP component service vCPU deadline expired"))

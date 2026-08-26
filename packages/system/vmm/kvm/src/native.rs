@@ -8,9 +8,9 @@ use mrml_kernel::arch::x86_64::{
     VirtAddr,
 };
 use mrml_kernel::{
-    BootHandoff, DeadlineVmBackend, IoReadCompleter, MAX_PE_SECTIONS, MmioWriteCompleter,
-    PAGE_SIZE, PeImage, PhysAddr, RevocableVmBackend, VerifiedExecutable, VmBackend,
-    VmDeadlineOutcome, VmExit,
+    AffinityDeadlineVmBackend, BootHandoff, DeadlineVmBackend, IoReadCompleter, MAX_PE_SECTIONS,
+    MmioWriteCompleter, PAGE_SIZE, PeImage, PhysAddr, RevocableVmBackend, VerifiedExecutable,
+    VmBackend, VmDeadlineOutcome, VmExit,
 };
 
 use crate::{KVM_API_VERSION, KvmError, KvmMemoryRegion, complete_io_read, decode_run_page};
@@ -119,7 +119,82 @@ unsafe extern "C" {
     fn munmap(address: *mut c_void, length: usize) -> c_int;
     fn pthread_self() -> usize;
     fn pthread_kill(thread: usize, signal: c_int) -> c_int;
+    fn pthread_getaffinity_np(thread: usize, set_size: usize, set: *mut CpuSet) -> c_int;
+    fn pthread_setaffinity_np(thread: usize, set_size: usize, set: *const CpuSet) -> c_int;
     fn signal(signal: c_int, handler: usize) -> usize;
+}
+
+#[derive(Clone, Copy)]
+#[repr(C)]
+struct CpuSet {
+    words: [u64; 16],
+}
+
+pub(crate) fn current_thread_affinity() -> Result<[u64; 16], KvmError> {
+    let mut affinity = CpuSet { words: [0; 16] };
+    if unsafe {
+        pthread_getaffinity_np(
+            pthread_self(),
+            core::mem::size_of::<CpuSet>(),
+            &mut affinity,
+        )
+    } != 0
+        || affinity.words.iter().all(|word| *word == 0)
+    {
+        return Err(KvmError::InvalidAffinity);
+    }
+    Ok(affinity.words)
+}
+
+struct ThreadAffinityGuard {
+    thread: usize,
+    previous: CpuSet,
+    restored: bool,
+}
+
+impl ThreadAffinityGuard {
+    fn bind(logical_cpu: u8) -> Result<Self, KvmError> {
+        if logical_cpu >= 64 {
+            return Err(KvmError::InvalidAffinity);
+        }
+        let thread = unsafe { pthread_self() };
+        let previous = CpuSet {
+            words: current_thread_affinity()?,
+        };
+        let mut selected = CpuSet { words: [0; 16] };
+        let index = usize::from(logical_cpu);
+        selected.words[index / 64] = 1_u64 << (index % 64);
+        if unsafe { pthread_setaffinity_np(thread, core::mem::size_of::<CpuSet>(), &selected) } != 0
+        {
+            return Err(KvmError::InvalidAffinity);
+        }
+        Ok(Self {
+            thread,
+            previous,
+            restored: false,
+        })
+    }
+
+    fn restore(mut self) -> Result<(), KvmError> {
+        if unsafe {
+            pthread_setaffinity_np(self.thread, core::mem::size_of::<CpuSet>(), &self.previous)
+        } != 0
+        {
+            return Err(KvmError::InvalidAffinity);
+        }
+        self.restored = true;
+        Ok(())
+    }
+}
+
+impl Drop for ThreadAffinityGuard {
+    fn drop(&mut self) {
+        if !self.restored {
+            let _ = unsafe {
+                pthread_setaffinity_np(self.thread, core::mem::size_of::<CpuSet>(), &self.previous)
+            };
+        }
+    }
 }
 
 unsafe extern "C" fn kvm_kick_signal_handler(_signal: c_int) {}
@@ -1689,6 +1764,26 @@ impl<const N: usize> DeadlineVmBackend for KvmBackend<N> {
             return Err(KvmError::InvalidVcpu);
         }
         self.vcpu.run_with_deadline(maximum_micros)
+    }
+}
+
+impl<const N: usize> AffinityDeadlineVmBackend for KvmBackend<N> {
+    fn run_with_affinity_deadline(
+        &mut self,
+        vcpu: u32,
+        logical_cpu: u8,
+        maximum_micros: u32,
+    ) -> Result<VmDeadlineOutcome, Self::Error> {
+        if self.mapping_poisoned {
+            return Err(KvmError::MappingStateUncertain);
+        }
+        if vcpu != self.vcpu_id {
+            return Err(KvmError::InvalidVcpu);
+        }
+        let affinity = ThreadAffinityGuard::bind(logical_cpu)?;
+        let result = self.vcpu.run_with_deadline(maximum_micros);
+        affinity.restore()?;
+        result
     }
 }
 

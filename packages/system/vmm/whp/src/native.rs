@@ -85,6 +85,75 @@ unsafe extern "system" {
         protection: u32,
     ) -> *mut c_void;
     fn VirtualFree(address: *mut c_void, size: usize, free_type: u32) -> i32;
+    fn GetCurrentThread() -> Handle;
+    fn GetThreadGroupAffinity(thread: Handle, affinity: *mut GroupAffinity) -> i32;
+    fn SetThreadAffinityMask(thread: Handle, affinity_mask: usize) -> usize;
+}
+
+#[derive(Clone, Copy)]
+#[repr(C)]
+struct GroupAffinity {
+    mask: usize,
+    group: u16,
+    reserved: [u16; 3],
+}
+
+pub(crate) fn current_thread_affinity() -> Result<(u16, usize), WhpError> {
+    let mut affinity = GroupAffinity {
+        mask: 0,
+        group: 0,
+        reserved: [0; 3],
+    };
+    if unsafe { GetThreadGroupAffinity(GetCurrentThread(), &mut affinity) } == 0
+        || affinity.mask == 0
+    {
+        return Err(WhpError::InvalidAffinity);
+    }
+    Ok((affinity.group, affinity.mask))
+}
+
+struct ThreadAffinityGuard {
+    thread: Handle,
+    previous: usize,
+    restored: bool,
+}
+
+impl ThreadAffinityGuard {
+    fn bind(logical_cpu: u8) -> Result<Self, WhpError> {
+        let (group, _) = current_thread_affinity()?;
+        if group != 0 {
+            return Err(WhpError::InvalidAffinity);
+        }
+        let affinity_mask = 1_usize
+            .checked_shl(u32::from(logical_cpu))
+            .ok_or(WhpError::InvalidAffinity)?;
+        let thread = unsafe { GetCurrentThread() };
+        let previous = unsafe { SetThreadAffinityMask(thread, affinity_mask) };
+        if previous == 0 {
+            return Err(WhpError::InvalidAffinity);
+        }
+        Ok(Self {
+            thread,
+            previous,
+            restored: false,
+        })
+    }
+
+    fn restore(mut self) -> Result<(), WhpError> {
+        if unsafe { SetThreadAffinityMask(self.thread, self.previous) } == 0 {
+            return Err(WhpError::InvalidAffinity);
+        }
+        self.restored = true;
+        Ok(())
+    }
+}
+
+impl Drop for ThreadAffinityGuard {
+    fn drop(&mut self) {
+        if !self.restored {
+            let _ = unsafe { SetThreadAffinityMask(self.thread, self.previous) };
+        }
+    }
 }
 
 struct Library(Handle);
@@ -998,6 +1067,18 @@ impl PreparedWhpPartition<'_> {
             CANCEL_FAILED => Err(WhpError::SystemCall(-1)),
             _ => Err(WhpError::InvalidRegisterState),
         }
+    }
+
+    pub(crate) fn run_vp_with_affinity_deadline(
+        &mut self,
+        index: u32,
+        logical_cpu: u8,
+        maximum_micros: u32,
+    ) -> Result<VmDeadlineOutcome, WhpError> {
+        let affinity = ThreadAffinityGuard::bind(logical_cpu)?;
+        let result = self.run_vp_with_deadline(index, maximum_micros);
+        affinity.restore()?;
+        result
     }
 
     fn complete_mmio_write(

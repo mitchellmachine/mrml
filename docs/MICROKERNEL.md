@@ -7857,13 +7857,24 @@ pre-entry signal race and is cleared only after both run and worker retire. A
 conflicting process signal disposition fails before entry.
 
 Focused live signed infinite-loop guests expire on WHP and nested KVM. The
-ordinary signed component probes also complete through the deadline path:
-Windows and Arch Linux kernel suites pass 510 tests, WHP passes 7, and KVM
-passes 8. Fresh probes reported 901 microseconds under WHP and 1,194 microseconds
-under KVM; KVM reported `eligible=1`, `microvm=1`, and `native_fallback=0`.
-This is hosted conservative accounting and cancellation evidence, not trusted
-guest CPU-time, exact deadline latency, native APIC enforcement, physical-
-hardware evidence, or a security boundary against the host.
+authorized logical-CPU value now crosses a separate backend-neutral contract
+without another policy decision. WHP uses `SetThreadAffinityMask`; KVM uses
+`pthread_getaffinity_np` and `pthread_setaffinity_np`. Both capture the complete
+prior runner affinity, bind before vCPU entry, wait for run and deadline-worker
+retirement, and restore that prior state before returning. An index outside the
+current 64-CPU budget model, bind failure, or restoration uncertainty fails
+closed. Focused live tests reject logical CPU 64 before entry and still expire
+the infinite-loop guest on authorized logical CPU 0.
+
+The ordinary signed component probes also complete through the same affinity
+and deadline path: Windows and Arch Linux kernel suites pass 510 tests, WHP
+passes 7, and KVM passes 8. Fresh optimized probes reported `logical_cpu=0`
+and `affinity=host-enforced`, with 1,006 microseconds under WHP and 1,204
+microseconds under KVM; KVM reported `eligible=1`, `microvm=1`, and
+`native_fallback=0`. This is hosted conservative accounting, cancellation, and
+affinity evidence, not trusted guest CPU-time, exact deadline latency, native
+APIC enforcement, host-priority enforcement, physical-hardware evidence, or a
+security boundary against the host.
 
 ### Hosted supervised native Zstd service lifecycle
 

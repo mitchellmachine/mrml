@@ -5275,6 +5275,21 @@ work retain their existing `TRIGGERED` reviews; this agent review does not
 establish clearance or infringement and does not replace independent human dual
 review.
 
+# 2026-08-26 — Hosted vCPU logical-CPU affinity enforcement
+
+**Result: NOT_TRIGGERED after the existing CPU-budget and scheduler reviews.**
+This bounded increment carries an already authorized logical-CPU index to the
+hosted vCPU runner and conventionally applies the operating system's public
+thread-affinity mechanism for the duration of one existing run call. Windows
+uses `SetThreadAffinityMask`; Linux uses `pthread_getaffinity_np` and
+`pthread_setaffinity_np`. MRML adds exact capture/restoration ordering and
+fail-closed handling but no scheduler-selection algorithm, topology discovery,
+load-balancing policy, priority scheme, hypervisor, or hardware mechanism.
+General scheduling, adaptive placement, native APIC enforcement, and physical-
+topology work retain their existing `TRIGGERED` reviews; this agent review does
+not establish clearance or infringement and does not replace independent human
+dual review.
+
 # 2026-08-25 — Signed general SystemRelease envelope admission
 
 **Result: NOT_TRIGGERED after the existing package/release, Lamport-signature,

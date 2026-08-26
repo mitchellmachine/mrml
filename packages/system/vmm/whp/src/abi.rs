@@ -25,6 +25,7 @@ pub enum WhpError {
     InvalidRegisterState,
     InvalidVcpu,
     InvalidDeadline,
+    InvalidAffinity,
     InvalidInterrupt,
     InvalidMapping,
     MappingStateUncertain,

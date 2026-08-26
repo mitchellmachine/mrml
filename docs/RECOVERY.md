@@ -159,6 +159,11 @@ explicitly and downgrade the status rather than guessing.
   unmapping, VP deletion, and accounting reconciliation must wait until the
   exact worker has retired. Recovery must never reconstruct a cancellation
   pointer, signal target, or partition handle from persisted data.
+  Hosted runner affinity is likewise transient linear state. Reconciliation,
+  teardown, and control-plane completion require proof that the exact prior
+  affinity was restored after both vCPU and deadline-worker retirement. Never
+  persist or reconstruct a native thread handle or prior CPU set; uncertain
+  restoration fails the domain closed and requires host-process recovery.
 - Boot image and loader: `packages/system/bootloader/`, `packages/libraries/uefi/`
 - CPL3 service image: `packages/system/service-image/`
 - Shared VM policy: `vm.rs`, `vm_dispatch.rs`, `vm_interrupt.rs`

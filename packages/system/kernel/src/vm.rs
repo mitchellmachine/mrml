@@ -681,6 +681,20 @@ pub trait DeadlineVmBackend: VmBackend {
     ) -> Result<VmDeadlineOutcome, Self::Error>;
 }
 
+/// Backend-neutral contract for applying one control-plane-authorized logical
+/// CPU decision to a bounded vCPU entry. The backend must bind the runner before
+/// guest entry, restore the runner's complete prior affinity before return, and
+/// fail closed if either transition is uncertain. The placement is data, not
+/// authority; callers must derive it from a live CPU runtime slice.
+pub trait AffinityDeadlineVmBackend: DeadlineVmBackend {
+    fn run_with_affinity_deadline(
+        &mut self,
+        vcpu: u32,
+        logical_cpu: u8,
+        maximum_micros: u32,
+    ) -> Result<VmDeadlineOutcome, Self::Error>;
+}
+
 /// Backend contract for completing one exact scalar input exit before another
 /// vCPU entry. Implementations must bind completion to the still-pending exit's
 /// vCPU, port, and width and must not report success after partial register or

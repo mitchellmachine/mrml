@@ -36,6 +36,7 @@ pub enum KvmError {
     ReadOnlyMemory,
     InvalidVcpu,
     InvalidDeadline,
+    InvalidAffinity,
     InvalidRegisterState,
     Pe(PeError),
     InvalidMapping,

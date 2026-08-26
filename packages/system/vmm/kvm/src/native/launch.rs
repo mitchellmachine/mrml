@@ -1011,6 +1011,21 @@ impl<const N: usize> DeadlineVmBackend for PreparedKvmGuest<N> {
     }
 }
 
+impl<const N: usize> mrml_kernel::AffinityDeadlineVmBackend for PreparedKvmGuest<N> {
+    fn run_with_affinity_deadline(
+        &mut self,
+        vcpu: u32,
+        logical_cpu: u8,
+        maximum_micros: u32,
+    ) -> Result<mrml_kernel::VmDeadlineOutcome, Self::Error> {
+        if self.trapped_mmio_retired {
+            return Err(KvmError::InvalidMapping);
+        }
+        self.backend
+            .run_with_affinity_deadline(vcpu, logical_cpu, maximum_micros)
+    }
+}
+
 impl<const N: usize> mrml_kernel::IoReadCompleter for PreparedKvmGuest<N> {
     fn complete_io_read(
         &mut self,
@@ -2391,13 +2406,26 @@ mod tests {
         let mut guest = system
             .prepare_kernel_guest::<7>(0, &executable, &valid_handoff(), layout)
             .unwrap();
+        let affinity_before = crate::native::current_thread_affinity().unwrap();
         assert_eq!(
             DeadlineVmBackend::run_with_deadline(&mut guest, 0, 0),
             Err(KvmError::InvalidDeadline)
         );
         assert_eq!(
-            DeadlineVmBackend::run_with_deadline(&mut guest, 0, 10_000),
+            mrml_kernel::AffinityDeadlineVmBackend::run_with_affinity_deadline(
+                &mut guest, 0, 64, 10_000,
+            ),
+            Err(KvmError::InvalidAffinity)
+        );
+        assert_eq!(
+            mrml_kernel::AffinityDeadlineVmBackend::run_with_affinity_deadline(
+                &mut guest, 0, 0, 10_000,
+            ),
             Ok(mrml_kernel::VmDeadlineOutcome::Expired)
+        );
+        assert_eq!(
+            crate::native::current_thread_affinity().unwrap(),
+            affinity_before
         );
     }
 

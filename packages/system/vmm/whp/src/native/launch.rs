@@ -1157,6 +1157,21 @@ impl DeadlineVmBackend for PreparedWhpGuest<'_> {
     }
 }
 
+impl mrml_kernel::AffinityDeadlineVmBackend for PreparedWhpGuest<'_> {
+    fn run_with_affinity_deadline(
+        &mut self,
+        vcpu: u32,
+        logical_cpu: u8,
+        maximum_micros: u32,
+    ) -> Result<mrml_kernel::VmDeadlineOutcome, Self::Error> {
+        if self.trapped_mmio_retired {
+            return Err(WhpError::InvalidMapping);
+        }
+        self.partition
+            .run_vp_with_affinity_deadline(vcpu, logical_cpu, maximum_micros)
+    }
+}
+
 impl mrml_kernel::IoReadCompleter for PreparedWhpGuest<'_> {
     fn complete_io_read(
         &mut self,
@@ -2755,6 +2770,7 @@ mod tests {
                 0x60_0000,
             )
             .unwrap();
+        let affinity_before = crate::native::current_thread_affinity().unwrap();
         assert_eq!(
             partition.run(),
             Ok(VmExit::Unknown {
@@ -2778,8 +2794,16 @@ mod tests {
             Err(WhpError::InvalidDeadline)
         );
         assert_eq!(
-            partition.run_vp_with_deadline(0, 10_000),
+            partition.run_vp_with_affinity_deadline(0, 64, 10_000),
+            Err(WhpError::InvalidAffinity)
+        );
+        assert_eq!(
+            partition.run_vp_with_affinity_deadline(0, 0, 10_000),
             Ok(mrml_kernel::VmDeadlineOutcome::Expired)
+        );
+        assert_eq!(
+            crate::native::current_thread_affinity().unwrap(),
+            affinity_before
         );
     }
 

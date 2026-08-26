@@ -337,14 +337,19 @@ and the KVM runner passes 8. A backend-neutral deadline contract now arms
 cancellation before entry and waits for the cancellation worker to retire before
 return or teardown. WHP uses `WHvCancelRunVirtualProcessor`; KVM sets
 `immediate_exit` and sends a reserved no-op signal to interrupt `KVM_RUN`.
-Focused live infinite-loop guests expire on both backends. Fresh signed hosted
-component probes completed normally and reconciled 901 microseconds on WHP and
-1,194 microseconds on KVM; KVM reported one eligible microVM and zero native
-fallback. These are host-scheduled cancellation deadlines and conservative
-host-wall measurements, not trusted CPU-time, exact latency, APIC enforcement,
-or a boundary against a compromised host. Native APIC deadlines,
-priority/affinity, multiple profiles/vCPUs, and general scheduler integration
-remain current gates.
+Focused live infinite-loop guests expire on both backends. The authorized
+logical-CPU decision now crosses a separate backend-neutral affinity contract:
+WHP and KVM bind the runner before entry and restore its complete prior affinity
+only after the deadline worker and vCPU run have retired. Unsupported CPU
+indices, bind failure, or restoration uncertainty fail closed. Fresh signed
+hosted component probes completed normally on logical CPU 0 and reconciled
+1,006 microseconds on WHP and 1,204 microseconds on KVM; KVM reported one
+eligible microVM and zero native fallback. These are host-scheduled cancellation
+and affinity mechanisms plus conservative host-wall measurements, not trusted
+CPU-time, exact latency, APIC enforcement, physical-topology evidence, or a
+boundary against a compromised host. Native APIC deadlines, priority-class
+enforcement, multiple profiles/vCPUs, and general scheduler integration remain
+current gates.
 
 Typed provider-resolution groundwork now matches canonical `REQUIRES` and
 `PROVIDES` edges only inside an immutable `SystemGeneration`. Interface name,

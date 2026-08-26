@@ -338,11 +338,16 @@ substitution, exhaustion, invalid time, affinity, priority, or vCPU selection
 fails closed. The backend-neutral deadline contract now arms cancellation before
 entry and withholds return and teardown until its worker retires. Focused live
 infinite-loop guests expire through WHP cancellation and KVM
-`immediate_exit` plus a runner-thread signal. Fresh signed WHP and nested-KVM
-component probes completed normally and reconciled 901 and 1,194 microseconds
+`immediate_exit` plus a runner-thread signal. The slice's authorized logical CPU
+now passes directly to a backend-neutral affinity contract; each backend binds
+the runner before entry, retires the run and deadline worker, and restores the
+complete prior affinity before return. Invalid CPU indices and uncertain bind
+or restoration fail closed. Fresh signed WHP and nested-KVM component probes
+completed on logical CPU 0 and reconciled 1,006 and 1,204 microseconds
 respectively; KVM retained zero native fallback. These hosted mechanisms do not
-prove trusted CPU time, exact deadline latency, native APIC enforcement, or a
-boundary against the host. General scheduler enforcement remains **PLANNED**.
+prove trusted CPU time, exact deadline latency, native APIC enforcement,
+physical topology, or a boundary against the host. Priority-class and general
+scheduler enforcement remain **PLANNED**.
 
 ## One policy, several placements
 
