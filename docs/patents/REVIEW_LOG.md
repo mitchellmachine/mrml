@@ -7896,6 +7896,17 @@ algorithm. General call coercion and region inference remain absent. Broader
 compiler completion remains partial; this technical screen is not a clearance
 or infringement conclusion and does not replace independent human dual review.
 
+# 2026-08-26 — Indexed nested loop alternative CFG and ownership
+
+**Result: NOT_TRIGGERED after the CFG and ownership review.** This increment
+adds a bounded arm index to conventional condition, action, and return
+identities and routes ordered true/false edges with the existing fixed CFG.
+It adds no novel control-flow, region, alias, inference, optimization, or
+instruction-selection algorithm. Native chain emission remains fail-closed.
+Broader compiler completion remains partial; this technical screen is not a
+clearance or infringement conclusion and does not replace independent human
+dual review.
+
 # 2026-08-26 — Nested loop else-arm representation
 
 **Result: NOT_TRIGGERED after the representation review.** This increment adds

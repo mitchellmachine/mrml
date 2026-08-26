@@ -1388,9 +1388,12 @@ x86-64 functions: the alternative is evaluated exactly once only after primary
 false, and its false edge preserves fallthrough. ELF64 and COFF probes cover
 both emission paths. The representation now retains up to four ordered
 alternative arms, including an optional final `else`, and the constant
-evaluator lazily selects the first matching arm. CFG, ownership, and native
-consumers still explicitly fail closed when more than one alternative is
-present until their identities carry an alternative index.
+evaluator lazily selects the first matching arm. CFG and ownership identities
+now carry an exact alternative index for every condition, scoped action block,
+and return value. Primary false and each conditional-alternative false edge
+advance in source order; an unconditional final arm closes fallthrough. Native
+emission still explicitly fails closed when more than one alternative is
+present.
 The bounded constant evaluator selects
 exactly one arm, executes its actions under a lexical resolver checkpoint, and
 routes its target-aware terminal under the existing iteration limit. CFG
