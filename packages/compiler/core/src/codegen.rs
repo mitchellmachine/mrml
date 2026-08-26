@@ -15588,6 +15588,151 @@ fn runtime_reference_call_origin_parameter<const MAX_PARAMETERS: usize, const MA
         Some(())
     }
 
+    fn analyze_nested_loop_origins<
+        'source,
+        F,
+        const MAX_PARAMETERS: usize,
+        const MAX_NODES: usize,
+    >(
+        target: crate::RuntimeCallTarget<'source, MAX_PARAMETERS>,
+        block: crate::NestedLoopBlock<'source>,
+        local_names: [Option<&'source str>; MAX_PARAMETERS],
+        local_origins: [Option<usize>; MAX_PARAMETERS],
+        projected_origins: RuntimeCalleeProjectedOrigins<MAX_PARAMETERS>,
+        local_types: [Option<RuntimeExpressionType>; MAX_PARAMETERS],
+        local_mutability: [bool; MAX_PARAMETERS],
+        local_return_compatibility: [bool; MAX_PARAMETERS],
+        local_count: usize,
+        merge: &mut F,
+    ) -> Option<()>
+    where
+        F: FnMut(usize) -> Option<()>,
+    {
+        let state_at = |action_index: usize| {
+            let mut names = local_names;
+            let mut origins = local_origins;
+            let mut projected = projected_origins;
+            let mut types = local_types;
+            let mut mutability = local_mutability;
+            let mut compatibility = local_return_compatibility;
+            let mut count = local_count;
+            apply_conditional_loop_actions::<MAX_PARAMETERS, MAX_NODES>(
+                target,
+                block.actions().get(..action_index)?,
+                &mut names,
+                &mut origins,
+                &mut projected,
+                &mut types,
+                &mut mutability,
+                &mut compatibility,
+                &mut count,
+                true,
+            )?;
+            Some((
+                names,
+                origins,
+                projected,
+                types,
+                mutability,
+                compatibility,
+                count,
+            ))
+        };
+        let prefix_preserves_state = |action_index: usize| -> Option<bool> {
+            let (_, origins, projected, _, _, _, _) = state_at(action_index)?;
+            Some(
+                origins[..local_count] == local_origins[..local_count]
+                    && projected
+                        .retain_local_prefix(local_count)
+                        .has_same_origins(projected_origins),
+            )
+        };
+        for action_index in block
+            .conditional_break_action_indices()
+            .iter()
+            .chain(block.conditional_continue_action_indices())
+        {
+            if !prefix_preserves_state(*action_index)? {
+                return None;
+            }
+        }
+        for (control, action_index) in block
+            .unconditional_controls()
+            .iter()
+            .flatten()
+            .zip(block.unconditional_control_action_indices())
+        {
+            if !matches!(control, crate::NestedLoopUnconditionalControl::Return(_))
+                && !prefix_preserves_state(*action_index)?
+            {
+                return None;
+            }
+        }
+        if block.unconditional_controls().is_empty()
+            && !prefix_preserves_state(block.action_count())?
+        {
+            return None;
+        }
+        for ((control, action_index), control_order) in block
+            .unconditional_controls()
+            .iter()
+            .flatten()
+            .zip(block.unconditional_control_action_indices())
+            .zip(block.unconditional_control_orders())
+        {
+            let crate::NestedLoopUnconditionalControl::Return(value) = *control else {
+                continue;
+            };
+            if block
+                .unconditional_control_orders()
+                .iter()
+                .any(|order| order < control_order)
+            {
+                continue;
+            }
+            let (names, origins, projected, _, _, _, count) = state_at(*action_index)?;
+            let tree = value.parse_value::<MAX_NODES>().ok()?;
+            merge(recurse(
+                target,
+                &tree,
+                tree.root(),
+                0,
+                &names,
+                &origins,
+                &projected,
+                count,
+            )?)?;
+        }
+        for ((value, action_index), control_order) in block
+            .conditional_returns()
+            .iter()
+            .flatten()
+            .zip(block.conditional_return_action_indices())
+            .zip(block.conditional_return_control_orders())
+        {
+            if block
+                .unconditional_control_orders()
+                .iter()
+                .any(|order| order < control_order)
+            {
+                continue;
+            }
+            let (names, origins, projected, _, _, _, count) = state_at(*action_index)?;
+            let tree = value.parse_value::<MAX_NODES>().ok()?;
+            merge(recurse(
+                target,
+                &tree,
+                tree.root(),
+                0,
+                &names,
+                &origins,
+                &projected,
+                count,
+            )?)?;
+        }
+        Some(())
+    }
+
     let body =
         crate::parser::parse_function_body::<MAX_PARAMETERS, MAX_NODES>(target.body_expression)
             .ok()?;
@@ -16147,6 +16292,24 @@ fn runtime_reference_call_origin_parameter<const MAX_PARAMETERS: usize, const MA
                                     iteration_projected_origins = joined_projected_origins;
                                 }
                             }
+                            crate::LoopOperation::NestedBlock(block_index) => {
+                                let block = loop_statement
+                                    .nested_blocks()
+                                    .get(block_index)
+                                    .and_then(|value| *value)?;
+                                analyze_nested_loop_origins::<_, MAX_PARAMETERS, MAX_NODES>(
+                                    target,
+                                    block,
+                                    iteration_names,
+                                    iteration_origins,
+                                    iteration_projected_origins,
+                                    iteration_types,
+                                    iteration_mutability,
+                                    iteration_return_compatibility,
+                                    iteration_local_count,
+                                    &mut merge,
+                                )?;
+                            }
                             _ => return None,
                         }
                     }
@@ -16310,155 +16473,18 @@ fn runtime_reference_call_origin_parameter<const MAX_PARAMETERS: usize, const MA
                                 .nested_blocks()
                                 .get(block_index)
                                 .and_then(|value| *value)?;
-                            let prefix_preserves_state = |action_index: usize| -> Option<bool> {
-                                let mut block_names = local_names;
-                                let mut block_origins = local_origins;
-                                let mut block_projected_origins = projected_origins;
-                                let mut block_types = local_types;
-                                let mut block_mutability = local_mutability;
-                                let mut block_return_compatibility = local_return_compatibility;
-                                let mut block_local_count = local_count;
-                                apply_conditional_loop_actions::<MAX_PARAMETERS, MAX_NODES>(
-                                    target,
-                                    block.actions().get(..action_index)?,
-                                    &mut block_names,
-                                    &mut block_origins,
-                                    &mut block_projected_origins,
-                                    &mut block_types,
-                                    &mut block_mutability,
-                                    &mut block_return_compatibility,
-                                    &mut block_local_count,
-                                    true,
-                                )?;
-                                Some(
-                                    block_origins[..local_count] == local_origins[..local_count]
-                                        && block_projected_origins
-                                            .retain_local_prefix(local_count)
-                                            .has_same_origins(projected_origins),
-                                )
-                            };
-                            for action_index in block
-                                .conditional_break_action_indices()
-                                .iter()
-                                .chain(block.conditional_continue_action_indices())
-                            {
-                                if !prefix_preserves_state(*action_index)? {
-                                    return None;
-                                }
-                            }
-                            for (control, action_index) in block
-                                .unconditional_controls()
-                                .iter()
-                                .flatten()
-                                .zip(block.unconditional_control_action_indices())
-                            {
-                                if !matches!(
-                                    control,
-                                    crate::NestedLoopUnconditionalControl::Return(_)
-                                ) && !prefix_preserves_state(*action_index)?
-                                {
-                                    return None;
-                                }
-                            }
-                            if block.unconditional_controls().is_empty()
-                                && !prefix_preserves_state(block.action_count())?
-                            {
-                                return None;
-                            }
-                            for ((control, action_index), control_order) in block
-                                .unconditional_controls()
-                                .iter()
-                                .flatten()
-                                .zip(block.unconditional_control_action_indices())
-                                .zip(block.unconditional_control_orders())
-                            {
-                                if let crate::NestedLoopUnconditionalControl::Return(value) =
-                                    *control
-                                {
-                                    if block
-                                        .unconditional_control_orders()
-                                        .iter()
-                                        .any(|order| order < control_order)
-                                    {
-                                        continue;
-                                    }
-                                    let mut block_names = local_names;
-                                    let mut block_origins = local_origins;
-                                    let mut block_projected_origins = projected_origins;
-                                    let mut block_types = local_types;
-                                    let mut block_mutability = local_mutability;
-                                    let mut block_return_compatibility = local_return_compatibility;
-                                    let mut block_local_count = local_count;
-                                    apply_conditional_loop_actions::<MAX_PARAMETERS, MAX_NODES>(
-                                        target,
-                                        block.actions().get(..*action_index)?,
-                                        &mut block_names,
-                                        &mut block_origins,
-                                        &mut block_projected_origins,
-                                        &mut block_types,
-                                        &mut block_mutability,
-                                        &mut block_return_compatibility,
-                                        &mut block_local_count,
-                                        true,
-                                    )?;
-                                    let tree = value.parse_value::<MAX_NODES>().ok()?;
-                                    merge(recurse(
-                                        target,
-                                        &tree,
-                                        tree.root(),
-                                        0,
-                                        &block_names,
-                                        &block_origins,
-                                        &block_projected_origins,
-                                        block_local_count,
-                                    )?)?;
-                                }
-                            }
-                            for ((value, action_index), control_order) in block
-                                .conditional_returns()
-                                .iter()
-                                .flatten()
-                                .zip(block.conditional_return_action_indices())
-                                .zip(block.conditional_return_control_orders())
-                            {
-                                if block
-                                    .unconditional_control_orders()
-                                    .iter()
-                                    .any(|order| order < control_order)
-                                {
-                                    continue;
-                                }
-                                let mut block_names = local_names;
-                                let mut block_origins = local_origins;
-                                let mut block_projected_origins = projected_origins;
-                                let mut block_types = local_types;
-                                let mut block_mutability = local_mutability;
-                                let mut block_return_compatibility = local_return_compatibility;
-                                let mut block_local_count = local_count;
-                                apply_conditional_loop_actions::<MAX_PARAMETERS, MAX_NODES>(
-                                    target,
-                                    block.actions().get(..*action_index)?,
-                                    &mut block_names,
-                                    &mut block_origins,
-                                    &mut block_projected_origins,
-                                    &mut block_types,
-                                    &mut block_mutability,
-                                    &mut block_return_compatibility,
-                                    &mut block_local_count,
-                                    true,
-                                )?;
-                                let tree = value.parse_value::<MAX_NODES>().ok()?;
-                                merge(recurse(
-                                    target,
-                                    &tree,
-                                    tree.root(),
-                                    0,
-                                    &block_names,
-                                    &block_origins,
-                                    &block_projected_origins,
-                                    block_local_count,
-                                )?)?;
-                            }
+                            analyze_nested_loop_origins::<_, MAX_PARAMETERS, MAX_NODES>(
+                                target,
+                                block,
+                                local_names,
+                                local_origins,
+                                projected_origins,
+                                local_types,
+                                local_mutability,
+                                local_return_compatibility,
+                                local_count,
+                                &mut merge,
+                            )?;
                         }
                         crate::LoopOperation::Local(_)
                         | crate::LoopOperation::Assignment(_)
@@ -37842,6 +37868,28 @@ mod tests {
                 ..loop_choose
             }),
             Some(0)
+        );
+        assert_eq!(
+            runtime_reference_call_origin_parameter::<2, 32>(RuntimeCallTarget {
+                body_expression: concat!(
+                    "loop { let mut changed: &mut u16 = value; ",
+                    "changed = &mut *changed; loop { ",
+                    "if first { return changed; } } }"
+                ),
+                ..loop_choose
+            }),
+            Some(0)
+        );
+        assert_eq!(
+            runtime_reference_call_origin_parameter::<2, 40>(RuntimeCallTarget {
+                body_expression: concat!(
+                    "let mut local: u16 = 1; loop { ",
+                    "let mut changed: &mut u16 = value; changed = &mut local; ",
+                    "loop { if first { return changed; } } }"
+                ),
+                ..loop_choose
+            }),
+            None
         );
         assert_eq!(
             runtime_reference_call_origin_parameter::<2, 40>(RuntimeCallTarget {
