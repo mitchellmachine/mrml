@@ -35340,6 +35340,7 @@ mod tests {
             "fn value(input: &mut u16) -> &u16 { loop { let mut local = *input; let returned: &mut u16 = identity(&mut local); let child: &u16 = &*returned; return child; } }",
             "fn value(input: &mut u16, choose: bool) -> &u16 { loop { let mut local = *input; let returned: &mut u16 = choose(&mut local, choose); let child: &u16 = &*returned; if choose { return child; } return child; } }",
             "fn value(first: &mut u16, second: &mut u16) -> &u16 { let mut local = *second; let returned: &mut u16 = tuple_field_assign(first, &mut local); let child: &u16 = &*returned; child }",
+            "fn value(first: &mut u16, second: &mut u16) -> &u16 { let mut local = *first; let returned: &mut u16 = tuple_field_assign(&mut local, second); let child: &u16 = &*returned; child }",
             "fn value(first: &mut u16, second: &mut u16, choose: bool) -> &u16 { let mut local = *second; let returned: &mut u16 = branch_tuple_field_assign(first, &mut local, choose); let child: &u16 = &*returned; child }",
             "fn value(first: &mut u16, second: &mut u16) -> &u16 { let mut local = *second; let returned: &mut u16 = tuple_field_assign(first, &mut local); let child: &u16 = &*returned; return child; }",
             "fn value(first: &mut u16, second: &mut u16, choose: bool) -> &u16 { let mut local = *second; let returned: &mut u16 = branch_tuple_field_assign(first, &mut local, choose); let child: &u16 = &*returned; if choose { return child; } child }",
