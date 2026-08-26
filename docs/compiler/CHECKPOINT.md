@@ -829,6 +829,13 @@ use. ORACLE-0002 reports E0503 for both call shapes and accepts both controls.
 Windows and Arch each pass 987 compiler tests; general call summaries remain
 unsupported.
 
+Shared children of exact identity and conditional same-parameter mutable call
+results now have return-outlives coverage. Parameter-backed children return;
+equivalent local-backed children fail with the bounded outlives diagnostic.
+ORACLE-0002 accepts both parameter cases and rejects both local escapes with
+E0515. Windows and Arch each pass 642 library tests, one component-interface
+probe, 10 conformance tests, and 335 replacement tests: 988 tests per host.
+
 Multi-field tuple literals retain a separate projected origin per field. A
 conditional reference element seeds its field only when both arms prove the
 same parameter; unequal first/second origins fail closed. Focused caller tests

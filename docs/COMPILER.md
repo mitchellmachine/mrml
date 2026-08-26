@@ -1138,6 +1138,13 @@ last use. ORACLE-0002 rejects both overlaps with E0503 and accepts both controls
 Unknown call results remain conservative; this is not general interprocedural
 region inference.
 
+Return-outlives validation now has focused evidence for a shared child derived
+from those same mutable call results. Identity and conditional same-parameter
+results preserve their parameter origin through mutable-to-shared reborrow and
+return, while identical local-backed results fail closed. ORACLE-0002 accepts
+both parameter-backed returns and rejects both local escapes with E0515. General
+interprocedural lifetime inference remains unsupported.
+
 The first modern trait-solver foundation is an explicit bounded implemented-
 goal representation. Stable trait/type/inference/placeholder identities remain
 distinct; canonicalization replaces inference identities with first-occurrence

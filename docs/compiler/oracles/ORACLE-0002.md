@@ -334,6 +334,15 @@ compiled. This is exact black-box evidence for those two call shapes, not
 general interprocedural regions. Temporary probe sources and metadata were
 removed.
 
+An independently authored Rust 2024 metadata-only probe against this exact
+toolchain and commit returned a shared child of a mutable reference obtained
+from both a direct identity function and a conditional same-parameter function.
+Both parameter-backed caller returns compiled. Equivalent callers that passed a
+local into each function and returned its shared child failed with E0515. This
+is exact black-box outlives evidence for those call shapes, not general
+interprocedural lifetime inference. Temporary probe sources and metadata were
+removed.
+
 ## Straight-line tuple-field callee-origin follow-up
 
 On 2026-08-26, an independently authored Rust 2024 metadata-only probe against

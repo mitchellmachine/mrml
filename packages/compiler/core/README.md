@@ -3985,6 +3985,14 @@ live and succeeds after its last use. The pinned oracle rejects both overlaps
 with E0503 and accepts both controls; Windows and Arch remain at 987 tests.
 Unknown call-result ancestry remains conservative.
 
+The same identity and conditional same-parameter results now preserve outlives
+origins through a mutable-to-shared child returned from the caller. Parameter-
+backed children are accepted, while equivalent children of local-backed call
+results fail closed. The pinned oracle accepts both parameter returns and
+rejects both local escapes with E0515. Windows and Arch each pass 642 library
+tests, one component-interface probe, 10 conformance tests, and 335 replacement
+tests: 988 compiler tests per host.
+
 Exact typed tuple literals now seed the same projected state when a local is
 declared. Every reference field is checked against the declared tuple element
 and return type; only a parameter-backed element records an origin. Scalar and
