@@ -58,7 +58,18 @@ oracle upgrade receives a new immutable record and differential classification
 against all prior accepted probes. Keep Cargo on edition 2024 until a newer
 named edition can be adopted through a pinned, workspace-wide migration.
 
-## Latest terminal noreturn assembly milestone
+## Latest direct delayed-initialization milestone
+
+Commit `b02037df` lets direct ordinary `=` perform the first write to an
+explicitly uninitialized `u64` local. Immutable locals admit exactly that first
+root write and reject a repeated write. ORACLE-0002 accepts the direct
+initialization and rejects the repeated immutable assignment with E0384.
+Windows and native Arch Linux WSL each passed 647 library tests, 1 component
+probe, 10 conformance tests, and 343 replacement tests: 1,001 compiler tests per
+host. Conditional joins, projected first writes, and other uninitialized types
+remain fail-closed.
+
+### Preceding assembly-output definite-initialization milestone
 
 Commit `21e1d328` represents explicit uninitialized `u64` locals without an
 initialization event and lets an exact returning syscall output perform their

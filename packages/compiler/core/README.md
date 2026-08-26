@@ -5727,6 +5727,19 @@ nested-loop return coverage, general regions, named lifetime inference, or
 complete Polonius semantics. The `no_std`/allocation/unsafe hygiene scan
 remained empty.
 
+The direct delayed-initialization milestone at `b02037df` permits an ordinary
+direct `=` to perform the first write to an explicitly uninitialized `u64`
+local. The bounded move-path write event is the semantic initialization;
+storage allocation does not manufacture an initialization fact. An immutable
+binding permits exactly one direct root write and rejects a repeated write,
+while projected and compound first writes fail closed. The pinned ORACLE-0002
+toolchain accepted the straight-line initialization and rejected the repeated
+immutable assignment with E0384. ELF64 and COFF replacements passed. Windows
+and native Arch Linux WSL each passed 647 library tests, 1 component probe, 10
+conformance tests, and 343 replacement tests: 1,001 compiler tests per host.
+This does not claim conditional joins, loop-carried initialization, other
+uninitialized types, or complete Rust definite-assignment semantics.
+
 The nested-loop return outlives milestone at `885ba7b7` passed all 767 compiler
 and driver tests on Windows gnullvm and all 767 in release mode on native Arch
 Linux WSL, plus warnings-denied compiler-only Clippy on both hosts using pinned

@@ -1070,3 +1070,12 @@ assembly. A direct read of an uninitialized `u64` failed with E0381. This is
 black-box evidence for those exact declaration, output, and read positions only;
 it does not establish general delayed initialization or control-flow joins.
 Temporary sources and metadata were removed.
+
+An independently authored Rust 2024 metadata-only ordinary delayed-
+initialization pair against this exact toolchain and commit accepted an
+immutable `let value: u64;` followed by direct `value = 42` initialization and
+a read. Repeating the direct immutable assignment failed with E0384. This is
+black-box evidence for those exact straight-line scalar forms only; it does not
+establish conditional joins, loop-carried initialization, projected writes, or
+general definite-assignment semantics. Temporary sources and metadata were
+removed.
