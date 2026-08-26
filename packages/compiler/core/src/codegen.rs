@@ -5701,8 +5701,11 @@ impl<'source> RuntimeBodyFacts<'source> {
                     && effect.expression_conditional == initialization.expression_conditional
                     && matches!(
                         (mutable, effect.kind),
-                        (false, RuntimePlaceEffectKind::SharedBorrow)
-                            | (true, RuntimePlaceEffectKind::MutableBorrow)
+                        (
+                            false,
+                            RuntimePlaceEffectKind::SharedBorrow
+                                | RuntimePlaceEffectKind::MutableBorrow
+                        ) | (true, RuntimePlaceEffectKind::MutableBorrow)
                     )
             })
             .max_by_key(|(_, effect)| effect.event.0)
@@ -5710,7 +5713,11 @@ impl<'source> RuntimeBodyFacts<'source> {
                 id: RuntimeLoanId(initialization_index),
                 borrower,
                 borrowed_path: effect.path,
-                kind: effect.kind,
+                kind: if mutable {
+                    RuntimePlaceEffectKind::MutableBorrow
+                } else {
+                    RuntimePlaceEffectKind::SharedBorrow
+                },
                 issue_effect,
                 generation_event: initialization.event,
             });
@@ -14750,7 +14757,9 @@ fn runtime_reference_call_origin_parameter<const MAX_PARAMETERS: usize, const MA
         local: crate::LocalBinding<'_>,
     ) -> bool {
         local.ty.is_none_or(|ty| {
-            runtime_type_from_text(ty.text) == Some(runtime_type_from_scalar(target.return_type))
+            runtime_type_from_text(ty.text).is_some_and(|ty| {
+                runtime_types_compatible(ty, runtime_type_from_scalar(target.return_type))
+            })
         })
     }
 
@@ -14760,7 +14769,7 @@ fn runtime_reference_call_origin_parameter<const MAX_PARAMETERS: usize, const MA
         origin: Option<usize>,
     ) -> bool {
         ty.map_or(origin.is_some(), |ty| {
-            ty == runtime_type_from_scalar(target.return_type)
+            runtime_types_compatible(ty, runtime_type_from_scalar(target.return_type))
         })
     }
 
@@ -31238,6 +31247,20 @@ mod tests {
                         body_expression: "let alias: &mut u16 = &mut values[0]; alias",
                     })
                 }
+                ("shared_array_element_alias", 1) => {
+                    parameters[0] = Some(RuntimeCallParameter {
+                        name: "values",
+                        ty: array_reference,
+                    });
+                    Some(RuntimeCallTarget {
+                        name: "shared_array_element_alias",
+                        parameters,
+                        parameter_count: 1,
+                        return_type: shared_reference,
+                        return_type_name: "&u16",
+                        body_expression: "let alias: &mut u16 = &mut values[0]; alias",
+                    })
+                }
                 ("slice_subslice_alias", 1) => {
                     parameters[0] = Some(RuntimeCallParameter {
                         name: "values",
@@ -35609,6 +35632,23 @@ mod tests {
         .unwrap();
         assert_eq!(
             analyze(concat!(
+                "fn value(input: &mut [u16; 2]) -> u16 { ",
+                "let returned: &u16 = shared_array_element_alias(input); ",
+                "let competing: &mut u16 = &mut input[0]; ",
+                "*competing += 1; *returned }"
+            ))
+            .unwrap_err()
+            .kind,
+            CodegenErrorKind::RuntimeBorrowConflict
+        );
+        analyze(concat!(
+            "fn value(input: &mut [u16; 2]) -> u16 { ",
+            "let returned: &u16 = shared_array_element_alias(input); let value = *returned; ",
+            "let restored: &mut u16 = &mut input[0]; *restored += value; *restored }"
+        ))
+        .unwrap();
+        assert_eq!(
+            analyze(concat!(
                 "fn value(input: &mut [u16]) -> u16 { ",
                 "let returned: &mut u16 = slice_element(input); ",
                 "let competing: &mut u16 = &mut input[0]; ",
@@ -35700,11 +35740,18 @@ mod tests {
         let array_element_alias = MutableReferenceCallResolver
             .resolve_runtime_call::<2>("array_element_alias", 1)
             .unwrap();
+        let shared_array_element_alias = MutableReferenceCallResolver
+            .resolve_runtime_call::<2>("shared_array_element_alias", 1)
+            .unwrap();
         let slice_subslice_alias = MutableReferenceCallResolver
             .resolve_runtime_call::<2>("slice_subslice_alias", 1)
             .unwrap();
         assert_eq!(
             runtime_reference_call_origin_parameter::<2, 16>(array_element_alias),
+            Some(0)
+        );
+        assert_eq!(
+            runtime_reference_call_origin_parameter::<2, 16>(shared_array_element_alias),
             Some(0)
         );
         assert_eq!(
