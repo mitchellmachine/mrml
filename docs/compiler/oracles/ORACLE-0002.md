@@ -257,6 +257,13 @@ returning arm, reporting E0515. This is exact exit-versus-backedge evidence, not
 general loop fixed-point or named-lifetime inference. Temporary sources and
 metadata were removed.
 
+A terminal loop-arm assignment pair reassigned a mutable-reference local before
+return. This exact toolchain compiled the same-origin reborrow and rejected the
+companion replacement with function-local storage, reporting E0515 at the
+return. This is exact terminal action-to-return evidence, not general loop
+dataflow or named-lifetime inference. Temporary sources and metadata were
+removed.
+
 An independently authored Rust 2024 metadata-only probe against this exact
 toolchain and commit accepted a mutable scalar reference returned from index
 zero of a mutable two-element array-reference parameter. The caller could reuse
