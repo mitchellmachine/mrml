@@ -635,6 +635,13 @@ ascriptions fail closed. ORACLE-0002 accepted direct and conditional local-
 backed replacement and rejected a slice initializer annotated as scalar with
 E0308. Both canonical hosts pass 986 compiler tests.
 
+The mutable-to-shared projected-return milestone applies the canonical
+directional reference compatibility relation to callee-local annotations and
+return state. Direct loan derivation accepts a mutable borrow effect for a
+shared destination but records the resulting loan as shared. A live caller
+mutation conflicts, post-last-use mutation succeeds, and ORACLE-0002 rejects
+the live indexed-array case with E0503. Both hosts pass 986 tests.
+
 Inferred locals now become reassignment-origin eligible only when their
 initializer already proved a compatible parameter origin. This preserves valid
 indexed scalar alias replacement while preventing an inferred slice alias from

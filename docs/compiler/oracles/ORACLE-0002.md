@@ -233,6 +233,10 @@ both directly and after both arms of an `if` replaced it. A separate probe
 rejected initializing an explicitly scalar mutable-reference alias from a
 mutable subslice with E0308.
 
+A projected mutable-to-shared return probe accepted a callee local declared as
+`&mut u16` and returned as `&u16`, plus caller mutation after the result's last
+use. The corresponding live caller mutation was rejected with E0503.
+
 An independently authored Rust 2024 metadata-only probe against this exact
 toolchain and commit separately accepted a mutable scalar reference returned
 from index zero of a mutable slice-reference parameter, followed by owner reuse

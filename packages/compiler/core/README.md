@@ -3924,6 +3924,12 @@ a local-backed inferred reference can be replaced by a compatible parameter-
 backed reference without fabricating provenance; mismatched annotations and
 ascriptions remain unknown.
 
+Mutable local references may now coerce to compatible shared call returns. The
+callee argument still contributes its mutable borrow effect, while the derived
+destination loan is attenuated to shared. This retains caller liveness and
+rejects mutation before the shared result's last use without granting mutable
+authority to the result.
+
 The conditional projected-reassignment milestone extends the bounded tuple-field
 loan chain across a conditional shared-reference assignment. The exact dated
 oracle rejects mutation of either conditional owner and of the field's replaced

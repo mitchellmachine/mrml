@@ -911,6 +911,13 @@ be replaced by a compatible parameter-backed reference in straight-line or
 complete conditional flow. Reference annotations and ascriptions must match
 their initializer evidence. Unsupported inference remains unknown.
 
+Callee-local compatibility now uses the canonical directional reference
+relation, permitting mutable-to-shared coercion while still rejecting shared-
+to-mutable transfer. A shared destination loan may derive from the callee call's
+mutable argument borrow, but its retained loan kind is attenuated to shared.
+Live caller mutation conflicts with that shared result; mutation after its last
+use succeeds.
+
 The first modern trait-solver foundation is an explicit bounded implemented-
 goal representation. Stable trait/type/inference/placeholder identities remain
 distinct; canonicalization replaces inference identities with first-occurrence
