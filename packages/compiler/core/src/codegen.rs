@@ -14704,6 +14704,7 @@ fn runtime_reference_call_origin_parameter<const MAX_PARAMETERS: usize, const MA
     let mut origin = None;
     let mut local_names = [None; MAX_PARAMETERS];
     let mut local_origins = [None; MAX_PARAMETERS];
+    let mut local_mutability = [false; MAX_PARAMETERS];
     let mut local_count = 0usize;
     let mut merge = |candidate: usize| -> Option<()> {
         if origin.is_some_and(|existing| existing != candidate) {
@@ -14787,7 +14788,34 @@ fn runtime_reference_call_origin_parameter<const MAX_PARAMETERS: usize, const MA
                 );
                 *local_names.get_mut(local_count)? = Some(local.name);
                 *local_origins.get_mut(local_count)? = local_origin;
+                *local_mutability.get_mut(local_count)? = local.mutable;
                 local_count += 1;
+            }
+            crate::BodyStatement::Assignment(index) => {
+                let assignment = body.assignments().get(index).and_then(|value| *value)?;
+                if assignment.projection.is_some()
+                    || assignment.operator != crate::AssignmentOperator::Assign
+                {
+                    return None;
+                }
+                let local_index = (0..local_count)
+                    .rev()
+                    .find(|index| local_names[*index] == Some(assignment.name))?;
+                if !local_mutability[local_index] {
+                    return None;
+                }
+                let tree = crate::ExpressionParser::<MAX_NODES>::new(assignment.value)
+                    .parse()
+                    .ok()?;
+                local_origins[local_index] = recurse(
+                    target,
+                    &tree,
+                    tree.root(),
+                    0,
+                    &local_names,
+                    &local_origins,
+                    local_count,
+                );
             }
             crate::BodyStatement::Loop(index) => {
                 let loop_statement = body.while_loops().get(index).and_then(|value| *value)?;
@@ -14913,8 +14941,7 @@ fn runtime_reference_call_origin_parameter<const MAX_PARAMETERS: usize, const MA
                     }
                 }
             }
-            crate::BodyStatement::Assignment(_)
-            | crate::BodyStatement::ConditionalAssignment(_)
+            crate::BodyStatement::ConditionalAssignment(_)
             | crate::BodyStatement::Expression(_) => return None,
         }
     }
@@ -30531,6 +30558,23 @@ mod tests {
                         body_expression: "let alias: &mut u16 = value; alias",
                     })
                 }
+                ("reassign_forward", 1) => {
+                    parameters[0] = Some(RuntimeCallParameter {
+                        name: "value",
+                        ty: reference,
+                    });
+                    Some(RuntimeCallTarget {
+                        name: "reassign_forward",
+                        parameters,
+                        parameter_count: 1,
+                        return_type: reference,
+                        return_type_name: "&mut u16",
+                        body_expression: concat!(
+                            "let mut alias: &mut u16 = value; ",
+                            "alias = &mut *alias; alias"
+                        ),
+                    })
+                }
                 ("touch", 1) => {
                     parameters[0] = Some(RuntimeCallParameter {
                         name: "value",
@@ -34485,6 +34529,7 @@ mod tests {
         for source in [
             "fn value(input: &mut u16) -> u16 { let returned: &mut u16 = forward(input); let competing: &mut u16 = &mut *input; *competing += 1; *returned }",
             "fn value(first: &mut u16, second: &mut u16) -> u16 { let mut returned: &mut u16 = second; returned = forward(first); let competing: &mut u16 = &mut *first; *competing += 1; *returned }",
+            "fn value(input: &mut u16) -> u16 { let returned: &mut u16 = reassign_forward(input); let competing: &mut u16 = &mut *input; *competing += 1; *returned }",
         ] {
             assert_eq!(
                 analyze(source).unwrap_err().kind,
@@ -34495,6 +34540,7 @@ mod tests {
         for source in [
             "fn value(input: &mut u16) -> u16 { let returned: &mut u16 = forward(input); *returned += 1; let restored: &mut u16 = &mut *input; *restored }",
             "fn value(first: &mut u16, second: &mut u16) -> u16 { let mut returned: &mut u16 = second; returned = forward(first); *returned += 1; let restored: &mut u16 = &mut *first; *restored }",
+            "fn value(input: &mut u16) -> u16 { let returned: &mut u16 = reassign_forward(input); *returned += 1; let restored: &mut u16 = &mut *input; *restored }",
         ] {
             analyze(source).unwrap();
         }
@@ -34506,6 +34552,13 @@ mod tests {
             runtime_reference_call_origin_parameter::<2, 16>(forward),
             Some(0)
         );
+        let reassign_forward = MutableReferenceCallResolver
+            .resolve_runtime_call::<2>("reassign_forward", 1)
+            .unwrap();
+        assert_eq!(
+            runtime_reference_call_origin_parameter::<2, 16>(reassign_forward),
+            Some(0)
+        );
         assert_eq!(
             runtime_reference_call_origin_parameter::<2, 16>(RuntimeCallTarget {
                 body_expression: "let value: u16 = 1; value",
@@ -34513,6 +34566,19 @@ mod tests {
             }),
             None
         );
+        for body_expression in [
+            "let alias: &mut u16 = value; alias = &mut *alias; alias",
+            "let mut local: u16 = 1; let mut alias: &mut u16 = value; alias = &mut local; alias",
+            "let mut alias: &mut u16 = value; *alias += 1; alias",
+        ] {
+            assert_eq!(
+                runtime_reference_call_origin_parameter::<2, 16>(RuntimeCallTarget {
+                    body_expression,
+                    ..reassign_forward
+                }),
+                None
+            );
+        }
     }
 
     #[test]
