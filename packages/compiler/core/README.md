@@ -4158,6 +4158,11 @@ The pinned oracle accepts a parameter-backed break with local state only on the
 continuing path and rejects a local-backed break with E0515. Both hosts remain
 at 989 compiler tests. Conditional continue and block-terminal breaks remain
 conservative.
+Direct continue now terminates the current operation suffix and carries its
+current origin state to the backedge. The pinned oracle accepts a parameter-
+backed conditional return before that continue and identifies the later local
+assignment as unreachable. Both hosts remain at 989 compiler tests; conditional
+continue still needs a multi-backedge join.
 
 Exact typed tuple literals now seed the same projected state when a local is
 declared. Every reference field is checked against the declared tuple element

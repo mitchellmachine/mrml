@@ -1287,6 +1287,11 @@ and the backedge. Multiple break outcomes intersect. A `while` additionally
 joins its natural/zero-iteration exit; an unconditional loop exposes only break
 outcomes. ORACLE-0002 accepts a parameter-backed break despite a local-backed
 non-break path and rejects the reversed local-backed break with E0515.
+Direct `continue` now terminates the current operation suffix and sends its
+current origin state to the backedge. Disconnected later assignments cannot
+alter return or iteration evidence. ORACLE-0002 accepts the exact stable return/
+continue shape and reports the retained suffix as unreachable. Conditional
+continue still requires a separate multi-backedge join.
 
 The first modern trait-solver foundation is an explicit bounded implemented-
 goal representation. Stable trait/type/inference/placeholder identities remain

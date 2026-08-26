@@ -520,6 +520,13 @@ and Arch each pass 643 library tests, one component-interface probe, 10
 conformance tests, and 335 replacement tests: 989 compiler tests per host.
 Conditional continue and branch-block break transfer remain unsupported.
 
+Direct continue now ends the current syntactic operation suffix and preserves
+the current origin state as the sole backedge outcome. ORACLE-0002 accepts the
+stable parameter-backed conditional return before that continue and reports a
+later local assignment as unreachable. Windows and Arch each pass 643 library
+tests, one component-interface probe, 10 conformance tests, and 335 replacement
+tests: 989 compiler tests per host. Conditional continue remains unsupported.
+
 The conditional callee-local reassignment milestone evaluates supported direct
 assignments from a copy of the incoming fixed local-origin state for every
 conditional outcome, then joins each local independently. A missing `else`

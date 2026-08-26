@@ -820,3 +820,10 @@ toolchain and commit compiled `asm!("inc rcx", inout("rcx") value)` and
 acceptance of those exact same-place and split explicit-RCX inout forms only; it
 does not establish other registers, allocation, effects, or general assembly
 semantics. Temporary source and metadata were removed.
+
+An independently authored Rust 2024 metadata-only direct-continue probe against
+this exact toolchain and commit accepted a stable parameter-backed conditional
+return before `continue` and reported the following local-backed assignment as
+unreachable. This is black-box evidence for that exact terminating suffix and
+backedge, not general loop or region inference. Temporary source and metadata
+were removed.
