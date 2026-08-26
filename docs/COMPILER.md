@@ -1085,8 +1085,14 @@ conditional-expression relation, not general interprocedural regions.
 A shared call through an exact tuple-field parent now has focused invalidation
 evidence against a live mutable child reborrowed from that field. ORACLE-0002
 rejects the overlapping call with E0502 and accepts the same call after the
-child's last use. The existing call parameter type supplies the shared-reborrow
+child’s last use. The existing call parameter type supplies the shared-reborrow
 context; unknown calls remain conservative.
+
+The complementary mutable call through an exact tuple-field parent now has
+focused invalidation evidence against a live shared child. ORACLE-0002 rejects
+the overlap with E0502 and accepts the mutable call after the shared child's last
+use. Together these slices cover exact shared/mutable call conflicts through a
+tuple field, not arbitrary projected call arguments or regions.
 
 The first modern trait-solver foundation is an explicit bounded implemented-
 goal representation. Stable trait/type/inference/placeholder identities remain
