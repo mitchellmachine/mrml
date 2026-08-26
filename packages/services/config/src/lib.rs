@@ -3170,6 +3170,66 @@ impl<const GRANTS: usize, const SETTINGS: usize, const AUDIT: usize>
             )
     }
 
+    /// Completes the production-shaped delivered Total control-plane join
+    /// without accepting a detached release builder. Installed recovery,
+    /// effective boot policy, every capability-readable package assignment,
+    /// authenticated release identity, and the only admission table either
+    /// bind together or produce no admission owner.
+    #[allow(clippy::too_many_arguments)]
+    pub fn build_assigned_installed_total_boot_admission<
+        'release,
+        const DOMAINS: usize,
+        A: CapabilityAuthorizer + ?Sized,
+    >(
+        &self,
+        installed: InstalledRecoveryDeviceSelection,
+        capabilities: &A,
+        system: IsolationPolicySetting,
+        system_read: Capability,
+        component: IsolationPolicySetting,
+        component_read: Capability,
+        mut plan: RuntimeDomainAssignmentPlan<'release, DOMAINS>,
+        bindings: &[RuntimeDomainPolicyBinding<'_>],
+    ) -> Result<RecoveredInstalledTotalAdmission<DOMAINS>, RecoveredAssignedTotalAdmissionError>
+    {
+        let (recovery_volume, recovery_root_generation) = validate_installed_selection_for_parts(
+            installed,
+            self.delivered.installed(),
+            self.delivered.sata_route(),
+        )
+        .map_err(RecoveredAssignedTotalAdmissionError::Installed)?;
+        let policy = self
+            .compose_boot_isolation_policy(
+                capabilities,
+                system,
+                system_read,
+                component,
+                component_read,
+            )
+            .map_err(RecoveredAssignedTotalAdmissionError::Policy)?;
+        if plan.policy_generation() != policy.effective().policy_generation() {
+            return Err(RecoveredAssignedTotalAdmissionError::Assignment(
+                RecoveredRuntimeDomainPolicyError::PolicyGenerationMismatch,
+            ));
+        }
+        self.recovered
+            .assign_runtime_domains(capabilities, &mut plan, bindings)
+            .map_err(RecoveredAssignedTotalAdmissionError::Assignment)?;
+        let release = plan
+            .seal()
+            .map_err(RecoveredAssignedTotalAdmissionError::Release)?;
+        let total = policy
+            .bind_release_inventory(release)
+            .map_err(RecoveredAssignedTotalAdmissionError::Policy)?;
+        RecoveredInstalledTotalAdmission::bind_identity(
+            installed,
+            recovery_volume,
+            recovery_root_generation,
+            total,
+        )
+        .map_err(RecoveredAssignedTotalAdmissionError::Installed)
+    }
+
     pub fn into_parts(
         self,
     ) -> (
@@ -3191,6 +3251,14 @@ pub enum RecoveredInstalledTotalAdmissionBuildError<E> {
     Installed(ConfigError),
     Policy(ConfigError),
     ReleaseBuilder(E),
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum RecoveredAssignedTotalAdmissionError {
+    Installed(ConfigError),
+    Policy(ConfigError),
+    Assignment(RecoveredRuntimeDomainPolicyError),
+    Release(ReleaseInventoryError),
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -10622,17 +10690,48 @@ mod tests {
             );
             let delivered_recovered = recovered.bind_delivered_boot(delivered_envelope).unwrap();
             assert_eq!(delivered_recovered.delivered(), delivered_envelope);
+            let (release, release_length, key_id, active) = configuration_release_records();
+            let stale_runtime_plan = RuntimeDomainAssignmentPlan::<1>::new(
+                &release[..release_length],
+                &key_id,
+                active,
+                delivered_recovered.recovered().configuration().revision() + 1,
+            )
+            .unwrap();
+            assert_eq!(
+                delivered_recovered
+                    .build_assigned_installed_total_boot_admission(
+                        installed_selection,
+                        &capabilities,
+                        system,
+                        system_access,
+                        component,
+                        component_access,
+                        stale_runtime_plan,
+                        &[runtime_binding],
+                    )
+                    .err(),
+                Some(RecoveredAssignedTotalAdmissionError::Assignment(
+                    RecoveredRuntimeDomainPolicyError::PolicyGenerationMismatch
+                ))
+            );
+            let runtime_plan = RuntimeDomainAssignmentPlan::<1>::new(
+                &release[..release_length],
+                &key_id,
+                active,
+                delivered_recovered.recovered().configuration().revision(),
+            )
+            .unwrap();
             let mut total = delivered_recovered
-                .build_installed_total_boot_admission(
+                .build_assigned_installed_total_boot_admission(
                     installed_selection,
                     &capabilities,
                     system,
                     system_access,
                     component,
                     component_access,
-                    |policy_generation| {
-                        Ok::<_, ()>(activated_configuration_release(domain, policy_generation))
-                    },
+                    runtime_plan,
+                    &[runtime_binding],
                 )
                 .unwrap();
             assert_eq!(total.installed(), installed_selection);
@@ -10647,7 +10746,7 @@ mod tests {
             )
             .unwrap();
             let identity = IsolationServiceIdentity::new(
-                domain,
+                component.object(),
                 ObjectId(0x434f_4e46_0000_0001),
                 1,
                 5,
@@ -10657,7 +10756,7 @@ mod tests {
             let prepared = total.prepare_service(bounds, identity).unwrap();
             assert_eq!(prepared.spec().placement(), IsolationPlacement::Microvm);
             let routed = prepared.commit(total.admission_mut(), 0x51u64).unwrap();
-            assert_eq!(routed.domain(), domain);
+            assert_eq!(routed.domain(), component.object());
             assert_eq!(routed.into_endpoint(), 0x51);
             let runtime = total.authorize_runtime().unwrap();
             assert_eq!(runtime.installed(), installed_selection);

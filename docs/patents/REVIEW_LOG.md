@@ -88,6 +88,17 @@ construction/finalization is kernel-private and the standalone application probe
 is labeled as scoped placement evidence rather than whole-system proof. This is
 the same conventional authority-boundary reduction and adds no mechanism.
 
+## 2026-08-26 — Delivered assignment-to-admission composition
+
+Patent review: **NOT_TRIGGERED** for composing existing installed-recovery,
+policy-generation equality, capability-checked assignment, authenticated
+release sealing, and admission-owner constructors into one fail-closed call.
+This is conventional typed transaction composition and removes a detached
+callback; it adds no VM construction, placement algorithm, scheduling,
+interface transport, device, DMA, queue, interrupt, or boot mechanism. The
+broader adaptive-placement and Total-MicroVM mechanisms retain their existing
+**TRIGGERED** review; this technical screen is not patent clearance.
+
 ## 2026-08-26 — Recovered complete-release policy assignment
 
 Patent review: **NOT_TRIGGERED** for enumerating an already authenticated

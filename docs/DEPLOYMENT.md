@@ -241,6 +241,17 @@ setting capability grants domain construction or launch authority. Windows
 passes 566 kernel tests and 51 configuration tests. Production service wiring,
 resource construction, route admission, and complete launch remain **PLANNED**.
 
+The delivered installed-system path now **PARTIALLY IMPLEMENTS** the next
+single-owner join. It consumes the retained one-use recovery envelope and an
+exact active-release assignment plan directly: installed identity, recovered
+effective policy, complete capability-checked package assignment, activated
+release inventory, and the only admission table bind atomically. There is no
+detached release-builder callback in this path, and any stale generation or
+substitution produces no admission owner. The focused Windows configuration
+suite remains 51 passing tests through microVM route commitment and strict
+runtime authorization. Live service-loop invocation and complete multi-domain
+launch remain **PLANNED**.
+
 - Complexity impact: MEDIUM
 - TCB impact: LOW
 - New parser boundary: YES

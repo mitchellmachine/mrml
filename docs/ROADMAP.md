@@ -504,6 +504,16 @@ construction and admission of every assigned domain, and complete WHP/KVM
 system placement remain the next dependency gates; Total mode remains
 **PLANNED** end to end.
 
+The retained delivered-recovery owner now **PARTIALLY IMPLEMENTS** the next
+atomic composition: it validates installed identity, composes effective Total
+policy, capability-assigns every authenticated active-release package, seals
+that exact inventory, and creates its only admission table without accepting a
+detached release builder. A stale assignment generation or any failed join
+returns no admission owner. The focused Windows configuration suite remains 51
+passing tests and exercises the resulting microVM route commitment and strict
+runtime authorization. Production service-loop invocation and complete
+multi-domain WHP/KVM launch are the next dependency gates.
+
 The first half of that gate is now **PARTIALLY IMPLEMENTED**: `MRMLRI1` is a
 bounded canonical runtime-inventory catalog whose records exact-bind every
 `MRMLSG2` package identity, version, and artifact digest to Total class,

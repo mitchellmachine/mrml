@@ -1210,6 +1210,19 @@ decisions. Windows passes 566 kernel tests and 51 configuration tests. Real
 service invocation, distinct-domain construction, complete route admission,
 and whole-system WHP/KVM execution remain **PLANNED**.
 
+The production-shaped delivered path now composes those steps in one
+**PARTIALLY IMPLEMENTED** transaction.
+`build_assigned_installed_total_boot_admission` validates the installed recovery
+identity from the retained one-use envelope, composes the capability-revalidated
+effective Total policy, requires the assignment plan to carry that exact policy
+generation, assigns every authenticated release package, seals the activated
+inventory, and constructs its sole admission table. It accepts no detached
+release-builder callback. Any installed, policy, assignment, signer, release,
+or inventory failure returns no admission owner. The focused Windows
+configuration suite remains 51 passing tests and continues through exact
+microVM route commitment and strict runtime authorization. Real service-loop
+invocation and multi-domain WHP/KVM execution remain **PLANNED**.
+
 Its canonical package-to-runtime classification prerequisite is now
 **PARTIALLY IMPLEMENTED** as the allocation-free `MRMLRI1` runtime-inventory
 catalog. Every strictly ordered record binds package identity, version, artifact
