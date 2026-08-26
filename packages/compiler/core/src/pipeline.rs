@@ -604,6 +604,18 @@ mod tests {
     }
 
     #[test]
+    fn resolves_forward_declaration_projection_identities_before_codegen() {
+        let source = concat!(
+            "trait Child<T> where <T as Parent<T>>::Output = T {} ",
+            "trait Parent<T> { type Output; } ",
+            "impl<T> Parent<T> for T { type Output = T; } impl<T> Child<T> for T {} ",
+            "#[unsafe(no_mangle)] pub extern \"C\" fn answer() -> u64 ",
+            "where u32: Child<u32> { 42 }"
+        );
+        compile(source, "answer", ObjectFormat::Coff).unwrap();
+    }
+
+    #[test]
     fn applies_associated_type_defaults_before_codegen() {
         let source = concat!(
             "trait Value<T> { type Output = T; } impl<T> Value<T> for T {} ",

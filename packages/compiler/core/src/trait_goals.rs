@@ -227,6 +227,50 @@ impl<'source> SourceTraitDeclarationTable<'source> {
                     return Err(SourceTraitDeclarationError::DuplicateGenericParameter);
                 }
             }
+            let mut associated_types = [None; MAX_TRAIT_ASSOCIATED_TYPES];
+            let mut associated_type_count = 0usize;
+            for source_associated in declaration.associated_types().iter().flatten() {
+                if declaration.associated_types()[..associated_type_count]
+                    .iter()
+                    .flatten()
+                    .any(|known| known.name == source_associated.name)
+                {
+                    return Err(SourceTraitDeclarationError::DuplicateAssociatedType);
+                }
+                if source_associated.default.is_some_and(|default| {
+                    default.text != "Self"
+                        && !declaration
+                            .generic_parameters()
+                            .contains(&Some(default.text))
+                        && !supported_source_trait_type(default.text)
+                }) {
+                    return Err(SourceTraitDeclarationError::UnsupportedAssociatedTypeDefault);
+                }
+                let slot = table
+                    .associated_types
+                    .get_mut(table.associated_type_count)
+                    .ok_or(SourceTraitDeclarationError::TooManyAssociatedTypes)?;
+                let id = TraitAssociatedTypeId::new(table.associated_type_count as u32);
+                *slot = Some(SourceTraitAssociatedType {
+                    id,
+                    trait_id: TraitId::new(index as u32),
+                    name: source_associated.name,
+                    span: source_associated.span,
+                    default: source_associated.default,
+                });
+                table.associated_type_count += 1;
+                associated_types[associated_type_count] = Some(id);
+                associated_type_count += 1;
+            }
+            let resolved = table.declarations[index].as_mut().unwrap();
+            resolved.associated_types = associated_types;
+            resolved.associated_type_count = associated_type_count;
+        }
+        for item in module.items().iter().flatten() {
+            let Item::Trait(declaration) = item else {
+                continue;
+            };
+            let index = table.get(declaration.name).unwrap().id.get() as usize;
             let mut supertraits: [Option<SourceTraitSupertrait<'source>>; MAX_TRAIT_SUPERTRAITS] =
                 [None; MAX_TRAIT_SUPERTRAITS];
             let mut supertrait_count = 0usize;
@@ -321,48 +365,11 @@ impl<'source> SourceTraitDeclarationTable<'source> {
                 where_predicates[where_predicate_count] = Some(*predicate);
                 where_predicate_count += 1;
             }
-            let mut associated_types = [None; MAX_TRAIT_ASSOCIATED_TYPES];
-            let mut associated_type_count = 0usize;
-            for source_associated in declaration.associated_types().iter().flatten() {
-                if declaration.associated_types()[..associated_type_count]
-                    .iter()
-                    .flatten()
-                    .any(|known| known.name == source_associated.name)
-                {
-                    return Err(SourceTraitDeclarationError::DuplicateAssociatedType);
-                }
-                if source_associated.default.is_some_and(|default| {
-                    default.text != "Self"
-                        && !declaration
-                            .generic_parameters()
-                            .contains(&Some(default.text))
-                        && !supported_source_trait_type(default.text)
-                }) {
-                    return Err(SourceTraitDeclarationError::UnsupportedAssociatedTypeDefault);
-                }
-                let slot = table
-                    .associated_types
-                    .get_mut(table.associated_type_count)
-                    .ok_or(SourceTraitDeclarationError::TooManyAssociatedTypes)?;
-                let id = TraitAssociatedTypeId::new(table.associated_type_count as u32);
-                *slot = Some(SourceTraitAssociatedType {
-                    id,
-                    trait_id: TraitId::new(index as u32),
-                    name: source_associated.name,
-                    span: source_associated.span,
-                    default: source_associated.default,
-                });
-                table.associated_type_count += 1;
-                associated_types[associated_type_count] = Some(id);
-                associated_type_count += 1;
-            }
             let resolved = table.declarations[index].as_mut().unwrap();
             resolved.supertraits = supertraits;
             resolved.supertrait_count = supertrait_count;
             resolved.where_predicates = where_predicates;
             resolved.where_predicate_count = where_predicate_count;
-            resolved.associated_types = associated_types;
-            resolved.associated_type_count = associated_type_count;
         }
         let mut states = [0u8; MAX_SOURCE_TRAIT_DECLARATIONS];
         for index in 0..table.count {
@@ -9141,6 +9148,21 @@ mod tests {
                 .kind,
             SourceTraitObligationErrorKind::Unsatisfied
         );
+    }
+
+    #[test]
+    fn resolves_forward_associated_types_in_declaration_requirements() {
+        let source = concat!(
+            "trait Child<T> where <T as Parent<T>>::Output = T {} ",
+            "trait Parent<T> { type Output; } ",
+            "impl<T> Parent<T> for T { type Output = T; } impl<T> Child<T> for T {} ",
+            "fn check() where u32: Child<u32> {}"
+        );
+        let module = Parser::new(source).parse_module::<10, 1>().unwrap();
+        let traits = SourceTraitDeclarationTable::from_module(&module).unwrap();
+        let implementations =
+            SourceTraitImplementationTable::from_module(&module, &traits).unwrap();
+        implementations.prove_module(&module, &traits).unwrap();
     }
 
     #[test]
