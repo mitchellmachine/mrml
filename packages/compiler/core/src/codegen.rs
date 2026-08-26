@@ -36256,6 +36256,7 @@ mod tests {
         for source in [
             "fn value(input: &mut u16) -> u16 { let returned: &mut u16 = identity(input); let competing: &mut u16 = &mut *input; *competing += 1; *returned }",
             "fn value(first: &mut u16, second: &mut u16) -> u16 { let mut returned: &mut u16 = second; returned = identity(first); let competing: &mut u16 = &mut *first; *competing += 1; *returned }",
+            "fn value(input: &mut u16) -> u16 { let returned: &mut u16 = identity(input); let child: &u16 = &*returned; *input += 1; *child }",
         ] {
             assert_eq!(
                 analyze(source).unwrap_err().kind,
@@ -36266,6 +36267,7 @@ mod tests {
         for source in [
             "fn value(input: &mut u16) -> u16 { let returned: &mut u16 = identity(input); *returned += 1; let restored: &mut u16 = &mut *input; *restored }",
             "fn value(first: &mut u16, second: &mut u16) -> u16 { let mut returned: &mut u16 = second; returned = identity(first); *returned += 1; let restored: &mut u16 = &mut *first; *restored }",
+            "fn value(input: &mut u16) -> u16 { let returned: &mut u16 = identity(input); let child: &u16 = &*returned; let copied = *child; *input += 1; copied + *input }",
         ] {
             analyze(source).unwrap();
         }
@@ -36293,6 +36295,7 @@ mod tests {
         for source in [
             "fn value(input: &mut u16, first: bool) -> u16 { let returned: &mut u16 = choose(input, first); let competing: &mut u16 = &mut *input; *competing += 1; *returned }",
             "fn value(input: &mut u16, alternate: &mut u16, first: bool) -> u16 { let mut returned: &mut u16 = alternate; returned = choose(input, first); let competing: &mut u16 = &mut *input; *competing += 1; *returned }",
+            "fn value(input: &mut u16, first: bool) -> u16 { let returned: &mut u16 = choose(input, first); let child: &u16 = &*returned; *input += 1; *child }",
         ] {
             assert_eq!(
                 analyze(source).unwrap_err().kind,
@@ -36303,6 +36306,7 @@ mod tests {
         for source in [
             "fn value(input: &mut u16, first: bool) -> u16 { let returned: &mut u16 = choose(input, first); *returned += 1; let restored: &mut u16 = &mut *input; *restored }",
             "fn value(input: &mut u16, alternate: &mut u16, first: bool) -> u16 { let mut returned: &mut u16 = alternate; returned = choose(input, first); *returned += 1; let restored: &mut u16 = &mut *input; *restored }",
+            "fn value(input: &mut u16, first: bool) -> u16 { let returned: &mut u16 = choose(input, first); let child: &u16 = &*returned; let copied = *child; *input += 1; copied + *input }",
         ] {
             analyze(source).unwrap();
         }
