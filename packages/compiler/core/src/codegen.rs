@@ -641,6 +641,18 @@ pub fn compile_x86_64_function_with_options<
         .flatten()
         .flat_map(|loop_statement| loop_statement.nested_blocks().iter().flatten())
         .any(|block| !block.conditional_blocks().is_empty());
+    let nested_branch_has_non_return_terminal = parsed_body
+        .while_loops()
+        .iter()
+        .flatten()
+        .flat_map(|loop_statement| loop_statement.nested_blocks().iter().flatten())
+        .flat_map(|block| block.conditional_blocks().iter().flatten())
+        .any(|branch| {
+            !matches!(
+                branch.terminal,
+                crate::NestedLoopUnconditionalControl::Return(_)
+            )
+        });
     let nested_branch_may_carry_references = function.body_expression.as_bytes().contains(&b'&')
         || function
             .parameters()
@@ -650,7 +662,10 @@ pub fn compile_x86_64_function_with_options<
         || function
             .return_type
             .is_some_and(|ty| ty.text.as_bytes().contains(&b'&'));
-    if has_nested_branch_actions && nested_branch_may_carry_references {
+    if has_nested_branch_actions
+        && nested_branch_may_carry_references
+        && nested_branch_has_non_return_terminal
+    {
         return Err(CodegenError {
             kind: CodegenErrorKind::RuntimeExpressionUnsupported,
             span: function.body_expression_span,
@@ -16107,6 +16122,43 @@ fn runtime_reference_call_origin_parameter<const MAX_PARAMETERS: usize, const MA
             };
         let state_at =
             |action_index: usize| state_at_from(action_index, local_origins, projected_origins);
+        let state_at_branch = |branch_index: usize| {
+            let branch = block
+                .conditional_blocks()
+                .get(branch_index)
+                .copied()
+                .flatten()?;
+            let (
+                mut names,
+                mut origins,
+                mut projected,
+                mut types,
+                mut mutability,
+                mut compatibility,
+                mut count,
+            ) = state_at(*block.conditional_block_action_indices().get(branch_index)?)?;
+            apply_conditional_loop_actions::<MAX_PARAMETERS, MAX_NODES>(
+                target,
+                branch.actions(),
+                &mut names,
+                &mut origins,
+                &mut projected,
+                &mut types,
+                &mut mutability,
+                &mut compatibility,
+                &mut count,
+                true,
+            )?;
+            Some((
+                names,
+                origins,
+                projected,
+                types,
+                mutability,
+                compatibility,
+                count,
+            ))
+        };
         let prefix_preserves_state = |action_index: usize| -> Option<bool> {
             let (_, origins, projected, _, _, _, _) = state_at(action_index)?;
             Some(
@@ -16499,6 +16551,36 @@ fn runtime_reference_call_origin_parameter<const MAX_PARAMETERS: usize, const MA
                 continue;
             }
             let (names, origins, projected, _, _, _, count) = state_at(*action_index)?;
+            let tree = value.parse_value::<MAX_NODES>().ok()?;
+            merge(recurse(
+                target,
+                &tree,
+                tree.root(),
+                0,
+                &names,
+                &origins,
+                &projected,
+                count,
+            )?)?;
+        }
+        for (branch_index, (branch, control_order)) in block
+            .conditional_blocks()
+            .iter()
+            .flatten()
+            .zip(block.conditional_block_control_orders())
+            .enumerate()
+        {
+            if block
+                .unconditional_control_orders()
+                .iter()
+                .any(|order| order < control_order)
+            {
+                continue;
+            }
+            let crate::NestedLoopUnconditionalControl::Return(value) = branch.terminal else {
+                return None;
+            };
+            let (names, origins, projected, _, _, _, count) = state_at_branch(branch_index)?;
             let tree = value.parse_value::<MAX_NODES>().ok()?;
             merge(recurse(
                 target,
@@ -39085,6 +39167,26 @@ mod tests {
             runtime_reference_call_origin_parameter::<2, 24>(nested_loop),
             Some(0)
         );
+        assert_eq!(
+            runtime_reference_call_origin_parameter::<2, 32>(RuntimeCallTarget {
+                body_expression: concat!(
+                    "loop { loop { if first { ",
+                    "let changed: &mut u16 = &mut *value; return changed; } } }"
+                ),
+                ..nested_loop
+            }),
+            Some(0)
+        );
+        assert_eq!(
+            runtime_reference_call_origin_parameter::<2, 32>(RuntimeCallTarget {
+                body_expression: concat!(
+                    "loop { loop { if first { let mut local: u16 = 1; ",
+                    "let changed: &mut u16 = &mut local; return changed; } } }"
+                ),
+                ..nested_loop
+            }),
+            None
+        );
         let nested_loop_tuple_assign = MutableReferenceCallResolver
             .resolve_runtime_call::<2>("nested_loop_tuple_assign", 2)
             .unwrap();
@@ -41008,7 +41110,7 @@ mod tests {
     }
 
     #[test]
-    fn runtime_nested_loop_branch_actions_build_cfg_and_bound_reference_admission() {
+    fn runtime_nested_loop_branch_actions_build_cfg_and_admit_return_origin_branches() {
         let source = "#[unsafe(no_mangle)] pub extern \"C\" fn value(stop: u64) -> u64 { loop { loop { if stop != 0 { stop; return stop; } } } }";
         let module = Parser::new(source).parse_module::<2, 2>().unwrap();
         let Some(Item::Function(function)) = module.items()[0] else {
@@ -41086,11 +41188,9 @@ mod tests {
         let Some(Item::Function(function)) = module.items()[0] else {
             panic!("expected function")
         };
-        assert_eq!(
+        assert!(
             compile_x86_64_function::<_, 256, 2, 16>(&function, &NoConstants, X86_64Abi::SystemV,)
-                .unwrap_err()
-                .kind,
-            CodegenErrorKind::RuntimeExpressionUnsupported
+                .is_ok()
         );
     }
 
