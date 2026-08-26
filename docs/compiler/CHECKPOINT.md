@@ -668,7 +668,9 @@ else-action block, false edge, and independent terminal target; ownership
 locations distinguish else actions and return values. Native and constant
 execution were initially rejected. Constant evaluation now selects exactly one
 arm, executes its scoped actions, and routes its terminal under the existing
-bounded loop evaluator; native emission remains rejected. The single-arm CFG assigns separate condition and
+bounded loop evaluator. Direct and helper-inlined x86-64 emission now lowers
+scalar-only else arms; reference-bearing else arms remain fail-closed. The
+single-arm CFG assigns separate condition and
 scoped-action blocks, routes false fallthrough and target-aware true terminals,
 and maps condition/action/return ownership locations back to those control
 points. Branch-return origin transfer applies the exact scoped action prefix:
@@ -678,13 +680,14 @@ continues. Inner continues feed their scoped state into the existing monotone
 bounded header convergence, and subsequent exits must match the converged
 header. Constant semantics are implemented: taken actions use a
 scoped resolver checkpoint and target-aware break, continue, and return reuse
-the existing bounded loop evaluator. Direct
-and inline native x86-64 lowering mirrors those actions, scoped cleanup, and
-terminals for scalar-only functions. Native reference-return branches are
-admitted only after that exact origin proof; reference break/continue branches
-use the bounded destination/backedge transfer above. ELF64 and COFF probes
-cover separate
-return, continue, and break prefixes. Windows and Arch each pass 645 library
+the existing bounded loop evaluator. Direct and inline native x86-64 lowering
+mirrors those actions, scoped cleanup, and terminals for scalar-only primary and
+else arms. Single-arm native reference-return branches are admitted only after
+that exact origin proof; single-arm reference break/continue branches use the
+bounded destination/backedge transfer above, while reference-bearing else arms
+remain rejected. ELF64 and COFF probes cover separate return, continue, and
+break prefixes plus direct and helper-inlined scalar else returns. Windows and
+Arch each pass 645 library
 tests, one component-interface probe, 10 conformance tests, and 336 replacement
 tests: 992 compiler tests per host.
 

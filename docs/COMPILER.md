@@ -1373,8 +1373,10 @@ branches that contain actions before a terminal `break`, `continue`, or
 target-aware terminal, and its position among surrounding flat actions and
 controls. Parser tests cover local and expression actions followed by a return.
 The same bounded record can now retain one explicit `else` arm with its own
-four-action limit and target-aware terminal. Native compilation rejects that
-arm before emitter selection. The bounded constant evaluator selects
+four-action limit and target-aware terminal. Direct and inline x86-64 emission
+lower scalar-only arms with scoped stack cleanup and independent target-aware
+terminals. Reference-bearing forms remain rejected before emitter selection.
+The bounded constant evaluator selects
 exactly one arm, executes its actions under a lexical resolver checkpoint, and
 routes its target-aware terminal under the existing iteration limit. CFG
 construction assigns a
@@ -1397,11 +1399,12 @@ branch actions with lexical-scope truncation and routes inner/outer break,
 continue, and return terminals under the existing iteration limit. Focused
 constants cover all three terminals and untaken fallthrough. Direct and inline
 x86-64 emitters now lower the same terminal routing and scoped stack cleanup
-for scalar-only functions; reference-return branch lowering follows the same
-origin proof, while reference break/continue forms use the bounded destination
-and backedge transfer described above. ELF64 and
-COFF object probes
-cover separate return, continue, and break prefixes. Windows and
+for scalar-only primary and explicit else arms. The single-arm reference-return
+lowering follows the same origin proof, while single-arm reference
+break/continue forms use the bounded destination and backedge transfer described
+above; reference-bearing explicit else arms remain fail-closed. ELF64 and COFF
+object probes cover separate return, continue, and break prefixes plus direct
+and helper-inlined scalar else returns. Windows and
 native Arch Linux WSL each pass 645 library tests, one component-interface
 probe, 10 conformance tests, and 336 replacement tests: 992 compiler tests per
 host.
