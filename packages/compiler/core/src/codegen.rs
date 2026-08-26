@@ -635,19 +635,6 @@ pub fn compile_x86_64_function_with_options<
             kind: CodegenErrorKind::Body(error.kind),
             span: translate_span(function.body_expression_span.start, error.span),
         })?;
-    if parsed_body
-        .while_loops()
-        .iter()
-        .flatten()
-        .flat_map(|loop_statement| loop_statement.nested_blocks().iter().flatten())
-        .flat_map(|block| block.conditional_blocks().iter().flatten())
-        .any(|branch| branch.else_arm_count() > 1)
-    {
-        return Err(CodegenError {
-            kind: CodegenErrorKind::RuntimeExpressionUnsupported,
-            span: function.body_expression_span,
-        });
-    }
     let mut body_has_aggregate_local = false;
     for local in parsed_body.locals().iter().flatten() {
         if local
@@ -1239,82 +1226,88 @@ pub fn compile_x86_64_function_with_options<
                                 }
                             }
                             emitter.truncate_scoped_locals(branch_checkpoint)?;
-                            if let Some(else_arm) = branch.else_arm() {
+                            if branch.else_arm_count() != 0 {
                                 emitter.patch_forward_branch(false_branch)?;
-                                let else_false_branch = if let Some(condition) = else_arm
-                                    .parse_condition::<MAX_EXPRESSION_NODES>()
-                                    .map_err(|error| CodegenError {
-                                        kind: CodegenErrorKind::Expression(error.kind),
-                                        span: translate_span(
-                                            function.body_expression_span.start
-                                                + else_arm.condition_span().start,
-                                            error.span,
-                                        ),
-                                    })? {
-                                    emitter.emit_inline_loop_arm_condition(&condition)?;
-                                    Some(emitter.emit_forward_branch(0x84)?)
-                                } else {
-                                    None
-                                };
-                                let else_checkpoint = emitter.saved_locals;
-                                for branch_action in else_arm.actions().iter().flatten() {
-                                    match branch_action {
-                                        crate::ConditionalLoopAction::Local(local) => {
-                                            emitter.emit_local::<MAX_EXPRESSION_NODES>(
-                                                local,
-                                                operand_type,
-                                                function.body_expression_span.start,
-                                            )?;
-                                        }
-                                        crate::ConditionalLoopAction::Assignment(assignment) => {
-                                            emitter.emit_assignment::<MAX_EXPRESSION_NODES>(
+                                for else_arm in branch.else_arms().iter().flatten() {
+                                    let else_false_branch = if let Some(condition) = else_arm
+                                        .parse_condition::<MAX_EXPRESSION_NODES>()
+                                        .map_err(|error| CodegenError {
+                                            kind: CodegenErrorKind::Expression(error.kind),
+                                            span: translate_span(
+                                                function.body_expression_span.start
+                                                    + else_arm.condition_span().start,
+                                                error.span,
+                                            ),
+                                        })? {
+                                        emitter.emit_inline_loop_arm_condition(&condition)?;
+                                        Some(emitter.emit_forward_branch(0x84)?)
+                                    } else {
+                                        None
+                                    };
+                                    let else_checkpoint = emitter.saved_locals;
+                                    for branch_action in else_arm.actions().iter().flatten() {
+                                        match branch_action {
+                                            crate::ConditionalLoopAction::Local(local) => {
+                                                emitter.emit_local::<MAX_EXPRESSION_NODES>(
+                                                    local,
+                                                    operand_type,
+                                                    function.body_expression_span.start,
+                                                )?;
+                                            }
+                                            crate::ConditionalLoopAction::Assignment(
                                                 assignment,
-                                                function.body_expression_span.start,
-                                            )?;
-                                        }
-                                        crate::ConditionalLoopAction::Expression(statement) => {
-                                            emitter
+                                            ) => {
+                                                emitter.emit_assignment::<MAX_EXPRESSION_NODES>(
+                                                    assignment,
+                                                    function.body_expression_span.start,
+                                                )?;
+                                            }
+                                            crate::ConditionalLoopAction::Expression(statement) => {
+                                                emitter
                                                 .emit_expression_statement::<MAX_EXPRESSION_NODES>(
                                                     statement,
                                                     function.body_expression_span.start,
                                                 )?;
+                                            }
                                         }
                                     }
-                                }
-                                match else_arm.terminal {
-                                    crate::NestedLoopUnconditionalControl::Break(target) => {
-                                        if target == crate::NestedLoopControlTarget::Outer {
-                                            emitter.emit_stack_cleanup_to(local_checkpoint)?;
-                                            exit_patches[exit_count] =
-                                                Some(emitter.emit_unconditional_forward_branch()?);
-                                            exit_count += 1;
-                                        } else {
-                                            emitter.emit_stack_cleanup_to(nested_checkpoint)?;
-                                            nested_exit_patches[nested_exit_count] =
-                                                Some(emitter.emit_unconditional_forward_branch()?);
-                                            nested_exit_count += 1;
+                                    match else_arm.terminal {
+                                        crate::NestedLoopUnconditionalControl::Break(target) => {
+                                            if target == crate::NestedLoopControlTarget::Outer {
+                                                emitter.emit_stack_cleanup_to(local_checkpoint)?;
+                                                exit_patches[exit_count] = Some(
+                                                    emitter.emit_unconditional_forward_branch()?,
+                                                );
+                                                exit_count += 1;
+                                            } else {
+                                                emitter.emit_stack_cleanup_to(nested_checkpoint)?;
+                                                nested_exit_patches[nested_exit_count] = Some(
+                                                    emitter.emit_unconditional_forward_branch()?,
+                                                );
+                                                nested_exit_count += 1;
+                                            }
+                                        }
+                                        crate::NestedLoopUnconditionalControl::Continue(target) => {
+                                            if target == crate::NestedLoopControlTarget::Outer {
+                                                emitter.emit_stack_cleanup_to(local_checkpoint)?;
+                                                emitter.emit_backward_branch(loop_start)?;
+                                            } else {
+                                                emitter.emit_stack_cleanup_to(nested_checkpoint)?;
+                                                emitter.emit_backward_branch(nested_start)?;
+                                            }
+                                        }
+                                        crate::NestedLoopUnconditionalControl::Return(value) => {
+                                            emitter.emit_return::<MAX_EXPRESSION_NODES>(
+                                                &value,
+                                                expected_type,
+                                                function.body_expression_span.start,
+                                            )?;
                                         }
                                     }
-                                    crate::NestedLoopUnconditionalControl::Continue(target) => {
-                                        if target == crate::NestedLoopControlTarget::Outer {
-                                            emitter.emit_stack_cleanup_to(local_checkpoint)?;
-                                            emitter.emit_backward_branch(loop_start)?;
-                                        } else {
-                                            emitter.emit_stack_cleanup_to(nested_checkpoint)?;
-                                            emitter.emit_backward_branch(nested_start)?;
-                                        }
+                                    emitter.truncate_scoped_locals(else_checkpoint)?;
+                                    if let Some(else_false_branch) = else_false_branch {
+                                        emitter.patch_forward_branch(else_false_branch)?;
                                     }
-                                    crate::NestedLoopUnconditionalControl::Return(value) => {
-                                        emitter.emit_return::<MAX_EXPRESSION_NODES>(
-                                            &value,
-                                            expected_type,
-                                            function.body_expression_span.start,
-                                        )?;
-                                    }
-                                }
-                                emitter.truncate_scoped_locals(else_checkpoint)?;
-                                if let Some(else_false_branch) = else_false_branch {
-                                    emitter.patch_forward_branch(else_false_branch)?;
                                 }
                             } else {
                                 emitter.patch_forward_branch(false_branch)?;
@@ -25349,88 +25342,90 @@ impl<
                         }
                     }
                     self.truncate_scoped_locals(branch_checkpoint)?;
-                    if let Some(else_arm) = branch.else_arm() {
+                    if branch.else_arm_count() != 0 {
                         self.patch_forward_branch(false_branch)?;
-                        let else_false_branch = if let Some(condition) = else_arm
-                            .parse_condition::<MAX_NODES>()
-                            .map_err(|error| CodegenError {
-                                kind: CodegenErrorKind::Expression(error.kind),
-                                span: translate_span(
-                                    body_start + else_arm.condition_span().start,
-                                    error.span,
-                                ),
-                            })? {
-                            self.emit_inline_loop_arm_condition(&condition)?;
-                            Some(self.emit_forward_branch(0x84)?)
-                        } else {
-                            None
-                        };
-                        let else_checkpoint = self.saved_locals;
-                        for branch_action in else_arm.actions().iter().flatten() {
-                            match branch_action {
-                                crate::ConditionalLoopAction::Local(local) => {
-                                    self.emit_local::<MAX_NODES>(local, operand_type, body_start)?
+                        for else_arm in branch.else_arms().iter().flatten() {
+                            let else_false_branch = if let Some(condition) = else_arm
+                                .parse_condition::<MAX_NODES>()
+                                .map_err(|error| CodegenError {
+                                    kind: CodegenErrorKind::Expression(error.kind),
+                                    span: translate_span(
+                                        body_start + else_arm.condition_span().start,
+                                        error.span,
+                                    ),
+                                })? {
+                                self.emit_inline_loop_arm_condition(&condition)?;
+                                Some(self.emit_forward_branch(0x84)?)
+                            } else {
+                                None
+                            };
+                            let else_checkpoint = self.saved_locals;
+                            for branch_action in else_arm.actions().iter().flatten() {
+                                match branch_action {
+                                    crate::ConditionalLoopAction::Local(local) => self
+                                        .emit_local::<MAX_NODES>(local, operand_type, body_start)?,
+                                    crate::ConditionalLoopAction::Assignment(assignment) => {
+                                        self.emit_assignment::<MAX_NODES>(assignment, body_start)?
+                                    }
+                                    crate::ConditionalLoopAction::Expression(statement) => {
+                                        self.emit_expression_statement::<MAX_NODES>(
+                                            statement, body_start,
+                                        )?
+                                    }
                                 }
-                                crate::ConditionalLoopAction::Assignment(assignment) => {
-                                    self.emit_assignment::<MAX_NODES>(assignment, body_start)?
+                            }
+                            match else_arm.terminal {
+                                crate::NestedLoopUnconditionalControl::Break(target) => {
+                                    let (checkpoint, patches, count) =
+                                        if target == crate::NestedLoopControlTarget::Outer {
+                                            (
+                                                outer_checkpoint,
+                                                &mut *outer_exit_patches,
+                                                &mut *outer_exit_count,
+                                            )
+                                        } else {
+                                            (
+                                                nested_checkpoint,
+                                                &mut nested_exit_patches[..],
+                                                &mut nested_exit_count,
+                                            )
+                                        };
+                                    self.emit_stack_cleanup_to(checkpoint)?;
+                                    let patch = self.emit_unconditional_forward_branch()?;
+                                    *patches
+                                        .get_mut(*count)
+                                        .ok_or(self.error(CodegenErrorKind::OutputTooSmall))? =
+                                        Some(patch);
+                                    *count += 1;
                                 }
-                                crate::ConditionalLoopAction::Expression(statement) => self
-                                    .emit_expression_statement::<MAX_NODES>(
-                                    statement, body_start,
-                                )?,
+                                crate::NestedLoopUnconditionalControl::Continue(target) => {
+                                    let (checkpoint, start) =
+                                        if target == crate::NestedLoopControlTarget::Outer {
+                                            (outer_checkpoint, outer_start)
+                                        } else {
+                                            (nested_checkpoint, nested_start)
+                                        };
+                                    self.emit_stack_cleanup_to(checkpoint)?;
+                                    self.emit_backward_branch(start)?;
+                                }
+                                crate::NestedLoopUnconditionalControl::Return(value) => {
+                                    let patch = self.emit_inline_return::<MAX_NODES>(
+                                        &value,
+                                        expected_type,
+                                        call_checkpoint,
+                                        body_start,
+                                    )?;
+                                    *return_patches
+                                        .get_mut(*return_count)
+                                        .ok_or(self.error(CodegenErrorKind::OutputTooSmall))? =
+                                        Some(patch);
+                                    *return_count += 1;
+                                }
                             }
-                        }
-                        match else_arm.terminal {
-                            crate::NestedLoopUnconditionalControl::Break(target) => {
-                                let (checkpoint, patches, count) =
-                                    if target == crate::NestedLoopControlTarget::Outer {
-                                        (
-                                            outer_checkpoint,
-                                            &mut *outer_exit_patches,
-                                            &mut *outer_exit_count,
-                                        )
-                                    } else {
-                                        (
-                                            nested_checkpoint,
-                                            &mut nested_exit_patches[..],
-                                            &mut nested_exit_count,
-                                        )
-                                    };
-                                self.emit_stack_cleanup_to(checkpoint)?;
-                                let patch = self.emit_unconditional_forward_branch()?;
-                                *patches
-                                    .get_mut(*count)
-                                    .ok_or(self.error(CodegenErrorKind::OutputTooSmall))? =
-                                    Some(patch);
-                                *count += 1;
+                            self.truncate_scoped_locals(else_checkpoint)?;
+                            if let Some(else_false_branch) = else_false_branch {
+                                self.patch_forward_branch(else_false_branch)?;
                             }
-                            crate::NestedLoopUnconditionalControl::Continue(target) => {
-                                let (checkpoint, start) =
-                                    if target == crate::NestedLoopControlTarget::Outer {
-                                        (outer_checkpoint, outer_start)
-                                    } else {
-                                        (nested_checkpoint, nested_start)
-                                    };
-                                self.emit_stack_cleanup_to(checkpoint)?;
-                                self.emit_backward_branch(start)?;
-                            }
-                            crate::NestedLoopUnconditionalControl::Return(value) => {
-                                let patch = self.emit_inline_return::<MAX_NODES>(
-                                    &value,
-                                    expected_type,
-                                    call_checkpoint,
-                                    body_start,
-                                )?;
-                                *return_patches
-                                    .get_mut(*return_count)
-                                    .ok_or(self.error(CodegenErrorKind::OutputTooSmall))? =
-                                    Some(patch);
-                                *return_count += 1;
-                            }
-                        }
-                        self.truncate_scoped_locals(else_checkpoint)?;
-                        if let Some(else_false_branch) = else_false_branch {
-                            self.patch_forward_branch(else_false_branch)?;
                         }
                     } else {
                         self.patch_forward_branch(false_branch)?;
@@ -42077,11 +42072,11 @@ mod tests {
                     .is_some()
             );
         }
-        assert_eq!(
+        assert!(
             compile_x86_64_function::<_, 256, 4, 16>(&function, &NoConstants, X86_64Abi::SystemV,)
-                .unwrap_err()
-                .kind,
-            CodegenErrorKind::RuntimeExpressionUnsupported,
+                .unwrap()
+                .len()
+                > 11,
         );
     }
 

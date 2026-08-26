@@ -644,6 +644,8 @@ fn rustc_nested_branch_actions_reach_native_objects() {
         "#[unsafe(no_mangle)] pub extern \"C\" fn probe(input: &mut u32, stop: bool) -> &mut u32 { loop { loop { if stop { return input; } else { *input += 1; return input; } } } }",
         "#[unsafe(no_mangle)] pub extern \"C\" fn probe(primary: bool, alternative: bool, input: u32) -> u32 { loop { loop { if primary { let selected: u32 = input + 5; return selected; } else if alternative { let fallback: u32 = input + 6; return fallback; } break; } return input; } }",
         "fn select(primary: bool, alternative: bool, input: u32) -> u32 { loop { loop { if primary { let selected: u32 = input + 7; return selected; } else if alternative { let fallback: u32 = input + 8; return fallback; } break; } return input; } } #[unsafe(no_mangle)] pub extern \"C\" fn probe(primary: bool, alternative: bool, input: u32) -> u32 { select(primary, alternative, input) }",
+        "#[unsafe(no_mangle)] pub extern \"C\" fn probe(primary: bool, first: bool, second: bool) -> u32 { loop { loop { if primary { return 40; } else if first { let selected: u32 = 50; return selected; } else if second { let selected: u32 = 60; return selected; } else { return 70; } } } }",
+        "fn select(primary: bool, first: bool, second: bool) -> u32 { loop { loop { if primary { return 80; } else if first { let selected: u32 = 81; return selected; } else if second { let selected: u32 = 82; return selected; } else { return 83; } } } } #[unsafe(no_mangle)] pub extern \"C\" fn probe(primary: bool, first: bool, second: bool) -> u32 { select(primary, first, second) }",
     ] {
         for format in [ObjectFormat::Elf64, ObjectFormat::Coff] {
             compile_source_function::<2048, 1536, 4, 4, 4, 64>(
