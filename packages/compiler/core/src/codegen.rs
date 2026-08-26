@@ -15257,7 +15257,7 @@ fn runtime_reference_call_origin_parameter<const MAX_PARAMETERS: usize, const MA
                         local_mutability,
                         local_return_compatibility,
                         *local_count,
-                        false,
+                        true,
                     )?;
                 }
                 crate::ConditionalAssignmentAction::Expression(_) => return None,
@@ -15465,23 +15465,31 @@ fn runtime_reference_call_origin_parameter<const MAX_PARAMETERS: usize, const MA
                     .get(index)
                     .and_then(|value| *value)?;
                 let base_origins = local_origins;
+                let base_projected_origins = projected_origins;
                 let mut joined_origins = [None; MAX_PARAMETERS];
+                let mut joined_projected_origins = RuntimeCalleeProjectedOrigins::EMPTY;
                 let mut ambiguous = [false; MAX_PARAMETERS];
                 let mut outcome_count = 0usize;
-                let mut merge_outcome = |outcome: [Option<usize>; MAX_PARAMETERS]| -> Option<()> {
-                    if outcome_count == 0 {
-                        joined_origins = outcome;
-                    } else {
-                        for local_index in 0..local_count {
-                            if joined_origins[local_index] != outcome[local_index] {
-                                joined_origins[local_index] = None;
-                                ambiguous[local_index] = true;
+                let mut merge_outcome =
+                    |outcome: [Option<usize>; MAX_PARAMETERS],
+                     projected_outcome: RuntimeCalleeProjectedOrigins<MAX_PARAMETERS>|
+                     -> Option<()> {
+                        if outcome_count == 0 {
+                            joined_origins = outcome;
+                            joined_projected_origins = projected_outcome;
+                        } else {
+                            for local_index in 0..local_count {
+                                if joined_origins[local_index] != outcome[local_index] {
+                                    joined_origins[local_index] = None;
+                                    ambiguous[local_index] = true;
+                                }
                             }
+                            joined_projected_origins =
+                                joined_projected_origins.intersect(projected_outcome);
                         }
-                    }
-                    outcome_count = outcome_count.checked_add(1)?;
-                    Some(())
-                };
+                        outcome_count = outcome_count.checked_add(1)?;
+                        Some(())
+                    };
                 for branch in conditional.branches().iter().flatten() {
                     let mut branch_names = local_names;
                     let mut branch_origins = base_origins;
@@ -15503,13 +15511,13 @@ fn runtime_reference_call_origin_parameter<const MAX_PARAMETERS: usize, const MA
                     )?;
                     match outcome {
                         ConditionalActionOutcome::FallsThrough => {
-                            merge_outcome(branch_origins)?;
+                            merge_outcome(branch_origins, branch_projected_origins)?;
                         }
                         ConditionalActionOutcome::Returns(candidate) => merge(candidate)?,
                     }
                 }
                 if conditional.else_action_count() == 0 {
-                    merge_outcome(base_origins)?;
+                    merge_outcome(base_origins, base_projected_origins)?;
                 } else {
                     let mut else_names = local_names;
                     let mut else_origins = base_origins;
@@ -15530,11 +15538,14 @@ fn runtime_reference_call_origin_parameter<const MAX_PARAMETERS: usize, const MA
                         &mut else_local_count,
                     )?;
                     match outcome {
-                        ConditionalActionOutcome::FallsThrough => merge_outcome(else_origins)?,
+                        ConditionalActionOutcome::FallsThrough => {
+                            merge_outcome(else_origins, else_projected_origins)?
+                        }
                         ConditionalActionOutcome::Returns(candidate) => merge(candidate)?,
                     }
                 }
                 if outcome_count != 0 {
+                    projected_origins = joined_projected_origins;
                     for local_index in 0..local_count {
                         local_origins[local_index] = (!ambiguous[local_index])
                             .then_some(joined_origins[local_index])
@@ -31577,6 +31588,32 @@ mod tests {
                         ),
                     })
                 }
+                ("branch_tuple_field_assign", 3) if MAX_PARAMETERS >= 4 => {
+                    parameters[0] = Some(RuntimeCallParameter {
+                        name: "first",
+                        ty: reference,
+                    });
+                    parameters[1] = Some(RuntimeCallParameter {
+                        name: "second",
+                        ty: reference,
+                    });
+                    parameters[2] = Some(RuntimeCallParameter {
+                        name: "choose",
+                        ty: ScalarType::Bool,
+                    });
+                    Some(RuntimeCallTarget {
+                        name: "branch_tuple_field_assign",
+                        parameters,
+                        parameter_count: 3,
+                        return_type: reference,
+                        return_type_name: "&mut u16",
+                        body_expression: concat!(
+                            "let mut pair: (&mut u16,) = (first,); ",
+                            "if choose { pair.0 = second; } ",
+                            "else { pair.0 = second; } pair.0"
+                        ),
+                    })
+                }
                 ("branch_forward", 2) if MAX_PARAMETERS >= 2 => {
                     parameters[0] = Some(RuntimeCallParameter {
                         name: "value",
@@ -35674,6 +35711,7 @@ mod tests {
             "fn value(input: &mut u16, repeat: bool) -> u16 { let returned: &mut u16 = loop_local_forward(input, repeat); let competing: &mut u16 = &mut *input; *competing += 1; *returned }",
             "fn value(input: &mut u16, repeat: bool, first: bool) -> u16 { let returned: &mut u16 = loop_branch_local_return(input, repeat, first); let competing: &mut u16 = &mut *input; *competing += 1; *returned }",
             "fn value(first: &mut u16, second: &mut u16) -> u16 { let returned: &mut u16 = tuple_field_assign(first, second); let competing: &mut u16 = &mut *second; *competing += 1; *returned }",
+            "fn value(first: &mut u16, second: &mut u16, choose: bool) -> u16 { let returned: &mut u16 = branch_tuple_field_assign(first, second, choose); let competing: &mut u16 = &mut *second; *competing += 1; *returned }",
         ] {
             assert_eq!(
                 analyze(source).unwrap_err().kind,
@@ -35692,6 +35730,7 @@ mod tests {
             "fn value(input: &mut u16, repeat: bool) -> u16 { let returned: &mut u16 = loop_local_forward(input, repeat); *returned += 1; let restored: &mut u16 = &mut *input; *restored }",
             "fn value(input: &mut u16, repeat: bool, first: bool) -> u16 { let returned: &mut u16 = loop_branch_local_return(input, repeat, first); *returned += 1; let restored: &mut u16 = &mut *input; *restored }",
             "fn value(first: &mut u16, second: &mut u16) -> u16 { let returned: &mut u16 = tuple_field_assign(first, second); *returned += 1; let restored: &mut u16 = &mut *second; *restored }",
+            "fn value(first: &mut u16, second: &mut u16, choose: bool) -> u16 { let returned: &mut u16 = branch_tuple_field_assign(first, second, choose); *returned += 1; let restored: &mut u16 = &mut *second; *restored }",
         ] {
             analyze(source).unwrap();
         }
@@ -35725,6 +35764,23 @@ mod tests {
                     "pair.0 = &mut local_value; pair.0"
                 ),
                 ..tuple_field_assign
+            }),
+            None
+        );
+        let branch_tuple_field_assign = MutableReferenceCallResolver
+            .resolve_runtime_call::<4>("branch_tuple_field_assign", 3)
+            .unwrap();
+        assert_eq!(
+            runtime_reference_call_origin_parameter::<4, 32>(branch_tuple_field_assign),
+            Some(1)
+        );
+        assert_eq!(
+            runtime_reference_call_origin_parameter::<4, 32>(RuntimeCallTarget {
+                body_expression: concat!(
+                    "let mut pair: (&mut u16,) = (first,); ",
+                    "if choose { pair.0 = second; } pair.0"
+                ),
+                ..branch_tuple_field_assign
             }),
             None
         );
