@@ -5848,6 +5848,20 @@ generation algorithm. Broader assembly support and compiler completion remain
 partial; this technical screen does not establish clearance or infringement and
 does not replace independent human dual review.
 
+# 2026-08-26 — Constant indexed inline-assembly outputs
+
+**Result: NOT_TRIGGERED after the indexed-output review.** This increment
+extends the previously reviewed explicit RAX output paths with conventional
+constant array-element selection and checked stack-slot load/writeback. Bounded
+numeric-index parsing, ordinary typed `ArrayElement` place projection, exact
+type/mutability/bounds validation, checked offset arithmetic, and fail-closed
+rejection introduce no novel assembler, register-allocation, optimization,
+instruction-selection, or code-generation algorithm. Dynamic indexing,
+dereference outputs, nested aggregates, and general assembly remain absent.
+Broader compiler completion remains partial; this technical screen does not
+establish clearance or infringement and does not replace independent human dual
+review.
+
 # 2026-08-26 — Native and microVM surface transport slice
 
 **Result: TRIGGERED under the existing graphics-object/compositor review.**

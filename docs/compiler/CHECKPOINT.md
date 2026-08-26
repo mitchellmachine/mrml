@@ -1567,6 +1567,16 @@ tests, one component-interface probe, 10 conformance tests, and 335 replacement
 tests: 985 compiler tests per host. Nested, indexed, and dereferenced places
 remain absent.
 
+The constant indexed-output increment extends those three explicit RAX forms to
+one compile-time numeric element of a mutable `[u64; N]`. Admission checks exact
+array type, `u64` element type, mutability, and bounds before recording an
+`ArrayElement` ownership projection; emission selects the checked stack slot for
+load or writeback. The exact dated oracle accepted independently authored
+`lateout`, same-place `inout`, and split `inout` probes with `values[1]` output
+places. Windows gnullvm and native Arch Linux WSL each continue to pass 985
+compiler tests. Dynamic indexes, nested aggregates, dereference outputs, and
+general place lowering remain absent.
+
 The premise-bearing rigid-normalization milestone proves the selected generic
 implementation's instantiated trait and projection predicates before exposing
 its associated value. It shares the caller's 16-frame rigid proof stack and

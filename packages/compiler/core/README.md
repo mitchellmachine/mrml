@@ -4741,6 +4741,15 @@ WSL each pass 639 library tests, one component-interface probe, 10 conformance
 tests, and 335 replacement tests: 985 compiler tests per host. Nested, indexed,
 or dereferenced places remain unsupported.
 
+The same three explicit RAX output forms also accept one compile-time numeric
+element of a mutable `[u64; N]`. The resolver validates exact `u64` element type,
+mutability, and bounds, records the base array plus `ArrayElement` ownership
+projection, and selects the load/writeback stack slot with checked arithmetic.
+The pinned oracle accepted original `lateout`, same-place `inout`, and split
+`inout` probes using `values[1]`. Both canonical hosts continue to pass 985
+compiler tests. Dynamic indexes, nested aggregates, dereference outputs, and
+general place lowering remain unsupported.
+
 The projection-bearing term milestone uses a fixed 64-node arena for flat leaf
 terms and associated-type projections whose trait self/argument positions refer
 only to earlier nodes. Identical nodes intern to one stable identity; invalid

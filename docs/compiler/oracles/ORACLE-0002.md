@@ -118,3 +118,11 @@ from its output place, with the output written to the second `u64` field of a
 mutable tuple. This records only exact black-box acceptance of split projected
 output syntax and does not establish general projected-place or assembly
 semantics. Temporary probe source and metadata were removed.
+
+Another independently authored Rust 2024 metadata-only probe against the same
+exact toolchain and commit compiled three explicit RAX forms whose output was
+`values[1]` for a mutable `[u64; 2]`: `lateout`, same-place `inout`, and a
+distinct-input `inout`. This is exact black-box acceptance evidence for those
+constant array-element output shapes only, not for dynamic indexing, general
+places, register allocation, or assembly semantics. Temporary source and
+metadata were removed.
