@@ -1192,6 +1192,18 @@ gnullvm and native Arch Linux WSL each pass 575 library tests, one component-
 interface probe, 10 conformance tests, and 335 replacement tests: 921 compiler
 tests per host.
 
+The flat generic source-implementation milestone admits up to eight implementation
+type parameters constrained by complete self or trait-argument head positions.
+Concrete obligations reuse the exact-plus-generic proof path, while parameter
+and concrete associated values reuse generic projection normalization.
+Exact/generic and generic/generic overlap, duplicate or unconstrained
+parameters, wrong arity, missing values, generic supertraits, and compound
+parameter positions fail closed. Generic where-premises, nested constructors,
+bounds, source inference, specialization, and methods remain unsupported.
+Windows gnullvm and native Arch Linux WSL each pass 578 library tests, one
+component-interface probe, 10 conformance tests, and 335 replacement tests: 924
+compiler tests per host.
+
 The premise-bearing rigid-normalization milestone proves the selected generic
 implementation's instantiated trait and projection predicates before exposing
 its associated value. It shares the caller's 16-frame rigid proof stack and

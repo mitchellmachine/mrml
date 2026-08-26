@@ -4385,6 +4385,18 @@ bounds, lifetimes, and const parameters remain unsupported. Windows gnullvm and
 native Arch Linux WSL each pass 575 library tests, one component probe, 10
 conformance tests, and 335 replacement tests: 921 compiler tests per host.
 
+The flat generic source-implementation milestone admits up to eight implementation
+type parameters when each parameter appears as a complete self or trait-argument
+head position. Concrete source obligations use the existing exact-plus-generic
+proof path, and parameter or concrete associated values use the existing generic
+projection normalizer. Exact/generic and generic/generic overlap, duplicate or
+unconstrained parameters, wrong arity, missing associated values, generic
+supertraits, and unsupported compound parameter positions fail closed. Generic
+where-premises, nested type constructors, bounds, inference in source
+signatures, specialization, and methods remain unsupported. Windows gnullvm and
+native Arch Linux WSL each pass 578 library tests, one component probe, 10
+conformance tests, and 335 replacement tests: 924 compiler tests per host.
+
 The projection-bearing term milestone uses a fixed 64-node arena for flat leaf
 terms and associated-type projections whose trait self/argument positions refer
 only to earlier nodes. Identical nodes intern to one stable identity; invalid
