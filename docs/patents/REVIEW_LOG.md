@@ -7445,3 +7445,15 @@ algorithm. General shared-reference call and region inference remain absent.
 Broader compiler completion remains partial; this technical screen is not a
 clearance or infringement conclusion and does not replace independent human
 dual review.
+
+# 2026-08-26 — Bounded loop loan-generation reachability
+
+**Result: NOT_TRIGGERED after the loop-generation mechanism review.** This
+increment applies conventional generation-sensitive CFG reachability so an old
+reference loan cannot flow through the same borrower's next loop-iteration
+reinitialization, while same-iteration later uses remain protected. It
+introduces no new general region solver, dataflow framework, interprocedural
+inference, alias analysis, optimization, or code-generation algorithm. General
+loop-region fixed points remain absent. Broader compiler completion remains
+partial; this technical screen is not a clearance or infringement conclusion
+and does not replace independent human dual review.
