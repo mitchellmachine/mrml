@@ -4627,8 +4627,13 @@ immediates, source-first moves, `disp(base,index,scale)` addresses, and indirect
 repeated, or misplaced options fail closed. RIP-relative/base-less memory
 operands and external symbols/relocations,
 additional architectures, and general inline assembly remain fail-closed.
-Windows gnullvm and native Arch Linux WSL each pass 633 library tests,
-one component probe, 10 conformance tests, and 335 replacement tests: 979
+The object layer separately emits one typed checked x86-64 PC-relative external
+relocation as ELF64 `.rela.text`/`R_X86_64_PLT32` with addend `-4` or COFF
+`IMAGE_REL_AMD64_REL32`; exact structural tests cover undefined symbols, string
+tables, relocation entries, and invalid patch ranges without changing existing
+relocation-free output. Naked symbol operands are not connected yet. Windows
+gnullvm and native Arch Linux WSL each pass 634 library tests,
+one component probe, 10 conformance tests, and 335 replacement tests: 980
 compiler tests per host.
 
 The projection-bearing term milestone uses a fixed 64-node arena for flat leaf

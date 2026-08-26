@@ -1422,14 +1422,19 @@ rejecting inline-only options. The restricted MRML encoder admits either marker
 alone or together. Its distinct AT&T grammar parses `%` registers, `$`
 immediates, source-first moves, `disp(base,index,scale)` addresses, and indirect
 `*` jumps for the supported instruction set; cross-syntax inputs fail closed.
+The object layer now has a separate typed single-relocation primitive. It checks
+the four-byte patch range and undefined symbol, emits ELF64 `.rela.text` with
+`R_X86_64_PLT32` and addend `-4`, or emits COFF
+`IMAGE_REL_AMD64_REL32`, and leaves existing relocation-free objects unchanged.
+Naked external-symbol syntax is not connected to this primitive yet.
 Focused tests compare the complete machine-code slice to prove that no prologue
 or epilogue is inserted and reject unsupported safety, ABI, signature,
 instruction, register, immediate, label, and fallthrough cases. RIP-relative/base-less
 memory operands and external symbols/relocations,
 additional architectures, and general inline assembly remain fail-closed.
-Windows gnullvm and native Arch Linux WSL each pass 633 library tests,
+Windows gnullvm and native Arch Linux WSL each pass 634 library tests,
 one component-interface probe, 10 conformance tests, and 335 replacement tests:
-979 compiler tests per host.
+980 compiler tests per host.
 
 The premise-bearing rigid-normalization milestone proves the selected generic
 implementation's instantiated trait and projection predicates before exposing

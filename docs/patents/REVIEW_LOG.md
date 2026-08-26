@@ -5868,3 +5868,15 @@ instruction-selection, relocation, or code-generation algorithm. Broader
 assembly support and compiler completion remain partial; this technical screen
 does not establish clearance or infringement and does not replace independent
 human dual review.
+
+# 2026-08-26 — Typed x86-64 object relocation primitive
+
+**Result: NOT_TRIGGERED after the object-format review.** This increment emits
+the conventional published ELF64 `SHT_RELA`/`R_X86_64_PLT32` and COFF
+`IMAGE_REL_AMD64_REL32` records for one caller-supplied checked patch offset and
+undefined symbol. Fixed-capacity writing, range validation, symbol validation,
+and string-table construction introduce no novel linker, assembler, relocation,
+optimization, instruction-selection, or code-generation algorithm. General
+relocation and linking remain absent. Broader compiler completion remains
+partial; this technical screen does not establish clearance or infringement and
+does not replace independent human dual review.
