@@ -11148,6 +11148,27 @@ fn preanalyze_runtime_assignment_access<
     resolver: &R,
     assignment: &crate::Assignment<'source>,
 ) -> Result<(), CodegenError> {
+    fn mutually_exclusive_conditional_assignment_arms(
+        left: RuntimeOwnershipEventLocation,
+        right: RuntimeOwnershipEventLocation,
+    ) -> bool {
+        matches!(
+            (left, right),
+            (
+                RuntimeOwnershipEventLocation::ConditionalAssignmentAction {
+                    statement_index: left_statement,
+                    branch_index: left_branch,
+                    ..
+                },
+                RuntimeOwnershipEventLocation::ConditionalAssignmentAction {
+                    statement_index: right_statement,
+                    branch_index: right_branch,
+                    ..
+                }
+            ) if left_statement == right_statement && left_branch != right_branch
+        )
+    }
+
     preanalyze_runtime_assignment_reads::<R, MAX_PARAMETERS, MAX_EXPRESSION_NODES>(
         facts, locals, function, resolver, assignment,
     )?;
@@ -11202,7 +11223,12 @@ fn preanalyze_runtime_assignment_access<
                 .iter()
                 .flatten()
                 .any(|effect| {
-                    effect.path == path && matches!(effect.kind, RuntimePlaceEffectKind::Write)
+                    effect.path == path
+                        && matches!(effect.kind, RuntimePlaceEffectKind::Write)
+                        && !mutually_exclusive_conditional_assignment_arms(
+                            effect.location,
+                            facts.current_ownership_event_location,
+                        )
                 })
         {
             return Err(CodegenError {

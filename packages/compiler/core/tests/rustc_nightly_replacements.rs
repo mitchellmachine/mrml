@@ -6155,3 +6155,13 @@ fn rustc_direct_delayed_scalar_initialization_reaches_native_objects() {
     );
     assert!(compile(repeated, ObjectFormat::Elf64).is_err());
 }
+
+#[test]
+fn rustc_conditional_delayed_scalar_initialization_reaches_native_objects() {
+    let source = "#[unsafe(no_mangle)] pub extern \"C\" fn probe(select: bool) -> u64 { let value: u64; if select { value = 41; } else { value = 42; } value }";
+    assert_eq!(compile(source, ObjectFormat::Elf64), Ok(()));
+    assert_eq!(compile(source, ObjectFormat::Coff), Ok(()));
+
+    let partial = "#[unsafe(no_mangle)] pub extern \"C\" fn probe(select: bool) -> u64 { let value: u64; if select { value = 42; } value }";
+    assert!(compile(partial, ObjectFormat::Elf64).is_err());
+}
