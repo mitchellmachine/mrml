@@ -5290,6 +5290,20 @@ topology work retain their existing `TRIGGERED` reviews; this agent review does
 not establish clearance or infringement and does not replace independent human
 dual review.
 
+# 2026-08-26 — Hosted vCPU host-normal priority enforcement
+
+**Result: NOT_TRIGGERED after the existing CPU-budget and scheduler reviews.**
+This bounded increment carries an already authorized priority-0 decision to an
+existing hosted vCPU run and conventionally applies the operating system's
+public thread-scheduling mechanism. Windows uses normal thread priority; Linux
+uses the ordinary time-sharing policy with scheduler priority 0. MRML adds
+exact capture, verification, restoration ordering, and fail-closed handling but
+no priority-selection algorithm, real-time scheduler, load-balancing policy,
+topology mechanism, hypervisor, or hardware mechanism. Stronger priority-class
+mapping, general scheduling, adaptive placement, and native APIC work retain
+their existing `TRIGGERED` reviews; this agent review does not establish
+clearance or infringement and does not replace independent human dual review.
+
 # 2026-08-25 — Signed general SystemRelease envelope admission
 
 **Result: NOT_TRIGGERED after the existing package/release, Lamport-signature,
@@ -5429,3 +5443,13 @@ code-generation mechanism. Projection-equality declaration requirements remain
 explicitly unsupported. Broader trait solving and Rust conformance remain
 partial; this agent review does not establish clearance or infringement and
 does not replace independent human dual review.
+
+# 2026-08-26 — Source trait-declaration projection requirements
+
+**Result: NOT_TRIGGERED after the bounded trait-goal reviews.** This increment
+conventionally resolves an associated-type identity and translates its existing
+flat source predicate into the already implemented bounded projection-premise
+representation. It adds no new unification, selection, coherence, proof-search,
+caching, or code-generation mechanism. Broader trait solving and Rust
+conformance remain partial; this agent review does not establish clearance or
+infringement and does not replace independent human dual review.

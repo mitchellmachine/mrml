@@ -4519,10 +4519,13 @@ flat self/argument position. Every implementation of the declared trait lowers
 those requirements into its bounded clause premises, including unconditional
 exact implementations, so a missing prerequisite makes the resulting trait
 goal unavailable. Unknown traits, wrong arity, duplicate requirements, and
-compound terms fail during declaration admission; declaration projection-
-equality requirements remain explicitly unsupported. Windows gnullvm and
-native Arch Linux WSL each pass 603 library tests, one component probe, 10
-conformance tests, and 335 replacement tests: 949 compiler tests per host.
+compound terms fail during declaration admission. Declaration projection-
+equality requirements now resolve the associated identity and lower their flat
+self, arguments, and expected type through the same implementation substitution
+before using the existing projection-aware premise solver; unknown associated
+types also fail during admission. Windows gnullvm and native Arch Linux WSL each
+pass 604 library tests, one component probe, 10 conformance tests, and 335
+replacement tests: 950 compiler tests per host.
 
 The projection-bearing term milestone uses a fixed 64-node arena for flat leaf
 terms and associated-type projections whose trait self/argument positions refer

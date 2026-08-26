@@ -1320,11 +1320,12 @@ complete declaration parameter, and concrete nominal types substitute through
 generic, conditional, and exact implementation clauses; prerequisites must
 prove before the declared trait is available. Unknown traits, wrong arity,
 duplicates, and compound terms fail closed during declaration admission.
-Projection-equality declaration requirements are parsed but rejected by a
-specific unsupported error for the next bounded slice. Windows gnullvm and
-native Arch Linux WSL each pass 603 library tests, one component-interface
-probe, 10 conformance tests, and 335 replacement tests: 949 compiler tests per
-host.
+Projection-equality declaration requirements resolve stable associated-type
+identity during admission, substitute flat self/argument/expected terms through
+each implementation head, and reuse the projection-aware premise solver;
+unknown associated types fail closed. Windows gnullvm and native Arch Linux WSL
+each pass 604 library tests, one component-interface probe, 10 conformance
+tests, and 335 replacement tests: 950 compiler tests per host.
 
 The premise-bearing rigid-normalization milestone proves the selected generic
 implementation's instantiated trait and projection predicates before exposing
