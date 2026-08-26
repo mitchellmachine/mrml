@@ -7161,3 +7161,14 @@ interprocedural, alias-analysis, optimization, or code-generation algorithm.
 General regions remain absent. Broader compiler completion remains partial;
 this technical screen is not a clearance or infringement conclusion and does
 not replace independent human dual review.
+
+# 2026-08-26 — Looped call-derived shared-return evidence
+
+**Result: NOT_TRIGGERED after the loop-return evidence review.** This increment
+adds independently authored regression evidence that the existing bounded call-
+origin and return-outlives checks apply to direct and conditional returns inside
+the supported loop representation. It introduces no new loop fixed point,
+lifetime inference, interprocedural analysis, alias analysis, optimization, or
+code-generation algorithm. General regions remain absent. Broader compiler
+completion remains partial; this technical screen is not a clearance or
+infringement conclusion and does not replace independent human dual review.
