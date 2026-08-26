@@ -1166,6 +1166,12 @@ parameter cases and rejects both local escapes with E0515. This composes the
 existing bounded callee-origin and shared-child analyses; general
 interprocedural lifetime inference remains unsupported.
 
+The same projected-summary proof now covers explicit returns and a conditional
+early-return plus tail-return join. Parameter-backed children remain accepted;
+matching local-backed children fail closed. ORACLE-0002 reports E0515 at both
+local return sites. This is bounded return-site composition, not general
+interprocedural lifetime inference.
+
 The first modern trait-solver foundation is an explicit bounded implemented-
 goal representation. Stable trait/type/inference/placeholder identities remain
 distinct; canonicalization replaces inference identities with first-occurrence

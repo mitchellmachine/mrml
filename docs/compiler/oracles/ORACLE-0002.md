@@ -343,6 +343,15 @@ is exact black-box outlives evidence for those call shapes, not general
 interprocedural lifetime inference. Temporary probe sources and metadata were
 removed.
 
+A follow-up independently authored Rust 2024 metadata-only probe against this
+exact toolchain and commit returned the shared child of an exhaustive projected
+callee result through an explicit return and a conditional early-return plus
+tail-return join. Parameter-backed forms compiled. Matching local-backed forms
+failed with E0515 at the explicit and conditional return sites. The oracle-only
+callee retained the explicit `'a: 'b` relationship required by tuple-field
+replacement. This is evidence for those exact sites, not general
+interprocedural lifetime inference. Temporary sources and metadata were removed.
+
 An independently authored Rust 2024 metadata-only probe against this exact
 toolchain and commit returned call-derived shared children through an explicit
 return and through a conditional early-return plus tail-return path. Both
