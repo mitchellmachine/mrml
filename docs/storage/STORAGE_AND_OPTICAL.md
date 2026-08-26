@@ -198,6 +198,16 @@ native descriptor plus exact boot correlation without granting I/O. Storage
 passes 126 tests on Windows and Arch Linux. AHCI, USB, and native VirtIO
 verifiers and hardware execution remain **PLANNED**.
 
+`ExactNativeBlockCorrelationVerifier` is now **PARTIALLY IMPLEMENTED** as the
+safe default for a driver that independently reconstructs the firmware-stable
+route. It exact-matches stable ID and controller/media generations and prevents
+an already-native AHCI/USB/VirtIO source from changing transport. UEFI may map
+only into those supported native transports. This check and capability issuance
+form the control plane; subsequent reads use the shortest safe existing block
+data path under the exact issued session. Storage passes 127 tests on Windows
+and Arch Linux. No native route parser, controller enumerator, or physical
+device has been implemented or exercised by this increment.
+
 The `mrml` frontend may expose structured `disk`, `filesystem`, `optical`, and
 `media` operations. The PowerShell-inspired shell projects the same backend as
 typed `Get-*`, `Test-*`, `Initialize-*`, `New-*`, `Format-*`, `Write-*`, and

@@ -1685,3 +1685,13 @@ Update documentation only when implementation, architecture, evidence, or
 limitations materially change. Keep mechanical formatter output in a separate
 commit. Before committing, inspect the staged diff and confirm unrelated work
 is absent. Push only the intended branch after required tests pass.
+`ExactNativeBlockCorrelationVerifier` now **PARTIALLY IMPLEMENTS** the strict
+default verification rule for drivers able to reconstruct the same boot-stable
+route: stable ID plus controller/media generations must all match, and a source
+already classified as AHCI/USB/VirtIO cannot change transport. UEFI may
+transition only to one of those supported native transports. Correlation and
+session issuance are the control plane; after that authority is established,
+reads retain the existing shortest safe capability-bound block data plane.
+Storage passes 127 tests on Windows and Arch Linux. This is equality/type
+evidence only; native enumeration and physical route derivation remain
+**PLANNED**.

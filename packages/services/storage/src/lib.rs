@@ -63,7 +63,8 @@ pub use block_protocol::{
 };
 pub use block_service::{
     BlockDeviceDescriptor, BlockDeviceId, BlockRights, BlockService, BlockServiceBackend,
-    BlockServiceError, BlockSessionGrant, BlockSessionHandle, InstalledRecoveryBlockSession,
+    BlockServiceError, BlockSessionGrant, BlockSessionHandle, ExactNativeBlockCorrelationError,
+    ExactNativeBlockCorrelationVerifier, InstalledRecoveryBlockSession,
     InstalledRecoverySessionError, NativeBlockCorrelationError, NativeBlockCorrelationVerifier,
     PlatformBlockDeviceDescriptor, PlatformBlockDeviceIdentity, PlatformBlockTransport,
     ServicedBlockDevice,

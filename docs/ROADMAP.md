@@ -3011,3 +3011,14 @@ Every milestone requires proportional Windows gnullvm and Linux testing,
 backend-specific signed probes where applicable, exact commands/results, and
 before/after performance measurements. Unsupported environments must be listed,
 not implied.
+Drivers that can independently reconstruct the firmware-stable route now have
+a conservative **PARTIALLY IMPLEMENTED** default verifier. It requires exact
+stable-ID, controller-generation, and media-generation equality; boot identities
+already attributed to AHCI/USB/VirtIO must also retain that transport, while a
+UEFI source may transition to any supported native transport. This follows the
+cross-cutting rule that control planes establish authority while data planes
+take the shortest safe path: correlation occurs once during registration, and
+later reads use the existing capability-bound block session. Focused tests
+reject route/generation and transport substitution. Storage passes 127 tests on
+Windows and Arch Linux. Deriving those inputs from actual native enumeration is
+still **PLANNED** and is not implied by this verifier.

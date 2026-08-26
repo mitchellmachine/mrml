@@ -176,6 +176,55 @@ pub enum NativeBlockCorrelationError<E> {
     Registration(BlockServiceError<core::convert::Infallible>),
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum ExactNativeBlockCorrelationError {
+    IdentityMismatch,
+    TransportMismatch,
+}
+
+/// Conservative verifier for a native driver that independently reconstructs
+/// the same opaque stable route and controller/media generations recorded at
+/// boot. UEFI may transition to any supported native transport; an identity
+/// already attributed to AHCI/USB/VirtIO must retain that transport class.
+///
+/// This verifier belongs to the registration control plane: it establishes the
+/// exact device binding once but grants no read authority itself. After the
+/// service issues a principal-bound session, ordinary reads retain the existing
+/// shortest safe block-data path and do not repeat correlation policy.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub struct ExactNativeBlockCorrelationVerifier;
+
+unsafe impl NativeBlockCorrelationVerifier for ExactNativeBlockCorrelationVerifier {
+    type Error = ExactNativeBlockCorrelationError;
+
+    fn verify(
+        &mut self,
+        boot: InstalledRecoveryBootIdentity,
+        candidate: PlatformBlockDeviceDescriptor,
+    ) -> Result<(), Self::Error> {
+        let native = candidate.identity();
+        let expected_transport = match boot.source() {
+            InstalledRecoverySource::Uefi => None,
+            InstalledRecoverySource::Ahci => Some(PlatformBlockTransport::Ahci),
+            InstalledRecoverySource::Usb => Some(PlatformBlockTransport::Usb),
+            InstalledRecoverySource::Virtio => Some(PlatformBlockTransport::Virtio),
+            InstalledRecoverySource::Hosted => {
+                return Err(ExactNativeBlockCorrelationError::TransportMismatch);
+            }
+        };
+        if expected_transport.is_some_and(|expected| native.transport() != expected) {
+            return Err(ExactNativeBlockCorrelationError::TransportMismatch);
+        }
+        if native.stable_id() != boot.stable_id()
+            || native.controller_generation() != boot.controller_generation()
+            || native.media_generation() != boot.media_generation()
+        {
+            return Err(ExactNativeBlockCorrelationError::IdentityMismatch);
+        }
+        Ok(())
+    }
+}
+
 /// Capability-bearing result of correlating one non-authorizing boot identity
 /// with one exact live platform registration. The identity still identifies;
 /// only the independently created principal-bound session authorizes reads.
@@ -1594,6 +1643,78 @@ mod tests {
         assert_eq!(
             service.grant(other.id(), owner(8), BlockRights::READ),
             Err(BlockServiceError::UnknownDevice)
+        );
+    }
+
+    #[test]
+    fn exact_native_verifier_requires_route_generations_and_native_transport() {
+        let boot = installed_boot_identity(
+            InstalledRecoverySource::Uefi,
+            [0x51; 32],
+            7,
+            9,
+            BLOCK_SIZE as u32,
+            BLOCKS as u64,
+        );
+        let exact = PlatformBlockDeviceDescriptor::new(
+            descriptor(),
+            PlatformBlockDeviceIdentity::new(
+                PlatformBlockTransport::Ahci,
+                boot.stable_id(),
+                boot.controller_generation(),
+                boot.media_generation(),
+            )
+            .unwrap(),
+        );
+        let mut service = BlockService::<1, 1>::new();
+        service
+            .register_correlated_installed_device(
+                &mut ExactNativeBlockCorrelationVerifier,
+                boot,
+                exact,
+            )
+            .unwrap();
+        let bound = service
+            .grant_installed_recovery_read_session(boot, owner(7))
+            .unwrap();
+        assert_eq!(bound.platform_descriptor(), exact);
+
+        let usb_boot = installed_boot_identity(
+            InstalledRecoverySource::Usb,
+            [0x61; 32],
+            17,
+            19,
+            BLOCK_SIZE as u32,
+            BLOCKS as u64,
+        );
+        let wrong_transport = PlatformBlockDeviceDescriptor::new(
+            descriptor(),
+            PlatformBlockDeviceIdentity::new(
+                PlatformBlockTransport::Ahci,
+                usb_boot.stable_id(),
+                usb_boot.controller_generation(),
+                usb_boot.media_generation(),
+            )
+            .unwrap(),
+        );
+        let mut verifier = ExactNativeBlockCorrelationVerifier;
+        assert_eq!(
+            verifier.verify(usb_boot, wrong_transport),
+            Err(ExactNativeBlockCorrelationError::TransportMismatch)
+        );
+        let changed_route = PlatformBlockDeviceDescriptor::new(
+            descriptor(),
+            PlatformBlockDeviceIdentity::new(
+                PlatformBlockTransport::Usb,
+                [0x62; 32],
+                usb_boot.controller_generation(),
+                usb_boot.media_generation(),
+            )
+            .unwrap(),
+        );
+        assert_eq!(
+            verifier.verify(usb_boot, changed_route),
+            Err(ExactNativeBlockCorrelationError::IdentityMismatch)
         );
     }
 

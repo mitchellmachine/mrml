@@ -8623,3 +8623,11 @@ plan and status vocabulary are authoritative in [ROADMAP.md](ROADMAP.md).
 6. IOMMU-contained CUDA device VM, reset/recovery tests, and CPU fallback.
 7. Bare-metal hardware matrix, formal specifications/proofs, external audit,
    then AArch64 and RISC-V64 ports.
+A reusable exact verifier is now **PARTIALLY IMPLEMENTED** for the conservative
+case where a native driver reconstructs the same opaque route and generations:
+all identity scalars must match, and an already-native source cannot substitute
+its transport. The verifier remains non-authorizing and runs only inside the
+atomic registration control plane. Once a principal-bound session establishes
+authority, the existing block data plane takes the shortest safe path without
+re-running correlation policy. Storage passes 127 tests on Windows and Arch
+Linux. Actual native enumeration remains **PLANNED**.
