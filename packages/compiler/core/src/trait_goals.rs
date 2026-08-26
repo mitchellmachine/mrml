@@ -46,14 +46,14 @@ pub struct SourceTraitDeclaration<'source> {
     pub name_span: Span,
     pub public: bool,
     pub generic_parameter_count: usize,
-    supertraits: [Option<SourceTraitSupertrait>; MAX_TRAIT_SUPERTRAITS],
+    supertraits: [Option<SourceTraitSupertrait<'source>>; MAX_TRAIT_SUPERTRAITS],
     supertrait_count: usize,
     associated_types: [Option<TraitAssociatedTypeId>; MAX_TRAIT_ASSOCIATED_TYPES],
     associated_type_count: usize,
 }
 
-impl SourceTraitDeclaration<'_> {
-    pub fn supertraits(&self) -> &[Option<SourceTraitSupertrait>] {
+impl<'source> SourceTraitDeclaration<'source> {
+    pub fn supertraits(&self) -> &[Option<SourceTraitSupertrait<'source>>] {
         &self.supertraits[..self.supertrait_count]
     }
 
@@ -71,20 +71,26 @@ impl SourceTraitDeclaration<'_> {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub struct SourceTraitSupertrait {
+pub struct SourceTraitSupertrait<'source> {
     pub trait_id: TraitId,
-    argument_parameters: [Option<u8>; MAX_TRAIT_GOAL_ARGUMENTS],
+    arguments: [Option<SourceTraitSupertraitArgument<'source>>; MAX_TRAIT_GOAL_ARGUMENTS],
     argument_count: usize,
 }
 
-impl SourceTraitSupertrait {
-    pub fn argument_parameters(&self) -> &[Option<u8>] {
-        &self.argument_parameters[..self.argument_count]
+impl<'source> SourceTraitSupertrait<'source> {
+    pub fn arguments(&self) -> &[Option<SourceTraitSupertraitArgument<'source>>] {
+        &self.arguments[..self.argument_count]
     }
 
     pub const fn argument_count(&self) -> usize {
         self.argument_count
     }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum SourceTraitSupertraitArgument<'source> {
+    Parameter(u8),
+    Concrete(TypeRef<'source>),
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -173,7 +179,7 @@ impl<'source> SourceTraitDeclarationTable<'source> {
                     return Err(SourceTraitDeclarationError::DuplicateGenericParameter);
                 }
             }
-            let mut supertraits: [Option<SourceTraitSupertrait>; MAX_TRAIT_SUPERTRAITS] =
+            let mut supertraits: [Option<SourceTraitSupertrait<'source>>; MAX_TRAIT_SUPERTRAITS] =
                 [None; MAX_TRAIT_SUPERTRAITS];
             let mut supertrait_count = 0usize;
             for source_supertrait in declaration.supertraits().iter().flatten() {
@@ -190,20 +196,25 @@ impl<'source> SourceTraitDeclarationTable<'source> {
                 {
                     return Err(SourceTraitDeclarationError::DuplicateSupertrait);
                 }
-                let mut argument_parameters = [None; MAX_TRAIT_GOAL_ARGUMENTS];
+                let mut arguments = [None; MAX_TRAIT_GOAL_ARGUMENTS];
                 for (argument_index, argument) in
                     source_supertrait.arguments().iter().flatten().enumerate()
                 {
                     let parameter_index = declaration
                         .generic_parameters()
                         .iter()
-                        .position(|parameter| *parameter == Some(argument.text))
-                        .ok_or(SourceTraitDeclarationError::UnsupportedSupertraitArgument)?;
-                    argument_parameters[argument_index] = Some(parameter_index as u8);
+                        .position(|parameter| *parameter == Some(argument.text));
+                    arguments[argument_index] = Some(if let Some(parameter_index) = parameter_index {
+                        SourceTraitSupertraitArgument::Parameter(parameter_index as u8)
+                    } else if supported_source_trait_type(argument.text) {
+                        SourceTraitSupertraitArgument::Concrete(*argument)
+                    } else {
+                        return Err(SourceTraitDeclarationError::UnsupportedSupertraitArgument);
+                    });
                 }
                 supertraits[supertrait_count] = Some(SourceTraitSupertrait {
                     trait_id: target.id,
-                    argument_parameters,
+                    arguments,
                     argument_count: source_supertrait.argument_count(),
                 });
                 supertrait_count += 1;
@@ -485,7 +496,19 @@ impl<'source> SourceTraitImplementationTable<'source> {
                         }
                     }
                 }
-                Item::Const(_) | Item::Static(_) | Item::Trait(_) => {}
+                Item::Trait(declaration) => {
+                    for supertrait in declaration.supertraits().iter().flatten() {
+                        for argument in supertrait.arguments().iter().flatten() {
+                            if !declaration
+                                .generic_parameters()
+                                .contains(&Some(argument.text))
+                            {
+                                table.intern_type(*argument)?;
+                            }
+                        }
+                    }
+                }
+                Item::Const(_) | Item::Static(_) => {}
             }
         }
         let mut implementation_count = 0u32;
@@ -675,8 +698,15 @@ impl<'source> SourceTraitImplementationTable<'source> {
                     supertrait.trait_id,
                     consequence.self_type,
                 );
-                for parameter_index in supertrait.argument_parameters().iter().flatten() {
-                    let argument = consequence.arguments()[*parameter_index as usize].unwrap();
+                for source_argument in supertrait.arguments().iter().flatten() {
+                    let argument = match source_argument {
+                        SourceTraitSupertraitArgument::Parameter(parameter_index) => {
+                            consequence.arguments()[*parameter_index as usize].unwrap()
+                        }
+                        SourceTraitSupertraitArgument::Concrete(source_type) => {
+                            BoundTraitGoalType::Concrete(table.get_type(source_type.text).unwrap().id)
+                        }
+                    };
                     inherited.push_argument(argument).map_err(|kind| {
                         SourceTraitImplementationError {
                             kind: SourceTraitImplementationErrorKind::Goal(kind),
@@ -1233,10 +1263,17 @@ impl<'source> SourceTraitImplementationTable<'source> {
                 TraitGoalType::Concrete(self_type),
             );
             let mut inherited_arguments = [TraitTypeId::new(0); MAX_TRAIT_GOAL_ARGUMENTS];
-            for (index, parameter_index) in
-                supertrait.argument_parameters().iter().flatten().enumerate()
+            for (index, source_argument) in
+                supertrait.arguments().iter().flatten().enumerate()
             {
-                let argument = trait_arguments[*parameter_index as usize];
+                let argument = match source_argument {
+                    SourceTraitSupertraitArgument::Parameter(parameter_index) => {
+                        trait_arguments[*parameter_index as usize]
+                    }
+                    SourceTraitSupertraitArgument::Concrete(source_type) => {
+                        self.get_type(source_type.text).unwrap().id
+                    }
+                };
                 inherited_arguments[index] = argument;
                 goal.push_argument(TraitGoalType::Concrete(argument))
                     .map_err(SourceTraitImplementationErrorKind::Goal)?;
@@ -8453,7 +8490,10 @@ mod tests {
             .unwrap();
         let traits = SourceTraitDeclarationTable::from_module(&parameterized).unwrap();
         let child = traits.get("Child").unwrap();
-        assert_eq!(child.supertraits()[0].unwrap().argument_parameters(), &[Some(0)]);
+        assert_eq!(
+            child.supertraits()[0].unwrap().arguments(),
+            &[Some(SourceTraitSupertraitArgument::Parameter(0))]
+        );
 
         let wrong_arity = Parser::new("trait Child<T>: Parent {} trait Parent<T> {}")
             .parse_module::<3, 1>()
@@ -8463,7 +8503,16 @@ mod tests {
             Err(SourceTraitDeclarationError::WrongSupertraitArgumentCount)
         );
 
-        let compound = Parser::new("trait Child<T>: Parent<u8> {} trait Parent<T> {}")
+        let concrete = Parser::new("trait Child<T>: Parent<u8> {} trait Parent<T> {}")
+            .parse_module::<3, 1>()
+            .unwrap();
+        let traits = SourceTraitDeclarationTable::from_module(&concrete).unwrap();
+        assert!(matches!(
+            traits.get("Child").unwrap().supertraits()[0].unwrap().arguments()[0],
+            Some(SourceTraitSupertraitArgument::Concrete(TypeRef { text: "u8", .. }))
+        ));
+
+        let compound = Parser::new("trait Child<T>: Parent<Vec<T>> {} trait Parent<T> {}")
             .parse_module::<3, 1>()
             .unwrap();
         assert_eq!(
@@ -8927,6 +8976,29 @@ mod tests {
                 .kind,
             SourceTraitImplementationErrorKind::MissingSupertraitImplementation
         );
+
+        let concrete = Parser::new(concat!(
+            "trait Root<T> {} trait Parent<T>: Root<u8> {} trait Child<T>: Parent<T> {} ",
+            "impl Root<u8> for u32 {} impl Parent<u16> for u32 {} impl Child<u16> for u32 {}"
+        ))
+        .parse_module::<10, 1>()
+        .unwrap();
+        let traits = SourceTraitDeclarationTable::from_module(&concrete).unwrap();
+        SourceTraitImplementationTable::from_module(&concrete, &traits).unwrap();
+
+        let generic_concrete = Parser::new(concat!(
+            "trait Parent<T> {} trait Child<T>: Parent<u8> {} ",
+            "impl Parent<u8> for u32 {} impl<T> Child<T> for u32 {} ",
+            "fn check() where u32: Child<u16> {}"
+        ))
+        .parse_module::<10, 1>()
+        .unwrap();
+        let traits = SourceTraitDeclarationTable::from_module(&generic_concrete).unwrap();
+        let implementations =
+            SourceTraitImplementationTable::from_module(&generic_concrete, &traits).unwrap();
+        implementations
+            .prove_module(&generic_concrete, &traits)
+            .unwrap();
     }
 
     #[test]

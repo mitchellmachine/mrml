@@ -3016,6 +3016,7 @@ impl<'source> Parser<'source> {
             let start = first.span.start;
             let mut end = start;
             let mut nested = 0usize;
+            let mut consumed_nested_and_outer_close = false;
             loop {
                 let token = self
                     .peek()?
@@ -3023,9 +3024,16 @@ impl<'source> Parser<'source> {
                 if nested == 0 && (token.text == "," || token.text == ">" || token.text == ">>") {
                     break;
                 }
+                if token.text == ">>" && nested == 1 {
+                    end = token.span.start + 1;
+                    self.take()?;
+                    consumed_nested_and_outer_close = true;
+                    break;
+                }
                 match token.text {
                     "<" => nested += 1,
                     ">" if nested != 0 => nested -= 1,
+                    ">>" if nested > 1 => nested -= 2,
                     _ => {}
                 }
                 end = token.span.end;
@@ -3044,6 +3052,9 @@ impl<'source> Parser<'source> {
                 },
             });
             count += 1;
+            if consumed_nested_and_outer_close {
+                return Ok((arguments, count, false));
+            }
             if self.take_text(",")?.is_some() {
                 continue;
             }
