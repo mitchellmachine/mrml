@@ -8305,3 +8305,14 @@ optimization, instruction-selection, or code-generation algorithm. Executable
 lowering remains fail-closed. Broader compiler completion remains partial; this
 technical screen is not a clearance or infringement conclusion and does not
 replace independent human dual review.
+
+# 2026-08-26 — Nested loop else constant semantics
+
+**Result: NOT_TRIGGERED after the constant-semantics review.** This increment
+selects one conventional bounded conditional arm and reuses existing scoped
+local, assignment, expression, return, break, continue, and iteration-limit
+evaluation. It adds no novel evaluation, fixed-point, region, alias, inference,
+optimization, instruction-selection, or code-generation algorithm. Native
+lowering remains fail-closed. Broader compiler completion remains partial; this
+technical screen is not a clearance or infringement conclusion and does not
+replace independent human dual review.
