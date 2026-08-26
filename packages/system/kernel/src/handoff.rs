@@ -1,7 +1,8 @@
 use crate::{
     BootEvidence, BootValidationError, FramebufferError, FramebufferInfo,
-    INSTALLED_RECOVERY_BOOT_IDENTITY_BYTES, InstalledRecoveryBootIdentity, MemoryError, MemoryKind,
-    MemoryMap, MemoryRegion, PhysAddr, PixelFormat,
+    INSTALLED_RECOVERY_BOOT_IDENTITY_BYTES, INSTALLED_RECOVERY_SATA_ROUTE_BYTES,
+    InstalledRecoveryBootIdentity, InstalledRecoverySataRoute, InstalledRecoverySource,
+    MemoryError, MemoryKind, MemoryMap, MemoryRegion, PhysAddr, PixelFormat,
 };
 
 pub const HANDOFF_HEADER_BYTES: usize = 168;
@@ -18,7 +19,8 @@ pub const MAX_HANDOFF_BYTES: usize = HANDOFF_HEADER_BYTES
     + HANDOFF_SERVICE_BYTES
     + HANDOFF_APPLICATION_BYTES
     + HANDOFF_RECOVERY_STATE_BYTES
-    + INSTALLED_RECOVERY_BOOT_IDENTITY_BYTES;
+    + INSTALLED_RECOVERY_BOOT_IDENTITY_BYTES
+    + INSTALLED_RECOVERY_SATA_ROUTE_BYTES;
 
 const FLAG_SECURE_BOOT: u16 = 1;
 const FLAG_MEASURED_BOOT: u16 = 1 << 1;
@@ -31,6 +33,7 @@ const FLAG_COHERENT_RELEASE: u16 = 1 << 7;
 const FLAG_APPLICATION_IMAGE: u16 = 1 << 8;
 const FLAG_TOTAL_MICROVM_ONCE: u16 = 1 << 9;
 const FLAG_INSTALLED_RECOVERY_IDENTITY: u16 = 1 << 10;
+const FLAG_INSTALLED_RECOVERY_SATA_ROUTE: u16 = 1 << 11;
 const KNOWN_FLAGS: u16 = FLAG_SECURE_BOOT
     | FLAG_MEASURED_BOOT
     | FLAG_ROLLBACK_PROTECTED
@@ -41,7 +44,8 @@ const KNOWN_FLAGS: u16 = FLAG_SECURE_BOOT
     | FLAG_COHERENT_RELEASE
     | FLAG_APPLICATION_IMAGE
     | FLAG_TOTAL_MICROVM_ONCE
-    | FLAG_INSTALLED_RECOVERY_IDENTITY;
+    | FLAG_INSTALLED_RECOVERY_IDENTITY
+    | FLAG_INSTALLED_RECOVERY_SATA_ROUTE;
 
 /// Authority-free, nonpersistent isolation overlay requested by the trusted
 /// loader for this boot. Runtime admission must still prove that Total mode is
@@ -406,6 +410,7 @@ pub struct BootHandoff {
     application: Option<ApplicationLaunch>,
     recovery_state: Option<RecoveryStateMetadata>,
     installed_recovery: Option<InstalledRecoveryBootIdentity>,
+    installed_recovery_sata_route: Option<InstalledRecoverySataRoute>,
     isolation_override: Option<BootIsolationOverride>,
 }
 
@@ -453,6 +458,10 @@ impl BootHandoff {
 
     pub const fn installed_recovery(&self) -> Option<InstalledRecoveryBootIdentity> {
         self.installed_recovery
+    }
+
+    pub const fn installed_recovery_sata_route(&self) -> Option<InstalledRecoverySataRoute> {
+        self.installed_recovery_sata_route
     }
 
     pub const fn isolation_override(&self) -> Option<BootIsolationOverride> {
@@ -517,8 +526,14 @@ impl BootHandoff {
             .ok_or(HandoffError::NonCanonical)?;
         let installed_recovery_bytes = usize::from(flags & FLAG_INSTALLED_RECOVERY_IDENTITY != 0)
             * INSTALLED_RECOVERY_BOOT_IDENTITY_BYTES;
-        let trampoline_offset = installed_recovery_offset
+        let installed_recovery_route_offset = installed_recovery_offset
             .checked_add(installed_recovery_bytes)
+            .ok_or(HandoffError::NonCanonical)?;
+        let installed_recovery_route_bytes =
+            usize::from(flags & FLAG_INSTALLED_RECOVERY_SATA_ROUTE != 0)
+                * INSTALLED_RECOVERY_SATA_ROUTE_BYTES;
+        let trampoline_offset = installed_recovery_route_offset
+            .checked_add(installed_recovery_route_bytes)
             .ok_or(HandoffError::NonCanonical)?;
         let trampoline_bytes = usize::from(flags & FLAG_AP_TRAMPOLINE != 0) * 16;
         let madt_offset = trampoline_offset
@@ -581,7 +596,19 @@ impl BootHandoff {
         let installed_recovery = if installed_recovery_bytes != 0 {
             Some(
                 InstalledRecoveryBootIdentity::decode(
-                    input[installed_recovery_offset..trampoline_offset]
+                    input[installed_recovery_offset..installed_recovery_route_offset]
+                        .try_into()
+                        .map_err(|_| HandoffError::NonCanonical)?,
+                )
+                .map_err(|_| HandoffError::NonCanonical)?,
+            )
+        } else {
+            None
+        };
+        let installed_recovery_sata_route = if installed_recovery_route_bytes != 0 {
+            Some(
+                InstalledRecoverySataRoute::decode(
+                    input[installed_recovery_route_offset..trampoline_offset]
                         .try_into()
                         .map_err(|_| HandoffError::NonCanonical)?,
                 )
@@ -597,6 +624,11 @@ impl BootHandoff {
             })
         }) {
             return Err(HandoffError::NonCanonical);
+        }
+        match (installed_recovery, installed_recovery_sata_route) {
+            (Some(installed), Some(route)) => validate_installed_recovery_route(installed, route)?,
+            (None, Some(_)) => return Err(HandoffError::NonCanonical),
+            _ => {}
         }
         let isolation_override = (flags & FLAG_TOTAL_MICROVM_ONCE != 0)
             .then_some(BootIsolationOverride::TotalMicrovmOnce);
@@ -716,6 +748,7 @@ impl BootHandoff {
             application,
             recovery_state,
             installed_recovery,
+            installed_recovery_sata_route,
             isolation_override,
         })
     }
@@ -1324,12 +1357,99 @@ pub fn encode_handoff_with_smp_service_recovery_isolation_and_installed(
     append_installed_recovery(length, installed_offset, installed_recovery, output)
 }
 
+/// Extends the installed-recovery handoff with the exact typed SATA route
+/// extracted while firmware still owns device-path interpretation. The route
+/// remains non-authorizing and must bind the same UEFI stable identity as the
+/// adjacent installed-recovery record.
+#[allow(clippy::too_many_arguments)]
+pub fn encode_handoff_with_smp_service_recovery_isolation_installed_and_sata_route(
+    image_version: u64,
+    entropy: [u8; 32],
+    image_measurement: [u8; 64],
+    secure_boot: bool,
+    measured_boot: bool,
+    rollback_protected: bool,
+    coherent_release: bool,
+    acpi_root: u64,
+    framebuffer: FramebufferInfo,
+    regions: &[MemoryRegion],
+    ap_trampoline: u64,
+    ap_stack_arena: u64,
+    service: ServiceLaunch,
+    recovery_state: Option<RecoveryStateMetadata>,
+    installed_recovery: Option<InstalledRecoveryBootIdentity>,
+    installed_recovery_sata_route: Option<InstalledRecoverySataRoute>,
+    isolation_override: Option<BootIsolationOverride>,
+    madt: &[u8],
+    output: &mut [u8],
+) -> Result<usize, HandoffError> {
+    match (installed_recovery, installed_recovery_sata_route) {
+        (Some(installed), Some(route)) => validate_installed_recovery_route(installed, route)?,
+        (None, Some(_)) => return Err(HandoffError::NonCanonical),
+        _ => {}
+    }
+    let length = encode_handoff_with_smp_service_recovery_isolation_and_installed(
+        image_version,
+        entropy,
+        image_measurement,
+        secure_boot,
+        measured_boot,
+        rollback_protected,
+        coherent_release,
+        acpi_root,
+        framebuffer,
+        regions,
+        ap_trampoline,
+        ap_stack_arena,
+        service,
+        recovery_state,
+        installed_recovery,
+        isolation_override,
+        madt,
+        output,
+    )?;
+    let Some(route) = installed_recovery_sata_route else {
+        return Ok(length);
+    };
+    let route_offset = HANDOFF_HEADER_BYTES
+        .checked_add(
+            regions
+                .len()
+                .checked_mul(HANDOFF_REGION_BYTES)
+                .ok_or(HandoffError::NonCanonical)?,
+        )
+        .and_then(|offset| offset.checked_add(HANDOFF_SERVICE_BYTES))
+        .and_then(|offset| {
+            offset.checked_add(usize::from(recovery_state.is_some()) * HANDOFF_RECOVERY_STATE_BYTES)
+        })
+        .and_then(|offset| {
+            offset.checked_add(
+                usize::from(installed_recovery.is_some()) * INSTALLED_RECOVERY_BOOT_IDENTITY_BYTES,
+            )
+        })
+        .ok_or(HandoffError::NonCanonical)?;
+    append_installed_recovery_sata_route(length, route_offset, route, output)
+}
+
 fn validate_installed_recovery(
     recovery_state: RecoveryStateMetadata,
     installed: InstalledRecoveryBootIdentity,
 ) -> Result<(), HandoffError> {
     if recovery_state.accepted_volume() != Some(installed.volume())
         || recovery_state.accepted_root_generation() != installed.root_generation()
+    {
+        Err(HandoffError::NonCanonical)
+    } else {
+        Ok(())
+    }
+}
+
+fn validate_installed_recovery_route(
+    installed: InstalledRecoveryBootIdentity,
+    route: InstalledRecoverySataRoute,
+) -> Result<(), HandoffError> {
+    if installed.source() != InstalledRecoverySource::Uefi
+        || installed.stable_id() != route.stable_id()
     {
         Err(HandoffError::NonCanonical)
     } else {
@@ -1358,6 +1478,31 @@ fn append_installed_recovery(
         .copy_from_slice(&installed_recovery.encode());
     output[16..20].copy_from_slice(&(extended_length as u32).to_le_bytes());
     let flags = read_u16(output, 22) | FLAG_INSTALLED_RECOVERY_IDENTITY;
+    output[22..24].copy_from_slice(&flags.to_le_bytes());
+    Ok(extended_length)
+}
+
+fn append_installed_recovery_sata_route(
+    length: usize,
+    route_offset: usize,
+    route: InstalledRecoverySataRoute,
+    output: &mut [u8],
+) -> Result<usize, HandoffError> {
+    let extended_length = length
+        .checked_add(INSTALLED_RECOVERY_SATA_ROUTE_BYTES)
+        .ok_or(HandoffError::NonCanonical)?;
+    if output.len() < extended_length || route_offset > length {
+        output[..length].fill(0);
+        return Err(HandoffError::NonCanonical);
+    }
+    output.copy_within(
+        route_offset..length,
+        route_offset + INSTALLED_RECOVERY_SATA_ROUTE_BYTES,
+    );
+    output[route_offset..route_offset + INSTALLED_RECOVERY_SATA_ROUTE_BYTES]
+        .copy_from_slice(&route.encode());
+    output[16..20].copy_from_slice(&(extended_length as u32).to_le_bytes());
+    let flags = read_u16(output, 22) | FLAG_INSTALLED_RECOVERY_SATA_ROUTE;
     output[22..24].copy_from_slice(&flags.to_le_bytes());
     Ok(extended_length)
 }
@@ -1780,7 +1925,8 @@ mod tests {
                     | FLAG_SERVICE_IMAGE
                     | FLAG_APPLICATION_IMAGE
                     | FLAG_RECOVERY_STATE
-                    | FLAG_INSTALLED_RECOVERY_IDENTITY))
+                    | FLAG_INSTALLED_RECOVERY_IDENTITY
+                    | FLAG_INSTALLED_RECOVERY_SATA_ROUTE))
                 .to_le_bytes(),
         );
         encoded[24..32].copy_from_slice(&7u64.to_le_bytes());
@@ -2351,6 +2497,76 @@ mod tests {
         assert_eq!(
             decoded.isolation_override(),
             Some(BootIsolationOverride::TotalMicrovmOnce)
+        );
+
+        let hops = [crate::InstalledRecoveryPciHop::new(5, 0).unwrap()];
+        let media =
+            crate::InstalledRecoveryHardDriveMedia::new(2, 2048, 4096, [0x6a; 16], 2, 2).unwrap();
+        let sata_route = InstalledRecoverySataRoute::new(
+            0x0a03_41d0,
+            0,
+            &hops,
+            3,
+            u16::MAX,
+            0,
+            Some(media),
+            installed.stable_id(),
+        )
+        .unwrap();
+        const WITH_SATA_ROUTE_LENGTH: usize =
+            WITH_INSTALLED_LENGTH + INSTALLED_RECOVERY_SATA_ROUTE_BYTES;
+        let mut with_sata_route = [0; WITH_SATA_ROUTE_LENGTH];
+        assert_eq!(
+            encode_handoff_with_smp_service_recovery_isolation_installed_and_sata_route(
+                7,
+                [1; 32],
+                [2; 64],
+                true,
+                true,
+                false,
+                true,
+                0x9000,
+                framebuffer,
+                &regions,
+                0x8000,
+                0x40_0000,
+                service,
+                Some(recovery),
+                Some(installed),
+                Some(sata_route),
+                Some(BootIsolationOverride::TotalMicrovmOnce),
+                &madt,
+                &mut with_sata_route,
+            ),
+            Ok(WITH_SATA_ROUTE_LENGTH)
+        );
+        let decoded = BootHandoff::decode(&with_sata_route, |_| {}).unwrap();
+        assert_eq!(decoded.installed_recovery(), Some(installed));
+        assert_eq!(decoded.installed_recovery_sata_route(), Some(sata_route));
+        assert_eq!(decoded.madt(&with_sata_route), Some(madt.as_slice()));
+
+        let route_offset = HANDOFF_HEADER_BYTES
+            + 2 * HANDOFF_REGION_BYTES
+            + HANDOFF_SERVICE_BYTES
+            + HANDOFF_RECOVERY_STATE_BYTES
+            + INSTALLED_RECOVERY_BOOT_IDENTITY_BYTES;
+        let installed_offset = route_offset - INSTALLED_RECOVERY_BOOT_IDENTITY_BYTES;
+        let mut substituted = with_sata_route;
+        substituted[route_offset + 96] ^= 1;
+        assert_eq!(
+            BootHandoff::decode(&substituted, |_| {}).err(),
+            Some(HandoffError::NonCanonical)
+        );
+        let mut missing_installed = with_sata_route;
+        let flags = read_u16(&missing_installed, 22) & !FLAG_INSTALLED_RECOVERY_IDENTITY;
+        missing_installed[22..24].copy_from_slice(&flags.to_le_bytes());
+        missing_installed.copy_within(route_offset.., installed_offset);
+        let missing_installed_length =
+            WITH_SATA_ROUTE_LENGTH - INSTALLED_RECOVERY_BOOT_IDENTITY_BYTES;
+        missing_installed[16..20].copy_from_slice(&(missing_installed_length as u32).to_le_bytes());
+        assert_eq!(
+            BootHandoff::decode(&missing_installed[..missing_installed_length], |_| {}).err(),
+            Some(HandoffError::NonCanonical)
         );
 
         const RECOVERY_ONLY_INSTALLED_LENGTH: usize = HANDOFF_HEADER_BYTES

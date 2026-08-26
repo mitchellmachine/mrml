@@ -8,8 +8,8 @@ use mrml_crypto::Sha3_512;
 use mrml_crypto::{LAMPORT_PUBLIC_KEY_BYTES, LAMPORT_SIGNATURE_BYTES};
 use mrml_kernel::{
     ArtifactKind, BOOTSTRAP_STATE_BYTES, BootIsolationOverride, BuildReceipt, FramebufferInfo,
-    InstalledRecoveryBootIdentity, MAX_CUDA_KERNEL_BUNDLE_BYTES, MAX_HANDOFF_BYTES,
-    MAX_HANDOFF_MADT_BYTES, MAX_KERNEL_IMAGE_BYTES, MAX_LAUNCH_POLICY_BYTES,
+    InstalledRecoveryBootIdentity, InstalledRecoverySataRoute, MAX_CUDA_KERNEL_BUNDLE_BYTES,
+    MAX_HANDOFF_BYTES, MAX_HANDOFF_MADT_BYTES, MAX_KERNEL_IMAGE_BYTES, MAX_LAUNCH_POLICY_BYTES,
     MAX_SERVICE_IMAGE_BYTES, MAX_VM_IMAGE_BYTES, MemoryKind, MemoryRegion, MonotonicStateStore,
     PeImage, PendingBootRelease, PhysAddr, PixelFormat, RELEASE_MANIFEST_BYTES,
     RecoveryStateMetadata, SIGNED_ARTIFACT_OVERHEAD_BYTES, ServiceLaunch, SignedArtifact,
@@ -19,7 +19,7 @@ use mrml_kernel::{
         PageTableBuildError, PageTableBuilder, PageTableStore, PerCpuPrivilegeStacks, VirtAddr,
         copy_madt,
     },
-    encode_handoff_with_smp_service_recovery_isolation_and_installed,
+    encode_handoff_with_smp_service_recovery_isolation_installed_and_sata_route,
 };
 #[cfg(feature = "package-boot")]
 use mrml_package_format::{
@@ -70,6 +70,12 @@ const INSTALLED_RECOVERY_DIRECTORIES: usize = 64;
 const INSTALLED_RECOVERY_EXTENTS: usize = 64;
 const INSTALLED_RECOVERY_OBJECTS: usize = 64;
 const INSTALLED_RECOVERY_METADATA_BYTES: usize = 64 * 1024;
+
+#[derive(Clone, Copy)]
+struct InstalledRecoveryHandoff {
+    identity: InstalledRecoveryBootIdentity,
+    sata_route: Option<InstalledRecoverySataRoute>,
+}
 struct RecoveryPathBuffer(UnsafeCell<[u8; MAX_UEFI_DEVICE_PATH_BYTES]>);
 unsafe impl Sync for RecoveryPathBuffer {}
 static RECOVERY_DEVICE_PATH: RecoveryPathBuffer =
@@ -779,7 +785,7 @@ unsafe fn launch_after_exit(
     framebuffer: Framebuffer,
     service: PreparedService,
     recovery_state: Option<RecoveryStateMetadata>,
-    installed_recovery: Option<InstalledRecoveryBootIdentity>,
+    installed_recovery: Option<InstalledRecoveryHandoff>,
     isolation_selection: BootIsolationSelection,
 ) -> ! {
     let map_bytes = unsafe { core::slice::from_raw_parts(MEMORY_MAP.0.get().cast(), map_size) };
@@ -1121,7 +1127,7 @@ fn validate_configured_installed_recovery(
     services: &BootServices,
     image: Handle,
     recovery: Option<RecoveryStateMetadata>,
-) -> Result<Option<InstalledRecoveryBootIdentity>, Status> {
+) -> Result<Option<InstalledRecoveryHandoff>, Status> {
     let Some(recovery) = recovery else {
         return Ok(None);
     };
@@ -1162,7 +1168,12 @@ fn validate_configured_installed_recovery(
         recovery.accepted_root_generation(),
     )
     .map_err(|_| LOAD_ERROR)?;
-    Ok(Some(identity.boot_identity().map_err(|_| LOAD_ERROR)?))
+    let sata_route = identity.sata_handoff_route().map_err(|_| LOAD_ERROR)?;
+    let identity = identity.boot_identity().map_err(|_| LOAD_ERROR)?;
+    Ok(Some(InstalledRecoveryHandoff {
+        identity,
+        sata_route,
+    }))
 }
 
 fn detect_secure_boot(runtime: *mut RuntimeServices) -> Result<bool, Status> {
@@ -1576,7 +1587,7 @@ fn enter_kernel(
     madt: &[u8],
     service: PreparedService,
     recovery_state: Option<RecoveryStateMetadata>,
-    installed_recovery: Option<InstalledRecoveryBootIdentity>,
+    installed_recovery: Option<InstalledRecoveryHandoff>,
     isolation_selection: BootIsolationSelection,
 ) -> Result<(), Status> {
     let placeholder = MemoryRegion::new(
@@ -1623,27 +1634,32 @@ fn enter_kernel(
         BootIsolationSelection::ConfiguredDefault => None,
         BootIsolationSelection::TotalMicrovmOnce => Some(BootIsolationOverride::TotalMicrovmOnce),
     };
-    let handoff_length = encode_handoff_with_smp_service_recovery_isolation_and_installed(
-        kernel_version,
-        entropy,
-        kernel_measurement,
-        secure_boot,
-        measured_boot,
-        rollback_protected,
-        coherent_release,
-        acpi_root,
-        framebuffer_info,
-        &kernel_regions[..regions.len()],
-        transition.ap_trampoline,
-        transition.ap_stack_arena,
-        service.launch,
-        recovery_state,
-        installed_recovery,
-        isolation_override,
-        madt,
-        handoff,
-    )
-    .map_err(|_| LOAD_ERROR)?;
+    let installed_recovery_identity = installed_recovery.map(|installed| installed.identity);
+    let installed_recovery_sata_route =
+        installed_recovery.and_then(|installed| installed.sata_route);
+    let handoff_length =
+        encode_handoff_with_smp_service_recovery_isolation_installed_and_sata_route(
+            kernel_version,
+            entropy,
+            kernel_measurement,
+            secure_boot,
+            measured_boot,
+            rollback_protected,
+            coherent_release,
+            acpi_root,
+            framebuffer_info,
+            &kernel_regions[..regions.len()],
+            transition.ap_trampoline,
+            transition.ap_stack_arena,
+            service.launch,
+            recovery_state,
+            installed_recovery_identity,
+            installed_recovery_sata_route,
+            isolation_override,
+            madt,
+            handoff,
+        )
+        .map_err(|_| LOAD_ERROR)?;
     loader_trace(0xb3);
     if kernel_entry == 0 {
         return Err(LOAD_ERROR);

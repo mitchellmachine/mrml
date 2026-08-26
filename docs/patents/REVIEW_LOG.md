@@ -38,6 +38,17 @@ route reconstruction, device protocol, DMA, queue, or hardware behavior. Native
 AHCI, USB, VirtIO, and physical-route mechanisms retain their existing
 `TRIGGERED` reviews; this technical screen is not legal clearance.
 
+## 2026-08-26 — Typed SATA route handoff integration
+
+Patent review: **NOT_TRIGGERED** for placing the already reviewed canonical
+typed route record in the existing versioned `BootHandoff`. This increment uses
+a conventional presence flag, checked offset/length arithmetic, fixed-record
+insertion, canonical decoding, and exact equality with the adjacent installed
+identity. It adds no device discovery, route derivation, AHCI, USB, VirtIO, DMA,
+interrupt, queue, or hardware-I/O mechanism. Those transport-specific
+mechanisms and broader adaptive/Total-MicroVM work retain their existing
+`TRIGGERED` reviews; this is not patent clearance.
+
 ## 2026-08-26 — Canonical typed SATA handoff record
 
 Patent review: **TRIGGERED** retained from the typed SATA route and native

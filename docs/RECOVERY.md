@@ -1147,8 +1147,8 @@ canonical termination. The resulting typed fields can be compared directly to
 native enumeration without implementing UEFI path reconstruction after boot;
 the full path digest remains identifying data and neither representation grants
 I/O. Storage passes 129 tests on Windows and Arch Linux; UEFI passes 37 and
-cross-builds on both. Handoff transport and native enumeration remain
-**PLANNED**.
+cross-builds on both. Canonical handoff transport is described below; native
+enumeration remains **PLANNED**.
 
 A kernel-owned canonical 128-byte SATA route record is now **PARTIALLY
 IMPLEMENTED** as the next handoff prerequisite. It carries only the bounded
@@ -1157,9 +1157,20 @@ and exact stable ID. Reserved bytes, unused hop slots, invalid field pairings,
 and zero identity fail closed. UEFI can translate the retained firmware route
 only when its stable ID still matches the recovered block descriptor. The
 record grants no I/O authority. Kernel passes 563 tests and UEFI 37 tests on
-Windows and Arch Linux, with UEFI cross-builds on both. `BootHandoff`
-integration and comparison with independently enumerated native state remain
-**PLANNED**.
+Windows and Arch Linux, with UEFI cross-builds on both. Canonical handoff
+integration is described below; comparison with independently enumerated native
+state remains **PLANNED**.
+
+The typed SATA route now has **PARTIALLY IMPLEMENTED** canonical
+`BootHandoff` carriage. Its distinct presence flag places the fixed record after
+the installed identity and before SMP/MADT bytes. The decoder requires the
+adjacent installed source to be UEFI and exact-matches the full stable ID;
+route-without-identity, substitutions, malformed lengths, and noncanonical route
+bytes fail before memory-map publication. The real loader retains and emits both
+records before leaving firmware. Kernel passes 563 tests and UEFI 37 tests on
+Windows and Arch Linux, UEFI cross-builds on both, and WHP/KVM runners pass
+11/12. Native device enumeration, correlation, reacquisition, and physical
+execution remain **PLANNED**.
 
 Recovery-session publication is now atomic across a bounded device set.
 `BlockSessionGrant` carries each explicit device/principal/rights decision, and

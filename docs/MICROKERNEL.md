@@ -8647,8 +8647,9 @@ partition path into typed route fields during the firmware-side phase, retains
 the exact full-path stable digest, and offers equality against independently
 enumerated native fields. Unknown ordering, excess PCI depth, invalid BDF,
 reserved SATA port, inconsistent partition identity, and trailing nodes fail
-closed. Storage passes 129 tests on Windows and Arch Linux. Encoding this typed
-route in `BootHandoff` and consuming real native enumeration remain **PLANNED**.
+closed. Storage passes 129 tests on Windows and Arch Linux. Canonical
+`BootHandoff` carriage is described below; consuming real native enumeration
+remains **PLANNED**.
 
 The next boundary prerequisite is now **PARTIALLY IMPLEMENTED** as a
 kernel-owned canonical 128-byte route record. It preserves the bounded typed
@@ -8656,5 +8657,16 @@ ACPI/PCI/SATA/optional-partition fields and exact stable ID, rejects malformed
 or nonzero reserved state, and carries no firmware handle, local pointer, or
 capability. UEFI produces that record only after rechecking the stable ID
 against the recovered descriptor. Kernel passes 563 tests and UEFI 37 tests on
-Windows and Arch Linux, with UEFI cross-builds on both. Publishing it through
-`BootHandoff` and authorizing a matched native device remain **PLANNED**.
+Windows and Arch Linux, with UEFI cross-builds on both. Canonical handoff
+publication is described below; authorizing a matched native device remains
+**PLANNED**.
+
+Canonical handoff transport for that record is now **PARTIALLY IMPLEMENTED**.
+One distinct flag places the fixed typed route after the installed identity and
+before SMP/MADT bytes. Decode requires an adjacent UEFI installed identity and
+exact stable-ID equality, so route-only input, substitution, malformed length,
+or noncanonical route bytes fail before emitting any memory region. The real
+loader carries the record it extracted before `ExitBootServices`. Kernel passes
+563 tests and UEFI 37 tests on Windows and Arch Linux, UEFI cross-builds on both,
+and WHP/KVM runners pass 11/12. This is codec, compile, and hosted parser parity,
+not native enumeration, device authorization, OVMF, or physical evidence.

@@ -3040,8 +3040,8 @@ hard-drive media node, and canonical end-entire. It retains the full stable-ID
 digest while exposing exact typed fields for equality against independently
 enumerated native state. Native comparison does not recreate UEFI binary path
 bytes and grants no authority. Storage passes 129 tests on Windows and Arch
-Linux; UEFI remains 37 tests and cross-builds on both. Carrying this typed route
-through handoff and a reviewed native enumerator remain the next gates.
+Linux; UEFI remains 37 tests and cross-builds on both. Canonical handoff carriage
+is described below; a reviewed native enumerator remains the next gate.
 
 The handoff prerequisite is now **PARTIALLY IMPLEMENTED** as a kernel-owned
 canonical 128-byte SATA route record. It binds the record version, ACPI root,
@@ -3050,5 +3050,16 @@ stable ID; decoding rejects nonzero reserved or unused bytes and malformed
 field combinations. UEFI translates its retained route only when that stable ID
 still equals the recovered descriptor identity. This record contains no handle
 or authority. Kernel passes 563 tests and UEFI 37 tests on Windows and Arch
-Linux, with UEFI cross-builds on both. Integrating it into `BootHandoff` and
-consuming independently enumerated native state remain **PLANNED**.
+Linux, with UEFI cross-builds on both. Handoff integration is described below;
+consuming independently enumerated native state remains **PLANNED**.
+
+The typed SATA route now crosses the real loader/kernel boundary as
+**PARTIALLY IMPLEMENTED** canonical handoff data. A distinct presence flag and
+fixed 128-byte record place it after the installed identity and before SMP/MADT
+bytes. Encoding and decoding require the adjacent source to be UEFI and the
+full stable ID to match; route-without-identity, identity substitution, malformed
+length, and reserved-state changes fail closed. The loader retains both records
+before `ExitBootServices` and emits them together. Kernel passes 563 tests and
+UEFI 37 tests on Windows and Arch Linux, UEFI cross-builds on both, and the
+WHP/KVM runners pass 11/12. Native enumeration and exact correlation remain the
+next gate; no hardware execution is claimed.

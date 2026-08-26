@@ -226,8 +226,8 @@ and end-entire. It retains the exact full-path stable digest and compares native
 root/PCI/SATA/partition fields directly; native code need not reconstruct UEFI
 binary path bytes. The typed route is data, not registration or I/O authority.
 Storage passes 129 tests on Windows and Arch Linux; UEFI remains 37 tests and
-cross-builds on both. Native AHCI enumeration and typed handoff remain
-**PLANNED**.
+cross-builds on both. Canonical typed handoff is described below; native AHCI
+enumeration remains **PLANNED**.
 
 The typed-handoff prerequisite is now **PARTIALLY IMPLEMENTED** as a canonical
 128-byte kernel record. It binds the route version, ACPI root, one through eight
@@ -236,8 +236,19 @@ requiring all reserved and unused bytes to be zero. The UEFI boundary translates
 its retained route only when the full stable ID still equals the recovered block
 descriptor. This authority-free record avoids native reconstruction of firmware
 bytes. Kernel passes 563 tests and UEFI 37 tests on Windows and Arch Linux, with
-UEFI cross-builds on both. `BootHandoff` carriage and independently enumerated
-native correlation remain **PLANNED**.
+UEFI cross-builds on both. Handoff carriage is described below; independently
+enumerated native correlation remains **PLANNED**.
+
+Canonical carriage of the typed route through `BootHandoff` is now **PARTIALLY
+IMPLEMENTED**. A distinct presence flag places the fixed 128-byte route after
+the installed identity and before SMP/MADT bytes. The adjacent identity must be
+UEFI-sourced and carry the same exact stable ID; route-only input, substitution,
+malformed length, and noncanonical route bytes fail closed before publication.
+The real loader retains and emits both records before leaving firmware. Kernel
+passes 563 tests and UEFI 37 tests on Windows and Arch Linux, UEFI cross-builds
+on both, and WHP/KVM runners pass 11/12. Native enumeration and correlation
+remain **PLANNED**; no AHCI, USB, VirtIO, OVMF, or physical-device evidence is
+claimed.
 
 The `mrml` frontend may expose structured `disk`, `filesystem`, `optical`, and
 `media` operations. The PowerShell-inspired shell projects the same backend as
