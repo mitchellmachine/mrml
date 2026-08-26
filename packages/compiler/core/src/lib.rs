@@ -18,9 +18,9 @@ pub mod semantics;
 pub mod trait_goals;
 
 pub use codegen::{
-    CodegenError, CodegenErrorKind, CodegenOptions, MachineCode, X86_64Abi,
-    compile_x86_64_constant_function, compile_x86_64_function,
-    compile_x86_64_function_with_options,
+    CodegenError, CodegenErrorKind, CodegenOptions, MachineCode, X86_64Abi, X86_64ExternalBranch,
+    X86_64RelocatableMachineCode, compile_x86_64_constant_function, compile_x86_64_function,
+    compile_x86_64_function_with_options, compile_x86_64_naked_relocatable,
 };
 pub use expression::{
     BinaryOperator, CallArrayElement, CastType, ConstEvalError, ConstantResolver, Expr, ExprId,

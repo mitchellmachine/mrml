@@ -79,6 +79,18 @@ impl<const MAX_BYTES: usize> MachineCode<MAX_BYTES> {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct X86_64ExternalBranch<'symbol> {
+    pub offset: usize,
+    pub symbol: &'symbol str,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct X86_64RelocatableMachineCode<'symbol, const MAX_BYTES: usize> {
+    pub code: MachineCode<MAX_BYTES>,
+    pub external_branch: Option<X86_64ExternalBranch<'symbol>>,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum CodegenErrorKind {
     StableExportRequired,
     ParametersUnsupported,
@@ -590,7 +602,14 @@ pub fn compile_x86_64_function_with_options<
     options: CodegenOptions,
 ) -> Result<MachineCode<MAX_BYTES>, CodegenError> {
     if function.naked {
-        return compile_x86_64_naked_function(function);
+        let output = compile_x86_64_naked_relocatable(function)?;
+        if output.external_branch.is_some() {
+            return Err(CodegenError {
+                kind: CodegenErrorKind::InvalidNakedAssembly,
+                span: function.body_expression_span,
+            });
+        }
+        return Ok(output.code);
     }
     let parsed_body = function
         .parse_body::<MAX_PARAMETERS>()
@@ -1841,9 +1860,13 @@ pub fn compile_x86_64_function_with_options<
     emitter.finish()
 }
 
-fn compile_x86_64_naked_function<const MAX_BYTES: usize, const MAX_PARAMETERS: usize>(
-    function: &Function<'_, MAX_PARAMETERS>,
-) -> Result<MachineCode<MAX_BYTES>, CodegenError> {
+pub fn compile_x86_64_naked_relocatable<
+    'source,
+    const MAX_BYTES: usize,
+    const MAX_PARAMETERS: usize,
+>(
+    function: &Function<'source, MAX_PARAMETERS>,
+) -> Result<X86_64RelocatableMachineCode<'source, MAX_BYTES>, CodegenError> {
     let error = |kind| CodegenError {
         kind,
         span: function.body_expression_span,
@@ -1931,7 +1954,9 @@ fn compile_x86_64_naked_function<const MAX_BYTES: usize, const MAX_PARAMETERS: u
             }
             continue;
         }
-        let encoding_length = if x86_64_naked_label_branch(instruction).is_some() {
+        let encoding_length = if x86_64_naked_label_branch(instruction).is_some()
+            || x86_64_naked_external_branch(instruction, att_syntax).is_some()
+        {
             5
         } else {
             encode_x86_64_naked_instruction_for_syntax(instruction, att_syntax)
@@ -1948,6 +1973,7 @@ fn compile_x86_64_naked_function<const MAX_BYTES: usize, const MAX_PARAMETERS: u
     let mut bytes = [0u8; MAX_BYTES];
     let mut terminating = false;
     let mut emitted_length = 0usize;
+    let mut external_branch = None;
     for (index, instruction) in instructions.iter().enumerate() {
         if x86_64_naked_label_definition(instruction).is_some() {
             continue;
@@ -1973,6 +1999,19 @@ fn compile_x86_64_naked_function<const MAX_BYTES: usize, const MAX_PARAMETERS: u
                 encoding[0] = 0xe9;
                 encoding[1..5].copy_from_slice(&displacement.to_le_bytes());
                 (encoding, 5, true)
+            } else if let Some(symbol) = x86_64_naked_external_branch(instruction, att_syntax) {
+                if external_branch
+                    .replace(X86_64ExternalBranch {
+                        offset: emitted_length
+                            .checked_add(1)
+                            .ok_or_else(|| error(CodegenErrorKind::OutputTooSmall))?,
+                        symbol,
+                    })
+                    .is_some()
+                {
+                    return Err(error(CodegenErrorKind::InvalidNakedAssembly));
+                }
+                ([0xe9, 0, 0, 0, 0, 0, 0, 0, 0, 0], 5, true)
             } else {
                 encode_x86_64_naked_instruction_for_syntax(instruction, att_syntax)
                     .ok_or_else(|| error(CodegenErrorKind::InvalidNakedAssembly))?
@@ -1985,7 +2024,11 @@ fn compile_x86_64_naked_function<const MAX_BYTES: usize, const MAX_PARAMETERS: u
     if !terminating {
         return Err(error(CodegenErrorKind::InvalidNakedAssembly));
     }
-    MachineCode::from_bytes(&bytes[..emitted_length]).map_err(error)
+    let code = MachineCode::from_bytes(&bytes[..emitted_length]).map_err(error)?;
+    Ok(X86_64RelocatableMachineCode {
+        code,
+        external_branch,
+    })
 }
 
 fn encode_x86_64_naked_instruction_for_syntax(
@@ -2012,6 +2055,29 @@ fn x86_64_naked_label_branch(instruction: &str) -> Option<(u8, u8)> {
         && (b'2'..=b'9').contains(&bytes[4])
         && (bytes[5] == b'f' || bytes[5] == b'b'))
         .then(|| (bytes[4] - b'0', bytes[5]))
+}
+
+fn x86_64_naked_external_branch(instruction: &str, att_syntax: bool) -> Option<&str> {
+    if x86_64_naked_label_branch(instruction).is_some() {
+        return None;
+    }
+    let symbol = instruction.strip_prefix("jmp ")?;
+    if symbol.is_empty()
+        || symbol.starts_with('[')
+        || symbol.starts_with('*')
+        || symbol.starts_with('%')
+        || (!att_syntax && x86_64_naked_register(symbol).is_some())
+    {
+        return None;
+    }
+    let mut bytes = symbol.bytes();
+    let first = bytes.next()?;
+    if !(first == b'_' || first.is_ascii_alphabetic())
+        || !bytes.all(|byte| byte == b'_' || byte.is_ascii_alphanumeric())
+    {
+        return None;
+    }
+    Some(symbol)
 }
 
 fn encode_x86_64_naked_instruction(instruction: &str) -> Option<([u8; 10], usize, bool)> {
@@ -28905,6 +28971,31 @@ mod tests {
         );
 
         let module = Parser::new(concat!(
+            "#[unsafe(naked)] unsafe extern \"C\" fn external() { ",
+            "naked_asm!(\"nop\", \"jmp external_target\"); }"
+        ))
+        .parse_module::<1, 1>()
+        .unwrap();
+        let Some(Item::Function(function)) = module.items()[0] else {
+            panic!("expected function")
+        };
+        let output = compile_x86_64_naked_relocatable::<16, 1>(&function).unwrap();
+        assert_eq!(output.code.bytes(), &[0x90, 0xe9, 0, 0, 0, 0]);
+        assert_eq!(
+            output.external_branch,
+            Some(X86_64ExternalBranch {
+                offset: 2,
+                symbol: "external_target",
+            })
+        );
+        assert_eq!(
+            compile_x86_64_function::<_, 16, 1, 8>(&function, &NoConstants, X86_64Abi::SystemV,)
+                .unwrap_err()
+                .kind,
+            CodegenErrorKind::InvalidNakedAssembly
+        );
+
+        let module = Parser::new(concat!(
             "#[unsafe(naked)] unsafe extern \"C\" fn labels() { ",
             "naked_asm!(\"2:\", \"nop\", \"jmp 3f\", \"int3\", \"3:\", \"jmp 2b\", ",
             "options(raw)); }"
@@ -29017,6 +29108,14 @@ mod tests {
             ),
             (
                 "#[unsafe(naked)] unsafe extern \"C\" fn f() { naked_asm!(\"jmp 2b\", \"2:\"); }",
+                CodegenErrorKind::InvalidNakedAssembly,
+            ),
+            (
+                "#[unsafe(naked)] unsafe extern \"C\" fn f() { naked_asm!(\"jmp first\", \"jmp second\"); }",
+                CodegenErrorKind::InvalidNakedAssembly,
+            ),
+            (
+                "#[unsafe(naked)] unsafe extern \"C\" fn f() { naked_asm!(\"jmp external.target\"); }",
                 CodegenErrorKind::InvalidNakedAssembly,
             ),
             (

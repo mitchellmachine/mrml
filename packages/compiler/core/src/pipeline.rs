@@ -3,8 +3,10 @@ use crate::{
     CodegenErrorKind, CodegenOptions, ConstantResolver, ConstantTable, Item, Module, ObjectError,
     ObjectFile, ParseErrorKind, Parser, SemanticErrorKind, SourceTraitDeclarationError,
     SourceTraitDeclarationTable, SourceTraitImplementationError, SourceTraitImplementationTable,
-    SourceTraitObligationError, Span, TargetLayout, X86_64Abi, analyze_constants,
-    compile_x86_64_function_with_options, emit_elf64_x86_64, emit_x86_64_coff,
+    SourceTraitObligationError, Span, TargetLayout, X86_64Abi, X86_64PcRelativeRelocation,
+    analyze_constants, compile_x86_64_function_with_options, compile_x86_64_naked_relocatable,
+    emit_elf64_x86_64, emit_elf64_x86_64_with_relocation, emit_x86_64_coff,
+    emit_x86_64_coff_with_relocation,
 };
 
 struct PipelineResolver<
@@ -269,19 +271,39 @@ pub fn compile_source_function_with_options<
         constants: &constants,
         target,
     };
-    let code = compile_x86_64_function_with_options::<
-        _,
-        MAX_CODE_BYTES,
-        MAX_PARAMETERS,
-        MAX_EXPRESSION_NODES,
-    >(function, &resolver, abi, options)
-    .map_err(|error| CompileError {
-        kind: CompileErrorKind::Codegen(error.kind),
-        span: Some(error.span),
-    })?;
-    match format {
-        ObjectFormat::Elf64 => emit_elf64_x86_64(function.name, &code),
-        ObjectFormat::Coff => emit_x86_64_coff(function.name, &code),
+    let (code, external_branch) = if function.naked {
+        let output = compile_x86_64_naked_relocatable::<MAX_CODE_BYTES, MAX_PARAMETERS>(function)
+            .map_err(|error| CompileError {
+                kind: CompileErrorKind::Codegen(error.kind),
+                span: Some(error.span),
+            })?;
+        (output.code, output.external_branch)
+    } else {
+        let code = compile_x86_64_function_with_options::<
+            _,
+            MAX_CODE_BYTES,
+            MAX_PARAMETERS,
+            MAX_EXPRESSION_NODES,
+        >(function, &resolver, abi, options)
+        .map_err(|error| CompileError {
+            kind: CompileErrorKind::Codegen(error.kind),
+            span: Some(error.span),
+        })?;
+        (code, None)
+    };
+    let relocation = external_branch.map(|branch| X86_64PcRelativeRelocation {
+        offset: branch.offset,
+        symbol: branch.symbol,
+    });
+    match (format, relocation) {
+        (ObjectFormat::Elf64, Some(relocation)) => {
+            emit_elf64_x86_64_with_relocation(function.name, &code, relocation)
+        }
+        (ObjectFormat::Coff, Some(relocation)) => {
+            emit_x86_64_coff_with_relocation(function.name, &code, relocation)
+        }
+        (ObjectFormat::Elf64, None) => emit_elf64_x86_64(function.name, &code),
+        (ObjectFormat::Coff, None) => emit_x86_64_coff(function.name, &code),
     }
     .map_err(|error| CompileError {
         kind: CompileErrorKind::Object(error),
@@ -336,6 +358,40 @@ mod tests {
         assert_eq!(&elf.bytes()[..4], b"\x7fELF");
         let coff = compile(source, "entry", ObjectFormat::Coff).unwrap();
         assert_eq!(&coff.bytes()[..2], &0x8664u16.to_le_bytes());
+    }
+
+    #[test]
+    fn emits_naked_external_branches_with_typed_object_relocations() {
+        let intel = concat!(
+            "#[unsafe(naked)] pub unsafe extern \"C\" fn entry() ",
+            "{ naked_asm!(\"nop\", \"jmp external_target\"); }"
+        );
+        let elf = compile(intel, "entry", ObjectFormat::Elf64).unwrap();
+        assert_eq!(
+            u16::from_le_bytes(elf.bytes()[60..62].try_into().unwrap()),
+            6
+        );
+        assert!(
+            elf.bytes()
+                .windows(b"external_target".len())
+                .any(|window| window == b"external_target")
+        );
+        let coff = compile(intel, "entry", ObjectFormat::Coff).unwrap();
+        assert_eq!(
+            u32::from_le_bytes(coff.bytes()[12..16].try_into().unwrap()),
+            2
+        );
+        assert_eq!(
+            u16::from_le_bytes(coff.bytes()[52..54].try_into().unwrap()),
+            1
+        );
+
+        let att = concat!(
+            "#[unsafe(naked)] pub unsafe extern \"C\" fn entry() ",
+            "{ naked_asm!(\"jmp external_target\", options(att_syntax)); }"
+        );
+        compile(att, "entry", ObjectFormat::Elf64).unwrap();
+        compile(att, "entry", ObjectFormat::Coff).unwrap();
     }
 
     #[test]
