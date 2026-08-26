@@ -1955,8 +1955,19 @@ fn encode_x86_64_naked_instruction(instruction: &str) -> Option<([u8; 10], usize
                     ))
                 }
             } else if mnemonic == "push" {
-                let immediate = x86_64_naked_immediate(operands)?;
-                if immediate <= i8::MAX as u64 {
+                let (immediate, negative) = x86_64_naked_signed_immediate(operands)?;
+                if negative {
+                    let immediate = i64::from_le_bytes(immediate.to_le_bytes());
+                    let immediate = i32::try_from(immediate).ok()?;
+                    if let Ok(immediate) = i8::try_from(immediate) {
+                        Some(([0x6a, immediate as u8, 0, 0, 0, 0, 0, 0, 0, 0], 2, false))
+                    } else {
+                        let mut encoding = [0u8; 10];
+                        encoding[0] = 0x68;
+                        encoding[1..5].copy_from_slice(&immediate.to_le_bytes());
+                        Some((encoding, 5, false))
+                    }
+                } else if immediate <= i8::MAX as u64 {
                     Some(([0x6a, immediate as u8, 0, 0, 0, 0, 0, 0, 0, 0], 2, false))
                 } else if immediate <= i32::MAX as u64 {
                     let mut encoding = [0u8; 10];
@@ -1998,7 +2009,7 @@ fn encode_x86_64_naked_instruction(instruction: &str) -> Option<([u8; 10], usize
                 } else if let Some(address) = x86_64_naked_memory_address(source) {
                     encode_x86_64_naked_memory(None, 0x8b, true, destination, address, false)
                 } else {
-                    let immediate = x86_64_naked_immediate(source)?;
+                    let (immediate, _) = x86_64_naked_signed_immediate(source)?;
                     let mut encoding = [0u8; 10];
                     encoding[0] = 0x48 | (destination >> 3);
                     encoding[1] = 0xb8 + (destination & 7);
@@ -2173,6 +2184,17 @@ fn x86_64_naked_immediate(source: &str) -> Option<u64> {
         separator = false;
     }
     (saw_digit && !separator).then_some(value)
+}
+
+fn x86_64_naked_signed_immediate(source: &str) -> Option<(u64, bool)> {
+    let Some(magnitude) = source.strip_prefix('-') else {
+        return Some((x86_64_naked_immediate(source)?, false));
+    };
+    let magnitude = x86_64_naked_immediate(magnitude)?;
+    if magnitude > 1u64 << 63 {
+        return None;
+    }
+    Some((0u64.wrapping_sub(magnitude), true))
 }
 
 fn x86_64_naked_register(register: &str) -> Option<u8> {
@@ -28581,7 +28603,8 @@ mod tests {
     fn emits_restricted_naked_functions_without_a_prologue_or_epilogue() {
         let module = Parser::new(concat!(
             "#[unsafe(naked)] pub unsafe extern \"C\" fn entry() ",
-            "{ naked_asm!(\"mov r11, [r12 + r9 * 4 - 16]\", ",
+            "{ naked_asm!(\"push -1\", \"push -129\", ",
+            "\"mov r10, -0x8000000000000000\", \"mov r11, [r12 + r9 * 4 - 16]\", ",
             "\"mov [rbp + rcx * 2 + 0x1234], r11\", \"lgdt [r13 - 128]\", ",
             "\"swapgs\", \"jmp [rax + r12 * 8]\"); }"
         ))
@@ -28591,11 +28614,12 @@ mod tests {
             panic!("expected function")
         };
         let code =
-            compile_x86_64_function::<_, 32, 1, 8>(&function, &NoConstants, X86_64Abi::SystemV)
+            compile_x86_64_function::<_, 48, 1, 8>(&function, &NoConstants, X86_64Abi::SystemV)
                 .unwrap();
         assert_eq!(
             code.bytes(),
             &[
+                0x6a, 0xff, 0x68, 0x7f, 0xff, 0xff, 0xff, 0x49, 0xba, 0, 0, 0, 0, 0, 0, 0, 0x80,
                 0x4f, 0x8b, 0x5c, 0x8c, 0xf0, 0x4c, 0x89, 0x9c, 0x4d, 0x34, 0x12, 0, 0, 0x41, 0x0f,
                 0x01, 0x55, 0x80, 0x0f, 0x01, 0xf8, 0x42, 0xff, 0x24, 0xe0,
             ]
@@ -28628,6 +28652,14 @@ mod tests {
             ),
             (
                 "#[unsafe(naked)] unsafe extern \"C\" fn f() { naked_asm!(\"push 0x80000000\", \"ret\"); }",
+                CodegenErrorKind::InvalidNakedAssembly,
+            ),
+            (
+                "#[unsafe(naked)] unsafe extern \"C\" fn f() { naked_asm!(\"push -0x80000001\", \"ret\"); }",
+                CodegenErrorKind::InvalidNakedAssembly,
+            ),
+            (
+                "#[unsafe(naked)] unsafe extern \"C\" fn f() { naked_asm!(\"mov rax, -0x8000000000000001\", \"ret\"); }",
                 CodegenErrorKind::InvalidNakedAssembly,
             ),
             (
