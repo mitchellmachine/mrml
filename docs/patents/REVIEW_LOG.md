@@ -3,9 +3,10 @@
 ## 2026-08-26 — Opaque strict Total runtime proof
 
 Patent review: **NOT_TRIGGERED** for making the existing generation-bound Total
-runtime proof's fields private and exposing read-only scalar accessors. This is
-conventional type encapsulation that prevents safe callers from constructing a
-substitute result without passing the existing complete-inventory finalizer. It
+runtime proof's fields private, making it non-copyable, and exposing read-only
+scalar accessors through the retaining installed-runtime owner. This is
+conventional type encapsulation that prevents safe callers from constructing or
+detaching a substitute result without passing the existing complete-inventory finalizer. It
 adds no placement algorithm, VM mechanism, scheduler, device, DMA, queue,
 interrupt, boot protocol, or persistent format. Broader adaptive and Total
 MicroVM mechanisms retain their existing **TRIGGERED** review; this technical

@@ -3891,8 +3891,8 @@ impl<const DOMAINS: usize> RecoveredInstalledTotalRuntime<DOMAINS> {
         self.total.admission()
     }
 
-    pub const fn proof(&self) -> mrml_kernel::TotalMicrovmRuntimeProof {
-        self.proof
+    pub const fn proof(&self) -> &mrml_kernel::TotalMicrovmRuntimeProof {
+        &self.proof
     }
 }
 

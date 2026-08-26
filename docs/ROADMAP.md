@@ -413,7 +413,9 @@ accept it, the wrapper must be consumed by exact equality with the activated
 system generation, canonical generation digest, and interface-catalog digest.
 The resulting strict-runtime proof is now private-field too; external launchers
 may inspect generation-bound counts but cannot safely construct a substitute
-proof. Windows passes 564 kernel tests and 51 configuration tests, and the WHP
+proof. It is non-copyable, and installed-runtime diagnostics borrow it without
+detaching it from the retained recovery and admission owner. Windows passes 564
+kernel tests and 51 configuration tests, and the WHP
 runner cross-builds with this boundary. Linux/KVM execution for this increment
 was unavailable on the current Windows host and is not claimed.
 Both runners perform that join before CPU, RAM, or VMM construction; matching

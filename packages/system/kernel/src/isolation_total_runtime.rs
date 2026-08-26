@@ -190,7 +190,7 @@ impl<const N: usize> TotalMicrovmInventory<N> {
     }
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Debug, Eq, PartialEq)]
 pub struct TotalMicrovmRuntimeProof {
     system_generation: u64,
     policy_generation: u64,
@@ -203,35 +203,35 @@ pub struct TotalMicrovmRuntimeProof {
 }
 
 impl TotalMicrovmRuntimeProof {
-    pub const fn system_generation(self) -> u64 {
+    pub const fn system_generation(&self) -> u64 {
         self.system_generation
     }
 
-    pub const fn policy_generation(self) -> u64 {
+    pub const fn policy_generation(&self) -> u64 {
         self.policy_generation
     }
 
-    pub const fn classified_domains(self) -> usize {
+    pub const fn classified_domains(&self) -> usize {
         self.classified_domains
     }
 
-    pub const fn running_microvm_eligible(self) -> usize {
+    pub const fn running_microvm_eligible(&self) -> usize {
         self.running_microvm_eligible
     }
 
-    pub const fn running_in_microvm(self) -> usize {
+    pub const fn running_in_microvm(&self) -> usize {
         self.running_in_microvm
     }
 
-    pub const fn running_host_substrate(self) -> usize {
+    pub const fn running_host_substrate(&self) -> usize {
         self.running_host_substrate
     }
 
-    pub const fn running_boot_only(self) -> usize {
+    pub const fn running_boot_only(&self) -> usize {
         self.running_boot_only
     }
 
-    pub const fn running_recovery_only(self) -> usize {
+    pub const fn running_recovery_only(&self) -> usize {
         self.running_recovery_only
     }
 }

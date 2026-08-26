@@ -1147,7 +1147,10 @@ fail closed; metadata grants no domain authority. The authenticated result is a
 non-forgeable typed wrapper rather than a public mutable inventory. The strict
 runtime finalizer's resulting proof is now also opaque outside its kernel
 module: callers inspect generation-bound counts through accessors and cannot
-construct a substitute proof with public fields. Kernel passes 564 tests and
+construct a substitute proof with public fields. It is non-copyable and remains
+owned by the immutable installed runtime beside the recovered device, policy,
+release, and admission table; diagnostics receive only a shared borrow. Kernel
+passes 564 tests and
 configuration passes 51 tests on Windows; the WHP runner cross-builds with the
 opaque proof API. Complete admitted-system runtime proof remains **PLANNED**
 because live installed orchestration and complete domain enumeration are not
