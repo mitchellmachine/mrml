@@ -369,6 +369,13 @@ the explicit `'a: 'b` relationship required by tuple-field replacement. This
 is evidence for that exact nested terminal shape, not a general loop or region
 fixed point. Temporary sources and metadata were removed.
 
+A follow-up invocation compiled the same projected call inside a nonterminal
+nested-loop path. On the path that did not return, both mutable-reference
+arguments were available for the next iteration through Rust's implicit call-
+argument reborrows. This is exact evidence for direct reference places passed to
+those reference-typed parameters, not general call coercion or region inference.
+Temporary source and metadata were removed.
+
 An independently authored Rust 2024 metadata-only probe against this exact
 toolchain and commit returned call-derived shared children through an explicit
 return and through a conditional early-return plus tail-return path. Both

@@ -872,11 +872,13 @@ conformance tests, and 335 replacement tests: 988 compiler tests per host.
 General loop and region fixed points remain unsupported.
 
 Nested supported `loop` returns now retain projected callee-summary shared-child
-origins on exhaustive inner terminal paths. Parameter-backed second arguments
-pass; inner-loop-local arguments fail closed, and a nonterminal backedge after
-moving call arguments remains `RuntimeUseAfterMove`. ORACLE-0002 accepts the
-parameter form and rejects the local escape with E0515. Windows and Arch remain
-at 988 compiler tests per host; general loop fixed points remain unsupported.
+origins. Every direct place passed to a reference-typed parameter receives its
+implicit reborrow effect, while only the proven origin parameter is attached to
+the result generation. The formerly conservative nonterminal inner backedge now
+matches ORACLE-0002 and passes; an inner-loop-local origin still fails closed
+with E0515. Windows and Arch each pass 642 library tests, one component-interface
+probe, 10 conformance tests, and 335 replacement tests: 988 tests per host.
+General loop fixed points remain unsupported.
 
 Multi-field tuple literals retain a separate projected origin per field. A
 conditional reference element seeds its field only when both arms prove the
