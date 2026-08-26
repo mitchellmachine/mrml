@@ -7201,3 +7201,15 @@ analysis, optimization, or code-generation mechanism. General interprocedural
 lifetime inference remains absent. Broader compiler completion remains partial;
 this technical screen is not a clearance or infringement conclusion and does
 not replace independent human dual review.
+
+# 2026-08-26 — Projected call-derived shared-child loop-return evidence
+
+**Result: NOT_TRIGGERED after the projected loop-return evidence review.** This
+increment adds independently authored regression evidence that existing bounded
+projected callee-origin and return-outlives checks compose at direct and
+conditional return sites inside the supported loop representation. It
+introduces no new loop fixed point, lifetime inference, interprocedural
+analysis, borrow-checking, alias-analysis, optimization, or code-generation
+algorithm. General loop and region fixed points remain absent. Broader compiler
+completion remains partial; this technical screen is not a clearance or
+infringement conclusion and does not replace independent human dual review.
