@@ -389,6 +389,14 @@ not reconstruct those pieces independently. Configuration remains 47/47 on
 Windows and Arch Linux, WHP 11/11, and KVM 12/12. Native device sources and
 transfer of this owner into the actual boot recovery orchestrator remain next.
 
+Fresh clean-tree parity now verifies the current owner on both hosted backends.
+Commit `70e2e74d` produced one new one-use-signed kernel, ZIM, Zstd, canonical
+generation/catalog/runtime inventory, and v2 SystemRelease set. WHP and nested
+KVM each reported recovery root 14, `classified=1`, `eligible=1`, `microvm=1`,
+`native_fallback=0`, Total satisfied, and successful terminal component
+execution/cleanup. The next gates remain native device enumeration and transfer
+into installed early boot; this evidence does not promote Total mode generally.
+
 The next storage connection is now **PARTIALLY IMPLEMENTED** without claiming
 media evidence. `recover_stable_system_selection` accepts the existing hostile
 metadata backend implemented by `BlockVolume`, selects one complete redundant-

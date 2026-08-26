@@ -1224,6 +1224,17 @@ volume, and active root match the candidate actually recovered. This closes a
 caller-side substitution gap but does not yet supply a native enumerator or an
 installed early-boot owner.
 
+A fresh detached clean-tree build at commit `70e2e74d` exercised this recovered
+owner through the complete focused component lifecycle on both hosted backends.
+One newly signed kernel/ZIM/Zstd/v2-SystemRelease set produced identical
+`isolation-recovery` records (`authority_epoch=9`, `boot_accepted_epoch=8`, root
+generation 14, configuration revision 1), then identical Total inventory results
+with one eligible microVM and zero fallback. KVM reached the expected halt and
+WHP completed the exact-generation data path and cleanup. Retained generic
+`service-probe` artifacts were excluded because that mode is not the component
+generation/release acceptance path. This remains controlled in-memory recovery,
+not installed-media or early-boot evidence.
+
 WHP and nested KVM now consume the common inner `BootTotalAdmission` owner from
 effective-policy/release binding through classified route preparation,
 vCPU/RAM/VMM construction, microVM commit, and final release proof. The owner

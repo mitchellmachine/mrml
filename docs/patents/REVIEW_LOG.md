@@ -885,6 +885,10 @@ reachable-graph owner is conventional lifetime-safe API composition. Combining
 those existing validation and read calls adds no device discovery, storage,
 recovery-selection, placement, scheduling, or virtualization algorithm; the
 broader review remains `TRIGGERED`.
+Rebuilding existing artifacts in a detached clean tree and exercising the
+already reviewed WHP/KVM component/recovery path introduces no mechanism.
+Patent review for this evidence-only step is `NOT_TRIGGERED`; the underlying
+adaptive-isolation/recovery combination remains `TRIGGERED` as stated below.
 Because the
 broader combination of
 signed release classification, automated placement, isolation, recovery, and

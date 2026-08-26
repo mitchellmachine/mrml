@@ -3202,6 +3202,20 @@ between discovery and root I/O. Hosted tests verify the retained device, volume,
 and active root. Configuration passes 47 tests on both development hosts, WHP
 11, and KVM 12; native enumeration and early-boot transfer remain **PLANNED**.
 
+Fresh clean-tree execution now carries that owner through the focused live
+component path. From detached commit `70e2e74d`, the public build frontend and
+both optimized runners produced and consumed one newly built, one-use-signed
+kernel/ZIM/Zstd/v2-SystemRelease set. KVM reported recovery root 14, one eligible
+microVM, zero fallback, Total satisfied, and reached the expected halt
+(`verify=24786us`, `prepare=9233us`, `execute=1505us`, `total=144281us`). WHP
+reported the same recovery/inventory/Total result and completed the exact-
+generation data path and lifecycle cleanup (`verify=19529us`, `prepare=6252us`,
+`execute=2566us`, `total=52633us`). Consumer and provider signed-artifact
+SHA-256 values were respectively
+`55e3a5167a25bdd36ff87247960dc05d6ad39805033e9c397b22545f0f27fe97` and
+`e8459afec07ce98b769e55c2ecdb5bf7622202e57b5ecaae670cf8a0ecdd4f7b`.
+This is hosted controlled evidence only.
+
 Patent review: `TRIGGERED` under the existing signed-release, adaptive
 isolation, Total-MicroVM, automated VMM placement, and device-projection reviews
 now that authenticated package classifications are joined to live domain

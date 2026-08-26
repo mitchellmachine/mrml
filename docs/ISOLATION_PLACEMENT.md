@@ -829,6 +829,20 @@ from a different reported candidate. The hosted test verifies the retained
 device, volume, and root; native enumeration and early-boot transfer remain
 **PLANNED**.
 
+Fresh clean-tree hosted evidence now covers that owner through the existing
+component lifecycle. A detached build of commit `70e2e74d` generated a new
+component-service kernel, ZIM consumer, Zstd provider, canonical 201-byte
+generation, 207-byte interface catalog, 225-byte runtime inventory, and one
+99,369-byte v2 SystemRelease using one-use Lamport roots. The identical artifacts
+reported recovered root 14, one eligible microVM, zero native fallback, and
+Total satisfied before completing the expected component data path and cleanup
+on both WHP and nested KVM. The kernel package SHA-256 was
+`60221162f6fe17540a4ade07a2e5ae02db1446a790a2fa52d5ab7f9f9abc49fa`; the
+SystemRelease SHA-256 was
+`9d74c677ba083276fc337c65adf90d664ec1466164089487030b8f5e00398394`.
+This is hosted controlled evidence, not native enumeration, installed boot,
+host-resistant isolation, or physical-hardware evidence.
+
 The runner-side boot overlay is no longer injected as an independent enum
 literal. Both hosted backends encode neutral accepted recovery state and the
 one-boot request into the same canonical handoff installed for the guest, decode
