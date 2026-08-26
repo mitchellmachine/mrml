@@ -7295,3 +7295,14 @@ analysis, optimization, or code-generation algorithm. General call coercion and
 region inference remain absent. Broader compiler completion remains partial;
 this technical screen is not a clearance or infringement conclusion and does
 not replace independent human dual review.
+
+# 2026-08-26 — Non-origin call-loan last-use release evidence
+
+**Result: NOT_TRIGGERED after the last-use release evidence review.** This
+increment adds independently authored regression evidence that the existing
+bounded loan-liveness analysis releases a non-origin local call loan after the
+reference result's last use. It introduces no new region solver,
+interprocedural inference, alias-analysis, optimization, or code-generation
+algorithm. General call coercion and region inference remain absent. Broader
+compiler completion remains partial; this technical screen is not a clearance
+or infringement conclusion and does not replace independent human dual review.
