@@ -4,8 +4,8 @@ use mrml_package_format::{
 };
 
 use crate::{
-    HostSubstrateReason, ObjectId, TotalMicrovmClass, TotalMicrovmInventory,
-    TotalMicrovmInventoryEntry, TotalMicrovmRuntimeError,
+    HostSubstrateReason, ObjectId, TotalMicrovmClass, TotalMicrovmInventoryEntry,
+    TotalMicrovmRuntimeError, isolation_total_runtime::TotalMicrovmInventory,
 };
 
 /// Policy-selected package-to-domain assignment for a complete authenticated

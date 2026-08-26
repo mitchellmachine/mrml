@@ -1150,6 +1150,10 @@ module: callers inspect generation-bound counts through accessors and cannot
 construct a substitute proof with public fields. It is non-copyable and remains
 owned by the immutable installed runtime beside the recovered device, policy,
 release, and admission table; diagnostics receive only a shared borrow. Kernel
+raw inventory construction/finalization is now kernel-private, so external
+hosted launchers cannot mint strict-system proofs from ad hoc domain records.
+The standalone GUI probe reports only `scope=single-application`; only an exact
+authenticated release inventory can enter strict-system finalization. Kernel
 passes 564 tests and
 configuration passes 51 tests on Windows; the WHP runner cross-builds with the
 opaque proof API. Complete admitted-system runtime proof remains **PLANNED**

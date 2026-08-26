@@ -12,6 +12,11 @@ interrupt, boot protocol, or persistent format. Broader adaptive and Total
 MicroVM mechanisms retain their existing **TRIGGERED** review; this technical
 screen is not patent clearance.
 
+The follow-on visibility tightening is also **NOT_TRIGGERED**: raw inventory
+construction/finalization is kernel-private and the standalone application probe
+is labeled as scoped placement evidence rather than whole-system proof. This is
+the same conventional authority-boundary reduction and adds no mechanism.
+
 ## 2026-08-26 — Canadian AHCI software-driver re-evaluation narrows the hold
 
 Patent review: **TRIGGERED**. This entry supersedes the blanket implementation

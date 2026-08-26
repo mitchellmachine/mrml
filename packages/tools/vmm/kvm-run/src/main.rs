@@ -34,7 +34,7 @@ use mrml_kernel::{
     MicrovmProjectionRequirements, ObjectId, PAGE_SIZE, PreparedMicrovmApplicationBackend,
     ResourceCommand, Rights, RuntimeDomainAssignment, RuntimeDomainAssignmentPlan,
     SIGNED_ARTIFACT_OVERHEAD_BYTES, ScheduledDeadlineVmBackend, ScheduledSmpVmBackend,
-    SignedArtifact, TotalMicrovmClass, TotalMicrovmInventory, TotalMicrovmInventoryEntry,
+    SignedArtifact, TotalMicrovmClass,
     TrustRoot, VIRTUAL_BLOCK_FEATURE_FLUSH, VcpuReservationId, VerifiedExecutable,
     VerifiedGpuKernelBundle, VirtualBlockBackend, VirtualBlockBackendAuthority,
     VirtualBlockCompletionStatus, VirtualBlockConfigurationPage, VirtualBlockDevice,
@@ -3511,29 +3511,14 @@ fn application_main() -> Result<()> {
                 "application Total MicroVM admission was not satisfied"
             ));
         }
-        let mut inventory =
-            TotalMicrovmInventory::<1>::new(spec.system_generation(), spec.policy_generation())
-                .map_err(|error| anyhow!("application Total inventory failed: {:?}", error))?;
-        inventory
-            .insert(
-                TotalMicrovmInventoryEntry::new(
-                    spec.domain(),
-                    TotalMicrovmClass::MicrovmEligible,
-                    true,
-                )
-                .map_err(|error| anyhow!("application Total entry failed: {:?}", error))?,
-            )
-            .map_err(|error| anyhow!("application Total inventory failed: {:?}", error))?;
-        let proof = inventory
-            .finalize(&admission)
-            .map_err(|error| anyhow!("application strict Total failed: {:?}", error))?;
+        let report = admission.total_microvm_report();
         println!(
-            "isolation-inventory|status=PASS|backend=kvm|system_generation={}|policy_generation={}|classified={}|eligible={}|microvm={}|native_fallback=0",
-            proof.system_generation(),
-            proof.policy_generation(),
-            proof.classified_domains(),
-            proof.running_microvm_eligible(),
-            proof.running_in_microvm(),
+            "application-isolation|status=PASS|scope=single-application|backend=kvm|system_generation={}|policy_generation={}|eligible={}|microvm={}|native_fallback={}",
+            spec.system_generation(),
+            spec.policy_generation(),
+            report.running_microvm_eligible,
+            report.running_in_microvm,
+            report.native_fallback,
         );
         KvmGuestOwner::Application {
             launcher,

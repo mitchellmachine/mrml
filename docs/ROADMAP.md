@@ -418,6 +418,10 @@ detaching it from the retained recovery and admission owner. Windows passes 564
 kernel tests and 51 configuration tests, and the WHP
 runner cross-builds with this boundary. Linux/KVM execution for this increment
 was unavailable on the current Windows host and is not claimed.
+Raw inventory construction and finalization are now kernel-private. The hosted
+GUI probe reports scoped application placement rather than constructing an ad
+hoc strict-system inventory; externally obtainable strict proof must flow from
+the authenticated release wrapper.
 Both runners perform that join before CPU, RAM, or VMM construction; matching
 only the numeric generation fails the typed boundary. Windows/Linux config
 suites pass 42 tests, WHP passes 9, and KVM passes 10. Complete installed-system

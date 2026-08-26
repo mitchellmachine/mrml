@@ -165,8 +165,7 @@ pub use isolation_release_inventory::{
     total_inventory_from_system_release, total_inventory_from_system_release_assignments,
 };
 pub use isolation_total_runtime::{
-    TotalMicrovmInventory, TotalMicrovmInventoryEntry, TotalMicrovmRuntimeError,
-    TotalMicrovmRuntimeProof,
+    TotalMicrovmInventoryEntry, TotalMicrovmRuntimeError, TotalMicrovmRuntimeProof,
 };
 pub use memory::{
     FrameAllocator, MemoryError, MemoryKind, MemoryMap, MemoryRegion, PAGE_SIZE, PhysAddr,

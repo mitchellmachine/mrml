@@ -12,7 +12,7 @@ pub struct TotalMicrovmInventoryEntry {
 }
 
 impl TotalMicrovmInventoryEntry {
-    pub const fn new(
+    pub(crate) const fn new(
         domain: ObjectId,
         class: TotalMicrovmClass,
         must_be_running: bool,
@@ -55,7 +55,7 @@ pub enum TotalMicrovmRuntimeError {
     NativeFallback,
 }
 
-pub struct TotalMicrovmInventory<const N: usize> {
+pub(crate) struct TotalMicrovmInventory<const N: usize> {
     system_generation: u64,
     policy_generation: u64,
     entries: [Option<TotalMicrovmInventoryEntry>; N],
@@ -63,7 +63,7 @@ pub struct TotalMicrovmInventory<const N: usize> {
 }
 
 impl<const N: usize> TotalMicrovmInventory<N> {
-    pub fn new(
+    pub(crate) fn new(
         system_generation: u64,
         policy_generation: u64,
     ) -> Result<Self, TotalMicrovmRuntimeError> {
@@ -78,7 +78,7 @@ impl<const N: usize> TotalMicrovmInventory<N> {
         })
     }
 
-    pub fn insert(
+    pub(crate) fn insert(
         &mut self,
         entry: TotalMicrovmInventoryEntry,
     ) -> Result<(), TotalMicrovmRuntimeError> {
@@ -97,15 +97,15 @@ impl<const N: usize> TotalMicrovmInventory<N> {
         Ok(())
     }
 
-    pub const fn len(&self) -> usize {
+    pub(crate) const fn len(&self) -> usize {
         self.count
     }
 
-    pub const fn is_empty(&self) -> bool {
+    pub(crate) const fn is_empty(&self) -> bool {
         self.count == 0
     }
 
-    pub fn entries(&self) -> impl Iterator<Item = TotalMicrovmInventoryEntry> + '_ {
+    pub(crate) fn entries(&self) -> impl Iterator<Item = TotalMicrovmInventoryEntry> + '_ {
         self.entries[..self.count].iter().flatten().copied()
     }
 
@@ -116,7 +116,7 @@ impl<const N: usize> TotalMicrovmInventory<N> {
     /// Finalizes strict Total mode only from the authoritative admission table
     /// and an exact generation-bound inventory. Names and manifests cannot
     /// satisfy this gate, and failure never creates a native launch path.
-    pub fn finalize<const DOMAINS: usize>(
+    pub(crate) fn finalize<const DOMAINS: usize>(
         &self,
         admission: &IsolationAdmissionTable<DOMAINS>,
     ) -> Result<TotalMicrovmRuntimeProof, TotalMicrovmRuntimeError> {
