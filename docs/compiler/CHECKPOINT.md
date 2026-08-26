@@ -1171,6 +1171,16 @@ unsupported. Windows gnullvm and native Arch Linux WSL each pass 569 library
 tests, one component-interface probe, 10 conformance tests, and 335 replacement
 tests: 915 compiler tests per host.
 
+The concrete source-projection milestone parses bounded function predicates of
+the form `where <Type as Trait>::Item = Expected`, resolves all four stable
+source identities, and queries the existing exact projection normalizer before
+code generation. Unknown identities, absent or ambiguous implementations,
+mismatched values, duplicate predicates, and capacity exhaustion fail closed.
+Generic projections, projection types outside where-equalities, and associated
+constraints on generic binders remain unsupported. Windows gnullvm and native
+Arch Linux WSL each pass 572 library tests, one component-interface probe, 10
+conformance tests, and 335 replacement tests: 918 compiler tests per host.
+
 The premise-bearing rigid-normalization milestone proves the selected generic
 implementation's instantiated trait and projection predicates before exposing
 its associated value. It shares the caller's 16-frame rigid proof stack and

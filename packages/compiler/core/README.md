@@ -4361,6 +4361,18 @@ remain unsupported. Windows gnullvm and native Arch Linux WSL each pass 569
 library tests, one component probe, 10 conformance tests, and 335 replacement
 tests: 915 compiler tests per host.
 
+The concrete source-projection milestone admits bounded function predicates of
+the form `where <Type as Trait>::Item = Expected`. The canonical parser retains
+each component and its source span; source admission resolves the exact trait,
+self type, associated type, and expected type identities, then uses the existing
+exact projection database before code generation. Unknown identities, missing or
+ambiguous implementations, mismatched values, duplicate predicates, and capacity
+exhaustion fail closed. Generic projections, projection types in signatures or
+bodies, and associated constraints on generic binders remain unsupported.
+Windows gnullvm and native Arch Linux WSL each pass 572 library tests, one
+component probe, 10 conformance tests, and 335 replacement tests: 918 compiler
+tests per host.
+
 The projection-bearing term milestone uses a fixed 64-node arena for flat leaf
 terms and associated-type projections whose trait self/argument positions refer
 only to earlier nodes. Identical nodes intern to one stable identity; invalid
