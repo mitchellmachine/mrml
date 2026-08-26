@@ -135,6 +135,14 @@ it does not establish branch break/continue destination state, general region
 inference, or local-backed return safety. Temporary source and metadata were
 removed.
 
+An independently authored Rust 2024 metadata-only nested-branch-control probe
+against this exact toolchain and commit accepted a scoped mutable parameter
+reborrow before both an inner `break` and an inner `continue`; each function
+subsequently returns the parameter. This black-box evidence covers the exact
+parameter-backed destination-state shapes only. It does not establish general
+region inference, local-backed return safety, or state-changing inner-continue
+prefixes. Temporary source and metadata were removed.
+
 An independently authored Rust 2024 metadata-only nested-break set against this
 exact toolchain and commit accepted a local-initialized alias overwritten by the
 parameter before an inner unconditional-loop break and returned afterward.

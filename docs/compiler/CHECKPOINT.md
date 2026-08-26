@@ -667,9 +667,11 @@ scoped-action blocks, routes false fallthrough and target-aware true terminals,
 and maps condition/action/return ownership locations back to those control
 points. Branch-return origin transfer applies the exact scoped action prefix:
 parameter-backed reborrows are admitted and local-backed returns fail closed.
-Reference branch breaks and continues remain unavailable. Constant semantics
-are implemented: taken actions use a scoped resolver checkpoint and target-aware
-break, continue, and return reuse the existing bounded loop evaluator. Direct
+Branch breaks transfer the exact scoped state to inner/outer exits, as do outer
+continues; inner continues require their complete prefix to preserve the
+incoming origin state. Constant semantics are implemented: taken actions use a
+scoped resolver checkpoint and target-aware break, continue, and return reuse
+the existing bounded loop evaluator. Direct
 and inline native x86-64 lowering mirrors those actions, scoped cleanup, and
 terminals for scalar-only functions. Native reference-return branches are
 admitted only after that exact origin proof; reference break/continue branches

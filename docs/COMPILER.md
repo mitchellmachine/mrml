@@ -1378,8 +1378,10 @@ preanalysis assigns distinct condition, action, and return-value locations and
 keeps branch locals scoped. Reference-carrying branch-return paths now apply
 their exact scoped action prefix before resolving the returned origin; direct
 parameter reborrows are admitted while local-backed returns fail closed.
-Reference-carrying branch breaks and continues remain rejected pending
-destination-state transfer. The bounded constant evaluator executes taken
+Reference-carrying branch breaks now transfer that scoped state into their
+inner/outer destination, as do outer continues; an inner continue is admitted
+only when its complete prefix preserves the incoming origin state. The bounded
+constant evaluator executes taken
 branch actions with lexical-scope truncation and routes inner/outer break,
 continue, and return terminals under the existing iteration limit. Focused
 constants cover all three terminals and untaken fallthrough. Direct and inline
