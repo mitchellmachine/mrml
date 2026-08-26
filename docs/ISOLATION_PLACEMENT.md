@@ -1144,8 +1144,14 @@ fixed-capacity `TotalMicrovmInventory` only from an authenticated v2 release and
 an exact package-to-live-domain binding supplied by the normal launch control
 plane. Signer, count, package, domain, class, and exception-reason substitution
 fail closed; metadata grants no domain authority. The authenticated result is a
-non-forgeable typed wrapper rather than a public mutable inventory. Complete
-admitted-system runtime proof remains **PLANNED**.
+non-forgeable typed wrapper rather than a public mutable inventory. The strict
+runtime finalizer's resulting proof is now also opaque outside its kernel
+module: callers inspect generation-bound counts through accessors and cannot
+construct a substitute proof with public fields. Kernel passes 564 tests and
+configuration passes 51 tests on Windows; the WHP runner cross-builds with the
+opaque proof API. Complete admitted-system runtime proof remains **PLANNED**
+because live installed orchestration and complete domain enumeration are not
+yet connected.
 
 ```text
 Complexity impact: MEDIUM

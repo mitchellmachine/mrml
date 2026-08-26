@@ -411,6 +411,11 @@ That inventory is now a private-field authenticated-release wrapper rather
 than a publicly constructible mutable value. Before recovered Total policy can
 accept it, the wrapper must be consumed by exact equality with the activated
 system generation, canonical generation digest, and interface-catalog digest.
+The resulting strict-runtime proof is now private-field too; external launchers
+may inspect generation-bound counts but cannot safely construct a substitute
+proof. Windows passes 564 kernel tests and 51 configuration tests, and the WHP
+runner cross-builds with this boundary. Linux/KVM execution for this increment
+was unavailable on the current Windows host and is not claimed.
 Both runners perform that join before CPU, RAM, or VMM construction; matching
 only the numeric generation fails the typed boundary. Windows/Linux config
 suites pass 42 tests, WHP passes 9, and KVM passes 10. Complete installed-system

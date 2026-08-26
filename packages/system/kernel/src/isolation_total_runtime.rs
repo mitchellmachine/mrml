@@ -192,14 +192,48 @@ impl<const N: usize> TotalMicrovmInventory<N> {
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct TotalMicrovmRuntimeProof {
-    pub system_generation: u64,
-    pub policy_generation: u64,
-    pub classified_domains: usize,
-    pub running_microvm_eligible: usize,
-    pub running_in_microvm: usize,
-    pub running_host_substrate: usize,
-    pub running_boot_only: usize,
-    pub running_recovery_only: usize,
+    system_generation: u64,
+    policy_generation: u64,
+    classified_domains: usize,
+    running_microvm_eligible: usize,
+    running_in_microvm: usize,
+    running_host_substrate: usize,
+    running_boot_only: usize,
+    running_recovery_only: usize,
+}
+
+impl TotalMicrovmRuntimeProof {
+    pub const fn system_generation(self) -> u64 {
+        self.system_generation
+    }
+
+    pub const fn policy_generation(self) -> u64 {
+        self.policy_generation
+    }
+
+    pub const fn classified_domains(self) -> usize {
+        self.classified_domains
+    }
+
+    pub const fn running_microvm_eligible(self) -> usize {
+        self.running_microvm_eligible
+    }
+
+    pub const fn running_in_microvm(self) -> usize {
+        self.running_in_microvm
+    }
+
+    pub const fn running_host_substrate(self) -> usize {
+        self.running_host_substrate
+    }
+
+    pub const fn running_boot_only(self) -> usize {
+        self.running_boot_only
+    }
+
+    pub const fn running_recovery_only(self) -> usize {
+        self.running_recovery_only
+    }
 }
 
 #[cfg(test)]
@@ -271,10 +305,10 @@ mod tests {
             .insert(entry(3, TotalMicrovmClass::RecoveryOnly, false))
             .unwrap();
         let proof = inventory.finalize(&admission).unwrap();
-        assert_eq!(proof.classified_domains, 3);
-        assert_eq!(proof.running_microvm_eligible, 1);
-        assert_eq!(proof.running_in_microvm, 1);
-        assert_eq!(proof.running_host_substrate, 1);
+        assert_eq!(proof.classified_domains(), 3);
+        assert_eq!(proof.running_microvm_eligible(), 1);
+        assert_eq!(proof.running_in_microvm(), 1);
+        assert_eq!(proof.running_host_substrate(), 1);
     }
 
     #[test]

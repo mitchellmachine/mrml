@@ -3409,11 +3409,11 @@ fn application_main() -> Result<()> {
             .map_err(|error| anyhow!("application strict Total failed: {:?}", error))?;
         println!(
             "isolation-inventory|status=PASS|backend=whp|system_generation={}|policy_generation={}|classified={}|eligible={}|microvm={}|native_fallback=0",
-            proof.system_generation,
-            proof.policy_generation,
-            proof.classified_domains,
-            proof.running_microvm_eligible,
-            proof.running_in_microvm,
+            proof.system_generation(),
+            proof.policy_generation(),
+            proof.classified_domains(),
+            proof.running_microvm_eligible(),
+            proof.running_in_microvm(),
         );
         WhpGuestOwner::Application {
             launcher,
@@ -3448,9 +3448,9 @@ fn application_main() -> Result<()> {
             let proof = runtime.proof();
             println!(
                 "component-total-inventory|status=PASS|backend=whp|classified={}|eligible={}|microvm={}|native_fallback={}",
-                proof.classified_domains,
-                proof.running_microvm_eligible,
-                proof.running_in_microvm,
+                proof.classified_domains(),
+                proof.running_microvm_eligible(),
+                proof.running_in_microvm(),
                 runtime.admission().total_microvm_report().native_fallback
             );
             installed_total_runtime = Some(runtime);

@@ -10098,9 +10098,9 @@ mod tests {
             assert_eq!(runtime.installed(), installed_selection);
             assert_eq!(runtime.admission().running().count(), 1);
             let proof = runtime.proof();
-            assert_eq!(proof.classified_domains, 1);
-            assert_eq!(proof.running_microvm_eligible, 1);
-            assert_eq!(proof.running_in_microvm, 1);
+            assert_eq!(proof.classified_domains(), 1);
+            assert_eq!(proof.running_microvm_eligible(), 1);
+            assert_eq!(proof.running_in_microvm(), 1);
 
             let stale_recovery = mrml_kernel::RecoveryStateMetadata::new(7, 1, None, 0).unwrap();
             let stale_length = mrml_kernel::encode_handoff_with_smp_service_recovery_and_isolation(
@@ -11447,9 +11447,9 @@ mod tests {
         assert_eq!(routed.domain(), domain);
         assert_eq!(routed.into_endpoint(), 0x51);
         let proof = total.finalize().unwrap();
-        assert_eq!(proof.classified_domains, 1);
-        assert_eq!(proof.running_microvm_eligible, 1);
-        assert_eq!(proof.running_in_microvm, 1);
+        assert_eq!(proof.classified_domains(), 1);
+        assert_eq!(proof.running_microvm_eligible(), 1);
+        assert_eq!(proof.running_in_microvm(), 1);
 
         let release = activated_configuration_release(domain, 9);
         let mut rejected = policy.bind_release_inventory(release).unwrap();
