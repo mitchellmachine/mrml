@@ -4159,7 +4159,7 @@ fn application_main() -> Result<()> {
         let mut exit = exit;
         let cleanup_stages = [0x21, 0x31, 0x20, 0x30];
         let mut cleanup_stage = 0;
-        for _ in 0..256 {
+        for observed_stage in 0..256 {
             if let VmExit::Io {
                 port: SERVICE_PROBE_PORT,
                 size: 4,
@@ -4202,7 +4202,11 @@ fn application_main() -> Result<()> {
                     ..
                 }
             ) {
-                return Err(anyhow!("WHP block-service stage mismatch: {:?}", exit));
+                return Err(anyhow!(
+                    "WHP block-service stage mismatch after {} accepted exits: {:?}",
+                    observed_stage,
+                    exit
+                ));
             }
             exit = VmBackend::run(&mut guest, 0)
                 .map_err(|error| anyhow!("WHP block-service execution failed: {:?}", error))?;

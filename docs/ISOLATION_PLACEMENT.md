@@ -755,6 +755,16 @@ live count of zero. Windows configuration tests pass 52/52. This constructs no
 backend endpoint and does not promote service-loop or multi-domain execution
 from **PLANNED**.
 
+The service-image prerequisite now **PARTIALLY IMPLEMENTS** live selection of
+the complete four-file stable root. The signed CPL3 block probe preserves its
+configuration/authority recovery, then publishes and validates distinct
+configuration, authority, deployment, and release objects through the same
+capability-mediated block session. WHP completed 51 monotonic requests and
+ordered cleanup with no native fallback claim. Placeholder deployment/release
+contents are not authenticated or converted into runtime assignments, so this
+does not yet connect the service loop to `BootTotalAdmission`, construct any
+domain, or satisfy Total mode.
+
 The common boot/recovery owner is now **PARTIALLY IMPLEMENTED** in both live
 runners. `BootTotalAdmission` binds an effective Total policy directly to the
 activated release, constructs an activated admission table retaining the exact

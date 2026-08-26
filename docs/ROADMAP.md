@@ -665,6 +665,22 @@ build/ABI evidence for the already implemented configuration/authority loop.
 It does not add the deployment checkpoint or SystemRelease to that service
 image, so four-file Total-owner consumption remains the next gate.
 
+Live service-image four-file selection is now **PARTIALLY IMPLEMENTED**. After
+the existing configuration/authority COW publication and recovery, the CPL3
+client publishes a canonical 48-block reachable graph with distinct
+configuration, authority-checkpoint, deployment-checkpoint, and SystemRelease
+files. It then invokes `recover_block_stable_total_system_selection` through the
+same capability-mediated remote block session, exact-checks volume `51...51`,
+root generation 14, and objects 9 through 12, and erases its static recovery
+scratch. The service processes exactly 51 monotonic block requests and cannot
+retire before the client completes the redundant-root reads. Fresh one-use
+signed artifacts completed the full lifecycle under WHP in 48,442 microseconds;
+WHP runner tests pass 12/12. The Linux cross-host target is unavailable here,
+so KVM execution was not rerun. The deployment bytes and release bytes in this
+controlled graph are not yet parsed or authenticated; deployment recovery,
+runtime assignment, and Total admission from this service-image owner remain
+the next gates.
+
 The production-shaped stable-selection API is now **PARTIALLY IMPLEMENTED**.
 `SelectedStableSystemRecovery` admits only distinct configuration and authority
 checkpoint files selected from the same integrity-validated volume/root

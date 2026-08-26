@@ -4027,6 +4027,18 @@ the terminal `0x30` marker. Each runner accepts at most 256 host exits and
 requires the exact ordered cleanup markers `0x21`, `0x31`, `0x20`, `0x30`, while
 allowing only service-call stages 1 through 3 between them.
 
+The extended profile retains that transaction and now performs a second
+production-selector phase. It publishes a canonical 48-block graph with four
+distinct configuration, authority-checkpoint, deployment-checkpoint, and
+SystemRelease files, reads both redundant roots, rejects the older candidate,
+and validates every reachable metadata object through the same live session.
+The resulting exact volume/root/file selections are checked before cleanup.
+This increases the monotonic block protocol from 18 to 51 requests. A fresh
+one-use-signed WHP run completed the established cleanup sequence; KVM was not
+rerun because the configured Linux cross-host Rust target was unavailable.
+The deployment/release placeholder contents are not authenticated and this is
+not Total admission or runtime-placement evidence.
+
 Fresh independently signed version-1 artifacts passed on 2026-08-24:
 
 ```text

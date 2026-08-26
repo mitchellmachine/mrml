@@ -1820,6 +1820,19 @@ This proves reproducible selection and ABI compilation only. The live loop
 still recovers its controlled configuration/authority pair and does not yet
 consume the four-file deployment/SystemRelease owner required for Total mode.
 
+The profile now **PARTIALLY IMPLEMENTS** live four-file owner selection. Its
+existing CPL3 stable-policy transaction is preserved, after which the client
+publishes a canonical reachable graph containing four distinct file objects and
+recovers it through `recover_block_stable_total_system_selection` over the same
+remote block session. Acceptance exact-matches the installed volume, root
+generation 14, and configuration/authority/deployment/release objects 9--12.
+Three additional page-aligned static scratch blocks avoid expanding the fixed
+service stack, and every scratch block is erased after selection. A fresh signed
+WHP run completed all 51 monotonic requests plus the existing typed peer-death
+and cleanup order. This is controlled volatile-device evidence. The deployment
+checkpoint and one-byte SystemRelease placeholders are selected but not decoded,
+signature-verified, assigned, or admitted; no Total runtime proof follows yet.
+
 Before any profile-specific kernel probe runs, the kernel now constructs its
 early context from the exact decoded handoff and retains the one-boot isolation
 request only as non-authorizing evidence. This closes the first-kernel-entry

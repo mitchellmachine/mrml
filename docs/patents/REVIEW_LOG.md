@@ -1,5 +1,16 @@
 # Patent review log
 
+## 2026-08-26 — Service-image four-file stable-root selection
+
+Patent review: **NOT_TRIGGERED** for composing existing canonical directory,
+allocation, extent, redundant-root, block-session, and stable-selection APIs in
+the controlled service-image probe, plus bounded scratch relocation and exact
+request/lifecycle accounting. This reuses already implemented storage formats
+and validation without adding a storage protocol, placement algorithm, VM
+mechanism, scheduler, DMA, queue, interrupt, or hardware behavior. The broader
+adaptive/Total MicroVM mechanism remains **TRIGGERED**; this technical screen is
+not patent clearance.
+
 ## 2026-08-26 — Canonical block-recovery build profiles
 
 Patent review: **NOT_TRIGGERED** for declaring existing Rust feature sets as
