@@ -10364,13 +10364,15 @@ fn preanalyze_runtime_assignment_access<
         && let Some(path) = facts.find_move_path(base, RuntimePlaceProjections::EMPTY)
         && let Some(root) = facts.move_paths.get(path.0).and_then(|path| *path)
         && matches!(root.ty, RuntimeExpressionType::Reference { .. })
-        && let RuntimePlaceIdentity::Local(borrower) = root.base
-        && facts
-            .direct_loan_for_borrower_before(
-                borrower,
-                RuntimeOwnershipEventId(facts.ownership_event_count),
-            )
-            .is_some()
+        && match root.base {
+            RuntimePlaceIdentity::Local(borrower) => facts
+                .direct_loan_for_borrower_before(
+                    borrower,
+                    RuntimeOwnershipEventId(facts.ownership_event_count),
+                )
+                .is_some(),
+            RuntimePlaceIdentity::Parameter(_) => true,
+        }
     {
         facts
             .push_place_effect(
@@ -22260,7 +22262,7 @@ impl<
                                 .body_facts
                                 .direct_loan_for_borrower_before(borrower, effect.event)
                                 .is_none(),
-                            RuntimePlaceIdentity::Parameter(_) => true,
+                            RuntimePlaceIdentity::Parameter(_) => false,
                         }
                     }
                     RuntimePlaceEffectKind::Write => false,
@@ -35880,6 +35882,8 @@ mod tests {
         for source in [
             "fn value(first: &mut u16, second: &mut u16) -> u16 { let mut child: &u16 = &*second; child = first; let competing: &mut u16 = &mut *first; *competing += 1; *child }",
             "fn value(first: &mut u16, second: &mut u16) -> u16 { let pair = (&mut *first,); let mut child: &u16 = &*second; child = pair.0; let competing: &mut u16 = &mut *first; *competing += 1; *child }",
+            "fn value(first: &mut u16, second: &mut u16) -> u16 { let mut child: &u16 = &*second; child = first; *first += 1; *child }",
+            "fn value(first: &mut u16, second: &mut u16) -> u16 { let pair = (&mut *first,); let mut child: &u16 = &*second; child = pair.0; *first += 1; *child }",
         ] {
             assert_eq!(
                 analyze(source).unwrap_err().kind,
@@ -35891,6 +35895,8 @@ mod tests {
         for source in [
             "fn value(first: &mut u16, second: &mut u16, third: &mut u16, choose: bool) -> u16 { let pair = (&mut *first, &mut *second); let mut child: &u16 = &*third; child = if choose { pair.0 } else { pair.1 }; let competing: &mut u16 = &mut *first; *competing += 1; *child }",
             "fn value(first: &mut u16, second: &mut u16, third: &mut u16, choose: bool) -> u16 { let pair = (&mut *first, &mut *second); let mut child: &u16 = &*third; child = if choose { pair.0 } else { pair.1 }; let competing: &mut u16 = &mut *second; *competing += 1; *child }",
+            "fn value(first: &mut u16, second: &mut u16, third: &mut u16, choose: bool) -> u16 { let pair = (&mut *first, &mut *second); let mut child: &u16 = &*third; child = if choose { pair.0 } else { pair.1 }; *first += 1; *child }",
+            "fn value(first: &mut u16, second: &mut u16, third: &mut u16, choose: bool) -> u16 { let pair = (&mut *first, &mut *second); let mut child: &u16 = &*third; child = if choose { pair.0 } else { pair.1 }; *second += 1; *child }",
         ] {
             assert_eq!(
                 analyze(source).unwrap_err().kind,
