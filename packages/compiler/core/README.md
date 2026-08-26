@@ -4080,6 +4080,11 @@ Mutable-reference calls now retain the same paired evidence: mutation before a
 later result use fails, while copying first releases the exclusive loan before
 mutation and the next iteration. Pinned rustc matches with E0503 and acceptance;
 both hosts remain at 989 compiler tests.
+Conditional shared-call joins now retain the same paired evidence across loop
+generations for both possible owners. Either same-iteration owner mutation fails
+before a later result use; copying first releases both candidate loans before
+mutation and the backedge. Pinned rustc matches with E0506 and acceptance; both
+hosts remain at 989 compiler tests.
 
 Exact typed tuple literals now seed the same projected state when a local is
 declared. Every reference field is checked against the declared tuple element

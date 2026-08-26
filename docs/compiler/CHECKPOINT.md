@@ -875,6 +875,12 @@ A later same-iteration result use rejects owner mutation with
 `RuntimeBorrowConflict`, matching ORACLE-0002 E0503; copy-before-mutation permits
 the backedge. Windows and Arch remain at 989 compiler tests per host.
 
+Conditional shared-reference call origins now exercise both possible owners at
+the same loop-generation boundary. Mutation of either candidate before the
+result's later same-iteration use fails with `RuntimeBorrowConflict`, matching
+ORACLE-0002 E0506; copy-before-mutation permits both owner writes and the
+backedge. Windows and Arch remain at 989 compiler tests per host.
+
 Direct and conditional return sites inside supported `loop` blocks now retain
 the projected callee summary's shared-child origin. Parameter-backed second
 arguments pass and matching loop-local second arguments fail closed. ORACLE-0002

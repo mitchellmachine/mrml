@@ -228,6 +228,13 @@ with E0503 and compiled a companion that copied the pointee before mutation and
 the loop backedge. This is exact exclusive-loan generation evidence, not a
 general loop-region fixed point. Temporary sources and metadata were removed.
 
+A conditional shared-reference identity-call `while` pair selected either of two
+mutable owners each iteration. This exact toolchain rejected mutation of either
+possible owner before a later result use with E0506 and compiled a companion
+that copied the pointee before mutating both owners and taking the loop backedge.
+This is exact joined-loan generation evidence, not a general loop-region fixed
+point. Temporary sources and metadata were removed.
+
 An independently authored Rust 2024 metadata-only probe against this exact
 toolchain and commit accepted a mutable scalar reference returned from index
 zero of a mutable two-element array-reference parameter. The caller could reuse

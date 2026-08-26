@@ -1223,6 +1223,10 @@ The same per-iteration generation rule now has mutable-reference call evidence:
 mutation before a later result use fails, while copying first releases the
 exclusive loan before mutation and the backedge. ORACLE-0002 matches with E0503
 and acceptance.
+Conditional shared-call origins now retain the same loop-generation boundary for
+both possible owners. Mutating either candidate before a later result use fails,
+while copying first permits mutation of both owners and the backedge. ORACLE-0002
+matches with E0506 and acceptance.
 
 The first modern trait-solver foundation is an explicit bounded implemented-
 goal representation. Stable trait/type/inference/placeholder identities remain
