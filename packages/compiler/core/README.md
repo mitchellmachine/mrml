@@ -3764,6 +3764,19 @@ chains after one directly initialized tuple-field source, not nested projections
 multiple projected-source hops, aggregate provenance, or general regions. The
 `no_std`/allocation/unsafe hygiene scan remained empty.
 
+The direct callee-local reassignment milestone extends that bounded proof through
+straight-line plain assignment to a mutable reference local. The proof retains a
+fixed newest-first name/origin/mutability state and resolves each RHS before
+replacing the destination generation. A returned child therefore continues to
+reject a competing mutable owner borrow while live and releases the owner after
+its last use. Immutable destinations, projected or compound writes, local-backed
+RHS values, conditional assignments, and expression statements remain
+conservative. The exact dated oracle accepted the reassigned-alias callee and
+post-last-use control and rejected the live competing borrow with E0499. Windows
+gnullvm and native Arch Linux WSL each pass 639 library tests, one component-
+interface probe, 10 conformance tests, and 335 replacement tests: 985 compiler
+tests per host. This is not general interprocedural dataflow or regions.
+
 The conditional projected-reassignment milestone extends the bounded tuple-field
 loan chain across a conditional shared-reference assignment. The exact dated
 oracle rejects mutation of either conditional owner and of the field's replaced

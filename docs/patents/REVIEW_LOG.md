@@ -1,5 +1,17 @@
 # Patent review log
 
+## 2026-08-26 — Reassigned callee reference-origin inference
+
+Patent review: **NOT_TRIGGERED** for this bounded compiler-analysis increment.
+It conventionally updates a fixed newest-first local name/origin table for one
+plain direct assignment and reuses the existing parameter-origin, borrow-
+liveness, and fail-closed machinery. It adds no novel alias-analysis algorithm,
+region solver, optimization, runtime enforcement, authority model, or external
+dependency. Projected, compound, conditional, local-backed, and unclassified
+assignments remain conservative. Broader compiler completion remains partial;
+this technical screen establishes neither clearance nor infringement and does
+not replace independent human dual review.
+
 ## 2026-08-26 — Bounded UEFI Total-mode LoadOptions parser
 
 Patent review: **NOT_TRIGGERED** for this conventional allocation-free exact

@@ -482,6 +482,17 @@ The compiler core remains `no_std`, forbids unsafe code, uses no global
 allocator, emits COFF and ELF64 for the documented subset, and fails closed on
 unsupported semantics.
 
+The direct callee-local reassignment milestone carries one compatible reference-
+parameter origin through straight-line plain assignment to a mutable reference
+local. The fixed local state is newest-first and generation-ordered; immutable,
+projected, compound, local-backed, conditional, or unclassified assignments
+make the proof conservative. The exact dated oracle accepted the reassigned
+alias and post-last-use control and rejected a live competing mutable borrow with
+E0499. Windows gnullvm and native Arch Linux WSL each pass 639 library tests, one
+component-interface probe, 10 conformance tests, and 335 replacement tests: 985
+compiler tests per host. General interprocedural dataflow and regions remain
+unsupported.
+
 This is an initial typed body-fact slice, not a complete typed body IR and not a
 borrow checker. Unsupported aggregate-leaf call arguments, other aggregate-
 argument and call-derived fat-reference initializers, unsupported compound array

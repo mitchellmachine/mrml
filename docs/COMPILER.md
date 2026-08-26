@@ -800,6 +800,14 @@ return boundary and through one stored call result. A local-backed conditional
 origin fails outlives validation while all parameter-backed origins remain
 accepted, reusing the same call-argument and projected-origin facts.
 
+Bounded callee return-origin inference now also carries a compatible parameter
+origin through straight-line plain reassignment of an already-declared mutable
+reference local. Each RHS is resolved against the immediately preceding local
+origin state, so shadowing and reassignment remain generation-ordered. Immutable,
+projected, compound, local-backed, conditional, or otherwise unclassified
+assignments keep the callee proof conservative rather than manufacturing an
+argument origin.
+
 The first modern trait-solver foundation is an explicit bounded implemented-
 goal representation. Stable trait/type/inference/placeholder identities remain
 distinct; canonicalization replaces inference identities with first-occurrence
