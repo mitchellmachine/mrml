@@ -18,15 +18,31 @@ use mrml_config::{
     dispatch_supervision_restart_envelope, encode_commit_message_request,
     encode_schema_message_request, prepare_block_stable_configuration,
     recover_block_stable_total_system_selection,
+    recover_selected_runtime_assignment_shared_backend,
 };
 #[cfg(all(not(feature = "preemption-probe"), feature = "block-service-loop"))]
-use mrml_crypto::Sha3_256;
+use mrml_crypto::{LAMPORT_PRIVATE_KEY_BYTES, Sha3_256};
+#[cfg(all(not(feature = "preemption-probe"), feature = "block-service-loop"))]
+use mrml_deployment::{
+    DEPLOYMENT_CHECKPOINT_BYTES, DEPLOYMENT_RECOVERY_STATE_BYTES, DeploymentRecoveryStateStore,
+    DeploymentService, GenerationCandidate, encode_deployment_recovery_state_with_release,
+    encode_deployment_release_checkpoint,
+};
 #[cfg(not(feature = "preemption-probe"))]
 use mrml_kernel::{
     Capability, CapabilityError, ObjectId, RestartPolicy, Rights, ServiceId, ServiceState,
 };
 #[cfg(all(not(feature = "preemption-probe"), feature = "block-service-loop"))]
-use mrml_kernel::{BOOT_RECOVERY_ENVELOPE_BYTES, BootRecoveryEnvelope, RecoveryStateMetadata};
+use mrml_kernel::{
+    BOOT_RECOVERY_ENVELOPE_BYTES, BootRecoveryEnvelope, CapabilitySpace, RecoveryStateMetadata,
+};
+#[cfg(all(not(feature = "preemption-probe"), feature = "block-service-loop"))]
+use mrml_package_format::{
+    ComponentInterfaceProvider, ComponentInterfaceRequirement, ComponentProviderForms, RuntimeInventoryRecord,
+    RuntimeIsolationClass, RuntimeIsolationPlacement, SystemGenerationDigestRecord,
+    encode_interface_catalog, encode_runtime_inventory, encode_system_generation,
+    encode_system_release_with_runtime_inventory, parse_system_release,
+};
 #[cfg(all(not(feature = "preemption-probe"), feature = "block-service-loop"))]
 use mrml_storage::{
     AUTHORITY_RECOVERY_STATE_BYTES, AllocationImage, AllocationKind, AllocationRecord,
@@ -56,6 +72,7 @@ global_asm!(
             .section .text$a,"xr"
             .global efi_main
         efi_main:
+            and rsp, -16
             sub rsp, 16
             mov [rsp], r11
             mov rdi, r13
@@ -78,6 +95,7 @@ global_asm!(
             mov rcx, rbx
             mov r8, r12
             mov r9, rbp
+            and rsp, -16
             sub rsp, 16
             mov [rsp], r10
             mov [rsp + 8], r11
@@ -91,6 +109,7 @@ global_asm!(
             mov rsi, r14
             mov rdx, r15
             mov rcx, rbx
+            and rsp, -16
             call mrml_restart_manager
             ud2
     "#
@@ -296,9 +315,11 @@ unsafe extern "sysv64" fn mrml_configuration_receiver(
 #[cfg(all(not(feature = "preemption-probe"), feature = "block-service-loop"))]
 const PROBE_BLOCK_BYTES: usize = mrml_kernel::PAGE_SIZE as usize;
 #[cfg(all(not(feature = "preemption-probe"), feature = "block-service-loop"))]
-const PROBE_BLOCK_COUNT: usize = 48;
+const PROBE_BLOCK_COUNT: usize = 64;
 #[cfg(all(not(feature = "preemption-probe"), feature = "block-service-loop"))]
-const PROBE_BLOCK_REQUESTS: usize = 51;
+const PROBE_MAX_BLOCK_REQUESTS: usize = 128;
+#[cfg(all(not(feature = "preemption-probe"), feature = "block-service-loop"))]
+const PROBE_RELEASE_CAPACITY: usize = 160 * 1024;
 #[cfg(all(not(feature = "preemption-probe"), feature = "block-service-loop"))]
 struct ProbeBlockBackend {
     bytes: [u8; PROBE_BLOCK_BYTES * PROBE_BLOCK_COUNT],
@@ -322,6 +343,11 @@ static mut PROBE_PRIMARY_SCRATCH: ProbeBlock = ProbeBlock([0; PROBE_BLOCK_BYTES]
 static mut PROBE_SECONDARY_SCRATCH: ProbeBlock = ProbeBlock([0; PROBE_BLOCK_BYTES]);
 #[cfg(all(not(feature = "preemption-probe"), feature = "block-service-loop"))]
 static mut PROBE_METADATA_SCRATCH: ProbeBlock = ProbeBlock([0; PROBE_BLOCK_BYTES]);
+#[cfg(all(not(feature = "preemption-probe"), feature = "block-service-loop"))]
+static mut PROBE_RELEASE_BYTES: [u8; PROBE_RELEASE_CAPACITY] = [0; PROBE_RELEASE_CAPACITY];
+#[cfg(all(not(feature = "preemption-probe"), feature = "block-service-loop"))]
+static mut PROBE_RELEASE_PRIVATE_KEY: [u8; LAMPORT_PRIVATE_KEY_BYTES] =
+    [0; LAMPORT_PRIVATE_KEY_BYTES];
 
 #[cfg(all(not(feature = "preemption-probe"), feature = "block-service-loop"))]
 static mut PROBE_BLOCK_BACKEND: ProbeBlockBackend = ProbeBlockBackend {
@@ -436,7 +462,18 @@ unsafe extern "sysv64" fn mrml_configuration_receiver(
     ready[8..].copy_from_slice(&recovery_envelope.encode());
     unsafe { send_buffer(endpoint, sender, &ready, &[]) };
     ready.fill(0);
-    for _ in 0..PROBE_BLOCK_REQUESTS {
+    let mut encoded_request_count = [0u8; 8];
+    let (length, count) = unsafe { receive_buffer(&mut encoded_request_count, &mut capability) };
+    let request_count = usize::try_from(u64::from_le_bytes(encoded_request_count))
+        .unwrap_or_else(|_| halt());
+    if length != encoded_request_count.len()
+        || count != 0
+        || request_count == 0
+        || request_count > PROBE_MAX_BLOCK_REQUESTS
+    {
+        halt();
+    }
+    for _ in 0..request_count {
         loop_state
             .serve_one(
                 &service,
@@ -1133,25 +1170,35 @@ unsafe impl StorageBlockDevice for RemoteBlockDevice {
     type Error = u8;
 
     fn read_blocks(&mut self, block: u64, output: &mut [u8]) -> Result<(), Self::Error> {
-        let length = u32::try_from(output.len()).map_err(|_| 9)?;
-        let request = BlockRequest::Read {
-            request_id: self.next_request,
-            session: self.session,
-            block,
-            byte_length: length,
-        };
-        unsafe { self.call(request, Some(RemoteBlockBuffer::ServiceWrites(output))) }
+        if output.is_empty() || !output.len().is_multiple_of(PROBE_BLOCK_BYTES) {
+            return Err(9);
+        }
+        for (index, page) in output.chunks_mut(PROBE_BLOCK_BYTES).enumerate() {
+            let request = BlockRequest::Read {
+                request_id: self.next_request,
+                session: self.session,
+                block: block.checked_add(index as u64).ok_or(9)?,
+                byte_length: PROBE_BLOCK_BYTES as u32,
+            };
+            unsafe { self.call(request, Some(RemoteBlockBuffer::ServiceWrites(page))) }?;
+        }
+        Ok(())
     }
 
     fn write_blocks(&mut self, block: u64, input: &[u8]) -> Result<(), Self::Error> {
-        let length = u32::try_from(input.len()).map_err(|_| 9)?;
-        let request = BlockRequest::Write {
-            request_id: self.next_request,
-            session: self.session,
-            block,
-            byte_length: length,
-        };
-        unsafe { self.call(request, Some(RemoteBlockBuffer::ServiceReads(input))) }
+        if input.is_empty() || !input.len().is_multiple_of(PROBE_BLOCK_BYTES) {
+            return Err(9);
+        }
+        for (index, page) in input.chunks(PROBE_BLOCK_BYTES).enumerate() {
+            let request = BlockRequest::Write {
+                request_id: self.next_request,
+                session: self.session,
+                block: block.checked_add(index as u64).ok_or(9)?,
+                byte_length: PROBE_BLOCK_BYTES as u32,
+            };
+            unsafe { self.call(request, Some(RemoteBlockBuffer::ServiceReads(page))) }?;
+        }
+        Ok(())
     }
 
     fn flush(&mut self) -> Result<(), Self::Error> {
@@ -1212,6 +1259,149 @@ fn write_probe_block(device: &mut RemoteBlockDevice, block: u64, bytes: &mut [u8
     bytes.fill(0);
 }
 
+#[cfg(all(not(feature = "preemption-probe"), feature = "block-service-loop"))]
+struct ProbeDeploymentStateStore {
+    bytes: [u8; DEPLOYMENT_RECOVERY_STATE_BYTES],
+}
+
+#[cfg(all(not(feature = "preemption-probe"), feature = "block-service-loop"))]
+impl DeploymentRecoveryStateStore for ProbeDeploymentStateStore {
+    type Error = ();
+
+    fn load_authenticated(
+        &self,
+        output: &mut [u8; DEPLOYMENT_RECOVERY_STATE_BYTES],
+    ) -> Result<(), Self::Error> {
+        output.copy_from_slice(&self.bytes);
+        Ok(())
+    }
+
+    fn compare_and_store(
+        &mut self,
+        expected: &[u8; DEPLOYMENT_RECOVERY_STATE_BYTES],
+        replacement: &[u8; DEPLOYMENT_RECOVERY_STATE_BYTES],
+    ) -> Result<(), Self::Error> {
+        if self.bytes != *expected {
+            return Err(());
+        }
+        self.bytes.copy_from_slice(replacement);
+        Ok(())
+    }
+}
+
+#[cfg(all(not(feature = "preemption-probe"), feature = "block-service-loop"))]
+fn build_probe_deployment_evidence(
+    release: &mut [u8],
+) -> (
+    usize,
+    [u8; DEPLOYMENT_CHECKPOINT_BYTES],
+    ProbeDeploymentStateStore,
+) {
+    const RELEASE_GENERATION: u64 = 33;
+    let artifact_digest = [0x5a; 64];
+    let generation_record = SystemGenerationDigestRecord {
+        package_id: "org.mrml.zstd",
+        version: 1,
+        artifact_digest: &artifact_digest,
+    };
+    let mut generation = [0u8; 160];
+    let generation_length = encode_system_generation(
+        RELEASE_GENERATION,
+        &[generation_record],
+        &mut generation,
+    )
+    .unwrap_or_else(|_| halt());
+    let mut catalog = [0u8; 256];
+    let provider = ComponentInterfaceProvider::exact(
+        "org.mrml.zstd",
+        "org.mrml.interface.compression.zstd",
+        3,
+        [0x6a; 32],
+        ComponentProviderForms::MICROVM,
+    )
+    .unwrap_or_else(|_| halt());
+    let requirement = ComponentInterfaceRequirement::exact(
+        "org.mrml.zstd",
+        "org.mrml.interface.compression.zstd",
+        3,
+        [0x6a; 32],
+    )
+    .unwrap_or_else(|_| halt());
+    let catalog_length = encode_interface_catalog(RELEASE_GENERATION, &[requirement], &[provider], &mut catalog)
+        .unwrap_or_else(|_| halt());
+    let runtime_record = RuntimeInventoryRecord {
+        package_id: "org.mrml.zstd",
+        version: 1,
+        artifact_digest: &artifact_digest,
+        class: RuntimeIsolationClass::MicrovmEligible,
+        must_run: true,
+        preferred: RuntimeIsolationPlacement::NativeService,
+        minimum: RuntimeIsolationPlacement::NativeService,
+        maximum: RuntimeIsolationPlacement::Microvm,
+        supported: RuntimeIsolationPlacement::NativeService.bit()
+            | RuntimeIsolationPlacement::Microvm.bit(),
+        reason: "",
+    };
+    let mut runtime = [0u8; 256];
+    let runtime_length =
+        encode_runtime_inventory(RELEASE_GENERATION, &[runtime_record], &mut runtime)
+            .unwrap_or_else(|_| halt());
+    let private = unsafe { &mut *core::ptr::addr_of_mut!(PROBE_RELEASE_PRIVATE_KEY) };
+    private.fill(0x69);
+    let release_length = encode_system_release_with_runtime_inventory(
+        &generation[..generation_length],
+        &catalog[..catalog_length],
+        &runtime[..runtime_length],
+        private,
+        release,
+    )
+    .unwrap_or_else(|_| halt());
+    private.fill(0);
+    let parsed = parse_system_release(&release[..release_length]).unwrap_or_else(|_| halt());
+    let deployment_root = ObjectId(0x4445_504c_4f59);
+    let mut capabilities = CapabilitySpace::<2>::new();
+    let control = capabilities
+        .insert(deployment_root, Rights::CONTROL)
+        .unwrap_or_else(|_| halt());
+    let inspect = capabilities
+        .insert(deployment_root, Rights::READ)
+        .unwrap_or_else(|_| halt());
+    let mut service = DeploymentService::<1>::new(deployment_root).unwrap_or_else(|_| halt());
+    let candidate = service
+        .stage(
+            &capabilities,
+            control,
+            GenerationCandidate::from_system_release(
+                &release[..release_length],
+                &parsed.key_id(),
+                probe_object(12).local(),
+                2,
+            )
+            .unwrap_or_else(|_| halt()),
+        )
+        .unwrap_or_else(|_| halt());
+    let prepared = service
+        .prepare_activation(&capabilities, control, candidate, None)
+        .unwrap_or_else(|_| halt());
+    let active = service.commit_activation(prepared).unwrap_or_else(|_| halt());
+    let active_release = service
+        .active_release(&capabilities, inspect)
+        .unwrap_or_else(|_| halt())
+        .unwrap_or_else(|| halt());
+    let checkpoint = encode_deployment_release_checkpoint(deployment_root, active_release)
+        .unwrap_or_else(|_| halt());
+    let state = encode_deployment_recovery_state_with_release(
+        1,
+        deployment_root,
+        active,
+        Some(active_release),
+        probe_object(11),
+        2,
+    )
+    .unwrap_or_else(|_| halt());
+    (release_length, checkpoint, ProbeDeploymentStateStore { bytes: state })
+}
+
 /// Publishes the controlled probe's four distinct recovery files as one
 /// canonical reachable root. The returned root block is identity only; the
 /// caller must still recover and validate the graph through its live block
@@ -1221,6 +1411,9 @@ fn publish_probe_total_recovery_graph(
     device: &mut RemoteBlockDevice,
     configuration: &[u8],
     authority_checkpoint: &[u8],
+    deployment_checkpoint: &[u8],
+    release: &mut [u8],
+    release_length: usize,
 ) -> u64 {
     const GENERATION: u64 = 2;
     const ROOT_GENERATION: u64 = 14;
@@ -1288,8 +1481,7 @@ fn publish_probe_total_recovery_graph(
     let files = [
         (configuration_object, configuration_extents, 12, 13, 30, configuration),
         (authority_object, authority_extents, 14, 15, 31, authority_checkpoint),
-        (deployment_object, deployment_extents, 16, 17, 32, &[0x44][..]),
-        (release_object, release_extents, 18, 19, 33, &[0x52][..]),
+        (deployment_object, deployment_extents, 16, 17, 32, deployment_checkpoint),
     ];
     for (object, extents_pointer, metadata_block, extents_block, data_block, contents) in files {
         scratch.0[..contents.len()].copy_from_slice(contents);
@@ -1334,6 +1526,55 @@ fn publish_probe_total_recovery_graph(
         write_probe_block(device, extents_block, &mut scratch.0);
     }
 
+    let release_blocks = release_length.div_ceil(PROBE_BLOCK_BYTES);
+    let release_padded_length = release_blocks * PROBE_BLOCK_BYTES;
+    if release_blocks == 0 || release_padded_length > PROBE_RELEASE_CAPACITY {
+        halt();
+    }
+    let release_padded_digest = probe_digest(&release[..release_padded_length]);
+    for block in 0..release_blocks {
+        let start = block * PROBE_BLOCK_BYTES;
+        scratch.0.copy_from_slice(&release[start..start + PROBE_BLOCK_BYTES]);
+        write_probe_block(device, 33 + block as u64, &mut scratch.0);
+    }
+    FileMetadata::new(
+        header,
+        release_object,
+        GENERATION,
+        release_length as u64,
+        1,
+        release_extents,
+        probe_digest(&release[..release_length]),
+    )
+    .unwrap_or_else(|_| halt())
+    .encode(
+        (&mut scratch.0[..mrml_storage::FILE_METADATA_BYTES])
+            .try_into()
+            .unwrap_or_else(|_| halt()),
+    );
+    write_probe_block(device, 18, &mut scratch.0);
+    let release_extent = ExtentRecord::data(
+        release_object,
+        GENERATION,
+        0,
+        release_blocks as u32,
+        33,
+        release_padded_digest,
+    )
+    .unwrap_or_else(|_| halt());
+    ExtentImage::<1>::build(
+        header,
+        release_object,
+        GENERATION,
+        release_length as u64,
+        release_extents,
+        &[release_extent],
+    )
+    .unwrap_or_else(|_| halt())
+    .encode(&mut scratch.0)
+    .unwrap_or_else(|_| halt());
+    write_probe_block(device, 19, &mut scratch.0);
+
     let records = [
         AllocationRecord::new(root, 2, 10, 1, AllocationKind::ObjectMetadata).unwrap_or_else(|_| halt()),
         AllocationRecord::new(root, 2, 11, 1, AllocationKind::DirectoryEntries).unwrap_or_else(|_| halt()),
@@ -1350,7 +1591,7 @@ fn publish_probe_total_recovery_graph(
         AllocationRecord::new(configuration_object, GENERATION, 30, 1, AllocationKind::FileData).unwrap_or_else(|_| halt()),
         AllocationRecord::new(authority_object, GENERATION, 31, 1, AllocationKind::FileData).unwrap_or_else(|_| halt()),
         AllocationRecord::new(deployment_object, GENERATION, 32, 1, AllocationKind::FileData).unwrap_or_else(|_| halt()),
-        AllocationRecord::new(release_object, GENERATION, 33, 1, AllocationKind::FileData).unwrap_or_else(|_| halt()),
+        AllocationRecord::new(release_object, GENERATION, 33, release_blocks as u32, AllocationKind::FileData).unwrap_or_else(|_| halt()),
     ];
     AllocationImage::<16>::build(header, ROOT_GENERATION, allocation_pointer, &records)
         .unwrap_or_else(|_| halt())
@@ -1407,6 +1648,17 @@ unsafe extern "sysv64" fn mrml_configuration_sender(
     .unwrap_or_else(|_| halt());
     let recovery = recovery_envelope.recovery();
     ready.fill(0);
+    let release = unsafe { &mut *core::ptr::addr_of_mut!(PROBE_RELEASE_BYTES) };
+    release.fill(0);
+    let (release_length, deployment_checkpoint, mut deployment_state_store) =
+        build_probe_deployment_evidence(release);
+    let release_blocks = release_length.div_ceil(PROBE_BLOCK_BYTES);
+    let request_count = release_blocks
+        .checked_mul(2)
+        .and_then(|requests| requests.checked_add(51))
+        .filter(|count| *count <= PROBE_MAX_BLOCK_REQUESTS)
+        .unwrap_or_else(|| halt());
+    unsafe { send_buffer(endpoint, receiver, &(request_count as u64).to_le_bytes(), &[]) };
     let mut device = RemoteBlockDevice {
         endpoint,
         receiver,
@@ -1690,6 +1942,9 @@ unsafe extern "sysv64" fn mrml_configuration_sender(
         &mut device,
         &checkpoint[..exported.length],
         &authority_backend.bytes[..authority_length],
+        &deployment_checkpoint,
+        release,
+        release_length,
     );
     let total_volume_scratch = unsafe { &mut *core::ptr::addr_of_mut!(PROBE_VOLUME_SCRATCH) };
     total_volume_scratch.0.fill(0);
@@ -1723,15 +1978,72 @@ unsafe extern "sysv64" fn mrml_configuration_sender(
     {
         halt();
     }
-    let (_, total_volume) = total.into_parts();
-    if total_volume.into_device().next_request != 52 {
+    let (selection, mut total_volume) = total.into_parts();
+    let selected = selection.selected();
+    let deployment_root = ObjectId(0x4445_504c_4f59);
+    let mut deployment_capabilities = CapabilitySpace::<1>::new();
+    let inspect = deployment_capabilities
+        .insert(deployment_root, Rights::READ)
+        .unwrap_or_else(|_| halt());
+    let mut deployment_authority = StorageAuthorityTable::<1>::new();
+    let deployment_handle = deployment_authority
+        .insert(
+            probe_object(11),
+            StorageObjectKind::File,
+            StorageRights::READ,
+            principal,
+        )
+        .unwrap_or_else(|_| halt());
+    let mut release_authority = StorageAuthorityTable::<1>::new();
+    let release_handle = release_authority
+        .insert(
+            probe_object(12),
+            StorageObjectKind::File,
+            StorageRights::READ,
+            principal,
+        )
+        .unwrap_or_else(|_| halt());
+    release.fill(0xa5);
+    let mut runtime = recover_selected_runtime_assignment_shared_backend::<1, 1, 1, 1, 1, 1, _, _>(
+        deployment_root,
+        selected,
+        &deployment_authority,
+        deployment_handle,
+        &release_authority,
+        release_handle,
+        principal,
+        &deployment_state_store,
+        &mut total_volume,
+        &deployment_capabilities,
+        inspect,
+        release,
+        1,
+    )
+    .unwrap_or_else(|_| halt());
+    runtime
+        .assignment_mut()
+        .assign_from_policy(|record| {
+            mrml_kernel::RuntimeDomainAssignment::new(record.package_id, ObjectId(0x434f_4e46_4947))
+        })
+        .unwrap_or_else(|_| halt());
+    let inventory = runtime.seal().unwrap_or_else(|_| halt());
+    if inventory.release().release().len() != 1
+        || inventory.release().system_generation() != 33
+        || inventory.release().policy_generation() != 1
+    {
         halt();
     }
+    let device = total_volume.into_device();
     primary.0.fill(0);
     secondary.0.fill(0);
     metadata.0.fill(0);
     state_store.encoded.fill(0);
+    deployment_state_store.bytes.fill(0);
+    release.fill(0);
     authority_backend.bytes.fill(0);
+    if device.next_request != request_count as u64 + 1 {
+        halt();
+    }
     unsafe { terminate(3) }
 }
 

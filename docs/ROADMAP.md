@@ -681,6 +681,15 @@ controlled graph are not yet parsed or authenticated; deployment recovery,
 runtime assignment, and Total admission from this service-image owner remain
 the next gates.
 
+The selected deployment and release files now carry real authenticated probe
+content instead of marker bytes. The service image builds a canonical signed
+one-domain release, publishes its multi-block extent, recovers both selected
+files through one shared volume with independent file capabilities, verifies
+and assigns the runtime inventory, and erases transient signing/output storage.
+The canonical release build passes. WHP execution reaches the final lifecycle
+ordering gate but does not yet satisfy the established sender-first cleanup
+trace; KVM execution and end-to-end Total runtime proof remain **PLANNED**.
+
 The production-shaped stable-selection API is now **PARTIALLY IMPLEMENTED**.
 `SelectedStableSystemRecovery` admits only distinct configuration and authority
 checkpoint files selected from the same integrity-validated volume/root

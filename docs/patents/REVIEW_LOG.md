@@ -8694,3 +8694,14 @@ representation, metadata interpretation, region algorithm, optimization, or
 runtime mechanism. Broader compiler completion remains partial; this technical
 screen is not a clearance or infringement conclusion and does not replace
 independent human dual review.
+
+# 2026-08-26 — Selected SystemRelease recovery probe composition
+
+**Result: NOT_TRIGGERED.** This increment composes MRML's existing canonical
+SystemRelease signature, deployment checkpoint, stable-storage extent,
+capability-checked file read, and runtime-inventory assignment APIs in the
+controlled service image. It adds bounded glue and page-sized transfer
+splitting, not a new codec, storage format, cryptographic primitive,
+virtualization mechanism, or isolation algorithm. The broader adaptive-
+placement and Total MicroVM review remains `TRIGGERED`; this entry does not
+clear that architecture or AHCI work.

@@ -53,6 +53,18 @@ package = "org.mrml.system.kernel"
 scope = "compile"
 
 [[dependency]]
+alias = "mrml_deployment"
+compile_name = "mrml-deployment"
+package = "org.mrml.service.deployment"
+scope = "compile"
+
+[[dependency]]
+alias = "mrml_package_format"
+compile_name = "mrml-package-format"
+package = "org.mrml.library.package-format"
+scope = "compile"
+
+[[dependency]]
 alias = "mrml_storage"
 compile_name = "mrml-storage"
 package = "org.mrml.service.storage"

@@ -4,10 +4,10 @@ version = 2
 toolchain = "nightly-2026-08-24"
 
 [graphs]
-compile_edges = 148
+compile_edges = 150
 build_tool_edges = 0
 runtime_interface_edges = 1
-package_edges = 141
+package_edges = 143
 system_release_edges = 3
 
 [[package]]
@@ -524,11 +524,11 @@ isolation_default = "native-service"
 isolation_minimum = "native-service"
 isolation_maximum = "native-service"
 isolation_supported = ["native-service"]
-compile_dependencies = ["org.mrml.library.crypto", "org.mrml.service.config", "org.mrml.service.storage", "org.mrml.system.kernel"]
+compile_dependencies = ["org.mrml.library.crypto", "org.mrml.library.package-format", "org.mrml.service.config", "org.mrml.service.deployment", "org.mrml.service.storage", "org.mrml.system.kernel"]
 
 static_runtime = []
 boot_bound = []
-system_release_bound = ["org.mrml.library.crypto", "org.mrml.service.config", "org.mrml.service.storage", "org.mrml.system.kernel"]
+system_release_bound = ["org.mrml.library.crypto", "org.mrml.library.package-format", "org.mrml.service.config", "org.mrml.service.deployment", "org.mrml.service.storage", "org.mrml.system.kernel"]
 
 [[package]]
 id = "org.mrml.system.vmm-kvm"

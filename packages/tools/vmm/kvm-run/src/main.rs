@@ -3265,6 +3265,7 @@ fn application_main() -> Result<()> {
         None
     };
     if service_mode {
+        let isolated_stack_pages = if mode == LaunchMode::BlockServiceProbe { 256 } else { 8 };
         let local_apic = component_smp_mode
             || matches!(
                 mode,
@@ -3336,7 +3337,7 @@ fn application_main() -> Result<()> {
                     SERVICE_VIRTUAL,
                     SERVICE_STACK_PHYSICAL,
                     SERVICE_STACK_VIRTUAL,
-                    8,
+                    isolated_stack_pages,
                     SERVICE_TABLE_PHYSICAL,
                     32,
                     local_apic,
@@ -3354,7 +3355,7 @@ fn application_main() -> Result<()> {
                     SERVICE_VIRTUAL,
                     SERVICE_B_STACK_PHYSICAL,
                     SERVICE_STACK_VIRTUAL,
-                    8,
+                    isolated_stack_pages,
                     SERVICE_B_TABLE_PHYSICAL,
                     32,
                     local_apic,
@@ -4008,7 +4009,7 @@ fn application_main() -> Result<()> {
     } else if mode == LaunchMode::BlockServiceProbe {
         let cleanup_stages = [0x21, 0x31, 0x20, 0x30];
         let mut cleanup_stage = 0;
-        for observed_stage in 0..256 {
+        for observed_stage in 0..512 {
             if let VmExit::Io {
                 port: SERVICE_PROBE_PORT,
                 size: 4,

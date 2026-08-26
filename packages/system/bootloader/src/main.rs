@@ -322,7 +322,7 @@ const SERVICE_SHARED_PHYSICAL: u64 = 0x00f0_0000;
 const SERVICE_RESOURCE_VIRTUAL: u64 = 0x006f_f000;
 #[cfg(feature = "service-probe")]
 const SERVICE_PEER_RESOURCE_VIRTUAL: u64 = 0x006f_e000;
-#[cfg(feature = "service-probe")]
+#[cfg(all(feature = "service-probe", not(feature = "block-service-probe")))]
 #[cfg(any(
     feature = "service-probe",
     feature = "smp-service-migration-probe",
@@ -332,6 +332,8 @@ const SERVICE_PEER_RESOURCE_VIRTUAL: u64 = 0x006f_e000;
     )
 ))]
 const SERVICE_STACK_TOP: u64 = 0x0070_8000;
+#[cfg(feature = "block-service-probe")]
+const SERVICE_STACK_TOP: u64 = 0x0080_0000;
 
 static mut CPU0_DESCRIPTORS: CpuDescriptorState = CpuDescriptorState::empty(0);
 struct ApDescriptorSlots([UnsafeCell<MaybeUninit<CpuDescriptorState>>; MAX_X86_64_CPUS]);

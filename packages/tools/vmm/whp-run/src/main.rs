@@ -3154,6 +3154,7 @@ fn application_main() -> Result<()> {
     if service_artifact_mode {
         let local_apic =
             service_preemption_mode || smp_service_migration_mode || component_smp_mode;
+        let isolated_stack_pages = if block_service_mode { 256 } else { 8 };
         guest = if let Some(launch) = component_launch.as_ref() {
             let ram = component_ram
                 .as_mut()
@@ -3220,7 +3221,7 @@ fn application_main() -> Result<()> {
                     SERVICE_VIRTUAL,
                     SERVICE_STACK_PHYSICAL,
                     SERVICE_STACK_VIRTUAL,
-                    8,
+                    isolated_stack_pages,
                     SERVICE_TABLE_PHYSICAL,
                     32,
                     local_apic,
@@ -3238,7 +3239,7 @@ fn application_main() -> Result<()> {
                     SERVICE_VIRTUAL,
                     SERVICE_B_STACK_PHYSICAL,
                     SERVICE_STACK_VIRTUAL,
-                    8,
+                    isolated_stack_pages,
                     SERVICE_B_TABLE_PHYSICAL,
                     32,
                     local_apic,
@@ -4159,7 +4160,7 @@ fn application_main() -> Result<()> {
         let mut exit = exit;
         let cleanup_stages = [0x21, 0x31, 0x20, 0x30];
         let mut cleanup_stage = 0;
-        for observed_stage in 0..256 {
+        for observed_stage in 0..512 {
             if let VmExit::Io {
                 port: SERVICE_PROBE_PORT,
                 size: 4,
