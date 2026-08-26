@@ -4005,6 +4005,14 @@ initializers still fail closed. Focused direct/caller tests and ORACLE-0002 cove
 the moved alias, live E0499 conflict, and post-last-use owner restoration. Both
 hosts remain at 987 tests.
 
+Focused projected-origin evidence now includes two successive consuming typed
+reference locals and a consuming local after either an exhaustive equal-origin
+conditional field assignment or a stable loop self-reborrow. The parameter
+origin remains attached to each exact generation. The pinned oracle accepts the
+chain and both post-control-flow forms, accepts restoration after last use, and
+rejects the live move-chain competitor with E0499. Both hosts remain at 987
+tests; this is bounded move propagation, not general alias or region inference.
+
 The conditional projected-reassignment milestone extends the bounded tuple-field
 loan chain across a conditional shared-reference assignment. The exact dated
 oracle rejects mutation of either conditional owner and of the field's replaced

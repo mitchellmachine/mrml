@@ -349,6 +349,16 @@ invocation rejected a live competing mutable owner borrow with E0499. Temporary
 sources and metadata were removed. This is exact one-move projected-origin
 evidence, not general aggregate moves, aliases, or region inference.
 
+A further independently authored Rust 2024 metadata-only probe against the same
+exact toolchain and commit accepted two successive consuming mutable-reference
+locals after a parameter-initialized tuple field. It also accepted one consuming
+local after exhaustive equal-origin field assignment and after a stable loop
+field self-reborrow, and permitted owner reuse after the returned child's last
+use. A separate invocation rejected a competing owner borrow while the two-move
+chain result remained live with E0499. Temporary sources and metadata were
+removed. This is bounded move-chain evidence, not general alias or region
+inference.
+
 An independently authored Rust 2024 metadata-only probe against that same exact
 toolchain and commit compiled `asm!("cmp rcx, rcx", in("rcx") value,
 options(nomem, nostack))`. This records black-box acceptance of that exact

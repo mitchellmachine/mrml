@@ -716,6 +716,14 @@ ORACLE-0002 accepts both moved-alias forms, accepts owner restoration after last
 use, and rejects a live competitor with E0499. Windows and Arch remain at 987
 tests per host.
 
+The projected-origin move-chain evidence now covers two successive consuming
+reference locals plus one post-join move after exhaustive equal-origin field
+assignment and stable loop field reborrow. The retained parameter origin crosses
+each local generation without replacing the preceding projected or control-flow
+proof. ORACLE-0002 accepts the chain, conditional, and loop forms, accepts owner
+restoration after last use, and rejects the live chain competitor with E0499.
+Windows and Arch remain at 987 tests per host.
+
 Inferred locals now become reassignment-origin eligible only when their
 initializer already proved a compatible parameter origin. This preserves valid
 indexed scalar alias replacement while preventing an inferred slice alias from

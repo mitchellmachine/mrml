@@ -991,6 +991,13 @@ proved direct alias; malformed tuple initialization still fails closed.
 ORACLE-0002 accepts the direct and conditional moved-alias forms, permits owner
 reuse after last use, and rejects a live competing borrow with E0499.
 
+Projected origins now have exact evidence through two successive consuming
+reference-local moves and through one move after either an exhaustive equal-
+origin conditional field assignment or a stable loop field reborrow. Each local
+generation carries the same parameter origin without collapsing the preceding
+projected/control-flow proof. ORACLE-0002 accepts all three forms, permits owner
+reuse after last use, and rejects the live move-chain competitor with E0499.
+
 The first modern trait-solver foundation is an explicit bounded implemented-
 goal representation. Stable trait/type/inference/placeholder identities remain
 distinct; canonicalization replaces inference identities with first-occurrence
