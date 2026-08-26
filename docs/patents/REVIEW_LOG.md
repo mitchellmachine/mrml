@@ -1,5 +1,16 @@
 # Patent review log
 
+## 2026-08-26 — Atomic initial block-session grant set
+
+Patent review: **NOT_TRIGGERED** for this authority-publication increment. It
+uses conventional fixed-capacity preflight and atomic slot publication for an
+explicit set of device, principal, and rights records. It adds no discovery,
+driver or scheduling algorithm, storage layout, persistent/wire format,
+cryptography, placement policy, native fallback, VMM/device protocol, DMA
+mechanism, or hardware-specific isolation technique. Broader storage/device,
+capability, adaptive-isolation, and Total-MicroVM reviews remain `TRIGGERED`; no
+patent-clearance or non-infringement conclusion is made.
+
 ## 2026-08-26 — Atomic platform block-device registration set
 
 Patent review: **NOT_TRIGGERED** for this bounded registry increment. It uses

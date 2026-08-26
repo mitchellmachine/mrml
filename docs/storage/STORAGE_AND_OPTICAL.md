@@ -31,6 +31,12 @@ every read, write, flush, or superblock operation. Hardware discovery backends
 must use this control-plane boundary rather than granting authority from PCI,
 AHCI, VirtIO, firmware, path, or enumeration metadata.
 
+Initial session publication for a registered set is atomic as well.
+`BlockSessionGrant` records an explicit device, principal, and attenuated rights
+decision; `grant_sessions_atomic` validates every device and rights mask plus
+complete session capacity before publishing any handle. A late unknown device,
+invalid right, or exhausted table therefore leaves no partial I/O authority.
+
 The `mrml` frontend may expose structured `disk`, `filesystem`, `optical`, and
 `media` operations. The PowerShell-inspired shell projects the same backend as
 typed `Get-*`, `Test-*`, `Initialize-*`, `New-*`, `Format-*`, `Write-*`, and

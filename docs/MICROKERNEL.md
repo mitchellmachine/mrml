@@ -3225,6 +3225,15 @@ then performs the serviced block-zero scan. Storage passes 122 tests on Windows
 and Arch Linux, configuration 48, WHP 11, and KVM 12. No native AHCI/VirtIO,
 firmware handoff, physical device, or installed boot was exercised.
 
+Initial recovery-session publication now has the same all-or-nothing boundary.
+A fixed `BlockSessionGrant` set binds explicit device, principal, and rights
+decisions; `grant_sessions_atomic` validates all registered identities, rights,
+and available generational slots before making one handle live. The hosted path
+then passes those exact read-only handles to serviced enumeration. Storage
+passes 123 tests on Windows and Arch Linux; configuration passes 48, WHP 11,
+and KVM 12. This is not native-driver, firmware, physical-media, or installed
+early-boot evidence.
+
 The bounded discovery result now remains owned through the complete serviced
 recovery read. `RecoveredInstalledStableSystemSelection` retains the exact
 installed selection beside the `BlockVolume` and reachable graph produced from

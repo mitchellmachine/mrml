@@ -848,6 +848,13 @@ the header scan. Storage passes 122 tests on Windows and Arch Linux. This is
 **PARTIALLY IMPLEMENTED** registration/control-plane evidence, not a native
 AHCI/VirtIO driver or installed firmware handoff.
 
+The explicit recovery grants after registration are also one atomic bounded
+control-plane operation. Every device, principal, rights mask, and session slot
+is preflighted before any handle becomes live, so a late failure cannot leave a
+partially authorized discovery set. The hosted source uses a single read-only
+`BlockSessionGrant`; registration metadata still cannot authorize discovery or
+placement. Storage passes 123 tests on both development hosts.
+
 The discovery-to-recovery lifetime is now one **PARTIALLY IMPLEMENTED** owning
 operation. `discover_and_recover_serviced_stable_system_selection` selects and
 authenticates the bounded candidate, performs both redundant-root and reachable-

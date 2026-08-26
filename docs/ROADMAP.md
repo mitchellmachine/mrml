@@ -35,6 +35,14 @@ the unchanged Total recovery owner in order. Storage passes 122 tests on Windows
 and Arch Linux; configuration remains 48, WHP 11, and KVM 12. Native driver
 enumeration and firmware/installed transfer remain **PLANNED**.
 
+The subsequent initial session grants are now atomic too.
+`grant_sessions_atomic` validates the complete bounded set of explicit
+device/principal/rights decisions and session capacity before publishing any
+handle. Unknown devices, invalid rights, or late capacity failure leave no
+partial authority. The hosted recovery source uses this operation before its
+serviced scan. Storage passes 123 tests on Windows and Arch Linux;
+configuration remains 48, WHP 11, and KVM 12.
+
 Installed recovery ownership now crosses the Total-admission boundary in the
 controlled backend-parity path. `RecoveredInstalledTotalAdmission` retains the
 exact serviced device selection and recovered volume/root identity beside the

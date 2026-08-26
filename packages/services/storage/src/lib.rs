@@ -63,7 +63,7 @@ pub use block_protocol::{
 };
 pub use block_service::{
     BlockDeviceDescriptor, BlockDeviceId, BlockRights, BlockService, BlockServiceBackend,
-    BlockServiceError, BlockSessionHandle, ServicedBlockDevice,
+    BlockServiceError, BlockSessionGrant, BlockSessionHandle, ServicedBlockDevice,
 };
 pub use cow::{
     CowMetadataImage, CowMetadataWrite, CowPlanError, CowPublicationBackend, CowPublicationPlan,

@@ -24,12 +24,13 @@ use mrml_kernel::{
 use mrml_storage::{
     AUTHORITY_RECOVERY_STATE_BYTES, AllocationImage, AllocationKind, AllocationRecord,
     AuthorityCheckpointProofIssuer, AuthorityRecoveryStateStore, BlockDeviceDescriptor,
-    BlockDeviceId, BlockRights, BlockService, BlockServiceBackend, BlockSessionHandle,
-    BootRecoveryAdmission, DirectoryEntry, DirectoryImage, DirectoryMetadata, ExtentImage,
-    ExtentRecord, FileMetadata, FileReadBackend, MetadataPointer, ObjectIdAllocatorImage,
-    OwnerApprovedAuthorityCheckpoint, SUPERBLOCK_BYTES, StorageAuthorityTable, StorageName,
-    StorageObjectId, StorageObjectKind, StoragePrincipal, StorageRecoveryGrant, StorageRights,
-    Superblock, VolumeHeader, VolumeId, authority_checkpoint_digest, encode_authority_checkpoint,
+    BlockDeviceId, BlockRights, BlockService, BlockServiceBackend, BlockSessionGrant,
+    BlockSessionHandle, BootRecoveryAdmission, DirectoryEntry, DirectoryImage, DirectoryMetadata,
+    ExtentImage, ExtentRecord, FileMetadata, FileReadBackend, MetadataPointer,
+    ObjectIdAllocatorImage, OwnerApprovedAuthorityCheckpoint, SUPERBLOCK_BYTES,
+    StorageAuthorityTable, StorageName, StorageObjectId, StorageObjectKind, StoragePrincipal,
+    StorageRecoveryGrant, StorageRights, Superblock, VolumeHeader, VolumeId,
+    authority_checkpoint_digest, encode_authority_checkpoint,
     recover_selected_validate_and_commit_stable_authorities,
 };
 
@@ -233,8 +234,12 @@ fn recovery_block_service()
     service
         .register_devices_atomic(&descriptors)
         .map_err(|_| HostedRecoveryProbeError::StorageLayout)?;
-    let session = service
-        .grant(recovery_device(), principal(), BlockRights::READ)
+    let [session] = service
+        .grant_sessions_atomic([BlockSessionGrant::new(
+            recovery_device(),
+            principal(),
+            BlockRights::READ,
+        )])
         .map_err(|_| HostedRecoveryProbeError::StorageLayout)?;
     Ok((service, session))
 }

@@ -73,6 +73,38 @@ impl BlockRights {
     }
 }
 
+/// One explicit supervisor decision to create an initial block session.
+/// Device and principal identities do not themselves grant the requested
+/// rights; only atomic publication by `BlockService` creates the handle.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct BlockSessionGrant {
+    device: BlockDeviceId,
+    owner: StoragePrincipal,
+    rights: BlockRights,
+}
+
+impl BlockSessionGrant {
+    pub const fn new(device: BlockDeviceId, owner: StoragePrincipal, rights: BlockRights) -> Self {
+        Self {
+            device,
+            owner,
+            rights,
+        }
+    }
+
+    pub const fn device(self) -> BlockDeviceId {
+        self.device
+    }
+
+    pub const fn owner(self) -> StoragePrincipal {
+        self.owner
+    }
+
+    pub const fn rights(self) -> BlockRights {
+        self.rights
+    }
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct BlockSessionHandle {
     slot: u32,
@@ -183,6 +215,58 @@ impl<const DEVICES: usize, const SESSIONS: usize> BlockService<DEVICES, SESSIONS
             return Err(BlockServiceError::InvalidRights);
         }
         self.insert_session(device, owner, rights, None)
+    }
+
+    /// Atomically publishes one bounded set of explicit initial session grants.
+    /// All rights, device identities, and session slots are preflighted before
+    /// any handle becomes live, so a late failure cannot leave partial authority.
+    pub fn grant_sessions_atomic<const GRANTS: usize>(
+        &mut self,
+        grants: [BlockSessionGrant; GRANTS],
+    ) -> Result<[BlockSessionHandle; GRANTS], BlockServiceError<core::convert::Infallible>> {
+        for grant in grants.iter().copied() {
+            self.descriptor(grant.device)?;
+            if !grant.rights.is_valid() {
+                return Err(BlockServiceError::InvalidRights);
+            }
+        }
+        let eligible = self
+            .sessions
+            .iter()
+            .enumerate()
+            .filter(|(index, session)| {
+                !session.occupied && session.generation != u32::MAX && u32::try_from(*index).is_ok()
+            })
+            .count();
+        if eligible < GRANTS {
+            return Err(BlockServiceError::Capacity);
+        }
+        let mut handles = [BlockSessionHandle {
+            slot: 0,
+            generation: 1,
+        }; GRANTS];
+        for (grant, handle) in grants.into_iter().zip(&mut handles) {
+            let (index, session) = self
+                .sessions
+                .iter_mut()
+                .enumerate()
+                .find(|(index, session)| {
+                    !session.occupied
+                        && session.generation != u32::MAX
+                        && u32::try_from(*index).is_ok()
+                })
+                .expect("grant capacity was completely preflighted");
+            session.occupied = true;
+            session.device = grant.device;
+            session.owner = Some(grant.owner);
+            session.rights = grant.rights;
+            session.parent = None;
+            *handle = BlockSessionHandle {
+                slot: u32::try_from(index).expect("grant slot was completely preflighted"),
+                generation: session.generation,
+            };
+        }
+        Ok(handles)
     }
 
     pub fn derive(
@@ -821,6 +905,46 @@ mod tests {
             .grant(second.id(), owner(1), BlockRights::READ)
             .unwrap();
         assert_eq!(service.session_descriptor(session, owner(1)), Ok(second));
+    }
+
+    #[test]
+    fn platform_session_set_grants_are_atomic_and_explicit() {
+        let first = descriptor();
+        let second = BlockDeviceDescriptor::new(
+            BlockDeviceId::new(8).unwrap(),
+            BLOCK_SIZE as u32,
+            BLOCKS as u64,
+        )
+        .unwrap();
+        let mut service = BlockService::<2, 1>::new();
+        service.register_devices_atomic(&[first, second]).unwrap();
+        let read_first = BlockSessionGrant::new(first.id(), owner(1), BlockRights::READ);
+        let read_second = BlockSessionGrant::new(second.id(), owner(1), BlockRights::READ);
+        let unknown =
+            BlockSessionGrant::new(BlockDeviceId::new(9).unwrap(), owner(1), BlockRights::READ);
+
+        assert_eq!(
+            service.grant_sessions_atomic([read_first, unknown]),
+            Err(BlockServiceError::UnknownDevice)
+        );
+        assert_eq!(
+            service.grant_sessions_atomic([read_first, read_second]),
+            Err(BlockServiceError::Capacity)
+        );
+        let [session] = service.grant_sessions_atomic([read_second]).unwrap();
+        assert_eq!(service.session_descriptor(session, owner(1)), Ok(second));
+
+        let mut invalid_service = BlockService::<1, 1>::new();
+        invalid_service.register_device(first).unwrap();
+        assert_eq!(
+            invalid_service.grant_sessions_atomic([BlockSessionGrant::new(
+                first.id(),
+                owner(1),
+                BlockRights(0),
+            )]),
+            Err(BlockServiceError::InvalidRights)
+        );
+        assert!(invalid_service.grant_sessions_atomic([read_first]).is_ok());
     }
 
     #[test]

@@ -1130,6 +1130,15 @@ list. It still does not persist or recover the binding and therefore does not
 advance recovery status. Recovered end-to-end Total finalization remains
 **PLANNED**.
 
+Recovery-session publication is now atomic across a bounded device set.
+`BlockSessionGrant` carries each explicit device/principal/rights decision, and
+`grant_sessions_atomic` preflights every registered identity, rights mask, and
+eligible session slot before making the first handle live. The hosted recovery
+path uses this set operation for its read-only principal session before header
+enumeration. Storage passes 123 tests on Windows and Arch Linux; configuration
+passes 48, WHP 11, and KVM 12. This remains controlled service evidence, not
+native driver or installed-boot evidence.
+
 The recovered installed selection is now retained across the boot-policy to
 Total-admission boundary. `RecoveredInstalledTotalAdmission` binds its exact
 device descriptor, serviced session selection, volume header, active root,
