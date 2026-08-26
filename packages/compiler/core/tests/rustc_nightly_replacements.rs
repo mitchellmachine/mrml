@@ -6223,9 +6223,13 @@ fn rustc_conditional_reference_delayed_initialization_preserves_origins() {
 
 #[test]
 fn rustc_string_reference_delayed_initialization_reaches_native_objects() {
-    let source = "#[unsafe(no_mangle)] pub extern \"C\" fn probe(input: &str) -> &str { let value: &str; value = input; value }";
-    assert_eq!(compile(source, ObjectFormat::Elf64), Ok(()));
-    assert_eq!(compile(source, ObjectFormat::Coff), Ok(()));
+    for source in [
+        "#[unsafe(no_mangle)] pub extern \"C\" fn probe(input: &str) -> &str { let value: &str; value = input; value }",
+        "#[unsafe(no_mangle)] pub extern \"C\" fn probe(input: &str, choose: bool) -> &str { let value: &str; if choose { value = input; } else { value = input; } value }",
+    ] {
+        assert_eq!(compile(source, ObjectFormat::Elf64), Ok(()));
+        assert_eq!(compile(source, ObjectFormat::Coff), Ok(()));
+    }
 
     let partial = "#[unsafe(no_mangle)] pub extern \"C\" fn probe(input: &str, choose: bool) -> &str { let value: &str; if choose { value = input; } value }";
     assert!(compile(partial, ObjectFormat::Elf64).is_err());
