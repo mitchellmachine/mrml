@@ -312,6 +312,15 @@ borrow of that owner while the child remained live with E0499. Temporary probe
 sources and metadata were removed. This records only the exact equal-origin
 conditional replacement, not general aggregate dataflow or region inference.
 
+A further independently authored Rust 2024 metadata-only probe against the same
+exact toolchain and commit accepted a tuple field replaced from a first mutable-
+reference parameter to a second before a `while`, then identity-reborrowed from
+that field in the loop body. The caller could reborrow the second owner after
+the returned child's last use. A separate invocation rejected a competing
+mutable borrow while that child remained live with E0499. Temporary probe
+sources and metadata were removed. This records only that stable zero/one-
+iteration origin shape, not a general loop fixed point or region inference.
+
 An independently authored Rust 2024 metadata-only probe against that same exact
 toolchain and commit compiled `asm!("cmp rcx, rcx", in("rcx") value,
 options(nomem, nostack))`. This records black-box acceptance of that exact

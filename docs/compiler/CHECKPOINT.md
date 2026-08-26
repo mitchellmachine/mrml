@@ -679,7 +679,17 @@ generation become unknown. Return-only arms remain exit evidence rather than
 post-conditional state. ORACLE-0002 accepts exhaustive replacement from a first
 mutable-reference parameter to a second, accepts second-owner reuse after the
 returned child's last use, and rejects a live competitor with E0499. Windows
-and Arch remain at 987 tests per host. Projected loop writes still fail closed.
+and Arch remain at 987 tests per host. Projected loop writes require the
+separately bounded stable-loop rule below.
+
+The stable projected-loop slice starts only from field evidence established
+before the loop. It admits an identity reborrow of that same tuple field in one
+modeled iteration, normalizes only the trailing identity dereference for origin
+lookup, and intersects iteration state with the zero-iteration incoming state.
+Changed or unavailable origins disappear. ORACLE-0002 accepts the exact pre-loop
+replacement and loop self-reborrow, accepts second-owner reuse after last use,
+and rejects a live competitor with E0499. Windows and Arch remain at 987 tests
+per host; this is not general loop fixed-point or region inference.
 
 Inferred locals now become reassignment-origin eligible only when their
 initializer already proved a compatible parameter origin. This preserves valid

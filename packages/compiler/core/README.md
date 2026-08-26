@@ -3964,8 +3964,19 @@ typed origins survive, while unequal origins and an implicit incoming `else`
 path clear the evidence. Focused caller tests preserve the second parameter's
 loan through the returned child, reject a live competing reborrow, and allow
 owner reuse after last use. ORACLE-0002 accepts that exact both-arm shape and
-rejects the live competitor with E0499. Projected loop writes remain fail-
-closed; this is not general conditional aggregate or region inference.
+rejects the live competitor with E0499. Projected loop writes require the
+separately bounded stable-loop rule below; this is not general conditional
+aggregate or region inference.
+
+A bounded loop transfer now preserves an already established tuple-field origin
+only when one modeled iteration produces the same typed origin as the zero-
+iteration incoming state. The supported iteration is an identity reborrow of
+the field; its trailing dereference is normalized back to the exact stored field
+key. Missing or changed evidence intersects away. Focused caller tests reject a
+live competing borrow and accept owner reuse after the returned child's last
+use. ORACLE-0002 accepts the same exact shape and rejects the competitor with
+E0499. Both hosts remain at 987 tests; arbitrary loop fixed points remain
+unsupported.
 
 The conditional projected-reassignment milestone extends the bounded tuple-field
 loan chain across a conditional shared-reference assignment. The exact dated

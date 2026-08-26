@@ -955,8 +955,17 @@ a differing origin or a missing `else` that preserves the incoming generation
 clears the joined evidence. Return-only arms do not contaminate post-conditional
 state. ORACLE-0002 accepts the exact both-arm replacement from a first mutable-
 reference parameter to a second, accepts reuse after last use, and rejects a
-live competing borrow of the second owner with E0499. Projected loop writes
-remain unsupported.
+live competing borrow of the second owner with E0499. Projected loop writes are
+handled only by the separately bounded stable-loop rule below.
+
+Stable projected loop transfer is now bounded to an incoming field origin that
+already exists before the loop. One modeled iteration may reborrow that same
+field through an identity dereference; the post-loop state is the intersection
+of the zero-iteration incoming state and the iteration state. A changed or
+unclassified iteration origin therefore fails closed. ORACLE-0002 accepts the
+exact pre-loop replacement plus loop-carried self-reborrow, accepts owner reuse
+after last use, and rejects a live competing borrow with E0499. This is not
+general loop fixed-point or region inference.
 
 The first modern trait-solver foundation is an explicit bounded implemented-
 goal representation. Stable trait/type/inference/placeholder identities remain
