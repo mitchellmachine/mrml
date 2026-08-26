@@ -1258,6 +1258,16 @@ unavailable before code generation. Windows gnullvm and native Arch Linux WSL
 each pass 590 library tests, one component-interface probe, 10 conformance
 tests, and 335 replacement tests: 936 compiler tests per host.
 
+The inherited source-supertrait milestone lowers every direct marker
+supertrait of a generic, conditional concrete, or projection-valued
+implementation as a deduplicated bounded premise over the same self type. A
+selected child implementation is unavailable unless each declared parent can
+be proved, while an equivalent explicit premise is retained only once.
+Parameterized supertrait paths remain unsupported and fail on arity. Windows
+gnullvm and native Arch Linux WSL each pass 592 library tests, one component-
+interface probe, 10 conformance tests, and 335 replacement tests: 938 compiler
+tests per host.
+
 The premise-bearing rigid-normalization milestone proves the selected generic
 implementation's instantiated trait and projection predicates before exposing
 its associated value. It shares the caller's 16-frame rigid proof stack and

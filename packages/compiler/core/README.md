@@ -4454,6 +4454,16 @@ before code generation. Windows gnullvm and native Arch Linux WSL each pass 590
 library tests, one component probe, 10 conformance tests, and 335 replacement
 tests: 936 compiler tests per host.
 
+The inherited source-supertrait milestone lowers each direct marker supertrait
+of a generic, conditional concrete, or projection-valued implementation as a
+deduplicated bounded premise over the same self type. Selected child
+implementations therefore remain unavailable unless every declared parent can
+be proved; explicit equivalent premises do not consume authority or duplicate
+solver work. Parameterized supertrait paths remain unsupported and fail on
+arity rather than being guessed. Windows gnullvm and native Arch Linux WSL each
+pass 592 library tests, one component probe, 10 conformance tests, and 335
+replacement tests: 938 compiler tests per host.
+
 The projection-bearing term milestone uses a fixed 64-node arena for flat leaf
 terms and associated-type projections whose trait self/argument positions refer
 only to earlier nodes. Identical nodes intern to one stable identity; invalid
