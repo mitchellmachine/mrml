@@ -35862,6 +35862,13 @@ mod tests {
         ] {
             analyze(source).unwrap();
         }
+
+        let projected_shared_call_live = "fn value(first: &mut u16) -> u16 { let pair = (&mut *first,); let child: &mut u16 = &mut *pair.0; let observed = read(pair.0); observed + *child }";
+        assert_eq!(
+            analyze(projected_shared_call_live).unwrap_err().kind,
+            CodegenErrorKind::RuntimeBorrowConflict
+        );
+        analyze("fn value(first: &mut u16) -> u16 { let pair = (&mut *first,); let child: &mut u16 = &mut *pair.0; let copied = *child; let observed = read(pair.0); copied + observed }").unwrap();
     }
 
     #[test]
