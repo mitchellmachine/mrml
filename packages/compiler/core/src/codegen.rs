@@ -2122,6 +2122,34 @@ fn x86_64_inline_assembly(
         x86_64_inline_assembly_options(options, true)?;
         return Ok(Some(X86_64InlineAssembly::Nop));
     }
+    if let Some(named) = arguments.strip_prefix("\"inc {") {
+        let template_end = named
+            .find("}\"")
+            .ok_or(CodegenErrorKind::InvalidInlineAssembly)?;
+        let operand_name = &named[..template_end];
+        if x86_64_naked_external_symbol(operand_name) != Some(operand_name) {
+            return Err(CodegenErrorKind::InvalidInlineAssembly);
+        }
+        let arguments = named[template_end + 2..]
+            .trim()
+            .strip_prefix(',')
+            .ok_or(CodegenErrorKind::InvalidInlineAssembly)?
+            .trim();
+        let (declared_name, operand) = arguments
+            .split_once('=')
+            .ok_or(CodegenErrorKind::InvalidInlineAssembly)?;
+        if declared_name.trim() != operand_name {
+            return Err(CodegenErrorKind::InvalidInlineAssembly);
+        }
+        let operand = operand
+            .trim()
+            .strip_prefix("inout(reg)")
+            .ok_or(CodegenErrorKind::InvalidInlineAssembly)?
+            .trim();
+        let operand = x86_64_inline_operand_with_options(operand, false)?;
+        let (input, output) = x86_64_inline_inout_places(operand)?;
+        return Ok(Some(X86_64InlineAssembly::IncrementRax { input, output }));
+    }
     let (arguments, operand_prefix, preserves_flags, operand_kind) =
         if let Some(arguments) = arguments.strip_prefix("\"cmp rax, rax\"") {
             (
@@ -2155,7 +2183,22 @@ fn x86_64_inline_assembly(
         .strip_prefix(operand_prefix)
         .ok_or(CodegenErrorKind::InvalidInlineAssembly)?
         .trim();
-    let (input, options) = if let Some(options_start) = arguments.rfind(", options(") {
+    let input = x86_64_inline_operand_with_options(arguments, preserves_flags)?;
+    match operand_kind {
+        X86_64InlineOperandKind::Input => Ok(Some(X86_64InlineAssembly::CompareRax { input })),
+        X86_64InlineOperandKind::Output => Ok(Some(X86_64InlineAssembly::SetRax { output: input })),
+        X86_64InlineOperandKind::InOut => {
+            let (input, output) = x86_64_inline_inout_places(input)?;
+            Ok(Some(X86_64InlineAssembly::IncrementRax { input, output }))
+        }
+    }
+}
+
+fn x86_64_inline_operand_with_options(
+    arguments: &str,
+    preserves_flags: bool,
+) -> Result<&str, CodegenErrorKind> {
+    let (operand, options) = if let Some(options_start) = arguments.rfind(", options(") {
         let options = arguments[options_start + 2..]
             .strip_prefix("options(")
             .and_then(|options| options.strip_suffix(')'))
@@ -2164,26 +2207,24 @@ fn x86_64_inline_assembly(
     } else {
         (arguments, None)
     };
-    let input = input.trim();
-    if input.is_empty() {
+    let operand = operand.trim();
+    if operand.is_empty() {
         return Err(CodegenErrorKind::InvalidInlineAssembly);
     }
     if let Some(options) = options {
         x86_64_inline_assembly_options(options, preserves_flags)?;
     }
-    match operand_kind {
-        X86_64InlineOperandKind::Input => Ok(Some(X86_64InlineAssembly::CompareRax { input })),
-        X86_64InlineOperandKind::Output => Ok(Some(X86_64InlineAssembly::SetRax { output: input })),
-        X86_64InlineOperandKind::InOut => {
-            let mut operands = input.split("=>");
-            let input = operands.next().unwrap_or_default().trim();
-            let output = operands.next().map(str::trim);
-            if operands.next().is_some() || input.is_empty() || output.is_some_and(str::is_empty) {
-                return Err(CodegenErrorKind::InvalidInlineAssembly);
-            }
-            Ok(Some(X86_64InlineAssembly::IncrementRax { input, output }))
-        }
+    Ok(operand)
+}
+
+fn x86_64_inline_inout_places(operand: &str) -> Result<(&str, Option<&str>), CodegenErrorKind> {
+    let mut operands = operand.split("=>");
+    let input = operands.next().unwrap_or_default().trim();
+    let output = operands.next().map(str::trim);
+    if operands.next().is_some() || input.is_empty() || output.is_some_and(str::is_empty) {
+        return Err(CodegenErrorKind::InvalidInlineAssembly);
     }
+    Ok((input, output))
 }
 
 fn x86_64_inline_assembly_options(
@@ -29777,6 +29818,24 @@ mod tests {
                 .windows(3)
                 .any(|bytes| bytes == [0x48, 0xff, 0xc0])
         );
+        for source in [
+            concat!(
+                "#[unsafe(no_mangle)] pub unsafe extern \"C\" fn answer() -> u64 { ",
+                "let mut value: u64 = 6; asm!(\"inc {value}\", value = inout(reg) value); value }"
+            ),
+            concat!(
+                "#[unsafe(no_mangle)] pub unsafe extern \"C\" fn answer(input: u64) -> u64 { ",
+                "let mut output: u64 = 0; asm!(\"inc {slot}\", slot = inout(reg) input => output, ",
+                "options(nomem, nostack)); output }"
+            ),
+        ] {
+            let code = compile(source).unwrap();
+            assert!(
+                code.bytes()
+                    .windows(3)
+                    .any(|bytes| bytes == [0x48, 0xff, 0xc0])
+            );
+        }
 
         for (source, expected) in [
             (
@@ -29865,6 +29924,22 @@ mod tests {
             ),
             (
                 "#[unsafe(no_mangle)] pub unsafe extern \"C\" fn answer(input: u64) -> u64 { let mut output: u64 = 0; asm!(\"inc rax\", inout(\"rax\") input => output => output); output }",
+                CodegenErrorKind::InvalidInlineAssembly,
+            ),
+            (
+                "#[unsafe(no_mangle)] pub unsafe extern \"C\" fn answer() -> u64 { let mut value: u64 = 6; asm!(\"inc {value}\", other = inout(reg) value); value }",
+                CodegenErrorKind::InvalidInlineAssembly,
+            ),
+            (
+                "#[unsafe(no_mangle)] pub unsafe extern \"C\" fn answer() -> u64 { let mut value: u64 = 6; asm!(\"inc {value}\", value = inout(reg_byte) value); value }",
+                CodegenErrorKind::InvalidInlineAssembly,
+            ),
+            (
+                "#[unsafe(no_mangle)] pub unsafe extern \"C\" fn answer() -> u64 { let mut value: u64 = 6; asm!(\"inc {}\", inout(reg) value); value }",
+                CodegenErrorKind::InvalidInlineAssembly,
+            ),
+            (
+                "#[unsafe(no_mangle)] pub unsafe extern \"C\" fn answer() -> u64 { let mut value: u64 = 6; asm!(\"inc {value} {value}\", value = inout(reg) value); value }",
                 CodegenErrorKind::InvalidInlineAssembly,
             ),
         ] {
