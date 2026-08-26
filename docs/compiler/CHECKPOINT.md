@@ -1365,6 +1365,16 @@ identities remain explicit errors. Windows gnullvm and native Arch Linux WSL
 each pass 615 library tests, one component-interface probe, 10 conformance
 tests, and 335 replacement tests: 961 compiler tests per host.
 
+The inline associated-binding milestone parses bounds such as
+`T: Iterator<Item = T>` on declaration or implementation type parameters and
+desugars them into the existing implemented-trait plus projection-equality
+predicates. Both predicates share capacity, identity admission, duplicate
+rejection, substitution, and projection-aware proof with explicit `where`
+clauses. Mixed positional arguments and bindings remain fail-closed pending a
+typed mixed argument-list representation. Windows gnullvm and native Arch Linux
+WSL each pass 621 library tests, one component-interface probe, 10 conformance
+tests, and 335 replacement tests: 967 compiler tests per host.
+
 The premise-bearing rigid-normalization milestone proves the selected generic
 implementation's instantiated trait and projection predicates before exposing
 its associated value. It shares the caller's 16-frame rigid proof stack and

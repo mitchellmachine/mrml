@@ -5507,6 +5507,17 @@ proof-search, caching, or code-generation mechanism. Broader trait solving and
 Rust conformance remain partial; this agent review does not establish clearance
 or infringement and does not replace independent human dual review.
 
+# 2026-08-26 — Inline source associated-type bindings
+
+**Result: NOT_TRIGGERED after the bounded source-premise reviews.** This
+increment conventionally desugars an inline associated-type binding into the
+existing implemented-trait and projection-equality source predicates before
+admission. It adds no new predicate representation, normalization, unification,
+selection, coherence, proof-search, caching, or code-generation mechanism.
+Broader trait solving and Rust conformance remain partial; this agent review
+does not establish clearance or infringement and does not replace independent
+human dual review.
+
 # 2026-08-26 — Kernel parallel-vCPU runtime-slice accounting
 
 **Result: NOT_TRIGGERED after the fixed-period CPU-budget and linear runtime-
