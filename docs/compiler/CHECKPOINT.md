@@ -60,6 +60,15 @@ named edition can be adopted through a pinned, workspace-wide migration.
 
 ## Latest terminal noreturn assembly milestone
 
+Commit `9a312d4e` lowers the exact first-party terminal x86-64 `cli`, `2:`,
+`hlt`, `jmp 2b` assembly sequence with all permutations of its required
+`noreturn`, `nomem`, and `nostack` options. ORACLE-0002 accepts the comparison
+probe. Windows and native Arch Linux WSL each passed 646 library tests, 1
+component probe, 10 conformance tests, and 342 replacement tests: 999 compiler
+tests per host. This is object encoding, not privileged-instruction execution.
+
+### Preceding returning syscall milestone
+
 Commit `9797cabb` adds returning seven-register `int 0x80` forms with RAX
 `inlateout`, ordered input/`inlateout` operands, mutable named-local or discarded
 outputs, exact `nostack`, source-ordered read/write facts, and preservation of

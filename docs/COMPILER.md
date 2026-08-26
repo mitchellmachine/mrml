@@ -123,6 +123,7 @@ language as a whole.
 | Unsafe inline-assembly statement delta | **PARTIAL** | A bounded `ExpressionStatement` now carries an explicit unsafe-context property when the parser recognizes one `unsafe { asm!(...); }` statement, with an optional semicolon after the block. Both read preanalysis and native emission require that property or an unsafe function. Adjacent assembly after an unrelated unsafe block remains unauthorized. Multiple statements in the same unsafe block, nested unsafe assembly blocks, general macro statements, other unsupported assembly, and general statement-block lowering remain absent; this row narrows the assembly limitation in the unsafe-block delta above. |
 | Terminal noreturn assembly delta | **PARTIAL** | The parser marks only the final top-level expression statement as terminal. On x86-64, exact `asm!("int3", options(noreturn, nostack))` (with either option order) is admitted only in that position and an unsafe context, emits `CC`, suppresses the ordinary return sequence, and permits `!` function returns or never-to-value coercion. A following unreachable suffix, conditional placement, other templates/options, general never expressions, and broader unreachable-code lowering fail closed. |
 | Syscall assembly delta | **PARTIAL** | Exact x86-64 `asm!("int 0x80", ...)` accepts seven ordered `u64` operands in RAX, RDI, RSI, RDX, R10, R8, and R9. The terminal form requires inputs plus exact `noreturn, nostack`; the returning form requires RAX `inlateout`, input or `inlateout` for the remaining registers, mutable named-local or discarded outputs, and exact `nostack`. Inputs are preanalyzed/evaluated left-to-right, all post-interrupt results are preserved before output stores, and unsupported scopes, orderings, types, places, or options fail closed. General output places and other syscall/assembly shapes remain unsupported. |
+| Terminal halt-loop assembly delta | **PARTIAL** | Exact x86-64 `asm!("cli", "2:", "hlt", "jmp 2b", options(noreturn, nomem, nostack))` is recognized as one typed terminal form, accepts every option permutation, and emits fixed `FA F4 EB FD` without a return sequence. Unsafe scope and terminal placement are mandatory; altered templates, labels, options, or suffixes fail closed. This is native-object encoding evidence, not physical privileged-instruction execution. |
 | Modern `no_std` systems features | **PARTIAL** | Dependency-free native code generation covers integers, control flow, arrays, bounded scalar tuples, references, slices, raw pointers, COFF/ELF64, UEFI checks, and NVPTX checks. Up to eight typed x86-64 PC-relative branch-or-data relocations are structurally emitted for both native object formats. General assembly, naked entry-point integration, atomics, SIMD, full ABI/layout, general relocation families, linking, and package compilation remain missing. |
 
 Already implemented post-2024 or forward-looking work should be preserved rather
@@ -1895,6 +1896,20 @@ Windows and Arch each passed 646 unit, 1 component, 10 conformance, and 341
 replacement tests (998 total). The interrupt was not executed; output
 parameters/fields/indexes, other operand orders/types/options, general assembly,
 and physical kernel behavior remain unsupported.
+
+### Terminal `cli`/`hlt` loop checkpoint
+
+The exact first-party halt shape containing `cli`, local label `2:`, `hlt`, and
+`jmp 2b` is now a typed divergent x86-64 assembly form. All permutations of the
+required `noreturn`, `nomem`, and `nostack` options are accepted; missing or
+altered fields fail closed. Terminal native lowering emits `FA F4 EB FD` and no
+return sequence. The exact ORACLE-0002 Rust 2024 toolchain accepted the
+independently authored metadata probe. ELF64 and COFF replacements plus unsafe,
+template, and nonterminal controls pass on both hosts. Windows and Arch each
+passed 646 unit, 1 component, 10 conformance, and 342 replacement tests (999
+total). The instructions were not executed, so this is not privileged-mode or
+physical CPU evidence; general labels and multi-template assembly remain
+unsupported.
 
 ## Non-negotiable implementation rules
 

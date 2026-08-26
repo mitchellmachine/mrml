@@ -1054,3 +1054,11 @@ black-box admission of that exact ordered operand/output form only; it does not
 establish runtime interrupt behavior, arbitrary output places, other options or
 register sets, general assembly, or physical kernel evidence. Temporary source
 and metadata were removed.
+
+An independently authored Rust 2024 metadata-only terminal halt probe against
+this exact toolchain and commit compiled `asm!("cli", "2:", "hlt", "jmp 2b",
+options(noreturn, nomem, nostack))` in a safe function's unsafe block returning
+`!`. This records black-box admission of that exact template, label, backedge,
+and option set only; it does not establish privileged instruction execution,
+general labels, multi-template assembly, or physical CPU evidence. Temporary
+source and metadata were removed.

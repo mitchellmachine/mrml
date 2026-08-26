@@ -8365,6 +8365,17 @@ algorithm. General output places, assembly, and broader compiler completion
 remain partial; this technical screen is not a clearance or infringement
 conclusion and does not replace independent human dual review.
 
+# 2026-08-26 — Terminal x86-64 CLI/HLT loop lowering
+
+**Result: NOT_TRIGGERED.** This bounded compiler increment recognizes one
+existing first-party fixed assembly sequence and emits the published
+architectural encodings plus a conventional short backward branch. It adds no
+new power-management, scheduling, instruction-selection, optimization,
+allocation, control-flow-analysis, or runtime algorithm. General assembly and
+broader compiler completion remain partial; this technical screen is not a
+clearance or infringement conclusion and does not replace independent human
+dual review.
+
 # 2026-08-26 — Composed outer/nested loop origin state
 
 **Result: NOT_TRIGGERED after the composed nested-state review.** This increment
