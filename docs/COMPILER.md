@@ -1125,6 +1125,12 @@ child's last use, then both are restored. ORACLE-0002 rejects each live-owner
 mutation with E0503 and accepts the combined restoration control. This is a
 bounded reaching-definition join, not path-sensitive region selection.
 
+The equivalent single-exit loop-carried join now has direct mutation evidence
+for both the pre-loop owner and the owner assigned before `break`. Both remain
+protected while a shared child formed after the loop is live and are restored
+after its last use. ORACLE-0002 rejects both overlaps with E0503 and accepts the
+combined restoration control. General loop fixed points remain unsupported.
+
 The first modern trait-solver foundation is an explicit bounded implemented-
 goal representation. Stable trait/type/inference/placeholder identities remain
 distinct; canonicalization replaces inference identities with first-occurrence

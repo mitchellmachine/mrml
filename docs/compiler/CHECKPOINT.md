@@ -816,6 +816,12 @@ write is rejected and both owners are writable after the child's last use.
 ORACLE-0002 reports E0503 for both conflicts and accepts the combined control.
 Windows and Arch each pass 987 compiler tests; this remains a bounded CFG join.
 
+A single-exit loop-carried mutable-parent generation now has direct mutation
+coverage for both its pre-loop and assigned-before-break owners. Both conflicts
+fail while the post-loop shared child remains live, and both owners are restored
+after its last use. ORACLE-0002 reports E0503 for each conflict and accepts the
+combined control. Windows and Arch each pass 987 compiler tests.
+
 Multi-field tuple literals retain a separate projected origin per field. A
 conditional reference element seeds its field only when both arms prove the
 same parameter; unequal first/second origins fail closed. Focused caller tests

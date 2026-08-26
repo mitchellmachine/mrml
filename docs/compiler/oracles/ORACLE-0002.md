@@ -315,6 +315,15 @@ before mutating both owners compiled. This is exact black-box evidence for the
 bounded conditional join, not general path-sensitive regions. Temporary probe
 sources and metadata were removed.
 
+An independently authored Rust 2024 metadata-only probe against this exact
+toolchain and commit initialized a mutable parent before a `while`, optionally
+reassigned it from a second parameter immediately before `break`, and formed a
+shared child after the loop. Separate invocations rejected direct mutation of
+the pre-loop and loop-assigned owners with E0503 while the child was used later.
+A control used the child before mutating both owners and compiled. This is exact
+black-box evidence for the bounded single-exit loop shape, not a general loop
+fixed point. Temporary probe sources and metadata were removed.
+
 ## Straight-line tuple-field callee-origin follow-up
 
 On 2026-08-26, an independently authored Rust 2024 metadata-only probe against

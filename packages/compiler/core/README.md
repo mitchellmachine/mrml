@@ -4146,6 +4146,13 @@ writable after its last use. The pinned oracle rejects each overlap with E0503
 and accepts the combined restoration control. Both hosts remain at 987 compiler
 tests; path-sensitive regions remain unsupported.
 
+The matching single-exit loop-carried case now protects both the pre-loop owner
+and the owner assigned before `break` from direct mutation while a post-loop
+shared child is live. Both become writable after the child's last use. The
+pinned oracle rejects each overlap with E0503 and accepts the combined control;
+both hosts remain at 987 compiler tests. General loop fixed points remain
+unsupported.
+
 The projected conditional-return outlives milestone validates every retained
 origin of the latest reference assignment when an exact tuple field is returned.
 The exact dated oracle rejects a conditional local/parameter generation with
