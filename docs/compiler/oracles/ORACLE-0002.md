@@ -143,6 +143,14 @@ parameter-backed destination-state shapes only. It does not establish general
 region inference, local-backed return safety, or state-changing inner-continue
 prefixes. Temporary source and metadata were removed.
 
+An independently authored Rust 2024 metadata-only nested-branch-header probe
+against this exact toolchain and commit accepted a loop-carried mutable
+parameter alias reborrowed inside a conditional nested-loop branch immediately
+before an inner `continue`, with the alias returned on the untaken path. This is
+black-box evidence for that exact convergent parameter-backed shape only; it
+does not establish general region inference or arbitrary loop-carried local
+origins. Temporary source and metadata were removed.
+
 An independently authored Rust 2024 metadata-only nested-break set against this
 exact toolchain and commit accepted a local-initialized alias overwritten by the
 parameter before an inner unconditional-loop break and returned afterward.

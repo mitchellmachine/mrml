@@ -4250,8 +4250,9 @@ return values distinct mapped locations. Reference-return records apply their
 exact scoped action prefix before resolving origins: parameter reborrows are
 admitted while local-backed returns fail closed. Reference break/continue
 records transfer their scoped state to inner/outer exit destinations and outer
-continues; inner continues require an unchanged incoming origin state. The
-bounded constant evaluator executes these records using lexical resolver
+continues. Inner continues participate in the existing monotone bounded header
+join, with post-backedge exits admitted only when their state is invariant at
+the converged header. The bounded constant evaluator executes these records using lexical resolver
 truncation and the existing loop limit for inner/outer
 break, continue, and return. Focused tests cover retained branch actions,
 CFG/ownership mapping, all constant terminal kinds, untaken fallthrough, and

@@ -668,8 +668,9 @@ and maps condition/action/return ownership locations back to those control
 points. Branch-return origin transfer applies the exact scoped action prefix:
 parameter-backed reborrows are admitted and local-backed returns fail closed.
 Branch breaks transfer the exact scoped state to inner/outer exits, as do outer
-continues; inner continues require their complete prefix to preserve the
-incoming origin state. Constant semantics are implemented: taken actions use a
+continues. Inner continues feed their scoped state into the existing monotone
+bounded header convergence, and subsequent exits must match the converged
+header. Constant semantics are implemented: taken actions use a
 scoped resolver checkpoint and target-aware break, continue, and return reuse
 the existing bounded loop evaluator. Direct
 and inline native x86-64 lowering mirrors those actions, scoped cleanup, and
