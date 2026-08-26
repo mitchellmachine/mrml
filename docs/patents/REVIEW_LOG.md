@@ -5164,3 +5164,16 @@ mechanism. Workspace/release delivery, servicing, adaptive placement, and
 microVM mechanisms retain their existing `TRIGGERED` reviews; this agent review
 does not establish clearance or infringement and does not replace independent
 human dual review.
+
+# 2026-08-25 — Focused canonical manifest catalog delivery to VMM probes
+
+**Result: NOT_TRIGGERED after the Manifest V2 interface-catalog derivation
+review.** This increment embeds two existing repository manifests as declared
+build inputs, extracts their already canonical exact declaration fields with a
+bounded allocation-free scanner, and passes them to the existing catalog
+encoder. It removes parallel constants and adds no provider discovery, ranking,
+dependency solving, update selection, transport, virtualization, recovery, or
+cryptographic mechanism. General release delivery, servicing, adaptive
+placement, and microVM mechanisms retain their existing `TRIGGERED` reviews;
+this agent review does not establish clearance or infringement and does not
+replace independent human dual review.

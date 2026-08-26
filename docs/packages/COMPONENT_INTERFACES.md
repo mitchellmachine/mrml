@@ -142,12 +142,15 @@ unsupported-placement, noncanonical, and either digest-substituted input fails
 closed.
 It then emits the existing immutable component launch handoff; names and
 metadata still grant no capability. Both focused WHP/KVM component paths use
-this resolver instead of assembling the ZIM/Zstd tuple directly. General
-The build frontend now has a focused canonical builder for deriving these
+this resolver instead of assembling the ZIM/Zstd tuple directly. The build
+frontend now has a focused canonical builder for deriving these
 records from Manifest V2 declarations, with malformed-field and manifest-order
-tests on Windows and Linux. Workspace/release construction and the VMM runners
-do not yet consume that builder output. Persistent authenticated generation/
-catalog storage
+tests on Windows and Linux. Both focused VMM runners embed the real ZIM and Zstd
+manifests as declared, audited build inputs and extract the exact dynamic
+requirement/provider and supported service forms without allocation. The old
+parallel ABI-generation, fingerprint, and provider-form constants are removed.
+General release catalog artifact delivery and persistent authenticated
+generation/catalog storage
 and resolver-driven native-service dispatch remain **PLANNED**.
 The canonical build-tool-to-kernel representation is now **PARTIALLY
 IMPLEMENTED** as `ComponentServiceLaunchHandoff`: a fixed 344-byte little-
@@ -159,8 +162,8 @@ against active system/policy admission and the exact resource-reserved route.
 The record also binds separate SHA3-512 digests of the complete canonical
 `SystemGeneration` and its canonical interface catalog; matching numeric
 generations with different package or declaration bytes fail before backend
-invocation. Windows and Arch Linux package-format suites pass 12 tests,
-DeploymentService suites pass 3, build-tool suites pass 87,
+invocation. Windows and Arch Linux package-format suites pass 13 tests,
+DeploymentService suites pass 3, build-tool suites pass 89,
 kernel suites pass 509, WHP passes 7, and KVM passes 8. The activation record
 also round-trips a canonical digest-bound checkpoint; focused deployment tests
 publish and recover it through one exact stable COW file-generation receipt,

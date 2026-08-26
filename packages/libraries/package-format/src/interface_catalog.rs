@@ -44,6 +44,154 @@ pub enum InterfaceCatalogError {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum ManifestInterfaceDeclaration<'a> {
+    Requirement(ComponentInterfaceRequirement<'a>),
+    Provider(ComponentInterfaceProvider<'a>),
+}
+
+/// Extracts the single dynamic interface declaration from one canonical
+/// Manifest V2 document without allocation. This is intentionally not a second
+/// general TOML parser: the build frontend remains responsible for canonical
+/// manifest validation before these exact declaration fields are embedded in a
+/// release or focused probe.
+pub fn decode_canonical_manifest_interface(
+    bytes: &[u8],
+) -> Result<ManifestInterfaceDeclaration<'_>, InterfaceCatalogError> {
+    let text = core::str::from_utf8(bytes).map_err(|_| InterfaceCatalogError::Format)?;
+    let mut section = "";
+    let mut format = false;
+    let mut version = false;
+    let mut package = None;
+    let mut binding = None;
+    let mut form = None;
+    let mut fingerprint = None;
+    let mut interface = None;
+    let mut generation = None;
+    let mut declaration = 0u8;
+    let mut provider_forms = 0u8;
+    for raw in text.lines() {
+        let line = raw.trim();
+        if line.is_empty() || line.starts_with('#') {
+            continue;
+        }
+        if line.starts_with('[') {
+            section = line;
+            if line == "[[requires]]" {
+                if declaration != 0 {
+                    return Err(InterfaceCatalogError::Format);
+                }
+                declaration = 1;
+            } else if line == "[[provides]]" {
+                if declaration != 0 {
+                    return Err(InterfaceCatalogError::Format);
+                }
+                declaration = 2;
+            }
+            continue;
+        }
+        let (key, value) = line
+            .split_once('=')
+            .ok_or(InterfaceCatalogError::Format)?;
+        let key = key.trim();
+        let value = value.trim();
+        match (section, key) {
+            ("[manifest]", "format") => format = quoted(value)? == "mrml",
+            ("[manifest]", "version") => version = value == "2",
+            ("[package]", "id") => package = Some(quoted(value)?),
+            ("[[requires]]" | "[[provides]]", "binding") => {
+                binding = Some(quoted(value)?)
+            }
+            ("[[requires]]" | "[[provides]]", "form") => form = Some(quoted(value)?),
+            ("[[requires]]" | "[[provides]]", "fingerprint") => {
+                fingerprint = Some(decode_fingerprint(quoted(value)?)?)
+            }
+            ("[[requires]]" | "[[provides]]", "interface") => {
+                interface = Some(quoted(value)?)
+            }
+            ("[[requires]]" | "[[provides]]", "generation") => {
+                generation = Some(
+                    value
+                        .parse::<u32>()
+                        .ok()
+                        .filter(|generation| *generation != 0)
+                        .ok_or(InterfaceCatalogError::InterfaceGeneration)?,
+                )
+            }
+            ("[isolation]", "supported") => provider_forms = decode_supported_forms(value)?,
+            _ => {}
+        }
+    }
+    if !format
+        || !version
+        || binding != Some("dynamic")
+        || form != Some("isolated-service")
+    {
+        return Err(InterfaceCatalogError::Format);
+    }
+    let package = package.ok_or(InterfaceCatalogError::PackageIdentity)?;
+    let interface = interface.ok_or(InterfaceCatalogError::InterfaceIdentity)?;
+    let generation = generation.ok_or(InterfaceCatalogError::InterfaceGeneration)?;
+    let fingerprint = fingerprint.ok_or(InterfaceCatalogError::Fingerprint)?;
+    match declaration {
+        1 => ComponentInterfaceRequirement::exact(package, interface, generation, fingerprint)
+            .map(ManifestInterfaceDeclaration::Requirement)
+            .map_err(InterfaceCatalogError::Declaration),
+        2 => ComponentInterfaceProvider::exact(
+            package,
+            interface,
+            generation,
+            fingerprint,
+            ComponentProviderForms::from_bits(provider_forms)
+                .ok_or(InterfaceCatalogError::ProviderForms)?,
+        )
+        .map(ManifestInterfaceDeclaration::Provider)
+        .map_err(InterfaceCatalogError::Declaration),
+        _ => Err(InterfaceCatalogError::Format),
+    }
+}
+
+fn quoted(value: &str) -> Result<&str, InterfaceCatalogError> {
+    value
+        .strip_prefix('"')
+        .and_then(|value| value.strip_suffix('"'))
+        .filter(|value| !value.is_empty() && !value.contains(['"', '\\']))
+        .ok_or(InterfaceCatalogError::Format)
+}
+
+fn decode_fingerprint(value: &str) -> Result<[u8; 32], InterfaceCatalogError> {
+    if value.len() != 64 {
+        return Err(InterfaceCatalogError::Fingerprint);
+    }
+    let mut output = [0; 32];
+    for (index, byte) in output.iter_mut().enumerate() {
+        *byte = u8::from_str_radix(&value[index * 2..index * 2 + 2], 16)
+            .map_err(|_| InterfaceCatalogError::Fingerprint)?;
+    }
+    if output == [0; 32] {
+        return Err(InterfaceCatalogError::Fingerprint);
+    }
+    Ok(output)
+}
+
+fn decode_supported_forms(value: &str) -> Result<u8, InterfaceCatalogError> {
+    let inner = value
+        .strip_prefix('[')
+        .and_then(|value| value.strip_suffix(']'))
+        .ok_or(InterfaceCatalogError::ProviderForms)?;
+    let mut forms = 0;
+    for item in inner.split(',') {
+        forms |= match quoted(item.trim())? {
+            "native-service" => ComponentProviderForms::NATIVE_SERVICE.bits(),
+            "microvm" => ComponentProviderForms::MICROVM.bits(),
+            _ => return Err(InterfaceCatalogError::ProviderForms),
+        };
+    }
+    ComponentProviderForms::from_bits(forms)
+        .map(ComponentProviderForms::bits)
+        .ok_or(InterfaceCatalogError::ProviderForms)
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum ActivatedCatalogResolutionError {
     Generation(SystemGenerationDecodeError),
     Catalog(InterfaceCatalogError),
@@ -570,6 +718,37 @@ mod tests {
             )
             .unwrap(),
         )
+    }
+
+    #[test]
+    fn canonical_manifest_declarations_supply_exact_catalog_fields() {
+        const REQUIREMENT: &[u8] = b"[manifest]\nformat = \"mrml\"\nversion = 2\n\n[package]\nid = \"org.mrml.zim\"\n\n[[requires]]\nbinding = \"dynamic\"\nfingerprint = \"6a6a6a6a6a6a6a6a6a6a6a6a6a6a6a6a6a6a6a6a6a6a6a6a6a6a6a6a6a6a6a6a\"\nform = \"isolated-service\"\ngeneration = 3\ninterface = \"org.mrml.interface.compression.zstd\"\n";
+        const PROVIDER: &[u8] = b"[manifest]\nformat = \"mrml\"\nversion = 2\n\n[package]\nid = \"org.mrml.zstd\"\n\n[isolation]\nsupported = [\"native-service\", \"microvm\"]\n\n[[provides]]\nbinding = \"dynamic\"\nfingerprint = \"6a6a6a6a6a6a6a6a6a6a6a6a6a6a6a6a6a6a6a6a6a6a6a6a6a6a6a6a6a6a6a6a\"\nform = \"isolated-service\"\ngeneration = 3\ninterface = \"org.mrml.interface.compression.zstd\"\n";
+        const MALFORMED: &[u8] = b"[manifest]\nformat = \"mrml\"\nversion = 2\n\n[package]\nid = \"org.mrml.zstd\"\n\n[isolation]\nsupported = [\"microvm\"]\n\n[[provides]]\nbinding = \"path\"\nfingerprint = \"6a6a6a6a6a6a6a6a6a6a6a6a6a6a6a6a6a6a6a6a6a6a6a6a6a6a6a6a6a6a6a6a\"\nform = \"isolated-service\"\ngeneration = 3\ninterface = \"org.mrml.interface.compression.zstd\"\n";
+        let requirement = match decode_canonical_manifest_interface(REQUIREMENT)
+            .unwrap()
+        {
+            ManifestInterfaceDeclaration::Requirement(value) => value,
+            ManifestInterfaceDeclaration::Provider(_) => panic!("wrong declaration kind"),
+        };
+        let provider = match decode_canonical_manifest_interface(PROVIDER)
+            .unwrap()
+        {
+            ManifestInterfaceDeclaration::Provider(value) => value,
+            ManifestInterfaceDeclaration::Requirement(_) => panic!("wrong declaration kind"),
+        };
+        assert_eq!(requirement.consumer_package(), "org.mrml.zim");
+        assert_eq!(requirement.interface_generation(), 3);
+        assert_eq!(provider.provider_package(), "org.mrml.zstd");
+        assert_eq!(
+            provider.forms(),
+            ComponentProviderForms::NATIVE_SERVICE_OR_MICROVM
+        );
+
+        assert_eq!(
+            decode_canonical_manifest_interface(MALFORMED),
+            Err(InterfaceCatalogError::Format)
+        );
     }
 
     #[test]

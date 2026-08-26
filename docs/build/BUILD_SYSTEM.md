@@ -570,9 +570,11 @@ by hosted WHP/KVM admission. A focused canonical builder now derives bounded
 forms, placements, generations, and fingerprints, and produces identical bytes
 for reordered manifest inputs. The existing resolved launch also emits a
 single-binding catalog and binds its independent SHA3-512 digest into activation
-and the handoff. Workspace/release construction and both VMM runners do not yet
-consume the manifest-derived builder output, so that delivery remains
-**PLANNED**. Caller-supplied kernel object IDs
+and the handoff. The focused WHP/KVM runners now embed the repository's real ZIM
+and Zstd manifests as declared build inputs and use a shared allocation-free
+extractor for those already canonicalized fields; they no longer duplicate ABI,
+fingerprint, or placement-form constants. General workspace/release catalog
+artifact construction and delivery remain **PLANNED**. Caller-supplied kernel object IDs
 and policy generation remain identity inputs and grant no capability. The
 kernel and focused WHP/KVM runners decode the same record. This does not make
 the build tool a runtime authority or implement persistent `DeploymentService`

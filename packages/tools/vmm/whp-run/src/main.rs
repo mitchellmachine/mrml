@@ -54,11 +54,10 @@ use mrml_kernel::{
 };
 #[cfg(target_os = "windows")]
 use mrml_package_format::{
-    ComponentInterfaceProvider, ComponentInterfaceRequirement, ComponentProviderForms,
     ComponentServicePlacement, InterfaceCatalogView, MAX_BOOT_PACKAGE_BYTES,
     MAX_BOOT_RELEASE_BYTES, SystemGenerationDigestRecord, SystemGenerationView,
-    admit_kernel_payload, encode_interface_catalog, encode_system_generation,
-    resolve_activated_interface_catalog,
+    ManifestInterfaceDeclaration, admit_kernel_payload, decode_canonical_manifest_interface,
+    encode_interface_catalog, encode_system_generation, resolve_activated_interface_catalog,
 };
 #[cfg(target_os = "windows")]
 use mrml_runtime::{Instant, Vector, mrml_println as println};
@@ -361,11 +360,6 @@ fn accounted_pages(bytes: u64) -> Result<u64> {
         .filter(|pages| *pages != 0)
         .ok_or_else(|| anyhow!("invalid guest RAM extent"))
 }
-#[cfg(target_os = "windows")]
-const ZSTD_INTERFACE_FINGERPRINT: [u8; 32] = [
-    106, 98, 189, 213, 148, 175, 40, 79, 81, 237, 193, 115, 74, 161, 88, 81, 229, 222, 55, 239,
-    126, 33, 16, 59, 102, 84, 84, 199, 67, 226, 18, 108,
-];
 #[cfg(target_os = "windows")]
 const BLOCK_PROOF_PORT: u16 = 0x4d65;
 #[cfg(target_os = "windows")]
@@ -1912,21 +1906,26 @@ fn application_main() -> Result<()> {
         let digest = SystemGenerationView::decode(&bytes[..length])
             .map_err(|error| anyhow!("WHP SystemGeneration decoding failed: {:?}", error))?
             .digest();
-        let requirement = ComponentInterfaceRequirement::exact(
-            "org.mrml.zim",
-            "org.mrml.interface.compression.zstd",
-            3,
-            ZSTD_INTERFACE_FINGERPRINT,
-        )
-        .map_err(|error| anyhow!("WHP interface requirement failed: {:?}", error))?;
-        let provider = ComponentInterfaceProvider::exact(
-            "org.mrml.zstd",
-            "org.mrml.interface.compression.zstd",
-            3,
-            ZSTD_INTERFACE_FINGERPRINT,
-            ComponentProviderForms::NATIVE_SERVICE_OR_MICROVM,
-        )
-        .map_err(|error| anyhow!("WHP interface provider failed: {:?}", error))?;
+        let requirement = match decode_canonical_manifest_interface(include_bytes!(
+            "../../../../libraries/zim/mrml.toml"
+        ))
+        .map_err(|error| anyhow!("WHP ZIM interface manifest failed: {:?}", error))?
+        {
+            ManifestInterfaceDeclaration::Requirement(requirement) => requirement,
+            ManifestInterfaceDeclaration::Provider(_) => {
+                return Err(anyhow!("WHP ZIM manifest declared a provider"));
+            }
+        };
+        let provider = match decode_canonical_manifest_interface(include_bytes!(
+            "../../../../libraries/zstd/mrml.toml"
+        ))
+        .map_err(|error| anyhow!("WHP Zstd interface manifest failed: {:?}", error))?
+        {
+            ManifestInterfaceDeclaration::Provider(provider) => provider,
+            ManifestInterfaceDeclaration::Requirement(_) => {
+                return Err(anyhow!("WHP Zstd manifest declared a requirement"));
+            }
+        };
         let mut catalog = [0u8; 256];
         let catalog_length = encode_interface_catalog(1, &[requirement], &[provider], &mut catalog)
             .map_err(|error| anyhow!("WHP interface catalog failed: {:?}", error))?;

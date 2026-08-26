@@ -92,3 +92,15 @@ crate_name = "mrml_kvm_run"
 output = "mrml-kvm-run"
 self_extern = false
 source = "packages/tools/vmm/kvm-run/src/main.rs"
+
+[[build_input]]
+kind = "included-file"
+line = 1981
+path = "packages/tools/vmm/kvm-run/src/main.rs"
+reason = "canonical ZIM Manifest V2 interface declaration"
+
+[[build_input]]
+kind = "included-file"
+line = 1991
+path = "packages/tools/vmm/kvm-run/src/main.rs"
+reason = "canonical Zstd Manifest V2 interface declaration"

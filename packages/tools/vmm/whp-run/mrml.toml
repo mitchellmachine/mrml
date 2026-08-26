@@ -112,3 +112,15 @@ crate_name = "mrml_whp_run"
 output = "mrml-whp-run"
 self_extern = false
 source = "packages/tools/vmm/whp-run/src/main.rs"
+
+[[build_input]]
+kind = "included-file"
+line = 1909
+path = "packages/tools/vmm/whp-run/src/main.rs"
+reason = "canonical ZIM Manifest V2 interface declaration"
+
+[[build_input]]
+kind = "included-file"
+line = 1919
+path = "packages/tools/vmm/whp-run/src/main.rs"
+reason = "canonical Zstd Manifest V2 interface declaration"
