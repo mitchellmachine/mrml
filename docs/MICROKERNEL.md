@@ -3048,11 +3048,19 @@ typed overlay separately, strengthens the effective mode to Total for that boot,
 and preserves the exact configuration policy generation. Native-only bounds
 fail before backend invocation. WHP and nested KVM both inject this same typed
 overlay over a Balanced/native configuration before their release-derived
-eligible component route; neither adds native fallback. The real loader-decoded
-`BootHandoff` is not yet fed through recovered configuration into that control
-plane, and complete required-system runtime proof is absent. This is hosted
-composition and handoff-integrity evidence—not a successful Total boot,
-OVMF/EFI-Shell execution, or physical firmware evidence.
+eligible component route; neither adds native fallback. A focused recovered-
+state path now accepts the real canonical `BootHandoff` type only after
+authenticated authority recovery, monotonic epoch advancement, and
+configuration-service publication commit. It revalidates both isolation
+settings through their exact READ capabilities, requires the handoff's accepted
+recovery epoch to immediately precede the committed authority epoch, composes
+the typed override, and retains recovery/configuration provenance without
+granting authority. A stale handoff fails. Windows and Arch Linux configuration
+suites pass 42 tests. Live early-boot orchestration does not yet invoke this path
+with the loader's actual handoff, and complete required-system runtime proof is
+absent. This is hosted recovery/composition and handoff-integrity evidence—not
+a successful Total boot, OVMF/EFI-Shell execution, or physical firmware
+evidence.
 
 The hosted WHP and nested-KVM service runners exercise the configured
 preparation path before real guest construction. Both build component and system

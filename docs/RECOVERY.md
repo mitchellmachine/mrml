@@ -1018,11 +1018,16 @@ value as authority-free input: it cannot prove effective placement, mutate the
 persistent default, or select fallback. The configuration control plane now
 **PARTIALLY IMPLEMENTS** immutable composition of a validated applied policy and
 that typed overlay; the effective boot becomes strict Total while the stored
-owner selections and policy generation remain unchanged. Recovery must still
-authenticate and restore the persistent configuration and feed the actual
-decoded handoff into that composition path. That recovered end-to-end path and
-recovery UI remain **PLANNED**, and malformed or unknown options fail rather
-than selecting Balanced or Recovery implicitly.
+owner selections and policy generation remain unchanged. The focused recovery
+path now authenticates and restores the persistent configuration, commits
+monotonic authority recovery and service publication, then revalidates the exact
+isolation settings and composes the canonical decoded handoff. It requires the
+handoff's accepted epoch to be the predecessor of the new committed authority
+epoch and retains both recovery and configuration identity as non-authorizing
+provenance; stale handoff state fails. Live early-boot delivery into complete
+installed-generation admission and the recovery UI remain **PLANNED**, and
+malformed or unknown options fail rather than selecting Balanced or Recovery
+implicitly.
 
 The kernel now exposes a **PARTIALLY IMPLEMENTED**, read-only aggregate recovery
 view of isolation state. Recovery must possess `INSPECT` for the exact monitor

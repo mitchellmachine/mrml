@@ -1,5 +1,30 @@
 # Patent review log
 
+## 2026-08-26 — Recovered BootHandoff isolation composition
+
+Patent review: **TRIGGERED** under the existing authenticated-recovery,
+configuration, adaptive-isolation, Total-MicroVM, boot-handoff, and VMM reviews.
+This increment conventionally gates composition on an already committed
+recovered-system wrapper, capability-revalidates the two exact persistent
+settings, checks that the decoded handoff's accepted recovery epoch immediately
+precedes the committed authority epoch, and retains recovery/configuration
+identities as non-authorizing provenance. It adds no placement heuristic, native
+fallback, cryptographic primitive, persistence format, VM/device protocol,
+scheduler, DMA mechanism, or hardware-specific isolation mechanism. Live early-
+boot orchestration remains unimplemented. No patent-clearance or non-
+infringement conclusion is made; independent human review remains required.
+
+## 2026-08-26 — Projected callee-alias origin validation
+
+Patent review: **NOT_TRIGGERED** for this bounded compiler-analysis hardening.
+It conventionally carries an existing exact parameter-origin identifier through
+one local alias and compares an explicit alias type with the declared return
+type. Mismatches fail conservative. It adds no novel alias-analysis algorithm,
+region solver, optimization, runtime enforcement, authority model, or external
+dependency. Broader compiler completion remains partial; this technical screen
+establishes neither clearance nor infringement and does not replace independent
+human dual review.
+
 ## 2026-08-26 — Subslice callee origins and fat-reference loan use
 
 Patent review: **NOT_TRIGGERED** for this bounded compiler-analysis increment.

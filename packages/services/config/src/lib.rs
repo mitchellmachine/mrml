@@ -17,14 +17,15 @@ use core::ops::{Deref, DerefMut};
 use mrml_crypto::Sha3_256;
 use mrml_kernel::arch::x86_64::UserContext;
 use mrml_kernel::{
-    BootIsolationOverride, Capability, CapabilityError, CapabilitySpace, IsolationAdmissionTable,
-    IsolationBackendFailure, IsolationMode, IsolationPlacement, IsolationServiceBackend,
-    IsolationServiceRouteError, IsolationServiceSpec, IsolationStatusSnapshot,
-    IsolationUnavailableReason, MemoryBackingKind, MemoryObjectId, MemoryPoolId, MemoryPoolTable,
-    MemoryResourceError, Message, ObjectId, PAGE_SIZE, PreparedIsolationServiceRoute, Priority,
-    RestartPolicy, Rights, RoutedIsolationService, ServiceAddressSpaceEraser, ServiceCleanupError,
-    ServiceError, ServiceId, ServiceRegistrationPlan, ServiceState, ServiceSupervisor, TaskId,
-    TaskRuntime, TaskRuntimeError, prepare_isolation_service_route, route_isolation_service,
+    BootHandoff, BootIsolationOverride, Capability, CapabilityError, CapabilitySpace,
+    IsolationAdmissionTable, IsolationBackendFailure, IsolationMode, IsolationPlacement,
+    IsolationServiceBackend, IsolationServiceRouteError, IsolationServiceSpec,
+    IsolationStatusSnapshot, IsolationUnavailableReason, MemoryBackingKind, MemoryObjectId,
+    MemoryPoolId, MemoryPoolTable, MemoryResourceError, Message, ObjectId, PAGE_SIZE,
+    PreparedIsolationServiceRoute, Priority, RestartPolicy, Rights, RoutedIsolationService,
+    ServiceAddressSpaceEraser, ServiceCleanupError, ServiceError, ServiceId,
+    ServiceRegistrationPlan, ServiceState, ServiceSupervisor, TaskId, TaskRuntime,
+    TaskRuntimeError, prepare_isolation_service_route, route_isolation_service,
 };
 use mrml_storage::{
     AuthorityRecoveryValidator, BlockFileSession, BlockVolume, BlockVolumeError,
@@ -881,6 +882,7 @@ pub enum ConfigError {
     InvalidAuthorityEnvelope,
     InvalidCheckpoint,
     IsolationPolicyMismatch,
+    RecoveryHandoffMismatch,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -1646,6 +1648,46 @@ impl<const GRANTS: usize, const SETTINGS: usize, const AUDIT: usize>
 
     pub const fn service(&self) -> ServiceId {
         self.service
+    }
+
+    /// Revalidates isolation settings only after authenticated storage authority,
+    /// monotonic recovery state, and service publication have committed, then
+    /// composes the actual decoded trusted-loader overlay. The handoff remains
+    /// authority-free: this result grants no capability and proves no placement.
+    #[allow(clippy::too_many_arguments)]
+    pub fn compose_boot_isolation_policy<A: CapabilityAuthorizer + ?Sized>(
+        &self,
+        capabilities: &A,
+        system: IsolationPolicySetting,
+        system_read: Capability,
+        component: IsolationPolicySetting,
+        component_read: Capability,
+        handoff: &BootHandoff,
+    ) -> Result<RecoveredBootIsolationPolicy, ConfigError> {
+        let recovery = handoff
+            .recovery_state()
+            .ok_or(ConfigError::RecoveryHandoffMismatch)?;
+        if recovery.accepted_epoch().checked_add(1) != Some(self.authorities.epoch()) {
+            return Err(ConfigError::RecoveryHandoffMismatch);
+        }
+        let plan = IsolationPolicyApplicationPlan::load(
+            &self.configuration,
+            capabilities,
+            system,
+            system_read,
+            component,
+            component_read,
+        )?;
+        let effective = plan
+            .apply(&self.configuration, capabilities)?
+            .compose_boot_override(handoff.isolation_override());
+        Ok(RecoveredBootIsolationPolicy {
+            effective,
+            authority_epoch: self.authorities.epoch(),
+            configuration_revision: self.configuration.revision(),
+            configuration_service: self.service,
+            boot_accepted_epoch: recovery.accepted_epoch(),
+        })
     }
 
     pub fn into_parts(
@@ -2469,6 +2511,47 @@ pub struct EffectiveBootIsolationPolicy {
     persistent: AppliedIsolationPolicy,
     mode: IsolationMode,
     boot_override: Option<BootIsolationOverride>,
+}
+
+/// Effective boot policy whose persistent inputs were revalidated from a fully
+/// committed recovered system state. Recovery identity is retained for
+/// monitoring and admission provenance; none of these identifiers authorize.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct RecoveredBootIsolationPolicy {
+    effective: EffectiveBootIsolationPolicy,
+    authority_epoch: u64,
+    configuration_revision: u64,
+    configuration_service: ServiceId,
+    boot_accepted_epoch: u64,
+}
+
+impl RecoveredBootIsolationPolicy {
+    pub const fn effective(self) -> EffectiveBootIsolationPolicy {
+        self.effective
+    }
+
+    pub const fn authority_epoch(self) -> u64 {
+        self.authority_epoch
+    }
+
+    pub const fn configuration_revision(self) -> u64 {
+        self.configuration_revision
+    }
+
+    pub const fn configuration_service(self) -> ServiceId {
+        self.configuration_service
+    }
+
+    pub const fn boot_accepted_epoch(self) -> u64 {
+        self.boot_accepted_epoch
+    }
+
+    pub fn admission_table<const DOMAINS: usize>(
+        self,
+        system_generation: u64,
+    ) -> Result<IsolationAdmissionTable<DOMAINS>, ConfigError> {
+        self.effective.admission_table(system_generation)
+    }
 }
 
 impl EffectiveBootIsolationPolicy {
@@ -7005,35 +7088,71 @@ mod tests {
     }
 
     #[test]
-    fn stable_policy_round_trip_uses_exact_capability_selected_block_service() {
+    fn stable_policy_and_boot_isolation_round_trip_use_committed_recovery() {
         let root_object = ObjectId(79);
         let setting_object = ObjectId(80);
         let service_object = ObjectId(81);
         let setting = SettingId::new(1).unwrap();
-        let schema = SettingSchema::bytes(
+        let restart_schema = SettingSchema::bytes(
             setting,
             setting_object,
             PERSISTED_RESTART_POLICY_BYTES as u8,
         )
         .unwrap();
-        let mut configuration = ConfigurationService::<1, 2>::new(root_object, &[schema]).unwrap();
-        let mut capabilities = CapabilitySpace::<2>::new();
+        let system =
+            IsolationPolicySetting::system(SettingId::new(2).unwrap(), ObjectId(83)).unwrap();
+        let component = IsolationPolicySetting::component(
+            SettingId::new(3).unwrap(),
+            ObjectId(84),
+            IsolationPlacement::NativeService,
+        )
+        .unwrap();
+        let mut configuration = ConfigurationService::<3, 2>::new(
+            root_object,
+            &[
+                restart_schema,
+                system.schema().unwrap(),
+                component.schema().unwrap(),
+            ],
+        )
+        .unwrap();
+        let mut capabilities = CapabilitySpace::<4>::new();
         let root = capabilities
             .insert(root_object, Rights::CONTROL.union(Rights::READ))
             .unwrap();
         let setting_access = capabilities
             .insert(setting_object, Rights::READ.union(Rights::WRITE))
             .unwrap();
+        let system_access = capabilities
+            .insert(system.object(), Rights::READ.union(Rights::WRITE))
+            .unwrap();
+        let component_access = capabilities
+            .insert(component.object(), Rights::READ.union(Rights::WRITE))
+            .unwrap();
         let policy = PersistedRestartPolicy::new(service_object, 3, 5, 20).unwrap();
         let mut encoded_policy = [0; PERSISTED_RESTART_POLICY_BYTES];
         policy.encode(&mut encoded_policy);
-        let mut update = ConfigTransaction::<1>::new(0);
+        let mut update = ConfigTransaction::<3>::new(0);
         update
             .push(ConfigUpdate::new(
                 setting,
                 setting_access,
                 ConfigValue::bytes(&encoded_policy).unwrap(),
             ))
+            .unwrap();
+        system
+            .stage(
+                &mut update,
+                system_access,
+                OwnerIsolationSelection::Balanced,
+            )
+            .unwrap();
+        component
+            .stage(
+                &mut update,
+                component_access,
+                OwnerIsolationSelection::Native,
+            )
             .unwrap();
         configuration.commit(&capabilities, root, &update).unwrap();
         let mut checkpoint_bytes = [0; 512];
@@ -7229,7 +7348,7 @@ mod tests {
             let mut supervisor = ServiceSupervisor::<1>::new();
             let mut recovered_bytes = [0xa5; 512];
             let configuration_validator =
-                StableConfigurationRecoveryValidator::<1, 2, _, _, _>::new(
+                StableConfigurationRecoveryValidator::<3, 2, _, _, _>::new(
                     stable.file(),
                     0,
                     stable_principal(),
@@ -7271,6 +7390,140 @@ mod tests {
             assert_eq!(recovered.service().token(), 1u64 << 32);
             assert_eq!(recovered.configuration().revision(), 1);
             assert_eq!(recovered.authorities().epoch(), 9);
+
+            const HANDOFF_LENGTH: usize = mrml_kernel::HANDOFF_HEADER_BYTES
+                + 2 * mrml_kernel::HANDOFF_REGION_BYTES
+                + mrml_kernel::HANDOFF_SERVICE_BYTES
+                + mrml_kernel::HANDOFF_RECOVERY_STATE_BYTES
+                + 16
+                + 52;
+            let regions = [
+                mrml_kernel::MemoryRegion::new(
+                    mrml_kernel::PhysAddr::new(0xa0000).unwrap(),
+                    1,
+                    mrml_kernel::MemoryKind::Mmio,
+                )
+                .unwrap(),
+                mrml_kernel::MemoryRegion::new(
+                    mrml_kernel::PhysAddr::new(0x10_0000).unwrap(),
+                    64,
+                    mrml_kernel::MemoryKind::Reserved,
+                )
+                .unwrap(),
+            ];
+            let framebuffer = mrml_kernel::FramebufferInfo::new(
+                0xa0000,
+                0x1000,
+                16,
+                16,
+                16,
+                mrml_kernel::PixelFormat::BlueGreenRedReserved,
+            )
+            .unwrap();
+            let launch = mrml_kernel::ServiceLaunch::new(
+                mrml_kernel::PhysAddr::new(0x11_0000).unwrap(),
+                1024,
+                mrml_kernel::PhysAddr::new(0x10_0000).unwrap(),
+                2,
+                0x1_4000_0000,
+                0x1_4000_0080,
+                mrml_kernel::PhysAddr::new(0x10_4000).unwrap(),
+                2,
+                0x2_0000_2000,
+                mrml_kernel::PhysAddr::new(0x10_8000).unwrap(),
+                4,
+                11,
+                [9; 64],
+            )
+            .unwrap();
+            let mut madt = [0u8; 52];
+            madt[..4].copy_from_slice(b"APIC");
+            madt[4..8].copy_from_slice(&52u32.to_le_bytes());
+            madt[36..40].copy_from_slice(&0xfee0_0000u32.to_le_bytes());
+            madt[44..].copy_from_slice(&[0, 8, 0, 1, 1, 0, 0, 0]);
+            madt[9] = 0u8.wrapping_sub(madt.iter().fold(0u8, |sum, byte| sum.wrapping_add(*byte)));
+            let mut handoff_bytes = [0u8; HANDOFF_LENGTH];
+            mrml_kernel::encode_handoff_with_smp_service_recovery_and_isolation(
+                7,
+                [1; 32],
+                [2; 64],
+                true,
+                true,
+                false,
+                true,
+                0x9000,
+                framebuffer,
+                &regions,
+                0x8000,
+                0x40_0000,
+                launch,
+                Some(delivered),
+                Some(BootIsolationOverride::TotalMicrovmOnce),
+                &madt,
+                &mut handoff_bytes,
+            )
+            .unwrap();
+            let handoff = BootHandoff::decode(&handoff_bytes, |_| {}).unwrap();
+            let boot_policy = recovered
+                .compose_boot_isolation_policy(
+                    &capabilities,
+                    system,
+                    system_access,
+                    component,
+                    component_access,
+                    &handoff,
+                )
+                .unwrap();
+            assert_eq!(boot_policy.authority_epoch(), 9);
+            assert_eq!(boot_policy.boot_accepted_epoch(), 8);
+            assert_eq!(boot_policy.configuration_revision(), 1);
+            assert_eq!(boot_policy.configuration_service(), recovered.service());
+            assert_eq!(
+                boot_policy.effective().configured().mode(),
+                IsolationMode::Balanced
+            );
+            assert_eq!(boot_policy.effective().mode(), IsolationMode::TotalMicrovm);
+            assert_eq!(
+                boot_policy.effective().boot_override(),
+                Some(BootIsolationOverride::TotalMicrovmOnce)
+            );
+            let admission = boot_policy.admission_table::<1>(33).unwrap();
+            assert_eq!(admission.mode(), IsolationMode::TotalMicrovm);
+            assert_eq!(admission.policy_generation(), 1);
+
+            let stale_recovery = mrml_kernel::RecoveryStateMetadata::new(7, 1, None, 0).unwrap();
+            mrml_kernel::encode_handoff_with_smp_service_recovery_and_isolation(
+                7,
+                [1; 32],
+                [2; 64],
+                true,
+                true,
+                false,
+                true,
+                0x9000,
+                framebuffer,
+                &regions,
+                0x8000,
+                0x40_0000,
+                launch,
+                Some(stale_recovery),
+                Some(BootIsolationOverride::TotalMicrovmOnce),
+                &madt,
+                &mut handoff_bytes,
+            )
+            .unwrap();
+            let stale_handoff = BootHandoff::decode(&handoff_bytes, |_| {}).unwrap();
+            assert_eq!(
+                recovered.compose_boot_isolation_policy(
+                    &capabilities,
+                    system,
+                    system_access,
+                    component,
+                    component_access,
+                    &stale_handoff,
+                ),
+                Err(ConfigError::RecoveryHandoffMismatch)
+            );
             assert_eq!(
                 recovered.authorities().authority_table().authorize(
                     recovered.authorities().handle(0).unwrap(),

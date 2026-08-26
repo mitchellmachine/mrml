@@ -265,9 +265,12 @@ closed. WHP and nested KVM inject that typed overlay and route the same
 release-derived eligible component to a microVM with zero native fallback.
 Configuration passes 42 tests on each host; WHP passes 9 runner tests and KVM
 passes 10.
-Actual decoded-handoff delivery into recovered configuration, menu presentation,
-live OVMF/EFI-Shell execution, complete installed-system inventory, and
-end-to-end runtime enforcement remain **PLANNED**.
+Focused decoded-handoff delivery into recovered configuration is now
+**PARTIALLY IMPLEMENTED**: only a committed recovered system state can
+capability-revalidate the exact settings and compose the canonical handoff, and
+a stale recovery epoch fails. Live early-boot orchestration, menu presentation,
+OVMF/EFI-Shell execution, complete installed-system inventory, and end-to-end
+runtime enforcement remain **PLANNED**.
 
 The deployment lane is defined in [DEPLOYMENT.md](DEPLOYMENT.md) and must not
 displace the current foundational gate. Later work proceeds as separate bounded
