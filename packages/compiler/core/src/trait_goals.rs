@@ -8921,6 +8921,47 @@ mod tests {
     }
 
     #[test]
+    fn proves_source_implementation_parameter_bounds() {
+        let source = concat!(
+            "trait Parent<T> {} trait Child<T> {} ",
+            "impl<T> Parent<T> for T {} impl<T: Parent<T>> Child<T> for T {} ",
+            "fn check() where u32: Child<u32> {}"
+        );
+        let module = Parser::new(source).parse_module::<8, 1>().unwrap();
+        let traits = SourceTraitDeclarationTable::from_module(&module).unwrap();
+        let implementations =
+            SourceTraitImplementationTable::from_module(&module, &traits).unwrap();
+        implementations.prove_module(&module, &traits).unwrap();
+
+        let missing = source.replace("impl<T> Parent<T> for T {} ", "");
+        let module = Parser::new(&missing).parse_module::<8, 1>().unwrap();
+        let traits = SourceTraitDeclarationTable::from_module(&module).unwrap();
+        let implementations =
+            SourceTraitImplementationTable::from_module(&module, &traits).unwrap();
+        assert_eq!(
+            implementations
+                .prove_module(&module, &traits)
+                .unwrap_err()
+                .kind,
+            SourceTraitObligationErrorKind::Unsatisfied
+        );
+
+        let duplicate = Parser::new(concat!(
+            "trait Parent<T> {} trait Child<T> {} ",
+            "impl<T: Parent<T>> Child<T> for T where T: Parent<T> {}"
+        ))
+        .parse_module::<6, 1>()
+        .unwrap();
+        let traits = SourceTraitDeclarationTable::from_module(&duplicate).unwrap();
+        assert_eq!(
+            SourceTraitImplementationTable::from_module(&duplicate, &traits)
+                .unwrap_err()
+                .kind,
+            SourceTraitImplementationErrorKind::DuplicatePremise
+        );
+    }
+
+    #[test]
     fn proves_trait_declaration_where_requirements() {
         let generic = concat!(
             "trait Parent<T> {} trait Child<T> where T: Parent<T> {} ",
