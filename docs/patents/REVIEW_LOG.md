@@ -1,5 +1,17 @@
 # Patent review log
 
+## 2026-08-26 — Complete recovered service-set preparation
+
+Patent review: **NOT_TRIGGERED** for exact bounded set membership/class checks,
+duplicate rejection, reverse cancellation of already prepared routes, shared
+typed domain identity, caller-owned decode scratch, and incremental hashing of
+the same canonical zero-padded extent. These are conventional equality,
+bounded transaction cleanup, memory-allocation placement, and equivalent digest
+evaluation. They add no placement algorithm, VM mechanism, scheduler, storage
+protocol, interface transport, DMA, queue, interrupt, or hardware behavior.
+The broader adaptive/Total MicroVM mechanism remains **TRIGGERED**; this
+technical screen is not patent clearance.
+
 ## 2026-08-26 — Active deployment release to complete runtime assignment
 
 Patent review: **NOT_TRIGGERED** for joining the existing capability-authorized

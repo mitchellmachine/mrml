@@ -9,7 +9,8 @@ use mrml_config::{
     IsolationPolicySetting, IsolationServiceBounds, IsolationServiceIdentity,
     MicrovmConfigurationServiceLauncher, OwnerIsolationSelection,
     PreparedMicrovmConfigurationLauncher, RecoveredDeploymentTotalControlPlane,
-    RecoveredDeploymentTotalRuntime, SettingId, hosted_recovery_probe::recover_total_control_plane,
+    RecoveredDeploymentTotalRuntime, SettingId, TotalServicePreparationBinding,
+    hosted_recovery_probe::{HOSTED_TOTAL_COMPONENT_DOMAIN, recover_total_control_plane},
 };
 #[cfg(target_os = "windows")]
 use mrml_crypto::{LAMPORT_PUBLIC_KEY_BYTES, Sha3_512};
@@ -2817,7 +2818,7 @@ fn application_main() -> Result<()> {
         let (domain, interface, interface_generation, provider_generation) =
             if component_service_mode {
                 (
-                    ObjectId(0x5a49_4d5f_5a53_5444),
+                    HOSTED_TOTAL_COMPONENT_DOMAIN,
                     ObjectId(0x5a53_5444_0000_0003),
                     3,
                     provider_executable
@@ -2871,11 +2872,17 @@ fn application_main() -> Result<()> {
         // SAFETY: this executable mode is a hosted controlled probe. The
         // helper's synthesized owner approval is never production recovery or
         // physical rollback evidence.
+        let mut release_output = Vector::with_capacity(MAX_SYSTEM_RELEASE_BYTES)
+            .map_err(|_| anyhow!("WHP release recovery scratch allocation failed"))?;
+        release_output
+            .try_resize(MAX_SYSTEM_RELEASE_BYTES, 0)
+            .map_err(|_| anyhow!("WHP release recovery scratch initialization failed"))?;
         let total = unsafe {
             recover_total_control_plane::<2>(
                 &decoded_boot_handoff,
                 release_bytes,
                 expected_release_key,
+                &mut release_output,
             )
         }
         .map_err(|error| anyhow!("WHP recovered boot Total admission failed: {:?}", error))?;
@@ -2905,11 +2912,19 @@ fn application_main() -> Result<()> {
         isolation_admission.as_mut(),
         configured_total_policy.as_ref(),
     ) {
-        (Some(WhpTotalAdmission::Recovered(total)), Some(configured)) => Some(
-            total
-                .prepare_service(configured.bounds, configured.identity)
-                .map_err(|error| anyhow!("WHP recovered preparation failed: {:?}", error))?,
-        ),
+        (Some(WhpTotalAdmission::Recovered(total)), Some(configured)) => {
+            let mut prepared = total
+                .prepare_complete_service_set(&[TotalServicePreparationBinding::new(
+                    configured.bounds,
+                    configured.identity,
+                )])
+                .map_err(|error| {
+                    anyhow!("WHP recovered complete preparation failed: {:?}", error)
+                })?;
+            Some(prepared.take(configured.identity.domain()).ok_or_else(|| {
+                anyhow!("WHP complete preparation omitted the recovered component domain")
+            })?)
+        }
         (Some(WhpTotalAdmission::Standalone(admission)), Some(configured)) => {
             let admitted = configured
                 .effective

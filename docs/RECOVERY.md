@@ -1789,6 +1789,21 @@ whose consumer and provider bytes were identical failed before launch with
 `ArtifactSubstitution`. This remains hosted recovery evidence, not native-media
 or physical installed recovery.
 
+Recovered runtime preparation now accepts only one complete bounded set of
+unique domain bindings for the authenticated release. Intentional compatible
+package co-location remains one domain; duplicate, missing, additional, and
+class-substituted bindings fail before a set is returned, while a later
+preparation failure cancels earlier routes in reverse. The hosted helper and
+both VMM runners share the exact ZIM/Zstd domain identity. Release decoding uses
+runner-owned bounded scratch, and extent verification hashes canonical zero
+padding incrementally instead of placing full padded copies on the stack. On
+Windows the configuration suite passed 51 tests and the WHP runner suite passed
+12. A release-mode WHP probe emitted authenticated recovery success and then
+rejected the retained substitutable consumer/provider executable identities at
+the later component handoff. KVM execution, native-media recovery, complete
+distinct-domain construction, and end-to-end Total satisfaction were not
+established.
+
 Before any profile-specific kernel probe runs, the kernel now constructs its
 early context from the exact decoded handoff and retains the one-boot isolation
 request only as non-authorizing evidence. This closes the first-kernel-entry

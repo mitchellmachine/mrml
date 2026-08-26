@@ -734,6 +734,19 @@ runtime connection, and complete strict proof remain **PLANNED**; a decoded
 request, focused recovery simulation, or hosted injection is not a successful
 Total-mode boot or satisfaction claim.
 
+Recovered preparation now also exposes a **PARTIALLY IMPLEMENTED** bounded
+complete-set transaction. It requires exactly one binding per unique release
+domain, so compatible packages may intentionally share one domain but callers
+cannot omit a domain, add an unclassified domain, duplicate a domain, or change
+its release class. Membership/class failures prepare nothing; a later route
+failure cancels every earlier preparation in reverse before returning no set.
+WHP and KVM recovered component paths consume this transaction. Windows
+configuration tests pass 51/51 and WHP runner tests pass 12/12. A release-mode
+WHP controlled probe reached recovered-policy acceptance but its retained
+consumer/provider executable identities then failed closed as
+`ArtifactSubstitution`; this is not complete component execution, KVM parity,
+live boot, or Total satisfaction evidence.
+
 The common boot/recovery owner is now **PARTIALLY IMPLEMENTED** in both live
 runners. `BootTotalAdmission` binds an effective Total policy directly to the
 activated release, constructs an activated admission table retaining the exact

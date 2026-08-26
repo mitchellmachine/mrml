@@ -631,6 +631,22 @@ Production stable-media recovery, early-boot orchestration, menu presentation,
 OVMF/EFI-Shell execution, complete installed-system inventory, and end-to-end
 runtime enforcement remain **PLANNED**.
 
+The recovered owner now **PARTIALLY IMPLEMENTS** complete unique-domain route
+preparation. One bounded transaction requires exactly one caller binding for
+every unique domain in the authenticated release, preserves intentional
+compatible package co-location, rejects empty, duplicate, missing, additional,
+or class-mismatched bindings before returning a set, and cancels earlier
+preparations in reverse if a later preparation fails. WHP and KVM recovered
+component modes consume this set instead of independently preparing one route.
+The hosted recovery fixture's package-policy domain now exactly matches the
+runner domain. Configuration passes 51 tests and WHP passes 12 on Windows. A
+release-mode WHP controlled probe reached authenticated recovered-policy output
+after moving bounded release scratch to runner-owned storage, then failed closed
+at the later component handoff because the retained consumer/provider fixture
+had substitutable executable identity. KVM execution was not rerun, and
+production service-loop invocation, complete distinct-domain construction, and
+end-to-end Total satisfaction remain **PLANNED**.
+
 The production-shaped stable-selection API is now **PARTIALLY IMPLEMENTED**.
 `SelectedStableSystemRecovery` admits only distinct configuration and authority
 checkpoint files selected from the same integrity-validated volume/root

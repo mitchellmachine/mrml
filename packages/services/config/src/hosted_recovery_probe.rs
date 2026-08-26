@@ -54,6 +54,11 @@ const ACCEPTED_HANDLE_GENERATION: u32 = 1;
 const CHECKPOINT_AUTHORITY_EPOCH: u64 = 9;
 const CHECKPOINT_HANDLE_GENERATION: u32 = 2;
 
+/// Recovered policy domain for the intentionally co-located hosted ZIM/Zstd
+/// component pair. Both runners consume this value rather than restating a
+/// detached launch identity.
+pub const HOSTED_TOTAL_COMPONENT_DOMAIN: ObjectId = ObjectId(0x5a49_4d5f_5a53_5444);
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum HostedRecoveryProbeError {
     MissingRecoveryState,
@@ -124,14 +129,12 @@ unsafe impl FileReadBackend for DeploymentReleaseBackend<'_> {
         if self.bytes.len() > extent_bytes || extent_bytes > MAX_HOSTED_RELEASE_BYTES {
             return Err(());
         }
-        let mut padded = [0; MAX_HOSTED_RELEASE_BYTES];
-        padded[..self.bytes.len()].copy_from_slice(self.bytes);
-        if record.content_digest() != digest(&padded[..extent_bytes]) {
+        if record.content_digest() != padded_extent_digest(self.bytes, extent_bytes).ok_or(())? {
             return Err(());
         }
         let within = usize::try_from(byte_offset).map_err(|_| ())?;
         let end = within.checked_add(output.len()).ok_or(())?;
-        output.copy_from_slice(padded.get(within..end).ok_or(())?);
+        output.copy_from_slice(self.bytes.get(within..end).ok_or(())?);
         Ok(())
     }
 }
@@ -395,6 +398,20 @@ fn digest(bytes: &[u8]) -> [u8; 32] {
     digest.finalize()
 }
 
+fn padded_extent_digest(bytes: &[u8], extent_bytes: usize) -> Option<[u8; 32]> {
+    let padding = extent_bytes.checked_sub(bytes.len())?;
+    let zeros = [0; BLOCK_BYTES];
+    let mut digest = Sha3_256::new();
+    digest.update(bytes);
+    let mut remaining = padding;
+    while remaining != 0 {
+        let length = remaining.min(zeros.len());
+        digest.update(&zeros[..length]);
+        remaining -= length;
+    }
+    Some(digest.finalize())
+}
+
 fn build_reachable_total_device(
     root_generation: u64,
     configuration_length: usize,
@@ -607,8 +624,6 @@ fn build_reachable_total_device(
     {
         return Err(HostedRecoveryProbeError::ReleaseLayout);
     }
-    let mut padded_release = [0; MAX_HOSTED_RELEASE_BYTES];
-    padded_release[..release_bytes.len()].copy_from_slice(release_bytes);
     let padded_release_length = release_block_count
         .checked_mul(BLOCK_BYTES)
         .ok_or(HostedRecoveryProbeError::StorageLayout)?;
@@ -634,7 +649,8 @@ fn build_reachable_total_device(
         0,
         u32::try_from(release_block_count).map_err(|_| HostedRecoveryProbeError::StorageLayout)?,
         33,
-        digest(&padded_release[..padded_release_length]),
+        padded_extent_digest(release_bytes, padded_release_length)
+            .ok_or(HostedRecoveryProbeError::ReleaseLayout)?,
     )
     .map_err(|_| HostedRecoveryProbeError::ReleaseLayout)?;
     let mut release_extents = [0; BLOCK_BYTES];
@@ -885,6 +901,7 @@ pub unsafe fn recover_total_control_plane<const DOMAINS: usize>(
     handoff: &BootHandoff,
     release_bytes: &[u8],
     expected_release_key: &[u8; 64],
+    release_output: &mut [u8],
 ) -> Result<
     RecoveredDeploymentTotalControlPlane<1, 3, 2, 1, DOMAINS>,
     HostedRecoveryProbeBuildError<()>,
@@ -988,7 +1005,7 @@ pub unsafe fn recover_total_control_plane<const DOMAINS: usize>(
             .map_err(|_| HostedRecoveryProbeError::Configuration)?;
     let component = IsolationPolicySetting::component(
         SettingId::new(3).unwrap(),
-        ObjectId(0x4852_5052_4f42_0005),
+        HOSTED_TOTAL_COMPONENT_DOMAIN,
         mrml_kernel::IsolationPlacement::NativeService,
     )
     .map_err(|_| HostedRecoveryProbeError::Configuration)?;
@@ -1213,7 +1230,6 @@ pub unsafe fn recover_total_control_plane<const DOMAINS: usize>(
             principal(),
         )
         .map_err(|_| HostedRecoveryProbeError::Deployment)?;
-    let mut release_output = [0; MAX_HOSTED_RELEASE_BYTES];
     let deployment = recover_selected_runtime_assignment::<1, DOMAINS, 2, 1, 1, 1, _, _, _>(
         deployment_root,
         selected,
@@ -1227,7 +1243,7 @@ pub unsafe fn recover_total_control_plane<const DOMAINS: usize>(
         &mut release_backend,
         &deployment_capabilities,
         inspect,
-        &mut release_output,
+        release_output,
         POLICY_GENERATION,
     )
     .map_err(|_| HostedRecoveryProbeError::Deployment)?;

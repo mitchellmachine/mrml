@@ -3830,6 +3830,13 @@ impl<
         self.admission.prepare_service(bounds, identity)
     }
 
+    pub fn prepare_complete_service_set(
+        &mut self,
+        bindings: &[TotalServicePreparationBinding],
+    ) -> Result<PreparedTotalServiceSet<DOMAINS>, CompleteTotalServicePreparationError> {
+        self.admission.prepare_complete_service_set(bindings)
+    }
+
     pub fn authorize_runtime(
         self,
     ) -> Result<
@@ -4792,6 +4799,58 @@ pub struct BootTotalAdmission<const DOMAINS: usize> {
     admission: IsolationAdmissionTable<DOMAINS>,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct TotalServicePreparationBinding {
+    bounds: IsolationServiceBounds,
+    identity: IsolationServiceIdentity,
+}
+
+impl TotalServicePreparationBinding {
+    pub const fn new(bounds: IsolationServiceBounds, identity: IsolationServiceIdentity) -> Self {
+        Self { bounds, identity }
+    }
+
+    pub const fn domain(self) -> ObjectId {
+        self.identity.domain()
+    }
+}
+
+pub struct PreparedTotalServiceSet<const DOMAINS: usize> {
+    routes: [Option<PreparedIsolationServiceRoute>; DOMAINS],
+    count: usize,
+}
+
+impl<const DOMAINS: usize> PreparedTotalServiceSet<DOMAINS> {
+    pub const fn len(&self) -> usize {
+        self.count
+    }
+
+    pub const fn is_empty(&self) -> bool {
+        self.count == 0
+    }
+
+    pub fn take(&mut self, domain: ObjectId) -> Option<PreparedIsolationServiceRoute> {
+        self.routes
+            .iter_mut()
+            .find(|route| route.as_ref().is_some_and(|route| route.spec().domain() == domain))
+            .and_then(Option::take)
+    }
+
+    pub fn into_routes(self) -> [Option<PreparedIsolationServiceRoute>; DOMAINS] {
+        self.routes
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum CompleteTotalServicePreparationError {
+    BindingCount,
+    DuplicateDomain,
+    MissingDomain,
+    ClassMismatch,
+    Preparation(ConfiguredIsolationPreparationError),
+    Rollback(mrml_kernel::IsolationLaunchError),
+}
+
 impl<const DOMAINS: usize> BootTotalAdmission<DOMAINS> {
     pub const fn policy(&self) -> EffectiveBootIsolationPolicy {
         self.policy
@@ -4845,6 +4904,68 @@ impl<const DOMAINS: usize> BootTotalAdmission<DOMAINS> {
             .map_err(ConfiguredIsolationPreparationError::Configuration)?;
         prepare_isolation_service_route(&mut self.admission, spec)
             .map_err(ConfiguredIsolationPreparationError::Admission)
+    }
+
+    /// Prepares exactly one route for every unique runtime domain in the
+    /// authenticated release. Multiple compatible packages may intentionally
+    /// share one domain. No route set is returned unless membership and class
+    /// match completely and every preparation succeeds; a later failure
+    /// cancels all earlier preparations before returning.
+    pub fn prepare_complete_service_set(
+        &mut self,
+        bindings: &[TotalServicePreparationBinding],
+    ) -> Result<PreparedTotalServiceSet<DOMAINS>, CompleteTotalServicePreparationError> {
+        if bindings.is_empty() || bindings.len() > DOMAINS {
+            return Err(CompleteTotalServicePreparationError::BindingCount);
+        }
+        for (index, binding) in bindings.iter().enumerate() {
+            if bindings[..index]
+                .iter()
+                .any(|present| present.domain() == binding.domain())
+            {
+                return Err(CompleteTotalServicePreparationError::DuplicateDomain);
+            }
+            let mut matched = false;
+            for entry in self.release.release().entries() {
+                if entry.domain() == binding.domain() {
+                    if entry.class() != binding.identity.class() {
+                        return Err(CompleteTotalServicePreparationError::ClassMismatch);
+                    }
+                    matched = true;
+                }
+            }
+            if !matched {
+                return Err(CompleteTotalServicePreparationError::MissingDomain);
+            }
+        }
+        for entry in self.release.release().entries() {
+            if !bindings
+                .iter()
+                .any(|binding| binding.domain() == entry.domain())
+            {
+                return Err(CompleteTotalServicePreparationError::MissingDomain);
+            }
+        }
+
+        let mut routes = array::from_fn(|_| None);
+        let mut count = 0;
+        for binding in bindings {
+            match self.prepare_service(binding.bounds, binding.identity) {
+                Ok(route) => {
+                    routes[count] = Some(route);
+                    count += 1;
+                }
+                Err(error) => {
+                    for route in routes[..count].iter_mut().rev().filter_map(Option::take) {
+                        route
+                            .cancel(&mut self.admission)
+                            .map_err(CompleteTotalServicePreparationError::Rollback)?;
+                    }
+                    return Err(CompleteTotalServicePreparationError::Preparation(error));
+                }
+            }
+        }
+        Ok(PreparedTotalServiceSet { routes, count })
     }
 
     pub fn finalize(
@@ -5017,6 +5138,13 @@ impl<const DOMAINS: usize> RecoveredInstalledTotalAdmission<DOMAINS> {
         self.total.prepare_service(bounds, identity)
     }
 
+    pub fn prepare_complete_service_set(
+        &mut self,
+        bindings: &[TotalServicePreparationBinding],
+    ) -> Result<PreparedTotalServiceSet<DOMAINS>, CompleteTotalServicePreparationError> {
+        self.total.prepare_complete_service_set(bindings)
+    }
+
     pub fn finalize(
         &self,
     ) -> Result<mrml_kernel::TotalMicrovmRuntimeProof, mrml_kernel::TotalMicrovmRuntimeError> {
@@ -5077,6 +5205,13 @@ impl<const DOMAINS: usize> RecoveredTotalAdmission<DOMAINS> {
         identity: IsolationServiceIdentity,
     ) -> Result<PreparedIsolationServiceRoute, ConfiguredIsolationPreparationError> {
         self.total.prepare_service(bounds, identity)
+    }
+
+    pub fn prepare_complete_service_set(
+        &mut self,
+        bindings: &[TotalServicePreparationBinding],
+    ) -> Result<PreparedTotalServiceSet<DOMAINS>, CompleteTotalServicePreparationError> {
+        self.total.prepare_complete_service_set(bindings)
     }
 
     pub fn finalize(
@@ -7587,6 +7722,7 @@ mod tests {
     #[test]
     fn hosted_recovery_source_is_independent_of_the_decoded_handoff_epoch() {
         let (release, release_length, key_id, _) = configuration_release_records();
+        let mut release_output = [0; mrml_package_format::MAX_SYSTEM_RELEASE_BYTES];
         let (current_bytes, current_length) = hosted_total_handoff(8, Some([0x51; 16]), 14);
         let current = BootHandoff::decode(&current_bytes[..current_length], |_| {}).unwrap();
         // SAFETY: this is the controlled hosted fixture named by the helper's
@@ -7596,6 +7732,7 @@ mod tests {
                 &current,
                 &release[..release_length],
                 &key_id,
+                &mut release_output,
             )
         }
         .unwrap();
@@ -7643,6 +7780,7 @@ mod tests {
                     &current,
                     &substituted_release[..release_length],
                     &key_id,
+                    &mut release_output,
                 )
             },
             Err(hosted_recovery_probe::HostedRecoveryProbeBuildError::Probe(
@@ -7660,6 +7798,7 @@ mod tests {
                 &stale,
                 &release[..release_length],
                 &key_id,
+                &mut release_output,
             )
         }
             .is_err()
@@ -7674,6 +7813,7 @@ mod tests {
                     &wrong_root,
                     &release[..release_length],
                     &key_id,
+                    &mut release_output,
                 )
             },
             Err(hosted_recovery_probe::HostedRecoveryProbeBuildError::Probe(
@@ -11415,7 +11555,19 @@ mod tests {
                 TotalMicrovmClass::MicrovmEligible,
             )
             .unwrap();
-            let prepared = total.prepare_service(bounds, identity).unwrap();
+            assert_eq!(
+                total.prepare_complete_service_set(&[]).err(),
+                Some(CompleteTotalServicePreparationError::BindingCount)
+            );
+            assert_eq!(total.admission().running().count(), 0);
+            let mut prepared_set = total
+                .prepare_complete_service_set(&[TotalServicePreparationBinding::new(
+                    bounds, identity,
+                )])
+                .unwrap();
+            assert_eq!(prepared_set.len(), 1);
+            let prepared = prepared_set.take(component.object()).unwrap();
+            assert!(prepared_set.take(component.object()).is_none());
             assert_eq!(prepared.spec().placement(), IsolationPlacement::Microvm);
             let routed = prepared.commit(total.admission_mut(), 0x51u64).unwrap();
             assert_eq!(routed.domain(), component.object());
