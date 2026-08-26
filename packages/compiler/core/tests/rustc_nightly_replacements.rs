@@ -6177,7 +6177,18 @@ fn rustc_primitive_delayed_initialization_reaches_native_objects() {
         assert_eq!(compile(source, ObjectFormat::Elf64), Ok(()));
         assert_eq!(compile(source, ObjectFormat::Coff), Ok(()));
     }
+}
 
-    let unsupported = "#[unsafe(no_mangle)] pub extern \"C\" fn probe() -> *const u8 { let value: *const u8; value = 0 as *const u8; value }";
-    assert!(compile(unsupported, ObjectFormat::Elf64).is_err());
+#[test]
+fn rustc_raw_pointer_delayed_initialization_reaches_native_objects() {
+    for source in [
+        "#[unsafe(no_mangle)] pub extern \"C\" fn probe(select: bool, address: usize) -> bool { let value: *const u8; if select { value = 0usize as *const u8; } else { value = address as *const u8; } value.is_null() }",
+        "#[unsafe(no_mangle)] pub extern \"C\" fn probe(address: usize) -> usize { let value: *mut u32; value = address as *mut u32; value.addr() }",
+    ] {
+        assert_eq!(compile(source, ObjectFormat::Elf64), Ok(()));
+        assert_eq!(compile(source, ObjectFormat::Coff), Ok(()));
+    }
+
+    let reference = "#[unsafe(no_mangle)] pub extern \"C\" fn probe(input: &u8) -> &u8 { let value: &u8; value = input; value }";
+    assert!(compile(reference, ObjectFormat::Elf64).is_err());
 }

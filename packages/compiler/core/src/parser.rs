@@ -1427,25 +1427,47 @@ impl<'source> BodyParser<'source> {
             self.take()?;
             let mut uninitialized_probe = self.clone();
             let explicit_type = uninitialized_probe.take()?;
-            let terminator = uninitialized_probe.peek()?;
-            if let (Some(explicit_type), Some(terminator)) = (explicit_type, terminator)
-                && explicit_type.kind == TokenKind::Identifier
-                && terminator.text == ";"
-            {
-                uninitialized_probe.take()?;
-                *self = uninitialized_probe;
-                return Ok(Some(LocalBinding {
-                    mutable,
-                    initialized: false,
-                    name: name.text,
-                    name_span: name.span,
-                    ty: Some(TypeRef {
-                        text: explicit_type.text,
-                        span: explicit_type.span,
-                    }),
-                    initializer: "",
-                    initializer_span: terminator.span,
-                }));
+            if let Some(explicit_type) = explicit_type {
+                let explicit_type_span = if explicit_type.kind == TokenKind::Identifier {
+                    Some(explicit_type.span)
+                } else if explicit_type.text == "*" {
+                    let pointer_kind = uninitialized_probe.take()?;
+                    let pointee = uninitialized_probe.take()?;
+                    match (pointer_kind, pointee) {
+                        (Some(pointer_kind), Some(pointee))
+                            if matches!(pointer_kind.text, "const" | "mut")
+                                && pointee.kind == TokenKind::Identifier =>
+                        {
+                            Some(Span {
+                                start: explicit_type.span.start,
+                                end: pointee.span.end,
+                            })
+                        }
+                        _ => None,
+                    }
+                } else {
+                    None
+                };
+                let terminator = uninitialized_probe.peek()?;
+                if let (Some(explicit_type_span), Some(terminator)) =
+                    (explicit_type_span, terminator)
+                    && terminator.text == ";"
+                {
+                    uninitialized_probe.take()?;
+                    *self = uninitialized_probe;
+                    return Ok(Some(LocalBinding {
+                        mutable,
+                        initialized: false,
+                        name: name.text,
+                        name_span: name.span,
+                        ty: Some(TypeRef {
+                            text: &self.source[explicit_type_span.start..explicit_type_span.end],
+                            span: explicit_type_span,
+                        }),
+                        initializer: "",
+                        initializer_span: terminator.span,
+                    }));
+                }
             }
             let (ty_span, _) = self.delimited_until("=", ParseErrorKind::ExpectedEquals)?;
             Some(TypeRef {

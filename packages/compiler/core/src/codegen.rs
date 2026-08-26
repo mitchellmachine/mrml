@@ -19023,6 +19023,7 @@ fn runtime_type_supports_uninitialized_scalar(ty: RuntimeExpressionType) -> bool
         RuntimeExpressionType::Integer(Some(_))
             | RuntimeExpressionType::Bool
             | RuntimeExpressionType::Char
+            | RuntimeExpressionType::RawPointer { .. }
     )
 }
 
