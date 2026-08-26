@@ -868,6 +868,7 @@ pub struct TraitDeclaration<'source> {
     pub name: &'source str,
     pub name_span: Span,
     generic_parameters: [Option<&'source str>; MAX_SOURCE_TRAIT_ARGUMENTS],
+    generic_parameter_defaults: [Option<TypeRef<'source>>; MAX_SOURCE_TRAIT_ARGUMENTS],
     generic_parameter_count: usize,
     supertraits: [Option<TraitSupertrait<'source>>; MAX_TRAIT_SUPERTRAITS],
     supertrait_count: usize,
@@ -882,6 +883,10 @@ pub struct TraitDeclaration<'source> {
 impl<'source> TraitDeclaration<'source> {
     pub fn generic_parameters(&self) -> &[Option<&'source str>] {
         &self.generic_parameters[..self.generic_parameter_count]
+    }
+
+    pub fn generic_parameter_defaults(&self) -> &[Option<TypeRef<'source>>] {
+        &self.generic_parameter_defaults[..self.generic_parameter_count]
     }
 
     pub const fn generic_parameter_count(&self) -> usize {
@@ -3002,6 +3007,42 @@ impl<'source> Parser<'source> {
         })
     }
 
+    fn type_until_comma_or_generic_close(&mut self) -> Result<TypeRef<'source>, ParseError> {
+        let Some(first) = self.peek()? else {
+            return Err(self.error(ParseErrorKind::ExpectedType, None));
+        };
+        if first.text == "," || first.text == ">" || first.text == ">>" {
+            return Err(self.error(ParseErrorKind::ExpectedType, Some(first)));
+        }
+        let start = first.span.start;
+        let mut end = start;
+        let mut angle_depth = 0usize;
+        loop {
+            let Some(token) = self.peek()? else {
+                return Err(self.error(ParseErrorKind::UnterminatedDelimiter, None));
+            };
+            if angle_depth == 0 && (token.text == "," || token.text == ">" || token.text == ">>") {
+                break;
+            }
+            match token.text {
+                "<" => angle_depth += 1,
+                ">" if angle_depth != 0 => angle_depth -= 1,
+                ">>" if angle_depth > 1 => angle_depth -= 2,
+                _ => {}
+            }
+            end = token.span.end;
+            self.take()?;
+        }
+        let text = self.source[start..end].trim_end();
+        Ok(TypeRef {
+            text,
+            span: Span {
+                start,
+                end: start + text.len(),
+            },
+        })
+    }
+
     fn source_trait_arguments(
         &mut self,
     ) -> Result<
@@ -3579,6 +3620,7 @@ impl<'source> Parser<'source> {
     fn trait_declaration(&mut self, public: bool) -> Result<TraitDeclaration<'source>, ParseError> {
         let name = self.identifier()?;
         let mut generic_parameters = [None; MAX_SOURCE_TRAIT_ARGUMENTS];
+        let mut generic_parameter_defaults = [None; MAX_SOURCE_TRAIT_ARGUMENTS];
         let mut generic_parameter_count = 0usize;
         let mut where_predicates = [None; MAX_FUNCTION_WHERE_PREDICATES];
         let mut where_predicate_count = 0usize;
@@ -3619,6 +3661,10 @@ impl<'source> Parser<'source> {
                 }
                 if consumed_declaration_close {
                     break;
+                }
+                if self.take_text("=")?.is_some() {
+                    generic_parameter_defaults[generic_parameter_count - 1] =
+                        Some(self.type_until_comma_or_generic_close()?);
                 }
                 if self.take_text(",")?.is_some() {
                     continue;
@@ -3740,6 +3786,7 @@ impl<'source> Parser<'source> {
             name: name.text,
             name_span: name.span,
             generic_parameters,
+            generic_parameter_defaults,
             generic_parameter_count,
             supertraits,
             supertrait_count,
@@ -4380,6 +4427,23 @@ mod tests {
         assert_eq!(implementation.trait_argument_count(), 2);
         assert_eq!(
             implementation.trait_arguments()[1].unwrap().text,
+            "core::primitive::u16"
+        );
+    }
+
+    #[test]
+    fn parses_trait_parameter_defaults() {
+        let source = "trait Convert<Input = u8, Output = core::primitive::u16> {}";
+        let module: TestModule<'_> = Parser::new(source).parse_module().unwrap();
+        let Some(Item::Trait(declaration)) = module.items()[0] else {
+            panic!("expected trait")
+        };
+        assert_eq!(
+            declaration.generic_parameter_defaults()[0].unwrap().text,
+            "u8"
+        );
+        assert_eq!(
+            declaration.generic_parameter_defaults()[1].unwrap().text,
             "core::primitive::u16"
         );
     }

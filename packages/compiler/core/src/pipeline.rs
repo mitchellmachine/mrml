@@ -453,6 +453,17 @@ mod tests {
     }
 
     #[test]
+    fn materializes_trailing_concrete_trait_defaults_before_codegen() {
+        let source = concat!(
+            "trait Convert<Input = u8> { type Output; } ",
+            "impl<T> Convert for T { type Output = T; } ",
+            "#[unsafe(no_mangle)] pub extern \"C\" fn answer() -> u64 ",
+            "where u32: Convert, <u32 as Convert>::Output = u32 { 42 }"
+        );
+        compile(source, "answer", ObjectFormat::Coff).unwrap();
+    }
+
+    #[test]
     fn proves_flat_generic_source_implementations_before_codegen() {
         let source = concat!(
             "trait Identity<Input> { type Output; } ",

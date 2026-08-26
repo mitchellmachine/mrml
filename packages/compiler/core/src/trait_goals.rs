@@ -47,6 +47,7 @@ pub struct SourceTraitDeclaration<'source> {
     pub public: bool,
     pub generic_parameter_count: usize,
     generic_parameters: [Option<&'source str>; MAX_TRAIT_GENERIC_PARAMETERS],
+    generic_parameter_defaults: [Option<TypeRef<'source>>; MAX_TRAIT_GENERIC_PARAMETERS],
     supertraits: [Option<SourceTraitSupertrait<'source>>; MAX_TRAIT_SUPERTRAITS],
     supertrait_count: usize,
     where_predicates:
@@ -67,6 +68,21 @@ impl<'source> SourceTraitDeclaration<'source> {
 
     pub fn generic_parameters(&self) -> &[Option<&'source str>] {
         &self.generic_parameters[..self.generic_parameter_count]
+    }
+
+    pub fn generic_parameter_defaults(&self) -> &[Option<TypeRef<'source>>] {
+        &self.generic_parameter_defaults[..self.generic_parameter_count]
+    }
+
+    pub fn required_generic_parameter_count(&self) -> usize {
+        self.generic_parameter_defaults()
+            .iter()
+            .position(Option::is_some)
+            .unwrap_or(self.generic_parameter_count)
+    }
+
+    fn supports_argument_count(&self, count: usize) -> bool {
+        count >= self.required_generic_parameter_count() && count <= self.generic_parameter_count
     }
 
     pub fn where_predicates(&self) -> &[Option<crate::TraitImplementationWherePredicate<'source>>] {
@@ -156,6 +172,8 @@ pub enum SourceTraitDeclarationError {
     UnknownAssociatedTypeDefaultTrait,
     WrongAssociatedTypeDefaultArgumentCount,
     UnknownAssociatedTypeDefaultProjection,
+    NonTrailingGenericParameterDefault,
+    UnsupportedGenericParameterDefault,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -202,6 +220,12 @@ impl<'source> SourceTraitDeclarationTable<'source> {
                         .copy_from_slice(declaration.generic_parameters());
                     parameters
                 },
+                generic_parameter_defaults: {
+                    let mut defaults = [None; MAX_TRAIT_GENERIC_PARAMETERS];
+                    defaults[..declaration.generic_parameter_count()]
+                        .copy_from_slice(declaration.generic_parameter_defaults());
+                    defaults
+                },
                 supertraits: [None; MAX_TRAIT_SUPERTRAITS],
                 supertrait_count: 0,
                 where_predicates: [None; MAX_FUNCTION_WHERE_PREDICATES],
@@ -228,6 +252,30 @@ impl<'source> SourceTraitDeclarationTable<'source> {
                     .any(|known| known == parameter)
                 {
                     return Err(SourceTraitDeclarationError::DuplicateGenericParameter);
+                }
+            }
+            let mut saw_default = false;
+            for default in declaration.generic_parameter_defaults() {
+                match default {
+                    Some(default) => {
+                        saw_default = true;
+                        if declaration
+                            .generic_parameters()
+                            .contains(&Some(default.text))
+                            || default.text == "Self"
+                            || !supported_source_trait_type(default.text)
+                        {
+                            return Err(
+                                SourceTraitDeclarationError::UnsupportedGenericParameterDefault,
+                            );
+                        }
+                    }
+                    None if saw_default => {
+                        return Err(
+                            SourceTraitDeclarationError::NonTrailingGenericParameterDefault,
+                        );
+                    }
+                    None => {}
                 }
             }
             let mut associated_types = [None; MAX_TRAIT_ASSOCIATED_TYPES];
@@ -292,7 +340,7 @@ impl<'source> SourceTraitDeclarationTable<'source> {
                 let target = table
                     .get(projection.trait_name)
                     .ok_or(SourceTraitDeclarationError::UnknownAssociatedTypeDefaultTrait)?;
-                if target.generic_parameter_count != projection.trait_argument_count() {
+                if !target.supports_argument_count(projection.trait_argument_count()) {
                     return Err(
                         SourceTraitDeclarationError::WrongAssociatedTypeDefaultArgumentCount,
                     );
@@ -329,7 +377,7 @@ impl<'source> SourceTraitDeclarationTable<'source> {
                 let target = table
                     .get(source_supertrait.name)
                     .ok_or(SourceTraitDeclarationError::UnknownSupertrait)?;
-                if target.generic_parameter_count != source_supertrait.argument_count() {
+                if !target.supports_argument_count(source_supertrait.argument_count()) {
                     return Err(SourceTraitDeclarationError::WrongSupertraitArgumentCount);
                 }
                 let mut arguments = [None; MAX_TRAIT_GOAL_ARGUMENTS];
@@ -350,10 +398,19 @@ impl<'source> SourceTraitDeclarationTable<'source> {
                         return Err(SourceTraitDeclarationError::UnsupportedSupertraitArgument);
                     });
                 }
+                for (argument_index, default) in target.generic_parameter_defaults()
+                    [source_supertrait.argument_count()..]
+                    .iter()
+                    .flatten()
+                    .enumerate()
+                {
+                    arguments[source_supertrait.argument_count() + argument_index] =
+                        Some(SourceTraitSupertraitArgument::Concrete(*default));
+                }
                 let resolved = SourceTraitSupertrait {
                     trait_id: target.id,
                     arguments,
-                    argument_count: source_supertrait.argument_count(),
+                    argument_count: target.generic_parameter_count,
                 };
                 if supertraits[..supertrait_count]
                     .iter()
@@ -378,7 +435,7 @@ impl<'source> SourceTraitDeclarationTable<'source> {
                 let target = table
                     .get(predicate.trait_name())
                     .ok_or(SourceTraitDeclarationError::UnknownRequirementTrait)?;
-                if target.generic_parameter_count != predicate.trait_argument_count() {
+                if !target.supports_argument_count(predicate.trait_argument_count()) {
                     return Err(SourceTraitDeclarationError::WrongRequirementArgumentCount);
                 }
                 let supported = |source: TypeRef<'source>| {
@@ -679,6 +736,9 @@ impl<'source> SourceTraitImplementationTable<'source> {
                     }
                 }
                 Item::Trait(declaration) => {
+                    for default in declaration.generic_parameter_defaults().iter().flatten() {
+                        table.intern_type(*default)?;
+                    }
                     for supertrait in declaration.supertraits().iter().flatten() {
                         for argument in supertrait.arguments().iter().flatten() {
                             if argument.text != "Self"
@@ -774,7 +834,7 @@ impl<'source> SourceTraitImplementationTable<'source> {
                         kind: SourceTraitImplementationErrorKind::UnknownTrait,
                         span: implementation.trait_name_span,
                     })?;
-            if declaration.generic_parameter_count != implementation.trait_argument_count() {
+            if !declaration.supports_argument_count(implementation.trait_argument_count()) {
                 return Err(SourceTraitImplementationError {
                     kind: SourceTraitImplementationErrorKind::WrongTraitArgumentCount,
                     span: implementation.trait_name_span,
@@ -793,6 +853,18 @@ impl<'source> SourceTraitImplementationTable<'source> {
                     .map_err(|kind| SourceTraitImplementationError {
                         kind: SourceTraitImplementationErrorKind::Goal(kind),
                         span: argument.span,
+                    })?;
+            }
+            for default in declaration.generic_parameter_defaults()
+                [implementation.trait_argument_count()..]
+                .iter()
+                .flatten()
+            {
+                header
+                    .push_argument(table.get_type(default.text).unwrap().id)
+                    .map_err(|kind| SourceTraitImplementationError {
+                        kind: SourceTraitImplementationErrorKind::Goal(kind),
+                        span: default.span,
                     })?;
             }
             table.implementations.insert(header).map_err(|kind| {
@@ -831,7 +903,7 @@ impl<'source> SourceTraitImplementationTable<'source> {
                         kind: SourceTraitImplementationErrorKind::UnknownTrait,
                         span: implementation.trait_name_span,
                     })?;
-            if declaration.generic_parameter_count != implementation.trait_argument_count() {
+            if !declaration.supports_argument_count(implementation.trait_argument_count()) {
                 return Err(SourceTraitImplementationError {
                     kind: SourceTraitImplementationErrorKind::WrongTraitArgumentCount,
                     span: implementation.trait_name_span,
@@ -847,6 +919,20 @@ impl<'source> SourceTraitImplementationTable<'source> {
                     .map_err(|kind| SourceTraitImplementationError {
                         kind: SourceTraitImplementationErrorKind::Goal(kind),
                         span: argument.span,
+                    })?;
+            }
+            for default in declaration.generic_parameter_defaults()
+                [implementation.trait_argument_count()..]
+                .iter()
+                .flatten()
+            {
+                consequence
+                    .push_argument(BoundTraitGoalType::Concrete(
+                        table.get_type(default.text).unwrap().id,
+                    ))
+                    .map_err(|kind| SourceTraitImplementationError {
+                        kind: SourceTraitImplementationErrorKind::Goal(kind),
+                        span: default.span,
                     })?;
             }
             for parameter_index in 0..implementation.generic_parameter_count() {
@@ -891,7 +977,7 @@ impl<'source> SourceTraitImplementationTable<'source> {
                             kind: SourceTraitImplementationErrorKind::UnknownPremiseTrait,
                             span: predicate.trait_name_span(),
                         })?;
-                if premise_trait.generic_parameter_count != predicate.trait_argument_count() {
+                if !premise_trait.supports_argument_count(predicate.trait_argument_count()) {
                     return Err(SourceTraitImplementationError {
                         kind: SourceTraitImplementationErrorKind::WrongTraitArgumentCount,
                         span: predicate.trait_name_span(),
@@ -907,6 +993,20 @@ impl<'source> SourceTraitImplementationTable<'source> {
                         .map_err(|kind| SourceTraitImplementationError {
                             kind: SourceTraitImplementationErrorKind::Goal(kind),
                             span: argument.span,
+                        })?;
+                }
+                for default in premise_trait.generic_parameter_defaults()
+                    [predicate.trait_argument_count()..]
+                    .iter()
+                    .flatten()
+                {
+                    premise
+                        .push_argument(BoundTraitGoalType::Concrete(
+                            table.get_type(default.text).unwrap().id,
+                        ))
+                        .map_err(|kind| SourceTraitImplementationError {
+                            kind: SourceTraitImplementationErrorKind::Goal(kind),
+                            span: default.span,
                         })?;
                 }
                 match predicate {
@@ -994,6 +1094,20 @@ impl<'source> SourceTraitImplementationTable<'source> {
                         .map_err(|kind| SourceTraitImplementationError {
                             kind: SourceTraitImplementationErrorKind::Goal(kind),
                             span: argument.span,
+                        })?;
+                }
+                for default in required_trait.generic_parameter_defaults()
+                    [predicate.trait_argument_count()..]
+                    .iter()
+                    .flatten()
+                {
+                    required
+                        .push_argument(BoundTraitGoalType::Concrete(
+                            table.get_type(default.text).unwrap().id,
+                        ))
+                        .map_err(|kind| SourceTraitImplementationError {
+                            kind: SourceTraitImplementationErrorKind::Goal(kind),
+                            span: default.span,
                         })?;
                 }
                 match predicate {
@@ -1106,7 +1220,9 @@ impl<'source> SourceTraitImplementationTable<'source> {
                     .iter()
                     .position(|parameter| *parameter == Some(default.text))
                 {
-                    implementation.trait_arguments()[index].unwrap()
+                    implementation.trait_arguments()[index]
+                        .or(declaration.generic_parameter_defaults()[index])
+                        .unwrap()
                 } else {
                     default
                 };
@@ -1177,8 +1293,7 @@ impl<'source> SourceTraitImplementationTable<'source> {
                             span: projection.trait_name_span,
                         },
                     )?;
-                    if projected_trait.generic_parameter_count != projection.trait_argument_count()
-                    {
+                    if !projected_trait.supports_argument_count(projection.trait_argument_count()) {
                         return Err(SourceTraitImplementationError {
                             kind: SourceTraitImplementationErrorKind::WrongTraitArgumentCount,
                             span: projection.trait_name_span,
@@ -1200,6 +1315,21 @@ impl<'source> SourceTraitImplementationTable<'source> {
                                 kind: SourceTraitImplementationErrorKind::Goal(kind),
                                 span: argument.span,
                             })?;
+                    }
+                    for default in projected_trait.generic_parameter_defaults()
+                        [projection.trait_argument_count()..]
+                        .iter()
+                        .flatten()
+                    {
+                        goal.push_argument(BoundTraitGoalType::Concrete(
+                            table.get_type(default.text).unwrap().id,
+                        ))
+                        .map_err(|kind| {
+                            SourceTraitImplementationError {
+                                kind: SourceTraitImplementationErrorKind::Goal(kind),
+                                span: default.span,
+                            }
+                        })?;
                     }
                     GenericTraitAssociatedTypeValue::new_projection(
                         GenericTraitImplementationId::new(generic_implementation_index),
@@ -1259,6 +1389,21 @@ impl<'source> SourceTraitImplementationTable<'source> {
                             }
                         })?;
                     }
+                    for default in projected_trait.generic_parameter_defaults()
+                        [projection.trait_argument_count()..]
+                        .iter()
+                        .flatten()
+                    {
+                        goal.push_argument(BoundTraitGoalType::Concrete(
+                            table.get_type(default.text).unwrap().id,
+                        ))
+                        .map_err(|kind| {
+                            SourceTraitImplementationError {
+                                kind: SourceTraitImplementationErrorKind::Goal(kind),
+                                span: default.span,
+                            }
+                        })?;
+                    }
                     GenericTraitAssociatedTypeValue::new_projection(
                         GenericTraitImplementationId::new(generic_implementation_index),
                         associated.id,
@@ -1302,6 +1447,7 @@ impl<'source> SourceTraitImplementationTable<'source> {
                 continue;
             }
             let trait_id = traits.get(implementation.trait_name).unwrap().id;
+            let declaration = traits.get_by_id(trait_id).unwrap();
             let self_type = table.get_type(implementation.self_type.text).unwrap().id;
             let mut trait_arguments = [TraitTypeId::new(0); MAX_TRAIT_GOAL_ARGUMENTS];
             for (index, argument) in implementation
@@ -1312,10 +1458,19 @@ impl<'source> SourceTraitImplementationTable<'source> {
             {
                 trait_arguments[index] = table.get_type(argument.text).unwrap().id;
             }
+            for (index, default) in declaration.generic_parameter_defaults()
+                [implementation.trait_argument_count()..]
+                .iter()
+                .flatten()
+                .enumerate()
+            {
+                trait_arguments[implementation.trait_argument_count() + index] =
+                    table.get_type(default.text).unwrap().id;
+            }
             table
                 .prove_supertraits(
                     trait_id,
-                    &trait_arguments[..implementation.trait_argument_count()],
+                    &trait_arguments[..declaration.generic_parameter_count],
                     self_type,
                     traits,
                     0,
@@ -1479,7 +1634,7 @@ impl<'source> SourceTraitImplementationTable<'source> {
                 kind: SourceTraitObligationErrorKind::UnknownTrait,
                 span: trait_name_span,
             })?;
-            if declaration.generic_parameter_count != trait_argument_count {
+            if !declaration.supports_argument_count(trait_argument_count) {
                 return Err(SourceTraitObligationError {
                     kind: SourceTraitObligationErrorKind::Goal(
                         TraitGoalError::WrongGenericArgumentCount,
@@ -1509,6 +1664,23 @@ impl<'source> SourceTraitImplementationTable<'source> {
                     .map_err(|kind| SourceTraitObligationError {
                         kind: SourceTraitObligationErrorKind::Goal(kind),
                         span: argument.span,
+                    })?;
+            }
+            for default in declaration.generic_parameter_defaults()[trait_argument_count..]
+                .iter()
+                .flatten()
+            {
+                let argument_type =
+                    self.get_type(default.text)
+                        .ok_or(SourceTraitObligationError {
+                            kind: SourceTraitObligationErrorKind::UnknownType,
+                            span: default.span,
+                        })?;
+                source_goal
+                    .push_argument(TraitGoalType::Concrete(argument_type.id))
+                    .map_err(|kind| SourceTraitObligationError {
+                        kind: SourceTraitObligationErrorKind::Goal(kind),
+                        span: default.span,
                     })?;
             }
             canonicalize_implemented_trait_goal(source_goal).map_err(|kind| {
@@ -1855,11 +2027,10 @@ fn source_declaration_implementation_bound_type(
         .iter()
         .position(|parameter| *parameter == Some(source.text))
     {
-        return source_bound_type(
-            implementation.trait_arguments()[index].unwrap(),
-            implementation,
-            table,
-        );
+        let source_argument = implementation.trait_arguments()[index]
+            .or(declaration.generic_parameter_defaults()[index])
+            .unwrap();
+        return source_bound_type(source_argument, implementation, table);
     }
     table
         .get_type(source.text)
@@ -9092,6 +9263,51 @@ mod tests {
         assert_eq!(
             SourceTraitDeclarationTable::from_module(&duplicate),
             Err(SourceTraitDeclarationError::DuplicateGenericParameter)
+        );
+    }
+
+    #[test]
+    fn materializes_trailing_concrete_source_trait_defaults() {
+        let exact = concat!(
+            "trait Convert<Input = u8> { type Output; } ",
+            "impl Convert for u32 { type Output = u16; } ",
+            "fn check() where u32: Convert, <u32 as Convert>::Output = u16 {}"
+        );
+        let module = Parser::new(exact).parse_module::<8, 1>().unwrap();
+        let traits = SourceTraitDeclarationTable::from_module(&module).unwrap();
+        assert_eq!(
+            traits
+                .get("Convert")
+                .unwrap()
+                .required_generic_parameter_count(),
+            0
+        );
+        let implementations =
+            SourceTraitImplementationTable::from_module(&module, &traits).unwrap();
+        implementations.prove_module(&module, &traits).unwrap();
+
+        let generic = concat!(
+            "trait Parent<Input = u8> {} trait Child: Parent {} ",
+            "impl<T> Parent for T {} impl<T> Child for T {} ",
+            "fn check() where u32: Child, u32: Parent {}"
+        );
+        let module = Parser::new(generic).parse_module::<10, 1>().unwrap();
+        let traits = SourceTraitDeclarationTable::from_module(&module).unwrap();
+        let implementations =
+            SourceTraitImplementationTable::from_module(&module, &traits).unwrap();
+        implementations.prove_module(&module, &traits).unwrap();
+
+        let invalid = |source| {
+            let module = Parser::new(source).parse_module::<3, 1>().unwrap();
+            SourceTraitDeclarationTable::from_module(&module).unwrap_err()
+        };
+        assert_eq!(
+            invalid("trait Bad<T = u8, U> {}"),
+            SourceTraitDeclarationError::NonTrailingGenericParameterDefault
+        );
+        assert_eq!(
+            invalid("trait Bad<T, U = T> {}"),
+            SourceTraitDeclarationError::UnsupportedGenericParameterDefault
         );
     }
 
