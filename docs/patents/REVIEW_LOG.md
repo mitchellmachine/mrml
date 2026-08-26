@@ -1,5 +1,15 @@
 # Patent review log
 
+## 2026-08-26 — Active deployment release to complete runtime assignment
+
+Patent review: **NOT_TRIGGERED** for joining the existing capability-authorized
+deployment inspection path, retained activated SystemRelease identity, canonical
+release parser, and fixed-capacity assignment plan. This is conventional typed
+composition, exact equality, bounded enumeration, and failure ordering. It adds
+no placement algorithm, VM mechanism, scheduler, storage protocol, DMA, queue,
+interrupt, or hardware behavior. The broader adaptive/Total MicroVM mechanism
+remains **TRIGGERED**; this technical screen is not patent clearance.
+
 ## 2026-08-26 — Canonical one-use installed recovery envelope
 
 Patent review: **NOT_TRIGGERED** for extending the existing one-use boot-recovery

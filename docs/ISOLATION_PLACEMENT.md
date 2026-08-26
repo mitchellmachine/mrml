@@ -1168,6 +1168,16 @@ release instead of naming ZIM/Zstd themselves. General per-package owner-policy
 lookup, distinct-domain construction, and boot orchestration remain
 **PLANNED**.
 
+The deployment control plane now starts that enumeration from its own
+capability-authorized active release. `begin_runtime_assignment` requires exact
+deployment `READ` authority, derives signer and activated identity from the
+service's retained `ActivatedSystemRelease`, and accepts only canonical release
+bytes matching that identity. A caller cannot pair arbitrary bytes with a
+detached active identity. The resulting plan remains non-authorizing and still
+requires complete policy assignment and later route admission. Deployment
+passes 6 tests on Windows; installed-storage retrieval, complete policy lookup,
+and live boot launch remain **PLANNED**.
+
 Its canonical package-to-runtime classification prerequisite is now
 **PARTIALLY IMPLEMENTED** as the allocation-free `MRMLRI1` runtime-inventory
 catalog. Every strictly ordered record binds package identity, version, artifact

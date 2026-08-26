@@ -462,6 +462,16 @@ with zero native fallback. Per-package owner-policy lookup, distinct-domain
 construction, complete installed-generation orchestration, and live boot
 recovery remain **PLANNED**.
 
+Deployment now **PARTIALLY IMPLEMENTS** the next complete-generation join. A
+capability-authorized `begin_runtime_assignment` query selects the exact active
+SystemRelease and signer retained by `DeploymentService`, then verifies supplied
+canonical release bytes before returning the existing fixed-capacity complete
+assignment plan. Missing release identity, corrupt/substituted bytes, or wrong
+inspection authority fail before enumeration; the plan remains non-authorizing.
+Deployment passes 6 tests on Windows. Capability-selected installed release-byte
+retrieval, general owner-policy assignment, and launch of the complete resulting
+domain set remain **PLANNED**.
+
 The first half of that gate is now **PARTIALLY IMPLEMENTED**: `MRMLRI1` is a
 bounded canonical runtime-inventory catalog whose records exact-bind every
 `MRMLSG2` package identity, version, and artifact digest to Total class,

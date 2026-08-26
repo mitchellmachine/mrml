@@ -10,7 +10,10 @@
 use core::array;
 
 use mrml_crypto::Sha3_256;
-use mrml_kernel::{Capability, CapabilitySpace, ObjectId, Rights};
+use mrml_kernel::{
+    Capability, CapabilitySpace, ObjectId, ReleaseInventoryError, Rights,
+    RuntimeDomainAssignmentPlan,
+};
 use mrml_package_format::{
     ActivatedSystemGeneration, ActivatedSystemGenerationError, ActivatedSystemRelease,
     InterfaceCatalogError, InterfaceCatalogView, SystemGenerationDecodeError, SystemGenerationView,
@@ -344,6 +347,31 @@ impl<const CANDIDATES: usize> DeploymentService<CANDIDATES> {
         Ok(self.active_release)
     }
 
+    /// Starts complete runtime-domain enumeration only from the currently
+    /// activated SystemRelease and its capability-authorized inspection path.
+    /// The caller supplies canonical release bytes but cannot substitute the
+    /// activated identity or signer. Package metadata and assignments remain
+    /// non-authorizing; launch admission still checks every resulting route.
+    pub fn begin_runtime_assignment<'a, const DOMAINS: usize, const CAPS: usize>(
+        &self,
+        capabilities: &CapabilitySpace<CAPS>,
+        inspect: Capability,
+        release_bytes: &'a [u8],
+        policy_generation: u64,
+    ) -> Result<RuntimeDomainAssignmentPlan<'a, DOMAINS>, DeploymentError> {
+        self.authorize(capabilities, inspect, Rights::READ)?;
+        let active = self
+            .active_release
+            .ok_or(DeploymentError::MissingActiveRelease)?;
+        RuntimeDomainAssignmentPlan::new(
+            release_bytes,
+            active.release().key_id(),
+            active,
+            policy_generation,
+        )
+        .map_err(DeploymentError::ReleaseInventory)
+    }
+
     fn authorize<const N: usize>(
         &self,
         capabilities: &CapabilitySpace<N>,
@@ -393,6 +421,8 @@ pub enum DeploymentError {
     RollbackRequiresSeparateAuthorization,
     GenerationExhausted,
     InvalidActivation(ActivatedSystemGenerationError),
+    MissingActiveRelease,
+    ReleaseInventory(ReleaseInventoryError),
     InvalidCheckpoint,
     InvalidRecoveryState,
 }
@@ -1388,7 +1418,19 @@ mod tests {
         .unwrap()
     }
 
-    fn signed_runtime_candidate() -> (GenerationCandidate, SystemReleaseIdentity) {
+    const TEST_RUNTIME_RELEASE_BYTES: usize = SYSTEM_RELEASE_RUNTIME_HEADER_BYTES
+        + 128
+        + 256
+        + 256
+        + LAMPORT_PUBLIC_KEY_BYTES
+        + LAMPORT_SIGNATURE_BYTES;
+
+    fn signed_runtime_candidate() -> (
+        GenerationCandidate,
+        SystemReleaseIdentity,
+        [u8; TEST_RUNTIME_RELEASE_BYTES],
+        usize,
+    ) {
         let artifact_digest = [0x2f; 64];
         let records = [SystemGenerationDigestRecord {
             package_id: "org.mrml.zstd",
@@ -1431,12 +1473,7 @@ mod tests {
         let mut runtime = [0; 256];
         let runtime_length = encode_runtime_inventory(7, &[runtime_record], &mut runtime).unwrap();
         let private = [0x5a; LAMPORT_PRIVATE_KEY_BYTES];
-        let mut release = [0; SYSTEM_RELEASE_RUNTIME_HEADER_BYTES
-            + 128
-            + 256
-            + 256
-            + LAMPORT_PUBLIC_KEY_BYTES
-            + LAMPORT_SIGNATURE_BYTES];
+        let mut release = [0; TEST_RUNTIME_RELEASE_BYTES];
         let release_length = encode_system_release_with_runtime_inventory(
             &generation[..generation_length],
             &catalog[..catalog_length],
@@ -1453,16 +1490,25 @@ mod tests {
             2,
         )
         .unwrap();
-        (candidate, parsed.identity())
+        (candidate, parsed.identity(), release, release_length)
     }
 
     #[test]
     fn signed_runtime_identity_survives_activation_checkpoint_and_recovery() {
-        let (capabilities, control, inspect) = authority();
+        let (mut capabilities, control, inspect) = authority();
         let root = ObjectId(0x4445_504c_4f59);
-        let (candidate, identity) = signed_runtime_candidate();
+        let (candidate, identity, release, release_length) = signed_runtime_candidate();
         assert!(identity.has_runtime_inventory());
         let mut service = DeploymentService::<1>::new(root).unwrap();
+        assert!(matches!(
+            service.begin_runtime_assignment::<1, 3>(
+                &capabilities,
+                inspect,
+                &release[..release_length],
+                4,
+            ),
+            Err(DeploymentError::MissingActiveRelease)
+        ));
         let id = service.stage(&capabilities, control, candidate).unwrap();
         let prepared = service
             .prepare_activation(&capabilities, control, id, None)
@@ -1474,6 +1520,46 @@ mod tests {
             .unwrap();
         assert_eq!(activated_release.generation(), active);
         assert_eq!(activated_release.release(), identity);
+
+        let mut assignment = service
+            .begin_runtime_assignment::<1, 3>(&capabilities, inspect, &release[..release_length], 4)
+            .unwrap();
+        let mut packages = assignment.packages();
+        assert_eq!(packages.next(), Some("org.mrml.zstd"));
+        assert_eq!(packages.next(), None);
+        drop(packages);
+        assignment
+            .assign_from_policy(|record| {
+                mrml_kernel::RuntimeDomainAssignment::new(record.package_id, ObjectId(0x5a53_5444))
+            })
+            .unwrap();
+        let inventory = assignment.seal().unwrap();
+        assert_eq!(inventory.active_release(), activated_release);
+        assert_eq!(inventory.policy_generation(), 4);
+        assert_eq!(inventory.release().len(), 1);
+
+        let wrong_inspect = capabilities.insert(ObjectId(9), Rights::READ).unwrap();
+        assert!(matches!(
+            service.begin_runtime_assignment::<1, 3>(
+                &capabilities,
+                wrong_inspect,
+                &release[..release_length],
+                4,
+            ),
+            Err(DeploymentError::Unauthorized)
+        ));
+
+        let mut substituted_release = release;
+        substituted_release[SYSTEM_RELEASE_RUNTIME_HEADER_BYTES] ^= 1;
+        assert!(matches!(
+            service.begin_runtime_assignment::<1, 3>(
+                &capabilities,
+                inspect,
+                &substituted_release[..release_length],
+                4,
+            ),
+            Err(DeploymentError::ReleaseInventory(_))
+        ));
 
         let checkpoint = encode_deployment_release_checkpoint(root, activated_release).unwrap();
         let recovery_state = encode_deployment_recovery_state_with_release(

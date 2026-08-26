@@ -194,6 +194,18 @@ longer carry a detached ZIM/Zstd package list. General per-package owner-policy
 lookup, distinct-domain construction, and complete installed-system
 orchestration remain **PLANNED**.
 
+`DeploymentService` now **PARTIALLY IMPLEMENTS** the installed control-plane
+join through `begin_runtime_assignment`. Exact `READ` authority over the
+deployment service is checked before the currently activated
+`ActivatedSystemRelease` selects its signer and identity for caller-supplied
+canonical release bytes. The caller cannot supply a replacement active identity
+or signer; corruption, legacy activation without release identity, and identity
+substitution fail before enumeration. The returned fixed-capacity plan still
+grants no capability and seals only after every authenticated runtime member is
+assigned. Deployment passes 6 tests on Windows. Reading the release image from
+installed capability-selected storage, general owner-policy decisions, and
+launching every resulting domain remain **PLANNED**.
+
 - Complexity impact: MEDIUM
 - TCB impact: LOW
 - New parser boundary: YES
