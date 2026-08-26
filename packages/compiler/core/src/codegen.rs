@@ -15839,12 +15839,6 @@ fn runtime_reference_call_origin_parameter<const MAX_PARAMETERS: usize, const MA
                             else {
                                 return false;
                             };
-                            if !matches!(
-                                block.terminal,
-                                None | Some(crate::ConditionalLoopTerminal::Return(_))
-                            ) {
-                                return false;
-                            }
                             let primary_has_state =
                                 block.actions().iter().flatten().any(|action| {
                                     matches!(
@@ -15866,12 +15860,7 @@ fn runtime_reference_call_origin_parameter<const MAX_PARAMETERS: usize, const MA
                             else {
                                 return false;
                             };
-                            arms.iter().flatten().all(|arm| {
-                                matches!(
-                                    arm.terminal,
-                                    None | Some(crate::ConditionalLoopTerminal::Return(_))
-                                )
-                            }) && (primary_has_state
+                            primary_has_state
                                 || arms.iter().flatten().any(|arm| {
                                     arm.actions().iter().flatten().any(|action| {
                                         matches!(
@@ -15880,7 +15869,7 @@ fn runtime_reference_call_origin_parameter<const MAX_PARAMETERS: usize, const MA
                                                 | crate::ConditionalLoopAction::Assignment(_)
                                         )
                                     })
-                                }))
+                                })
                         }
                         _ => false,
                     },
@@ -16035,12 +16024,6 @@ fn runtime_reference_call_origin_parameter<const MAX_PARAMETERS: usize, const MA
                                     .conditional_blocks()
                                     .get(block_index)
                                     .and_then(|value| *value)?;
-                                if !matches!(
-                                    block.terminal,
-                                    None | Some(crate::ConditionalLoopTerminal::Return(_))
-                                ) {
-                                    return None;
-                                }
                                 let base_origins = iteration_origins;
                                 let base_projected_origins = iteration_projected_origins;
                                 let mut joined_origins = [None; MAX_PARAMETERS];
@@ -16115,10 +16098,28 @@ fn runtime_reference_call_origin_parameter<const MAX_PARAMETERS: usize, const MA
                                                     arm_local_count,
                                                 )?)
                                             }
-                                            Some(
-                                                crate::ConditionalLoopTerminal::Break
-                                                | crate::ConditionalLoopTerminal::Continue,
-                                            ) => None,
+                                            Some(crate::ConditionalLoopTerminal::Break) => {
+                                                merge_loop_exit_origins(
+                                                    &mut break_origins,
+                                                    &mut break_projected_origins,
+                                                    &mut break_outcome_count,
+                                                    arm_origins,
+                                                    arm_projected_origins
+                                                        .retain_local_prefix(local_count),
+                                                    local_count,
+                                                )
+                                            }
+                                            Some(crate::ConditionalLoopTerminal::Continue) => {
+                                                merge_loop_exit_origins(
+                                                    &mut backedge_origins,
+                                                    &mut backedge_projected_origins,
+                                                    &mut backedge_outcome_count,
+                                                    arm_origins,
+                                                    arm_projected_origins
+                                                        .retain_local_prefix(local_count),
+                                                    local_count,
+                                                )
+                                            }
                                         }
                                     };
                                 apply_arm(block.actions(), block.terminal)?;
@@ -16129,12 +16130,6 @@ fn runtime_reference_call_origin_parameter<const MAX_PARAMETERS: usize, const MA
                                         .conditional_else_arms()
                                         .get(else_index..else_end)?;
                                     for arm in arms.iter().flatten() {
-                                        if !matches!(
-                                            arm.terminal,
-                                            None | Some(crate::ConditionalLoopTerminal::Return(_))
-                                        ) {
-                                            return None;
-                                        }
                                         has_unconditional_else |= arm.condition.is_none();
                                         apply_arm(arm.actions(), arm.terminal)?;
                                     }
@@ -37914,6 +37909,39 @@ mod tests {
                 ..conditional_continue
             }),
             None
+        );
+        assert_eq!(
+            runtime_reference_call_origin_parameter::<2, 40>(RuntimeCallTarget {
+                body_expression: concat!(
+                    "let mut local: u16 = 1; let mut changed: &mut u16 = &mut local; ",
+                    "loop { if first { changed = value; break; } ",
+                    "else { changed = value; break; } } changed"
+                ),
+                ..loop_choose
+            }),
+            Some(0)
+        );
+        assert_eq!(
+            runtime_reference_call_origin_parameter::<2, 40>(RuntimeCallTarget {
+                body_expression: concat!(
+                    "let mut local: u16 = 1; let mut changed: &mut u16 = value; ",
+                    "loop { if first { changed = value; break; } ",
+                    "else { changed = &mut local; break; } } changed"
+                ),
+                ..loop_choose
+            }),
+            None
+        );
+        assert_eq!(
+            runtime_reference_call_origin_parameter::<2, 40>(RuntimeCallTarget {
+                body_expression: concat!(
+                    "let mut changed: &mut u16 = value; loop { ",
+                    "if first { changed = value; continue; } ",
+                    "else { changed = value; } return changed; }"
+                ),
+                ..loop_choose
+            }),
+            Some(0)
         );
     }
 
