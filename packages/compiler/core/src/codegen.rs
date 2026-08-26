@@ -15703,6 +15703,47 @@ fn runtime_reference_call_origin_parameter<const MAX_PARAMETERS: usize, const MA
             }
             Some(true)
         };
+        let normalized_prefix_backedge_is_stable = |backedge_action_index: usize| -> Option<bool> {
+            let (_, candidate_origins, candidate_projected, _, _, _, _) =
+                state_at(backedge_action_index)?;
+            let candidate_projected = candidate_projected.retain_local_prefix(local_count);
+            let (_, repeated_origins, repeated_projected, _, _, _, _) = state_at_from(
+                backedge_action_index,
+                candidate_origins,
+                candidate_projected,
+            )?;
+            if repeated_origins[..local_count] != candidate_origins[..local_count]
+                || !repeated_projected
+                    .retain_local_prefix(local_count)
+                    .has_same_origins(candidate_projected)
+            {
+                return Some(false);
+            }
+            let prefix_matches = |action_index: usize| -> Option<bool> {
+                let (_, initial_origins, initial_projected, _, _, _, _) = state_at(action_index)?;
+                let (_, repeated_origins, repeated_projected, _, _, _, _) =
+                    state_at_from(action_index, candidate_origins, candidate_projected)?;
+                Some(
+                    initial_origins[..local_count] == repeated_origins[..local_count]
+                        && initial_projected
+                            .retain_local_prefix(local_count)
+                            .has_same_origins(repeated_projected.retain_local_prefix(local_count)),
+                )
+            };
+            for action_index in block
+                .conditional_break_action_indices()
+                .iter()
+                .chain(block.conditional_continue_action_indices())
+                .chain(block.conditional_return_action_indices())
+                .chain(block.unconditional_control_action_indices())
+                .filter(|action_index| **action_index <= backedge_action_index)
+            {
+                if !prefix_matches(*action_index)? {
+                    return Some(false);
+                }
+            }
+            Some(true)
+        };
         let mut exit_origins = [None; MAX_PARAMETERS];
         let mut exit_projected_origins = RuntimeCalleeProjectedOrigins::EMPTY;
         let mut exit_count = 0usize;
@@ -15810,7 +15851,8 @@ fn runtime_reference_call_origin_parameter<const MAX_PARAMETERS: usize, const MA
                 }
                 crate::NestedLoopUnconditionalControl::Continue(
                     crate::NestedLoopControlTarget::Inner,
-                ) if prefix_preserves_state(*action_index)? => {}
+                ) if prefix_preserves_state(*action_index)?
+                    || normalized_prefix_backedge_is_stable(*action_index)? => {}
                 crate::NestedLoopUnconditionalControl::Break(
                     crate::NestedLoopControlTarget::Outer,
                 ) => {
@@ -38623,6 +38665,28 @@ mod tests {
                     "changed = value; } return changed; }"
                 ),
                 ..nested_continue
+            }),
+            None
+        );
+        assert_eq!(
+            runtime_reference_call_origin_parameter::<2, 40>(RuntimeCallTarget {
+                body_expression: concat!(
+                    "let mut local: u16 = 1; let mut changed: &mut u16 = &mut local; ",
+                    "loop { loop { changed = value; if first { return changed; } ",
+                    "continue; changed = &mut local; } }"
+                ),
+                ..nested_loop
+            }),
+            Some(0)
+        );
+        assert_eq!(
+            runtime_reference_call_origin_parameter::<2, 40>(RuntimeCallTarget {
+                body_expression: concat!(
+                    "let mut local: u16 = 1; let mut changed: &mut u16 = &mut local; ",
+                    "loop { loop { if first { return changed; } changed = value; ",
+                    "continue; } }"
+                ),
+                ..nested_loop
             }),
             None
         );
