@@ -4212,6 +4212,13 @@ agree, while unreachable suffix actions are ignored. The pinned oracle accepts
 normalization before return/continue and rejects a return before normalization
 with E0515. Both hosts remain at 989 compiler tests; iterative multi-backedge
 fixed points remain incomplete.
+Multiple conditional inner continues now contribute to a bounded header meet
+alongside initial entry and normal fallthrough. One replay must reproduce that
+header exactly, and all exit prefixes must agree between initial and joined
+states. The pinned oracle accepts differing continue origins normalized before
+every exit and rejects an early local-backed break with E0515. Both hosts remain
+at 989 compiler tests; unconditional mixed-backedge and general iterative fixed
+points remain incomplete.
 Nested-loop ordered-return and stable-edge analysis is now factored over an
 explicit incoming state and composes after outer-loop declarations, assignments,
 and branch joins. Stable nested edges preserve that state for later outer

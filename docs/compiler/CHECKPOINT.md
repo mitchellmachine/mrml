@@ -613,6 +613,17 @@ and Arch each pass 643 library tests, one component-interface probe, 10
 conformance tests, and 335 replacement tests: 989 compiler tests per host.
 Multi-backedge fixed-point iteration remains incomplete.
 
+Conditional inner backedges now use a bounded joined header. The initial state,
+every conditional inner-continue prefix, and normal fallthrough are intersected;
+one replay from that header must reproduce the same local/projected origins.
+Break, return, and outer-continue prefixes must remain equal between the initial
+and converged headers. ORACLE-0002 accepts parameter and local-backed continue
+edges when every exit first restores the parameter, and rejects an early local-
+backed break with E0515. Windows and Arch each pass 643 library tests, one
+component-interface probe, 10 conformance tests, and 335 replacement tests: 989
+compiler tests per host. Unconditional mixed-backedge and broader iterative
+fixed points remain incomplete.
+
 The conditional callee-local reassignment milestone evaluates supported direct
 assignments from a copy of the incoming fixed local-origin state for every
 conditional outcome, then joins each local independently. A missing `else`

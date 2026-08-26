@@ -176,6 +176,15 @@ overwrite failed with E0515. This is black-box evidence for that exact prefix-
 bounded normalization and terminating suffix, not general fixed-point or region
 inference. Temporary source and metadata were removed.
 
+An independently authored Rust 2024 metadata-only multi-backedge pair against
+this exact toolchain and commit accepted two conditional inner continues that
+carried parameter-backed and local-backed alias states when every possible
+inner-loop exit first restored the parameter. Moving the conditional break
+before that restoration failed at the enclosing return with E0515. This is
+black-box evidence for those exact joined backedges and exit ordering, not
+general fixed-point or region inference. Temporary source and metadata were
+removed.
+
 An independently authored Rust 2024 metadata-only composed-loop pair against
 this exact toolchain and commit accepted an outer-loop same-origin mutable
 reassignment followed by an inner-loop conditional return. Replacing that outer

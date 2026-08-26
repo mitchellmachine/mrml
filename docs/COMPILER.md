@@ -1343,6 +1343,12 @@ second replay stop at the continue's exact action index, so unreachable suffix
 assignments cannot affect the proof. Earlier stored controls must still expose
 the same origins from both headers. ORACLE-0002 accepts a parameter overwrite
 before a return/continue and rejects a return before normalization with E0515.
+Multiple conditional inner backedges now form a bounded header meet with the
+initial entry and normal fallthrough. Replaying all backedges from that joined
+header must converge exactly, while every break, return, and outer-target
+continue prefix must expose the same origins from the initial and joined
+headers. ORACLE-0002 accepts differing backedge origins normalized before every
+exit and rejects an exit that precedes normalization with E0515.
 
 The first modern trait-solver foundation is an explicit bounded implemented-
 goal representation. Stable trait/type/inference/placeholder identities remain
