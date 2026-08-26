@@ -9,6 +9,7 @@ pub enum ArtifactKind {
     ServiceImage = 3,
     CudaKernelBundle = 4,
     LaunchPolicy = 5,
+    ApplicationImage = 6,
 }
 
 pub const MAX_KERNEL_IMAGE_BYTES: u32 = 64 * 1024 * 1024;
@@ -16,12 +17,14 @@ pub const MAX_SERVICE_IMAGE_BYTES: u32 = 128 * 1024 * 1024;
 pub const MAX_VM_IMAGE_BYTES: u32 = 512 * 1024 * 1024;
 pub const MAX_CUDA_KERNEL_BUNDLE_BYTES: u32 = 64 * 1024 * 1024;
 pub const MAX_LAUNCH_POLICY_BYTES: u32 = 16 * 1024 * 1024;
+pub const MAX_APPLICATION_IMAGE_BYTES: u32 = 128 * 1024 * 1024;
 
 pub const fn executable_image_limit(kind: ArtifactKind) -> Option<u32> {
     match kind {
         ArtifactKind::Kernel => Some(MAX_KERNEL_IMAGE_BYTES),
         ArtifactKind::ServiceImage => Some(MAX_SERVICE_IMAGE_BYTES),
         ArtifactKind::VmImage => Some(MAX_VM_IMAGE_BYTES),
+        ArtifactKind::ApplicationImage => Some(MAX_APPLICATION_IMAGE_BYTES),
         ArtifactKind::CudaKernelBundle | ArtifactKind::LaunchPolicy => None,
     }
 }
@@ -101,6 +104,7 @@ impl<'a> SignedArtifact<'a> {
             3 => ArtifactKind::ServiceImage,
             4 => ArtifactKind::CudaKernelBundle,
             5 => ArtifactKind::LaunchPolicy,
+            6 => ArtifactKind::ApplicationImage,
             _ => return Err(ArtifactError::MalformedContainer),
         };
         if encoded[17..24].iter().any(|byte| *byte != 0) {
@@ -611,6 +615,7 @@ impl PendingBootRelease {
             ArtifactKind::VmImage => BOOT_VM_ADMITTED,
             ArtifactKind::CudaKernelBundle => BOOT_CUDA_ADMITTED,
             ArtifactKind::LaunchPolicy => BOOT_POLICY_ADMITTED,
+            ArtifactKind::ApplicationImage => 0,
         };
     }
 }
@@ -623,12 +628,14 @@ impl Drop for PendingBootRelease {
 }
 
 impl VerifiedRelease {
-    fn trust_root(&self, kind: ArtifactKind) -> TrustRoot {
-        TrustRoot::new(
-            kind,
-            self.manifest.artifact_roots[kind as usize - 1],
-            self.manifest.release,
-        )
+    fn trust_root(&self, kind: ArtifactKind) -> Result<TrustRoot, ArtifactError> {
+        let digest = self
+            .manifest
+            .artifact_roots
+            .get(kind as usize - 1)
+            .copied()
+            .ok_or(ArtifactError::MissingTrustRoot)?;
+        Ok(TrustRoot::new(kind, digest, self.manifest.release))
     }
 
     /// Authenticates one artifact only when its signed version is exactly this
@@ -644,7 +651,7 @@ impl VerifiedRelease {
         if artifact.version() != self.manifest.release {
             return Err(ArtifactError::ReleaseMismatch);
         }
-        artifact.verify(&self.trust_root(expected_kind), expected_kind)
+        artifact.verify(&self.trust_root(expected_kind)?, expected_kind)
     }
 
     /// Applies exact-release authentication before interpreting executable
@@ -1241,6 +1248,44 @@ mod tests {
         assert_eq!(
             SignedArtifact::decode(&encoded).err(),
             Some(ArtifactError::MalformedContainer)
+        );
+    }
+
+    #[test]
+    fn application_image_has_independent_executable_kind_and_no_core_release_root() {
+        let payload = b"application-image";
+        let (public, signature) =
+            signed_test_parts(ArtifactKind::ApplicationImage, 9, payload, 0x7f);
+        let application = SignedArtifact {
+            kind: ArtifactKind::ApplicationImage,
+            version: 9,
+            payload,
+            public_key: &public,
+            signature: &signature,
+        };
+        let root = TrustRoot::new(ArtifactKind::ApplicationImage, Sha3_512::digest(&public), 9);
+        assert!(
+            application
+                .verify(&root, ArtifactKind::ApplicationImage)
+                .is_ok()
+        );
+        assert_eq!(
+            executable_image_limit(ArtifactKind::ApplicationImage),
+            Some(MAX_APPLICATION_IMAGE_BYTES)
+        );
+        let release = VerifiedRelease {
+            manifest: ReleaseManifest::new(
+                9,
+                [0xa5; 64],
+                [[1; 64], [2; 64], [3; 64], [4; 64], [5; 64]],
+            )
+            .unwrap(),
+        };
+        assert_eq!(
+            release
+                .verify_artifact(&application, ArtifactKind::ApplicationImage)
+                .err(),
+            Some(ArtifactError::MissingTrustRoot)
         );
     }
 }

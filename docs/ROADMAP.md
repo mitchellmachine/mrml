@@ -47,8 +47,11 @@ Three new persistent deltas are documented before implementation:
   and retires the complete task domain before retryable address-space erasure.
   Focused tests use an unaccounted runtime, so production quantitative
   allocation remains a caller obligation. This is kernel control/lifecycle
-  groundwork; the representative GUI application, compositor/Semantic Scene
-  Graph integration, application image execution, and WHP/KVM application
+  groundwork. A bounded executable `ApplicationImage` artifact kind now admits
+  independently authenticated application bytes and fails closed when code
+  incorrectly asks the fixed five-root early-boot release for an application
+  root. The representative GUI application, compositor/Semantic Scene Graph
+  integration, application image loading/execution, and WHP/KVM application
   probes remain **PLANNED**. A backend-neutral microVM owner now rechecks and
   consumes one already constructed application guest, retains it behind an
   exact generational endpoint, refuses native dispatch, and preserves uncertain

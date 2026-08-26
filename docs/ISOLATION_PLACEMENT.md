@@ -62,7 +62,14 @@ erase for exact retry. Focused Windows/Linux unit tests use an unaccounted test
 runtime; production quantitative runtime allocation remains the caller's
 separate obligation. This is not the representative dual-placement GUI
 application: no GUI package, compositor, Semantic Scene Graph integration,
-application image execution or WHP/KVM application probe exists yet. A
+application image execution or WHP/KVM application probe exists yet. The
+kernel artifact boundary now recognizes a bounded executable
+`ApplicationImage` kind and can authenticate it against an independently
+selected application root. It is intentionally outside the fixed five-root
+early-boot `SystemRelease`: asking that release to supply an application root
+fails closed instead of indexing beyond its root set. This is typed admission
+groundwork only; no application loader or runtime consumes the verified bytes
+yet. A
 backend-neutral microVM owner now accepts one already constructed guest only
 after rechecking the complete immutable application route, consumes that guest
 once, exposes it solely through a generational endpoint, refuses native-process

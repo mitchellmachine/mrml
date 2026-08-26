@@ -1029,6 +1029,15 @@ factory, or drop a guest after uncertain teardown. Exact teardown retry is
 required. Current coverage uses mock guests and is not WHP/KVM execution
 evidence.
 
+Application recovery must preserve the distinction between the fixed five-root
+early-boot release and independently admitted application artifacts. The kernel
+recognizes bounded executable `ApplicationImage` bytes, but a recovered
+`VerifiedRelease` cannot manufacture an application trust root: that request
+fails with `MissingTrustRoot`. Recovery must reacquire the exact independently
+selected application root and signed artifact through the eventual package and
+generation admission path. This is unit-tested artifact-boundary evidence, not
+an implemented application loader or recovered application execution path.
+
 The focused recovery oracle now includes the two-vCPU component profiles
 `whp_component_service_smp_probe` and `kvm_component_service_smp_probe`. Each
 must use fresh signed kernel/package artifacts, the exact signed ZIM/Zstd
