@@ -8474,3 +8474,13 @@ control-flow, region, alias, inference, optimization, or instruction-selection
 algorithm. Unindexed CFG, ownership, and native consumers fail closed. Broader
 compiler completion remains partial; this technical screen is not a clearance
 or infringement conclusion and does not replace independent human dual review.
+
+# 2026-08-26 — Nested loop alternative-chain native lowering
+
+**Result: NOT_TRIGGERED after the native-lowering review.** This increment
+repeats the compiler's existing conventional conditional forward-branch,
+scoped-action, stack-cleanup, and target-aware terminal sequence for each arm
+of a fixed four-entry array. It adds no novel control-flow, region, alias,
+inference, optimization, or instruction-selection algorithm. Broader compiler
+completion remains partial; this technical screen is not a clearance or
+infringement conclusion and does not replace independent human dual review.

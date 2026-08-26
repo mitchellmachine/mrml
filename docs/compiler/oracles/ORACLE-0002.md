@@ -178,9 +178,9 @@ An independently authored Rust 2024 metadata-only nested-loop chain against
 this exact toolchain and commit accepted a primary arm, two ordered `else if`
 arms with scoped locals, and a final `else`; four const calls selected each
 outcome. MRML now retains up to four alternatives and evaluates that bounded
-chain lazily. MRML also maps every arm to indexed CFG and ownership identities,
-while native compilation of more than one alternative remains fail-closed.
-This is syntax and const-control-shape evidence
+chain lazily. MRML also maps every arm to indexed CFG and ownership identities
+and emits separately authored direct and helper-inlined probes into ELF64 and
+COFF objects. This is syntax and const-control-shape evidence
 only, not general branch-chain, region, or native-code evidence. Temporary
 source and metadata were removed.
 

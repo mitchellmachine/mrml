@@ -1391,9 +1391,9 @@ alternative arms, including an optional final `else`, and the constant
 evaluator lazily selects the first matching arm. CFG and ownership identities
 now carry an exact alternative index for every condition, scoped action block,
 and return value. Primary false and each conditional-alternative false edge
-advance in source order; an unconditional final arm closes fallthrough. Native
-emission still explicitly fails closed when more than one alternative is
-present.
+advance in source order; an unconditional final arm closes fallthrough. Direct
+and helper-inlined x86-64 emission now walks the same bounded chain, and ELF64
+and COFF probes cover both paths.
 The bounded constant evaluator selects
 exactly one arm, executes its actions under a lexical resolver checkpoint, and
 routes its target-aware terminal under the existing iteration limit. CFG
