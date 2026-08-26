@@ -3999,6 +3999,13 @@ sites; equivalent local-backed children fail the bounded outlives check. The
 pinned oracle accepts both parameter forms and rejects both local escapes with
 E0515. Windows and Arch remain at 988 compiler tests per host.
 
+Loop-contained direct and conditional returns now carry the same call-derived
+shared-child outlives origin. Parameter-backed identity and conditional results
+are accepted, and equivalent loop-local children fail closed. The pinned oracle
+accepts both parameter forms and rejects both local escapes with E0515. Windows
+and Arch remain at 988 compiler tests per host; general loop dataflow remains
+unsupported.
+
 Exact typed tuple literals now seed the same projected state when a local is
 declared. Every reference field is checked against the declared tuple element
 and return type; only a parameter-backed element records an origin. Scalar and

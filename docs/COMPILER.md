@@ -1151,6 +1151,12 @@ remain accepted at every site, while the matching local-backed sites fail
 closed. ORACLE-0002 accepts both parameter forms and reports E0515 for both
 local escapes. This is bounded return-site coverage, not general regions.
 
+Loop-contained direct and conditional returns now retain the same call-derived
+shared-child origin. Parameter-backed identity and same-parameter conditional
+results return successfully, while the equivalent loop-local children fail
+closed. ORACLE-0002 accepts both parameter forms and reports E0515 for both
+local escapes. This remains bounded loop-return evidence, not a fixed point.
+
 The first modern trait-solver foundation is an explicit bounded implemented-
 goal representation. Stable trait/type/inference/placeholder identities remain
 distinct; canonicalization replaces inference identities with first-occurrence

@@ -842,6 +842,12 @@ same-parameter children return successfully; equivalent local-backed sites fail
 closed. ORACLE-0002 accepts both parameter cases and rejects both local escapes
 with E0515. Windows and Arch remain at 988 compiler tests per host.
 
+Loop-contained direct and conditional returns now preserve call-derived shared-
+child origins. Both parameter-backed forms pass, while matching loop-local
+escapes fail closed. ORACLE-0002 accepts the parameter cases and rejects the
+local cases with E0515. Windows and Arch remain at 988 compiler tests per host;
+general loop fixed points remain unsupported.
+
 Multi-field tuple literals retain a separate projected origin per field. A
 conditional reference element seeds its field only when both arms prove the
 same parameter; unequal first/second origins fail closed. Focused caller tests
