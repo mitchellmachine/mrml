@@ -1,5 +1,16 @@
 # Patent review log
 
+## 2026-08-26 — Exact 4 KiB UEFI recovery-read bridge
+
+Patent review: **NOT_TRIGGERED** for this geometry adapter. It uses conventional
+power-of-two block aggregation, checked integer/range arithmetic, aligned
+storage, generation rechecks, and failure erasure around the published UEFI
+Block I/O call. It adds no filesystem or storage layout, discovery/scheduling
+algorithm, cryptography, placement heuristic, native fallback, queue/DMA
+mechanism, or hardware isolation method. Broader storage/device, firmware,
+adaptive-isolation, and Total-MicroVM reviews remain `TRIGGERED`; no patent-
+clearance or non-infringement conclusion is made.
+
 ## 2026-08-26 — Exact UEFI loaded-device protocol acquisition
 
 Patent review: **NOT_TRIGGERED** for this firmware-lifecycle integration. It

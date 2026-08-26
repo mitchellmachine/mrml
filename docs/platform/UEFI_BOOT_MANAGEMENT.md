@@ -104,6 +104,13 @@ media, persist identity across boots, or transfer a selected device into the
 kernel handoff. No OVMF, EFI Shell, or physical firmware claim follows from host
 tests and cross-builds.
 
+The same boundary now **PARTIALLY IMPLEMENTS** an aligned 4 KiB recovery read
+over compatible 512/1024/2048/4096-byte firmware media. Exact LBA/range checks
+and pre/post media snapshots prevent crossing geometry or replacement, and any
+failed or stale read erases its complete output. This has only run against a
+host mock; the production loader still does not enumerate or read installed
+media through it.
+
 The conventional fallback `\EFI\BOOT\BOOTX64.EFI` may be installed only under
 policy that proves ownership/non-conflict and previews backup/recovery or exact
 replacement. A shared ESP's existing fallback is never casually overwritten.

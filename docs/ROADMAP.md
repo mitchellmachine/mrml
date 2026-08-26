@@ -65,6 +65,14 @@ cross-build the UEFI target. Calling this source from the real loader and
 transferring installed early-boot ownership remain next; no OVMF or physical
 firmware was exercised.
 
+The compatible-geometry recovery reader is now **PARTIALLY IMPLEMENTED**. A
+4096-aligned buffer and checked LBA mapping read one MRML 4 KiB block through
+512/1024/2048/4096-byte UEFI media while exact pre/post media snapshots prevent
+replacement. Failure erases the complete output. Windows and Arch Linux each
+pass 31 focused tests and cross-build the UEFI target. Bounded handle
+enumeration, expected-volume selection, real-loader composition, and installed
+ownership transfer remain next.
+
 Installed recovery ownership now crosses the Total-admission boundary in the
 controlled backend-parity path. `RecoveredInstalledTotalAdmission` retains the
 exact serviced device selection and recovered volume/root identity beside the

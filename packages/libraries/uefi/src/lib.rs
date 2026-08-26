@@ -328,6 +328,10 @@ pub enum UefiBlockDescriptorError {
     InvalidDevicePathNode,
     UnsupportedDevicePathInstance,
     MissingDevicePathEnd,
+    UnsupportedRecoveryGeometry,
+    RecoveryRange,
+    MediaChanged,
+    ReadBlock(Status),
 }
 
 pub const OPEN_PROTOCOL_GET_PROTOCOL: u32 = 0x0000_0002;
@@ -364,6 +368,31 @@ impl UefiBlockMediaSnapshot {
     }
     pub const fn read_only(self) -> bool {
         self.read_only
+    }
+}
+
+pub const UEFI_RECOVERY_BLOCK_BYTES: usize = 4096;
+
+#[repr(C, align(4096))]
+pub struct UefiRecoveryBlock([u8; UEFI_RECOVERY_BLOCK_BYTES]);
+
+impl UefiRecoveryBlock {
+    pub const fn new() -> Self {
+        Self([0; UEFI_RECOVERY_BLOCK_BYTES])
+    }
+
+    pub const fn as_slice(&self) -> &[u8; UEFI_RECOVERY_BLOCK_BYTES] {
+        &self.0
+    }
+
+    pub fn erase(&mut self) {
+        self.0.fill(0);
+    }
+}
+
+impl Default for UefiRecoveryBlock {
+    fn default() -> Self {
+        Self::new()
     }
 }
 
@@ -412,6 +441,71 @@ pub unsafe fn snapshot_uefi_block_media(
         logical_partition: media.logical_partition == 1,
         read_only: media.read_only == 1,
     })
+}
+
+/// Reads one MRML-native 4 KiB recovery block through an exact still-current
+/// firmware media generation. Compatible smaller firmware blocks are grouped
+/// in one checked request; no read-modify-write behavior is introduced.
+/// Failure or generation change erases the complete output.
+///
+/// # Safety
+///
+/// `protocol` and its media record must remain firmware-valid for this call.
+/// Its `read_blocks` implementation must follow the UEFI Block I/O contract for
+/// the validated media geometry and the aligned output buffer.
+pub unsafe fn read_uefi_recovery_block(
+    protocol: &mut BlockIoProtocol,
+    expected: UefiBlockMediaSnapshot,
+    recovery_block: u64,
+    output: &mut UefiRecoveryBlock,
+) -> Result<(), UefiBlockDescriptorError> {
+    output.erase();
+    let current = unsafe { snapshot_uefi_block_media(protocol) }?;
+    if current != expected {
+        return Err(UefiBlockDescriptorError::MediaChanged);
+    }
+    let firmware_bytes = usize::try_from(expected.block_size)
+        .map_err(|_| UefiBlockDescriptorError::UnsupportedRecoveryGeometry)?;
+    if !(512..=UEFI_RECOVERY_BLOCK_BYTES).contains(&firmware_bytes)
+        || !firmware_bytes.is_power_of_two()
+        || !UEFI_RECOVERY_BLOCK_BYTES.is_multiple_of(firmware_bytes)
+        || expected.io_align > UEFI_RECOVERY_BLOCK_BYTES as u32
+    {
+        return Err(UefiBlockDescriptorError::UnsupportedRecoveryGeometry);
+    }
+    let firmware_blocks = u64::try_from(UEFI_RECOVERY_BLOCK_BYTES / firmware_bytes)
+        .map_err(|_| UefiBlockDescriptorError::UnsupportedRecoveryGeometry)?;
+    let first = recovery_block
+        .checked_mul(firmware_blocks)
+        .ok_or(UefiBlockDescriptorError::RecoveryRange)?;
+    let end = first
+        .checked_add(firmware_blocks)
+        .filter(|end| *end <= expected.block_count)
+        .ok_or(UefiBlockDescriptorError::RecoveryRange)?;
+    let _ = end;
+    let address = output.0.as_mut_ptr() as usize;
+    if expected.io_align > 1 && !address.is_multiple_of(expected.io_align as usize) {
+        return Err(UefiBlockDescriptorError::UnsupportedRecoveryGeometry);
+    }
+    let status = unsafe {
+        (protocol.read_blocks)(
+            protocol,
+            expected.media_id,
+            first,
+            UEFI_RECOVERY_BLOCK_BYTES,
+            output.0.as_mut_ptr().cast(),
+        )
+    };
+    if status != SUCCESS {
+        output.erase();
+        return Err(UefiBlockDescriptorError::ReadBlock(status));
+    }
+    let current = unsafe { snapshot_uefi_block_media(protocol) }?;
+    if current != expected {
+        output.erase();
+        return Err(UefiBlockDescriptorError::MediaChanged);
+    }
+    Ok(())
 }
 
 /// Converts one validated firmware media snapshot and canonical single-instance
@@ -1240,6 +1334,11 @@ mod tests {
     static MOCK_DEVICE_PATH: AtomicPtr<c_void> = AtomicPtr::new(core::ptr::null_mut());
     static MOCK_CLOSE_STATUS: AtomicUsize = AtomicUsize::new(SUCCESS);
     static MOCK_CLOSE_CALLS: AtomicUsize = AtomicUsize::new(0);
+    static RECOVERY_READ_MEDIA: AtomicUsize = AtomicUsize::new(0);
+    static RECOVERY_READ_LBA: AtomicUsize = AtomicUsize::new(0);
+    static RECOVERY_READ_CALLS: AtomicUsize = AtomicUsize::new(0);
+    static RECOVERY_READ_STATUS: AtomicUsize = AtomicUsize::new(SUCCESS);
+    static RECOVERY_MUTATE_MEDIA: AtomicPtr<BlockIoMedia> = AtomicPtr::new(core::ptr::null_mut());
 
     unsafe extern "efiapi" fn mock_get_memory_map(
         _: *mut usize,
@@ -1377,6 +1476,29 @@ mod tests {
         _: *mut c_void,
     ) -> Status {
         SUCCESS
+    }
+
+    unsafe extern "efiapi" fn recovery_block_read(
+        _: *mut BlockIoProtocol,
+        media_id: u32,
+        lba: u64,
+        bytes: usize,
+        output: *mut c_void,
+    ) -> Status {
+        RECOVERY_READ_CALLS.fetch_add(1, Ordering::SeqCst);
+        if usize::try_from(media_id).ok() != Some(RECOVERY_READ_MEDIA.load(Ordering::SeqCst))
+            || usize::try_from(lba).ok() != Some(RECOVERY_READ_LBA.load(Ordering::SeqCst))
+            || bytes != UEFI_RECOVERY_BLOCK_BYTES
+            || output.is_null()
+        {
+            return LOAD_ERROR;
+        }
+        unsafe { core::ptr::write_bytes(output.cast::<u8>(), 0x5a, bytes) };
+        let media = RECOVERY_MUTATE_MEDIA.load(Ordering::SeqCst);
+        if let Some(media) = unsafe { media.as_mut() } {
+            media.media_id = media.media_id.wrapping_add(1);
+        }
+        RECOVERY_READ_STATUS.load(Ordering::SeqCst)
     }
 
     unsafe extern "efiapi" fn block_write(
@@ -1774,6 +1896,62 @@ mod tests {
         MOCK_CLOSE_STATUS.store(SUCCESS, Ordering::SeqCst);
         MOCK_BLOCK_PROTOCOL.store(core::ptr::null_mut(), Ordering::SeqCst);
         MOCK_DEVICE_PATH.store(core::ptr::null_mut(), Ordering::SeqCst);
+    }
+
+    #[test]
+    fn recovery_block_read_groups_firmware_blocks_and_erases_uncertain_output() {
+        let mut media = valid_block_media();
+        media.media_id = 7;
+        media.block_size = 512;
+        media.last_block = 63;
+        let mut protocol = block_protocol(&mut media);
+        protocol.read_blocks = recovery_block_read;
+        let expected = unsafe { snapshot_uefi_block_media(&protocol) }.unwrap();
+        let mut output = UefiRecoveryBlock::new();
+        assert!((output.as_slice().as_ptr() as usize).is_multiple_of(4096));
+
+        RECOVERY_READ_MEDIA.store(7, Ordering::SeqCst);
+        RECOVERY_READ_LBA.store(16, Ordering::SeqCst);
+        RECOVERY_READ_CALLS.store(0, Ordering::SeqCst);
+        RECOVERY_READ_STATUS.store(SUCCESS, Ordering::SeqCst);
+        RECOVERY_MUTATE_MEDIA.store(core::ptr::null_mut(), Ordering::SeqCst);
+        assert_eq!(
+            unsafe { read_uefi_recovery_block(&mut protocol, expected, 2, &mut output) },
+            Ok(())
+        );
+        assert_eq!(RECOVERY_READ_CALLS.load(Ordering::SeqCst), 1);
+        assert!(output.as_slice().iter().all(|byte| *byte == 0x5a));
+
+        RECOVERY_READ_STATUS.store(LOAD_ERROR, Ordering::SeqCst);
+        assert_eq!(
+            unsafe { read_uefi_recovery_block(&mut protocol, expected, 2, &mut output) },
+            Err(UefiBlockDescriptorError::ReadBlock(LOAD_ERROR))
+        );
+        assert!(output.as_slice().iter().all(|byte| *byte == 0));
+
+        RECOVERY_READ_STATUS.store(SUCCESS, Ordering::SeqCst);
+        RECOVERY_MUTATE_MEDIA.store(protocol.media, Ordering::SeqCst);
+        assert_eq!(
+            unsafe { read_uefi_recovery_block(&mut protocol, expected, 2, &mut output) },
+            Err(UefiBlockDescriptorError::MediaChanged)
+        );
+        assert!(output.as_slice().iter().all(|byte| *byte == 0));
+        RECOVERY_MUTATE_MEDIA.store(core::ptr::null_mut(), Ordering::SeqCst);
+
+        unsafe { (*protocol.media).media_id = 7 };
+        RECOVERY_READ_CALLS.store(0, Ordering::SeqCst);
+        assert_eq!(
+            unsafe { read_uefi_recovery_block(&mut protocol, expected, 8, &mut output) },
+            Err(UefiBlockDescriptorError::RecoveryRange)
+        );
+        assert_eq!(RECOVERY_READ_CALLS.load(Ordering::SeqCst), 0);
+
+        unsafe { (*protocol.media).block_size = 256 };
+        let unsupported = unsafe { snapshot_uefi_block_media(&protocol) }.unwrap();
+        assert_eq!(
+            unsafe { read_uefi_recovery_block(&mut protocol, unsupported, 0, &mut output) },
+            Err(UefiBlockDescriptorError::UnsupportedRecoveryGeometry)
+        );
     }
 
     #[test]

@@ -3255,6 +3255,14 @@ and fails on partial-open cleanup or uncertain closure. Windows and Arch Linux
 each pass 30 library tests and cross-build the UEFI artifact. Real-loader use,
 firmware reads, installed handoff, OVMF, and physical hardware remain untested.
 
+The UEFI boundary now groups compatible 512/1024/2048/4096-byte firmware blocks
+into one exact aligned 4 KiB recovery read. Checked multiplication and end bounds
+precede the call, while complete media snapshots bracket it. A failed read or
+changed media generation zeroes the whole output. Windows and Arch Linux each
+pass 31 library tests and cross-build the UEFI artifact. This remains mocked
+protocol evidence; enumeration, installed selection, and firmware execution are
+not implemented.
+
 The bounded discovery result now remains owned through the complete serviced
 recovery read. `RecoveredInstalledStableSystemSelection` retains the exact
 installed selection beside the `BlockVolume` and reachable graph produced from

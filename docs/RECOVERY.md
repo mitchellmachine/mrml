@@ -1162,6 +1162,15 @@ target. The real loader has not invoked this source and no block was read, so
 installed-device discovery, durable identity, OVMF, EFI Shell, and physical-
 firmware recovery remain **PLANNED**.
 
+The UEFI source now also **PARTIALLY IMPLEMENTS** exact native-format block-zero
+input over common firmware geometry. One aligned 4 KiB recovery buffer groups
+exactly 1, 2, 4, or 8 compatible firmware blocks with checked LBA arithmetic,
+then rechecks the complete media snapshot after the read. Range/geometry failure
+precedes firmware access; backend failure or media replacement erases all
+output. Windows and Arch Linux each pass 31 UEFI-library tests and cross-build
+the target. No real firmware read, volume scan, installed selection, or early-
+boot transfer has run.
+
 The recovered installed selection is now retained across the boot-policy to
 Total-admission boundary. `RecoveredInstalledTotalAdmission` binds its exact
 device descriptor, serviced session selection, volume header, active root,

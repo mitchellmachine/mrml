@@ -65,6 +65,15 @@ up the first; both closes are attempted and any close failure rejects discovery.
 Actual loader integration, reads, multi-device enumeration, persistence across
 boots, and physical firmware evidence remain **PLANNED**.
 
+An exact 4 KiB recovery-read bridge is now **PARTIALLY IMPLEMENTED** for
+compatible 512/1024/2048/4096-byte UEFI media. It uses a 4096-aligned private
+buffer, checked logical-to-firmware LBA multiplication and range bounds, and one
+firmware request covering exactly the constituent blocks. The complete media
+snapshot is revalidated before and after the read. Backend failure or post-read
+media replacement erases all output; incompatible block size/alignment fails
+before firmware access. This is host-mocked and cross-build evidence, not a
+running loader, durable storage, OVMF, or physical-device result.
+
 The `mrml` frontend may expose structured `disk`, `filesystem`, `optical`, and
 `media` operations. The PowerShell-inspired shell projects the same backend as
 typed `Get-*`, `Test-*`, `Initialize-*`, `New-*`, `Format-*`, `Write-*`, and
