@@ -1161,6 +1161,16 @@ native Arch Linux WSL each pass 564 library tests, one component-interface
 probe, 10 conformance tests, and 335 replacement tests: 910 compiler tests per
 host.
 
+The exact source-associated-type milestone parses up to eight `type Name;`
+declarations per trait and requires exactly one `type Name = Type;` value in
+each exact source implementation. Stable source-order identities feed the
+existing bounded associated-value database and exact projection normalizer.
+Missing, unknown, duplicate, and capacity-exhausted declarations or values fail
+closed. Defaults, bounds, generics, methods, and source projection syntax remain
+unsupported. Windows gnullvm and native Arch Linux WSL each pass 569 library
+tests, one component-interface probe, 10 conformance tests, and 335 replacement
+tests: 915 compiler tests per host.
+
 The premise-bearing rigid-normalization milestone proves the selected generic
 implementation's instantiated trait and projection predicates before exposing
 its associated value. It shares the caller's 16-frame rigid proof stack and

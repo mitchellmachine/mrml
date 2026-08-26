@@ -48,8 +48,8 @@ Unsupported borrowing, traits, provenance, unsafe behavior, ABI, assembly,
 const evaluation, control flow, and security metadata continue to fail closed.
 
 The implemented bootstrap grammar currently recognizes module-level `fn`, `const fn`,
-typed `const`, immutable typed `static`, marker `trait Name {}`, and empty exact
-`impl Trait for Type {}` items, optional `pub`, named typed parameters, optional return
+typed `const`, immutable typed `static`, bounded `trait Name { type Item; }`, and exact
+`impl Trait for Type { type Item = Value; }` items, optional `pub`, named typed parameters, optional return
 types, up to eight concrete `where Type: Trait` predicates, nested generic and
 tuple/array type syntax, balanced function bodies, and
 bounded constant initializers. Function bodies additionally parse a bounded
@@ -4349,6 +4349,17 @@ Generic supertraits, associated items, `?Sized`, higher-ranked bounds, and
 generic implementations remain unsupported. Windows gnullvm and native Arch
 Linux WSL each pass 564 library tests, one component probe, 10 conformance
 tests, and 335 replacement tests: 910 compiler tests per host.
+
+The exact source-associated-type milestone admits up to eight `type Name;`
+declarations in each trait and requires one exact `type Name = Type;` value in
+every implementation of that trait. Declaration identities are stable in source
+order and lower into the existing bounded associated-value database, so the
+existing exact projection normalizer can recover the declared value. Missing,
+unknown, duplicate, and capacity-exhausted declarations or values fail closed.
+Associated-type defaults, bounds, generics, methods, and source projection syntax
+remain unsupported. Windows gnullvm and native Arch Linux WSL each pass 569
+library tests, one component probe, 10 conformance tests, and 335 replacement
+tests: 915 compiler tests per host.
 
 The projection-bearing term milestone uses a fixed 64-node arena for flat leaf
 terms and associated-type projections whose trait self/argument positions refer
