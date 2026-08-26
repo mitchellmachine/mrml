@@ -15564,6 +15564,30 @@ fn runtime_reference_call_origin_parameter<const MAX_PARAMETERS: usize, const MA
         Some(())
     }
 
+    fn merge_loop_exit_origins<const MAX_PARAMETERS: usize>(
+        joined_origins: &mut [Option<usize>; MAX_PARAMETERS],
+        joined_projected_origins: &mut RuntimeCalleeProjectedOrigins<MAX_PARAMETERS>,
+        outcome_count: &mut usize,
+        outcome_origins: [Option<usize>; MAX_PARAMETERS],
+        outcome_projected_origins: RuntimeCalleeProjectedOrigins<MAX_PARAMETERS>,
+        local_count: usize,
+    ) -> Option<()> {
+        if *outcome_count == 0 {
+            *joined_origins = outcome_origins;
+            *joined_projected_origins = outcome_projected_origins;
+        } else {
+            for local_index in 0..local_count {
+                if joined_origins[local_index] != outcome_origins[local_index] {
+                    joined_origins[local_index] = None;
+                }
+            }
+            *joined_projected_origins =
+                joined_projected_origins.intersect(outcome_projected_origins);
+        }
+        *outcome_count = outcome_count.checked_add(1)?;
+        Some(())
+    }
+
     let body =
         crate::parser::parse_function_body::<MAX_PARAMETERS, MAX_NODES>(target.body_expression)
             .ok()?;
@@ -15872,7 +15896,9 @@ fn runtime_reference_call_origin_parameter<const MAX_PARAMETERS: usize, const MA
                     let mut iteration_return_compatibility = local_return_compatibility;
                     let mut iteration_local_count = local_count;
                     let mut iteration_reaches_backedge = true;
-                    let mut iteration_breaks = false;
+                    let mut break_origins = [None; MAX_PARAMETERS];
+                    let mut break_projected_origins = RuntimeCalleeProjectedOrigins::EMPTY;
+                    let mut break_outcome_count = 0usize;
                     for operation in loop_statement.operations().iter().flatten() {
                         match *operation {
                             crate::LoopOperation::Local(local) => {
@@ -15942,6 +15968,16 @@ fn runtime_reference_call_origin_parameter<const MAX_PARAMETERS: usize, const MA
                                     iteration_local_count,
                                 )?)?;
                             }
+                            crate::LoopOperation::ConditionalBreak(_) => {
+                                merge_loop_exit_origins(
+                                    &mut break_origins,
+                                    &mut break_projected_origins,
+                                    &mut break_outcome_count,
+                                    iteration_origins,
+                                    iteration_projected_origins.retain_local_prefix(local_count),
+                                    local_count,
+                                )?;
+                            }
                             crate::LoopOperation::Return(value) => {
                                 let tree = value.parse_value::<MAX_NODES>().ok()?;
                                 merge(recurse(
@@ -15958,8 +15994,15 @@ fn runtime_reference_call_origin_parameter<const MAX_PARAMETERS: usize, const MA
                                 break;
                             }
                             crate::LoopOperation::Break => {
+                                merge_loop_exit_origins(
+                                    &mut break_origins,
+                                    &mut break_projected_origins,
+                                    &mut break_outcome_count,
+                                    iteration_origins,
+                                    iteration_projected_origins.retain_local_prefix(local_count),
+                                    local_count,
+                                )?;
                                 iteration_reaches_backedge = false;
-                                iteration_breaks = true;
                                 break;
                             }
                             crate::LoopOperation::ConditionalBlock(block_index) => {
@@ -16087,35 +16130,34 @@ fn runtime_reference_call_origin_parameter<const MAX_PARAMETERS: usize, const MA
                             _ => return None,
                         }
                     }
-                    if iteration_reaches_backedge {
-                        for local_index in 0..local_count {
-                            local_origins[local_index] = (incoming_origins[local_index]
-                                == iteration_origins[local_index])
-                                .then_some(incoming_origins[local_index])
-                                .flatten();
-                        }
-                        projected_origins =
-                            incoming_projected_origins.intersect(iteration_projected_origins);
-                    } else if iteration_breaks {
-                        let break_projected_origins =
-                            iteration_projected_origins.retain_local_prefix(local_count);
-                        if loop_statement.condition.is_some() {
+                    if loop_statement.condition.is_some() {
+                        let mut natural_origins = incoming_origins;
+                        let mut natural_projected_origins = incoming_projected_origins;
+                        if iteration_reaches_backedge {
                             for local_index in 0..local_count {
-                                local_origins[local_index] = (incoming_origins[local_index]
+                                natural_origins[local_index] = (incoming_origins[local_index]
                                     == iteration_origins[local_index])
                                     .then_some(incoming_origins[local_index])
                                     .flatten();
                             }
-                            projected_origins =
-                                incoming_projected_origins.intersect(break_projected_origins);
-                        } else {
-                            local_origins[..local_count]
-                                .copy_from_slice(&iteration_origins[..local_count]);
-                            projected_origins = break_projected_origins;
+                            natural_projected_origins =
+                                incoming_projected_origins.intersect(iteration_projected_origins);
                         }
-                    } else {
+                        merge_loop_exit_origins(
+                            &mut break_origins,
+                            &mut break_projected_origins,
+                            &mut break_outcome_count,
+                            natural_origins,
+                            natural_projected_origins.retain_local_prefix(local_count),
+                            local_count,
+                        )?;
+                    }
+                    if break_outcome_count == 0 {
                         local_origins = incoming_origins;
                         projected_origins = incoming_projected_origins;
+                    } else {
+                        local_origins[..local_count].copy_from_slice(&break_origins[..local_count]);
+                        projected_origins = break_projected_origins;
                     }
                     continue;
                 }
@@ -37770,6 +37812,28 @@ mod tests {
                 ..loop_choose
             }),
             Some(0)
+        );
+        assert_eq!(
+            runtime_reference_call_origin_parameter::<2, 40>(RuntimeCallTarget {
+                body_expression: concat!(
+                    "let mut local: u16 = 1; let mut changed: &mut u16 = &mut local; ",
+                    "loop { changed = value; if first { break; } ",
+                    "changed = &mut local; } changed"
+                ),
+                ..loop_choose
+            }),
+            Some(0)
+        );
+        assert_eq!(
+            runtime_reference_call_origin_parameter::<2, 40>(RuntimeCallTarget {
+                body_expression: concat!(
+                    "let mut local: u16 = 1; let mut changed: &mut u16 = value; ",
+                    "loop { changed = &mut local; if first { break; } ",
+                    "changed = value; } changed"
+                ),
+                ..loop_choose
+            }),
+            None
         );
     }
 
