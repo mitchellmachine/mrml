@@ -92,6 +92,24 @@ impl<'a, D: StorageBlockDevice> BlockVolume<'a, D> {
         self.device
     }
 
+    /// Reads both redundant superblock blocks through the same exclusive
+    /// device generation that will service subsequent recovery metadata reads.
+    /// Callers pass full block-sized buffers and decode only the canonical
+    /// superblock prefix.
+    pub fn read_recovery_superblocks(
+        &mut self,
+        primary: &mut [u8],
+        secondary: &mut [u8],
+    ) -> Result<(), BlockVolumeError<D::Error>> {
+        if primary.len() != self.header.block_size() as usize
+            || secondary.len() != self.header.block_size() as usize
+        {
+            return Err(BlockVolumeError::InvalidRange);
+        }
+        self.read_block(self.header.primary_superblock(), primary)?;
+        self.read_block(self.header.secondary_superblock(), secondary)
+    }
+
     fn flush_staged(&mut self) -> Result<(), BlockVolumeError<D::Error>> {
         if self.poisoned || self.pending_superblock.is_some() {
             return Err(BlockVolumeError::InvalidState);

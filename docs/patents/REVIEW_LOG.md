@@ -835,6 +835,11 @@ Retaining the existing redundant-root recovery result in an owning wrapper and
 lending its already-validated file selections is ordinary lifetime-safe API
 composition over the existing `RecoveryMetadataBackend`; it adds no recovery
 selection or storage algorithm.
+Reading the two existing fixed redundant-root locations through the existing
+exclusive `BlockVolume`/`StorageBlockDevice` abstraction and retaining that
+device generation during validation is conventional block I/O and fail-closed
+state ownership. It adds no new on-disk format, recovery-selection algorithm,
+placement rule, or VMM mechanism.
 Because the
 broader combination of
 signed release classification, automated placement, isolation, recovery, and

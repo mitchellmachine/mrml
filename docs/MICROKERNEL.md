@@ -3155,6 +3155,14 @@ graph in `RecoveredStableSystemSelection`, and exposes paired file selections
 only while that owner lives. The controlled hosted adapter uses the same path;
 durable-device and installed-boot evidence remain **PLANNED**.
 
+The controlled path now **PARTIALLY IMPLEMENTS** redundant-root device reads.
+`recover_block_stable_system_selection` uses one exclusive `BlockVolume` to
+read both full root blocks and all reachable metadata from the same device
+generation, then retains that volume beside the selected system state. Either
+root-read failure yields no selection or admission. Storage passes 121 tests
+and configuration 45 on both development hosts; WHP passes 11 and KVM 12. The
+backend is still in-memory, so installed-media claims remain **PLANNED**.
+
 Patent review: `TRIGGERED` under the existing signed-release, adaptive
 isolation, Total-MicroVM, automated VMM placement, and device-projection reviews
 now that authenticated package classifications are joined to live domain

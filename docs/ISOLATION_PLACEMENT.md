@@ -780,6 +780,15 @@ cannot outlive that owner. The hosted adapter uses this same entry point. No
 real block device or installed boot was exercised, so those claims remain
 **PLANNED**.
 
+The controlled adapter now exercises the next **PARTIALLY IMPLEMENTED** device
+boundary rather than preloading superblock slices. One exclusive `BlockVolume`
+reads both full redundant-root blocks through `StorageBlockDevice`, validates
+the selected graph through that same device generation, and remains owned beside
+the selection. Failure to read either root returns no selection and opens no
+Total admission. Storage passes 121 tests and configuration 45 on Windows and
+Arch Linux; WHP passes 11 and KVM 12. The device remains an in-memory controlled
+backend, so installed media and physical-device evidence remain **PLANNED**.
+
 The runner-side boot overlay is no longer injected as an independent enum
 literal. Both hosted backends encode neutral accepted recovery state and the
 one-boot request into the same canonical handoff installed for the guest, decode

@@ -1173,6 +1173,15 @@ exist, and lends the paired selections only from that owner. The hosted adapter
 uses this production-shaped entry point, but no durable block device, firmware,
 or installed system was tested; those remain **PLANNED**.
 
+`recover_block_stable_system_selection` now **PARTIALLY IMPLEMENTS** the exact
+device-read step. It constructs one exclusive `BlockVolume`, reads both complete
+superblock blocks from the same `StorageBlockDevice` generation used for all
+reachable metadata, validates the graph, and retains the volume beside the
+selection. An unreadable root fails without returning a selection or invoking
+Total admission. Windows and Arch Linux each pass 121 storage and 45
+configuration tests; WHP remains 11/11 and KVM 12/12. This is controlled
+in-memory device evidence, not installed or physical storage evidence.
+
 WHP and nested KVM now consume the common inner `BootTotalAdmission` owner from
 effective-policy/release binding through classified route preparation,
 vCPU/RAM/VMM construction, microVM commit, and final release proof. The owner

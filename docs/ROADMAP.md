@@ -340,6 +340,15 @@ passes 11, and KVM passes 12. The hosted adapter is its only caller so far;
 real block-device selection, installed early-boot construction, and complete
 system enumeration remain the next gates.
 
+Redundant-root device reading is now **PARTIALLY IMPLEMENTED**. The shared
+controlled path creates one exclusive `BlockVolume`, reads both full root blocks
+through `StorageBlockDevice`, validates all reachable metadata through that same
+device generation, and retains the volume with the selection. Failure of either
+root read returns no selected state and cannot reach Total admission. Windows
+and Arch Linux each pass 121 storage and 45 configuration tests; WHP passes 11
+and KVM 12. The exercised device is an in-memory controlled backend. Installed
+media, early-boot device discovery, and complete system enumeration remain next.
+
 The next storage connection is now **PARTIALLY IMPLEMENTED** without claiming
 media evidence. `recover_stable_system_selection` accepts the existing hostile
 metadata backend implemented by `BlockVolume`, selects one complete redundant-

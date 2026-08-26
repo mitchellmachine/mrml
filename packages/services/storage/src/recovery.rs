@@ -126,6 +126,21 @@ pub unsafe trait RecoveryMetadataBackend {
     ) -> Result<(), Self::Error>;
 }
 
+// SAFETY: the forwarded borrow preserves the wrapped backend's exact-read and
+// immutable-generation contract and cannot outlive the caller's exclusive
+// borrow.
+unsafe impl<T: RecoveryMetadataBackend + ?Sized> RecoveryMetadataBackend for &mut T {
+    type Error = T::Error;
+
+    fn read_metadata(
+        &mut self,
+        pointer: MetadataPointer,
+        output: &mut [u8],
+    ) -> Result<(), Self::Error> {
+        (**self).read_metadata(pointer, output)
+    }
+}
+
 #[derive(Clone, Copy)]
 struct RecoveryNode {
     object: StorageObjectId,

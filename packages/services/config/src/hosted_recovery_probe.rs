@@ -8,11 +8,12 @@
 //! rollback evidence.
 
 use super::{
-    recover_stable_system_selection, ConfigTransaction, ConfigUpdate, ConfigValue,
-    ConfigurationService, IsolationPolicySetting, OwnerIsolationSelection, PersistedRestartPolicy,
-    RecoveredStableSystemSelection, RecoveredTotalAdmission, RecoveredTotalAdmissionBuildError,
-    SettingId, SettingSchema, StableConfigurationRecoveryValidator, StableServiceRecoveryValidator,
-    PERSISTED_RESTART_POLICY_BYTES,
+    ConfigTransaction, ConfigUpdate, ConfigValue, ConfigurationService, IsolationPolicySetting,
+    OwnerIsolationSelection, PERSISTED_RESTART_POLICY_BYTES, PersistedRestartPolicy,
+    RecoveredBlockStableSystemSelection, RecoveredTotalAdmission,
+    RecoveredTotalAdmissionBuildError, SettingId, SettingSchema,
+    StableConfigurationRecoveryValidator, StableServiceRecoveryValidator,
+    recover_block_stable_system_selection,
 };
 use mrml_crypto::Sha3_256;
 use mrml_kernel::arch::x86_64::UserContext;
@@ -21,14 +22,14 @@ use mrml_kernel::{
     Rights, ServiceSupervisor, TaskRuntime,
 };
 use mrml_storage::{
-    authority_checkpoint_digest, encode_authority_checkpoint,
-    recover_selected_validate_and_commit_stable_authorities, AllocationImage, AllocationKind,
-    AllocationRecord, AuthorityCheckpointProofIssuer, AuthorityRecoveryStateStore,
-    BootRecoveryAdmission, DirectoryEntry, DirectoryImage, DirectoryMetadata, ExtentImage,
-    ExtentRecord, FileMetadata, FileReadBackend, MetadataPointer, ObjectIdAllocatorImage,
-    OwnerApprovedAuthorityCheckpoint, RecoveryMetadataBackend, StorageAuthorityTable, StorageName,
-    StorageObjectId, StorageObjectKind, StoragePrincipal, StorageRecoveryGrant, StorageRights,
-    Superblock, VolumeHeader, VolumeId, AUTHORITY_RECOVERY_STATE_BYTES, SUPERBLOCK_BYTES,
+    AUTHORITY_RECOVERY_STATE_BYTES, AllocationImage, AllocationKind, AllocationRecord,
+    AuthorityCheckpointProofIssuer, AuthorityRecoveryStateStore, BootRecoveryAdmission,
+    DirectoryEntry, DirectoryImage, DirectoryMetadata, ExtentImage, ExtentRecord, FileMetadata,
+    FileReadBackend, MetadataPointer, ObjectIdAllocatorImage, OwnerApprovedAuthorityCheckpoint,
+    SUPERBLOCK_BYTES, StorageAuthorityTable, StorageBlockDevice, StorageName, StorageObjectId,
+    StorageObjectKind, StoragePrincipal, StorageRecoveryGrant, StorageRights, Superblock,
+    VolumeHeader, VolumeId, authority_checkpoint_digest, encode_authority_checkpoint,
+    recover_selected_validate_and_commit_stable_authorities,
 };
 
 const BLOCK_BYTES: usize = 4096;
@@ -92,6 +93,9 @@ unsafe impl FileReadBackend for CheckpointBackend {
 }
 
 struct ReachableMetadataBackend {
+    fail_block: Option<u64>,
+    primary: [u8; BLOCK_BYTES],
+    secondary: [u8; BLOCK_BYTES],
     root: [u8; BLOCK_BYTES],
     entries: [u8; BLOCK_BYTES],
     configuration: [u8; BLOCK_BYTES],
@@ -102,15 +106,16 @@ struct ReachableMetadataBackend {
     object_ids: [u8; BLOCK_BYTES],
 }
 
-unsafe impl RecoveryMetadataBackend for ReachableMetadataBackend {
+unsafe impl StorageBlockDevice for ReachableMetadataBackend {
     type Error = ();
 
-    fn read_metadata(
-        &mut self,
-        pointer: MetadataPointer,
-        output: &mut [u8],
-    ) -> Result<(), Self::Error> {
-        let source = match pointer.block() {
+    fn read_blocks(&mut self, block: u64, output: &mut [u8]) -> Result<(), Self::Error> {
+        if self.fail_block == Some(block) {
+            return Err(());
+        }
+        let source = match block {
+            1 => &self.primary,
+            2 => &self.secondary,
             10 => &self.root,
             11 => &self.entries,
             12 => &self.configuration,
@@ -121,11 +126,27 @@ unsafe impl RecoveryMetadataBackend for ReachableMetadataBackend {
             21 => &self.object_ids,
             _ => return Err(()),
         };
-        if pointer.blocks() != 1 || output.len() != source.len() {
+        if output.len() != source.len() {
             return Err(());
         }
         output.copy_from_slice(source);
         Ok(())
+    }
+
+    fn write_blocks(&mut self, _block: u64, _input: &[u8]) -> Result<(), Self::Error> {
+        Err(())
+    }
+
+    fn flush(&mut self) -> Result<(), Self::Error> {
+        Err(())
+    }
+
+    fn replace_superblock(
+        &mut self,
+        _block: u64,
+        _encoded: &[u8; SUPERBLOCK_BYTES],
+    ) -> Result<(), Self::Error> {
+        Err(())
     }
 }
 
@@ -196,13 +217,18 @@ fn digest(bytes: &[u8]) -> [u8; 32] {
     digest.finalize()
 }
 
-fn recover_reachable_files(
+fn recover_reachable_files<'a>(
     root_generation: u64,
     configuration_length: usize,
     configuration_bytes: &[u8; BLOCK_BYTES],
     authority_length: usize,
     authority_bytes: &[u8; BLOCK_BYTES],
-) -> Result<RecoveredStableSystemSelection<1, 3>, HostedRecoveryProbeError> {
+    fail_block: Option<u64>,
+    volume_scratch: &'a mut [u8],
+) -> Result<
+    RecoveredBlockStableSystemSelection<'a, ReachableMetadataBackend, 1, 3>,
+    HostedRecoveryProbeError,
+> {
     let root = object(1);
     let configuration = object(9);
     let authority = object(10);
@@ -409,7 +435,16 @@ fn recover_reachable_files(
         .encode(&mut object_ids)
         .map_err(|_| HostedRecoveryProbeError::StorageLayout)?;
 
+    let mut primary = [0; BLOCK_BYTES];
+    candidate.encode(
+        (&mut primary[..SUPERBLOCK_BYTES])
+            .try_into()
+            .expect("canonical superblock prefix"),
+    );
     let backend = ReachableMetadataBackend {
+        fail_block,
+        primary,
+        secondary: [0; BLOCK_BYTES],
         root: root_bytes,
         entries: entry_bytes,
         configuration: configuration_metadata,
@@ -419,15 +454,17 @@ fn recover_reachable_files(
         allocation,
         object_ids,
     };
-    let mut primary = [0; SUPERBLOCK_BYTES];
-    candidate.encode(&mut primary);
-    let mut scratch = [0; BLOCK_BYTES];
-    recover_stable_system_selection::<_, 10, 2, 1, 3>(
+    let mut primary_read = [0; BLOCK_BYTES];
+    let mut secondary_read = [0; BLOCK_BYTES];
+    let mut metadata_scratch = [0; BLOCK_BYTES];
+    recover_block_stable_system_selection::<_, 10, 2, 1, 3>(
         header(),
-        &primary,
-        &[0; SUPERBLOCK_BYTES],
+        header().primary_superblock(),
         backend,
-        &mut scratch,
+        volume_scratch,
+        &mut primary_read,
+        &mut secondary_read,
+        &mut metadata_scratch,
         configuration,
         authority,
     )
@@ -579,12 +616,15 @@ where
     };
     authority_backend.bytes[..authority_length]
         .copy_from_slice(&authority_bytes[..authority_length]);
+    let mut volume_scratch = [0; BLOCK_BYTES];
     let reachable = recover_reachable_files(
         ROOT_GENERATION,
         checkpoint.length,
         &configuration_backend.bytes,
         authority_length,
         &authority_backend.bytes,
+        None,
+        &mut volume_scratch,
     )?;
     let selected = reachable.selected();
     let mut bootstrap = StorageAuthorityTable::<1>::new();
@@ -685,8 +725,28 @@ mod tests {
     fn stable_system_selection_requires_distinct_files_from_one_exact_root() {
         let configuration = [0x31; BLOCK_BYTES];
         let authority = [0x41; BLOCK_BYTES];
-        let current = recover_reachable_files(14, 1, &configuration, 1, &authority).unwrap();
-        let previous = recover_reachable_files(13, 1, &configuration, 1, &authority).unwrap();
+        let mut current_scratch = [0; BLOCK_BYTES];
+        let mut previous_scratch = [0; BLOCK_BYTES];
+        let current = recover_reachable_files(
+            14,
+            1,
+            &configuration,
+            1,
+            &authority,
+            None,
+            &mut current_scratch,
+        )
+        .unwrap();
+        let previous = recover_reachable_files(
+            13,
+            1,
+            &configuration,
+            1,
+            &authority,
+            None,
+            &mut previous_scratch,
+        )
+        .unwrap();
         let selected = current.selected();
         let configuration_selection = selected.configuration();
         assert_eq!(selected.volume(), volume());
@@ -702,5 +762,18 @@ mod tests {
             ),
             Err(SelectedStableSystemRecoveryError::RootMismatch)
         ));
+        let mut failed_scratch = [0; BLOCK_BYTES];
+        assert!(
+            recover_reachable_files(
+                14,
+                1,
+                &configuration,
+                1,
+                &authority,
+                Some(header().secondary_superblock()),
+                &mut failed_scratch,
+            )
+            .is_err()
+        );
     }
 }
