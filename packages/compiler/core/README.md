@@ -4568,14 +4568,14 @@ fail in the validation phase. Windows gnullvm and native Arch Linux WSL each
 pass 615 library tests, one component probe, 10 conformance tests, and 335
 replacement tests: 961 compiler tests per host.
 
-The inline associated-binding milestone accepts zero-positional-parameter
-bounds such as `T: Iterator<Item = T>` on trait and implementation type
+The inline associated-binding milestone accepts bounds such as
+`T: Iterator<Item = T>` or `T: Convert<u8, Output = T>` on trait and implementation type
 parameters. It desugars each bound into one implemented-trait predicate plus
 one projection-equality predicate per binding, sharing the existing eight-entry
 capacity, identity admission, duplicate rejection, and projection-aware proof.
-Mixed positional arguments and associated bindings remain fail-closed until a
-typed mixed argument-list representation exists. Windows gnullvm and native
-Arch Linux WSL each pass 621 library tests, one component probe, 10 conformance
+Positional arguments are preserved on both generated predicates, so mixed
+lists retain one semantic trait instantiation. Windows gnullvm and native Arch
+Linux WSL each pass 621 library tests, one component probe, 10 conformance
 tests, and 335 replacement tests: 967 compiler tests per host.
 
 The projection-bearing term milestone uses a fixed 64-node arena for flat leaf
