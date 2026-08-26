@@ -4589,6 +4589,9 @@ exact and generic implementation heads, supertraits, declaration and
 implementation premises, projection values/defaults, and function obligations.
 Only a trailing run of complete concrete nominal defaults is accepted;
 parameter-dependent, `Self`, lifetime/const, and compound defaults fail closed.
+Predicate duplicate admission compares materialized argument tuples, so
+`Parent` and `Parent<u8>` are the same requirement when `u8` is the default and
+cannot bypass duplicate rejection through different spelling.
 Windows gnullvm and native Arch Linux WSL each pass 630 library tests, one
 component probe, 10 conformance tests, and 335 replacement tests: 976 compiler
 tests per host.

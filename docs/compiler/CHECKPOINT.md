@@ -1389,6 +1389,10 @@ native Arch Linux WSL each pass 630 library tests, one component-interface
 probe, 10 conformance tests, and 335 replacement tests: 976 compiler tests per
 host.
 
+Default-equivalent predicate admission compares materialized argument tuples:
+an omitted default and the same explicitly written type are one semantic
+requirement and duplicate declaration/implementation premises are rejected.
+
 The premise-bearing rigid-normalization milestone proves the selected generic
 implementation's instantiated trait and projection predicates before exposing
 its associated value. It shares the caller's 16-frame rigid proof stack and
