@@ -7592,6 +7592,26 @@ algorithm. General call coercion and region inference remain absent. Broader
 compiler completion remains partial; this technical screen is not a clearance
 or infringement conclusion and does not replace independent human dual review.
 
+# 2026-08-26 — Conditional labeled nested-control evidence
+
+**Result: NOT_TRIGGERED after the conditional labeled-control review.** This
+increment adds independently authored tests and oracle observations for the
+existing bounded outer-break, outer-continue, and inner-exit routing mechanism.
+It introduces no new compiler algorithm or runtime mechanism. Broader compiler
+completion remains partial; this technical screen is not a clearance or
+infringement conclusion and does not replace independent human dual review.
+
+# 2026-08-26 — Bounded nested-backedge normalization
+
+**Result: NOT_TRIGGERED after the nested-backedge normalization review.** This
+increment uses conventional fixed-capacity transfer replay and exact equality
+checks to accept one idempotent candidate state only when all stored control
+prefixes retain the same origins. It adds no general fixed-point solver, region
+or alias analysis, optimization, or code-generation algorithm. Multi-step or
+ambiguous cycles fail closed. Broader compiler completion remains partial; this
+technical screen is not a clearance or infringement conclusion and does not
+replace independent human dual review.
+
 # 2026-08-26 — Conditional call-argument reborrow evidence
 
 **Result: NOT_TRIGGERED after the conditional reborrow evidence review.** This
