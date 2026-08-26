@@ -4503,6 +4503,15 @@ generation. Windows gnullvm and native Arch Linux WSL each pass 598 library
 tests, one component probe, 10 conformance tests, and 335 replacement tests:
 944 compiler tests per host.
 
+The distinct source-supertrait instantiation milestone defines duplicate
+identity over the parent trait plus its semantic bounded arguments rather than
+the parent trait alone. A declaration may require `Parent<u8> + Parent<u16>`;
+both exact or inherited goals remain separate and both must prove. Repeating
+the same instantiated requirement still fails during declaration admission.
+Windows gnullvm and native Arch Linux WSL each pass 599 library tests, one
+component probe, 10 conformance tests, and 335 replacement tests: 945 compiler
+tests per host.
+
 The projection-bearing term milestone uses a fixed 64-node arena for flat leaf
 terms and associated-type projections whose trait self/argument positions refer
 only to earlier nodes. Identical nodes intern to one stable identity; invalid

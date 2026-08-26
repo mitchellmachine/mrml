@@ -1306,6 +1306,14 @@ and native Arch Linux WSL each pass 598 library tests, one component-interface
 probe, 10 conformance tests, and 335 replacement tests: 944 compiler tests per
 host.
 
+The distinct source-supertrait instantiation milestone compares duplicate
+requirements by parent identity and semantic bounded arguments. Distinct
+requirements such as `Parent<u8> + Parent<u16>` remain separate through exact
+validation and inherited-premise proof, and every instantiation must resolve;
+an exact repeated requirement still fails admission. Windows gnullvm and native
+Arch Linux WSL each pass 599 library tests, one component-interface probe, 10
+conformance tests, and 335 replacement tests: 945 compiler tests per host.
+
 The premise-bearing rigid-normalization milestone proves the selected generic
 implementation's instantiated trait and projection predicates before exposing
 its associated value. It shares the caller's 16-frame rigid proof stack and

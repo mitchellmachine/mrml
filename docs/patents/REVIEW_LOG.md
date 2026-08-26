@@ -5392,3 +5392,14 @@ unification, selection, coherence, proof-search, caching, or code-generation
 mechanism. Broader trait solving and Rust conformance remain partial; this agent
 review does not establish clearance or infringement and does not replace
 independent human dual review.
+
+# 2026-08-26 — Distinct source-supertrait instantiations
+
+**Result: NOT_TRIGGERED after the bounded source-supertrait reviews.** This
+increment conventionally compares a parent trait requirement by stable trait
+identity and its existing bounded argument identities, retaining distinct goals
+for distinct instantiations. It adds no type-constructor semantics, unification,
+selection, coherence, proof-search, caching, or code-generation mechanism.
+Broader trait solving and Rust conformance remain partial; this agent review
+does not establish clearance or infringement and does not replace independent
+human dual review.
