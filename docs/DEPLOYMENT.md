@@ -143,7 +143,11 @@ bounded adapter that requires the caller-policy-selected signer, v2 inventory,
 and an exact one-for-one package-to-live-domain binding. It rejects missing,
 duplicate-package, incompatible-co-location, class-substituted,
 reason-substituted, or excess bindings before publishing an inventory.
-Compatible colocated packages conservatively combine must-run state. End-to-end
+Compatible colocated packages conservatively combine must-run state. The result
+is a private-field `ReleaseTotalMicrovmInventory` retaining the authenticated
+signer and exact system/policy generations; safe code cannot construct it from
+ad hoc domain records. Recovered strict-Total policy accepts only this typed
+result when creating its release admission table. End-to-end
 runner consumption is now **PARTIALLY IMPLEMENTED** for the focused ZIM/Zstd
 component release. WHP and KVM each derive the same 201-byte generation,
 207-byte interface catalog, and 225-byte runtime inventory; all three records

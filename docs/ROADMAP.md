@@ -214,14 +214,16 @@ running/unavailable domain and mark each must-run component. The finalizer
 rejects missing or unavailable required domains, unknown active domains, class
 substitution, eligible execution outside a microVM, unsupported blockers, and
 native fallback before producing a bounded runtime proof. Windows and Arch
-Linux each pass 549 kernel tests. The real WHP and KVM application runners now
-consume that finalizer after exact Total admission and before guest execution.
-Their focused suites pass 9 and 10 tests respectively, and fresh signed probes
-on 2026-08-26 each emitted `classified=1`, `eligible=1`, `microvm=1`, and
-`native_fallback=0` for the exact system/policy generation. Complete
-Runner consumption of the release-derived required-system inventory remains the
-next gate; this one-application proof does not establish required-system Total
-readiness.
+Linux each pass 553 kernel tests. WHP and KVM now consume the release-derived
+inventory after exact Total admission and before focused component execution.
+Their suites pass 9 and 10 tests respectively, and fresh signed probes on
+2026-08-26 each emitted `classified=1`, `eligible=1`, `microvm=1`, and
+`native_fallback=0` for the exact system/policy generation. That inventory is
+now a private-field authenticated-release wrapper rather than a publicly
+constructible mutable value. Recovered Total policy accepts only this wrapper
+when creating the exact release admission table. Complete installed-system
+enumeration and live boot consumption remain the next gate; this one-component
+proof does not establish required-system Total readiness.
 
 The first half of that gate is now **PARTIALLY IMPLEMENTED**: `MRMLRI1` is a
 bounded canonical runtime-inventory catalog whose records exact-bind every
@@ -239,7 +241,9 @@ inventory/generation mismatch; v1 continues to parse without an inventory.
 Kernel construction is now **IMPLEMENTED**: a bounded adapter requires the
 selected signer plus an exact package binding for every authenticated
 classification, rejects count, identity, class, reason, or incompatible-
-co-location substitution, and conservatively combines colocated must-run state.
+co-location substitution, conservatively combines colocated must-run state, and
+returns a private-field release-authenticated wrapper. Recovered Total policy
+can bind only that wrapper to its exact system/policy generation before launch.
 Focused runner consumption is now **PARTIALLY IMPLEMENTED**. WHP and nested KVM
 produced byte-identical 201/207/225-byte generation, interface, and runtime
 records; the same freshly signed 99,369-byte v2 release finalized one colocated

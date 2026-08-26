@@ -1,5 +1,19 @@
 # Patent review log
 
+## 2026-08-26 — Authenticated release/recovered-policy Total binding
+
+Patent review: **TRIGGERED** under the existing SystemRelease, runtime-
+inventory, authenticated-recovery, adaptive-isolation, Total-MicroVM, and VMM
+reviews. This increment conventionally wraps the already validated complete
+release inventory in a private-field type retaining signer and exact
+system/policy generations, then permits committed recovered Total policy to
+create admission only from that type after exact policy-generation comparison.
+It adds no parser, signature scheme, classification heuristic, native fallback,
+VM/device protocol, scheduler, DMA mechanism, or hardware-specific isolation
+mechanism. Complete installed-system enumeration and live boot orchestration
+remain unimplemented. No patent-clearance or non-infringement conclusion is
+made; independent human review remains required.
+
 ## 2026-08-26 — Alias reassignment compatibility state
 
 Patent review: **NOT_TRIGGERED** for this bounded compiler-analysis hardening.

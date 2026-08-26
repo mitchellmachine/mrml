@@ -62,6 +62,49 @@ pub enum ReleaseInventoryError {
     Inventory(TotalMicrovmRuntimeError),
 }
 
+/// Complete Total inventory whose package classifications and system
+/// generation were authenticated from one exact SystemRelease. Safe code cannot
+/// construct this wrapper from ad hoc domain records.
+pub struct ReleaseTotalMicrovmInventory<const N: usize> {
+    inventory: TotalMicrovmInventory<N>,
+    signer: [u8; 64],
+    system_generation: u64,
+    policy_generation: u64,
+}
+
+impl<const N: usize> ReleaseTotalMicrovmInventory<N> {
+    pub const fn signer(&self) -> &[u8; 64] {
+        &self.signer
+    }
+
+    pub const fn system_generation(&self) -> u64 {
+        self.system_generation
+    }
+
+    pub const fn policy_generation(&self) -> u64 {
+        self.policy_generation
+    }
+
+    pub const fn len(&self) -> usize {
+        self.inventory.len()
+    }
+
+    pub const fn is_empty(&self) -> bool {
+        self.inventory.is_empty()
+    }
+
+    pub fn entries(&self) -> impl Iterator<Item = TotalMicrovmInventoryEntry> + '_ {
+        self.inventory.entries()
+    }
+
+    pub fn finalize<const DOMAINS: usize>(
+        &self,
+        admission: &crate::IsolationAdmissionTable<DOMAINS>,
+    ) -> Result<crate::TotalMicrovmRuntimeProof, TotalMicrovmRuntimeError> {
+        self.inventory.finalize(admission)
+    }
+}
+
 /// Constructs the kernel's complete strict-Total inventory only from one
 /// authenticated SystemRelease v2 and the exact package-to-live-domain bindings
 /// created by the normal launch control plane. Multiple compatible packages
@@ -73,7 +116,7 @@ pub fn total_inventory_from_system_release<const N: usize>(
     expected_key_id: &[u8; 64],
     policy_generation: u64,
     bindings: &[RuntimeDomainBinding<'_>],
-) -> Result<TotalMicrovmInventory<N>, ReleaseInventoryError> {
+) -> Result<ReleaseTotalMicrovmInventory<N>, ReleaseInventoryError> {
     let release = parse_system_release(release_bytes).map_err(ReleaseInventoryError::Release)?;
     if *expected_key_id == [0; 64] || release.key_id() != *expected_key_id {
         return Err(ReleaseInventoryError::SignerMismatch);
@@ -157,7 +200,12 @@ pub fn total_inventory_from_system_release<const N: usize>(
             )
             .map_err(ReleaseInventoryError::Inventory)?;
     }
-    Ok(inventory)
+    Ok(ReleaseTotalMicrovmInventory {
+        inventory,
+        signer: *expected_key_id,
+        system_generation: release.generation().generation(),
+        policy_generation,
+    })
 }
 
 #[cfg(test)]
@@ -346,6 +394,9 @@ mod tests {
         )
         .unwrap();
         let entry = inventory.entries().next().unwrap();
+        assert_eq!(inventory.signer(), &key_id);
+        assert_eq!(inventory.system_generation(), 13);
+        assert_eq!(inventory.policy_generation(), POLICY);
         assert_eq!(inventory.len(), 1);
         assert_eq!(entry.domain(), ObjectId(0x700));
         assert_eq!(entry.class(), TotalMicrovmClass::MicrovmEligible);

@@ -891,14 +891,18 @@ produces a `TotalMicrovmRuntimeProof` only when every required domain is live,
 every live eligible domain is in a microVM, every active substrate/boot/recovery
 exception is classified, no unsupported blocker runs, and native fallback is
 zero. A required unavailable component is failure, not permission to omit or
-launch it natively. Windows and Arch Linux each pass 549 kernel tests. The real
-WHP and KVM application runners now finalize the exact one-domain inventory
-after Total admission and before guest execution; fresh signed probes on
+launch it natively. Windows and Arch Linux each pass 553 kernel tests. The WHP
+and KVM component runners now finalize one release-derived colocated ZIM/Zstd
+domain after Total admission and before guest execution; fresh signed probes on
 2026-08-26 emitted the same generation-bound proof with `classified=1`,
-`eligible=1`, `microvm=1`, and `native_fallback=0`. Complete
-Consumption of the release-derived required-system inventory by these runners
-remains **PLANNED**, so this focused application evidence does not promote Total
-mode itself.
+`eligible=1`, `microvm=1`, and `native_fallback=0`. The kernel now returns that
+result as `ReleaseTotalMicrovmInventory`, a private-field wrapper that safe code
+cannot construct from ad hoc domain records. It retains the authenticated
+signer, system generation, and policy generation. Recovered policy can bind only
+this wrapper to create the admission table for that exact release; non-Total or
+policy-generation mismatch fails. Complete installed-system enumeration and
+live boot consumption remain **PLANNED**, so this focused component evidence
+does not promote Total mode itself.
 
 Its canonical package-to-runtime classification prerequisite is now
 **PARTIALLY IMPLEMENTED** as the allocation-free `MRMLRI1` runtime-inventory
@@ -920,8 +924,9 @@ Total-ready merely because it is otherwise valid. The kernel now constructs its
 fixed-capacity `TotalMicrovmInventory` only from an authenticated v2 release and
 an exact package-to-live-domain binding supplied by the normal launch control
 plane. Signer, count, package, domain, class, and exception-reason substitution
-fail closed; metadata grants no domain authority. Complete admitted-system
-runtime proof remains **PLANNED**.
+fail closed; metadata grants no domain authority. The authenticated result is a
+non-forgeable typed wrapper rather than a public mutable inventory. Complete
+admitted-system runtime proof remains **PLANNED**.
 
 ```text
 Complexity impact: MEDIUM

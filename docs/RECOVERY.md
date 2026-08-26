@@ -1029,6 +1029,15 @@ installed-generation admission and the recovery UI remain **PLANNED**, and
 malformed or unknown options fail rather than selecting Balanced or Recovery
 implicitly.
 
+The recovered effective policy now has a typed pre-launch join with the
+authenticated SystemRelease runtime inventory. It accepts only the kernel's
+private-field `ReleaseTotalMicrovmInventory`, requires strict Total and the exact
+policy generation, and creates the admission table from the release's
+authenticated system generation. An ad hoc inventory with matching numbers is
+not accepted by this API. Recovery must retain this joined state through launch
+and finalization; live early-boot orchestration and complete installed-system
+enumeration remain **PLANNED**.
+
 The kernel now exposes a **PARTIALLY IMPLEMENTED**, read-only aggregate recovery
 view of isolation state. Recovery must possess `INSPECT` for the exact monitor
 object; names, configuration text, another object, an attenuated right, or a

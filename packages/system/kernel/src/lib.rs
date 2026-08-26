@@ -5,10 +5,10 @@
 //! machine code. Architecture and hypervisor implementations sit behind these
 //! narrow types so their unsafe boundaries can be reviewed independently.
 
-pub mod arch;
 mod application_artifact;
 mod application_lifecycle;
 mod application_microvm;
+pub mod arch;
 mod artifact;
 mod boot;
 mod boot_recovery;
@@ -50,15 +50,6 @@ mod vm;
 mod vm_dispatch;
 mod vm_interrupt;
 
-pub use artifact::{
-    ArtifactError, ArtifactKind, BOOTSTRAP_STATE_BYTES, BootstrapState, ExecutableArtifactError,
-    MAX_CUDA_KERNEL_BUNDLE_BYTES, MAX_KERNEL_IMAGE_BYTES, MAX_LAUNCH_POLICY_BYTES,
-    MAX_APPLICATION_IMAGE_BYTES, MAX_SERVICE_IMAGE_BYTES, MAX_VM_IMAGE_BYTES,
-    MonotonicStateStore, PendingBootRelease,
-    RELEASE_MANIFEST_BYTES, ReleaseManifest, SIGNED_ARTIFACT_HEADER_BYTES,
-    SIGNED_ARTIFACT_OVERHEAD_BYTES, SignedArtifact, TrustRoot, VerifiedArtifact,
-    VerifiedExecutable, VerifiedRelease, artifact_statement, executable_image_limit,
-};
 pub use application_artifact::{
     ApplicationArtifactBindingError, VerifiedApplicationImage, bind_verified_application_image,
 };
@@ -69,6 +60,14 @@ pub use application_microvm::{
     AdmittedApplicationGuestError, AdmittedApplicationGuestFactory, ApplicationMicrovmAccessError,
     ApplicationMicrovmEndpoint, ApplicationMicrovmError, ApplicationMicrovmFactory,
     PreparedMicrovmApplicationBackend,
+};
+pub use artifact::{
+    ArtifactError, ArtifactKind, BOOTSTRAP_STATE_BYTES, BootstrapState, ExecutableArtifactError,
+    MAX_APPLICATION_IMAGE_BYTES, MAX_CUDA_KERNEL_BUNDLE_BYTES, MAX_KERNEL_IMAGE_BYTES,
+    MAX_LAUNCH_POLICY_BYTES, MAX_SERVICE_IMAGE_BYTES, MAX_VM_IMAGE_BYTES, MonotonicStateStore,
+    PendingBootRelease, RELEASE_MANIFEST_BYTES, ReleaseManifest, SIGNED_ARTIFACT_HEADER_BYTES,
+    SIGNED_ARTIFACT_OVERHEAD_BYTES, SignedArtifact, TrustRoot, VerifiedArtifact,
+    VerifiedExecutable, VerifiedRelease, artifact_statement, executable_image_limit,
 };
 pub use boot::{BootEvidence, BootPolicy, BootValidationError, ValidatedBoot};
 pub use boot_recovery::{BootRecoveryDelivery, BootRecoveryDeliveryError};
@@ -101,8 +100,8 @@ pub use framebuffer::{Color, FramebufferError, FramebufferInfo, FramebufferSurfa
 pub use grant::{DirectoryGrant, GrantError, GrantMode, MAX_HOST_PATH};
 pub use graphics::{
     AdmittedSurfaceCommit, DisplayOutputIdentity, GraphicsBufferDescriptor, GraphicsFormat,
-    GraphicsProtocolError, LogicalRect, LogicalScale, PhysicalExtent, SurfaceDataPlaneBinding,
-    SurfaceDamage, SurfaceIdentity, SurfaceObjectResolver, MAX_SURFACE_DAMAGE_RECTS,
+    GraphicsProtocolError, LogicalRect, LogicalScale, MAX_SURFACE_DAMAGE_RECTS, PhysicalExtent,
+    SurfaceDamage, SurfaceDataPlaneBinding, SurfaceIdentity, SurfaceObjectResolver,
     admit_surface_interface_commit, authorize_surface_commit,
 };
 pub use handoff::{
@@ -127,17 +126,16 @@ pub use ipc::{
 };
 pub use isolation::{
     ComponentServiceArtifactError, ComponentServiceHandoffError, ComponentServiceLaunchError,
-    HostSubstrateReason,
-    IsolationAdmissionTable, IsolationApplicationBackend, IsolationApplicationRouteError,
-    IsolationApplicationSpec, IsolationApplicationSpecError, IsolationBackendFailure,
-    IsolationLaunchError, IsolationLaunchEvidence, IsolationLaunchRequest, IsolationMode,
-    IsolationPlacement, IsolationServiceBackend, IsolationServiceRouteError, IsolationServiceSpec,
-    IsolationServiceSpecError, IsolationUnavailableReason, IsolationVcpuReservationError,
-    PreparedComponentServiceLaunch, PreparedComponentServiceRouteError,
-    PreparedIsolationApplicationRoute, PreparedIsolationLaunch, PreparedIsolationServiceRoute,
-    ReservedIsolationVcpus, RoutedIsolationApplication, RoutedIsolationService,
-    RunningIsolationDomain, TotalMicrovmClass, TotalMicrovmReport, UnavailableIsolationDomain,
-    bind_component_service_handoff, launch_prepared_component_service,
+    HostSubstrateReason, IsolationAdmissionTable, IsolationApplicationBackend,
+    IsolationApplicationRouteError, IsolationApplicationSpec, IsolationApplicationSpecError,
+    IsolationBackendFailure, IsolationLaunchError, IsolationLaunchEvidence, IsolationLaunchRequest,
+    IsolationMode, IsolationPlacement, IsolationServiceBackend, IsolationServiceRouteError,
+    IsolationServiceSpec, IsolationServiceSpecError, IsolationUnavailableReason,
+    IsolationVcpuReservationError, PreparedComponentServiceLaunch,
+    PreparedComponentServiceRouteError, PreparedIsolationApplicationRoute, PreparedIsolationLaunch,
+    PreparedIsolationServiceRoute, ReservedIsolationVcpus, RoutedIsolationApplication,
+    RoutedIsolationService, RunningIsolationDomain, TotalMicrovmClass, TotalMicrovmReport,
+    UnavailableIsolationDomain, bind_component_service_handoff, launch_prepared_component_service,
     launch_prepared_isolation_application_route, launch_prepared_isolation_service_route,
     prepare_component_service_handoff, prepare_isolation_application_route,
     prepare_isolation_service_route, reserve_isolation_vcpus, route_isolation_application,
@@ -148,7 +146,8 @@ pub use isolation_monitor::{
     IsolationUnavailableCounts, TotalMicrovmState, inspect_isolation_status,
 };
 pub use isolation_release_inventory::{
-    ReleaseInventoryError, RuntimeDomainBinding, total_inventory_from_system_release,
+    ReleaseInventoryError, ReleaseTotalMicrovmInventory, RuntimeDomainBinding,
+    total_inventory_from_system_release,
 };
 pub use isolation_total_runtime::{
     TotalMicrovmInventory, TotalMicrovmInventoryEntry, TotalMicrovmRuntimeError,
@@ -270,20 +269,19 @@ pub use virtual_gpu::{
     BatchedDispatch, BufferAccess, BufferId, BufferMode, ControlBufferId, ControlBufferTable,
     Dispatch, DispatchId, DispatchTable, GPU_DOORBELL_PORT, GPU_QUEUE_MESSAGE_BYTES,
     GpuBatchExecutor, GpuCommandRing, GpuCommandServiceError, GpuCompletion, GpuCompletionReceiver,
-    GpuCompletionRing, GpuCompletionSender, GpuCompletionStatus, GpuDataPlaneBinding,
-    GpuControlPlaneAuthority, GpuDispatchBatch, GpuError,
-    GpuGuestCommandPublisher, GpuHostBackend, GpuLifecycleError, GpuQueueIdentity,
-    GpuQueueReceiver, GpuQueueSender, GpuResourceBackend, GpuResourceOutcome, GpuResourceResponse,
-    GpuResourceResponseReceiver, GpuResourceResponseSender, GpuRingConsumer, GpuRingProducer,
-    GpuRingTicket, GpuSharedQueueLayout, GpuSharedRingIndices, GpuSubmitError, GpuVmmMemory,
-    GpuVmmQueueBridge, GpuVmmQueueError, KernelId, MAX_ACTIVE_EXPERTS, MAX_BATCH_DISPATCHES,
-    MAX_DISPATCH_BUFFERS, MAX_DISPATCH_SCALARS, MAX_GPU_BENCHMARK_ELEMENTS,
-    MAX_GPU_BENCHMARK_ITERATIONS, MAX_GPU_CONTROL_BYTES, MAX_GPU_QUEUE_SLOTS, MediatedGpuExecutor,
-    PreparedGpuBatch, PreparedGpuDispatch, ResourceCommand, ScalarArg, ScalarKind,
-    ValidatedExpertSelection, ValidatedGpuBatch, ValidatedKernelLaunch, ValidatedMoeKernelLaunch,
-    VerifiedGpuKernelBundle, VirtualGpuSession, process_gpu_resource_command,
-    process_gpu_resource_command_with_response, submit_gpu_batch,
-    submit_gpu_batch_to_completion_ring, submit_gpu_batch_with_completions,
+    GpuCompletionRing, GpuCompletionSender, GpuCompletionStatus, GpuControlPlaneAuthority,
+    GpuDataPlaneBinding, GpuDispatchBatch, GpuError, GpuGuestCommandPublisher, GpuHostBackend,
+    GpuLifecycleError, GpuQueueIdentity, GpuQueueReceiver, GpuQueueSender, GpuResourceBackend,
+    GpuResourceOutcome, GpuResourceResponse, GpuResourceResponseReceiver,
+    GpuResourceResponseSender, GpuRingConsumer, GpuRingProducer, GpuRingTicket,
+    GpuSharedQueueLayout, GpuSharedRingIndices, GpuSubmitError, GpuVmmMemory, GpuVmmQueueBridge,
+    GpuVmmQueueError, KernelId, MAX_ACTIVE_EXPERTS, MAX_BATCH_DISPATCHES, MAX_DISPATCH_BUFFERS,
+    MAX_DISPATCH_SCALARS, MAX_GPU_BENCHMARK_ELEMENTS, MAX_GPU_BENCHMARK_ITERATIONS,
+    MAX_GPU_CONTROL_BYTES, MAX_GPU_QUEUE_SLOTS, MediatedGpuExecutor, PreparedGpuBatch,
+    PreparedGpuDispatch, ResourceCommand, ScalarArg, ScalarKind, ValidatedExpertSelection,
+    ValidatedGpuBatch, ValidatedKernelLaunch, ValidatedMoeKernelLaunch, VerifiedGpuKernelBundle,
+    VirtualGpuSession, process_gpu_resource_command, process_gpu_resource_command_with_response,
+    submit_gpu_batch, submit_gpu_batch_to_completion_ring, submit_gpu_batch_with_completions,
     submit_gpu_control_batch, verify_gpu_kernel_bundle,
 };
 pub use virtual_pci::{
@@ -303,8 +301,7 @@ pub use vm::{
     IoReadCompleter, MAX_GUEST_REGIONS, MappingRevocationError, MmioWriteCompleter,
     RevocableVmBackend, RoutedHypercall, ScheduledDeadlineVmBackend, ScheduledSmpVmBackend,
     ScheduledVcpuOutcome, VmBackend, VmDeadlineOutcome, VmError, VmExit, VmId, VmRunError, VmState,
-    VmTable, decode_hypercall_exit,
-    revoke_mapping_before_resume,
+    VmTable, decode_hypercall_exit, revoke_mapping_before_resume,
 };
 pub use vm_dispatch::{
     ExitDisposition, IoDirection, IoPortPolicy, IoPortRule, MAX_IO_PORT_RULES, dispatch_vm_exit,

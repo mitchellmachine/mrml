@@ -3027,9 +3027,15 @@ component generation. Both runners produce byte-identical 201-byte `MRMLSG2`,
 one already admitted microVM domain, and finalized `classified=1`, `eligible=1`,
 `microvm=1`, and `native_fallback=0` before guest execution on WHP and nested
 KVM. The stable component ABI data plane then ran without per-request package or
-policy resolution. This is hosted controlled evidence for one colocated
-consumer/provider domain, not complete installed-system Total readiness,
-recovery, host-resistant isolation, or physical-hardware evidence.
+policy resolution. Kernel construction now returns a private-field
+`ReleaseTotalMicrovmInventory` retaining the authenticated signer, system
+generation, and policy generation; safe code cannot substitute an ad hoc
+inventory with matching numeric generations. The recovered configuration path
+accepts only that type when creating its exact release admission table and
+rejects non-Total or policy-generation mismatch. This is hosted controlled
+evidence for one colocated consumer/provider domain, not complete installed-
+system Total readiness, live boot recovery, host-resistant isolation, or
+physical-hardware evidence.
 
 Patent review: `TRIGGERED` under the existing signed-release, adaptive
 isolation, Total-MicroVM, automated VMM placement, and device-projection reviews

@@ -22,9 +22,9 @@ use mrml_kernel::{
     IsolationServiceBackend, IsolationServiceRouteError, IsolationServiceSpec,
     IsolationStatusSnapshot, IsolationUnavailableReason, MemoryBackingKind, MemoryObjectId,
     MemoryPoolId, MemoryPoolTable, MemoryResourceError, Message, ObjectId, PAGE_SIZE,
-    PreparedIsolationServiceRoute, Priority, RestartPolicy, Rights, RoutedIsolationService,
-    ServiceAddressSpaceEraser, ServiceCleanupError, ServiceError, ServiceId,
-    ServiceRegistrationPlan, ServiceState, ServiceSupervisor, TaskId, TaskRuntime,
+    PreparedIsolationServiceRoute, Priority, ReleaseTotalMicrovmInventory, RestartPolicy, Rights,
+    RoutedIsolationService, ServiceAddressSpaceEraser, ServiceCleanupError, ServiceError,
+    ServiceId, ServiceRegistrationPlan, ServiceState, ServiceSupervisor, TaskId, TaskRuntime,
     TaskRuntimeError, prepare_isolation_service_route, route_isolation_service,
 };
 use mrml_storage::{
@@ -2551,6 +2551,59 @@ impl RecoveredBootIsolationPolicy {
         system_generation: u64,
     ) -> Result<IsolationAdmissionTable<DOMAINS>, ConfigError> {
         self.effective.admission_table(system_generation)
+    }
+
+    /// Binds this recovered effective policy to the complete package
+    /// classifications authenticated from one exact SystemRelease. Neither an
+    /// ad hoc inventory nor a matching generation number can enter this path.
+    pub fn bind_release_inventory<const DOMAINS: usize>(
+        self,
+        release: ReleaseTotalMicrovmInventory<DOMAINS>,
+    ) -> Result<RecoveredTotalAdmission<DOMAINS>, ConfigError> {
+        if self.effective.mode() != IsolationMode::TotalMicrovm
+            || release.policy_generation() != self.effective.policy_generation()
+        {
+            return Err(ConfigError::IsolationPolicyMismatch);
+        }
+        let admission = self.admission_table(release.system_generation())?;
+        Ok(RecoveredTotalAdmission {
+            policy: self,
+            release,
+            admission,
+        })
+    }
+}
+
+/// One pre-launch control-plane state joining committed recovered policy,
+/// authenticated complete release classification, and the only admission table
+/// allowed to account the resulting domains.
+pub struct RecoveredTotalAdmission<const DOMAINS: usize> {
+    policy: RecoveredBootIsolationPolicy,
+    release: ReleaseTotalMicrovmInventory<DOMAINS>,
+    admission: IsolationAdmissionTable<DOMAINS>,
+}
+
+impl<const DOMAINS: usize> RecoveredTotalAdmission<DOMAINS> {
+    pub const fn policy(&self) -> RecoveredBootIsolationPolicy {
+        self.policy
+    }
+
+    pub const fn release(&self) -> &ReleaseTotalMicrovmInventory<DOMAINS> {
+        &self.release
+    }
+
+    pub const fn admission(&self) -> &IsolationAdmissionTable<DOMAINS> {
+        &self.admission
+    }
+
+    pub fn admission_mut(&mut self) -> &mut IsolationAdmissionTable<DOMAINS> {
+        &mut self.admission
+    }
+
+    pub fn finalize(
+        &self,
+    ) -> Result<mrml_kernel::TotalMicrovmRuntimeProof, mrml_kernel::TotalMicrovmRuntimeError> {
+        self.release.finalize(&self.admission)
     }
 }
 
