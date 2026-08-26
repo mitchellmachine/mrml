@@ -58,7 +58,17 @@ oracle upgrade receives a new immutable record and differential classification
 against all prior accepted probes. Keep Cargo on edition 2024 until a newer
 named edition can be adopted through a pinned, workspace-wide migration.
 
-## Latest conditional delayed-initialization milestone
+## Latest primitive scalar delayed-initialization milestone
+
+Commit `1cfcc246` widens direct and bounded conditional delayed initialization
+from `u64` to every concrete primitive integer width plus `bool` and `char`.
+Preanalysis and emission share one admission predicate; raw pointers,
+references, and aggregates remain rejected. ORACLE-0002 accepts independent
+`i8`, `bool`, and `char` exhaustive probes. Windows and native Arch Linux WSL
+each passed 647 library tests, 1 component probe, 10 conformance tests, and 345
+replacement tests: 1,003 compiler tests per host.
+
+### Preceding conditional delayed-initialization milestone
 
 Commit `d032d92c` lets different arms of the same bounded conditional each
 perform the mutually exclusive first write to an immutable uninitialized `u64`.

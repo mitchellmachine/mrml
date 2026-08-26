@@ -1088,3 +1088,10 @@ uninitialized. This is black-box evidence for those exact scalar branch and join
 positions only; it does not establish nested/general joins, loop-carried
 initialization, or complete definite-assignment semantics. Temporary sources
 and metadata were removed.
+
+An independently authored Rust 2024 metadata-only primitive delayed-
+initialization set against this exact toolchain and commit accepted exhaustive
+two-arm initialization followed by a read for `i8`, `bool`, and `char`. This is
+black-box evidence for those exact primitive forms only; it does not establish
+raw-pointer provenance, reference lifetimes, aggregate initialization, or
+loop-carried joins. Temporary source and metadata were removed.

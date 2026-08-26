@@ -5727,6 +5727,18 @@ nested-loop return coverage, general regions, named lifetime inference, or
 complete Polonius semantics. The `no_std`/allocation/unsafe hygiene scan
 remained empty.
 
+The primitive delayed-initialization milestone at `1cfcc246` widens the existing
+direct and conditional first-write path to every concrete primitive integer
+width plus `bool` and `char`. Preanalysis and emission use one admission
+predicate, while existing typed assignment and return lowering preserve narrow
+integer normalization and scalar semantics. The pinned ORACLE-0002 toolchain
+accepted independent `i8`, `bool`, and `char` exhaustive probes. ELF64 and COFF
+replacements additionally cover `u32`, and a raw-pointer control fails closed.
+Windows and native Arch Linux WSL each passed 647 library tests, 1 component
+probe, 10 conformance tests, and 345 replacement tests: 1,003 compiler tests per
+host. References, raw pointers, aggregates, and loop-carried initialization are
+not claimed.
+
 The conditional delayed-initialization milestone at `d032d92c` treats first
 writes in different arms of the same bounded conditional assignment as mutually
 exclusive. The existing CFG initializedness intersection admits a post-join
