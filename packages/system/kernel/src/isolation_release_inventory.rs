@@ -1,9 +1,61 @@
 use mrml_package_format::{RuntimeIsolationClass, SystemReleaseError, parse_system_release};
 
 use crate::{
-    ObjectId, TotalMicrovmClass, TotalMicrovmInventory, TotalMicrovmInventoryEntry,
-    TotalMicrovmRuntimeError,
+    HostSubstrateReason, ObjectId, TotalMicrovmClass, TotalMicrovmInventory,
+    TotalMicrovmInventoryEntry, TotalMicrovmRuntimeError,
 };
+
+/// Policy-selected package-to-domain assignment for a complete authenticated
+/// release. The assignment carries no capability and deliberately does not
+/// restate package-controlled class or reason metadata. Host-substrate packages
+/// additionally require one typed architectural reason because the release's
+/// descriptive string cannot select a kernel enum value.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct RuntimeDomainAssignment<'a> {
+    package_id: &'a str,
+    domain: ObjectId,
+    host_substrate_reason: Option<HostSubstrateReason>,
+}
+
+impl<'a> RuntimeDomainAssignment<'a> {
+    pub const fn new(package_id: &'a str, domain: ObjectId) -> Result<Self, ReleaseInventoryError> {
+        if package_id.is_empty() || domain.0 == 0 {
+            return Err(ReleaseInventoryError::InvalidBinding);
+        }
+        Ok(Self {
+            package_id,
+            domain,
+            host_substrate_reason: None,
+        })
+    }
+
+    pub const fn host_substrate(
+        package_id: &'a str,
+        domain: ObjectId,
+        reason: HostSubstrateReason,
+    ) -> Result<Self, ReleaseInventoryError> {
+        if package_id.is_empty() || domain.0 == 0 {
+            return Err(ReleaseInventoryError::InvalidBinding);
+        }
+        Ok(Self {
+            package_id,
+            domain,
+            host_substrate_reason: Some(reason),
+        })
+    }
+
+    pub const fn package_id(self) -> &'a str {
+        self.package_id
+    }
+
+    pub const fn domain(self) -> ObjectId {
+        self.domain
+    }
+
+    pub const fn host_substrate_reason(self) -> Option<HostSubstrateReason> {
+        self.host_substrate_reason
+    }
+}
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct RuntimeDomainBinding<'a> {
@@ -59,6 +111,7 @@ pub enum ReleaseInventoryError {
     MissingBinding,
     ClassificationMismatch,
     ReasonMismatch,
+    HostSubstrateReasonMismatch,
     Inventory(TotalMicrovmRuntimeError),
 }
 
@@ -208,6 +261,82 @@ pub fn total_inventory_from_system_release<const N: usize>(
     })
 }
 
+/// Constructs a complete strict-Total inventory from policy-selected domain
+/// assignments while deriving every package class and descriptive reason from
+/// the authenticated SystemRelease. This prevents launchers from restating or
+/// substituting eligible/boot/recovery/blocker classifications. A typed host-
+/// substrate reason remains explicit architectural policy and is accepted only
+/// for a release record classified as host substrate. Names identify; neither
+/// assignments nor authenticated metadata grant domain authority.
+pub fn total_inventory_from_system_release_assignments<const N: usize>(
+    release_bytes: &[u8],
+    expected_key_id: &[u8; 64],
+    policy_generation: u64,
+    assignments: &[RuntimeDomainAssignment<'_>],
+) -> Result<ReleaseTotalMicrovmInventory<N>, ReleaseInventoryError> {
+    let release = parse_system_release(release_bytes).map_err(ReleaseInventoryError::Release)?;
+    if *expected_key_id == [0; 64] || release.key_id() != *expected_key_id {
+        return Err(ReleaseInventoryError::SignerMismatch);
+    }
+    let runtime = release
+        .runtime_inventory()
+        .ok_or(ReleaseInventoryError::MissingRuntimeInventory)?;
+    if assignments.len() != runtime.package_count() as usize || assignments.len() > N {
+        return Err(ReleaseInventoryError::BindingCount);
+    }
+    for (index, assignment) in assignments.iter().enumerate() {
+        if assignment.package_id.is_empty() || assignment.domain.0 == 0 {
+            return Err(ReleaseInventoryError::InvalidBinding);
+        }
+        if assignments[..index]
+            .iter()
+            .any(|present| present.package_id == assignment.package_id)
+        {
+            return Err(ReleaseInventoryError::DuplicateBinding);
+        }
+    }
+
+    let placeholder = RuntimeDomainBinding {
+        package_id: "",
+        domain: ObjectId(0),
+        class: TotalMicrovmClass::BootOnly,
+        reason: "",
+    };
+    let mut bindings = [placeholder; N];
+    let mut count = 0;
+    for record in runtime.records() {
+        let assignment = assignments
+            .iter()
+            .find(|assignment| assignment.package_id == record.package_id)
+            .ok_or(ReleaseInventoryError::MissingBinding)?;
+        let class = match (record.class, assignment.host_substrate_reason) {
+            (RuntimeIsolationClass::MicrovmEligible, None) => TotalMicrovmClass::MicrovmEligible,
+            (RuntimeIsolationClass::HostSubstrateRequired, Some(reason)) => {
+                TotalMicrovmClass::HostSubstrateRequired(reason)
+            }
+            (RuntimeIsolationClass::BootOnly, None) => TotalMicrovmClass::BootOnly,
+            (RuntimeIsolationClass::RecoveryOnly, None) => TotalMicrovmClass::RecoveryOnly,
+            (RuntimeIsolationClass::UnsupportedBlocker, None) => {
+                TotalMicrovmClass::UnsupportedBlocker
+            }
+            _ => return Err(ReleaseInventoryError::HostSubstrateReasonMismatch),
+        };
+        bindings[count] = RuntimeDomainBinding {
+            package_id: record.package_id,
+            domain: assignment.domain,
+            class,
+            reason: record.reason,
+        };
+        count += 1;
+    }
+    total_inventory_from_system_release(
+        release_bytes,
+        expected_key_id,
+        policy_generation,
+        &bindings[..count],
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -225,6 +354,20 @@ mod tests {
     fn build_release(
         include_runtime: bool,
         runtime_generation: u64,
+    ) -> ([u8; MAX_SYSTEM_RELEASE_BYTES], usize, [u8; 64]) {
+        build_release_with_class(
+            include_runtime,
+            runtime_generation,
+            RuntimeIsolationClass::MicrovmEligible,
+            "",
+        )
+    }
+
+    fn build_release_with_class(
+        include_runtime: bool,
+        runtime_generation: u64,
+        class: RuntimeIsolationClass,
+        reason: &str,
     ) -> ([u8; MAX_SYSTEM_RELEASE_BYTES], usize, [u8; 64]) {
         let digest = [0x41; 64];
         let generation_record = SystemGenerationDigestRecord {
@@ -253,18 +396,30 @@ mod tests {
         let mut catalog = [0; 256];
         let catalog_length =
             encode_interface_catalog(13, &[requirement], &[provider], &mut catalog).unwrap();
+        let (preferred, minimum, maximum, supported) =
+            if class == RuntimeIsolationClass::HostSubstrateRequired {
+                let platform = RuntimeIsolationPlacement::Platform;
+                (platform, platform, platform, platform.bit())
+            } else {
+                (
+                    RuntimeIsolationPlacement::NativeService,
+                    RuntimeIsolationPlacement::NativeService,
+                    RuntimeIsolationPlacement::Microvm,
+                    RuntimeIsolationPlacement::NativeService.bit()
+                        | RuntimeIsolationPlacement::Microvm.bit(),
+                )
+            };
         let runtime_record = RuntimeInventoryRecord {
             package_id: "org.mrml.service.config",
             version: 5,
             artifact_digest: &digest,
-            class: RuntimeIsolationClass::MicrovmEligible,
+            class,
             must_run: true,
-            preferred: RuntimeIsolationPlacement::NativeService,
-            minimum: RuntimeIsolationPlacement::NativeService,
-            maximum: RuntimeIsolationPlacement::Microvm,
-            supported: RuntimeIsolationPlacement::NativeService.bit()
-                | RuntimeIsolationPlacement::Microvm.bit(),
-            reason: "",
+            preferred,
+            minimum,
+            maximum,
+            supported,
+            reason,
         };
         let mut runtime = [0; 256];
         let runtime_length =
@@ -552,5 +707,89 @@ mod tests {
         assert_eq!(entry.domain(), domain);
         assert_eq!(entry.class(), TotalMicrovmClass::MicrovmEligible);
         assert!(entry.must_be_running());
+    }
+
+    #[test]
+    fn authenticated_classes_complete_policy_domain_assignments() {
+        let (release, release_length, key_id) = build_colocated_release();
+        let domain = ObjectId(0x5a49_4d5f_5a53_5444);
+        let assignments = [
+            RuntimeDomainAssignment::new("org.mrml.zim", domain).unwrap(),
+            RuntimeDomainAssignment::new("org.mrml.zstd", domain).unwrap(),
+        ];
+        let inventory = total_inventory_from_system_release_assignments::<2>(
+            &release[..release_length],
+            &key_id,
+            POLICY,
+            &assignments,
+        )
+        .unwrap();
+        let entry = inventory.entries().next().unwrap();
+        assert_eq!(inventory.len(), 1);
+        assert_eq!(entry.domain(), domain);
+        assert_eq!(entry.class(), TotalMicrovmClass::MicrovmEligible);
+        assert!(entry.must_be_running());
+
+        let missing = [RuntimeDomainAssignment::new("org.mrml.zim", domain).unwrap()];
+        assert!(matches!(
+            total_inventory_from_system_release_assignments::<2>(
+                &release[..release_length],
+                &key_id,
+                POLICY,
+                &missing,
+            ),
+            Err(ReleaseInventoryError::BindingCount)
+        ));
+        let substituted = [
+            RuntimeDomainAssignment::new("org.mrml.other", domain).unwrap(),
+            RuntimeDomainAssignment::new("org.mrml.zstd", domain).unwrap(),
+        ];
+        assert!(matches!(
+            total_inventory_from_system_release_assignments::<2>(
+                &release[..release_length],
+                &key_id,
+                POLICY,
+                &substituted,
+            ),
+            Err(ReleaseInventoryError::MissingBinding)
+        ));
+    }
+
+    #[test]
+    fn host_substrate_reason_cannot_be_attached_to_eligible_release_record() {
+        let (release, release_length, key_id) = build_release(true, 13);
+        let assignments = [RuntimeDomainAssignment::host_substrate(
+            "org.mrml.service.config",
+            ObjectId(0x700),
+            HostSubstrateReason::InstantiateMicrovms,
+        )
+        .unwrap()];
+        assert!(matches!(
+            total_inventory_from_system_release_assignments::<1>(
+                &release[..release_length],
+                &key_id,
+                POLICY,
+                &assignments,
+            ),
+            Err(ReleaseInventoryError::HostSubstrateReasonMismatch)
+        ));
+
+        let (release, release_length, key_id) = build_release_with_class(
+            true,
+            13,
+            RuntimeIsolationClass::HostSubstrateRequired,
+            "required to instantiate microVMs",
+        );
+        let inventory = total_inventory_from_system_release_assignments::<1>(
+            &release[..release_length],
+            &key_id,
+            POLICY,
+            &assignments,
+        )
+        .unwrap();
+        assert_eq!(
+            inventory.entries().next().unwrap().class(),
+            TotalMicrovmClass::HostSubstrateRequired(HostSubstrateReason::InstantiateMicrovms)
+        );
     }
 }

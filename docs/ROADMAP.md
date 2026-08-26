@@ -214,7 +214,7 @@ running/unavailable domain and mark each must-run component. The finalizer
 rejects missing or unavailable required domains, unknown active domains, class
 substitution, eligible execution outside a microVM, unsupported blockers, and
 native fallback before producing a bounded runtime proof. Windows and Arch
-Linux each pass 553 kernel tests. WHP and KVM now authenticate and construct the
+Linux each pass 555 kernel tests. WHP and KVM now authenticate and construct the
 release-derived inventory before CPU, RAM, or guest construction, retain it
 across construction, and finalize it after exact Total admission but before
 focused component execution. Their suites pass 9 and 10 tests respectively,
@@ -225,6 +225,16 @@ than a publicly constructible mutable value. Recovered Total policy accepts only
 when creating the exact release admission table. Complete installed-system
 enumeration and live boot consumption remain the next gate; this one-component
 proof does not establish required-system Total readiness.
+
+The next narrowing is **PARTIALLY IMPLEMENTED**: launchers supply a complete
+bounded set of policy-selected package/domain assignments rather than restating
+release classifications. The authenticated runtime inventory supplies eligible,
+boot-only, recovery-only, and unsupported-blocker classes plus descriptive
+reasons. Host-substrate enum reasons remain explicit architecture input and are
+accepted only for release records in that class. Omission, substitution,
+duplicates, and class/reason-shape mismatch fail before backend construction.
+The focused WHP/KVM release path uses this API; general installed-generation
+domain assignment remains **PLANNED**.
 
 The first half of that gate is now **PARTIALLY IMPLEMENTED**: `MRMLRI1` is a
 bounded canonical runtime-inventory catalog whose records exact-bind every

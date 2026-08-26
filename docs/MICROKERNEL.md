@@ -3019,7 +3019,7 @@ It rejects v1, missing/excess bindings, duplicate package identity, incompatible
 co-location, class substitution, and exception-reason substitution. Compatible
 packages may share one live domain and conservatively combine must-run state.
 Package names identify the binding; neither release nor manifest metadata grants
-domain authority. Windows and Arch Linux each pass 553 kernel tests. WHP/KVM
+domain authority. Windows and Arch Linux each pass 555 kernel tests. WHP/KVM
 runner consumption is now **PARTIALLY IMPLEMENTED** for the focused ZIM/Zstd
 component generation. Both runners produce byte-identical 201-byte `MRMLSG2`,
 207-byte `MRMLIC1`, and 225-byte `MRMLRI1` records. The same freshly signed
@@ -3038,6 +3038,15 @@ rejects non-Total or policy-generation mismatch. This is hosted controlled
 evidence for one colocated consumer/provider domain, not complete installed-
 system Total readiness, live boot recovery, host-resistant isolation, or
 physical-hardware evidence.
+
+The focused runners no longer restate `MICROVM_ELIGIBLE` or the empty eligible
+reason in their launch input. They provide only the exact ZIM/Zstd-to-domain
+assignments; the authenticated release derives both classes and reasons before
+construction. Complete membership, distinct package identity, and the typed
+host-substrate/non-substrate reason shape are checked allocation-free. A
+descriptive release reason cannot choose `HostSubstrateReason`, and neither
+metadata nor assignment authorizes the domain. General installed-generation
+domain planning remains **PLANNED**.
 
 Patent review: `TRIGGERED` under the existing signed-release, adaptive
 isolation, Total-MicroVM, automated VMM placement, and device-projection reviews

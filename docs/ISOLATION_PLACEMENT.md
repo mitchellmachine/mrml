@@ -891,7 +891,7 @@ produces a `TotalMicrovmRuntimeProof` only when every required domain is live,
 every live eligible domain is in a microVM, every active substrate/boot/recovery
 exception is classified, no unsupported blocker runs, and native fallback is
 zero. A required unavailable component is failure, not permission to omit or
-launch it natively. Windows and Arch Linux each pass 553 kernel tests. The WHP
+launch it natively. Windows and Arch Linux each pass 555 kernel tests. The WHP
 and KVM component runners now authenticate and construct one release-derived
 colocated ZIM/Zstd inventory before CPU, RAM, or VMM guest construction. They
 retain that immutable inventory across construction, then finalize it only
@@ -905,6 +905,14 @@ this wrapper to create the admission table for that exact release; non-Total or
 policy-generation mismatch fails. Complete installed-system enumeration and
 live boot consumption remain **PLANNED**, so this focused component evidence
 does not promote Total mode itself.
+
+The focused runners now provide only complete policy-selected package-to-domain
+assignments. The authenticated release supplies each package's runtime class
+and descriptive exception reason; omission, identity substitution, duplicate
+assignment, and attaching a typed host-substrate reason to a non-substrate
+record fail before construction. Host-substrate enum selection remains explicit
+architectural policy because descriptive release text cannot select a kernel
+value. Assignments and metadata remain non-authorizing.
 
 Its canonical package-to-runtime classification prerequisite is now
 **PARTIALLY IMPLEMENTED** as the allocation-free `MRMLRI1` runtime-inventory

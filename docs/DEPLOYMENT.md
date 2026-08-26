@@ -161,6 +161,15 @@ controlled-probe evidence for one focused release, not a complete installed-
 system inventory, recovery proof, or host-resistant isolation. Full-system
 generation admission remains **PLANNED**.
 
+The kernel's newer assignment adapter keeps policy-selected domain identity
+separate from authenticated package classification. Callers submit an exact
+one-for-one package/domain set; the signed runtime inventory supplies class and
+descriptive reason. Only the typed host-substrate enum reason remains explicit
+architecture input, and it is rejected for every other release class. Neither
+the assignment nor the release grants a capability. The focused WHP/KVM path
+uses this adapter; automatic installed-system domain planning remains
+**PLANNED**.
+
 - Complexity impact: MEDIUM
 - TCB impact: LOW
 - New parser boundary: YES

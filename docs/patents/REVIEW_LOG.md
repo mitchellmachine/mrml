@@ -1,5 +1,19 @@
 # Patent review log
 
+## 2026-08-26 — Release-derived Total classification assignments
+
+Patent review: **TRIGGERED** under the existing SystemRelease, runtime-
+inventory, adaptive-isolation, Total-MicroVM, and VMM reviews. This bounded
+increment separates policy-selected package/domain assignments from package
+classification: the existing authenticated runtime inventory supplies classes
+and descriptive reasons, while an explicit typed reason remains required for a
+host-substrate architectural exception. It uses bounded linear membership and
+duplicate checks and adds no parser format, signature scheme, placement or
+scheduling heuristic, native fallback, VM/device protocol, DMA mechanism, or
+hardware-specific isolation mechanism. General installed-generation assignment
+and live boot remain unimplemented. No patent-clearance or non-infringement
+conclusion is made; independent human review remains required.
+
 ## 2026-08-26 — Bounded callee-local reference type state
 
 Patent review: **NOT_TRIGGERED** for this bounded compiler-analysis increment.

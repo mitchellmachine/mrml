@@ -29,7 +29,7 @@ use mrml_kernel::{
     MAX_COMPONENT_IMAGE_REGIONS, MemoryPoolTable, MicrovmPageProjectionKind,
     MicrovmProjectionDescriptor, MicrovmProjectionKind, MicrovmProjectionPlan,
     MicrovmProjectionRequirements, ObjectId, PAGE_SIZE, PreparedIsolationServiceRoute,
-    PreparedMicrovmApplicationBackend, ResourceCommand, Rights, RuntimeDomainBinding,
+    PreparedMicrovmApplicationBackend, ResourceCommand, Rights, RuntimeDomainAssignment,
     SIGNED_ARTIFACT_OVERHEAD_BYTES, ScheduledDeadlineVmBackend, ScheduledSmpVmBackend,
     SignedArtifact, TotalMicrovmClass, TotalMicrovmInventory, TotalMicrovmInventoryEntry,
     TrustRoot, VIRTUAL_BLOCK_FEATURE_FLUSH, VcpuReservationId, VerifiedExecutable,
@@ -51,7 +51,7 @@ use mrml_kernel::{
     reserve_microvm_guest_ram, reserve_microvm_page_projection, route_isolation_application,
     run_pci_configuration_once, run_pci_configuration_once_with_backend_mapper,
     run_virtual_block_mmio_transaction_once, run_virtual_block_transaction_once,
-    total_inventory_from_system_release, verify_gpu_kernel_bundle,
+    total_inventory_from_system_release_assignments, verify_gpu_kernel_bundle,
 };
 #[cfg(any(test, target_os = "linux"))]
 use mrml_kernel::{
@@ -2866,28 +2866,18 @@ fn application_main() -> Result<()> {
         let (release_bytes, expected_release_key) = component_release_authority
             .as_ref()
             .ok_or_else(|| anyhow!("missing authenticated KVM component release"))?;
-        let bindings = [
-            RuntimeDomainBinding::new(
-                "org.mrml.zim",
-                spec.domain(),
-                TotalMicrovmClass::MicrovmEligible,
-                "",
-            )
-            .map_err(|error| anyhow!("KVM ZIM runtime binding failed: {:?}", error))?,
-            RuntimeDomainBinding::new(
-                "org.mrml.zstd",
-                spec.domain(),
-                TotalMicrovmClass::MicrovmEligible,
-                "",
-            )
-            .map_err(|error| anyhow!("KVM Zstd runtime binding failed: {:?}", error))?,
+        let assignments = [
+            RuntimeDomainAssignment::new("org.mrml.zim", spec.domain())
+                .map_err(|error| anyhow!("KVM ZIM runtime assignment failed: {:?}", error))?,
+            RuntimeDomainAssignment::new("org.mrml.zstd", spec.domain())
+                .map_err(|error| anyhow!("KVM Zstd runtime assignment failed: {:?}", error))?,
         ];
         Some(
-            total_inventory_from_system_release::<2>(
+            total_inventory_from_system_release_assignments::<2>(
                 release_bytes,
                 expected_release_key,
                 spec.policy_generation(),
-                &bindings,
+                &assignments,
             )
             .map_err(|error| anyhow!("KVM release inventory admission failed: {:?}", error))?,
         )
