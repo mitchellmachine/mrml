@@ -5,11 +5,12 @@ use mrml_kernel::arch::x86_64::{
     PerCpuPrivilegeStacks, PrivilegeStackLayout, VirtAddr,
 };
 use mrml_kernel::{
-    ArtifactKind, BootHandoff, DeadlineVmBackend, GpuSharedQueueLayout, GpuVmmMemory,
-    MAX_PE_SECTIONS, PAGE_SIZE, PeImage, PhysAddr, PreparedComponentServiceLaunch,
-    RevocableVmBackend, ScheduledVcpuOutcome, ServiceAddressSpaceEraser, TaskId,
-    VerifiedExecutable, VirtualBlockConfigurationPage, VirtualBlockQueueLayout,
-    VirtualBlockResumePage, VirtualBlockVmmMemory, VmBackend, VmExit,
+    ApplicationLaunch, ArtifactKind, BootHandoff, DeadlineVmBackend, GpuSharedQueueLayout,
+    GpuVmmMemory, MAX_PE_SECTIONS, PAGE_SIZE, PeImage, PhysAddr,
+    PreparedComponentServiceLaunch, RevocableVmBackend, ScheduledVcpuOutcome,
+    ServiceAddressSpaceEraser, SignedArtifact, TaskId, VerifiedExecutable,
+    VirtualBlockConfigurationPage, VirtualBlockQueueLayout, VirtualBlockResumePage,
+    VirtualBlockVmmMemory, VmBackend, VmExit,
 };
 
 use crate::{GuestRange, MapPermissions, WhpError};
@@ -232,6 +233,88 @@ impl ServiceAddressSpaceEraser for WhpServiceEraser<'_, '_, '_> {
 }
 
 impl<'system> PreparedWhpGuest<'system> {
+    /// Maps the exact signed application container and its unpublished boot
+    /// resources. The kernel revalidates trust, builds final W^X tables, and
+    /// publishes lifecycle state only after entering the typed handoff path.
+    pub fn attach_application_boot_resources(
+        mut self,
+        application: ApplicationLaunch,
+        container: &[u8],
+        executable: &VerifiedExecutable<'_>,
+    ) -> Result<Self, WhpError> {
+        let signed = SignedArtifact::decode(container).map_err(|_| WhpError::InvalidMapping)?;
+        let image_bytes = page_bytes(u64::from(executable.image().image_size()))?;
+        let artifact_bytes = page_bytes(
+            u64::try_from(container.len()).map_err(|_| WhpError::MemoryOverflow)?,
+        )?;
+        let stack_bytes = application
+            .stack_pages()
+            .checked_mul(PAGE_SIZE)
+            .ok_or(WhpError::MemoryOverflow)?;
+        let table_bytes = application
+            .table_pages()
+            .checked_mul(PAGE_SIZE)
+            .ok_or(WhpError::MemoryOverflow)?;
+        if !signed.matches_verified_executable(executable)
+            || executable.artifact().kind() != ArtifactKind::ApplicationImage
+            || application.artifact_length() != container.len() as u64
+            || application.version() != executable.artifact().version()
+            || application.measurement() != *executable.artifact().digest()
+            || application.image_pages().checked_mul(PAGE_SIZE) != Some(image_bytes)
+            || application.image_virtual() != executable.image().image_base()
+            || application.entry()
+                != application
+                    .image_virtual()
+                    .checked_add(u64::from(executable.image().entry_rva()))
+                    .ok_or(WhpError::MemoryOverflow)?
+            || application.stack_pages() == 0
+            || application.table_pages() < 4
+        {
+            return Err(WhpError::InvalidMapping);
+        }
+        validate_ranges(&[
+            (application.artifact_physical().get(), artifact_bytes),
+            (application.image_physical().get(), image_bytes),
+            (application.stack_physical().get(), stack_bytes),
+            (application.table_physical().get(), table_bytes),
+        ])?;
+        self.partition.map_zeroed(range(
+            application.artifact_physical().get(),
+            artifact_bytes,
+            MapPermissions::read_write(),
+        )?)?;
+        let image_mapping = self.partition.map_zeroed(range(
+            application.image_physical().get(),
+            image_bytes,
+            MapPermissions::read_write(),
+        )?)?;
+        self.partition.map_zeroed(range(
+            application.stack_physical().get(),
+            stack_bytes,
+            MapPermissions::read_write(),
+        )?)?;
+        self.partition.map_zeroed(range(
+            application.table_physical().get(),
+            table_bytes,
+            MapPermissions::read_write(),
+        )?)?;
+        self.partition
+            .write_service(application.artifact_physical().get(), container)?;
+        let image = executable.image();
+        let destination = self.partition.mutable_guest(
+            application.image_physical().get(),
+            image.image_size() as usize,
+        )?;
+        let entry = image
+            .materialize_at(destination, application.image_virtual())
+            .map_err(WhpError::Pe)?;
+        self.partition.seal_pe(image_mapping, image)?;
+        if entry != application.entry() {
+            return Err(WhpError::InvalidMapping);
+        }
+        Ok(self)
+    }
+
     pub fn service_eraser<'guest, 'artifact>(
         &'guest mut self,
         slot: usize,

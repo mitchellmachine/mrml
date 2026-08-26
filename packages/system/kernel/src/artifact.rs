@@ -149,6 +149,15 @@ impl<'a> SignedArtifact<'a> {
         })
     }
 
+    /// Confirms that this exact canonical container carries the payload from
+    /// an already authenticated executable. This is a transport binding only:
+    /// callers must first verify the signature through a `TrustRoot`.
+    pub fn matches_verified_executable(&self, executable: &VerifiedExecutable<'_>) -> bool {
+        self.kind == executable.artifact().kind()
+            && self.version == executable.artifact().version()
+            && Sha3_512::digest(self.payload) == *executable.artifact().digest()
+    }
+
     pub fn verify(
         &self,
         root: &TrustRoot,

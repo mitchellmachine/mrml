@@ -5,10 +5,11 @@ use mrml_kernel::arch::x86_64::{
     VirtAddr,
 };
 use mrml_kernel::{
-    ArtifactKind, BootHandoff, DeadlineVmBackend, GpuSharedQueueLayout, GpuVmmMemory, PAGE_SIZE,
-    PhysAddr, PreparedComponentServiceLaunch, RevocableVmBackend, ServiceAddressSpaceEraser,
-    TaskId, VerifiedExecutable, VirtualBlockConfigurationPage, VirtualBlockQueueLayout,
-    VirtualBlockResumePage, VirtualBlockVmmMemory, VmBackend, VmExit,
+    ApplicationLaunch, ArtifactKind, BootHandoff, DeadlineVmBackend, GpuSharedQueueLayout,
+    GpuVmmMemory, PAGE_SIZE, PhysAddr, PreparedComponentServiceLaunch, RevocableVmBackend,
+    ServiceAddressSpaceEraser, SignedArtifact, TaskId, VerifiedExecutable,
+    VirtualBlockConfigurationPage, VirtualBlockQueueLayout, VirtualBlockResumePage,
+    VirtualBlockVmmMemory, VmBackend, VmExit,
 };
 
 use super::{
@@ -151,6 +152,85 @@ impl<const N: usize> ServiceAddressSpaceEraser for KvmServiceEraser<'_, '_, N> {
 }
 
 impl<const N: usize> PreparedKvmGuest<N> {
+    /// Maps the exact signed application container and its unpublished boot
+    /// resources. The kernel remains responsible for signature revalidation,
+    /// final W^X page tables, CPL3 entry, and lifecycle publication.
+    pub fn attach_application_boot_resources(
+        mut self,
+        application: ApplicationLaunch,
+        container: &[u8],
+        executable: &VerifiedExecutable<'_>,
+    ) -> Result<Self, KvmError> {
+        let signed = SignedArtifact::decode(container).map_err(|_| KvmError::InvalidMapping)?;
+        let image_bytes = page_bytes(u64::from(executable.image().image_size()))?;
+        let artifact_bytes = page_bytes(
+            u64::try_from(container.len()).map_err(|_| KvmError::MemoryOverflow)?,
+        )?;
+        let stack_bytes = application
+            .stack_pages()
+            .checked_mul(PAGE_SIZE)
+            .ok_or(KvmError::MemoryOverflow)?;
+        let table_bytes = application
+            .table_pages()
+            .checked_mul(PAGE_SIZE)
+            .ok_or(KvmError::MemoryOverflow)?;
+        if !signed.matches_verified_executable(executable)
+            || executable.artifact().kind() != ArtifactKind::ApplicationImage
+            || application.artifact_length() != container.len() as u64
+            || application.version() != executable.artifact().version()
+            || application.measurement() != *executable.artifact().digest()
+            || application.image_pages().checked_mul(PAGE_SIZE) != Some(image_bytes)
+            || application.image_virtual() != executable.image().image_base()
+            || application.entry()
+                != application
+                    .image_virtual()
+                    .checked_add(u64::from(executable.image().entry_rva()))
+                    .ok_or(KvmError::MemoryOverflow)?
+            || application.stack_pages() == 0
+            || application.table_pages() < 4
+        {
+            return Err(KvmError::InvalidMapping);
+        }
+        validate_ranges(&[
+            (application.artifact_physical().get(), artifact_bytes),
+            (application.image_physical().get(), image_bytes),
+            (application.stack_physical().get(), stack_bytes),
+            (application.table_physical().get(), table_bytes),
+        ])?;
+        self.backend.map_memory(
+            application.artifact_physical().get(),
+            artifact_bytes as usize,
+            false,
+        )?;
+        self.backend.map_memory(
+            application.image_physical().get(),
+            image_bytes as usize,
+            false,
+        )?;
+        self.backend.map_memory(
+            application.stack_physical().get(),
+            stack_bytes as usize,
+            false,
+        )?;
+        self.backend.map_memory(
+            application.table_physical().get(),
+            table_bytes as usize,
+            false,
+        )?;
+        self.backend
+            .memory
+            .write_service(application.artifact_physical().get(), container)?;
+        let loaded = self.backend.memory.load_verified_executable(
+            executable,
+            application.image_physical().get(),
+            application.image_virtual(),
+        )?;
+        if loaded.entry() != application.entry() {
+            return Err(KvmError::InvalidMapping);
+        }
+        Ok(self)
+    }
+
     pub fn service_eraser<'guest, 'artifact>(
         &'guest mut self,
         slot: usize,
