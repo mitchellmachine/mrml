@@ -1569,6 +1569,13 @@ pub enum NativeSataHandoffRecoveryError<E> {
     Cleanup,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum DecodedHandoffSataRecoveryError<E> {
+    MissingInstalledIdentity,
+    MissingSataRoute,
+    Recovery(NativeSataHandoffRecoveryError<E>),
+}
+
 /// Converts one canonical boot identity into the existing installed-device
 /// recovery owner. The identity first has to reacquire a fresh read-only block
 /// session; block zero is then read through that session and exact-matched to
@@ -1654,6 +1661,41 @@ pub fn correlate_and_reacquire_handoff_installed_sata_device<
             Err(NativeSataHandoffRecoveryError::Reacquire(error))
         }
     }
+}
+
+/// Consumes the installed identity and typed route from one already validated
+/// canonical handoff. Callers cannot replace either field with detached data;
+/// absence fails before registration, session issuance, or block I/O.
+pub fn recover_decoded_handoff_installed_sata_device<
+    B: BlockServiceBackend,
+    const DEVICES: usize,
+    const SESSIONS: usize,
+>(
+    service: &mut BlockService<DEVICES, SESSIONS>,
+    backend: &mut B,
+    handoff: &BootHandoff,
+    native_route: NativeSataBlockRoute,
+    candidate: PlatformBlockDeviceDescriptor,
+    principal: StoragePrincipal,
+    scratch: &mut [u8],
+) -> Result<InstalledRecoveryDeviceSelection, DecodedHandoffSataRecoveryError<B::Error>> {
+    let boot = handoff
+        .installed_recovery()
+        .ok_or(DecodedHandoffSataRecoveryError::MissingInstalledIdentity)?;
+    let route = handoff
+        .installed_recovery_sata_route()
+        .ok_or(DecodedHandoffSataRecoveryError::MissingSataRoute)?;
+    correlate_and_reacquire_handoff_installed_sata_device(
+        service,
+        backend,
+        boot,
+        route,
+        native_route,
+        candidate,
+        principal,
+        scratch,
+    )
+    .map_err(DecodedHandoffSataRecoveryError::Recovery)
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -8878,6 +8920,197 @@ mod tests {
         assert_eq!(selected.platform_identity(), Some(identity));
         assert_eq!(selected.header(), stable_header());
         assert_eq!(backend.reads, 2);
+    }
+
+    #[test]
+    fn decoded_handoff_is_the_only_source_of_installed_sata_identity() {
+        let framebuffer = mrml_kernel::FramebufferInfo::new(
+            0xa0000,
+            0x1000,
+            16,
+            16,
+            16,
+            mrml_kernel::PixelFormat::BlueGreenRedReserved,
+        )
+        .unwrap();
+        let regions = [
+            mrml_kernel::MemoryRegion::new(
+                mrml_kernel::PhysAddr::new(0xa0000).unwrap(),
+                1,
+                mrml_kernel::MemoryKind::Mmio,
+            )
+            .unwrap(),
+            mrml_kernel::MemoryRegion::new(
+                mrml_kernel::PhysAddr::new(0x10_0000).unwrap(),
+                64,
+                mrml_kernel::MemoryKind::Reserved,
+            )
+            .unwrap(),
+        ];
+        let recovery =
+            mrml_kernel::RecoveryStateMetadata::new(8, 1, Some(stable_volume().bytes()), 14)
+                .unwrap();
+        let stable_id = [0x51; 32];
+        let boot = InstalledRecoveryBootIdentity::new(
+            InstalledRecoverySource::Uefi,
+            stable_id,
+            3,
+            5,
+            STABLE_BLOCK_BYTES as u32,
+            stable_header().block_count(),
+            stable_volume().bytes(),
+            stable_header().primary_superblock(),
+            14,
+        )
+        .unwrap();
+        let boot_hops = [mrml_kernel::InstalledRecoveryPciHop::new(5, 0).unwrap()];
+        let boot_media =
+            mrml_kernel::InstalledRecoveryHardDriveMedia::new(2, 2048, 4096, [0x6a; 16], 2, 2)
+                .unwrap();
+        let route = InstalledRecoverySataRoute::new(
+            0x0a03_41d0,
+            0,
+            &boot_hops,
+            3,
+            u16::MAX,
+            0,
+            Some(boot_media),
+            stable_id,
+        )
+        .unwrap();
+        let mut handoff_bytes = [0; 512];
+        let length = mrml_kernel::encode_handoff_with_recovery_isolation_installed_and_sata_route(
+            7,
+            [1; 32],
+            [2; 64],
+            true,
+            true,
+            false,
+            true,
+            0x9000,
+            framebuffer,
+            &regions,
+            recovery,
+            boot,
+            route,
+            Some(BootIsolationOverride::TotalMicrovmOnce),
+            &mut handoff_bytes,
+        )
+        .unwrap();
+        let handoff = BootHandoff::decode(&handoff_bytes[..length], |_| {}).unwrap();
+
+        let device = BlockDeviceId::new(7).unwrap();
+        let descriptor = BlockDeviceDescriptor::new(
+            device,
+            STABLE_BLOCK_BYTES as u32,
+            stable_header().block_count(),
+        )
+        .unwrap();
+        let identity =
+            PlatformBlockDeviceIdentity::new(PlatformBlockTransport::Ahci, stable_id, 3, 5)
+                .unwrap();
+        let candidate = PlatformBlockDeviceDescriptor::new(descriptor, identity);
+        let native_hops = [mrml_storage::CanonicalUefiPciHop::new(5, 0).unwrap()];
+        let native_media =
+            mrml_storage::CanonicalUefiHardDriveMedia::new(2, 2048, 4096, [0x6a; 16], 2, 2)
+                .unwrap();
+        let native = NativeSataBlockRoute::new(
+            0x0a03_41d0,
+            0,
+            &native_hops,
+            3,
+            u16::MAX,
+            0,
+            Some(native_media),
+        )
+        .unwrap();
+        let mut backend = StableBlockBackend::new(device);
+        let mut encoded_header = [0; VOLUME_HEADER_BYTES];
+        stable_header().encode(&mut encoded_header);
+        backend.bytes[..VOLUME_HEADER_BYTES].copy_from_slice(&encoded_header);
+        let mut scratch = [0xa5; STABLE_BLOCK_BYTES];
+        let mut service = BlockService::<1, 1>::new();
+        let selected = recover_decoded_handoff_installed_sata_device(
+            &mut service,
+            &mut backend,
+            &handoff,
+            native,
+            candidate,
+            stable_principal(),
+            &mut scratch,
+        )
+        .unwrap();
+        assert_eq!(selected.platform_identity(), Some(identity));
+
+        let mut identity_only_bytes = [0; 512];
+        let identity_only_length =
+            mrml_kernel::encode_handoff_with_recovery_isolation_and_installed(
+                7,
+                [1; 32],
+                [2; 64],
+                true,
+                true,
+                false,
+                true,
+                0x9000,
+                framebuffer,
+                &regions,
+                recovery,
+                boot,
+                None,
+                &mut identity_only_bytes,
+            )
+            .unwrap();
+        let identity_only =
+            BootHandoff::decode(&identity_only_bytes[..identity_only_length], |_| {}).unwrap();
+        let reads = backend.reads;
+        let mut missing_route_service = BlockService::<1, 1>::new();
+        assert_eq!(
+            recover_decoded_handoff_installed_sata_device(
+                &mut missing_route_service,
+                &mut backend,
+                &identity_only,
+                native,
+                candidate,
+                stable_principal(),
+                &mut scratch,
+            ),
+            Err(DecodedHandoffSataRecoveryError::MissingSataRoute)
+        );
+        assert_eq!(backend.reads, reads);
+
+        let mut recovery_only_bytes = [0; 512];
+        let recovery_only_length = mrml_kernel::encode_handoff_with_recovery_and_isolation(
+            7,
+            [1; 32],
+            [2; 64],
+            true,
+            true,
+            false,
+            true,
+            0x9000,
+            framebuffer,
+            &regions,
+            recovery,
+            None,
+            &mut recovery_only_bytes,
+        )
+        .unwrap();
+        let recovery_only =
+            BootHandoff::decode(&recovery_only_bytes[..recovery_only_length], |_| {}).unwrap();
+        assert_eq!(
+            recover_decoded_handoff_installed_sata_device(
+                &mut missing_route_service,
+                &mut backend,
+                &recovery_only,
+                native,
+                candidate,
+                stable_principal(),
+                &mut scratch,
+            ),
+            Err(DecodedHandoffSataRecoveryError::MissingInstalledIdentity)
+        );
+        assert_eq!(backend.reads, reads);
     }
 
     fn stable_layout(

@@ -270,6 +270,15 @@ return. Configuration passes 50 tests on Windows and Arch Linux; WHP/KVM
 regression runners pass 11/12 without native SATA evidence. Real driver
 discovery and installed-kernel consumption remain **PLANNED**.
 
+Configuration now **PARTIALLY IMPLEMENTS** decoded-handoff-only recovery for
+the pair. A recovery-only canonical encoder retains the adjacent identity and
+typed route without unrelated service/SMP payloads. The consumer extracts both
+from one validated `BootHandoff`; missing identity or route fails before
+registration, session issuance, or block I/O, and detached replacement boot data
+is not accepted. Kernel passes 563 tests and configuration 51 tests on Windows
+and Arch Linux. Native descriptor discovery and installed Total consumption
+remain **PLANNED**.
+
 The `mrml` frontend may expose structured `disk`, `filesystem`, `optical`, and
 `media` operations. The PowerShell-inspired shell projects the same backend as
 typed `Get-*`, `Test-*`, `Initialize-*`, `New-*`, `Format-*`, `Write-*`, and

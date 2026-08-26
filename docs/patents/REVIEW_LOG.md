@@ -38,6 +38,16 @@ route reconstruction, device protocol, DMA, queue, or hardware behavior. Native
 AHCI, USB, VirtIO, and physical-route mechanisms retain their existing
 `TRIGGERED` reviews; this technical screen is not legal clearance.
 
+## 2026-08-26 — Decoded-handoff-only SATA recovery composition
+
+Patent review: **NOT_TRIGGERED** for adding a recovery-only form of the existing
+canonical fixed-record handoff and requiring configuration to extract adjacent
+identity/route fields from one validated decode. This is conventional checked
+encoding, presence validation, and composition of already reviewed operations;
+it adds no discovery, controller access, AHCI command, DMA, interrupt, queue, or
+hardware-I/O mechanism. Native AHCI and broader adaptive/Total-MicroVM work
+retain their existing `TRIGGERED` reviews; this is not patent clearance.
+
 ## 2026-08-26 — Atomic SATA correlation and recovery reacquisition
 
 Patent review: **NOT_TRIGGERED** for composing already reviewed exact route

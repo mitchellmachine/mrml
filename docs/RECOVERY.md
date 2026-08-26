@@ -1192,6 +1192,15 @@ registration before return. Configuration passes 50 tests on Windows and Arch
 Linux; WHP/KVM regression runners pass 11/12 but do not exercise SATA. Real
 native discovery and installed-kernel orchestration remain **PLANNED**.
 
+The next installed-orchestration boundary is **PARTIALLY IMPLEMENTED**:
+configuration consumes the installed identity and SATA route only from one
+decoded canonical `BootHandoff`, while a recovery-only encoder preserves their
+adjacency without inventing a service or SMP payload. Missing identity or route
+fails before registration, session creation, or block I/O, so detached caller
+data cannot replace boot evidence. Kernel passes 563 tests and configuration 51
+tests on Windows and Arch Linux. Real driver discovery and installed Total-owner
+consumption remain **PLANNED**.
+
 Recovery-session publication is now atomic across a bounded device set.
 `BlockSessionGrant` carries each explicit device/principal/rights decision, and
 `grant_sessions_atomic` preflights every registered identity, rights mask, and

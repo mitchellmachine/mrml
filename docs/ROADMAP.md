@@ -3085,3 +3085,13 @@ device before returning. Configuration passes 50 tests on Windows and Arch
 Linux; WHP/KVM regression runners pass 11/12 without claiming SATA execution.
 Supplying the native descriptor from a real driver and connecting this owner to
 installed kernel Total admission remain **PLANNED**.
+
+Installed orchestration now **PARTIALLY IMPLEMENTS** a decoded-handoff-only
+entry point. A recovery-only canonical encoder carries the same adjacent
+identity/route pair without fabricating service or SMP state, and configuration
+extracts both exclusively from one validated `BootHandoff` before correlation.
+Missing identity or route fails before registration, session issuance, or block
+I/O; callers cannot supply detached replacement boot data. Kernel passes 563
+tests and configuration 51 tests on Windows and Arch Linux. Real native
+descriptor discovery and binding the returned owner into installed Total boot
+remain **PLANNED**.

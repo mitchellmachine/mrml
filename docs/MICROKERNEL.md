@@ -8688,3 +8688,11 @@ device/session and performs zero block reads; later validation failure revokes
 the session and removes the new registration. Configuration passes 50 tests on
 Windows and Arch Linux, with WHP/KVM regression runners at 11/12. Those runners
 exercise shared configuration compatibility only, not native SATA execution.
+
+A recovery-only encoder and decoded-handoff configuration entry point now
+**PARTIALLY IMPLEMENT** the next ownership boundary. The identity and typed SATA
+route must be adjacent fields of the same validated handoff; absence fails before
+registration, session issuance, or block I/O, and callers cannot inject detached
+boot data. Kernel passes 563 tests and configuration 51 tests on Windows and Arch
+Linux. This remains canonical codec and controlled service evidence, not native
+enumeration, installed Total execution, OVMF, or physical hardware.
