@@ -6082,3 +6082,23 @@ fn rustc_terminal_int3_inline_assembly_reaches_native_objects() {
     )
     .is_err());
 }
+
+#[test]
+fn rustc_terminal_int80_inline_assembly_reaches_native_objects() {
+    let source = concat!(
+        "#[unsafe(no_mangle)] pub extern \"C\" fn probe(operation: u64) -> ! { unsafe { ",
+        "asm!(\"int 0x80\", in(\"rax\") operation, in(\"rdi\") 0u64, ",
+        "in(\"rsi\") 0u64, in(\"rdx\") 0u64, in(\"r10\") 0u64, ",
+        "in(\"r8\") 0u64, in(\"r9\") 0u64, options(noreturn, nostack)); } }"
+    );
+    assert_eq!(compile(source, ObjectFormat::Elf64), Ok(()));
+    assert_eq!(compile(source, ObjectFormat::Coff), Ok(()));
+
+    let nonterminal = concat!(
+        "#[unsafe(no_mangle)] pub unsafe extern \"C\" fn probe(operation: u64) -> u64 { ",
+        "asm!(\"int 0x80\", in(\"rax\") operation, in(\"rdi\") 0u64, ",
+        "in(\"rsi\") 0u64, in(\"rdx\") 0u64, in(\"r10\") 0u64, ",
+        "in(\"r8\") 0u64, in(\"r9\") 0u64, options(noreturn, nostack)); 42 }"
+    );
+    assert!(compile(nonterminal, ObjectFormat::Elf64).is_err());
+}
