@@ -4219,6 +4219,13 @@ states. The pinned oracle accepts differing continue origins normalized before
 every exit and rejects an early local-backed break with E0515. Both hosts remain
 at 989 compiler tests; unconditional mixed-backedge and general iterative fixed
 points remain incomplete.
+The joined-header proof now stops at the earliest unconditional nested-loop
+exit. Only earlier conditional inner continues contribute backedges, the
+terminal prefix must agree across headers, and its suffix is unreachable. The
+pinned oracle accepts a normalized unconditional break after differing
+backedges and rejects an earlier local-backed break with E0515. Both hosts
+remain at 989 compiler tests; nested branching and broader iterative fixed
+points remain incomplete.
 Nested-loop ordered-return and stable-edge analysis is now factored over an
 explicit incoming state and composes after outer-loop declarations, assignments,
 and branch joins. Stable nested edges preserve that state for later outer

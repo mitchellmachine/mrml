@@ -185,6 +185,14 @@ black-box evidence for those exact joined backedges and exit ordering, not
 general fixed-point or region inference. Temporary source and metadata were
 removed.
 
+A follow-up independently authored Rust 2024 metadata-only pair against this
+exact toolchain and commit accepted the same differing conditional inner
+backedges when a parameter overwrite preceded an unconditional inner break;
+rustc also reported a later local assignment as unreachable. Adding an earlier
+conditional break before normalization failed at the enclosing return with
+E0515. This is black-box evidence for that exact terminal boundary, not general
+fixed-point or region inference. Temporary source and metadata were removed.
+
 An independently authored Rust 2024 metadata-only composed-loop pair against
 this exact toolchain and commit accepted an outer-loop same-origin mutable
 reassignment followed by an inner-loop conditional return. Replacing that outer

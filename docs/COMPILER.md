@@ -1349,6 +1349,11 @@ header must converge exactly, while every break, return, and outer-target
 continue prefix must expose the same origins from the initial and joined
 headers. ORACLE-0002 accepts differing backedge origins normalized before every
 exit and rejects an exit that precedes normalization with E0515.
+The joined-header proof now also stops at the first reachable unconditional
+nested-loop exit. Only conditional inner continues ordered before that terminal
+feed the header; the terminal prefix is checked as an exit, and its suffix is
+unreachable. ORACLE-0002 accepts differing backedges followed by a normalized
+unconditional break and rejects an earlier local-backed break with E0515.
 
 The first modern trait-solver foundation is an explicit bounded implemented-
 goal representation. Stable trait/type/inference/placeholder identities remain

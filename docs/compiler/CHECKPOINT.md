@@ -624,6 +624,17 @@ component-interface probe, 10 conformance tests, and 335 replacement tests: 989
 compiler tests per host. Unconditional mixed-backedge and broader iterative
 fixed points remain incomplete.
 
+The bounded joined-header proof now recognizes the earliest unconditional
+nested-loop terminal. Conditional inner continues before that source-order
+boundary feed the header; normal fallthrough is excluded, the terminal prefix
+must agree between initial and converged headers, and later operations remain
+unreachable. ORACLE-0002 accepts differing conditional backedges followed by a
+parameter-normalized unconditional break and rejects an earlier local-backed
+break with E0515. Windows and Arch each pass 643 library tests, one component-
+interface probe, 10 conformance tests, and 335 replacement tests: 989 compiler
+tests per host. Nested branching transfers and broader iterative fixed points
+remain incomplete.
+
 The conditional callee-local reassignment milestone evaluates supported direct
 assignments from a copy of the incoming fixed local-origin state for every
 conditional outcome, then joins each local independently. A missing `else`
