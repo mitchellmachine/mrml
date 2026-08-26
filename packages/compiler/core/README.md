@@ -4483,6 +4483,17 @@ parents. Windows gnullvm and native Arch Linux WSL each pass 596 library tests,
 one component probe, 10 conformance tests, and 335 replacement tests: 942
 compiler tests per host.
 
+The concrete source-supertrait argument milestone distinguishes complete child
+parameters from complete concrete nominal types in each parent path. Concrete
+arguments intern in the bounded source type table and instantiate identically
+through generic, exact, and transitive supertrait proof; a missing exact match
+remains unavailable. The type-argument scanner also accounts for a nested
+generic close adjacent to the enclosing close so compound terms reach semantic
+admission and fail for the intended unsupported-position reason. Windows
+gnullvm and native Arch Linux WSL each pass 597 library tests, one component
+probe, 10 conformance tests, and 335 replacement tests: 943 compiler tests per
+host.
+
 The projection-bearing term milestone uses a fixed 64-node arena for flat leaf
 terms and associated-type projections whose trait self/argument positions refer
 only to earlier nodes. Identical nodes intern to one stable identity; invalid

@@ -1287,6 +1287,16 @@ gnullvm and native Arch Linux WSL each pass 596 library tests, one component-
 interface probe, 10 conformance tests, and 335 replacement tests: 942 compiler
 tests per host.
 
+The concrete source-supertrait argument milestone represents each parent
+argument as either a child declaration parameter index or a complete concrete
+nominal type. Concrete identities intern in the bounded source type table and
+instantiate through generic, exact, and transitive proof; mismatched parent
+facts remain unavailable. Adjacent nested/enclosing `>>` closes now reach
+semantic admission, where compound terms continue to fail closed. Windows
+gnullvm and native Arch Linux WSL each pass 597 library tests, one component-
+interface probe, 10 conformance tests, and 335 replacement tests: 943 compiler
+tests per host.
+
 The premise-bearing rigid-normalization milestone proves the selected generic
 implementation's instantiated trait and projection predicates before exposing
 its associated value. It shares the caller's 16-frame rigid proof stack and
