@@ -79,15 +79,22 @@ impl<const MAX_BYTES: usize> MachineCode<MAX_BYTES> {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub struct X86_64ExternalBranch<'symbol> {
+pub struct X86_64ExternalRelocation<'symbol> {
     pub offset: usize,
     pub symbol: &'symbol str,
+    pub kind: X86_64ExternalRelocationKind,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum X86_64ExternalRelocationKind {
+    Branch,
+    RipRelativeMemory,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct X86_64RelocatableMachineCode<'symbol, const MAX_BYTES: usize> {
     pub code: MachineCode<MAX_BYTES>,
-    pub external_branch: Option<X86_64ExternalBranch<'symbol>>,
+    pub external_relocation: Option<X86_64ExternalRelocation<'symbol>>,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -603,7 +610,7 @@ pub fn compile_x86_64_function_with_options<
 ) -> Result<MachineCode<MAX_BYTES>, CodegenError> {
     if function.naked {
         let output = compile_x86_64_naked_relocatable(function)?;
-        if output.external_branch.is_some() {
+        if output.external_relocation.is_some() {
             return Err(CodegenError {
                 kind: CodegenErrorKind::InvalidNakedAssembly,
                 span: function.body_expression_span,
@@ -1958,6 +1965,10 @@ pub fn compile_x86_64_naked_relocatable<
             || x86_64_naked_external_branch(instruction, att_syntax).is_some()
         {
             5
+        } else if let Some(external) =
+            x86_64_naked_external_memory_instruction(instruction, att_syntax)
+        {
+            external.length
         } else {
             encode_x86_64_naked_instruction_for_syntax(instruction, att_syntax)
                 .ok_or_else(|| error(CodegenErrorKind::InvalidNakedAssembly))?
@@ -1973,7 +1984,7 @@ pub fn compile_x86_64_naked_relocatable<
     let mut bytes = [0u8; MAX_BYTES];
     let mut terminating = false;
     let mut emitted_length = 0usize;
-    let mut external_branch = None;
+    let mut external_relocation = None;
     for (index, instruction) in instructions.iter().enumerate() {
         if x86_64_naked_label_definition(instruction).is_some() {
             continue;
@@ -2000,18 +2011,35 @@ pub fn compile_x86_64_naked_relocatable<
                 encoding[1..5].copy_from_slice(&displacement.to_le_bytes());
                 (encoding, 5, true)
             } else if let Some(symbol) = x86_64_naked_external_branch(instruction, att_syntax) {
-                if external_branch
-                    .replace(X86_64ExternalBranch {
+                if external_relocation
+                    .replace(X86_64ExternalRelocation {
                         offset: emitted_length
                             .checked_add(1)
                             .ok_or_else(|| error(CodegenErrorKind::OutputTooSmall))?,
                         symbol,
+                        kind: X86_64ExternalRelocationKind::Branch,
                     })
                     .is_some()
                 {
                     return Err(error(CodegenErrorKind::InvalidNakedAssembly));
                 }
                 ([0xe9, 0, 0, 0, 0, 0, 0, 0, 0, 0], 5, true)
+            } else if let Some(external) =
+                x86_64_naked_external_memory_instruction(instruction, att_syntax)
+            {
+                if external_relocation
+                    .replace(X86_64ExternalRelocation {
+                        offset: emitted_length
+                            .checked_add(external.relocation_offset)
+                            .ok_or_else(|| error(CodegenErrorKind::OutputTooSmall))?,
+                        symbol: external.symbol,
+                        kind: X86_64ExternalRelocationKind::RipRelativeMemory,
+                    })
+                    .is_some()
+                {
+                    return Err(error(CodegenErrorKind::InvalidNakedAssembly));
+                }
+                (external.encoding, external.length, external.terminating)
             } else {
                 encode_x86_64_naked_instruction_for_syntax(instruction, att_syntax)
                     .ok_or_else(|| error(CodegenErrorKind::InvalidNakedAssembly))?
@@ -2027,7 +2055,7 @@ pub fn compile_x86_64_naked_relocatable<
     let code = MachineCode::from_bytes(&bytes[..emitted_length]).map_err(error)?;
     Ok(X86_64RelocatableMachineCode {
         code,
-        external_branch,
+        external_relocation,
     })
 }
 
@@ -2070,6 +2098,10 @@ fn x86_64_naked_external_branch(instruction: &str, att_syntax: bool) -> Option<&
     {
         return None;
     }
+    x86_64_naked_external_symbol(symbol)
+}
+
+fn x86_64_naked_external_symbol(symbol: &str) -> Option<&str> {
     let mut bytes = symbol.bytes();
     let first = bytes.next()?;
     if !(first == b'_' || first.is_ascii_alphabetic())
@@ -2078,6 +2110,133 @@ fn x86_64_naked_external_branch(instruction: &str, att_syntax: bool) -> Option<&
         return None;
     }
     Some(symbol)
+}
+
+struct X86_64NakedExternalMemory<'symbol> {
+    encoding: [u8; 10],
+    length: usize,
+    relocation_offset: usize,
+    terminating: bool,
+    symbol: &'symbol str,
+}
+
+fn x86_64_naked_external_memory_instruction(
+    instruction: &str,
+    att_syntax: bool,
+) -> Option<X86_64NakedExternalMemory<'_>> {
+    let (mnemonic, operands) = instruction.split_once(' ')?;
+    let operands = operands.trim();
+    let (prefix, opcode, wide, register, operand, terminating) = if att_syntax {
+        match mnemonic {
+            "jmp" => (None, 0xff, false, 4, operands.strip_prefix('*')?, true),
+            "movq" => {
+                let (source, destination) = x86_64_naked_att_operands(operands)?;
+                let source = source.trim();
+                let destination = destination.trim();
+                if let Some(register) = x86_64_naked_att_register(destination) {
+                    (None, 0x8b, true, register, source, false)
+                } else {
+                    (
+                        None,
+                        0x89,
+                        true,
+                        x86_64_naked_att_register(source)?,
+                        destination,
+                        false,
+                    )
+                }
+            }
+            "lgdt" | "lidt" | "invlpg" => (
+                Some(0x0f),
+                0x01,
+                false,
+                match mnemonic {
+                    "lgdt" => 2,
+                    "lidt" => 3,
+                    _ => 7,
+                },
+                operands,
+                false,
+            ),
+            _ => return None,
+        }
+    } else {
+        match mnemonic {
+            "jmp" => (None, 0xff, false, 4, operands, true),
+            "mov" => {
+                let (destination, source) = operands.split_once(',')?;
+                let destination = destination.trim();
+                let source = source.trim();
+                if let Some(register) = x86_64_naked_register(destination) {
+                    (None, 0x8b, true, register, source, false)
+                } else {
+                    (
+                        None,
+                        0x89,
+                        true,
+                        x86_64_naked_register(source)?,
+                        destination,
+                        false,
+                    )
+                }
+            }
+            "lgdt" | "lidt" | "invlpg" => (
+                Some(0x0f),
+                0x01,
+                false,
+                match mnemonic {
+                    "lgdt" => 2,
+                    "lidt" => 3,
+                    _ => 7,
+                },
+                operands,
+                false,
+            ),
+            _ => return None,
+        }
+    };
+    let symbol = if att_syntax {
+        let open = operand.find('(')?;
+        if operand[open + 1..].strip_suffix(')')?.trim() != "%rip" {
+            return None;
+        }
+        x86_64_naked_external_symbol(operand[..open].trim())?
+    } else {
+        let expression = operand.strip_prefix('[')?.strip_suffix(']')?.trim();
+        let mut tokens = expression.split_whitespace();
+        if tokens.next()? != "rip" || tokens.next()? != "+" {
+            return None;
+        }
+        let symbol = x86_64_naked_external_symbol(tokens.next()?)?;
+        if tokens.next().is_some() {
+            return None;
+        }
+        symbol
+    };
+    let mut encoding = [0u8; 10];
+    let mut length = 0usize;
+    let rex = 0x40 | ((wide as u8) << 3) | ((register >> 3) << 2);
+    if rex != 0x40 {
+        encoding[length] = rex;
+        length += 1;
+    }
+    if let Some(prefix) = prefix {
+        encoding[length] = prefix;
+        length += 1;
+    }
+    encoding[length] = opcode;
+    length += 1;
+    encoding[length] = ((register & 7) << 3) | 5;
+    length += 1;
+    let relocation_offset = length;
+    length += 4;
+    Some(X86_64NakedExternalMemory {
+        encoding,
+        length,
+        relocation_offset,
+        terminating,
+        symbol,
+    })
 }
 
 fn encode_x86_64_naked_instruction(instruction: &str) -> Option<([u8; 10], usize, bool)> {
@@ -29035,10 +29194,11 @@ mod tests {
         let output = compile_x86_64_naked_relocatable::<16, 1>(&function).unwrap();
         assert_eq!(output.code.bytes(), &[0x90, 0xe9, 0, 0, 0, 0]);
         assert_eq!(
-            output.external_branch,
-            Some(X86_64ExternalBranch {
+            output.external_relocation,
+            Some(X86_64ExternalRelocation {
                 offset: 2,
                 symbol: "external_target",
+                kind: X86_64ExternalRelocationKind::Branch,
             })
         );
         assert_eq!(
@@ -29047,6 +29207,48 @@ mod tests {
                 .kind,
             CodegenErrorKind::InvalidNakedAssembly
         );
+
+        for source in [
+            concat!(
+                "#[unsafe(naked)] unsafe extern \"C\" fn external_memory() { ",
+                "naked_asm!(\"mov r10, [rip + external_data]\", \"ret\"); }"
+            ),
+            concat!(
+                "#[unsafe(naked)] unsafe extern \"C\" fn external_memory() { ",
+                "naked_asm!(\"movq external_data(%rip), %r10\", \"ret\", ",
+                "options(att_syntax)); }"
+            ),
+        ] {
+            let module = Parser::new(source).parse_module::<1, 1>().unwrap();
+            let Some(Item::Function(function)) = module.items()[0] else {
+                panic!("expected function")
+            };
+            let output = compile_x86_64_naked_relocatable::<16, 1>(&function).unwrap();
+            assert_eq!(output.code.bytes(), &[0x4c, 0x8b, 0x15, 0, 0, 0, 0, 0xc3]);
+            assert_eq!(
+                output.external_relocation,
+                Some(X86_64ExternalRelocation {
+                    offset: 3,
+                    symbol: "external_data",
+                    kind: X86_64ExternalRelocationKind::RipRelativeMemory,
+                })
+            );
+        }
+
+        for (instruction, expected) in [
+            ("mov [rip + data], r11", &[0x4c, 0x89, 0x1d][..]),
+            ("jmp [rip + target]", &[0xff, 0x25][..]),
+            ("lgdt [rip + table]", &[0x0f, 0x01, 0x15][..]),
+            ("movq %r11, data(%rip)", &[0x4c, 0x89, 0x1d][..]),
+            ("jmp *target(%rip)", &[0xff, 0x25][..]),
+            ("lgdt table(%rip)", &[0x0f, 0x01, 0x15][..]),
+        ] {
+            let external =
+                x86_64_naked_external_memory_instruction(instruction, instruction.contains('%'))
+                    .unwrap();
+            assert_eq!(&external.encoding[..external.relocation_offset], expected);
+            assert_eq!(external.length, external.relocation_offset + 4);
+        }
 
         let module = Parser::new(concat!(
             "#[unsafe(naked)] unsafe extern \"C\" fn labels() { ",
@@ -29161,6 +29363,14 @@ mod tests {
             ),
             (
                 "#[unsafe(naked)] unsafe extern \"C\" fn f() { naked_asm!(\"mov rax, [rip]\", \"ret\"); }",
+                CodegenErrorKind::InvalidNakedAssembly,
+            ),
+            (
+                "#[unsafe(naked)] unsafe extern \"C\" fn f() { naked_asm!(\"mov rax, [rip + bad.symbol]\", \"ret\"); }",
+                CodegenErrorKind::InvalidNakedAssembly,
+            ),
+            (
+                "#[unsafe(naked)] unsafe extern \"C\" fn f() { naked_asm!(\"mov rax, [rip + first]\", \"jmp second\"); }",
                 CodegenErrorKind::InvalidNakedAssembly,
             ),
             (

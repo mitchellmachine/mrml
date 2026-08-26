@@ -21,6 +21,13 @@ pub enum ObjectError {
 pub struct X86_64PcRelativeRelocation<'symbol> {
     pub offset: usize,
     pub symbol: &'symbol str,
+    pub kind: X86_64PcRelativeRelocationKind,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum X86_64PcRelativeRelocationKind {
+    Branch,
+    Data,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -265,7 +272,11 @@ pub fn emit_elf64_x86_64_with_relocation<
     writer.align(8)?;
     let relocation_offset = writer.position;
     writer.u64(to_u64(relocation.offset)?)?;
-    writer.u64((2u64 << 32) | 4)?;
+    let relocation_type = match relocation.kind {
+        X86_64PcRelativeRelocationKind::Branch => 4,
+        X86_64PcRelativeRelocationKind::Data => 2,
+    };
+    writer.u64((2u64 << 32) | relocation_type)?;
     writer.i64(-4)?;
     let symbol_offset = writer.position;
     writer.zeros(ELF_SYMBOL_BYTES)?;
@@ -607,6 +618,7 @@ mod tests {
         let relocation = X86_64PcRelativeRelocation {
             offset: 1,
             symbol: "external_target",
+            kind: X86_64PcRelativeRelocationKind::Branch,
         };
         let elf =
             emit_elf64_x86_64_with_relocation::<768, 16>("answer", &code, relocation).unwrap();
@@ -635,6 +647,20 @@ mod tests {
         assert_eq!(u32_at(bytes, 12), 2);
         assert_eq!(i16::from_le_bytes(bytes[107..109].try_into().unwrap()), 0);
         assert_eq!(&bytes[121..136], b"external_target");
+
+        let data = X86_64PcRelativeRelocation {
+            kind: X86_64PcRelativeRelocationKind::Data,
+            ..relocation
+        };
+        let elf = emit_elf64_x86_64_with_relocation::<768, 16>("answer", &code, data).unwrap();
+        let bytes = elf.bytes();
+        let sections = u64_at(bytes, 40) as usize;
+        let rela = sections + 2 * ELF_SECTION_HEADER_BYTES;
+        let entries = u64_at(bytes, rela + 24) as usize;
+        assert_eq!(u64_at(bytes, entries + 8), (2u64 << 32) | 2);
+
+        let coff = emit_x86_64_coff_with_relocation::<384, 16>("answer", &code, data).unwrap();
+        assert_eq!(u16_at(coff.bytes(), 79), 4);
     }
 
     #[test]
@@ -667,6 +693,7 @@ mod tests {
         let invalid = X86_64PcRelativeRelocation {
             offset: code.len() - 3,
             symbol: "external_target",
+            kind: X86_64PcRelativeRelocationKind::Branch,
         };
         assert_eq!(
             emit_elf64_x86_64_with_relocation::<768, 16>("answer", &code, invalid),

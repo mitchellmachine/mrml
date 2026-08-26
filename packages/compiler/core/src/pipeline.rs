@@ -4,9 +4,9 @@ use crate::{
     ObjectFile, ParseErrorKind, Parser, SemanticErrorKind, SourceTraitDeclarationError,
     SourceTraitDeclarationTable, SourceTraitImplementationError, SourceTraitImplementationTable,
     SourceTraitObligationError, Span, TargetLayout, X86_64Abi, X86_64PcRelativeRelocation,
-    analyze_constants, compile_x86_64_function_with_options, compile_x86_64_naked_relocatable,
-    emit_elf64_x86_64, emit_elf64_x86_64_with_relocation, emit_x86_64_coff,
-    emit_x86_64_coff_with_relocation,
+    X86_64PcRelativeRelocationKind, analyze_constants, compile_x86_64_function_with_options,
+    compile_x86_64_naked_relocatable, emit_elf64_x86_64, emit_elf64_x86_64_with_relocation,
+    emit_x86_64_coff, emit_x86_64_coff_with_relocation,
 };
 
 struct PipelineResolver<
@@ -271,13 +271,13 @@ pub fn compile_source_function_with_options<
         constants: &constants,
         target,
     };
-    let (code, external_branch) = if function.naked {
+    let (code, external_relocation) = if function.naked {
         let output = compile_x86_64_naked_relocatable::<MAX_CODE_BYTES, MAX_PARAMETERS>(function)
             .map_err(|error| CompileError {
-                kind: CompileErrorKind::Codegen(error.kind),
-                span: Some(error.span),
-            })?;
-        (output.code, output.external_branch)
+            kind: CompileErrorKind::Codegen(error.kind),
+            span: Some(error.span),
+        })?;
+        (output.code, output.external_relocation)
     } else {
         let code = compile_x86_64_function_with_options::<
             _,
@@ -291,9 +291,15 @@ pub fn compile_source_function_with_options<
         })?;
         (code, None)
     };
-    let relocation = external_branch.map(|branch| X86_64PcRelativeRelocation {
-        offset: branch.offset,
-        symbol: branch.symbol,
+    let relocation = external_relocation.map(|relocation| X86_64PcRelativeRelocation {
+        offset: relocation.offset,
+        symbol: relocation.symbol,
+        kind: match relocation.kind {
+            crate::X86_64ExternalRelocationKind::Branch => X86_64PcRelativeRelocationKind::Branch,
+            crate::X86_64ExternalRelocationKind::RipRelativeMemory => {
+                X86_64PcRelativeRelocationKind::Data
+            }
+        },
     });
     match (format, relocation) {
         (ObjectFormat::Elf64, Some(relocation)) => {
@@ -392,6 +398,43 @@ mod tests {
         );
         compile(att, "entry", ObjectFormat::Elf64).unwrap();
         compile(att, "entry", ObjectFormat::Coff).unwrap();
+    }
+
+    #[test]
+    fn emits_naked_rip_relative_memory_with_data_relocations() {
+        for source in [
+            concat!(
+                "#[unsafe(naked)] pub unsafe extern \"C\" fn entry() ",
+                "{ naked_asm!(\"mov r10, [rip + external_data]\", \"ret\"); }"
+            ),
+            concat!(
+                "#[unsafe(naked)] pub unsafe extern \"C\" fn entry() ",
+                "{ naked_asm!(\"movq external_data(%rip), %r10\", \"ret\", ",
+                "options(att_syntax)); }"
+            ),
+        ] {
+            let elf = compile(source, "entry", ObjectFormat::Elf64).unwrap();
+            let section_headers =
+                u64::from_le_bytes(elf.bytes()[40..48].try_into().unwrap()) as usize;
+            let rela = section_headers + 2 * 64;
+            let entries =
+                u64::from_le_bytes(elf.bytes()[rela + 24..rela + 32].try_into().unwrap()) as usize;
+            let info =
+                u64::from_le_bytes(elf.bytes()[entries + 8..entries + 16].try_into().unwrap());
+            assert_eq!(info, (2u64 << 32) | 2);
+
+            let coff = compile(source, "entry", ObjectFormat::Coff).unwrap();
+            let relocation_offset =
+                u32::from_le_bytes(coff.bytes()[44..48].try_into().unwrap()) as usize;
+            assert_eq!(
+                u16::from_le_bytes(
+                    coff.bytes()[relocation_offset + 8..relocation_offset + 10]
+                        .try_into()
+                        .unwrap()
+                ),
+                4
+            );
+        }
     }
 
     #[test]

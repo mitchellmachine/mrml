@@ -18,8 +18,9 @@ pub mod semantics;
 pub mod trait_goals;
 
 pub use codegen::{
-    CodegenError, CodegenErrorKind, CodegenOptions, MachineCode, X86_64Abi, X86_64ExternalBranch,
-    X86_64RelocatableMachineCode, compile_x86_64_constant_function, compile_x86_64_function,
+    CodegenError, CodegenErrorKind, CodegenOptions, MachineCode, X86_64Abi,
+    X86_64ExternalRelocation, X86_64ExternalRelocationKind, X86_64RelocatableMachineCode,
+    compile_x86_64_constant_function, compile_x86_64_function,
     compile_x86_64_function_with_options, compile_x86_64_naked_relocatable,
 };
 pub use expression::{
@@ -34,8 +35,9 @@ pub use ir::{
 };
 pub use lexer::{LexError, LexErrorKind, Lexer, Span, Token, TokenKind};
 pub use object::{
-    ObjectError, ObjectFile, X86_64PcRelativeRelocation, emit_elf64_x86_64,
-    emit_elf64_x86_64_with_relocation, emit_x86_64_coff, emit_x86_64_coff_with_relocation,
+    ObjectError, ObjectFile, X86_64PcRelativeRelocation, X86_64PcRelativeRelocationKind,
+    emit_elf64_x86_64, emit_elf64_x86_64_with_relocation, emit_x86_64_coff,
+    emit_x86_64_coff_with_relocation,
 };
 pub use parser::{
     Assignment, AssignmentOperator, BodyStatement, ConditionalAssignment,
