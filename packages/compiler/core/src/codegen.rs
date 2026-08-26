@@ -14585,15 +14585,15 @@ fn runtime_call_arguments_preanalysis_supported<
 fn runtime_reference_call_origin_parameter<const MAX_PARAMETERS: usize, const MAX_NODES: usize>(
     target: crate::RuntimeCallTarget<'_, MAX_PARAMETERS>,
 ) -> Option<usize> {
-    fn compatible_name<const MAX_PARAMETERS: usize>(
+    fn compatible_place<const MAX_PARAMETERS: usize>(
         target: crate::RuntimeCallTarget<'_, MAX_PARAMETERS>,
-        name: &str,
+        place: RuntimeReadPlace<'_>,
         local_names: &[Option<&str>; MAX_PARAMETERS],
         local_origins: &[Option<usize>; MAX_PARAMETERS],
         local_count: usize,
     ) -> Option<usize> {
         for index in (0..local_count).rev() {
-            if local_names[index] == Some(name) {
+            if local_names[index] == Some(place.name) {
                 return local_origins[index];
             }
         }
@@ -14616,10 +14616,32 @@ fn runtime_reference_call_origin_parameter<const MAX_PARAMETERS: usize, const MA
                 else {
                     return None;
                 };
-                (parameter.name == name
-                    && parameter_target == result_target
-                    && (!result_mutable || parameter_mutable))
-                    .then_some(index)
+                if parameter.name != place.name || (result_mutable && !parameter_mutable) {
+                    return None;
+                }
+                let projections = &place.projections;
+                let identity_projection = projections.count == 0
+                    || (projections.count == 1
+                        && projections.items[0] == Some(RuntimePlaceProjection::Dereference));
+                let indexed_projection = (projections.count == 1
+                    && projections.items[0] == Some(RuntimePlaceProjection::Index))
+                    || (projections.count == 2
+                        && projections.items[0] == Some(RuntimePlaceProjection::Dereference)
+                        && projections.items[1] == Some(RuntimePlaceProjection::Index));
+                let compatible = (identity_projection && parameter_target == result_target)
+                    || (indexed_projection
+                        && matches!(
+                            (parameter_target, result_target),
+                            (
+                                RuntimeReferenceTarget::Array {
+                                    element: parameter_element,
+                                    ..
+                                }
+                                    | RuntimeReferenceTarget::Slice(parameter_element),
+                                RuntimeReferenceTarget::Scalar(result_element),
+                            ) if parameter_element == result_element
+                        ));
+                compatible.then_some(index)
             })
     }
 
@@ -14636,7 +14658,7 @@ fn runtime_reference_call_origin_parameter<const MAX_PARAMETERS: usize, const MA
             return None;
         }
         if let Some(place) = discover_runtime_read_place(tree, id).ok().flatten() {
-            return compatible_name(target, place.name, local_names, local_origins, local_count);
+            return compatible_place(target, place, local_names, local_origins, local_count);
         }
         match tree.expression(id)?.kind {
             ExprKind::Unary {
@@ -30800,8 +30822,27 @@ mod tests {
                 target: crate::PointerPointee::Integer(crate::IntegerType::U16),
                 mutable: false,
             };
+            let array_reference = ScalarType::ArrayReference {
+                element: crate::CallArrayElement::Integer(crate::IntegerType::U16),
+                count: 2,
+                mutable: true,
+            };
             let mut parameters = [None; MAX_PARAMETERS];
             match (name, argument_count) {
+                ("array_element", 1) => {
+                    parameters[0] = Some(RuntimeCallParameter {
+                        name: "values",
+                        ty: array_reference,
+                    });
+                    Some(RuntimeCallTarget {
+                        name: "array_element",
+                        parameters,
+                        parameter_count: 1,
+                        return_type: reference,
+                        return_type_name: "&mut u16",
+                        body_expression: "&mut values[0]",
+                    })
+                }
                 ("identity", 1) => {
                     parameters[0] = Some(RuntimeCallParameter {
                         name: "value",
@@ -35102,6 +35143,82 @@ mod tests {
                 None
             );
         }
+    }
+
+    #[test]
+    fn runtime_array_element_call_results_retain_argument_origins() {
+        fn analyze(source: &str) -> Result<usize, CodegenError> {
+            let module = Parser::new(source).parse_module::<1, 4>().unwrap();
+            let Some(Item::Function(function)) = module.items()[0] else {
+                panic!("expected function")
+            };
+            let body = function.parse_body::<4>().unwrap();
+            let mut facts = RuntimeBodyFacts::EMPTY;
+            preanalyze_runtime_body_declarations::<_, 4, 32>(
+                &function,
+                &MutableReferenceCallResolver,
+                &body,
+                "u16",
+                function.body_expression_span.start,
+                &mut facts,
+            )
+        }
+
+        assert_eq!(
+            analyze(concat!(
+                "fn value(input: &mut [u16; 2]) -> u16 { ",
+                "let returned: &mut u16 = array_element(input); ",
+                "let competing: &mut u16 = &mut input[0]; ",
+                "*competing += 1; *returned }"
+            ))
+            .unwrap_err()
+            .kind,
+            CodegenErrorKind::RuntimeBorrowConflict
+        );
+        analyze(concat!(
+            "fn value(input: &mut [u16; 2]) -> u16 { ",
+            "let returned: &mut u16 = array_element(input); *returned += 1; ",
+            "let restored: &mut u16 = &mut input[0]; *restored }"
+        ))
+        .unwrap();
+
+        let target = MutableReferenceCallResolver
+            .resolve_runtime_call::<2>("array_element", 1)
+            .unwrap();
+        assert_eq!(
+            runtime_reference_call_origin_parameter::<2, 16>(target),
+            Some(0)
+        );
+        assert_eq!(
+            runtime_reference_call_origin_parameter::<2, 16>(RuntimeCallTarget {
+                body_expression: "&mut (*values)[1]",
+                ..target
+            }),
+            Some(0)
+        );
+        assert_eq!(
+            runtime_reference_call_origin_parameter::<2, 16>(RuntimeCallTarget {
+                body_expression: "&mut values",
+                ..target
+            }),
+            None
+        );
+        let mut shared_parameters = target.parameters;
+        shared_parameters[0] = Some(RuntimeCallParameter {
+            ty: ScalarType::ArrayReference {
+                element: crate::CallArrayElement::Integer(crate::IntegerType::U16),
+                count: 2,
+                mutable: false,
+            },
+            ..shared_parameters[0].unwrap()
+        });
+        assert_eq!(
+            runtime_reference_call_origin_parameter::<2, 16>(RuntimeCallTarget {
+                parameters: shared_parameters,
+                ..target
+            }),
+            None
+        );
     }
 
     #[test]
