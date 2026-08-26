@@ -36,6 +36,13 @@ it adds no VM construction, placement algorithm, scheduling policy, interface
 transport, device, DMA, queue, interrupt, or hardware mechanism. Broader
 adaptive/Total MicroVM execution remains **TRIGGERED**.
 
+Selecting four distinct existing files from one already validated storage root
+and retaining their graph owner is **NOT_TRIGGERED**. This is conventional typed
+identity equality, duplicate rejection, and ownership retention. It adds no
+placement algorithm, VM construction, scheduler, interface transport, device,
+DMA, queue, interrupt, or hardware mechanism. Broader adaptive/Total MicroVM
+execution remains **TRIGGERED**.
+
 ## 2026-08-26 — Canonical one-use installed recovery envelope
 
 Patent review: **NOT_TRIGGERED** for extending the existing one-use boot-recovery
@@ -8439,3 +8446,14 @@ region, alias, inference, optimization, or instruction-selection algorithm.
 Longer alternative chains remain fail-closed. Broader compiler completion
 remains partial; this technical screen is not a clearance or infringement
 conclusion and does not replace independent human dual review.
+
+# 2026-08-26 — Bounded nested loop alternative-chain representation
+
+**Result: NOT_TRIGGERED after the representation and constant-semantics
+review.** This increment stores up to four conventional ordered conditional
+alternatives in a fixed array and evaluates the first matching arm with the
+existing bounded Boolean and scoped-action machinery. It adds no novel
+control-flow, region, alias, inference, optimization, or instruction-selection
+algorithm. Unindexed CFG, ownership, and native consumers fail closed. Broader
+compiler completion remains partial; this technical screen is not a clearance
+or infringement conclusion and does not replace independent human dual review.

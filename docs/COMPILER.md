@@ -1386,7 +1386,11 @@ enters its scoped actions, and alternative false preserves fallthrough. Native
 emission now mirrors that two-stage decision for direct and helper-inlined
 x86-64 functions: the alternative is evaluated exactly once only after primary
 false, and its false edge preserves fallthrough. ELF64 and COFF probes cover
-both emission paths. Longer alternative chains remain unrepresented.
+both emission paths. The representation now retains up to four ordered
+alternative arms, including an optional final `else`, and the constant
+evaluator lazily selects the first matching arm. CFG, ownership, and native
+consumers still explicitly fail closed when more than one alternative is
+present until their identities carry an alternative index.
 The bounded constant evaluator selects
 exactly one arm, executes its actions under a lexical resolver checkpoint, and
 routes its target-aware terminal under the existing iteration limit. CFG

@@ -174,6 +174,15 @@ and helper-inlined x86-64 paths into ELF64 and COFF objects. This remains syntax
 and control-shape oracle evidence only, not general branch-chain, region, or
 native-code evidence from rustc. Temporary source and metadata were removed.
 
+An independently authored Rust 2024 metadata-only nested-loop chain against
+this exact toolchain and commit accepted a primary arm, two ordered `else if`
+arms with scoped locals, and a final `else`; four const calls selected each
+outcome. MRML now retains up to four alternatives and evaluates that bounded
+chain lazily, while CFG, ownership, and native compilation of more than one
+alternative remain fail-closed. This is syntax and const-control-shape evidence
+only, not general branch-chain, region, or native-code evidence. Temporary
+source and metadata were removed.
+
 An independently authored Rust 2024 metadata-only nested-break set against this
 exact toolchain and commit accepted a local-initialized alias overwritten by the
 parameter before an inner unconditional-loop break and returned afterward.

@@ -705,9 +705,12 @@ preanalysis records and maps the alternative-condition reads separately from
 its actions and terminal. Direct and helper-inlined x86-64 emission now lazily
 tests the alternative condition after primary false, routes true through the
 existing scoped actions and terminal, and preserves false fallthrough. ELF64
-and COFF probes cover both native paths. Longer alternative chains remain
-fail-closed. The exact dated oracle accepts the same
-independently authored Rust 2024 control shape. Windows and Arch each continue
+and COFF probes cover both native paths. The parser now retains up to four
+ordered alternatives, including an optional final `else`, and constant
+evaluation lazily selects only the first matching arm. CFG, ownership, and
+native consumers explicitly fail closed for more than one alternative until
+their public identities include an alternative index. The exact dated oracle
+accepts an independently authored Rust 2024 four-outcome chain. Windows and Arch each continue
 to pass 645 library tests, one component-interface probe, 10 conformance tests,
 and 336 replacement tests: 992 compiler tests per host.
 
