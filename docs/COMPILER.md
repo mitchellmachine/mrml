@@ -1050,10 +1050,17 @@ Conditional assignment from two exact mutable-reference tuple fields now keeps
 each branch field's recorded owner in the bounded loan-ancestry walk. A later
 mutation of either possible owner conflicts while the assigned child remains
 live, and either owner is available after the child's last use. The ancestry
-step follows only exact tuple-field initializer or reassignment evidence;
+step follows only exact tuple-field initializer and reassignment generations;
 unknown projections remain conservative. ORACLE-0002 accepts both restoration
 controls and rejects both live competitors with E0499. This is not general
 path-sensitive alias or region inference.
+
+When an exact tuple reference field is overwritten before a child is moved from
+it, that child now retains the initializer owner and every recorded intermediate
+and latest field owner. This matches the dated oracle: the original owner fails
+with E0503 and the replacement owner fails with E0499 while the child remains
+live, while both owners are available after its last use. The traversal remains
+bounded by the existing effect and initialization capacities.
 
 The first modern trait-solver foundation is an explicit bounded implemented-
 goal representation. Stable trait/type/inference/placeholder identities remain

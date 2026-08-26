@@ -741,13 +741,20 @@ competition with E0499 and local-backed escape with E0515. Windows and Arch each
 pass 987 compiler tests. This adds evidence, not nested fixed-point analysis.
 
 Conditional projected-loan ancestry now follows an exact tuple field through
-its recorded initializer or latest reassignment origin instead of stopping at
+its recorded initializer and reassignment generations instead of stopping at
 the projected path. A conditional assignment selecting either of two mutable-
 reference fields therefore retains both possible owners: live mutation of each
 owner fails, while both are restored after the child's last use. ORACLE-0002
 accepted both restoration controls and rejected both competitors with E0499.
 Windows and Arch each pass 987 compiler tests. Unknown projections and general
 path-sensitive regions remain unsupported.
+
+Projected ancestry across an overwritten tuple field retains every exact field
+generation rather than selecting only the latest. ORACLE-0002 rejected use of
+the initializer owner with E0503 and the replacement owner with E0499 while a
+moved child remained live, then accepted both owners after last use. Windows and
+Arch each pass 987 compiler tests. The traversal is fixed-capacity and does not
+infer unknown aggregate generations.
 
 Multi-field tuple literals retain a separate projected origin per field. A
 conditional reference element seeds its field only when both arms prove the

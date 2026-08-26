@@ -404,6 +404,14 @@ reuse after the child's last use. Temporary sources and metadata were removed.
 This is conditional exact projected-loan evidence, not general path-sensitive
 alias or region inference.
 
+A follow-up independently authored Rust 2024 metadata-only probe against the
+same exact toolchain and commit overwrote a mutable-reference tuple field before
+moving a child from it. The oracle rejected use of the original field owner with
+E0503 and a live competing borrow of the replacement owner with E0499. Separate
+passing functions used the child first and then reused each owner. Temporary
+sources and metadata were removed. This is exact multi-generation tuple-field
+evidence, not general aggregate history or region inference.
+
 Another independently authored Rust 2024 metadata-only probe against the same
 exact toolchain and commit accepted assigning a parameter-backed tuple field
 into an existing mutable-reference local and returning that local. The same

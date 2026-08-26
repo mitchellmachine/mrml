@@ -4060,11 +4060,17 @@ parameter-backed result and owner restoration after last use and rejects live
 competition and local-backed escape. Both hosts remain at 987 tests.
 
 Conditional assignment from two exact tuple-field reborrows now traces each
-projected loan back through the field's recorded initializer or reassignment
+projected loan back through the field's recorded initializer and reassignment
 origin. Both possible owners remain protected while the selected child is live
 and become available after its last use. The pinned oracle rejects both live
 competitors with E0499 and accepts both restoration controls; Windows and Arch
 remain at 987 tests.
+
+An overwritten tuple reference field now retains the initializer, intermediate,
+and latest exact owners for descendants moved from that field. The pinned oracle
+rejects the original owner with E0503 and replacement owner with E0499 while the
+child remains live and accepts both after last use. Windows and Arch remain at
+987 tests.
 
 The conditional projected-reassignment milestone extends the bounded tuple-field
 loan chain across a conditional shared-reference assignment. The exact dated
