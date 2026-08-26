@@ -672,6 +672,15 @@ local-backed field initialization followed by parameter replacement with E0515,
 and MRML likewise does not claim that shape. Windows and Arch each pass 641
 library, 1 component, 10 conformance, and 335 replacement tests: 987 per host.
 
+The conditional projected-origin integration forks the fixed projected state
+for each arm and intersects fallthrough outcomes. Equal typed tuple-field
+origins survive; unequal origins and a non-exhaustive path retaining the incoming
+generation become unknown. Return-only arms remain exit evidence rather than
+post-conditional state. ORACLE-0002 accepts exhaustive replacement from a first
+mutable-reference parameter to a second, accepts second-owner reuse after the
+returned child's last use, and rejects a live competitor with E0499. Windows
+and Arch remain at 987 tests per host. Projected loop writes still fail closed.
+
 Inferred locals now become reassignment-origin eligible only when their
 initializer already proved a compatible parameter origin. This preserves valid
 indexed scalar alias replacement while preventing an inferred slice alias from

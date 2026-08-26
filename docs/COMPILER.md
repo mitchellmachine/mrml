@@ -949,6 +949,15 @@ borrow of the second parameter while the child remains live with E0499. It
 rejects the superficially similar local-backed initialization-and-replacement
 shape with E0515, so MRML does not admit that divergence.
 
+Exhaustive conditional assignment now forks that projected state per arm and
+intersects only fallthrough outcomes. An identical typed field origin survives;
+a differing origin or a missing `else` that preserves the incoming generation
+clears the joined evidence. Return-only arms do not contaminate post-conditional
+state. ORACLE-0002 accepts the exact both-arm replacement from a first mutable-
+reference parameter to a second, accepts reuse after last use, and rejects a
+live competing borrow of the second owner with E0499. Projected loop writes
+remain unsupported.
+
 The first modern trait-solver foundation is an explicit bounded implemented-
 goal representation. Stable trait/type/inference/placeholder identities remain
 distinct; canonicalization replaces inference identities with first-occurrence

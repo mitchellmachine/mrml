@@ -303,6 +303,15 @@ continues to reject the local-backed divergence. Temporary probe sources and
 metadata were removed. This is black-box evidence for that bounded shape, not
 general aggregate dataflow, conditional joins, loops, or region inference.
 
+An additional independently authored Rust 2024 metadata-only probe against the
+same exact toolchain and commit accepted exhaustive conditional arms that each
+replaced a one-element mutable-reference tuple field from a first parameter to
+the same second parameter. The caller could reborrow the second owner after the
+returned child's last use. A separate invocation rejected a competing mutable
+borrow of that owner while the child remained live with E0499. Temporary probe
+sources and metadata were removed. This records only the exact equal-origin
+conditional replacement, not general aggregate dataflow or region inference.
+
 An independently authored Rust 2024 metadata-only probe against that same exact
 toolchain and commit compiled `asm!("cmp rcx, rcx", in("rcx") value,
 options(nomem, nostack))`. This records black-box acceptance of that exact

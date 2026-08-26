@@ -3958,6 +3958,15 @@ by parameter replacement with E0515, so that shape remains outside MRML's
 accepted subset. Windows and Arch each pass 641 library, 1 component, 10
 conformance, and 335 replacement tests (987 per host).
 
+Exhaustive conditional tuple-field assignments now use a copy of the bounded
+projected state per arm and intersect only arms that fall through. Identical
+typed origins survive, while unequal origins and an implicit incoming `else`
+path clear the evidence. Focused caller tests preserve the second parameter's
+loan through the returned child, reject a live competing reborrow, and allow
+owner reuse after last use. ORACLE-0002 accepts that exact both-arm shape and
+rejects the live competitor with E0499. Projected loop writes remain fail-
+closed; this is not general conditional aggregate or region inference.
+
 The conditional projected-reassignment milestone extends the bounded tuple-field
 loan chain across a conditional shared-reference assignment. The exact dated
 oracle rejects mutation of either conditional owner and of the field's replaced
