@@ -7185,3 +7185,15 @@ lifetime inference, interprocedural analysis, alias analysis, optimization, or
 code-generation algorithm. General regions remain absent. Broader compiler
 completion remains partial; this technical screen is not a clearance or
 infringement conclusion and does not replace independent human dual review.
+
+# 2026-08-26 — Projected call-derived shared-child return-site evidence
+
+**Result: NOT_TRIGGERED after the projected return-site evidence review.** This
+increment adds independently authored regression evidence that existing bounded
+projected callee-origin and return-outlives checks compose at explicit and
+conditional return sites. It introduces no new lifetime inference,
+interprocedural analysis, control-flow algorithm, borrow-checking, alias-
+analysis, optimization, or code-generation mechanism. General interprocedural
+lifetime inference remains absent. Broader compiler completion remains partial;
+this technical screen is not a clearance or infringement conclusion and does
+not replace independent human dual review.
