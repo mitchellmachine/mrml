@@ -2981,8 +2981,20 @@ stale-generation, and wrong-mode cases. This is shared semantic-service evidence
 not a rendered GUI, shell parser, trusted accessibility surface, or Total-mode
 completion.
 
+The first frontend adapters preserve that common contract. A Settings action
+contains only the selected enum and expected revision. The bounded object-shell
+parser accepts `isolation show` and
+`isolation set <selection> <expected-revision>`; it has no grammar for object
+IDs, capabilities, provider names, paths, placement bypass, or fallback. Both
+produce the identical canonical edit and reach the same scope, revision, and
+capability checks. The 41-test suites on Windows and Arch Linux cover component
+and system selections, extra-token rejection, revision overflow, scope
+confusion, and byte equality. This is parser/semantic-adapter evidence, not a
+rendered Settings app, running object shell, or trusted accessibility surface.
+
 Patent review: `NOT_TRIGGERED` for this conventional fixed-record
-encode/decode and optimistic revision-bound transaction composition. The
+encode/decode, bounded literal command parser, and optimistic revision-bound
+transaction composition. The
 broader adaptive placement and automated VMM/resource selection reviews remain
 `TRIGGERED` in [patents/REVIEW_LOG.md](patents/REVIEW_LOG.md).
 

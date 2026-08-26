@@ -650,6 +650,16 @@ privacy-bounded aggregate status. Policy-generation or requested-mode drift
 rejects the composition; the view contains no domain identity, capability, or
 mutation/launch authority.
 
+The first semantic frontend adapters are also **PARTIALLY IMPLEMENTED** in the
+same service contract. `IsolationSettingsAction` maps an owner selection and
+expected revision to the canonical edit without widget identity or privilege.
+`IsolationShellCommand` accepts only `isolation show` or
+`isolation set <selection> <expected-revision>` and cannot parse object IDs,
+capabilities, providers, paths, or fallback instructions from text. Component/
+system scope validation remains in the common edit constructor. A rendered
+Settings application, a complete object-shell process and output formatter,
+trusted semantic surfaces, and restart/reboot presentation remain **PLANNED**.
+
 The planned Settings application and object shell project that one typed policy
 service. They distinguish configured default, requested boot mode, effective
 state, and policy generation; show floors, supported forms, blockers, overhead,

@@ -201,8 +201,12 @@ remain **PLANNED**. The common privacy-bounded semantic projection is now
 **PARTIALLY IMPLEMENTED**: it exposes the configured selections, package bounds
 and supported forms, resolved placement/source or blocked state, and exact
 aggregate kernel snapshot only when policy generation and requested mode match.
-Concrete Settings and shell adapters are the remaining frontend gate before
-strict Total runtime enforcement.
+Rendered Settings and running shell adapters are the remaining frontend gate
+before strict Total runtime enforcement. Their first semantic adapters are now
+**PARTIALLY IMPLEMENTED**: Settings actions and a bounded object-shell parser
+produce the same canonical edit, and shell text cannot select authority,
+objects, providers, paths, or fallback. Rendered/interactive processes and
+trusted accessibility presentation remain **PLANNED**.
 
 The deployment lane is defined in [DEPLOYMENT.md](DEPLOYMENT.md) and must not
 displace the current foundational gate. Later work proceeds as separate bounded

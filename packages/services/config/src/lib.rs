@@ -2152,6 +2152,73 @@ impl CommittedIsolationPolicyEdit {
     }
 }
 
+/// Semantic Settings action. Widget identity is deliberately absent: mapping a
+/// control to this action grants no authority and commits through the same edit
+/// path as every other frontend.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct IsolationSettingsAction {
+    selection: OwnerIsolationSelection,
+    expected_revision: u64,
+}
+
+impl IsolationSettingsAction {
+    pub const fn new(selection: OwnerIsolationSelection, expected_revision: u64) -> Self {
+        Self {
+            selection,
+            expected_revision,
+        }
+    }
+
+    pub fn edit(self, setting: IsolationPolicySetting) -> Result<IsolationPolicyEdit, ConfigError> {
+        IsolationPolicyEdit::new(setting, self.selection, self.expected_revision)
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum IsolationShellCommand {
+    Show,
+    Set(IsolationPolicyEdit),
+}
+
+impl IsolationShellCommand {
+    /// Parses the bounded object-shell form without accepting object IDs,
+    /// capabilities, provider names, paths, or fallback instructions from text.
+    ///
+    /// `isolation show`
+    /// `isolation set <selection> <expected-revision>`
+    pub fn parse(input: &str, setting: IsolationPolicySetting) -> Result<Self, ConfigError> {
+        let mut parts = input.split_whitespace();
+        if parts.next() != Some("isolation") {
+            return Err(ConfigError::InvalidProtocol);
+        }
+        match parts.next() {
+            Some("show") if parts.next().is_none() => Ok(Self::Show),
+            Some("set") => {
+                let selection = match parts.next() {
+                    Some("default") => OwnerIsolationSelection::Default,
+                    Some("native") => OwnerIsolationSelection::Native,
+                    Some("microvm") => OwnerIsolationSelection::Microvm,
+                    Some("balanced") => OwnerIsolationSelection::Balanced,
+                    Some("more-isolated") => OwnerIsolationSelection::MoreIsolated,
+                    Some("total-microvm") => OwnerIsolationSelection::TotalMicrovm,
+                    Some("custom") => OwnerIsolationSelection::Custom,
+                    _ => return Err(ConfigError::InvalidValue),
+                };
+                let revision = parts
+                    .next()
+                    .ok_or(ConfigError::InvalidProtocol)?
+                    .parse::<u64>()
+                    .map_err(|_| ConfigError::InvalidValue)?;
+                if parts.next().is_some() {
+                    return Err(ConfigError::NonCanonical);
+                }
+                IsolationPolicyEdit::new(setting, selection, revision).map(Self::Set)
+            }
+            _ => Err(ConfigError::InvalidProtocol),
+        }
+    }
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct PersistedIsolationPolicy {
     setting: IsolationPolicySetting,
@@ -7839,6 +7906,17 @@ mod tests {
         .unwrap();
         let system =
             IsolationPolicySetting::system(SettingId::new(41).unwrap(), system_object).unwrap();
+        let system_edit = IsolationSettingsAction::new(OwnerIsolationSelection::TotalMicrovm, 0)
+            .edit(system)
+            .unwrap();
+        assert_eq!(
+            IsolationShellCommand::parse("isolation set total-microvm 0", system),
+            Ok(IsolationShellCommand::Set(system_edit))
+        );
+        assert_eq!(
+            IsolationShellCommand::parse("isolation set native 0", system),
+            Err(ConfigError::SchemaViolation)
+        );
         let schemas = [component.schema().unwrap(), system.schema().unwrap()];
         let mut configuration = ConfigurationService::<2, 4>::new(root_object, &schemas).unwrap();
         let mut capabilities = CapabilitySpace::<5>::new();
@@ -8079,6 +8157,32 @@ mod tests {
 
         let settings_edit =
             IsolationPolicyEdit::new(setting, OwnerIsolationSelection::Microvm, 0).unwrap();
+        assert_eq!(
+            IsolationSettingsAction::new(OwnerIsolationSelection::Microvm, 0)
+                .edit(setting)
+                .unwrap(),
+            settings_edit
+        );
+        assert_eq!(
+            IsolationShellCommand::parse("isolation set microvm 0", setting),
+            Ok(IsolationShellCommand::Set(settings_edit))
+        );
+        assert_eq!(
+            IsolationShellCommand::parse("isolation show", setting),
+            Ok(IsolationShellCommand::Show)
+        );
+        assert_eq!(
+            IsolationShellCommand::parse("isolation set total-microvm 0", setting),
+            Err(ConfigError::SchemaViolation)
+        );
+        assert_eq!(
+            IsolationShellCommand::parse("isolation set microvm 0 extra", setting),
+            Err(ConfigError::NonCanonical)
+        );
+        assert_eq!(
+            IsolationShellCommand::parse("isolation set microvm 18446744073709551616", setting),
+            Err(ConfigError::InvalidValue)
+        );
         let wire = settings_edit.encode();
         let shell_edit = IsolationPolicyEdit::decode(&wire).unwrap();
         assert_eq!(shell_edit, settings_edit);

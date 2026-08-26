@@ -38,6 +38,10 @@ Implemented boundaries:
   selections and package floors/forms to a matching kernel policy generation
   and requested mode, exposing either exact effective placement/source or a
   blocked state without domain identities or mutation authority.
+- authority-free Settings actions and a strict object-shell parser that both
+  create the same canonical edit; shell text contains only a selection and
+  expected revision, never object IDs, capabilities, providers, paths, or
+  fallback directives.
 
 Setting IDs and service tokens identify records but never grant authority.
 Secrets are intentionally outside this value model. The adapters are

@@ -1045,6 +1045,13 @@ kernel-monitor reads. That view rejects policy-generation/requested-mode drift,
 contains aggregate counts rather than domain identities, and carries no repair,
 launch, or policy-mutation authority.
 
+The shared object-shell parser deliberately cannot reconstruct recovery
+authority: its only mutation form carries a selection and expected revision,
+then uses the already selected typed setting descriptor. Recovery must reject
+attempts to place object IDs, capability tokens, provider names, paths, or
+fallback directives in shell text. Settings actions have the same authority-
+free shape. Concrete recovery UI and shell execution remain **PLANNED**.
+
 Application-launch recovery must retain the exact runtime domain, application
 object, immutable application generation and artifact digest, active system
 generation, and applied policy generation. The kernel application route accepts
