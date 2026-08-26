@@ -151,6 +151,13 @@ black-box evidence for that exact convergent parameter-backed shape only; it
 does not establish general region inference or arbitrary loop-carried local
 origins. Temporary source and metadata were removed.
 
+An independently authored Rust 2024 metadata-only nested-loop `if`/`else`
+probe against this exact toolchain and commit accepted action prefixes followed
+by `return` in the primary arm and inner `continue` in the explicit else arm.
+This is black-box syntax and control-shape evidence only; it does not establish
+MRML CFG, constant-evaluation, native-emission, or general region semantics for
+the second successor. Temporary source and metadata were removed.
+
 An independently authored Rust 2024 metadata-only nested-break set against this
 exact toolchain and commit accepted a local-initialized alias overwritten by the
 parameter before an inner unconditional-loop break and returned afterward.

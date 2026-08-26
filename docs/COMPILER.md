@@ -1372,6 +1372,10 @@ branches that contain actions before a terminal `break`, `continue`, or
 `return`. Each record preserves the condition, up to four scoped actions, the
 target-aware terminal, and its position among surrounding flat actions and
 controls. Parser tests cover local and expression actions followed by a return.
+The same bounded record can now retain one explicit `else` arm with its own
+four-action limit and target-aware terminal. All execution paths reject that
+arm before CFG, evaluator, or emitter selection until both successors are
+modeled; no consumer silently treats it as false fallthrough.
 CFG construction now gives the condition and scoped action body distinct basic
 blocks and routes true, false, and target-aware terminal edges. Ownership
 preanalysis assigns distinct condition, action, and return-value locations and
@@ -1388,7 +1392,8 @@ continue, and return terminals under the existing iteration limit. Focused
 constants cover all three terminals and untaken fallthrough. Direct and inline
 x86-64 emitters now lower the same terminal routing and scoped stack cleanup
 for scalar-only functions; reference-return branch lowering follows the same
-origin proof, while reference break/continue forms stay fail-closed. ELF64 and
+origin proof, while reference break/continue forms use the bounded destination
+and backedge transfer described above. ELF64 and
 COFF object probes
 cover separate return, continue, and break prefixes. Windows and
 native Arch Linux WSL each pass 645 library tests, one component-interface

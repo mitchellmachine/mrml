@@ -4243,7 +4243,10 @@ Flat modeled nested actions/controls now have iterative header convergence;
 nested branch-action representation and general regions remain incomplete.
 Nested conditional branches can now retain up to four scoped actions before a
 target-aware terminal in a dedicated parser record, including their exact
-position among surrounding actions and controls. CFG construction now emits
+position among surrounding actions and controls. The record now also retains
+one explicit bounded `else` action/terminal arm. Compilation, constant
+evaluation, and CFG preanalysis reject that form until both successors are
+implemented. CFG construction for the single-arm form emits
 separate condition and action blocks with explicit false fallthrough and true
 terminal routing; ownership preanalysis gives conditions, scoped actions, and
 return values distinct mapped locations. Reference-return records apply their

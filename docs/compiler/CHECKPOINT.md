@@ -662,7 +662,10 @@ incomplete.
 The nested branch-action representation now has a bounded parser-level record.
 It preserves a branch condition, up to four scoped local/assignment/expression
 actions, a target-aware terminal, and exact ordering relative to surrounding
-nested-loop actions and controls. The CFG now assigns separate condition and
+nested-loop actions and controls. One explicit `else` arm can now retain the
+same bounded actions and terminal; execution rejects the record before CFG,
+constant evaluation, or native emission until its second successor is modeled.
+The CFG now assigns separate condition and
 scoped-action blocks, routes false fallthrough and target-aware true terminals,
 and maps condition/action/return ownership locations back to those control
 points. Branch-return origin transfer applies the exact scoped action prefix:
