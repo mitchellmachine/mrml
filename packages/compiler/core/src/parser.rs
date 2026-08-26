@@ -750,6 +750,14 @@ pub struct TraitDeclaration<'source> {
     pub body: Span,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct TraitImplementation<'source> {
+    pub trait_name: &'source str,
+    pub trait_name_span: Span,
+    pub self_type: TypeRef<'source>,
+    pub body: Span,
+}
+
 impl<'source> ConstItem<'source> {
     pub fn parse_initializer<const MAX_NODES: usize>(
         &self,
@@ -764,6 +772,7 @@ pub enum Item<'source, const MAX_PARAMETERS: usize> {
     Const(ConstItem<'source>),
     Static(ConstItem<'source>),
     Trait(TraitDeclaration<'source>),
+    TraitImplementation(TraitImplementation<'source>),
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -801,6 +810,8 @@ pub enum ParseErrorKind {
     ExpectedColon,
     ExpectedBody,
     UnsupportedTraitBody,
+    ExpectedFor,
+    UnsupportedTraitImplementationBody,
     UnknownLoopLabel,
     UnexpectedClosingDelimiter,
     UnterminatedDelimiter,
@@ -2866,6 +2877,29 @@ impl<'source> Parser<'source> {
         }
     }
 
+    fn trait_implementation(&mut self) -> Result<TraitImplementation<'source>, ParseError> {
+        let trait_name = self.identifier()?;
+        let for_keyword = self.take()?;
+        if !for_keyword.is_some_and(|token| token.text == "for") {
+            return Err(self.error(ParseErrorKind::ExpectedFor, for_keyword));
+        }
+        let self_type = self.type_until(&[TokenKind::OpenBrace])?;
+        let body = self.body()?;
+        let contents = &self.source[body.start + 1..body.end - 1];
+        if Parser::new(contents).peek()?.is_some() {
+            return Err(ParseError {
+                kind: ParseErrorKind::UnsupportedTraitImplementationBody,
+                span: body,
+            });
+        }
+        Ok(TraitImplementation {
+            trait_name: trait_name.text,
+            trait_name_span: trait_name.span,
+            self_type,
+            body,
+        })
+    }
+
     pub fn parse_module<const MAX_ITEMS: usize, const MAX_PARAMETERS: usize>(
         mut self,
     ) -> Result<Module<'source, MAX_ITEMS, MAX_PARAMETERS>, ParseError> {
@@ -3016,6 +3050,9 @@ impl<'source> Parser<'source> {
                 }
                 Some("static") if !no_mangle => Item::Static(self.const_item(public)?),
                 Some("trait") if !no_mangle => Item::Trait(self.trait_declaration(public)?),
+                Some("impl") if !no_mangle && !public => {
+                    Item::TraitImplementation(self.trait_implementation()?)
+                }
                 _ => return Err(self.error(ParseErrorKind::ExpectedItem, keyword)),
             };
             module.items[module.item_count] = Some(item);
@@ -3093,6 +3130,42 @@ mod tests {
             .parse_module::<2, 2>()
             .unwrap_err();
         assert_eq!(attributed.kind, ParseErrorKind::ExpectedItem);
+    }
+
+    #[test]
+    fn parses_empty_exact_trait_implementations() {
+        let source = "trait Visible {} impl Visible for core::primitive::u32 { /* empty */ }";
+        let module: TestModule<'_> = Parser::new(source).parse_module().unwrap();
+        let Some(Item::TraitImplementation(implementation)) = module.items()[1] else {
+            panic!("expected trait implementation")
+        };
+        assert_eq!(implementation.trait_name, "Visible");
+        assert_eq!(implementation.self_type.text, "core::primitive::u32");
+        assert_eq!(
+            &source[implementation.self_type.span.start..implementation.self_type.span.end],
+            implementation.self_type.text
+        );
+    }
+
+    #[test]
+    fn rejects_unsupported_trait_implementation_forms() {
+        let missing_for = Parser::new("impl Visible core::primitive::u32 {}")
+            .parse_module::<3, 1>()
+            .unwrap_err();
+        assert_eq!(missing_for.kind, ParseErrorKind::ExpectedFor);
+
+        let body = Parser::new("impl Visible for u32 { fn value() {} }")
+            .parse_module::<3, 1>()
+            .unwrap_err();
+        assert_eq!(
+            body.kind,
+            ParseErrorKind::UnsupportedTraitImplementationBody
+        );
+
+        let public = Parser::new("pub impl Visible for u32 {}")
+            .parse_module::<3, 1>()
+            .unwrap_err();
+        assert_eq!(public.kind, ParseErrorKind::ExpectedItem);
     }
 
     #[test]

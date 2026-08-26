@@ -119,10 +119,15 @@ pub fn analyze_constants<
     };
 
     for (symbol_count, item) in module.items().iter().flatten().enumerate() {
-        let (name, name_span) = match item {
-            Item::Function(function) => (function.name, function.name_span),
-            Item::Const(constant) | Item::Static(constant) => (constant.name, constant.name_span),
-            Item::Trait(declaration) => (declaration.name, declaration.name_span),
+        let Some((name, name_span)) = (match item {
+            Item::Function(function) => Some((function.name, function.name_span)),
+            Item::Const(constant) | Item::Static(constant) => {
+                Some((constant.name, constant.name_span))
+            }
+            Item::Trait(declaration) => Some((declaration.name, declaration.name_span)),
+            Item::TraitImplementation(_) => None,
+        }) else {
+            continue;
         };
         if symbols[..symbol_count].contains(&Some(name)) {
             return Err(SemanticError {
@@ -134,7 +139,7 @@ pub fn analyze_constants<
 
         let constant = match item {
             Item::Const(constant) | Item::Static(constant) => constant,
-            Item::Function(_) | Item::Trait(_) => continue,
+            Item::Function(_) | Item::Trait(_) | Item::TraitImplementation(_) => continue,
         };
         if table.count == MAX_CONSTANTS {
             return Err(SemanticError {

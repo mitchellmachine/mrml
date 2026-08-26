@@ -20,6 +20,7 @@ pub const MAX_GENERIC_TRAIT_IMPLEMENTATIONS: usize = 64;
 pub const MAX_TRAIT_GOAL_TERMS: usize = 64;
 pub const MAX_COINDUCTIVE_TRAITS: usize = 64;
 pub const MAX_SOURCE_TRAIT_DECLARATIONS: usize = 64;
+pub const MAX_SOURCE_TRAIT_TYPES: usize = 64;
 
 #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
 pub struct TraitId(u32);
@@ -106,6 +107,124 @@ impl<'source> SourceTraitDeclarationTable<'source> {
             .copied()
             .find(|declaration| declaration.name == name)
     }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct SourceTraitType<'source> {
+    pub id: TraitTypeId,
+    pub name: &'source str,
+    pub span: Span,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum SourceTraitImplementationErrorKind {
+    UnknownTrait,
+    UnsupportedSelfType,
+    TooManyTypes,
+    Goal(TraitGoalError),
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct SourceTraitImplementationError {
+    pub kind: SourceTraitImplementationErrorKind,
+    pub span: Span,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct SourceTraitImplementationTable<'source> {
+    types: [Option<SourceTraitType<'source>>; MAX_SOURCE_TRAIT_TYPES],
+    type_count: usize,
+    implementations: TraitImplementationDatabase,
+}
+
+impl<'source> SourceTraitImplementationTable<'source> {
+    pub fn from_module<const MAX_ITEMS: usize, const MAX_PARAMETERS: usize>(
+        module: &Module<'source, MAX_ITEMS, MAX_PARAMETERS>,
+        traits: &SourceTraitDeclarationTable<'source>,
+    ) -> Result<Self, SourceTraitImplementationError> {
+        let mut table = Self {
+            types: [None; MAX_SOURCE_TRAIT_TYPES],
+            type_count: 0,
+            implementations: TraitImplementationDatabase::EMPTY,
+        };
+        let mut implementation_count = 0u32;
+        for item in module.items().iter().flatten() {
+            let Item::TraitImplementation(implementation) = item else {
+                continue;
+            };
+            let trait_id = traits
+                .get(implementation.trait_name)
+                .ok_or(SourceTraitImplementationError {
+                    kind: SourceTraitImplementationErrorKind::UnknownTrait,
+                    span: implementation.trait_name_span,
+                })?
+                .id;
+            if !supported_source_trait_type(implementation.self_type.text) {
+                return Err(SourceTraitImplementationError {
+                    kind: SourceTraitImplementationErrorKind::UnsupportedSelfType,
+                    span: implementation.self_type.span,
+                });
+            }
+            let self_type = if let Some(known) = table.get_type(implementation.self_type.text) {
+                known.id
+            } else {
+                let slot = table.types.get_mut(table.type_count).ok_or(
+                    SourceTraitImplementationError {
+                        kind: SourceTraitImplementationErrorKind::TooManyTypes,
+                        span: implementation.self_type.span,
+                    },
+                )?;
+                let id = TraitTypeId::new(table.type_count as u32);
+                *slot = Some(SourceTraitType {
+                    id,
+                    name: implementation.self_type.text,
+                    span: implementation.self_type.span,
+                });
+                table.type_count += 1;
+                id
+            };
+            table
+                .implementations
+                .insert(TraitImplementationHeader::new(
+                    TraitImplementationId::new(implementation_count),
+                    trait_id,
+                    self_type,
+                ))
+                .map_err(|kind| SourceTraitImplementationError {
+                    kind: SourceTraitImplementationErrorKind::Goal(kind),
+                    span: implementation.trait_name_span,
+                })?;
+            implementation_count += 1;
+        }
+        Ok(table)
+    }
+
+    pub fn types(&self) -> &[Option<SourceTraitType<'source>>] {
+        &self.types[..self.type_count]
+    }
+
+    pub fn get_type(&self, name: &str) -> Option<SourceTraitType<'source>> {
+        self.types()
+            .iter()
+            .flatten()
+            .copied()
+            .find(|ty| ty.name == name)
+    }
+
+    pub const fn implementations(&self) -> &TraitImplementationDatabase {
+        &self.implementations
+    }
+}
+
+fn supported_source_trait_type(name: &str) -> bool {
+    !name.is_empty()
+        && name.split("::").all(|segment| {
+            let mut bytes = segment.bytes();
+            bytes
+                .next()
+                .is_some_and(|first| first == b'_' || first.is_ascii_alphabetic())
+                && bytes.all(|byte| byte == b'_' || byte.is_ascii_alphanumeric())
+        })
 }
 
 #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
@@ -7158,6 +7277,85 @@ mod tests {
             SourceTraitDeclarationTable::from_module(&overflow),
             Err(SourceTraitDeclarationError::TooManyDeclarations)
         );
+    }
+
+    #[test]
+    fn lowers_exact_source_trait_implementations_into_solver_facts() {
+        let source = concat!(
+            "trait Visible {} trait Persisted {} ",
+            "impl Visible for core::primitive::u32 {} ",
+            "impl Persisted for core::primitive::u32 {}"
+        );
+        let module = Parser::new(source).parse_module::<8, 1>().unwrap();
+        let traits = SourceTraitDeclarationTable::from_module(&module).unwrap();
+        let implementations =
+            SourceTraitImplementationTable::from_module(&module, &traits).unwrap();
+        assert_eq!(implementations.types().len(), 1);
+        let self_type = implementations.get_type("core::primitive::u32").unwrap().id;
+        let goal = canonicalize_implemented_trait_goal(ImplementedTraitGoal::new(
+            traits.get("Visible").unwrap().id,
+            TraitGoalType::Concrete(self_type),
+        ))
+        .unwrap();
+        assert!(matches!(
+            implementations.implementations().solve(goal),
+            TraitGoalSolution::Unique(_)
+        ));
+    }
+
+    #[test]
+    fn source_trait_implementation_lowering_fails_closed() {
+        let unknown = Parser::new("impl Missing for u32 {}")
+            .parse_module::<4, 1>()
+            .unwrap();
+        let no_traits = SourceTraitDeclarationTable::from_module(&unknown).unwrap();
+        let error = SourceTraitImplementationTable::from_module(&unknown, &no_traits).unwrap_err();
+        assert_eq!(error.kind, SourceTraitImplementationErrorKind::UnknownTrait);
+
+        let unsupported = Parser::new("trait Value {} impl Value for &u32 {}")
+            .parse_module::<4, 1>()
+            .unwrap();
+        let traits = SourceTraitDeclarationTable::from_module(&unsupported).unwrap();
+        let error = SourceTraitImplementationTable::from_module(&unsupported, &traits).unwrap_err();
+        assert_eq!(
+            error.kind,
+            SourceTraitImplementationErrorKind::UnsupportedSelfType
+        );
+
+        let overlap = Parser::new("trait Value {} impl Value for u32 {} impl Value for u32 {}")
+            .parse_module::<4, 1>()
+            .unwrap();
+        let traits = SourceTraitDeclarationTable::from_module(&overlap).unwrap();
+        let error = SourceTraitImplementationTable::from_module(&overlap, &traits).unwrap_err();
+        assert_eq!(
+            error.kind,
+            SourceTraitImplementationErrorKind::Goal(TraitGoalError::OverlappingImplementation)
+        );
+
+        let type_overflow = concat!(
+            "trait Value {} ",
+            "impl Value for T00 {} impl Value for T01 {} impl Value for T02 {} impl Value for T03 {} ",
+            "impl Value for T04 {} impl Value for T05 {} impl Value for T06 {} impl Value for T07 {} ",
+            "impl Value for T08 {} impl Value for T09 {} impl Value for T10 {} impl Value for T11 {} ",
+            "impl Value for T12 {} impl Value for T13 {} impl Value for T14 {} impl Value for T15 {} ",
+            "impl Value for T16 {} impl Value for T17 {} impl Value for T18 {} impl Value for T19 {} ",
+            "impl Value for T20 {} impl Value for T21 {} impl Value for T22 {} impl Value for T23 {} ",
+            "impl Value for T24 {} impl Value for T25 {} impl Value for T26 {} impl Value for T27 {} ",
+            "impl Value for T28 {} impl Value for T29 {} impl Value for T30 {} impl Value for T31 {} ",
+            "impl Value for T32 {} impl Value for T33 {} impl Value for T34 {} impl Value for T35 {} ",
+            "impl Value for T36 {} impl Value for T37 {} impl Value for T38 {} impl Value for T39 {} ",
+            "impl Value for T40 {} impl Value for T41 {} impl Value for T42 {} impl Value for T43 {} ",
+            "impl Value for T44 {} impl Value for T45 {} impl Value for T46 {} impl Value for T47 {} ",
+            "impl Value for T48 {} impl Value for T49 {} impl Value for T50 {} impl Value for T51 {} ",
+            "impl Value for T52 {} impl Value for T53 {} impl Value for T54 {} impl Value for T55 {} ",
+            "impl Value for T56 {} impl Value for T57 {} impl Value for T58 {} impl Value for T59 {} ",
+            "impl Value for T60 {} impl Value for T61 {} impl Value for T62 {} impl Value for T63 {} ",
+            "impl Value for T64 {}",
+        );
+        let overflow = Parser::new(type_overflow).parse_module::<66, 1>().unwrap();
+        let traits = SourceTraitDeclarationTable::from_module(&overflow).unwrap();
+        let error = SourceTraitImplementationTable::from_module(&overflow, &traits).unwrap_err();
+        assert_eq!(error.kind, SourceTraitImplementationErrorKind::TooManyTypes);
     }
 
     fn concrete_clause(
