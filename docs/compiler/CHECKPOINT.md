@@ -1355,6 +1355,14 @@ native Arch Linux WSL each pass 613 library tests, one component-interface
 probe, 10 conformance tests, and 335 replacement tests: 959 compiler tests per
 host.
 
+The forward associated-identity milestone registers every bounded associated
+identity after trait identities but before supertrait and declaration-
+requirement validation. Projection requirements can consequently reference a
+later trait declaration without source-order dependence, while missing
+identities remain explicit errors. Windows gnullvm and native Arch Linux WSL
+each pass 615 library tests, one component-interface probe, 10 conformance
+tests, and 335 replacement tests: 961 compiler tests per host.
+
 The premise-bearing rigid-normalization milestone proves the selected generic
 implementation's instantiated trait and projection predicates before exposing
 its associated value. It shares the caller's 16-frame rigid proof stack and
