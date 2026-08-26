@@ -871,6 +871,9 @@ pub struct TraitDeclaration<'source> {
     generic_parameter_count: usize,
     supertraits: [Option<TraitSupertrait<'source>>; MAX_TRAIT_SUPERTRAITS],
     supertrait_count: usize,
+    where_predicates:
+        [Option<TraitImplementationWherePredicate<'source>>; MAX_FUNCTION_WHERE_PREDICATES],
+    where_predicate_count: usize,
     associated_types: [Option<TraitAssociatedTypeDeclaration<'source>>; MAX_TRAIT_ASSOCIATED_TYPES],
     associated_type_count: usize,
     pub body: Span,
@@ -890,6 +893,14 @@ impl<'source> TraitDeclaration<'source> {
 
     pub const fn supertrait_count(&self) -> usize {
         self.supertrait_count
+    }
+
+    pub fn where_predicates(&self) -> &[Option<TraitImplementationWherePredicate<'source>>] {
+        &self.where_predicates[..self.where_predicate_count]
+    }
+
+    pub const fn where_predicate_count(&self) -> usize {
+        self.where_predicate_count
     }
 
     pub fn associated_types(&self) -> &[Option<TraitAssociatedTypeDeclaration<'source>>] {
@@ -3371,6 +3382,93 @@ impl<'source> Parser<'source> {
         })
     }
 
+    fn trait_where_predicates(
+        &mut self,
+    ) -> Result<
+        (
+            [Option<TraitImplementationWherePredicate<'source>>; MAX_FUNCTION_WHERE_PREDICATES],
+            usize,
+        ),
+        ParseError,
+    > {
+        let mut where_predicates = [None; MAX_FUNCTION_WHERE_PREDICATES];
+        let mut where_predicate_count = 0usize;
+        if self.take_text("where")?.is_none() {
+            return Ok((where_predicates, where_predicate_count));
+        }
+        loop {
+            if where_predicate_count == MAX_FUNCTION_WHERE_PREDICATES {
+                let token = self.peek()?;
+                return Err(self.error(ParseErrorKind::TooManyWherePredicates, token));
+            }
+            let predicate = if self.take_text("<")?.is_some() {
+                let predicate_self = self.type_until_text("as")?;
+                let as_token = self.take()?;
+                if !as_token.is_some_and(|token| token.text == "as") {
+                    return Err(self.error(ParseErrorKind::ExpectedIdentifier, as_token));
+                }
+                let predicate_trait = self.identifier()?;
+                let (trait_arguments, trait_argument_count, consumed_projection_close) =
+                    self.source_trait_arguments()?;
+                if !consumed_projection_close {
+                    let close = self.take()?;
+                    if !close.is_some_and(|token| token.text == ">") {
+                        return Err(self.error(ParseErrorKind::ExpectedType, close));
+                    }
+                }
+                let separator = self.take()?;
+                if !separator.is_some_and(|token| token.text == "::") {
+                    return Err(self.error(ParseErrorKind::ExpectedIdentifier, separator));
+                }
+                let associated_type = self.identifier()?;
+                let equals = self.take()?;
+                if !equals.is_some_and(|token| token.text == "=") {
+                    return Err(self.error(ParseErrorKind::ExpectedEquals, equals));
+                }
+                let expected_type = self.type_until_kind_or_text(TokenKind::OpenBrace, ",")?;
+                TraitImplementationWherePredicate::ProjectionEquality {
+                    self_type: predicate_self,
+                    trait_name: predicate_trait.text,
+                    trait_name_span: predicate_trait.span,
+                    trait_arguments,
+                    trait_argument_count,
+                    associated_type: associated_type.text,
+                    associated_type_span: associated_type.span,
+                    expected_type,
+                }
+            } else {
+                let predicate_self = self.type_until(&[TokenKind::Colon])?;
+                self.expect_kind(TokenKind::Colon, ParseErrorKind::ExpectedColon)?;
+                let predicate_trait = self.identifier()?;
+                let (trait_arguments, trait_argument_count, consumed_outer_close) =
+                    self.source_trait_arguments()?;
+                if consumed_outer_close {
+                    let token = self.peek()?;
+                    return Err(self.error(ParseErrorKind::ExpectedBody, token));
+                }
+                TraitImplementationWherePredicate::Implemented {
+                    self_type: predicate_self,
+                    trait_name: predicate_trait.text,
+                    trait_name_span: predicate_trait.span,
+                    trait_arguments,
+                    trait_argument_count,
+                }
+            };
+            where_predicates[where_predicate_count] = Some(predicate);
+            where_predicate_count += 1;
+            if self.take_text(",")?.is_none() {
+                break;
+            }
+            if self
+                .peek()?
+                .is_some_and(|token| token.kind == TokenKind::OpenBrace)
+            {
+                break;
+            }
+        }
+        Ok((where_predicates, where_predicate_count))
+    }
+
     fn trait_declaration(&mut self, public: bool) -> Result<TraitDeclaration<'source>, ParseError> {
         let name = self.identifier()?;
         let mut generic_parameters = [None; MAX_SOURCE_TRAIT_ARGUMENTS];
@@ -3421,6 +3519,7 @@ impl<'source> Parser<'source> {
                 }
             }
         }
+        let (where_predicates, where_predicate_count) = self.trait_where_predicates()?;
         let open = self.expect_kind(TokenKind::OpenBrace, ParseErrorKind::ExpectedBody)?;
         let mut associated_types = [None; MAX_TRAIT_ASSOCIATED_TYPES];
         let mut associated_type_count = 0usize;
@@ -3455,6 +3554,8 @@ impl<'source> Parser<'source> {
             generic_parameter_count,
             supertraits,
             supertrait_count,
+            where_predicates,
+            where_predicate_count,
             associated_types,
             associated_type_count,
             body: Span {
@@ -3864,9 +3965,32 @@ mod tests {
             panic!("expected trait")
         };
         assert_eq!(child.supertraits()[0].unwrap().argument_count(), 1);
-        assert_eq!(child.supertraits()[0].unwrap().arguments()[0].unwrap().text, "T");
+        assert_eq!(
+            child.supertraits()[0].unwrap().arguments()[0].unwrap().text,
+            "T"
+        );
         assert_eq!(child.supertraits()[1].unwrap().argument_count(), 2);
-        assert_eq!(child.supertraits()[1].unwrap().arguments()[1].unwrap().text, "U");
+        assert_eq!(
+            child.supertraits()[1].unwrap().arguments()[1].unwrap().text,
+            "U"
+        );
+    }
+
+    #[test]
+    fn parses_trait_declaration_where_requirements() {
+        let source = "trait Child<T> where T: Parent<T>, Self: Visible {}";
+        let module: TestModule<'_> = Parser::new(source).parse_module().unwrap();
+        let Some(Item::Trait(child)) = module.items()[0] else {
+            panic!("expected trait")
+        };
+        assert_eq!(child.where_predicate_count(), 2);
+        let first = child.where_predicates()[0].unwrap();
+        assert_eq!(first.self_type().text, "T");
+        assert_eq!(first.trait_name(), "Parent");
+        assert_eq!(first.trait_arguments()[0].unwrap().text, "T");
+        let second = child.where_predicates()[1].unwrap();
+        assert_eq!(second.self_type().text, "Self");
+        assert_eq!(second.trait_name(), "Visible");
     }
 
     #[test]

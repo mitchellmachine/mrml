@@ -1,10 +1,10 @@
 use crate::semantics::evaluate_scalar_const_function;
 use crate::{
+    analyze_constants, compile_x86_64_function_with_options, emit_elf64_x86_64, emit_x86_64_coff,
     CodegenErrorKind, CodegenOptions, ConstantResolver, ConstantTable, Item, Module, ObjectError,
     ObjectFile, ParseErrorKind, Parser, SemanticErrorKind, SourceTraitDeclarationError,
     SourceTraitDeclarationTable, SourceTraitImplementationError, SourceTraitImplementationTable,
-    SourceTraitObligationError, Span, TargetLayout, X86_64Abi, analyze_constants,
-    compile_x86_64_function_with_options, emit_elf64_x86_64, emit_x86_64_coff,
+    SourceTraitObligationError, Span, TargetLayout, X86_64Abi,
 };
 
 struct PipelineResolver<
@@ -529,6 +529,27 @@ mod tests {
         compile(source, "answer", ObjectFormat::Coff).unwrap();
 
         let missing = source.replace("impl Parent<u32> for u32 {} ", "");
+        let error = compile(&missing, "answer", ObjectFormat::Coff).unwrap_err();
+        assert!(matches!(
+            error.kind,
+            CompileErrorKind::TraitObligation(SourceTraitObligationError {
+                kind: crate::SourceTraitObligationErrorKind::Unsatisfied,
+                ..
+            })
+        ));
+    }
+
+    #[test]
+    fn proves_trait_declaration_where_requirements_before_codegen() {
+        let source = concat!(
+            "trait Parent<T> {} trait Child<T> where T: Parent<T> {} ",
+            "impl<T> Parent<T> for T {} impl<T> Child<T> for T {} ",
+            "#[unsafe(no_mangle)] pub extern \"C\" fn answer() -> u64 ",
+            "where u32: Child<u32> { 42 }"
+        );
+        compile(source, "answer", ObjectFormat::Coff).unwrap();
+
+        let missing = source.replace("impl<T> Parent<T> for T {} ", "");
         let error = compile(&missing, "answer", ObjectFormat::Coff).unwrap_err();
         assert!(matches!(
             error.kind,
