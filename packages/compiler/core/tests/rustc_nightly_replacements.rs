@@ -6008,3 +6008,10 @@ fn rustc_boolean_compound_assignments_reach_native_objects() {
         assert_eq!(compile(source, ObjectFormat::Coff), Ok(()));
     }
 }
+
+#[test]
+fn rustc_pause_inline_assembly_reaches_native_objects() {
+    let source = "#[unsafe(no_mangle)] pub unsafe extern \"C\" fn probe() -> u64 { asm!(\"pause\", options(nomem, nostack, preserves_flags)); 42 }";
+    assert_eq!(compile(source, ObjectFormat::Elf64), Ok(()));
+    assert_eq!(compile(source, ObjectFormat::Coff), Ok(()));
+}

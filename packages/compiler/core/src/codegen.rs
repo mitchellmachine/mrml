@@ -2248,6 +2248,7 @@ pub fn compile_x86_64_naked_relocatable<
 enum X86_64InlineAssembly<'source> {
     Nop,
     NopCClobber,
+    Pause,
     CompareRegister {
         register: X86_64InlineRegister,
         input: &'source str,
@@ -2318,6 +2319,21 @@ fn x86_64_inline_assembly(
             .ok_or(CodegenErrorKind::InvalidInlineAssembly)?;
         x86_64_inline_assembly_options(options, true, false)?;
         return Ok(Some(X86_64InlineAssembly::Nop));
+    }
+    if let Some(arguments) = arguments.strip_prefix("\"pause\"") {
+        let arguments = arguments.trim();
+        if arguments.is_empty() {
+            return Ok(Some(X86_64InlineAssembly::Pause));
+        }
+        let options = arguments
+            .strip_prefix(',')
+            .ok_or(CodegenErrorKind::InvalidInlineAssembly)?
+            .trim()
+            .strip_prefix("options(")
+            .and_then(|options| options.strip_suffix(')'))
+            .ok_or(CodegenErrorKind::InvalidInlineAssembly)?;
+        x86_64_inline_assembly_options(options, true, false)?;
+        return Ok(Some(X86_64InlineAssembly::Pause));
     }
     if let Some(named) = arguments.strip_prefix("\"add {") {
         let separator = named
@@ -9765,7 +9781,11 @@ fn preanalyze_runtime_expression_statement_reads<
                 span: translate_span(body_start, statement.span),
             });
         }
-        Ok(Some(X86_64InlineAssembly::Nop | X86_64InlineAssembly::NopCClobber)) => return Ok(()),
+        Ok(Some(
+            X86_64InlineAssembly::Nop
+            | X86_64InlineAssembly::NopCClobber
+            | X86_64InlineAssembly::Pause,
+        )) => return Ok(()),
         Ok(Some(X86_64InlineAssembly::CompareRegister { input, .. })) => {
             let tree = crate::ExpressionParser::<MAX_EXPRESSION_NODES>::new(input)
                 .parse()
@@ -30070,6 +30090,9 @@ impl<
             Ok(Some(X86_64InlineAssembly::Nop | X86_64InlineAssembly::NopCClobber)) => {
                 return self.emit(&[0x90]);
             }
+            Ok(Some(X86_64InlineAssembly::Pause)) => {
+                return self.emit(&[0xf3, 0x90]);
+            }
             Ok(Some(X86_64InlineAssembly::CompareRegister { register, input })) => {
                 let tree = crate::ExpressionParser::<MAX_EXPRESSION_NODES>::new(input)
                     .parse()
@@ -34763,6 +34786,22 @@ mod tests {
             assert!(insertion < code.len());
         }
 
+        for source in [
+            "#[unsafe(no_mangle)] pub unsafe extern \"C\" fn answer() -> u64 { asm!(\"pause\"); 42 }",
+            "#[unsafe(no_mangle)] pub unsafe extern \"C\" fn answer() -> u64 { asm!(\"pause\", options(nomem, nostack, preserves_flags)); 42 }",
+        ] {
+            let code = compile(source).unwrap();
+            assert_eq!(code.len(), baseline.len() + 2);
+            let insertion = (0..code.len() - 1)
+                .find(|index| {
+                    code.bytes()[*index..*index + 2] == [0xf3, 0x90]
+                        && code.bytes()[..*index] == baseline.bytes()[..*index]
+                        && code.bytes()[*index + 2..] == baseline.bytes()[*index..]
+                })
+                .expect("one inline pause must be inserted into ordinary lowering");
+            assert!(insertion < code.len());
+        }
+
         let compare = compile(concat!(
             "#[unsafe(no_mangle)] pub unsafe extern \"C\" fn answer(value: u64) -> u64 { ",
             "asm!(\"cmp rax, rax\", in(\"rax\") value, options(nomem, nostack)); value }"
@@ -35218,6 +35257,18 @@ mod tests {
             ),
             (
                 "#[unsafe(no_mangle)] pub unsafe extern \"C\" fn answer() -> u64 { asm!(\"nop\", in(\"rax\") 1); 42 }",
+                CodegenErrorKind::InvalidInlineAssembly,
+            ),
+            (
+                "#[unsafe(no_mangle)] pub extern \"C\" fn answer() -> u64 { asm!(\"pause\"); 42 }",
+                CodegenErrorKind::InlineAssemblyRequiresUnsafe,
+            ),
+            (
+                "#[unsafe(no_mangle)] pub unsafe extern \"C\" fn answer() -> u64 { asm!(\"pause\", clobber_abi(\"C\")); 42 }",
+                CodegenErrorKind::InvalidInlineAssembly,
+            ),
+            (
+                "#[unsafe(no_mangle)] pub unsafe extern \"C\" fn answer() -> u64 { asm!(\"pause\", in(\"rax\") 1); 42 }",
                 CodegenErrorKind::InvalidInlineAssembly,
             ),
             (
