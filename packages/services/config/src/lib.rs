@@ -19,8 +19,8 @@ use mrml_kernel::arch::x86_64::UserContext;
 use mrml_kernel::{
     ActivatedReleaseTotalMicrovmInventory, BootHandoff, BootIsolationOverride, Capability,
     CapabilityError, CapabilitySpace, InstalledRecoveryBootIdentity, InstalledRecoverySataRoute,
-    IsolationAdmissionTable, IsolationBackendFailure, IsolationMode, IsolationPlacement,
-    IsolationServiceBackend, IsolationServiceRouteError, IsolationServiceSpec,
+    InstalledRecoverySource, IsolationAdmissionTable, IsolationBackendFailure, IsolationMode,
+    IsolationPlacement, IsolationServiceBackend, IsolationServiceRouteError, IsolationServiceSpec,
     IsolationStatusSnapshot, IsolationUnavailableReason, MemoryBackingKind, MemoryObjectId,
     MemoryPoolId, MemoryPoolTable, MemoryResourceError, Message, ObjectId, PAGE_SIZE,
     PreparedIsolationServiceRoute, Priority, RestartPolicy, Rights, RoutedIsolationService,
@@ -35,7 +35,7 @@ use mrml_storage::{
     FileReadBackend, FileReadError, FileState, FileWriteBackend, FileWriteError,
     InstalledRecoverySessionError, MetadataError, MetadataPointer, NativeBlockCorrelationError,
     NativeSataBlockRoute, PlatformBlockDeviceDescriptor, PlatformBlockDeviceIdentity,
-    PreparedFileWrite, ReachableFileSelection, RecoveredReachableState,
+    PlatformBlockTransport, PreparedFileWrite, ReachableFileSelection, RecoveredReachableState,
     RecoveredStorageAuthorities, RecoveryError, RecoveryMetadataBackend, SUPERBLOCK_BYTES,
     SataNativeBlockCorrelationError, SataNativeBlockCorrelationVerifier, ServicedBlockDevice,
     StorageAuthorityTable, StorageBlockDevice, StorageHandle, StorageObjectId, StoragePrincipal,
@@ -2674,6 +2674,64 @@ impl<const GRANTS: usize, const SETTINGS: usize, const AUDIT: usize>
             .map_err(RecoveredTotalAdmissionBuildError::Policy)
     }
 
+    /// Joins the exact installed-device selection recovered from this boot's
+    /// decoded handoff to the release-owned Total admission transaction. The
+    /// platform identity and generations are rechecked before policy or release
+    /// construction, so a detached, substituted, or stale storage selection
+    /// cannot authorize Total-mode launch.
+    #[allow(clippy::too_many_arguments)]
+    pub fn build_installed_total_boot_admission<
+        const DOMAINS: usize,
+        A: CapabilityAuthorizer + ?Sized,
+        F,
+        E,
+    >(
+        &self,
+        installed: InstalledRecoveryDeviceSelection,
+        capabilities: &A,
+        system: IsolationPolicySetting,
+        system_read: Capability,
+        component: IsolationPolicySetting,
+        component_read: Capability,
+        handoff: &BootHandoff,
+        build_release: F,
+    ) -> Result<
+        RecoveredInstalledTotalAdmission<DOMAINS>,
+        RecoveredInstalledTotalAdmissionBuildError<E>,
+    >
+    where
+        F: FnOnce(u64) -> Result<ActivatedReleaseTotalMicrovmInventory<DOMAINS>, E>,
+    {
+        let (recovery_volume, recovery_root_generation) =
+            validate_installed_selection_for_handoff(installed, handoff)
+                .map_err(RecoveredInstalledTotalAdmissionBuildError::Installed)?;
+        let total = self
+            .build_total_boot_admission(
+                capabilities,
+                system,
+                system_read,
+                component,
+                component_read,
+                handoff,
+                build_release,
+            )
+            .map_err(|error| match error {
+                RecoveredTotalAdmissionBuildError::Policy(error) => {
+                    RecoveredInstalledTotalAdmissionBuildError::Policy(error)
+                }
+                RecoveredTotalAdmissionBuildError::ReleaseBuilder(error) => {
+                    RecoveredInstalledTotalAdmissionBuildError::ReleaseBuilder(error)
+                }
+            })?;
+        RecoveredInstalledTotalAdmission::bind_identity(
+            installed,
+            recovery_volume,
+            recovery_root_generation,
+            total,
+        )
+        .map_err(RecoveredInstalledTotalAdmissionBuildError::Installed)
+    }
+
     pub fn into_parts(
         self,
     ) -> (
@@ -2687,6 +2745,13 @@ impl<const GRANTS: usize, const SETTINGS: usize, const AUDIT: usize>
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum RecoveredTotalAdmissionBuildError<E> {
+    Policy(ConfigError),
+    ReleaseBuilder(E),
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum RecoveredInstalledTotalAdmissionBuildError<E> {
+    Installed(ConfigError),
     Policy(ConfigError),
     ReleaseBuilder(E),
 }
@@ -3658,6 +3723,45 @@ pub struct RecoveredInstalledTotalAdmission<const DOMAINS: usize> {
     recovery_volume: VolumeId,
     recovery_root_generation: u64,
     total: RecoveredTotalAdmission<DOMAINS>,
+}
+
+fn validate_installed_selection_for_handoff(
+    installed: InstalledRecoveryDeviceSelection,
+    handoff: &BootHandoff,
+) -> Result<(VolumeId, u64), ConfigError> {
+    let boot = handoff
+        .installed_recovery()
+        .ok_or(ConfigError::RecoveryHandoffMismatch)?;
+    if boot.source() == InstalledRecoverySource::Uefi
+        && handoff.installed_recovery_sata_route().is_none()
+    {
+        return Err(ConfigError::RecoveryHandoffMismatch);
+    }
+    let platform = installed
+        .platform_identity()
+        .ok_or(ConfigError::RecoveryHandoffMismatch)?;
+    let transport_matches = match boot.source() {
+        InstalledRecoverySource::Uefi => platform.transport() == PlatformBlockTransport::Ahci,
+        InstalledRecoverySource::Ahci => platform.transport() == PlatformBlockTransport::Ahci,
+        InstalledRecoverySource::Usb => platform.transport() == PlatformBlockTransport::Usb,
+        InstalledRecoverySource::Virtio => platform.transport() == PlatformBlockTransport::Virtio,
+        InstalledRecoverySource::Hosted => platform.transport() == PlatformBlockTransport::Hosted,
+    };
+    let descriptor = installed.descriptor();
+    let header = installed.header();
+    if !transport_matches
+        || platform.stable_id() != boot.stable_id()
+        || platform.controller_generation() != boot.controller_generation()
+        || platform.media_generation() != boot.media_generation()
+        || descriptor.block_size() != boot.block_size()
+        || descriptor.block_count() != boot.block_count()
+        || header.volume().bytes() != boot.volume()
+        || installed.active_superblock() != boot.root_block()
+    {
+        return Err(ConfigError::RecoveryHandoffMismatch);
+    }
+    let volume = VolumeId::new(boot.volume()).map_err(|_| ConfigError::RecoveryHandoffMismatch)?;
+    Ok((volume, boot.root_generation()))
 }
 
 impl<const DOMAINS: usize> RecoveredInstalledTotalAdmission<DOMAINS> {
@@ -9041,6 +9145,10 @@ mod tests {
         )
         .unwrap();
         assert_eq!(selected.platform_identity(), Some(identity));
+        assert_eq!(
+            validate_installed_selection_for_handoff(selected, &handoff),
+            Ok((stable_volume(), 14))
+        );
 
         let mut identity_only_bytes = [0; 512];
         let identity_only_length =
@@ -9063,6 +9171,10 @@ mod tests {
             .unwrap();
         let identity_only =
             BootHandoff::decode(&identity_only_bytes[..identity_only_length], |_| {}).unwrap();
+        assert_eq!(
+            validate_installed_selection_for_handoff(selected, &identity_only),
+            Err(ConfigError::RecoveryHandoffMismatch)
+        );
         let reads = backend.reads;
         let mut missing_route_service = BlockService::<1, 1>::new();
         assert_eq!(
@@ -9098,6 +9210,10 @@ mod tests {
         .unwrap();
         let recovery_only =
             BootHandoff::decode(&recovery_only_bytes[..recovery_only_length], |_| {}).unwrap();
+        assert_eq!(
+            validate_installed_selection_for_handoff(selected, &recovery_only),
+            Err(ConfigError::RecoveryHandoffMismatch)
+        );
         assert_eq!(
             recover_decoded_handoff_installed_sata_device(
                 &mut missing_route_service,
@@ -9519,14 +9635,31 @@ mod tests {
         let descriptor = BlockDeviceDescriptor::new(
             device,
             STABLE_BLOCK_BYTES as u32,
-            STABLE_BLOCK_COUNT as u64,
+            stable_header().block_count(),
         )
         .unwrap();
         let mut block_service = BlockService::<1, 2>::new();
-        block_service.register_device(descriptor).unwrap();
+        let installed_platform_identity =
+            PlatformBlockDeviceIdentity::new(PlatformBlockTransport::Hosted, [0x42; 32], 1, 1)
+                .unwrap();
+        let installed_platform =
+            PlatformBlockDeviceDescriptor::new(descriptor, installed_platform_identity);
+        block_service
+            .register_platform_devices_atomic(&[installed_platform])
+            .unwrap();
         let block_session = block_service
             .grant(device, stable_principal(), BlockRights::ALL)
             .unwrap();
+        let installed_selection = InstalledRecoveryDeviceSelection::new_platform(
+            &block_service,
+            block_session,
+            stable_principal(),
+            installed_platform,
+            stable_volume(),
+            stable_header(),
+            stable_header().primary_superblock(),
+        )
+        .unwrap();
         let read_only_session = block_service
             .derive(
                 block_session,
@@ -9752,6 +9885,7 @@ mod tests {
                 + 2 * mrml_kernel::HANDOFF_REGION_BYTES
                 + mrml_kernel::HANDOFF_SERVICE_BYTES
                 + mrml_kernel::HANDOFF_RECOVERY_STATE_BYTES
+                + mrml_kernel::INSTALLED_RECOVERY_BOOT_IDENTITY_BYTES
                 + 16
                 + 52;
             let regions = [
@@ -9800,7 +9934,19 @@ mod tests {
             madt[44..].copy_from_slice(&[0, 8, 0, 1, 1, 0, 0, 0]);
             madt[9] = 0u8.wrapping_sub(madt.iter().fold(0u8, |sum, byte| sum.wrapping_add(*byte)));
             let mut handoff_bytes = [0u8; HANDOFF_LENGTH];
-            mrml_kernel::encode_handoff_with_smp_service_recovery_and_isolation(
+            let installed_boot = InstalledRecoveryBootIdentity::new(
+                InstalledRecoverySource::Hosted,
+                installed_platform_identity.stable_id(),
+                installed_platform_identity.controller_generation(),
+                installed_platform_identity.media_generation(),
+                descriptor.block_size(),
+                descriptor.block_count(),
+                stable_volume().bytes(),
+                stable_header().primary_superblock(),
+                14,
+            )
+            .unwrap();
+            mrml_kernel::encode_handoff_with_smp_service_recovery_isolation_and_installed(
                 7,
                 [1; 32],
                 [2; 64],
@@ -9815,6 +9961,7 @@ mod tests {
                 0x40_0000,
                 launch,
                 Some(delivered),
+                Some(installed_boot),
                 Some(BootIsolationOverride::TotalMicrovmOnce),
                 &madt,
                 &mut handoff_bytes,
@@ -9851,18 +9998,21 @@ mod tests {
             assert_eq!(admission.policy_generation(), 1);
 
             let domain = ObjectId(0x434f_4e46_4947_0001);
-            let release = activated_configuration_release(domain, 1);
             let mut total = recovered
-                .bind_total_boot_admission(
+                .build_installed_total_boot_admission(
+                    installed_selection,
                     &capabilities,
                     system,
                     system_access,
                     component,
                     component_access,
                     &handoff,
-                    release,
+                    |policy_generation| {
+                        Ok::<_, ()>(activated_configuration_release(domain, policy_generation))
+                    },
                 )
                 .unwrap();
+            assert_eq!(total.installed(), installed_selection);
             assert_eq!(total.policy().authority_epoch(), 9);
             assert_eq!(total.policy().boot_accepted_epoch(), 8);
             let bounds = IsolationServiceBounds::new(
@@ -9892,7 +10042,7 @@ mod tests {
             assert_eq!(proof.running_in_microvm, 1);
 
             let stale_recovery = mrml_kernel::RecoveryStateMetadata::new(7, 1, None, 0).unwrap();
-            mrml_kernel::encode_handoff_with_smp_service_recovery_and_isolation(
+            let stale_length = mrml_kernel::encode_handoff_with_smp_service_recovery_and_isolation(
                 7,
                 [1; 32],
                 [2; 64],
@@ -9912,7 +10062,27 @@ mod tests {
                 &mut handoff_bytes,
             )
             .unwrap();
-            let stale_handoff = BootHandoff::decode(&handoff_bytes, |_| {}).unwrap();
+            let stale_handoff =
+                BootHandoff::decode(&handoff_bytes[..stale_length], |_| {}).unwrap();
+            let missing_installed: Result<
+                RecoveredInstalledTotalAdmission<1>,
+                RecoveredInstalledTotalAdmissionBuildError<()>,
+            > = recovered.build_installed_total_boot_admission(
+                installed_selection,
+                &capabilities,
+                system,
+                system_access,
+                component,
+                component_access,
+                &stale_handoff,
+                |_| panic!("release builder must not run without installed handoff identity"),
+            );
+            assert_eq!(
+                missing_installed.err(),
+                Some(RecoveredInstalledTotalAdmissionBuildError::Installed(
+                    ConfigError::RecoveryHandoffMismatch
+                ))
+            );
             assert_eq!(
                 recovered.compose_boot_isolation_policy(
                     &capabilities,

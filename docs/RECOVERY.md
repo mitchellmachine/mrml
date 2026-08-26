@@ -1201,6 +1201,16 @@ data cannot replace boot evidence. Kernel passes 563 tests and configuration 51
 tests on Windows and Arch Linux. Real driver discovery and installed Total-owner
 consumption remain **PLANNED**.
 
+Recovered configuration now **PARTIALLY IMPLEMENTS** direct installed-owner
+consumption at the Total admission boundary. The admitted owner rechecks the
+selected platform stable identity, controller and media generations, geometry,
+volume, and selected root against the decoded handoff; UEFI recovery additionally
+requires the adjacent typed SATA route. Only after that check may the release
+inventory builder run. The exact installed selection remains retained through
+strict route preparation and final proof, while missing identity fails before
+release construction. Configuration passes 51 tests on Windows and Arch Linux;
+WHP/KVM 11/12 are regression evidence only, not native SATA evidence.
+
 Recovery-session publication is now atomic across a bounded device set.
 `BlockSessionGrant` carries each explicit device/principal/rights decision, and
 `grant_sessions_atomic` preflights every registered identity, rights mask, and

@@ -8696,3 +8696,13 @@ registration, session issuance, or block I/O, and callers cannot inject detached
 boot data. Kernel passes 563 tests and configuration 51 tests on Windows and Arch
 Linux. This remains canonical codec and controlled service evidence, not native
 enumeration, installed Total execution, OVMF, or physical hardware.
+
+The same control-plane chain now reaches the existing strict Total owner without
+creating a parallel admission path. Recovered configuration revalidates the
+installed selection's exact platform generations, geometry, volume, and root
+against one decoded handoff before allowing authenticated release construction;
+UEFI-installed recovery also requires its adjacent SATA route. The returned
+`RecoveredInstalledTotalAdmission` owns both the live selection and the sole
+release-derived admission table through final proof. Missing installed state
+prevents the release builder from running. Configuration passes 51 tests on
+Windows and Arch Linux; WHP/KVM pass 11/12 as hosted regression only.

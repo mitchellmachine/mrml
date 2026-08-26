@@ -279,6 +279,15 @@ is not accepted. Kernel passes 563 tests and configuration 51 tests on Windows
 and Arch Linux. Native descriptor discovery and installed Total consumption
 remain **PLANNED**.
 
+The recovered-system Total boundary now **PARTIALLY IMPLEMENTS** consumption of
+that installed owner. Before release construction it rechecks the selection's
+stable platform identity, controller/media generations, geometry, volume, and
+root against the decoded handoff; a UEFI source also requires the adjacent SATA
+route. Missing or substituted state cannot run the release builder. Successful
+admission retains the exact live selection beside the sole release-derived
+Total table through final proof. Configuration passes 51 tests on Windows and
+Arch Linux; WHP/KVM 11/12 remain regression rather than native-storage evidence.
+
 The `mrml` frontend may expose structured `disk`, `filesystem`, `optical`, and
 `media` operations. The PowerShell-inspired shell projects the same backend as
 typed `Get-*`, `Test-*`, `Initialize-*`, `New-*`, `Format-*`, `Write-*`, and

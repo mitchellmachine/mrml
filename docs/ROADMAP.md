@@ -3095,3 +3095,15 @@ I/O; callers cannot supply detached replacement boot data. Kernel passes 563
 tests and configuration 51 tests on Windows and Arch Linux. Real native
 descriptor discovery and binding the returned owner into installed Total boot
 remain **PLANNED**.
+
+The recovered-system admission boundary now **PARTIALLY IMPLEMENTS** that owner
+join. `build_installed_total_boot_admission` revalidates the live selected
+device's stable identity, controller/media generations, geometry, volume, and
+root against the same decoded handoff before constructing the authenticated
+release inventory and its only Total admission table. A UEFI-installed source
+also requires the adjacent typed SATA route. Missing or substituted installed
+state fails before the release builder runs, and successful strict admission
+retains the exact selection in `RecoveredInstalledTotalAdmission` through final
+runtime proof. Configuration passes 51 tests on Windows and Arch Linux;
+WHP/KVM regression runners pass 11/12 without claiming native SATA execution.
+Real native descriptor discovery and installed kernel wiring remain **PLANNED**.

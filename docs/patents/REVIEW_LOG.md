@@ -1,5 +1,16 @@
 # Patent review log
 
+## 2026-08-26 — Installed recovery owner to Total admission composition
+
+Patent review: **NOT_TRIGGERED** for rechecking an already authenticated live
+storage selection against the existing decoded fixed-record handoff before the
+existing release-owned Total admission transaction is constructed. This is
+conventional exact equality, presence validation, typed ownership, and failure
+ordering; it adds no placement algorithm, VM mechanism, controller discovery,
+AHCI command, DMA, interrupt, queue, scheduling, or hardware-I/O behavior. Native
+AHCI discovery and broader adaptive/Total-MicroVM mechanisms retain their
+existing `TRIGGERED` reviews; this technical screen is not patent clearance.
+
 ## 2026-08-26 — Typed SATA boot-route extraction design-around
 
 Patent review: **TRIGGERED** because this increment begins the previously

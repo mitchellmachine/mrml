@@ -1175,3 +1175,13 @@ whole-system isolation policy, and boot-time policy composition require targeted
 worldwide claim review before implementation. See
 [the patent review log](patents/REVIEW_LOG.md); this is technical screening, not
 legal advice or a clearance conclusion.
+
+Installed recovery now has a **PARTIALLY IMPLEMENTED** fail-closed join into the
+same Total admission owner. Before release construction, recovered configuration
+exact-matches the live installed selection's stable identity, controller/media
+generations, geometry, volume, and root to the decoded boot handoff; UEFI sources
+must also carry the adjacent typed SATA route. Missing or substituted state
+cannot invoke the release builder, and successful admission retains that exact
+selection beside the only release-derived admission table through final runtime
+proof. This is controlled Windows/Arch unit evidence plus WHP/KVM regression,
+not installed native execution or physical isolation evidence.
