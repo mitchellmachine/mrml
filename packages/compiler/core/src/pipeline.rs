@@ -461,6 +461,13 @@ mod tests {
             "where u32: Convert, <u32 as Convert>::Value = u8 { 42 }"
         );
         compile(source, "answer", ObjectFormat::Coff).unwrap();
+
+        let self_default = concat!(
+            "trait Identity<T = Self> { type Value = T; } impl<T> Identity for T {} ",
+            "#[unsafe(no_mangle)] pub extern \"C\" fn identity() -> u64 ",
+            "where u32: Identity, <u32 as Identity>::Value = u32 { 42 }"
+        );
+        compile(self_default, "identity", ObjectFormat::Coff).unwrap();
     }
 
     #[test]

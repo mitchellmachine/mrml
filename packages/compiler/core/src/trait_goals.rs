@@ -265,9 +265,9 @@ impl<'source> SourceTraitDeclarationTable<'source> {
                             .generic_parameters()
                             .iter()
                             .position(|parameter| *parameter == Some(default.text));
-                        if default.text == "Self"
-                            || parameter_index.is_some_and(|index| index >= default_index)
+                        if parameter_index.is_some_and(|index| index >= default_index)
                             || (parameter_index.is_none()
+                                && default.text != "Self"
                                 && !supported_source_trait_type(default.text))
                         {
                             return Err(
@@ -407,17 +407,17 @@ impl<'source> SourceTraitDeclarationTable<'source> {
                     source_supertrait.argument_count()..target.generic_parameter_count
                 {
                     let default = target.generic_parameter_defaults()[argument_index].unwrap();
-                    arguments[argument_index] = Some(
-                        if let Some(parameter_index) = target
-                            .generic_parameters()
-                            .iter()
-                            .position(|parameter| *parameter == Some(default.text))
-                        {
-                            arguments[parameter_index].unwrap()
-                        } else {
-                            SourceTraitSupertraitArgument::Concrete(default)
-                        },
-                    );
+                    arguments[argument_index] = Some(if default.text == "Self" {
+                        SourceTraitSupertraitArgument::SelfType
+                    } else if let Some(parameter_index) = target
+                        .generic_parameters()
+                        .iter()
+                        .position(|parameter| *parameter == Some(default.text))
+                    {
+                        arguments[parameter_index].unwrap()
+                    } else {
+                        SourceTraitSupertraitArgument::Concrete(default)
+                    });
                 }
                 let resolved = SourceTraitSupertrait {
                     trait_id: target.id,
@@ -749,9 +749,10 @@ impl<'source> SourceTraitImplementationTable<'source> {
                 }
                 Item::Trait(declaration) => {
                     for default in declaration.generic_parameter_defaults().iter().flatten() {
-                        if !declaration
-                            .generic_parameters()
-                            .contains(&Some(default.text))
+                        if default.text != "Self"
+                            && !declaration
+                                .generic_parameters()
+                                .contains(&Some(default.text))
                         {
                             table.intern_type(*default)?;
                         }
@@ -876,12 +877,16 @@ impl<'source> SourceTraitImplementationTable<'source> {
                 implementation.trait_argument_count()..declaration.generic_parameter_count
             {
                 let default = declaration.generic_parameter_defaults()[argument_index].unwrap();
-                let value = declaration
-                    .generic_parameters()
-                    .iter()
-                    .position(|parameter| *parameter == Some(default.text))
-                    .map(|parameter_index| header.arguments()[parameter_index].unwrap())
-                    .unwrap_or_else(|| table.get_type(default.text).unwrap().id);
+                let value = if default.text == "Self" {
+                    header.self_type
+                } else {
+                    declaration
+                        .generic_parameters()
+                        .iter()
+                        .position(|parameter| *parameter == Some(default.text))
+                        .map(|parameter_index| header.arguments()[parameter_index].unwrap())
+                        .unwrap_or_else(|| table.get_type(default.text).unwrap().id)
+                };
                 header
                     .push_argument(value)
                     .map_err(|kind| SourceTraitImplementationError {
@@ -947,14 +952,18 @@ impl<'source> SourceTraitImplementationTable<'source> {
                 implementation.trait_argument_count()..declaration.generic_parameter_count
             {
                 let default = declaration.generic_parameter_defaults()[argument_index].unwrap();
-                let value = declaration
-                    .generic_parameters()
-                    .iter()
-                    .position(|parameter| *parameter == Some(default.text))
-                    .map(|parameter_index| consequence.arguments()[parameter_index].unwrap())
-                    .unwrap_or_else(|| {
-                        BoundTraitGoalType::Concrete(table.get_type(default.text).unwrap().id)
-                    });
+                let value = if default.text == "Self" {
+                    consequence.self_type
+                } else {
+                    declaration
+                        .generic_parameters()
+                        .iter()
+                        .position(|parameter| *parameter == Some(default.text))
+                        .map(|parameter_index| consequence.arguments()[parameter_index].unwrap())
+                        .unwrap_or_else(|| {
+                            BoundTraitGoalType::Concrete(table.get_type(default.text).unwrap().id)
+                        })
+                };
                 consequence.push_argument(value).map_err(|kind| {
                     SourceTraitImplementationError {
                         kind: SourceTraitImplementationErrorKind::Goal(kind),
@@ -1235,6 +1244,11 @@ impl<'source> SourceTraitImplementationTable<'source> {
                 } else {
                     default
                 };
+                let source_value = if source_value.text == "Self" {
+                    implementation.self_type
+                } else {
+                    source_value
+                };
                 let value = table.get_type(source_value.text).unwrap().id;
                 table
                     .associated_types
@@ -1453,12 +1467,16 @@ impl<'source> SourceTraitImplementationTable<'source> {
                 implementation.trait_argument_count()..declaration.generic_parameter_count
             {
                 let default = declaration.generic_parameter_defaults()[argument_index].unwrap();
-                trait_arguments[argument_index] = declaration
-                    .generic_parameters()
-                    .iter()
-                    .position(|parameter| *parameter == Some(default.text))
-                    .map(|parameter_index| trait_arguments[parameter_index])
-                    .unwrap_or_else(|| table.get_type(default.text).unwrap().id);
+                trait_arguments[argument_index] = if default.text == "Self" {
+                    self_type
+                } else {
+                    declaration
+                        .generic_parameters()
+                        .iter()
+                        .position(|parameter| *parameter == Some(default.text))
+                        .map(|parameter_index| trait_arguments[parameter_index])
+                        .unwrap_or_else(|| table.get_type(default.text).unwrap().id)
+                };
             }
             table
                 .prove_supertraits(
@@ -1661,14 +1679,18 @@ impl<'source> SourceTraitImplementationTable<'source> {
             }
             for argument_index in trait_argument_count..declaration.generic_parameter_count {
                 let default = declaration.generic_parameter_defaults()[argument_index].unwrap();
-                let argument = declaration
-                    .generic_parameters()
-                    .iter()
-                    .position(|parameter| *parameter == Some(default.text))
-                    .map(|parameter_index| source_goal.arguments()[parameter_index].unwrap())
-                    .unwrap_or_else(|| {
-                        TraitGoalType::Concrete(self.get_type(default.text).unwrap().id)
-                    });
+                let argument = if default.text == "Self" {
+                    TraitGoalType::Concrete(self_type)
+                } else {
+                    declaration
+                        .generic_parameters()
+                        .iter()
+                        .position(|parameter| *parameter == Some(default.text))
+                        .map(|parameter_index| source_goal.arguments()[parameter_index].unwrap())
+                        .unwrap_or_else(|| {
+                            TraitGoalType::Concrete(self.get_type(default.text).unwrap().id)
+                        })
+                };
                 source_goal
                     .push_argument(argument)
                     .map_err(|kind| SourceTraitObligationError {
@@ -2026,6 +2048,9 @@ fn source_declaration_implementation_bound_type(
     {
         let source_argument =
             source_declaration_implementation_argument(index, declaration, implementation);
+        if source_argument.text == "Self" {
+            return source_bound_type(implementation.self_type, implementation, table);
+        }
         return source_bound_type(source_argument, implementation, table);
     }
     table
@@ -2074,6 +2099,9 @@ fn source_predicate_effective_argument<'source>(
         .get(index)
         .copied()
         .flatten()?;
+    if default.text == "Self" {
+        return Some(predicate.self_type());
+    }
     declaration
         .generic_parameters()
         .iter()
@@ -2092,14 +2120,18 @@ fn push_source_bound_trait_defaults(
 ) -> Result<(), SourceTraitImplementationError> {
     for argument_index in provided_count..declaration.generic_parameter_count {
         let default = declaration.generic_parameter_defaults()[argument_index].unwrap();
-        let value = declaration
-            .generic_parameters()
-            .iter()
-            .position(|parameter| *parameter == Some(default.text))
-            .map(|parameter_index| goal.arguments()[parameter_index].unwrap())
-            .unwrap_or_else(|| {
-                BoundTraitGoalType::Concrete(table.get_type(default.text).unwrap().id)
-            });
+        let value = if default.text == "Self" {
+            goal.self_type
+        } else {
+            declaration
+                .generic_parameters()
+                .iter()
+                .position(|parameter| *parameter == Some(default.text))
+                .map(|parameter_index| goal.arguments()[parameter_index].unwrap())
+                .unwrap_or_else(|| {
+                    BoundTraitGoalType::Concrete(table.get_type(default.text).unwrap().id)
+                })
+        };
         goal.push_argument(value)
             .map_err(|kind| SourceTraitImplementationError {
                 kind: SourceTraitImplementationErrorKind::Goal(kind),
@@ -9372,6 +9404,18 @@ mod tests {
             "fn check() where u32: Child, u32: Parent {}"
         );
         let module = Parser::new(generic).parse_module::<10, 1>().unwrap();
+        let traits = SourceTraitDeclarationTable::from_module(&module).unwrap();
+        let implementations =
+            SourceTraitImplementationTable::from_module(&module, &traits).unwrap();
+        implementations.prove_module(&module, &traits).unwrap();
+
+        let self_default = concat!(
+            "trait Identity<T = Self> { type Output = T; } ",
+            "trait Child: Identity {} impl<T> Identity for T {} impl<T> Child for T {} ",
+            "fn check() where u32: Child, u32: Identity, ",
+            "<u32 as Identity>::Output = u32 {}"
+        );
+        let module = Parser::new(self_default).parse_module::<12, 1>().unwrap();
         let traits = SourceTraitDeclarationTable::from_module(&module).unwrap();
         let implementations =
             SourceTraitImplementationTable::from_module(&module, &traits).unwrap();
