@@ -7892,9 +7892,12 @@ runners use this shared package-format codec before attaching either verified
 image, after canonical activation-checkpoint recovery. The deployment service's
 focused Windows/Linux test also binds activation publication to one exact stable
 COW file-generation receipt and recovers only through the selected file
-generation and verified extent. This is hosted codec, storage simulation, and
-backend-parity evidence, not authenticated reachable-root selection, physical
-durability, or physical isolation.
+generation and verified extent. An independent authenticated-state-store
+contract now pins the monotonic epoch, activation sequence, exact stable object
+and file generation, generation/source identity, and checkpoint digest; an
+older valid file is rejected when that state names a successor. This is hosted
+codec and storage/monotonic-store simulation plus backend-parity evidence, not
+a concrete TPM/NVRAM backend, physical durability, or physical isolation.
 
 The focused test sends the generated 104-byte request and one attenuated shared-
 buffer capability from the caller to the launched provider task, executes the

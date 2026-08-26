@@ -217,9 +217,12 @@ two-phase, one-use `DeploymentService` activation transaction and construct
 kernel admission from its typed immutable result. A canonical 160-byte
 activation checkpoint and one receipt-bound stable COW file transaction now
 publish/recover the same record in focused Windows/Linux simulation; WHP/KVM
-re-decode that checkpoint before admission. Authenticated reachable-root and
-monotonic recovery-state integration, physical durability, and general
-resolver-driven launch remain **PLANNED**. The canonical build-tool-to-
+re-decode that checkpoint before admission. A separate fixed authenticated
+recovery-state contract now compare-and-stores a monotonic epoch and pins the
+exact volume/object/file generation plus activation/checkpoint identities;
+focused Windows/Linux tests reject replay of an older valid file. A concrete
+TPM/NVRAM/recovery-journal backend, physical durability, and general resolver-
+driven launch remain **PLANNED**. The canonical build-tool-to-
 kernel format itself is now **PARTIALLY IMPLEMENTED**: a shared fixed 280-byte
 record carries the resolved system/provider/interface generations,
 fingerprint, placement, applied policy generation, capability-selected object

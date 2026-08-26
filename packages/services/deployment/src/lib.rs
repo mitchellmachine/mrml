@@ -19,8 +19,10 @@ use mrml_storage::{
 };
 
 pub const DEPLOYMENT_CHECKPOINT_BYTES: usize = 160;
+pub const DEPLOYMENT_RECOVERY_STATE_BYTES: usize = 192;
 const DEPLOYMENT_CHECKPOINT_MAGIC: [u8; 8] = *b"MRMLDA1\0";
 const DEPLOYMENT_CHECKPOINT_VERSION: u16 = 1;
+const DEPLOYMENT_RECOVERY_STATE_MAGIC: [u8; 16] = *b"MRML-DEPLSTATE1\0";
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct GenerationCandidate {
@@ -290,6 +292,7 @@ pub enum DeploymentError {
     GenerationExhausted,
     InvalidActivation(ActivatedSystemGenerationError),
     InvalidCheckpoint,
+    InvalidRecoveryState,
 }
 
 pub fn encode_deployment_checkpoint(
@@ -386,6 +389,56 @@ impl<const EXTENTS: usize> PreparedStableActivation<EXTENTS> {
         }
         Ok(StableActivation { file, active })
     }
+
+    pub fn commit_authenticated<
+        const CANDIDATES: usize,
+        const PARTICIPANTS: usize,
+        S: DeploymentRecoveryStateStore,
+    >(
+        self,
+        service: &mut DeploymentService<CANDIDATES>,
+        receipt: &mut TransactionReceipt<PARTICIPANTS>,
+        state_store: &mut S,
+    ) -> Result<StableActivation<EXTENTS>, AuthenticatedActivationCommitError<S::Error>> {
+        if service.preview_activation(self.activation) != Ok(self.active) {
+            return Err(AuthenticatedActivationCommitError::StaleActivation);
+        }
+        let mut expected = [0; DEPLOYMENT_RECOVERY_STATE_BYTES];
+        state_store
+            .load_authenticated(&mut expected)
+            .map_err(AuthenticatedActivationCommitError::StateStore)?;
+        let current = decode_deployment_recovery_state(&expected)
+            .map_err(AuthenticatedActivationCommitError::Deployment)?;
+        if !current.matches_active(service.active) {
+            return Err(AuthenticatedActivationCommitError::RecoveryStateMismatch);
+        }
+        let file = self
+            .file
+            .commit_transaction(receipt)
+            .map_err(AuthenticatedActivationCommitError::Transaction)?;
+        let replacement = encode_deployment_recovery_state(
+            current.epoch().checked_add(1).ok_or(
+                AuthenticatedActivationCommitError::Deployment(
+                    DeploymentError::GenerationExhausted,
+                ),
+            )?,
+            service.root,
+            self.active,
+            file.object(),
+            file.generation(),
+        )
+        .map_err(AuthenticatedActivationCommitError::Deployment)?;
+        state_store
+            .compare_and_store(&expected, &replacement)
+            .map_err(AuthenticatedActivationCommitError::StateStore)?;
+        let active = service
+            .commit_activation(self.activation)
+            .map_err(AuthenticatedActivationCommitError::Deployment)?;
+        if active != self.active {
+            return Err(AuthenticatedActivationCommitError::StaleActivation);
+        }
+        Ok(StableActivation { file, active })
+    }
 }
 
 pub struct StableActivation<const EXTENTS: usize> {
@@ -408,6 +461,166 @@ pub enum StableActivationCommitError {
     StaleActivation,
     Transaction(TransactionError),
     Deployment(DeploymentError),
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum AuthenticatedActivationCommitError<E> {
+    StaleActivation,
+    RecoveryStateMismatch,
+    Transaction(TransactionError),
+    Deployment(DeploymentError),
+    StateStore(E),
+}
+
+pub trait DeploymentRecoveryStateStore {
+    type Error;
+
+    /// Loads one authenticated rollback-resistant state record. Missing,
+    /// unauthenticated, or ambiguous state must fail closed.
+    fn load_authenticated(
+        &self,
+        output: &mut [u8; DEPLOYMENT_RECOVERY_STATE_BYTES],
+    ) -> Result<(), Self::Error>;
+
+    /// Atomically replaces exactly `expected`; stale state must be rejected.
+    fn compare_and_store(
+        &mut self,
+        expected: &[u8; DEPLOYMENT_RECOVERY_STATE_BYTES],
+        replacement: &[u8; DEPLOYMENT_RECOVERY_STATE_BYTES],
+    ) -> Result<(), Self::Error>;
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct DeploymentRecoveryState {
+    epoch: u64,
+    active: Option<ActivatedSystemGeneration>,
+    volume: Option<mrml_storage::VolumeId>,
+    file_object: u64,
+    file_generation: u64,
+    checkpoint_digest: [u8; 32],
+}
+
+impl DeploymentRecoveryState {
+    pub const fn epoch(self) -> u64 {
+        self.epoch
+    }
+
+    pub const fn active(self) -> Option<ActivatedSystemGeneration> {
+        self.active
+    }
+
+    pub fn matches_active(self, active: Option<ActivatedSystemGeneration>) -> bool {
+        self.active == active
+    }
+
+    fn matches_file<const N: usize>(&self, file: &FileState<N>) -> bool {
+        self.volume == Some(file.object().volume())
+            && self.file_object == file.object().local()
+            && self.file_generation == file.generation()
+    }
+}
+
+pub fn encode_empty_deployment_recovery_state(
+    epoch: u64,
+) -> Result<[u8; DEPLOYMENT_RECOVERY_STATE_BYTES], DeploymentError> {
+    if epoch == 0 {
+        return Err(DeploymentError::InvalidRecoveryState);
+    }
+    let mut bytes = [0; DEPLOYMENT_RECOVERY_STATE_BYTES];
+    bytes[..16].copy_from_slice(&DEPLOYMENT_RECOVERY_STATE_MAGIC);
+    bytes[16..24].copy_from_slice(&epoch.to_le_bytes());
+    Ok(bytes)
+}
+
+pub fn encode_deployment_recovery_state(
+    epoch: u64,
+    root: ObjectId,
+    active: ActivatedSystemGeneration,
+    file: mrml_storage::StorageObjectId,
+    file_generation: u64,
+) -> Result<[u8; DEPLOYMENT_RECOVERY_STATE_BYTES], DeploymentError> {
+    if epoch == 0 || file_generation == 0 {
+        return Err(DeploymentError::InvalidRecoveryState);
+    }
+    let mut bytes = [0; DEPLOYMENT_RECOVERY_STATE_BYTES];
+    bytes[..16].copy_from_slice(&DEPLOYMENT_RECOVERY_STATE_MAGIC);
+    bytes[16..24].copy_from_slice(&epoch.to_le_bytes());
+    bytes[24..32].copy_from_slice(&active.activation_sequence().to_le_bytes());
+    bytes[32..40].copy_from_slice(&active.generation().to_le_bytes());
+    bytes[40..56].copy_from_slice(&file.volume().bytes());
+    bytes[56..64].copy_from_slice(&file.local().to_le_bytes());
+    bytes[64..72].copy_from_slice(&file_generation.to_le_bytes());
+    bytes[72..136].copy_from_slice(active.generation_digest());
+    bytes[136..168].copy_from_slice(&Sha3_256::digest(&encode_deployment_checkpoint(
+        root, active,
+    )?));
+    bytes[168..176].copy_from_slice(&active.source_object().to_le_bytes());
+    bytes[176..184].copy_from_slice(&active.source_generation().to_le_bytes());
+    Ok(bytes)
+}
+
+pub fn decode_deployment_recovery_state(
+    bytes: &[u8; DEPLOYMENT_RECOVERY_STATE_BYTES],
+) -> Result<DeploymentRecoveryState, DeploymentError> {
+    if bytes[..16] != DEPLOYMENT_RECOVERY_STATE_MAGIC || bytes[184..].iter().any(|byte| *byte != 0)
+    {
+        return Err(DeploymentError::InvalidRecoveryState);
+    }
+    let epoch = read_u64(bytes, 16)?;
+    if epoch == 0 {
+        return Err(DeploymentError::InvalidRecoveryState);
+    }
+    let sequence = read_u64(bytes, 24)?;
+    let generation = read_u64(bytes, 32)?;
+    let volume_bytes: [u8; 16] = bytes[40..56]
+        .try_into()
+        .map_err(|_| DeploymentError::InvalidRecoveryState)?;
+    let file_object = read_u64(bytes, 56)?;
+    let file_generation = read_u64(bytes, 64)?;
+    let mut generation_digest = [0; 64];
+    generation_digest.copy_from_slice(&bytes[72..136]);
+    let mut checkpoint_digest = [0; 32];
+    checkpoint_digest.copy_from_slice(&bytes[136..168]);
+    let source_object = read_u64(bytes, 168)?;
+    let source_generation = read_u64(bytes, 176)?;
+    if sequence == 0 && generation == 0 {
+        if volume_bytes.iter().any(|byte| *byte != 0)
+            || file_object != 0
+            || file_generation != 0
+            || generation_digest.iter().any(|byte| *byte != 0)
+            || checkpoint_digest.iter().any(|byte| *byte != 0)
+            || source_object != 0
+            || source_generation != 0
+        {
+            return Err(DeploymentError::InvalidRecoveryState);
+        }
+        return Ok(DeploymentRecoveryState {
+            epoch,
+            active: None,
+            volume: None,
+            file_object: 0,
+            file_generation: 0,
+            checkpoint_digest,
+        });
+    }
+    let volume = mrml_storage::VolumeId::new(volume_bytes)
+        .map_err(|_| DeploymentError::InvalidRecoveryState)?;
+    let active = ActivatedSystemGeneration::new(
+        generation,
+        generation_digest,
+        sequence,
+        source_object,
+        source_generation,
+    )
+    .map_err(|_| DeploymentError::InvalidRecoveryState)?;
+    Ok(DeploymentRecoveryState {
+        epoch,
+        active: Some(active),
+        volume: Some(volume),
+        file_object,
+        file_generation,
+        checkpoint_digest,
+    })
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -507,6 +720,64 @@ pub fn recover_stable_activation<
         )
         .map_err(DeploymentStorageError::Read)?;
     DeploymentService::recover(root, &checkpoint).map_err(DeploymentStorageError::Deployment)
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum AuthenticatedActivationRecoveryError<StorageError, StateError> {
+    Storage(DeploymentStorageError<StorageError>),
+    StateStore(StateError),
+    InvalidRecoveryState,
+}
+
+#[allow(clippy::too_many_arguments)]
+pub fn recover_authenticated_activation<
+    const CANDIDATES: usize,
+    const EXTENTS: usize,
+    const AUTHORITIES: usize,
+    B: FileReadBackend,
+    S: DeploymentRecoveryStateStore,
+>(
+    root: ObjectId,
+    file_state: &FileState<EXTENTS>,
+    storage_authority: &StorageAuthorityTable<AUTHORITIES>,
+    file: StorageHandle,
+    principal: StoragePrincipal,
+    state_store: &S,
+    backend: &mut B,
+) -> Result<DeploymentService<CANDIDATES>, AuthenticatedActivationRecoveryError<B::Error, S::Error>>
+{
+    let mut encoded_state = [0; DEPLOYMENT_RECOVERY_STATE_BYTES];
+    state_store
+        .load_authenticated(&mut encoded_state)
+        .map_err(AuthenticatedActivationRecoveryError::StateStore)?;
+    let state = decode_deployment_recovery_state(&encoded_state)
+        .map_err(|_| AuthenticatedActivationRecoveryError::InvalidRecoveryState)?;
+    if !state.matches_file(file_state) {
+        return Err(AuthenticatedActivationRecoveryError::InvalidRecoveryState);
+    }
+    let service = recover_stable_activation::<CANDIDATES, _, _, _>(
+        root,
+        file_state,
+        storage_authority,
+        file,
+        principal,
+        state.file_generation,
+        backend,
+    )
+    .map_err(AuthenticatedActivationRecoveryError::Storage)?;
+    let active = service
+        .active
+        .ok_or(AuthenticatedActivationRecoveryError::InvalidRecoveryState)?;
+    if state.active != Some(active)
+        || state.checkpoint_digest
+            != Sha3_256::digest(
+                &encode_deployment_checkpoint(root, active)
+                    .map_err(|_| AuthenticatedActivationRecoveryError::InvalidRecoveryState)?,
+            )
+    {
+        return Err(AuthenticatedActivationRecoveryError::InvalidRecoveryState);
+    }
+    Ok(service)
 }
 
 fn read_u16(bytes: &[u8], offset: usize) -> Result<u16, DeploymentError> {
@@ -674,6 +945,42 @@ mod tests {
         }
 
         fn flush_superblock(&mut self) -> Result<(), Self::Error> {
+            Ok(())
+        }
+    }
+
+    struct RecoveryStateStore {
+        bytes: [u8; DEPLOYMENT_RECOVERY_STATE_BYTES],
+    }
+
+    impl RecoveryStateStore {
+        fn empty() -> Self {
+            Self {
+                bytes: encode_empty_deployment_recovery_state(1).unwrap(),
+            }
+        }
+    }
+
+    impl DeploymentRecoveryStateStore for RecoveryStateStore {
+        type Error = u8;
+
+        fn load_authenticated(
+            &self,
+            output: &mut [u8; DEPLOYMENT_RECOVERY_STATE_BYTES],
+        ) -> Result<(), Self::Error> {
+            output.copy_from_slice(&self.bytes);
+            Ok(())
+        }
+
+        fn compare_and_store(
+            &mut self,
+            expected: &[u8; DEPLOYMENT_RECOVERY_STATE_BYTES],
+            replacement: &[u8; DEPLOYMENT_RECOVERY_STATE_BYTES],
+        ) -> Result<(), Self::Error> {
+            if self.bytes != *expected {
+                return Err(1);
+            }
+            self.bytes.copy_from_slice(replacement);
             Ok(())
         }
     }
@@ -884,35 +1191,63 @@ mod tests {
         let mut receipt = transaction
             .publish(&publication_plan(images), &mut PublicationBackend)
             .unwrap();
-        let stable = stable.commit(&mut service, &mut receipt).unwrap();
+        let mut recovery_state = RecoveryStateStore::empty();
+        let stable = stable
+            .commit_authenticated(&mut service, &mut receipt, &mut recovery_state)
+            .unwrap();
         assert_eq!(receipt.remaining(), 0);
         assert_eq!(stable.active(), preview);
         assert_eq!(service.active(&capabilities, inspect), Ok(Some(preview)));
 
-        let recovered = recover_stable_activation::<2, _, _, _>(
+        let recovered = recover_authenticated_activation::<2, _, _, _, _>(
             root,
             stable.file(),
             &authority,
             file,
             principal(),
-            stable.file().generation(),
+            &recovery_state,
             &mut backend,
         )
         .unwrap();
         assert_eq!(recovered.active(&capabilities, inspect), Ok(Some(preview)));
 
-        backend.bytes[0] ^= 1;
+        let accepted = recovery_state.bytes;
+        recovery_state.bytes = encode_deployment_recovery_state(
+            3,
+            root,
+            stable.active(),
+            stable.file().object(),
+            stable.file().generation() + 1,
+        )
+        .unwrap();
         assert!(matches!(
-            recover_stable_activation::<2, _, _, _>(
+            recover_authenticated_activation::<2, _, _, _, _>(
                 root,
                 stable.file(),
                 &authority,
                 file,
                 principal(),
-                stable.file().generation(),
+                &recovery_state,
                 &mut backend,
             ),
-            Err(DeploymentStorageError::Read(FileReadError::Backend(4)))
+            Err(AuthenticatedActivationRecoveryError::InvalidRecoveryState)
+        ));
+
+        recovery_state.bytes = accepted;
+        backend.bytes[0] ^= 1;
+        assert!(matches!(
+            recover_authenticated_activation::<2, _, _, _, _>(
+                root,
+                stable.file(),
+                &authority,
+                file,
+                principal(),
+                &recovery_state,
+                &mut backend,
+            ),
+            Err(AuthenticatedActivationRecoveryError::Storage(
+                DeploymentStorageError::Read(FileReadError::Backend(4))
+            ))
         ));
     }
 }

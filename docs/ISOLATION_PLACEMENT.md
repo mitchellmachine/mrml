@@ -56,8 +56,11 @@ hosted activation and kernel/runtime identity evidence. The service now also
 publishes/reconstructs the same typed record through one receipt-bound stable
 COW file-generation transaction in focused Windows/Linux simulation tests, and
 the hosted WHP/KVM paths re-decode the canonical recovery checkpoint before
-kernel admission. Authenticated reachable-root selection, monotonic recovery
-state, physical durability, and general runtime delivery remain **PLANNED**.
+kernel admission. The deployment recovery contract now independently binds the
+accepted monotonic epoch and exact volume/object/file generation to that
+checkpoint and rejects replay of an older valid file in Windows/Linux unit
+simulation. A concrete TPM/NVRAM/recovery-journal backend, physical durability,
+and general runtime delivery remain **PLANNED**.
 The build/kernel boundary now has a canonical fixed 280-byte, pointer-free
 component-service launch handoff in the shared package-format library. The
 build tool derives system generation, provider generation, interface

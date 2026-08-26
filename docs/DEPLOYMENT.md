@@ -75,8 +75,14 @@ before receipt publication, commit consumes the exact file participant and
 activation token, and recovery reads only the caller-selected exact file
 generation through storage authority and verified extents. Windows and Arch
 Linux simulation tests cover clean publication/recovery and corruption rejection
-at the authenticated extent boundary. Authenticated reachable-root selection,
-recovery-journal/monotonic-state integration, physical durability,
+at the authenticated extent boundary. A separate fixed 192-byte authenticated
+recovery-state contract now binds a monotonic epoch, activation sequence,
+generation/digest/source identity, exact volume/object/file generation, and
+checkpoint digest. Publication advances it by exact compare-and-store only
+after the COW receipt exists; recovery requires complete equality, so an older
+valid stable file fails when authenticated state names a newer generation.
+This is Windows/Linux unit simulation against an abstract authenticated store,
+not TPM/NVRAM evidence. Concrete recovery-journal/TPM integration, physical durability,
 SystemRelease admission, rollback authorization, retained-root integration,
 and general runtime delivery remain **PLANNED**.
 

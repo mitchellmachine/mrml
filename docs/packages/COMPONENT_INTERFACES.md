@@ -144,9 +144,11 @@ pass 6 tests, DeploymentService suites pass 2, build-tool suites pass 80,
 kernel suites pass 509, WHP passes 7, and KVM passes 8. The activation record
 also round-trips a canonical digest-bound checkpoint; focused deployment tests
 publish and recover it through one exact stable COW file-generation receipt,
-and both hosted VMM paths re-decode it before admission. Authenticated
-reachable-root/monotonic recovery integration and general resolver-driven
-launching remain **PLANNED**.
+and both hosted VMM paths re-decode it before admission. A separate abstract
+authenticated-store record now pins the accepted monotonic epoch and exact
+stable-file/object/checkpoint identity, rejecting an older valid file in
+Windows/Linux unit simulation. Concrete TPM/NVRAM/recovery-journal integration
+and general resolver-driven launching remain **PLANNED**.
 The canonical provider now builds its own `mrml-zstd-service.efi` artifact—never
 an alias of the generic configuration service—with an x86-64 architecture trap,
 one private 4 KiB scratch page, and exact launch-register endpoint/caller/

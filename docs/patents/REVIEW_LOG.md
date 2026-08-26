@@ -5007,6 +5007,20 @@ storage, deployment, package, component-interface, adaptive-placement, and
 microVM mechanisms retain their existing `TRIGGERED` reviews; this agent review
 does not replace targeted independent human review.
 
+# 2026-08-25 — Monotonic deployment recovery selector
+
+**Result: NOT_TRIGGERED after the existing recovery and deployment reviews.**
+This increment uses the repository's existing fixed canonical records, exact
+field equality, monotonic integer checks, and authenticated-store compare-and-
+store contract to bind an activation checkpoint to one volume/object/file
+generation. It adds no authenticated-store implementation, TPM/NVRAM protocol,
+recovery-journal layout, rollback algorithm, cryptographic construction,
+virtualization technique, scheduling policy, queue/ring transport, compression
+operation, or hardware protocol. The broader recovery, storage, deployment,
+package, adaptive-placement, and microVM mechanisms retain their existing
+`TRIGGERED` reviews; this agent review does not replace targeted independent
+human review.
+
 # 2026-08-25 — Artifact-bound component control/data-plane handoff
 
 **Result: NOT_TRIGGERED after the existing component-interface and adaptive-
