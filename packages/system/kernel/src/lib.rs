@@ -116,6 +116,7 @@ pub use handoff::{
     encode_handoff_with_smp_recovery_and_isolation, encode_handoff_with_smp_service_and_recovery,
     encode_handoff_with_smp_service_application_and_recovery,
     encode_handoff_with_smp_service_recovery_and_isolation,
+    encode_handoff_with_smp_service_recovery_isolation_and_installed,
 };
 pub use host_resource::{
     DirectHostResourceError, DirectHostResourceMemory, HostResourceIoError, HostResourceMemory,

@@ -150,6 +150,15 @@ absent. Windows kernel tests pass 561, UEFI tests pass 37, and the UEFI target
 cross-builds. The canonical kernel handoff does not yet include the record, and
 cross-transport native-device correlation remains **PLANNED**.
 
+The canonical kernel handoff now includes the record under a distinct flag and
+requires exact volume/root-generation equality with its authenticated recovery
+metadata. The encoder shifts the existing SMP/MADT tail only after validating
+capacity, and the decoder rejects malformed identity or inconsistent tail
+length before publishing regions. The real loader uses this path. Windows
+kernel tests pass 561, UEFI tests pass 37, and the UEFI target cross-builds.
+Native AHCI/USB identity correlation and live `BlockService` reacquisition
+remain **PLANNED**.
+
 The `mrml` frontend may expose structured `disk`, `filesystem`, `optical`, and
 `media` operations. The PowerShell-inspired shell projects the same backend as
 typed `Get-*`, `Test-*`, `Initialize-*`, `New-*`, `Format-*`, `Write-*`, and

@@ -3328,6 +3328,15 @@ call. Windows kernel tests pass 561, UEFI tests pass 37, and the UEFI target
 cross-builds. The record is not yet encoded into `BootHandoff`, and no native
 AHCI/USB correlation or physical reacquisition is claimed.
 
+Canonical `BootHandoff` now carries that identity under a separate bounded flag.
+The record is inserted before the SMP/MADT tail, and the decoder exact-matches
+its volume and root generation against authenticated recovery metadata before
+emitting any memory region. The real UEFI loader selects this encoder; malformed,
+truncated, journal-mismatched, or tail-shifting inputs fail closed. Windows
+kernel tests pass 561, UEFI tests pass 37, and the UEFI target cross-builds.
+This remains codec and compile evidence, not OVMF, physical firmware, native
+driver correlation, or capability-bearing storage reacquisition.
+
 The bounded discovery result now remains owned through the complete serviced
 recovery read. `RecoveredInstalledStableSystemSelection` retains the exact
 installed selection beside the `BlockVolume` and reachable graph produced from

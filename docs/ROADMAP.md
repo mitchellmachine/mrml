@@ -128,6 +128,15 @@ constructs and retains it across `ExitBootServices`; Windows kernel tests pass
 integration is still **PLANNED** because the shared handoff source has unrelated
 concurrent edits; native driver correlation and reacquisition remain later gates.
 
+The installed identity is now encoded and decoded inside canonical
+`BootHandoff`. Its distinct flag and exact length place the 104-byte record
+before SMP/MADT data, and decoding requires its volume/root generation to match
+the authenticated recovery metadata in the same handoff. The loader uses this
+path; Windows kernel tests pass 561, UEFI tests pass 37, and the UEFI target
+cross-builds. This is **PARTIALLY IMPLEMENTED** codec/compile evidence. Exact
+native-driver correlation, live-session reacquisition, and physical execution
+remain the next storage-backed Total-admission gates.
+
 Selected-device reopening and redundant-root reads are now **PARTIALLY
 IMPLEMENTED**. Exact path/media/geometry and block-zero header revalidation
 precedes both root reads; any mismatch, second-read failure, or protocol-close

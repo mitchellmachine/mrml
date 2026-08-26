@@ -1,5 +1,6 @@
 use crate::{
-    BootEvidence, BootValidationError, FramebufferError, FramebufferInfo, MemoryError, MemoryKind,
+    BootEvidence, BootValidationError, FramebufferError, FramebufferInfo,
+    INSTALLED_RECOVERY_BOOT_IDENTITY_BYTES, InstalledRecoveryBootIdentity, MemoryError, MemoryKind,
     MemoryMap, MemoryRegion, PhysAddr, PixelFormat,
 };
 
@@ -16,7 +17,8 @@ pub const MAX_HANDOFF_BYTES: usize = HANDOFF_HEADER_BYTES
     + 16
     + HANDOFF_SERVICE_BYTES
     + HANDOFF_APPLICATION_BYTES
-    + HANDOFF_RECOVERY_STATE_BYTES;
+    + HANDOFF_RECOVERY_STATE_BYTES
+    + INSTALLED_RECOVERY_BOOT_IDENTITY_BYTES;
 
 const FLAG_SECURE_BOOT: u16 = 1;
 const FLAG_MEASURED_BOOT: u16 = 1 << 1;
@@ -28,6 +30,7 @@ const FLAG_RECOVERY_STATE: u16 = 1 << 6;
 const FLAG_COHERENT_RELEASE: u16 = 1 << 7;
 const FLAG_APPLICATION_IMAGE: u16 = 1 << 8;
 const FLAG_TOTAL_MICROVM_ONCE: u16 = 1 << 9;
+const FLAG_INSTALLED_RECOVERY_IDENTITY: u16 = 1 << 10;
 const KNOWN_FLAGS: u16 = FLAG_SECURE_BOOT
     | FLAG_MEASURED_BOOT
     | FLAG_ROLLBACK_PROTECTED
@@ -37,7 +40,8 @@ const KNOWN_FLAGS: u16 = FLAG_SECURE_BOOT
     | FLAG_RECOVERY_STATE
     | FLAG_COHERENT_RELEASE
     | FLAG_APPLICATION_IMAGE
-    | FLAG_TOTAL_MICROVM_ONCE;
+    | FLAG_TOTAL_MICROVM_ONCE
+    | FLAG_INSTALLED_RECOVERY_IDENTITY;
 
 /// Authority-free, nonpersistent isolation overlay requested by the trusted
 /// loader for this boot. Runtime admission must still prove that Total mode is
@@ -401,6 +405,7 @@ pub struct BootHandoff {
     service: Option<ServiceLaunch>,
     application: Option<ApplicationLaunch>,
     recovery_state: Option<RecoveryStateMetadata>,
+    installed_recovery: Option<InstalledRecoveryBootIdentity>,
     isolation_override: Option<BootIsolationOverride>,
 }
 
@@ -444,6 +449,10 @@ impl BootHandoff {
 
     pub const fn recovery_state(&self) -> Option<RecoveryStateMetadata> {
         self.recovery_state
+    }
+
+    pub const fn installed_recovery(&self) -> Option<InstalledRecoveryBootIdentity> {
+        self.installed_recovery
     }
 
     pub const fn isolation_override(&self) -> Option<BootIsolationOverride> {
@@ -503,8 +512,13 @@ impl BootHandoff {
             .ok_or(HandoffError::NonCanonical)?;
         let recovery_bytes =
             usize::from(flags & FLAG_RECOVERY_STATE != 0) * HANDOFF_RECOVERY_STATE_BYTES;
-        let trampoline_offset = recovery_offset
+        let installed_recovery_offset = recovery_offset
             .checked_add(recovery_bytes)
+            .ok_or(HandoffError::NonCanonical)?;
+        let installed_recovery_bytes = usize::from(flags & FLAG_INSTALLED_RECOVERY_IDENTITY != 0)
+            * INSTALLED_RECOVERY_BOOT_IDENTITY_BYTES;
+        let trampoline_offset = installed_recovery_offset
+            .checked_add(installed_recovery_bytes)
             .ok_or(HandoffError::NonCanonical)?;
         let trampoline_bytes = usize::from(flags & FLAG_AP_TRAMPOLINE != 0) * 16;
         let madt_offset = trampoline_offset
@@ -564,6 +578,26 @@ impl BootHandoff {
         } else {
             None
         };
+        let installed_recovery = if installed_recovery_bytes != 0 {
+            Some(
+                InstalledRecoveryBootIdentity::decode(
+                    input[installed_recovery_offset..trampoline_offset]
+                        .try_into()
+                        .map_err(|_| HandoffError::NonCanonical)?,
+                )
+                .map_err(|_| HandoffError::NonCanonical)?,
+            )
+        } else {
+            None
+        };
+        if installed_recovery.is_some_and(|installed| {
+            recovery_state.is_none_or(|recovery| {
+                recovery.accepted_volume() != Some(installed.volume())
+                    || recovery.accepted_root_generation() != installed.root_generation()
+            })
+        }) {
+            return Err(HandoffError::NonCanonical);
+        }
         let isolation_override = (flags & FLAG_TOTAL_MICROVM_ONCE != 0)
             .then_some(BootIsolationOverride::TotalMicrovmOnce);
         let pixel_format = match input[164] {
@@ -681,6 +715,7 @@ impl BootHandoff {
             service,
             application,
             recovery_state,
+            installed_recovery,
             isolation_override,
         })
     }
@@ -1175,6 +1210,92 @@ pub fn encode_handoff_with_smp_service_recovery_and_isolation(
     Ok(length)
 }
 
+/// Extends the ordinary loader handoff with the exact non-authorizing installed
+/// recovery identity. The record is inserted before SMP/MADT data and is valid
+/// only when its volume and selected root generation exactly match the
+/// authenticated recovery journal metadata in the same handoff.
+#[allow(clippy::too_many_arguments)]
+pub fn encode_handoff_with_smp_service_recovery_isolation_and_installed(
+    image_version: u64,
+    entropy: [u8; 32],
+    image_measurement: [u8; 64],
+    secure_boot: bool,
+    measured_boot: bool,
+    rollback_protected: bool,
+    coherent_release: bool,
+    acpi_root: u64,
+    framebuffer: FramebufferInfo,
+    regions: &[MemoryRegion],
+    ap_trampoline: u64,
+    ap_stack_arena: u64,
+    service: ServiceLaunch,
+    recovery_state: Option<RecoveryStateMetadata>,
+    installed_recovery: Option<InstalledRecoveryBootIdentity>,
+    isolation_override: Option<BootIsolationOverride>,
+    madt: &[u8],
+    output: &mut [u8],
+) -> Result<usize, HandoffError> {
+    if installed_recovery.is_some_and(|installed| {
+        recovery_state.is_none_or(|recovery| {
+            recovery.accepted_volume() != Some(installed.volume())
+                || recovery.accepted_root_generation() != installed.root_generation()
+        })
+    }) {
+        return Err(HandoffError::NonCanonical);
+    }
+    let length = encode_handoff_with_smp_service_recovery_and_isolation(
+        image_version,
+        entropy,
+        image_measurement,
+        secure_boot,
+        measured_boot,
+        rollback_protected,
+        coherent_release,
+        acpi_root,
+        framebuffer,
+        regions,
+        ap_trampoline,
+        ap_stack_arena,
+        service,
+        recovery_state,
+        isolation_override,
+        madt,
+        output,
+    )?;
+    let Some(installed_recovery) = installed_recovery else {
+        return Ok(length);
+    };
+    let installed_offset = HANDOFF_HEADER_BYTES
+        .checked_add(
+            regions
+                .len()
+                .checked_mul(HANDOFF_REGION_BYTES)
+                .ok_or(HandoffError::NonCanonical)?,
+        )
+        .and_then(|offset| offset.checked_add(HANDOFF_SERVICE_BYTES))
+        .and_then(|offset| {
+            offset.checked_add(usize::from(recovery_state.is_some()) * HANDOFF_RECOVERY_STATE_BYTES)
+        })
+        .ok_or(HandoffError::NonCanonical)?;
+    let extended_length = length
+        .checked_add(INSTALLED_RECOVERY_BOOT_IDENTITY_BYTES)
+        .ok_or(HandoffError::NonCanonical)?;
+    if output.len() < extended_length {
+        output[..length].fill(0);
+        return Err(HandoffError::NonCanonical);
+    }
+    output.copy_within(
+        installed_offset..length,
+        installed_offset + INSTALLED_RECOVERY_BOOT_IDENTITY_BYTES,
+    );
+    output[installed_offset..installed_offset + INSTALLED_RECOVERY_BOOT_IDENTITY_BYTES]
+        .copy_from_slice(&installed_recovery.encode());
+    output[16..20].copy_from_slice(&(extended_length as u32).to_le_bytes());
+    let flags = read_u16(output, 22) | FLAG_INSTALLED_RECOVERY_IDENTITY;
+    output[22..24].copy_from_slice(&flags.to_le_bytes());
+    Ok(extended_length)
+}
+
 #[allow(clippy::too_many_arguments)]
 pub fn encode_handoff_with_smp_service_application_and_recovery(
     image_version: u64,
@@ -1592,7 +1713,8 @@ mod tests {
                     | FLAG_AP_TRAMPOLINE
                     | FLAG_SERVICE_IMAGE
                     | FLAG_APPLICATION_IMAGE
-                    | FLAG_RECOVERY_STATE))
+                    | FLAG_RECOVERY_STATE
+                    | FLAG_INSTALLED_RECOVERY_IDENTITY))
                 .to_le_bytes(),
         );
         encoded[24..32].copy_from_slice(&7u64.to_le_bytes());
@@ -2117,6 +2239,99 @@ mod tests {
             Some(BootIsolationOverride::TotalMicrovmOnce)
         );
         assert_eq!(decoded.recovery_state(), Some(recovery));
+
+        let installed = InstalledRecoveryBootIdentity::new(
+            crate::InstalledRecoverySource::Uefi,
+            [0x51; 32],
+            3,
+            9,
+            4096,
+            128,
+            [0x6a; 16],
+            2,
+            19,
+        )
+        .unwrap();
+        const WITH_INSTALLED_LENGTH: usize =
+            WITH_RECOVERY_LENGTH + INSTALLED_RECOVERY_BOOT_IDENTITY_BYTES;
+        let mut with_installed = [0u8; WITH_INSTALLED_LENGTH];
+        assert_eq!(
+            encode_handoff_with_smp_service_recovery_isolation_and_installed(
+                7,
+                [1; 32],
+                [2; 64],
+                true,
+                true,
+                false,
+                true,
+                0x9000,
+                framebuffer,
+                &regions,
+                0x8000,
+                0x40_0000,
+                service,
+                Some(recovery),
+                Some(installed),
+                Some(BootIsolationOverride::TotalMicrovmOnce),
+                &madt,
+                &mut with_installed,
+            ),
+            Ok(WITH_INSTALLED_LENGTH)
+        );
+        let decoded = BootHandoff::decode(&with_installed, |_| {}).unwrap();
+        assert_eq!(decoded.recovery_state(), Some(recovery));
+        assert_eq!(decoded.installed_recovery(), Some(installed));
+        assert_eq!(decoded.madt(&with_installed), Some(madt.as_slice()));
+        assert_eq!(
+            decoded.isolation_override(),
+            Some(BootIsolationOverride::TotalMicrovmOnce)
+        );
+
+        let installed_offset = HANDOFF_HEADER_BYTES
+            + 2 * HANDOFF_REGION_BYTES
+            + HANDOFF_SERVICE_BYTES
+            + HANDOFF_RECOVERY_STATE_BYTES;
+        let mut malformed = with_installed;
+        malformed[installed_offset + 72] ^= 1;
+        assert_eq!(
+            BootHandoff::decode(&malformed, |_| {}).err(),
+            Some(HandoffError::NonCanonical)
+        );
+        let wrong_root = InstalledRecoveryBootIdentity::new(
+            crate::InstalledRecoverySource::Uefi,
+            [0x51; 32],
+            3,
+            9,
+            4096,
+            128,
+            [0x6a; 16],
+            2,
+            20,
+        )
+        .unwrap();
+        assert_eq!(
+            encode_handoff_with_smp_service_recovery_isolation_and_installed(
+                7,
+                [1; 32],
+                [2; 64],
+                true,
+                true,
+                false,
+                true,
+                0x9000,
+                framebuffer,
+                &regions,
+                0x8000,
+                0x40_0000,
+                service,
+                Some(recovery),
+                Some(wrong_root),
+                None,
+                &madt,
+                &mut with_installed,
+            ),
+            Err(HandoffError::NonCanonical)
+        );
 
         let recovery_offset =
             HANDOFF_HEADER_BYTES + 2 * HANDOFF_REGION_BYTES + HANDOFF_SERVICE_BYTES;

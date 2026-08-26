@@ -1246,6 +1246,16 @@ Windows kernel tests pass 561, UEFI tests pass 37, and the UEFI target cross-
 builds. Encoding the record into `BootHandoff` and exact native-driver
 reacquisition remain **PLANNED**.
 
+`BootHandoff` now **PARTIALLY IMPLEMENTS** that transfer. A distinct flag adds
+the exact 104-byte identity before SMP/MADT bytes, updates the bounded total
+length, and exposes it only after canonical decoding. An installed identity is
+rejected unless the same handoff contains authenticated recovery metadata with
+the identical volume and root generation; malformed identity bytes, truncation,
+or a shifted MADT fail before any memory region is emitted. The real loader now
+uses this encoder. Windows kernel tests pass 561, UEFI tests pass 37, and the
+UEFI target cross-builds. Native driver correlation/reacquisition and delivery
+of a capability-bound live storage owner remain **PLANNED**.
+
 The recovered installed selection is now retained across the boot-policy to
 Total-admission boundary. `RecoveredInstalledTotalAdmission` binds its exact
 device descriptor, serviced session selection, volume header, active root,

@@ -19,7 +19,7 @@ use mrml_kernel::{
         PageTableBuildError, PageTableBuilder, PageTableStore, PerCpuPrivilegeStacks, VirtAddr,
         copy_madt,
     },
-    encode_handoff_with_smp_service_recovery_and_isolation,
+    encode_handoff_with_smp_service_recovery_isolation_and_installed,
 };
 #[cfg(feature = "package-boot")]
 use mrml_package_format::{
@@ -1623,10 +1623,7 @@ fn enter_kernel(
         BootIsolationSelection::ConfiguredDefault => None,
         BootIsolationSelection::TotalMicrovmOnce => Some(BootIsolationOverride::TotalMicrovmOnce),
     };
-    // Retain the exact non-authorizing installed identity across
-    // ExitBootServices. Encoding it into the kernel handoff is the next gate.
-    let _installed_recovery = installed_recovery;
-    let handoff_length = encode_handoff_with_smp_service_recovery_and_isolation(
+    let handoff_length = encode_handoff_with_smp_service_recovery_isolation_and_installed(
         kernel_version,
         entropy,
         kernel_measurement,
@@ -1641,6 +1638,7 @@ fn enter_kernel(
         transition.ap_stack_arena,
         service.launch,
         recovery_state,
+        installed_recovery,
         isolation_override,
         madt,
         handoff,

@@ -1,5 +1,16 @@
 # Patent review log
 
+## 2026-08-26 — Installed recovery identity handoff binding
+
+Patent review: **NOT_TRIGGERED** for this canonical handoff integration. It uses
+a conventional presence flag, checked length/offset arithmetic, fixed-record
+insertion, canonical decoding, and exact equality with adjacent authenticated
+recovery metadata. It adds no device-correlation algorithm, storage layout,
+recovery selection, cryptography, placement policy, native fallback, queue/DMA
+mechanism, or hardware isolation method. Native cross-transport correlation plus
+broader storage, firmware, adaptive-isolation, and Total-MicroVM reviews remain
+`TRIGGERED`; no patent-clearance or non-infringement conclusion is made.
+
 ## 2026-08-26 — Installed recovery boot identity codec
 
 Patent review: **NOT_TRIGGERED** for this bounded identity record. It uses a
