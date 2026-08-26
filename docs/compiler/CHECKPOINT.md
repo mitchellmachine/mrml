@@ -617,6 +617,14 @@ borrows fail, post-last-use owner access succeeds, and mismatched explicit alias
 types fail the standalone interprocedural proof closed. Both canonical hosts
 pass 986 compiler tests.
 
+Alias return compatibility is now retained alongside every modeled local's
+name, origin, and mutability. Plain reassignment consults that state, preventing
+an explicitly incompatible mutable local from acquiring a return origin after
+initialization. Straight-line and both-arm conditional controls fail closed;
+the exact oracle accepts a compatible scalar-reference reassignment and rejects
+the slice/scalar mismatch with E0308. Both canonical hosts pass 986 compiler
+tests.
+
 This is an initial typed body-fact slice, not a complete typed body IR and not a
 borrow checker. Unsupported aggregate-leaf call arguments, other aggregate-
 argument and call-derived fat-reference initializers, unsupported compound array

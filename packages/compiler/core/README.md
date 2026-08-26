@@ -3905,6 +3905,12 @@ the initializer's already compatible result. Focused caller tests cover live
 conflicts and post-last-use restoration, while a mismatched annotation fails
 conservative.
 
+The explicit compatibility result is retained with bounded local state and is
+checked again by plain assignment transfer. A mutable local whose declared type
+does not match the call return therefore cannot regain an origin through a
+later direct or conditional assignment. All modeled local scopes carry the same
+state without allocating a second type environment.
+
 The conditional projected-reassignment milestone extends the bounded tuple-field
 loan chain across a conditional shared-reference assignment. The exact dated
 oracle rejects mutation of either conditional owner and of the field's replaced

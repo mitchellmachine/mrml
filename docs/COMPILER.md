@@ -889,6 +889,13 @@ declared return type before the alias receives an origin; inferred aliases keep
 the already compatible initializer result. This applies to every currently
 modeled local scope. Mismatched annotations fail conservative.
 
+That explicit compatibility is retained as bounded local state, so a later
+plain assignment cannot revive an origin for a local whose declared type is
+incompatible with the call return. Straight-line, conditional-action, loop-
+local, and conditional-loop scopes carry the same bit alongside origin and
+mutability state. This is type-gated provenance transfer, not general local
+type inference.
+
 The first modern trait-solver foundation is an explicit bounded implemented-
 goal representation. Stable trait/type/inference/placeholder identities remain
 distinct; canonicalization replaces inference identities with first-occurrence

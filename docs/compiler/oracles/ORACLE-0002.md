@@ -216,6 +216,12 @@ use. A live competing array-element borrow was rejected with E0499. MRML's
 standalone callee-origin proof additionally rejects an explicit alias annotation
 that differs from the declared return type.
 
+A follow-up reassignment probe accepted replacing one `&mut u16` alias with
+another indexed `&mut u16` and rejected assigning `&mut u16` into an explicitly
+typed `&mut [u16]` alias, then returning it as `&mut u16`, with two E0308
+diagnostics. MRML retains the explicit compatibility bit so its standalone
+origin proof rejects the same transfer without relying on later codegen.
+
 An independently authored Rust 2024 metadata-only probe against this exact
 toolchain and commit separately accepted a mutable scalar reference returned
 from index zero of a mutable slice-reference parameter, followed by owner reuse
