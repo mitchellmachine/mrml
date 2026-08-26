@@ -8781,6 +8781,39 @@ fn preanalyze_runtime_expression_statement_reads<
                     &tree,
                     statement.span,
                 )?;
+                if let Some((_, local, field)) =
+                    x86_64_inline_output_tuple_field(function, locals, output).map_err(|kind| {
+                        CodegenError {
+                            kind,
+                            span: translate_span(body_start, statement.span),
+                        }
+                    })?
+                {
+                    let base = RuntimePlaceIdentity::Local(local.id);
+                    let projections =
+                        RuntimePlaceProjections::single(RuntimePlaceProjection::TupleField(field));
+                    facts
+                        .push_assignment_access(RuntimePlaceAccessFact {
+                            base,
+                            projections,
+                            ty: local.ty,
+                            access: RuntimePlaceAccess::Write,
+                            span: statement.span,
+                        })
+                        .map_err(|kind| CodegenError {
+                            kind,
+                            span: translate_span(body_start, statement.span),
+                        })?;
+                    if let Some(path) = facts.find_move_path(base, projections) {
+                        facts
+                            .push_place_effect(path, RuntimePlaceEffectKind::Write, statement.span)
+                            .map_err(|kind| CodegenError {
+                                kind,
+                                span: translate_span(body_start, statement.span),
+                            })?;
+                    }
+                    return Ok(());
+                }
                 let (_, local) =
                     x86_64_inline_output_local(function, locals, output).map_err(|kind| {
                         CodegenError {
@@ -26127,6 +26160,52 @@ impl<
                             span: translate_span(body_start, statement.span),
                         });
                     }
+                    if let Some((index, local, field)) = x86_64_inline_output_tuple_field(
+                        self.function,
+                        &self.locals[..self.saved_locals],
+                        output,
+                    )
+                    .map_err(|kind| CodegenError {
+                        kind,
+                        span: translate_span(body_start, statement.span),
+                    })? {
+                        let fact = RuntimePlaceAccessFact {
+                            base: RuntimePlaceIdentity::Local(local.id),
+                            projections: RuntimePlaceProjections::single(
+                                RuntimePlaceProjection::TupleField(field),
+                            ),
+                            ty: local.ty,
+                            access: RuntimePlaceAccess::Write,
+                            span: statement.span,
+                        };
+                        if self.preanalyzed_assignment_access_cursor
+                            < self.body_facts.assignment_access_count
+                            && self.body_facts.assignment_accesses
+                                [self.preanalyzed_assignment_access_cursor]
+                                == Some(fact)
+                        {
+                            self.preanalyzed_assignment_access_cursor += 1;
+                        }
+                        self.record_place_access_fact(
+                            fact.base,
+                            fact.projections,
+                            fact.ty,
+                            fact.access,
+                            fact.span,
+                        )?;
+                        let previous_width = self.width;
+                        self.width = runtime_expression_width(ty)
+                            .ok_or(self.error(CodegenErrorKind::RuntimeTypeMismatch))?;
+                        let emission = self.emit_expression(&tree, tree.root(), 0);
+                        self.width = previous_width;
+                        emission?;
+                        self.emit(&[0x48, 0xff, 0xc0])?;
+                        let stack_slot = self
+                            .local_stack_slots_from(index + 1)?
+                            .checked_add(field)
+                            .ok_or(self.error(CodegenErrorKind::OutputTooSmall))?;
+                        return self.emit_store_stack_slot(stack_slot);
+                    }
                     let (index, local) = x86_64_inline_output_local(
                         self.function,
                         &self.locals[..self.saved_locals],
@@ -30252,6 +30331,18 @@ mod tests {
                 .windows(3)
                 .any(|bytes| bytes == [0x48, 0xff, 0xc0])
         );
+        let projected_split_inout = compile(concat!(
+            "#[unsafe(no_mangle)] pub unsafe extern \"C\" fn answer(input: u64) -> u64 { ",
+            "let mut values: (u64, u64) = (0, 1); ",
+            "asm!(\"inc rax\", inout(\"rax\") input => values.1); values.1 }"
+        ))
+        .unwrap();
+        assert!(
+            projected_split_inout
+                .bytes()
+                .windows(3)
+                .any(|bytes| bytes == [0x48, 0xff, 0xc0])
+        );
         for source in [
             concat!(
                 "#[unsafe(no_mangle)] pub unsafe extern \"C\" fn answer() -> u64 { ",
@@ -30411,6 +30502,10 @@ mod tests {
             ),
             (
                 "#[unsafe(no_mangle)] pub unsafe extern \"C\" fn answer(input: u64) -> u64 { let output: u64 = 0; asm!(\"inc rax\", inout(\"rax\") input => output); output }",
+                CodegenErrorKind::ImmutableAssignment,
+            ),
+            (
+                "#[unsafe(no_mangle)] pub unsafe extern \"C\" fn answer(input: u64) -> u64 { let values: (u64, u64) = (0, 1); asm!(\"inc rax\", inout(\"rax\") input => values.1); values.1 }",
                 CodegenErrorKind::ImmutableAssignment,
             ),
             (
