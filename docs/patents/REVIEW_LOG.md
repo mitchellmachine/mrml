@@ -5334,3 +5334,14 @@ selection, coherence, proof-search, caching, or code-generation mechanism.
 Broader trait solving and Rust conformance remain partial; this agent review
 does not establish clearance or infringement and does not replace independent
 human dual review.
+
+# 2026-08-25 — Exact-child generic-parent supertrait proof
+
+**Result: NOT_TRIGGERED after the bounded trait-solver and inherited-supertrait
+reviews.** This increment replaces an exact-only parent lookup with the existing
+projection-aware exact-plus-generic proof entry point and preserves its existing
+bounded premise, cycle, and overflow behavior. It adds no new unification,
+selection, coherence, proof-search, caching, or code-generation mechanism.
+Broader trait solving and Rust conformance remain partial; this agent review
+does not establish clearance or infringement and does not replace independent
+human dual review.

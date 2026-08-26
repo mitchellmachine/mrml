@@ -4464,6 +4464,15 @@ arity rather than being guessed. Windows gnullvm and native Arch Linux WSL each
 pass 592 library tests, one component probe, 10 conformance tests, and 335
 replacement tests: 938 compiler tests per host.
 
+The exact-child generic-parent milestone validates supertraits of unconditional
+exact child facts through the same projection-aware exact-plus-generic proof
+environment used by source obligations. A parent may therefore come from a
+generic or conditional implementation, but every instantiated parent premise
+must prove before the child fact is admitted; unavailable parents still fail
+closed. Windows gnullvm and native Arch Linux WSL each pass 593 library tests,
+one component probe, 10 conformance tests, and 335 replacement tests: 939
+compiler tests per host.
+
 The projection-bearing term milestone uses a fixed 64-node arena for flat leaf
 terms and associated-type projections whose trait self/argument positions refer
 only to earlier nodes. Identical nodes intern to one stable identity; invalid

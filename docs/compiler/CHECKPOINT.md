@@ -1268,6 +1268,15 @@ gnullvm and native Arch Linux WSL each pass 592 library tests, one component-
 interface probe, 10 conformance tests, and 335 replacement tests: 938 compiler
 tests per host.
 
+The exact-child generic-parent milestone validates supertraits of unconditional
+exact child facts through the same projection-aware exact-plus-generic proof
+environment used by source obligations. Generic and conditional parent
+implementations are accepted only when every instantiated premise proves;
+unavailable parents still fail closed before child admission. Windows gnullvm
+and native Arch Linux WSL each pass 593 library tests, one component-interface
+probe, 10 conformance tests, and 335 replacement tests: 939 compiler tests per
+host.
+
 The premise-bearing rigid-normalization milestone proves the selected generic
 implementation's instantiated trait and projection predicates before exposing
 its associated value. It shares the caller's 16-frame rigid proof stack and
