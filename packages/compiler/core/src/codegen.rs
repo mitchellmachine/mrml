@@ -4063,6 +4063,15 @@ impl<const MAX_ORIGINS: usize> RuntimeCalleeProjectedOrigins<MAX_ORIGINS> {
         }
         retained
     }
+
+    fn has_same_origins(self, other: Self) -> bool {
+        self.count == other.count
+            && self.entries[..self.count].iter().flatten().all(|left| {
+                other
+                    .get(left.local, left.projections)
+                    .is_some_and(|right| left.ty == right.ty && left.origin == right.origin)
+            })
+    }
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -16172,6 +16181,61 @@ fn runtime_reference_call_origin_parameter<const MAX_PARAMETERS: usize, const MA
                                 .nested_blocks()
                                 .get(block_index)
                                 .and_then(|value| *value)?;
+                            let prefix_preserves_state = |action_index: usize| -> Option<bool> {
+                                let mut block_names = local_names;
+                                let mut block_origins = local_origins;
+                                let mut block_projected_origins = projected_origins;
+                                let mut block_types = local_types;
+                                let mut block_mutability = local_mutability;
+                                let mut block_return_compatibility = local_return_compatibility;
+                                let mut block_local_count = local_count;
+                                apply_conditional_loop_actions::<MAX_PARAMETERS, MAX_NODES>(
+                                    target,
+                                    block.actions().get(..action_index)?,
+                                    &mut block_names,
+                                    &mut block_origins,
+                                    &mut block_projected_origins,
+                                    &mut block_types,
+                                    &mut block_mutability,
+                                    &mut block_return_compatibility,
+                                    &mut block_local_count,
+                                    true,
+                                )?;
+                                Some(
+                                    block_origins[..local_count] == local_origins[..local_count]
+                                        && block_projected_origins
+                                            .retain_local_prefix(local_count)
+                                            .has_same_origins(projected_origins),
+                                )
+                            };
+                            for action_index in block
+                                .conditional_break_action_indices()
+                                .iter()
+                                .chain(block.conditional_continue_action_indices())
+                            {
+                                if !prefix_preserves_state(*action_index)? {
+                                    return None;
+                                }
+                            }
+                            for (control, action_index) in block
+                                .unconditional_controls()
+                                .iter()
+                                .flatten()
+                                .zip(block.unconditional_control_action_indices())
+                            {
+                                if !matches!(
+                                    control,
+                                    crate::NestedLoopUnconditionalControl::Return(_)
+                                ) && !prefix_preserves_state(*action_index)?
+                                {
+                                    return None;
+                                }
+                            }
+                            if block.unconditional_controls().is_empty()
+                                && !prefix_preserves_state(block.action_count())?
+                            {
+                                return None;
+                            }
                             for ((control, action_index), control_order) in block
                                 .unconditional_controls()
                                 .iter()
@@ -37760,6 +37824,28 @@ mod tests {
                     "let mut local: u16 = 1; let mut changed: &mut u16 = value; ",
                     "loop { loop { if first { return changed; } ",
                     "changed = &mut local; changed = value; return changed; } }"
+                ),
+                ..nested_loop
+            }),
+            Some(0)
+        );
+        assert_eq!(
+            runtime_reference_call_origin_parameter::<2, 40>(RuntimeCallTarget {
+                body_expression: concat!(
+                    "let mut local: u16 = 1; let mut changed: &mut u16 = value; ",
+                    "loop { loop { if first { return changed; } ",
+                    "changed = &mut local; } }"
+                ),
+                ..nested_loop
+            }),
+            None
+        );
+        assert_eq!(
+            runtime_reference_call_origin_parameter::<2, 40>(RuntimeCallTarget {
+                body_expression: concat!(
+                    "let mut local: u16 = 1; let mut changed: &mut u16 = value; ",
+                    "loop { loop { if first { return changed; } ",
+                    "changed = &mut local; changed = value; } }"
                 ),
                 ..nested_loop
             }),
