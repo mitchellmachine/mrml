@@ -1204,6 +1204,18 @@ Windows gnullvm and native Arch Linux WSL each pass 578 library tests, one
 component-interface probe, 10 conformance tests, and 335 replacement tests: 924
 compiler tests per host.
 
+The generic source-premise milestone parses up to eight implemented-trait
+predicates after each flat generic implementation head. Premises use complete
+parameter or concrete nominal self/argument positions, resolve stable trait
+identity and arity, reject duplicates, and lower onto the existing bounded
+generic clause. Concrete proof and generic associated-value normalization
+recursively discharge them through the existing 16-frame solver. Missing
+premises fail before code generation. Projection-equality premises, exact-
+implementation premises, nested parameter constructors, and bounds remain
+unsupported. Windows gnullvm and native Arch Linux WSL each pass 581 library
+tests, one component-interface probe, 10 conformance tests, and 335 replacement
+tests: 927 compiler tests per host.
+
 The premise-bearing rigid-normalization milestone proves the selected generic
 implementation's instantiated trait and projection predicates before exposing
 its associated value. It shares the caller's 16-frame rigid proof stack and

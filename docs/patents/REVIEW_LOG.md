@@ -5139,6 +5139,17 @@ existing `TRIGGERED` review; source generic premises and nested generic heads
 require review when concrete. This agent review does not replace targeted
 independent human review.
 
+# 2026-08-25 — Generic source implementation-premise lowering
+
+**Result: NOT_TRIGGERED after the existing trait-solver review.** This compiler
+increment parses bounded implemented-trait premises and attaches them to the
+existing generic clause representation and recursive proof path. It adds no new
+solver algorithm, coherence rule, specialization, dispatch, runtime,
+cryptographic, storage, transport, codec, virtualization, or hardware
+mechanism. Broader modern trait solving retains its existing `TRIGGERED` review;
+projection premises and nested generic source heads require review when
+concrete. This agent review does not replace targeted independent human review.
+
 # 2026-08-25 — Exact source associated-type lowering
 
 **Result: NOT_TRIGGERED after the existing trait-solver review.** This compiler

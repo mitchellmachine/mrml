@@ -4397,6 +4397,19 @@ signatures, specialization, and methods remain unsupported. Windows gnullvm and
 native Arch Linux WSL each pass 578 library tests, one component probe, 10
 conformance tests, and 335 replacement tests: 924 compiler tests per host.
 
+The generic source-premise milestone admits up to eight implemented-trait
+predicates after a flat generic implementation head. Each premise may use the
+implementation parameters or supported concrete nominal types in complete self
+and trait-argument positions. Admission resolves trait identity and arity,
+rejects duplicates, and stores the predicates on the existing bounded generic
+clause; concrete proof and generic associated-value normalization recursively
+discharge them through the existing 16-frame solver. Missing premises fail
+closed before code generation. Projection-equality premises, exact-implementation
+premises, nested parameter constructors, and bounds remain unsupported. Windows
+gnullvm and native Arch Linux WSL each pass 581 library tests, one component
+probe, 10 conformance tests, and 335 replacement tests: 927 compiler tests per
+host.
+
 The projection-bearing term milestone uses a fixed 64-node arena for flat leaf
 terms and associated-type projections whose trait self/argument positions refer
 only to earlier nodes. Identical nodes intern to one stable identity; invalid
