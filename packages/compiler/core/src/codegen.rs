@@ -2255,6 +2255,7 @@ enum X86_64InlineAssembly<'source> {
     NopCClobber,
     Pause,
     Int3Noreturn,
+    HaltLoopNoreturn,
     Int80Noreturn {
         inputs: [&'source str; 7],
     },
@@ -2358,6 +2359,22 @@ fn x86_64_inline_assembly(
         return match arguments.trim() {
             ", options(noreturn, nostack)" | ", options(nostack, noreturn)" => {
                 Ok(Some(X86_64InlineAssembly::Int3Noreturn))
+            }
+            _ => Err(CodegenErrorKind::InvalidInlineAssembly),
+        };
+    }
+    if let Some(arguments) = arguments.strip_prefix("\"cli\"") {
+        let arguments = x86_64_inline_exact_field(arguments, "\"2:\"")?;
+        let arguments = x86_64_inline_exact_field(arguments, "\"hlt\"")?;
+        let arguments = x86_64_inline_exact_field(arguments, "\"jmp 2b\"")?;
+        return match arguments.trim() {
+            ", options(noreturn, nomem, nostack)"
+            | ", options(noreturn, nostack, nomem)"
+            | ", options(nomem, noreturn, nostack)"
+            | ", options(nomem, nostack, noreturn)"
+            | ", options(nostack, noreturn, nomem)"
+            | ", options(nostack, nomem, noreturn)" => {
+                Ok(Some(X86_64InlineAssembly::HaltLoopNoreturn))
             }
             _ => Err(CodegenErrorKind::InvalidInlineAssembly),
         };
@@ -2502,10 +2519,23 @@ fn x86_64_body_tail_diverges<const MAX_LOCALS: usize>(
                     x86_64_inline_assembly(statement.expression),
                     Ok(Some(
                         X86_64InlineAssembly::Int3Noreturn
+                            | X86_64InlineAssembly::HaltLoopNoreturn
                             | X86_64InlineAssembly::Int80Noreturn { .. }
                     ))
                 )
         })
+}
+
+fn x86_64_inline_exact_field<'source>(
+    arguments: &'source str,
+    expected: &str,
+) -> Result<&'source str, CodegenErrorKind> {
+    arguments
+        .trim()
+        .strip_prefix(',')
+        .map(str::trim_start)
+        .and_then(|arguments| arguments.strip_prefix(expected))
+        .ok_or(CodegenErrorKind::InvalidInlineAssembly)
 }
 
 fn x86_64_int80_fields(arguments: &str) -> Result<[&str; 9], CodegenErrorKind> {
@@ -9968,6 +9998,13 @@ fn preanalyze_runtime_expression_statement_reads<
         )) => return Ok(()),
         Ok(Some(X86_64InlineAssembly::Int3Noreturn)) if statement.terminal => return Ok(()),
         Ok(Some(X86_64InlineAssembly::Int3Noreturn)) => {
+            return Err(CodegenError {
+                kind: CodegenErrorKind::InvalidInlineAssembly,
+                span: translate_span(body_start, statement.span),
+            });
+        }
+        Ok(Some(X86_64InlineAssembly::HaltLoopNoreturn)) if statement.terminal => return Ok(()),
+        Ok(Some(X86_64InlineAssembly::HaltLoopNoreturn)) => {
             return Err(CodegenError {
                 kind: CodegenErrorKind::InvalidInlineAssembly,
                 span: translate_span(body_start, statement.span),
@@ -30432,6 +30469,15 @@ impl<
                     span: translate_span(body_start, statement.span),
                 });
             }
+            Ok(Some(X86_64InlineAssembly::HaltLoopNoreturn)) if statement.terminal => {
+                return self.emit(&[0xfa, 0xf4, 0xeb, 0xfd]);
+            }
+            Ok(Some(X86_64InlineAssembly::HaltLoopNoreturn)) => {
+                return Err(CodegenError {
+                    kind: CodegenErrorKind::InvalidInlineAssembly,
+                    span: translate_span(body_start, statement.span),
+                });
+            }
             Ok(Some(X86_64InlineAssembly::Int80Noreturn { inputs })) if statement.terminal => {
                 for input in inputs {
                     let tree = crate::ExpressionParser::<MAX_EXPRESSION_NODES>::new(input)
@@ -35287,6 +35333,18 @@ mod tests {
         }
 
         for source in [
+            "#[unsafe(no_mangle)] pub extern \"C\" fn halt() -> ! { unsafe { asm!(\"cli\", \"2:\", \"hlt\", \"jmp 2b\", options(noreturn, nomem, nostack)); } }",
+            "#[unsafe(no_mangle)] pub unsafe extern \"C\" fn halt() -> ! { asm!(\"cli\", \"2:\", \"hlt\", \"jmp 2b\", options(nostack, nomem, noreturn)); }",
+        ] {
+            let code = compile(source).unwrap();
+            assert_eq!(
+                code.bytes().get(code.len() - 4..),
+                Some(&[0xfa, 0xf4, 0xeb, 0xfd][..])
+            );
+            assert!(!code.bytes().contains(&0xc3), "{source}");
+        }
+
+        for source in [
             concat!(
                 "#[unsafe(no_mangle)] pub extern \"C\" fn terminate(operation: u64) -> ! { unsafe { ",
                 "asm!(\"int 0x80\", in(\"rax\") operation, in(\"rdi\") 0u64, ",
@@ -35825,6 +35883,18 @@ mod tests {
             ),
             (
                 "#[unsafe(no_mangle)] pub unsafe extern \"C\" fn trap() -> ! { asm!(\"int3\"); }",
+                CodegenErrorKind::InvalidInlineAssembly,
+            ),
+            (
+                "#[unsafe(no_mangle)] pub extern \"C\" fn halt() -> ! { asm!(\"cli\", \"2:\", \"hlt\", \"jmp 2b\", options(noreturn, nomem, nostack)); }",
+                CodegenErrorKind::InlineAssemblyRequiresUnsafe,
+            ),
+            (
+                "#[unsafe(no_mangle)] pub unsafe extern \"C\" fn halt() -> ! { asm!(\"cli\", \"hlt\", \"jmp 2b\", options(noreturn, nomem, nostack)); }",
+                CodegenErrorKind::InvalidInlineAssembly,
+            ),
+            (
+                "#[unsafe(no_mangle)] pub unsafe extern \"C\" fn halt() -> u64 { asm!(\"cli\", \"2:\", \"hlt\", \"jmp 2b\", options(noreturn, nomem, nostack)); 42 }",
                 CodegenErrorKind::InvalidInlineAssembly,
             ),
             (
