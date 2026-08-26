@@ -11589,6 +11589,9 @@ fn nested_loop_control_count(
 fn nested_loop_has_supported_control_flow(
     block: &crate::NestedLoopBlock<'_>,
 ) -> Result<bool, CodegenErrorKind> {
+    if !block.conditional_blocks().is_empty() {
+        return Ok(false);
+    }
     for action in block.actions() {
         action.ok_or(CodegenErrorKind::InvalidRuntimeControlFlowFacts)?;
     }
@@ -40468,6 +40471,22 @@ mod tests {
                 Some(RuntimeOwnershipControlPoint::Block(block))
             );
         }
+    }
+
+    #[test]
+    fn runtime_nested_loop_branch_actions_remain_fail_closed() {
+        let source = "fn value(stop: bool) -> u64 { loop { loop { if stop { 1; return 2; } } } }";
+        let module = Parser::new(source).parse_module::<2, 2>().unwrap();
+        let Some(Item::Function(function)) = module.items()[0] else {
+            panic!("expected function")
+        };
+        let body = function.parse_body::<2>().unwrap();
+        let outer = body.while_loops()[0].unwrap();
+        let Some(crate::LoopOperation::NestedBlock(index)) = outer.operations()[0] else {
+            panic!("expected nested loop block")
+        };
+        let inner = outer.nested_blocks()[index].unwrap();
+        assert!(!nested_loop_has_supported_control_flow(&inner).unwrap());
     }
 
     #[test]

@@ -9,6 +9,7 @@ pub const MAX_CONDITIONAL_LOOP_ACTIONS: usize = 4;
 pub const MAX_CONDITIONAL_LOOP_ELSE_ARMS: usize = 4;
 pub const MAX_NESTED_LOOP_ACTIONS: usize = 4;
 pub const MAX_NESTED_LOOP_BLOCKS: usize = 4;
+pub const MAX_NESTED_LOOP_CONDITIONAL_BLOCKS: usize = 4;
 pub const MAX_NESTED_LOOP_CONDITIONAL_BREAKS: usize = 4;
 pub const MAX_NESTED_LOOP_CONDITIONAL_CONTINUES: usize = 4;
 pub const MAX_NESTED_LOOP_CONDITIONAL_RETURNS: usize = 4;
@@ -425,6 +426,11 @@ pub struct NestedLoopBlock<'source> {
     pub entry_condition: Option<ConditionalLoopControl<'source>>,
     actions: [Option<ConditionalLoopAction<'source>>; MAX_NESTED_LOOP_ACTIONS],
     action_count: usize,
+    conditional_blocks:
+        [Option<NestedLoopConditionalBlock<'source>>; MAX_NESTED_LOOP_CONDITIONAL_BLOCKS],
+    conditional_block_action_indices: [usize; MAX_NESTED_LOOP_CONDITIONAL_BLOCKS],
+    conditional_block_control_orders: [usize; MAX_NESTED_LOOP_CONDITIONAL_BLOCKS],
+    conditional_block_count: usize,
     unconditional_controls:
         [Option<NestedLoopUnconditionalControl<'source>>; MAX_NESTED_LOOP_UNCONDITIONAL_CONTROLS],
     unconditional_control_action_indices: [usize; MAX_NESTED_LOOP_UNCONDITIONAL_CONTROLS],
@@ -449,6 +455,31 @@ pub struct NestedLoopBlock<'source> {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct NestedLoopConditionalBlock<'source> {
+    pub condition: &'source str,
+    pub condition_span: Span,
+    actions: [Option<ConditionalLoopAction<'source>>; MAX_CONDITIONAL_LOOP_ACTIONS],
+    action_count: usize,
+    pub terminal: NestedLoopUnconditionalControl<'source>,
+}
+
+impl<'source> NestedLoopConditionalBlock<'source> {
+    pub fn actions(&self) -> &[Option<ConditionalLoopAction<'source>>] {
+        &self.actions[..self.action_count]
+    }
+
+    pub const fn action_count(&self) -> usize {
+        self.action_count
+    }
+
+    pub fn parse_condition<const MAX_NODES: usize>(
+        &self,
+    ) -> Result<ExpressionTree<'source, MAX_NODES>, ExpressionError> {
+        ExpressionParser::new(self.condition).parse()
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum NestedLoopUnconditionalControl<'source> {
     Break(NestedLoopControlTarget),
     Continue(NestedLoopControlTarget),
@@ -469,6 +500,18 @@ impl<'source> NestedLoopBlock<'source> {
 
     pub const fn action_count(&self) -> usize {
         self.action_count
+    }
+
+    pub fn conditional_blocks(&self) -> &[Option<NestedLoopConditionalBlock<'source>>] {
+        &self.conditional_blocks[..self.conditional_block_count]
+    }
+
+    pub fn conditional_block_action_indices(&self) -> &[usize] {
+        &self.conditional_block_action_indices[..self.conditional_block_count]
+    }
+
+    pub fn conditional_block_control_orders(&self) -> &[usize] {
+        &self.conditional_block_control_orders[..self.conditional_block_count]
     }
 
     pub fn unconditional_controls(&self) -> &[Option<NestedLoopUnconditionalControl<'source>>] {
@@ -1149,6 +1192,7 @@ pub enum ParseErrorKind {
     TooManyConditionalLoopElseArms,
     TooManyNestedLoopActions,
     TooManyNestedLoopBlocks,
+    TooManyNestedLoopConditionalBlocks,
     TooManyNestedLoopConditionalBreaks,
     TooManyNestedLoopConditionalContinues,
     TooManyNestedLoopConditionalReturns,
@@ -2191,6 +2235,12 @@ impl<'source> BodyParser<'source> {
                     };
                     let mut actions = [None; MAX_NESTED_LOOP_ACTIONS];
                     let mut action_count = 0usize;
+                    let mut nested_conditional_blocks = [None; MAX_NESTED_LOOP_CONDITIONAL_BLOCKS];
+                    let mut nested_conditional_block_action_indices =
+                        [0usize; MAX_NESTED_LOOP_CONDITIONAL_BLOCKS];
+                    let mut nested_conditional_block_control_orders =
+                        [0usize; MAX_NESTED_LOOP_CONDITIONAL_BLOCKS];
+                    let mut nested_conditional_block_count = 0usize;
                     let mut conditional_breaks = [None; MAX_NESTED_LOOP_CONDITIONAL_BREAKS];
                     let mut conditional_break_action_indices =
                         [0usize; MAX_NESTED_LOOP_CONDITIONAL_BREAKS];
@@ -2305,7 +2355,54 @@ impl<'source> BodyParser<'source> {
                             probe.take()?;
                             let (condition_span, _) =
                                 probe.delimited_until("{", ParseErrorKind::ExpectedBody)?;
-                            let inner_control = probe.take()?;
+                            let mut branch_actions = [None; MAX_CONDITIONAL_LOOP_ACTIONS];
+                            let mut branch_action_count = 0usize;
+                            let inner_control = loop {
+                                let candidate = probe.peek()?;
+                                if candidate.is_some_and(|token| {
+                                    matches!(token.text, "break" | "continue" | "return")
+                                }) {
+                                    break probe.take()?;
+                                }
+                                if candidate
+                                    .is_some_and(|token| token.kind == TokenKind::CloseBrace)
+                                {
+                                    return Err(
+                                        probe.error(ParseErrorKind::ExpectedBody, candidate)
+                                    );
+                                }
+                                if branch_action_count == MAX_CONDITIONAL_LOOP_ACTIONS {
+                                    return Err(probe.error(
+                                        ParseErrorKind::TooManyConditionalLoopActions,
+                                        candidate,
+                                    ));
+                                }
+                                let branch_action = if let Some(local) = probe.local_record()? {
+                                    ConditionalLoopAction::Local(local)
+                                } else {
+                                    let assignment_name = probe.peek()?;
+                                    if let Some(assignment) = probe.assignment_record()? {
+                                        if assignment_count == MAX_LOOP_ASSIGNMENTS {
+                                            return Err(probe.error(
+                                                ParseErrorKind::TooManyLoopAssignments,
+                                                assignment_name,
+                                            ));
+                                        }
+                                        assignment_count += 1;
+                                        ConditionalLoopAction::Assignment(assignment)
+                                    } else if let Some(expression) =
+                                        probe.expression_statement_record()?
+                                    {
+                                        ConditionalLoopAction::Expression(expression)
+                                    } else {
+                                        return Err(
+                                            probe.error(ParseErrorKind::ExpectedBody, candidate)
+                                        );
+                                    }
+                                };
+                                branch_actions[branch_action_count] = Some(branch_action);
+                                branch_action_count += 1;
+                            };
                             if !inner_control.is_some_and(|token| {
                                 matches!(token.text, "break" | "continue" | "return")
                             }) {
@@ -2344,6 +2441,43 @@ impl<'source> BodyParser<'source> {
                             };
                             let this_control_order = control_order;
                             control_order += 1;
+                            if branch_action_count != 0 {
+                                if nested_conditional_block_count
+                                    == MAX_NESTED_LOOP_CONDITIONAL_BLOCKS
+                                {
+                                    return Err(probe.error(
+                                        ParseErrorKind::TooManyNestedLoopConditionalBlocks,
+                                        inner_control,
+                                    ));
+                                }
+                                let terminal = if let Some((value, value_span)) = return_value {
+                                    NestedLoopUnconditionalControl::Return(LoopReturn {
+                                        value,
+                                        value_span,
+                                    })
+                                } else if inner_control
+                                    .is_some_and(|token| token.text == "continue")
+                                {
+                                    NestedLoopUnconditionalControl::Continue(control_target)
+                                } else {
+                                    NestedLoopUnconditionalControl::Break(control_target)
+                                };
+                                nested_conditional_blocks[nested_conditional_block_count] =
+                                    Some(NestedLoopConditionalBlock {
+                                        condition: &self.source
+                                            [condition_span.start..condition_span.end],
+                                        condition_span,
+                                        actions: branch_actions,
+                                        action_count: branch_action_count,
+                                        terminal,
+                                    });
+                                nested_conditional_block_action_indices
+                                    [nested_conditional_block_count] = action_count;
+                                nested_conditional_block_control_orders
+                                    [nested_conditional_block_count] = this_control_order;
+                                nested_conditional_block_count += 1;
+                                continue;
+                            }
                             if inner_control.is_some_and(|token| token.text == "continue") {
                                 if conditional_continue_count
                                     == MAX_NESTED_LOOP_CONDITIONAL_CONTINUES
@@ -2451,6 +2585,12 @@ impl<'source> BodyParser<'source> {
                                 entry_condition,
                                 actions,
                                 action_count,
+                                conditional_blocks: nested_conditional_blocks,
+                                conditional_block_action_indices:
+                                    nested_conditional_block_action_indices,
+                                conditional_block_control_orders:
+                                    nested_conditional_block_control_orders,
+                                conditional_block_count: nested_conditional_block_count,
                                 unconditional_controls,
                                 unconditional_control_action_indices,
                                 unconditional_control_orders,
@@ -5375,6 +5515,42 @@ mod tests {
             "()"
         );
         assert_eq!(inner.conditional_return_action_indices(), &[1]);
+
+        let nested_branch_actions = Parser::new(
+            "fn nested(limit: u64, stop: u64) -> u64 { let mut outer: u64 = 0; let mut inner: u64 = 0; while outer < limit { while inner < 3 { inner += 1; if inner == stop { let result: u64 = outer + inner; result + 1; return result; } } outer += 1; inner = 0; } outer }",
+        )
+        .parse_module::<2, 4>()
+        .unwrap();
+        let Some(Item::Function(function)) = nested_branch_actions.items()[0] else {
+            panic!("expected function")
+        };
+        let body = function.parse_body::<4>().unwrap();
+        let outer = body.while_loops()[0].unwrap();
+        let Some(LoopOperation::NestedBlock(index)) = outer.operations()[0] else {
+            panic!("expected nested while block")
+        };
+        let inner = outer.nested_blocks()[index].unwrap();
+        let branch = inner.conditional_blocks()[0].unwrap();
+        assert_eq!(branch.condition, "inner == stop");
+        assert_eq!(branch.action_count(), 2);
+        assert!(matches!(
+            branch.actions()[0],
+            Some(ConditionalLoopAction::Local(local)) if local.name == "result"
+        ));
+        assert!(matches!(
+            branch.actions()[1],
+            Some(ConditionalLoopAction::Expression(expression))
+                if expression.expression == "result + 1"
+        ));
+        assert!(matches!(
+            branch.terminal,
+            NestedLoopUnconditionalControl::Return(LoopReturn {
+                value: "result",
+                ..
+            })
+        ));
+        assert_eq!(inner.conditional_block_action_indices(), &[1]);
+        assert_eq!(inner.conditional_block_control_orders(), &[0]);
 
         let multiple_returns = Parser::new(
             "fn nested(limit: u64, first: u64, second: u64) -> u64 { let mut outer: u64 = 0; let mut inner: u64 = 0; while outer < limit { while inner < 3 { inner += 1; if inner == first { return 40; } if inner == second { return 50; } } outer += 1; inner = 0; } outer }",
