@@ -53,6 +53,18 @@ pub struct MachineCode<const MAX_BYTES: usize> {
 }
 
 impl<const MAX_BYTES: usize> MachineCode<MAX_BYTES> {
+    fn from_bytes(source: &[u8]) -> Result<Self, CodegenErrorKind> {
+        let mut bytes = [0; MAX_BYTES];
+        let output = bytes
+            .get_mut(..source.len())
+            .ok_or(CodegenErrorKind::OutputTooSmall)?;
+        output.copy_from_slice(source);
+        Ok(Self {
+            bytes,
+            length: source.len(),
+        })
+    }
+
     pub fn bytes(&self) -> &[u8] {
         &self.bytes[..self.length]
     }
@@ -105,6 +117,11 @@ pub enum CodegenErrorKind {
     RuntimeReferenceOutlivesFunction,
     DuplicateLocal,
     ImmutableAssignment,
+    NakedFunctionMustBeUnsafe,
+    NakedFunctionRequiresCAbi,
+    NakedFunctionParametersUnsupported,
+    NakedFunctionReturnUnsupported,
+    InvalidNakedAssembly,
 }
 
 #[derive(Clone, Copy)]
@@ -572,6 +589,9 @@ pub fn compile_x86_64_function_with_options<
     abi: X86_64Abi,
     options: CodegenOptions,
 ) -> Result<MachineCode<MAX_BYTES>, CodegenError> {
+    if function.naked {
+        return compile_x86_64_naked_function(function);
+    }
     let parsed_body = function
         .parse_body::<MAX_PARAMETERS>()
         .map_err(|error| CodegenError {
@@ -1819,6 +1839,78 @@ pub fn compile_x86_64_function_with_options<
     }
     emitter.emit_typed_return(&tree, tree.root(), expected_type)?;
     emitter.finish()
+}
+
+fn compile_x86_64_naked_function<const MAX_BYTES: usize, const MAX_PARAMETERS: usize>(
+    function: &Function<'_, MAX_PARAMETERS>,
+) -> Result<MachineCode<MAX_BYTES>, CodegenError> {
+    let error = |kind| CodegenError {
+        kind,
+        span: function.body_expression_span,
+    };
+    if !function.unsafe_function {
+        return Err(error(CodegenErrorKind::NakedFunctionMustBeUnsafe));
+    }
+    if function.constant || function.abi != FunctionAbi::C {
+        return Err(error(CodegenErrorKind::NakedFunctionRequiresCAbi));
+    }
+    if function.parameter_count() != 0 || function.where_predicate_count() != 0 {
+        return Err(error(CodegenErrorKind::NakedFunctionParametersUnsupported));
+    }
+    if function
+        .return_type
+        .is_some_and(|return_type| return_type.text != "!" && return_type.text != "()")
+    {
+        return Err(error(CodegenErrorKind::NakedFunctionReturnUnsupported));
+    }
+    let mut source = function.body_expression.trim();
+    source = source
+        .strip_prefix("naked_asm!(")
+        .ok_or_else(|| error(CodegenErrorKind::InvalidNakedAssembly))?;
+    if let Some(without_semicolon) = source.strip_suffix(";") {
+        source = without_semicolon.trim_end();
+    }
+    source = source
+        .strip_suffix(')')
+        .ok_or_else(|| error(CodegenErrorKind::InvalidNakedAssembly))?;
+    let mut bytes = [0u8; MAX_BYTES];
+    let mut length = 0usize;
+    let mut instruction_count = 0usize;
+    let mut terminating = false;
+    for literal in source.split(',') {
+        if instruction_count == 8 {
+            return Err(error(CodegenErrorKind::InvalidNakedAssembly));
+        }
+        let literal = literal.trim();
+        let instruction = literal
+            .strip_prefix('"')
+            .and_then(|literal| literal.strip_suffix('"'))
+            .ok_or_else(|| error(CodegenErrorKind::InvalidNakedAssembly))?;
+        let encoding: &[u8] = match instruction.trim() {
+            "nop" => &[0x90],
+            "ret" => &[0xc3],
+            "int3" => &[0xcc],
+            "ud2" => &[0x0f, 0x0b],
+            "cli" => &[0xfa],
+            "sti" => &[0xfb],
+            "hlt" => &[0xf4],
+            _ => return Err(error(CodegenErrorKind::InvalidNakedAssembly)),
+        };
+        terminating = matches!(instruction.trim(), "ret" | "ud2" | "hlt");
+        let end = length
+            .checked_add(encoding.len())
+            .ok_or_else(|| error(CodegenErrorKind::OutputTooSmall))?;
+        bytes
+            .get_mut(length..end)
+            .ok_or_else(|| error(CodegenErrorKind::OutputTooSmall))?
+            .copy_from_slice(encoding);
+        length = end;
+        instruction_count += 1;
+    }
+    if instruction_count == 0 || !terminating {
+        return Err(error(CodegenErrorKind::InvalidNakedAssembly));
+    }
+    MachineCode::from_bytes(&bytes[..length]).map_err(error)
 }
 
 fn validate_stable_export<const MAX_PARAMETERS: usize>(
@@ -28198,6 +28290,65 @@ mod tests {
                 return_type_name: "&[usize]",
                 body_expression: "{ if bias == 0 { &values[start..end] } else { values } }",
             })
+        }
+    }
+
+    #[test]
+    fn emits_restricted_naked_functions_without_a_prologue_or_epilogue() {
+        let module = Parser::new(concat!(
+            "#[unsafe(naked)] pub unsafe extern \"C\" fn entry() ",
+            "{ naked_asm!(\"nop\", \"cli\", \"sti\", \"ret\"); }"
+        ))
+        .parse_module::<1, 1>()
+        .unwrap();
+        let Some(Item::Function(function)) = module.items()[0] else {
+            panic!("expected function")
+        };
+        let code =
+            compile_x86_64_function::<_, 16, 1, 8>(&function, &NoConstants, X86_64Abi::SystemV)
+                .unwrap();
+        assert_eq!(code.bytes(), &[0x90, 0xfa, 0xfb, 0xc3]);
+
+        for (source, expected) in [
+            (
+                "#[unsafe(naked)] extern \"C\" fn f() { naked_asm!(\"ret\"); }",
+                CodegenErrorKind::NakedFunctionMustBeUnsafe,
+            ),
+            (
+                "#[unsafe(naked)] unsafe fn f() { naked_asm!(\"ret\"); }",
+                CodegenErrorKind::NakedFunctionRequiresCAbi,
+            ),
+            (
+                "#[unsafe(naked)] unsafe extern \"C\" fn f(x: u64) { naked_asm!(\"ret\"); }",
+                CodegenErrorKind::NakedFunctionParametersUnsupported,
+            ),
+            (
+                "#[unsafe(naked)] unsafe extern \"C\" fn f() -> u64 { naked_asm!(\"ret\"); }",
+                CodegenErrorKind::NakedFunctionReturnUnsupported,
+            ),
+            (
+                "#[unsafe(naked)] unsafe extern \"C\" fn f() { naked_asm!(\"mov rax, rbx\"); }",
+                CodegenErrorKind::InvalidNakedAssembly,
+            ),
+            (
+                "#[unsafe(naked)] unsafe extern \"C\" fn f() { naked_asm!(\"nop\"); }",
+                CodegenErrorKind::InvalidNakedAssembly,
+            ),
+        ] {
+            let module = Parser::new(source).parse_module::<1, 1>().unwrap();
+            let Some(Item::Function(function)) = module.items()[0] else {
+                panic!("expected function")
+            };
+            assert_eq!(
+                compile_x86_64_function::<_, 16, 1, 8>(
+                    &function,
+                    &NoConstants,
+                    X86_64Abi::SystemV,
+                )
+                .unwrap_err()
+                .kind,
+                expected
+            );
         }
     }
 

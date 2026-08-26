@@ -158,6 +158,7 @@ pub struct Function<'source, const MAX_PARAMETERS: usize> {
     pub unsafe_function: bool,
     pub abi: FunctionAbi,
     pub no_mangle: bool,
+    pub naked: bool,
     pub name: &'source str,
     pub name_span: Span,
     parameters: [Option<Parameter<'source>>; MAX_PARAMETERS],
@@ -3223,6 +3224,7 @@ impl<'source> Parser<'source> {
         unsafe_function: bool,
         abi: FunctionAbi,
         no_mangle: bool,
+        naked: bool,
     ) -> Result<Function<'source, MAX_PARAMETERS>, ParseError> {
         let name = self.identifier()?;
         self.expect_kind(
@@ -3358,6 +3360,7 @@ impl<'source> Parser<'source> {
             unsafe_function,
             abi,
             no_mangle,
+            naked,
             name: name.text,
             name_span: name.span,
             parameters,
@@ -3374,35 +3377,40 @@ impl<'source> Parser<'source> {
         })
     }
 
-    fn no_mangle_attribute(&mut self) -> Result<bool, ParseError> {
-        if self.take_text("#")?.is_none() {
-            return Ok(false);
+    fn function_attributes(&mut self) -> Result<(bool, bool), ParseError> {
+        let mut no_mangle = false;
+        let mut naked = false;
+        while self.take_text("#")?.is_some() {
+            self.expect_kind(
+                TokenKind::OpenBracket,
+                ParseErrorKind::ExpectedAttributeDelimiter,
+            )?;
+            let unsafe_keyword = self.identifier()?;
+            if unsafe_keyword.text != "unsafe" {
+                return Err(self.error(ParseErrorKind::UnsupportedAttribute, Some(unsafe_keyword)));
+            }
+            self.expect_kind(
+                TokenKind::OpenParen,
+                ParseErrorKind::ExpectedAttributeDelimiter,
+            )?;
+            let attribute = self.identifier()?;
+            match attribute.text {
+                "no_mangle" if !no_mangle => no_mangle = true,
+                "naked" if !naked => naked = true,
+                _ => {
+                    return Err(self.error(ParseErrorKind::UnsupportedAttribute, Some(attribute)));
+                }
+            }
+            self.expect_kind(
+                TokenKind::CloseParen,
+                ParseErrorKind::ExpectedAttributeDelimiter,
+            )?;
+            self.expect_kind(
+                TokenKind::CloseBracket,
+                ParseErrorKind::ExpectedAttributeDelimiter,
+            )?;
         }
-        self.expect_kind(
-            TokenKind::OpenBracket,
-            ParseErrorKind::ExpectedAttributeDelimiter,
-        )?;
-        let unsafe_keyword = self.identifier()?;
-        if unsafe_keyword.text != "unsafe" {
-            return Err(self.error(ParseErrorKind::UnsupportedAttribute, Some(unsafe_keyword)));
-        }
-        self.expect_kind(
-            TokenKind::OpenParen,
-            ParseErrorKind::ExpectedAttributeDelimiter,
-        )?;
-        let attribute = self.identifier()?;
-        if attribute.text != "no_mangle" {
-            return Err(self.error(ParseErrorKind::UnsupportedAttribute, Some(attribute)));
-        }
-        self.expect_kind(
-            TokenKind::CloseParen,
-            ParseErrorKind::ExpectedAttributeDelimiter,
-        )?;
-        self.expect_kind(
-            TokenKind::CloseBracket,
-            ParseErrorKind::ExpectedAttributeDelimiter,
-        )?;
-        Ok(true)
+        Ok((no_mangle, naked))
     }
 
     fn const_item(&mut self, public: bool) -> Result<ConstItem<'source>, ParseError> {
@@ -3937,7 +3945,7 @@ impl<'source> Parser<'source> {
                 let token = self.peek()?;
                 return Err(self.error(ParseErrorKind::TooManyItems, token));
             }
-            let no_mangle = self.no_mangle_attribute()?;
+            let (no_mangle, naked) = self.function_attributes()?;
             let public = self.take_text("pub")?.is_some();
             let keyword = self.take()?;
             let item = match keyword.map(|token| token.text) {
@@ -3947,6 +3955,7 @@ impl<'source> Parser<'source> {
                     false,
                     FunctionAbi::Rust,
                     no_mangle,
+                    naked,
                 )?),
                 Some("extern") => {
                     let abi = self.take()?;
@@ -3965,6 +3974,7 @@ impl<'source> Parser<'source> {
                         false,
                         FunctionAbi::C,
                         no_mangle,
+                        naked,
                     )?)
                 }
                 Some("const") => match self.peek()?.map(|token| token.text) {
@@ -3976,6 +3986,7 @@ impl<'source> Parser<'source> {
                             false,
                             FunctionAbi::Rust,
                             no_mangle,
+                            naked,
                         )?)
                     }
                     Some("extern") => {
@@ -3996,6 +4007,7 @@ impl<'source> Parser<'source> {
                             false,
                             FunctionAbi::C,
                             no_mangle,
+                            naked,
                         )?)
                     }
                     Some("unsafe") => {
@@ -4008,6 +4020,7 @@ impl<'source> Parser<'source> {
                                 true,
                                 FunctionAbi::Rust,
                                 no_mangle,
+                                naked,
                             )?),
                             Some("extern") => {
                                 let abi = self.take()?;
@@ -4028,12 +4041,13 @@ impl<'source> Parser<'source> {
                                     true,
                                     FunctionAbi::C,
                                     no_mangle,
+                                    naked,
                                 )?)
                             }
                             _ => return Err(self.error(ParseErrorKind::ExpectedItem, qualifier)),
                         }
                     }
-                    _ if !no_mangle => Item::Const(self.const_item(public)?),
+                    _ if !no_mangle && !naked => Item::Const(self.const_item(public)?),
                     _ => {
                         let token = self.peek()?;
                         return Err(self.error(ParseErrorKind::ExpectedItem, token));
@@ -4048,6 +4062,7 @@ impl<'source> Parser<'source> {
                             true,
                             FunctionAbi::Rust,
                             no_mangle,
+                            naked,
                         )?),
                         Some("extern") => {
                             let abi = self.take()?;
@@ -4068,14 +4083,17 @@ impl<'source> Parser<'source> {
                                 true,
                                 FunctionAbi::C,
                                 no_mangle,
+                                naked,
                             )?)
                         }
                         _ => return Err(self.error(ParseErrorKind::ExpectedItem, qualifier)),
                     }
                 }
-                Some("static") if !no_mangle => Item::Static(self.const_item(public)?),
-                Some("trait") if !no_mangle => Item::Trait(self.trait_declaration(public)?),
-                Some("impl") if !no_mangle && !public => {
+                Some("static") if !no_mangle && !naked => Item::Static(self.const_item(public)?),
+                Some("trait") if !no_mangle && !naked => {
+                    Item::Trait(self.trait_declaration(public)?)
+                }
+                Some("impl") if !no_mangle && !naked && !public => {
                     Item::TraitImplementation(self.trait_implementation()?)
                 }
                 _ => return Err(self.error(ParseErrorKind::ExpectedItem, keyword)),
@@ -4715,6 +4733,28 @@ mod tests {
         assert_eq!(function.abi, FunctionAbi::C);
         assert!(function.no_mangle);
         assert_eq!(function.name, "answer");
+    }
+
+    #[test]
+    fn parses_bounded_naked_function_attributes() {
+        let source = concat!(
+            "#[unsafe(no_mangle)] #[unsafe(naked)] ",
+            "pub unsafe extern \"C\" fn entry() { naked_asm!(\"ret\"); }"
+        );
+        let module: TestModule<'_> = Parser::new(source).parse_module().unwrap();
+        let Some(Item::Function(function)) = module.items()[0] else {
+            panic!("expected function")
+        };
+        assert!(function.no_mangle);
+        assert!(function.naked);
+        assert!(function.unsafe_function);
+        assert_eq!(function.abi, FunctionAbi::C);
+
+        let duplicate =
+            Parser::new("#[unsafe(naked)] #[unsafe(naked)] unsafe extern \"C\" fn entry() {}")
+                .parse_module::<1, 1>()
+                .unwrap_err();
+        assert_eq!(duplicate.kind, ParseErrorKind::UnsupportedAttribute);
     }
 
     #[test]

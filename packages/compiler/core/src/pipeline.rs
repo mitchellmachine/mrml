@@ -1,10 +1,10 @@
 use crate::semantics::evaluate_scalar_const_function;
 use crate::{
-    analyze_constants, compile_x86_64_function_with_options, emit_elf64_x86_64, emit_x86_64_coff,
     CodegenErrorKind, CodegenOptions, ConstantResolver, ConstantTable, Item, Module, ObjectError,
     ObjectFile, ParseErrorKind, Parser, SemanticErrorKind, SourceTraitDeclarationError,
     SourceTraitDeclarationTable, SourceTraitImplementationError, SourceTraitImplementationTable,
-    SourceTraitObligationError, Span, TargetLayout, X86_64Abi,
+    SourceTraitObligationError, Span, TargetLayout, X86_64Abi, analyze_constants,
+    compile_x86_64_function_with_options, emit_elf64_x86_64, emit_x86_64_coff,
 };
 
 struct PipelineResolver<
@@ -323,6 +323,18 @@ mod tests {
         let elf = compile(source, "answer", ObjectFormat::Elf64).unwrap();
         assert_eq!(&elf.bytes()[..4], b"\x7fELF");
         let coff = compile(source, "answer", ObjectFormat::Coff).unwrap();
+        assert_eq!(&coff.bytes()[..2], &0x8664u16.to_le_bytes());
+    }
+
+    #[test]
+    fn emits_restricted_naked_assembly_to_both_object_formats() {
+        let source = concat!(
+            "#[unsafe(naked)] pub unsafe extern \"C\" fn entry() ",
+            "{ naked_asm!(\"nop\", \"ret\"); }"
+        );
+        let elf = compile(source, "entry", ObjectFormat::Elf64).unwrap();
+        assert_eq!(&elf.bytes()[..4], b"\x7fELF");
+        let coff = compile(source, "entry", ObjectFormat::Coff).unwrap();
         assert_eq!(&coff.bytes()[..2], &0x8664u16.to_le_bytes());
     }
 
