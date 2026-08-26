@@ -1,4 +1,6 @@
-use mrml_package_format::{RuntimeIsolationClass, SystemReleaseError, parse_system_release};
+use mrml_package_format::{
+    ActivatedSystemGeneration, RuntimeIsolationClass, SystemReleaseError, parse_system_release,
+};
 
 use crate::{
     HostSubstrateReason, ObjectId, TotalMicrovmClass, TotalMicrovmInventory,
@@ -112,6 +114,7 @@ pub enum ReleaseInventoryError {
     ClassificationMismatch,
     ReasonMismatch,
     HostSubstrateReasonMismatch,
+    ActivatedGenerationMismatch,
     Inventory(TotalMicrovmRuntimeError),
 }
 
@@ -122,6 +125,8 @@ pub struct ReleaseTotalMicrovmInventory<const N: usize> {
     inventory: TotalMicrovmInventory<N>,
     signer: [u8; 64],
     system_generation: u64,
+    generation_digest: [u8; 64],
+    interface_catalog_digest: [u8; 64],
     policy_generation: u64,
 }
 
@@ -136,6 +141,14 @@ impl<const N: usize> ReleaseTotalMicrovmInventory<N> {
 
     pub const fn policy_generation(&self) -> u64 {
         self.policy_generation
+    }
+
+    pub const fn generation_digest(&self) -> &[u8; 64] {
+        &self.generation_digest
+    }
+
+    pub const fn interface_catalog_digest(&self) -> &[u8; 64] {
+        &self.interface_catalog_digest
     }
 
     pub const fn len(&self) -> usize {
@@ -155,6 +168,59 @@ impl<const N: usize> ReleaseTotalMicrovmInventory<N> {
         admission: &crate::IsolationAdmissionTable<DOMAINS>,
     ) -> Result<crate::TotalMicrovmRuntimeProof, TotalMicrovmRuntimeError> {
         self.inventory.finalize(admission)
+    }
+
+    /// Consumes the authenticated release inventory only when its exact
+    /// canonical generation and interface catalog are the records retained by
+    /// the activated deployment generation. Numeric generation equality alone
+    /// is insufficient.
+    pub fn bind_activated(
+        self,
+        active: ActivatedSystemGeneration,
+    ) -> Result<ActivatedReleaseTotalMicrovmInventory<N>, ReleaseInventoryError> {
+        if active.generation() != self.system_generation
+            || active.generation_digest() != &self.generation_digest
+            || active.interface_catalog_digest() != &self.interface_catalog_digest
+        {
+            return Err(ReleaseInventoryError::ActivatedGenerationMismatch);
+        }
+        Ok(ActivatedReleaseTotalMicrovmInventory {
+            release: self,
+            active,
+        })
+    }
+}
+
+/// Authenticated complete runtime inventory joined to the exact activated
+/// generation/catalog pair. Safe code cannot construct this from matching
+/// numeric generations or detached digests.
+pub struct ActivatedReleaseTotalMicrovmInventory<const N: usize> {
+    release: ReleaseTotalMicrovmInventory<N>,
+    active: ActivatedSystemGeneration,
+}
+
+impl<const N: usize> ActivatedReleaseTotalMicrovmInventory<N> {
+    pub const fn active(&self) -> ActivatedSystemGeneration {
+        self.active
+    }
+
+    pub const fn release(&self) -> &ReleaseTotalMicrovmInventory<N> {
+        &self.release
+    }
+
+    pub const fn system_generation(&self) -> u64 {
+        self.release.system_generation()
+    }
+
+    pub const fn policy_generation(&self) -> u64 {
+        self.release.policy_generation()
+    }
+
+    pub fn finalize<const DOMAINS: usize>(
+        &self,
+        admission: &crate::IsolationAdmissionTable<DOMAINS>,
+    ) -> Result<crate::TotalMicrovmRuntimeProof, TotalMicrovmRuntimeError> {
+        self.release.finalize(admission)
     }
 }
 
@@ -257,6 +323,8 @@ pub fn total_inventory_from_system_release<const N: usize>(
         inventory,
         signer: *expected_key_id,
         system_generation: release.generation().generation(),
+        generation_digest: release.generation().digest(),
+        interface_catalog_digest: release.interface_catalog().digest(),
         policy_generation,
     })
 }
@@ -556,6 +624,74 @@ mod tests {
         assert_eq!(entry.domain(), ObjectId(0x700));
         assert_eq!(entry.class(), TotalMicrovmClass::MicrovmEligible);
         assert!(entry.must_be_running());
+    }
+
+    #[test]
+    fn release_inventory_binds_only_the_exact_activated_generation() {
+        let (release, release_length, key_id) = build_release(true, 13);
+        let assignment =
+            RuntimeDomainAssignment::new("org.mrml.service.config", ObjectId(0x700)).unwrap();
+        let inventory = total_inventory_from_system_release_assignments::<1>(
+            &release[..release_length],
+            &key_id,
+            POLICY,
+            &[assignment],
+        )
+        .unwrap();
+        let active = ActivatedSystemGeneration::new(
+            inventory.system_generation(),
+            *inventory.generation_digest(),
+            *inventory.interface_catalog_digest(),
+            7,
+            0x5155,
+            3,
+        )
+        .unwrap();
+        let bound = inventory.bind_activated(active).unwrap();
+        assert_eq!(bound.active(), active);
+        assert_eq!(bound.system_generation(), 13);
+        assert_eq!(bound.policy_generation(), POLICY);
+        assert_eq!(bound.release().signer(), &key_id);
+    }
+
+    #[test]
+    fn numeric_generation_cannot_substitute_activated_release_digests() {
+        for mismatch in 0..3 {
+            let (release, release_length, key_id) = build_release(true, 13);
+            let assignment =
+                RuntimeDomainAssignment::new("org.mrml.service.config", ObjectId(0x700)).unwrap();
+            let inventory = total_inventory_from_system_release_assignments::<1>(
+                &release[..release_length],
+                &key_id,
+                POLICY,
+                &[assignment],
+            )
+            .unwrap();
+            let generation = if mismatch == 0 { 14 } else { 13 };
+            let generation_digest = if mismatch == 1 {
+                [0x91; 64]
+            } else {
+                *inventory.generation_digest()
+            };
+            let catalog_digest = if mismatch == 2 {
+                [0x92; 64]
+            } else {
+                *inventory.interface_catalog_digest()
+            };
+            let active = ActivatedSystemGeneration::new(
+                generation,
+                generation_digest,
+                catalog_digest,
+                7,
+                0x5155,
+                3,
+            )
+            .unwrap();
+            assert!(matches!(
+                inventory.bind_activated(active),
+                Err(ReleaseInventoryError::ActivatedGenerationMismatch)
+            ));
+        }
     }
 
     #[test]

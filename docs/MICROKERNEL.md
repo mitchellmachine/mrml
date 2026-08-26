@@ -3031,10 +3031,15 @@ exact microVM admission and before guest execution on WHP and nested KVM. The
 stable component ABI data plane then ran without per-request package or policy
 resolution. Kernel construction returns a private-field
 `ReleaseTotalMicrovmInventory` retaining the authenticated signer, system
-generation, and policy generation; safe code cannot substitute an ad hoc
-inventory with matching numeric generations. The recovered configuration path
-accepts only that type when creating its exact release admission table and
-rejects non-Total or policy-generation mismatch. This is hosted controlled
+generation, canonical generation digest, interface-catalog digest, and policy
+generation. It can enter recovered admission only after consumption into an
+`ActivatedReleaseTotalMicrovmInventory` whose activated generation and both
+canonical digests match exactly; numeric equality, a substituted generation
+record, or a substituted catalog record fails. The focused WHP/KVM runners
+perform that join before CPU, RAM, or guest construction. The recovered
+configuration path accepts only the activated type and rejects non-Total or
+policy-generation mismatch. Activated state does not yet persist the complete
+signed SystemRelease/runtime-inventory content identity. This is hosted controlled
 evidence for one colocated consumer/provider domain, not complete installed-
 system Total readiness, live boot recovery, host-resistant isolation, or
 physical-hardware evidence.

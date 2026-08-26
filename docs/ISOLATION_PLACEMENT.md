@@ -900,9 +900,15 @@ probes on 2026-08-26 emitted the same generation-bound proof with
 `classified=1`, `eligible=1`, `microvm=1`, and `native_fallback=0`. The kernel
 returns that result as `ReleaseTotalMicrovmInventory`, a private-field wrapper
 that safe code cannot construct from ad hoc domain records. It retains the
-authenticated signer, system generation, and policy generation. Recovered policy can bind only
-this wrapper to create the admission table for that exact release; non-Total or
-policy-generation mismatch fails. Complete installed-system enumeration and
+authenticated signer, system generation, canonical generation digest,
+interface-catalog digest, and policy generation. The wrapper must be consumed
+into `ActivatedReleaseTotalMicrovmInventory` by matching all three activated
+generation fields; a matching numeric generation with either substituted
+digest fails. Recovered policy accepts only this activated wrapper when it
+creates the admission table, and non-Total or policy-generation mismatch also
+fails. Both focused runners perform this join before CPU, RAM, or VMM guest
+construction. Complete installed-system enumeration, persistence of the exact
+signed SystemRelease/runtime-inventory content identity in activated state, and
 live boot consumption remain **PLANNED**, so this focused component evidence
 does not promote Total mode itself.
 

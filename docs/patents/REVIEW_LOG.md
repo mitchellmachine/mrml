@@ -1,5 +1,19 @@
 # Patent review log
 
+## 2026-08-26 — Activated-generation binding for Total inventory
+
+Patent review: **TRIGGERED** under the existing SystemRelease, deployment,
+recovery, adaptive-isolation, Total-MicroVM, and VMM reviews. This bounded
+increment consumes the existing authenticated runtime inventory only when its
+system generation, canonical generation digest, and interface-catalog digest
+exactly equal the retained activated generation. It uses conventional exact
+comparisons and private typed-state construction and adds no parser format,
+signature scheme, placement or scheduling heuristic, native fallback,
+VM/device protocol, DMA mechanism, or hardware-specific isolation mechanism.
+Persistence of the complete signed SystemRelease/runtime-inventory content
+identity and live recovered boot remain unimplemented. No patent-clearance or
+non-infringement conclusion is made; independent human review remains required.
+
 ## 2026-08-26 — Alias assignment type validation
 
 Patent review: **NOT_TRIGGERED** for this bounded compiler-analysis hardening.

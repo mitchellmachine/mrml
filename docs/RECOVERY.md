@@ -1030,12 +1030,17 @@ malformed or unknown options fail rather than selecting Balanced or Recovery
 implicitly.
 
 The recovered effective policy now has a typed pre-launch join with the
-authenticated SystemRelease runtime inventory. It accepts only the kernel's
-private-field `ReleaseTotalMicrovmInventory`, requires strict Total and the exact
-policy generation, and creates the admission table from the release's
-authenticated system generation. An ad hoc inventory with matching numbers is
-not accepted by this API. Recovery must retain this joined state through launch
-and finalization; live early-boot orchestration and complete installed-system
+authenticated SystemRelease runtime inventory. The kernel first consumes its
+private-field `ReleaseTotalMicrovmInventory` into an
+`ActivatedReleaseTotalMicrovmInventory` only when the activated system
+generation, canonical generation digest, and interface-catalog digest all
+match. Recovery accepts only this activated wrapper, requires strict Total and
+the exact policy generation, and creates the admission table from it. An ad hoc
+inventory, matching numeric generation with substituted canonical bytes, or
+detached digest pair is not accepted by this API. Recovery must retain this
+joined state through launch and finalization. Activated deployment state does
+not yet persist the complete signed SystemRelease/runtime-inventory content
+identity; live early-boot orchestration and complete installed-system
 enumeration remain **PLANNED**.
 
 The kernel now exposes a **PARTIALLY IMPLEMENTED**, read-only aggregate recovery

@@ -2872,14 +2872,25 @@ fn application_main() -> Result<()> {
             RuntimeDomainAssignment::new("org.mrml.zstd", spec.domain())
                 .map_err(|error| anyhow!("KVM Zstd runtime assignment failed: {:?}", error))?,
         ];
+        let release_inventory = total_inventory_from_system_release_assignments::<2>(
+            release_bytes,
+            expected_release_key,
+            spec.policy_generation(),
+            &assignments,
+        )
+        .map_err(|error| anyhow!("KVM release inventory admission failed: {:?}", error))?;
         Some(
-            total_inventory_from_system_release_assignments::<2>(
-                release_bytes,
-                expected_release_key,
-                spec.policy_generation(),
-                &assignments,
-            )
-            .map_err(|error| anyhow!("KVM release inventory admission failed: {:?}", error))?,
+            release_inventory
+                .bind_activated(
+                    active_component_generation
+                        .ok_or_else(|| anyhow!("missing activated KVM component generation"))?,
+                )
+                .map_err(|error| {
+                    anyhow!(
+                        "KVM activated release inventory binding failed: {:?}",
+                        error
+                    )
+                })?,
         )
     } else {
         None

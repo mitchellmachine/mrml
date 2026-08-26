@@ -145,9 +145,12 @@ duplicate-package, incompatible-co-location, class-substituted,
 reason-substituted, or excess bindings before publishing an inventory.
 Compatible colocated packages conservatively combine must-run state. The result
 is a private-field `ReleaseTotalMicrovmInventory` retaining the authenticated
-signer and exact system/policy generations; safe code cannot construct it from
-ad hoc domain records. Recovered strict-Total policy accepts only this typed
-result when creating its release admission table. End-to-end
+signer, system generation, canonical generation digest, interface-catalog
+digest, and policy generation; safe code cannot construct it from ad hoc
+domain records. Before it can reach recovered strict-Total policy, it must be
+consumed into `ActivatedReleaseTotalMicrovmInventory` by exact equality with
+the activated generation number and both retained digests. Numeric generation
+equality cannot substitute either canonical record. End-to-end
 runner consumption is now **PARTIALLY IMPLEMENTED** for the focused ZIM/Zstd
 component release. WHP and KVM each derive the same 201-byte generation,
 207-byte interface catalog, and 225-byte runtime inventory; all three records
@@ -158,8 +161,10 @@ immutable inventory across construction and finalized `classified=1`,
 `eligible=1`, `microvm=1`, and `native_fallback=0` only after exact microVM
 admission and before guest execution on WHP and nested KVM. This is hosted
 controlled-probe evidence for one focused release, not a complete installed-
-system inventory, recovery proof, or host-resistant isolation. Full-system
-generation admission remains **PLANNED**.
+system inventory, recovery proof, or host-resistant isolation. Activated state
+does not yet persist the complete signed SystemRelease content identity or its
+runtime-inventory digest, so full-system generation admission and recovered
+content binding remain **PLANNED**.
 
 The kernel's newer assignment adapter keeps policy-selected domain identity
 separate from authenticated package classification. Callers submit an exact

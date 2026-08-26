@@ -214,17 +214,22 @@ running/unavailable domain and mark each must-run component. The finalizer
 rejects missing or unavailable required domains, unknown active domains, class
 substitution, eligible execution outside a microVM, unsupported blockers, and
 native fallback before producing a bounded runtime proof. Windows and Arch
-Linux each pass 555 kernel tests. WHP and KVM now authenticate and construct the
+Linux each pass 557 kernel tests. WHP and KVM now authenticate and construct the
 release-derived inventory before CPU, RAM, or guest construction, retain it
 across construction, and finalize it after exact Total admission but before
 focused component execution. Their suites pass 9 and 10 tests respectively,
 and fresh signed probes on 2026-08-26 each emitted `classified=1`, `eligible=1`,
 `microvm=1`, and `native_fallback=0` for the exact system/policy generation.
 That inventory is now a private-field authenticated-release wrapper rather
-than a publicly constructible mutable value. Recovered Total policy accepts only this wrapper
-when creating the exact release admission table. Complete installed-system
-enumeration and live boot consumption remain the next gate; this one-component
-proof does not establish required-system Total readiness.
+than a publicly constructible mutable value. Before recovered Total policy can
+accept it, the wrapper must be consumed by exact equality with the activated
+system generation, canonical generation digest, and interface-catalog digest.
+Both runners perform that join before CPU, RAM, or VMM construction; matching
+only the numeric generation fails the typed boundary. Windows/Linux config
+suites pass 42 tests, WHP passes 9, and KVM passes 10. Complete installed-system
+enumeration, persistence of the signed SystemRelease/runtime-inventory content
+identity in activated state, and live boot consumption remain the next gates;
+this one-component proof does not establish required-system Total readiness.
 
 The next narrowing is **PARTIALLY IMPLEMENTED**: launchers supply a complete
 bounded set of policy-selected package/domain assignments rather than restating

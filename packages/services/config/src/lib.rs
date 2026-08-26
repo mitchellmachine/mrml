@@ -17,12 +17,12 @@ use core::ops::{Deref, DerefMut};
 use mrml_crypto::Sha3_256;
 use mrml_kernel::arch::x86_64::UserContext;
 use mrml_kernel::{
-    BootHandoff, BootIsolationOverride, Capability, CapabilityError, CapabilitySpace,
-    IsolationAdmissionTable, IsolationBackendFailure, IsolationMode, IsolationPlacement,
-    IsolationServiceBackend, IsolationServiceRouteError, IsolationServiceSpec,
-    IsolationStatusSnapshot, IsolationUnavailableReason, MemoryBackingKind, MemoryObjectId,
-    MemoryPoolId, MemoryPoolTable, MemoryResourceError, Message, ObjectId, PAGE_SIZE,
-    PreparedIsolationServiceRoute, Priority, ReleaseTotalMicrovmInventory, RestartPolicy, Rights,
+    ActivatedReleaseTotalMicrovmInventory, BootHandoff, BootIsolationOverride, Capability,
+    CapabilityError, CapabilitySpace, IsolationAdmissionTable, IsolationBackendFailure,
+    IsolationMode, IsolationPlacement, IsolationServiceBackend, IsolationServiceRouteError,
+    IsolationServiceSpec, IsolationStatusSnapshot, IsolationUnavailableReason, MemoryBackingKind,
+    MemoryObjectId, MemoryPoolId, MemoryPoolTable, MemoryResourceError, Message, ObjectId,
+    PAGE_SIZE, PreparedIsolationServiceRoute, Priority, RestartPolicy, Rights,
     RoutedIsolationService, ServiceAddressSpaceEraser, ServiceCleanupError, ServiceError,
     ServiceId, ServiceRegistrationPlan, ServiceState, ServiceSupervisor, TaskId, TaskRuntime,
     TaskRuntimeError, prepare_isolation_service_route, route_isolation_service,
@@ -2558,7 +2558,7 @@ impl RecoveredBootIsolationPolicy {
     /// ad hoc inventory nor a matching generation number can enter this path.
     pub fn bind_release_inventory<const DOMAINS: usize>(
         self,
-        release: ReleaseTotalMicrovmInventory<DOMAINS>,
+        release: ActivatedReleaseTotalMicrovmInventory<DOMAINS>,
     ) -> Result<RecoveredTotalAdmission<DOMAINS>, ConfigError> {
         if self.effective.mode() != IsolationMode::TotalMicrovm
             || release.policy_generation() != self.effective.policy_generation()
@@ -2579,7 +2579,7 @@ impl RecoveredBootIsolationPolicy {
 /// allowed to account the resulting domains.
 pub struct RecoveredTotalAdmission<const DOMAINS: usize> {
     policy: RecoveredBootIsolationPolicy,
-    release: ReleaseTotalMicrovmInventory<DOMAINS>,
+    release: ActivatedReleaseTotalMicrovmInventory<DOMAINS>,
     admission: IsolationAdmissionTable<DOMAINS>,
 }
 
@@ -2588,7 +2588,7 @@ impl<const DOMAINS: usize> RecoveredTotalAdmission<DOMAINS> {
         self.policy
     }
 
-    pub const fn release(&self) -> &ReleaseTotalMicrovmInventory<DOMAINS> {
+    pub const fn release(&self) -> &ActivatedReleaseTotalMicrovmInventory<DOMAINS> {
         &self.release
     }
 

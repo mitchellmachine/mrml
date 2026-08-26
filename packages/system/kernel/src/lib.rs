@@ -146,8 +146,8 @@ pub use isolation_monitor::{
     IsolationUnavailableCounts, TotalMicrovmState, inspect_isolation_status,
 };
 pub use isolation_release_inventory::{
-    ReleaseInventoryError, ReleaseTotalMicrovmInventory, RuntimeDomainAssignment,
-    RuntimeDomainBinding, total_inventory_from_system_release,
+    ActivatedReleaseTotalMicrovmInventory, ReleaseInventoryError, ReleaseTotalMicrovmInventory,
+    RuntimeDomainAssignment, RuntimeDomainBinding, total_inventory_from_system_release,
     total_inventory_from_system_release_assignments,
 };
 pub use isolation_total_runtime::{
