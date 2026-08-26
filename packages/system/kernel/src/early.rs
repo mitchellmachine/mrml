@@ -1,6 +1,8 @@
 use crate::{
     BootHandoff, BootIsolationOverride, Color, FramebufferError, FramebufferInfo,
-    FramebufferSurface, MemoryError, MemoryKind, MemoryMap, MemoryRegion,
+    FramebufferSurface, InstalledRecoveryBootIdentity, InstalledRecoverySataRoute,
+    InstalledRecoverySource, MemoryError, MemoryKind, MemoryMap, MemoryRegion,
+    RecoveryStateMetadata,
 };
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -9,6 +11,7 @@ pub enum EarlyKernelError {
     MissingAcpi,
     InvalidMemoryMap(MemoryError),
     FramebufferOutsideMmio,
+    MissingInstalledRecoveryRoute,
     Framebuffer(FramebufferError),
 }
 
@@ -21,6 +24,9 @@ pub struct EarlyKernelContext<'a> {
     framebuffer: FramebufferInfo,
     memory: MemoryMap<'a>,
     isolation_override: Option<BootIsolationOverride>,
+    recovery_state: Option<RecoveryStateMetadata>,
+    installed_recovery: Option<InstalledRecoveryBootIdentity>,
+    installed_recovery_sata_route: Option<InstalledRecoverySataRoute>,
 }
 
 impl<'a> EarlyKernelContext<'a> {
@@ -50,6 +56,9 @@ impl<'a> EarlyKernelContext<'a> {
             framebuffer,
             memory,
             isolation_override: None,
+            recovery_state: None,
+            installed_recovery: None,
+            installed_recovery_sata_route: None,
         })
     }
 
@@ -66,7 +75,18 @@ impl<'a> EarlyKernelContext<'a> {
             handoff.framebuffer(),
             regions,
         )?;
+        let installed_recovery = handoff.installed_recovery();
+        let installed_recovery_sata_route = handoff.installed_recovery_sata_route();
+        if installed_recovery
+            .is_some_and(|identity| identity.source() == InstalledRecoverySource::Uefi)
+            && installed_recovery_sata_route.is_none()
+        {
+            return Err(EarlyKernelError::MissingInstalledRecoveryRoute);
+        }
         context.isolation_override = handoff.isolation_override();
+        context.recovery_state = handoff.recovery_state();
+        context.installed_recovery = installed_recovery;
+        context.installed_recovery_sata_route = installed_recovery_sata_route;
         Ok(context)
     }
 
@@ -84,6 +104,25 @@ impl<'a> EarlyKernelContext<'a> {
     /// This identifies no capability and does not prove effective placement.
     pub const fn isolation_override(&self) -> Option<BootIsolationOverride> {
         self.isolation_override
+    }
+
+    /// Returns the exact recovery state decoded by the loader. This is
+    /// provenance, not rollback authority; later recovery must still validate
+    /// it against its authenticated monotonic state.
+    pub const fn recovery_state(&self) -> Option<RecoveryStateMetadata> {
+        self.recovery_state
+    }
+
+    /// Returns the exact authority-free installed identity retained from the
+    /// canonical loader handoff.
+    pub const fn installed_recovery(&self) -> Option<InstalledRecoveryBootIdentity> {
+        self.installed_recovery
+    }
+
+    /// Returns the adjacent typed SATA route retained for a UEFI installed
+    /// identity. Native discovery must still establish exact equality.
+    pub const fn installed_recovery_sata_route(&self) -> Option<InstalledRecoverySataRoute> {
+        self.installed_recovery_sata_route
     }
 
     /// Visible proof that execution crossed into validated kernel code. A
@@ -126,8 +165,9 @@ impl<'a> EarlyKernelContext<'a> {
 mod tests {
     use super::*;
     use crate::{
-        BootIsolationOverride, PAGE_SIZE, PhysAddr, PixelFormat, RecoveryStateMetadata,
-        encode_handoff_with_recovery_and_isolation,
+        BootIsolationOverride, InstalledRecoveryBootIdentity, InstalledRecoverySource, PAGE_SIZE,
+        PhysAddr, PixelFormat, RecoveryStateMetadata,
+        encode_handoff_with_recovery_isolation_and_installed,
     };
 
     #[test]
@@ -153,7 +193,7 @@ mod tests {
     }
 
     #[test]
-    fn decoded_handoff_retains_only_the_loader_isolation_request() {
+    fn decoded_handoff_retains_loader_isolation_and_recovery_identity() {
         let framebuffer = FramebufferInfo::new(
             0xa0000,
             PAGE_SIZE,
@@ -168,8 +208,20 @@ mod tests {
             MemoryRegion::new(PhysAddr::new(0xa0000).unwrap(), 1, MemoryKind::Mmio).unwrap(),
         ];
         let recovery = RecoveryStateMetadata::new(8, 1, Some([0x51; 16]), 14).unwrap();
-        let mut encoded = [0; 512];
-        let length = encode_handoff_with_recovery_and_isolation(
+        let installed = InstalledRecoveryBootIdentity::new(
+            InstalledRecoverySource::Hosted,
+            [0x31; 32],
+            2,
+            3,
+            4096,
+            4096,
+            [0x51; 16],
+            4,
+            14,
+        )
+        .unwrap();
+        let mut encoded = [0; 768];
+        let length = encode_handoff_with_recovery_isolation_and_installed(
             1,
             [1; 32],
             [2; 64],
@@ -181,6 +233,7 @@ mod tests {
             framebuffer,
             &regions,
             recovery,
+            installed,
             Some(BootIsolationOverride::TotalMicrovmOnce),
             &mut encoded,
         )
@@ -191,6 +244,62 @@ mod tests {
             context.isolation_override(),
             Some(BootIsolationOverride::TotalMicrovmOnce)
         );
+        assert_eq!(context.recovery_state(), Some(recovery));
+        assert_eq!(context.installed_recovery(), Some(installed));
+        assert_eq!(context.installed_recovery_sata_route(), None);
         assert_eq!(context.entropy(), handoff.evidence().entropy());
+    }
+
+    #[test]
+    fn uefi_installed_identity_requires_adjacent_route_at_first_entry() {
+        let framebuffer = FramebufferInfo::new(
+            0xa0000,
+            PAGE_SIZE,
+            16,
+            16,
+            16,
+            PixelFormat::RedGreenBlueReserved,
+        )
+        .unwrap();
+        let regions = [
+            MemoryRegion::new(PhysAddr::new(0x1000).unwrap(), 4, MemoryKind::Free).unwrap(),
+            MemoryRegion::new(PhysAddr::new(0xa0000).unwrap(), 1, MemoryKind::Mmio).unwrap(),
+        ];
+        let recovery = RecoveryStateMetadata::new(8, 1, Some([0x51; 16]), 14).unwrap();
+        let installed = InstalledRecoveryBootIdentity::new(
+            InstalledRecoverySource::Uefi,
+            [0x31; 32],
+            2,
+            3,
+            4096,
+            4096,
+            [0x51; 16],
+            4,
+            14,
+        )
+        .unwrap();
+        let mut encoded = [0; 768];
+        let length = encode_handoff_with_recovery_isolation_and_installed(
+            1,
+            [1; 32],
+            [2; 64],
+            true,
+            true,
+            true,
+            true,
+            0x1234,
+            framebuffer,
+            &regions,
+            recovery,
+            installed,
+            Some(BootIsolationOverride::TotalMicrovmOnce),
+            &mut encoded,
+        )
+        .unwrap();
+        let handoff = BootHandoff::decode(&encoded[..length], |_| {}).unwrap();
+        assert!(matches!(
+            EarlyKernelContext::from_handoff(&handoff, &regions),
+            Err(EarlyKernelError::MissingInstalledRecoveryRoute)
+        ));
     }
 }

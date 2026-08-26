@@ -901,6 +901,13 @@ kernel packages then completed the identical decoded-policy, zero-fallback, and
 guest lifecycle/data path on WHP and nested KVM. Stable recovered-state binding
 is still required before claiming live recovered Total mode.
 
+At real kernel entry, `EarlyKernelContext` now retains that decoded isolation
+request together with the exact recovery epoch/root and installed identity/typed
+SATA route. A UEFI installed identity without the adjacent route fails before
+profile work. The fields are non-authorizing and cannot replace native discovery
+or authenticated recovery. Windows passes 565 kernel tests and the standard
+UEFI image cross-builds; live installed Total orchestration remains **PLANNED**.
+
 Committed recovery now exposes one atomic release-binding operation rather than
 requiring callers to retain an intermediate effective policy.
 `bind_total_boot_admission` revalidates both capabilities and settings, checks

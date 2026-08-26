@@ -1552,6 +1552,16 @@ current-source one-use-signed kernel package subsequently completed the decoded
 handoff and zero-fallback guest path on both backends. That proves hosted live
 handoff and recovered-owner parity, not production recovered boot.
 
+The real first-kernel context now **PARTIALLY IMPLEMENTS** the corresponding
+ownership prerequisite. Construction from the decoded canonical handoff retains
+the exact recovery epoch/root, installed identity, adjacent typed SATA route,
+and one-boot isolation request together. A UEFI installed identity without its
+required route fails before profile work. These copied typed facts grant no
+storage, rollback, configuration, or placement authority; live native discovery
+and authenticated recovery must still establish the later joins. The Windows
+kernel suite passes 565 tests and the standard UEFI image cross-builds. Live
+installed recovery orchestration remains **PLANNED**.
+
 `RecoveredSystemState` now provides an atomic
 `bind_total_boot_admission` transition. It joins the committed recovered
 authorities and configuration service, exact decoded handoff epoch/override,

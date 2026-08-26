@@ -1,5 +1,16 @@
 # Patent review log
 
+## 2026-08-26 — Retained installed recovery state at first kernel entry
+
+Patent review: **NOT_TRIGGERED** for copying already decoded canonical recovery,
+installed-identity, typed-route, and isolation-request values into the existing
+early-kernel context, plus rejecting a UEFI identity missing its required
+adjacent route. This is conventional typed state retention, presence validation,
+and failure ordering. It adds no placement algorithm, VM mechanism, storage
+protocol, controller discovery, DMA, queue, interrupt, or persistent format.
+The broader Total MicroVM and native-storage mechanisms retain their existing
+**TRIGGERED** reviews; this technical screen is not patent clearance.
+
 ## 2026-08-26 — Opaque strict Total runtime proof
 
 Patent review: **NOT_TRIGGERED** for making the existing generation-bound Total

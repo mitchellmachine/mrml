@@ -3141,8 +3141,11 @@ and `native_fallback=0`. This is hosted controlled evidence; production
 installed configuration/release wiring and native/physical evidence remain
 **PLANNED**. The first kernel-entry portion is now **PARTIALLY IMPLEMENTED**:
 all profiles construct `EarlyKernelContext` only from the decoded canonical
-handoff before profile work, retaining the non-authorizing one-boot override
-without reconstructing it from scalar input. Windows/Arch kernel suites pass
-564 tests, and standard plus component-SMP UEFI images cross-build on both
-hosts. It does not establish effective placement or replace the later recovery
-and admission control planes.
+handoff before profile work. It retains the recovery epoch/root, installed
+identity, optional typed SATA route, and non-authorizing one-boot override
+without reconstructing them from scalar input. A UEFI installed identity
+without its required adjacent route fails at this first entry boundary. The
+Windows kernel suite passes 565 tests, and the standard UEFI image cross-builds
+on Windows; earlier Arch and component-profile evidence is not extended by this
+increment. This retained data remains non-authorizing and does not establish
+effective placement or replace the later recovery and admission control planes.
