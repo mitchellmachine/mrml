@@ -3951,6 +3951,97 @@ impl RuntimePlaceProjections {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[cfg_attr(not(test), allow(dead_code))]
+struct RuntimeCalleeProjectedOrigin {
+    local: usize,
+    projections: RuntimePlaceProjections,
+    ty: RuntimeExpressionType,
+    origin: usize,
+    generation: u16,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[cfg_attr(not(test), allow(dead_code))]
+struct RuntimeCalleeProjectedOrigins<const MAX_ORIGINS: usize> {
+    entries: [Option<RuntimeCalleeProjectedOrigin>; MAX_ORIGINS],
+    count: usize,
+}
+
+#[cfg_attr(not(test), allow(dead_code))]
+impl<const MAX_ORIGINS: usize> RuntimeCalleeProjectedOrigins<MAX_ORIGINS> {
+    const EMPTY: Self = Self {
+        entries: [None; MAX_ORIGINS],
+        count: 0,
+    };
+
+    fn set(
+        &mut self,
+        local: usize,
+        base_type: RuntimeExpressionType,
+        projections: RuntimePlaceProjections,
+        origin: usize,
+    ) -> Option<()> {
+        if projections.count == 0 {
+            return None;
+        }
+        let ty = runtime_place_projected_type(base_type, projections)?;
+        if let Some(entry) = self.entries[..self.count]
+            .iter_mut()
+            .flatten()
+            .find(|entry| entry.local == local && entry.projections == projections)
+        {
+            entry.ty = ty;
+            entry.origin = origin;
+            entry.generation = entry.generation.checked_add(1)?;
+            return Some(());
+        }
+        let slot = self.entries.get_mut(self.count)?;
+        *slot = Some(RuntimeCalleeProjectedOrigin {
+            local,
+            projections,
+            ty,
+            origin,
+            generation: 0,
+        });
+        self.count = self.count.checked_add(1)?;
+        Some(())
+    }
+
+    fn get(
+        &self,
+        local: usize,
+        projections: RuntimePlaceProjections,
+    ) -> Option<RuntimeCalleeProjectedOrigin> {
+        self.entries[..self.count]
+            .iter()
+            .flatten()
+            .find(|entry| entry.local == local && entry.projections == projections)
+            .copied()
+    }
+
+    fn intersect(self, other: Self) -> Self {
+        let mut joined = Self::EMPTY;
+        for left in self.entries[..self.count].iter().flatten() {
+            let Some(right) = other.get(left.local, left.projections) else {
+                continue;
+            };
+            if left.ty != right.ty || left.origin != right.origin {
+                continue;
+            }
+            let Some(slot) = joined.entries.get_mut(joined.count) else {
+                break;
+            };
+            *slot = Some(RuntimeCalleeProjectedOrigin {
+                generation: left.generation.max(right.generation),
+                ..*left
+            });
+            joined.count += 1;
+        }
+        joined
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 struct RuntimeReadPlace<'source> {
     name: &'source str,
     span: Span,
@@ -40126,6 +40217,44 @@ mod tests {
             discover_runtime_read_place(&tree, tree.root()).unwrap_err(),
             CodegenErrorKind::TooManyRuntimePlaceProjections
         );
+    }
+
+    #[test]
+    fn bounded_callee_projected_origins_validate_generations_and_joins() {
+        let mut elements = [None; crate::expression::MAX_TUPLE_ELEMENTS];
+        elements[0] = Some(RuntimeTupleElementType::Reference {
+            pointee: RuntimeArrayElementType::Integer(Some(crate::IntegerType::U16)),
+            mutable: true,
+        });
+        elements[1] = elements[0];
+        let tuple = RuntimeExpressionType::Tuple {
+            elements,
+            element_count: 2,
+        };
+        let first = RuntimePlaceProjections::single(RuntimePlaceProjection::TupleField(0));
+        let second = RuntimePlaceProjections::single(RuntimePlaceProjection::TupleField(1));
+        let invalid = RuntimePlaceProjections::single(RuntimePlaceProjection::TupleField(2));
+
+        let mut state = RuntimeCalleeProjectedOrigins::<1>::EMPTY;
+        assert_eq!(state.set(0, tuple, RuntimePlaceProjections::EMPTY, 2), None);
+        assert_eq!(state.set(0, tuple, invalid, 2), None);
+        state.set(0, tuple, first, 2).unwrap();
+        assert_eq!(state.get(0, first).unwrap().generation, 0);
+        state.set(0, tuple, first, 3).unwrap();
+        assert_eq!(state.get(0, first).unwrap().origin, 3);
+        assert_eq!(state.get(0, first).unwrap().generation, 1);
+        assert_eq!(state.set(0, tuple, second, 4), None);
+
+        let mut same = RuntimeCalleeProjectedOrigins::<1>::EMPTY;
+        same.set(0, tuple, first, 3).unwrap();
+        let joined = state.intersect(same);
+        assert_eq!(joined.count, 1);
+        assert_eq!(joined.get(0, first).unwrap().origin, 3);
+        assert_eq!(joined.get(0, first).unwrap().generation, 1);
+
+        let mut different = RuntimeCalleeProjectedOrigins::<1>::EMPTY;
+        different.set(0, tuple, first, 4).unwrap();
+        assert_eq!(state.intersect(different).count, 0);
     }
 
     #[test]
