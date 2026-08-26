@@ -635,6 +635,18 @@ pub fn compile_x86_64_function_with_options<
             kind: CodegenErrorKind::Body(error.kind),
             span: translate_span(function.body_expression_span.start, error.span),
         })?;
+    if parsed_body
+        .while_loops()
+        .iter()
+        .flatten()
+        .flat_map(|loop_statement| loop_statement.nested_blocks().iter().flatten())
+        .any(|block| !block.conditional_blocks().is_empty())
+    {
+        return Err(CodegenError {
+            kind: CodegenErrorKind::RuntimeExpressionUnsupported,
+            span: function.body_expression_span,
+        });
+    }
     let mut body_has_aggregate_local = false;
     for local in parsed_body.locals().iter().flatten() {
         if local
@@ -4415,6 +4427,22 @@ enum RuntimeOwnershipEventLocation {
         operation_index: usize,
         action_index: usize,
     },
+    NestedLoopBranchCondition {
+        statement_index: usize,
+        operation_index: usize,
+        branch_index: usize,
+    },
+    NestedLoopBranchAction {
+        statement_index: usize,
+        operation_index: usize,
+        branch_index: usize,
+        action_index: usize,
+    },
+    NestedLoopBranchValue {
+        statement_index: usize,
+        operation_index: usize,
+        branch_index: usize,
+    },
     ReturnValue {
         statement_index: usize,
     },
@@ -4475,6 +4503,15 @@ const fn runtime_ownership_location_statement_index(
             statement_index, ..
         }
         | RuntimeOwnershipEventLocation::NestedLoopAction {
+            statement_index, ..
+        }
+        | RuntimeOwnershipEventLocation::NestedLoopBranchCondition {
+            statement_index, ..
+        }
+        | RuntimeOwnershipEventLocation::NestedLoopBranchAction {
+            statement_index, ..
+        }
+        | RuntimeOwnershipEventLocation::NestedLoopBranchValue {
             statement_index, ..
         }
         | RuntimeOwnershipEventLocation::ReturnValue { statement_index } => Some(statement_index),
@@ -4611,6 +4648,17 @@ enum RuntimeBasicBlockSource {
         statement_index: usize,
         operation_index: usize,
         action_index: usize,
+    },
+    NestedLoopBranchCondition {
+        statement_index: usize,
+        operation_index: usize,
+        branch_index: usize,
+    },
+    NestedLoopBranchActions {
+        statement_index: usize,
+        operation_index: usize,
+        branch_index: usize,
+        action_count: usize,
     },
 }
 
@@ -5105,6 +5153,15 @@ impl<'source> RuntimeBodyFacts<'source> {
                 }
                 | RuntimeOwnershipEventLocation::NestedLoopAction {
                     operation_index, ..
+                }
+                | RuntimeOwnershipEventLocation::NestedLoopBranchCondition {
+                    operation_index, ..
+                }
+                | RuntimeOwnershipEventLocation::NestedLoopBranchAction {
+                    operation_index, ..
+                }
+                | RuntimeOwnershipEventLocation::NestedLoopBranchValue {
+                    operation_index, ..
                 },
                 Some(RuntimeOwnershipStatementShape::Loop { operation_count }),
             ) => operation_index < operation_count,
@@ -5128,6 +5185,9 @@ impl<'source> RuntimeBodyFacts<'source> {
             | (RuntimeOwnershipEventLocation::NestedLoopControlCondition { .. }, _)
             | (RuntimeOwnershipEventLocation::NestedLoopControlValue { .. }, _)
             | (RuntimeOwnershipEventLocation::NestedLoopAction { .. }, _)
+            | (RuntimeOwnershipEventLocation::NestedLoopBranchCondition { .. }, _)
+            | (RuntimeOwnershipEventLocation::NestedLoopBranchAction { .. }, _)
+            | (RuntimeOwnershipEventLocation::NestedLoopBranchValue { .. }, _)
             | (RuntimeOwnershipEventLocation::ReturnValue { .. }, _) => false,
         }
     }
@@ -5195,6 +5255,17 @@ impl<'source> RuntimeBodyFacts<'source> {
             .iter()
             .flatten()
             .find(|block| block.source == source)
+            .map(|block| block.id)
+    }
+
+    fn block_with_source_matching(
+        &self,
+        matches_source: impl Fn(RuntimeBasicBlockSource) -> bool,
+    ) -> Option<RuntimeBasicBlockId> {
+        self.basic_blocks[..self.basic_block_count]
+            .iter()
+            .flatten()
+            .find(|block| matches_source(block.source))
             .map(|block| block.id)
     }
 
@@ -5532,6 +5603,58 @@ impl<'source> RuntimeBodyFacts<'source> {
                     action_index,
                 })
                 .map(RuntimeOwnershipControlPoint::Block),
+            RuntimeOwnershipEventLocation::NestedLoopBranchCondition {
+                statement_index,
+                operation_index,
+                branch_index,
+            } => self
+                .block_with_source(RuntimeBasicBlockSource::NestedLoopBranchCondition {
+                    statement_index,
+                    operation_index,
+                    branch_index,
+                })
+                .map(RuntimeOwnershipControlPoint::Block),
+            RuntimeOwnershipEventLocation::NestedLoopBranchAction {
+                statement_index,
+                operation_index,
+                branch_index,
+                ..
+            } => self
+                .block_with_source_matching(|source| {
+                    matches!(
+                        source,
+                        RuntimeBasicBlockSource::NestedLoopBranchActions {
+                            statement_index: stored_statement,
+                            operation_index: stored_operation,
+                            branch_index: stored_branch,
+                            ..
+                        } if stored_statement == statement_index
+                            && stored_operation == operation_index
+                            && stored_branch == branch_index
+                    )
+                })
+                .map(RuntimeOwnershipControlPoint::Block),
+            RuntimeOwnershipEventLocation::NestedLoopBranchValue {
+                statement_index,
+                operation_index,
+                branch_index,
+            } => {
+                let block = self.block_with_source_matching(|source| {
+                    matches!(
+                        source,
+                        RuntimeBasicBlockSource::NestedLoopBranchActions {
+                            statement_index: stored_statement,
+                            operation_index: stored_operation,
+                            branch_index: stored_branch,
+                            ..
+                        } if stored_statement == statement_index
+                            && stored_operation == operation_index
+                            && stored_branch == branch_index
+                    )
+                })?;
+                self.return_edge(block, RuntimeControlFlowEdgeKind::Unconditional)
+                    .map(RuntimeOwnershipControlPoint::Edge)
+            }
             RuntimeOwnershipEventLocation::Tail => {
                 let Some(block) = self.basic_blocks[..self.basic_block_count]
                     .iter()
@@ -10603,6 +10726,123 @@ fn preanalyze_runtime_nested_loop_block<
         })?;
     for action_index in 0..=block.action_count() {
         for control_order in 0..control_count {
+            for (branch_index, ((branch, stored_action_index), stored_order)) in block
+                .conditional_blocks()
+                .iter()
+                .zip(block.conditional_block_action_indices())
+                .zip(block.conditional_block_control_orders())
+                .enumerate()
+            {
+                if action_index != *stored_action_index || control_order != *stored_order {
+                    continue;
+                }
+                let branch = branch.ok_or(CodegenError {
+                    kind: CodegenErrorKind::InvalidRuntimePlaceFacts,
+                    span: function.name_span,
+                })?;
+                facts.current_ownership_event_location =
+                    RuntimeOwnershipEventLocation::NestedLoopBranchCondition {
+                        statement_index,
+                        operation_index,
+                        branch_index,
+                    };
+                preanalyze_runtime_source_expression_reads::<
+                    R,
+                    MAX_PARAMETERS,
+                    MAX_EXPRESSION_NODES,
+                >(
+                    facts,
+                    &locals[..local_count],
+                    function,
+                    resolver,
+                    branch.condition,
+                    branch.condition_span,
+                    body_start,
+                )?;
+                let mut branch_locals = locals;
+                let mut branch_local_count = local_count;
+                for (branch_action_index, branch_action) in
+                    branch.actions().iter().copied().enumerate()
+                {
+                    let branch_action = branch_action.ok_or(CodegenError {
+                        kind: CodegenErrorKind::InvalidRuntimePlaceFacts,
+                        span: function.name_span,
+                    })?;
+                    facts.current_ownership_event_location =
+                        RuntimeOwnershipEventLocation::NestedLoopBranchAction {
+                            statement_index,
+                            operation_index,
+                            branch_index,
+                            action_index: branch_action_index,
+                        };
+                    match branch_action {
+                        crate::ConditionalLoopAction::Local(local) => {
+                            preanalyze_runtime_local_binding::<
+                                R,
+                                MAX_PARAMETERS,
+                                MAX_EXPRESSION_NODES,
+                            >(
+                                function,
+                                resolver,
+                                local,
+                                operand_type,
+                                body_start,
+                                facts,
+                                &mut branch_locals,
+                                &mut branch_local_count,
+                            )?;
+                        }
+                        crate::ConditionalLoopAction::Assignment(assignment) => {
+                            preanalyze_runtime_assignment_access::<
+                                R,
+                                MAX_PARAMETERS,
+                                MAX_EXPRESSION_NODES,
+                            >(
+                                facts,
+                                &branch_locals[..branch_local_count],
+                                function,
+                                resolver,
+                                &assignment,
+                            )?;
+                        }
+                        crate::ConditionalLoopAction::Expression(statement) => {
+                            preanalyze_runtime_expression_statement_reads::<
+                                R,
+                                MAX_PARAMETERS,
+                                MAX_EXPRESSION_NODES,
+                            >(
+                                facts,
+                                &branch_locals[..branch_local_count],
+                                function,
+                                resolver,
+                                &statement,
+                                body_start,
+                            )?;
+                        }
+                    }
+                }
+                if let crate::NestedLoopUnconditionalControl::Return(value) = branch.terminal {
+                    facts.current_ownership_event_location =
+                        RuntimeOwnershipEventLocation::NestedLoopBranchValue {
+                            statement_index,
+                            operation_index,
+                            branch_index,
+                        };
+                    preanalyze_runtime_return_expression_reads::<
+                        R,
+                        MAX_PARAMETERS,
+                        MAX_EXPRESSION_NODES,
+                    >(
+                        facts,
+                        &branch_locals[..branch_local_count],
+                        function,
+                        resolver,
+                        value.value,
+                        value.value_span,
+                        body_start,
+                    )?;
+                }
+            }
             for ((control, stored_action_index), stored_order) in block
                 .unconditional_controls()
                 .iter()
@@ -11474,6 +11714,17 @@ enum RuntimeNestedLoopControl {
     Return {
         conditional: bool,
     },
+    ConditionalBlock {
+        branch_index: usize,
+        terminal: RuntimeNestedLoopBranchTerminal,
+    },
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum RuntimeNestedLoopBranchTerminal {
+    Break(crate::NestedLoopControlTarget),
+    Continue(crate::NestedLoopControlTarget),
+    Return,
 }
 
 fn record_nested_loop_control(
@@ -11492,6 +11743,36 @@ fn nested_loop_control_at(
     control_order: usize,
 ) -> Result<Option<RuntimeNestedLoopControl>, CodegenErrorKind> {
     let mut found = None;
+    for (branch_index, ((branch, stored_action_index), stored_order)) in block
+        .conditional_blocks()
+        .iter()
+        .zip(block.conditional_block_action_indices())
+        .zip(block.conditional_block_control_orders())
+        .enumerate()
+    {
+        if action_index != *stored_action_index || control_order != *stored_order {
+            continue;
+        }
+        let branch = branch.ok_or(CodegenErrorKind::InvalidRuntimeControlFlowFacts)?;
+        let terminal = match branch.terminal {
+            crate::NestedLoopUnconditionalControl::Break(target) => {
+                RuntimeNestedLoopBranchTerminal::Break(target)
+            }
+            crate::NestedLoopUnconditionalControl::Continue(target) => {
+                RuntimeNestedLoopBranchTerminal::Continue(target)
+            }
+            crate::NestedLoopUnconditionalControl::Return(_) => {
+                RuntimeNestedLoopBranchTerminal::Return
+            }
+        };
+        record_nested_loop_control(
+            &mut found,
+            RuntimeNestedLoopControl::ConditionalBlock {
+                branch_index,
+                terminal,
+            },
+        )?;
+    }
     for ((control, stored_action_index), stored_order) in block
         .unconditional_controls()
         .iter()
@@ -11578,9 +11859,10 @@ fn nested_loop_control_count(
     block: &crate::NestedLoopBlock<'_>,
 ) -> Result<usize, CodegenErrorKind> {
     block
-        .unconditional_controls()
+        .conditional_blocks()
         .len()
-        .checked_add(block.conditional_breaks().len())
+        .checked_add(block.unconditional_controls().len())
+        .and_then(|count| count.checked_add(block.conditional_breaks().len()))
         .and_then(|count| count.checked_add(block.conditional_continues().len()))
         .and_then(|count| count.checked_add(block.conditional_returns().len()))
         .ok_or(CodegenErrorKind::InvalidRuntimeControlFlowFacts)
@@ -11589,8 +11871,11 @@ fn nested_loop_control_count(
 fn nested_loop_has_supported_control_flow(
     block: &crate::NestedLoopBlock<'_>,
 ) -> Result<bool, CodegenErrorKind> {
-    if !block.conditional_blocks().is_empty() {
-        return Ok(false);
+    for branch in block.conditional_blocks() {
+        let branch = branch.ok_or(CodegenErrorKind::InvalidRuntimeControlFlowFacts)?;
+        for action in branch.actions() {
+            action.ok_or(CodegenErrorKind::InvalidRuntimeControlFlowFacts)?;
+        }
     }
     for action in block.actions() {
         action.ok_or(CodegenErrorKind::InvalidRuntimeControlFlowFacts)?;
@@ -11630,6 +11915,12 @@ fn nested_loop_has_inner_exit(block: &crate::NestedLoopBlock<'_>) -> bool {
         || block
             .conditional_break_targets()
             .contains(&crate::NestedLoopControlTarget::Inner)
+        || block.conditional_blocks().iter().flatten().any(|branch| {
+            matches!(
+                branch.terminal,
+                crate::NestedLoopUnconditionalControl::Break(crate::NestedLoopControlTarget::Inner)
+            )
+        })
 }
 
 fn nested_loop_has_outer_break(block: &crate::NestedLoopBlock<'_>) -> bool {
@@ -11646,6 +11937,12 @@ fn nested_loop_has_outer_break(block: &crate::NestedLoopBlock<'_>) -> bool {
         || block
             .conditional_break_targets()
             .contains(&crate::NestedLoopControlTarget::Outer)
+        || block.conditional_blocks().iter().flatten().any(|branch| {
+            matches!(
+                branch.terminal,
+                crate::NestedLoopUnconditionalControl::Break(crate::NestedLoopControlTarget::Outer)
+            )
+        })
 }
 
 fn loop_has_supported_initial_control_flow(
@@ -11913,6 +12210,26 @@ fn nested_loop_control_target(
             },
         )),
         RuntimeNestedLoopControl::Return { .. } => Ok(RuntimeControlFlowTarget::Return),
+        RuntimeNestedLoopControl::ConditionalBlock { terminal, .. } => match terminal {
+            RuntimeNestedLoopBranchTerminal::Break(target) => {
+                let target = if target == crate::NestedLoopControlTarget::Inner {
+                    after_nested.ok_or(CodegenErrorKind::InvalidRuntimeControlFlowFacts)?
+                } else {
+                    outer_continuation.ok_or(CodegenErrorKind::InvalidRuntimeControlFlowFacts)?
+                };
+                Ok(RuntimeControlFlowTarget::Block(target))
+            }
+            RuntimeNestedLoopBranchTerminal::Continue(target) => {
+                Ok(RuntimeControlFlowTarget::Block(
+                    if target == crate::NestedLoopControlTarget::Inner {
+                        nested_header
+                    } else {
+                        outer_header
+                    },
+                ))
+            }
+            RuntimeNestedLoopBranchTerminal::Return => Ok(RuntimeControlFlowTarget::Return),
+        },
     }
 }
 
@@ -11968,16 +12285,23 @@ fn push_nested_loop_block_control_flow(
             seen = seen
                 .checked_add(1)
                 .ok_or(CodegenErrorKind::InvalidRuntimeControlFlowFacts)?;
-            let control_block = facts.push_sourced_basic_block(
-                statement_index,
-                event_reachable,
-                RuntimeBasicBlockSource::NestedLoopControl {
+            let control_source = match control {
+                RuntimeNestedLoopControl::ConditionalBlock { branch_index, .. } => {
+                    RuntimeBasicBlockSource::NestedLoopBranchCondition {
+                        statement_index,
+                        operation_index,
+                        branch_index,
+                    }
+                }
+                _ => RuntimeBasicBlockSource::NestedLoopControl {
                     statement_index,
                     operation_index,
                     action_index,
                     control_order,
                 },
-            )?;
+            };
+            let control_block =
+                facts.push_sourced_basic_block(statement_index, event_reachable, control_source)?;
             if pending.is_some() {
                 push_pending_control_flow_edge(facts, pending, control_block)?;
             }
@@ -11997,16 +12321,45 @@ fn push_nested_loop_block_control_flow(
                     conditional: true,
                     ..
                 } | RuntimeNestedLoopControl::Return { conditional: true }
+                    | RuntimeNestedLoopControl::ConditionalBlock { .. }
             );
-            facts.push_control_flow_edge(RuntimeControlFlowEdgeFact {
-                from: control_block,
-                target,
-                kind: if conditional {
-                    RuntimeControlFlowEdgeKind::True
-                } else {
-                    RuntimeControlFlowEdgeKind::Unconditional
-                },
-            })?;
+            if let RuntimeNestedLoopControl::ConditionalBlock { branch_index, .. } = control {
+                let branch = block
+                    .conditional_blocks()
+                    .get(branch_index)
+                    .and_then(|branch| *branch)
+                    .ok_or(CodegenErrorKind::InvalidRuntimeControlFlowFacts)?;
+                let action_block = facts.push_sourced_basic_block(
+                    statement_index,
+                    event_reachable,
+                    RuntimeBasicBlockSource::NestedLoopBranchActions {
+                        statement_index,
+                        operation_index,
+                        branch_index,
+                        action_count: branch.action_count(),
+                    },
+                )?;
+                facts.push_control_flow_edge(RuntimeControlFlowEdgeFact {
+                    from: control_block,
+                    target: RuntimeControlFlowTarget::Block(action_block),
+                    kind: RuntimeControlFlowEdgeKind::True,
+                })?;
+                facts.push_control_flow_edge(RuntimeControlFlowEdgeFact {
+                    from: action_block,
+                    target,
+                    kind: RuntimeControlFlowEdgeKind::Unconditional,
+                })?;
+            } else {
+                facts.push_control_flow_edge(RuntimeControlFlowEdgeFact {
+                    from: control_block,
+                    target,
+                    kind: if conditional {
+                        RuntimeControlFlowEdgeKind::True
+                    } else {
+                        RuntimeControlFlowEdgeKind::Unconditional
+                    },
+                })?;
+            }
             pending = conditional.then_some((control_block, RuntimeControlFlowEdgeKind::False));
             if !conditional {
                 event_reachable = false;
@@ -24114,6 +24467,9 @@ impl<
         outer_exit_patches: &mut [Option<usize>],
         outer_exit_count: &mut usize,
     ) -> Result<(), CodegenError> {
+        if !block.conditional_blocks().is_empty() {
+            return Err(self.error(CodegenErrorKind::RuntimeExpressionUnsupported));
+        }
         let nested_checkpoint = self.saved_locals;
         let nested_start = self.length;
         let entry_exit = if let Some(condition) = block.entry_condition {
@@ -40474,8 +40830,8 @@ mod tests {
     }
 
     #[test]
-    fn runtime_nested_loop_branch_actions_remain_fail_closed() {
-        let source = "fn value(stop: bool) -> u64 { loop { loop { if stop { 1; return 2; } } } }";
+    fn runtime_nested_loop_branch_actions_build_cfg_but_emission_remains_fail_closed() {
+        let source = "#[unsafe(no_mangle)] pub extern \"C\" fn value(stop: u64) -> u64 { loop { loop { if stop != 0 { stop; return stop; } } } }";
         let module = Parser::new(source).parse_module::<2, 2>().unwrap();
         let Some(Item::Function(function)) = module.items()[0] else {
             panic!("expected function")
@@ -40486,7 +40842,64 @@ mod tests {
             panic!("expected nested loop block")
         };
         let inner = outer.nested_blocks()[index].unwrap();
-        assert!(!nested_loop_has_supported_control_flow(&inner).unwrap());
+        assert!(nested_loop_has_supported_control_flow(&inner).unwrap());
+        let mut facts = RuntimeBodyFacts::EMPTY;
+        preanalyze_runtime_body_declarations::<_, 2, 16>(
+            &function,
+            &NoConstants,
+            &body,
+            "u64",
+            function.body_expression_span.start,
+            &mut facts,
+        )
+        .unwrap();
+        for source in [
+            RuntimeBasicBlockSource::NestedLoopBranchCondition {
+                statement_index: 0,
+                operation_index: 0,
+                branch_index: 0,
+            },
+            RuntimeBasicBlockSource::NestedLoopBranchActions {
+                statement_index: 0,
+                operation_index: 0,
+                branch_index: 0,
+                action_count: 1,
+            },
+        ] {
+            assert!(
+                facts.block_with_source(source).is_some(),
+                "missing {source:?}"
+            );
+        }
+        for location in [
+            RuntimeOwnershipEventLocation::NestedLoopBranchCondition {
+                statement_index: 0,
+                operation_index: 0,
+                branch_index: 0,
+            },
+            RuntimeOwnershipEventLocation::NestedLoopBranchAction {
+                statement_index: 0,
+                operation_index: 0,
+                branch_index: 0,
+                action_index: 0,
+            },
+            RuntimeOwnershipEventLocation::NestedLoopBranchValue {
+                statement_index: 0,
+                operation_index: 0,
+                branch_index: 0,
+            },
+        ] {
+            assert!(
+                facts.ownership_control_point(location).is_some(),
+                "missing control point for {location:?}"
+            );
+        }
+        assert_eq!(
+            compile_x86_64_function::<_, 128, 2, 16>(&function, &NoConstants, X86_64Abi::SystemV,)
+                .unwrap_err()
+                .kind,
+            CodegenErrorKind::RuntimeExpressionUnsupported
+        );
     }
 
     #[test]
