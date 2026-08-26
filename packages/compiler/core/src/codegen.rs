@@ -8345,13 +8345,6 @@ fn preanalyze_runtime_expression_at_reads_with_tuple<
                         kind: CodegenErrorKind::RuntimeExpressionUnsupported,
                         span: assignment_span,
                     })?;
-                let result_may_carry_reference = matches!(
-                    target.return_type,
-                    crate::ScalarType::Reference { .. }
-                        | crate::ScalarType::ArrayReference { .. }
-                        | crate::ScalarType::SliceReference { .. }
-                        | crate::ScalarType::StrReference { .. }
-                );
                 let result_origin_parameter = runtime_reference_call_origin_parameter::<
                     MAX_PARAMETERS,
                     MAX_EXPRESSION_NODES,
@@ -8614,10 +8607,7 @@ fn preanalyze_runtime_expression_at_reads_with_tuple<
                             );
                         let carries_result_origin =
                             result_origin_parameter == Some(parameter_index);
-                        let argument_context = match (
-                            coercion_root && (!result_may_carry_reference || carries_result_origin),
-                            expected,
-                        ) {
+                        let argument_context = match (coercion_root, expected) {
                             (true, RuntimeExpressionType::Reference { mutable: true, .. }) => {
                                 RuntimeReadEffectContext::MutableBorrow
                             }
@@ -35353,6 +35343,8 @@ mod tests {
                 CodegenErrorKind::RuntimeReferenceOutlivesFunction
             );
         }
+        analyze("fn value(first: &mut u16, second: &mut u16, choose: bool) -> &u16 { loop { loop { let returned: &mut u16 = branch_tuple_field_assign(first, second, choose); let child: &u16 = &*returned; if choose { return child; } } } }")
+            .unwrap();
     }
 
     #[test]
