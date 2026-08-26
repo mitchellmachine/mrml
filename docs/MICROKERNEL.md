@@ -3318,6 +3318,16 @@ Windows and Arch Linux. No firmware protocol authority crosses the handoff, and 
 authority-free recovery metadata does not yet carry installed device identity
 for native-kernel reacquisition.
 
+The kernel now defines a canonical 104-byte `InstalledRecoveryBootIdentity` for
+that boundary. The record contains only non-authorizing source/provenance,
+geometry, volume, and root identity and rejects malformed reserved bytes,
+unknown source values, absent generations, invalid geometry, and out-of-range
+roots. The UEFI adapter converts its validated selection to this type, and the
+real loader retains it across `ExitBootServices` to the handoff-construction
+call. Windows kernel tests pass 561, UEFI tests pass 37, and the UEFI target
+cross-builds. The record is not yet encoded into `BootHandoff`, and no native
+AHCI/USB correlation or physical reacquisition is claimed.
+
 The bounded discovery result now remains owned through the complete serviced
 recovery read. `RecoveredInstalledStableSystemSelection` retains the exact
 installed selection beside the `BlockVolume` and reachable graph produced from

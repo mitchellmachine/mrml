@@ -119,6 +119,15 @@ cross-builds on Windows and Arch Linux. This is **PARTIALLY IMPLEMENTED** compil
 OVMF/physical execution and typed installed-device identity transfer for native
 kernel reacquisition remain the next gate.
 
+The loader/kernel boundary now has a canonical 104-byte non-authorizing
+installed-recovery identity. It excludes ephemeral firmware handles and local
+device/session/capability values while retaining exact source, stable identity,
+controller/media generations, geometry, volume, and selected root. The loader
+constructs and retains it across `ExitBootServices`; Windows kernel tests pass
+561, UEFI tests pass 37, and the UEFI target cross-builds. `BootHandoff`
+integration is still **PLANNED** because the shared handoff source has unrelated
+concurrent edits; native driver correlation and reacquisition remain later gates.
+
 Selected-device reopening and redundant-root reads are now **PARTIALLY
 IMPLEMENTED**. Exact path/media/geometry and block-zero header revalidation
 precedes both root reads; any mismatch, second-read failure, or protocol-close

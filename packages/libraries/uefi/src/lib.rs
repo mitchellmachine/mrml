@@ -1075,6 +1075,34 @@ impl UefiRecoveredInstalledIdentity {
     pub const fn root_generation(self) -> u64 {
         self.root_generation
     }
+
+    pub fn boot_identity(
+        self,
+    ) -> Result<
+        mrml_kernel::InstalledRecoveryBootIdentity,
+        mrml_kernel::InstalledRecoveryBootIdentityError,
+    > {
+        let identity = self.descriptor.identity();
+        let source = match identity.transport() {
+            PlatformBlockTransport::Uefi => mrml_kernel::InstalledRecoverySource::Uefi,
+            PlatformBlockTransport::Ahci => mrml_kernel::InstalledRecoverySource::Ahci,
+            PlatformBlockTransport::Usb => mrml_kernel::InstalledRecoverySource::Usb,
+            PlatformBlockTransport::Virtio => mrml_kernel::InstalledRecoverySource::Virtio,
+            PlatformBlockTransport::Hosted => mrml_kernel::InstalledRecoverySource::Hosted,
+        };
+        let block = self.descriptor.block();
+        mrml_kernel::InstalledRecoveryBootIdentity::new(
+            source,
+            identity.stable_id(),
+            identity.controller_generation(),
+            identity.media_generation(),
+            block.block_size(),
+            block.block_count(),
+            self.volume.bytes(),
+            self.root_block,
+            self.root_generation,
+        )
+    }
 }
 
 /// Exact-matches a recovered graph with the independently authenticated volume
@@ -3282,6 +3310,18 @@ mod tests {
         assert_eq!(identity.volume(), volume_id);
         assert_eq!(identity.root_block(), 1);
         assert_eq!(identity.root_generation(), 5);
+        let boot_identity = identity.boot_identity().unwrap();
+        assert_eq!(
+            boot_identity.source(),
+            mrml_kernel::InstalledRecoverySource::Uefi
+        );
+        assert_eq!(boot_identity.volume(), volume_id.bytes());
+        assert_eq!(boot_identity.root_block(), 1);
+        assert_eq!(boot_identity.root_generation(), 5);
+        assert_eq!(
+            mrml_kernel::InstalledRecoveryBootIdentity::decode(&boot_identity.encode()),
+            Ok(boot_identity)
+        );
         assert_eq!(
             bind_recovered_uefi_installed_identity(
                 selected,

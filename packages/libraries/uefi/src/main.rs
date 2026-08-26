@@ -8,11 +8,12 @@ use mrml_crypto::Sha3_512;
 use mrml_crypto::{LAMPORT_PUBLIC_KEY_BYTES, LAMPORT_SIGNATURE_BYTES};
 use mrml_kernel::{
     ArtifactKind, BOOTSTRAP_STATE_BYTES, BootIsolationOverride, BuildReceipt, FramebufferInfo,
-    MAX_CUDA_KERNEL_BUNDLE_BYTES, MAX_HANDOFF_BYTES, MAX_HANDOFF_MADT_BYTES,
-    MAX_KERNEL_IMAGE_BYTES, MAX_LAUNCH_POLICY_BYTES, MAX_SERVICE_IMAGE_BYTES, MAX_VM_IMAGE_BYTES,
-    MemoryKind, MemoryRegion, MonotonicStateStore, PeImage, PendingBootRelease, PhysAddr,
-    PixelFormat, RELEASE_MANIFEST_BYTES, RecoveryStateMetadata, SIGNED_ARTIFACT_OVERHEAD_BYTES,
-    ServiceLaunch, SignedArtifact, TrustRoot,
+    InstalledRecoveryBootIdentity, MAX_CUDA_KERNEL_BUNDLE_BYTES, MAX_HANDOFF_BYTES,
+    MAX_HANDOFF_MADT_BYTES, MAX_KERNEL_IMAGE_BYTES, MAX_LAUNCH_POLICY_BYTES,
+    MAX_SERVICE_IMAGE_BYTES, MAX_VM_IMAGE_BYTES, MemoryKind, MemoryRegion, MonotonicStateStore,
+    PeImage, PendingBootRelease, PhysAddr, PixelFormat, RELEASE_MANIFEST_BYTES,
+    RecoveryStateMetadata, SIGNED_ARTIFACT_OVERHEAD_BYTES, ServiceLaunch, SignedArtifact,
+    TrustRoot,
     arch::x86_64::{
         AcpiMemory, MAX_X86_64_CPUS, PRIVILEGE_STACK_ARENA_PAGES, PagePermissions,
         PageTableBuildError, PageTableBuilder, PageTableStore, PerCpuPrivilegeStacks, VirtAddr,
@@ -723,7 +724,8 @@ unsafe fn boot(image: Handle, table: *mut SystemTable) -> Result<(), Status> {
     }
     let recovery_state =
         admit_configured_recovery_journal(services, rng_pointer.cast(), recovery_configuration)?;
-    validate_configured_installed_recovery(services, image, recovery_state)?;
+    let installed_recovery =
+        validate_configured_installed_recovery(services, image, recovery_state)?;
     let coherent_release = prepared_release.is_some();
 
     loader_trace(0xa8);
@@ -745,6 +747,7 @@ unsafe fn boot(image: Handle, table: *mut SystemTable) -> Result<(), Status> {
             framebuffer,
             prepared_service,
             recovery_state,
+            installed_recovery,
             isolation_selection,
         )
     }
@@ -776,6 +779,7 @@ unsafe fn launch_after_exit(
     framebuffer: Framebuffer,
     service: PreparedService,
     recovery_state: Option<RecoveryStateMetadata>,
+    installed_recovery: Option<InstalledRecoveryBootIdentity>,
     isolation_selection: BootIsolationSelection,
 ) -> ! {
     let map_bytes = unsafe { core::slice::from_raw_parts(MEMORY_MAP.0.get().cast(), map_size) };
@@ -819,6 +823,7 @@ unsafe fn launch_after_exit(
         &madt_storage[..madt_length],
         service,
         recovery_state,
+        installed_recovery,
         isolation_selection,
     )
     .is_err()
@@ -1116,12 +1121,12 @@ fn validate_configured_installed_recovery(
     services: &BootServices,
     image: Handle,
     recovery: Option<RecoveryStateMetadata>,
-) -> Result<(), Status> {
+) -> Result<Option<InstalledRecoveryBootIdentity>, Status> {
     let Some(recovery) = recovery else {
-        return Ok(());
+        return Ok(None);
     };
     let Some(expected_volume) = recovery.accepted_volume() else {
-        return Ok(());
+        return Ok(None);
     };
     let expected_volume = VolumeId::new(expected_volume).map_err(|_| LOAD_ERROR)?;
     let handles = unsafe { locate_block_io_handles::<INSTALLED_RECOVERY_HANDLES>(services) }
@@ -1150,14 +1155,14 @@ fn validate_configured_installed_recovery(
         )
     }
     .map_err(|_| LOAD_ERROR)?;
-    bind_recovered_uefi_installed_identity(
+    let identity = bind_recovered_uefi_installed_identity(
         selected,
         &recovered,
         expected_volume,
         recovery.accepted_root_generation(),
     )
     .map_err(|_| LOAD_ERROR)?;
-    Ok(())
+    Ok(Some(identity.boot_identity().map_err(|_| LOAD_ERROR)?))
 }
 
 fn detect_secure_boot(runtime: *mut RuntimeServices) -> Result<bool, Status> {
@@ -1571,6 +1576,7 @@ fn enter_kernel(
     madt: &[u8],
     service: PreparedService,
     recovery_state: Option<RecoveryStateMetadata>,
+    installed_recovery: Option<InstalledRecoveryBootIdentity>,
     isolation_selection: BootIsolationSelection,
 ) -> Result<(), Status> {
     let placeholder = MemoryRegion::new(
@@ -1617,6 +1623,9 @@ fn enter_kernel(
         BootIsolationSelection::ConfiguredDefault => None,
         BootIsolationSelection::TotalMicrovmOnce => Some(BootIsolationOverride::TotalMicrovmOnce),
     };
+    // Retain the exact non-authorizing installed identity across
+    // ExitBootServices. Encoding it into the kernel handoff is the next gate.
+    let _installed_recovery = installed_recovery;
     let handoff_length = encode_handoff_with_smp_service_recovery_and_isolation(
         kernel_version,
         entropy,

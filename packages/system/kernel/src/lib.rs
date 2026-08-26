@@ -23,6 +23,7 @@ mod grant;
 mod graphics;
 mod handoff;
 mod host_resource;
+mod installed_recovery;
 mod ipc;
 mod isolation;
 mod isolation_monitor;
@@ -119,6 +120,10 @@ pub use handoff::{
 pub use host_resource::{
     DirectHostResourceError, DirectHostResourceMemory, HostResourceIoError, HostResourceMemory,
     HostResourceRetireError, HostResourceTable, HostResourceTableError,
+};
+pub use installed_recovery::{
+    INSTALLED_RECOVERY_BOOT_IDENTITY_BYTES, InstalledRecoveryBootIdentity,
+    InstalledRecoveryBootIdentityError, InstalledRecoverySource,
 };
 pub use ipc::{
     AuthorizedIpcCapability, AuthorizedSharedIpcBuffer, Endpoint, IpcError, IpcSharedBufferBackend,

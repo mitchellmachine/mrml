@@ -1234,6 +1234,18 @@ mocked-library evidence, not execution under OVMF or physical firmware. The
 current handoff remains non-authorizing recovery metadata and does not yet carry
 the installed device identity needed for native-kernel reacquisition.
 
+A canonical 104-byte `InstalledRecoveryBootIdentity` is now **PARTIALLY
+IMPLEMENTED** at the loader/kernel boundary. It retains source class, opaque
+stable identifier, controller/media generations, native geometry, volume, and
+selected root while explicitly excluding firmware handles, service-local device
+IDs, sessions, pointers, and capabilities. Reserved bytes, zero identities or
+generations, invalid geometry, unknown source classes, and out-of-range roots
+fail decoding. The real loader constructs this record from the validated UEFI
+selection and retains it across `ExitBootServices` to handoff construction.
+Windows kernel tests pass 561, UEFI tests pass 37, and the UEFI target cross-
+builds. Encoding the record into `BootHandoff` and exact native-driver
+reacquisition remain **PLANNED**.
+
 The recovered installed selection is now retained across the boot-policy to
 Total-admission boundary. `RecoveredInstalledTotalAdmission` binds its exact
 device descriptor, serviced session selection, volume header, active root,

@@ -1,5 +1,16 @@
 # Patent review log
 
+## 2026-08-26 — Installed recovery boot identity codec
+
+Patent review: **NOT_TRIGGERED** for this bounded identity record. It uses a
+conventional fixed-field canonical encoding, reserved-zero checks, exact scalar
+validation, and omission of ephemeral handles and authority. It adds no device-
+correlation algorithm, storage layout, recovery selection, cryptography,
+placement policy, native fallback, queue/DMA mechanism, or hardware isolation
+method. Native cross-transport correlation plus broader storage, firmware,
+adaptive-isolation, and Total-MicroVM reviews remain `TRIGGERED`; no patent-
+clearance or non-infringement conclusion is made.
+
 ## 2026-08-26 — Real-loader installed recovery admission
 
 Patent review: **NOT_TRIGGERED** for this loader integration. It invokes the

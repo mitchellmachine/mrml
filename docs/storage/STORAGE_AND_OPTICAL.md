@@ -141,6 +141,15 @@ fails boot rather than weakening validation. The UEFI target cross-builds on
 Windows and Arch Linux. This is compile evidence, not firmware execution, physical-media
 evidence, or transfer of device identity into the kernel.
 
+The exact installed selection now converts into a canonical 104-byte,
+non-authorizing boot identity and is retained through `ExitBootServices` to
+handoff construction. It carries source class, opaque stable ID,
+controller/media generations, 4 KiB-native geometry, volume, and selected root;
+firmware handles, local device IDs, sessions, pointers, and capabilities are
+absent. Windows kernel tests pass 561, UEFI tests pass 37, and the UEFI target
+cross-builds. The canonical kernel handoff does not yet include the record, and
+cross-transport native-device correlation remains **PLANNED**.
+
 The `mrml` frontend may expose structured `disk`, `filesystem`, `optical`, and
 `media` operations. The PowerShell-inspired shell projects the same backend as
 typed `Get-*`, `Test-*`, `Initialize-*`, `New-*`, `Format-*`, `Write-*`, and
