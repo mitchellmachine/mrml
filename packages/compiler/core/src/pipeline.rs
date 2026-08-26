@@ -636,6 +636,28 @@ mod tests {
     }
 
     #[test]
+    fn normalizes_projection_valued_associated_defaults_before_codegen() {
+        let source = concat!(
+            "trait Child<T> { type Output = <T as Parent<T>>::Output; } ",
+            "trait Parent<T> { type Output; } ",
+            "impl<T> Parent<T> for T { type Output = T; } impl<T> Child<T> for T {} ",
+            "#[unsafe(no_mangle)] pub extern \"C\" fn answer() -> u64 ",
+            "where <u32 as Child<u32>>::Output = u32 { 42 }"
+        );
+        compile(source, "answer", ObjectFormat::Coff).unwrap();
+
+        let missing = source.replace("impl<T> Parent<T> for T { type Output = T; } ", "");
+        let error = compile(&missing, "answer", ObjectFormat::Coff).unwrap_err();
+        assert!(matches!(
+            error.kind,
+            CompileErrorKind::TraitObligation(SourceTraitObligationError {
+                kind: crate::SourceTraitObligationErrorKind::Unsatisfied,
+                ..
+            })
+        ));
+    }
+
+    #[test]
     fn proves_trait_declaration_parameter_bounds_before_codegen() {
         let source = concat!(
             "trait Parent<T> {} trait Child<T: Parent<T>> {} ",

@@ -153,6 +153,9 @@ pub enum SourceTraitDeclarationError {
     DuplicateRequirement,
     UnknownRequirementAssociatedType,
     UnsupportedAssociatedTypeDefault,
+    UnknownAssociatedTypeDefaultTrait,
+    WrongAssociatedTypeDefaultArgumentCount,
+    UnknownAssociatedTypeDefaultProjection,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -237,14 +240,19 @@ impl<'source> SourceTraitDeclarationTable<'source> {
                 {
                     return Err(SourceTraitDeclarationError::DuplicateAssociatedType);
                 }
-                if source_associated.default.is_some_and(|default| {
-                    default.text != "Self"
+                if let Some(default) = source_associated.default {
+                    let projection = default.parse_trait_projection().map_err(|_| {
+                        SourceTraitDeclarationError::UnsupportedAssociatedTypeDefault
+                    })?;
+                    if projection.is_none()
+                        && default.text != "Self"
                         && !declaration
                             .generic_parameters()
                             .contains(&Some(default.text))
                         && !supported_source_trait_type(default.text)
-                }) {
-                    return Err(SourceTraitDeclarationError::UnsupportedAssociatedTypeDefault);
+                    {
+                        return Err(SourceTraitDeclarationError::UnsupportedAssociatedTypeDefault);
+                    }
                 }
                 let slot = table
                     .associated_types
@@ -271,6 +279,49 @@ impl<'source> SourceTraitDeclarationTable<'source> {
                 continue;
             };
             let index = table.get(declaration.name).unwrap().id.get() as usize;
+            for source_associated in declaration.associated_types().iter().flatten() {
+                let Some(default) = source_associated.default else {
+                    continue;
+                };
+                let Some(projection) = default
+                    .parse_trait_projection()
+                    .map_err(|_| SourceTraitDeclarationError::UnsupportedAssociatedTypeDefault)?
+                else {
+                    continue;
+                };
+                let target = table
+                    .get(projection.trait_name)
+                    .ok_or(SourceTraitDeclarationError::UnknownAssociatedTypeDefaultTrait)?;
+                if target.generic_parameter_count != projection.trait_argument_count() {
+                    return Err(
+                        SourceTraitDeclarationError::WrongAssociatedTypeDefaultArgumentCount,
+                    );
+                }
+                let supported = |source: TypeRef<'source>| {
+                    source.text == "Self"
+                        || declaration
+                            .generic_parameters()
+                            .contains(&Some(source.text))
+                        || supported_source_trait_type(source.text)
+                };
+                if !supported(projection.self_type)
+                    || projection
+                        .trait_arguments()
+                        .iter()
+                        .flatten()
+                        .any(|argument| !supported(*argument))
+                {
+                    return Err(SourceTraitDeclarationError::UnsupportedAssociatedTypeDefault);
+                }
+                if table
+                    .get_associated_type(target.id, projection.associated_type)
+                    .is_none()
+                {
+                    return Err(
+                        SourceTraitDeclarationError::UnknownAssociatedTypeDefaultProjection,
+                    );
+                }
+            }
             let mut supertraits: [Option<SourceTraitSupertrait<'source>>; MAX_TRAIT_SUPERTRAITS] =
                 [None; MAX_TRAIT_SUPERTRAITS];
             let mut supertrait_count = 0usize;
@@ -672,7 +723,30 @@ impl<'source> SourceTraitImplementationTable<'source> {
                     }
                     for associated in declaration.associated_types().iter().flatten() {
                         if let Some(default) = associated.default {
-                            if default.text != "Self"
+                            let projection = default.parse_trait_projection().map_err(|_| {
+                                SourceTraitImplementationError {
+                                    kind: SourceTraitImplementationErrorKind::UnsupportedAssociatedTypeProjection,
+                                    span: default.span,
+                                }
+                            })?;
+                            if let Some(projection) = projection {
+                                if projection.self_type.text != "Self"
+                                    && !declaration
+                                        .generic_parameters()
+                                        .contains(&Some(projection.self_type.text))
+                                {
+                                    table.intern_type(projection.self_type)?;
+                                }
+                                for argument in projection.trait_arguments().iter().flatten() {
+                                    if argument.text != "Self"
+                                        && !declaration
+                                            .generic_parameters()
+                                            .contains(&Some(argument.text))
+                                    {
+                                        table.intern_type(*argument)?;
+                                    }
+                                }
+                            } else if default.text != "Self"
                                 && !declaration
                                     .generic_parameters()
                                     .contains(&Some(default.text))
@@ -1156,22 +1230,52 @@ impl<'source> SourceTraitImplementationTable<'source> {
                     kind: SourceTraitImplementationErrorKind::MissingAssociatedTypeValue,
                     span: implementation.trait_name_span,
                 })?;
-                let source_value = if default.text == "Self" {
-                    implementation.self_type
-                } else if let Some(index) = declaration
-                    .generic_parameters()
-                    .iter()
-                    .position(|parameter| *parameter == Some(default.text))
-                {
-                    implementation.trait_arguments()[index].unwrap()
+                let projection = default.parse_trait_projection().unwrap();
+                let value = if let Some(projection) = projection {
+                    let projected_trait = traits.get(projection.trait_name).unwrap();
+                    let projected_associated = traits
+                        .get_associated_type(projected_trait.id, projection.associated_type)
+                        .unwrap();
+                    let mut goal = BoundImplementedTraitGoal::new(
+                        projected_trait.id,
+                        source_declaration_implementation_bound_type(
+                            projection.self_type,
+                            &declaration,
+                            implementation,
+                            &table,
+                        )?,
+                    );
+                    for argument in projection.trait_arguments().iter().flatten() {
+                        goal.push_argument(source_declaration_implementation_bound_type(
+                            *argument,
+                            &declaration,
+                            implementation,
+                            &table,
+                        )?)
+                        .map_err(|kind| {
+                            SourceTraitImplementationError {
+                                kind: SourceTraitImplementationErrorKind::Goal(kind),
+                                span: argument.span,
+                            }
+                        })?;
+                    }
+                    GenericTraitAssociatedTypeValue::new_projection(
+                        GenericTraitImplementationId::new(generic_implementation_index),
+                        associated.id,
+                        BoundTraitProjection::new(goal, projected_associated.id),
+                    )
                 } else {
-                    default
+                    GenericTraitAssociatedTypeValue::new(
+                        GenericTraitImplementationId::new(generic_implementation_index),
+                        associated.id,
+                        source_declaration_implementation_bound_type(
+                            default,
+                            &declaration,
+                            implementation,
+                            &table,
+                        )?,
+                    )
                 };
-                let value = GenericTraitAssociatedTypeValue::new(
-                    GenericTraitImplementationId::new(generic_implementation_index),
-                    associated.id,
-                    source_bound_type(source_value, implementation, &table)?,
-                );
                 table
                     .generic_associated_types
                     .insert(&table.generic_implementations, value)
@@ -1632,7 +1736,20 @@ fn source_implementation_is_exact_fact(
         && implementation.where_predicate_count() == 0
         && traits
             .get(implementation.trait_name)
-            .is_some_and(|declaration| declaration.where_predicate_count() == 0)
+            .is_some_and(|declaration| {
+                declaration.where_predicate_count() == 0
+                    && !declaration.associated_types().iter().flatten().any(|id| {
+                        let associated = traits.get_associated_type_by_id(*id).unwrap();
+                        implementation
+                            .associated_types()
+                            .iter()
+                            .flatten()
+                            .all(|value| value.name != associated.name)
+                            && associated.default.is_some_and(|default| {
+                                matches!(default.parse_trait_projection(), Ok(Some(_)))
+                            })
+                    })
+            })
         && !implementation
             .associated_types()
             .iter()
@@ -1714,6 +1831,35 @@ fn source_declaration_bound_type(
         .position(|parameter| *parameter == Some(source.text))
     {
         return Ok(consequence.arguments()[index].unwrap());
+    }
+    table
+        .get_type(source.text)
+        .map(|ty| BoundTraitGoalType::Concrete(ty.id))
+        .ok_or(SourceTraitImplementationError {
+            kind: SourceTraitImplementationErrorKind::UnsupportedSelfType,
+            span: source.span,
+        })
+}
+
+fn source_declaration_implementation_bound_type(
+    source: TypeRef<'_>,
+    declaration: &SourceTraitDeclaration<'_>,
+    implementation: &crate::TraitImplementation<'_>,
+    table: &SourceTraitImplementationTable<'_>,
+) -> Result<BoundTraitGoalType, SourceTraitImplementationError> {
+    if source.text == "Self" {
+        return source_bound_type(implementation.self_type, implementation, table);
+    }
+    if let Some(index) = declaration
+        .generic_parameters()
+        .iter()
+        .position(|parameter| *parameter == Some(source.text))
+    {
+        return source_bound_type(
+            implementation.trait_arguments()[index].unwrap(),
+            implementation,
+            table,
+        );
     }
     table
         .get_type(source.text)
@@ -9427,6 +9573,57 @@ mod tests {
         assert_eq!(
             SourceTraitDeclarationTable::from_module(&unsupported),
             Err(SourceTraitDeclarationError::UnsupportedAssociatedTypeDefault)
+        );
+    }
+
+    #[test]
+    fn normalizes_projection_valued_source_associated_type_defaults() {
+        let generic = concat!(
+            "trait Child<T> { type Output = <T as Parent<T>>::Output; } ",
+            "trait Parent<T> { type Output; } ",
+            "impl<T> Parent<T> for T { type Output = T; } impl<T> Child<T> for T {} ",
+            "fn check() where <u32 as Child<u32>>::Output = u32 {}"
+        );
+        let module = Parser::new(generic).parse_module::<10, 1>().unwrap();
+        let traits = SourceTraitDeclarationTable::from_module(&module).unwrap();
+        let implementations =
+            SourceTraitImplementationTable::from_module(&module, &traits).unwrap();
+        implementations.prove_module(&module, &traits).unwrap();
+
+        let exact = concat!(
+            "trait Parent { type Output; } ",
+            "trait Child { type Output = <Self as Parent>::Output; } ",
+            "impl Parent for u32 { type Output = u8; } impl Child for u32 {} ",
+            "fn check() where <u32 as Child>::Output = u8 {}"
+        );
+        let module = Parser::new(exact).parse_module::<8, 1>().unwrap();
+        let traits = SourceTraitDeclarationTable::from_module(&module).unwrap();
+        let implementations =
+            SourceTraitImplementationTable::from_module(&module, &traits).unwrap();
+        implementations.prove_module(&module, &traits).unwrap();
+
+        let missing = exact.replace("impl Parent for u32 { type Output = u8; } ", "");
+        let module = Parser::new(&missing).parse_module::<8, 1>().unwrap();
+        let traits = SourceTraitDeclarationTable::from_module(&module).unwrap();
+        let implementations =
+            SourceTraitImplementationTable::from_module(&module, &traits).unwrap();
+        assert_eq!(
+            implementations
+                .prove_module(&module, &traits)
+                .unwrap_err()
+                .kind,
+            SourceTraitObligationErrorKind::Unsatisfied
+        );
+
+        let unknown = Parser::new(concat!(
+            "trait Parent { type Output; } ",
+            "trait Child { type Output = <Self as Parent>::Missing; }"
+        ))
+        .parse_module::<4, 1>()
+        .unwrap();
+        assert_eq!(
+            SourceTraitDeclarationTable::from_module(&unknown),
+            Err(SourceTraitDeclarationError::UnknownAssociatedTypeDefaultProjection)
         );
     }
 
