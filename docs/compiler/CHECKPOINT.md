@@ -1409,9 +1409,10 @@ noncanonical separators fail.
 Base-register memory operands admit 64-bit `mov` loads/stores,
 memory-indirect `jmp`, and `lgdt`, `lidt`, and `invlpg`, including the required
 SIB or zero displacement for `rsp`/`r12` and `rbp`/`r13`. The typed address
-admits one optional index GPR at scale 1/2/4/8 and an optional checked signed `i32`
-displacement; the encoder selects canonical no-displacement, disp8, or disp32
-forms and rejects `rsp` as an index. It requires an
+admits an optional base GPR, one optional index GPR at scale 1/2/4/8, and a
+checked signed `i32` displacement. Base-less numeric and index-only addresses
+emit the conventional SIB no-base disp32 form; the encoder otherwise selects
+canonical no-displacement, disp8, or disp32 forms and rejects `rsp` as an index. It requires an
 explicit terminating instruction and emits those exact bytes without ordinary function lowering.
 The bounded two-pass layout recognizes numeric local definitions `2:` through
 `9:` and direction-checked `jmp 2f`/`2b` references, rejects duplicate, missing,
@@ -1420,8 +1421,9 @@ object relocation.
 The exact dated oracle accepts `raw` and `att_syntax` for `naked_asm!` while
 rejecting inline-only options. The restricted MRML encoder admits either marker
 alone or together. Its distinct AT&T grammar parses `%` registers, `$`
-immediates, source-first moves, `disp(base,index,scale)` addresses, and indirect
-`*` jumps for the supported instruction set; cross-syntax inputs fail closed.
+immediates, source-first moves, `disp(base,index,scale)` addresses including an
+omitted base, and indirect `*` jumps for the supported instruction set;
+cross-syntax inputs fail closed.
 The object layer now has a separate typed single-relocation primitive. It checks
 the four-byte patch range and undefined symbol, emits ELF64 `.rela.text` with
 `R_X86_64_PLT32` and addend `-4`, or emits COFF
@@ -1433,8 +1435,8 @@ Multiple external branches and invalid symbol identifiers fail closed in both
 Intel and AT&T modes.
 Focused tests compare the complete machine-code slice to prove that no prologue
 or epilogue is inserted and reject unsupported safety, ABI, signature,
-instruction, register, immediate, label, and fallthrough cases. RIP-relative/base-less
-memory operands and external symbols/relocations,
+instruction, register, immediate, label, and fallthrough cases. RIP-relative
+and symbolic memory operands,
 additional architectures, and general inline assembly remain fail-closed.
 Windows gnullvm and native Arch Linux WSL each pass 635 library tests,
 one component-interface probe, 10 conformance tests, and 335 replacement tests:

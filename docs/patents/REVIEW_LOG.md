@@ -5892,3 +5892,16 @@ relocation, optimization, instruction-selection, or code-generation algorithm.
 General relocations and linking remain absent. Broader compiler completion
 remains partial; this technical screen does not establish clearance or
 infringement and does not replace independent human dual review.
+
+# 2026-08-26 — Base-less naked memory operands
+
+**Result: NOT_TRIGGERED after the base-less-address review.** This increment
+extends the existing bounded x86-64 memory encoder with the published SIB
+no-base disp32 form for checked numeric absolute and index-only operands. The
+Intel and AT&T parsers share the existing register, scale, and signed-`i32`
+validation and reject `rsp` as an index. It introduces no novel assembler,
+relocation, optimization, instruction-selection, or code-generation algorithm;
+RIP-relative and symbolic memory operands remain absent. Broader assembly
+support and compiler completion remain partial; this technical screen does not
+establish clearance or infringement and does not replace independent human dual
+review.
