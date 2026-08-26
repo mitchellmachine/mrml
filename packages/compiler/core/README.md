@@ -4782,6 +4782,15 @@ non-`u64` elements fail closed. Index expressions outside the existing bounded
 expression subset, deeper nested projections, and general assembly remain
 unsupported.
 
+Mutable `&mut [u64]` parameters and locals are also valid indexed output bases.
+Their resolved storage retains separate pointer and runtime-length slots. The
+index is evaluated once, compared unsigned against the stored length, preserved
+across the fixed RAX operation, and used by the existing scaled reference load/
+store path. Slice ownership uses the established direct `Index` projection;
+shared slices and non-`u64` elements fail closed. The pinned oracle accepted all
+three forms and both canonical hosts pass 985 compiler tests. Deeper places and
+general assembly remain unsupported.
+
 The projection-bearing term milestone uses a fixed 64-node arena for flat leaf
 terms and associated-type projections whose trait self/argument positions refer
 only to earlier nodes. Identical nodes intern to one stable identity; invalid

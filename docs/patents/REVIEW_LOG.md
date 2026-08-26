@@ -6269,3 +6269,16 @@ alias-analysis, or code-generation algorithm. Deeper nested places, slices,
 general memory effects, and general assembly remain absent. Broader compiler
 completion remains partial; this technical screen is not a clearance or
 infringement conclusion and does not replace independent human dual review.
+
+# 2026-08-26 — Indexed slice inline-assembly outputs
+
+**Result: NOT_TRIGGERED after the indexed-slice review.** This increment reuses
+the existing fat-reference pointer/length representation, unsigned bounds check,
+scaled x86-64 address helpers, and reviewed explicit RAX output paths. Separate
+resolved pointer and length slots, single evaluation, and the established slice
+ownership projection introduce no novel bounds-checking, assembler, register-
+allocation, optimization, instruction-selection, alias-analysis, or code-
+generation algorithm. Deeper places, other element types, general memory effects,
+and general assembly remain absent. Broader compiler completion remains partial;
+this technical screen is not a clearance or infringement conclusion and does
+not replace independent human dual review.

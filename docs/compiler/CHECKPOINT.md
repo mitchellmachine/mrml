@@ -1636,6 +1636,20 @@ pass 639 library tests, one component-interface probe, 10 conformance tests, and
 335 replacement tests: 985 compiler tests per host. Deeper nested projections,
 slice outputs, general memory effects, and general assembly remain absent.
 
+The indexed slice-output milestone extends the same typed destination to mutable
+`[u64]` slice references in parameters or locals. Resolved storage keeps the fat
+reference's pointer and runtime-length slots separate. Emission evaluates the
+index once, preserves it on the evaluation stack, compares it unsigned against
+the stored length, and then reuses the scaled reference load/store path. Slice
+ownership follows the existing direct `Index` projection rather than inventing
+an invalid dereferenced-unsized move path. Focused tests cover RAX `lateout`,
+same-place `inout`, distinct-input `inout`, local slice storage, and fail-closed
+shared/non-`u64` slices. The exact dated oracle accepted all three parameter-
+slice forms. Windows gnullvm and native Arch Linux WSL each pass 639 library
+tests, one component-interface probe, 10 conformance tests, and 335 replacement
+tests: 985 compiler tests per host. Deeper nested places, other element types,
+general memory effects, and general assembly remain absent.
+
 The premise-bearing rigid-normalization milestone proves the selected generic
 implementation's instantiated trait and projection predicates before exposing
 its associated value. It shares the caller's 16-frame rigid proof stack and

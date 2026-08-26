@@ -159,3 +159,11 @@ of those exact mutable fixed-array-reference output shapes only; it does not
 establish general nested-place, borrowing, evaluation-order, register-allocation,
 memory-effect, or assembly semantics. Temporary source and metadata were
 removed.
+
+A subsequent independently authored Rust 2024 metadata-only probe against that
+same exact toolchain and commit compiled explicit RAX `lateout`, same-place
+`inout`, and distinct-input output forms whose destinations indexed a mutable
+`[u64]` slice parameter with `index % 2` or `index`. This records black-box
+acceptance of those exact mutable-slice output shapes only; it does not establish
+general unsized-place, borrowing, evaluation-order, register-allocation, memory-
+effect, or assembly semantics. Temporary source and metadata were removed.
