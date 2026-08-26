@@ -4682,6 +4682,17 @@ This remains **PARTIAL** inout evidence; register classes/allocation, distinct
 input/output expressions, projections, clobbers, arbitrary effects, and general
 assembly remain absent.
 
+Distinct inout places are admitted as
+`asm!("inc rax", inout("rax") input => output)`: the input may be any supported
+typed `u64` expression and the output must be a mutable `u64` local. The
+ownership model records the expression reads followed by a separate output
+write; emission evaluates the input once, increments RAX, and stores only to
+the checked output slot. Empty/repeated arrows, wrong types, immutable or
+parameter outputs, unsupported registers, and invalid options fail closed.
+Windows gnullvm and native Arch Linux WSL each pass 985 compiler tests. This is
+**PARTIAL** distinct-inout evidence, not register allocation, output projection,
+general clobber/effect, or general assembly support.
+
 The projection-bearing term milestone uses a fixed 64-node arena for flat leaf
 terms and associated-type projections whose trait self/argument positions refer
 only to earlier nodes. Identical nodes intern to one stable identity; invalid

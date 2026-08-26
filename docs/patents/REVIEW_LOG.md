@@ -5996,3 +5996,16 @@ expressions, projections, general clobbers/effects, and general assembly remain
 absent. Broader compiler completion remains partial; this technical screen does
 not establish clearance or infringement and does not replace independent human
 dual review.
+
+# 2026-08-26 — Distinct inline-assembly inout places
+
+**Result: NOT_TRIGGERED after the distinct-inout review.** This increment uses
+ordinary typed expression evaluation followed by the previously reviewed
+published x86-64 increment and conventional stack writeback, while recording
+the input read and output write as separate ownership effects. Bounded arrow
+parsing, local resolution, type/mutability checks, and fail-closed rejection
+introduce no novel assembler, register-allocation, optimization, instruction-
+selection, or code-generation algorithm. Register classes, projections,
+general clobbers/effects, and general assembly remain absent. Broader compiler
+completion remains partial; this technical screen does not establish clearance
+or infringement and does not replace independent human dual review.

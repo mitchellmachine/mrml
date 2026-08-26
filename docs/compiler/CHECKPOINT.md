@@ -1498,6 +1498,19 @@ tests per host. Register classes/allocation, separate input/output expressions,
 output projections, clobbers, arbitrary effects, and general inline assembly
 remain unimplemented.
 
+The distinct-inout increment additionally accepts
+`asm!("inc rax", inout("rax") input => output)` where `input` is any supported
+typed `u64` expression and `output` is a mutable `u64` local. Ownership
+preanalysis records expression reads before a separate destination write rather
+than conflating the two places into read-modify-write. Emission evaluates the
+input once into RAX, applies the fixed increment, and stores only to the checked
+output slot. Empty or repeated arrows, wrong input/output types, immutable or
+parameter outputs, unsupported registers, and invalid options fail closed.
+Windows gnullvm and native Arch Linux WSL each pass 639 library tests, one
+component-interface probe, 10 conformance tests, and 335 replacement tests: 985
+compiler tests per host. Register classes/allocation, projections, clobbers,
+arbitrary effects, and general inline assembly remain unimplemented.
+
 The premise-bearing rigid-normalization milestone proves the selected generic
 implementation's instantiated trait and projection predicates before exposing
 its associated value. It shares the caller's 16-frame rigid proof stack and
