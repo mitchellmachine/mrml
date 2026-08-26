@@ -35876,6 +35876,33 @@ mod tests {
             CodegenErrorKind::RuntimeBorrowConflict
         );
         analyze("fn value(first: &mut u16) -> u16 { let pair = (&mut *first,); let child: &u16 = &*pair.0; let copied = *child; touch(pair.0); copied + *pair.0 }").unwrap();
+
+        for source in [
+            "fn value(first: &mut u16, second: &mut u16) -> u16 { let mut child: &u16 = &*second; child = first; let competing: &mut u16 = &mut *first; *competing += 1; *child }",
+            "fn value(first: &mut u16, second: &mut u16) -> u16 { let pair = (&mut *first,); let mut child: &u16 = &*second; child = pair.0; let competing: &mut u16 = &mut *first; *competing += 1; *child }",
+        ] {
+            assert_eq!(
+                analyze(source).unwrap_err().kind,
+                CodegenErrorKind::RuntimeBorrowConflict
+            );
+        }
+        analyze("fn value(first: &mut u16, second: &mut u16) -> u16 { let pair = (&mut *first,); let mut child: &u16 = &*second; child = pair.0; let copied = *child; *first += 1; copied + *first }").unwrap();
+
+        for source in [
+            "fn value(first: &mut u16, second: &mut u16, third: &mut u16, choose: bool) -> u16 { let pair = (&mut *first, &mut *second); let mut child: &u16 = &*third; child = if choose { pair.0 } else { pair.1 }; let competing: &mut u16 = &mut *first; *competing += 1; *child }",
+            "fn value(first: &mut u16, second: &mut u16, third: &mut u16, choose: bool) -> u16 { let pair = (&mut *first, &mut *second); let mut child: &u16 = &*third; child = if choose { pair.0 } else { pair.1 }; let competing: &mut u16 = &mut *second; *competing += 1; *child }",
+        ] {
+            assert_eq!(
+                analyze(source).unwrap_err().kind,
+                CodegenErrorKind::RuntimeBorrowConflict
+            );
+        }
+        for source in [
+            "fn value(first: &mut u16, second: &mut u16, third: &mut u16, choose: bool) -> u16 { let pair = (&mut *first, &mut *second); let mut child: &u16 = &*third; child = if choose { pair.0 } else { pair.1 }; let copied = *child; *first += 1; copied + *first }",
+            "fn value(first: &mut u16, second: &mut u16, third: &mut u16, choose: bool) -> u16 { let pair = (&mut *first, &mut *second); let mut child: &u16 = &*third; child = if choose { pair.0 } else { pair.1 }; let copied = *child; *second += 1; copied + *second }",
+        ] {
+            analyze(source).unwrap();
+        }
     }
 
     #[test]
