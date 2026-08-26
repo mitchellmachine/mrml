@@ -7718,6 +7718,17 @@ paths fail closed. Broader compiler completion remains partial; this technical
 screen is not a clearance or infringement conclusion and does not replace
 independent human dual review.
 
+# 2026-08-26 — Nested branch constant semantics
+
+**Result: NOT_TRIGGERED after the constant-semantics review.** This increment
+applies the existing bounded constant-expression, local, assignment, and
+terminal evaluators to the new scoped branch record. It uses the existing loop
+iteration limit and lexical resolver truncation and adds no novel evaluation,
+fixed-point, region, alias, optimization, or code-generation algorithm. Native
+execution remains fail-closed. Broader compiler completion remains partial;
+this technical screen is not a clearance or infringement conclusion and does
+not replace independent human dual review.
+
 # 2026-08-26 — Bounded joined nested-loop header
 
 **Result: NOT_TRIGGERED after the joined-header review.** This increment uses a
@@ -8067,3 +8078,25 @@ optimization, or code-generation algorithm. Ambiguous and local-backed states
 fail closed; general nested-loop fixed points remain incomplete. Broader
 compiler completion remains partial; this technical screen is not a clearance
 or infringement conclusion and does not replace independent human dual review.
+
+# 2026-08-26 — Bounded nested branch-action representation
+
+**Result: NOT_TRIGGERED after the representation review.** This increment adds
+a conventional fixed-capacity parser record for a nested-loop condition,
+scoped action list, target-aware terminal, and source-order indices. It adds no
+execution algorithm, fixed-point solver, region or alias analysis,
+optimization, or code-generation technique; all execution consumers continue
+to reject the new record until modeled. Broader compiler completion remains
+partial; this technical screen is not a clearance or infringement conclusion
+and does not replace independent human dual review.
+
+# 2026-08-26 — Nested branch CFG and ownership-event mapping
+
+**Result: NOT_TRIGGERED after the CFG mapping review.** This increment maps the
+new bounded branch record into conventional condition/action basic blocks,
+typed true/false/terminal edges, scoped ownership-preanalysis locations, and an
+early fail-closed compilation gate. It adds no novel fixed-point, region, alias,
+optimization, or code-generation algorithm. Executable lowering remains
+unsupported. Broader compiler completion remains partial; this technical
+screen is not a clearance or infringement conclusion and does not replace
+independent human dual review.
