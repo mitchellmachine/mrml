@@ -1,5 +1,18 @@
 # Patent review log
 
+## 2026-08-26 — Nested-loop local return origins
+
+Patent review: **NOT_TRIGGERED** for this bounded compiler-analysis increment.
+It conventionally copies a fixed local name/origin/mutability table for one
+parsed nested-loop block, appends local aliases with checked capacity, and
+merges existing parameter identifiers from supported returns. Assignments,
+expressions, local-backed returns, and unsupported shapes fail conservative. It
+adds no novel loop dataflow or alias-analysis algorithm, region solver,
+optimization, runtime enforcement, authority model, or external dependency.
+Broader compiler completion remains partial; this technical screen establishes
+neither clearance nor infringement and does not replace independent human dual
+review.
+
 ## 2026-08-26 — Conditional-loop arm-local return origins
 
 Patent review: **NOT_TRIGGERED** for this bounded compiler-analysis increment.

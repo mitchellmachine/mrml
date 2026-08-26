@@ -567,6 +567,16 @@ native Arch Linux WSL each pass 639 library tests, one component-interface
 probe, 10 conformance tests, and 335 replacement tests: 985 compiler tests per
 host. General loop dataflow, nested projections, and regions remain unsupported.
 
+The nested-loop local return milestone applies one fixed local-only alias state
+to the supported unconditional and conditional returns of a parsed nested loop
+block. Exact parameter origins merge with other function exits; local-backed
+returns, assignments, and expressions fail conservative. ORACLE-0002 accepted
+the nested-loop local alias and post-last-use owner reuse and rejected a live
+competing mutable owner borrow with E0499. Windows gnullvm and native Arch Linux
+WSL each pass 639 library tests, one component-interface probe, 10 conformance
+tests, and 335 replacement tests: 985 compiler tests per host. General nested-
+loop fixed-point, path-sensitive, and region analysis remain unsupported.
+
 This is an initial typed body-fact slice, not a complete typed body IR and not a
 borrow checker. Unsupported aggregate-leaf call arguments, other aggregate-
 argument and call-derived fat-reference initializers, unsupported compound array

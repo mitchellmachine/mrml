@@ -856,6 +856,13 @@ Arm assignments and expressions remain conservative because their loop-carried
 fallthrough effects are not modeled. Local-backed returns fail closed. This is
 an exact loop-arm early-return form, not general loop dataflow or regions.
 
+Nested loop blocks may likewise carry local-only alias actions into their
+supported unconditional or conditional returns. One fixed scoped state is
+resolved for the nested block, return origins merge with all other function
+exits, and local-backed storage fails closed. Assignments and expressions remain
+unsupported because their repeated control-flow effects are not represented.
+This is bounded nested-loop return provenance, not a general loop fixed point.
+
 The first modern trait-solver foundation is an explicit bounded implemented-
 goal representation. Stable trait/type/inference/placeholder identities remain
 distinct; canonicalization replaces inference identities with first-occurrence
