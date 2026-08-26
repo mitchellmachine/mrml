@@ -61,8 +61,11 @@ the complete task domain before address-space erasure, and retains an uncertain
 erase for exact retry. Focused Windows/Linux unit tests use an unaccounted test
 runtime; production quantitative runtime allocation remains the caller's
 separate obligation. This is not the representative dual-placement GUI
-application: no GUI package, compositor, Semantic Scene Graph integration,
-application image execution or WHP/KVM application probe exists yet. The
+application: no GUI package, compositor or Semantic Scene Graph integration
+exists yet. A distinct syscall-only `org.mrml.app.isolation-probe` package now
+declares native-process and microVM support and cross-builds to identical PE
+bytes on Windows and Arch Linux. It has not been loaded or executed, so no
+WHP/KVM application probe exists yet. The
 kernel artifact boundary now recognizes a bounded executable
 `ApplicationImage` kind and can authenticate it against an independently
 selected application root. It is intentionally outside the fixed five-root

@@ -1037,6 +1037,11 @@ fails with `MissingTrustRoot`. Recovery must reacquire the exact independently
 selected application root and signed artifact through the eventual package and
 generation admission path. This is unit-tested artifact-boundary evidence, not
 an implemented application loader or recovered application execution path.
+The canonical workspace and lock now retain the syscall-only
+`org.mrml.app.isolation-probe` as a `system-application` with both supported
+placements. Recovery must not reinterpret its common PE compiler output as a
+service or UEFI loader. Identical Windows/Linux cross-build bytes are provenance
+evidence only and do not establish recovery or runtime execution.
 
 The focused recovery oracle now includes the two-vCPU component profiles
 `whp_component_service_smp_probe` and `kvm_component_service_smp_probe`. Each

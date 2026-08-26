@@ -1,0 +1,42 @@
+[manifest]
+format = "mrml"
+version = 2
+
+[package]
+default = false
+id = "org.mrml.app.isolation-probe"
+kind = "application"
+name = "mrml-isolation-probe"
+profile = "system-application"
+
+[isolation]
+default = "native-process"
+minimum = "native-process"
+supported = ["native-process", "microvm"]
+
+[[target]]
+arch = "x86_64"
+environment = "mrml"
+
+[[artifact]]
+kind = "bin"
+name = "mrml-isolation-probe"
+
+[rust]
+crate_name = "mrml_isolation_probe"
+crate_type = "none"
+source = "-"
+
+[[binary]]
+crate_name = "mrml_isolation_probe"
+output = "mrml-isolation-probe"
+self_extern = false
+source = "packages/apps/isolation-probe/src/main.rs"
+
+[[feature_set]]
+features = []
+targets = ["MRML_NATIVE"]
+
+[[target_triple]]
+target = "MRML_NATIVE"
+triple = "x86_64-unknown-uefi"

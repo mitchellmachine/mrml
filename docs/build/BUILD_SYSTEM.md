@@ -149,6 +149,16 @@ was verified. The first eighteen library components, `mrml-math`,
 bootstrap tool under `packages/tools/mrml` and compiler tooling under a clear compiler
 location. Do not create empty speculative directories.
 
+The `MRML_NATIVE` build class now distinguishes a `system-application` package
+profile from `system-service`; package kind is not inferred from the common
+`x86_64-unknown-uefi` PE/COFF compiler target. The first
+`org.mrml.app.isolation-probe` image contains only an ordinary MRML task-system-
+call entry and declares both native-process and microVM support. Windows
+GNU/LLVM and Arch Linux GNU builds produced the same 3,072-byte image with
+SHA-256 `4798770920b2ffffa301242299c4525bff672c7d7f744d4bf62bac6eb36290f5`.
+This is cross-build evidence only: neither output was loaded or executed, and
+the PE target does not make it a UEFI loader or service.
+
 The dependency-free `mrml-rustc` core lives at `packages/compiler/core`, and its
 separate driver lives at `packages/compiler/driver`.
 `mrml-git` now lives at `packages/tools/git`; its host-tool classification and Cargo

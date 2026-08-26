@@ -3615,6 +3615,19 @@ loading, and runtime binding remain `TRIGGERED` and require separate selected-
 mechanism review. This technical screen establishes neither clearance nor
 infringement and does not replace independent human dual review.
 
+# 2026-08-26 — MRML-native application build profile and syscall probe
+
+**Result: NOT_TRIGGERED after the existing build-tool, task-syscall, and
+adaptive-placement reviews.** This increment adds a declarative application
+build-class mapping and independently compiles a minimal existing termination-
+syscall sequence into PE/COFF. It introduces no loader, package resolver,
+signature scheme, placement algorithm, VM construction, transport, queue,
+scheduler, hardware interface, or fallback mechanism. The broader adaptive-
+placement and Total MicroVM architecture remains `TRIGGERED`, and live
+application loading plus WHP/KVM execution remain unimplemented. This technical
+screen does not establish clearance or infringement and does not replace
+independent human dual review.
+
 # 2026-08-25 — Immutable W^X component load-plan admission
 
 **Result for this bounded mechanism: NOT_TRIGGERED.** This increment validates

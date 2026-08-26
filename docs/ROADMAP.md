@@ -50,9 +50,13 @@ Three new persistent deltas are documented before implementation:
   groundwork. A bounded executable `ApplicationImage` artifact kind now admits
   independently authenticated application bytes and fails closed when code
   incorrectly asks the fixed five-root early-boot release for an application
-  root. The representative GUI application, compositor/Semantic Scene Graph
-  integration, application image loading/execution, and WHP/KVM application
-  probes remain **PLANNED**. A backend-neutral microVM owner now rechecks and
+  root. The distinct syscall-only `org.mrml.app.isolation-probe` is now a real
+  Manifest V2 `system-application` supporting native-process and microVM forms;
+  Windows and Arch Linux cross-build identical 3,072-byte PE output. It has not
+  been loaded or executed. The representative GUI application,
+  compositor/Semantic Scene Graph integration, application image
+  loading/execution, and WHP/KVM application probes remain **PLANNED**. A
+  backend-neutral microVM owner now rechecks and
   consumes one already constructed application guest, retains it behind an
   exact generational endpoint, refuses native dispatch, and preserves uncertain
   teardown for retry. Focused tests use mock guests; VM construction and live

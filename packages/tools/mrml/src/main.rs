@@ -1321,7 +1321,9 @@ fn v2_build_class(kind: &str, profile: &str) -> Result<&'static str, String> {
     match (kind, profile) {
         ("bootstrap-tool", "host-tool") => Ok("BOOTSTRAP_ONLY"),
         ("compiler", "compiler") => Ok("COMPILER"),
-        ("kernel", "kernel") | ("service", "system-service") => Ok("MRML_NATIVE"),
+        ("application", "system-application")
+        | ("kernel", "kernel")
+        | ("service", "system-service") => Ok("MRML_NATIVE"),
         ("bootloader", "uefi") => Ok("UEFI"),
         ("library", "gpu-kernel") => Ok("GPU"),
         ("test", "test") => Ok("TEST"),
@@ -4974,6 +4976,15 @@ mod tests {
     fn native_declarations_are_canonicalized() {
         assert_eq!(split_declaration("z,a,z"), ["a", "z"]);
         assert!(split_declaration("").is_empty());
+    }
+    #[test]
+    fn system_application_is_native_without_becoming_a_service() {
+        assert_eq!(
+            v2_build_class("application", "system-application"),
+            Ok("MRML_NATIVE")
+        );
+        assert!(v2_build_class("service", "system-application").is_err());
+        assert!(v2_build_class("application", "system-service").is_err());
     }
     #[test]
     fn rust_actions_reject_escaping_paths_and_invalid_crate_names() {

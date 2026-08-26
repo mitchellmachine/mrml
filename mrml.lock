@@ -24,6 +24,19 @@ boot_bound = []
 system_release_bound = []
 
 [[package]]
+id = "org.mrml.app.isolation-probe"
+path = "packages/apps/isolation-probe"
+isolation_default = "native-process"
+isolation_minimum = "native-process"
+isolation_maximum = "microvm"
+isolation_supported = ["native-process", "microvm"]
+compile_dependencies = []
+
+static_runtime = []
+boot_bound = []
+system_release_bound = []
+
+[[package]]
 id = "org.mrml.app.server"
 path = "packages/apps/server"
 isolation_default = "native-process"
