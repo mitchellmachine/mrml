@@ -625,6 +625,13 @@ the exact oracle accepts a compatible scalar-reference reassignment and rejects
 the slice/scalar mismatch with E0308. Both canonical hosts pass 986 compiler
 tests.
 
+Inferred locals now become reassignment-origin eligible only when their
+initializer already proved a compatible parameter origin. This preserves valid
+indexed scalar alias replacement while preventing an inferred slice alias from
+acquiring a scalar return origin through direct or both-arm conditional
+assignment. ORACLE-0002 accepts the compatible replacement and rejects the
+inferred mismatch with two E0308 diagnostics. Both hosts pass 986 tests.
+
 This is an initial typed body-fact slice, not a complete typed body IR and not a
 borrow checker. Unsupported aggregate-leaf call arguments, other aggregate-
 argument and call-derived fat-reference initializers, unsupported compound array

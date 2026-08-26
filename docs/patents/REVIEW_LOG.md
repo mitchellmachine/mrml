@@ -1,5 +1,15 @@
 # Patent review log
 
+## 2026-08-26 — Inferred alias reassignment gate
+
+Patent review: **NOT_TRIGGERED** for this bounded compiler-analysis hardening.
+It conservatively conditions an existing local-origin transfer on whether the
+initializer already established a compatible origin. It adds no type-inference
+algorithm, alias-analysis algorithm, region solver, optimization, runtime
+enforcement, authority model, or external dependency. Broader compiler
+completion remains partial; this technical screen establishes neither clearance
+nor infringement and does not replace independent human dual review.
+
 ## 2026-08-26 — Authenticated release/recovered-policy Total binding
 
 Patent review: **TRIGGERED** under the existing SystemRelease, runtime-

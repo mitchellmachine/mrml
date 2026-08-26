@@ -3911,6 +3911,11 @@ does not match the call return therefore cannot regain an origin through a
 later direct or conditional assignment. All modeled local scopes carry the same
 state without allocating a second type environment.
 
+For an inferred local, that state is true only when its initializer already
+retained a compatible parameter origin. Originless inferred locals cannot gain
+an origin through later assignment, closing the slice-to-scalar case
+conservatively until this proof owns a complete local type environment.
+
 The conditional projected-reassignment milestone extends the bounded tuple-field
 loan chain across a conditional shared-reference assignment. The exact dated
 oracle rejects mutation of either conditional owner and of the field's replaced

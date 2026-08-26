@@ -896,6 +896,12 @@ local, and conditional-loop scopes carry the same bit alongside origin and
 mutability state. This is type-gated provenance transfer, not general local
 type inference.
 
+For an inferred local, the compatibility bit is set only when its initializer
+already produced a compatible parameter origin. An originless inferred local
+therefore cannot later acquire an origin through assignment; this deliberately
+fails conservative until callee-origin inference carries a complete bounded
+local type environment.
+
 The first modern trait-solver foundation is an explicit bounded implemented-
 goal representation. Stable trait/type/inference/placeholder identities remain
 distinct; canonicalization replaces inference identities with first-occurrence

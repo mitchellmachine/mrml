@@ -222,6 +222,11 @@ typed `&mut [u16]` alias, then returning it as `&mut u16`, with two E0308
 diagnostics. MRML retains the explicit compatibility bit so its standalone
 origin proof rejects the same transfer without relying on later codegen.
 
+The inferred form produced the same result: replacing an inferred indexed
+`&mut u16` alias with another indexed scalar reference was accepted, while an
+inferred `&mut [u16]` alias assigned an indexed `&mut u16` and returned as that
+scalar reference was rejected with two E0308 diagnostics.
+
 An independently authored Rust 2024 metadata-only probe against this exact
 toolchain and commit separately accepted a mutable scalar reference returned
 from index zero of a mutable slice-reference parameter, followed by owner reuse
