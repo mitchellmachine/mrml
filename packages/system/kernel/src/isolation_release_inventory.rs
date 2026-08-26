@@ -198,6 +198,13 @@ impl<'a, const N: usize> RuntimeDomainAssignmentPlan<'a, N> {
         self.runtime.records().map(|record| record.package_id)
     }
 
+    pub fn package_at(&self, index: usize) -> Option<&'a str> {
+        self.runtime
+            .records()
+            .nth(index)
+            .map(|record| record.package_id)
+    }
+
     /// Enumerates the exact authenticated runtime records through one
     /// caller-supplied policy decision. The callback may select only the
     /// domain and typed host-substrate reason for the record currently being
@@ -1305,6 +1312,9 @@ mod tests {
         .unwrap();
         assert_eq!(visited, 2);
         assert_eq!(plan.policy_generation(), POLICY);
+        assert_eq!(plan.package_at(0), Some("org.mrml.zim"));
+        assert_eq!(plan.package_at(1), Some("org.mrml.zstd"));
+        assert_eq!(plan.package_at(2), None);
         assert_eq!(plan.assigned_len(), plan.expected_len());
         assert_eq!(plan.seal().unwrap().release().len(), 1);
 

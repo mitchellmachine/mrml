@@ -514,6 +514,18 @@ passing tests and exercises the resulting microVM route commitment and strict
 runtime authorization. Production service-loop invocation and complete
 multi-domain WHP/KVM launch are the next dependency gates.
 
+Backend probe wiring now **PARTIALLY IMPLEMENTS** the recovered assignment
+path on both WHP and KVM sources. Each runner enumerates the exact two signed
+release records, capability-reads their persisted component policy through the
+shared hosted recovery transaction, atomically assigns them, and seals the
+activated inventory before guest construction; runner code no longer directly
+creates package/domain assignments. Windows passes 566 kernel tests, 51
+configuration tests, and 12 WHP runner tests, and the WHP runner cross-builds.
+The KVM build is unavailable on this Windows host because the configured Linux
+cross-host Rust target is absent, so parity remains source-level for this
+increment. Complete production service-loop and multi-domain orchestration
+remain **PLANNED**.
+
 The first half of that gate is now **PARTIALLY IMPLEMENTED**: `MRMLRI1` is a
 bounded canonical runtime-inventory catalog whose records exact-bind every
 `MRMLSG2` package identity, version, and artifact digest to Total class,

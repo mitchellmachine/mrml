@@ -1223,6 +1223,19 @@ configuration suite remains 51 passing tests and continues through exact
 microVM route commitment and strict runtime authorization. Real service-loop
 invocation and multi-domain WHP/KVM execution remain **PLANNED**.
 
+The shared hosted recovery probe and both backend runners now
+**PARTIALLY IMPLEMENT** recovered owner-policy assignment instead of minting a
+release inventory directly in a runner callback. The callback receives the
+committed recovered configuration and its capability space; WHP and KVM build
+the exact activated two-package plan, inspect its release-lifetime package
+identities, capability-read the persisted component setting for each record,
+atomically assign, and seal before any guest construction. WHP cross-builds and
+passes 12 runner tests on Windows. KVM source uses the identical path, but its
+Linux build is unavailable on this Windows host because the configured
+`cross_host_rust_target` is absent; no new KVM execution claim is made. The
+probe still colocates compatible ZIM/Zstd packages in one domain and remains
+hosted controlled evidence, not complete production-system orchestration.
+
 Its canonical package-to-runtime classification prerequisite is now
 **PARTIALLY IMPLEMENTED** as the allocation-free `MRMLRI1` runtime-inventory
 catalog. Every strictly ordered record binds package identity, version, artifact

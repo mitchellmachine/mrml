@@ -88,6 +88,18 @@ construction/finalization is kernel-private and the standalone application probe
 is labeled as scoped placement evidence rather than whole-system proof. This is
 the same conventional authority-boundary reduction and adds no mechanism.
 
+## 2026-08-26 — Hosted backend recovered-policy assignment wiring
+
+Patent review: **NOT_TRIGGERED** for passing an existing recovered
+configuration/capability context into controlled WHP/KVM probe callbacks,
+enumerating two authenticated package identities, applying the already reviewed
+bounded assignment transaction, and exposing an indexed read-only identity
+accessor. This is conventional typed test-harness composition and bounded
+lookup. It adds no VM construction, placement algorithm, scheduling, interface
+transport, device, DMA, queue, interrupt, or boot mechanism. The broader
+adaptive-placement and Total-MicroVM mechanisms retain their existing
+**TRIGGERED** review; this technical screen is not patent clearance.
+
 ## 2026-08-26 — Delivered assignment-to-admission composition
 
 Patent review: **NOT_TRIGGERED** for composing existing installed-recovery,

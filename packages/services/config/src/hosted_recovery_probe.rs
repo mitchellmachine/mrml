@@ -10,9 +10,8 @@
 use super::{
     ConfigTransaction, ConfigUpdate, ConfigValue, ConfigurationService, IsolationPolicySetting,
     OwnerIsolationSelection, PERSISTED_RESTART_POLICY_BYTES, PersistedRestartPolicy,
-    RecoveredInstalledStableSystemSelection, RecoveredInstalledTotalAdmission,
-    RecoveredTotalAdmissionBuildError, SettingId, SettingSchema,
-    StableConfigurationRecoveryValidator, StableServiceRecoveryValidator,
+    RecoveredInstalledStableSystemSelection, RecoveredInstalledTotalAdmission, SettingId,
+    SettingSchema, StableConfigurationRecoveryValidator, StableServiceRecoveryValidator,
     reacquire_handoff_installed_recovery_device, recover_serviced_stable_system_selection,
 };
 use mrml_crypto::Sha3_256;
@@ -20,7 +19,7 @@ use mrml_crypto::Sha3_256;
 use mrml_kernel::InstalledRecoverySource;
 use mrml_kernel::arch::x86_64::UserContext;
 use mrml_kernel::{
-    ActivatedReleaseTotalMicrovmInventory, BootHandoff, CapabilitySpace,
+    ActivatedReleaseTotalMicrovmInventory, BootHandoff, Capability, CapabilitySpace,
     InstalledRecoveryBootIdentity, ObjectId, Priority, Rights, ServiceSupervisor, TaskRuntime,
 };
 use mrml_storage::{
@@ -572,7 +571,13 @@ pub unsafe fn recover_total_admission_with<const DOMAINS: usize, F, E>(
     build_release: F,
 ) -> Result<RecoveredInstalledTotalAdmission<DOMAINS>, HostedRecoveryProbeBuildError<E>>
 where
-    F: FnOnce(u64) -> Result<ActivatedReleaseTotalMicrovmInventory<DOMAINS>, E>,
+    F: FnOnce(
+        u64,
+        &super::RecoveredSystemState<1, 3, 2>,
+        &CapabilitySpace<4>,
+        IsolationPolicySetting,
+        Capability,
+    ) -> Result<ActivatedReleaseTotalMicrovmInventory<DOMAINS>, E>,
 {
     let recovery = handoff
         .recovery_state()
@@ -798,26 +803,33 @@ where
         .commit(authorities, &mut supervisor)
         .map_err(|_| HostedRecoveryProbeError::ServicePublication)?;
     if recovered.configuration().revision() != POLICY_GENERATION {
-        return Err(HostedRecoveryProbeError::Configuration.into());
+        return Err(HostedRecoveryProbeBuildError::Probe(
+            HostedRecoveryProbeError::Configuration,
+        ));
     }
-    match recovered.build_total_boot_admission(
+    let policy = recovered
+        .compose_boot_isolation_policy(
+            &capabilities,
+            system,
+            system_access,
+            component,
+            component_access,
+            handoff,
+        )
+        .map_err(|_| HostedRecoveryProbeBuildError::Probe(HostedRecoveryProbeError::Admission))?;
+    let release = build_release(
+        policy.effective().policy_generation(),
+        &recovered,
         &capabilities,
-        system,
-        system_access,
         component,
         component_access,
-        handoff,
-        build_release,
-    ) {
-        Ok(total) => RecoveredInstalledTotalAdmission::bind(&reachable, total)
-            .map_err(|_| HostedRecoveryProbeError::Admission.into()),
-        Err(RecoveredTotalAdmissionBuildError::Policy(_)) => {
-            Err(HostedRecoveryProbeError::Admission.into())
-        }
-        Err(RecoveredTotalAdmissionBuildError::ReleaseBuilder(error)) => {
-            Err(HostedRecoveryProbeBuildError::ReleaseBuilder(error))
-        }
-    }
+    )
+    .map_err(HostedRecoveryProbeBuildError::ReleaseBuilder)?;
+    let total = policy
+        .bind_release_inventory(release)
+        .map_err(|_| HostedRecoveryProbeBuildError::Probe(HostedRecoveryProbeError::Admission))?;
+    RecoveredInstalledTotalAdmission::bind(&reachable, total)
+        .map_err(|_| HostedRecoveryProbeBuildError::Probe(HostedRecoveryProbeError::Admission))
 }
 
 #[cfg(test)]

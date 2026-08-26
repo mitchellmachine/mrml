@@ -6948,9 +6948,12 @@ mod tests {
         // SAFETY: this is the controlled hosted fixture named by the helper's
         // contract; it does not represent owner presence or durable hardware.
         let total = unsafe {
-            hosted_recovery_probe::recover_total_admission_with(&current, |policy_generation| {
-                Ok::<_, ()>(activated_configuration_release(domain, policy_generation))
-            })
+            hosted_recovery_probe::recover_total_admission_with(
+                &current,
+                |policy_generation, _, _, _, _| {
+                    Ok::<_, ()>(activated_configuration_release(domain, policy_generation))
+                },
+            )
         }
         .unwrap();
         assert_eq!(total.installed().descriptor().block_size(), 4096);
@@ -6980,7 +6983,7 @@ mod tests {
             unsafe {
                 hosted_recovery_probe::recover_total_admission_with::<1, _, _>(
                     &current,
-                    |policy_generation| {
+                    |policy_generation, _, _, _, _| {
                         assert_eq!(policy_generation, 1);
                         Err(7u8)
                     },
@@ -6995,9 +6998,12 @@ mod tests {
         // redefine its independently fixed authenticated recovery state.
         assert!(
             unsafe {
-                hosted_recovery_probe::recover_total_admission_with(&stale, |policy_generation| {
-                    Ok::<_, ()>(activated_configuration_release(domain, policy_generation))
-                })
+                hosted_recovery_probe::recover_total_admission_with(
+                    &stale,
+                    |policy_generation, _, _, _, _| {
+                        Ok::<_, ()>(activated_configuration_release(domain, policy_generation))
+                    },
+                )
             }
             .is_err()
         );
@@ -7009,7 +7015,7 @@ mod tests {
             unsafe {
                 hosted_recovery_probe::recover_total_admission_with::<1, _, _>(
                     &wrong_root,
-                    |policy_generation| {
+                    |policy_generation, _, _, _, _| {
                         Ok::<_, ()>(activated_configuration_release(domain, policy_generation))
                     },
                 )

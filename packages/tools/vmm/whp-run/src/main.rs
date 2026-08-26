@@ -9,7 +9,8 @@ use mrml_config::{
     IsolationPolicySetting, IsolationServiceBounds, IsolationServiceIdentity,
     MicrovmConfigurationServiceLauncher, OwnerIsolationSelection,
     PreparedMicrovmConfigurationLauncher, RecoveredInstalledTotalAdmission,
-    RecoveredInstalledTotalRuntime, SettingId, hosted_recovery_probe::recover_total_admission_with,
+    RecoveredInstalledTotalRuntime, RuntimeDomainPolicyBinding, SettingId,
+    hosted_recovery_probe::recover_total_admission_with,
 };
 #[cfg(target_os = "windows")]
 use mrml_crypto::{LAMPORT_PUBLIC_KEY_BYTES, Sha3_512};
@@ -35,9 +36,8 @@ use mrml_kernel::{
     MAX_COMPONENT_IMAGE_REGIONS, MemoryPoolTable, MicrovmPageProjectionKind,
     MicrovmProjectionDescriptor, MicrovmProjectionKind, MicrovmProjectionPlan,
     MicrovmProjectionRequirements, ObjectId, PAGE_SIZE, PreparedMicrovmApplicationBackend,
-    ResourceCommand, Rights, RuntimeDomainAssignment, RuntimeDomainAssignmentPlan,
-    SIGNED_ARTIFACT_OVERHEAD_BYTES, ScheduledDeadlineVmBackend, ScheduledSmpVmBackend,
-    SignedArtifact, TotalMicrovmClass,
+    ResourceCommand, Rights, RuntimeDomainAssignmentPlan, SIGNED_ARTIFACT_OVERHEAD_BYTES,
+    ScheduledDeadlineVmBackend, ScheduledSmpVmBackend, SignedArtifact, TotalMicrovmClass,
     TrustRoot, VIRTUAL_BLOCK_FEATURE_FLUSH, VcpuReservationId, VerifiedExecutable,
     VerifiedGpuKernelBundle, VirtualBlockBackend, VirtualBlockBackendAuthority,
     VirtualBlockCompletionStatus, VirtualBlockConfigurationPage, VirtualBlockDevice,
@@ -2863,7 +2863,7 @@ fn application_main() -> Result<()> {
     // The immutable inventory is retained across construction and finalized
     // only after the same domain has been committed as a running microVM.
     let mut isolation_admission = if component_service_mode {
-        let configured = configured_total_policy
+        configured_total_policy
             .as_ref()
             .ok_or_else(|| anyhow!("missing configured WHP component policy"))?;
         let (release_bytes, expected_release_key) = component_release_authority
@@ -2873,22 +2873,41 @@ fn application_main() -> Result<()> {
         // helper's synthesized owner approval is never production recovery or
         // physical rollback evidence.
         let total = unsafe {
-            recover_total_admission_with(&decoded_boot_handoff, |policy_generation| {
-                let mut plan = RuntimeDomainAssignmentPlan::<2>::new(
-                    release_bytes,
-                    expected_release_key,
-                    active_component_generation
-                        .ok_or_else(|| anyhow!("missing activated WHP component release"))?,
-                    policy_generation,
-                )
-                .map_err(|error| anyhow!("WHP installed assignment plan failed: {:?}", error))?;
-                plan.assign_from_policy(|record| {
-                    RuntimeDomainAssignment::new(record.package_id, configured.identity.domain())
-                })
-                .map_err(|error| anyhow!("WHP runtime assignment policy failed: {:?}", error))?;
-                plan.seal()
-                    .map_err(|error| anyhow!("WHP release inventory sealing failed: {:?}", error))
-            })
+            recover_total_admission_with(
+                &decoded_boot_handoff,
+                |policy_generation, recovered, capabilities, component, component_access| {
+                    let mut plan = RuntimeDomainAssignmentPlan::<2>::new(
+                        release_bytes,
+                        expected_release_key,
+                        active_component_generation
+                            .ok_or_else(|| anyhow!("missing activated WHP component release"))?,
+                        policy_generation,
+                    )
+                    .map_err(|error| {
+                        anyhow!("WHP installed assignment plan failed: {:?}", error)
+                    })?;
+                    let first = plan
+                        .package_at(0)
+                        .ok_or_else(|| anyhow!("missing first WHP runtime package"))?;
+                    let second = plan
+                        .package_at(1)
+                        .ok_or_else(|| anyhow!("missing second WHP runtime package"))?;
+                    if plan.package_at(2).is_some() {
+                        return Err(anyhow!("unexpected extra WHP runtime package"));
+                    }
+                    let bindings = [
+                        RuntimeDomainPolicyBinding::new(first, component, component_access)
+                            .map_err(|error| anyhow!("WHP first policy binding: {:?}", error))?,
+                        RuntimeDomainPolicyBinding::new(second, component, component_access)
+                            .map_err(|error| anyhow!("WHP second policy binding: {:?}", error))?,
+                    ];
+                    recovered
+                        .assign_runtime_domains(capabilities, &mut plan, &bindings)
+                        .map_err(|error| anyhow!("WHP runtime policy failed: {:?}", error))?;
+                    plan.seal()
+                        .map_err(|error| anyhow!("WHP release sealing failed: {:?}", error))
+                },
+            )
         }
         .map_err(|error| anyhow!("WHP recovered boot Total admission failed: {:?}", error))?;
         println!(
