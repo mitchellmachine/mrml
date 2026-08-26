@@ -130,6 +130,11 @@ same-place and split `inout` for the fixed `inc rcx` template. These forms reuse
 the documented typed output-place and ownership machinery; other explicit
 registers, generic allocation, and general assembly remain absent.
 
+It also includes exact explicit RCX `in` for the fixed `cmp rcx, rcx` template.
+The input is lowered through the same checked `u64` expression path and moved to
+the declared register before the comparison; template/register mismatches fail
+closed.
+
 ## Ownership and Polonius-direction roadmap
 
 The current borrowed-source AST and fixed-capacity expression arenas are useful

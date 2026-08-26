@@ -4807,6 +4807,13 @@ dated oracle accepted both original Rust 2024 forms, and both canonical hosts
 pass 985 compiler tests. Other explicit registers, generic allocation, and
 general assembly remain unsupported.
 
+The fixed explicit-input node likewise carries RAX-or-RCX identity. Exact
+`asm!("cmp rcx, rcx", in("rcx") value)` accepts the existing checked `u64`
+expression subset, transfers the result to RCX, and emits the declared compare.
+The exact dated oracle accepted the original Rust 2024 form, and both canonical
+hosts pass 985 compiler tests. Other explicit registers and general assembly
+remain unsupported.
+
 Exact `asm!("mov rax, 7", lateout("rax") _)` is a discarded explicit output.
 Preanalysis records no language-place access, while emission still performs the
 declared RAX write. The exact dated oracle accepted the original Rust 2024 form,
