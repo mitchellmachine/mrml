@@ -7804,3 +7804,15 @@ code-generation algorithm. Ambiguous and local-backed results fail closed;
 general nested-loop transfer remains unsupported. Broader compiler completion
 remains partial; this technical screen is not a clearance or infringement
 conclusion and does not replace independent human dual review.
+
+# 2026-08-26 — Composed outer/nested loop origin state
+
+**Result: NOT_TRIGGERED after the composed nested-state review.** This increment
+factors existing fixed-capacity ordered-return and stable-edge checks over an
+explicit incoming origin state so they can be reused after outer-loop transfer.
+It adds no novel fixed-point solver, region or alias analysis, path-sensitive
+inference, optimization, or code-generation algorithm. Unstable and local-
+backed states fail closed; general nested-loop exit transfer remains unsupported.
+Broader compiler completion remains partial; this technical screen is not a
+clearance or infringement conclusion and does not replace independent human
+dual review.
