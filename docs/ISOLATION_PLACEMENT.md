@@ -1236,6 +1236,16 @@ Linux build is unavailable on this Windows host because the configured
 probe still colocates compatible ZIM/Zstd packages in one domain and remains
 hosted controlled evidence, not complete production-system orchestration.
 
+Complete distinct-domain finalization now has focused **PARTIALLY IMPLEMENTED**
+kernel evidence. A signed two-package fixture assigns both must-run packages to
+different domains and binds the exact activated generation to one Total
+admission table. Finalization returns `RequiredDomainMissing` after only the
+first microVM route commits and succeeds only after the second route commits,
+with two classified eligible domains, two running microVMs, and zero native
+fallback. The Windows kernel suite passes 567 tests. This is an in-memory
+control-plane test, not WHP/KVM guest construction, cleanup, service-loop, or
+physical evidence.
+
 Its canonical package-to-runtime classification prerequisite is now
 **PARTIALLY IMPLEMENTED** as the allocation-free `MRMLRI1` runtime-inventory
 catalog. Every strictly ordered record binds package identity, version, artifact

@@ -526,6 +526,15 @@ cross-host Rust target is absent, so parity remains source-level for this
 increment. Complete production service-loop and multi-domain orchestration
 remain **PLANNED**.
 
+The kernel now **PARTIALLY IMPLEMENTS** focused complete multi-domain
+finalization evidence. An authenticated two-package release assigns two
+required packages to distinct domains; strict finalization rejects the state
+after only one microVM route commits and succeeds only after both commit. The
+result reports two classified eligible domains, two running microVMs, and zero
+native fallback. Windows passes 567 kernel tests. Backend construction,
+all-domain cleanup, and production service-loop orchestration remain
+**PLANNED**.
+
 The first half of that gate is now **PARTIALLY IMPLEMENTED**: `MRMLRI1` is a
 bounded canonical runtime-inventory catalog whose records exact-bind every
 `MRMLSG2` package identity, version, and artifact digest to Total class,

@@ -835,7 +835,7 @@ mod tests {
                 version: 7,
                 artifact_digest: &first_digest,
                 class: RuntimeIsolationClass::MicrovmEligible,
-                must_run: false,
+                must_run: true,
                 preferred: RuntimeIsolationPlacement::InProcess,
                 minimum: RuntimeIsolationPlacement::InProcess,
                 maximum: RuntimeIsolationPlacement::Microvm,
@@ -1390,6 +1390,93 @@ mod tests {
             )),
             Err(ReleaseInventoryError::BindingCount)
         );
+    }
+
+    #[test]
+    fn distinct_required_release_domains_must_all_commit_microvm_routes() {
+        use crate::{
+            IsolationAdmissionTable, IsolationMode, IsolationPlacement, IsolationServiceSpec,
+            prepare_isolation_service_route,
+        };
+
+        let (release, release_length, key_id) = build_colocated_release();
+        let parsed = parse_system_release(&release[..release_length]).unwrap();
+        let generation = ActivatedSystemGeneration::new(
+            parsed.generation().generation(),
+            parsed.generation().digest(),
+            parsed.interface_catalog().digest(),
+            7,
+            0x5155,
+            3,
+        )
+        .unwrap();
+        let active = ActivatedSystemRelease::new(generation, parsed.identity());
+        let first_domain = ObjectId(0x5a49_4d5f_0000_0001);
+        let second_domain = ObjectId(0x5a53_5444_0000_0002);
+        let mut plan = RuntimeDomainAssignmentPlan::<2>::new(
+            &release[..release_length],
+            &key_id,
+            active,
+            POLICY,
+        )
+        .unwrap();
+        plan.assign("org.mrml.zim", first_domain).unwrap();
+        plan.assign("org.mrml.zstd", second_domain).unwrap();
+        let inventory = plan.seal().unwrap();
+        assert_eq!(inventory.release().len(), 2);
+        assert!(
+            inventory
+                .release()
+                .entries()
+                .all(|entry| entry.must_be_running())
+        );
+
+        let mut admission = IsolationAdmissionTable::<2>::new_activated(
+            IsolationMode::TotalMicrovm,
+            inventory.active(),
+            POLICY,
+        )
+        .unwrap();
+        let first = IsolationServiceSpec::new(
+            first_domain,
+            ObjectId(0x494e_5445_5246_0001),
+            3,
+            7,
+            inventory.system_generation(),
+            POLICY,
+            TotalMicrovmClass::MicrovmEligible,
+            IsolationPlacement::Microvm,
+        )
+        .unwrap();
+        prepare_isolation_service_route(&mut admission, first)
+            .unwrap()
+            .commit(&mut admission, 0x51u64)
+            .unwrap();
+        assert_eq!(
+            inventory.finalize(&admission),
+            Err(TotalMicrovmRuntimeError::RequiredDomainMissing)
+        );
+
+        let second = IsolationServiceSpec::new(
+            second_domain,
+            ObjectId(0x494e_5445_5246_0002),
+            3,
+            8,
+            inventory.system_generation(),
+            POLICY,
+            TotalMicrovmClass::MicrovmEligible,
+            IsolationPlacement::Microvm,
+        )
+        .unwrap();
+        prepare_isolation_service_route(&mut admission, second)
+            .unwrap()
+            .commit(&mut admission, 0x52u64)
+            .unwrap();
+        let proof = inventory.finalize(&admission).unwrap();
+        assert_eq!(proof.classified_domains(), 2);
+        assert_eq!(proof.running_microvm_eligible(), 2);
+        assert_eq!(proof.running_in_microvm(), 2);
+        assert_eq!(admission.total_microvm_report().native_fallback, 0);
     }
 
     #[test]

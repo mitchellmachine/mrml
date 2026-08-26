@@ -88,6 +88,17 @@ construction/finalization is kernel-private and the standalone application probe
 is labeled as scoped placement evidence rather than whole-system proof. This is
 the same conventional authority-boundary reduction and adds no mechanism.
 
+## 2026-08-26 — Complete distinct-domain Total finalization evidence
+
+Patent review: **NOT_TRIGGERED** for adding a two-domain test fixture and
+checking that an existing authenticated inventory finalizer rejects one missing
+required route before accepting both existing microVM-ready records. This adds
+no new finalization algorithm, VM construction, placement selection,
+scheduling, interface transport, device, DMA, queue, interrupt, or boot
+mechanism. The broader adaptive-placement and Total-MicroVM mechanisms retain
+their existing **TRIGGERED** review; this technical screen is not patent
+clearance.
+
 ## 2026-08-26 — Hosted backend recovered-policy assignment wiring
 
 Patent review: **NOT_TRIGGERED** for passing an existing recovered
