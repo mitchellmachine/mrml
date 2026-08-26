@@ -12,7 +12,9 @@ use mrml_config::{
 #[cfg(target_os = "linux")]
 use mrml_crypto::{Sha3_512, LAMPORT_PUBLIC_KEY_BYTES};
 #[cfg(target_os = "linux")]
-use mrml_deployment::{DeploymentService, GenerationCandidate};
+use mrml_deployment::{
+    DeploymentService, GenerationCandidate, encode_deployment_checkpoint,
+};
 use mrml_error::{anyhow, Result};
 #[cfg(target_os = "linux")]
 use mrml_kernel::arch::x86_64::{Mapping, PagePermissions, VirtAddr, PRIVILEGE_STACK_ARENA_PAGES};
@@ -1987,10 +1989,13 @@ fn application_main() -> Result<()> {
     };
     let active_component_generation = if let Some(digest) = component_generation_digest {
         let deployment_root = ObjectId(0x4445_504c_4f59);
-        let mut capabilities = CapabilitySpace::<1>::new();
+        let mut capabilities = CapabilitySpace::<2>::new();
         let control = capabilities
             .insert(deployment_root, Rights::CONTROL)
             .map_err(|error| anyhow!("KVM deployment authority failed: {:?}", error))?;
+        let inspect = capabilities
+            .insert(deployment_root, Rights::READ)
+            .map_err(|error| anyhow!("KVM deployment inspection failed: {:?}", error))?;
         let mut deployment = DeploymentService::<1>::new(deployment_root)
             .map_err(|error| anyhow!("KVM DeploymentService failed: {:?}", error))?;
         let candidate = deployment
@@ -2004,10 +2009,18 @@ fn application_main() -> Result<()> {
         let prepared = deployment
             .prepare_activation(&capabilities, control, candidate, None)
             .map_err(|error| anyhow!("KVM generation preparation failed: {:?}", error))?;
+        let active = deployment
+            .commit_activation(prepared)
+            .map_err(|error| anyhow!("KVM generation activation failed: {:?}", error))?;
+        let checkpoint = encode_deployment_checkpoint(deployment_root, active)
+            .map_err(|error| anyhow!("KVM generation checkpoint failed: {:?}", error))?;
+        let recovered = DeploymentService::<1>::recover(deployment_root, &checkpoint)
+            .map_err(|error| anyhow!("KVM generation recovery failed: {:?}", error))?;
         Some(
-            deployment
-                .commit_activation(prepared)
-                .map_err(|error| anyhow!("KVM generation activation failed: {:?}", error))?,
+            recovered
+                .active(&capabilities, inspect)
+                .map_err(|error| anyhow!("KVM active generation read failed: {:?}", error))?
+                .ok_or_else(|| anyhow!("KVM recovered no active SystemGeneration"))?,
         )
     } else {
         None

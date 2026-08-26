@@ -7889,8 +7889,12 @@ the complete canonical `SystemGeneration` SHA3-512 digest, fingerprint, and
 both artifact digests must remain exact. A reused generation number with
 different generation bytes fails before backend construction. The focused WHP/KVM
 runners use this shared package-format codec before attaching either verified
-image. This is hosted canonical-codec, in-memory activation, and parity
-evidence, not persistent activation recovery or physical isolation.
+image, after canonical activation-checkpoint recovery. The deployment service's
+focused Windows/Linux test also binds activation publication to one exact stable
+COW file-generation receipt and recovers only through the selected file
+generation and verified extent. This is hosted codec, storage simulation, and
+backend-parity evidence, not authenticated reachable-root selection, physical
+durability, or physical isolation.
 
 The focused test sends the generated 104-byte request and one attenuated shared-
 buffer capability from the caller to the launched provider task, executes the

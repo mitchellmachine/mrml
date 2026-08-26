@@ -36,6 +36,13 @@ crate_type = "lib"
 source = "packages/services/deployment/src/lib.rs"
 
 [[dependency]]
+alias = "mrml_crypto"
+compile_name = "mrml-crypto"
+package = "org.mrml.library.crypto"
+provider_profile = "core"
+scope = "compile"
+
+[[dependency]]
 alias = "mrml_kernel"
 compile_name = "mrml-kernel"
 package = "org.mrml.system.kernel"
@@ -45,6 +52,12 @@ scope = "compile"
 alias = "mrml_package_format"
 compile_name = "mrml-package-format"
 package = "org.mrml.library.package-format"
+scope = "compile"
+
+[[dependency]]
+alias = "mrml_storage"
+compile_name = "mrml-storage"
+package = "org.mrml.service.storage"
 scope = "compile"
 
 [[host_test]]

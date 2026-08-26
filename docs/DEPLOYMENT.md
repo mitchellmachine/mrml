@@ -65,12 +65,20 @@ the generation number, complete canonical-generation SHA3-512 digest,
 activation sequence, and source object/generation identity. Kernel isolation
 admission consumes that typed record, and both focused WHP/KVM component paths
 now construct admission only after this activation transaction. Windows and
-Arch Linux deployment-service suites pass 2 tests; package-format suites pass
+Arch Linux deployment-service suites pass 3 tests; package-format suites pass
 6, kernel suites pass 509, WHP passes 7, and KVM passes 8. The current hosted
-probe stages an already verified transient local generation; authenticated
-storage reads, crash-safe persistence/recovery, SystemRelease admission,
-rollback authorization, retained-root integration, and general runtime delivery
-remain **PLANNED**.
+probe stages an already verified transient local generation. The activation
+checkpoint now has a canonical fixed 160-byte SHA3-256-bound encoding. Its
+publication composes the prepared activation and a new stable-file generation
+through one COW `StorageTransaction` receipt: the service remains inactive
+before receipt publication, commit consumes the exact file participant and
+activation token, and recovery reads only the caller-selected exact file
+generation through storage authority and verified extents. Windows and Arch
+Linux simulation tests cover clean publication/recovery and corruption rejection
+at the authenticated extent boundary. Authenticated reachable-root selection,
+recovery-journal/monotonic-state integration, physical durability,
+SystemRelease admission, rollback authorization, retained-root integration,
+and general runtime delivery remain **PLANNED**.
 
 > Installation, updating, offline servicing, recovery, system imaging, and
 > system snapshots are different operations over the same immutable package and

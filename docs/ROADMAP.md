@@ -214,8 +214,12 @@ value before opening the data plane. Windows and Arch Linux kernel, Zstd, and
 configuration suites plus WHP/KVM runner suites pass. The runners now stage and
 commit their transient local generation through a bounded capability-authorized,
 two-phase, one-use `DeploymentService` activation transaction and construct
-kernel admission from its typed immutable result. Authenticated persistent
-storage/recovery and general resolver-driven launch remain **PLANNED**. The canonical build-tool-to-
+kernel admission from its typed immutable result. A canonical 160-byte
+activation checkpoint and one receipt-bound stable COW file transaction now
+publish/recover the same record in focused Windows/Linux simulation; WHP/KVM
+re-decode that checkpoint before admission. Authenticated reachable-root and
+monotonic recovery-state integration, physical durability, and general
+resolver-driven launch remain **PLANNED**. The canonical build-tool-to-
 kernel format itself is now **PARTIALLY IMPLEMENTED**: a shared fixed 280-byte
 record carries the resolved system/provider/interface generations,
 fingerprint, placement, applied policy generation, capability-selected object
@@ -223,7 +227,7 @@ IDs, the SHA3-512 digest of the complete canonical `SystemGeneration`, and exact
 consumer/provider digests. Kernel decoding and both focused VMM runners reject
 substitutions—including reused generation numbers with different canonical
 bytes—before backend invocation. Windows/Arch Linux package-format 6,
-DeploymentService 2, build-tool 80, and kernel 509 test suites pass; WHP passes
+DeploymentService 3, build-tool 80, and kernel 509 test suites pass; WHP passes
 7 and KVM passes 8.
 A backend-neutral linear control-plane admission now binds those two immutable
 load plans to the exact generation/interface placement before an endpoint

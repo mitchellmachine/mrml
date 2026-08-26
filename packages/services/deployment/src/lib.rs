@@ -9,8 +9,18 @@
 
 use core::array;
 
+use mrml_crypto::Sha3_256;
 use mrml_kernel::{Capability, CapabilitySpace, ObjectId, Rights};
 use mrml_package_format::{ActivatedSystemGeneration, ActivatedSystemGenerationError};
+use mrml_storage::{
+    ExtentMap, FileMetadata, FileReadBackend, FileReadError, FileState, FileWriteBackend,
+    FileWriteError, MetadataPointer, PreparedFileWrite, StorageAuthorityTable, StorageHandle,
+    StoragePrincipal, StorageTransaction, TransactionError, TransactionReceipt,
+};
+
+pub const DEPLOYMENT_CHECKPOINT_BYTES: usize = 160;
+const DEPLOYMENT_CHECKPOINT_MAGIC: [u8; 8] = *b"MRMLDA1\0";
+const DEPLOYMENT_CHECKPOINT_VERSION: u16 = 1;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct GenerationCandidate {
@@ -190,6 +200,42 @@ impl<const CANDIDATES: usize> DeploymentService<CANDIDATES> {
         Ok(active)
     }
 
+    pub fn preview_activation(
+        &self,
+        prepared: PreparedActivation,
+    ) -> Result<ActivatedSystemGeneration, DeploymentError> {
+        if prepared.expected_activation_sequence != self.next_activation_sequence {
+            return Err(DeploymentError::StaleActivation);
+        }
+        let slot = self.slot(prepared.candidate)?;
+        if slot.state != CandidateState::Prepared {
+            return Err(DeploymentError::InvalidCandidate);
+        }
+        ActivatedSystemGeneration::new(
+            slot.candidate.generation,
+            slot.candidate.generation_digest,
+            self.next_activation_sequence,
+            slot.candidate.source_object,
+            slot.candidate.source_generation,
+        )
+        .map_err(DeploymentError::InvalidActivation)
+    }
+
+    pub fn recover(root: ObjectId, checkpoint: &[u8]) -> Result<Self, DeploymentError> {
+        let (checkpoint_root, active) = decode_deployment_checkpoint(checkpoint)?;
+        if checkpoint_root != root.0 {
+            return Err(DeploymentError::InvalidCheckpoint);
+        }
+        let next_activation_sequence = active
+            .activation_sequence()
+            .checked_add(1)
+            .ok_or(DeploymentError::GenerationExhausted)?;
+        let mut service = Self::new(root)?;
+        service.active = Some(active);
+        service.next_activation_sequence = next_activation_sequence;
+        Ok(service)
+    }
+
     pub fn active<const N: usize>(
         &self,
         capabilities: &CapabilitySpace<N>,
@@ -243,6 +289,248 @@ pub enum DeploymentError {
     RollbackRequiresSeparateAuthorization,
     GenerationExhausted,
     InvalidActivation(ActivatedSystemGenerationError),
+    InvalidCheckpoint,
+}
+
+pub fn encode_deployment_checkpoint(
+    root: ObjectId,
+    active: ActivatedSystemGeneration,
+) -> Result<[u8; DEPLOYMENT_CHECKPOINT_BYTES], DeploymentError> {
+    if root.0 == 0 {
+        return Err(DeploymentError::InvalidService);
+    }
+    let mut bytes = [0; DEPLOYMENT_CHECKPOINT_BYTES];
+    bytes[..8].copy_from_slice(&DEPLOYMENT_CHECKPOINT_MAGIC);
+    bytes[8..10].copy_from_slice(&DEPLOYMENT_CHECKPOINT_VERSION.to_le_bytes());
+    bytes[10..12].copy_from_slice(&(DEPLOYMENT_CHECKPOINT_BYTES as u16).to_le_bytes());
+    bytes[12..16].copy_from_slice(&(DEPLOYMENT_CHECKPOINT_BYTES as u32).to_le_bytes());
+    bytes[16..24].copy_from_slice(&root.0.to_le_bytes());
+    bytes[24..32].copy_from_slice(&active.generation().to_le_bytes());
+    bytes[32..40].copy_from_slice(&active.activation_sequence().to_le_bytes());
+    bytes[40..48].copy_from_slice(&active.source_object().to_le_bytes());
+    bytes[48..56].copy_from_slice(&active.source_generation().to_le_bytes());
+    bytes[56..120].copy_from_slice(active.generation_digest());
+    let digest = Sha3_256::digest(&bytes);
+    bytes[120..152].copy_from_slice(&digest);
+    Ok(bytes)
+}
+
+pub fn decode_deployment_checkpoint(
+    bytes: &[u8],
+) -> Result<(u64, ActivatedSystemGeneration), DeploymentError> {
+    if bytes.len() != DEPLOYMENT_CHECKPOINT_BYTES
+        || bytes[..8] != DEPLOYMENT_CHECKPOINT_MAGIC
+        || read_u16(bytes, 8)? != DEPLOYMENT_CHECKPOINT_VERSION
+        || read_u16(bytes, 10)? as usize != DEPLOYMENT_CHECKPOINT_BYTES
+        || read_u32(bytes, 12)? as usize != DEPLOYMENT_CHECKPOINT_BYTES
+        || bytes[152..].iter().any(|byte| *byte != 0)
+    {
+        return Err(DeploymentError::InvalidCheckpoint);
+    }
+    let mut expected = [0; DEPLOYMENT_CHECKPOINT_BYTES];
+    expected.copy_from_slice(bytes);
+    let mut claimed = [0; 32];
+    claimed.copy_from_slice(&expected[120..152]);
+    expected[120..152].fill(0);
+    if Sha3_256::digest(&expected) != claimed {
+        return Err(DeploymentError::InvalidCheckpoint);
+    }
+    let mut generation_digest = [0; 64];
+    generation_digest.copy_from_slice(&bytes[56..120]);
+    let active = ActivatedSystemGeneration::new(
+        read_u64(bytes, 24)?,
+        generation_digest,
+        read_u64(bytes, 32)?,
+        read_u64(bytes, 40)?,
+        read_u64(bytes, 48)?,
+    )
+    .map_err(DeploymentError::InvalidActivation)?;
+    Ok((read_u64(bytes, 16)?, active))
+}
+
+pub struct PreparedStableActivation<const EXTENTS: usize> {
+    file: PreparedFileWrite<EXTENTS>,
+    activation: PreparedActivation,
+    active: ActivatedSystemGeneration,
+}
+
+impl<const EXTENTS: usize> PreparedStableActivation<EXTENTS> {
+    pub const fn active(&self) -> ActivatedSystemGeneration {
+        self.active
+    }
+
+    pub fn admit<const PARTICIPANTS: usize, const WRITES: usize>(
+        &self,
+        transaction: &mut StorageTransaction<PARTICIPANTS, WRITES>,
+    ) -> Result<(), TransactionError> {
+        transaction.admit_file(&self.file)
+    }
+
+    pub fn commit<const CANDIDATES: usize, const PARTICIPANTS: usize>(
+        self,
+        service: &mut DeploymentService<CANDIDATES>,
+        receipt: &mut TransactionReceipt<PARTICIPANTS>,
+    ) -> Result<StableActivation<EXTENTS>, StableActivationCommitError> {
+        if service.preview_activation(self.activation) != Ok(self.active) {
+            return Err(StableActivationCommitError::StaleActivation);
+        }
+        let file = self
+            .file
+            .commit_transaction(receipt)
+            .map_err(StableActivationCommitError::Transaction)?;
+        let active = service
+            .commit_activation(self.activation)
+            .map_err(StableActivationCommitError::Deployment)?;
+        if active != self.active {
+            return Err(StableActivationCommitError::StaleActivation);
+        }
+        Ok(StableActivation { file, active })
+    }
+}
+
+pub struct StableActivation<const EXTENTS: usize> {
+    file: FileState<EXTENTS>,
+    active: ActivatedSystemGeneration,
+}
+
+impl<const EXTENTS: usize> StableActivation<EXTENTS> {
+    pub const fn file(&self) -> &FileState<EXTENTS> {
+        &self.file
+    }
+
+    pub const fn active(&self) -> ActivatedSystemGeneration {
+        self.active
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum StableActivationCommitError {
+    StaleActivation,
+    Transaction(TransactionError),
+    Deployment(DeploymentError),
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum DeploymentStorageError<E> {
+    Deployment(DeploymentError),
+    InvalidBinding,
+    Read(FileReadError<E>),
+    Write(FileWriteError<E>),
+}
+
+#[allow(clippy::too_many_arguments)]
+pub fn prepare_stable_activation<
+    const CANDIDATES: usize,
+    const CURRENT_EXTENTS: usize,
+    const NEXT_EXTENTS: usize,
+    const AUTHORITIES: usize,
+    B: FileWriteBackend,
+>(
+    service: &DeploymentService<CANDIDATES>,
+    prepared: PreparedActivation,
+    current_file: &FileState<CURRENT_EXTENTS>,
+    storage_authority: &StorageAuthorityTable<AUTHORITIES>,
+    file: StorageHandle,
+    principal: StoragePrincipal,
+    next_extents: ExtentMap<NEXT_EXTENTS>,
+    next_metadata: FileMetadata,
+    file_metadata_pointer: MetadataPointer,
+    protected_metadata: &[MetadataPointer],
+    backend: &mut B,
+) -> Result<PreparedStableActivation<NEXT_EXTENTS>, DeploymentStorageError<B::Error>> {
+    let active = service
+        .preview_activation(prepared)
+        .map_err(DeploymentStorageError::Deployment)?;
+    let checkpoint = encode_deployment_checkpoint(service.root, active)
+        .map_err(DeploymentStorageError::Deployment)?;
+    let mut content = Sha3_256::new();
+    content.update(&checkpoint);
+    if next_metadata.object() != current_file.object()
+        || next_metadata.generation() != current_file.generation().checked_add(1).unwrap_or(0)
+        || next_metadata.length() != DEPLOYMENT_CHECKPOINT_BYTES as u64
+        || next_metadata.content_digest() != content.finalize()
+    {
+        return Err(DeploymentStorageError::InvalidBinding);
+    }
+    let file = current_file
+        .prepare_write(
+            storage_authority,
+            file,
+            principal,
+            0,
+            &checkpoint,
+            DEPLOYMENT_CHECKPOINT_BYTES as u64,
+            next_extents,
+            next_metadata,
+            file_metadata_pointer,
+            protected_metadata,
+            backend,
+        )
+        .map_err(DeploymentStorageError::Write)?;
+    Ok(PreparedStableActivation {
+        file,
+        activation: prepared,
+        active,
+    })
+}
+
+#[allow(clippy::too_many_arguments)]
+pub fn recover_stable_activation<
+    const CANDIDATES: usize,
+    const EXTENTS: usize,
+    const AUTHORITIES: usize,
+    B: FileReadBackend,
+>(
+    root: ObjectId,
+    file_state: &FileState<EXTENTS>,
+    storage_authority: &StorageAuthorityTable<AUTHORITIES>,
+    file: StorageHandle,
+    principal: StoragePrincipal,
+    expected_file_generation: u64,
+    backend: &mut B,
+) -> Result<DeploymentService<CANDIDATES>, DeploymentStorageError<B::Error>> {
+    if expected_file_generation == 0
+        || file_state.generation() != expected_file_generation
+        || file_state.length() != DEPLOYMENT_CHECKPOINT_BYTES as u64
+    {
+        return Err(DeploymentStorageError::InvalidBinding);
+    }
+    let mut checkpoint = [0; DEPLOYMENT_CHECKPOINT_BYTES];
+    file_state
+        .read(
+            storage_authority,
+            file,
+            principal,
+            0,
+            &mut checkpoint,
+            backend,
+        )
+        .map_err(DeploymentStorageError::Read)?;
+    DeploymentService::recover(root, &checkpoint).map_err(DeploymentStorageError::Deployment)
+}
+
+fn read_u16(bytes: &[u8], offset: usize) -> Result<u16, DeploymentError> {
+    bytes
+        .get(offset..offset + 2)
+        .and_then(|value| value.try_into().ok())
+        .map(u16::from_le_bytes)
+        .ok_or(DeploymentError::InvalidCheckpoint)
+}
+
+fn read_u32(bytes: &[u8], offset: usize) -> Result<u32, DeploymentError> {
+    bytes
+        .get(offset..offset + 4)
+        .and_then(|value| value.try_into().ok())
+        .map(u32::from_le_bytes)
+        .ok_or(DeploymentError::InvalidCheckpoint)
+}
+
+fn read_u64(bytes: &[u8], offset: usize) -> Result<u64, DeploymentError> {
+    bytes
+        .get(offset..offset + 8)
+        .and_then(|value| value.try_into().ok())
+        .map(u64::from_le_bytes)
+        .ok_or(DeploymentError::InvalidCheckpoint)
 }
 
 const fn all_zero(value: &[u8; 64]) -> bool {
@@ -259,6 +547,230 @@ const fn all_zero(value: &[u8; 64]) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use mrml_storage::{
+        CowMetadataImage, CowMetadataWrite, CowPublicationBackend, CowPublicationPlan,
+        ExtentRecord, StorageObjectId, StorageObjectKind, StorageRights, StorageTransactionId,
+        Superblock, VolumeHeader, VolumeId,
+    };
+
+    const BLOCK_BYTES: usize = 4096;
+
+    fn volume() -> VolumeId {
+        VolumeId::new([0x61; 16]).unwrap()
+    }
+
+    fn header() -> VolumeHeader {
+        VolumeHeader::new(volume(), BLOCK_BYTES as u32, 100, 1, 2).unwrap()
+    }
+
+    fn object(local: u64) -> StorageObjectId {
+        StorageObjectId::new(volume(), local).unwrap()
+    }
+
+    fn principal() -> StoragePrincipal {
+        StoragePrincipal::new(7).unwrap()
+    }
+
+    fn digest(bytes: &[u8]) -> [u8; 32] {
+        Sha3_256::digest(bytes)
+    }
+
+    struct StableBackend {
+        bytes: [u8; BLOCK_BYTES],
+    }
+
+    unsafe impl FileWriteBackend for StableBackend {
+        type Error = u8;
+
+        fn stage_new_extent(
+            &mut self,
+            file: StorageObjectId,
+            old_generation: u64,
+            old_length: u64,
+            next: ExtentRecord,
+            new_length: u64,
+            patch_offset: u64,
+            patch: &[u8],
+        ) -> Result<(), Self::Error> {
+            if file != object(9)
+                || old_generation != 1
+                || old_length != 0
+                || next.file() != file
+                || next.metadata_generation() != 2
+                || next.physical_block() != Some(10)
+                || next.block_count() != 1
+                || patch_offset != 0
+                || new_length as usize != patch.len()
+            {
+                return Err(1);
+            }
+            self.bytes.fill(0);
+            self.bytes[..patch.len()].copy_from_slice(patch);
+            if next.content_digest() != digest(&self.bytes) {
+                return Err(2);
+            }
+            Ok(())
+        }
+
+        fn flush_new_file_data(
+            &mut self,
+            file: StorageObjectId,
+            generation: u64,
+            length: u64,
+            content_digest: [u8; 32],
+        ) -> Result<(), Self::Error> {
+            if file != object(9)
+                || generation != 2
+                || length != DEPLOYMENT_CHECKPOINT_BYTES as u64
+                || content_digest != digest(&self.bytes[..DEPLOYMENT_CHECKPOINT_BYTES])
+            {
+                return Err(3);
+            }
+            Ok(())
+        }
+    }
+
+    unsafe impl FileReadBackend for StableBackend {
+        type Error = u8;
+
+        fn read_verified_extent(
+            &mut self,
+            record: ExtentRecord,
+            byte_offset: u64,
+            output: &mut [u8],
+        ) -> Result<(), Self::Error> {
+            if record.file() != object(9)
+                || record.metadata_generation() != 2
+                || record.content_digest() != digest(&self.bytes)
+            {
+                return Err(4);
+            }
+            let start = byte_offset as usize;
+            let end = start.checked_add(output.len()).ok_or(4)?;
+            output.copy_from_slice(self.bytes.get(start..end).ok_or(4)?);
+            Ok(())
+        }
+    }
+
+    struct PublicationBackend;
+
+    unsafe impl CowPublicationBackend for PublicationBackend {
+        type Error = ();
+
+        fn verify_new_metadata(&mut self, _: CowMetadataWrite) -> Result<(), Self::Error> {
+            Ok(())
+        }
+
+        fn flush_new_metadata(&mut self) -> Result<(), Self::Error> {
+            Ok(())
+        }
+
+        fn replace_superblock(
+            &mut self,
+            block: u64,
+            _: &[u8; mrml_storage::SUPERBLOCK_BYTES],
+        ) -> Result<(), Self::Error> {
+            (block == 2).then_some(()).ok_or(())
+        }
+
+        fn flush_superblock(&mut self) -> Result<(), Self::Error> {
+            Ok(())
+        }
+    }
+
+    fn stable_layout(
+        checkpoint: &[u8; DEPLOYMENT_CHECKPOINT_BYTES],
+    ) -> (
+        FileState<0>,
+        ExtentMap<1>,
+        FileMetadata,
+        [CowMetadataImage; 2],
+    ) {
+        let current = FileState::new(
+            object(9),
+            1,
+            0,
+            ExtentMap::<0>::build(header(), object(9), 1, 0, &[]).unwrap(),
+        )
+        .unwrap();
+        let mut block = [0; BLOCK_BYTES];
+        block[..checkpoint.len()].copy_from_slice(checkpoint);
+        let record = ExtentRecord::data(object(9), 2, 0, 1, 10, digest(&block)).unwrap();
+        let next =
+            ExtentMap::build(header(), object(9), 2, checkpoint.len() as u64, &[record]).unwrap();
+        let metadata = FileMetadata::new(
+            header(),
+            object(9),
+            2,
+            checkpoint.len() as u64,
+            1,
+            MetadataPointer::new(20, 1).unwrap(),
+            digest(checkpoint),
+        )
+        .unwrap();
+        let mut encoded_metadata = [0; BLOCK_BYTES];
+        metadata.encode(
+            (&mut encoded_metadata[..mrml_storage::FILE_METADATA_BYTES])
+                .try_into()
+                .unwrap(),
+        );
+        let mut encoded_extents = [0; BLOCK_BYTES];
+        record.encode(
+            (&mut encoded_extents[..mrml_storage::EXTENT_RECORD_BYTES])
+                .try_into()
+                .unwrap(),
+        );
+        (
+            current,
+            next,
+            metadata,
+            [
+                CowMetadataImage::new(
+                    MetadataPointer::new(21, 1).unwrap(),
+                    digest(&encoded_metadata),
+                ),
+                CowMetadataImage::new(
+                    MetadataPointer::new(20, 1).unwrap(),
+                    digest(&encoded_extents),
+                ),
+            ],
+        )
+    }
+
+    fn publication_plan(images: [CowMetadataImage; 2]) -> CowPublicationPlan<4> {
+        let active = Superblock::new(
+            header(),
+            1,
+            0,
+            object(1),
+            MetadataPointer::new(30, 1).unwrap(),
+            MetadataPointer::new(31, 1).unwrap(),
+        )
+        .unwrap();
+        let root =
+            CowMetadataWrite::new(MetadataPointer::new(40, 1).unwrap(), 2, [0x40; 32]).unwrap();
+        let allocation =
+            CowMetadataWrite::new(MetadataPointer::new(41, 1).unwrap(), 2, [0x41; 32]).unwrap();
+        CowPublicationPlan::build(
+            header(),
+            1,
+            active,
+            object(1),
+            root.pointer(),
+            allocation.pointer(),
+            &[
+                images[0].bind(2).unwrap(),
+                images[1].bind(2).unwrap(),
+                root,
+                allocation,
+            ],
+            &[
+                MetadataPointer::new(30, 1).unwrap(),
+                MetadataPointer::new(31, 1).unwrap(),
+            ],
+        )
+        .unwrap()
+    }
 
     fn authority() -> (CapabilitySpace<3>, Capability, Capability) {
         let mut capabilities = CapabilitySpace::new();
@@ -321,5 +833,86 @@ mod tests {
             Err(DeploymentError::RollbackRequiresSeparateAuthorization)
         );
         assert_eq!(service.active(&capabilities, inspect), Ok(Some(active)));
+    }
+
+    #[test]
+    fn activation_publishes_with_one_storage_receipt_and_recovers_exact_file_generation() {
+        let (capabilities, control, inspect) = authority();
+        let root = ObjectId(0x4445_504c_4f59);
+        let mut service = DeploymentService::<2>::new(root).unwrap();
+        let id = service
+            .stage(&capabilities, control, candidate(8, 0x51))
+            .unwrap();
+        let prepared = service
+            .prepare_activation(&capabilities, control, id, None)
+            .unwrap();
+        let preview = service.preview_activation(prepared).unwrap();
+        let checkpoint = encode_deployment_checkpoint(root, preview).unwrap();
+        let (current, next, metadata, images) = stable_layout(&checkpoint);
+        let mut authority = StorageAuthorityTable::<1>::new();
+        let file = authority
+            .insert(
+                object(9),
+                StorageObjectKind::File,
+                StorageRights::READ
+                    .union(StorageRights::WRITE)
+                    .union(StorageRights::RESIZE),
+                principal(),
+            )
+            .unwrap();
+        let mut backend = StableBackend {
+            bytes: [0; BLOCK_BYTES],
+        };
+        let stable = prepare_stable_activation(
+            &service,
+            prepared,
+            &current,
+            &authority,
+            file,
+            principal(),
+            next,
+            metadata,
+            MetadataPointer::new(21, 1).unwrap(),
+            &[],
+            &mut backend,
+        )
+        .unwrap();
+        assert_eq!(service.active(&capabilities, inspect), Ok(None));
+        let mut transaction =
+            StorageTransaction::<1, 2>::new(StorageTransactionId::new(70).unwrap(), 2).unwrap();
+        stable.admit(&mut transaction).unwrap();
+        let mut receipt = transaction
+            .publish(&publication_plan(images), &mut PublicationBackend)
+            .unwrap();
+        let stable = stable.commit(&mut service, &mut receipt).unwrap();
+        assert_eq!(receipt.remaining(), 0);
+        assert_eq!(stable.active(), preview);
+        assert_eq!(service.active(&capabilities, inspect), Ok(Some(preview)));
+
+        let recovered = recover_stable_activation::<2, _, _, _>(
+            root,
+            stable.file(),
+            &authority,
+            file,
+            principal(),
+            stable.file().generation(),
+            &mut backend,
+        )
+        .unwrap();
+        assert_eq!(recovered.active(&capabilities, inspect), Ok(Some(preview)));
+
+        backend.bytes[0] ^= 1;
+        assert!(matches!(
+            recover_stable_activation::<2, _, _, _>(
+                root,
+                stable.file(),
+                &authority,
+                file,
+                principal(),
+                stable.file().generation(),
+                &mut backend,
+            ),
+            Err(DeploymentStorageError::Read(FileReadError::Backend(4)))
+        ));
     }
 }
