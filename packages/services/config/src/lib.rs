@@ -16,8 +16,9 @@ use core::ops::{Deref, DerefMut};
 
 use mrml_crypto::Sha3_256;
 use mrml_deployment::{
-    recover_and_read_runtime_assignment, DeploymentRecoveryStateStore, RecoveredDeploymentOwner,
-    RecoveredRuntimeAssignment, RecoveredRuntimeAssignmentError,
+    recover_and_read_runtime_assignment, recover_and_read_runtime_assignment_shared_backend,
+    DeploymentRecoveryStateStore, RecoveredDeploymentOwner, RecoveredRuntimeAssignment,
+    RecoveredRuntimeAssignmentError,
 };
 use mrml_kernel::arch::x86_64::UserContext;
 use mrml_kernel::{
@@ -2810,6 +2811,67 @@ pub fn recover_selected_runtime_assignment<
         state_store,
         checkpoint_backend,
         release_backend,
+        capabilities,
+        inspect,
+        output,
+        policy_generation,
+    )
+}
+
+/// Shared-volume form of [`recover_selected_runtime_assignment`]. The
+/// deployment checkpoint and SystemRelease still require distinct file
+/// capabilities, while their selected extents are read sequentially through
+/// the one recovered block-volume backend.
+#[allow(clippy::too_many_arguments)]
+pub fn recover_selected_runtime_assignment_shared_backend<
+    'release,
+    const CANDIDATES: usize,
+    const DOMAINS: usize,
+    const CAPS: usize,
+    const EXTENTS: usize,
+    const CHECKPOINT_AUTHORITIES: usize,
+    const RELEASE_AUTHORITIES: usize,
+    B: FileReadBackend,
+    S: DeploymentRecoveryStateStore,
+>(
+    root: ObjectId,
+    selected: SelectedStableTotalSystemRecovery<'_, EXTENTS>,
+    checkpoint_authority: &StorageAuthorityTable<CHECKPOINT_AUTHORITIES>,
+    checkpoint_handle: StorageHandle,
+    release_authority: &StorageAuthorityTable<RELEASE_AUTHORITIES>,
+    release_handle: StorageHandle,
+    principal: StoragePrincipal,
+    state_store: &S,
+    backend: &mut B,
+    capabilities: &CapabilitySpace<CAPS>,
+    inspect: Capability,
+    output: &'release mut [u8],
+    policy_generation: u64,
+) -> Result<
+    RecoveredRuntimeAssignment<'release, CANDIDATES, DOMAINS>,
+    RecoveredRuntimeAssignmentError<B::Error, B::Error, S::Error>,
+> {
+    recover_and_read_runtime_assignment_shared_backend::<
+        CANDIDATES,
+        DOMAINS,
+        CAPS,
+        EXTENTS,
+        EXTENTS,
+        CHECKPOINT_AUTHORITIES,
+        RELEASE_AUTHORITIES,
+        _,
+        _,
+    >(
+        root,
+        selected.deployment_checkpoint().file_state(),
+        checkpoint_authority,
+        checkpoint_handle,
+        selected.system_release().file_state(),
+        release_authority,
+        release_handle,
+        principal,
+        state_store,
+        backend,
         capabilities,
         inspect,
         output,

@@ -1378,6 +1378,72 @@ pub fn recover_and_read_runtime_assignment<
     })
 }
 
+/// Recovers the authenticated deployment checkpoint and then reads its exact
+/// active SystemRelease through one shared storage backend. This is the normal
+/// form for two selected files that reside on the same recovered volume; the
+/// reads remain sequential and each file retains an independent capability.
+#[allow(clippy::too_many_arguments)]
+pub fn recover_and_read_runtime_assignment_shared_backend<
+    'a,
+    const CANDIDATES: usize,
+    const DOMAINS: usize,
+    const CAPS: usize,
+    const CHECKPOINT_EXTENTS: usize,
+    const RELEASE_EXTENTS: usize,
+    const CHECKPOINT_AUTHORITIES: usize,
+    const RELEASE_AUTHORITIES: usize,
+    B: FileReadBackend,
+    S: DeploymentRecoveryStateStore,
+>(
+    root: ObjectId,
+    checkpoint_file: &FileState<CHECKPOINT_EXTENTS>,
+    checkpoint_authority: &StorageAuthorityTable<CHECKPOINT_AUTHORITIES>,
+    checkpoint_handle: StorageHandle,
+    release_file: &FileState<RELEASE_EXTENTS>,
+    release_authority: &StorageAuthorityTable<RELEASE_AUTHORITIES>,
+    release_handle: StorageHandle,
+    principal: StoragePrincipal,
+    state_store: &S,
+    backend: &mut B,
+    capabilities: &CapabilitySpace<CAPS>,
+    inspect: Capability,
+    output: &'a mut [u8],
+    policy_generation: u64,
+) -> Result<
+    RecoveredRuntimeAssignment<'a, CANDIDATES, DOMAINS>,
+    RecoveredRuntimeAssignmentError<B::Error, B::Error, S::Error>,
+> {
+    let (service, recovery) =
+        recover_authenticated_activation_with_state::<CANDIDATES, _, _, _, _>(
+            root,
+            checkpoint_file,
+            checkpoint_authority,
+            checkpoint_handle,
+            principal,
+            state_store,
+            backend,
+        )
+        .map_err(RecoveredRuntimeAssignmentError::Recovery)?;
+    let assignment = service
+        .read_active_runtime_assignment::<DOMAINS, CAPS, _, _, _>(
+            capabilities,
+            inspect,
+            release_file,
+            release_authority,
+            release_handle,
+            principal,
+            output,
+            backend,
+            policy_generation,
+        )
+        .map_err(RecoveredRuntimeAssignmentError::Release)?;
+    Ok(RecoveredRuntimeAssignment {
+        service,
+        recovery,
+        assignment,
+    })
+}
+
 fn read_u16(bytes: &[u8], offset: usize) -> Result<u16, DeploymentError> {
     bytes
         .get(offset..offset + 2)
@@ -1751,6 +1817,50 @@ mod tests {
         }
     }
 
+    struct SharedRuntimeBackend {
+        checkpoint: [u8; BLOCK_BYTES],
+        release: [u8; TEST_RUNTIME_EXTENT_BYTES],
+        checkpoint_reads: usize,
+        release_reads: usize,
+    }
+
+    unsafe impl FileReadBackend for SharedRuntimeBackend {
+        type Error = u8;
+
+        fn read_verified_extent(
+            &mut self,
+            record: ExtentRecord,
+            byte_offset: u64,
+            output: &mut [u8],
+        ) -> Result<(), Self::Error> {
+            let bytes = if record.file() == object(9) {
+                self.checkpoint_reads += 1;
+                if record.metadata_generation() != 2
+                    || record.content_digest() != digest(&self.checkpoint)
+                {
+                    return Err(1);
+                }
+                &self.checkpoint[..]
+            } else if record.file() == object(0x700) {
+                self.release_reads += 1;
+                if record.metadata_generation() != 2
+                    || record.physical_block() != Some(40)
+                    || record.block_count() as usize != TEST_RUNTIME_EXTENT_BLOCKS
+                    || record.content_digest() != digest(&self.release)
+                {
+                    return Err(2);
+                }
+                &self.release[..]
+            } else {
+                return Err(3);
+            };
+            let start = usize::try_from(byte_offset).map_err(|_| 4)?;
+            let end = start.checked_add(output.len()).ok_or(4)?;
+            output.copy_from_slice(bytes.get(start..end).ok_or(4)?);
+            Ok(())
+        }
+    }
+
     fn signed_runtime_candidate() -> (
         GenerationCandidate,
         SystemReleaseIdentity,
@@ -2030,6 +2140,39 @@ mod tests {
         let state_store = RecoveryStateStore {
             bytes: recovery_state,
         };
+        let mut shared_backend = SharedRuntimeBackend {
+            checkpoint: checkpoint_block,
+            release: release_extent,
+            checkpoint_reads: 0,
+            release_reads: 0,
+        };
+        let mut shared_output = [0xa5; TEST_RUNTIME_RELEASE_BYTES];
+        let shared_assignment =
+            recover_and_read_runtime_assignment_shared_backend::<1, 1, 3, 1, 1, 1, 1, _, _>(
+                root,
+                &checkpoint_file,
+                &checkpoint_authority,
+                checkpoint_handle,
+                &release_file,
+                &release_authority,
+                release_handle,
+                principal(),
+                &state_store,
+                &mut shared_backend,
+                &capabilities,
+                inspect,
+                &mut shared_output,
+                4,
+            )
+            .unwrap();
+        assert_eq!(
+            shared_assignment
+                .service()
+                .active_release(&capabilities, inspect),
+            Ok(Some(activated_release))
+        );
+        assert_eq!(shared_backend.checkpoint_reads, 1);
+        assert_eq!(shared_backend.release_reads, 1);
         let mut checkpoint_backend = StableBackend {
             bytes: checkpoint_block,
         };
