@@ -5,10 +5,11 @@ pub mod tpm;
 use core::ffi::c_void;
 use mrml_storage::{
     BlockDeviceDescriptor, BlockDeviceId, BlockVolume, BlockVolumeError,
-    MAX_CANONICAL_UEFI_BLOCK_DEVICE_PATH_BYTES, PlatformBlockDeviceDescriptor,
-    PlatformBlockDeviceIdentity, PlatformBlockTransport, RecoveredReachableState, RecoveryError,
-    SUPERBLOCK_BYTES, StorageBlockDevice, VOLUME_HEADER_BYTES, VolumeHeader, VolumeId,
-    canonical_uefi_block_stable_id, recover_reachable_state,
+    CanonicalUefiBlockDevicePathError, MAX_CANONICAL_UEFI_BLOCK_DEVICE_PATH_BYTES,
+    PlatformBlockDeviceDescriptor, PlatformBlockDeviceIdentity, PlatformBlockTransport,
+    RecoveredReachableState, RecoveryError, SUPERBLOCK_BYTES, StorageBlockDevice,
+    VOLUME_HEADER_BYTES, VolumeHeader, VolumeId, canonical_uefi_block_stable_id,
+    recover_reachable_state,
 };
 
 pub type Status = usize;
@@ -631,8 +632,21 @@ pub fn uefi_platform_block_descriptor(
         uefi_recovery_block_count(media)?,
     )
     .ok_or(UefiBlockDescriptorError::InvalidGeometry)?;
-    let stable_id = canonical_uefi_block_stable_id(device_path)
-        .ok_or(UefiBlockDescriptorError::InvalidDevicePathNode)?;
+    let stable_id = canonical_uefi_block_stable_id(device_path).map_err(|error| match error {
+        CanonicalUefiBlockDevicePathError::TooLong => UefiBlockDescriptorError::DevicePathTooLong,
+        CanonicalUefiBlockDevicePathError::Truncated => {
+            UefiBlockDescriptorError::TruncatedDevicePath
+        }
+        CanonicalUefiBlockDevicePathError::MultipleInstances => {
+            UefiBlockDescriptorError::UnsupportedDevicePathInstance
+        }
+        CanonicalUefiBlockDevicePathError::InvalidNode => {
+            UefiBlockDescriptorError::InvalidDevicePathNode
+        }
+        CanonicalUefiBlockDevicePathError::MissingEnd => {
+            UefiBlockDescriptorError::MissingDevicePathEnd
+        }
+    })?;
     let media_generation = u64::from(media.media_id) + 1;
     let identity = PlatformBlockDeviceIdentity::new(
         PlatformBlockTransport::Uefi,

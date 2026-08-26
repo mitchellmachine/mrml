@@ -1131,9 +1131,10 @@ advance recovery status. Recovered end-to-end Total finalization remains
 **PLANNED**.
 
 Firmware and native recovery now share one **PARTIALLY IMPLEMENTED** stable-ID
-algorithm boundary. `canonical_uefi_block_stable_id` accepts only a bounded
-already validated canonical path, applies the existing UEFI domain separation,
-and grants no authority. The UEFI discovery path now calls that shared storage
+algorithm boundary. `canonical_uefi_block_stable_id` structurally validates one
+bounded single-instance path, rejects truncation, malformed nodes, multiple
+instances, and noncanonical termination, applies the existing UEFI domain
+separation, and grants no authority. The UEFI discovery path calls that shared storage
 function, so later native correlation cannot silently choose a different hash
 contract. Storage passes 128 tests and UEFI 37 tests on Windows and Arch Linux;
 UEFI cross-builds on both. Constructing the canonical path from native AHCI,

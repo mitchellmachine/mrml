@@ -3024,9 +3024,10 @@ Windows and Arch Linux. Deriving those inputs from actual native enumeration is
 still **PLANNED** and is not implied by this verifier.
 
 The boot/native identity algorithm is now shared rather than UEFI-local.
-`canonical_uefi_block_stable_id` bounds an already validated canonical device
-path and applies the one existing domain-separated digest used by firmware
-discovery; UEFI now consumes that storage-interface function. A future native
+`canonical_uefi_block_stable_id` now structurally walks a bounded canonical
+single-instance device path, rejects malformed nodes, missing/extra end nodes,
+and multiple instances, then applies the one existing domain-separated digest
+used by firmware discovery. UEFI consumes that storage-interface function. A future native
 driver can therefore reconstruct the same route without inventing a second
 identity scheme. Storage passes 128 tests and UEFI 37 tests on Windows and Arch
 Linux, with UEFI cross-builds on both. Native path reconstruction, protocol

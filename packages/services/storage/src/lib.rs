@@ -63,12 +63,12 @@ pub use block_protocol::{
 };
 pub use block_service::{
     BlockDeviceDescriptor, BlockDeviceId, BlockRights, BlockService, BlockServiceBackend,
-    BlockServiceError, BlockSessionGrant, BlockSessionHandle, ExactNativeBlockCorrelationError,
-    ExactNativeBlockCorrelationVerifier, InstalledRecoveryBlockSession,
-    InstalledRecoverySessionError, MAX_CANONICAL_UEFI_BLOCK_DEVICE_PATH_BYTES,
-    NativeBlockCorrelationError, NativeBlockCorrelationVerifier, PlatformBlockDeviceDescriptor,
-    PlatformBlockDeviceIdentity, PlatformBlockTransport, ServicedBlockDevice,
-    canonical_uefi_block_stable_id,
+    BlockServiceError, BlockSessionGrant, BlockSessionHandle, CanonicalUefiBlockDevicePathError,
+    ExactNativeBlockCorrelationError, ExactNativeBlockCorrelationVerifier,
+    InstalledRecoveryBlockSession, InstalledRecoverySessionError,
+    MAX_CANONICAL_UEFI_BLOCK_DEVICE_PATH_BYTES, NativeBlockCorrelationError,
+    NativeBlockCorrelationVerifier, PlatformBlockDeviceDescriptor, PlatformBlockDeviceIdentity,
+    PlatformBlockTransport, ServicedBlockDevice, canonical_uefi_block_stable_id,
 };
 pub use cow::{
     CowMetadataImage, CowMetadataWrite, CowPlanError, CowPublicationBackend, CowPublicationPlan,

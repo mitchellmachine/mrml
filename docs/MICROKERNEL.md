@@ -8634,8 +8634,9 @@ Linux. Actual native enumeration remains **PLANNED**.
 
 The firmware side and future native-driver side now have one **PARTIALLY
 IMPLEMENTED** stable route digest contract. The storage interface owns the
-bounded `canonical_uefi_block_stable_id` operation and UEFI uses it after its
-existing structural device-path validation. The result is identity data only;
+bounded `canonical_uefi_block_stable_id` operation. That shared operation now
+performs the structural single-instance device-path validation before hashing,
+and UEFI consumes it. The result is identity data only;
 it cannot open, map, register, or authorize a device. Storage passes 128 tests
 and UEFI 37 tests on Windows and Arch Linux, with UEFI cross-builds on both.
 Native reconstruction of those canonical bytes remains **PLANNED**.

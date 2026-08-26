@@ -4,6 +4,19 @@ use mrml_kernel::{InstalledRecoveryBootIdentity, InstalledRecoverySource};
 
 pub const MAX_CANONICAL_UEFI_BLOCK_DEVICE_PATH_BYTES: usize = 4096;
 const UEFI_BLOCK_STABLE_ID_DOMAIN: &[u8] = b"MRML-UEFI-BLOCK-ID-v1\0";
+const UEFI_DEVICE_PATH_HEADER_BYTES: usize = 4;
+const UEFI_DEVICE_PATH_END_TYPE: u8 = 0x7f;
+const UEFI_DEVICE_PATH_END_INSTANCE_SUBTYPE: u8 = 0x01;
+const UEFI_DEVICE_PATH_END_ENTIRE_SUBTYPE: u8 = 0xff;
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum CanonicalUefiBlockDevicePathError {
+    TooLong,
+    Truncated,
+    InvalidNode,
+    MultipleInstances,
+    MissingEnd,
+}
 
 /// Derives the one canonical boot-stable identifier from an already validated
 /// single-instance UEFI device path.
@@ -12,14 +25,46 @@ const UEFI_BLOCK_STABLE_ID_DOMAIN: &[u8] = b"MRML-UEFI-BLOCK-ID-v1\0";
 /// so correlation cannot silently use different identity algorithms. The bytes
 /// identify only; callers must validate or independently reconstruct the path,
 /// and a successful digest grants no device or I/O authority.
-pub fn canonical_uefi_block_stable_id(device_path: &[u8]) -> Option<[u8; 32]> {
-    if device_path.len() < 4 || device_path.len() > MAX_CANONICAL_UEFI_BLOCK_DEVICE_PATH_BYTES {
-        return None;
+pub fn canonical_uefi_block_stable_id(
+    device_path: &[u8],
+) -> Result<[u8; 32], CanonicalUefiBlockDevicePathError> {
+    if device_path.len() > MAX_CANONICAL_UEFI_BLOCK_DEVICE_PATH_BYTES {
+        return Err(CanonicalUefiBlockDevicePathError::TooLong);
+    }
+    let mut offset = 0usize;
+    loop {
+        let header = device_path
+            .get(offset..offset + UEFI_DEVICE_PATH_HEADER_BYTES)
+            .ok_or(CanonicalUefiBlockDevicePathError::Truncated)?;
+        let length = usize::from(u16::from_le_bytes([header[2], header[3]]));
+        if length < UEFI_DEVICE_PATH_HEADER_BYTES {
+            return Err(CanonicalUefiBlockDevicePathError::InvalidNode);
+        }
+        let next = offset
+            .checked_add(length)
+            .filter(|next| *next <= device_path.len())
+            .ok_or(CanonicalUefiBlockDevicePathError::Truncated)?;
+        if header[0] == UEFI_DEVICE_PATH_END_TYPE {
+            if header[1] == UEFI_DEVICE_PATH_END_INSTANCE_SUBTYPE {
+                return Err(CanonicalUefiBlockDevicePathError::MultipleInstances);
+            }
+            if header[1] != UEFI_DEVICE_PATH_END_ENTIRE_SUBTYPE
+                || length != UEFI_DEVICE_PATH_HEADER_BYTES
+                || next != device_path.len()
+            {
+                return Err(CanonicalUefiBlockDevicePathError::InvalidNode);
+            }
+            break;
+        }
+        offset = next;
+        if offset == device_path.len() {
+            return Err(CanonicalUefiBlockDevicePathError::MissingEnd);
+        }
     }
     let mut hash = Sha3_256::new();
     hash.update(UEFI_BLOCK_STABLE_ID_DOMAIN);
     hash.update(device_path);
-    Some(hash.finalize())
+    Ok(hash.finalize())
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -1744,15 +1789,29 @@ mod tests {
         let path = [1u8, 1, 4, 0, 0x7f, 0xff, 4, 0];
         let stable = canonical_uefi_block_stable_id(&path).unwrap();
         assert_ne!(stable, [0; 32]);
-        assert_eq!(canonical_uefi_block_stable_id(&path), Some(stable));
+        assert_eq!(canonical_uefi_block_stable_id(&path), Ok(stable));
 
         let mut changed = path;
         changed[1] = 2;
-        assert_ne!(canonical_uefi_block_stable_id(&changed), Some(stable));
-        assert_eq!(canonical_uefi_block_stable_id(&path[..3]), None);
+        assert_ne!(canonical_uefi_block_stable_id(&changed), Ok(stable));
+        assert_eq!(
+            canonical_uefi_block_stable_id(&path[..3]),
+            Err(CanonicalUefiBlockDevicePathError::Truncated)
+        );
         assert_eq!(
             canonical_uefi_block_stable_id(&[0; MAX_CANONICAL_UEFI_BLOCK_DEVICE_PATH_BYTES + 1]),
-            None
+            Err(CanonicalUefiBlockDevicePathError::TooLong)
+        );
+
+        let multiple = [1u8, 1, 4, 0, 0x7f, 1, 4, 0, 0x7f, 0xff, 4, 0];
+        assert_eq!(
+            canonical_uefi_block_stable_id(&multiple),
+            Err(CanonicalUefiBlockDevicePathError::MultipleInstances)
+        );
+        let missing_end = [1u8, 1, 4, 0];
+        assert_eq!(
+            canonical_uefi_block_stable_id(&missing_end),
+            Err(CanonicalUefiBlockDevicePathError::MissingEnd)
         );
     }
 

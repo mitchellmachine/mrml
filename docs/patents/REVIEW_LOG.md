@@ -1,5 +1,17 @@
 # Patent review log
 
+## 2026-08-26 — Shared canonical UEFI device-path structural validation
+
+Patent review: **NOT_TRIGGERED**. This increment moves conventional bounded
+walking of the public UEFI generic device-path node format into the existing
+stable-ID operation and rejects truncation, invalid lengths, multiple instances,
+missing termination, and trailing bytes before hashing. It follows the
+[UEFI 2.10 Device Path Protocol](https://uefi.org/specs/UEFI/2.10/10_Protocols_Device_Path_Protocol.html)
+generic node and end-node structures and adds no native topology discovery,
+route reconstruction, device protocol, DMA, queue, or hardware behavior. Native
+AHCI, USB, VirtIO, and physical-route mechanisms retain their existing
+`TRIGGERED` reviews; this technical screen is not legal clearance.
+
 ## 2026-08-26 — Shared canonical UEFI block stable-ID digest
 
 Patent review: **NOT_TRIGGERED** for extracting the repository's existing
