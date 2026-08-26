@@ -5311,3 +5311,14 @@ paths. It adds no new unification, selection, coherence, proof-search, caching,
 or code-generation mechanism. Broader trait solving and Rust conformance remain
 partial; this agent review does not establish clearance or infringement and
 does not replace independent human dual review.
+
+# 2026-08-25 — Inherited source-supertrait premises
+
+**Result: NOT_TRIGGERED after the bounded trait-solver and source-supertrait
+reviews.** This increment conventionally translates declared direct marker
+supertraits into deduplicated premises on the existing bounded clause and uses
+the already reviewed recursive proof path. It adds no new unification,
+selection, coherence, proof-search, caching, or code-generation mechanism.
+Broader trait solving and Rust conformance remain partial; this agent review
+does not establish clearance or infringement and does not replace independent
+human dual review.
