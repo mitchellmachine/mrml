@@ -4814,6 +4814,16 @@ The exact dated oracle accepted the original Rust 2024 form, and both canonical
 hosts pass 985 compiler tests. Other explicit registers and general assembly
 remain unsupported.
 
+The typed fixed-register node now also carries RDX identity across the exact
+input, output, and inout families: `cmp rdx, rdx` with `in("rdx")`,
+`mov rdx, 7` with stored or discarded `lateout("rdx")`, and `inc rdx` with
+same-place or split `inout("rdx")`. RDX values use the common RAX expression and
+writeback channel only outside the declared instruction, so all existing typed
+places, ownership effects, bounds checks, and single-evaluation guarantees are
+reused. The exact dated oracle accepted all five independently authored Rust
+2024 forms, and both canonical hosts pass 985 compiler tests. Other explicit
+registers, generic allocation, and general assembly remain unsupported.
+
 Exact `asm!("mov rax, 7", lateout("rax") _)` is a discarded explicit output.
 Preanalysis records no language-place access, while emission still performs the
 declared RAX write. The exact dated oracle accepted the original Rust 2024 form,

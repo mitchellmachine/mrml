@@ -135,6 +135,11 @@ The input is lowered through the same checked `u64` expression path and moved to
 the declared register before the comparison; template/register mismatches fail
 closed.
 
+The same typed fixed-register representation now includes RDX across exact
+`cmp rdx, rdx` input, `mov rdx, 7` output, and `inc rdx` same-place or split
+inout templates. Stored and discarded outputs share the existing destination
+rules. This remains bounded template support, not general register allocation.
+
 ## Ownership and Polonius-direction roadmap
 
 The current borrowed-source AST and fixed-capacity expression arenas are useful

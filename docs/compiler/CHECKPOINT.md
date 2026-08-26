@@ -1691,6 +1691,16 @@ each pass 639 library tests, one component-interface probe, 10 conformance tests
 and 335 replacement tests: 985 compiler tests per host. Other explicit registers
 and general assembly remain absent.
 
+The fixed explicit-RDX milestone extends the shared typed register identity
+across exact `cmp rdx, rdx` input, `mov rdx, 7` stored/discarded output, and
+`inc rdx` same-place/distinct-input inout. It reuses the existing checked `u64`
+expression, typed destination, ownership, bounds, and writeback machinery;
+mismatched template/register pairs fail closed. The exact dated oracle accepted
+all five independently authored Rust 2024 forms. Windows gnullvm and native Arch
+Linux WSL each pass 639 library tests, one component-interface probe, 10
+conformance tests, and 335 replacement tests: 985 compiler tests per host. Other
+explicit registers, generic allocation, and general assembly remain absent.
+
 The premise-bearing rigid-normalization milestone proves the selected generic
 implementation's instantiated trait and projection predicates before exposing
 its associated value. It shares the caller's 16-frame rigid proof stack and

@@ -158,6 +158,14 @@ explicit-RCX input form only; it does not establish other registers, allocation,
 effects, or general assembly semantics. Temporary source and metadata were
 removed.
 
+An independently authored Rust 2024 metadata-only probe against that same exact
+toolchain and commit compiled fixed RDX `in("rdx")`, stored and discarded
+`lateout("rdx")`, same-place `inout("rdx")`, and distinct-input
+`inout("rdx")` forms. This records black-box acceptance of those five exact
+fixed-template forms only; it does not establish other registers, general
+allocation, effects, or general assembly semantics. Temporary source and
+metadata were removed.
+
 Another independently authored Rust 2024 metadata-only probe against that same
 exact toolchain and commit compiled explicit RAX `lateout`, same-place `inout`,
 and distinct-input output forms whose destinations indexed a `&mut [u64; 2]`

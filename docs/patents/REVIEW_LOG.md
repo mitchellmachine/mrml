@@ -91,6 +91,19 @@ or new scheduling policy. Those adaptive-isolation mechanisms remain
 **TRIGGERED** under the existing review. Agent review is not legal clearance and
 does not replace independent human dual review.
 
+# 2026-08-26 — Fixed explicit RDX inline-assembly operands
+
+**Result: NOT_TRIGGERED after the fixed-RDX review.** This increment extends the
+already reviewed typed fixed-register selector and input/output/inout nodes with
+RDX, uses published x86-64 register-move, immediate-move, compare, and increment
+encodings, and reuses existing expression, destination, ownership, bounds, and
+writeback machinery. It introduces no novel assembler, general register
+allocator, optimization, instruction selection, alias analysis, or code-
+generation algorithm. Other registers and general assembly remain absent.
+Broader compiler completion remains partial; this technical screen is not a
+clearance or infringement conclusion and does not replace independent human
+dual review.
+
 # 2026-08-26 — Explicit RCX inline-assembly input
 
 **Result: NOT_TRIGGERED after the explicit-RCX-input review.** This increment
