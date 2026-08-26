@@ -40,6 +40,71 @@ Complete installed-system enumeration and live recovered boot remain
 unimplemented. No patent-clearance or non-infringement conclusion is made;
 independent human review remains required.
 
+## 2026-08-26 — Bounded projected callee-origin state
+
+Patent review: **NOT_TRIGGERED** for this compiler-analysis foundation. It uses
+a conventional fixed table keyed by an existing stable local index and typed
+projection, with a monotonic generation and conservative branch intersection.
+It adds no alias-analysis algorithm, region solver, optimization, runtime
+enforcement, authority model, or external dependency. Transfer integration and
+broader compiler completion remain partial; this technical screen establishes
+neither clearance nor infringement and does not replace independent human dual
+review.
+
+## 2026-08-26 — Straight-line tuple-field callee-origin transfer
+
+Patent review: **NOT_TRIGGERED** for this bounded compiler-analysis increment.
+It connects the existing fixed projected-origin table to one exact typed tuple-
+field assignment and return lookup, using conventional equality, replacement,
+and conservative clearing. It adds no alias-analysis algorithm, region solver,
+optimization, runtime enforcement, authority model, or external dependency.
+Conditional and loop projected joins and broader compiler completion remain
+partial; this technical screen establishes neither clearance nor infringement
+and does not replace independent human dual review.
+
+## 2026-08-26 — Conditional tuple-field callee-origin join
+
+Patent review: **NOT_TRIGGERED** for this bounded compiler-analysis increment.
+It copies the existing fixed projected-origin table per conditional arm and
+uses its already reviewed conservative intersection for fallthrough outcomes.
+It adds no new alias-analysis algorithm, region solver, optimization, runtime
+enforcement, authority model, or external dependency. Projected loop joins and
+broader compiler completion remain partial; this technical screen establishes
+neither clearance nor infringement and does not replace independent human dual
+review.
+
+## 2026-08-26 — Stable loop tuple-field callee-origin transfer
+
+Patent review: **NOT_TRIGGERED** for this bounded compiler-analysis increment.
+It applies the existing conservative projected-origin intersection to the
+incoming and one-iteration loop states and normalizes a trailing identity
+dereference. It adds no fixed-point algorithm, alias-analysis algorithm, region
+solver, optimization, runtime enforcement, authority model, or external
+dependency. Broader loop and compiler completion remain partial; this technical
+screen establishes neither clearance nor infringement and does not replace
+independent human dual review.
+
+## 2026-08-26 — Tuple-literal projected-origin initialization
+
+Patent review: **NOT_TRIGGERED** for this bounded compiler-analysis increment.
+It maps explicit tuple-literal elements into the existing fixed typed projected-
+origin table using conventional type equality and parameter-origin lookup. It
+adds no aggregate-analysis algorithm, alias-analysis algorithm, region solver,
+optimization, runtime enforcement, authority model, or external dependency.
+Broader aggregate and compiler completion remain partial; this technical screen
+establishes neither clearance nor infringement and does not replace independent
+human dual review.
+
+## 2026-08-26 — Conditional multi-field initializer origins
+
+Patent review: **NOT_TRIGGERED**. This evidence increment applies the existing
+bounded expression-origin equality rule independently to explicit tuple fields.
+It adds no new control-flow, aggregate-analysis, alias-analysis, region-solving,
+optimization, runtime, authority, or dependency mechanism. Broader aggregate
+and compiler completion remain partial; this technical screen establishes
+neither clearance nor infringement and does not replace independent human dual
+review.
+
 ## 2026-08-26 — Activated-generation binding for Total inventory
 
 Patent review: **TRIGGERED** under the existing SystemRelease, deployment,
