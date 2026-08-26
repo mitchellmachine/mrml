@@ -4076,6 +4076,10 @@ static reinitialization point. A later use in the same iteration still blocks
 owner mutation, while an old loan does not flow through the next iteration's
 generation after its last use. The pinned oracle matches with E0506 and an
 accepted copy-before-mutation case. Both hosts remain at 989 compiler tests.
+Mutable-reference calls now retain the same paired evidence: mutation before a
+later result use fails, while copying first releases the exclusive loan before
+mutation and the next iteration. Pinned rustc matches with E0503 and acceptance;
+both hosts remain at 989 compiler tests.
 
 Exact typed tuple literals now seed the same projected state when a local is
 declared. Every reference field is checked against the declared tuple element

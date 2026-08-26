@@ -1219,6 +1219,10 @@ dynamic generation. A later static use reached only after wrapping past that
 generation cannot keep the prior iteration's loan alive. Shared-call mutation
 before a same-iteration use still fails; copying first releases the loan before
 mutation and the backedge. ORACLE-0002 matches with E0506 and acceptance.
+The same per-iteration generation rule now has mutable-reference call evidence:
+mutation before a later result use fails, while copying first releases the
+exclusive loan before mutation and the backedge. ORACLE-0002 matches with E0503
+and acceptance.
 
 The first modern trait-solver foundation is an explicit bounded implemented-
 goal representation. Stable trait/type/inference/placeholder identities remain

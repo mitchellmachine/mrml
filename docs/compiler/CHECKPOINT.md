@@ -870,6 +870,11 @@ fails with `RuntimeBorrowConflict`/E0506; copying the pointee first permits owne
 mutation and the next iteration. Windows and Arch remain at 989 compiler tests.
 This is a bounded generation rule, not a general loop-region fixed point.
 
+Mutable-reference identity calls now exercise the same loop-generation boundary.
+A later same-iteration result use rejects owner mutation with
+`RuntimeBorrowConflict`, matching ORACLE-0002 E0503; copy-before-mutation permits
+the backedge. Windows and Arch remain at 989 compiler tests per host.
+
 Direct and conditional return sites inside supported `loop` blocks now retain
 the projected callee summary's shared-child origin. Parameter-backed second
 arguments pass and matching loop-local second arguments fail closed. ORACLE-0002

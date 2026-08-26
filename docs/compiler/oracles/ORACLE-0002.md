@@ -222,6 +222,12 @@ owner, and allowed the loop backedge. This is exact non-lexical evidence across
 per-iteration reference generations, not a general loop-region fixed point.
 Temporary sources and metadata were removed.
 
+A mutable-reference identity-call `while` pair exercised the same generation
+boundary. This exact toolchain rejected owner mutation before a later result use
+with E0503 and compiled a companion that copied the pointee before mutation and
+the loop backedge. This is exact exclusive-loan generation evidence, not a
+general loop-region fixed point. Temporary sources and metadata were removed.
+
 An independently authored Rust 2024 metadata-only probe against this exact
 toolchain and commit accepted a mutable scalar reference returned from index
 zero of a mutable two-element array-reference parameter. The caller could reuse
