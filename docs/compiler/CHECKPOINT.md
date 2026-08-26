@@ -665,15 +665,15 @@ actions, a target-aware terminal, and exact ordering relative to surrounding
 nested-loop actions and controls. The CFG now assigns separate condition and
 scoped-action blocks, routes false fallthrough and target-aware true terminals,
 and maps condition/action/return ownership locations back to those control
-points. Compilation rejects the record at entry before evaluator or emitter
-selection, so origin transfer, semantics, and native emission remain
-unavailable without silent branch loss. Constant semantics are now implemented:
-taken actions use a scoped resolver checkpoint and target-aware break, continue,
-and return reuse the existing bounded loop evaluator. Direct and inline native
-x86-64 lowering now mirrors those actions, scoped cleanup, and terminals for
-scalar-only functions. A lexical reference-admission gate rejects the entire
-form before lowering when a signature or body contains reference syntax;
-origin transfer remains unavailable. ELF64 and COFF probes cover separate
+points. Branch-return origin transfer applies the exact scoped action prefix:
+parameter-backed reborrows are admitted and local-backed returns fail closed.
+Reference branch breaks and continues remain unavailable. Constant semantics
+are implemented: taken actions use a scoped resolver checkpoint and target-aware
+break, continue, and return reuse the existing bounded loop evaluator. Direct
+and inline native x86-64 lowering mirrors those actions, scoped cleanup, and
+terminals for scalar-only functions. Native reference-return branches are
+admitted only after that exact origin proof; reference break/continue branches
+remain rejected. ELF64 and COFF probes cover separate
 return, continue, and break prefixes. Windows and Arch each pass 645 library
 tests, one component-interface probe, 10 conformance tests, and 336 replacement
 tests: 992 compiler tests per host.

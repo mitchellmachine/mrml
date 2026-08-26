@@ -127,6 +127,14 @@ constant array-element output shapes only, not for dynamic indexing, general
 places, register allocation, or assembly semantics. Temporary source and
 metadata were removed.
 
+An independently authored Rust 2024 metadata-only nested-branch-return probe
+against this exact toolchain and commit accepted a mutable parameter reborrow
+inside a nested-loop conditional action block before returning that reborrow.
+This is black-box evidence for that exact parameter-backed return shape only;
+it does not establish branch break/continue destination state, general region
+inference, or local-backed return safety. Temporary source and metadata were
+removed.
+
 An independently authored Rust 2024 metadata-only nested-break set against this
 exact toolchain and commit accepted a local-initialized alias overwritten by the
 parameter before an inner unconditional-loop break and returned afterward.
