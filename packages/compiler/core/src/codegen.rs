@@ -635,6 +635,20 @@ pub fn compile_x86_64_function_with_options<
             kind: CodegenErrorKind::Body(error.kind),
             span: translate_span(function.body_expression_span.start, error.span),
         })?;
+    if parsed_body
+        .while_loops()
+        .iter()
+        .flatten()
+        .flat_map(|loop_statement| loop_statement.nested_blocks().iter().flatten())
+        .flat_map(|block| block.conditional_blocks().iter().flatten())
+        .filter_map(|branch| branch.else_arm())
+        .any(|arm| arm.condition().is_some())
+    {
+        return Err(CodegenError {
+            kind: CodegenErrorKind::RuntimeExpressionUnsupported,
+            span: function.body_expression_span,
+        });
+    }
     let mut body_has_aggregate_local = false;
     for local in parsed_body.locals().iter().flatten() {
         if local
@@ -41790,6 +41804,18 @@ mod tests {
                 .unwrap_err()
                 .kind,
             CodegenErrorKind::RuntimeReferenceOutlivesFunction,
+        );
+
+        let else_if = "#[unsafe(no_mangle)] pub extern \"C\" fn value(limit: u64, stop: u64) -> u64 { let mut outer: u64 = 0; let mut inner: u64 = 0; while outer < limit { loop { if inner == stop { let selected: u64 = outer + inner; return selected; } else if inner < limit { inner += 1; continue; } } } outer }";
+        let module = Parser::new(else_if).parse_module::<2, 2>().unwrap();
+        let Some(Item::Function(function)) = module.items()[0] else {
+            panic!("expected function")
+        };
+        assert_eq!(
+            compile_x86_64_function::<_, 256, 2, 16>(&function, &NoConstants, X86_64Abi::SystemV,)
+                .unwrap_err()
+                .kind,
+            CodegenErrorKind::RuntimeExpressionUnsupported,
         );
     }
 

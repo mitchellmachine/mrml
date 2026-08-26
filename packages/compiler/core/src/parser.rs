@@ -466,6 +466,8 @@ pub struct NestedLoopConditionalBlock<'source> {
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct NestedLoopConditionalArm<'source> {
+    condition: Option<&'source str>,
+    condition_span: Span,
     actions: [Option<ConditionalLoopAction<'source>>; MAX_CONDITIONAL_LOOP_ACTIONS],
     action_count: usize,
     pub terminal: NestedLoopUnconditionalControl<'source>,
@@ -492,6 +494,23 @@ impl<'source> NestedLoopConditionalBlock<'source> {
 }
 
 impl<'source> NestedLoopConditionalArm<'source> {
+    pub const fn condition(&self) -> Option<&'source str> {
+        self.condition
+    }
+
+    pub const fn condition_span(&self) -> Span {
+        self.condition_span
+    }
+
+    pub fn parse_condition<const MAX_NODES: usize>(
+        &self,
+    ) -> Result<Option<ExpressionTree<'source, MAX_NODES>>, ExpressionError> {
+        self.condition
+            .map(ExpressionParser::new)
+            .map(|parser| parser.parse())
+            .transpose()
+    }
+
     pub fn actions(&self) -> &[Option<ConditionalLoopAction<'source>>] {
         &self.actions[..self.action_count]
     }
@@ -1709,6 +1728,8 @@ impl<'source> BodyParser<'source> {
                     return Err(self.error(ParseErrorKind::UnexpectedClosingDelimiter, close));
                 }
                 return Ok(NestedLoopConditionalArm {
+                    condition: None,
+                    condition_span: Span { start: 0, end: 0 },
                     actions,
                     action_count,
                     terminal,
@@ -2451,22 +2472,40 @@ impl<'source> BodyParser<'source> {
                                 inner_label,
                                 label,
                             )?;
-                            let else_arm =
-                                if probe.peek()?.is_some_and(|token| token.text == "else") {
+                            let else_arm = if probe
+                                .peek()?
+                                .is_some_and(|token| token.text == "else")
+                            {
+                                probe.take()?;
+                                let else_condition_span = if probe
+                                    .peek()?
+                                    .is_some_and(|token| token.text == "if")
+                                {
                                     probe.take()?;
+                                    Some(
+                                        probe.delimited_until("{", ParseErrorKind::ExpectedBody)?.0,
+                                    )
+                                } else {
                                     let open = probe.take()?;
                                     if !open.is_some_and(|token| token.kind == TokenKind::OpenBrace)
                                     {
                                         return Err(probe.error(ParseErrorKind::ExpectedBody, open));
                                     }
-                                    Some(probe.nested_loop_conditional_arm(
-                                        &mut assignment_count,
-                                        inner_label,
-                                        label,
-                                    )?)
-                                } else {
                                     None
                                 };
+                                let mut arm = probe.nested_loop_conditional_arm(
+                                    &mut assignment_count,
+                                    inner_label,
+                                    label,
+                                )?;
+                                if let Some(span) = else_condition_span {
+                                    arm.condition = Some(&self.source[span.start..span.end]);
+                                    arm.condition_span = span;
+                                }
+                                Some(arm)
+                            } else {
+                                None
+                            };
                             let condition = ConditionalLoopControl {
                                 condition: &self.source[condition_span.start..condition_span.end],
                                 condition_span,
@@ -5614,6 +5653,32 @@ mod tests {
             else_arm.terminal,
             NestedLoopUnconditionalControl::Continue(NestedLoopControlTarget::Inner)
         );
+
+        let nested_branch_else_if = Parser::new(
+            "fn nested(primary: bool, alternative: bool) -> u8 { loop { loop { if primary { return 40; } else if alternative { let result: u8 = 50; return result; } } } }",
+        )
+        .parse_module::<1, 2>()
+        .unwrap();
+        let Some(Item::Function(function)) = nested_branch_else_if.items()[0] else {
+            panic!("expected function")
+        };
+        let body = function.parse_body::<2>().unwrap();
+        let outer = body.while_loops()[0].unwrap();
+        let Some(LoopOperation::NestedBlock(index)) = outer.operations()[0] else {
+            panic!("expected nested loop block")
+        };
+        let branch = outer.nested_blocks()[index].unwrap().conditional_blocks()[0].unwrap();
+        let else_if = branch.else_arm().expect("expected nested else-if arm");
+        assert_eq!(else_if.condition(), Some("alternative"));
+        assert!(else_if.condition_span().end > else_if.condition_span().start);
+        assert_eq!(else_if.action_count(), 1);
+        assert!(matches!(
+            else_if.terminal,
+            NestedLoopUnconditionalControl::Return(LoopReturn {
+                value: "result",
+                ..
+            })
+        ));
 
         let multiple_returns = Parser::new(
             "fn nested(limit: u64, first: u64, second: u64) -> u64 { let mut outer: u64 = 0; let mut inner: u64 = 0; while outer < limit { while inner < 3 { inner += 1; if inner == first { return 40; } if inner == second { return 50; } } outer += 1; inner = 0; } outer }",

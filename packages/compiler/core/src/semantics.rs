@@ -1541,6 +1541,24 @@ fn evaluate_const_loop<'source, const MAX_ITEMS: usize, const MAX_PARAMETERS: us
                                     {
                                         (branch.actions(), branch.terminal)
                                     } else if let Some(else_arm) = branch.else_arm() {
+                                        if let Some(condition) = else_arm
+                                            .parse_condition::<MAX_CONST_FUNCTION_EXPRESSION_NODES>(
+                                            )
+                                            .map_err(|error| {
+                                                SemanticErrorKind::Expression(error.kind)
+                                            })?
+                                        {
+                                            if !evaluate_boolean_const_expression(
+                                                context,
+                                                symbol_count,
+                                                &condition,
+                                                condition.root(),
+                                                resolver,
+                                                depth,
+                                            )? {
+                                                continue;
+                                            }
+                                        }
                                         (else_arm.actions(), else_arm.terminal)
                                     } else {
                                         continue;
@@ -5770,17 +5788,20 @@ mod tests {
     #[test]
     fn evaluates_actions_before_nested_branch_terminals() {
         let module = Parser::new(
-            "const fn choose(mode: u8) -> u8 { let mut inner: u8 = 0; loop { loop { inner += 1; if mode == 0 { let result: u8 = inner + 40; result + 1; return result; } if mode == 1 && inner < 3 { inner += 1; continue; } if mode == 2 { inner += 4; break; } break; } return inner; } } const fn choose_else(primary: bool) -> u8 { loop { loop { if primary { let result: u8 = 40; return result; } else { let result: u8 = 50; return result; } } } } const RETURNED: u8 = choose(0); const CONTINUED: u8 = choose(1); const BROKEN: u8 = choose(2); const FALLTHROUGH: u8 = choose(3); const PRIMARY: u8 = choose_else(true); const ELSE: u8 = choose_else(false);",
+            "const fn choose(mode: u8) -> u8 { let mut inner: u8 = 0; loop { loop { inner += 1; if mode == 0 { let result: u8 = inner + 40; result + 1; return result; } if mode == 1 && inner < 3 { inner += 1; continue; } if mode == 2 { inner += 4; break; } break; } return inner; } } const fn choose_else(primary: bool) -> u8 { loop { loop { if primary { let result: u8 = 40; return result; } else { let result: u8 = 50; return result; } } } } const fn choose_else_if(primary: bool, alternative: bool) -> u8 { let mut outer: u8 = 0; let mut inner: u8 = 0; while outer < 1 { loop { if primary { let selected: u8 = 60; return selected; } else if alternative { let result: u8 = 70; return result; } inner += 1; if inner == 1 { break; } } outer += 1; } 80 } const RETURNED: u8 = choose(0); const CONTINUED: u8 = choose(1); const BROKEN: u8 = choose(2); const FALLTHROUGH: u8 = choose(3); const PRIMARY: u8 = choose_else(true); const ELSE: u8 = choose_else(false); const ELSE_IF_PRIMARY: u8 = choose_else_if(true, false); const ELSE_IF_ALTERNATIVE: u8 = choose_else_if(false, true); const ELSE_IF_FALLTHROUGH: u8 = choose_else_if(false, false);",
         )
-        .parse_module::<9, 4>()
+        .parse_module::<12, 4>()
         .unwrap();
-        let values = analyze_constants::<6, 128, 9, 4>(&module, TargetLayout::X86_64).unwrap();
+        let values = analyze_constants::<9, 128, 12, 4>(&module, TargetLayout::X86_64).unwrap();
         assert_eq!(values.resolve("RETURNED"), Some(41));
         assert_eq!(values.resolve("CONTINUED"), Some(3));
         assert_eq!(values.resolve("BROKEN"), Some(5));
         assert_eq!(values.resolve("FALLTHROUGH"), Some(1));
         assert_eq!(values.resolve("PRIMARY"), Some(40));
         assert_eq!(values.resolve("ELSE"), Some(50));
+        assert_eq!(values.resolve("ELSE_IF_PRIMARY"), Some(60));
+        assert_eq!(values.resolve("ELSE_IF_ALTERNATIVE"), Some(70));
+        assert_eq!(values.resolve("ELSE_IF_FALLTHROUGH"), Some(80));
     }
 
     #[test]
