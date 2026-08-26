@@ -5718,3 +5718,16 @@ RIP-relative, symbolic, and relocation-bearing forms remain absent. Broader
 assembly support and compiler completion remain partial; this technical screen
 does not establish clearance or infringement and does not replace independent
 human dual review.
+
+# 2026-08-26 — Indexed and displaced naked memory operands
+
+**Result: NOT_TRIGGERED after the indexed-address review.** This increment
+extends the existing bounded memory encoder with the published x86-64 SIB scale
+field and conventional signed disp8/disp32 selection. Checked positional parsing
+limits each address to one base register, one optional index register, one
+architectural scale, and one signed `i32` displacement. It introduces no novel
+assembler, optimization, instruction-selection, relocation, or code-generation
+algorithm; RIP-relative, base-less, symbolic, and relocation-bearing forms
+remain absent. Broader assembly support and compiler completion remain partial;
+this technical screen does not establish clearance or infringement and does not
+replace independent human dual review.

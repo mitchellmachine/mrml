@@ -4609,12 +4609,14 @@ instruction set includes `nop`, `ret`, `int3`, `ud2`, `cli`, `sti`, `hlt`,
 full-width `mov r64, imm64`. Base-register memory operands support 64-bit
 `mov` loads/stores, memory-indirect `jmp`, and `lgdt`, `lidt`, and `invlpg`,
 including required SIB and zero-displacement encodings for `rsp`/`r12` and
-`rbp`/`r13`, with at most eight string-literal instructions. A quote-aware
+`rbp`/`r13`. The same typed address path accepts one optional index GPR at
+scale 1/2/4/8 and an optional checked signed `i32` displacement, selecting
+canonical disp8 or disp32 encodings, with at most eight string-literal instructions. A quote-aware
 bounded template scanner preserves operand commas without accepting escapes. A naked function must be
 unsafe, use the C ABI, have no parameters or where predicates, return unit or
 never, and end in an explicit terminating instruction. Exact machine-code tests
 prove that no prologue or epilogue bytes are inserted. Signed immediates,
-displaced/indexed/RIP-relative memory operands, labels, symbols, options,
+RIP-relative/base-less memory operands, labels, symbols, options,
 additional architectures, and general inline assembly remain fail-closed.
 Windows gnullvm and native Arch Linux WSL each pass 633 library tests,
 one component probe, 10 conformance tests, and 335 replacement tests: 979
