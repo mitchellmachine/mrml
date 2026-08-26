@@ -7621,6 +7621,16 @@ ambiguous cycles fail closed. Broader compiler completion remains partial; this
 technical screen is not a clearance or infringement conclusion and does not
 replace independent human dual review.
 
+# 2026-08-26 — Normalized conditional nested continues
+
+**Result: NOT_TRIGGERED after the normalized-continue review.** This increment
+reuses the existing bounded transfer replay and exact control-prefix equality
+checks for a conditional inner-continue edge. It adds no new solver, region or
+alias analysis, optimization, or code-generation algorithm. Non-idempotent or
+early-control paths fail closed. Broader compiler completion remains partial;
+this technical screen is not a clearance or infringement conclusion and does
+not replace independent human dual review.
+
 # 2026-08-26 — Conditional call-argument reborrow evidence
 
 **Result: NOT_TRIGGERED after the conditional reborrow evidence review.** This
