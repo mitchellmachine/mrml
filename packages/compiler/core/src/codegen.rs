@@ -635,29 +635,6 @@ pub fn compile_x86_64_function_with_options<
             kind: CodegenErrorKind::Body(error.kind),
             span: translate_span(function.body_expression_span.start, error.span),
         })?;
-    let has_nested_loop_else = parsed_body
-        .while_loops()
-        .iter()
-        .flatten()
-        .flat_map(|loop_statement| loop_statement.nested_blocks().iter().flatten())
-        .flat_map(|block| block.conditional_blocks().iter().flatten())
-        .any(|branch| branch.else_arm().is_some());
-    if has_nested_loop_else
-        && (function
-            .parameters()
-            .iter()
-            .flatten()
-            .any(|parameter| runtime_reference_type(parameter.ty.text).is_some())
-            || function
-                .return_type
-                .is_some_and(|ty| runtime_reference_type(ty.text).is_some())
-            || function.body_expression.contains('&'))
-    {
-        return Err(CodegenError {
-            kind: CodegenErrorKind::RuntimeExpressionUnsupported,
-            span: function.body_expression_span,
-        });
-    }
     let mut body_has_aggregate_local = false;
     for local in parsed_body.locals().iter().flatten() {
         if local
@@ -14658,6 +14635,8 @@ const fn runtime_location_is_exact_function_return_value(
             | RuntimeOwnershipEventLocation::LoopReturnValue { .. }
             | RuntimeOwnershipEventLocation::LoopConditionalTerminal { .. }
             | RuntimeOwnershipEventLocation::NestedLoopControlValue { .. }
+            | RuntimeOwnershipEventLocation::NestedLoopBranchValue { .. }
+            | RuntimeOwnershipEventLocation::NestedLoopBranchElseValue { .. }
             | RuntimeOwnershipEventLocation::ReturnValue { .. }
             | RuntimeOwnershipEventLocation::Tail
     )
@@ -41796,11 +41775,21 @@ mod tests {
         let Some(Item::Function(function)) = module.items()[0] else {
             panic!("expected function")
         };
+        assert!(
+            compile_x86_64_function::<_, 256, 2, 16>(&function, &NoConstants, X86_64Abi::SystemV,)
+                .is_ok(),
+        );
+
+        let local_else = "#[unsafe(no_mangle)] pub extern \"C\" fn value(input: &mut u64, stop: bool) -> &mut u64 { loop { loop { if stop { return input; } else { let mut local: u64 = 1; return &mut local; } } } }";
+        let module = Parser::new(local_else).parse_module::<2, 2>().unwrap();
+        let Some(Item::Function(function)) = module.items()[0] else {
+            panic!("expected function")
+        };
         assert_eq!(
             compile_x86_64_function::<_, 256, 2, 16>(&function, &NoConstants, X86_64Abi::SystemV,)
                 .unwrap_err()
                 .kind,
-            CodegenErrorKind::RuntimeExpressionUnsupported,
+            CodegenErrorKind::RuntimeReferenceOutlivesFunction,
         );
     }
 
