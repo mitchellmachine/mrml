@@ -15733,103 +15733,74 @@ fn runtime_reference_call_origin_parameter<const MAX_PARAMETERS: usize, const MA
             let terminal_order = terminal.map_or(usize::MAX, |(_, _, order)| order);
             let mut header_origins = local_origins;
             let mut header_projected = projected_origins.retain_local_prefix(local_count);
-            let mut header_count = 1usize;
-            for ((action_index, target_kind), control_order) in block
-                .conditional_continue_action_indices()
-                .iter()
-                .zip(block.conditional_continue_targets())
-                .zip(block.conditional_continue_control_orders())
-            {
-                if *target_kind != crate::NestedLoopControlTarget::Inner
-                    || *control_order >= terminal_order
+            let next_header = |source_origins, source_projected| {
+                let mut joined_origins = local_origins;
+                let mut joined_projected = projected_origins.retain_local_prefix(local_count);
+                let mut joined_count = 1usize;
+                for ((action_index, target_kind), control_order) in block
+                    .conditional_continue_action_indices()
+                    .iter()
+                    .zip(block.conditional_continue_targets())
+                    .zip(block.conditional_continue_control_orders())
                 {
-                    continue;
+                    if *target_kind != crate::NestedLoopControlTarget::Inner
+                        || *control_order >= terminal_order
+                    {
+                        continue;
+                    }
+                    let (_, origins, projected, _, _, _, _) =
+                        state_at_from(*action_index, source_origins, source_projected)?;
+                    merge_loop_exit_origins(
+                        &mut joined_origins,
+                        &mut joined_projected,
+                        &mut joined_count,
+                        origins,
+                        projected.retain_local_prefix(local_count),
+                        local_count,
+                    )?;
                 }
-                let (_, origins, projected, _, _, _, _) = state_at(*action_index)?;
-                merge_loop_exit_origins(
-                    &mut header_origins,
-                    &mut header_projected,
-                    &mut header_count,
-                    origins,
-                    projected.retain_local_prefix(local_count),
-                    local_count,
-                )?;
-            }
-            if terminal_is_inner_continue {
-                let (_, action_index, _) = terminal?;
-                let (_, origins, projected, _, _, _, _) = state_at(action_index)?;
-                merge_loop_exit_origins(
-                    &mut header_origins,
-                    &mut header_projected,
-                    &mut header_count,
-                    origins,
-                    projected.retain_local_prefix(local_count),
-                    local_count,
-                )?;
-            } else if terminal.is_none() {
-                let (_, origins, projected, _, _, _, _) = state_at(block.action_count())?;
-                merge_loop_exit_origins(
-                    &mut header_origins,
-                    &mut header_projected,
-                    &mut header_count,
-                    origins,
-                    projected.retain_local_prefix(local_count),
-                    local_count,
-                )?;
-            }
-
-            let mut repeated_origins = local_origins;
-            let mut repeated_projected = projected_origins.retain_local_prefix(local_count);
-            let mut repeated_count = 1usize;
-            for ((action_index, target_kind), control_order) in block
-                .conditional_continue_action_indices()
-                .iter()
-                .zip(block.conditional_continue_targets())
-                .zip(block.conditional_continue_control_orders())
-            {
-                if *target_kind != crate::NestedLoopControlTarget::Inner
-                    || *control_order >= terminal_order
+                if terminal_is_inner_continue {
+                    let (_, action_index, _) = terminal?;
+                    let (_, origins, projected, _, _, _, _) =
+                        state_at_from(action_index, source_origins, source_projected)?;
+                    merge_loop_exit_origins(
+                        &mut joined_origins,
+                        &mut joined_projected,
+                        &mut joined_count,
+                        origins,
+                        projected.retain_local_prefix(local_count),
+                        local_count,
+                    )?;
+                } else if terminal.is_none() {
+                    let (_, origins, projected, _, _, _, _) =
+                        state_at_from(block.action_count(), source_origins, source_projected)?;
+                    merge_loop_exit_origins(
+                        &mut joined_origins,
+                        &mut joined_projected,
+                        &mut joined_count,
+                        origins,
+                        projected.retain_local_prefix(local_count),
+                        local_count,
+                    )?;
+                }
+                Some((joined_origins, joined_projected))
+            };
+            let iteration_limit = local_count
+                .checked_add(header_projected.count)?
+                .checked_add(1)?;
+            let mut converged = false;
+            for _ in 0..iteration_limit {
+                let (next_origins, next_projected) = next_header(header_origins, header_projected)?;
+                if next_origins[..local_count] == header_origins[..local_count]
+                    && next_projected.has_same_origins(header_projected)
                 {
-                    continue;
+                    converged = true;
+                    break;
                 }
-                let (_, origins, projected, _, _, _, _) =
-                    state_at_from(*action_index, header_origins, header_projected)?;
-                merge_loop_exit_origins(
-                    &mut repeated_origins,
-                    &mut repeated_projected,
-                    &mut repeated_count,
-                    origins,
-                    projected.retain_local_prefix(local_count),
-                    local_count,
-                )?;
+                header_origins = next_origins;
+                header_projected = next_projected;
             }
-            if terminal_is_inner_continue {
-                let (_, action_index, _) = terminal?;
-                let (_, origins, projected, _, _, _, _) =
-                    state_at_from(action_index, header_origins, header_projected)?;
-                merge_loop_exit_origins(
-                    &mut repeated_origins,
-                    &mut repeated_projected,
-                    &mut repeated_count,
-                    origins,
-                    projected.retain_local_prefix(local_count),
-                    local_count,
-                )?;
-            } else if terminal.is_none() {
-                let (_, origins, projected, _, _, _, _) =
-                    state_at_from(block.action_count(), header_origins, header_projected)?;
-                merge_loop_exit_origins(
-                    &mut repeated_origins,
-                    &mut repeated_projected,
-                    &mut repeated_count,
-                    origins,
-                    projected.retain_local_prefix(local_count),
-                    local_count,
-                )?;
-            }
-            if repeated_origins[..local_count] != header_origins[..local_count]
-                || !repeated_projected.has_same_origins(header_projected)
-            {
+            if !converged {
                 return Some(false);
             }
 
@@ -38921,6 +38892,32 @@ mod tests {
                     "if third { continue; } changed = value; continue; } }"
                 ),
                 ..nested_multi_backedge
+            }),
+            None
+        );
+        assert_eq!(
+            runtime_reference_call_origin_parameter::<3, 80>(RuntimeCallTarget {
+                body_expression: concat!(
+                    "let mut local: u16 = 1; let mut a: &mut u16 = &mut *value; ",
+                    "let mut b: &mut u16 = &mut *value; loop { loop { ",
+                    "a = &mut *b; b = &mut local; ",
+                    "if first { continue; } a = &mut *value; ",
+                    "if second { break; } } return a; }"
+                ),
+                ..nested_continue
+            }),
+            Some(0)
+        );
+        assert_eq!(
+            runtime_reference_call_origin_parameter::<3, 80>(RuntimeCallTarget {
+                body_expression: concat!(
+                    "let mut local: u16 = 1; let mut a: &mut u16 = &mut *value; ",
+                    "let mut b: &mut u16 = &mut *value; loop { loop { ",
+                    "a = &mut *b; b = &mut local; ",
+                    "if second { break; } a = &mut *value; ",
+                    "if first { continue; } } return a; }"
+                ),
+                ..nested_continue
             }),
             None
         );
