@@ -15140,7 +15140,10 @@ fn runtime_reference_call_origin_parameter<const MAX_PARAMETERS: usize, const MA
         local_types: &[Option<RuntimeExpressionType>; MAX_PARAMETERS],
         local_count: usize,
     ) -> Option<()> {
-        let local_type @ RuntimeExpressionType::Tuple { element_count, .. } = local_type? else {
+        let Some(local_type) = local_type else {
+            return Some(());
+        };
+        let local_type @ RuntimeExpressionType::Tuple { element_count, .. } = local_type else {
             return Some(());
         };
         let ExprKind::Tuple {
@@ -31717,6 +31720,23 @@ mod tests {
                         body_expression: "let pair: (&mut u16,) = (value,); pair.0",
                     })
                 }
+                ("tuple_field_move", 1) if MAX_PARAMETERS >= 3 => {
+                    parameters[0] = Some(RuntimeCallParameter {
+                        name: "value",
+                        ty: reference,
+                    });
+                    Some(RuntimeCallTarget {
+                        name: "tuple_field_move",
+                        parameters,
+                        parameter_count: 1,
+                        return_type: reference,
+                        return_type_name: "&mut u16",
+                        body_expression: concat!(
+                            "let pair: (&mut u16,) = (value,); ",
+                            "let alias: &mut u16 = pair.0; alias"
+                        ),
+                    })
+                }
                 ("tuple_field_initialize_conditional", 3) if MAX_PARAMETERS >= 4 => {
                     parameters[0] = Some(RuntimeCallParameter {
                         name: "first",
@@ -31738,7 +31758,8 @@ mod tests {
                         return_type_name: "&mut u16",
                         body_expression: concat!(
                             "let pair: (&mut u16, &mut u16) = ",
-                            "(first, if choose { second } else { second }); pair.1"
+                            "(first, if choose { second } else { second }); ",
+                            "let alias: &mut u16 = pair.1; alias"
                         ),
                     })
                 }
@@ -35891,6 +35912,7 @@ mod tests {
             "fn value(input: &mut u16, repeat: bool, first: bool) -> u16 { let returned: &mut u16 = loop_branch_local_return(input, repeat, first); let competing: &mut u16 = &mut *input; *competing += 1; *returned }",
             "fn value(first: &mut u16, second: &mut u16) -> u16 { let returned: &mut u16 = tuple_field_assign(first, second); let competing: &mut u16 = &mut *second; *competing += 1; *returned }",
             "fn value(input: &mut u16) -> u16 { let returned: &mut u16 = tuple_field_initialize(input); let competing: &mut u16 = &mut *input; *competing += 1; *returned }",
+            "fn value(input: &mut u16) -> u16 { let returned: &mut u16 = tuple_field_move(input); let competing: &mut u16 = &mut *input; *competing += 1; *returned }",
             "fn value(first: &mut u16, second: &mut u16, choose: bool) -> u16 { let returned: &mut u16 = tuple_field_initialize_conditional(first, second, choose); let competing: &mut u16 = &mut *second; *competing += 1; *returned }",
             "fn value(first: &mut u16, second: &mut u16, choose: bool) -> u16 { let returned: &mut u16 = branch_tuple_field_assign(first, second, choose); let competing: &mut u16 = &mut *second; *competing += 1; *returned }",
             "fn value(first: &mut u16, second: &mut u16, repeat: bool) -> u16 { let returned: &mut u16 = loop_tuple_field_assign(first, second, repeat); let competing: &mut u16 = &mut *second; *competing += 1; *returned }",
@@ -35913,6 +35935,7 @@ mod tests {
             "fn value(input: &mut u16, repeat: bool, first: bool) -> u16 { let returned: &mut u16 = loop_branch_local_return(input, repeat, first); *returned += 1; let restored: &mut u16 = &mut *input; *restored }",
             "fn value(first: &mut u16, second: &mut u16) -> u16 { let returned: &mut u16 = tuple_field_assign(first, second); *returned += 1; let restored: &mut u16 = &mut *second; *restored }",
             "fn value(input: &mut u16) -> u16 { let returned: &mut u16 = tuple_field_initialize(input); *returned += 1; let restored: &mut u16 = &mut *input; *restored }",
+            "fn value(input: &mut u16) -> u16 { let returned: &mut u16 = tuple_field_move(input); *returned += 1; let restored: &mut u16 = &mut *input; *restored }",
             "fn value(first: &mut u16, second: &mut u16, choose: bool) -> u16 { let returned: &mut u16 = tuple_field_initialize_conditional(first, second, choose); *returned += 1; let restored: &mut u16 = &mut *second; *restored }",
             "fn value(first: &mut u16, second: &mut u16, choose: bool) -> u16 { let returned: &mut u16 = branch_tuple_field_assign(first, second, choose); *returned += 1; let restored: &mut u16 = &mut *second; *restored }",
             "fn value(first: &mut u16, second: &mut u16, repeat: bool) -> u16 { let returned: &mut u16 = loop_tuple_field_assign(first, second, repeat); *returned += 1; let restored: &mut u16 = &mut *second; *restored }",
@@ -35947,6 +35970,24 @@ mod tests {
         assert_eq!(
             runtime_reference_call_origin_parameter::<2, 16>(tuple_field_initialize),
             Some(0)
+        );
+        let tuple_field_move = MutableReferenceCallResolver
+            .resolve_runtime_call::<3>("tuple_field_move", 1)
+            .unwrap();
+        assert_eq!(
+            runtime_reference_call_origin_parameter::<3, 24>(tuple_field_move),
+            Some(0)
+        );
+        assert_eq!(
+            runtime_reference_call_origin_parameter::<3, 24>(RuntimeCallTarget {
+                body_expression: concat!(
+                    "let mut local_value: u16 = 1; ",
+                    "let pair: (&mut u16,) = (&mut local_value,); ",
+                    "let alias: &mut u16 = pair.0; alias"
+                ),
+                ..tuple_field_move
+            }),
+            None
         );
         assert_eq!(
             runtime_reference_call_origin_parameter::<2, 16>(RuntimeCallTarget {
