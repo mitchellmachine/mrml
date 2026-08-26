@@ -14993,6 +14993,7 @@ fn runtime_reference_call_origin_parameter<const MAX_PARAMETERS: usize, const MA
         assignment: crate::Assignment<'_>,
         local_names: &[Option<&str>; MAX_PARAMETERS],
         local_origins: &mut [Option<usize>; MAX_PARAMETERS],
+        local_types: &[Option<RuntimeExpressionType>; MAX_PARAMETERS],
         local_mutability: &[bool; MAX_PARAMETERS],
         local_return_compatibility: &[bool; MAX_PARAMETERS],
         local_count: usize,
@@ -15011,7 +15012,7 @@ fn runtime_reference_call_origin_parameter<const MAX_PARAMETERS: usize, const MA
         let tree = crate::ExpressionParser::<MAX_NODES>::new(assignment.value)
             .parse()
             .ok()?;
-        local_origins[local_index] = recurse(
+        let origin = recurse(
             target,
             &tree,
             tree.root(),
@@ -15020,6 +15021,21 @@ fn runtime_reference_call_origin_parameter<const MAX_PARAMETERS: usize, const MA
             local_origins,
             local_count,
         );
+        let assignment_type = inferred_reference_expression_type(
+            target,
+            &tree,
+            tree.root(),
+            local_names,
+            local_types,
+            local_count,
+            0,
+        )?;
+        if !local_types[local_index]
+            .is_some_and(|local_type| runtime_types_compatible(assignment_type, local_type))
+        {
+            return None;
+        }
+        local_origins[local_index] = origin;
         Some(())
     }
 
@@ -15074,6 +15090,7 @@ fn runtime_reference_call_origin_parameter<const MAX_PARAMETERS: usize, const MA
                         assignment,
                         local_names,
                         local_origins,
+                        local_types,
                         local_mutability,
                         local_return_compatibility,
                         *local_count,
@@ -15261,6 +15278,7 @@ fn runtime_reference_call_origin_parameter<const MAX_PARAMETERS: usize, const MA
                     assignment,
                     &local_names,
                     &mut local_origins,
+                    &local_types,
                     &local_mutability,
                     &local_return_compatibility,
                     local_count,
@@ -15403,6 +15421,7 @@ fn runtime_reference_call_origin_parameter<const MAX_PARAMETERS: usize, const MA
                                     assignment,
                                     &iteration_names,
                                     &mut iteration_origins,
+                                    &iteration_types,
                                     &iteration_mutability,
                                     &iteration_return_compatibility,
                                     iteration_local_count,
@@ -35789,6 +35808,33 @@ mod tests {
         assert_eq!(
             runtime_reference_call_origin_parameter::<2, 16>(shared_array_element_alias),
             Some(0)
+        );
+        assert_eq!(
+            runtime_reference_call_origin_parameter::<2, 24>(RuntimeCallTarget {
+                body_expression: concat!(
+                    "let mut alias: &u16 = &mut values[0]; ",
+                    "alias = &mut values[1]; alias"
+                ),
+                ..shared_array_element_alias
+            }),
+            Some(0)
+        );
+        let mut shared_assignment_parameters = shared_array_element_alias.parameters;
+        shared_assignment_parameters[1] = Some(RuntimeCallParameter {
+            name: "alternate",
+            ty: shared_array_element_alias.return_type,
+        });
+        assert_eq!(
+            runtime_reference_call_origin_parameter::<2, 24>(RuntimeCallTarget {
+                parameters: shared_assignment_parameters,
+                parameter_count: 2,
+                body_expression: concat!(
+                    "let mut alias: &mut u16 = &mut values[0]; ",
+                    "alias = alternate; alias"
+                ),
+                ..shared_array_element_alias
+            }),
+            None
         );
         assert_eq!(
             runtime_reference_call_origin_parameter::<2, 24>(RuntimeCallTarget {
