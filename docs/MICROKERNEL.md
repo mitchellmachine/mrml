@@ -3053,8 +3053,14 @@ assignments; the authenticated release derives both classes and reasons before
 construction. Complete membership, distinct package identity, and the typed
 host-substrate/non-substrate reason shape are checked allocation-free. A
 descriptive release reason cannot choose `HostSubstrateReason`, and neither
-metadata nor assignment authorizes the domain. General installed-generation
-domain planning remains **PLANNED**.
+metadata nor assignment authorizes the domain. The runners now build those
+assignments through a fixed-capacity `RuntimeDomainAssignmentPlan` that retains
+the exact activated signed release, enumerates its runtime members, and refuses
+to seal on an unknown, duplicate, omitted, or excess package. This is a
+control-plane completeness boundary, not a capability: ordinary launch
+admission must establish authority before the resulting stable interface data
+plane takes its shortest safe path. General policy-driven installed-generation
+planning remains **PLANNED**.
 
 Patent review: `TRIGGERED` under the existing signed-release, adaptive
 isolation, Total-MicroVM, automated VMM placement, and device-projection reviews

@@ -922,7 +922,13 @@ and descriptive exception reason; omission, identity substitution, duplicate
 assignment, and attaching a typed host-substrate reason to a non-substrate
 record fail before construction. Host-substrate enum selection remains explicit
 architectural policy because descriptive release text cannot select a kernel
-value. Assignments and metadata remain non-authorizing.
+value. Their fixed-capacity assignment plan enumerates the exact activated
+release membership, rejects unknown, duplicate, omitted, and excess members,
+and yields an activated inventory only when complete. Assignments and metadata
+remain non-authorizing: the normal control plane establishes each domain's
+capabilities and resources before its established data plane can take the
+shortest safe path. General policy selection and boot orchestration remain
+**PLANNED**.
 
 Its canonical package-to-runtime classification prerequisite is now
 **PARTIALLY IMPLEMENTED** as the allocation-free `MRMLRI1` runtime-inventory

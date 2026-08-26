@@ -1,6 +1,6 @@
 use mrml_package_format::{
-    ActivatedSystemGeneration, ActivatedSystemRelease, RuntimeIsolationClass, SystemReleaseError,
-    parse_system_release,
+    ActivatedSystemGeneration, ActivatedSystemRelease, RuntimeInventoryView, RuntimeIsolationClass,
+    SystemReleaseError, parse_system_release,
 };
 
 use crate::{
@@ -117,6 +117,133 @@ pub enum ReleaseInventoryError {
     HostSubstrateReasonMismatch,
     ActivatedGenerationMismatch,
     Inventory(TotalMicrovmRuntimeError),
+}
+
+/// Fixed-capacity control-plane transaction for assigning every authenticated
+/// installed release member to one policy-selected runtime domain. The plan
+/// retains the exact activated release identity and cannot be sealed with an
+/// unknown, duplicate, omitted, or excess package. Domain identity still
+/// carries no authority; normal launch admission must authorize each route.
+pub struct RuntimeDomainAssignmentPlan<'a, const N: usize> {
+    release_bytes: &'a [u8],
+    expected_key_id: [u8; 64],
+    active: ActivatedSystemRelease,
+    runtime: RuntimeInventoryView<'a>,
+    policy_generation: u64,
+    assignments: [RuntimeDomainAssignment<'a>; N],
+    count: usize,
+}
+
+impl<'a, const N: usize> RuntimeDomainAssignmentPlan<'a, N> {
+    pub fn new(
+        release_bytes: &'a [u8],
+        expected_key_id: &[u8; 64],
+        active: ActivatedSystemRelease,
+        policy_generation: u64,
+    ) -> Result<Self, ReleaseInventoryError> {
+        let release =
+            parse_system_release(release_bytes).map_err(ReleaseInventoryError::Release)?;
+        let runtime = release
+            .runtime_inventory()
+            .ok_or(ReleaseInventoryError::MissingRuntimeInventory)?;
+        if *expected_key_id == [0; 64] || release.key_id() != *expected_key_id {
+            return Err(ReleaseInventoryError::SignerMismatch);
+        }
+        if runtime.package_count() as usize > N || runtime.package_count() == 0 {
+            return Err(ReleaseInventoryError::BindingCount);
+        }
+        let generation = active.generation();
+        if generation.generation() != release.generation().generation()
+            || generation.generation_digest() != &release.generation().digest()
+            || generation.interface_catalog_digest() != &release.interface_catalog().digest()
+            || active.release() != release.identity()
+        {
+            return Err(ReleaseInventoryError::ActivatedGenerationMismatch);
+        }
+        let placeholder = RuntimeDomainAssignment {
+            package_id: "",
+            domain: ObjectId(0),
+            host_substrate_reason: None,
+        };
+        Ok(Self {
+            release_bytes,
+            expected_key_id: *expected_key_id,
+            active,
+            runtime,
+            policy_generation,
+            assignments: [placeholder; N],
+            count: 0,
+        })
+    }
+
+    pub const fn expected_len(&self) -> usize {
+        self.runtime.package_count() as usize
+    }
+
+    pub const fn assigned_len(&self) -> usize {
+        self.count
+    }
+
+    pub fn packages(&self) -> impl Iterator<Item = &'a str> + '_ {
+        self.runtime.records().map(|record| record.package_id)
+    }
+
+    pub fn assign(
+        &mut self,
+        package_id: &'a str,
+        domain: ObjectId,
+    ) -> Result<(), ReleaseInventoryError> {
+        self.assign_record(RuntimeDomainAssignment::new(package_id, domain)?)
+    }
+
+    pub fn assign_host_substrate(
+        &mut self,
+        package_id: &'a str,
+        domain: ObjectId,
+        reason: HostSubstrateReason,
+    ) -> Result<(), ReleaseInventoryError> {
+        self.assign_record(RuntimeDomainAssignment::host_substrate(
+            package_id, domain, reason,
+        )?)
+    }
+
+    fn assign_record(
+        &mut self,
+        assignment: RuntimeDomainAssignment<'a>,
+    ) -> Result<(), ReleaseInventoryError> {
+        if self.count >= self.expected_len() || self.count >= N {
+            return Err(ReleaseInventoryError::BindingCount);
+        }
+        if !self
+            .runtime
+            .records()
+            .any(|record| record.package_id == assignment.package_id)
+        {
+            return Err(ReleaseInventoryError::MissingBinding);
+        }
+        if self.assignments[..self.count]
+            .iter()
+            .any(|present| present.package_id == assignment.package_id)
+        {
+            return Err(ReleaseInventoryError::DuplicateBinding);
+        }
+        self.assignments[self.count] = assignment;
+        self.count += 1;
+        Ok(())
+    }
+
+    pub fn seal(self) -> Result<ActivatedReleaseTotalMicrovmInventory<N>, ReleaseInventoryError> {
+        if self.count != self.expected_len() {
+            return Err(ReleaseInventoryError::BindingCount);
+        }
+        total_inventory_from_system_release_assignments::<N>(
+            self.release_bytes,
+            &self.expected_key_id,
+            self.policy_generation,
+            &self.assignments[..self.count],
+        )?
+        .bind_activated(self.active)
+    }
 }
 
 /// Complete Total inventory whose package classifications and system
@@ -943,6 +1070,89 @@ mod tests {
                 &substituted,
             ),
             Err(ReleaseInventoryError::MissingBinding)
+        ));
+    }
+
+    #[test]
+    fn installed_assignment_plan_enumerates_and_seals_exact_release_membership() {
+        let (release, release_length, key_id) = build_colocated_release();
+        let parsed = parse_system_release(&release[..release_length]).unwrap();
+        let generation = ActivatedSystemGeneration::new(
+            parsed.generation().generation(),
+            parsed.generation().digest(),
+            parsed.interface_catalog().digest(),
+            7,
+            0x5155,
+            3,
+        )
+        .unwrap();
+        let active = ActivatedSystemRelease::new(generation, parsed.identity());
+        let domain = ObjectId(0x5a49_4d5f_5a53_5444);
+        let mut plan = RuntimeDomainAssignmentPlan::<2>::new(
+            &release[..release_length],
+            &key_id,
+            active,
+            POLICY,
+        )
+        .unwrap();
+        assert_eq!(plan.expected_len(), 2);
+        assert_eq!(plan.assigned_len(), 0);
+        let mut packages = plan.packages();
+        assert_eq!(packages.next(), Some("org.mrml.zim"));
+        assert_eq!(packages.next(), Some("org.mrml.zstd"));
+        assert_eq!(packages.next(), None);
+        drop(packages);
+        plan.assign("org.mrml.zim", domain).unwrap();
+        plan.assign("org.mrml.zstd", domain).unwrap();
+        let inventory = plan.seal().unwrap();
+        assert_eq!(inventory.active_release(), active);
+        assert_eq!(inventory.release().len(), 1);
+        assert!(
+            inventory
+                .release()
+                .entries()
+                .next()
+                .unwrap()
+                .must_be_running()
+        );
+
+        let mut incomplete = RuntimeDomainAssignmentPlan::<2>::new(
+            &release[..release_length],
+            &key_id,
+            active,
+            POLICY,
+        )
+        .unwrap();
+        incomplete.assign("org.mrml.zim", domain).unwrap();
+        assert!(matches!(
+            incomplete.seal(),
+            Err(ReleaseInventoryError::BindingCount)
+        ));
+
+        let mut hostile = RuntimeDomainAssignmentPlan::<2>::new(
+            &release[..release_length],
+            &key_id,
+            active,
+            POLICY,
+        )
+        .unwrap();
+        assert_eq!(
+            hostile.assign("org.mrml.other", domain),
+            Err(ReleaseInventoryError::MissingBinding)
+        );
+        hostile.assign("org.mrml.zim", domain).unwrap();
+        assert_eq!(
+            hostile.assign("org.mrml.zim", ObjectId(domain.0 + 1)),
+            Err(ReleaseInventoryError::DuplicateBinding)
+        );
+        assert!(matches!(
+            RuntimeDomainAssignmentPlan::<1>::new(
+                &release[..release_length],
+                &key_id,
+                active,
+                POLICY,
+            ),
+            Err(ReleaseInventoryError::BindingCount)
         ));
     }
 

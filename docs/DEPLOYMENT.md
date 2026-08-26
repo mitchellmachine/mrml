@@ -181,7 +181,13 @@ one-for-one package/domain set; the signed runtime inventory supplies class and
 descriptive reason. Only the typed host-substrate enum reason remains explicit
 architecture input, and it is rejected for every other release class. Neither
 the assignment nor the release grants a capability. The focused WHP/KVM path
-uses this adapter; automatic installed-system domain planning remains
+now constructs a fixed-capacity `RuntimeDomainAssignmentPlan` from the exact
+activated signed release. The plan enumerates every authenticated runtime
+member and can seal only after each has one policy-selected domain; unknown,
+duplicate, omitted, or excess members fail closed. This is an authority-free
+control-plane transaction: normal capability-authorized launch admission must
+still establish each route before its shortest-safe-path data plane may run.
+Automatic policy selection and complete installed-system orchestration remain
 **PLANNED**.
 
 - Complexity impact: MEDIUM

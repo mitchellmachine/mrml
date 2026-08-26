@@ -250,8 +250,13 @@ boot-only, recovery-only, and unsupported-blocker classes plus descriptive
 reasons. Host-substrate enum reasons remain explicit architecture input and are
 accepted only for release records in that class. Omission, substitution,
 duplicates, and class/reason-shape mismatch fail before backend construction.
-The focused WHP/KVM release path uses this API; general installed-generation
-domain assignment remains **PLANNED**.
+The focused WHP/KVM release path now uses a fixed-capacity plan that enumerates
+the exact activated release membership and seals only after every member has
+one assignment; unknown, duplicate, omitted, and excess packages fail. The plan
+is non-authorizing control-plane data, so normal capability/resource admission
+still precedes the shortest-safe-path interface data plane. General policy
+selection, complete installed-generation orchestration, and live boot recovery
+remain **PLANNED**.
 
 The first half of that gate is now **PARTIALLY IMPLEMENTED**: `MRMLRI1` is a
 bounded canonical runtime-inventory catalog whose records exact-bind every

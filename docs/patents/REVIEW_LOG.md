@@ -1,5 +1,19 @@
 # Patent review log
 
+## 2026-08-26 — Sealed installed-domain assignment plan
+
+Patent review: **TRIGGERED** under the existing SystemRelease, deployment,
+adaptive-isolation, Total-MicroVM, and VMM reviews. This increment uses a
+conventional fixed-capacity transaction to enumerate the exact authenticated
+runtime inventory and reject unknown, duplicate, omitted, or excess package
+assignments before producing an activated inventory. It adds no parser or
+signature format, placement or scheduling heuristic, authority grant, native
+fallback, VM/device protocol, DMA mechanism, or hardware-specific isolation
+mechanism. General policy selection, live boot/recovery orchestration, and
+complete installed-system readiness remain unimplemented. No patent-clearance
+or non-infringement conclusion is made; independent human review remains
+required.
+
 ## 2026-08-26 — Persistent SystemRelease identity for Total admission
 
 Patent review: **TRIGGERED** under the existing SystemRelease, deployment,
