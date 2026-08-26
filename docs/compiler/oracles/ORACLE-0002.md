@@ -134,3 +134,11 @@ input `inout`. This records black-box acceptance of those exact mutable-
 reference dereference shapes only; it does not establish general pointer,
 memory-effect, place, register-allocation, or assembly semantics. Temporary
 source and metadata were removed.
+
+An independently authored Rust 2024 metadata-only probe against the same exact
+toolchain and commit compiled `values[index]` output places for a mutable
+`[u64; 2]` and runtime `usize` parameter in explicit RAX `lateout`, same-place
+`inout`, and distinct-input `inout` forms. This establishes black-box acceptance
+of those exact dynamic-index shapes only, not evaluation order for effectful
+index expressions, general place semantics, register allocation, memory effects,
+or general assembly. Temporary source and metadata were removed.

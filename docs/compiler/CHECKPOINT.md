@@ -1598,6 +1598,17 @@ authored mutable-reference shapes. Windows gnullvm and native Arch Linux WSL
 each pass 985 compiler tests. Dynamic indexes, nested projections, general
 memory operands/effects, and general assembly remain absent.
 
+The dynamic indexed-output milestone accepts `values[index]` when `values` is a
+mutable `[u64; N]` local and `index` is an exact local or parameter of type
+`usize`. Preanalysis records the index read and an `Index` output projection.
+Emission evaluates the identifier once, traps when it is not less than `N`,
+saves the checked value across the fixed RAX operation, and reuses the existing
+bounded array-element load/store selector. Explicit `lateout`, same-place
+`inout`, and distinct `inout` are covered. The exact dated oracle accepted all
+three original forms. Windows gnullvm and native Arch Linux WSL each pass 985
+compiler tests. General index expressions, nested projections, reference-array
+index outputs, and general assembly remain absent.
+
 The premise-bearing rigid-normalization milestone proves the selected generic
 implementation's instantiated trait and projection predicates before exposing
 its associated value. It shares the caller's 16-frame rigid proof stack and

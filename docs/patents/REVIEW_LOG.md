@@ -3992,6 +3992,19 @@ live WHP/KVM execution remain unimplemented. This technical screen does not
 establish clearance or infringement and does not replace independent human
 dual review.
 
+# 2026-08-26 — Dynamic indexed inline-assembly outputs
+
+**Result: NOT_TRIGGERED after the dynamic-index review.** This increment reuses
+MRML's existing conventional typed index read, unsigned bounds check, saved
+index, and bounded array-element selection for previously reviewed fixed RAX
+output paths. Explicit `Index` ownership projection, one-evaluation bookkeeping,
+ordinary trap branching, and fail-closed type/mutability validation introduce no
+novel assembler, register-allocation, optimization, bounds-check, alias-analysis,
+instruction-selection, or code-generation algorithm. General index expressions,
+nested projections, and general assembly remain absent. Broader compiler
+completion remains partial; this technical screen does not establish clearance
+or infringement and does not replace independent human dual review.
+
 # 2026-08-26 — Exact application artifact/generation binding
 
 **Result: NOT_TRIGGERED after the existing signed-artifact, SystemGeneration,
