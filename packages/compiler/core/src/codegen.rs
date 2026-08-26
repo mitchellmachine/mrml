@@ -38479,6 +38479,52 @@ mod tests {
             }),
             None
         );
+        assert_eq!(
+            runtime_reference_call_origin_parameter::<2, 48>(RuntimeCallTarget {
+                body_expression: concat!(
+                    "let mut local: u16 = 1; let mut changed: &mut u16 = &mut local; ",
+                    "'outer: loop { loop { changed = value; ",
+                    "if first { break 'outer; } break; } return changed; } changed"
+                ),
+                ..nested_loop
+            }),
+            Some(0)
+        );
+        assert_eq!(
+            runtime_reference_call_origin_parameter::<2, 48>(RuntimeCallTarget {
+                body_expression: concat!(
+                    "let mut local: u16 = 1; let mut changed: &mut u16 = value; ",
+                    "'outer: loop { loop { changed = &mut local; ",
+                    "if first { break 'outer; } changed = value; break; } ",
+                    "return changed; } changed"
+                ),
+                ..nested_loop
+            }),
+            None
+        );
+        assert_eq!(
+            runtime_reference_call_origin_parameter::<2, 48>(RuntimeCallTarget {
+                body_expression: concat!(
+                    "let mut changed: &mut u16 = &mut *value; 'outer: while first { ",
+                    "loop { changed = &mut *value; if first { continue 'outer; } ",
+                    "break; } break 'outer; } changed"
+                ),
+                ..nested_loop
+            }),
+            Some(0)
+        );
+        assert_eq!(
+            runtime_reference_call_origin_parameter::<2, 48>(RuntimeCallTarget {
+                body_expression: concat!(
+                    "let mut local: u16 = 1; let mut changed: &mut u16 = &mut *value; ",
+                    "'outer: while first { loop { changed = &mut *value; ",
+                    "if first { continue 'outer; } changed = &mut local; break; } ",
+                    "break 'outer; } changed"
+                ),
+                ..nested_loop
+            }),
+            None
+        );
     }
 
     #[test]
