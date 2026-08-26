@@ -2119,7 +2119,7 @@ fn x86_64_inline_assembly(
             .strip_prefix("options(")
             .and_then(|options| options.strip_suffix(')'))
             .ok_or(CodegenErrorKind::InvalidInlineAssembly)?;
-        x86_64_inline_assembly_options(options, true)?;
+        x86_64_inline_assembly_options(options, true, false)?;
         return Ok(Some(X86_64InlineAssembly::Nop));
     }
     if let Some(named) = arguments.strip_prefix("\"inc {") {
@@ -2146,7 +2146,7 @@ fn x86_64_inline_assembly(
             .strip_prefix("inout(reg)")
             .ok_or(CodegenErrorKind::InvalidInlineAssembly)?
             .trim();
-        let operand = x86_64_inline_operand_with_options(operand, false)?;
+        let operand = x86_64_inline_operand_with_options(operand, false, true)?;
         let (input, output) = x86_64_inline_inout_places(operand)?;
         return Ok(Some(X86_64InlineAssembly::IncrementRax { input, output }));
     }
@@ -2183,7 +2183,11 @@ fn x86_64_inline_assembly(
         .strip_prefix(operand_prefix)
         .ok_or(CodegenErrorKind::InvalidInlineAssembly)?
         .trim();
-    let input = x86_64_inline_operand_with_options(arguments, preserves_flags)?;
+    let has_output = matches!(
+        operand_kind,
+        X86_64InlineOperandKind::Output | X86_64InlineOperandKind::InOut
+    );
+    let input = x86_64_inline_operand_with_options(arguments, preserves_flags, has_output)?;
     match operand_kind {
         X86_64InlineOperandKind::Input => Ok(Some(X86_64InlineAssembly::CompareRax { input })),
         X86_64InlineOperandKind::Output => Ok(Some(X86_64InlineAssembly::SetRax { output: input })),
@@ -2197,6 +2201,7 @@ fn x86_64_inline_assembly(
 fn x86_64_inline_operand_with_options(
     arguments: &str,
     preserves_flags: bool,
+    has_output: bool,
 ) -> Result<&str, CodegenErrorKind> {
     let (operand, options) = if let Some(options_start) = arguments.rfind(", options(") {
         let options = arguments[options_start + 2..]
@@ -2212,7 +2217,7 @@ fn x86_64_inline_operand_with_options(
         return Err(CodegenErrorKind::InvalidInlineAssembly);
     }
     if let Some(options) = options {
-        x86_64_inline_assembly_options(options, preserves_flags)?;
+        x86_64_inline_assembly_options(options, preserves_flags, has_output)?;
     }
     Ok(operand)
 }
@@ -2230,16 +2235,21 @@ fn x86_64_inline_inout_places(operand: &str) -> Result<(&str, Option<&str>), Cod
 fn x86_64_inline_assembly_options(
     options: &str,
     allow_preserves_flags: bool,
+    has_output: bool,
 ) -> Result<(), CodegenErrorKind> {
     let mut seen_nomem = false;
     let mut seen_nostack = false;
     let mut seen_preserves_flags = false;
+    let mut seen_pure = false;
+    let mut seen_readonly = false;
     let mut option_count = 0usize;
     for option in options.split(',').map(str::trim) {
         let seen = match option {
             "nomem" => &mut seen_nomem,
             "nostack" => &mut seen_nostack,
             "preserves_flags" if allow_preserves_flags => &mut seen_preserves_flags,
+            "pure" => &mut seen_pure,
+            "readonly" if has_output => &mut seen_readonly,
             _ => return Err(CodegenErrorKind::InvalidInlineAssembly),
         };
         if option.is_empty() || *seen {
@@ -2249,6 +2259,9 @@ fn x86_64_inline_assembly_options(
         option_count += 1;
     }
     if option_count == 0 {
+        return Err(CodegenErrorKind::InvalidInlineAssembly);
+    }
+    if seen_nomem && seen_readonly || seen_pure && (!has_output || !(seen_nomem || seen_readonly)) {
         return Err(CodegenErrorKind::InvalidInlineAssembly);
     }
     Ok(())
@@ -29828,6 +29841,21 @@ mod tests {
                 "let mut output: u64 = 0; asm!(\"inc {slot}\", slot = inout(reg) input => output, ",
                 "options(nomem, nostack)); output }"
             ),
+            concat!(
+                "#[unsafe(no_mangle)] pub unsafe extern \"C\" fn answer() -> u64 { ",
+                "let mut value: u64 = 6; asm!(\"inc {value}\", value = inout(reg) value, ",
+                "options(pure, nomem)); value }"
+            ),
+            concat!(
+                "#[unsafe(no_mangle)] pub unsafe extern \"C\" fn answer() -> u64 { ",
+                "let mut value: u64 = 6; asm!(\"inc {value}\", value = inout(reg) value, ",
+                "options(pure, readonly)); value }"
+            ),
+            concat!(
+                "#[unsafe(no_mangle)] pub unsafe extern \"C\" fn answer() -> u64 { ",
+                "let mut value: u64 = 6; asm!(\"inc {value}\", value = inout(reg) value, ",
+                "options(readonly)); value }"
+            ),
         ] {
             let code = compile(source).unwrap();
             assert!(
@@ -29940,6 +29968,18 @@ mod tests {
             ),
             (
                 "#[unsafe(no_mangle)] pub unsafe extern \"C\" fn answer() -> u64 { let mut value: u64 = 6; asm!(\"inc {value} {value}\", value = inout(reg) value); value }",
+                CodegenErrorKind::InvalidInlineAssembly,
+            ),
+            (
+                "#[unsafe(no_mangle)] pub unsafe extern \"C\" fn answer() -> u64 { let mut value: u64 = 6; asm!(\"inc {value}\", value = inout(reg) value, options(pure)); value }",
+                CodegenErrorKind::InvalidInlineAssembly,
+            ),
+            (
+                "#[unsafe(no_mangle)] pub unsafe extern \"C\" fn answer(value: u64) -> u64 { asm!(\"cmp rax, rax\", in(\"rax\") value, options(pure, nomem)); value }",
+                CodegenErrorKind::InvalidInlineAssembly,
+            ),
+            (
+                "#[unsafe(no_mangle)] pub unsafe extern \"C\" fn answer() -> u64 { let mut value: u64 = 6; asm!(\"inc {value}\", value = inout(reg) value, options(pure, nomem, readonly)); value }",
                 CodegenErrorKind::InvalidInlineAssembly,
             ),
         ] {
