@@ -26,6 +26,15 @@ candidate. Configuration passes 48 tests on Windows and Arch Linux, WHP passes
 enumeration; native AHCI/VirtIO discovery and installed early boot remain the
 next hardware/boot connection.
 
+Platform descriptor registration is now atomic before that scan.
+`BlockService::register_devices_atomic` preflights the entire bounded set for
+capacity and both internal/existing identity collisions, publishing none on any
+failure. It grants no session or operation right. The hosted positive path uses
+registration, an explicit read-only principal grant, serviced enumeration, and
+the unchanged Total recovery owner in order. Storage passes 122 tests on Windows
+and Arch Linux; configuration remains 48, WHP 11, and KVM 12. Native driver
+enumeration and firmware/installed transfer remain **PLANNED**.
+
 Installed recovery ownership now crosses the Total-admission boundary in the
 controlled backend-parity path. `RecoveredInstalledTotalAdmission` retains the
 exact serviced device selection and recovered volume/root identity beside the

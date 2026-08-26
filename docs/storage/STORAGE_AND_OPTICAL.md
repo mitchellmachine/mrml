@@ -22,6 +22,15 @@ eject. A destructive preview binds the exact device/media generation, operation,
 ranges, image digest, and consequences before owner authorization. Reuse of an
 enumeration number or media replacement invalidates old authority.
 
+Platform/native block descriptors enter the isolated `BlockService` through an
+atomic fixed-capacity registration set. The service preflights set-internal
+duplicates, collisions with every live registered identity, and complete slot
+capacity before publishing any descriptor. Registration records identity and
+geometry only; an explicit principal-bound session grant is still required for
+every read, write, flush, or superblock operation. Hardware discovery backends
+must use this control-plane boundary rather than granting authority from PCI,
+AHCI, VirtIO, firmware, path, or enumeration metadata.
+
 The `mrml` frontend may expose structured `disk`, `filesystem`, `optical`, and
 `media` operations. The PowerShell-inspired shell projects the same backend as
 typed `Get-*`, `Test-*`, `Initialize-*`, `New-*`, `Format-*`, `Write-*`, and

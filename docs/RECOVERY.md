@@ -1238,6 +1238,16 @@ passes 48 tests on Windows and Arch Linux; WHP passes 11 and KVM 12. Native
 AHCI/VirtIO/firmware enumeration, physical media, and installed early boot remain
 **PLANNED**.
 
+The immediately preceding platform-registration boundary is now **PARTIALLY
+IMPLEMENTED**. `BlockService::register_devices_atomic` preflights a complete
+bounded descriptor set for registry capacity, internal duplicates, and
+collisions with existing devices before publishing the first entry. Descriptor
+registration grants no I/O; the hosted recovery source then creates its
+separate read-only principal session and uses the serviced header scan above.
+Storage passes 122 tests and configuration 48 on Windows and Arch Linux; WHP
+passes 11 and KVM 12. Native driver enumeration and installed handoff remain
+**PLANNED**.
+
 Discovery, authorization, and recovery now compose into one **PARTIALLY
 IMPLEMENTED** owning transition. The combined operation returns
 `RecoveredInstalledStableSystemSelection`, which keeps the exact installed

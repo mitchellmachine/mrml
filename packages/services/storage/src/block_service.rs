@@ -247,6 +247,41 @@ impl<const DEVICES: usize, const SESSIONS: usize> BlockService<DEVICES, SESSIONS
         Ok(())
     }
 
+    /// Atomically registers one bounded platform-discovered device set. The
+    /// descriptors identify devices and geometry but grant no session or I/O
+    /// authority. Every duplicate, collision, or capacity failure is detected
+    /// before the first registry slot changes.
+    pub fn register_devices_atomic(
+        &mut self,
+        descriptors: &[BlockDeviceDescriptor],
+    ) -> Result<usize, BlockServiceError<core::convert::Infallible>> {
+        if descriptors.len() > self.devices.iter().filter(|slot| slot.is_none()).count() {
+            return Err(BlockServiceError::Capacity);
+        }
+        for (index, descriptor) in descriptors.iter().copied().enumerate() {
+            if self
+                .devices
+                .iter()
+                .flatten()
+                .any(|current| current.id == descriptor.id)
+                || descriptors[..index]
+                    .iter()
+                    .any(|current| current.id == descriptor.id)
+            {
+                return Err(BlockServiceError::DuplicateDevice);
+            }
+        }
+        for descriptor in descriptors.iter().copied() {
+            let slot = self
+                .devices
+                .iter_mut()
+                .find(|slot| slot.is_none())
+                .expect("registration capacity was completely preflighted");
+            *slot = Some(descriptor);
+        }
+        Ok(descriptors.len())
+    }
+
     /// Returns non-authorizing geometry for the exact live session after
     /// authenticating its owner. The descriptor identifies the bound device;
     /// every I/O operation still checks its independent right.
@@ -730,6 +765,62 @@ mod tests {
             Err(BlockServiceError::Denied)
         );
         assert_eq!(backend.calls, 1);
+    }
+
+    #[test]
+    fn platform_device_set_registration_is_atomic_and_non_authorizing() {
+        let first = descriptor();
+        let second = BlockDeviceDescriptor::new(
+            BlockDeviceId::new(8).unwrap(),
+            BLOCK_SIZE as u32,
+            BLOCKS as u64,
+        )
+        .unwrap();
+        let third = BlockDeviceDescriptor::new(
+            BlockDeviceId::new(9).unwrap(),
+            BLOCK_SIZE as u32,
+            BLOCKS as u64,
+        )
+        .unwrap();
+        let fourth = BlockDeviceDescriptor::new(
+            BlockDeviceId::new(10).unwrap(),
+            BLOCK_SIZE as u32,
+            BLOCKS as u64,
+        )
+        .unwrap();
+        let mut service = BlockService::<3, 4>::new();
+        service.register_device(first).unwrap();
+
+        assert_eq!(
+            service.register_devices_atomic(&[second, second]),
+            Err(BlockServiceError::DuplicateDevice)
+        );
+        assert_eq!(
+            service.grant(second.id(), owner(1), BlockRights::READ),
+            Err(BlockServiceError::UnknownDevice)
+        );
+        assert_eq!(
+            service.register_devices_atomic(&[second, third, fourth]),
+            Err(BlockServiceError::Capacity)
+        );
+        assert_eq!(
+            service.grant(second.id(), owner(1), BlockRights::READ),
+            Err(BlockServiceError::UnknownDevice)
+        );
+        assert_eq!(
+            service.register_devices_atomic(&[second, first]),
+            Err(BlockServiceError::DuplicateDevice)
+        );
+        assert_eq!(
+            service.grant(second.id(), owner(1), BlockRights::READ),
+            Err(BlockServiceError::UnknownDevice)
+        );
+
+        assert_eq!(service.register_devices_atomic(&[second, third]), Ok(2));
+        let session = service
+            .grant(second.id(), owner(1), BlockRights::READ)
+            .unwrap();
+        assert_eq!(service.session_descriptor(session, owner(1)), Ok(second));
     }
 
     #[test]

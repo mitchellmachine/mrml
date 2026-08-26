@@ -840,6 +840,14 @@ the complete scan closed. Configuration passes 48 tests on Windows and Arch
 Linux; WHP remains 11 and KVM 12. Hardware enumeration and installed boot remain
 **PLANNED**.
 
+The hosted path also enters its platform descriptor through the normal atomic
+`BlockService` registration set. Duplicate identities, collision with a live
+device, or insufficient registry capacity changes no slot. Registration remains
+non-authorizing; only the later explicit principal-bound `READ` session permits
+the header scan. Storage passes 122 tests on Windows and Arch Linux. This is
+**PARTIALLY IMPLEMENTED** registration/control-plane evidence, not a native
+AHCI/VirtIO driver or installed firmware handoff.
+
 The discovery-to-recovery lifetime is now one **PARTIALLY IMPLEMENTED** owning
 operation. `discover_and_recover_serviced_stable_system_selection` selects and
 authenticates the bounded candidate, performs both redundant-root and reachable-

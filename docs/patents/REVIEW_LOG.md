@@ -1,5 +1,16 @@
 # Patent review log
 
+## 2026-08-26 — Atomic platform block-device registration set
+
+Patent review: **NOT_TRIGGERED** for this bounded registry increment. It uses
+conventional complete preflight, duplicate/equality checks, fixed-capacity slot
+publication, and separate explicit session grants. It adds no hardware discovery
+or driver algorithm, storage layout, persistent/wire format, cryptography,
+placement policy, native fallback, VMM/device protocol, DMA mechanism, or
+hardware-specific isolation technique. The broader storage/device,
+adaptive-isolation, and Total-MicroVM reviews remain `TRIGGERED`; no
+patent-clearance or non-infringement conclusion is made.
+
 ## 2026-08-26 — Capability-backed recovery-device inventory
 
 Patent review: **NOT_TRIGGERED** for this bounded integration increment. It uses

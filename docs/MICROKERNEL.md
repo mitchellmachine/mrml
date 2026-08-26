@@ -3216,6 +3216,15 @@ Configuration passes 48 tests on Windows and Arch Linux, WHP passes 11, and KVM
 passes 12. This does not prove AHCI, VirtIO, firmware, physical-media, or
 installed early-boot enumeration.
 
+The block-service registry now has a **PARTIALLY IMPLEMENTED** atomic platform
+set boundary. `register_devices_atomic` checks complete free capacity,
+set-internal duplicate identities, and collision with existing registrations
+before changing the first slot. Device identity and geometry remain data, not
+authority; the hosted path separately grants the recovery principal `READ` and
+then performs the serviced block-zero scan. Storage passes 122 tests on Windows
+and Arch Linux, configuration 48, WHP 11, and KVM 12. No native AHCI/VirtIO,
+firmware handoff, physical device, or installed boot was exercised.
+
 The bounded discovery result now remains owned through the complete serviced
 recovery read. `RecoveredInstalledStableSystemSelection` retains the exact
 installed selection beside the `BlockVolume` and reachable graph produced from

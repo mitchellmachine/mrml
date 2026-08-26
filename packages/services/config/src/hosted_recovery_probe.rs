@@ -224,15 +224,14 @@ fn recovery_device() -> BlockDeviceId {
 fn recovery_block_service()
 -> Result<(BlockService<1, 1>, BlockSessionHandle), HostedRecoveryProbeError> {
     let mut service = BlockService::<1, 1>::new();
+    let descriptors = [BlockDeviceDescriptor::new(
+        recovery_device(),
+        BLOCK_BYTES as u32,
+        header().block_count(),
+    )
+    .ok_or(HostedRecoveryProbeError::StorageLayout)?];
     service
-        .register_device(
-            BlockDeviceDescriptor::new(
-                recovery_device(),
-                BLOCK_BYTES as u32,
-                header().block_count(),
-            )
-            .ok_or(HostedRecoveryProbeError::StorageLayout)?,
-        )
+        .register_devices_atomic(&descriptors)
         .map_err(|_| HostedRecoveryProbeError::StorageLayout)?;
     let session = service
         .grant(recovery_device(), principal(), BlockRights::READ)
