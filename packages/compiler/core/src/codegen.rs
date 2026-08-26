@@ -31175,6 +31175,10 @@ mod tests {
                 element: crate::CallArrayElement::Integer(crate::IntegerType::U16),
                 mutable: true,
             };
+            let shared_slice_reference = ScalarType::SliceReference {
+                element: crate::CallArrayElement::Integer(crate::IntegerType::U16),
+                mutable: false,
+            };
             let mut parameters = [None; MAX_PARAMETERS];
             match (name, argument_count) {
                 ("array_element", 1) => {
@@ -31273,6 +31277,23 @@ mod tests {
                         return_type: slice_reference,
                         return_type_name: "&mut [u16]",
                         body_expression: "let alias: &mut [u16] = &mut values[1..]; alias",
+                    })
+                }
+                ("shared_slice_subslice_alias", 1) => {
+                    parameters[0] = Some(RuntimeCallParameter {
+                        name: "values",
+                        ty: slice_reference,
+                    });
+                    Some(RuntimeCallTarget {
+                        name: "shared_slice_subslice_alias",
+                        parameters,
+                        parameter_count: 1,
+                        return_type: shared_slice_reference,
+                        return_type_name: "&[u16]",
+                        body_expression: concat!(
+                            "let mutable: &mut [u16] = &mut values[1..]; ",
+                            "let shared: &[u16] = mutable; shared"
+                        ),
                     })
                 }
                 ("identity", 1) => {
@@ -35683,6 +35704,12 @@ mod tests {
                 "let competing: &mut u16 = &mut input[1]; ",
                 "*competing += 1; returned[0] }"
             ),
+            concat!(
+                "fn value(input: &mut [u16]) -> u16 { ",
+                "let returned: &[u16] = shared_slice_subslice_alias(input); ",
+                "let competing: &mut u16 = &mut input[1]; ",
+                "*competing += 1; returned[0] }"
+            ),
         ] {
             assert_eq!(
                 analyze(rejected).unwrap_err().kind,
@@ -35704,6 +35731,12 @@ mod tests {
                 "fn value(input: &mut [u16]) -> u16 { ",
                 "let returned: &mut [u16] = slice_subslice_alias(input); returned[0] += 1; ",
                 "let restored: &mut u16 = &mut input[1]; *restored }"
+            ),
+            concat!(
+                "fn value(input: &mut [u16]) -> u16 { ",
+                "let returned: &[u16] = shared_slice_subslice_alias(input); ",
+                "let value = returned[0]; ",
+                "let restored: &mut u16 = &mut input[1]; *restored += value; *restored }"
             ),
         ] {
             analyze(accepted).unwrap();
@@ -35746,6 +35779,9 @@ mod tests {
         let slice_subslice_alias = MutableReferenceCallResolver
             .resolve_runtime_call::<2>("slice_subslice_alias", 1)
             .unwrap();
+        let shared_slice_subslice_alias = MutableReferenceCallResolver
+            .resolve_runtime_call::<2>("shared_slice_subslice_alias", 1)
+            .unwrap();
         assert_eq!(
             runtime_reference_call_origin_parameter::<2, 16>(array_element_alias),
             Some(0)
@@ -35784,6 +35820,10 @@ mod tests {
         }
         assert_eq!(
             runtime_reference_call_origin_parameter::<2, 16>(slice_subslice_alias),
+            Some(0)
+        );
+        assert_eq!(
+            runtime_reference_call_origin_parameter::<2, 24>(shared_slice_subslice_alias),
             Some(0)
         );
         assert_eq!(
