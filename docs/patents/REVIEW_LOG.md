@@ -5919,3 +5919,16 @@ or code-generation algorithm. Symbol addends, multiple relocations, and linking
 remain absent. Broader assembly support and compiler completion remain partial;
 this technical screen does not establish clearance or infringement and does not
 replace independent human dual review.
+
+# 2026-08-26 — Bounded x86-64 relocation collections
+
+**Result: NOT_TRIGGERED after the relocation-collection review.** This
+increment repeats the already reviewed published ELF64 RELA and COFF relocation
+and symbol records under an explicit eight-entry capacity. Checked size and
+offset arithmetic, source-order preservation, duplicate-symbol handling, and
+fail-closed ninth-entry rejection introduce no novel assembler, linker,
+relocation, optimization, instruction-selection, or code-generation algorithm.
+Symbol addends, additional relocation families, and linking remain absent.
+Broader assembly support and compiler completion remain partial; this technical
+screen does not establish clearance or infringement and does not replace
+independent human dual review.
