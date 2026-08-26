@@ -1356,10 +1356,16 @@ unreachable. ORACLE-0002 accepts differing backedges followed by a normalized
 unconditional break and rejects an earlier local-backed break with E0515.
 When the unconditional terminal is an inner continue, its exact prefix joins
 the earlier conditional backedges instead of being checked as an exit. The same
-single convergence replay and exit-prefix invariance rules apply, while the
+bounded convergence and exit-prefix invariance rules apply, while the
 continue suffix remains unreachable. ORACLE-0002 accepts mixed parameter/local
 backedges normalized before a return and rejects a return before normalization
 with E0515.
+Modeled nested-loop headers now iterate to a bounded fixed point instead of
+allowing only one convergence replay. The meet lattice can only drop one fact
+per local origin or retained projected origin, so the hard iteration limit is
+the initial fact count plus one; failure to converge remains fail-closed. A
+multi-step alias chain now converges before an exact parameter-restoring exit.
+ORACLE-0002 accepts that form and rejects the early-exit form with E0499.
 
 The first modern trait-solver foundation is an explicit bounded implemented-
 goal representation. Stable trait/type/inference/placeholder identities remain

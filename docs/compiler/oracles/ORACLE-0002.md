@@ -202,6 +202,15 @@ with E0515. This is black-box evidence for those exact mixed backedges, not
 general fixed-point or region inference. Temporary source and metadata were
 removed.
 
+An independently authored Rust 2024 metadata-only iterative-header pair against
+this exact toolchain and commit used two mutable-reference aliases so a local
+origin required multiple loop transfers to reach the first alias. Rustc accepted
+the form that restored the parameter before every break and enclosing return;
+moving the break before restoration failed with E0499 because the local borrow
+could remain live across iterations. This is black-box evidence for that exact
+multi-step cycle, not general region inference. Temporary source and metadata
+were removed.
+
 An independently authored Rust 2024 metadata-only composed-loop pair against
 this exact toolchain and commit accepted an outer-loop same-origin mutable
 reassignment followed by an inner-loop conditional return. Replacing that outer

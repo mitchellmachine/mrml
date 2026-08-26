@@ -646,6 +646,19 @@ probe, 10 conformance tests, and 335 replacement tests: 989 compiler tests per
 host. Nested branching transfers and broader iterative fixed points remain
 incomplete.
 
+The modeled nested-loop origin header now iterates its monotone meet to a fixed
+point. Direct origins and retained projected facts may only disappear, so the
+loop is bounded by `local_count + projected_origin_count + 1`; exceeding that
+bound fails closed. Exit prefixes are checked only after convergence. A focused
+two-alias chain requires multiple transfers before a local origin reaches the
+header, then restores the parameter before every exit. ORACLE-0002 accepts that
+case and rejects the early-exit ordering with E0499. Windows and Arch each pass
+643 library tests, one component-interface probe, 10 conformance tests, and 335
+replacement tests: 989 compiler tests per host. This completes iterative header
+convergence for the currently modeled flat nested-loop actions and controls;
+nested branch-action representation and general region inference remain
+incomplete.
+
 The conditional callee-local reassignment milestone evaluates supported direct
 assignments from a copy of the incoming fixed local-origin state for every
 conditional outcome, then joins each local independently. A missing `else`

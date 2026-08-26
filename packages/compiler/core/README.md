@@ -4233,6 +4233,14 @@ The pinned oracle accepts mixed parameter/local backedges normalized before a
 return and rejects an earlier local-backed return with E0515. Both hosts remain
 at 989 compiler tests; nested branching and broader iterative fixed points
 remain incomplete.
+Nested headers now iterate the monotone origin meet to a bounded fixed point.
+Each direct or projected origin fact can only be dropped once, establishing an
+exact `local_count + projected_origin_count + 1` transfer limit; nonconvergence
+fails closed. A multi-step alias chain converges and returns the parameter only
+after an explicit restoring assignment. The pinned oracle accepts that ordering
+and rejects an earlier exit with E0499. Both hosts remain at 989 compiler tests.
+Flat modeled nested actions/controls now have iterative header convergence;
+nested branch-action representation and general regions remain incomplete.
 Nested-loop ordered-return and stable-edge analysis is now factored over an
 explicit incoming state and composes after outer-loop declarations, assignments,
 and branch joins. Stable nested edges preserve that state for later outer
