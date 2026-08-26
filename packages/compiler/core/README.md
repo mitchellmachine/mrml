@@ -4000,6 +4000,11 @@ remains connected through the call result to its ultimate owner; the oracle
 rejects a live competitor with E0499 and accepts restoration after last use.
 Both hosts remain at 987 tests.
 
+The exact call-assignment path also retains both owners when its argument is a
+conditional choice between two tuple fields. The pinned oracle rejects live use
+of either owner with E0503 and accepts both after last use. Windows and Arch
+remain at 987 tests.
+
 Multi-field initialization uses one independent key per tuple field. An exact
 conditional reference element records an origin only when both arms resolve to
 the same parameter; differing first/second origins remain unavailable. Focused

@@ -1075,6 +1075,13 @@ ultimate owner remain connected: a live owner competitor fails with E0499 and
 owner reuse after the returned child's last use succeeds. Unsupported callees
 and unclassified projected arguments remain conservative.
 
+The same exact call-result assignment now preserves both possible owners when
+the identity call receives a conditional choice between two tuple fields. A live
+use of either owner conflicts, and each owner is restored after the assigned
+child's last use. ORACLE-0002 reports E0503 for both live-owner controls and
+accepts both restoration controls. This remains a bounded call summary and
+conditional-expression relation, not general interprocedural regions.
+
 The first modern trait-solver foundation is an explicit bounded implemented-
 goal representation. Stable trait/type/inference/placeholder identities remain
 distinct; canonicalization replaces inference identities with first-occurrence

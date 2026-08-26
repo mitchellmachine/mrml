@@ -769,6 +769,13 @@ competitor with E0499 and accepted restoration after the assigned child's last
 use. Windows and Arch each pass 987 compiler tests. This does not generalize
 unknown call summaries or projected arguments.
 
+Conditional projected call-result coverage carries both exact tuple-field
+owners through an identity call and assignment into an existing local.
+ORACLE-0002 rejected live use of either owner with E0503 and accepted restoration
+of each after the assigned child's last use. Windows and Arch each pass 987
+compiler tests. General call summaries and path-sensitive regions remain
+unsupported.
+
 Multi-field tuple literals retain a separate projected origin per field. A
 conditional reference element seeds its field only when both arms prove the
 same parameter; unequal first/second origins fail closed. Focused caller tests

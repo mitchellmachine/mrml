@@ -428,6 +428,14 @@ E0499 while the assigned child remained live, and accepted owner reuse after its
 last use. Temporary sources and metadata were removed. This is exact projected
 call-result ancestry evidence, not general call-summary or region inference.
 
+A follow-up independently authored Rust 2024 metadata-only probe against the
+same exact toolchain and commit passed a conditional choice between two mutable-
+reference tuple fields through the identity call before assigning its result.
+The oracle rejected live use of the first and second possible owners with E0503
+and accepted reuse of each after the assigned child's last use. Temporary
+sources and metadata were removed. This is bounded conditional projected-call
+evidence, not general path-sensitive interprocedural region inference.
+
 Another independently authored Rust 2024 metadata-only probe against the same
 exact toolchain and commit accepted assigning a parameter-backed tuple field
 into an existing mutable-reference local and returning that local. The same
