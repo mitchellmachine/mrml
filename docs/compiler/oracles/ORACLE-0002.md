@@ -358,6 +358,18 @@ Equivalent loop-local forms failed with E0515. This is exact black-box evidence
 for those loop-return shapes, not a general loop or region fixed point.
 Temporary probe sources and metadata were removed.
 
+An independently authored Rust 2024 metadata-only probe against this exact
+toolchain and commit defined straight-line and exhaustive conditional callees
+that initialized a one-element mutable-reference tuple from a first parameter,
+replaced its field with a second parameter, and returned that field. Shared
+children of both call results compiled when the second argument was parameter-
+backed. Equivalent calls supplied with function-local storage failed with E0515
+at the shared-child return. The explicit `'a: 'b` relationship needed by the
+tuple replacement was part of the oracle-only function signatures. This is
+black-box evidence for these exact projected call-return shapes, not general
+interprocedural lifetime inference. Temporary probe sources and metadata were
+removed.
+
 ## Straight-line tuple-field callee-origin follow-up
 
 On 2026-08-26, an independently authored Rust 2024 metadata-only probe against

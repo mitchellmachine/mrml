@@ -1157,6 +1157,15 @@ results return successfully, while the equivalent loop-local children fail
 closed. ORACLE-0002 accepts both parameter forms and reports E0515 for both
 local escapes. This remains bounded loop-return evidence, not a fixed point.
 
+Projected callee summaries now carry their proven second-parameter origin
+through a shared child of the returned mutable reference. Straight-line tuple-
+field replacement and exhaustive conditional tuple-field replacement accept a
+parameter-backed second argument; substituting function-local storage for that
+argument fails the caller's return-outlives check. ORACLE-0002 accepts both
+parameter cases and rejects both local escapes with E0515. This composes the
+existing bounded callee-origin and shared-child analyses; general
+interprocedural lifetime inference remains unsupported.
+
 The first modern trait-solver foundation is an explicit bounded implemented-
 goal representation. Stable trait/type/inference/placeholder identities remain
 distinct; canonicalization replaces inference identities with first-occurrence

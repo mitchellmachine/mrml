@@ -4006,6 +4006,15 @@ accepts both parameter forms and rejects both local escapes with E0515. Windows
 and Arch remain at 988 compiler tests per host; general loop dataflow remains
 unsupported.
 
+Shared children of projected mutable-reference call results also retain the
+callee summary's proven second-parameter origin. Straight-line and exhaustive
+conditional tuple-field replacement calls accept a parameter-backed second
+argument, while matching calls supplied with caller-local storage fail the
+bounded return-outlives check. The pinned oracle accepts both parameter forms
+and rejects both local escapes with E0515. Windows and Arch remain at 988
+compiler tests per host; general interprocedural lifetime inference remains
+unsupported.
+
 Exact typed tuple literals now seed the same projected state when a local is
 declared. Every reference field is checked against the declared tuple element
 and return type; only a parameter-backed element records an origin. Scalar and

@@ -848,6 +848,15 @@ escapes fail closed. ORACLE-0002 accepts the parameter cases and rejects the
 local cases with E0515. Windows and Arch remain at 988 compiler tests per host;
 general loop fixed points remain unsupported.
 
+Shared children of projected callee returns now preserve a proven second-
+parameter origin through straight-line and exhaustive conditional tuple-field
+replacement summaries. Parameter-backed calls pass; substituting a caller-local
+second argument fails closed. ORACLE-0002 accepts the two parameter cases and
+rejects both local escapes with E0515. Windows and Arch each pass 642 library
+tests, one component-interface probe, 10 conformance tests, and 335 replacement
+tests: 988 compiler tests per host. General interprocedural lifetime inference
+remains unsupported.
+
 Multi-field tuple literals retain a separate projected origin per field. A
 conditional reference element seeds its field only when both arms prove the
 same parameter; unequal first/second origins fail closed. Focused caller tests
