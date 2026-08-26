@@ -1186,7 +1186,9 @@ argument loan remains live with the result, while the independently proven
 origin parameter alone supplies the returned pointer ancestry. This permits the
 oracle-accepted backedge after the result dies and rejects a competing borrow of
 a non-origin argument while the result remains live. Matching inner-loop-local
-origins still fail closed with E0515.
+origins still fail closed with E0515. A local-backed non-origin argument also
+prevents returning the otherwise parameter-origin result, matching the pinned
+oracle's E0515 and keeping loan lifetime distinct from pointer ancestry.
 
 The first modern trait-solver foundation is an explicit bounded implemented-
 goal representation. Stable trait/type/inference/placeholder identities remain

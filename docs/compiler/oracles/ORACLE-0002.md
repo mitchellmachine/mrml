@@ -383,6 +383,14 @@ live through the later result use. Together these probes distinguish returned-
 pointer origin from the lifetime of every reference argument loan. Temporary
 source and metadata were removed.
 
+Another independently authored invocation passed function-local storage as the
+non-origin first argument and a parameter as the returned-origin second
+argument, then attempted to return a shared child of the result. This exact
+toolchain rejected the return with E0515 because the first argument's loan still
+referenced local storage. This is exact evidence that result pointer ancestry
+does not erase non-origin argument lifetime constraints. Temporary source and
+metadata were removed.
+
 An independently authored Rust 2024 metadata-only probe against this exact
 toolchain and commit returned call-derived shared children through an explicit
 return and through a conditional early-return plus tail-return path. Both

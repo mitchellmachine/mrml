@@ -882,6 +882,12 @@ inner-loop-local origin still fails with E0515. Windows and Arch each pass 642
 library tests, one component-interface probe, 10 conformance tests, and 335
 replacement tests: 988 tests per host. General loop fixed points are unsupported.
 
+A focused non-origin-local case proves that returned-pointer ancestry and call-
+argument loan lifetime remain distinct: the result origin resolves to the
+parameter-backed second argument, but a local first-argument loan still prevents
+escape. MRML fails with `RuntimeReferenceOutlivesFunction`, matching ORACLE-0002
+E0515. Both hosts remain at 988 compiler tests.
+
 Multi-field tuple literals retain a separate projected origin per field. A
 conditional reference element seeds its field only when both arms prove the
 same parameter; unequal first/second origins fail closed. Focused caller tests

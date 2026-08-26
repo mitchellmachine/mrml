@@ -4037,6 +4037,11 @@ result dies and reject a competing non-origin borrow while it remains live
 (E0499 / `RuntimeBorrowConflict`). An inner-loop-local origin still fails with
 E0515. Both hosts pass 988 compiler tests; general loop fixed points are absent.
 
+A local-backed non-origin argument also prevents returning the otherwise
+parameter-origin result. This retains the distinction between returned-pointer
+ancestry and the lifetime of every call-argument loan; MRML's bounded outlives
+failure matches the pinned oracle's E0515. Both hosts remain at 988 tests.
+
 Exact typed tuple literals now seed the same projected state when a local is
 declared. Every reference field is checked against the declared tuple element
 and return type; only a parameter-backed element records an origin. Scalar and
