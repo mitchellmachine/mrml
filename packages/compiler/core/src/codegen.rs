@@ -1877,6 +1877,10 @@ fn compile_x86_64_naked_function<const MAX_BYTES: usize, const MAX_PARAMETERS: u
     let mut instruction_count = 0usize;
     let mut remaining = source.trim();
     while !remaining.is_empty() {
+        if remaining == "options(raw)" {
+            remaining = "";
+            continue;
+        }
         if instruction_count == 8 {
             return Err(error(CodegenErrorKind::InvalidNakedAssembly));
         }
@@ -28696,7 +28700,8 @@ mod tests {
 
         let module = Parser::new(concat!(
             "#[unsafe(naked)] unsafe extern \"C\" fn labels() { ",
-            "naked_asm!(\"2:\", \"nop\", \"jmp 3f\", \"int3\", \"3:\", \"jmp 2b\"); }"
+            "naked_asm!(\"2:\", \"nop\", \"jmp 3f\", \"int3\", \"3:\", \"jmp 2b\", ",
+            "options(raw)); }"
         ))
         .parse_module::<1, 1>()
         .unwrap();
@@ -28782,6 +28787,14 @@ mod tests {
             ),
             (
                 "#[unsafe(naked)] unsafe extern \"C\" fn f() { naked_asm!(\"jmp 2b\", \"2:\"); }",
+                CodegenErrorKind::InvalidNakedAssembly,
+            ),
+            (
+                "#[unsafe(naked)] unsafe extern \"C\" fn f() { naked_asm!(\"ret\", options(att_syntax)); }",
+                CodegenErrorKind::InvalidNakedAssembly,
+            ),
+            (
+                "#[unsafe(naked)] unsafe extern \"C\" fn f() { naked_asm!(options(raw)); }",
                 CodegenErrorKind::InvalidNakedAssembly,
             ),
             (
