@@ -1373,8 +1373,11 @@ branches that contain actions before a terminal `break`, `continue`, or
 target-aware terminal, and its position among surrounding flat actions and
 controls. Parser tests cover local and expression actions followed by a return.
 The same bounded record can now retain one explicit `else` arm with its own
-four-action limit and target-aware terminal. All execution paths reject that
-arm before evaluator or emitter selection. CFG construction now assigns a
+four-action limit and target-aware terminal. Native compilation rejects that
+arm before emitter selection. The bounded constant evaluator selects
+exactly one arm, executes its actions under a lexical resolver checkpoint, and
+routes its target-aware terminal under the existing iteration limit. CFG
+construction assigns a
 separate else-action block, routes the condition's false edge into it, and
 routes each arm's terminal independently. Ownership preanalysis gives else
 actions and return values distinct mapped locations. No consumer silently

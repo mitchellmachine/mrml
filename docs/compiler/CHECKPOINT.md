@@ -666,7 +666,9 @@ nested-loop actions and controls. One explicit `else` arm can now retain the
 same bounded actions and terminal. The CFG models that successor with a distinct
 else-action block, false edge, and independent terminal target; ownership
 locations distinguish else actions and return values. Native and constant
-execution remain rejected. The single-arm CFG assigns separate condition and
+execution were initially rejected. Constant evaluation now selects exactly one
+arm, executes its scoped actions, and routes its terminal under the existing
+bounded loop evaluator; native emission remains rejected. The single-arm CFG assigns separate condition and
 scoped-action blocks, routes false fallthrough and target-aware true terminals,
 and maps condition/action/return ownership locations back to those control
 points. Branch-return origin transfer applies the exact scoped action prefix:

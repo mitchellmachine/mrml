@@ -4245,7 +4245,9 @@ Nested conditional branches can now retain up to four scoped actions before a
 target-aware terminal in a dedicated parser record, including their exact
 position among surrounding actions and controls. The record now also retains
 one explicit bounded `else` action/terminal arm. Compilation, constant
-evaluation, and native emission reject that form. CFG preanalysis now emits a
+native emission rejects that form. Constant evaluation selects one arm,
+executes its actions with lexical truncation, and routes its target-aware
+terminal under the existing loop bound. CFG preanalysis emits a
 distinct else-action block from the condition's false edge, routes both
 terminals independently, and maps else actions/returns to distinct ownership
 locations. Branch assignment generations in either arm reuse the bounded
@@ -4265,7 +4267,7 @@ CFG/ownership mapping, all constant terminal kinds, untaken fallthrough, and
 the fail-closed reference boundary. Direct and inline x86-64 emitters now lower
 scalar-only branch actions, scoped stack cleanup, and target-aware terminals;
 reference-return lowering is admitted only after the origin proof, while
-reference break/continue forms reject.
+reference break/continue forms use the bounded destination/backedge transfer.
 Separate return, continue, and break probes reach ELF64 and COFF objects.
 Windows and native Arch Linux WSL each pass 645 library tests, one component-
 interface probe, 10 conformance tests, and 336 replacement tests: 992 compiler

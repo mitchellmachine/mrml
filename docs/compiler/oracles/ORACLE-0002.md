@@ -155,10 +155,11 @@ An independently authored Rust 2024 metadata-only nested-loop `if`/`else`
 probe against this exact toolchain and commit accepted action prefixes followed
 by `return` in the primary arm and inner `continue` in the explicit else arm.
 This is black-box syntax and control-shape evidence only; it does not establish
-MRML constant-evaluation, native-emission, or general region semantics for the
-second successor. MRML's separately authored probe now maps both CFG successors
-and their scoped ownership locations while execution remains fail-closed.
-Temporary source and metadata were removed.
+MRML native-emission or general region semantics for the second successor.
+MRML's separately authored probes now map both CFG successors and their scoped
+ownership locations, then evaluate true and false constant-return arms while
+native execution remains fail-closed. Temporary source and metadata were
+removed.
 
 An independently authored Rust 2024 metadata-only nested-break set against this
 exact toolchain and commit accepted a local-initialized alias overwritten by the
