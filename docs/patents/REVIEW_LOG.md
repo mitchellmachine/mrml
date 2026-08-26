@@ -5640,6 +5640,19 @@ claim patent clearance, non-infringement, physical deployment readiness, or a
 completed global Total-mode system. Independent human dual review remains
 required before production deployment.
 
+# 2026-08-26 — Generation-bound application placement transaction
+
+**Result: NOT_TRIGGERED after the existing adaptive-placement and Total
+MicroVM reviews.** This bounded kernel prerequisite applies the existing
+fixed-capacity generational admission transaction to an application identity
+and invokes one caller-selected existing placement class: native process or
+microVM. It adds no placement heuristic, workload classifier, VM construction,
+transport, queue, scheduler, hardware interface, or fallback mechanism. The
+broader adaptive-placement and Total MicroVM architecture remains `TRIGGERED`,
+and the representative GUI application remains unimplemented. This technical
+screen does not establish clearance or infringement and does not replace
+independent human dual review.
+
 # 2026-08-26 — Restricted x86-64 naked-function emission
 
 **Result: NOT_TRIGGERED after the naked-function and register-encoding
@@ -5654,3 +5667,15 @@ selection, binary-translation, or code-generation algorithm. Broader assembly
 support and compiler completion remain partial; this technical screen does not
 establish clearance or infringement and does not replace independent human dual
 review.
+
+# 2026-08-26 — Bounded naked immediate operands
+
+**Result: NOT_TRIGGERED after the immediate-encoding review.** This increment
+uses conventional checked positional parsing for decimal/hexadecimal integers
+and the published x86-64 `push imm8`/`push imm32` and `mov r64, imm64` encodings.
+It rejects values whose sign-extended push encoding would change the requested
+nonnegative value, malformed separators, and arithmetic overflow. It introduces
+no novel assembler, optimization, instruction-selection, relocation, or code-
+generation algorithm. Broader assembly support and compiler completion remain
+partial; this technical screen does not establish clearance or infringement and
+does not replace independent human dual review.

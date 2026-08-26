@@ -1401,11 +1401,15 @@ where predicates and a unit or never return. Its bounded `naked_asm!` body
 accepts at most eight x86-64 instructions from `nop`, `ret`, `int3`, `ud2`,
 `cli`, `sti`, `hlt`, `swapgs`, and `iretq`, validated 64-bit GPR `push`/`pop`
 and register-indirect `jmp`, and register-to-register `mov`. A quote-aware
-bounded scanner preserves operand commas without accepting escapes. It requires
+bounded scanner preserves operand commas without accepting escapes. A checked
+decimal/hexadecimal parser admits nonnegative `push` immediates only when their
+sign-extended x86-64 encoding preserves the value, and admits full-width
+`mov r64, imm64`; malformed, overflowing, and noncanonical separators fail.
+It requires
 an explicit terminating instruction and emits those exact bytes without ordinary function lowering.
 Focused tests compare the complete machine-code slice to prove that no prologue
 or epilogue is inserted and reject unsupported safety, ABI, signature,
-instruction, register, and fallthrough cases. Immediate/memory operands,
+instruction, register, immediate, and fallthrough cases. Signed/memory operands,
 labels, symbols, options, additional architectures, and general inline assembly remain fail-
 closed. Windows gnullvm and native Arch Linux WSL each pass 633 library tests,
 one component-interface probe, 10 conformance tests, and 335 replacement tests:
