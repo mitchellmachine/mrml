@@ -31775,6 +31775,59 @@ mod tests {
                         ),
                     })
                 }
+                ("branch_tuple_field_assign_alias", 3) if MAX_PARAMETERS >= 4 => {
+                    parameters[0] = Some(RuntimeCallParameter {
+                        name: "first",
+                        ty: reference,
+                    });
+                    parameters[1] = Some(RuntimeCallParameter {
+                        name: "second",
+                        ty: reference,
+                    });
+                    parameters[2] = Some(RuntimeCallParameter {
+                        name: "choose",
+                        ty: ScalarType::Bool,
+                    });
+                    Some(RuntimeCallTarget {
+                        name: "branch_tuple_field_assign_alias",
+                        parameters,
+                        parameter_count: 3,
+                        return_type: reference,
+                        return_type_name: "&mut u16",
+                        body_expression: concat!(
+                            "let pair: (&mut u16,) = (second,); ",
+                            "let mut alias: &mut u16 = first; ",
+                            "if choose { alias = pair.0; } ",
+                            "else { alias = pair.0; } alias"
+                        ),
+                    })
+                }
+                ("loop_tuple_field_assign_alias", 3) if MAX_PARAMETERS >= 4 => {
+                    parameters[0] = Some(RuntimeCallParameter {
+                        name: "first",
+                        ty: reference,
+                    });
+                    parameters[1] = Some(RuntimeCallParameter {
+                        name: "second",
+                        ty: reference,
+                    });
+                    parameters[2] = Some(RuntimeCallParameter {
+                        name: "repeat",
+                        ty: ScalarType::Bool,
+                    });
+                    Some(RuntimeCallTarget {
+                        name: "loop_tuple_field_assign_alias",
+                        parameters,
+                        parameter_count: 3,
+                        return_type: reference,
+                        return_type_name: "&mut u16",
+                        body_expression: concat!(
+                            "let pair: (&mut u16,) = (second,); ",
+                            "let mut alias: &mut u16 = &mut *pair.0; ",
+                            "while repeat { alias = &mut *pair.0; } alias"
+                        ),
+                    })
+                }
                 ("tuple_field_initialize_conditional", 3) if MAX_PARAMETERS >= 4 => {
                     parameters[0] = Some(RuntimeCallParameter {
                         name: "first",
@@ -35954,6 +36007,8 @@ mod tests {
             "fn value(input: &mut u16) -> u16 { let returned: &mut u16 = tuple_field_initialize(input); let competing: &mut u16 = &mut *input; *competing += 1; *returned }",
             "fn value(input: &mut u16) -> u16 { let returned: &mut u16 = tuple_field_move(input); let competing: &mut u16 = &mut *input; *competing += 1; *returned }",
             "fn value(first: &mut u16, second: &mut u16) -> u16 { let returned: &mut u16 = tuple_field_assign_alias(first, second); let competing: &mut u16 = &mut *second; *competing += 1; *returned }",
+            "fn value(first: &mut u16, second: &mut u16, choose: bool) -> u16 { let returned: &mut u16 = branch_tuple_field_assign_alias(first, second, choose); let competing: &mut u16 = &mut *second; *competing += 1; *returned }",
+            "fn value(first: &mut u16, second: &mut u16, repeat: bool) -> u16 { let returned: &mut u16 = loop_tuple_field_assign_alias(first, second, repeat); let competing: &mut u16 = &mut *second; *competing += 1; *returned }",
             "fn value(first: &mut u16, second: &mut u16, choose: bool) -> u16 { let returned: &mut u16 = tuple_field_initialize_conditional(first, second, choose); let competing: &mut u16 = &mut *second; *competing += 1; *returned }",
             "fn value(first: &mut u16, second: &mut u16, choose: bool) -> u16 { let returned: &mut u16 = branch_tuple_field_assign(first, second, choose); let competing: &mut u16 = &mut *second; *competing += 1; *returned }",
             "fn value(first: &mut u16, second: &mut u16, repeat: bool) -> u16 { let returned: &mut u16 = loop_tuple_field_assign(first, second, repeat); let competing: &mut u16 = &mut *second; *competing += 1; *returned }",
@@ -35978,6 +36033,8 @@ mod tests {
             "fn value(input: &mut u16) -> u16 { let returned: &mut u16 = tuple_field_initialize(input); *returned += 1; let restored: &mut u16 = &mut *input; *restored }",
             "fn value(input: &mut u16) -> u16 { let returned: &mut u16 = tuple_field_move(input); *returned += 1; let restored: &mut u16 = &mut *input; *restored }",
             "fn value(first: &mut u16, second: &mut u16) -> u16 { let returned: &mut u16 = tuple_field_assign_alias(first, second); *returned += 1; let restored: &mut u16 = &mut *second; *restored }",
+            "fn value(first: &mut u16, second: &mut u16, choose: bool) -> u16 { let returned: &mut u16 = branch_tuple_field_assign_alias(first, second, choose); *returned += 1; let restored: &mut u16 = &mut *second; *restored }",
+            "fn value(first: &mut u16, second: &mut u16, repeat: bool) -> u16 { let returned: &mut u16 = loop_tuple_field_assign_alias(first, second, repeat); *returned += 1; let restored: &mut u16 = &mut *second; *restored }",
             "fn value(first: &mut u16, second: &mut u16, choose: bool) -> u16 { let returned: &mut u16 = tuple_field_initialize_conditional(first, second, choose); *returned += 1; let restored: &mut u16 = &mut *second; *restored }",
             "fn value(first: &mut u16, second: &mut u16, choose: bool) -> u16 { let returned: &mut u16 = branch_tuple_field_assign(first, second, choose); *returned += 1; let restored: &mut u16 = &mut *second; *restored }",
             "fn value(first: &mut u16, second: &mut u16, repeat: bool) -> u16 { let returned: &mut u16 = loop_tuple_field_assign(first, second, repeat); *returned += 1; let restored: &mut u16 = &mut *second; *restored }",
@@ -36058,6 +36115,42 @@ mod tests {
                     "let mut alias: &mut u16 = first; alias = pair.0; alias"
                 ),
                 ..tuple_field_assign_alias
+            }),
+            None
+        );
+        let branch_tuple_field_assign_alias = MutableReferenceCallResolver
+            .resolve_runtime_call::<4>("branch_tuple_field_assign_alias", 3)
+            .unwrap();
+        assert_eq!(
+            runtime_reference_call_origin_parameter::<4, 32>(branch_tuple_field_assign_alias),
+            Some(1)
+        );
+        assert_eq!(
+            runtime_reference_call_origin_parameter::<4, 32>(RuntimeCallTarget {
+                body_expression: concat!(
+                    "let pair: (&mut u16,) = (second,); ",
+                    "let mut alias: &mut u16 = first; ",
+                    "if choose { alias = pair.0; } alias"
+                ),
+                ..branch_tuple_field_assign_alias
+            }),
+            None
+        );
+        let loop_tuple_field_assign_alias = MutableReferenceCallResolver
+            .resolve_runtime_call::<4>("loop_tuple_field_assign_alias", 3)
+            .unwrap();
+        assert_eq!(
+            runtime_reference_call_origin_parameter::<4, 32>(loop_tuple_field_assign_alias),
+            Some(1)
+        );
+        assert_eq!(
+            runtime_reference_call_origin_parameter::<4, 32>(RuntimeCallTarget {
+                body_expression: concat!(
+                    "let pair: (&mut u16,) = (second,); ",
+                    "let mut alias: &mut u16 = first; ",
+                    "while repeat { alias = &mut *pair.0; } alias"
+                ),
+                ..loop_tuple_field_assign_alias
             }),
             None
         );
