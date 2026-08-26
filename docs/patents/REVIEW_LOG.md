@@ -6176,6 +6176,20 @@ resource-optimization mechanism. The broader surface/compositor/microVM work
 remains `TRIGGERED` as recorded above. This technical screen is not a legal
 opinion or clearance conclusion and does not replace independent human review.
 
+# 2026-08-26 — Indirect inline-assembly outputs
+
+**Result: NOT_TRIGGERED after the indirect-output review.** This increment
+extends the previously reviewed explicit RAX output paths with conventional
+mutable-reference/raw-pointer dereference load and writeback. Ordinary typed
+`Dereference` projection, exact mutable-`u64` pointee validation, explicit
+direct-versus-indirect storage selection, and published x86-64 indirect move
+encodings introduce no novel assembler, register-allocation, optimization,
+instruction-selection, alias-analysis, or code-generation algorithm. Dynamic
+indexes, nested projections, general memory effects, and general assembly remain
+absent. Broader compiler completion remains partial; this technical screen does
+not establish clearance or infringement and does not replace independent human
+dual review.
+
 # 2026-08-26 — Projected inline-assembly output
 
 **Result: NOT_TRIGGERED after the projected-operand review.** These increments
