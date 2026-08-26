@@ -91,7 +91,7 @@ type KvmApplicationLauncher =
 
 #[cfg(target_os = "linux")]
 struct ConfiguredTotalServicePolicy {
-    effective: EffectiveBootIsolationPolicy,
+    effective: Option<EffectiveBootIsolationPolicy>,
     bounds: IsolationServiceBounds,
     identity: IsolationServiceIdentity,
 }
@@ -601,6 +601,12 @@ fn configured_total_service_policy(
     provider_generation: u64,
     handoff: &BootHandoff,
 ) -> Result<ConfiguredTotalServicePolicy> {
+    let service = configured_isolation_service(
+        domain,
+        interface,
+        interface_generation,
+        provider_generation,
+    )?;
     let root_object = ObjectId(0x4953_4f4c_4154_494f);
     let component_object = ObjectId(0x434f_4e46_504f_4c59);
     let system_object = ObjectId(0x5359_5354_504f_4c59);
@@ -664,22 +670,6 @@ fn configured_total_service_policy(
         component_access,
     )
     .map_err(|error| anyhow!("KVM policy load failed: {:?}", error))?;
-    let bounds = IsolationServiceBounds::new(
-        IsolationPlacement::NativeService,
-        IsolationPlacement::NativeService,
-        IsolationPlacement::Microvm,
-        true,
-        true,
-    )
-    .map_err(|error| anyhow!("KVM package isolation bounds failed: {:?}", error))?;
-    let identity = IsolationServiceIdentity::new(
-        domain,
-        interface,
-        interface_generation,
-        provider_generation,
-        TotalMicrovmClass::MicrovmEligible,
-    )
-    .map_err(|error| anyhow!("KVM service identity failed: {:?}", error))?;
     let recovery = handoff
         .recovery_state()
         .ok_or_else(|| anyhow!("KVM Total policy requires decoded recovery metadata"))?;
@@ -700,7 +690,37 @@ fn configured_total_service_policy(
         effective.policy_generation()
     );
     Ok(ConfiguredTotalServicePolicy {
-        effective,
+        effective: Some(effective),
+        bounds: service.bounds,
+        identity: service.identity,
+    })
+}
+
+#[cfg(target_os = "linux")]
+fn configured_isolation_service(
+    domain: ObjectId,
+    interface: ObjectId,
+    interface_generation: u32,
+    provider_generation: u64,
+) -> Result<ConfiguredTotalServicePolicy> {
+    let bounds = IsolationServiceBounds::new(
+        IsolationPlacement::NativeService,
+        IsolationPlacement::NativeService,
+        IsolationPlacement::Microvm,
+        true,
+        true,
+    )
+    .map_err(|error| anyhow!("KVM package isolation bounds failed: {:?}", error))?;
+    let identity = IsolationServiceIdentity::new(
+        domain,
+        interface,
+        interface_generation,
+        provider_generation,
+        TotalMicrovmClass::MicrovmEligible,
+    )
+    .map_err(|error| anyhow!("KVM service identity failed: {:?}", error))?;
+    Ok(ConfiguredTotalServicePolicy {
+        effective: None,
         bounds,
         identity,
     })
@@ -2902,13 +2922,22 @@ fn application_main() -> Result<()> {
                         .version(),
                 )
             };
-        Some(configured_total_service_policy(
-            domain,
-            interface,
-            interface_generation,
-            provider_generation,
-            &decoded_boot_handoff,
-        )?)
+        Some(if component_service_mode {
+            configured_isolation_service(
+                domain,
+                interface,
+                interface_generation,
+                provider_generation,
+            )?
+        } else {
+            configured_total_service_policy(
+                domain,
+                interface,
+                interface_generation,
+                provider_generation,
+                &decoded_boot_handoff,
+            )?
+        })
     } else {
         None
     };
@@ -2959,6 +2988,7 @@ fn application_main() -> Result<()> {
         Some(KvmTotalAdmission::Standalone(
             configured
                 .effective
+                .ok_or_else(|| anyhow!("missing transient KVM service policy"))?
                 .admission_table(1)
                 .map_err(|error| anyhow!("KVM isolation admission failed: {:?}", error))?,
         ))
@@ -2977,6 +3007,7 @@ fn application_main() -> Result<()> {
         (Some(KvmTotalAdmission::Standalone(admission)), Some(configured)) => {
             let admitted = configured
                 .effective
+                .ok_or_else(|| anyhow!("missing transient KVM service policy"))?
                 .admit_service(configured.bounds)
                 .map_err(|error| anyhow!("KVM configured admission failed: {:?}", error))?;
             let spec = admitted
@@ -5330,6 +5361,9 @@ mod tests {
     #[cfg(target_os = "linux")]
     #[test]
     fn total_policy_rejects_a_decoded_handoff_without_the_override() {
+        let recovered_component =
+            configured_isolation_service(ObjectId(1), ObjectId(2), 1, 1).unwrap();
+        assert!(recovered_component.effective.is_none());
         let recovery = RecoveryStateMetadata::new(8, 1, None, 0).unwrap();
         let encoded = boot_handoff(
             21, [0x38; 32], [0xaa; 64], 1, Some(recovery), None, false,

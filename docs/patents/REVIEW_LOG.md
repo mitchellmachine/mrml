@@ -780,7 +780,9 @@ cryptographic primitive, storage format, scheduler, VMM backend, or fallback.
 Its fixed in-memory source state remains independently bound from decoded
 handoff data so stale epochs fail closed. The one-use release-builder callback
 is conventional control-flow sequencing and receives only the recovered policy
-generation; failure publishes no admission or detached policy. Because the
+generation; failure publishes no admission or detached policy. The component
+runner now retains only non-authorizing bounds and identity before
+the recovered join, removing rather than adding a policy mechanism. Because the
 broader combination of
 signed release classification, automated placement, isolation, recovery, and
 device projection is already under targeted worldwide review, that status

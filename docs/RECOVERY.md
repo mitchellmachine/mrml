@@ -1185,8 +1185,10 @@ then prepares and commits a classified microVM route and obtains the final
 generation-bound Total proof from that same owner. Windows and Arch Linux each
 pass 44 configuration tests. This closes the detached-policy API gap. The
 hosted runners now use the shared controlled recovered-state source; a
-production stable-storage selector and installed boot orchestration are still
-required before claiming live recovered boot.
+component runner retains no transient effective-policy object, only the package
+bounds and identity required by the eventual recovered owner. A production
+stable-storage selector and installed boot orchestration are still required
+before claiming live recovered boot.
 
 Application-launch recovery must retain the exact runtime domain, application
 object, immutable application generation and artifact digest, active system

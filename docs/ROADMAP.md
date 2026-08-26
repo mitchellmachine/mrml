@@ -334,7 +334,9 @@ tests on both hosts, WHP passes 11, KVM passes 12, and fresh signed probes repor
 one eligible microVM with zero fallback. The component-service runners now
 replace their release-owned transient admission with `RecoveredTotalAdmission`
 produced by the shared hosted recovery source. Production stable-storage
-selection is the next gate; live recovered boot remains **PLANNED**.
+selection is the next gate; component mode now creates no transient
+configuration/effective-policy fixture, and live recovered boot remains
+**PLANNED**.
 
 The hosted service runners now take the one-boot Total overlay from the exact
 canonical `BootHandoff` bytes installed for the guest rather than constructing

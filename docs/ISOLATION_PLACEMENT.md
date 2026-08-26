@@ -778,8 +778,10 @@ The stable recovery test commits one eligible microVM route and finalizes its
 signed release inventory through that owner on Windows and Arch Linux. The
 hosted WHP/KVM component path now constructs that recovered owner through the
 shared controlled source and retains it through preparation, microVM commit,
-and final proof. Production stable-storage selection and installed early-boot
-construction remain **PLANNED**.
+and final proof. Component mode now retains only non-authorizing package bounds
+and identity before that join; it no longer constructs a parallel transient
+configuration or effective policy. Production stable-storage selection and
+installed early-boot construction remain **PLANNED**.
 
 ## Resources, devices, security, and monitoring
 
