@@ -201,6 +201,13 @@ E0499. This is black-box evidence for that exact nested-loop local-return shape,
 not a general nested-loop fixed point, path-sensitive analysis, or region
 inference. Temporary sources and metadata were removed.
 
+An independently authored conditional shared-call pair selected `&*first` or
+`&*second` as the argument to `shared_identity`. This exact toolchain rejected
+assignment to either possible owner before a later result use with E0506, then
+compiled a companion that copied the result and mutated both owners afterward.
+This is exact joined shared-loan evidence, not general path-sensitive regions.
+Temporary sources and metadata were removed.
+
 An independently authored Rust 2024 metadata-only probe against this exact
 toolchain and commit accepted a mutable scalar reference returned from index
 zero of a mutable two-element array-reference parameter. The caller could reuse

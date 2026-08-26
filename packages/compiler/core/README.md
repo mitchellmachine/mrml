@@ -4063,6 +4063,10 @@ The shared identity result also participates in bounded return-outlives checks:
 parameter ancestry passes and local ancestry fails, matching pinned-oracle
 E0515. A new focused unit raises both hosts to 989 compiler tests (643 library,
 one component, 10 conformance, and 335 replacement tests).
+Conditional shared-call arguments also preserve both possible immutable loans
+at the join. A live result blocks mutation of either owner, and last use releases
+both; pinned rustc matches with E0506 and post-use acceptance. Both hosts remain
+at 989 compiler tests.
 
 Exact typed tuple literals now seed the same projected state when a local is
 declared. Every reference field is checked against the declared tuple element

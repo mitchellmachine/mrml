@@ -918,6 +918,11 @@ with `RuntimeReferenceOutlivesFunction`, matching ORACLE-0002 E0515. Windows and
 Arch each pass 643 library tests, one component-interface probe, 10 conformance
 tests, and 335 replacement tests: 989 compiler tests per host.
 
+Conditional shared-reference call arguments now retain both possible owner loans
+at their join. A live result rejects mutation of either owner with
+`RuntimeBorrowConflict`, matching ORACLE-0002 E0506; after last use, both owners
+are mutable. Windows and Arch remain at 989 compiler tests per host.
+
 Multi-field tuple literals retain a separate projected origin per field. A
 conditional reference element seeds its field only when both arms prove the
 same parameter; unequal first/second origins fail closed. Focused caller tests
