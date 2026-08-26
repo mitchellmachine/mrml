@@ -15927,6 +15927,19 @@ fn runtime_reference_call_origin_parameter<const MAX_PARAMETERS: usize, const MA
                                     true,
                                 )?;
                             }
+                            crate::LoopOperation::ConditionalReturn(value) => {
+                                let tree = value.parse_value::<MAX_NODES>().ok()?;
+                                merge(recurse(
+                                    target,
+                                    &tree,
+                                    tree.root(),
+                                    0,
+                                    &iteration_names,
+                                    &iteration_origins,
+                                    &iteration_projected_origins,
+                                    iteration_local_count,
+                                )?)?;
+                            }
                             crate::LoopOperation::ConditionalBlock(block_index) => {
                                 let block = loop_statement
                                     .conditional_blocks()
@@ -37647,6 +37660,27 @@ mod tests {
         assert_eq!(
             runtime_reference_call_origin_parameter::<2, 24>(RuntimeCallTarget {
                 body_expression: "while first { return value; } let value: u16 = 1; value",
+                ..loop_choose
+            }),
+            None
+        );
+        assert_eq!(
+            runtime_reference_call_origin_parameter::<2, 24>(RuntimeCallTarget {
+                body_expression: concat!(
+                    "loop { let mut changed: &mut u16 = value; ",
+                    "changed = &mut *changed; if first { return changed; } }"
+                ),
+                ..loop_choose
+            }),
+            Some(0)
+        );
+        assert_eq!(
+            runtime_reference_call_origin_parameter::<2, 32>(RuntimeCallTarget {
+                body_expression: concat!(
+                    "let mut local: u16 = 1; loop { ",
+                    "let mut changed: &mut u16 = value; changed = &mut local; ",
+                    "if first { return changed; } }"
+                ),
                 ..loop_choose
             }),
             None
