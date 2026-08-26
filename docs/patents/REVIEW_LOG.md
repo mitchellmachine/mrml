@@ -1,5 +1,17 @@
 # Patent review log
 
+## 2026-08-26 — Platform media-generation recovery binding
+
+Patent review: **NOT_TRIGGERED** for this typed identity/lifetime increment. It
+uses conventional opaque identifiers, nonzero generation counters, exact
+equality checks, fixed-capacity registration, and revoke-before-replacement to
+prevent a recovered selection from silently changing devices or media. It adds
+no discovery or driver algorithm, storage layout, persistent/wire format,
+cryptography, placement heuristic, native fallback, queue/DMA mechanism, or
+hardware-specific isolation technique. Broader storage/device,
+adaptive-isolation, and Total-MicroVM reviews remain `TRIGGERED`; no patent-
+clearance or non-infringement conclusion is made.
+
 ## 2026-08-26 — Atomic initial block-session grant set
 
 Patent review: **NOT_TRIGGERED** for this authority-publication increment. It

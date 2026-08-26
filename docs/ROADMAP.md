@@ -43,6 +43,16 @@ partial authority. The hosted recovery source uses this operation before its
 serviced scan. Storage passes 123 tests on Windows and Arch Linux;
 configuration remains 48, WHP 11, and KVM 12.
 
+The next installed-recovery identity gate is now **PARTIALLY IMPLEMENTED**.
+Platform registration binds each service-local block descriptor to an opaque
+stable identity, transport, and exact controller/media generations without
+granting authority. Serviced recovery refuses legacy registration before block
+I/O, retains the exact platform identity through selection and Total admission,
+and rejects media-generation substitution. Old sessions are revoked before a
+replacement generation can register. Storage passes 124 tests on Windows and
+Arch Linux; configuration remains 48, WHP 11, and KVM 12. Native firmware/driver
+identity derivation and installed early-boot transfer remain the next gate.
+
 Installed recovery ownership now crosses the Total-admission boundary in the
 controlled backend-parity path. `RecoveredInstalledTotalAdmission` retains the
 exact serviced device selection and recovered volume/root identity beside the

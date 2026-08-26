@@ -37,6 +37,19 @@ decision; `grant_sessions_atomic` validates every device and rights mask plus
 complete session capacity before publishing any handle. A late unknown device,
 invalid right, or exhausted table therefore leaves no partial I/O authority.
 
+The registration boundary now **PARTIALLY IMPLEMENTS** stable platform/media
+provenance. `PlatformBlockDeviceIdentity` records an opaque nonzero stable
+identifier, transport class, and exact nonzero controller and media generations
+beside the service-local descriptor. `BlockDeviceId` remains a local registry
+identity and never substitutes for that provenance or grants authority. A
+replacement media generation cannot coexist under the same live stable
+controller identity: removal first revokes every old session, after which the
+new generation may be registered. Installed-recovery enumeration accepts only
+sessions backed by this platform descriptor and rejects legacy registration
+before block I/O. The current hosted source supplies synthetic provenance;
+native UEFI/AHCI/USB/VirtIO identity derivation and physical media evidence
+remain **PLANNED**.
+
 The `mrml` frontend may expose structured `disk`, `filesystem`, `optical`, and
 `media` operations. The PowerShell-inspired shell projects the same backend as
 typed `Get-*`, `Test-*`, `Initialize-*`, `New-*`, `Format-*`, `Write-*`, and

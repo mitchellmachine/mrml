@@ -772,6 +772,16 @@ admission lifetime. This is **PARTIALLY IMPLEMENTED** controlled ownership
 evidence; platform enumeration, durable hardware-backed recovery state, and
 installed early-boot orchestration remain **PLANNED**.
 
+The retained installed owner now also carries the exact opaque platform
+identity, transport, controller generation, and media generation established at
+block-service registration. Recovery enumeration requires that provenance and
+fails before reading legacy registrations; final selection rechecks it against
+the still-live capability-authorized session, so local device-number reuse or
+media replacement cannot cross into Total admission. Removal revokes the old
+session before a replacement generation can register. This is **PARTIALLY
+IMPLEMENTED** hosted identity/lifetime evidence only; native platform discovery
+and installed early boot remain **PLANNED**.
+
 Stable-system selection is now a reusable **PARTIALLY IMPLEMENTED** boundary.
 `SelectedStableSystemRecovery` accepts the configuration checkpoint and
 authority checkpoint only when both are distinct objects selected from the

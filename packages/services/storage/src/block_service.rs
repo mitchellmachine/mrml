@@ -50,6 +50,98 @@ impl BlockDeviceDescriptor {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum PlatformBlockTransport {
+    Uefi,
+    Ahci,
+    Usb,
+    Virtio,
+    Hosted,
+}
+
+/// Opaque stable platform identity plus exact controller and removable-media
+/// generations. The bytes identify; they never authorize an operation.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct PlatformBlockDeviceIdentity {
+    transport: PlatformBlockTransport,
+    stable_id: [u8; 32],
+    controller_generation: u64,
+    media_generation: u64,
+}
+
+impl PlatformBlockDeviceIdentity {
+    pub const fn new(
+        transport: PlatformBlockTransport,
+        stable_id: [u8; 32],
+        controller_generation: u64,
+        media_generation: u64,
+    ) -> Option<Self> {
+        if controller_generation == 0 || media_generation == 0 || stable_id_is_zero(&stable_id) {
+            None
+        } else {
+            Some(Self {
+                transport,
+                stable_id,
+                controller_generation,
+                media_generation,
+            })
+        }
+    }
+
+    pub const fn transport(self) -> PlatformBlockTransport {
+        self.transport
+    }
+
+    pub const fn stable_id(self) -> [u8; 32] {
+        self.stable_id
+    }
+
+    pub const fn controller_generation(self) -> u64 {
+        self.controller_generation
+    }
+
+    pub const fn media_generation(self) -> u64 {
+        self.media_generation
+    }
+
+    fn same_device(self, other: Self) -> bool {
+        self.transport as u8 == other.transport as u8
+            && self.stable_id == other.stable_id
+            && self.controller_generation == other.controller_generation
+    }
+}
+
+const fn stable_id_is_zero(value: &[u8; 32]) -> bool {
+    let mut index = 0;
+    while index < value.len() {
+        if value[index] != 0 {
+            return false;
+        }
+        index += 1;
+    }
+    true
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct PlatformBlockDeviceDescriptor {
+    block: BlockDeviceDescriptor,
+    identity: PlatformBlockDeviceIdentity,
+}
+
+impl PlatformBlockDeviceDescriptor {
+    pub const fn new(block: BlockDeviceDescriptor, identity: PlatformBlockDeviceIdentity) -> Self {
+        Self { block, identity }
+    }
+
+    pub const fn block(self) -> BlockDeviceDescriptor {
+        self.block
+    }
+
+    pub const fn identity(self) -> PlatformBlockDeviceIdentity {
+        self.identity
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct BlockRights(u8);
 
 impl BlockRights {
@@ -164,6 +256,7 @@ impl Session {
 /// Fixed-capacity capability boundary for native block devices.
 pub struct BlockService<const DEVICES: usize, const SESSIONS: usize> {
     devices: [Option<BlockDeviceDescriptor>; DEVICES],
+    platform_identities: [Option<PlatformBlockDeviceIdentity>; DEVICES],
     sessions: [Session; SESSIONS],
 }
 
@@ -177,6 +270,7 @@ impl<const DEVICES: usize, const SESSIONS: usize> BlockService<DEVICES, SESSIONS
     pub const fn new() -> Self {
         Self {
             devices: [None; DEVICES],
+            platform_identities: [None; DEVICES],
             sessions: [Session::EMPTY; SESSIONS],
         }
     }
@@ -201,6 +295,48 @@ impl<const DEVICES: usize, const SESSIONS: usize> BlockService<DEVICES, SESSIONS
             .ok_or(BlockServiceError::Capacity)?;
         *slot = Some(descriptor);
         Ok(())
+    }
+
+    /// Atomically registers platform-derived descriptors with stable device and
+    /// exact media generations. Neither identity nor registration grants a
+    /// session. A replaced media generation cannot coexist under the same
+    /// controller identity.
+    pub fn register_platform_devices_atomic(
+        &mut self,
+        descriptors: &[PlatformBlockDeviceDescriptor],
+    ) -> Result<usize, BlockServiceError<core::convert::Infallible>> {
+        if descriptors.len() > self.devices.iter().filter(|slot| slot.is_none()).count() {
+            return Err(BlockServiceError::Capacity);
+        }
+        for (index, descriptor) in descriptors.iter().copied().enumerate() {
+            if self
+                .devices
+                .iter()
+                .flatten()
+                .any(|current| current.id == descriptor.block.id)
+                || self
+                    .platform_identities
+                    .iter()
+                    .flatten()
+                    .any(|current| current.same_device(descriptor.identity))
+                || descriptors[..index].iter().any(|current| {
+                    current.block.id == descriptor.block.id
+                        || current.identity.same_device(descriptor.identity)
+                })
+            {
+                return Err(BlockServiceError::DuplicateDevice);
+            }
+        }
+        for descriptor in descriptors.iter().copied() {
+            let index = self
+                .devices
+                .iter()
+                .position(|slot| slot.is_none())
+                .expect("platform registration capacity was completely preflighted");
+            self.devices[index] = Some(descriptor.block);
+            self.platform_identities[index] = Some(descriptor.identity);
+        }
+        Ok(descriptors.len())
     }
 
     /// Supervisor-only initial grant. Device identity alone cannot call this operation.
@@ -302,12 +438,13 @@ impl<const DEVICES: usize, const SESSIONS: usize> BlockService<DEVICES, SESSIONS
         &mut self,
         device: BlockDeviceId,
     ) -> Result<usize, BlockServiceError<core::convert::Infallible>> {
-        let slot = self
+        let index = self
             .devices
-            .iter_mut()
-            .find(|slot| slot.is_some_and(|current| current.id == device))
+            .iter()
+            .position(|slot| slot.is_some_and(|current| current.id == device))
             .ok_or(BlockServiceError::UnknownDevice)?;
-        *slot = None;
+        self.devices[index] = None;
+        self.platform_identities[index] = None;
         let mut revoked = 0;
         for session in &mut self.sessions {
             if session.occupied && session.device == device {
@@ -356,12 +493,13 @@ impl<const DEVICES: usize, const SESSIONS: usize> BlockService<DEVICES, SESSIONS
             }
         }
         for descriptor in descriptors.iter().copied() {
-            let slot = self
+            let index = self
                 .devices
-                .iter_mut()
-                .find(|slot| slot.is_none())
+                .iter()
+                .position(|slot| slot.is_none())
                 .expect("registration capacity was completely preflighted");
-            *slot = Some(descriptor);
+            self.devices[index] = Some(descriptor);
+            self.platform_identities[index] = None;
         }
         Ok(descriptors.len())
     }
@@ -379,6 +517,24 @@ impl<const DEVICES: usize, const SESSIONS: usize> BlockService<DEVICES, SESSIONS
             return Err(BlockServiceError::Denied);
         }
         self.descriptor(session.device)
+    }
+
+    /// Returns the exact non-authorizing platform/media identity bound to a
+    /// live session. Legacy registrations deliberately return `None`.
+    pub fn session_platform_descriptor(
+        &self,
+        handle: BlockSessionHandle,
+        owner: StoragePrincipal,
+    ) -> Result<Option<PlatformBlockDeviceDescriptor>, BlockServiceError<core::convert::Infallible>>
+    {
+        let descriptor = self.session_descriptor(handle, owner)?;
+        let index = self
+            .devices
+            .iter()
+            .position(|slot| slot.is_some_and(|current| current.id == descriptor.id))
+            .ok_or(BlockServiceError::UnknownDevice)?;
+        Ok(self.platform_identities[index]
+            .map(|identity| PlatformBlockDeviceDescriptor::new(descriptor, identity)))
     }
 
     pub fn read_blocks<B: BlockServiceBackend>(
@@ -804,6 +960,16 @@ mod tests {
         BlockDeviceDescriptor::new(device(), BLOCK_SIZE as u32, BLOCKS as u64).unwrap()
     }
 
+    fn platform_identity(media_generation: u64) -> PlatformBlockDeviceIdentity {
+        PlatformBlockDeviceIdentity::new(
+            PlatformBlockTransport::Hosted,
+            [0x41; 32],
+            3,
+            media_generation,
+        )
+        .unwrap()
+    }
+
     fn owner(value: u64) -> StoragePrincipal {
         StoragePrincipal::new(value).unwrap()
     }
@@ -905,6 +1071,64 @@ mod tests {
             .grant(second.id(), owner(1), BlockRights::READ)
             .unwrap();
         assert_eq!(service.session_descriptor(session, owner(1)), Ok(second));
+    }
+
+    #[test]
+    fn platform_identity_rejects_media_replacement_until_old_generation_retires() {
+        assert_eq!(
+            PlatformBlockDeviceIdentity::new(PlatformBlockTransport::Hosted, [0; 32], 1, 1),
+            None
+        );
+        let first = descriptor();
+        let replacement = BlockDeviceDescriptor::new(
+            BlockDeviceId::new(8).unwrap(),
+            BLOCK_SIZE as u32,
+            BLOCKS as u64,
+        )
+        .unwrap();
+        let first_platform = PlatformBlockDeviceDescriptor::new(first, platform_identity(1));
+        let replacement_platform =
+            PlatformBlockDeviceDescriptor::new(replacement, platform_identity(2));
+        let mut service = BlockService::<2, 2>::new();
+        assert_eq!(
+            service.register_platform_devices_atomic(&[first_platform]),
+            Ok(1)
+        );
+        let [old_session] = service
+            .grant_sessions_atomic([BlockSessionGrant::new(
+                first.id(),
+                owner(1),
+                BlockRights::READ,
+            )])
+            .unwrap();
+        assert_eq!(
+            service.session_platform_descriptor(old_session, owner(1)),
+            Ok(Some(first_platform))
+        );
+        assert_eq!(
+            service.register_platform_devices_atomic(&[replacement_platform]),
+            Err(BlockServiceError::DuplicateDevice)
+        );
+        assert_eq!(service.remove_device(first.id()), Ok(1));
+        assert_eq!(
+            service.session_platform_descriptor(old_session, owner(1)),
+            Err(BlockServiceError::StaleHandle)
+        );
+        assert_eq!(
+            service.register_platform_devices_atomic(&[replacement_platform]),
+            Ok(1)
+        );
+        let [new_session] = service
+            .grant_sessions_atomic([BlockSessionGrant::new(
+                replacement.id(),
+                owner(1),
+                BlockRights::READ,
+            )])
+            .unwrap();
+        assert_eq!(
+            service.session_platform_descriptor(new_session, owner(1)),
+            Ok(Some(replacement_platform))
+        );
     }
 
     #[test]

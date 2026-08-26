@@ -32,11 +32,12 @@ use mrml_storage::{
     BlockService, BlockServiceBackend, BlockServiceError, BlockSessionHandle, BlockVolume,
     BlockVolumeError, CommittedRecoveredStorageAuthorities, ExtentMap, FileMetadata,
     FileReadBackend, FileReadError, FileState, FileWriteBackend, FileWriteError, MetadataPointer,
-    PreparedFileWrite, ReachableFileSelection, RecoveredReachableState,
-    RecoveredStorageAuthorities, RecoveryError, RecoveryMetadataBackend, SUPERBLOCK_BYTES,
-    ServicedBlockDevice, StorageAuthorityTable, StorageBlockDevice, StorageHandle, StorageObjectId,
-    StoragePrincipal, StorageTransaction, TransactionError, TransactionReceipt,
-    VOLUME_HEADER_BYTES, VolumeHeader, VolumeId, recover_reachable_state,
+    PlatformBlockDeviceDescriptor, PlatformBlockDeviceIdentity, PreparedFileWrite,
+    ReachableFileSelection, RecoveredReachableState, RecoveredStorageAuthorities, RecoveryError,
+    RecoveryMetadataBackend, SUPERBLOCK_BYTES, ServicedBlockDevice, StorageAuthorityTable,
+    StorageBlockDevice, StorageHandle, StorageObjectId, StoragePrincipal, StorageTransaction,
+    TransactionError, TransactionReceipt, VOLUME_HEADER_BYTES, VolumeHeader, VolumeId,
+    recover_reachable_state,
 };
 
 #[cfg(any(test, target_os = "windows", target_os = "linux"))]
@@ -1551,6 +1552,7 @@ pub enum InstalledRecoveryDeviceSelectionError {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct DiscoveredRecoveryDevice {
     descriptor: BlockDeviceDescriptor,
+    platform_identity: Option<PlatformBlockDeviceIdentity>,
     header: VolumeHeader,
     active_superblock: u64,
 }
@@ -1573,6 +1575,7 @@ impl DiscoveredRecoveryDevice {
         }
         Ok(Self {
             descriptor,
+            platform_identity: None,
             header,
             active_superblock,
         })
@@ -1580,6 +1583,20 @@ impl DiscoveredRecoveryDevice {
 
     pub const fn descriptor(self) -> BlockDeviceDescriptor {
         self.descriptor
+    }
+
+    pub fn new_platform(
+        descriptor: PlatformBlockDeviceDescriptor,
+        header: VolumeHeader,
+        active_superblock: u64,
+    ) -> Result<Self, InstalledRecoveryDeviceSelectionError> {
+        let mut candidate = Self::new(descriptor.block(), header, active_superblock)?;
+        candidate.platform_identity = Some(descriptor.identity());
+        Ok(candidate)
+    }
+
+    pub const fn platform_identity(self) -> Option<PlatformBlockDeviceIdentity> {
+        self.platform_identity
     }
 
     pub const fn header(self) -> VolumeHeader {
@@ -1632,6 +1649,7 @@ pub enum ServicedRecoveryDeviceInventoryError<E> {
     Capacity,
     Scratch,
     Session(BlockServiceError<core::convert::Infallible>),
+    MissingPlatformIdentity,
     Read(BlockServiceError<E>),
     Candidate(InstalledRecoveryDeviceSelectionError),
 }
@@ -1665,9 +1683,12 @@ pub fn enumerate_serviced_recovery_devices<
         next: 0,
     };
     for session in sessions.iter().copied() {
-        let descriptor = service
-            .session_descriptor(session, principal)
+        let platform = service
+            .session_platform_descriptor(session, principal)
             .map_err(ServicedRecoveryDeviceInventoryError::Session)?;
+        let platform =
+            platform.ok_or(ServicedRecoveryDeviceInventoryError::MissingPlatformIdentity)?;
+        let descriptor = platform.block();
         let block_size = usize::try_from(descriptor.block_size())
             .map_err(|_| ServicedRecoveryDeviceInventoryError::Scratch)?;
         let block = scratch
@@ -1680,7 +1701,7 @@ pub fn enumerate_serviced_recovery_devices<
             continue;
         };
         let candidate =
-            DiscoveredRecoveryDevice::new(descriptor, header, header.primary_superblock())
+            DiscoveredRecoveryDevice::new_platform(platform, header, header.primary_superblock())
                 .map_err(ServicedRecoveryDeviceInventoryError::Candidate)?;
         inventory.candidates[inventory.count] = Some(candidate);
         inventory.count += 1;
@@ -1709,6 +1730,7 @@ pub struct InstalledRecoveryDeviceSelection {
     session: BlockSessionHandle,
     principal: StoragePrincipal,
     descriptor: BlockDeviceDescriptor,
+    platform_identity: Option<PlatformBlockDeviceIdentity>,
     header: VolumeHeader,
     active_superblock: u64,
 }
@@ -1746,6 +1768,7 @@ impl InstalledRecoveryDeviceSelection {
             session,
             principal,
             descriptor,
+            platform_identity: None,
             header,
             active_superblock,
         })
@@ -1753,6 +1776,39 @@ impl InstalledRecoveryDeviceSelection {
 
     pub const fn descriptor(self) -> BlockDeviceDescriptor {
         self.descriptor
+    }
+
+    pub fn new_platform<const DEVICES: usize, const SESSIONS: usize>(
+        service: &BlockService<DEVICES, SESSIONS>,
+        session: BlockSessionHandle,
+        principal: StoragePrincipal,
+        expected: PlatformBlockDeviceDescriptor,
+        expected_volume: VolumeId,
+        header: VolumeHeader,
+        active_superblock: u64,
+    ) -> Result<Self, InstalledRecoveryDeviceSelectionError> {
+        let live = service
+            .session_platform_descriptor(session, principal)
+            .map_err(InstalledRecoveryDeviceSelectionError::Session)?
+            .ok_or(InstalledRecoveryDeviceSelectionError::DeviceMismatch)?;
+        if live != expected {
+            return Err(InstalledRecoveryDeviceSelectionError::DeviceMismatch);
+        }
+        let mut selected = Self::new(
+            service,
+            session,
+            principal,
+            expected.block().id(),
+            expected_volume,
+            header,
+            active_superblock,
+        )?;
+        selected.platform_identity = Some(expected.identity());
+        Ok(selected)
+    }
+
+    pub const fn platform_identity(self) -> Option<PlatformBlockDeviceIdentity> {
+        self.platform_identity
     }
 
     pub const fn header(self) -> VolumeHeader {
@@ -1820,15 +1876,26 @@ fn finish_discovered_recovery_selection<const DEVICES: usize, const SESSIONS: us
     selected: Option<DiscoveredRecoveryDevice>,
 ) -> Result<InstalledRecoveryDeviceSelection, InstalledRecoveryDeviceDiscoveryError<E>> {
     let selected = selected.ok_or(InstalledRecoveryDeviceDiscoveryError::Missing)?;
-    InstalledRecoveryDeviceSelection::new(
-        service,
-        session,
-        principal,
-        selected.descriptor.id(),
-        expected_volume,
-        selected.header,
-        selected.active_superblock,
-    )
+    match selected.platform_identity {
+        Some(identity) => InstalledRecoveryDeviceSelection::new_platform(
+            service,
+            session,
+            principal,
+            PlatformBlockDeviceDescriptor::new(selected.descriptor, identity),
+            expected_volume,
+            selected.header,
+            selected.active_superblock,
+        ),
+        None => InstalledRecoveryDeviceSelection::new(
+            service,
+            session,
+            principal,
+            selected.descriptor.id(),
+            expected_volume,
+            selected.header,
+            selected.active_superblock,
+        ),
+    }
     .map_err(InstalledRecoveryDeviceDiscoveryError::Selection)
 }
 
@@ -5879,11 +5946,11 @@ mod tests {
         AUTHORITY_RECOVERY_STATE_BYTES, AuthenticatedAuthorityRecoveryState,
         AuthorityCheckpointProofIssuer, AuthorityRecoveryGuard, AuthorityRecoveryStateStore,
         BlockDeviceDescriptor, BlockDeviceId, BlockRights, BlockService, BlockServiceBackend,
-        BlockServiceError, BlockVolume, BootRecoveryAdmission, CowMetadataImage, CowMetadataWrite,
-        CowPublicationBackend, CowPublicationPlan, ExtentRecord, FileReadBackend, FileWriteBackend,
-        OwnerApprovedAuthorityCheckpoint, ServicedBlockDevice, StorageObjectId, StorageObjectKind,
-        StorageRecoveryGrant, StorageRights, StorageTransactionId, Superblock, VolumeHeader,
-        VolumeId, authority_checkpoint_digest, encode_authority_checkpoint,
+        BlockServiceError, BlockSessionGrant, BlockVolume, BootRecoveryAdmission, CowMetadataImage,
+        CowMetadataWrite, CowPublicationBackend, CowPublicationPlan, ExtentRecord, FileReadBackend,
+        FileWriteBackend, OwnerApprovedAuthorityCheckpoint, ServicedBlockDevice, StorageObjectId,
+        StorageObjectKind, StorageRecoveryGrant, StorageRights, StorageTransactionId, Superblock,
+        VolumeHeader, VolumeId, authority_checkpoint_digest, encode_authority_checkpoint,
         recover_validate_and_commit_stable_authorities,
     };
     use std::vec;
@@ -8096,6 +8163,22 @@ mod tests {
         .unwrap()
     }
 
+    fn platform_descriptor(
+        descriptor: BlockDeviceDescriptor,
+        media_generation: u64,
+    ) -> PlatformBlockDeviceDescriptor {
+        PlatformBlockDeviceDescriptor::new(
+            descriptor,
+            PlatformBlockDeviceIdentity::new(
+                mrml_storage::PlatformBlockTransport::Hosted,
+                [0x61; 32],
+                1,
+                media_generation,
+            )
+            .unwrap(),
+        )
+    }
+
     #[test]
     fn installed_recovery_discovery_is_bounded_unique_and_non_authorizing() {
         let device = BlockDeviceId::new(7).unwrap();
@@ -8105,10 +8188,17 @@ mod tests {
             stable_header().block_count(),
         )
         .unwrap();
+        let platform = platform_descriptor(descriptor, 1);
         let mut service = BlockService::<1, 1>::new();
-        service.register_device(descriptor).unwrap();
-        let session = service
-            .grant(device, stable_principal(), BlockRights::READ)
+        service
+            .register_platform_devices_atomic(&[platform])
+            .unwrap();
+        let [session] = service
+            .grant_sessions_atomic([BlockSessionGrant::new(
+                device,
+                stable_principal(),
+                BlockRights::READ,
+            )])
             .unwrap();
         let candidate = discovered_recovery_device(device, stable_volume());
         let other = discovered_recovery_device(
@@ -8181,10 +8271,17 @@ mod tests {
         let descriptor =
             BlockDeviceDescriptor::new(device, STABLE_BLOCK_BYTES as u32, header.block_count())
                 .unwrap();
+        let platform = platform_descriptor(descriptor, 1);
         let mut service = BlockService::<1, 1>::new();
-        service.register_device(descriptor).unwrap();
-        let session = service
-            .grant(device, stable_principal(), BlockRights::READ)
+        service
+            .register_platform_devices_atomic(&[platform])
+            .unwrap();
+        let [session] = service
+            .grant_sessions_atomic([BlockSessionGrant::new(
+                device,
+                stable_principal(),
+                BlockRights::READ,
+            )])
             .unwrap();
         let mut backend = StableBlockBackend::new(device);
         let mut encoded_header = [0; mrml_storage::VOLUME_HEADER_BYTES];
@@ -8213,6 +8310,61 @@ mod tests {
         .unwrap();
         assert_eq!(selected.descriptor(), descriptor);
         assert_eq!(selected.header(), header);
+        assert_eq!(selected.platform_identity(), Some(platform.identity()));
+
+        let mut legacy_service = BlockService::<1, 1>::new();
+        legacy_service.register_device(descriptor).unwrap();
+        let legacy_session = legacy_service
+            .grant(device, stable_principal(), BlockRights::READ)
+            .unwrap();
+        let mut legacy_backend = StableBlockBackend::new(device);
+        assert!(matches!(
+            enumerate_serviced_recovery_devices::<_, 1, 1, 1>(
+                &legacy_service,
+                &mut legacy_backend,
+                &[legacy_session],
+                stable_principal(),
+                &mut scratch,
+            ),
+            Err(ServicedRecoveryDeviceInventoryError::MissingPlatformIdentity)
+        ));
+        assert_eq!(legacy_backend.reads, 0);
+
+        let mut replaced_service = BlockService::<1, 1>::new();
+        replaced_service
+            .register_platform_devices_atomic(&[platform_descriptor(descriptor, 2)])
+            .unwrap();
+        let [replaced_session] = replaced_service
+            .grant_sessions_atomic([BlockSessionGrant::new(
+                device,
+                stable_principal(),
+                BlockRights::READ,
+            )])
+            .unwrap();
+        let mut substituted = ServicedRecoveryDeviceInventory {
+            candidates: [Some(
+                DiscoveredRecoveryDevice::new_platform(
+                    platform,
+                    header,
+                    header.primary_superblock(),
+                )
+                .unwrap(),
+            )],
+            count: 1,
+            next: 0,
+        };
+        assert_eq!(
+            discover_installed_recovery_device::<_, 1, 1, 1>(
+                &replaced_service,
+                replaced_session,
+                stable_principal(),
+                stable_volume(),
+                &mut substituted,
+            ),
+            Err(InstalledRecoveryDeviceDiscoveryError::Selection(
+                InstalledRecoveryDeviceSelectionError::DeviceMismatch
+            ))
+        );
 
         let mut denied_backend = StableBlockBackend::new(device);
         denied_backend.install_block(0, &header_block);

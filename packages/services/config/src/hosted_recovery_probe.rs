@@ -27,11 +27,11 @@ use mrml_storage::{
     BlockDeviceId, BlockRights, BlockService, BlockServiceBackend, BlockSessionGrant,
     BlockSessionHandle, BootRecoveryAdmission, DirectoryEntry, DirectoryImage, DirectoryMetadata,
     ExtentImage, ExtentRecord, FileMetadata, FileReadBackend, MetadataPointer,
-    ObjectIdAllocatorImage, OwnerApprovedAuthorityCheckpoint, SUPERBLOCK_BYTES,
-    StorageAuthorityTable, StorageName, StorageObjectId, StorageObjectKind, StoragePrincipal,
-    StorageRecoveryGrant, StorageRights, Superblock, VolumeHeader, VolumeId,
-    authority_checkpoint_digest, encode_authority_checkpoint,
-    recover_selected_validate_and_commit_stable_authorities,
+    ObjectIdAllocatorImage, OwnerApprovedAuthorityCheckpoint, PlatformBlockDeviceDescriptor,
+    PlatformBlockDeviceIdentity, PlatformBlockTransport, SUPERBLOCK_BYTES, StorageAuthorityTable,
+    StorageName, StorageObjectId, StorageObjectKind, StoragePrincipal, StorageRecoveryGrant,
+    StorageRights, Superblock, VolumeHeader, VolumeId, authority_checkpoint_digest,
+    encode_authority_checkpoint, recover_selected_validate_and_commit_stable_authorities,
 };
 
 const BLOCK_BYTES: usize = 4096;
@@ -231,8 +231,13 @@ fn recovery_block_service()
         header().block_count(),
     )
     .ok_or(HostedRecoveryProbeError::StorageLayout)?];
+    let platform = [PlatformBlockDeviceDescriptor::new(
+        descriptors[0],
+        PlatformBlockDeviceIdentity::new(PlatformBlockTransport::Hosted, [0x42; 32], 1, 1)
+            .ok_or(HostedRecoveryProbeError::StorageLayout)?,
+    )];
     service
-        .register_devices_atomic(&descriptors)
+        .register_platform_devices_atomic(&platform)
         .map_err(|_| HostedRecoveryProbeError::StorageLayout)?;
     let [session] = service
         .grant_sessions_atomic([BlockSessionGrant::new(
@@ -812,6 +817,10 @@ mod tests {
         )
         .unwrap();
         assert_eq!(current.installed().descriptor().id(), recovery_device());
+        assert_eq!(
+            current.installed().platform_identity().unwrap().transport(),
+            PlatformBlockTransport::Hosted
+        );
         assert_eq!(current.installed().header().volume(), volume());
         assert_eq!(
             current.installed().active_superblock(),

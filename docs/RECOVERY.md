@@ -1139,6 +1139,17 @@ enumeration. Storage passes 123 tests on Windows and Arch Linux; configuration
 passes 48, WHP 11, and KVM 12. This remains controlled service evidence, not
 native driver or installed-boot evidence.
 
+Installed recovery now retains an exact platform/controller/media generation
+through discovery and selection. The serviced scan rejects a legacy descriptor
+with no platform provenance before its first block read, and the selection
+rechecks the complete platform descriptor against the live authorized session
+before opening the existing block data plane. A changed media generation under
+the same stable controller cannot be substituted; removal revokes the prior
+session before replacement registration. Windows and Arch Linux storage suites
+pass 124 tests, configuration passes 48, WHP 11, and KVM 12. The hosted identity
+is synthetic controlled evidence, not firmware/native-driver enumeration,
+physical-media identity, durable rollback state, or installed early boot.
+
 The recovered installed selection is now retained across the boot-policy to
 Total-admission boundary. `RecoveredInstalledTotalAdmission` binds its exact
 device descriptor, serviced session selection, volume header, active root,

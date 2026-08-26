@@ -3234,6 +3234,15 @@ passes 123 tests on Windows and Arch Linux; configuration passes 48, WHP 11,
 and KVM 12. This is not native-driver, firmware, physical-media, or installed
 early-boot evidence.
 
+Installed recovery now retains an exact opaque platform identity, transport,
+controller generation, and media generation through serviced enumeration and
+selection. Legacy registration fails before backend access, changed media
+cannot substitute for the discovered generation, and removal revokes every old
+session before replacement registration. Windows and Arch Linux storage suites
+pass 124 tests, configuration passes 48, WHP 11, and KVM 12. The hosted source
+uses synthetic identity only; native platform enumeration and physical identity
+remain unverified.
+
 The bounded discovery result now remains owned through the complete serviced
 recovery read. `RecoveredInstalledStableSystemSelection` retains the exact
 installed selection beside the `BlockVolume` and reachable graph produced from
