@@ -1309,6 +1309,12 @@ The nested block observes the exact active outer state while its proven stable
 edges leave that state unchanged for later outer operations. ORACLE-0002 accepts
 an outer same-origin reassignment followed by a nested conditional return and
 rejects the corresponding local-backed reassignment with E0515.
+Nested inner-break outcomes now accumulate their exact outer-visible origin
+state and feed later outer-loop operations. Condition-headed inner loops also
+join the zero-iteration input; inner continue and normal backedges retain the
+stability requirement. Labeled controls targeting the outer loop still fail
+closed. ORACLE-0002 accepts a parameter overwrite before an inner break and
+rejects both local-backed and zero-iteration/local exits with E0515.
 
 The first modern trait-solver foundation is an explicit bounded implemented-
 goal representation. Stable trait/type/inference/placeholder identities remain

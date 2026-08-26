@@ -4175,6 +4175,13 @@ the later-operation fallthrough join. The pinned oracle accepts parameter-
 backed terminal controls and rejects a local-backed break arm with E0515. Both
 hosts remain at 989 compiler tests; nested-loop state transfer and general fixed
 points remain incomplete.
+Nested inner-break outcomes now export their exact outer-visible origin state to
+later outer-loop operations. Condition-headed inner loops join zero iterations;
+inner continue and normal backedges must remain stable, and labeled outer
+controls fail closed. The pinned oracle accepts a parameter overwrite before an
+inner break and rejects local-backed and zero-iteration/local exits with E0515.
+Both hosts remain at 989 compiler tests; outer-target routing and general nested
+fixed points remain incomplete.
 Nested-loop ordered-return and stable-edge analysis is now factored over an
 explicit incoming state and composes after outer-loop declarations, assignments,
 and branch joins. Stable nested edges preserve that state for later outer

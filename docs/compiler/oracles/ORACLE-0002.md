@@ -127,6 +127,14 @@ constant array-element output shapes only, not for dynamic indexing, general
 places, register allocation, or assembly semantics. Temporary source and
 metadata were removed.
 
+An independently authored Rust 2024 metadata-only nested-break set against this
+exact toolchain and commit accepted a local-initialized alias overwritten by the
+parameter before an inner unconditional-loop break and returned afterward.
+Replacing the break state with local storage failed with E0515; a condition-
+headed inner loop whose zero-iteration path retained local storage also failed
+with E0515. This is black-box evidence for those exact inner exits, not general
+nested-loop or region inference. Temporary sources and metadata were removed.
+
 An independently authored Rust 2024 metadata-only composed-loop pair against
 this exact toolchain and commit accepted an outer-loop same-origin mutable
 reassignment followed by an inner-loop conditional return. Replacing that outer
