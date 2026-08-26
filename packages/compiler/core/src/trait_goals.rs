@@ -5,7 +5,9 @@
 //! substitutions without confusing inference variables, placeholders, or
 //! concrete types.
 
-use crate::{Function, Item, MAX_TRAIT_SUPERTRAITS, Module, Span, TypeRef};
+use crate::{
+    Function, Item, MAX_TRAIT_ASSOCIATED_TYPES, MAX_TRAIT_SUPERTRAITS, Module, Span, TypeRef,
+};
 
 pub const MAX_TRAIT_GOAL_ARGUMENTS: usize = 8;
 pub const MAX_CANONICAL_TRAIT_VARIABLES: usize = 8;
@@ -21,6 +23,7 @@ pub const MAX_TRAIT_GOAL_TERMS: usize = 64;
 pub const MAX_COINDUCTIVE_TRAITS: usize = 64;
 pub const MAX_SOURCE_TRAIT_DECLARATIONS: usize = 64;
 pub const MAX_SOURCE_TRAIT_TYPES: usize = 64;
+pub const MAX_SOURCE_ASSOCIATED_TYPES: usize = 64;
 
 #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
 pub struct TraitId(u32);
@@ -43,6 +46,8 @@ pub struct SourceTraitDeclaration<'source> {
     pub public: bool,
     supertraits: [Option<TraitId>; MAX_TRAIT_SUPERTRAITS],
     supertrait_count: usize,
+    associated_types: [Option<TraitAssociatedTypeId>; MAX_TRAIT_ASSOCIATED_TYPES],
+    associated_type_count: usize,
 }
 
 impl SourceTraitDeclaration<'_> {
@@ -53,6 +58,22 @@ impl SourceTraitDeclaration<'_> {
     pub const fn supertrait_count(&self) -> usize {
         self.supertrait_count
     }
+
+    pub fn associated_types(&self) -> &[Option<TraitAssociatedTypeId>] {
+        &self.associated_types[..self.associated_type_count]
+    }
+
+    pub const fn associated_type_count(&self) -> usize {
+        self.associated_type_count
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct SourceTraitAssociatedType<'source> {
+    pub id: TraitAssociatedTypeId,
+    pub trait_id: TraitId,
+    pub name: &'source str,
+    pub span: Span,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -62,12 +83,16 @@ pub enum SourceTraitDeclarationError {
     UnknownSupertrait,
     DuplicateSupertrait,
     CyclicSupertrait,
+    TooManyAssociatedTypes,
+    DuplicateAssociatedType,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct SourceTraitDeclarationTable<'source> {
     declarations: [Option<SourceTraitDeclaration<'source>>; MAX_SOURCE_TRAIT_DECLARATIONS],
     count: usize,
+    associated_types: [Option<SourceTraitAssociatedType<'source>>; MAX_SOURCE_ASSOCIATED_TYPES],
+    associated_type_count: usize,
 }
 
 impl<'source> SourceTraitDeclarationTable<'source> {
@@ -77,6 +102,8 @@ impl<'source> SourceTraitDeclarationTable<'source> {
         let mut table = Self {
             declarations: [None; MAX_SOURCE_TRAIT_DECLARATIONS],
             count: 0,
+            associated_types: [None; MAX_SOURCE_ASSOCIATED_TYPES],
+            associated_type_count: 0,
         };
         for item in module.items().iter().flatten() {
             let Item::Trait(declaration) = item else {
@@ -99,6 +126,8 @@ impl<'source> SourceTraitDeclarationTable<'source> {
                 public: declaration.public,
                 supertraits: [None; MAX_TRAIT_SUPERTRAITS],
                 supertrait_count: 0,
+                associated_types: [None; MAX_TRAIT_ASSOCIATED_TYPES],
+                associated_type_count: 0,
             });
             table.count += 1;
         }
@@ -120,9 +149,36 @@ impl<'source> SourceTraitDeclarationTable<'source> {
                 supertraits[supertrait_count] = Some(supertrait);
                 supertrait_count += 1;
             }
+            let mut associated_types = [None; MAX_TRAIT_ASSOCIATED_TYPES];
+            let mut associated_type_count = 0usize;
+            for source_associated in declaration.associated_types().iter().flatten() {
+                if declaration.associated_types()[..associated_type_count]
+                    .iter()
+                    .flatten()
+                    .any(|known| known.name == source_associated.name)
+                {
+                    return Err(SourceTraitDeclarationError::DuplicateAssociatedType);
+                }
+                let slot = table
+                    .associated_types
+                    .get_mut(table.associated_type_count)
+                    .ok_or(SourceTraitDeclarationError::TooManyAssociatedTypes)?;
+                let id = TraitAssociatedTypeId::new(table.associated_type_count as u32);
+                *slot = Some(SourceTraitAssociatedType {
+                    id,
+                    trait_id: TraitId::new(index as u32),
+                    name: source_associated.name,
+                    span: source_associated.span,
+                });
+                table.associated_type_count += 1;
+                associated_types[associated_type_count] = Some(id);
+                associated_type_count += 1;
+            }
             let resolved = table.declarations[index].as_mut().unwrap();
             resolved.supertraits = supertraits;
             resolved.supertrait_count = supertrait_count;
+            resolved.associated_types = associated_types;
+            resolved.associated_type_count = associated_type_count;
         }
         let mut states = [0u8; MAX_SOURCE_TRAIT_DECLARATIONS];
         for index in 0..table.count {
@@ -156,6 +212,22 @@ impl<'source> SourceTraitDeclarationTable<'source> {
             .get(id.get() as usize)
             .copied()
             .flatten()
+    }
+
+    pub fn associated_types(&self) -> &[Option<SourceTraitAssociatedType<'source>>] {
+        &self.associated_types[..self.associated_type_count]
+    }
+
+    pub fn get_associated_type(
+        &self,
+        trait_id: TraitId,
+        name: &str,
+    ) -> Option<SourceTraitAssociatedType<'source>> {
+        self.associated_types()
+            .iter()
+            .flatten()
+            .copied()
+            .find(|associated| associated.trait_id == trait_id && associated.name == name)
     }
 
     fn visit_supertraits(
@@ -192,6 +264,9 @@ pub enum SourceTraitImplementationErrorKind {
     TooManyTypes,
     MissingSupertraitImplementation,
     AmbiguousSupertraitImplementation,
+    UnknownAssociatedType,
+    DuplicateAssociatedTypeValue,
+    MissingAssociatedTypeValue,
     Goal(TraitGoalError),
 }
 
@@ -222,6 +297,7 @@ pub struct SourceTraitImplementationTable<'source> {
     types: [Option<SourceTraitType<'source>>; MAX_SOURCE_TRAIT_TYPES],
     type_count: usize,
     implementations: TraitImplementationDatabase,
+    associated_types: TraitAssociatedTypeDatabase,
 }
 
 impl<'source> SourceTraitImplementationTable<'source> {
@@ -233,11 +309,15 @@ impl<'source> SourceTraitImplementationTable<'source> {
             types: [None; MAX_SOURCE_TRAIT_TYPES],
             type_count: 0,
             implementations: TraitImplementationDatabase::EMPTY,
+            associated_types: TraitAssociatedTypeDatabase::EMPTY,
         };
         for item in module.items().iter().flatten() {
             match item {
                 Item::TraitImplementation(implementation) => {
                     table.intern_type(implementation.self_type)?;
+                    for associated in implementation.associated_types().iter().flatten() {
+                        table.intern_type(associated.value)?;
+                    }
                 }
                 Item::Function(function) => {
                     for predicate in function.where_predicates().iter().flatten() {
@@ -273,6 +353,54 @@ impl<'source> SourceTraitImplementationTable<'source> {
                 })?;
             implementation_count += 1;
         }
+        let mut implementation_index = 0u32;
+        for item in module.items().iter().flatten() {
+            let Item::TraitImplementation(implementation) = item else {
+                continue;
+            };
+            let trait_id = traits.get(implementation.trait_name).unwrap().id;
+            let declaration = traits.get_by_id(trait_id).unwrap();
+            let mut seen = [None; MAX_TRAIT_ASSOCIATED_TYPES];
+            let mut seen_count = 0usize;
+            for source_value in implementation.associated_types().iter().flatten() {
+                let associated = traits
+                    .get_associated_type(trait_id, source_value.name)
+                    .ok_or(SourceTraitImplementationError {
+                        kind: SourceTraitImplementationErrorKind::UnknownAssociatedType,
+                        span: source_value.name_span,
+                    })?;
+                if seen[..seen_count].contains(&Some(associated.id)) {
+                    return Err(SourceTraitImplementationError {
+                        kind: SourceTraitImplementationErrorKind::DuplicateAssociatedTypeValue,
+                        span: source_value.name_span,
+                    });
+                }
+                seen[seen_count] = Some(associated.id);
+                seen_count += 1;
+                let value = table.get_type(source_value.value.text).unwrap().id;
+                table
+                    .associated_types
+                    .insert(
+                        &table.implementations,
+                        TraitAssociatedTypeValue::new(
+                            TraitImplementationId::new(implementation_index),
+                            associated.id,
+                            value,
+                        ),
+                    )
+                    .map_err(|kind| SourceTraitImplementationError {
+                        kind: SourceTraitImplementationErrorKind::Goal(kind),
+                        span: source_value.name_span,
+                    })?;
+            }
+            if declaration.associated_type_count() != seen_count {
+                return Err(SourceTraitImplementationError {
+                    kind: SourceTraitImplementationErrorKind::MissingAssociatedTypeValue,
+                    span: implementation.trait_name_span,
+                });
+            }
+            implementation_index += 1;
+        }
         for item in module.items().iter().flatten() {
             let Item::TraitImplementation(implementation) = item else {
                 continue;
@@ -303,6 +431,10 @@ impl<'source> SourceTraitImplementationTable<'source> {
 
     pub const fn implementations(&self) -> &TraitImplementationDatabase {
         &self.implementations
+    }
+
+    pub const fn associated_type_values(&self) -> &TraitAssociatedTypeDatabase {
+        &self.associated_types
     }
 
     pub fn prove_function<const MAX_PARAMETERS: usize>(
@@ -7650,6 +7782,102 @@ mod tests {
         assert_eq!(
             error.kind,
             SourceTraitImplementationErrorKind::MissingSupertraitImplementation
+        );
+    }
+
+    #[test]
+    fn lowers_exact_source_associated_type_values_for_projection() {
+        let source = concat!(
+            "trait Iterator { type Item; } ",
+            "impl Iterator for u32 { type Item = u8; }"
+        );
+        let module = Parser::new(source).parse_module::<4, 1>().unwrap();
+        let traits = SourceTraitDeclarationTable::from_module(&module).unwrap();
+        let implementations =
+            SourceTraitImplementationTable::from_module(&module, &traits).unwrap();
+        let trait_id = traits.get("Iterator").unwrap().id;
+        let associated_id = traits.get_associated_type(trait_id, "Item").unwrap().id;
+        let self_type = implementations.get_type("u32").unwrap().id;
+        let value_type = implementations.get_type("u8").unwrap().id;
+        let goal = canonicalize_implemented_trait_goal(ImplementedTraitGoal::new(
+            trait_id,
+            TraitGoalType::Concrete(self_type),
+        ))
+        .unwrap();
+        assert_eq!(
+            implementations.associated_type_values().normalize(
+                implementations.implementations(),
+                goal,
+                associated_id
+            ),
+            TraitProjectionSolution::Unique(value_type)
+        );
+    }
+
+    #[test]
+    fn exact_source_associated_values_require_one_declared_value_each() {
+        let missing = Parser::new("trait Iterator { type Item; } impl Iterator for u32 {}")
+            .parse_module::<4, 1>()
+            .unwrap();
+        let traits = SourceTraitDeclarationTable::from_module(&missing).unwrap();
+        assert_eq!(
+            SourceTraitImplementationTable::from_module(&missing, &traits)
+                .unwrap_err()
+                .kind,
+            SourceTraitImplementationErrorKind::MissingAssociatedTypeValue
+        );
+
+        let unknown = Parser::new(concat!(
+            "trait Iterator { type Item; } ",
+            "impl Iterator for u32 { type Other = u8; }"
+        ))
+        .parse_module::<4, 1>()
+        .unwrap();
+        let traits = SourceTraitDeclarationTable::from_module(&unknown).unwrap();
+        assert_eq!(
+            SourceTraitImplementationTable::from_module(&unknown, &traits)
+                .unwrap_err()
+                .kind,
+            SourceTraitImplementationErrorKind::UnknownAssociatedType
+        );
+
+        let duplicate = Parser::new(concat!(
+            "trait Iterator { type Item; } ",
+            "impl Iterator for u32 { type Item = u8; type Item = u16; }"
+        ))
+        .parse_module::<4, 1>()
+        .unwrap();
+        let traits = SourceTraitDeclarationTable::from_module(&duplicate).unwrap();
+        assert_eq!(
+            SourceTraitImplementationTable::from_module(&duplicate, &traits)
+                .unwrap_err()
+                .kind,
+            SourceTraitImplementationErrorKind::DuplicateAssociatedTypeValue
+        );
+
+        let declaration_duplicate = Parser::new("trait Iterator { type Item; type Item; }")
+            .parse_module::<2, 1>()
+            .unwrap();
+        assert_eq!(
+            SourceTraitDeclarationTable::from_module(&declaration_duplicate),
+            Err(SourceTraitDeclarationError::DuplicateAssociatedType)
+        );
+
+        let source_capacity = concat!(
+            "trait T0 { type A0; type A1; type A2; type A3; type A4; type A5; type A6; type A7; } ",
+            "trait T1 { type B0; type B1; type B2; type B3; type B4; type B5; type B6; type B7; } ",
+            "trait T2 { type C0; type C1; type C2; type C3; type C4; type C5; type C6; type C7; } ",
+            "trait T3 { type D0; type D1; type D2; type D3; type D4; type D5; type D6; type D7; } ",
+            "trait T4 { type E0; type E1; type E2; type E3; type E4; type E5; type E6; type E7; } ",
+            "trait T5 { type F0; type F1; type F2; type F3; type F4; type F5; type F6; type F7; } ",
+            "trait T6 { type G0; type G1; type G2; type G3; type G4; type G5; type G6; type G7; } ",
+            "trait T7 { type H0; type H1; type H2; type H3; type H4; type H5; type H6; type H7; } ",
+            "trait T8 { type I0; }"
+        );
+        let overflow = Parser::new(source_capacity).parse_module::<9, 1>().unwrap();
+        assert_eq!(
+            SourceTraitDeclarationTable::from_module(&overflow),
+            Err(SourceTraitDeclarationError::TooManyAssociatedTypes)
         );
     }
 

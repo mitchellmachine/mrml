@@ -369,6 +369,28 @@ mod tests {
     }
 
     #[test]
+    fn rejects_missing_source_associated_type_values_before_codegen() {
+        let complete = concat!(
+            "trait Iterator { type Item; } impl Iterator for u32 { type Item = u8; } ",
+            "#[unsafe(no_mangle)] pub extern \"C\" fn answer() -> u64 { 42 }"
+        );
+        compile(complete, "answer", ObjectFormat::Coff).unwrap();
+
+        let source = concat!(
+            "trait Iterator { type Item; } impl Iterator for u32 {} ",
+            "#[unsafe(no_mangle)] pub extern \"C\" fn answer() -> u64 { 42 }"
+        );
+        let error = compile(source, "answer", ObjectFormat::Coff).unwrap_err();
+        assert!(matches!(
+            error.kind,
+            CompileErrorKind::TraitImplementation(SourceTraitImplementationError {
+                kind: crate::SourceTraitImplementationErrorKind::MissingAssociatedTypeValue,
+                ..
+            })
+        ));
+    }
+
+    #[test]
     fn reports_each_pipeline_boundary() {
         let parse = compile("fn broken(", "broken", ObjectFormat::Elf64).unwrap_err();
         assert!(matches!(parse.kind, CompileErrorKind::Parse(_)));

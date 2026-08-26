@@ -20,6 +20,7 @@ pub const MAX_CONDITIONAL_RETURN_BRANCHES: usize = 4;
 pub const MAX_BODY_CONDITIONAL_ASSIGNMENTS: usize = 8;
 pub const MAX_FUNCTION_WHERE_PREDICATES: usize = 8;
 pub const MAX_TRAIT_SUPERTRAITS: usize = 8;
+pub const MAX_TRAIT_ASSOCIATED_TYPES: usize = 8;
 pub const MAX_CONDITIONAL_ASSIGNMENT_BRANCHES: usize = 4;
 pub const MAX_CONDITIONAL_BRANCH_ACTIONS: usize = 4;
 const MAX_BODY_TAIL_EXPRESSION_NODES: usize = 128;
@@ -768,6 +769,8 @@ pub struct TraitDeclaration<'source> {
     pub name_span: Span,
     supertraits: [Option<TraitSupertrait<'source>>; MAX_TRAIT_SUPERTRAITS],
     supertrait_count: usize,
+    associated_types: [Option<TraitAssociatedTypeDeclaration<'source>>; MAX_TRAIT_ASSOCIATED_TYPES],
+    associated_type_count: usize,
     pub body: Span,
 }
 
@@ -779,6 +782,20 @@ impl<'source> TraitDeclaration<'source> {
     pub const fn supertrait_count(&self) -> usize {
         self.supertrait_count
     }
+
+    pub fn associated_types(&self) -> &[Option<TraitAssociatedTypeDeclaration<'source>>] {
+        &self.associated_types[..self.associated_type_count]
+    }
+
+    pub const fn associated_type_count(&self) -> usize {
+        self.associated_type_count
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct TraitAssociatedTypeDeclaration<'source> {
+    pub name: &'source str,
+    pub span: Span,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -792,7 +809,27 @@ pub struct TraitImplementation<'source> {
     pub trait_name: &'source str,
     pub trait_name_span: Span,
     pub self_type: TypeRef<'source>,
+    associated_types:
+        [Option<TraitAssociatedTypeImplementation<'source>>; MAX_TRAIT_ASSOCIATED_TYPES],
+    associated_type_count: usize,
     pub body: Span,
+}
+
+impl<'source> TraitImplementation<'source> {
+    pub fn associated_types(&self) -> &[Option<TraitAssociatedTypeImplementation<'source>>] {
+        &self.associated_types[..self.associated_type_count]
+    }
+
+    pub const fn associated_type_count(&self) -> usize {
+        self.associated_type_count
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct TraitAssociatedTypeImplementation<'source> {
+    pub name: &'source str,
+    pub name_span: Span,
+    pub value: TypeRef<'source>,
 }
 
 impl<'source> ConstItem<'source> {
@@ -857,6 +894,7 @@ pub enum ParseErrorKind {
     TooManyParameters,
     TooManyWherePredicates,
     TooManySupertraits,
+    TooManyAssociatedTypes,
     TooManyLocals,
     TooManyLoopAssignments,
     TooManyLoopOperations,
@@ -3000,23 +3038,45 @@ impl<'source> Parser<'source> {
                 }
             }
         }
-        let body = self.body()?;
-        let contents = &self.source[body.start + 1..body.end - 1];
-        if Parser::new(contents).peek()?.is_none() {
-            Ok(TraitDeclaration {
-                public,
-                name: name.text,
-                name_span: name.span,
-                supertraits,
-                supertrait_count,
-                body,
-            })
-        } else {
-            Err(ParseError {
-                kind: ParseErrorKind::UnsupportedTraitBody,
-                span: body,
-            })
-        }
+        let open = self.expect_kind(TokenKind::OpenBrace, ParseErrorKind::ExpectedBody)?;
+        let mut associated_types = [None; MAX_TRAIT_ASSOCIATED_TYPES];
+        let mut associated_type_count = 0usize;
+        let close = loop {
+            if self
+                .peek()?
+                .is_some_and(|token| token.kind == TokenKind::CloseBrace)
+            {
+                break self.take()?.unwrap();
+            }
+            if associated_type_count == MAX_TRAIT_ASSOCIATED_TYPES {
+                let token = self.peek()?;
+                return Err(self.error(ParseErrorKind::TooManyAssociatedTypes, token));
+            }
+            let keyword = self.take()?;
+            if !keyword.is_some_and(|token| token.text == "type") {
+                return Err(self.error(ParseErrorKind::UnsupportedTraitBody, keyword));
+            }
+            let associated = self.identifier()?;
+            self.expect_kind(TokenKind::Semicolon, ParseErrorKind::ExpectedSemicolon)?;
+            associated_types[associated_type_count] = Some(TraitAssociatedTypeDeclaration {
+                name: associated.text,
+                span: associated.span,
+            });
+            associated_type_count += 1;
+        };
+        Ok(TraitDeclaration {
+            public,
+            name: name.text,
+            name_span: name.span,
+            supertraits,
+            supertrait_count,
+            associated_types,
+            associated_type_count,
+            body: Span {
+                start: open.span.start,
+                end: close.span.end,
+            },
+        })
     }
 
     fn trait_implementation(&mut self) -> Result<TraitImplementation<'source>, ParseError> {
@@ -3026,19 +3086,48 @@ impl<'source> Parser<'source> {
             return Err(self.error(ParseErrorKind::ExpectedFor, for_keyword));
         }
         let self_type = self.type_until(&[TokenKind::OpenBrace])?;
-        let body = self.body()?;
-        let contents = &self.source[body.start + 1..body.end - 1];
-        if Parser::new(contents).peek()?.is_some() {
-            return Err(ParseError {
-                kind: ParseErrorKind::UnsupportedTraitImplementationBody,
-                span: body,
+        let open = self.expect_kind(TokenKind::OpenBrace, ParseErrorKind::ExpectedBody)?;
+        let mut associated_types = [None; MAX_TRAIT_ASSOCIATED_TYPES];
+        let mut associated_type_count = 0usize;
+        let close = loop {
+            if self
+                .peek()?
+                .is_some_and(|token| token.kind == TokenKind::CloseBrace)
+            {
+                break self.take()?.unwrap();
+            }
+            if associated_type_count == MAX_TRAIT_ASSOCIATED_TYPES {
+                let token = self.peek()?;
+                return Err(self.error(ParseErrorKind::TooManyAssociatedTypes, token));
+            }
+            let keyword = self.take()?;
+            if !keyword.is_some_and(|token| token.text == "type") {
+                return Err(self.error(ParseErrorKind::UnsupportedTraitImplementationBody, keyword));
+            }
+            let associated = self.identifier()?;
+            let equals = self.take()?;
+            if !equals.is_some_and(|token| token.text == "=") {
+                return Err(self.error(ParseErrorKind::ExpectedEquals, equals));
+            }
+            let value = self.type_until(&[TokenKind::Semicolon])?;
+            self.expect_kind(TokenKind::Semicolon, ParseErrorKind::ExpectedSemicolon)?;
+            associated_types[associated_type_count] = Some(TraitAssociatedTypeImplementation {
+                name: associated.text,
+                name_span: associated.span,
+                value,
             });
-        }
+            associated_type_count += 1;
+        };
         Ok(TraitImplementation {
             trait_name: trait_name.text,
             trait_name_span: trait_name.span,
             self_type,
-            body,
+            associated_types,
+            associated_type_count,
+            body: Span {
+                start: open.span.start,
+                end: close.span.end,
+            },
         })
     }
 
@@ -3273,6 +3362,50 @@ mod tests {
         .parse_module::<2, 1>()
         .unwrap_err();
         assert_eq!(overflow.kind, ParseErrorKind::TooManySupertraits);
+    }
+
+    #[test]
+    fn parses_bounded_trait_associated_types_and_exact_values() {
+        let source = concat!(
+            "trait Iterator { type Item; type Error; } ",
+            "impl Iterator for u32 { type Item = u8; type Error = core::result::Result; }"
+        );
+        let module: TestModule<'_> = Parser::new(source).parse_module().unwrap();
+        let Some(Item::Trait(declaration)) = module.items()[0] else {
+            panic!("expected trait")
+        };
+        assert_eq!(declaration.associated_type_count(), 2);
+        assert_eq!(declaration.associated_types()[0].unwrap().name, "Item");
+        let Some(Item::TraitImplementation(implementation)) = module.items()[1] else {
+            panic!("expected implementation")
+        };
+        assert_eq!(implementation.associated_type_count(), 2);
+        assert_eq!(implementation.associated_types()[0].unwrap().name, "Item");
+        assert_eq!(
+            implementation.associated_types()[0].unwrap().value.text,
+            "u8"
+        );
+    }
+
+    #[test]
+    fn bounds_and_rejects_unsupported_associated_type_forms() {
+        let overflow = Parser::new(concat!(
+            "trait Values { type T0; type T1; type T2; type T3; type T4; ",
+            "type T5; type T6; type T7; type T8; }"
+        ))
+        .parse_module::<2, 1>()
+        .unwrap_err();
+        assert_eq!(overflow.kind, ParseErrorKind::TooManyAssociatedTypes);
+
+        let default = Parser::new("trait Values { type Item = u8; }")
+            .parse_module::<2, 1>()
+            .unwrap_err();
+        assert_eq!(default.kind, ParseErrorKind::ExpectedSemicolon);
+
+        let bound = Parser::new("trait Values { type Item: Copy; }")
+            .parse_module::<2, 1>()
+            .unwrap_err();
+        assert_eq!(bound.kind, ParseErrorKind::ExpectedSemicolon);
     }
 
     #[test]
