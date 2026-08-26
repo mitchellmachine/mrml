@@ -81,6 +81,13 @@ and Arch Linux each pass 32 focused tests and cross-build the UEFI target.
 Opening/scanning each handle and selecting exactly one expected installed volume
 remain the next gate.
 
+The per-handle recovery-header probe is now **PARTIALLY IMPLEMENTED**. One
+transaction opens both exact protocols, derives stable path/media identity,
+reads native block zero through converted firmware geometry, exact-matches the
+canonical header, erases scratch, and closes both before returning. Windows and
+Arch Linux each pass 33 focused tests and cross-build the UEFI target. Scanning
+the complete enumerated set for exactly one expected volume is the next gate.
+
 Installed recovery ownership now crosses the Total-admission boundary in the
 controlled backend-parity path. `RecoveredInstalledTotalAdmission` retains the
 exact serviced device selection and recovered volume/root identity beside the

@@ -6,7 +6,7 @@ use core::ffi::c_void;
 use mrml_crypto::Sha3_256;
 use mrml_storage::{
     BlockDeviceDescriptor, BlockDeviceId, PlatformBlockDeviceDescriptor,
-    PlatformBlockDeviceIdentity, PlatformBlockTransport,
+    PlatformBlockDeviceIdentity, PlatformBlockTransport, VOLUME_HEADER_BYTES, VolumeHeader,
 };
 
 pub type Status = usize;
@@ -346,6 +346,8 @@ pub enum UefiBlockDescriptorError {
     InvalidHandleBuffer,
     DuplicateHandle,
     FreeHandleBuffer(Status),
+    InvalidVolumeHeader,
+    VolumeGeometryMismatch,
 }
 
 pub const OPEN_PROTOCOL_GET_PROTOCOL: u32 = 0x0000_0002;
@@ -617,8 +619,12 @@ pub fn uefi_platform_block_descriptor(
     device_path: &[u8],
 ) -> Result<PlatformBlockDeviceDescriptor, UefiBlockDescriptorError> {
     validate_single_device_path(device_path)?;
-    let block = BlockDeviceDescriptor::new(id, media.block_size, media.block_count)
-        .ok_or(UefiBlockDescriptorError::InvalidGeometry)?;
+    let block = BlockDeviceDescriptor::new(
+        id,
+        UEFI_RECOVERY_BLOCK_BYTES as u32,
+        uefi_recovery_block_count(media)?,
+    )
+    .ok_or(UefiBlockDescriptorError::InvalidGeometry)?;
     let mut hash = Sha3_256::new();
     hash.update(b"MRML-UEFI-BLOCK-ID-v1\0");
     hash.update(device_path);
@@ -632,6 +638,30 @@ pub fn uefi_platform_block_descriptor(
     )
     .ok_or(UefiBlockDescriptorError::InvalidGeometry)?;
     Ok(PlatformBlockDeviceDescriptor::new(block, identity))
+}
+
+fn uefi_recovery_block_count(
+    media: UefiBlockMediaSnapshot,
+) -> Result<u64, UefiBlockDescriptorError> {
+    let firmware_bytes = usize::try_from(media.block_size)
+        .map_err(|_| UefiBlockDescriptorError::UnsupportedRecoveryGeometry)?;
+    if !(512..=UEFI_RECOVERY_BLOCK_BYTES).contains(&firmware_bytes)
+        || !firmware_bytes.is_power_of_two()
+        || !UEFI_RECOVERY_BLOCK_BYTES.is_multiple_of(firmware_bytes)
+        || media.io_align > UEFI_RECOVERY_BLOCK_BYTES as u32
+    {
+        return Err(UefiBlockDescriptorError::UnsupportedRecoveryGeometry);
+    }
+    let firmware_blocks = u64::try_from(UEFI_RECOVERY_BLOCK_BYTES / firmware_bytes)
+        .map_err(|_| UefiBlockDescriptorError::UnsupportedRecoveryGeometry)?;
+    if !media.block_count.is_multiple_of(firmware_blocks) {
+        return Err(UefiBlockDescriptorError::UnsupportedRecoveryGeometry);
+    }
+    let blocks = media.block_count / firmware_blocks;
+    if blocks == 0 {
+        return Err(UefiBlockDescriptorError::UnsupportedRecoveryGeometry);
+    }
+    Ok(blocks)
 }
 
 /// Opens the exact loaded-image device's Block I/O and Device Path protocols,
@@ -660,7 +690,96 @@ pub unsafe fn discover_loaded_image_block_descriptor(
     if device.is_null() {
         return Err(UefiBlockDescriptorError::MissingDeviceHandle);
     }
+    unsafe {
+        with_opened_uefi_block_protocols(services, image, device, |block, path| {
+            let media = snapshot_uefi_block_media(block)?;
+            let path_length = copy_single_device_path(path, device_path_scratch)?;
+            uefi_platform_block_descriptor(id, media, &device_path_scratch[..path_length])
+        })
+    }
+}
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct UefiRecoveryHeaderCandidate {
+    handle: Handle,
+    descriptor: PlatformBlockDeviceDescriptor,
+    media: UefiBlockMediaSnapshot,
+    header: VolumeHeader,
+}
+
+impl UefiRecoveryHeaderCandidate {
+    pub const fn handle(self) -> Handle {
+        self.handle
+    }
+
+    pub const fn descriptor(self) -> PlatformBlockDeviceDescriptor {
+        self.descriptor
+    }
+
+    pub const fn media(self) -> UefiBlockMediaSnapshot {
+        self.media
+    }
+
+    pub const fn header(self) -> VolumeHeader {
+        self.header
+    }
+}
+
+/// Opens one enumerated handle, binds its canonical path and media generation,
+/// reads and decodes native block zero, and closes all firmware relationships
+/// before publishing the candidate. The ephemeral handle must be reopened and
+/// the descriptor revalidated before any later root read.
+///
+/// # Safety
+///
+/// The boot-services and protocol-pointer requirements of
+/// `discover_loaded_image_block_descriptor` apply to `device`.
+pub unsafe fn probe_uefi_recovery_header(
+    services: &BootServices,
+    image: Handle,
+    device: Handle,
+    id: BlockDeviceId,
+    device_path_scratch: &mut [u8; MAX_UEFI_DEVICE_PATH_BYTES],
+    block: &mut UefiRecoveryBlock,
+) -> Result<UefiRecoveryHeaderCandidate, UefiBlockDescriptorError> {
+    if image.is_null() {
+        return Err(UefiBlockDescriptorError::MissingImageHandle);
+    }
+    if device.is_null() {
+        return Err(UefiBlockDescriptorError::MissingDeviceHandle);
+    }
+    unsafe {
+        with_opened_uefi_block_protocols(services, image, device, |protocol, path| {
+            let media = snapshot_uefi_block_media(protocol)?;
+            let path_length = copy_single_device_path(path, device_path_scratch)?;
+            let descriptor =
+                uefi_platform_block_descriptor(id, media, &device_path_scratch[..path_length])?;
+            read_uefi_recovery_block(protocol, media, 0, block)?;
+            let header = VolumeHeader::decode(&block.as_slice()[..VOLUME_HEADER_BYTES])
+                .map_err(|_| UefiBlockDescriptorError::InvalidVolumeHeader)?;
+            if header.block_size() != descriptor.block().block_size()
+                || header.block_count() != descriptor.block().block_count()
+            {
+                block.erase();
+                return Err(UefiBlockDescriptorError::VolumeGeometryMismatch);
+            }
+            block.erase();
+            Ok(UefiRecoveryHeaderCandidate {
+                handle: device,
+                descriptor,
+                media,
+                header,
+            })
+        })
+    }
+}
+
+unsafe fn with_opened_uefi_block_protocols<R>(
+    services: &BootServices,
+    image: Handle,
+    device: Handle,
+    operation: impl FnOnce(&mut BlockIoProtocol, *const u8) -> Result<R, UefiBlockDescriptorError>,
+) -> Result<R, UefiBlockDescriptorError> {
     let mut block_pointer = core::ptr::null_mut();
     let status = unsafe {
         (services.open_protocol)(
@@ -703,13 +822,9 @@ pub unsafe fn discover_loaded_image_block_descriptor(
         };
     }
 
-    let discovered = unsafe {
-        opened_uefi_block_descriptor(
-            block_pointer.cast::<BlockIoProtocol>(),
-            path_pointer.cast_const().cast::<u8>(),
-            id,
-            device_path_scratch,
-        )
+    let discovered = match unsafe { block_pointer.cast::<BlockIoProtocol>().as_mut() } {
+        Some(block) => operation(block, path_pointer.cast_const().cast::<u8>()),
+        None => Err(UefiBlockDescriptorError::MissingMedia),
     };
     let path_close = unsafe {
         (services.close_protocol)(
@@ -734,18 +849,6 @@ pub unsafe fn discover_loaded_image_block_descriptor(
         return Err(UefiBlockDescriptorError::CloseProtocol(block_close));
     }
     discovered
-}
-
-unsafe fn opened_uefi_block_descriptor(
-    block: *mut BlockIoProtocol,
-    device_path: *const u8,
-    id: BlockDeviceId,
-    scratch: &mut [u8; MAX_UEFI_DEVICE_PATH_BYTES],
-) -> Result<PlatformBlockDeviceDescriptor, UefiBlockDescriptorError> {
-    let block = unsafe { block.as_ref() }.ok_or(UefiBlockDescriptorError::MissingMedia)?;
-    let media = unsafe { snapshot_uefi_block_media(block) }?;
-    let path_length = unsafe { copy_single_device_path(device_path, scratch) }?;
-    uefi_platform_block_descriptor(id, media, &scratch[..path_length])
 }
 
 unsafe fn copy_single_device_path(
@@ -1427,7 +1530,30 @@ fn hex(byte: u8) -> Option<u8> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use core::sync::atomic::{AtomicPtr, AtomicUsize, Ordering};
+    use core::sync::atomic::{AtomicBool, AtomicPtr, AtomicUsize, Ordering};
+    use mrml_storage::VolumeId;
+
+    static MOCK_FIRMWARE_LOCK: AtomicBool = AtomicBool::new(false);
+
+    struct MockFirmwareGuard;
+
+    impl MockFirmwareGuard {
+        fn acquire() -> Self {
+            while MOCK_FIRMWARE_LOCK
+                .compare_exchange(false, true, Ordering::Acquire, Ordering::Relaxed)
+                .is_err()
+            {
+                core::hint::spin_loop();
+            }
+            Self
+        }
+    }
+
+    impl Drop for MockFirmwareGuard {
+        fn drop(&mut self) {
+            MOCK_FIRMWARE_LOCK.store(false, Ordering::Release);
+        }
+    }
 
     static MOCK_BLOCK_PROTOCOL: AtomicPtr<c_void> = AtomicPtr::new(core::ptr::null_mut());
     static MOCK_DEVICE_PATH: AtomicPtr<c_void> = AtomicPtr::new(core::ptr::null_mut());
@@ -1438,6 +1564,7 @@ mod tests {
     static RECOVERY_READ_CALLS: AtomicUsize = AtomicUsize::new(0);
     static RECOVERY_READ_STATUS: AtomicUsize = AtomicUsize::new(SUCCESS);
     static RECOVERY_MUTATE_MEDIA: AtomicPtr<BlockIoMedia> = AtomicPtr::new(core::ptr::null_mut());
+    static RECOVERY_READ_SOURCE: AtomicPtr<u8> = AtomicPtr::new(core::ptr::null_mut());
     static MOCK_HANDLE_BUFFER: AtomicPtr<Handle> = AtomicPtr::new(core::ptr::null_mut());
     static MOCK_HANDLE_COUNT: AtomicUsize = AtomicUsize::new(0);
     static MOCK_LOCATE_STATUS: AtomicUsize = AtomicUsize::new(SUCCESS);
@@ -1625,7 +1752,12 @@ mod tests {
         {
             return LOAD_ERROR;
         }
-        unsafe { core::ptr::write_bytes(output.cast::<u8>(), 0x5a, bytes) };
+        let source = RECOVERY_READ_SOURCE.load(Ordering::SeqCst);
+        if source.is_null() {
+            unsafe { core::ptr::write_bytes(output.cast::<u8>(), 0x5a, bytes) };
+        } else {
+            unsafe { core::ptr::copy_nonoverlapping(source, output.cast::<u8>(), bytes) };
+        }
         let media = RECOVERY_MUTATE_MEDIA.load(Ordering::SeqCst);
         if let Some(media) = unsafe { media.as_mut() } {
             media.media_id = media.media_id.wrapping_add(1);
@@ -1963,6 +2095,7 @@ mod tests {
 
     #[test]
     fn loaded_image_protocol_acquisition_closes_every_open_relationship() {
+        let _guard = MockFirmwareGuard::acquire();
         let mut media = valid_block_media();
         media.media_id = 9;
         let mut block = block_protocol(&mut media);
@@ -2047,6 +2180,7 @@ mod tests {
         RECOVERY_READ_CALLS.store(0, Ordering::SeqCst);
         RECOVERY_READ_STATUS.store(SUCCESS, Ordering::SeqCst);
         RECOVERY_MUTATE_MEDIA.store(core::ptr::null_mut(), Ordering::SeqCst);
+        RECOVERY_READ_SOURCE.store(core::ptr::null_mut(), Ordering::SeqCst);
         assert_eq!(
             unsafe { read_uefi_recovery_block(&mut protocol, expected, 2, &mut output) },
             Ok(())
@@ -2139,6 +2273,81 @@ mod tests {
         MOCK_HANDLE_COUNT.store(0, Ordering::SeqCst);
         MOCK_LOCATE_STATUS.store(SUCCESS, Ordering::SeqCst);
         MOCK_FREE_STATUS.store(SUCCESS, Ordering::SeqCst);
+    }
+
+    #[test]
+    fn recovery_header_probe_opens_reads_validates_erases_and_closes_atomically() {
+        let _guard = MockFirmwareGuard::acquire();
+        let mut media = valid_block_media();
+        media.media_id = 7;
+        media.block_size = 512;
+        media.last_block = 63;
+        let mut protocol = block_protocol(&mut media);
+        protocol.read_blocks = recovery_block_read;
+        let mut path = [1u8, 1, 8, 0, 0xaa, 0xbb, 0xcc, 0xdd, 0x7f, 0xff, 4, 0];
+        let volume = VolumeId::new([0x51; 16]).unwrap();
+        let header = VolumeHeader::new(volume, 4096, 8, 1, 2).unwrap();
+        let mut source = [0u8; UEFI_RECOVERY_BLOCK_BYTES];
+        header.encode((&mut source[..VOLUME_HEADER_BYTES]).try_into().unwrap());
+
+        MOCK_BLOCK_PROTOCOL.store(
+            (&mut protocol as *mut BlockIoProtocol).cast(),
+            Ordering::SeqCst,
+        );
+        MOCK_DEVICE_PATH.store(path.as_mut_ptr().cast(), Ordering::SeqCst);
+        MOCK_CLOSE_STATUS.store(SUCCESS, Ordering::SeqCst);
+        MOCK_CLOSE_CALLS.store(0, Ordering::SeqCst);
+        RECOVERY_READ_MEDIA.store(7, Ordering::SeqCst);
+        RECOVERY_READ_LBA.store(0, Ordering::SeqCst);
+        RECOVERY_READ_STATUS.store(SUCCESS, Ordering::SeqCst);
+        RECOVERY_MUTATE_MEDIA.store(core::ptr::null_mut(), Ordering::SeqCst);
+        RECOVERY_READ_SOURCE.store(source.as_mut_ptr(), Ordering::SeqCst);
+
+        let services = mock_boot_services();
+        let image = core::ptr::without_provenance_mut::<c_void>(1);
+        let device = core::ptr::without_provenance_mut::<c_void>(2);
+        let mut path_scratch = [0u8; MAX_UEFI_DEVICE_PATH_BYTES];
+        let mut block = UefiRecoveryBlock::new();
+        let candidate = unsafe {
+            probe_uefi_recovery_header(
+                &services,
+                image,
+                device,
+                BlockDeviceId::new(9).unwrap(),
+                &mut path_scratch,
+                &mut block,
+            )
+        }
+        .unwrap();
+        assert_eq!(candidate.handle(), device);
+        assert_eq!(candidate.header(), header);
+        assert_eq!(candidate.media().media_id(), 7);
+        assert_eq!(candidate.descriptor().block().block_size(), 4096);
+        assert_eq!(candidate.descriptor().block().block_count(), 8);
+        assert!(block.as_slice().iter().all(|byte| *byte == 0));
+        assert_eq!(MOCK_CLOSE_CALLS.load(Ordering::SeqCst), 2);
+
+        source[..VOLUME_HEADER_BYTES].fill(0);
+        MOCK_CLOSE_CALLS.store(0, Ordering::SeqCst);
+        assert!(matches!(
+            unsafe {
+                probe_uefi_recovery_header(
+                    &services,
+                    image,
+                    device,
+                    BlockDeviceId::new(9).unwrap(),
+                    &mut path_scratch,
+                    &mut block,
+                )
+            },
+            Err(UefiBlockDescriptorError::InvalidVolumeHeader)
+        ));
+        assert!(block.as_slice().iter().all(|byte| *byte == 0));
+        assert_eq!(MOCK_CLOSE_CALLS.load(Ordering::SeqCst), 2);
+
+        RECOVERY_READ_SOURCE.store(core::ptr::null_mut(), Ordering::SeqCst);
+        MOCK_BLOCK_PROTOCOL.store(core::ptr::null_mut(), Ordering::SeqCst);
+        MOCK_DEVICE_PATH.store(core::ptr::null_mut(), Ordering::SeqCst);
     }
 
     #[test]

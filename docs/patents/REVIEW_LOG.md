@@ -1,5 +1,16 @@
 # Patent review log
 
+## 2026-08-26 — Atomic UEFI recovery-header probe
+
+Patent review: **NOT_TRIGGERED** for this integration increment. It composes the
+already reviewed UEFI protocol lifecycle, bounded path/media validation, exact
+4 KiB read adapter, and canonical MRML volume-header decoder in a conventional
+all-or-nothing transaction. It adds no device-selection ranking, new storage
+layout, driver scheduling, cryptography, placement heuristic, native fallback,
+queue/DMA mechanism, or hardware isolation method. Broader storage/device,
+firmware, adaptive-isolation, and Total-MicroVM reviews remain `TRIGGERED`; no
+patent-clearance or non-infringement conclusion is made.
+
 ## 2026-08-26 — Bounded UEFI Block I/O handle enumeration
 
 Patent review: **NOT_TRIGGERED** for this firmware-array lifecycle increment. It

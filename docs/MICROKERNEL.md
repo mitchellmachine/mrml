@@ -3271,6 +3271,13 @@ stable identity. Windows and Arch Linux each pass 32 library tests and
 cross-build the UEFI artifact. Per-handle volume inspection and loader execution
 remain absent.
 
+One enumerated UEFI handle can now be probed through a single bounded
+open/read/decode/close transaction. Firmware geometry is converted to exact
+native 4 KiB units, the canonical volume header must match it, scratch is
+erased, and no candidate escapes before both protocol closes succeed. Windows
+and Arch Linux each pass 33 library tests and cross-build the UEFI artifact.
+Complete-set uniqueness and real firmware remain untested.
+
 The bounded discovery result now remains owned through the complete serviced
 recovery read. `RecoveredInstalledStableSystemSelection` retains the exact
 installed selection beside the `BlockVolume` and reachable graph produced from

@@ -118,6 +118,12 @@ return. Handle values and enumeration order are explicitly non-authoritative
 and are not persistent identity. The production loader has not yet opened and
 scanned this set.
 
+The first per-handle scan step is now **PARTIALLY IMPLEMENTED**. It opens both
+protocols, binds path and media generation, reads and validates native block
+zero, exact-matches the canonical volume geometry, erases temporary bytes, and
+closes both relationships before returning a candidate. The real loader has not
+yet applied it to the complete enumerated set.
+
 The conventional fallback `\EFI\BOOT\BOOTX64.EFI` may be installed only under
 policy that proves ownership/non-conflict and previews backup/recovery or exact
 replacement. A shared ESP's existing fallback is never casually overwritten.

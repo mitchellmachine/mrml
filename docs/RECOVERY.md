@@ -1179,6 +1179,15 @@ and ordering grant no identity or authority. Windows and Arch Linux each pass
 32 UEFI-library tests and cross-build the target. Per-handle header scanning,
 expected-volume selection, and real-loader recovery remain **PLANNED**.
 
+Per-handle block-zero probing is now **PARTIALLY IMPLEMENTED** as one
+open/read/validate/erase/close transaction. The candidate retains the ephemeral
+handle only for exact later reopening plus stable path/media identity, converted
+4 KiB geometry, and canonical volume header. Header geometry must exactly match
+the converted media descriptor; malformed bytes, read uncertainty, replacement,
+or close failure publishes no candidate. Windows and Arch Linux each pass 33
+UEFI-library tests and cross-build the target. Set-wide expected-volume
+uniqueness and real-loader execution remain next.
+
 The recovered installed selection is now retained across the boot-policy to
 Total-admission boundary. `RecoveredInstalledTotalAdmission` binds its exact
 device descriptor, serviced session selection, volume header, active root,

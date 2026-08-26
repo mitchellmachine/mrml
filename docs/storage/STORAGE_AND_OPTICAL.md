@@ -83,6 +83,15 @@ rejects the operation. Handle values and firmware order remain ephemeral
 presentation and never form stable identity or authority. Per-handle descriptor
 opening, block-zero volume matching, and real-loader execution remain next.
 
+One per-handle recovery-header transaction is now **PARTIALLY IMPLEMENTED**.
+It opens Block I/O and Device Path together, snapshots media, converts compatible
+firmware geometry into exact native 4 KiB geometry, reads block zero, decodes the
+canonical `VolumeHeader`, exact-matches its size/count to the converted
+descriptor, erases scratch, and closes both protocols before publishing a
+candidate. Invalid headers and close uncertainty publish nothing. Windows and
+Arch Linux each pass 33 UEFI-library tests and cross-build the target; this is
+mocked protocol evidence, not a real installed-volume scan.
+
 The `mrml` frontend may expose structured `disk`, `filesystem`, `optical`, and
 `media` operations. The PowerShell-inspired shell projects the same backend as
 typed `Get-*`, `Test-*`, `Initialize-*`, `New-*`, `Format-*`, `Write-*`, and
