@@ -37098,14 +37098,23 @@ mod tests {
             )
         }
 
-        let rejected = "fn value(input: u16) -> u16 { let mut slot = input; let parent: &mut u16 = &mut slot; let child: &u16 = &*parent; touch(parent); *child }";
-        assert_eq!(
-            analyze(rejected).unwrap_err().kind,
-            CodegenErrorKind::RuntimeBorrowConflict
-        );
+        for rejected in [
+            "fn value(input: u16) -> u16 { let mut slot = input; let parent: &mut u16 = &mut slot; let child: &u16 = &*parent; touch(parent); *child }",
+            "fn value(input: u16) -> u16 { let mut slot = input; let holder = (&mut slot,); let child: &u16 = &*holder.0; touch(holder.0); *child }",
+        ] {
+            assert_eq!(
+                analyze(rejected).unwrap_err().kind,
+                CodegenErrorKind::RuntimeBorrowConflict,
+                "{rejected}",
+            );
+        }
 
-        let accepted = "fn value(input: u16) -> u16 { let mut slot = input; let parent: &mut u16 = &mut slot; let child: &u16 = &*parent; let copied = *child; touch(parent); copied + *parent }";
-        analyze(accepted).unwrap();
+        for accepted in [
+            "fn value(input: u16) -> u16 { let mut slot = input; let parent: &mut u16 = &mut slot; let child: &u16 = &*parent; let copied = *child; touch(parent); copied + *parent }",
+            "fn value(input: u16) -> u16 { let mut slot = input; let holder = (&mut slot,); let child: &u16 = &*holder.0; let copied = *child; touch(holder.0); copied + slot }",
+        ] {
+            analyze(accepted).unwrap_or_else(|error| panic!("{accepted}: {error:?}"));
+        }
     }
 
     #[test]
