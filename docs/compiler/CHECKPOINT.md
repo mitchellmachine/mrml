@@ -521,6 +521,17 @@ interface probe, 10 conformance tests, and 335 replacement tests: 985 compiler
 tests per host. Arbitrary branch dataflow, nested projections, and general
 regions remain unsupported.
 
+The branch-local return-origin milestone resolves a terminal explicit return
+using aliases accumulated earlier in that conditional action block. Its exact
+parameter origin joins the other callee exits, and the terminal path is excluded
+from the conditional fallthrough-state join. Local-backed, nonterminal,
+malformed, and unsupported returns fail conservative. ORACLE-0002 accepted the
+branch-local early return, its parameter-backed tail, and post-last-use owner
+reuse, and rejected a live competing mutable owner borrow with E0499. Windows
+gnullvm and native Arch Linux WSL each pass 639 library tests, one component-
+interface probe, 10 conformance tests, and 335 replacement tests: 985 compiler
+tests per host. General control-flow and region inference remain unsupported.
+
 The loop callee-local reassignment milestone applies one bounded transfer when a
 `while` body contains only supported direct assignments, then joins it with the
 incoming zero-iteration state. Same-origin reborrows remain exact; a changed

@@ -825,6 +825,13 @@ locals are joined. A local-backed alias makes the affected result unknown rather
 than fabricating a parameter origin. This is scoped indirect-alias provenance,
 not arbitrary branch expressions, nested projections, or general regions.
 
+A terminal explicit return in such an action block now resolves against that
+branch's scoped alias state and contributes its exact parameter origin to the
+callee's return merge. Terminal paths are excluded from the subsequent
+fallthrough-state join. A local-backed, nonterminal, malformed, or otherwise
+unclassified return fails the complete callee proof closed. This covers one
+bounded branch-local early-return form, not general control-flow regions.
+
 For a `while` body consisting only of supported direct assignments, callee
 return-origin inference now performs one bounded transfer and joins it with the
 incoming zero-iteration state. Same-origin reborrows therefore retain their

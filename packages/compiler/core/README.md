@@ -3805,6 +3805,18 @@ Linux WSL each pass 639 library tests, one component-interface probe, 10
 conformance tests, and 335 replacement tests: 985 compiler tests per host. This
 is not arbitrary branch dataflow, nested projections, or general regions.
 
+The branch-local return-origin milestone resolves a terminal explicit return
+against the scoped aliases accumulated earlier in that conditional action block.
+Its parameter origin joins the callee's other exits, while that terminal path is
+not merged into the conditional fallthrough state. Local-backed, nonterminal,
+malformed, or unsupported return shapes fail the entire proof conservative. The
+exact dated oracle accepted a branch-local early return with a parameter-backed
+tail and post-last-use owner reuse, and rejected a live competing mutable owner
+borrow with E0499. Windows gnullvm and native Arch Linux WSL each pass 639
+library tests, one component-interface probe, 10 conformance tests, and 335
+replacement tests: 985 compiler tests per host. This is not general control-flow
+or region inference.
+
 The loop callee-local reassignment milestone handles a `while` body made only of
 supported direct assignments. It applies one bounded transfer from the incoming
 local-origin state and joins the result with that same zero-iteration state.

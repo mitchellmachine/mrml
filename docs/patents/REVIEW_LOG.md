@@ -1,5 +1,17 @@
 # Patent review log
 
+## 2026-08-26 — Branch-local callee return-origin merge
+
+Patent review: **NOT_TRIGGERED** for this bounded compiler-analysis increment.
+It conventionally resolves a terminal return through the existing fixed scoped
+local-origin table, merges an existing parameter identifier with other exits,
+and excludes the terminal path from the fallthrough join. Local-backed and
+unsupported shapes fail conservative. It adds no novel control-flow or alias-
+analysis algorithm, region solver, optimization, runtime enforcement, authority
+model, or external dependency. Broader compiler completion remains partial;
+this technical screen establishes neither clearance nor infringement and does
+not replace independent human dual review.
+
 ## 2026-08-26 — Signed runtime-inventory SystemRelease v2
 
 Patent review: **TRIGGERED** under the existing adaptive-isolation,
