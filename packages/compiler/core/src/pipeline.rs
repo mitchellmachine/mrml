@@ -5,8 +5,8 @@ use crate::{
     SourceTraitDeclarationTable, SourceTraitImplementationError, SourceTraitImplementationTable,
     SourceTraitObligationError, Span, TargetLayout, X86_64Abi, X86_64PcRelativeRelocation,
     X86_64PcRelativeRelocationKind, analyze_constants, compile_x86_64_function_with_options,
-    compile_x86_64_naked_relocatable, emit_elf64_x86_64, emit_elf64_x86_64_with_relocation,
-    emit_x86_64_coff, emit_x86_64_coff_with_relocation,
+    compile_x86_64_naked_relocatable, emit_elf64_x86_64, emit_elf64_x86_64_with_relocations,
+    emit_x86_64_coff, emit_x86_64_coff_with_relocations,
 };
 
 struct PipelineResolver<
@@ -271,13 +271,34 @@ pub fn compile_source_function_with_options<
         constants: &constants,
         target,
     };
-    let (code, external_relocation) = if function.naked {
+    let mut relocations = [X86_64PcRelativeRelocation {
+        offset: 0,
+        symbol: "",
+        kind: X86_64PcRelativeRelocationKind::Branch,
+    }; crate::MAX_X86_64_EXTERNAL_RELOCATIONS];
+    let mut relocation_count = 0usize;
+    let code = if function.naked {
         let output = compile_x86_64_naked_relocatable::<MAX_CODE_BYTES, MAX_PARAMETERS>(function)
             .map_err(|error| CompileError {
             kind: CompileErrorKind::Codegen(error.kind),
             span: Some(error.span),
         })?;
-        (output.code, output.external_relocation)
+        for external in output.relocations() {
+            relocations[relocation_count] = X86_64PcRelativeRelocation {
+                offset: external.offset,
+                symbol: external.symbol,
+                kind: match external.kind {
+                    crate::X86_64ExternalRelocationKind::Branch => {
+                        X86_64PcRelativeRelocationKind::Branch
+                    }
+                    crate::X86_64ExternalRelocationKind::RipRelativeMemory => {
+                        X86_64PcRelativeRelocationKind::Data
+                    }
+                },
+            };
+            relocation_count += 1;
+        }
+        output.code
     } else {
         let code = compile_x86_64_function_with_options::<
             _,
@@ -289,27 +310,17 @@ pub fn compile_source_function_with_options<
             kind: CompileErrorKind::Codegen(error.kind),
             span: Some(error.span),
         })?;
-        (code, None)
+        code
     };
-    let relocation = external_relocation.map(|relocation| X86_64PcRelativeRelocation {
-        offset: relocation.offset,
-        symbol: relocation.symbol,
-        kind: match relocation.kind {
-            crate::X86_64ExternalRelocationKind::Branch => X86_64PcRelativeRelocationKind::Branch,
-            crate::X86_64ExternalRelocationKind::RipRelativeMemory => {
-                X86_64PcRelativeRelocationKind::Data
-            }
-        },
-    });
-    match (format, relocation) {
-        (ObjectFormat::Elf64, Some(relocation)) => {
-            emit_elf64_x86_64_with_relocation(function.name, &code, relocation)
+    match (format, relocation_count) {
+        (ObjectFormat::Elf64, 0) => emit_elf64_x86_64(function.name, &code),
+        (ObjectFormat::Coff, 0) => emit_x86_64_coff(function.name, &code),
+        (ObjectFormat::Elf64, count) => {
+            emit_elf64_x86_64_with_relocations(function.name, &code, &relocations[..count])
         }
-        (ObjectFormat::Coff, Some(relocation)) => {
-            emit_x86_64_coff_with_relocation(function.name, &code, relocation)
+        (ObjectFormat::Coff, count) => {
+            emit_x86_64_coff_with_relocations(function.name, &code, &relocations[..count])
         }
-        (ObjectFormat::Elf64, None) => emit_elf64_x86_64(function.name, &code),
-        (ObjectFormat::Coff, None) => emit_x86_64_coff(function.name, &code),
     }
     .map_err(|error| CompileError {
         kind: CompileErrorKind::Object(error),
@@ -435,6 +446,43 @@ mod tests {
                 4
             );
         }
+    }
+
+    #[test]
+    fn emits_multiple_naked_relocations_in_source_order() {
+        let source = concat!(
+            "#[unsafe(naked)] pub unsafe extern \"C\" fn entry() { naked_asm!(",
+            "\"mov rax, [rip + shared]\", \"mov [rip + shared], r10\", ",
+            "\"jmp branch_target\"); }"
+        );
+        let elf = compile(source, "entry", ObjectFormat::Elf64).unwrap();
+        let section_headers = u64::from_le_bytes(elf.bytes()[40..48].try_into().unwrap()) as usize;
+        let rela = section_headers + 2 * 64;
+        assert_eq!(
+            u64::from_le_bytes(elf.bytes()[rela + 32..rela + 40].try_into().unwrap()),
+            72
+        );
+        let entries =
+            u64::from_le_bytes(elf.bytes()[rela + 24..rela + 32].try_into().unwrap()) as usize;
+        for (index, expected) in [2u64, 2, 4].iter().enumerate() {
+            let info_offset = entries + index * 24 + 8;
+            let info = u64::from_le_bytes(
+                elf.bytes()[info_offset..info_offset + 8]
+                    .try_into()
+                    .unwrap(),
+            );
+            assert_eq!(info & u32::MAX as u64, *expected);
+        }
+
+        let coff = compile(source, "entry", ObjectFormat::Coff).unwrap();
+        assert_eq!(
+            u16::from_le_bytes(coff.bytes()[52..54].try_into().unwrap()),
+            3
+        );
+        assert_eq!(
+            u32::from_le_bytes(coff.bytes()[12..16].try_into().unwrap()),
+            4
+        );
     }
 
     #[test]
