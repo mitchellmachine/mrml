@@ -182,6 +182,16 @@ borrow while that child remained live with E0499. This is black-box evidence for
 that exact loop-local alias shape, not general loop fixed-point, path-sensitive,
 or region analysis. Temporary sources and metadata were removed.
 
+An independently authored Rust 2024 metadata-only probe against this exact
+toolchain and commit accepted a mutable-reference forwarding callee whose loop
+contained a conditional arm that created a local `&mut` alias and returned it,
+an `else` return of the parameter, and a zero-iteration parameter tail. The
+caller could reuse the owner after the returned child's last use. A separate
+invocation rejected a competing mutable owner borrow while that child remained
+live with E0499. This is black-box evidence for that exact loop-arm local-return
+shape, not general loop dataflow or region inference. Temporary sources and
+metadata were removed.
+
 An independently authored Rust 2024 metadata-only probe against the same exact
 toolchain and commit compiled three explicit RAX forms whose output place was
 `*target` for `target: &mut u64`: `lateout`, same-place `inout`, and a distinct-

@@ -556,6 +556,17 @@ host. One concurrent Arch invocation exited during replacement execution
 without a stable failing summary; the immediate full rerun passed 985. General
 loop fixed-point, path-sensitive, and region analysis remain unsupported.
 
+The conditional-loop arm-local return milestone gives each supported loop
+`if`/`else if`/`else` arm an independent fixed-capacity local alias state before
+a terminal return. Its exact parameter origin joins other function exits;
+local-backed returns fail closed. Assignments and expressions inside these arms
+remain conservative because loop-carried fallthrough effects are not modeled.
+ORACLE-0002 accepted the loop-arm local alias and post-last-use owner reuse and
+rejected a live competing mutable owner borrow with E0499. Windows gnullvm and
+native Arch Linux WSL each pass 639 library tests, one component-interface
+probe, 10 conformance tests, and 335 replacement tests: 985 compiler tests per
+host. General loop dataflow, nested projections, and regions remain unsupported.
+
 This is an initial typed body-fact slice, not a complete typed body IR and not a
 borrow checker. Unsupported aggregate-leaf call arguments, other aggregate-
 argument and call-derived fat-reference initializers, unsupported compound array

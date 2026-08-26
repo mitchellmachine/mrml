@@ -848,6 +848,14 @@ local-backed or changed origins become unknown. Mixed controls and unsupported
 operations still fail conservative. This is scoped loop-local provenance, not a
 general loop fixed point or region solver.
 
+Conditional blocks and `else if`/`else` arms inside a supported loop may now
+declare fixed-capacity local reference aliases before a terminal return. Each
+arm resolves its return against an independent scoped name/origin/mutability
+state and merges only the resulting parameter origin with other function exits.
+Arm assignments and expressions remain conservative because their loop-carried
+fallthrough effects are not modeled. Local-backed returns fail closed. This is
+an exact loop-arm early-return form, not general loop dataflow or regions.
+
 The first modern trait-solver foundation is an explicit bounded implemented-
 goal representation. Stable trait/type/inference/placeholder identities remain
 distinct; canonicalization replaces inference identities with first-occurrence
