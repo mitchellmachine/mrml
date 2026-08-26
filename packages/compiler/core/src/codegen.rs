@@ -31641,6 +31641,20 @@ mod tests {
             };
             let mut parameters = [None; MAX_PARAMETERS];
             match (name, argument_count) {
+                ("shared_identity", 1) => {
+                    parameters[0] = Some(RuntimeCallParameter {
+                        name: "value",
+                        ty: shared_reference,
+                    });
+                    Some(RuntimeCallTarget {
+                        name: "shared_identity",
+                        parameters,
+                        parameter_count: 1,
+                        return_type: shared_reference,
+                        return_type_name: "&u16",
+                        body_expression: "value",
+                    })
+                }
                 ("array_element", 1) => {
                     parameters[0] = Some(RuntimeCallParameter {
                         name: "values",
@@ -36397,6 +36411,7 @@ mod tests {
         }
 
         for source in [
+            "fn value(input: &mut u16) -> u16 { let shared: &u16 = &*input; let returned: &u16 = shared_identity(shared); let competing: &mut u16 = &mut *input; *competing += 1; *returned }",
             "fn value(input: &mut u16) -> u16 { let returned: &mut u16 = forward(input); let competing: &mut u16 = &mut *input; *competing += 1; *returned }",
             "fn value(input: &mut u16, choose: bool) -> u16 { let returned: &mut u16 = forward(if choose { input } else { input }); let competing: &mut u16 = &mut *input; *competing += 1; *returned }",
             "fn value(first: &mut u16, second: &mut u16, choose: bool) -> u16 { let returned: &mut u16 = forward(if choose { first } else { second }); let competing: &mut u16 = &mut *first; *competing += 1; *returned }",
@@ -36430,6 +36445,7 @@ mod tests {
         }
 
         for source in [
+            "fn value(input: &mut u16) -> u16 { let shared: &u16 = &*input; let returned: &u16 = shared_identity(shared); let copied = *returned; *input += 1; copied + *input }",
             "fn value(input: &mut u16) -> u16 { let returned: &mut u16 = forward(input); *returned += 1; let restored: &mut u16 = &mut *input; *restored }",
             "fn value(input: &mut u16, choose: bool) -> u16 { let returned: &mut u16 = forward(if choose { input } else { input }); let copied = *returned; *input += 1; copied + *input }",
             "fn value(first: &mut u16, second: &mut u16, choose: bool) -> u16 { let returned: &mut u16 = forward(if choose { first } else { second }); let copied = *returned; *first += 1; *second += 1; copied + *first + *second }",
