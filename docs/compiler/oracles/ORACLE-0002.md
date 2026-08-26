@@ -50,6 +50,18 @@ subset on the verified host. Future generations must preserve both prior
 records, rerun the corpus, classify observed deltas, and retain independently
 authored regression probes.
 
+## Naked-assembly option follow-up
+
+On 2026-08-26, an independently authored Rust 2024 probe against this exact
+oracle compiled `naked_asm!("ud2")`, `options(raw)`, and
+`options(att_syntax)` with `rustc --edition 2024 --emit metadata`. A separate
+probe invocation rejected `noreturn`, `nomem`, `nostack`, `preserves_flags`,
+and `pure` as options that cannot be used with `naked_asm!`. MRML currently
+admits only `raw` because its restricted Intel-syntax encoder does not yet
+implement AT&T operand syntax; unsupported options fail closed. These are
+black-box syntax/validation observations, not copied upstream source or tests,
+and do not establish general inline-assembly compatibility.
+
 ## Component-interface follow-up
 
 On 2026-08-25, the canonical native MRML action added and passed one independently

@@ -4619,8 +4619,10 @@ never, and end in an explicit terminating instruction. Exact machine-code tests
 prove that no prologue or epilogue bytes are inserted. A bounded two-pass layout
 resolves numeric local definitions `2:` through `9:` and direction-checked
 `jmp 2f`/`2b` references to checked rel32 displacements; duplicate, missing,
-and wrong-direction labels fail closed. RIP-relative/base-less memory operands,
-external symbols/relocations, options,
+and wrong-direction labels fail closed. A single trailing `options(raw)` marker
+is accepted in accordance with the exact dated oracle; unsupported, repeated,
+or misplaced options fail closed. RIP-relative/base-less memory operands,
+external symbols/relocations, AT&T syntax,
 additional architectures, and general inline assembly remain fail-closed.
 Windows gnullvm and native Arch Linux WSL each pass 633 library tests,
 one component probe, 10 conformance tests, and 335 replacement tests: 979
