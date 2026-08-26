@@ -15129,6 +15129,67 @@ fn runtime_reference_call_origin_parameter<const MAX_PARAMETERS: usize, const MA
             .or_else(inferred)
     }
 
+    fn apply_projected_initializer<const MAX_PARAMETERS: usize, const MAX_NODES: usize>(
+        target: crate::RuntimeCallTarget<'_, MAX_PARAMETERS>,
+        tree: &crate::ExpressionTree<'_, MAX_NODES>,
+        local_index: usize,
+        local_type: Option<RuntimeExpressionType>,
+        local_names: &[Option<&str>; MAX_PARAMETERS],
+        local_origins: &[Option<usize>; MAX_PARAMETERS],
+        projected_origins: &mut RuntimeCalleeProjectedOrigins<MAX_PARAMETERS>,
+        local_types: &[Option<RuntimeExpressionType>; MAX_PARAMETERS],
+        local_count: usize,
+    ) -> Option<()> {
+        let local_type @ RuntimeExpressionType::Tuple { element_count, .. } = local_type? else {
+            return Some(());
+        };
+        let ExprKind::Tuple {
+            elements,
+            element_count: initializer_count,
+        } = tree.expression(tree.root())?.kind
+        else {
+            return Some(());
+        };
+        if initializer_count != element_count {
+            return None;
+        }
+        let return_type = runtime_type_from_scalar(target.return_type);
+        for field in 0..element_count {
+            let projections =
+                RuntimePlaceProjections::single(RuntimePlaceProjection::TupleField(field));
+            let projected_type = runtime_place_projected_type(local_type, projections)?;
+            if !runtime_types_compatible(projected_type, return_type) {
+                continue;
+            }
+            let element = elements[field]?;
+            let element_type = inferred_reference_expression_type(
+                target,
+                tree,
+                element,
+                local_names,
+                local_types,
+                local_count,
+                0,
+            )?;
+            if !runtime_types_compatible(element_type, projected_type) {
+                return None;
+            }
+            if let Some(origin) = recurse(
+                target,
+                tree,
+                element,
+                0,
+                local_names,
+                local_origins,
+                projected_origins,
+                local_count,
+            ) {
+                projected_origins.set(local_index, local_type, projections, origin)?;
+            }
+        }
+        Some(())
+    }
+
     fn apply_assignment<const MAX_PARAMETERS: usize, const MAX_NODES: usize>(
         target: crate::RuntimeCallTarget<'_, MAX_PARAMETERS>,
         assignment: crate::Assignment<'_>,
@@ -15245,6 +15306,17 @@ fn runtime_reference_call_origin_parameter<const MAX_PARAMETERS: usize, const MA
                         *local_count,
                         local_origin,
                     );
+                    apply_projected_initializer(
+                        target,
+                        &tree,
+                        *local_count,
+                        local_type,
+                        local_names,
+                        local_origins,
+                        projected_origins,
+                        local_types,
+                        *local_count,
+                    )?;
                     *local_names.get_mut(*local_count)? = Some(local.name);
                     *local_origins.get_mut(*local_count)? = local_origin;
                     *local_types.get_mut(*local_count)? = local_type;
@@ -15328,6 +15400,17 @@ fn runtime_reference_call_origin_parameter<const MAX_PARAMETERS: usize, const MA
                 *local_count,
                 local_origin,
             );
+            apply_projected_initializer(
+                target,
+                &tree,
+                *local_count,
+                local_type,
+                local_names,
+                local_origins,
+                projected_origins,
+                local_types,
+                *local_count,
+            )?;
             *local_names.get_mut(*local_count)? = Some(local.name);
             *local_origins.get_mut(*local_count)? = local_origin;
             *local_types.get_mut(*local_count)? = local_type;
@@ -15443,6 +15526,17 @@ fn runtime_reference_call_origin_parameter<const MAX_PARAMETERS: usize, const MA
                     local_count,
                     local_origin,
                 );
+                apply_projected_initializer(
+                    target,
+                    &tree,
+                    local_count,
+                    local_type,
+                    &local_names,
+                    &local_origins,
+                    &mut projected_origins,
+                    &local_types,
+                    local_count,
+                )?;
                 *local_names.get_mut(local_count)? = Some(local.name);
                 *local_origins.get_mut(local_count)? = local_origin;
                 *local_types.get_mut(local_count)? = local_type;
@@ -15606,6 +15700,17 @@ fn runtime_reference_call_origin_parameter<const MAX_PARAMETERS: usize, const MA
                                     iteration_local_count,
                                     local_origin,
                                 );
+                                apply_projected_initializer(
+                                    target,
+                                    &tree,
+                                    iteration_local_count,
+                                    local_type,
+                                    &iteration_names,
+                                    &iteration_origins,
+                                    &mut iteration_projected_origins,
+                                    &iteration_types,
+                                    iteration_local_count,
+                                )?;
                                 *iteration_names.get_mut(iteration_local_count)? = Some(local.name);
                                 *iteration_origins.get_mut(iteration_local_count)? = local_origin;
                                 *iteration_types.get_mut(iteration_local_count)? = local_type;
@@ -31598,6 +31703,20 @@ mod tests {
                         ),
                     })
                 }
+                ("tuple_field_initialize", 1) if MAX_PARAMETERS >= 2 => {
+                    parameters[0] = Some(RuntimeCallParameter {
+                        name: "value",
+                        ty: reference,
+                    });
+                    Some(RuntimeCallTarget {
+                        name: "tuple_field_initialize",
+                        parameters,
+                        parameter_count: 1,
+                        return_type: reference,
+                        return_type_name: "&mut u16",
+                        body_expression: "let pair: (&mut u16,) = (value,); pair.0",
+                    })
+                }
                 ("branch_tuple_field_assign", 3) if MAX_PARAMETERS >= 4 => {
                     parameters[0] = Some(RuntimeCallParameter {
                         name: "first",
@@ -31644,8 +31763,7 @@ mod tests {
                         return_type: reference,
                         return_type_name: "&mut u16",
                         body_expression: concat!(
-                            "let mut pair: (&mut u16,) = (first,); ",
-                            "pair.0 = second; ",
+                            "let mut pair: (&mut u16,) = (second,); ",
                             "while repeat { pair.0 = &mut *pair.0; } pair.0"
                         ),
                     })
@@ -35747,6 +35865,7 @@ mod tests {
             "fn value(input: &mut u16, repeat: bool) -> u16 { let returned: &mut u16 = loop_local_forward(input, repeat); let competing: &mut u16 = &mut *input; *competing += 1; *returned }",
             "fn value(input: &mut u16, repeat: bool, first: bool) -> u16 { let returned: &mut u16 = loop_branch_local_return(input, repeat, first); let competing: &mut u16 = &mut *input; *competing += 1; *returned }",
             "fn value(first: &mut u16, second: &mut u16) -> u16 { let returned: &mut u16 = tuple_field_assign(first, second); let competing: &mut u16 = &mut *second; *competing += 1; *returned }",
+            "fn value(input: &mut u16) -> u16 { let returned: &mut u16 = tuple_field_initialize(input); let competing: &mut u16 = &mut *input; *competing += 1; *returned }",
             "fn value(first: &mut u16, second: &mut u16, choose: bool) -> u16 { let returned: &mut u16 = branch_tuple_field_assign(first, second, choose); let competing: &mut u16 = &mut *second; *competing += 1; *returned }",
             "fn value(first: &mut u16, second: &mut u16, repeat: bool) -> u16 { let returned: &mut u16 = loop_tuple_field_assign(first, second, repeat); let competing: &mut u16 = &mut *second; *competing += 1; *returned }",
         ] {
@@ -35767,6 +35886,7 @@ mod tests {
             "fn value(input: &mut u16, repeat: bool) -> u16 { let returned: &mut u16 = loop_local_forward(input, repeat); *returned += 1; let restored: &mut u16 = &mut *input; *restored }",
             "fn value(input: &mut u16, repeat: bool, first: bool) -> u16 { let returned: &mut u16 = loop_branch_local_return(input, repeat, first); *returned += 1; let restored: &mut u16 = &mut *input; *restored }",
             "fn value(first: &mut u16, second: &mut u16) -> u16 { let returned: &mut u16 = tuple_field_assign(first, second); *returned += 1; let restored: &mut u16 = &mut *second; *restored }",
+            "fn value(input: &mut u16) -> u16 { let returned: &mut u16 = tuple_field_initialize(input); *returned += 1; let restored: &mut u16 = &mut *input; *restored }",
             "fn value(first: &mut u16, second: &mut u16, choose: bool) -> u16 { let returned: &mut u16 = branch_tuple_field_assign(first, second, choose); *returned += 1; let restored: &mut u16 = &mut *second; *restored }",
             "fn value(first: &mut u16, second: &mut u16, repeat: bool) -> u16 { let returned: &mut u16 = loop_tuple_field_assign(first, second, repeat); *returned += 1; let restored: &mut u16 = &mut *second; *restored }",
         ] {
@@ -35793,6 +35913,23 @@ mod tests {
         assert_eq!(
             runtime_reference_call_origin_parameter::<3, 32>(tuple_field_assign),
             Some(1)
+        );
+        let tuple_field_initialize = MutableReferenceCallResolver
+            .resolve_runtime_call::<2>("tuple_field_initialize", 1)
+            .unwrap();
+        assert_eq!(
+            runtime_reference_call_origin_parameter::<2, 16>(tuple_field_initialize),
+            Some(0)
+        );
+        assert_eq!(
+            runtime_reference_call_origin_parameter::<2, 16>(RuntimeCallTarget {
+                body_expression: concat!(
+                    "let mut local_value: u16 = 1; ",
+                    "let pair: (&mut u16,) = (&mut local_value,); pair.0"
+                ),
+                ..tuple_field_initialize
+            }),
+            None
         );
         assert_eq!(
             runtime_reference_call_origin_parameter::<3, 32>(RuntimeCallTarget {
@@ -35837,7 +35974,7 @@ mod tests {
                 ),
                 ..loop_tuple_field_assign
             }),
-            None
+            Some(0)
         );
         assert_eq!(
             runtime_reference_call_origin_parameter::<3, 32>(RuntimeCallTarget {
