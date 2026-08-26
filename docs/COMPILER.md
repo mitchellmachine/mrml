@@ -808,6 +808,15 @@ projected, compound, local-backed, conditional, or otherwise unclassified
 assignments keep the callee proof conservative rather than manufacturing an
 argument origin.
 
+The same bounded callee proof now evaluates direct mutable-reference local
+assignments independently for each `if`/`else if`/`else` outcome and joins the
+resulting fixed local-origin states per local. A missing `else` contributes the
+unchanged incoming state. Outcomes that retain the same parameter origin keep
+that exact origin; differing origins make only the affected local unknown.
+Branch-local declarations, returns, expressions, projected or compound writes,
+and other unsupported branch actions fail the proof closed. This is an exact
+conditional-assignment join, not general interprocedural CFG or region analysis.
+
 The first modern trait-solver foundation is an explicit bounded implemented-
 goal representation. Stable trait/type/inference/placeholder identities remain
 distinct; canonicalization replaces inference identities with first-occurrence

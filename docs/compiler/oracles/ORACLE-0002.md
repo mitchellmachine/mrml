@@ -136,6 +136,15 @@ black-box evidence for that exact straight-line reassigned-alias shape, not
 general interprocedural dataflow or region inference. Temporary sources and
 metadata were removed.
 
+An independently authored Rust 2024 metadata-only probe against this exact
+toolchain and commit accepted a mutable-reference forwarding callee whose local
+alias was reassigned through `&mut *alias` in both exhaustive conditional
+branches, plus a caller that reused the owner after the returned child's last
+use. A separate invocation rejected a competing mutable owner borrow while that
+child remained live with E0499. This is black-box evidence for that exact equal-
+origin conditional reassignment shape, not general branch dataflow, alias
+analysis, or region inference. Temporary sources and metadata were removed.
+
 An independently authored Rust 2024 metadata-only probe against the same exact
 toolchain and commit compiled three explicit RAX forms whose output place was
 `*target` for `target: &mut u64`: `lateout`, same-place `inout`, and a distinct-

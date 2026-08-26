@@ -493,6 +493,21 @@ component-interface probe, 10 conformance tests, and 335 replacement tests: 985
 compiler tests per host. General interprocedural dataflow and regions remain
 unsupported.
 
+The conditional callee-local reassignment milestone evaluates supported direct
+assignments from a copy of the incoming fixed local-origin state for every
+conditional outcome, then joins each local independently. A missing `else`
+contributes the unchanged fallthrough state. Equal parameter origins remain
+exact; differing origins make only the affected local unknown. Unsupported
+branch actions and assignment shapes remain conservative. ORACLE-0002 accepted
+equal-origin branches and post-last-use owner reuse and rejected a live
+competing mutable owner borrow with E0499. The Windows gnullvm canonical suite
+passes 639 library tests, one component-interface probe, 10 conformance tests,
+and 335 replacement tests: 985 compiler tests. The Arch Linux WSL rerun did not
+reach compiler execution because concurrent `org.mrml.library.uefi` isolation
+metadata failed build-graph validation; that run is recorded as blocked, not
+passing evidence. General interprocedural CFG, alias, and region analysis remain
+unsupported.
+
 This is an initial typed body-fact slice, not a complete typed body IR and not a
 borrow checker. Unsupported aggregate-leaf call arguments, other aggregate-
 argument and call-derived fat-reference initializers, unsupported compound array

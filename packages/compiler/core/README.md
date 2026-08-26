@@ -3777,6 +3777,21 @@ gnullvm and native Arch Linux WSL each pass 639 library tests, one component-
 interface probe, 10 conformance tests, and 335 replacement tests: 985 compiler
 tests per host. This is not general interprocedural dataflow or regions.
 
+The conditional callee-local reassignment milestone copies the fixed local-
+origin state for each conditional outcome and joins it per local. Explicit
+branches and `else` start from the same incoming generation; a missing `else`
+adds that unchanged fallthrough outcome. Equal parameter origins remain exact,
+while differing origins make only the affected local conservative. Unsupported
+branch actions, projected or compound writes, immutable destinations, and
+local-backed RHS values fail closed. The exact dated oracle accepted equal-
+origin branches and owner reuse after the returned child's last use, and
+rejected a live competing mutable owner borrow with E0499. The Windows gnullvm
+canonical suite passes 639 library tests, one component-interface probe, 10
+conformance tests, and 335 replacement tests: 985 compiler tests. The Arch WSL
+rerun was blocked before compiler execution by concurrent invalid isolation
+metadata in `org.mrml.library.uefi`; it is not passing evidence for this
+increment. This is not general interprocedural CFG, alias, or region analysis.
+
 The conditional projected-reassignment milestone extends the bounded tuple-field
 loan chain across a conditional shared-reference assignment. The exact dated
 oracle rejects mutation of either conditional owner and of the field's replaced

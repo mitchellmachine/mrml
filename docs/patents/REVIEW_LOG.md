@@ -1,5 +1,16 @@
 # Patent review log
 
+## 2026-08-26 — Conditional callee reference-origin joins
+
+Patent review: **NOT_TRIGGERED** for this bounded compiler-analysis increment.
+It conventionally copies a fixed local-origin table for each parsed conditional
+outcome and performs an exact per-local equality join of existing parameter
+origin identifiers. Differing or unsupported outcomes fail conservative. It
+adds no novel alias-analysis algorithm, region solver, optimization, runtime
+enforcement, authority model, or external dependency. Broader compiler
+completion remains partial; this technical screen establishes neither clearance
+nor infringement and does not replace independent human dual review.
+
 ## 2026-08-26 — Canonical SystemGeneration runtime-inventory catalog
 
 Patent review: **NOT_TRIGGERED** for this conventional bounded canonical metadata
