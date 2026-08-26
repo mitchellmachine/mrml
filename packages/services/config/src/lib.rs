@@ -18,26 +18,29 @@ use mrml_crypto::Sha3_256;
 use mrml_kernel::arch::x86_64::UserContext;
 use mrml_kernel::{
     ActivatedReleaseTotalMicrovmInventory, BootHandoff, BootIsolationOverride, Capability,
-    CapabilityError, CapabilitySpace, InstalledRecoveryBootIdentity, IsolationAdmissionTable,
-    IsolationBackendFailure, IsolationMode, IsolationPlacement, IsolationServiceBackend,
-    IsolationServiceRouteError, IsolationServiceSpec, IsolationStatusSnapshot,
-    IsolationUnavailableReason, MemoryBackingKind, MemoryObjectId, MemoryPoolId, MemoryPoolTable,
-    MemoryResourceError, Message, ObjectId, PAGE_SIZE, PreparedIsolationServiceRoute, Priority,
-    RestartPolicy, Rights, RoutedIsolationService, ServiceAddressSpaceEraser, ServiceCleanupError,
-    ServiceError, ServiceId, ServiceRegistrationPlan, ServiceState, ServiceSupervisor, TaskId,
-    TaskRuntime, TaskRuntimeError, prepare_isolation_service_route, route_isolation_service,
+    CapabilityError, CapabilitySpace, InstalledRecoveryBootIdentity, InstalledRecoverySataRoute,
+    IsolationAdmissionTable, IsolationBackendFailure, IsolationMode, IsolationPlacement,
+    IsolationServiceBackend, IsolationServiceRouteError, IsolationServiceSpec,
+    IsolationStatusSnapshot, IsolationUnavailableReason, MemoryBackingKind, MemoryObjectId,
+    MemoryPoolId, MemoryPoolTable, MemoryResourceError, Message, ObjectId, PAGE_SIZE,
+    PreparedIsolationServiceRoute, Priority, RestartPolicy, Rights, RoutedIsolationService,
+    ServiceAddressSpaceEraser, ServiceCleanupError, ServiceError, ServiceId,
+    ServiceRegistrationPlan, ServiceState, ServiceSupervisor, TaskId, TaskRuntime,
+    TaskRuntimeError, prepare_isolation_service_route, route_isolation_service,
 };
 use mrml_storage::{
     AuthorityRecoveryValidator, BlockDeviceDescriptor, BlockDeviceId, BlockFileSession,
     BlockService, BlockServiceBackend, BlockServiceError, BlockSessionHandle, BlockVolume,
     BlockVolumeError, CommittedRecoveredStorageAuthorities, ExtentMap, FileMetadata,
     FileReadBackend, FileReadError, FileState, FileWriteBackend, FileWriteError,
-    InstalledRecoverySessionError, MetadataError, MetadataPointer, PlatformBlockDeviceDescriptor,
-    PlatformBlockDeviceIdentity, PreparedFileWrite, ReachableFileSelection,
-    RecoveredReachableState, RecoveredStorageAuthorities, RecoveryError, RecoveryMetadataBackend,
-    SUPERBLOCK_BYTES, ServicedBlockDevice, StorageAuthorityTable, StorageBlockDevice,
-    StorageHandle, StorageObjectId, StoragePrincipal, StorageTransaction, TransactionError,
-    TransactionReceipt, VOLUME_HEADER_BYTES, VolumeHeader, VolumeId, recover_reachable_state,
+    InstalledRecoverySessionError, MetadataError, MetadataPointer, NativeBlockCorrelationError,
+    NativeSataBlockRoute, PlatformBlockDeviceDescriptor, PlatformBlockDeviceIdentity,
+    PreparedFileWrite, ReachableFileSelection, RecoveredReachableState,
+    RecoveredStorageAuthorities, RecoveryError, RecoveryMetadataBackend, SUPERBLOCK_BYTES,
+    SataNativeBlockCorrelationError, SataNativeBlockCorrelationVerifier, ServicedBlockDevice,
+    StorageAuthorityTable, StorageBlockDevice, StorageHandle, StorageObjectId, StoragePrincipal,
+    StorageTransaction, TransactionError, TransactionReceipt, VOLUME_HEADER_BYTES, VolumeHeader,
+    VolumeId, recover_reachable_state,
 };
 
 #[cfg(any(test, target_os = "windows", target_os = "linux"))]
@@ -1559,6 +1562,13 @@ pub enum HandoffInstalledRecoveryError<E> {
     Cleanup,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum NativeSataHandoffRecoveryError<E> {
+    Correlation(NativeBlockCorrelationError<SataNativeBlockCorrelationError>),
+    Reacquire(HandoffInstalledRecoveryError<E>),
+    Cleanup,
+}
+
 /// Converts one canonical boot identity into the existing installed-device
 /// recovery owner. The identity first has to reacquire a fresh read-only block
 /// session; block zero is then read through that session and exact-matched to
@@ -1606,6 +1616,44 @@ pub fn reacquire_handoff_installed_recovery_device<
         return Err(HandoffInstalledRecoveryError::Cleanup);
     }
     result
+}
+
+/// Correlates one independently supplied native SATA descriptor with the
+/// canonical handoff route and completes installed recovery as one bounded
+/// control-plane transaction. Correlation failure publishes no registration or
+/// session. A later reacquisition failure revokes its session and removes the
+/// newly registered descriptor before returning.
+#[allow(clippy::too_many_arguments)]
+pub fn correlate_and_reacquire_handoff_installed_sata_device<
+    B: BlockServiceBackend,
+    const DEVICES: usize,
+    const SESSIONS: usize,
+>(
+    service: &mut BlockService<DEVICES, SESSIONS>,
+    backend: &mut B,
+    boot: InstalledRecoveryBootIdentity,
+    handoff_route: InstalledRecoverySataRoute,
+    native_route: NativeSataBlockRoute,
+    candidate: PlatformBlockDeviceDescriptor,
+    principal: StoragePrincipal,
+    scratch: &mut [u8],
+) -> Result<InstalledRecoveryDeviceSelection, NativeSataHandoffRecoveryError<B::Error>> {
+    service
+        .register_correlated_installed_device(
+            &mut SataNativeBlockCorrelationVerifier::new(handoff_route, native_route),
+            boot,
+            candidate,
+        )
+        .map_err(NativeSataHandoffRecoveryError::Correlation)?;
+    match reacquire_handoff_installed_recovery_device(service, backend, boot, principal, scratch) {
+        Ok(selected) => Ok(selected),
+        Err(error) => {
+            if service.remove_device(candidate.block().id()).is_err() {
+                return Err(NativeSataHandoffRecoveryError::Cleanup);
+            }
+            Err(NativeSataHandoffRecoveryError::Reacquire(error))
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -8700,6 +8748,135 @@ mod tests {
             selected.active_superblock(),
             stable_header().primary_superblock()
         );
+        assert_eq!(backend.reads, 2);
+    }
+
+    #[test]
+    fn typed_sata_handoff_correlation_is_atomic_through_reacquisition() {
+        let device = BlockDeviceId::new(7).unwrap();
+        let descriptor = BlockDeviceDescriptor::new(
+            device,
+            STABLE_BLOCK_BYTES as u32,
+            stable_header().block_count(),
+        )
+        .unwrap();
+        let stable_id = [0x51; 32];
+        let identity =
+            PlatformBlockDeviceIdentity::new(PlatformBlockTransport::Ahci, stable_id, 3, 5)
+                .unwrap();
+        let candidate = PlatformBlockDeviceDescriptor::new(descriptor, identity);
+        let boot = |root_block| {
+            InstalledRecoveryBootIdentity::new(
+                InstalledRecoverySource::Uefi,
+                stable_id,
+                3,
+                5,
+                STABLE_BLOCK_BYTES as u32,
+                stable_header().block_count(),
+                stable_volume().bytes(),
+                root_block,
+                14,
+            )
+            .unwrap()
+        };
+        let boot_hops = [mrml_kernel::InstalledRecoveryPciHop::new(5, 0).unwrap()];
+        let boot_media =
+            mrml_kernel::InstalledRecoveryHardDriveMedia::new(2, 2048, 4096, [0x6a; 16], 2, 2)
+                .unwrap();
+        let handoff_route = |hba_port| {
+            InstalledRecoverySataRoute::new(
+                0x0a03_41d0,
+                0,
+                &boot_hops,
+                hba_port,
+                u16::MAX,
+                0,
+                Some(boot_media),
+                stable_id,
+            )
+            .unwrap()
+        };
+        let native_hops = [mrml_storage::CanonicalUefiPciHop::new(5, 0).unwrap()];
+        let native_media =
+            mrml_storage::CanonicalUefiHardDriveMedia::new(2, 2048, 4096, [0x6a; 16], 2, 2)
+                .unwrap();
+        let native_route = NativeSataBlockRoute::new(
+            0x0a03_41d0,
+            0,
+            &native_hops,
+            3,
+            u16::MAX,
+            0,
+            Some(native_media),
+        )
+        .unwrap();
+
+        let mut backend = StableBlockBackend::new(device);
+        let mut encoded_header = [0; VOLUME_HEADER_BYTES];
+        stable_header().encode(&mut encoded_header);
+        backend.bytes[..VOLUME_HEADER_BYTES].copy_from_slice(&encoded_header);
+        let mut scratch = [0xa5; STABLE_BLOCK_BYTES];
+        let mut rejected = BlockService::<1, 1>::new();
+        assert_eq!(
+            correlate_and_reacquire_handoff_installed_sata_device(
+                &mut rejected,
+                &mut backend,
+                boot(stable_header().primary_superblock()),
+                handoff_route(4),
+                native_route,
+                candidate,
+                stable_principal(),
+                &mut scratch,
+            ),
+            Err(NativeSataHandoffRecoveryError::Correlation(
+                NativeBlockCorrelationError::Correlation(
+                    SataNativeBlockCorrelationError::NativeRouteMismatch
+                )
+            ))
+        );
+        assert_eq!(backend.reads, 0);
+        assert_eq!(
+            rejected.grant(device, stable_principal(), mrml_storage::BlockRights::READ),
+            Err(BlockServiceError::UnknownDevice)
+        );
+
+        let mut invalid_root = BlockService::<1, 1>::new();
+        assert_eq!(
+            correlate_and_reacquire_handoff_installed_sata_device(
+                &mut invalid_root,
+                &mut backend,
+                boot(3),
+                handoff_route(3),
+                native_route,
+                candidate,
+                stable_principal(),
+                &mut scratch,
+            ),
+            Err(NativeSataHandoffRecoveryError::Reacquire(
+                HandoffInstalledRecoveryError::Selection(
+                    InstalledRecoveryDeviceSelectionError::InvalidActiveRoot
+                )
+            ))
+        );
+        assert_eq!(
+            invalid_root.grant(device, stable_principal(), mrml_storage::BlockRights::READ),
+            Err(BlockServiceError::UnknownDevice)
+        );
+
+        let mut service = BlockService::<1, 1>::new();
+        let selected = correlate_and_reacquire_handoff_installed_sata_device(
+            &mut service,
+            &mut backend,
+            boot(stable_header().primary_superblock()),
+            handoff_route(3),
+            native_route,
+            candidate,
+            stable_principal(),
+            &mut scratch,
+        )
+        .unwrap();
+        assert_eq!(selected.platform_identity(), Some(identity));
+        assert_eq!(selected.header(), stable_header());
         assert_eq!(backend.reads, 2);
     }
 

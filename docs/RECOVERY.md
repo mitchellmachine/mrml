@@ -1182,6 +1182,16 @@ tests on Windows and Arch Linux. A real driver must still derive this descriptor
 from native controller state; installed reacquisition and physical execution
 remain **PLANNED**.
 
+The typed native route and installed recovery are now composed atomically as a
+**PARTIALLY IMPLEMENTED** configuration control plane. One bounded operation
+correlates and registers the descriptor, reacquires a read-only session, checks
+block zero and the selected root, and returns the existing installed owner.
+Route rejection leaves no device or session and performs no block read. Any
+later recovery-validation failure revokes the session and removes the new
+registration before return. Configuration passes 50 tests on Windows and Arch
+Linux; WHP/KVM regression runners pass 11/12 but do not exercise SATA. Real
+native discovery and installed-kernel orchestration remain **PLANNED**.
+
 Recovery-session publication is now atomic across a bounded device set.
 `BlockSessionGrant` carries each explicit device/principal/rights decision, and
 `grant_sessions_atomic` preflights every registered identity, rights mask, and

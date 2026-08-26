@@ -8679,3 +8679,12 @@ route/media field plus the boot stable ID, AHCI transport, controller/media
 generations, and geometry. Storage passes 130 tests on Windows and Arch Linux.
 No AHCI register discovery, DMA, interrupt, queue, block I/O, OVMF, or physical
 hardware was implemented or exercised.
+
+Configuration now **PARTIALLY IMPLEMENTS** one transactional bridge from that
+typed verifier to the existing installed recovery owner. Correlation,
+registration, read-session reacquisition, block-zero validation, and selected-
+root binding occur through one bounded call. Correlation failure publishes no
+device/session and performs zero block reads; later validation failure revokes
+the session and removes the new registration. Configuration passes 50 tests on
+Windows and Arch Linux, with WHP/KVM regression runners at 11/12. Those runners
+exercise shared configuration compatibility only, not native SATA execution.

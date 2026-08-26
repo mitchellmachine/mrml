@@ -3074,3 +3074,14 @@ generation, and geometry before the existing atomic registration path may run.
 Storage passes 130 tests on Windows and Arch Linux. A real native driver that
 derives this descriptor from controller state, plus subsequent installed
 reacquisition and hardware evidence, remain **PLANNED**.
+
+Configuration now **PARTIALLY IMPLEMENTS** the next atomic composition.
+`correlate_and_reacquire_handoff_installed_sata_device` performs typed-route
+verification, non-authorizing registration, read-session reacquisition,
+block-zero validation, and installed selection through one bounded call. Route
+failure publishes neither device nor session and performs zero block reads; a
+later header/root failure revokes the session and removes the newly registered
+device before returning. Configuration passes 50 tests on Windows and Arch
+Linux; WHP/KVM regression runners pass 11/12 without claiming SATA execution.
+Supplying the native descriptor from a real driver and connecting this owner to
+installed kernel Total admission remain **PLANNED**.

@@ -38,6 +38,15 @@ route reconstruction, device protocol, DMA, queue, or hardware behavior. Native
 AHCI, USB, VirtIO, and physical-route mechanisms retain their existing
 `TRIGGERED` reviews; this technical screen is not legal clearance.
 
+## 2026-08-26 — Atomic SATA correlation and recovery reacquisition
+
+Patent review: **NOT_TRIGGERED** for composing already reviewed exact route
+equality, atomic registration, principal-bound session issuance, block-zero
+validation, cleanup, and installed selection. The operation adds no discovery,
+controller access, AHCI command, DMA, interrupt, queue, scheduling, or hardware
+I/O mechanism. Native AHCI discovery and broader adaptive/Total-MicroVM work
+retain their existing `TRIGGERED` reviews; this is not patent clearance.
+
 ## 2026-08-26 — Transport-neutral native SATA route verifier
 
 Patent review: **NOT_TRIGGERED** for this bounded equality/control-plane
