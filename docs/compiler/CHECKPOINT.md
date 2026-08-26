@@ -1485,6 +1485,19 @@ probe, 10 conformance tests, and 335 replacement tests: 985 compiler tests per
 host. Inout operands, register classes/allocation, output projections,
 clobbers, arbitrary effects, and general inline assembly remain unimplemented.
 
+The explicit-inout increment admits
+`asm!("inc rax", inout("rax") value)` for a mutable `u64` local. It records one
+typed read-modify-write ownership effect, loads the exact checked stack slot,
+emits the published 64-bit increment, and writes RAX back to that same slot.
+Unique `nomem` and `nostack` options are accepted; `preserves_flags` is rejected
+because the fixed increment modifies flags. Immutable locals, parameters, wrong
+types, other registers/templates, and malformed operands fail closed. Windows
+gnullvm and native Arch Linux WSL each pass 639 library tests, one component-
+interface probe, 10 conformance tests, and 335 replacement tests: 985 compiler
+tests per host. Register classes/allocation, separate input/output expressions,
+output projections, clobbers, arbitrary effects, and general inline assembly
+remain unimplemented.
+
 The premise-bearing rigid-normalization milestone proves the selected generic
 implementation's instantiated trait and projection predicates before exposing
 its associated value. It shares the caller's 16-frame rigid proof stack and

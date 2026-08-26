@@ -5982,3 +5982,17 @@ generation algorithm. Inout operands, register classes, output projections,
 general clobbers/effects, and general assembly remain absent. Broader compiler
 completion remains partial; this technical screen does not establish clearance
 or infringement and does not replace independent human dual review.
+
+# 2026-08-26 — Explicit typed inline-assembly inout
+
+**Result: NOT_TRIGGERED after the typed-inout review.** This increment applies
+the published x86-64 register increment encoding between conventional stack
+load and writeback for one explicitly selected RAX `inout` operand. Bounded
+local-name resolution, ordinary ownership read-modify-write bookkeeping,
+type/mutability checking, effect-option validation, and fail-closed rejection
+introduce no novel assembler, register-allocation, optimization, instruction-
+selection, or code-generation algorithm. Register classes, distinct inout
+expressions, projections, general clobbers/effects, and general assembly remain
+absent. Broader compiler completion remains partial; this technical screen does
+not establish clearance or infringement and does not replace independent human
+dual review.

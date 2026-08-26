@@ -4671,6 +4671,17 @@ Windows gnullvm and native Arch Linux WSL each pass 985 compiler tests. This is
 **PARTIAL** output-operand evidence, not an inout, register-allocation, output-
 projection, clobber, arbitrary-effect, or general assembly claim.
 
+The bounded inout form is
+`asm!("inc rax", inout("rax") value)` for a mutable `u64` local. It records one
+read-modify-write ownership effect, loads the destination's checked stack slot,
+emits the fixed 64-bit increment, and writes RAX back to the same slot. Unique
+`nomem` and `nostack` options are accepted; `preserves_flags` is rejected.
+Immutable locals, parameters, wrong types, other registers/templates, and
+malformed operands fail closed. Both canonical hosts pass 985 compiler tests.
+This remains **PARTIAL** inout evidence; register classes/allocation, distinct
+input/output expressions, projections, clobbers, arbitrary effects, and general
+assembly remain absent.
+
 The projection-bearing term milestone uses a fixed 64-node arena for flat leaf
 terms and associated-type projections whose trait self/argument positions refer
 only to earlier nodes. Identical nodes intern to one stable identity; invalid
