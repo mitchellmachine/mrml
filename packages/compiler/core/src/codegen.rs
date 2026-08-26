@@ -42078,6 +42078,28 @@ mod tests {
                 .len()
                 > 11,
         );
+
+        let reference_chain = "#[unsafe(no_mangle)] pub extern \"C\" fn value(input: &mut u64, primary: bool, first: bool, second: bool) -> &mut u64 { loop { loop { if primary { return input; } else if first { *input += 1; return input; } else if second { return input; } else { return input; } } } }";
+        let module = Parser::new(reference_chain).parse_module::<1, 4>().unwrap();
+        let Some(Item::Function(function)) = module.items()[0] else {
+            panic!("expected function")
+        };
+        assert!(
+            compile_x86_64_function::<_, 384, 4, 24>(&function, &NoConstants, X86_64Abi::SystemV,)
+                .is_ok(),
+        );
+
+        let local_chain = "#[unsafe(no_mangle)] pub extern \"C\" fn value(input: &mut u64, primary: bool, first: bool) -> &mut u64 { loop { loop { if primary { return input; } else if first { let mut local: u64 = 40; return &mut local; } else { return input; } } } }";
+        let module = Parser::new(local_chain).parse_module::<1, 4>().unwrap();
+        let Some(Item::Function(function)) = module.items()[0] else {
+            panic!("expected function")
+        };
+        assert_eq!(
+            compile_x86_64_function::<_, 384, 4, 24>(&function, &NoConstants, X86_64Abi::SystemV,)
+                .unwrap_err()
+                .kind,
+            CodegenErrorKind::RuntimeReferenceOutlivesFunction,
+        );
     }
 
     #[test]
