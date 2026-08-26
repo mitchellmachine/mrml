@@ -902,6 +902,15 @@ therefore cannot later acquire an origin through assignment; this deliberately
 fails conservative until callee-origin inference carries a complete bounded
 local type environment.
 
+The callee proof now carries a fixed local type array alongside names, origins,
+mutability, and return compatibility. Exact annotations and bounded inferred
+reference expressions share the canonical projection/type walker; address-of,
+index, subslice, identifier, transparent wrapper, sequence tail, and equal-type
+conditional forms are supported. This permits a local-backed inferred alias to
+be replaced by a compatible parameter-backed reference in straight-line or
+complete conditional flow. Reference annotations and ascriptions must match
+their initializer evidence. Unsupported inference remains unknown.
+
 The first modern trait-solver foundation is an explicit bounded implemented-
 goal representation. Stable trait/type/inference/placeholder identities remain
 distinct; canonicalization replaces inference identities with first-occurrence

@@ -227,6 +227,12 @@ The inferred form produced the same result: replacing an inferred indexed
 inferred `&mut [u16]` alias assigned an indexed `&mut u16` and returned as that
 scalar reference was rejected with two E0308 diagnostics.
 
+Bounded local-type-state probes accepted returning an inferred alias that began
+at local `u16` storage and was then replaced by an indexed parameter reference,
+both directly and after both arms of an `if` replaced it. A separate probe
+rejected initializing an explicitly scalar mutable-reference alias from a
+mutable subslice with E0308.
+
 An independently authored Rust 2024 metadata-only probe against this exact
 toolchain and commit separately accepted a mutable scalar reference returned
 from index zero of a mutable slice-reference parameter, followed by owner reuse

@@ -3916,6 +3916,14 @@ retained a compatible parameter origin. Originless inferred locals cannot gain
 an origin through later assignment, closing the slice-to-scalar case
 conservatively until this proof owns a complete local type environment.
 
+The proof now owns a fixed local type slot and reuses the canonical place-
+projection type walker for bounded reference inference. Exact annotations,
+address-of indexed or subslice places, identifiers, transparent wrappers,
+sequence tails, and equal conditional results feed the same state. Consequently
+a local-backed inferred reference can be replaced by a compatible parameter-
+backed reference without fabricating provenance; mismatched annotations and
+ascriptions remain unknown.
+
 The conditional projected-reassignment milestone extends the bounded tuple-field
 loan chain across a conditional shared-reference assignment. The exact dated
 oracle rejects mutation of either conditional owner and of the field's replaced

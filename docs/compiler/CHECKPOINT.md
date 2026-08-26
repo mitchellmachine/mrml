@@ -625,6 +625,16 @@ the exact oracle accepts a compatible scalar-reference reassignment and rejects
 the slice/scalar mismatch with E0308. Both canonical hosts pass 986 compiler
 tests.
 
+The bounded callee-local type-state milestone adds one fixed type slot per
+modeled local and derives reference types through the canonical projection
+walker. It supports address-of, exact index/subslice, identifiers, transparent
+wrappers, sequence tails, and equal conditional results. A local-backed inferred
+scalar alias may now be replaced on every modeled path by a compatible indexed
+parameter reference and retain that parameter origin. Mismatched annotations or
+ascriptions fail closed. ORACLE-0002 accepted direct and conditional local-
+backed replacement and rejected a slice initializer annotated as scalar with
+E0308. Both canonical hosts pass 986 compiler tests.
+
 Inferred locals now become reassignment-origin eligible only when their
 initializer already proved a compatible parameter origin. This preserves valid
 indexed scalar alias replacement while preventing an inferred slice alias from
