@@ -4730,15 +4730,16 @@ clobber templates fail closed. Both canonical hosts pass 985 compiler tests.
 Other ABI sets, explicit clobber outputs, and general clobber integration remain
 absent.
 
-Explicit RAX `lateout` and same-place `inout` also accept one numeric field of a
-mutable tuple local when the selected element is exactly `u64`. Their ownership
-facts retain the tuple local identity and a `TupleField` projection, and load or
-writeback uses bounded, checked stack-slot selection. Immutable tuples, missing
-or out-of-range fields, and non-`u64` elements fail closed. Windows gnullvm and
-native Arch Linux WSL each pass 639 library tests, one component-interface
-probe, 10 conformance tests, and 335 replacement tests: 985 compiler tests per
-host. Nested, indexed, or dereferenced places and projected distinct
-input/output forms remain unsupported.
+Explicit RAX `lateout`, same-place `inout`, and a distinct `inout` output also
+accept one numeric field of a mutable tuple local when the selected element is
+exactly `u64`. Their ownership facts retain the tuple local identity and a
+`TupleField` projection, and load or writeback uses bounded, checked stack-slot
+selection. A distinct input remains a typed expression evaluated once before
+increment and projected writeback. Immutable tuples, missing or out-of-range
+fields, and non-`u64` elements fail closed. Windows gnullvm and native Arch Linux
+WSL each pass 639 library tests, one component-interface probe, 10 conformance
+tests, and 335 replacement tests: 985 compiler tests per host. Nested, indexed,
+or dereferenced places remain unsupported.
 
 The projection-bearing term milestone uses a fixed 64-node arena for flat leaf
 terms and associated-type projections whose trait self/argument positions refer

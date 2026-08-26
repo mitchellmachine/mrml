@@ -111,3 +111,10 @@ the same `nightly-2026-08-24-x86_64-pc-windows-gnullvm` toolchain and exact
 This establishes only the black-box acceptance of that projected operand shape;
 it does not establish general place, register-allocation, or assembly semantics.
 Temporary probe source and metadata were removed after recording the outcome.
+
+A subsequent independently authored metadata-only probe against that same
+toolchain and commit compiled a named `inout(reg)` whose `u64` input was distinct
+from its output place, with the output written to the second `u64` field of a
+mutable tuple. This records only exact black-box acceptance of split projected
+output syntax and does not establish general projected-place or assembly
+semantics. Temporary probe source and metadata were removed.
