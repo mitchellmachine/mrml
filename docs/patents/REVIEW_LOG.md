@@ -7353,3 +7353,15 @@ interprocedural inference, alias analysis, optimization, or code-generation
 algorithm. General call coercion and region inference remain absent. Broader
 compiler completion remains partial; this technical screen is not a clearance
 or infringement conclusion and does not replace independent human dual review.
+
+# 2026-08-26 — Scalar shared-reference call-reborrow evidence
+
+**Result: NOT_TRIGGERED after the shared-call evidence review.** This increment
+adds a bounded scalar shared-reference identity target and independently authored
+regression evidence that the existing call-reborrow liveness check blocks owner
+mutation while its shared result is live and releases after last use. It
+introduces no new region solver, interprocedural inference, alias analysis,
+optimization, or code-generation algorithm. General shared-reference call and
+region inference remain absent. Broader compiler completion remains partial;
+this technical screen is not a clearance or infringement conclusion and does
+not replace independent human dual review.
