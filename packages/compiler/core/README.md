@@ -4603,12 +4603,15 @@ tests per host.
 The restricted naked-function milestone admits repeated modern unsafe
 attributes including `#[unsafe(naked)]` and directly emits a bounded x86-64
 `naked_asm!` body without entering ordinary function lowering. The initial
-zero-operand instruction set is `nop`, `ret`, `int3`, `ud2`, `cli`, `sti`, and
-`hlt`, with at most eight string-literal instructions. A naked function must be
+instruction set includes `nop`, `ret`, `int3`, `ud2`, `cli`, `sti`, `hlt`,
+`swapgs`, `iretq`, validated 64-bit GPR `push`/`pop` and register-indirect
+`jmp`, plus register-to-register `mov`, with at most eight string-literal
+instructions. A quote-aware bounded template scanner preserves operand commas
+without accepting escapes. A naked function must be
 unsafe, use the C ABI, have no parameters or where predicates, return unit or
 never, and end in `ret`, `ud2`, or `hlt`. Exact machine-code tests prove that no
-prologue or epilogue bytes are inserted. Operands, labels, symbols, options,
-registers, additional architectures, and general inline assembly remain fail-
+prologue or epilogue bytes are inserted. Immediate/memory operands, labels,
+symbols, options, additional architectures, and general inline assembly remain fail-
 closed. Windows gnullvm and native Arch Linux WSL each pass 633 library tests,
 one component probe, 10 conformance tests, and 335 replacement tests: 979
 compiler tests per host.

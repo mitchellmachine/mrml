@@ -5639,3 +5639,18 @@ limited to the conventional exact two-vCPU controlled profile and does not
 claim patent clearance, non-infringement, physical deployment readiness, or a
 completed global Total-mode system. Independent human dual review remains
 required before production deployment.
+
+# 2026-08-26 — Restricted x86-64 naked-function emission
+
+**Result: NOT_TRIGGERED after the naked-function and register-encoding
+reviews.** These increments conventionally recognize a bounded modern unsafe
+attribute, validate a deliberately small function/body grammar, map explicitly
+named x86-64 instructions and architectural GPR numbers to their published
+instruction encodings, and place the exact resulting bytes in the existing
+object writer. The quote-aware fixed-capacity scanner, direct opcode tables,
+REX/ModRM bit placement, signature rejection, and terminal-instruction check
+introduce no novel assembler, optimization, register-allocation, instruction-
+selection, binary-translation, or code-generation algorithm. Broader assembly
+support and compiler completion remain partial; this technical screen does not
+establish clearance or infringement and does not replace independent human dual
+review.
