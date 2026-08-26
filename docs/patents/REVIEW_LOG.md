@@ -8251,6 +8251,17 @@ or mixed loop-control transfer remains unsupported. Broader compiler completion
 remains partial; this technical screen is not a clearance or infringement
 conclusion and does not replace independent human dual review.
 
+# 2026-08-26 — Terminal noreturn x86-64 INT3 lowering
+
+**Result: NOT_TRIGGERED.** This bounded compiler increment recognizes one exact
+conventional Rust assembly form, records whether its statement is the final
+top-level body statement, and emits the published architectural `CC` encoding
+through the existing fixed-template path. It introduces no new instruction-
+selection, optimization, control-flow-analysis, allocation, synchronization,
+or runtime algorithm. Broader never-type, unreachable-code, assembly, and
+compiler completion remain partial; this technical screen is not a clearance
+or infringement conclusion and does not replace independent human dual review.
+
 # 2026-08-26 — Loop unconditional-return origin transfer
 
 **Result: NOT_TRIGGERED after the loop return review.** This increment routes an

@@ -1026,3 +1026,13 @@ failed with E0133. This records black-box acceptance and lexical containment for
 that exact statement form only; it does not establish multiple-statement unsafe
 blocks, nested blocks, arbitrary macros, other templates, general effects, or
 general inline-assembly semantics. Temporary sources and metadata were removed.
+
+An independently authored Rust 2024 metadata-only terminal-assembly set against
+this exact toolchain and commit compiled safe scoped and unsafe-function forms
+of `asm!("int3", options(noreturn, nostack))`, accepted the reversed option
+order, and accepted both direct `!` return and never-to-`u64` coercion. A
+comparison with a following `42` suffix also compiled while warning that the
+suffix was unreachable. MRML deliberately rejects that nonterminal form until
+its bounded control-flow representation can model unreachable statement tails;
+this is a conservative classified delta, not claimed oracle equivalence.
+Temporary sources and metadata were removed.

@@ -58,6 +58,19 @@ oracle upgrade receives a new immutable record and differential classification
 against all prior accepted probes. Keep Cargo on edition 2024 until a newer
 named edition can be adopted through a pinned, workspace-wide migration.
 
+## Latest terminal noreturn assembly milestone
+
+Commit `01c14e8a` adds a typed terminal property to final top-level expression
+statements and lowers exact unsafe x86-64
+`asm!("int3", options(noreturn, nostack))` in either option order. It emits
+`CC`, omits the ordinary return sequence, and admits direct `!` returns and
+never-to-value coercion. Nonterminal/conditional forms fail closed until the
+compiler models unreachable suffixes. ORACLE-0002 accepts the terminal forms
+and also accepts a following suffix with an unreachable-code warning; that
+last behavior is a classified conservative MRML delta. Windows and native Arch
+Linux WSL each passed 646 library tests, 1 component probe, 10 conformance
+tests, and 339 replacement tests: 996 compiler tests per host.
+
 ## Implemented ownership/place foundation
 
 At the checkpoint commit, the runtime emitter has these bounded mechanisms:

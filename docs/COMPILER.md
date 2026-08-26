@@ -121,6 +121,7 @@ language as a whole.
 | Modern unsafe rules | **PARTIAL** | Unsafe functions gate a bounded unchecked integer/raw-pointer subset and unsupported operations fail closed. General unsafe blocks, unsafe traits/impls, extern rules, assembly, provenance, and complete `unsafe_op_in_unsafe_fn` semantics are absent. |
 | Modern unsafe-block delta | **PARTIAL** | A typed bounded `UnsafeBlock` expression now scopes the supported unchecked integer operations, unchecked casts/option extraction, and dangerous scalar raw-pointer dereference, reference conversion, read/write/fill/copy/swap/drop, non-wrapping offset, and pointer-difference operations. Nested blocks and bounded scalar locals are retained through constant, IR, semantic, type, and native-emission consumers. Lexically adjacent operations outside the block fail closed. Unsafe blocks around ordinary assembly statements, general statements, unsupported operations, unsafe traits/implementations, extern rules, complete provenance, and complete `unsafe_op_in_unsafe_fn` semantics remain absent; this row supersedes the general-unsafe-block wording above. |
 | Unsafe inline-assembly statement delta | **PARTIAL** | A bounded `ExpressionStatement` now carries an explicit unsafe-context property when the parser recognizes one `unsafe { asm!(...); }` statement, with an optional semicolon after the block. Both read preanalysis and native emission require that property or an unsafe function. Adjacent assembly after an unrelated unsafe block remains unauthorized. Multiple statements in the same unsafe block, nested unsafe assembly blocks, general macro statements, other unsupported assembly, and general statement-block lowering remain absent; this row narrows the assembly limitation in the unsafe-block delta above. |
+| Terminal noreturn assembly delta | **PARTIAL** | The parser marks only the final top-level expression statement as terminal. On x86-64, exact `asm!("int3", options(noreturn, nostack))` (with either option order) is admitted only in that position and an unsafe context, emits `CC`, suppresses the ordinary return sequence, and permits `!` function returns or never-to-value coercion. A following unreachable suffix, conditional placement, other templates/options, general never expressions, and broader unreachable-code lowering fail closed. |
 | Modern `no_std` systems features | **PARTIAL** | Dependency-free native code generation covers integers, control flow, arrays, bounded scalar tuples, references, slices, raw pointers, COFF/ELF64, UEFI checks, and NVPTX checks. Up to eight typed x86-64 PC-relative branch-or-data relocations are structurally emitted for both native object formats. General assembly, naked entry-point integration, atomics, SIMD, full ABI/layout, general relocation families, linking, and package compilation remain missing. |
 
 Already implemented post-2024 or forward-looking work should be preserved rather
@@ -1832,6 +1833,28 @@ leakage control. Windows and Arch each passed 646 unit, 1 component, 10
 conformance, and 338 replacement tests (995 total). Multiple statements inside
 one unsafe block, nested unsafe assembly blocks, arbitrary macros, general
 assembly, and general statement-block lowering remain unsupported.
+
+### Terminal noreturn `int3` checkpoint
+
+The bounded function-body representation now marks only a final top-level
+expression statement as terminal. Exact x86-64
+`asm!("int3", options(noreturn, nostack))`, with either option order, requires
+an unsafe function or the scoped unsafe-statement form, emits the architectural
+`CC` byte, and terminates native emission without a fabricated return. This
+supports direct `!` function returns and never-to-value coercion for that exact
+terminal form. Nonterminal and conditional uses fail closed because unreachable
+statement suffixes are not yet represented precisely.
+
+The exact ORACLE-0002 Rust 2024 toolchain accepted both option orders, the safe
+scoped form, and never-to-value coercion. It also accepted a following suffix
+with an unreachable-code warning; MRML deliberately rejects that form until its
+control-flow representation can prove and lower unreachable suffixes without
+guessing. Independently authored ELF64 and COFF probes cover the accepted forms
+and the conservative rejection. Windows and Arch each passed 646 unit, 1
+component, 10 conformance, and 339 replacement tests (996 total). General never
+expressions, multiple-statement unsafe blocks, arbitrary noreturn assembly,
+unreachable suffixes, and physical instruction-execution evidence remain
+unsupported.
 
 ## Non-negotiable implementation rules
 
