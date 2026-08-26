@@ -8278,3 +8278,14 @@ instruction-selection, or code-generation algorithm. Post-backedge exits must
 match the converged header, and unsupported transitions fail closed. Broader
 compiler completion remains partial; this technical screen is not a clearance
 or infringement conclusion and does not replace independent human dual review.
+
+# 2026-08-26 — Nested loop else CFG and ownership mapping
+
+**Result: NOT_TRIGGERED after the CFG/ownership review.** This increment maps a
+conventional bounded else arm into explicit false/action/terminal CFG edges and
+reuses existing scoped ownership and direct assignment-origin machinery. It
+adds no novel control-flow, region, alias, fixed-point, inference,
+optimization, instruction-selection, or code-generation algorithm. Executable
+lowering remains fail-closed. Broader compiler completion remains partial; this
+technical screen is not a clearance or infringement conclusion and does not
+replace independent human dual review.
