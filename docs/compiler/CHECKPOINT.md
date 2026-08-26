@@ -910,6 +910,17 @@ pass 643 library tests, one component-interface probe, 10 conformance tests, and
 points, path-sensitive regions, and complete Polonius reasoning remain
 unsupported.
 
+Nested-loop callee summaries now require every modeled inner backedge and
+break/continue state edge to preserve the incoming outer local and projected
+origins. Prefix transfer uses the same exact action indices as return transfer;
+local declarations are discarded, and origin generations do not create false
+instability. ORACLE-0002 accepts a temporary local alias restored to the
+parameter before the backedge and rejects the unrestored local-backed cycle
+with E0515. Windows and Arch each pass 643 library tests, one component-
+interface probe, 10 conformance tests, and 335 replacement tests: 989 compiler
+tests per host. This is bounded stable-backedge proof, not general nested-loop
+fixed-point or region inference.
+
 Mixed conditional loop arms now partition exit and backedge evidence: supported
 terminal returns merge directly into the function result, while only nonterminal
 arms join the one-iteration state before its zero-iteration intersection. Direct

@@ -4121,6 +4121,15 @@ Windows and native Arch Linux WSL each pass 643 library tests, one component-
 interface probe, 10 conformance tests, and 335 replacement tests: 989 compiler
 tests per host. This is bounded source-ordered transfer, not a nested-loop fixed
 point or region solver.
+Nested inner-loop state edges now have a separate stability gate. Every normal
+backedge and conditional or unconditional break/continue prefix must preserve
+the incoming outer local and projected origins before return-origin inference is
+accepted. Exact restoration to the same parameter is supported; a local-backed
+or changed origin fails closed. The pinned oracle accepts restore-before-
+backedge and rejects the unrestored cycle with E0515. Windows and native Arch
+Linux WSL each pass 643 library tests, one component-interface probe, 10
+conformance tests, and 335 replacement tests: 989 compiler tests per host. This
+does not claim a general nested-loop fixed point or region solver.
 
 Exact typed tuple literals now seed the same projected state when a local is
 declared. Every reference field is checked against the declared tuple element

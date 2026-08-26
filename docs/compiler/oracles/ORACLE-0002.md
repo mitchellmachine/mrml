@@ -154,6 +154,15 @@ live with E0499. This is black-box evidence for that exact stable-origin loop
 shape, not general loop dataflow, alias analysis, or region inference. Temporary
 sources and metadata were removed.
 
+An independently authored Rust 2024 metadata-only inner-backedge pair against
+this exact toolchain and commit accepted a parameter-backed alias that was
+temporarily assigned to local storage and restored to the parameter before the
+backedge. The otherwise identical probe without restoration failed at the
+conditional return with E0515. This is black-box evidence for exact stable and
+changed nested-backedge origins, not a general loop fixed point, path-sensitive
+region inference, or complete Polonius semantics. Temporary sources and
+metadata were removed.
+
 An independently authored Rust 2024 metadata-only probe against this exact
 toolchain and commit accepted a mutable-reference forwarding callee that created
 an `&mut` alias inside each conditional branch and assigned that branch-local

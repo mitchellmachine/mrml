@@ -1254,6 +1254,13 @@ prefix are supported; differing or local-backed reachable exits still fail
 closed. ORACLE-0002 accepts the parameter-backed ordered pair and rejects the
 earlier local-backed conditional return with E0515. This is source-ordered
 bounded transfer, not a nested-loop fixed point or general region inference.
+Nested return summaries additionally validate every inner backedge and every
+conditional or unconditional break/continue edge that can carry alias state.
+The bounded prefix at such an edge must preserve the incoming outer origin
+facts; generation-only changes are ignored, but a changed or local-backed
+origin fails closed. ORACLE-0002 accepts a temporary local assignment restored
+to the parameter before the backedge and rejects an unrestored local origin
+with E0515. This is an exact stability criterion, not a general fixed point.
 
 The first modern trait-solver foundation is an explicit bounded implemented-
 goal representation. Stable trait/type/inference/placeholder identities remain
