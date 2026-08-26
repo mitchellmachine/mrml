@@ -2078,7 +2078,8 @@ pub fn compile_x86_64_naked_relocatable<
 enum X86_64InlineAssembly<'source> {
     Nop,
     NopCClobber,
-    CompareRax {
+    CompareRegister {
+        register: X86_64InlineOutputRegister,
         input: &'source str,
     },
     SetRegister {
@@ -2231,7 +2232,15 @@ fn x86_64_inline_assembly(
                 "in(\"rax\")",
                 false,
                 X86_64InlineOperandKind::Input,
-                None,
+                Some(X86_64InlineOutputRegister::Rax),
+            )
+        } else if let Some(arguments) = arguments.strip_prefix("\"cmp rcx, rcx\"") {
+            (
+                arguments,
+                "in(\"rcx\")",
+                false,
+                X86_64InlineOperandKind::Input,
+                Some(X86_64InlineOutputRegister::Rcx),
             )
         } else if let Some(arguments) = arguments.strip_prefix("\"mov rax, 7\"") {
             (
@@ -2282,7 +2291,10 @@ fn x86_64_inline_assembly(
     );
     let input = x86_64_inline_operand_with_options(arguments, preserves_flags, has_output)?;
     match operand_kind {
-        X86_64InlineOperandKind::Input => Ok(Some(X86_64InlineAssembly::CompareRax { input })),
+        X86_64InlineOperandKind::Input => Ok(Some(X86_64InlineAssembly::CompareRegister {
+            register: output_register.ok_or(CodegenErrorKind::InvalidInlineAssembly)?,
+            input,
+        })),
         X86_64InlineOperandKind::Output => Ok(Some(X86_64InlineAssembly::SetRegister {
             register: output_register.ok_or(CodegenErrorKind::InvalidInlineAssembly)?,
             output: input,
@@ -9181,7 +9193,7 @@ fn preanalyze_runtime_expression_statement_reads<
             });
         }
         Ok(Some(X86_64InlineAssembly::Nop | X86_64InlineAssembly::NopCClobber)) => return Ok(()),
-        Ok(Some(X86_64InlineAssembly::CompareRax { input })) => {
+        Ok(Some(X86_64InlineAssembly::CompareRegister { input, .. })) => {
             let tree = crate::ExpressionParser::<MAX_EXPRESSION_NODES>::new(input)
                 .parse()
                 .map_err(|error| CodegenError {
@@ -26742,7 +26754,7 @@ impl<
             Ok(Some(X86_64InlineAssembly::Nop | X86_64InlineAssembly::NopCClobber)) => {
                 return self.emit(&[0x90]);
             }
-            Ok(Some(X86_64InlineAssembly::CompareRax { input })) => {
+            Ok(Some(X86_64InlineAssembly::CompareRegister { register, input })) => {
                 let tree = crate::ExpressionParser::<MAX_EXPRESSION_NODES>::new(input)
                     .parse()
                     .map_err(|error| CodegenError {
@@ -26773,7 +26785,12 @@ impl<
                 let emission = self.emit_expression(&tree, tree.root(), 0);
                 self.width = previous_width;
                 emission?;
-                return self.emit(&[0x48, 0x39, 0xc0]);
+                return match register {
+                    X86_64InlineOutputRegister::Rax => self.emit(&[0x48, 0x39, 0xc0]),
+                    X86_64InlineOutputRegister::Rcx => {
+                        self.emit(&[0x48, 0x89, 0xc1, 0x48, 0x39, 0xc9])
+                    }
+                };
             }
             Ok(Some(X86_64InlineAssembly::SetRegister { register, output })) => {
                 if output == "_" {
@@ -30828,6 +30845,17 @@ mod tests {
                 .windows(3)
                 .any(|bytes| bytes == [0x48, 0x39, 0xc0])
         );
+        let compare_rcx = compile(concat!(
+            "#[unsafe(no_mangle)] pub unsafe extern \"C\" fn answer(value: u64) -> u64 { ",
+            "asm!(\"cmp rcx, rcx\", in(\"rcx\") value, options(nomem, nostack)); value }"
+        ))
+        .unwrap();
+        assert!(
+            compare_rcx
+                .bytes()
+                .windows(6)
+                .any(|bytes| bytes == [0x48, 0x89, 0xc1, 0x48, 0x39, 0xc9])
+        );
         for source in [
             concat!(
                 "#[unsafe(no_mangle)] pub unsafe extern \"C\" fn answer() -> u64 { ",
@@ -31175,6 +31203,10 @@ mod tests {
             ),
             (
                 "#[unsafe(no_mangle)] pub unsafe extern \"C\" fn answer(value: u64) -> u64 { asm!(\"cmp rax, rax\", in(\"rax\") value, options(preserves_flags)); value }",
+                CodegenErrorKind::InvalidInlineAssembly,
+            ),
+            (
+                "#[unsafe(no_mangle)] pub unsafe extern \"C\" fn answer(value: u64) -> u64 { asm!(\"cmp rcx, rcx\", in(\"rax\") value); value }",
                 CodegenErrorKind::InvalidInlineAssembly,
             ),
             (
