@@ -3095,12 +3095,20 @@ typed isolation flag. Each runner decodes those bytes, requires recovery state,
 and passes only `BootHandoff::isolation_override()` into effective-policy
 composition; a missing flag fails before admission instead of falling back to
 native execution. WHP passes 11 focused runner tests, KVM passes 12, and the
-kernel passes 559 tests on Windows and Arch Linux. Live retained-artifact
-attempts on both backends reached `handoff=decoded`, `eligible=1`, `microvm=1`,
-and `native_fallback=0`, but guest execution ended in WHP `RuntimeOverrun` and
-KVM `Halted`. Those failures are recorded rather than converted into successful
-live or recovery evidence; fresh signed current-source guest artifacts and the
-committed `RecoveredSystemState` join remain required.
+kernel passes 559 tests on Windows and Arch Linux. Retained older artifacts
+reached the control proof but did not complete and were not counted as live
+evidence. A freshly built component-service kernel was signed with separate
+one-use kernel/package keys; both private keys were consumed, and the resulting
+`.mrp` has SHA-256
+`6edd697109255f628dbd877bfd0a7df1d703a161d288369b3a5023038c0ebe91`.
+WHP completed the exact-generation ZIM/Zstd data path and cleanup with
+`cpu_runtime=1077us`, `verify=18447us`, `prepare=6305us`, `execute=2184us`, and
+`total=49861us`. Nested KVM reached the expected halt with
+`component_runtime=1331us`, `verify=26084us`, `prepare=7451us`,
+`execute=1337us`, and `total=120800us`. Both reported `handoff=decoded`, accepted
+epoch 8, `eligible=1`, `microvm=1`, and `native_fallback=0`. This is hosted live
+handoff parity, not the committed `RecoveredSystemState` join, host resistance,
+bare metal, or complete Total readiness.
 
 Patent review: `TRIGGERED` under the existing signed-release, adaptive
 isolation, Total-MicroVM, automated VMM placement, and device-projection reviews

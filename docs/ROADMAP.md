@@ -337,14 +337,15 @@ canonical `BootHandoff` bytes installed for the guest rather than constructing
 metadata with accepted epoch 8 and no pending recovery action; missing recovery
 metadata or a decoded handoff without the Total flag fails before admission.
 WHP passes 11 runner tests and KVM passes 12, while Windows and Arch Linux each
-pass 559 kernel tests. Controlled WHP and nested-KVM attempts both reached the
-decoded-policy and release-inventory proofs with one eligible microVM and zero
-fallback, but the retained signed guest artifacts did not complete the service
-ABI (`RuntimeOverrun` on WHP and `Halted` on KVM). Therefore this is
-**PARTIALLY IMPLEMENTED** handoff/control-plane parity, not new successful live
-guest, recovered-boot, or Total-satisfaction evidence. Fresh current-source
-signed artifacts and committed stable-recovery consumption remain the next
-gate.
+pass 559 kernel tests. Retained older signed guest artifacts correctly failed to
+produce new execution evidence. A freshly built component-service kernel was
+then signed with one-use kernel/package keys and packaged as SHA-256
+`6edd697109255f628dbd877bfd0a7df1d703a161d288369b3a5023038c0ebe91`.
+Both WHP and nested KVM consumed it, reported `handoff=decoded`, accepted epoch
+8, one eligible microVM, and zero fallback, then completed the expected guest
+lifecycle/data path. This is **PARTIALLY IMPLEMENTED** live hosted handoff
+parity, not recovered boot or complete Total satisfaction. Committed
+stable-recovery consumption remains the next gate.
 
 The deployment lane is defined in [DEPLOYMENT.md](DEPLOYMENT.md) and must not
 displace the current foundational gate. Later work proceeds as separate bounded

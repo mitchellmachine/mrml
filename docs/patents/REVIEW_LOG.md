@@ -9,10 +9,11 @@ SMP encoder entry points for the already defined recovery/isolation fields, and
 requires hosted policy composition to consume the decoded handoff rather than
 an independently supplied enum value. It adds no new wire field, signature
 scheme, placement or scheduling heuristic, capability grant, native fallback,
-device protocol, DMA mechanism, or hardware-specific isolation mechanism. Live
-committed-recovery consumption and fresh signed-guest completion remain
-unimplemented. No patent-clearance or non-infringement conclusion is made;
-independent human review remains required.
+device protocol, DMA mechanism, or hardware-specific isolation mechanism. Fresh
+one-use-signed current-source guests completed under hosted WHP and nested KVM;
+live committed-recovery consumption remains unimplemented. No patent-clearance
+or non-infringement conclusion is made; independent human review remains
+required.
 
 ## 2026-08-26 — Common live release-owned Total admission
 

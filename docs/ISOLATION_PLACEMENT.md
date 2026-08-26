@@ -753,10 +753,11 @@ one-boot request into the same canonical handoff installed for the guest, decode
 that object, and compose policy only from `BootHandoff::isolation_override()`.
 Absent recovery metadata or an absent decoded Total request rejects the focused
 Total path before admission. Focused WHP/KVM tests cover the accepted and
-missing-override cases. Retained signed-artifact live attempts reached identical
-decoded-policy and zero-fallback inventory proofs but did not complete guest
-execution, so current-source re-signing and stable recovered-state binding are
-still required before claiming live recovered Total mode.
+missing-override cases. Retained older signed artifacts did not complete guest
+execution and were not counted as evidence. Fresh one-use-signed current-source
+kernel packages then completed the identical decoded-policy, zero-fallback, and
+guest lifecycle/data path on WHP and nested KVM. Stable recovered-state binding
+is still required before claiming live recovered Total mode.
 
 ## Resources, devices, security, and monitoring
 

@@ -1160,10 +1160,12 @@ installed for the guest, decode it, and derive the effective overlay only from
 that decoded object. Missing recovery metadata or a missing Total flag rejects
 before admission. The decoded accepted epoch is retained in diagnostic output,
 but it is not yet compared with a live `RecoveredSystemState`; that existing
-committed-state predecessor check remains the next required join. Retained
-signed guest artifacts reached the identical zero-fallback control-plane proof
-on both backends but halted before a successful service ABI completion, so they
-provide no new recovered-boot execution claim.
+committed-state predecessor check remains the next required join. Retained older
+signed guest artifacts were rejected as execution evidence; a fresh
+current-source one-use-signed kernel package subsequently completed the decoded
+handoff and zero-fallback guest path on both backends. That proves hosted live
+handoff parity, not recovered boot, because neither runner yet obtains its
+effective policy from the committed recovered system object.
 
 Application-launch recovery must retain the exact runtime domain, application
 object, immutable application generation and artifact digest, active system
