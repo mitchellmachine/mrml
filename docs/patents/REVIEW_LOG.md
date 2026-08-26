@@ -238,6 +238,16 @@ and compiler completion remain partial; this technical screen establishes
 neither clearance nor infringement and does not replace independent human dual
 review.
 
+## 2026-08-26 — Conditional projected-loan ancestry
+
+Patent review: **NOT_TRIGGERED**. This bounded compiler-analysis increment
+recurses through already recorded exact tuple-field initializer and reassignment
+origins while checking loan conflicts. It adds no new alias-analysis algorithm,
+fixed-point, region solver, optimization, runtime, authority, or dependency
+mechanism. Broader alias and compiler completion remain partial; this technical
+screen establishes neither clearance nor infringement and does not replace
+independent human dual review.
+
 ## 2026-08-26 — Activated-generation binding for Total inventory
 
 Patent review: **TRIGGERED** under the existing SystemRelease, deployment,
