@@ -1377,10 +1377,14 @@ blocks and routes true, false, and target-aware terminal edges. Ownership
 preanalysis assigns distinct condition, action, and return-value locations and
 keeps branch locals scoped. Compilation rejects these records before any
 evaluator or emitter fast path until state transfer, semantics, and native
-lowering are modeled; this is CFG/preanalysis support, not executable language
+lowering are modeled. The bounded constant evaluator already executes taken
+branch actions with lexical-scope truncation and routes inner/outer break,
+continue, and return terminals under the existing iteration limit. Focused
+constants cover all three terminals and untaken fallthrough. This is
+parser/CFG/preanalysis/const support, not native executable language
 support. Windows and
-native Arch Linux WSL each pass 644 library tests, one component-interface
-probe, 10 conformance tests, and 335 replacement tests: 990 compiler tests per
+native Arch Linux WSL each pass 645 library tests, one component-interface
+probe, 10 conformance tests, and 335 replacement tests: 991 compiler tests per
 host.
 
 The first modern trait-solver foundation is an explicit bounded implemented-

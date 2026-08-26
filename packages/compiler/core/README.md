@@ -4248,11 +4248,14 @@ separate condition and action blocks with explicit false fallthrough and true
 terminal routing; ownership preanalysis gives conditions, scoped actions, and
 return values distinct mapped locations. Compilation rejects the record before
 evaluator or emitter selection until origin transfer, semantics, and native
-emission model it. Focused tests cover retained branch actions, CFG/ownership
-mapping, and the fail-closed compile boundary. Windows and
-native Arch Linux WSL each pass 644 library tests, one component-interface
-probe, 10 conformance tests, and 335 replacement tests: 990 compiler tests per
-host. This is parser/representation support, not executable nested branching.
+emission model it. The bounded constant evaluator does execute these records,
+using lexical resolver truncation and the existing loop limit for inner/outer
+break, continue, and return. Focused tests cover retained branch actions,
+CFG/ownership mapping, all constant terminal kinds, untaken fallthrough, and
+the fail-closed native compile boundary. Windows and native Arch Linux WSL each
+pass 645 library tests, one component-interface probe, 10 conformance tests,
+and 335 replacement tests: 991 compiler tests per host. This is constant
+semantics, not native executable nested branching.
 Nested-loop ordered-return and stable-edge analysis is now factored over an
 explicit incoming state and composes after outer-loop declarations, assignments,
 and branch joins. Stable nested edges preserve that state for later outer

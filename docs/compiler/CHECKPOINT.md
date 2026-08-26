@@ -667,9 +667,12 @@ scoped-action blocks, routes false fallthrough and target-aware true terminals,
 and maps condition/action/return ownership locations back to those control
 points. Compilation rejects the record at entry before evaluator or emitter
 selection, so origin transfer, semantics, and native emission remain
-unavailable without silent branch loss. Windows and Arch each pass 644 library
+unavailable without silent branch loss. Constant semantics are now implemented:
+taken actions use a scoped resolver checkpoint and target-aware break, continue,
+and return reuse the existing bounded loop evaluator. Native semantics and
+origin transfer remain unavailable. Windows and Arch each pass 645 library
 tests, one component-interface probe, 10 conformance tests, and 335 replacement
-tests: 990 compiler tests per host.
+tests: 991 compiler tests per host.
 
 The conditional callee-local reassignment milestone evaluates supported direct
 assignments from a copy of the incoming fixed local-origin state for every
