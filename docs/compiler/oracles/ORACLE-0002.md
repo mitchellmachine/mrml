@@ -1045,3 +1045,12 @@ This records black-box admission of that exact source form only; it does not
 establish runtime interrupt behavior, other operands or options, returning
 syscalls, general assembly, or physical kernel evidence. Temporary source and
 metadata were removed.
+
+An independently authored Rust 2024 metadata-only returning syscall probe
+against this exact toolchain and commit compiled `asm!("int 0x80", ...)` with
+RAX same-place `inlateout`, RDI/RSI inputs, RDX split `inlateout` to a named
+local, R10/R8/R9 discarded outputs, and `options(nostack)`. This records
+black-box admission of that exact ordered operand/output form only; it does not
+establish runtime interrupt behavior, arbitrary output places, other options or
+register sets, general assembly, or physical kernel evidence. Temporary source
+and metadata were removed.

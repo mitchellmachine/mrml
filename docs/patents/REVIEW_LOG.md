@@ -8354,6 +8354,17 @@ and broader compiler completion remain partial; this technical screen is not a
 clearance or infringement conclusion and does not replace independent human
 dual review.
 
+# 2026-08-26 — Returning seven-register x86-64 INT 0x80 lowering
+
+**Result: NOT_TRIGGERED.** This bounded compiler increment extends the existing
+fixed syscall shape with conventional input/output operand bookkeeping, saves
+the architectural result registers, and writes them to already-supported local
+storage. It introduces no new syscall protocol, instruction-selection,
+optimization, allocation, control-flow-analysis, synchronization, or runtime
+algorithm. General output places, assembly, and broader compiler completion
+remain partial; this technical screen is not a clearance or infringement
+conclusion and does not replace independent human dual review.
+
 # 2026-08-26 — Composed outer/nested loop origin state
 
 **Result: NOT_TRIGGERED after the composed nested-state review.** This increment

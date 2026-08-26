@@ -60,6 +60,16 @@ named edition can be adopted through a pinned, workspace-wide migration.
 
 ## Latest terminal noreturn assembly milestone
 
+Commit `9797cabb` adds returning seven-register `int 0x80` forms with RAX
+`inlateout`, ordered input/`inlateout` operands, mutable named-local or discarded
+outputs, exact `nostack`, source-ordered read/write facts, and preservation of
+all seven results before stores. ORACLE-0002 accepts the mixed comparison probe.
+Windows and native Arch Linux WSL each passed 646 library tests, 1 component
+probe, 10 conformance tests, and 341 replacement tests: 998 compiler tests per
+host. General output places and other syscall forms remain unsupported.
+
+### Preceding terminal syscall milestone
+
 Commit `3602f172` extends the terminal path with exact x86-64
 `asm!("int 0x80", ...)` containing seven ordered `u64` inputs in RAX, RDI,
 RSI, RDX, R10, R8, and R9 and exact `noreturn, nostack` options. The bounded
