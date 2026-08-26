@@ -5745,3 +5745,14 @@ algorithm; RIP-relative, base-less, symbolic, and relocation-bearing forms
 remain absent. Broader assembly support and compiler completion remain partial;
 this technical screen does not establish clearance or infringement and does not
 replace independent human dual review.
+
+# 2026-08-26 — Signed naked immediate operands
+
+**Result: NOT_TRIGGERED after the signed-immediate review.** This increment
+extends the existing checked positional integer parser with an optional minus
+sign, validates the published x86-64 `push` sign-extension limits, and emits the
+conventional two's-complement bits for signed `mov r64, imm64` operands. It
+introduces no novel assembler, optimization, instruction-selection, relocation,
+or code-generation algorithm. Broader assembly support and compiler completion
+remain partial; this technical screen does not establish clearance or
+infringement and does not replace independent human dual review.

@@ -1402,9 +1402,10 @@ accepts at most eight x86-64 instructions from `nop`, `ret`, `int3`, `ud2`,
 `cli`, `sti`, `hlt`, `swapgs`, and `iretq`, validated 64-bit GPR `push`/`pop`
 and register-indirect `jmp`, and register-to-register `mov`. A quote-aware
 bounded scanner preserves operand commas without accepting escapes. A checked
-decimal/hexadecimal parser admits nonnegative `push` immediates only when their
-sign-extended x86-64 encoding preserves the value, and admits full-width
-`mov r64, imm64`; malformed, overflowing, and noncanonical separators fail.
+decimal/hexadecimal parser admits signed `push` immediates only when their
+sign-extended x86-64 encoding preserves the requested `i32` value, and admits
+full-width signed-or-unsigned `mov r64, imm64`; malformed, overflowing, and
+noncanonical separators fail.
 Base-register memory operands admit 64-bit `mov` loads/stores,
 memory-indirect `jmp`, and `lgdt`, `lidt`, and `invlpg`, including the required
 SIB or zero displacement for `rsp`/`r12` and `rbp`/`r13`. The typed address
@@ -1414,8 +1415,8 @@ forms and rejects `rsp` as an index. It requires an
 explicit terminating instruction and emits those exact bytes without ordinary function lowering.
 Focused tests compare the complete machine-code slice to prove that no prologue
 or epilogue is inserted and reject unsupported safety, ABI, signature,
-instruction, register, immediate, and fallthrough cases. Signed immediates,
-RIP-relative/base-less memory operands, labels, symbols, options,
+instruction, register, immediate, and fallthrough cases. RIP-relative/base-less
+memory operands, labels, symbols, options,
 additional architectures, and general inline assembly remain fail-closed.
 Windows gnullvm and native Arch Linux WSL each pass 633 library tests,
 one component-interface probe, 10 conformance tests, and 335 replacement tests:
