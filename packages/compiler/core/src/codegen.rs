@@ -1875,9 +1875,17 @@ fn compile_x86_64_naked_function<const MAX_BYTES: usize, const MAX_PARAMETERS: u
         .ok_or_else(|| error(CodegenErrorKind::InvalidNakedAssembly))?;
     let mut instructions = [""; 8];
     let mut instruction_count = 0usize;
+    let mut att_syntax = false;
     let mut remaining = source.trim();
     while !remaining.is_empty() {
-        if remaining == "options(raw)" {
+        if matches!(
+            remaining,
+            "options(raw)"
+                | "options(att_syntax)"
+                | "options(raw, att_syntax)"
+                | "options(att_syntax, raw)"
+        ) {
+            att_syntax = remaining.contains("att_syntax");
             remaining = "";
             continue;
         }
@@ -1926,7 +1934,7 @@ fn compile_x86_64_naked_function<const MAX_BYTES: usize, const MAX_PARAMETERS: u
         let encoding_length = if x86_64_naked_label_branch(instruction).is_some() {
             5
         } else {
-            encode_x86_64_naked_instruction(instruction)
+            encode_x86_64_naked_instruction_for_syntax(instruction, att_syntax)
                 .ok_or_else(|| error(CodegenErrorKind::InvalidNakedAssembly))?
                 .1
         };
@@ -1966,7 +1974,7 @@ fn compile_x86_64_naked_function<const MAX_BYTES: usize, const MAX_PARAMETERS: u
                 encoding[1..5].copy_from_slice(&displacement.to_le_bytes());
                 (encoding, 5, true)
             } else {
-                encode_x86_64_naked_instruction(instruction)
+                encode_x86_64_naked_instruction_for_syntax(instruction, att_syntax)
                     .ok_or_else(|| error(CodegenErrorKind::InvalidNakedAssembly))?
             };
         terminating = is_terminating;
@@ -1978,6 +1986,17 @@ fn compile_x86_64_naked_function<const MAX_BYTES: usize, const MAX_PARAMETERS: u
         return Err(error(CodegenErrorKind::InvalidNakedAssembly));
     }
     MachineCode::from_bytes(&bytes[..emitted_length]).map_err(error)
+}
+
+fn encode_x86_64_naked_instruction_for_syntax(
+    instruction: &str,
+    att_syntax: bool,
+) -> Option<([u8; 10], usize, bool)> {
+    if att_syntax {
+        encode_x86_64_naked_att_instruction(instruction)
+    } else {
+        encode_x86_64_naked_instruction(instruction)
+    }
 }
 
 fn x86_64_naked_label_definition(instruction: &str) -> Option<u8> {
@@ -2106,6 +2125,178 @@ fn encode_x86_64_naked_instruction(instruction: &str) -> Option<([u8; 10], usize
         }
         _ => None,
     }
+}
+
+fn encode_x86_64_naked_att_instruction(instruction: &str) -> Option<([u8; 10], usize, bool)> {
+    if !instruction.contains(' ') {
+        if let Some(fixed) = encode_x86_64_naked_instruction(instruction) {
+            return Some(fixed);
+        }
+    }
+    let (mnemonic, operands) = instruction.split_once(' ')?;
+    let operands = operands.trim();
+    match mnemonic {
+        "push" | "pushq" | "pop" | "popq" => {
+            let push = mnemonic.starts_with("push");
+            let opcode = if push { 0x50 } else { 0x58 };
+            if let Some(register) = x86_64_naked_att_register(operands) {
+                if register < 8 {
+                    Some(([opcode + register, 0, 0, 0, 0, 0, 0, 0, 0, 0], 1, false))
+                } else {
+                    Some((
+                        [0x41, opcode + (register & 7), 0, 0, 0, 0, 0, 0, 0, 0],
+                        2,
+                        false,
+                    ))
+                }
+            } else if push {
+                let (immediate, negative) =
+                    x86_64_naked_signed_immediate(operands.strip_prefix('$')?)?;
+                let immediate = if negative {
+                    i32::try_from(i64::from_le_bytes(immediate.to_le_bytes())).ok()?
+                } else {
+                    i32::try_from(immediate).ok()?
+                };
+                if let Ok(immediate) = i8::try_from(immediate) {
+                    Some(([0x6a, immediate as u8, 0, 0, 0, 0, 0, 0, 0, 0], 2, false))
+                } else {
+                    let mut encoding = [0u8; 10];
+                    encoding[0] = 0x68;
+                    encoding[1..5].copy_from_slice(&immediate.to_le_bytes());
+                    Some((encoding, 5, false))
+                }
+            } else {
+                None
+            }
+        }
+        "jmp" => {
+            let operand = operands.strip_prefix('*')?;
+            if let Some(register) = x86_64_naked_att_register(operand) {
+                if register < 8 {
+                    Some(([0xff, 0xe0 + register, 0, 0, 0, 0, 0, 0, 0, 0], 2, true))
+                } else {
+                    Some((
+                        [0x41, 0xff, 0xe0 + (register & 7), 0, 0, 0, 0, 0, 0, 0],
+                        3,
+                        true,
+                    ))
+                }
+            } else {
+                let address = x86_64_naked_att_memory_address(operand)?;
+                encode_x86_64_naked_memory(None, 0xff, false, 4, address, true)
+            }
+        }
+        "movq" | "movabsq" => {
+            let (source, destination) = x86_64_naked_att_operands(operands)?;
+            let source = source.trim();
+            let destination = destination.trim();
+            if let Some(destination) = x86_64_naked_att_register(destination) {
+                if let Some(source) = x86_64_naked_att_register(source) {
+                    if mnemonic == "movabsq" {
+                        return None;
+                    }
+                    let rex = 0x48 | ((source >> 3) << 2) | (destination >> 3);
+                    let modrm = 0xc0 | ((source & 7) << 3) | (destination & 7);
+                    Some(([rex, 0x89, modrm, 0, 0, 0, 0, 0, 0, 0], 3, false))
+                } else if let Some(immediate) = source.strip_prefix('$') {
+                    let (immediate, _) = x86_64_naked_signed_immediate(immediate)?;
+                    let mut encoding = [0u8; 10];
+                    encoding[0] = 0x48 | (destination >> 3);
+                    encoding[1] = 0xb8 + (destination & 7);
+                    encoding[2..10].copy_from_slice(&immediate.to_le_bytes());
+                    Some((encoding, 10, false))
+                } else if mnemonic == "movq" {
+                    let address = x86_64_naked_att_memory_address(source)?;
+                    encode_x86_64_naked_memory(None, 0x8b, true, destination, address, false)
+                } else {
+                    None
+                }
+            } else if mnemonic == "movq" {
+                let address = x86_64_naked_att_memory_address(destination)?;
+                let source = x86_64_naked_att_register(source)?;
+                encode_x86_64_naked_memory(None, 0x89, true, source, address, false)
+            } else {
+                None
+            }
+        }
+        "lgdt" | "lidt" | "invlpg" => {
+            let address = x86_64_naked_att_memory_address(operands)?;
+            let extension = match mnemonic {
+                "lgdt" => 2,
+                "lidt" => 3,
+                _ => 7,
+            };
+            encode_x86_64_naked_memory(Some(0x0f), 0x01, false, extension, address, false)
+        }
+        _ => None,
+    }
+}
+
+fn x86_64_naked_att_operands(operands: &str) -> Option<(&str, &str)> {
+    let mut depth = 0u8;
+    for (index, byte) in operands.bytes().enumerate() {
+        match byte {
+            b'(' => depth = depth.checked_add(1)?,
+            b')' => depth = depth.checked_sub(1)?,
+            b',' if depth == 0 => return Some((&operands[..index], &operands[index + 1..])),
+            _ => {}
+        }
+    }
+    None
+}
+
+fn x86_64_naked_att_register(register: &str) -> Option<u8> {
+    x86_64_naked_register(register.strip_prefix('%')?)
+}
+
+fn x86_64_naked_att_memory_address(operand: &str) -> Option<X86_64NakedMemoryAddress> {
+    let open = operand.find('(')?;
+    let displacement = operand[..open].trim();
+    let registers = operand[open + 1..].strip_suffix(')')?;
+    if registers.contains(')') {
+        return None;
+    }
+    let mut fields = registers.split(',');
+    let base = x86_64_naked_att_register(fields.next()?.trim())?;
+    let index = fields.next().map(str::trim);
+    let scale = fields.next().map(str::trim);
+    if fields.next().is_some() {
+        return None;
+    }
+    let (index, scale) = match (index, scale) {
+        (None, None) => (None, 0),
+        (Some(index), scale) if !index.is_empty() => {
+            let index = x86_64_naked_att_register(index)?;
+            if index == 4 {
+                return None;
+            }
+            let scale = match scale {
+                None | Some("1") => 0,
+                Some("2") => 1,
+                Some("4") => 2,
+                Some("8") => 3,
+                _ => return None,
+            };
+            (Some(index), scale)
+        }
+        _ => return None,
+    };
+    let displacement = if displacement.is_empty() {
+        0
+    } else {
+        let (bits, negative) = x86_64_naked_signed_immediate(displacement)?;
+        if negative {
+            i32::try_from(i64::from_le_bytes(bits.to_le_bytes())).ok()?
+        } else {
+            i32::try_from(bits).ok()?
+        }
+    };
+    Some(X86_64NakedMemoryAddress {
+        base,
+        index,
+        scale,
+        displacement,
+    })
 }
 
 fn encode_x86_64_naked_memory(
@@ -28686,6 +28877,21 @@ mod tests {
         let Some(Item::Function(function)) = module.items()[0] else {
             panic!("expected function")
         };
+        for instruction in [
+            "pushq $-1",
+            "pushq %r12",
+            "movabsq $-0x8000000000000000, %r10",
+            "movq -16(%r12,%r9,4), %r11",
+            "movq %r11, 0x1234(%rbp,%rcx,2)",
+            "lgdt -128(%r13)",
+            "swapgs",
+            "jmp *(%rax,%r12,8)",
+        ] {
+            assert!(
+                encode_x86_64_naked_att_instruction(instruction).is_some(),
+                "unsupported AT&T instruction: {instruction}"
+            );
+        }
         let code =
             compile_x86_64_function::<_, 48, 1, 8>(&function, &NoConstants, X86_64Abi::SystemV)
                 .unwrap();
@@ -28714,6 +28920,30 @@ mod tests {
         assert_eq!(
             code.bytes(),
             &[0x90, 0xe9, 1, 0, 0, 0, 0xcc, 0xe9, 0xf4, 0xff, 0xff, 0xff]
+        );
+
+        let module = Parser::new(concat!(
+            "#[unsafe(naked)] unsafe extern \"C\" fn att() { naked_asm!(",
+            "\"pushq $-1\", \"pushq %r12\", \"movabsq $-0x8000000000000000, %r10\", ",
+            "\"movq -16(%r12,%r9,4), %r11\", \"movq %r11, 0x1234(%rbp,%rcx,2)\", ",
+            "\"lgdt -128(%r13)\", \"swapgs\", \"jmp *(%rax,%r12,8)\", ",
+            "options(raw, att_syntax)); }"
+        ))
+        .parse_module::<1, 1>()
+        .unwrap();
+        let Some(Item::Function(function)) = module.items()[0] else {
+            panic!("expected function")
+        };
+        let code =
+            compile_x86_64_function::<_, 48, 1, 8>(&function, &NoConstants, X86_64Abi::SystemV)
+                .unwrap();
+        assert_eq!(
+            code.bytes(),
+            &[
+                0x6a, 0xff, 0x41, 0x54, 0x49, 0xba, 0, 0, 0, 0, 0, 0, 0, 0x80, 0x4f, 0x8b, 0x5c,
+                0x8c, 0xf0, 0x4c, 0x89, 0x9c, 0x4d, 0x34, 0x12, 0, 0, 0x41, 0x0f, 0x01, 0x55, 0x80,
+                0x0f, 0x01, 0xf8, 0x42, 0xff, 0x24, 0xe0,
+            ]
         );
 
         for (source, expected) in [
@@ -28790,7 +29020,11 @@ mod tests {
                 CodegenErrorKind::InvalidNakedAssembly,
             ),
             (
-                "#[unsafe(naked)] unsafe extern \"C\" fn f() { naked_asm!(\"ret\", options(att_syntax)); }",
+                "#[unsafe(naked)] unsafe extern \"C\" fn f() { naked_asm!(\"mov rax, rbx\", \"ret\", options(att_syntax)); }",
+                CodegenErrorKind::InvalidNakedAssembly,
+            ),
+            (
+                "#[unsafe(naked)] unsafe extern \"C\" fn f() { naked_asm!(\"movq (%rax,%rsp,2), %rbx\", \"ret\", options(att_syntax)); }",
                 CodegenErrorKind::InvalidNakedAssembly,
             ),
             (
