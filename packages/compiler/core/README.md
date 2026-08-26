@@ -4139,6 +4139,12 @@ replacement with E0515. Windows and native Arch Linux WSL each pass 643 library
 tests, one component-interface probe, 10 conformance tests, and 335 replacement
 tests: 989 compiler tests per host. Unconditional returns and mixed loop control
 remain conservative.
+Direct unconditional returns now resolve against the same current transfer
+state, end the iteration, and disconnect later syntactic operations from the
+backedge. Condition-headed loops preserve only their zero-iteration input as a
+continuation. The pinned oracle accepts a stable parameter reborrow followed by
+an unreachable suffix and rejects a local-backed return with E0515. Both hosts
+remain at 989 compiler tests; mixed break/continue exits remain conservative.
 
 Exact typed tuple literals now seed the same projected state when a local is
 declared. Every reference field is checked against the declared tuple element

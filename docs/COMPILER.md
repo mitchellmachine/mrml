@@ -1268,6 +1268,12 @@ edge retains the current state for later operations and the backedge join.
 ORACLE-0002 accepts a same-origin reborrow before that return and rejects a
 local-backed replacement with E0515. Unconditional return and mixed loop-control
 transfer remain separate incomplete steps.
+Direct unconditional returns now use that same current state, terminate the
+modeled iteration, and exclude disconnected suffix operations from the
+backedge. A condition-headed loop retains only its zero-iteration input as a
+possible continuation. ORACLE-0002 accepts a stable reborrow with an unreachable
+suffix and rejects a local-backed return with E0515. Mixed break/continue exit
+state remains incomplete.
 
 The first modern trait-solver foundation is an explicit bounded implemented-
 goal representation. Stable trait/type/inference/placeholder identities remain

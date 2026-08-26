@@ -493,6 +493,15 @@ component-interface probe, 10 conformance tests, and 335 replacement tests: 985
 compiler tests per host. General interprocedural dataflow and regions remain
 unsupported.
 
+Direct unconditional returns now resolve from the current loop local/projected
+state and terminate that modeled iteration. Disconnected suffix operations no
+longer manufacture a backedge; for a condition-headed loop only the incoming
+zero-iteration state can continue after the loop. ORACLE-0002 accepts a stable
+same-origin return with an unreachable suffix and rejects local-backed storage
+with E0515. Windows and Arch each pass 643 library tests, one component-interface
+probe, 10 conformance tests, and 335 replacement tests: 989 compiler tests per
+host. Mixed break/continue exit-state joining remains unsupported.
+
 The conditional callee-local reassignment milestone evaluates supported direct
 assignments from a copy of the incoming fixed local-origin state for every
 conditional outcome, then joins each local independently. A missing `else`

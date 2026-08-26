@@ -135,6 +135,13 @@ evidence for that exact conditional exit after local-origin transfer, not a
 general loop fixed point, region inference, or complete Polonius semantics.
 Temporary sources and metadata were removed.
 
+An independently authored Rust 2024 metadata-only unconditional-loop-return
+pair against this exact toolchain and commit accepted a same-origin mutable
+reborrow followed by an unreachable reassignment. The matching local-backed
+return failed with E0515. This is black-box evidence for that exact terminating
+iteration and disconnected suffix, not general loop or region inference.
+Temporary sources and metadata were removed.
+
 An independently authored Rust 2024 metadata-only probe against this exact
 toolchain and commit accepted a mutable-reference forwarding callee whose local
 alias was directly reassigned through `&mut *alias`, plus a caller that reused the
