@@ -5289,3 +5289,14 @@ solver, update algorithm, transport, virtualization, or recovery mechanism.
 Broader release delivery, adaptive placement, and microVM mechanisms retain
 their existing `TRIGGERED` reviews; this agent review does not establish
 clearance or infringement and does not replace independent human dual review.
+
+# 2026-08-25 — Projection-valued generic associated-type source lowering
+
+**Result: NOT_TRIGGERED after the existing bounded trait-solver reviews.** This
+compiler increment conventionally decomposes source projection syntax into the
+already implemented bounded trait, argument, and associated-type identities and
+feeds the existing generic projection normalizer. It adds no new unification,
+selection, coherence, proof-search, caching, or code-generation mechanism.
+Broader trait solving and Rust conformance remain partial; this agent review does
+not establish clearance or infringement and does not replace independent human
+dual review.

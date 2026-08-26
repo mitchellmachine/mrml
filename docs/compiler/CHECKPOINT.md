@@ -1238,6 +1238,17 @@ unsupported. Windows gnullvm and native Arch Linux WSL each pass 586 library
 tests, one component-interface probe, 10 conformance tests, and 335 replacement
 tests: 932 compiler tests per host.
 
+The projection-valued generic associated-type milestone parses values such as
+`type Output = <T as Parent<T>>::Output`, resolves the projected trait,
+arguments, and associated identity, and lowers them into the existing bounded
+generic projection representation. Concrete obligations recursively prove the
+projected implementation through the existing 16-frame normalizer. Missing
+implementations fail closed; malformed projections, unknown identities, wrong
+arity, unsupported compound positions, and projection-valued unconditional
+exact implementations are rejected. Windows gnullvm and native Arch Linux WSL
+each pass 589 library tests, one component-interface probe, 10 conformance
+tests, and 335 replacement tests: 935 compiler tests per host.
+
 The premise-bearing rigid-normalization milestone proves the selected generic
 implementation's instantiated trait and projection predicates before exposing
 its associated value. It shares the caller's 16-frame rigid proof stack and

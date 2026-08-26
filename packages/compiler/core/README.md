@@ -4434,6 +4434,17 @@ with source supertraits remain unsupported. Windows gnullvm and native Arch
 Linux WSL each pass 586 library tests, one component probe, 10 conformance tests,
 and 335 replacement tests: 932 compiler tests per host.
 
+The projection-valued generic associated-type milestone decomposes values such
+as `type Output = <T as Parent<T>>::Output`, resolves the projected trait,
+arguments, and associated identity, and stores the result in the existing
+bounded generic projection representation. Concrete source obligations then
+reuse recursive implementation proof and the 16-frame projection normalizer.
+Missing projected implementations fail closed; malformed projections, unknown
+identities, wrong arity, unsupported compound positions, and projection-valued
+unconditional exact implementations are rejected. Windows gnullvm and native
+Arch Linux WSL each pass 589 library tests, one component probe, 10 conformance
+tests, and 335 replacement tests: 935 compiler tests per host.
+
 The projection-bearing term milestone uses a fixed 64-node arena for flat leaf
 terms and associated-type projections whose trait self/argument positions refer
 only to earlier nodes. Identical nodes intern to one stable identity; invalid
