@@ -15710,18 +15710,41 @@ fn runtime_reference_call_origin_parameter<const MAX_PARAMETERS: usize, const MA
             Some(true)
         };
         let joined_backedge_header_is_stable = || -> Option<bool> {
-            if !block.unconditional_controls().is_empty() {
+            let mut terminal = None;
+            for ((control, action_index), control_order) in block
+                .unconditional_controls()
+                .iter()
+                .flatten()
+                .zip(block.unconditional_control_action_indices())
+                .zip(block.unconditional_control_orders())
+            {
+                if terminal.is_none_or(|(_, _, order)| *control_order < order) {
+                    terminal = Some((*control, *action_index, *control_order));
+                }
+            }
+            if terminal.is_some_and(|(control, _, _)| {
+                matches!(
+                    control,
+                    crate::NestedLoopUnconditionalControl::Continue(
+                        crate::NestedLoopControlTarget::Inner
+                    )
+                )
+            }) {
                 return Some(false);
             }
+            let terminal_order = terminal.map_or(usize::MAX, |(_, _, order)| order);
             let mut header_origins = local_origins;
             let mut header_projected = projected_origins.retain_local_prefix(local_count);
             let mut header_count = 1usize;
-            for (action_index, target_kind) in block
+            for ((action_index, target_kind), control_order) in block
                 .conditional_continue_action_indices()
                 .iter()
                 .zip(block.conditional_continue_targets())
+                .zip(block.conditional_continue_control_orders())
             {
-                if *target_kind != crate::NestedLoopControlTarget::Inner {
+                if *target_kind != crate::NestedLoopControlTarget::Inner
+                    || *control_order >= terminal_order
+                {
                     continue;
                 }
                 let (_, origins, projected, _, _, _, _) = state_at(*action_index)?;
@@ -15734,25 +15757,30 @@ fn runtime_reference_call_origin_parameter<const MAX_PARAMETERS: usize, const MA
                     local_count,
                 )?;
             }
-            let (_, origins, projected, _, _, _, _) = state_at(block.action_count())?;
-            merge_loop_exit_origins(
-                &mut header_origins,
-                &mut header_projected,
-                &mut header_count,
-                origins,
-                projected.retain_local_prefix(local_count),
-                local_count,
-            )?;
+            if terminal.is_none() {
+                let (_, origins, projected, _, _, _, _) = state_at(block.action_count())?;
+                merge_loop_exit_origins(
+                    &mut header_origins,
+                    &mut header_projected,
+                    &mut header_count,
+                    origins,
+                    projected.retain_local_prefix(local_count),
+                    local_count,
+                )?;
+            }
 
             let mut repeated_origins = local_origins;
             let mut repeated_projected = projected_origins.retain_local_prefix(local_count);
             let mut repeated_count = 1usize;
-            for (action_index, target_kind) in block
+            for ((action_index, target_kind), control_order) in block
                 .conditional_continue_action_indices()
                 .iter()
                 .zip(block.conditional_continue_targets())
+                .zip(block.conditional_continue_control_orders())
             {
-                if *target_kind != crate::NestedLoopControlTarget::Inner {
+                if *target_kind != crate::NestedLoopControlTarget::Inner
+                    || *control_order >= terminal_order
+                {
                     continue;
                 }
                 let (_, origins, projected, _, _, _, _) =
@@ -15766,16 +15794,18 @@ fn runtime_reference_call_origin_parameter<const MAX_PARAMETERS: usize, const MA
                     local_count,
                 )?;
             }
-            let (_, origins, projected, _, _, _, _) =
-                state_at_from(block.action_count(), header_origins, header_projected)?;
-            merge_loop_exit_origins(
-                &mut repeated_origins,
-                &mut repeated_projected,
-                &mut repeated_count,
-                origins,
-                projected.retain_local_prefix(local_count),
-                local_count,
-            )?;
+            if terminal.is_none() {
+                let (_, origins, projected, _, _, _, _) =
+                    state_at_from(block.action_count(), header_origins, header_projected)?;
+                merge_loop_exit_origins(
+                    &mut repeated_origins,
+                    &mut repeated_projected,
+                    &mut repeated_count,
+                    origins,
+                    projected.retain_local_prefix(local_count),
+                    local_count,
+                )?;
+            }
             if repeated_origins[..local_count] != header_origins[..local_count]
                 || !repeated_projected.has_same_origins(header_projected)
             {
@@ -15793,25 +15823,42 @@ fn runtime_reference_call_origin_parameter<const MAX_PARAMETERS: usize, const MA
                             .has_same_origins(repeated_projected.retain_local_prefix(local_count)),
                 )
             };
-            for action_index in block
+            for ((action_index, _), control_order) in block
                 .conditional_break_action_indices()
                 .iter()
-                .chain(block.conditional_return_action_indices())
+                .zip(block.conditional_break_targets())
+                .zip(block.conditional_break_control_orders())
             {
-                if !prefix_matches(*action_index)? {
+                if *control_order < terminal_order && !prefix_matches(*action_index)? {
                     return Some(false);
                 }
             }
-            for (action_index, target_kind) in block
+            for (action_index, control_order) in block
+                .conditional_return_action_indices()
+                .iter()
+                .zip(block.conditional_return_control_orders())
+            {
+                if *control_order < terminal_order && !prefix_matches(*action_index)? {
+                    return Some(false);
+                }
+            }
+            for ((action_index, target_kind), control_order) in block
                 .conditional_continue_action_indices()
                 .iter()
                 .zip(block.conditional_continue_targets())
+                .zip(block.conditional_continue_control_orders())
             {
-                if *target_kind == crate::NestedLoopControlTarget::Outer
+                if *control_order < terminal_order
+                    && *target_kind == crate::NestedLoopControlTarget::Outer
                     && !prefix_matches(*action_index)?
                 {
                     return Some(false);
                 }
+            }
+            if let Some((_, action_index, _)) = terminal
+                && !prefix_matches(action_index)?
+            {
+                return Some(false);
             }
             Some(true)
         };
@@ -38799,6 +38846,31 @@ mod tests {
                     "loop { loop { if third { break; } changed = value; ",
                     "if first { continue; } changed = &mut local; ",
                     "if second { continue; } changed = value; } return changed; }"
+                ),
+                ..nested_multi_backedge
+            }),
+            None
+        );
+        assert_eq!(
+            runtime_reference_call_origin_parameter::<4, 64>(RuntimeCallTarget {
+                body_expression: concat!(
+                    "let mut local: u16 = 1; let mut changed: &mut u16 = &mut local; ",
+                    "loop { loop { changed = value; if first { continue; } ",
+                    "changed = &mut local; if second { continue; } changed = value; ",
+                    "break; changed = &mut local; } return changed; }"
+                ),
+                ..nested_multi_backedge
+            }),
+            Some(0)
+        );
+        assert_eq!(
+            runtime_reference_call_origin_parameter::<4, 64>(RuntimeCallTarget {
+                body_expression: concat!(
+                    "let mut local: u16 = 1; let mut changed: &mut u16 = &mut local; ",
+                    "loop { loop { if third { break; } changed = value; ",
+                    "if first { continue; } changed = &mut local; ",
+                    "if second { continue; } changed = value; break; } ",
+                    "return changed; }"
                 ),
                 ..nested_multi_backedge
             }),
