@@ -7550,3 +7550,15 @@ analysis, optimization, or code-generation mechanism. A general loop-region
 fixed point remains absent. Broader compiler completion remains partial; this
 technical screen is not a clearance or infringement conclusion and does not
 replace independent human dual review.
+
+# 2026-08-26 — Bounded loop-branch fallthrough origin join
+
+**Result: NOT_TRIGGERED after the loop-branch fallthrough review.** This
+increment applies conventional fixed-capacity branch-state intersection to the
+existing one-iteration callee-origin transfer, followed by the existing zero-
+iteration intersection. It introduces no general fixed-point solver, region or
+alias analysis, path-sensitive inference, optimization, or code-generation
+algorithm. Terminal, nested-loop, expression, unstable-origin, and unsupported
+assignment paths remain fail closed. Broader compiler completion remains
+partial; this technical screen is not a clearance or infringement conclusion
+and does not replace independent human dual review.
