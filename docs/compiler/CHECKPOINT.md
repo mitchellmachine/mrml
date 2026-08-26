@@ -558,12 +558,21 @@ General nested-loop exit-state transfer and fixed points remain incomplete.
 Nested inner-break paths now accumulate exact outer-visible local/projected
 origins and return the joined exit state to subsequent outer-loop operations.
 Condition-headed inner loops include their zero-iteration state. Inner continue
-and normal backedges remain stability-checked; controls targeting the outer loop
-fail closed. ORACLE-0002 accepts a parameter overwrite before an inner break and
-rejects local-backed and zero-iteration/local outcomes with E0515. Windows and
-Arch each pass 643 library tests, one component-interface probe, 10 conformance
-tests, and 335 replacement tests: 989 compiler tests per host. Labeled outer
-control routing and general nested fixed points remain incomplete.
+and normal backedges remain stability-checked. ORACLE-0002 accepts a parameter
+overwrite before an inner break and rejects local-backed and zero-iteration/
+local outcomes with E0515. Windows and Arch each pass 643 library tests, one
+component-interface probe, 10 conformance tests, and 335 replacement tests: 989
+compiler tests per host. General nested fixed points remain incomplete.
+
+Labeled nested controls now export separate outer-break and outer-continue
+origin states. The enclosing loop routes those outcomes into its existing exit
+and backedge accumulators, while only an inner-loop exit permits subsequent
+outer operations to execute. Earlier unconditional controls suppress later
+ordered outcomes. ORACLE-0002 accepts the parameter-backed labeled break and
+condition-headed labeled continue probes and rejects the equivalent local-
+backed escapes with E0515. Windows and Arch each pass 643 library tests, one
+component-interface probe, 10 conformance tests, and 335 replacement tests: 989
+compiler tests per host. General nested-loop fixed points remain incomplete.
 
 The conditional callee-local reassignment milestone evaluates supported direct
 assignments from a copy of the incoming fixed local-origin state for every

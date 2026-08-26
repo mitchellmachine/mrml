@@ -135,6 +135,14 @@ headed inner loop whose zero-iteration path retained local storage also failed
 with E0515. This is black-box evidence for those exact inner exits, not general
 nested-loop or region inference. Temporary sources and metadata were removed.
 
+An independently authored Rust 2024 metadata-only labeled-control set against
+this exact toolchain and commit accepted parameter-backed state routed through
+an inner loop's `break 'outer` and through a condition-headed outer loop's
+`continue 'outer` backedge. Replacing either routed state with function-local
+storage failed at the post-loop return with E0515. This is black-box evidence
+for those exact labeled destinations and joins, not general nested-loop fixed
+points or region inference. Temporary source and metadata were removed.
+
 An independently authored Rust 2024 metadata-only composed-loop pair against
 this exact toolchain and commit accepted an outer-loop same-origin mutable
 reassignment followed by an inner-loop conditional return. Replacing that outer

@@ -4177,11 +4177,18 @@ hosts remain at 989 compiler tests; nested-loop state transfer and general fixed
 points remain incomplete.
 Nested inner-break outcomes now export their exact outer-visible origin state to
 later outer-loop operations. Condition-headed inner loops join zero iterations;
-inner continue and normal backedges must remain stable, and labeled outer
-controls fail closed. The pinned oracle accepts a parameter overwrite before an
-inner break and rejects local-backed and zero-iteration/local exits with E0515.
-Both hosts remain at 989 compiler tests; outer-target routing and general nested
-fixed points remain incomplete.
+inner continue and normal backedges must remain stable. The pinned oracle
+accepts a parameter overwrite before an inner break and rejects local-backed
+and zero-iteration/local exits with E0515. Both hosts remain at 989 compiler
+tests; general nested fixed points remain incomplete.
+Labeled nested breaks and continues now carry distinct outer-visible states to
+the enclosing loop's exit and backedge joins. Only inner-loop exits fall through
+to later outer operations, and controls ordered after an unconditional edge are
+unreachable. The pinned oracle accepts parameter-backed labeled break and
+continue paths and rejects local-backed equivalents with E0515. Both hosts pass
+643 library tests, one component-interface probe, 10 conformance tests, and 335
+replacement tests: 989 compiler tests per host. General nested fixed points
+remain incomplete.
 Nested-loop ordered-return and stable-edge analysis is now factored over an
 explicit incoming state and composes after outer-loop declarations, assignments,
 and branch joins. Stable nested edges preserve that state for later outer
