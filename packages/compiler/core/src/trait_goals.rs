@@ -85,6 +85,22 @@ impl<'source> SourceTraitSupertrait<'source> {
     pub const fn argument_count(&self) -> usize {
         self.argument_count
     }
+
+    fn same_requirement(&self, other: &Self) -> bool {
+        self.trait_id == other.trait_id
+            && self.argument_count == other.argument_count
+            && self
+                .arguments()
+                .iter()
+                .zip(other.arguments())
+                .all(|(left, right)| match (left.unwrap(), right.unwrap()) {
+                    (
+                        SourceTraitSupertraitArgument::Concrete(left),
+                        SourceTraitSupertraitArgument::Concrete(right),
+                    ) => left.text == right.text,
+                    (left, right) => left == right,
+                })
+    }
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -190,13 +206,6 @@ impl<'source> SourceTraitDeclarationTable<'source> {
                 if target.generic_parameter_count != source_supertrait.argument_count() {
                     return Err(SourceTraitDeclarationError::WrongSupertraitArgumentCount);
                 }
-                if supertraits[..supertrait_count]
-                    .iter()
-                    .flatten()
-                    .any(|known| known.trait_id == target.id)
-                {
-                    return Err(SourceTraitDeclarationError::DuplicateSupertrait);
-                }
                 let mut arguments = [None; MAX_TRAIT_GOAL_ARGUMENTS];
                 for (argument_index, argument) in
                     source_supertrait.arguments().iter().flatten().enumerate()
@@ -215,11 +224,19 @@ impl<'source> SourceTraitDeclarationTable<'source> {
                         return Err(SourceTraitDeclarationError::UnsupportedSupertraitArgument);
                     });
                 }
-                supertraits[supertrait_count] = Some(SourceTraitSupertrait {
+                let resolved = SourceTraitSupertrait {
                     trait_id: target.id,
                     arguments,
                     argument_count: source_supertrait.argument_count(),
-                });
+                };
+                if supertraits[..supertrait_count]
+                    .iter()
+                    .flatten()
+                    .any(|known| known.same_requirement(&resolved))
+                {
+                    return Err(SourceTraitDeclarationError::DuplicateSupertrait);
+                }
+                supertraits[supertrait_count] = Some(resolved);
                 supertrait_count += 1;
             }
             let mut associated_types = [None; MAX_TRAIT_ASSOCIATED_TYPES];
@@ -8482,6 +8499,24 @@ mod tests {
             Err(SourceTraitDeclarationError::DuplicateSupertrait)
         );
 
+        let distinct = Parser::new(
+            "trait Child: Parent<u8> + Parent<u16> {} trait Parent<T> {}",
+        )
+        .parse_module::<3, 1>()
+        .unwrap();
+        let traits = SourceTraitDeclarationTable::from_module(&distinct).unwrap();
+        assert_eq!(traits.get("Child").unwrap().supertrait_count(), 2);
+
+        let duplicate_instantiation = Parser::new(
+            "trait Child: Parent<u8> + Parent<u8> {} trait Parent<T> {}",
+        )
+        .parse_module::<3, 1>()
+        .unwrap();
+        assert_eq!(
+            SourceTraitDeclarationTable::from_module(&duplicate_instantiation),
+            Err(SourceTraitDeclarationError::DuplicateSupertrait)
+        );
+
         let cyclic = Parser::new("trait First: Second {} trait Second: First {}")
             .parse_module::<3, 1>()
             .unwrap();
@@ -9022,6 +9057,29 @@ mod tests {
         .unwrap();
         let traits = SourceTraitDeclarationTable::from_module(&self_argument).unwrap();
         SourceTraitImplementationTable::from_module(&self_argument, &traits).unwrap();
+
+        let distinct = Parser::new(concat!(
+            "trait Parent<T> {} trait Child: Parent<u8> + Parent<u16> {} ",
+            "impl Parent<u8> for u32 {} impl Parent<u16> for u32 {} impl Child for u32 {}"
+        ))
+        .parse_module::<8, 1>()
+        .unwrap();
+        let traits = SourceTraitDeclarationTable::from_module(&distinct).unwrap();
+        SourceTraitImplementationTable::from_module(&distinct, &traits).unwrap();
+
+        let missing_distinct = Parser::new(concat!(
+            "trait Parent<T> {} trait Child: Parent<u8> + Parent<u16> {} ",
+            "impl Parent<u8> for u32 {} impl Child for u32 {}"
+        ))
+        .parse_module::<8, 1>()
+        .unwrap();
+        let traits = SourceTraitDeclarationTable::from_module(&missing_distinct).unwrap();
+        assert_eq!(
+            SourceTraitImplementationTable::from_module(&missing_distinct, &traits)
+                .unwrap_err()
+                .kind,
+            SourceTraitImplementationErrorKind::MissingSupertraitImplementation
+        );
     }
 
     #[test]
