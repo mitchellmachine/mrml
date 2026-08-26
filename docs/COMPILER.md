@@ -1367,6 +1367,18 @@ the initial fact count plus one; failure to converge remains fail-closed. A
 multi-step alias chain now converges before an exact parameter-restoring exit.
 ORACLE-0002 accepts that form and rejects the early-exit form with E0499.
 
+Nested-loop parsing now retains a bounded typed representation for conditional
+branches that contain actions before a terminal `break`, `continue`, or
+`return`. Each record preserves the condition, up to four scoped actions, the
+target-aware terminal, and its position among surrounding flat actions and
+controls. Parser tests cover local and expression actions followed by a return.
+CFG construction and execution deliberately reject any such record until their
+branch state, ownership events, scoped locals, and terminal edge are modeled;
+this is representation progress, not executable language support. Windows and
+native Arch Linux WSL each pass 644 library tests, one component-interface
+probe, 10 conformance tests, and 335 replacement tests: 990 compiler tests per
+host.
+
 The first modern trait-solver foundation is an explicit bounded implemented-
 goal representation. Stable trait/type/inference/placeholder identities remain
 distinct; canonicalization replaces inference identities with first-occurrence

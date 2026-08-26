@@ -659,6 +659,16 @@ convergence for the currently modeled flat nested-loop actions and controls;
 nested branch-action representation and general region inference remain
 incomplete.
 
+The nested branch-action representation now has a bounded parser-level record.
+It preserves a branch condition, up to four scoped local/assignment/expression
+actions, a target-aware terminal, and exact ordering relative to surrounding
+nested-loop actions and controls. The runtime support predicate rejects blocks
+that contain this record, with a focused test proving the fail-closed boundary;
+CFG facts, ownership preanalysis, origin transfer, semantics, and native
+emission are not yet implemented for it. Windows and Arch each pass 644 library
+tests, one component-interface probe, 10 conformance tests, and 335 replacement
+tests: 990 compiler tests per host.
+
 The conditional callee-local reassignment milestone evaluates supported direct
 assignments from a copy of the incoming fixed local-origin state for every
 conditional outcome, then joins each local independently. A missing `else`
