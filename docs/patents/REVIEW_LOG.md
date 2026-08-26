@@ -7253,10 +7253,11 @@ replace independent human dual review.
 
 **Result: NOT_TRIGGERED after the call-reborrow mechanism review.** This
 increment applies conventional Rust implicit reborrow effects to bounded direct
-places passed to reference-typed parameters and keeps returned-loan generation
-attachment limited to the independently proven origin parameter. It introduces
-no new region solver, interprocedural inference, alias-analysis algorithm,
-optimization, calling convention, or code-generation mechanism. General call
-coercion and region inference remain absent. Broader compiler completion remains
-partial; this technical screen is not a clearance or infringement conclusion
-and does not replace independent human dual review.
+places passed to reference-typed parameters, retains every reference argument
+loan for the lifetime of a reference result, and keeps returned-pointer ancestry
+limited to the independently proven origin parameter. It introduces no new
+region solver, interprocedural inference, alias-analysis algorithm, optimization,
+calling convention, or code-generation mechanism. General call coercion and
+region inference remain absent. Broader compiler completion remains partial;
+this technical screen is not a clearance or infringement conclusion and does
+not replace independent human dual review.
