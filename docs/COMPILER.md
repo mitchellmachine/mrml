@@ -2011,8 +2011,25 @@ parameter-backed shared and mutable delayed-reference returns and rejected the
 local-backed form with E0515. ELF64 and COFF replacements cover both accepted
 forms and the local-backed control. Windows and Arch each passed 647 unit, 1
 component, 10 conformance, and 347 replacement tests (1,005 total). This does
-not claim named lifetime inference, fat references, conditional reference first-
-write origin joins, aggregates, or complete Polonius semantics.
+not claim named lifetime inference, fat references, aggregates, or complete
+Polonius semantics.
+
+### Conditional thin-reference first-write checkpoint
+
+Exhaustive conditional first writes to one uninitialized thin-reference local
+retain each branch's assignment reborrow generation. The existing CFG
+initializedness intersection requires every reachable arm, while return-
+outlives independently validates every origin that can reach the join. A local-
+storage origin therefore rejects the whole returned value even when another arm
+is parameter-backed.
+
+The exact ORACLE-0002 Rust 2024 toolchain accepted exhaustive parameter-backed
+shared and mutable probes, rejected a mixed parameter/local-origin return with
+E0515, and rejected a missing-else form with E0381. ELF64 and COFF replacements
+cover the accepted forms and focused controls cover both rejections. Windows and
+Arch each passed 647 unit, 1 component, 10 conformance, and 348 replacement
+tests (1,006 total). This is bounded structured-arm origin preservation, not
+named lifetimes, arbitrary nested joins, fat references, or complete Polonius.
 
 ## Non-negotiable implementation rules
 

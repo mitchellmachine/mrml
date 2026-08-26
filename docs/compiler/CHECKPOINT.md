@@ -58,7 +58,18 @@ oracle upgrade receives a new immutable record and differential classification
 against all prior accepted probes. Keep Cargo on edition 2024 until a newer
 named edition can be adopted through a pinned, workspace-wide migration.
 
-## Latest thin-reference delayed-initialization milestone
+## Latest conditional thin-reference initialization milestone
+
+Commit `7847c11f` proves that exhaustive conditional first writes retain every
+thin-reference assignment origin through the existing CFG and outlives joins.
+ORACLE-0002 accepts parameter-backed shared and mutable cases, rejects a mixed
+local origin with E0515, and rejects a missing arm with E0381. Windows and native
+Arch Linux WSL each passed 647 library tests, 1 component probe, 10 conformance
+tests, and 348 replacement tests: 1,006 compiler tests per host. This is focused
+conformance evidence for the mechanism established by the preceding compiler
+commits; no new unchecked origin path was added.
+
+### Preceding thin-reference delayed-initialization milestone
 
 Commit `beb37de7` parses exact uninitialized scalar `&T`/`&mut T` declarations,
 retains their direct assignment reborrow generation, and includes an immutable
@@ -66,8 +77,8 @@ uninitialized reference's first write in bounded return-outlives analysis.
 ORACLE-0002 accepts parameter-backed shared and mutable returns and rejects a
 local-backed return with E0515. Windows and native Arch Linux WSL each passed
 647 library tests, 1 component probe, 10 conformance tests, and 347 replacement
-tests: 1,005 compiler tests per host. Fat references, conditional reference
-origin joins, aggregates, and named lifetime inference remain fail-closed.
+tests: 1,005 compiler tests per host. Fat references, aggregates, and named
+lifetime inference remain fail-closed.
 
 ### Preceding thin raw-pointer delayed-initialization milestone
 

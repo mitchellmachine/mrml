@@ -1112,3 +1112,12 @@ evidence for those exact thin direct-assignment and return positions only; it
 does not establish named lifetime inference, fat references, conditional origin
 joins, aggregates, or complete Polonius semantics. Temporary sources and
 metadata were removed.
+
+An independently authored Rust 2024 metadata-only conditional delayed-reference
+set against this exact toolchain and commit accepted exhaustive parameter-backed
+shared and mutable reference assignments before return. A shared case with one
+function-local origin failed with E0515, and removing the `else` arm failed with
+E0381. This is black-box evidence for those exact structured thin-reference
+origins and joins only; it does not establish named lifetimes, arbitrary nested
+joins, fat references, or complete Polonius semantics. Temporary sources and
+metadata were removed.

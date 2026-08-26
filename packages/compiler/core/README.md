@@ -5727,6 +5727,19 @@ nested-loop return coverage, general regions, named lifetime inference, or
 complete Polonius semantics. The `no_std`/allocation/unsafe hygiene scan
 remained empty.
 
+The conditional thin-reference conformance milestone at `7847c11f` proves that
+the existing mutually exclusive first-write logic and assigned-loan relation
+retain all exhaustive branch origins through the CFG and return-outlives joins.
+The pinned ORACLE-0002 toolchain accepted parameter-backed shared and mutable
+forms, rejected a branch retaining function-local storage with E0515, and
+rejected a missing-else form with E0381. ELF64 and COFF replacements cover the
+accepted cases, and focused fail-closed controls cover both rejected cases.
+Windows and native Arch Linux WSL each passed 647 library tests, 1 component
+probe, 10 conformance tests, and 348 replacement tests: 1,006 compiler tests per
+host. This milestone adds conformance evidence rather than a new unchecked
+origin rule; named lifetimes, arbitrary nested joins, and fat references remain
+outside the claim.
+
 The thin-reference delayed-initialization milestone at `beb37de7` recognizes
 exact uninitialized scalar `&T` and `&mut T` declarations and connects their
 direct assignment reborrow effects to the first write generation. The assigned-
@@ -5738,8 +5751,7 @@ mutable delayed returns and rejected the local-backed form with E0515. ELF64 and
 COFF replacements cover all three controls. Windows and native Arch Linux WSL
 each passed 647 library tests, 1 component probe, 10 conformance tests, and 347
 replacement tests: 1,005 compiler tests per host. Named lifetime inference, fat
-references, conditional reference-origin joins, aggregates, and complete
-Polonius semantics are not claimed.
+references, aggregates, and complete Polonius semantics are not claimed.
 
 The thin raw-pointer delayed-initialization milestone at `0a5f2cc6` recognizes
 exact uninitialized `*const T` and `*mut T` declarations with a bounded type
