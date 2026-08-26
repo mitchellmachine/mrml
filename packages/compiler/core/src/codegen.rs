@@ -6099,25 +6099,6 @@ impl<'source> RuntimeBodyFacts<'source> {
         self.direct_tuple_field_assigned_loan_origin_at(generation_index)
     }
 
-    fn direct_tuple_field_assigned_value_origin_before(
-        &self,
-        field_path: RuntimeMovePathId,
-        before: RuntimeOwnershipEventId,
-    ) -> Option<RuntimeLoanFact> {
-        let generation_index = self.effects[..self.effect_count]
-            .iter()
-            .enumerate()
-            .filter_map(|(index, effect)| effect.map(|effect| (index, effect)))
-            .filter(|(_, effect)| {
-                effect.path == field_path
-                    && effect.kind == RuntimePlaceEffectKind::Write
-                    && effect.event.0 < before.0
-            })
-            .max_by_key(|(_, effect)| effect.event.0)?
-            .0;
-        self.direct_tuple_field_assigned_value_origin_at(generation_index)
-    }
-
     fn direct_tuple_field_assigned_loan_origin_at(
         &self,
         generation_index: usize,
@@ -13516,23 +13497,61 @@ fn runtime_loan_may_borrow_path(
         if loan.borrowed_path == target {
             return Some(true);
         }
-        let origin = facts
-            .direct_tuple_field_assigned_loan_origin_before(loan.borrowed_path, issue.event)
-            .or_else(|| {
-                facts.direct_tuple_field_assigned_value_origin_before(
-                    loan.borrowed_path,
-                    issue.event,
-                )
+        for generation_index in facts.effects[..facts.effect_count]
+            .iter()
+            .enumerate()
+            .filter_map(|(index, effect)| effect.map(|effect| (index, effect)))
+            .filter(|(_, effect)| {
+                effect.path == loan.borrowed_path
+                    && effect.kind == RuntimePlaceEffectKind::Write
+                    && effect.event.0 < issue.event.0
             })
-            .or_else(|| {
-                facts.direct_tuple_field_loan_origin_before(loan.borrowed_path, issue.event)
-            })
-            .or_else(|| {
-                facts.direct_tuple_field_value_origin_before(loan.borrowed_path, issue.event)
-            });
-        return origin.map_or(Some(false), |origin| {
-            runtime_loan_may_borrow_path(facts, origin, target, include_intermediate, depth + 1)
-        });
+            .map(|(index, _)| index)
+        {
+            if let Some(origin) = facts
+                .direct_tuple_field_assigned_loan_origin_at(generation_index)
+                .or_else(|| facts.direct_tuple_field_assigned_value_origin_at(generation_index))
+                && runtime_loan_may_borrow_path(
+                    facts,
+                    origin,
+                    target,
+                    include_intermediate,
+                    depth + 1,
+                )?
+            {
+                return Some(true);
+            }
+        }
+        if let Some(root) = path.parent {
+            let initialization = facts.initializations[..facts.initialization_count]
+                .iter()
+                .flatten()
+                .filter(|initialization| {
+                    initialization.path == root && initialization.event.0 < issue.event.0
+                })
+                .max_by_key(|initialization| initialization.event.0)?;
+            let initialization_end =
+                RuntimeOwnershipEventId(initialization.event.0.checked_add(1)?);
+            for origin in [
+                facts.direct_tuple_field_loan_origin_before(loan.borrowed_path, initialization_end),
+                facts
+                    .direct_tuple_field_value_origin_before(loan.borrowed_path, initialization_end),
+            ]
+            .into_iter()
+            .flatten()
+            {
+                if runtime_loan_may_borrow_path(
+                    facts,
+                    origin,
+                    target,
+                    include_intermediate,
+                    depth + 1,
+                )? {
+                    return Some(true);
+                }
+            }
+        }
+        return Some(false);
     }
     let RuntimePlaceIdentity::Local(parent_borrower) = path.base else {
         return Some(loan.borrowed_path == target);
@@ -35901,6 +35920,22 @@ mod tests {
         for source in [
             "fn value(first: &mut u16, second: &mut u16, third: &mut u16, choose: bool) -> u16 { let pair = (&mut *first, &mut *second); let mut child: &mut u16 = third; child = if choose { pair.0 } else { pair.1 }; *child += 1; let restored: &mut u16 = &mut *first; *restored }",
             "fn value(first: &mut u16, second: &mut u16, third: &mut u16, choose: bool) -> u16 { let pair = (&mut *first, &mut *second); let mut child: &mut u16 = third; child = if choose { pair.0 } else { pair.1 }; *child += 1; let restored: &mut u16 = &mut *second; *restored }",
+        ] {
+            analyze(source).unwrap();
+        }
+
+        for source in [
+            "fn value(first: &mut u16, second: &mut u16) -> u16 { let mut pair = (&mut *first,); pair.0 = &mut *second; let child: &mut u16 = pair.0; let competing: &mut u16 = &mut *first; *competing += 1; *child }",
+            "fn value(first: &mut u16, second: &mut u16) -> u16 { let mut pair = (&mut *first,); pair.0 = &mut *second; let child: &mut u16 = pair.0; let competing: &mut u16 = &mut *second; *competing += 1; *child }",
+        ] {
+            assert_eq!(
+                analyze(source).unwrap_err().kind,
+                CodegenErrorKind::RuntimeBorrowConflict
+            );
+        }
+        for source in [
+            "fn value(first: &mut u16, second: &mut u16) -> u16 { let mut pair = (&mut *first,); pair.0 = &mut *second; let child: &mut u16 = pair.0; *child += 1; let restored: &mut u16 = &mut *first; *restored }",
+            "fn value(first: &mut u16, second: &mut u16) -> u16 { let mut pair = (&mut *first,); pair.0 = &mut *second; let child: &mut u16 = pair.0; *child += 1; let restored: &mut u16 = &mut *second; *restored }",
         ] {
             analyze(source).unwrap();
         }
