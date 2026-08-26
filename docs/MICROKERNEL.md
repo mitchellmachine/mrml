@@ -3243,6 +3243,16 @@ pass 124 tests, configuration passes 48, WHP 11, and KVM 12. The hosted source
 uses synthetic identity only; native platform enumeration and physical identity
 remain unverified.
 
+The shared UEFI library now supplies the first bounded native identity source
+primitive. Exact x86-64 UEFI Block I/O ABI layouts are compile-time represented
+and host-tested; media fields are copied only after canonicality, presence,
+alignment, geometry, and overflow checks. One device path is bounded to 4096
+bytes, structurally walked to its exact end node, and domain-separated SHA3-256
+hashed into a boot-scoped identifier; the complete `u32` firmware `MediaId`
+space maps to nonzero `u64` generations. Windows and Arch Linux each pass 29
+library tests and cross-build the UEFI artifact. Protocol discovery/opening,
+firmware reads, installed handoff, OVMF, and physical hardware remain untested.
+
 The bounded discovery result now remains owned through the complete serviced
 recovery read. `RecoveredInstalledStableSystemSelection` retains the exact
 installed selection beside the `BlockVolume` and reachable graph produced from

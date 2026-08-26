@@ -3,6 +3,11 @@
 pub mod tpm;
 
 use core::ffi::c_void;
+use mrml_crypto::Sha3_256;
+use mrml_storage::{
+    BlockDeviceDescriptor, BlockDeviceId, PlatformBlockDeviceDescriptor,
+    PlatformBlockDeviceIdentity, PlatformBlockTransport,
+};
 
 pub type Status = usize;
 pub type Handle = *mut c_void;
@@ -208,6 +213,18 @@ pub const ACPI_TABLE_GUID: Guid = Guid {
     data3: 0x11d3,
     data4: [0x9a, 0x16, 0x00, 0x90, 0x27, 0x3f, 0xc1, 0x4d],
 };
+pub const BLOCK_IO_PROTOCOL_GUID: Guid = Guid {
+    data1: 0x964e_5b21,
+    data2: 0x6459,
+    data3: 0x11d2,
+    data4: [0x8e, 0x39, 0x00, 0xa0, 0xc9, 0x69, 0x72, 0x3b],
+};
+pub const DEVICE_PATH_PROTOCOL_GUID: Guid = Guid {
+    data1: 0x0957_6e91,
+    data2: 0x6d3f,
+    data3: 0x11d2,
+    data4: [0x8e, 0x39, 0x00, 0xa0, 0xc9, 0x69, 0x72, 0x3b],
+};
 
 impl Guid {
     pub const fn equals(&self, other: &Self) -> bool {
@@ -252,6 +269,198 @@ pub type Tcg2HashLogExtendEvent =
     unsafe extern "efiapi" fn(*mut Tcg2Protocol, u64, u64, u64, *mut Tcg2Event) -> Status;
 pub type Tcg2SubmitCommand =
     unsafe extern "efiapi" fn(*mut Tcg2Protocol, u32, *mut u8, u32, *mut u8) -> Status;
+
+pub type BlockIoReset = unsafe extern "efiapi" fn(*mut BlockIoProtocol, u8) -> Status;
+pub type BlockIoRead =
+    unsafe extern "efiapi" fn(*mut BlockIoProtocol, u32, u64, usize, *mut c_void) -> Status;
+pub type BlockIoWrite =
+    unsafe extern "efiapi" fn(*mut BlockIoProtocol, u32, u64, usize, *const c_void) -> Status;
+pub type BlockIoFlush = unsafe extern "efiapi" fn(*mut BlockIoProtocol) -> Status;
+
+#[repr(C)]
+pub struct BlockIoMedia {
+    pub media_id: u32,
+    pub removable_media: u8,
+    pub media_present: u8,
+    pub logical_partition: u8,
+    pub read_only: u8,
+    pub write_caching: u8,
+    pub block_size: u32,
+    pub io_align: u32,
+    pub last_block: u64,
+    pub lowest_aligned_lba: u64,
+    pub logical_blocks_per_physical_block: u32,
+    pub optimal_transfer_length_granularity: u32,
+}
+
+#[repr(C)]
+pub struct BlockIoProtocol {
+    pub revision: u64,
+    pub media: *mut BlockIoMedia,
+    pub reset: BlockIoReset,
+    pub read_blocks: BlockIoRead,
+    pub write_blocks: BlockIoWrite,
+    pub flush_blocks: BlockIoFlush,
+}
+
+pub const MAX_UEFI_DEVICE_PATH_BYTES: usize = 4096;
+const DEVICE_PATH_END_TYPE: u8 = 0x7f;
+const DEVICE_PATH_END_ENTIRE_SUBTYPE: u8 = 0xff;
+const DEVICE_PATH_HEADER_BYTES: usize = 4;
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum UefiBlockDescriptorError {
+    MissingMedia,
+    MediaAbsent,
+    NonCanonicalBoolean,
+    InvalidAlignment,
+    InvalidGeometry,
+    DevicePathTooLong,
+    TruncatedDevicePath,
+    InvalidDevicePathNode,
+    UnsupportedDevicePathInstance,
+    MissingDevicePathEnd,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct UefiBlockMediaSnapshot {
+    media_id: u32,
+    block_size: u32,
+    block_count: u64,
+    io_align: u32,
+    removable: bool,
+    logical_partition: bool,
+    read_only: bool,
+}
+
+impl UefiBlockMediaSnapshot {
+    pub const fn media_id(self) -> u32 {
+        self.media_id
+    }
+    pub const fn block_size(self) -> u32 {
+        self.block_size
+    }
+    pub const fn block_count(self) -> u64 {
+        self.block_count
+    }
+    pub const fn io_align(self) -> u32 {
+        self.io_align
+    }
+    pub const fn removable(self) -> bool {
+        self.removable
+    }
+    pub const fn logical_partition(self) -> bool {
+        self.logical_partition
+    }
+    pub const fn read_only(self) -> bool {
+        self.read_only
+    }
+}
+
+/// Copies and validates the volatile media descriptor before any block I/O.
+/// The snapshot identifies geometry and one firmware media generation; it
+/// grants no read, write, flush, protocol-open, or device-path authority.
+///
+/// # Safety
+///
+/// `protocol.media`, when non-null, must point to a readable `BlockIoMedia`
+/// that firmware does not mutate for the duration of this call.
+pub unsafe fn snapshot_uefi_block_media(
+    protocol: &BlockIoProtocol,
+) -> Result<UefiBlockMediaSnapshot, UefiBlockDescriptorError> {
+    let media = unsafe { protocol.media.as_ref() }.ok_or(UefiBlockDescriptorError::MissingMedia)?;
+    for value in [
+        media.removable_media,
+        media.media_present,
+        media.logical_partition,
+        media.read_only,
+        media.write_caching,
+    ] {
+        if value > 1 {
+            return Err(UefiBlockDescriptorError::NonCanonicalBoolean);
+        }
+    }
+    if media.media_present == 0 {
+        return Err(UefiBlockDescriptorError::MediaAbsent);
+    }
+    if media.io_align > 1 && !media.io_align.is_power_of_two() {
+        return Err(UefiBlockDescriptorError::InvalidAlignment);
+    }
+    let block_count = media
+        .last_block
+        .checked_add(1)
+        .ok_or(UefiBlockDescriptorError::InvalidGeometry)?;
+    if block_count == 0 || media.block_size == 0 {
+        return Err(UefiBlockDescriptorError::InvalidGeometry);
+    }
+    Ok(UefiBlockMediaSnapshot {
+        media_id: media.media_id,
+        block_size: media.block_size,
+        block_count,
+        io_align: media.io_align,
+        removable: media.removable_media == 1,
+        logical_partition: media.logical_partition == 1,
+        read_only: media.read_only == 1,
+    })
+}
+
+/// Converts one validated firmware media snapshot and canonical single-instance
+/// device path into the storage service's boot-scoped platform descriptor.
+/// The path digest identifies only; the caller must separately obtain protocol
+/// access and grant a principal-bound block session.
+pub fn uefi_platform_block_descriptor(
+    id: BlockDeviceId,
+    media: UefiBlockMediaSnapshot,
+    device_path: &[u8],
+) -> Result<PlatformBlockDeviceDescriptor, UefiBlockDescriptorError> {
+    validate_single_device_path(device_path)?;
+    let block = BlockDeviceDescriptor::new(id, media.block_size, media.block_count)
+        .ok_or(UefiBlockDescriptorError::InvalidGeometry)?;
+    let mut hash = Sha3_256::new();
+    hash.update(b"MRML-UEFI-BLOCK-ID-v1\0");
+    hash.update(device_path);
+    let stable_id = hash.finalize();
+    let media_generation = u64::from(media.media_id) + 1;
+    let identity = PlatformBlockDeviceIdentity::new(
+        PlatformBlockTransport::Uefi,
+        stable_id,
+        1,
+        media_generation,
+    )
+    .ok_or(UefiBlockDescriptorError::InvalidGeometry)?;
+    Ok(PlatformBlockDeviceDescriptor::new(block, identity))
+}
+
+fn validate_single_device_path(path: &[u8]) -> Result<(), UefiBlockDescriptorError> {
+    if path.len() > MAX_UEFI_DEVICE_PATH_BYTES {
+        return Err(UefiBlockDescriptorError::DevicePathTooLong);
+    }
+    let mut offset = 0usize;
+    while offset < path.len() {
+        let header = path
+            .get(offset..offset + DEVICE_PATH_HEADER_BYTES)
+            .ok_or(UefiBlockDescriptorError::TruncatedDevicePath)?;
+        let length = usize::from(u16::from_le_bytes([header[2], header[3]]));
+        if length < DEVICE_PATH_HEADER_BYTES {
+            return Err(UefiBlockDescriptorError::InvalidDevicePathNode);
+        }
+        let next = offset
+            .checked_add(length)
+            .filter(|next| *next <= path.len())
+            .ok_or(UefiBlockDescriptorError::TruncatedDevicePath)?;
+        if header[0] == DEVICE_PATH_END_TYPE {
+            if header[1] != DEVICE_PATH_END_ENTIRE_SUBTYPE {
+                return Err(UefiBlockDescriptorError::UnsupportedDevicePathInstance);
+            }
+            if length != DEVICE_PATH_HEADER_BYTES || next != path.len() {
+                return Err(UefiBlockDescriptorError::InvalidDevicePathNode);
+            }
+            return Ok(());
+        }
+        offset = next;
+    }
+    Err(UefiBlockDescriptorError::MissingDevicePathEnd)
+}
 
 #[repr(C)]
 pub struct Tcg2Protocol {
@@ -860,6 +1069,62 @@ fn hex(byte: u8) -> Option<u8> {
 mod tests {
     use super::*;
 
+    unsafe extern "efiapi" fn block_reset(_: *mut BlockIoProtocol, _: u8) -> Status {
+        SUCCESS
+    }
+
+    unsafe extern "efiapi" fn block_read(
+        _: *mut BlockIoProtocol,
+        _: u32,
+        _: u64,
+        _: usize,
+        _: *mut c_void,
+    ) -> Status {
+        SUCCESS
+    }
+
+    unsafe extern "efiapi" fn block_write(
+        _: *mut BlockIoProtocol,
+        _: u32,
+        _: u64,
+        _: usize,
+        _: *const c_void,
+    ) -> Status {
+        SUCCESS
+    }
+
+    unsafe extern "efiapi" fn block_flush(_: *mut BlockIoProtocol) -> Status {
+        SUCCESS
+    }
+
+    fn block_protocol(media: &mut BlockIoMedia) -> BlockIoProtocol {
+        BlockIoProtocol {
+            revision: 0x0001_0000,
+            media,
+            reset: block_reset,
+            read_blocks: block_read,
+            write_blocks: block_write,
+            flush_blocks: block_flush,
+        }
+    }
+
+    fn valid_block_media() -> BlockIoMedia {
+        BlockIoMedia {
+            media_id: 0,
+            removable_media: 0,
+            media_present: 1,
+            logical_partition: 0,
+            read_only: 0,
+            write_caching: 0,
+            block_size: 4096,
+            io_align: 1,
+            last_block: 31,
+            lowest_aligned_lba: 0,
+            logical_blocks_per_physical_block: 1,
+            optimal_transfer_length_granularity: 1,
+        }
+    }
+
     fn utf16_ascii(value: &str) -> [u16; MAX_BOOT_LOAD_OPTION_UNITS] {
         let mut output = [0; MAX_BOOT_LOAD_OPTION_UNITS];
         for (slot, byte) in output.iter_mut().zip(value.bytes()) {
@@ -1023,6 +1288,127 @@ mod tests {
         );
         assert_eq!(core::mem::offset_of!(FileProtocol, read), 32);
         assert_eq!(core::mem::offset_of!(FileProtocol, get_info), 64);
+        assert_eq!(core::mem::size_of::<BlockIoMedia>(), 48);
+        assert_eq!(core::mem::offset_of!(BlockIoMedia, block_size), 12);
+        assert_eq!(core::mem::offset_of!(BlockIoMedia, last_block), 24);
+        assert_eq!(core::mem::size_of::<BlockIoProtocol>(), 48);
+        assert_eq!(core::mem::offset_of!(BlockIoProtocol, media), 8);
+        assert_eq!(core::mem::offset_of!(BlockIoProtocol, read_blocks), 24);
+    }
+
+    #[test]
+    fn uefi_block_media_snapshot_and_path_produce_exact_platform_generation() {
+        let mut media = BlockIoMedia {
+            media_id: u32::MAX,
+            removable_media: 1,
+            media_present: 1,
+            logical_partition: 1,
+            read_only: 1,
+            write_caching: 0,
+            block_size: 4096,
+            io_align: 4096,
+            last_block: 31,
+            lowest_aligned_lba: 0,
+            logical_blocks_per_physical_block: 1,
+            optimal_transfer_length_granularity: 1,
+        };
+        let protocol = block_protocol(&mut media);
+        let snapshot = unsafe { snapshot_uefi_block_media(&protocol) }.unwrap();
+        assert_eq!(snapshot.media_id(), u32::MAX);
+        assert_eq!(snapshot.block_size(), 4096);
+        assert_eq!(snapshot.block_count(), 32);
+        assert_eq!(snapshot.io_align(), 4096);
+        assert!(snapshot.removable());
+        assert!(snapshot.logical_partition());
+        assert!(snapshot.read_only());
+
+        let path = [1, 1, 8, 0, 0xaa, 0xbb, 0xcc, 0xdd, 0x7f, 0xff, 4, 0];
+        let id = BlockDeviceId::new(7).unwrap();
+        let descriptor = uefi_platform_block_descriptor(id, snapshot, &path).unwrap();
+        assert_eq!(descriptor.block().id(), id);
+        assert_eq!(descriptor.block().block_count(), 32);
+        assert_eq!(
+            descriptor.identity().transport(),
+            PlatformBlockTransport::Uefi
+        );
+        assert_eq!(descriptor.identity().controller_generation(), 1);
+        assert_eq!(
+            descriptor.identity().media_generation(),
+            u64::from(u32::MAX) + 1
+        );
+
+        let changed_path = [1, 1, 8, 0, 0xaa, 0xbb, 0xcc, 0xde, 0x7f, 0xff, 4, 0];
+        let changed = uefi_platform_block_descriptor(id, snapshot, &changed_path).unwrap();
+        assert_ne!(
+            descriptor.identity().stable_id(),
+            changed.identity().stable_id()
+        );
+    }
+
+    #[test]
+    fn uefi_block_descriptor_rejects_hostile_media_and_device_paths() {
+        let mut absent = valid_block_media();
+        absent.media_present = 0;
+        let protocol = block_protocol(&mut absent);
+        assert_eq!(
+            unsafe { snapshot_uefi_block_media(&protocol) },
+            Err(UefiBlockDescriptorError::MediaAbsent)
+        );
+        let mut noncanonical = valid_block_media();
+        noncanonical.media_present = 2;
+        let protocol = block_protocol(&mut noncanonical);
+        assert_eq!(
+            unsafe { snapshot_uefi_block_media(&protocol) },
+            Err(UefiBlockDescriptorError::NonCanonicalBoolean)
+        );
+        let mut misaligned = valid_block_media();
+        misaligned.io_align = 3;
+        let protocol = block_protocol(&mut misaligned);
+        assert_eq!(
+            unsafe { snapshot_uefi_block_media(&protocol) },
+            Err(UefiBlockDescriptorError::InvalidAlignment)
+        );
+        let mut overflowing = valid_block_media();
+        overflowing.last_block = u64::MAX;
+        let protocol = block_protocol(&mut overflowing);
+        assert_eq!(
+            unsafe { snapshot_uefi_block_media(&protocol) },
+            Err(UefiBlockDescriptorError::InvalidGeometry)
+        );
+        let mut valid = valid_block_media();
+        let mut protocol = block_protocol(&mut valid);
+        protocol.media = core::ptr::null_mut();
+        assert_eq!(
+            unsafe { snapshot_uefi_block_media(&protocol) },
+            Err(UefiBlockDescriptorError::MissingMedia)
+        );
+
+        let snapshot = UefiBlockMediaSnapshot {
+            media_id: 0,
+            block_size: 4096,
+            block_count: 32,
+            io_align: 1,
+            removable: false,
+            logical_partition: false,
+            read_only: false,
+        };
+        let id = BlockDeviceId::new(7).unwrap();
+        assert_eq!(
+            uefi_platform_block_descriptor(id, snapshot, &[1, 1, 3, 0]),
+            Err(UefiBlockDescriptorError::InvalidDevicePathNode)
+        );
+        assert_eq!(
+            uefi_platform_block_descriptor(id, snapshot, &[1, 1, 8, 0, 0, 0]),
+            Err(UefiBlockDescriptorError::TruncatedDevicePath)
+        );
+        assert_eq!(
+            uefi_platform_block_descriptor(id, snapshot, &[0x7f, 1, 4, 0]),
+            Err(UefiBlockDescriptorError::UnsupportedDevicePathInstance)
+        );
+        assert_eq!(
+            uefi_platform_block_descriptor(id, snapshot, &[1, 1, 4, 0]),
+            Err(UefiBlockDescriptorError::MissingDevicePathEnd)
+        );
     }
 
     #[test]

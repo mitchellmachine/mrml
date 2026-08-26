@@ -50,6 +50,17 @@ before block I/O. The current hosted source supplies synthetic provenance;
 native UEFI/AHCI/USB/VirtIO identity derivation and physical media evidence
 remain **PLANNED**.
 
+The first UEFI source primitive is now **PARTIALLY IMPLEMENTED** in the shared
+firmware library. ABI-checked `EFI_BLOCK_IO_PROTOCOL`/media layouts are copied
+into a bounded snapshot only after canonical Boolean, media-presence, alignment,
+block-count, and overflow validation. A maximum-4096-byte, single-instance UEFI
+device path is structurally validated through its exact end node and hashed with
+an MRML domain separator into the opaque boot-scoped stable identifier;
+firmware `MediaId` maps injectively to a nonzero media generation. This creates
+non-authorizing descriptor input only. Protocol discovery/opening, device-path
+buffer acquisition, actual reads, multi-device enumeration, persistence across
+boots, and physical firmware evidence remain **PLANNED**.
+
 The `mrml` frontend may expose structured `disk`, `filesystem`, `optical`, and
 `media` operations. The PowerShell-inspired shell projects the same backend as
 typed `Get-*`, `Test-*`, `Initialize-*`, `New-*`, `Format-*`, `Write-*`, and

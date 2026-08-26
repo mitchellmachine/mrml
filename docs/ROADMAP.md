@@ -53,6 +53,15 @@ replacement generation can register. Storage passes 124 tests on Windows and
 Arch Linux; configuration remains 48, WHP 11, and KVM 12. Native firmware/driver
 identity derivation and installed early-boot transfer remain the next gate.
 
+The first half of native firmware identity derivation is now **PARTIALLY
+IMPLEMENTED**. The shared UEFI library defines ABI-checked Block I/O protocol
+and media layouts, validates a bounded media snapshot and canonical
+single-instance device path, and derives a domain-separated boot-scoped stable
+identity with an injective nonzero generation for every firmware `MediaId`.
+Windows and Arch Linux each pass 29 focused tests and cross-build the UEFI
+target. Firmware protocol discovery/opening and installed early-boot ownership
+transfer remain next; no OVMF or physical firmware was exercised.
+
 Installed recovery ownership now crosses the Total-admission boundary in the
 controlled backend-parity path. `RecoveredInstalledTotalAdmission` retains the
 exact serviced device selection and recovered volume/root identity beside the

@@ -92,6 +92,15 @@ produce no override, and malformed options stop the boot. Menu presentation,
 OVMF/EFI-Shell execution evidence, policy composition, and runtime Total effect
 remain **PLANNED**.
 
+The library also now has a **PARTIALLY IMPLEMENTED** Block I/O descriptor
+primitive for installed-recovery work. It models and layout-tests the x86-64
+UEFI Block I/O ABI, validates a copied media snapshot and one bounded canonical
+device path, and derives an authority-free boot-scoped stable identity and exact
+media generation. It does not yet enumerate handles, open either protocol,
+acquire firmware device-path storage, read media, persist identity across boots,
+or transfer a selected device into the kernel handoff. No OVMF, EFI Shell, or
+physical firmware claim follows from host tests and cross-builds.
+
 The conventional fallback `\EFI\BOOT\BOOTX64.EFI` may be installed only under
 policy that proves ownership/non-conflict and previews backup/recovery or exact
 replacement. A shared ESP's existing fallback is never casually overwritten.

@@ -1150,6 +1150,16 @@ pass 124 tests, configuration passes 48, WHP 11, and KVM 12. The hosted identity
 is synthetic controlled evidence, not firmware/native-driver enumeration,
 physical-media identity, durable rollback state, or installed early boot.
 
+The shared UEFI library now **PARTIALLY IMPLEMENTS** the preceding firmware
+descriptor boundary: it snapshots an ABI-checked Block I/O media record,
+rejects absent/noncanonical/overflowing geometry, validates one bounded complete
+device path, and derives a domain-separated boot-scoped identity plus exact
+firmware media generation. Windows and Arch Linux each pass 29 UEFI-library
+tests, and both hosts cross-build the UEFI target. No firmware handle was
+enumerated or opened and no block was read, so installed-device discovery,
+durable identity, OVMF, EFI Shell, and physical-firmware recovery remain
+**PLANNED**.
+
 The recovered installed selection is now retained across the boot-policy to
 Total-admission boundary. `RecoveredInstalledTotalAdmission` binds its exact
 device descriptor, serviced session selection, volume header, active root,
