@@ -1336,6 +1336,16 @@ terms remain fail-closed. Windows gnullvm and native Arch Linux WSL each pass
 607 library tests, one component-interface probe, 10 conformance tests, and 335
 replacement tests: 953 compiler tests per host.
 
+The implementation-parameter-bound milestone parses `+`-separated implemented-
+trait bounds on implementation type parameters and desugars them into the same
+bounded premises as the explicit implementation `where` clause. Capacity,
+duplicate rejection, substitution, recursive proof, and projection-aware
+normalization are shared. Defaults, lifetime/const parameters, `?Sized`,
+associated constraints, and compound type terms remain fail-closed. Windows
+gnullvm and native Arch Linux WSL each pass 610 library tests, one component-
+interface probe, 10 conformance tests, and 335 replacement tests: 956 compiler
+tests per host.
+
 The premise-bearing rigid-normalization milestone proves the selected generic
 implementation's instantiated trait and projection predicates before exposing
 its associated value. It shares the caller's 16-frame rigid proof stack and
