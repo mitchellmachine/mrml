@@ -3038,8 +3038,11 @@ canonical digests match exactly; numeric equality, a substituted generation
 record, or a substituted catalog record fails. The focused WHP/KVM runners
 perform that join before CPU, RAM, or guest construction. The recovered
 configuration path accepts only the activated type and rejects non-Total or
-policy-generation mismatch. Activated state does not yet persist the complete
-signed SystemRelease/runtime-inventory content identity. This is hosted controlled
+policy-generation mismatch. Deployment checkpoint v3 now persists and recovers
+the exact SystemRelease content digest, selected signer identity, and runtime-
+inventory digest, and the kernel compares all three before it constructs the
+activated Total inventory. A legacy generation-only checkpoint or v1 release
+has no qualifying identity. This is hosted controlled
 evidence for one colocated consumer/provider domain, not complete installed-
 system Total readiness, live boot recovery, host-resistant isolation, or
 physical-hardware evidence.

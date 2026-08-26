@@ -907,10 +907,14 @@ generation fields; a matching numeric generation with either substituted
 digest fails. Recovered policy accepts only this activated wrapper when it
 creates the admission table, and non-Total or policy-generation mismatch also
 fails. Both focused runners perform this join before CPU, RAM, or VMM guest
-construction. Complete installed-system enumeration, persistence of the exact
-signed SystemRelease/runtime-inventory content identity in activated state, and
-live boot consumption remain **PLANNED**, so this focused component evidence
-does not promote Total mode itself.
+construction. The recovered v3 deployment checkpoint now also retains the
+authenticated SystemRelease content digest, selected signer identity, and
+runtime-inventory digest. Kernel binding compares all three with the freshly
+parsed release; a legacy generation-only checkpoint, v1 release without runtime
+inventory, or substitution of any release/generation/catalog identity fails
+before construction. Complete installed-system enumeration and live boot
+consumption remain **PLANNED**, so this focused component evidence does not
+promote Total mode itself.
 
 The focused runners now provide only complete policy-selected package-to-domain
 assignments. The authenticated release supplies each package's runtime class

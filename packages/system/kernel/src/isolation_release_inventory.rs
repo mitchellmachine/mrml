@@ -1,5 +1,6 @@
 use mrml_package_format::{
-    ActivatedSystemGeneration, RuntimeIsolationClass, SystemReleaseError, parse_system_release,
+    ActivatedSystemGeneration, ActivatedSystemRelease, RuntimeIsolationClass, SystemReleaseError,
+    parse_system_release,
 };
 
 use crate::{
@@ -127,6 +128,8 @@ pub struct ReleaseTotalMicrovmInventory<const N: usize> {
     system_generation: u64,
     generation_digest: [u8; 64],
     interface_catalog_digest: [u8; 64],
+    release_content_digest: [u8; 64],
+    runtime_inventory_digest: [u8; 64],
     policy_generation: u64,
 }
 
@@ -149,6 +152,14 @@ impl<const N: usize> ReleaseTotalMicrovmInventory<N> {
 
     pub const fn interface_catalog_digest(&self) -> &[u8; 64] {
         &self.interface_catalog_digest
+    }
+
+    pub const fn release_content_digest(&self) -> &[u8; 64] {
+        &self.release_content_digest
+    }
+
+    pub const fn runtime_inventory_digest(&self) -> &[u8; 64] {
+        &self.runtime_inventory_digest
     }
 
     pub const fn len(&self) -> usize {
@@ -176,11 +187,16 @@ impl<const N: usize> ReleaseTotalMicrovmInventory<N> {
     /// is insufficient.
     pub fn bind_activated(
         self,
-        active: ActivatedSystemGeneration,
+        active: ActivatedSystemRelease,
     ) -> Result<ActivatedReleaseTotalMicrovmInventory<N>, ReleaseInventoryError> {
-        if active.generation() != self.system_generation
-            || active.generation_digest() != &self.generation_digest
-            || active.interface_catalog_digest() != &self.interface_catalog_digest
+        let generation = active.generation();
+        let release = active.release();
+        if generation.generation() != self.system_generation
+            || generation.generation_digest() != &self.generation_digest
+            || generation.interface_catalog_digest() != &self.interface_catalog_digest
+            || release.key_id() != &self.signer
+            || release.content_digest() != &self.release_content_digest
+            || release.runtime_inventory_digest() != Some(&self.runtime_inventory_digest)
         {
             return Err(ReleaseInventoryError::ActivatedGenerationMismatch);
         }
@@ -196,11 +212,15 @@ impl<const N: usize> ReleaseTotalMicrovmInventory<N> {
 /// numeric generations or detached digests.
 pub struct ActivatedReleaseTotalMicrovmInventory<const N: usize> {
     release: ReleaseTotalMicrovmInventory<N>,
-    active: ActivatedSystemGeneration,
+    active: ActivatedSystemRelease,
 }
 
 impl<const N: usize> ActivatedReleaseTotalMicrovmInventory<N> {
     pub const fn active(&self) -> ActivatedSystemGeneration {
+        self.active.generation()
+    }
+
+    pub const fn active_release(&self) -> ActivatedSystemRelease {
         self.active
     }
 
@@ -325,6 +345,11 @@ pub fn total_inventory_from_system_release<const N: usize>(
         system_generation: release.generation().generation(),
         generation_digest: release.generation().digest(),
         interface_catalog_digest: release.interface_catalog().digest(),
+        release_content_digest: release.content_digest(),
+        runtime_inventory_digest: *release
+            .identity()
+            .runtime_inventory_digest()
+            .ok_or(ReleaseInventoryError::MissingRuntimeInventory)?,
         policy_generation,
     })
 }
@@ -638,7 +663,7 @@ mod tests {
             &[assignment],
         )
         .unwrap();
-        let active = ActivatedSystemGeneration::new(
+        let active_generation = ActivatedSystemGeneration::new(
             inventory.system_generation(),
             *inventory.generation_digest(),
             *inventory.interface_catalog_digest(),
@@ -647,16 +672,21 @@ mod tests {
             3,
         )
         .unwrap();
+        let release_identity = parse_system_release(&release[..release_length])
+            .unwrap()
+            .identity();
+        let active = ActivatedSystemRelease::new(active_generation, release_identity);
         let bound = inventory.bind_activated(active).unwrap();
-        assert_eq!(bound.active(), active);
+        assert_eq!(bound.active(), active_generation);
+        assert_eq!(bound.active_release(), active);
         assert_eq!(bound.system_generation(), 13);
         assert_eq!(bound.policy_generation(), POLICY);
         assert_eq!(bound.release().signer(), &key_id);
     }
 
     #[test]
-    fn numeric_generation_cannot_substitute_activated_release_digests() {
-        for mismatch in 0..3 {
+    fn activated_total_inventory_rejects_every_release_identity_substitution() {
+        for mismatch in 0..6 {
             let (release, release_length, key_id) = build_release(true, 13);
             let assignment =
                 RuntimeDomainAssignment::new("org.mrml.service.config", ObjectId(0x700)).unwrap();
@@ -678,7 +708,7 @@ mod tests {
             } else {
                 *inventory.interface_catalog_digest()
             };
-            let active = ActivatedSystemGeneration::new(
+            let active_generation = ActivatedSystemGeneration::new(
                 generation,
                 generation_digest,
                 catalog_digest,
@@ -687,6 +717,31 @@ mod tests {
                 3,
             )
             .unwrap();
+            let parsed_identity = parse_system_release(&release[..release_length])
+                .unwrap()
+                .identity();
+            let content_digest = if mismatch == 3 {
+                [0x93; 64]
+            } else {
+                *parsed_identity.content_digest()
+            };
+            let key_id = if mismatch == 4 {
+                [0x94; 64]
+            } else {
+                *parsed_identity.key_id()
+            };
+            let runtime_digest = if mismatch == 5 {
+                [0x95; 64]
+            } else {
+                *parsed_identity.runtime_inventory_digest().unwrap()
+            };
+            let identity = mrml_package_format::SystemReleaseIdentity::from_digests(
+                content_digest,
+                key_id,
+                Some(runtime_digest),
+            )
+            .unwrap();
+            let active = ActivatedSystemRelease::new(active_generation, identity);
             assert!(matches!(
                 inventory.bind_activated(active),
                 Err(ReleaseInventoryError::ActivatedGenerationMismatch)

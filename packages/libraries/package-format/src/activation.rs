@@ -1,3 +1,5 @@
+use crate::SystemReleaseIdentity;
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct ActivatedSystemGeneration {
     generation: u64,
@@ -66,6 +68,36 @@ pub enum ActivatedSystemGenerationError {
     Generation,
     Digest,
     SourceObject,
+}
+
+/// Exact SystemRelease identity paired with an immutable activated generation.
+/// Deployment creates this only from a verified release or an authenticated
+/// checkpoint. Like all identity metadata, the pair identifies but grants no
+/// authority by itself.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct ActivatedSystemRelease {
+    generation: ActivatedSystemGeneration,
+    release: SystemReleaseIdentity,
+}
+
+impl ActivatedSystemRelease {
+    pub const fn new(
+        generation: ActivatedSystemGeneration,
+        release: SystemReleaseIdentity,
+    ) -> Self {
+        Self {
+            generation,
+            release,
+        }
+    }
+
+    pub const fn generation(self) -> ActivatedSystemGeneration {
+        self.generation
+    }
+
+    pub const fn release(self) -> SystemReleaseIdentity {
+        self.release
+    }
 }
 
 const fn all_zero(value: &[u8; 64]) -> bool {

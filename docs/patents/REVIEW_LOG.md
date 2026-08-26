@@ -1,5 +1,18 @@
 # Patent review log
 
+## 2026-08-26 — Persistent SystemRelease identity for Total admission
+
+Patent review: **TRIGGERED** under the existing SystemRelease, deployment,
+recovery, adaptive-isolation, Total-MicroVM, and VMM reviews. This increment
+adds a bounded versioned activation checkpoint that retains existing
+authenticated content, signer, generation, catalog, and runtime-inventory
+digests, then requires conventional exact equality before Total admission. It
+adds no signature scheme, placement or scheduling heuristic, native fallback,
+VM/device protocol, DMA mechanism, or hardware-specific isolation mechanism.
+Complete installed-system enumeration and live recovered boot remain
+unimplemented. No patent-clearance or non-infringement conclusion is made;
+independent human review remains required.
+
 ## 2026-08-26 — Activated-generation binding for Total inventory
 
 Patent review: **TRIGGERED** under the existing SystemRelease, deployment,

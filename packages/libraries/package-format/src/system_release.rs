@@ -157,13 +157,70 @@ fn encode_system_release_records(
     Ok(total)
 }
 
+/// Canonical SystemRelease identity data. Parsing a release derives this only
+/// after verifying its complete signature and records. Persisted-state decoders
+/// may reconstruct the same non-authorizing identity after authenticating their
+/// own envelope; constructing identity data never grants admission authority.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct SystemReleaseIdentity {
+    content_digest: [u8; 64],
+    key_id: [u8; 64],
+    runtime_inventory_digest: Option<[u8; 64]>,
+}
+
+impl SystemReleaseIdentity {
+    pub const fn from_digests(
+        content_digest: [u8; 64],
+        key_id: [u8; 64],
+        runtime_inventory_digest: Option<[u8; 64]>,
+    ) -> Option<Self> {
+        if all_zero_64(&content_digest)
+            || all_zero_64(&key_id)
+            || matches!(runtime_inventory_digest, Some(digest) if all_zero_64(&digest))
+        {
+            return None;
+        }
+        Some(Self {
+            content_digest,
+            key_id,
+            runtime_inventory_digest,
+        })
+    }
+
+    pub const fn content_digest(&self) -> &[u8; 64] {
+        &self.content_digest
+    }
+
+    pub const fn key_id(&self) -> &[u8; 64] {
+        &self.key_id
+    }
+
+    pub const fn runtime_inventory_digest(&self) -> Option<&[u8; 64]> {
+        self.runtime_inventory_digest.as_ref()
+    }
+
+    pub const fn has_runtime_inventory(self) -> bool {
+        self.runtime_inventory_digest.is_some()
+    }
+}
+
+const fn all_zero_64(value: &[u8; 64]) -> bool {
+    let mut index = 0;
+    while index < value.len() {
+        if value[index] != 0 {
+            return false;
+        }
+        index += 1;
+    }
+    true
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct SystemReleaseArtifact<'a> {
     generation: SystemGenerationView<'a>,
     catalog: InterfaceCatalogView<'a>,
     runtime_inventory: Option<RuntimeInventoryView<'a>>,
-    content_digest: [u8; 64],
-    key_id: [u8; 64],
+    identity: SystemReleaseIdentity,
 }
 
 impl<'a> SystemReleaseArtifact<'a> {
@@ -180,11 +237,15 @@ impl<'a> SystemReleaseArtifact<'a> {
     }
 
     pub const fn content_digest(self) -> [u8; 64] {
-        self.content_digest
+        self.identity.content_digest
     }
 
     pub const fn key_id(self) -> [u8; 64] {
-        self.key_id
+        self.identity.key_id
+    }
+
+    pub const fn identity(self) -> SystemReleaseIdentity {
+        self.identity
     }
 }
 
@@ -276,20 +337,22 @@ pub fn parse_system_release(bytes: &[u8]) -> Result<SystemReleaseArtifact<'_>, S
     if bytes[72..136] != generation.digest() || bytes[136..200] != catalog.digest() {
         return Err(SystemReleaseError::RecordDigest);
     }
-    let runtime_inventory = if format_version == SYSTEM_RELEASE_RUNTIME_FORMAT_VERSION {
-        let inventory_bytes = &bytes[inventory_offset..records_end];
-        if bytes[344..408] != Sha3_512::digest(inventory_bytes) {
-            return Err(SystemReleaseError::RecordDigest);
-        }
-        let inventory = RuntimeInventoryView::decode(inventory_bytes)
-            .map_err(SystemReleaseError::RuntimeInventory)?;
-        inventory
-            .validate_system_generation(generation)
-            .map_err(SystemReleaseError::RuntimeInventory)?;
-        Some(inventory)
-    } else {
-        None
-    };
+    let (runtime_inventory, runtime_inventory_digest) =
+        if format_version == SYSTEM_RELEASE_RUNTIME_FORMAT_VERSION {
+            let inventory_bytes = &bytes[inventory_offset..records_end];
+            let digest = Sha3_512::digest(inventory_bytes);
+            if bytes[344..408] != digest {
+                return Err(SystemReleaseError::RecordDigest);
+            }
+            let inventory = RuntimeInventoryView::decode(inventory_bytes)
+                .map_err(SystemReleaseError::RuntimeInventory)?;
+            inventory
+                .validate_system_generation(generation)
+                .map_err(SystemReleaseError::RuntimeInventory)?;
+            (Some(inventory), Some(digest))
+        } else {
+            (None, None)
+        };
     let mut content_digest = [0; 64];
     content_digest.copy_from_slice(&bytes[200..264]);
     if system_release_content_digest(&bytes[..records_end])? != content_digest {
@@ -313,8 +376,11 @@ pub fn parse_system_release(bytes: &[u8]) -> Result<SystemReleaseArtifact<'_>, S
         generation,
         catalog,
         runtime_inventory,
-        content_digest,
-        key_id,
+        identity: SystemReleaseIdentity {
+            content_digest,
+            key_id,
+            runtime_inventory_digest,
+        },
     })
 }
 

@@ -161,10 +161,19 @@ immutable inventory across construction and finalized `classified=1`,
 `eligible=1`, `microvm=1`, and `native_fallback=0` only after exact microVM
 admission and before guest execution on WHP and nested KVM. This is hosted
 controlled-probe evidence for one focused release, not a complete installed-
-system inventory, recovery proof, or host-resistant isolation. Activated state
-does not yet persist the complete signed SystemRelease content identity or its
-runtime-inventory digest, so full-system generation admission and recovered
-content binding remain **PLANNED**.
+system inventory, full boot recovery proof, or host-resistant isolation.
+
+Exact release-content persistence is now **PARTIALLY IMPLEMENTED**. The bounded
+424-byte `MRMLDA3` activation checkpoint retains the activated generation plus
+the verified SystemRelease content digest, selected signer identity, and exact
+runtime-inventory digest under its checkpoint checksum. `DeploymentService`
+recovers that state as `ActivatedSystemRelease`; generation-only activation and
+legacy 224-byte `MRMLDA2` checkpoints remain readable but recover without a
+release identity and therefore cannot satisfy strict-Total inventory binding.
+Stable COW publication writes v3, and the rollback-resistant recovery record's
+checkpoint digest commits to those exact bytes. Identity metadata does not
+grant deployment or launch authority. Full installed-system enumeration and
+live early-boot orchestration remain **PLANNED**.
 
 The kernel's newer assignment adapter keeps policy-selected domain identity
 separate from authenticated package classification. Callers submit an exact

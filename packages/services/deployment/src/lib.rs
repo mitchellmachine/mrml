@@ -12,9 +12,9 @@ use core::array;
 use mrml_crypto::Sha3_256;
 use mrml_kernel::{Capability, CapabilitySpace, ObjectId, Rights};
 use mrml_package_format::{
-    ActivatedSystemGeneration, ActivatedSystemGenerationError, InterfaceCatalogError,
-    InterfaceCatalogView, SystemGenerationDecodeError, SystemGenerationView, SystemReleaseError,
-    parse_system_release,
+    ActivatedSystemGeneration, ActivatedSystemGenerationError, ActivatedSystemRelease,
+    InterfaceCatalogError, InterfaceCatalogView, SystemGenerationDecodeError, SystemGenerationView,
+    SystemReleaseError, SystemReleaseIdentity, parse_system_release,
 };
 use mrml_storage::{
     ExtentMap, FileMetadata, FileReadBackend, FileReadError, FileState, FileWriteBackend,
@@ -22,10 +22,13 @@ use mrml_storage::{
     StoragePrincipal, StorageTransaction, TransactionError, TransactionReceipt,
 };
 
-pub const DEPLOYMENT_CHECKPOINT_BYTES: usize = 224;
+pub const DEPLOYMENT_CHECKPOINT_BYTES: usize = 424;
 pub const DEPLOYMENT_RECOVERY_STATE_BYTES: usize = 256;
-const DEPLOYMENT_CHECKPOINT_MAGIC: [u8; 8] = *b"MRMLDA2\0";
-const DEPLOYMENT_CHECKPOINT_VERSION: u16 = 2;
+const LEGACY_DEPLOYMENT_CHECKPOINT_BYTES: usize = 224;
+const LEGACY_DEPLOYMENT_CHECKPOINT_MAGIC: [u8; 8] = *b"MRMLDA2\0";
+const LEGACY_DEPLOYMENT_CHECKPOINT_VERSION: u16 = 2;
+const DEPLOYMENT_CHECKPOINT_MAGIC: [u8; 8] = *b"MRMLDA3\0";
+const DEPLOYMENT_CHECKPOINT_VERSION: u16 = 3;
 const DEPLOYMENT_RECOVERY_STATE_MAGIC: [u8; 16] = *b"MRML-DEPLSTATE2\0";
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -35,6 +38,7 @@ pub struct GenerationCandidate {
     interface_catalog_digest: [u8; 64],
     source_object: u64,
     source_generation: u64,
+    release_identity: Option<SystemReleaseIdentity>,
 }
 
 impl GenerationCandidate {
@@ -60,11 +64,16 @@ impl GenerationCandidate {
             interface_catalog_digest,
             source_object,
             source_generation,
+            release_identity: None,
         })
     }
 
     pub const fn generation(self) -> u64 {
         self.generation
+    }
+
+    pub const fn release_identity(self) -> Option<SystemReleaseIdentity> {
+        self.release_identity
     }
 
     /// Constructs a candidate only from the complete canonical runtime records
@@ -107,13 +116,15 @@ impl GenerationCandidate {
         if release.key_id() != *expected_key_id {
             return Err(DeploymentError::SystemReleaseSignerMismatch);
         }
-        Self::new(
+        let mut candidate = Self::new(
             release.generation().generation(),
             release.generation().digest(),
             release.interface_catalog().digest(),
             source_object,
             source_generation,
-        )
+        )?;
+        candidate.release_identity = Some(release.identity());
+        Ok(candidate)
     }
 }
 
@@ -145,6 +156,7 @@ struct CandidateSlot {
 pub struct DeploymentService<const CANDIDATES: usize> {
     root: ObjectId,
     active: Option<ActivatedSystemGeneration>,
+    active_release: Option<ActivatedSystemRelease>,
     candidates: [Option<CandidateSlot>; CANDIDATES],
     next_slot_generation: u64,
     next_activation_sequence: u64,
@@ -158,6 +170,7 @@ impl<const CANDIDATES: usize> DeploymentService<CANDIDATES> {
         Ok(Self {
             root,
             active: None,
+            active_release: None,
             candidates: array::from_fn(|_| None),
             next_slot_generation: 1,
             next_activation_sequence: 1,
@@ -256,6 +269,9 @@ impl<const CANDIDATES: usize> DeploymentService<CANDIDATES> {
             .ok_or(DeploymentError::GenerationExhausted)?;
         self.candidates[slot_index] = None;
         self.active = Some(active);
+        self.active_release = candidate
+            .release_identity
+            .map(|release| ActivatedSystemRelease::new(active, release));
         Ok(active)
     }
 
@@ -281,8 +297,21 @@ impl<const CANDIDATES: usize> DeploymentService<CANDIDATES> {
         .map_err(DeploymentError::InvalidActivation)
     }
 
+    fn preview_release(
+        &self,
+        prepared: PreparedActivation,
+    ) -> Result<Option<ActivatedSystemRelease>, DeploymentError> {
+        let active = self.preview_activation(prepared)?;
+        let slot = self.slot(prepared.candidate)?;
+        Ok(slot
+            .candidate
+            .release_identity
+            .map(|release| ActivatedSystemRelease::new(active, release)))
+    }
+
     pub fn recover(root: ObjectId, checkpoint: &[u8]) -> Result<Self, DeploymentError> {
-        let (checkpoint_root, active) = decode_deployment_checkpoint(checkpoint)?;
+        let (checkpoint_root, active, active_release) =
+            decode_deployment_checkpoint_release(checkpoint)?;
         if checkpoint_root != root.0 {
             return Err(DeploymentError::InvalidCheckpoint);
         }
@@ -292,6 +321,7 @@ impl<const CANDIDATES: usize> DeploymentService<CANDIDATES> {
             .ok_or(DeploymentError::GenerationExhausted)?;
         let mut service = Self::new(root)?;
         service.active = Some(active);
+        service.active_release = active_release;
         service.next_activation_sequence = next_activation_sequence;
         Ok(service)
     }
@@ -303,6 +333,15 @@ impl<const CANDIDATES: usize> DeploymentService<CANDIDATES> {
     ) -> Result<Option<ActivatedSystemGeneration>, DeploymentError> {
         self.authorize(capabilities, inspect, Rights::READ)?;
         Ok(self.active)
+    }
+
+    pub fn active_release<const N: usize>(
+        &self,
+        capabilities: &CapabilitySpace<N>,
+        inspect: Capability,
+    ) -> Result<Option<ActivatedSystemRelease>, DeploymentError> {
+        self.authorize(capabilities, inspect, Rights::READ)?;
+        Ok(self.active_release)
     }
 
     fn authorize<const N: usize>(
@@ -362,6 +401,21 @@ pub fn encode_deployment_checkpoint(
     root: ObjectId,
     active: ActivatedSystemGeneration,
 ) -> Result<[u8; DEPLOYMENT_CHECKPOINT_BYTES], DeploymentError> {
+    encode_deployment_checkpoint_state(root, active, None)
+}
+
+pub fn encode_deployment_release_checkpoint(
+    root: ObjectId,
+    active: ActivatedSystemRelease,
+) -> Result<[u8; DEPLOYMENT_CHECKPOINT_BYTES], DeploymentError> {
+    encode_deployment_checkpoint_state(root, active.generation(), Some(active.release()))
+}
+
+fn encode_deployment_checkpoint_state(
+    root: ObjectId,
+    active: ActivatedSystemGeneration,
+    release: Option<SystemReleaseIdentity>,
+) -> Result<[u8; DEPLOYMENT_CHECKPOINT_BYTES], DeploymentError> {
     if root.0 == 0 {
         return Err(DeploymentError::InvalidService);
     }
@@ -377,24 +431,122 @@ pub fn encode_deployment_checkpoint(
     bytes[48..56].copy_from_slice(&active.source_generation().to_le_bytes());
     bytes[56..120].copy_from_slice(active.generation_digest());
     bytes[120..184].copy_from_slice(active.interface_catalog_digest());
+    let mut flags = 0u64;
+    if let Some(release) = release {
+        flags |= 1;
+        bytes[184..248].copy_from_slice(release.content_digest());
+        bytes[248..312].copy_from_slice(release.key_id());
+        if let Some(runtime) = release.runtime_inventory_digest() {
+            flags |= 2;
+            bytes[312..376].copy_from_slice(runtime);
+        }
+    }
+    bytes[376..384].copy_from_slice(&flags.to_le_bytes());
     let digest = Sha3_256::digest(&bytes);
-    bytes[184..216].copy_from_slice(&digest);
+    bytes[384..416].copy_from_slice(&digest);
     Ok(bytes)
 }
 
 pub fn decode_deployment_checkpoint(
     bytes: &[u8],
 ) -> Result<(u64, ActivatedSystemGeneration), DeploymentError> {
+    let (root, active, _) = decode_deployment_checkpoint_release(bytes)?;
+    Ok((root, active))
+}
+
+pub fn decode_deployment_checkpoint_release(
+    bytes: &[u8],
+) -> Result<
+    (
+        u64,
+        ActivatedSystemGeneration,
+        Option<ActivatedSystemRelease>,
+    ),
+    DeploymentError,
+> {
+    if bytes.len() == LEGACY_DEPLOYMENT_CHECKPOINT_BYTES {
+        let (root, active) = decode_legacy_deployment_checkpoint(bytes)?;
+        return Ok((root, active, None));
+    }
     if bytes.len() != DEPLOYMENT_CHECKPOINT_BYTES
         || bytes[..8] != DEPLOYMENT_CHECKPOINT_MAGIC
         || read_u16(bytes, 8)? != DEPLOYMENT_CHECKPOINT_VERSION
         || read_u16(bytes, 10)? as usize != DEPLOYMENT_CHECKPOINT_BYTES
         || read_u32(bytes, 12)? as usize != DEPLOYMENT_CHECKPOINT_BYTES
-        || bytes[216..].iter().any(|byte| *byte != 0)
+        || bytes[416..].iter().any(|byte| *byte != 0)
     {
         return Err(DeploymentError::InvalidCheckpoint);
     }
     let mut expected = [0; DEPLOYMENT_CHECKPOINT_BYTES];
+    expected.copy_from_slice(bytes);
+    let mut claimed = [0; 32];
+    claimed.copy_from_slice(&expected[384..416]);
+    expected[384..416].fill(0);
+    if Sha3_256::digest(&expected) != claimed {
+        return Err(DeploymentError::InvalidCheckpoint);
+    }
+    let mut generation_digest = [0; 64];
+    generation_digest.copy_from_slice(&bytes[56..120]);
+    let mut interface_catalog_digest = [0; 64];
+    interface_catalog_digest.copy_from_slice(&bytes[120..184]);
+    let active = ActivatedSystemGeneration::new(
+        read_u64(bytes, 24)?,
+        generation_digest,
+        interface_catalog_digest,
+        read_u64(bytes, 32)?,
+        read_u64(bytes, 40)?,
+        read_u64(bytes, 48)?,
+    )
+    .map_err(DeploymentError::InvalidActivation)?;
+    let flags = read_u64(bytes, 376)?;
+    let release = match flags {
+        0 => {
+            if bytes[184..376].iter().any(|byte| *byte != 0) {
+                return Err(DeploymentError::InvalidCheckpoint);
+            }
+            None
+        }
+        1 | 3 => {
+            let mut content_digest = [0; 64];
+            content_digest.copy_from_slice(&bytes[184..248]);
+            let mut key_id = [0; 64];
+            key_id.copy_from_slice(&bytes[248..312]);
+            let runtime_inventory_digest = if flags == 3 {
+                let mut digest = [0; 64];
+                digest.copy_from_slice(&bytes[312..376]);
+                Some(digest)
+            } else {
+                if bytes[312..376].iter().any(|byte| *byte != 0) {
+                    return Err(DeploymentError::InvalidCheckpoint);
+                }
+                None
+            };
+            let identity = SystemReleaseIdentity::from_digests(
+                content_digest,
+                key_id,
+                runtime_inventory_digest,
+            )
+            .ok_or(DeploymentError::InvalidCheckpoint)?;
+            Some(ActivatedSystemRelease::new(active, identity))
+        }
+        _ => return Err(DeploymentError::InvalidCheckpoint),
+    };
+    Ok((read_u64(bytes, 16)?, active, release))
+}
+
+fn decode_legacy_deployment_checkpoint(
+    bytes: &[u8],
+) -> Result<(u64, ActivatedSystemGeneration), DeploymentError> {
+    if bytes.len() != LEGACY_DEPLOYMENT_CHECKPOINT_BYTES
+        || bytes[..8] != LEGACY_DEPLOYMENT_CHECKPOINT_MAGIC
+        || read_u16(bytes, 8)? != LEGACY_DEPLOYMENT_CHECKPOINT_VERSION
+        || read_u16(bytes, 10)? as usize != LEGACY_DEPLOYMENT_CHECKPOINT_BYTES
+        || read_u32(bytes, 12)? as usize != LEGACY_DEPLOYMENT_CHECKPOINT_BYTES
+        || bytes[216..].iter().any(|byte| *byte != 0)
+    {
+        return Err(DeploymentError::InvalidCheckpoint);
+    }
+    let mut expected = [0; LEGACY_DEPLOYMENT_CHECKPOINT_BYTES];
     expected.copy_from_slice(bytes);
     let mut claimed = [0; 32];
     claimed.copy_from_slice(&expected[184..216]);
@@ -422,6 +574,7 @@ pub struct PreparedStableActivation<const EXTENTS: usize> {
     file: PreparedFileWrite<EXTENTS>,
     activation: PreparedActivation,
     active: ActivatedSystemGeneration,
+    active_release: Option<ActivatedSystemRelease>,
 }
 
 impl<const EXTENTS: usize> PreparedStableActivation<EXTENTS> {
@@ -444,6 +597,9 @@ impl<const EXTENTS: usize> PreparedStableActivation<EXTENTS> {
         if service.preview_activation(self.activation) != Ok(self.active) {
             return Err(StableActivationCommitError::StaleActivation);
         }
+        if service.preview_release(self.activation) != Ok(self.active_release) {
+            return Err(StableActivationCommitError::StaleActivation);
+        }
         let file = self
             .file
             .commit_transaction(receipt)
@@ -454,7 +610,14 @@ impl<const EXTENTS: usize> PreparedStableActivation<EXTENTS> {
         if active != self.active {
             return Err(StableActivationCommitError::StaleActivation);
         }
-        Ok(StableActivation { file, active })
+        if service.active_release != self.active_release {
+            return Err(StableActivationCommitError::StaleActivation);
+        }
+        Ok(StableActivation {
+            file,
+            active,
+            active_release: self.active_release,
+        })
     }
 
     pub fn commit_authenticated<
@@ -470,6 +633,9 @@ impl<const EXTENTS: usize> PreparedStableActivation<EXTENTS> {
         if service.preview_activation(self.activation) != Ok(self.active) {
             return Err(AuthenticatedActivationCommitError::StaleActivation);
         }
+        if service.preview_release(self.activation) != Ok(self.active_release) {
+            return Err(AuthenticatedActivationCommitError::StaleActivation);
+        }
         let mut expected = [0; DEPLOYMENT_RECOVERY_STATE_BYTES];
         state_store
             .load_authenticated(&mut expected)
@@ -483,7 +649,7 @@ impl<const EXTENTS: usize> PreparedStableActivation<EXTENTS> {
             .file
             .commit_transaction(receipt)
             .map_err(AuthenticatedActivationCommitError::Transaction)?;
-        let replacement = encode_deployment_recovery_state(
+        let replacement = encode_deployment_recovery_state_with_release(
             current.epoch().checked_add(1).ok_or(
                 AuthenticatedActivationCommitError::Deployment(
                     DeploymentError::GenerationExhausted,
@@ -491,6 +657,7 @@ impl<const EXTENTS: usize> PreparedStableActivation<EXTENTS> {
             )?,
             service.root,
             self.active,
+            self.active_release,
             file.object(),
             file.generation(),
         )
@@ -504,13 +671,21 @@ impl<const EXTENTS: usize> PreparedStableActivation<EXTENTS> {
         if active != self.active {
             return Err(AuthenticatedActivationCommitError::StaleActivation);
         }
-        Ok(StableActivation { file, active })
+        if service.active_release != self.active_release {
+            return Err(AuthenticatedActivationCommitError::StaleActivation);
+        }
+        Ok(StableActivation {
+            file,
+            active,
+            active_release: self.active_release,
+        })
     }
 }
 
 pub struct StableActivation<const EXTENTS: usize> {
     file: FileState<EXTENTS>,
     active: ActivatedSystemGeneration,
+    active_release: Option<ActivatedSystemRelease>,
 }
 
 impl<const EXTENTS: usize> StableActivation<EXTENTS> {
@@ -520,6 +695,10 @@ impl<const EXTENTS: usize> StableActivation<EXTENTS> {
 
     pub const fn active(&self) -> ActivatedSystemGeneration {
         self.active
+    }
+
+    pub const fn active_release(&self) -> Option<ActivatedSystemRelease> {
+        self.active_release
     }
 }
 
@@ -606,7 +785,21 @@ pub fn encode_deployment_recovery_state(
     file: mrml_storage::StorageObjectId,
     file_generation: u64,
 ) -> Result<[u8; DEPLOYMENT_RECOVERY_STATE_BYTES], DeploymentError> {
+    encode_deployment_recovery_state_with_release(epoch, root, active, None, file, file_generation)
+}
+
+pub fn encode_deployment_recovery_state_with_release(
+    epoch: u64,
+    root: ObjectId,
+    active: ActivatedSystemGeneration,
+    active_release: Option<ActivatedSystemRelease>,
+    file: mrml_storage::StorageObjectId,
+    file_generation: u64,
+) -> Result<[u8; DEPLOYMENT_RECOVERY_STATE_BYTES], DeploymentError> {
     if epoch == 0 || file_generation == 0 {
+        return Err(DeploymentError::InvalidRecoveryState);
+    }
+    if active_release.is_some_and(|release| release.generation() != active) {
         return Err(DeploymentError::InvalidRecoveryState);
     }
     let mut bytes = [0; DEPLOYMENT_RECOVERY_STATE_BYTES];
@@ -619,9 +812,11 @@ pub fn encode_deployment_recovery_state(
     bytes[64..72].copy_from_slice(&file_generation.to_le_bytes());
     bytes[72..136].copy_from_slice(active.generation_digest());
     bytes[136..200].copy_from_slice(active.interface_catalog_digest());
-    bytes[200..232].copy_from_slice(&Sha3_256::digest(&encode_deployment_checkpoint(
-        root, active,
-    )?));
+    let checkpoint = match active_release {
+        Some(release) => encode_deployment_release_checkpoint(root, release)?,
+        None => encode_deployment_checkpoint(root, active)?,
+    };
+    bytes[200..232].copy_from_slice(&Sha3_256::digest(&checkpoint));
     bytes[232..240].copy_from_slice(&active.source_object().to_le_bytes());
     bytes[240..248].copy_from_slice(&active.source_generation().to_le_bytes());
     Ok(bytes)
@@ -726,8 +921,14 @@ pub fn prepare_stable_activation<
     let active = service
         .preview_activation(prepared)
         .map_err(DeploymentStorageError::Deployment)?;
-    let checkpoint = encode_deployment_checkpoint(service.root, active)
+    let active_release = service
+        .preview_release(prepared)
         .map_err(DeploymentStorageError::Deployment)?;
+    let checkpoint = match active_release {
+        Some(release) => encode_deployment_release_checkpoint(service.root, release),
+        None => encode_deployment_checkpoint(service.root, active),
+    }
+    .map_err(DeploymentStorageError::Deployment)?;
     let mut content = Sha3_256::new();
     content.update(&checkpoint);
     if next_metadata.object() != current_file.object()
@@ -756,6 +957,7 @@ pub fn prepare_stable_activation<
         file,
         activation: prepared,
         active,
+        active_release,
     })
 }
 
@@ -776,22 +978,25 @@ pub fn recover_stable_activation<
 ) -> Result<DeploymentService<CANDIDATES>, DeploymentStorageError<B::Error>> {
     if expected_file_generation == 0
         || file_state.generation() != expected_file_generation
-        || file_state.length() != DEPLOYMENT_CHECKPOINT_BYTES as u64
+        || (file_state.length() != DEPLOYMENT_CHECKPOINT_BYTES as u64
+            && file_state.length() != LEGACY_DEPLOYMENT_CHECKPOINT_BYTES as u64)
     {
         return Err(DeploymentStorageError::InvalidBinding);
     }
     let mut checkpoint = [0; DEPLOYMENT_CHECKPOINT_BYTES];
+    let checkpoint_length = file_state.length() as usize;
     file_state
         .read(
             storage_authority,
             file,
             principal,
             0,
-            &mut checkpoint,
+            &mut checkpoint[..checkpoint_length],
             backend,
         )
         .map_err(DeploymentStorageError::Read)?;
-    DeploymentService::recover(root, &checkpoint).map_err(DeploymentStorageError::Deployment)
+    DeploymentService::recover(root, &checkpoint[..checkpoint_length])
+        .map_err(DeploymentStorageError::Deployment)
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -840,13 +1045,12 @@ pub fn recover_authenticated_activation<
     let active = service
         .active
         .ok_or(AuthenticatedActivationRecoveryError::InvalidRecoveryState)?;
-    if state.active != Some(active)
-        || state.checkpoint_digest
-            != Sha3_256::digest(
-                &encode_deployment_checkpoint(root, active)
-                    .map_err(|_| AuthenticatedActivationRecoveryError::InvalidRecoveryState)?,
-            )
-    {
+    let checkpoint = match service.active_release {
+        Some(release) => encode_deployment_release_checkpoint(root, release),
+        None => encode_deployment_checkpoint(root, active),
+    }
+    .map_err(|_| AuthenticatedActivationRecoveryError::InvalidRecoveryState)?;
+    if state.active != Some(active) || state.checkpoint_digest != Sha3_256::digest(&checkpoint) {
         return Err(AuthenticatedActivationRecoveryError::InvalidRecoveryState);
     }
     Ok(service)
@@ -895,8 +1099,11 @@ mod tests {
     };
     use mrml_package_format::{
         ComponentInterfaceProvider, ComponentInterfaceRequirement, ComponentProviderForms,
-        SYSTEM_RELEASE_HEADER_BYTES, SystemGenerationDigestRecord, encode_interface_catalog,
+        RuntimeInventoryRecord, RuntimeIsolationClass, RuntimeIsolationPlacement,
+        SYSTEM_RELEASE_HEADER_BYTES, SYSTEM_RELEASE_RUNTIME_HEADER_BYTES,
+        SystemGenerationDigestRecord, encode_interface_catalog, encode_runtime_inventory,
         encode_system_generation, encode_system_release,
+        encode_system_release_with_runtime_inventory,
     };
     use mrml_storage::{
         CowMetadataImage, CowMetadataWrite, CowPublicationBackend, CowPublicationPlan,
@@ -1181,6 +1388,157 @@ mod tests {
         .unwrap()
     }
 
+    fn signed_runtime_candidate() -> (GenerationCandidate, SystemReleaseIdentity) {
+        let artifact_digest = [0x2f; 64];
+        let records = [SystemGenerationDigestRecord {
+            package_id: "org.mrml.zstd",
+            version: 3,
+            artifact_digest: &artifact_digest,
+        }];
+        let mut generation = [0; 128];
+        let generation_length = encode_system_generation(7, &records, &mut generation).unwrap();
+        let provider = ComponentInterfaceProvider::exact(
+            "org.mrml.zstd",
+            "org.mrml.interface.compression.zstd",
+            3,
+            [0x6a; 32],
+            ComponentProviderForms::MICROVM,
+        )
+        .unwrap();
+        let requirement = ComponentInterfaceRequirement::exact(
+            "org.mrml.zstd",
+            "org.mrml.interface.compression.zstd",
+            3,
+            [0x6a; 32],
+        )
+        .unwrap();
+        let mut catalog = [0; 256];
+        let catalog_length =
+            encode_interface_catalog(7, &[requirement], &[provider], &mut catalog).unwrap();
+        let runtime_record = RuntimeInventoryRecord {
+            package_id: "org.mrml.zstd",
+            version: 3,
+            artifact_digest: &artifact_digest,
+            class: RuntimeIsolationClass::MicrovmEligible,
+            must_run: true,
+            preferred: RuntimeIsolationPlacement::NativeService,
+            minimum: RuntimeIsolationPlacement::NativeService,
+            maximum: RuntimeIsolationPlacement::Microvm,
+            supported: RuntimeIsolationPlacement::NativeService.bit()
+                | RuntimeIsolationPlacement::Microvm.bit(),
+            reason: "",
+        };
+        let mut runtime = [0; 256];
+        let runtime_length = encode_runtime_inventory(7, &[runtime_record], &mut runtime).unwrap();
+        let private = [0x5a; LAMPORT_PRIVATE_KEY_BYTES];
+        let mut release = [0; SYSTEM_RELEASE_RUNTIME_HEADER_BYTES
+            + 128
+            + 256
+            + 256
+            + LAMPORT_PUBLIC_KEY_BYTES
+            + LAMPORT_SIGNATURE_BYTES];
+        let release_length = encode_system_release_with_runtime_inventory(
+            &generation[..generation_length],
+            &catalog[..catalog_length],
+            &runtime[..runtime_length],
+            &private,
+            &mut release,
+        )
+        .unwrap();
+        let parsed = parse_system_release(&release[..release_length]).unwrap();
+        let candidate = GenerationCandidate::from_system_release(
+            &release[..release_length],
+            &parsed.key_id(),
+            0x700,
+            2,
+        )
+        .unwrap();
+        (candidate, parsed.identity())
+    }
+
+    #[test]
+    fn signed_runtime_identity_survives_activation_checkpoint_and_recovery() {
+        let (capabilities, control, inspect) = authority();
+        let root = ObjectId(0x4445_504c_4f59);
+        let (candidate, identity) = signed_runtime_candidate();
+        assert!(identity.has_runtime_inventory());
+        let mut service = DeploymentService::<1>::new(root).unwrap();
+        let id = service.stage(&capabilities, control, candidate).unwrap();
+        let prepared = service
+            .prepare_activation(&capabilities, control, id, None)
+            .unwrap();
+        let active = service.commit_activation(prepared).unwrap();
+        let activated_release = service
+            .active_release(&capabilities, inspect)
+            .unwrap()
+            .unwrap();
+        assert_eq!(activated_release.generation(), active);
+        assert_eq!(activated_release.release(), identity);
+
+        let checkpoint = encode_deployment_release_checkpoint(root, activated_release).unwrap();
+        let recovery_state = encode_deployment_recovery_state_with_release(
+            9,
+            root,
+            active,
+            Some(activated_release),
+            object(9),
+            2,
+        )
+        .unwrap();
+        assert_eq!(
+            decode_deployment_recovery_state(&recovery_state)
+                .unwrap()
+                .checkpoint_digest,
+            Sha3_256::digest(&checkpoint)
+        );
+        let (decoded_root, decoded_active, decoded_release) =
+            decode_deployment_checkpoint_release(&checkpoint).unwrap();
+        assert_eq!(decoded_root, root.0);
+        assert_eq!(decoded_active, active);
+        assert_eq!(decoded_release, Some(activated_release));
+        let recovered = DeploymentService::<1>::recover(root, &checkpoint).unwrap();
+        assert_eq!(
+            recovered.active_release(&capabilities, inspect),
+            Ok(Some(activated_release))
+        );
+
+        let mut corrupted = checkpoint;
+        corrupted[312] ^= 1;
+        assert_eq!(
+            decode_deployment_checkpoint_release(&corrupted),
+            Err(DeploymentError::InvalidCheckpoint)
+        );
+    }
+
+    #[test]
+    fn legacy_generation_checkpoint_recovers_without_release_identity() {
+        let root = ObjectId(0x4445_504c_4f59);
+        let active =
+            ActivatedSystemGeneration::new(8, [0x51; 64], [0x52; 64], 3, 0x700, 18).unwrap();
+        let mut legacy = [0; LEGACY_DEPLOYMENT_CHECKPOINT_BYTES];
+        legacy[..8].copy_from_slice(&LEGACY_DEPLOYMENT_CHECKPOINT_MAGIC);
+        legacy[8..10].copy_from_slice(&LEGACY_DEPLOYMENT_CHECKPOINT_VERSION.to_le_bytes());
+        legacy[10..12].copy_from_slice(&(LEGACY_DEPLOYMENT_CHECKPOINT_BYTES as u16).to_le_bytes());
+        legacy[12..16].copy_from_slice(&(LEGACY_DEPLOYMENT_CHECKPOINT_BYTES as u32).to_le_bytes());
+        legacy[16..24].copy_from_slice(&root.0.to_le_bytes());
+        legacy[24..32].copy_from_slice(&active.generation().to_le_bytes());
+        legacy[32..40].copy_from_slice(&active.activation_sequence().to_le_bytes());
+        legacy[40..48].copy_from_slice(&active.source_object().to_le_bytes());
+        legacy[48..56].copy_from_slice(&active.source_generation().to_le_bytes());
+        legacy[56..120].copy_from_slice(active.generation_digest());
+        legacy[120..184].copy_from_slice(active.interface_catalog_digest());
+        let digest = Sha3_256::digest(&legacy);
+        legacy[184..216].copy_from_slice(&digest);
+
+        let (_, decoded, release) = decode_deployment_checkpoint_release(&legacy).unwrap();
+        assert_eq!(decoded, active);
+        assert_eq!(release, None);
+        let recovered = DeploymentService::<1>::recover(root, &legacy).unwrap();
+        let (capabilities, _, inspect) = authority();
+        assert_eq!(recovered.active(&capabilities, inspect), Ok(Some(active)));
+        assert_eq!(recovered.active_release(&capabilities, inspect), Ok(None));
+    }
+
     #[test]
     fn canonical_records_derive_both_activation_roots_and_reject_cross_generation_pairing() {
         let records = [SystemGenerationDigestRecord {
@@ -1239,7 +1597,21 @@ mod tests {
             2,
         )
         .unwrap();
-        assert_eq!(signed_candidate, candidate);
+        assert_eq!(signed_candidate.generation, candidate.generation);
+        assert_eq!(
+            signed_candidate.generation_digest,
+            candidate.generation_digest
+        );
+        assert_eq!(
+            signed_candidate.interface_catalog_digest,
+            candidate.interface_catalog_digest
+        );
+        assert_eq!(candidate.release_identity(), None);
+        let identity = signed_candidate.release_identity().unwrap();
+        assert_eq!(identity, parsed_release.identity());
+        assert_eq!(identity.content_digest(), &parsed_release.content_digest());
+        assert_eq!(identity.key_id(), &expected_key_id);
+        assert!(!identity.has_runtime_inventory());
         assert_eq!(
             GenerationCandidate::from_system_release(
                 &release[..release_length],

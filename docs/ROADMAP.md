@@ -227,9 +227,21 @@ system generation, canonical generation digest, and interface-catalog digest.
 Both runners perform that join before CPU, RAM, or VMM construction; matching
 only the numeric generation fails the typed boundary. Windows/Linux config
 suites pass 42 tests, WHP passes 9, and KVM passes 10. Complete installed-system
-enumeration, persistence of the signed SystemRelease/runtime-inventory content
-identity in activated state, and live boot consumption remain the next gates;
-this one-component proof does not establish required-system Total readiness.
+enumeration and live boot consumption remain the next gates; this one-component
+proof does not establish required-system Total readiness.
+
+The exact release-persistence sub-gate is now **PARTIALLY IMPLEMENTED**. A
+versioned 424-byte deployment checkpoint retains the authenticated
+SystemRelease content digest, signer identity, and runtime-inventory digest with
+the activated generation. Stable publication and its rollback-resistant state
+commit to those bytes. Recovery recreates `ActivatedSystemRelease`, and kernel
+Total binding rejects substitutions of generation, generation digest, catalog
+digest, signer, release-content digest, or runtime-inventory digest. Legacy
+224-byte generation-only checkpoints remain readable but cannot satisfy Total.
+Windows and Linux package-format suites pass 16 tests, deployment passes 6,
+kernel passes 557, config passes 42, WHP passes 9, and KVM passes 10. Fresh
+signed WHP and nested-KVM probes each report one eligible microVM and zero
+native fallback after v3 recovery.
 
 The next narrowing is **PARTIALLY IMPLEMENTED**: launchers supply a complete
 bounded set of policy-selected package/domain assignments rather than restating

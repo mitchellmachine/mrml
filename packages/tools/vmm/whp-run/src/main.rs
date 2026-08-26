@@ -13,7 +13,9 @@ use mrml_config::{
 #[cfg(target_os = "windows")]
 use mrml_crypto::{LAMPORT_PUBLIC_KEY_BYTES, Sha3_512};
 #[cfg(target_os = "windows")]
-use mrml_deployment::{DeploymentService, GenerationCandidate, encode_deployment_checkpoint};
+use mrml_deployment::{
+    DeploymentService, GenerationCandidate, encode_deployment_release_checkpoint,
+};
 use mrml_error::{Result, anyhow};
 #[cfg(target_os = "windows")]
 use mrml_kernel::arch::x86_64::{Mapping, PRIVILEGE_STACK_ARENA_PAGES, PagePermissions, VirtAddr};
@@ -2705,7 +2707,11 @@ fn application_main() -> Result<()> {
                 "WHP SystemRelease did not bind the verified component artifacts"
             ));
         }
-        let checkpoint = encode_deployment_checkpoint(deployment_root, active)
+        let active_release = deployment
+            .active_release(&capabilities, inspect)
+            .map_err(|error| anyhow!("WHP active release read failed: {:?}", error))?
+            .ok_or_else(|| anyhow!("WHP activation lost SystemRelease identity"))?;
+        let checkpoint = encode_deployment_release_checkpoint(deployment_root, active_release)
             .map_err(|error| anyhow!("WHP generation checkpoint failed: {:?}", error))?;
         let recovered = DeploymentService::<1>::recover(deployment_root, &checkpoint)
             .map_err(|error| anyhow!("WHP generation recovery failed: {:?}", error))?;
@@ -2713,8 +2719,15 @@ fn application_main() -> Result<()> {
             .active(&capabilities, inspect)
             .map_err(|error| anyhow!("WHP active generation read failed: {:?}", error))?
             .ok_or_else(|| anyhow!("WHP recovered no active SystemGeneration"))?;
+        let recovered_release = recovered
+            .active_release(&capabilities, inspect)
+            .map_err(|error| anyhow!("WHP recovered release read failed: {:?}", error))?
+            .ok_or_else(|| anyhow!("WHP recovered no active SystemRelease identity"))?;
+        if recovered_release.generation() != recovered_active {
+            return Err(anyhow!("WHP recovered release/generation mismatch"));
+        }
         component_release_authority = Some((release_bytes, expected_release_key));
-        Some(recovered_active)
+        Some(recovered_release)
     } else {
         None
     };
@@ -2723,7 +2736,7 @@ fn application_main() -> Result<()> {
             match active_component_generation {
                 Some(active) => IsolationAdmissionTable::<1>::new_activated(
                     IsolationMode::TotalMicrovm,
-                    active,
+                    active.generation(),
                     1,
                 ),
                 None => IsolationAdmissionTable::<1>::new(IsolationMode::TotalMicrovm, 1, 1),
@@ -2977,9 +2990,10 @@ fn application_main() -> Result<()> {
                 .as_ref()
                 .ok_or_else(|| anyhow!("missing canonical component SystemGeneration"))?;
         let handoff = resolve_activated_interface_catalog(
-            *active_component_generation
+            active_component_generation
                 .as_ref()
-                .ok_or_else(|| anyhow!("missing active component SystemGeneration"))?,
+                .ok_or_else(|| anyhow!("missing active component SystemGeneration"))?
+                .generation(),
             &generation_bytes[..*generation_length],
             &catalog_bytes[..*catalog_length],
             "org.mrml.zim",

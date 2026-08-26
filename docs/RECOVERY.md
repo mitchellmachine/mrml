@@ -1038,10 +1038,14 @@ match. Recovery accepts only this activated wrapper, requires strict Total and
 the exact policy generation, and creates the admission table from it. An ad hoc
 inventory, matching numeric generation with substituted canonical bytes, or
 detached digest pair is not accepted by this API. Recovery must retain this
-joined state through launch and finalization. Activated deployment state does
-not yet persist the complete signed SystemRelease/runtime-inventory content
-identity; live early-boot orchestration and complete installed-system
-enumeration remain **PLANNED**.
+joined state through launch and finalization. Deployment checkpoint v3 now
+persists the exact SystemRelease content digest, signer identity, and runtime-
+inventory digest alongside the activated generation, and the authenticated
+rollback-resistant recovery record commits to the exact checkpoint bytes.
+Legacy v2 checkpoints remain readable as generation-only state but expose no
+`ActivatedSystemRelease`; strict Total therefore fails rather than reconstructing
+or guessing the missing identity. Live early-boot orchestration and complete
+installed-system enumeration remain **PLANNED**.
 
 The kernel now exposes a **PARTIALLY IMPLEMENTED**, read-only aggregate recovery
 view of isolation state. Recovery must possess `INSPECT` for the exact monitor
