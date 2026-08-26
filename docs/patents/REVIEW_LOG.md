@@ -8343,6 +8343,17 @@ emits a conventional conditional forward branch and reuses the compiler's
 existing scoped action, stack cleanup, return, break, continue, direct-call,
 and inline-call machinery for a bounded scalar else arm. It adds no novel
 control-flow, region, alias, inference, optimization, or instruction-selection
-algorithm; reference-bearing forms remain fail-closed. Broader compiler
+algorithm; reference returns require the existing exact outlives proof. Broader compiler
 completion remains partial; this technical screen is not a clearance or
 infringement conclusion and does not replace independent human dual review.
+
+# 2026-08-26 — Nested branch return-origin validation
+
+**Result: NOT_TRIGGERED after the return-origin review.** This correction adds
+the already modeled primary and else nested-branch return locations to the
+existing exact function-return outlives classifier. It introduces no new region,
+alias, inference, fixed-point, optimization, instruction-selection, or runtime
+mechanism. Parameter-backed origins are admitted and branch-local origins fail
+closed. Broader compiler completion remains partial; this technical screen is
+not a clearance or infringement conclusion and does not replace independent
+human dual review.

@@ -669,7 +669,8 @@ locations distinguish else actions and return values. Native and constant
 execution were initially rejected. Constant evaluation now selects exactly one
 arm, executes its scoped actions, and routes its terminal under the existing
 bounded loop evaluator. Direct and helper-inlined x86-64 emission now lowers
-scalar-only else arms; reference-bearing else arms remain fail-closed. The
+scalar else arms. Exact parameter-backed reference returns are also admitted;
+branch-local returned origins fail closed. The
 single-arm CFG assigns separate condition and
 scoped-action blocks, routes false fallthrough and target-aware true terminals,
 and maps condition/action/return ownership locations back to those control
@@ -682,11 +683,12 @@ header. Constant semantics are implemented: taken actions use a
 scoped resolver checkpoint and target-aware break, continue, and return reuse
 the existing bounded loop evaluator. Direct and inline native x86-64 lowering
 mirrors those actions, scoped cleanup, and terminals for scalar-only primary and
-else arms. Single-arm native reference-return branches are admitted only after
-that exact origin proof; single-arm reference break/continue branches use the
-bounded destination/backedge transfer above, while reference-bearing else arms
-remain rejected. ELF64 and COFF probes cover separate return, continue, and
-break prefixes plus direct and helper-inlined scalar else returns. Windows and
+else arms. Primary and else native reference-return branches are admitted only
+after the exact function-return outlives proof; a branch-local else return is
+rejected. Reference break/continue branches use the bounded destination/backedge
+transfer above. ELF64 and COFF probes cover separate return, continue, and break
+prefixes, direct and helper-inlined scalar else returns, and a parameter-backed
+mutable-reference else return. Windows and
 Arch each pass 645 library
 tests, one component-interface probe, 10 conformance tests, and 336 replacement
 tests: 992 compiler tests per host.

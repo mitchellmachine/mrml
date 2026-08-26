@@ -158,8 +158,10 @@ This is black-box syntax and control-shape evidence only; it does not establish
 general region semantics for the second successor. MRML's separately authored
 probes now map both CFG successors and their scoped ownership locations,
 evaluate true and false constant-return arms, and emit direct and helper-inlined
-scalar else returns into ELF64 and COFF objects. Reference-bearing explicit
-else arms remain fail-closed. Temporary source and metadata were removed.
+scalar else returns into ELF64 and COFF objects. The exact function-return
+outlives classifier also admits a parameter-backed mutable-reference else return
+and rejects a branch-local returned origin. Temporary source and metadata were
+removed.
 
 An independently authored Rust 2024 metadata-only nested-break set against this
 exact toolchain and commit accepted a local-initialized alias overwritten by the
