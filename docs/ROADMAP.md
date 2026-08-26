@@ -381,6 +381,14 @@ development hosts, WHP 11, and KVM 12. Implementing PCI/AHCI and VirtIO discover
 sources and transferring the selected owner into installed early boot remain the
 next dependency gates.
 
+The selected-device lifetime now remains coherent through recovery as a
+**PARTIALLY IMPLEMENTED** owner. A single bounded API discovers and
+authenticates the candidate, reads its redundant roots and reachable graph, and
+returns the installed binding beside the exact live `BlockVolume`; callers do
+not reconstruct those pieces independently. Configuration remains 47/47 on
+Windows and Arch Linux, WHP 11/11, and KVM 12/12. Native device sources and
+transfer of this owner into the actual boot recovery orchestrator remain next.
+
 The next storage connection is now **PARTIALLY IMPLEMENTED** without claiming
 media evidence. `recover_stable_system_selection` accepts the existing hostile
 metadata backend implemented by `BlockVolume`, selects one complete redundant-

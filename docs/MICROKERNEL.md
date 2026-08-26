@@ -3194,6 +3194,14 @@ in-memory candidate. Windows and Arch Linux configuration suites pass 47 tests,
 WHP 11, and KVM 12. Native platform enumeration and installed early-boot
 ownership remain **PLANNED**.
 
+The bounded discovery result now remains owned through the complete serviced
+recovery read. `RecoveredInstalledStableSystemSelection` retains the exact
+installed selection beside the `BlockVolume` and reachable graph produced from
+it, while one combined operation prevents callers from substituting a candidate
+between discovery and root I/O. Hosted tests verify the retained device, volume,
+and active root. Configuration passes 47 tests on both development hosts, WHP
+11, and KVM 12; native enumeration and early-boot transfer remain **PLANNED**.
+
 Patent review: `TRIGGERED` under the existing signed-release, adaptive
 isolation, Total-MicroVM, automated VMM placement, and device-projection reviews
 now that authenticated package classifications are joined to live domain

@@ -819,6 +819,16 @@ session/device substitution fail closed. The shared hosted source exercises a
 single controlled candidate. Configuration passes 47 tests on Windows and Arch
 Linux, with WHP 11 and KVM 12; real platform enumeration remains **PLANNED**.
 
+The discovery-to-recovery lifetime is now one **PARTIALLY IMPLEMENTED** owning
+operation. `discover_and_recover_serviced_stable_system_selection` selects and
+authenticates the bounded candidate, performs both redundant-root and reachable-
+graph reads through that exact serviced device, and returns a
+`RecoveredInstalledStableSystemSelection` that retains the installed binding
+beside the recovered `BlockVolume`. Callers cannot detach the selected graph
+from a different reported candidate. The hosted test verifies the retained
+device, volume, and root; native enumeration and early-boot transfer remain
+**PLANNED**.
+
 The runner-side boot overlay is no longer injected as an independent enum
 literal. Both hosted backends encode neutral accepted recovery state and the
 one-boot request into the same canonical handoff installed for the guest, decode

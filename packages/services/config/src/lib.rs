@@ -1744,6 +1744,131 @@ fn finish_discovered_recovery_selection<const DEVICES: usize, const SESSIONS: us
     .map_err(InstalledRecoveryDeviceDiscoveryError::Selection)
 }
 
+pub struct RecoveredInstalledStableSystemSelection<
+    'a,
+    B: BlockServiceBackend,
+    const DEVICES: usize,
+    const SESSIONS: usize,
+    const EXTENTS: usize,
+    const OBJECTS: usize,
+> {
+    installed: InstalledRecoveryDeviceSelection,
+    recovered: RecoveredBlockStableSystemSelection<
+        'a,
+        ServicedBlockDevice<'a, B, DEVICES, SESSIONS>,
+        EXTENTS,
+        OBJECTS,
+    >,
+}
+
+impl<
+    'a,
+    B: BlockServiceBackend,
+    const DEVICES: usize,
+    const SESSIONS: usize,
+    const EXTENTS: usize,
+    const OBJECTS: usize,
+> RecoveredInstalledStableSystemSelection<'a, B, DEVICES, SESSIONS, EXTENTS, OBJECTS>
+{
+    pub const fn installed(&self) -> InstalledRecoveryDeviceSelection {
+        self.installed
+    }
+
+    pub fn selected(&self) -> SelectedStableSystemRecovery<'_, EXTENTS, EXTENTS> {
+        self.recovered.selected()
+    }
+
+    pub const fn volume(&self) -> &BlockVolume<'a, ServicedBlockDevice<'a, B, DEVICES, SESSIONS>> {
+        self.recovered.volume()
+    }
+
+    pub fn into_parts(
+        self,
+    ) -> (
+        InstalledRecoveryDeviceSelection,
+        RecoveredBlockStableSystemSelection<
+            'a,
+            ServicedBlockDevice<'a, B, DEVICES, SESSIONS>,
+            EXTENTS,
+            OBJECTS,
+        >,
+    ) {
+        (self.installed, self.recovered)
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum DiscoveredStableSystemSelectionError<DiscoveryError, BackendError> {
+    Discovery(InstalledRecoveryDeviceDiscoveryError<DiscoveryError>),
+    Recovery(ServicedStableSystemSelectionError<BackendError>),
+}
+
+/// Performs the bounded discovery/control-plane join and the complete serviced
+/// recovery read as one owning operation. Callers cannot detach the recovered
+/// graph from the exact installed-device binding that selected its data plane.
+#[allow(clippy::too_many_arguments)]
+pub fn discover_and_recover_serviced_stable_system_selection<
+    'a,
+    D: InstalledRecoveryDeviceDiscovery,
+    B: BlockServiceBackend,
+    const DEVICES: usize,
+    const SESSIONS: usize,
+    const MAX_CANDIDATES: usize,
+    const ALLOCATIONS: usize,
+    const DIRECTORIES: usize,
+    const EXTENTS: usize,
+    const OBJECTS: usize,
+>(
+    service: &'a BlockService<DEVICES, SESSIONS>,
+    backend: &'a mut B,
+    session: BlockSessionHandle,
+    principal: StoragePrincipal,
+    expected_volume: VolumeId,
+    discovery: &mut D,
+    volume_scratch: &'a mut [u8],
+    primary_block: &mut [u8],
+    secondary_block: &mut [u8],
+    metadata_scratch: &mut [u8],
+    configuration: StorageObjectId,
+    authority_checkpoint: StorageObjectId,
+) -> Result<
+    RecoveredInstalledStableSystemSelection<'a, B, DEVICES, SESSIONS, EXTENTS, OBJECTS>,
+    DiscoveredStableSystemSelectionError<D::Error, B::Error>,
+> {
+    let installed = discover_installed_recovery_device::<_, DEVICES, SESSIONS, MAX_CANDIDATES>(
+        service,
+        session,
+        principal,
+        expected_volume,
+        discovery,
+    )
+    .map_err(DiscoveredStableSystemSelectionError::Discovery)?;
+    let recovered = recover_serviced_stable_system_selection::<
+        _,
+        DEVICES,
+        SESSIONS,
+        ALLOCATIONS,
+        DIRECTORIES,
+        EXTENTS,
+        OBJECTS,
+    >(
+        service,
+        backend,
+        installed,
+        volume_scratch,
+        primary_block,
+        secondary_block,
+        metadata_scratch,
+        configuration,
+        authority_checkpoint,
+    )
+    .map_err(DiscoveredStableSystemSelectionError::Recovery)?;
+    Ok(RecoveredInstalledStableSystemSelection {
+        installed,
+        recovered,
+    })
+}
+
 /// Consumes one completely established recovery-device control-plane binding
 /// before any redundant-root or metadata data-plane read. Names and identities
 /// do not authorize: the retained session and principal are checked again on

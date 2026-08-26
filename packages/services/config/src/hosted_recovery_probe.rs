@@ -10,10 +10,11 @@
 use super::{
     ConfigTransaction, ConfigUpdate, ConfigValue, ConfigurationService, DiscoveredRecoveryDevice,
     InstalledRecoveryDeviceDiscovery, IsolationPolicySetting, OwnerIsolationSelection,
-    PERSISTED_RESTART_POLICY_BYTES, PersistedRestartPolicy, RecoveredBlockStableSystemSelection,
-    RecoveredTotalAdmission, RecoveredTotalAdmissionBuildError, SettingId, SettingSchema,
+    PERSISTED_RESTART_POLICY_BYTES, PersistedRestartPolicy,
+    RecoveredInstalledStableSystemSelection, RecoveredTotalAdmission,
+    RecoveredTotalAdmissionBuildError, SettingId, SettingSchema,
     StableConfigurationRecoveryValidator, StableServiceRecoveryValidator,
-    discover_installed_recovery_device, recover_serviced_stable_system_selection,
+    discover_and_recover_serviced_stable_system_selection,
 };
 use mrml_crypto::Sha3_256;
 use mrml_kernel::arch::x86_64::UserContext;
@@ -27,10 +28,10 @@ use mrml_storage::{
     BlockDeviceId, BlockRights, BlockService, BlockServiceBackend, BlockSessionHandle,
     BootRecoveryAdmission, DirectoryEntry, DirectoryImage, DirectoryMetadata, ExtentImage,
     ExtentRecord, FileMetadata, FileReadBackend, MetadataPointer, ObjectIdAllocatorImage,
-    OwnerApprovedAuthorityCheckpoint, SUPERBLOCK_BYTES, ServicedBlockDevice, StorageAuthorityTable,
-    StorageName, StorageObjectId, StorageObjectKind, StoragePrincipal, StorageRecoveryGrant,
-    StorageRights, Superblock, VolumeHeader, VolumeId, authority_checkpoint_digest,
-    encode_authority_checkpoint, recover_selected_validate_and_commit_stable_authorities,
+    OwnerApprovedAuthorityCheckpoint, SUPERBLOCK_BYTES, StorageAuthorityTable, StorageName,
+    StorageObjectId, StorageObjectKind, StoragePrincipal, StorageRecoveryGrant, StorageRights,
+    Superblock, VolumeHeader, VolumeId, authority_checkpoint_digest, encode_authority_checkpoint,
+    recover_selected_validate_and_commit_stable_authorities,
 };
 
 const BLOCK_BYTES: usize = 4096;
@@ -505,12 +506,7 @@ fn recover_reachable_files<'a>(
     session: BlockSessionHandle,
     volume_scratch: &'a mut [u8],
 ) -> Result<
-    RecoveredBlockStableSystemSelection<
-        'a,
-        ServicedBlockDevice<'a, ReachableMetadataBackend, 1, 1>,
-        1,
-        3,
-    >,
+    RecoveredInstalledStableSystemSelection<'a, ReachableMetadataBackend, 1, 1, 1, 3>,
     HostedRecoveryProbeError,
 > {
     let candidate = DiscoveredRecoveryDevice::new(
@@ -527,21 +523,16 @@ fn recover_reachable_files<'a>(
     let mut discovery = ControlledRecoveryDiscovery {
         candidate: Some(candidate),
     };
-    let installed = discover_installed_recovery_device::<_, 1, 1, 1>(
+    let mut primary_read = [0; BLOCK_BYTES];
+    let mut secondary_read = [0; BLOCK_BYTES];
+    let mut metadata_scratch = [0; BLOCK_BYTES];
+    discover_and_recover_serviced_stable_system_selection::<_, _, 1, 1, 1, 10, 2, 1, 3>(
         service,
+        backend,
         session,
         principal(),
         volume(),
         &mut discovery,
-    )
-    .map_err(|_| HostedRecoveryProbeError::StorageLayout)?;
-    let mut primary_read = [0; BLOCK_BYTES];
-    let mut secondary_read = [0; BLOCK_BYTES];
-    let mut metadata_scratch = [0; BLOCK_BYTES];
-    recover_serviced_stable_system_selection::<_, 1, 1, 10, 2, 1, 3>(
-        service,
-        backend,
-        installed,
         volume_scratch,
         &mut primary_read,
         &mut secondary_read,
@@ -827,6 +818,12 @@ mod tests {
             &mut current_scratch,
         )
         .unwrap();
+        assert_eq!(current.installed().descriptor().id(), recovery_device());
+        assert_eq!(current.installed().header().volume(), volume());
+        assert_eq!(
+            current.installed().active_superblock(),
+            header().primary_superblock()
+        );
         let previous = recover_reachable_files(
             &previous_service,
             &mut previous_backend,

@@ -867,6 +867,11 @@ duplicate rejection, and joining the result to an existing capability session
 are conventional inventory validation and API composition. The adapter adds no
 bus enumeration, device protocol, filesystem, recovery-selection, placement,
 or virtualization algorithm, so the broader review remains `TRIGGERED`.
+Retaining the selected candidate beside the existing serviced `BlockVolume` and
+reachable-graph owner is conventional lifetime-safe API composition. Combining
+those existing validation and read calls adds no device discovery, storage,
+recovery-selection, placement, scheduling, or virtualization algorithm; the
+broader review remains `TRIGGERED`.
 Because the
 broader combination of
 signed release classification, automated placement, isolation, recovery, and

@@ -1215,6 +1215,15 @@ the existing session/device substitutions. Configuration passes 47 tests on
 Windows and Arch Linux; WHP passes 11 and KVM 12. The hosted source supplies one
 in-memory candidate, not PCI/AHCI/VirtIO, installed-media, or physical evidence.
 
+Discovery, authorization, and recovery now compose into one **PARTIALLY
+IMPLEMENTED** owning transition. The combined operation returns
+`RecoveredInstalledStableSystemSelection`, which keeps the exact installed
+selection alive beside the same serviced `BlockVolume` that read both roots and
+the selected reachable graph. The hosted test verifies that the retained device,
+volume, and active root match the candidate actually recovered. This closes a
+caller-side substitution gap but does not yet supply a native enumerator or an
+installed early-boot owner.
+
 WHP and nested KVM now consume the common inner `BootTotalAdmission` owner from
 effective-policy/release binding through classified route preparation,
 vCPU/RAM/VMM construction, microVM commit, and final release proof. The owner
