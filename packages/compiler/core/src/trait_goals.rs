@@ -140,8 +140,11 @@ impl<'source> SourceTraitDeclarationTable<'source> {
                 continue;
             };
             let index = table.get(declaration.name).unwrap().id.get() as usize;
-            for (parameter_index, parameter) in
-                declaration.generic_parameters().iter().flatten().enumerate()
+            for (parameter_index, parameter) in declaration
+                .generic_parameters()
+                .iter()
+                .flatten()
+                .enumerate()
             {
                 if declaration.generic_parameters()[..parameter_index]
                     .iter()
@@ -288,6 +291,7 @@ pub enum SourceTraitImplementationErrorKind {
     UnsupportedGenericSupertraits,
     UnknownPremiseTrait,
     DuplicatePremise,
+    UnsupportedAssociatedTypeProjection,
     Goal(TraitGoalError),
 }
 
@@ -356,7 +360,28 @@ impl<'source> SourceTraitImplementationTable<'source> {
                         }
                     }
                     for associated in implementation.associated_types().iter().flatten() {
-                        if !implementation
+                        let projection = associated.value.parse_trait_projection().map_err(|_| {
+                            SourceTraitImplementationError {
+                                kind: SourceTraitImplementationErrorKind::UnsupportedAssociatedTypeProjection,
+                                span: associated.value.span,
+                            }
+                        })?;
+                        if let Some(projection) = projection {
+                            if !implementation
+                                .generic_parameters()
+                                .contains(&Some(projection.self_type.text))
+                            {
+                                table.intern_type(projection.self_type)?;
+                            }
+                            for argument in projection.trait_arguments().iter().flatten() {
+                                if !implementation
+                                    .generic_parameters()
+                                    .contains(&Some(argument.text))
+                                {
+                                    table.intern_type(*argument)?;
+                                }
+                            }
+                        } else if !implementation
                             .generic_parameters()
                             .contains(&Some(associated.value.text))
                         {
@@ -408,7 +433,9 @@ impl<'source> SourceTraitImplementationTable<'source> {
                             }
                         }
                         let arguments = match predicate {
-                            FunctionWherePredicate::Implemented { trait_arguments, .. }
+                            FunctionWherePredicate::Implemented {
+                                trait_arguments, ..
+                            }
                             | FunctionWherePredicate::ProjectionEquality {
                                 trait_arguments, ..
                             } => trait_arguments,
@@ -429,12 +456,13 @@ impl<'source> SourceTraitImplementationTable<'source> {
             if !source_implementation_is_exact_fact(implementation) {
                 continue;
             }
-            let declaration = traits
-                .get(implementation.trait_name)
-                .ok_or(SourceTraitImplementationError {
-                    kind: SourceTraitImplementationErrorKind::UnknownTrait,
-                    span: implementation.trait_name_span,
-                })?;
+            let declaration =
+                traits
+                    .get(implementation.trait_name)
+                    .ok_or(SourceTraitImplementationError {
+                        kind: SourceTraitImplementationErrorKind::UnknownTrait,
+                        span: implementation.trait_name_span,
+                    })?;
             if declaration.generic_parameter_count != implementation.trait_argument_count() {
                 return Err(SourceTraitImplementationError {
                     kind: SourceTraitImplementationErrorKind::WrongTraitArgumentCount,
@@ -456,13 +484,12 @@ impl<'source> SourceTraitImplementationTable<'source> {
                         span: argument.span,
                     })?;
             }
-            table
-                .implementations
-                .insert(header)
-                .map_err(|kind| SourceTraitImplementationError {
+            table.implementations.insert(header).map_err(|kind| {
+                SourceTraitImplementationError {
                     kind: SourceTraitImplementationErrorKind::Goal(kind),
                     span: implementation.trait_name_span,
-                })?;
+                }
+            })?;
             implementation_count += 1;
         }
         let mut generic_implementation_count = 0u32;
@@ -486,12 +513,13 @@ impl<'source> SourceTraitImplementationTable<'source> {
                     });
                 }
             }
-            let declaration = traits.get(implementation.trait_name).ok_or(
-                SourceTraitImplementationError {
-                    kind: SourceTraitImplementationErrorKind::UnknownTrait,
-                    span: implementation.trait_name_span,
-                },
-            )?;
+            let declaration =
+                traits
+                    .get(implementation.trait_name)
+                    .ok_or(SourceTraitImplementationError {
+                        kind: SourceTraitImplementationErrorKind::UnknownTrait,
+                        span: implementation.trait_name_span,
+                    })?;
             if declaration.generic_parameter_count != implementation.trait_argument_count() {
                 return Err(SourceTraitImplementationError {
                     kind: SourceTraitImplementationErrorKind::WrongTraitArgumentCount,
@@ -529,14 +557,12 @@ impl<'source> SourceTraitImplementationTable<'source> {
                     });
                 }
             }
-            let mut clause = TraitWhereClause::new(
-                implementation.generic_parameter_count(),
-                consequence,
-            )
-            .map_err(|kind| SourceTraitImplementationError {
-                kind: SourceTraitImplementationErrorKind::Goal(kind),
-                span: implementation.trait_name_span,
-            })?;
+            let mut clause =
+                TraitWhereClause::new(implementation.generic_parameter_count(), consequence)
+                    .map_err(|kind| SourceTraitImplementationError {
+                        kind: SourceTraitImplementationErrorKind::Goal(kind),
+                        span: implementation.trait_name_span,
+                    })?;
             for (predicate_index, predicate) in implementation
                 .where_predicates()
                 .iter()
@@ -553,12 +579,13 @@ impl<'source> SourceTraitImplementationTable<'source> {
                         span: predicate.trait_name_span(),
                     });
                 }
-                let premise_trait = traits.get(predicate.trait_name()).ok_or(
-                    SourceTraitImplementationError {
-                        kind: SourceTraitImplementationErrorKind::UnknownPremiseTrait,
-                        span: predicate.trait_name_span(),
-                    },
-                )?;
+                let premise_trait =
+                    traits
+                        .get(predicate.trait_name())
+                        .ok_or(SourceTraitImplementationError {
+                            kind: SourceTraitImplementationErrorKind::UnknownPremiseTrait,
+                            span: predicate.trait_name_span(),
+                        })?;
                 if premise_trait.generic_parameter_count != predicate.trait_argument_count() {
                     return Err(SourceTraitImplementationError {
                         kind: SourceTraitImplementationErrorKind::WrongTraitArgumentCount,
@@ -635,6 +662,22 @@ impl<'source> SourceTraitImplementationTable<'source> {
             let mut seen = [None; MAX_TRAIT_ASSOCIATED_TYPES];
             let mut seen_count = 0usize;
             for source_value in implementation.associated_types().iter().flatten() {
+                if source_value
+                    .value
+                    .parse_trait_projection()
+                    .map_err(|_| SourceTraitImplementationError {
+                        kind:
+                            SourceTraitImplementationErrorKind::UnsupportedAssociatedTypeProjection,
+                        span: source_value.value.span,
+                    })?
+                    .is_some()
+                {
+                    return Err(SourceTraitImplementationError {
+                        kind:
+                            SourceTraitImplementationErrorKind::UnsupportedAssociatedTypeProjection,
+                        span: source_value.value.span,
+                    });
+                }
                 let associated = traits
                     .get_associated_type(trait_id, source_value.name)
                     .ok_or(SourceTraitImplementationError {
@@ -686,12 +729,12 @@ impl<'source> SourceTraitImplementationTable<'source> {
             let mut seen = [None; MAX_TRAIT_ASSOCIATED_TYPES];
             let mut seen_count = 0usize;
             for source_value in implementation.associated_types().iter().flatten() {
-                let associated = traits.get_associated_type(trait_id, source_value.name).ok_or(
-                    SourceTraitImplementationError {
+                let associated = traits
+                    .get_associated_type(trait_id, source_value.name)
+                    .ok_or(SourceTraitImplementationError {
                         kind: SourceTraitImplementationErrorKind::UnknownAssociatedType,
                         span: source_value.name_span,
-                    },
-                )?;
+                    })?;
                 if seen[..seen_count].contains(&Some(associated.id)) {
                     return Err(SourceTraitImplementationError {
                         kind: SourceTraitImplementationErrorKind::DuplicateAssociatedTypeValue,
@@ -700,16 +743,59 @@ impl<'source> SourceTraitImplementationTable<'source> {
                 }
                 seen[seen_count] = Some(associated.id);
                 seen_count += 1;
+                let projection = source_value.value.parse_trait_projection().map_err(|_| {
+                    SourceTraitImplementationError {
+                        kind:
+                            SourceTraitImplementationErrorKind::UnsupportedAssociatedTypeProjection,
+                        span: source_value.value.span,
+                    }
+                })?;
+                let value = if let Some(projection) = projection {
+                    let projected_trait = traits.get(projection.trait_name).ok_or(
+                        SourceTraitImplementationError {
+                            kind: SourceTraitImplementationErrorKind::UnknownTrait,
+                            span: projection.trait_name_span,
+                        },
+                    )?;
+                    if projected_trait.generic_parameter_count != projection.trait_argument_count()
+                    {
+                        return Err(SourceTraitImplementationError {
+                            kind: SourceTraitImplementationErrorKind::WrongTraitArgumentCount,
+                            span: projection.trait_name_span,
+                        });
+                    }
+                    let projected_associated = traits
+                        .get_associated_type(projected_trait.id, projection.associated_type)
+                        .ok_or(SourceTraitImplementationError {
+                            kind: SourceTraitImplementationErrorKind::UnknownAssociatedType,
+                            span: projection.associated_type_span,
+                        })?;
+                    let mut goal = BoundImplementedTraitGoal::new(
+                        projected_trait.id,
+                        source_bound_type(projection.self_type, implementation, &table)?,
+                    );
+                    for argument in projection.trait_arguments().iter().flatten() {
+                        goal.push_argument(source_bound_type(*argument, implementation, &table)?)
+                            .map_err(|kind| SourceTraitImplementationError {
+                                kind: SourceTraitImplementationErrorKind::Goal(kind),
+                                span: argument.span,
+                            })?;
+                    }
+                    GenericTraitAssociatedTypeValue::new_projection(
+                        GenericTraitImplementationId::new(generic_implementation_index),
+                        associated.id,
+                        BoundTraitProjection::new(goal, projected_associated.id),
+                    )
+                } else {
+                    GenericTraitAssociatedTypeValue::new(
+                        GenericTraitImplementationId::new(generic_implementation_index),
+                        associated.id,
+                        source_bound_type(source_value.value, implementation, &table)?,
+                    )
+                };
                 table
                     .generic_associated_types
-                    .insert(
-                        &table.generic_implementations,
-                        GenericTraitAssociatedTypeValue::new(
-                            GenericTraitImplementationId::new(generic_implementation_index),
-                            associated.id,
-                            source_bound_type(source_value.value, implementation, &table)?,
-                        ),
-                    )
+                    .insert(&table.generic_implementations, value)
                     .map_err(|kind| SourceTraitImplementationError {
                         kind: SourceTraitImplementationErrorKind::Goal(kind),
                         span: source_value.name_span,
@@ -802,9 +888,7 @@ impl<'source> SourceTraitImplementationTable<'source> {
                             && left_arguments[..*left_count]
                                 .iter()
                                 .zip(&right_arguments[..*right_count])
-                                .all(|(left, right)| {
-                                    left.unwrap().text == right.unwrap().text
-                                })
+                                .all(|(left, right)| left.unwrap().text == right.unwrap().text)
                     }
                     (
                         FunctionWherePredicate::ProjectionEquality {
@@ -832,9 +916,7 @@ impl<'source> SourceTraitImplementationTable<'source> {
                             && left_arguments[..*left_count]
                                 .iter()
                                 .zip(&right_arguments[..*right_count])
-                                .all(|(left, right)| {
-                                    left.unwrap().text == right.unwrap().text
-                                })
+                                .all(|(left, right)| left.unwrap().text == right.unwrap().text)
                             && left_associated == right_associated
                             && left_expected.text == right_expected.text
                     }
@@ -844,10 +926,12 @@ impl<'source> SourceTraitImplementationTable<'source> {
                 return Err(SourceTraitObligationError {
                     kind: SourceTraitObligationErrorKind::DuplicatePredicate,
                     span: match predicate {
-                        FunctionWherePredicate::Implemented { trait_name_span, .. }
-                        | FunctionWherePredicate::ProjectionEquality { trait_name_span, .. } => {
-                            *trait_name_span
+                        FunctionWherePredicate::Implemented {
+                            trait_name_span, ..
                         }
+                        | FunctionWherePredicate::ProjectionEquality {
+                            trait_name_span, ..
+                        } => *trait_name_span,
                     },
                 });
             }
@@ -891,12 +975,10 @@ impl<'source> SourceTraitImplementationTable<'source> {
                     Some((*associated_type, *associated_type_span, *expected_type)),
                 ),
             };
-            let declaration = traits
-                .get(trait_name)
-                .ok_or(SourceTraitObligationError {
-                    kind: SourceTraitObligationErrorKind::UnknownTrait,
-                    span: trait_name_span,
-                })?;
+            let declaration = traits.get(trait_name).ok_or(SourceTraitObligationError {
+                kind: SourceTraitObligationErrorKind::UnknownTrait,
+                span: trait_name_span,
+            })?;
             if declaration.generic_parameter_count != trait_argument_count {
                 return Err(SourceTraitObligationError {
                     kind: SourceTraitObligationErrorKind::Goal(
@@ -916,12 +998,12 @@ impl<'source> SourceTraitImplementationTable<'source> {
             let mut source_goal =
                 ImplementedTraitGoal::new(trait_id, TraitGoalType::Concrete(self_type));
             for argument in trait_arguments[..trait_argument_count].iter().flatten() {
-                let argument_type = self.get_type(argument.text).ok_or(
-                    SourceTraitObligationError {
-                        kind: SourceTraitObligationErrorKind::UnknownType,
-                        span: argument.span,
-                    },
-                )?;
+                let argument_type =
+                    self.get_type(argument.text)
+                        .ok_or(SourceTraitObligationError {
+                            kind: SourceTraitObligationErrorKind::UnknownType,
+                            span: argument.span,
+                        })?;
                 source_goal
                     .push_argument(TraitGoalType::Concrete(argument_type.id))
                     .map_err(|kind| SourceTraitObligationError {
@@ -936,18 +1018,18 @@ impl<'source> SourceTraitImplementationTable<'source> {
                 }
             })?;
             if let Some((associated_name, associated_span, expected_type_ref)) = projection {
-                let associated = traits.get_associated_type(trait_id, associated_name).ok_or(
-                    SourceTraitObligationError {
+                let associated = traits
+                    .get_associated_type(trait_id, associated_name)
+                    .ok_or(SourceTraitObligationError {
                         kind: SourceTraitObligationErrorKind::UnknownAssociatedType,
                         span: associated_span,
-                    },
-                )?;
-                let expected_type = self.get_type(expected_type_ref.text).ok_or(
-                    SourceTraitObligationError {
-                        kind: SourceTraitObligationErrorKind::UnknownType,
-                        span: expected_type_ref.span,
-                    },
-                )?;
+                    })?;
+                let expected_type =
+                    self.get_type(expected_type_ref.text)
+                        .ok_or(SourceTraitObligationError {
+                            kind: SourceTraitObligationErrorKind::UnknownType,
+                            span: expected_type_ref.span,
+                        })?;
                 match normalize_concrete_trait_projection(
                     &self.implementations,
                     &self.generic_implementations,
@@ -960,8 +1042,7 @@ impl<'source> SourceTraitImplementationTable<'source> {
                 .map_err(|kind| SourceTraitObligationError {
                     kind: SourceTraitObligationErrorKind::Goal(kind),
                     span: associated_span,
-                })?
-                {
+                })? {
                     TraitProjectionSolution::Unique(value) if value == expected_type.id => continue,
                     TraitProjectionSolution::Unique(_) => {
                         return Err(SourceTraitObligationError {
@@ -1006,8 +1087,7 @@ impl<'source> SourceTraitImplementationTable<'source> {
             .map_err(|kind| SourceTraitObligationError {
                 kind: SourceTraitObligationErrorKind::Goal(kind),
                 span: trait_name_span,
-            })?
-            {
+            })? {
                 TraitProofSolution::Proven => {}
                 TraitProofSolution::NoSolution => {
                     return Err(SourceTraitObligationError {
@@ -1115,11 +1195,8 @@ impl<'source> SourceTraitImplementationTable<'source> {
     }
 }
 
-fn source_implementation_is_exact_fact(
-    implementation: &crate::TraitImplementation<'_>,
-) -> bool {
-    implementation.generic_parameter_count() == 0
-        && implementation.where_predicate_count() == 0
+fn source_implementation_is_exact_fact(implementation: &crate::TraitImplementation<'_>) -> bool {
+    implementation.generic_parameter_count() == 0 && implementation.where_predicate_count() == 0
 }
 
 fn source_implementation_predicates_same(
@@ -1168,9 +1245,9 @@ fn source_bound_type(
         .iter()
         .position(|parameter| *parameter == Some(source.text))
     {
-        return Ok(BoundTraitGoalType::Parameter(
-            TraitGenericParameterId::new(index as u8),
-        ));
+        return Ok(BoundTraitGoalType::Parameter(TraitGenericParameterId::new(
+            index as u8,
+        )));
     }
     table
         .get_type(source.text)
@@ -8402,7 +8479,10 @@ mod tests {
         let implementations =
             SourceTraitImplementationTable::from_module(&module, &traits).unwrap();
         assert_eq!(
-            implementations.prove_module(&module, &traits).unwrap_err().kind,
+            implementations
+                .prove_module(&module, &traits)
+                .unwrap_err()
+                .kind,
             SourceTraitObligationErrorKind::Unsatisfied
         );
 
@@ -8441,7 +8521,10 @@ mod tests {
         let implementations =
             SourceTraitImplementationTable::from_module(&module, &traits).unwrap();
         assert_eq!(
-            implementations.prove_module(&module, &traits).unwrap_err().kind,
+            implementations
+                .prove_module(&module, &traits)
+                .unwrap_err()
+                .kind,
             SourceTraitObligationErrorKind::Unsatisfied
         );
     }
@@ -8466,7 +8549,10 @@ mod tests {
         let implementations =
             SourceTraitImplementationTable::from_module(&module, &traits).unwrap();
         assert_eq!(
-            implementations.prove_module(&module, &traits).unwrap_err().kind,
+            implementations
+                .prove_module(&module, &traits)
+                .unwrap_err()
+                .kind,
             SourceTraitObligationErrorKind::Unsatisfied
         );
 
@@ -8485,6 +8571,49 @@ mod tests {
             SourceTraitImplementationErrorKind::Goal(
                 TraitGoalError::OverlappingExactAndGenericImplementation
             )
+        );
+    }
+
+    #[test]
+    fn normalizes_projection_valued_generic_source_associated_types() {
+        let satisfied = concat!(
+            "trait Parent<Input> { type Output; } trait Child<Input> { type Output; } ",
+            "impl<T> Parent<T> for T { type Output = T; } ",
+            "impl<T> Child<T> for T { type Output = <T as Parent<T>>::Output; } ",
+            "fn check() where u32: Child<u32>, <u32 as Child<u32>>::Output = u32 {}"
+        );
+        let module = Parser::new(satisfied).parse_module::<10, 1>().unwrap();
+        let traits = SourceTraitDeclarationTable::from_module(&module).unwrap();
+        let implementations =
+            SourceTraitImplementationTable::from_module(&module, &traits).unwrap();
+        implementations.prove_module(&module, &traits).unwrap();
+
+        let missing = satisfied.replace("impl<T> Parent<T> for T { type Output = T; } ", "");
+        let module = Parser::new(&missing).parse_module::<10, 1>().unwrap();
+        let traits = SourceTraitDeclarationTable::from_module(&module).unwrap();
+        let implementations =
+            SourceTraitImplementationTable::from_module(&module, &traits).unwrap();
+        assert_eq!(
+            implementations
+                .prove_module(&module, &traits)
+                .unwrap_err()
+                .kind,
+            SourceTraitObligationErrorKind::Unsatisfied
+        );
+
+        let exact = Parser::new(concat!(
+            "trait Parent { type Output; } trait Child { type Output; } ",
+            "impl Parent for u32 { type Output = u8; } ",
+            "impl Child for u32 { type Output = <u32 as Parent>::Output; }"
+        ))
+        .parse_module::<8, 1>()
+        .unwrap();
+        let traits = SourceTraitDeclarationTable::from_module(&exact).unwrap();
+        assert_eq!(
+            SourceTraitImplementationTable::from_module(&exact, &traits)
+                .unwrap_err()
+                .kind,
+            SourceTraitImplementationErrorKind::UnsupportedAssociatedTypeProjection
         );
     }
 

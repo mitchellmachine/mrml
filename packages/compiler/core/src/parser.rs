@@ -33,6 +33,91 @@ pub struct TypeRef<'source> {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct TraitProjectionTypeRef<'source> {
+    pub self_type: TypeRef<'source>,
+    pub trait_name: &'source str,
+    pub trait_name_span: Span,
+    trait_arguments: [Option<TypeRef<'source>>; MAX_SOURCE_TRAIT_ARGUMENTS],
+    trait_argument_count: usize,
+    pub associated_type: &'source str,
+    pub associated_type_span: Span,
+}
+
+impl<'source> TraitProjectionTypeRef<'source> {
+    pub fn trait_arguments(&self) -> &[Option<TypeRef<'source>>] {
+        &self.trait_arguments[..self.trait_argument_count]
+    }
+
+    pub const fn trait_argument_count(&self) -> usize {
+        self.trait_argument_count
+    }
+}
+
+impl<'source> TypeRef<'source> {
+    pub fn parse_trait_projection(
+        self,
+    ) -> Result<Option<TraitProjectionTypeRef<'source>>, ParseError> {
+        let mut parser = Parser::new(self.text);
+        if parser.take_text("<")?.is_none() {
+            return Ok(None);
+        }
+        let self_type = parser.type_until_text("as")?;
+        let as_token = parser.take()?;
+        if !as_token.is_some_and(|token| token.text == "as") {
+            return Err(parser.error(ParseErrorKind::ExpectedIdentifier, as_token));
+        }
+        let trait_name = parser.identifier()?;
+        let (trait_arguments, trait_argument_count, consumed_projection_close) =
+            parser.source_trait_arguments()?;
+        if !consumed_projection_close {
+            let close = parser.take()?;
+            if !close.is_some_and(|token| token.text == ">") {
+                return Err(parser.error(ParseErrorKind::ExpectedType, close));
+            }
+        }
+        let separator = parser.take()?;
+        if !separator.is_some_and(|token| token.text == "::") {
+            return Err(parser.error(ParseErrorKind::ExpectedIdentifier, separator));
+        }
+        let associated_type = parser.identifier()?;
+        if let Some(extra) = parser.take()? {
+            return Err(parser.error(ParseErrorKind::ExpectedSemicolon, Some(extra)));
+        }
+        let offset = self.span.start;
+        let offset_type = |ty: TypeRef<'source>| TypeRef {
+            text: ty.text,
+            span: Span {
+                start: ty.span.start + offset,
+                end: ty.span.end + offset,
+            },
+        };
+        let mut adjusted_arguments = [None; MAX_SOURCE_TRAIT_ARGUMENTS];
+        for (index, argument) in trait_arguments[..trait_argument_count]
+            .iter()
+            .flatten()
+            .enumerate()
+        {
+            adjusted_arguments[index] = Some(offset_type(*argument));
+        }
+        Ok(Some(TraitProjectionTypeRef {
+            self_type: offset_type(self_type),
+            trait_name: trait_name.text,
+            trait_name_span: Span {
+                start: trait_name.span.start + offset,
+                end: trait_name.span.end + offset,
+            },
+            trait_arguments: adjusted_arguments,
+            trait_argument_count,
+            associated_type: associated_type.text,
+            associated_type_span: Span {
+                start: associated_type.span.start + offset,
+                end: associated_type.span.end + offset,
+            },
+        }))
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct Parameter<'source> {
     pub name: &'source str,
     pub span: Span,
@@ -902,22 +987,28 @@ pub enum TraitImplementationWherePredicate<'source> {
 impl<'source> TraitImplementationWherePredicate<'source> {
     pub const fn self_type(&self) -> TypeRef<'source> {
         match self {
-            Self::Implemented { self_type, .. }
-            | Self::ProjectionEquality { self_type, .. } => *self_type,
+            Self::Implemented { self_type, .. } | Self::ProjectionEquality { self_type, .. } => {
+                *self_type
+            }
         }
     }
 
     pub const fn trait_name(&self) -> &'source str {
         match self {
-            Self::Implemented { trait_name, .. }
-            | Self::ProjectionEquality { trait_name, .. } => trait_name,
+            Self::Implemented { trait_name, .. } | Self::ProjectionEquality { trait_name, .. } => {
+                trait_name
+            }
         }
     }
 
     pub const fn trait_name_span(&self) -> Span {
         match self {
-            Self::Implemented { trait_name_span, .. }
-            | Self::ProjectionEquality { trait_name_span, .. } => *trait_name_span,
+            Self::Implemented {
+                trait_name_span, ..
+            }
+            | Self::ProjectionEquality {
+                trait_name_span, ..
+            } => *trait_name_span,
         }
     }
 
@@ -2744,6 +2835,7 @@ impl<'source> Parser<'source> {
             match token.text {
                 "<" => angle_depth = angle_depth.saturating_add(1),
                 ">" if angle_depth != 0 => angle_depth -= 1,
+                ">>" if angle_depth != 0 => angle_depth = angle_depth.saturating_sub(2),
                 _ => {}
             }
             match token.kind {
@@ -2796,6 +2888,7 @@ impl<'source> Parser<'source> {
             match token.text {
                 "<" => angle_depth = angle_depth.saturating_add(1),
                 ">" if angle_depth != 0 => angle_depth -= 1,
+                ">>" if angle_depth != 0 => angle_depth = angle_depth.saturating_sub(2),
                 _ => {}
             }
             match token.kind {
@@ -2842,6 +2935,7 @@ impl<'source> Parser<'source> {
             match token.text {
                 "<" => angle_depth = angle_depth.saturating_add(1),
                 ">" if angle_depth != 0 => angle_depth -= 1,
+                ">>" if angle_depth != 0 => angle_depth = angle_depth.saturating_sub(2),
                 _ => {}
             }
             let open = match token.kind {
@@ -3135,8 +3229,7 @@ impl<'source> Parser<'source> {
                     if !equals.is_some_and(|token| token.text == "=") {
                         return Err(self.error(ParseErrorKind::ExpectedType, equals));
                     }
-                    let expected_type =
-                        self.type_until_kind_or_text(TokenKind::OpenBrace, ",")?;
+                    let expected_type = self.type_until_kind_or_text(TokenKind::OpenBrace, ",")?;
                     FunctionWherePredicate::ProjectionEquality {
                         self_type,
                         trait_name: trait_name.text,
@@ -3406,8 +3499,7 @@ impl<'source> Parser<'source> {
                     if !equals.is_some_and(|token| token.text == "=") {
                         return Err(self.error(ParseErrorKind::ExpectedEquals, equals));
                     }
-                    let expected_type =
-                        self.type_until_kind_or_text(TokenKind::OpenBrace, ",")?;
+                    let expected_type = self.type_until_kind_or_text(TokenKind::OpenBrace, ",")?;
                     TraitImplementationWherePredicate::ProjectionEquality {
                         self_type: predicate_self,
                         trait_name: predicate_trait.text,
@@ -3816,17 +3908,24 @@ mod tests {
         let Some(Item::Trait(declaration)) = module.items()[0] else {
             panic!("expected trait")
         };
-        assert_eq!(declaration.generic_parameters(), &[Some("Input"), Some("Output")]);
+        assert_eq!(
+            declaration.generic_parameters(),
+            &[Some("Input"), Some("Output")]
+        );
         let Some(Item::TraitImplementation(implementation)) = module.items()[1] else {
             panic!("expected implementation")
         };
         assert_eq!(implementation.trait_argument_count(), 2);
-        assert_eq!(implementation.trait_arguments()[1].unwrap().text, "core::primitive::u16");
+        assert_eq!(
+            implementation.trait_arguments()[1].unwrap().text,
+            "core::primitive::u16"
+        );
     }
 
     #[test]
     fn parses_bounded_flat_generic_trait_implementations() {
-        let source = "trait Identity<Input> { type Output; } impl<T> Identity<T> for T { type Output = T; }";
+        let source =
+            "trait Identity<Input> { type Output; } impl<T> Identity<T> for T { type Output = T; }";
         let module: TestModule<'_> = Parser::new(source).parse_module().unwrap();
         let Some(Item::TraitImplementation(implementation)) = module.items()[1] else {
             panic!("expected implementation")
@@ -3834,7 +3933,32 @@ mod tests {
         assert_eq!(implementation.generic_parameters(), &[Some("T")]);
         assert_eq!(implementation.trait_arguments()[0].unwrap().text, "T");
         assert_eq!(implementation.self_type.text, "T");
-        assert_eq!(implementation.associated_types()[0].unwrap().value.text, "T");
+        assert_eq!(
+            implementation.associated_types()[0].unwrap().value.text,
+            "T"
+        );
+    }
+
+    #[test]
+    fn decomposes_projection_valued_associated_types() {
+        let source = concat!(
+            "trait Parent<T> { type Output; } trait Child<T> { type Output; } ",
+            "impl<T> Child<T> for T { type Output = <T as Parent<T>>::Output; }"
+        );
+        let module: TestModule<'_> = Parser::new(source).parse_module().unwrap();
+        let Some(Item::TraitImplementation(implementation)) = module.items()[2] else {
+            panic!("expected implementation")
+        };
+        let value = implementation.associated_types()[0].unwrap().value;
+        let projection = value.parse_trait_projection().unwrap().unwrap();
+        assert_eq!(projection.self_type.text, "T");
+        assert_eq!(projection.trait_name, "Parent");
+        assert_eq!(projection.trait_arguments()[0].unwrap().text, "T");
+        assert_eq!(projection.associated_type, "Output");
+        assert_eq!(
+            &source[projection.self_type.span.start..projection.self_type.span.end],
+            "T"
+        );
     }
 
     #[test]
@@ -3849,9 +3973,17 @@ mod tests {
             panic!("expected implementation")
         };
         assert_eq!(implementation.where_predicate_count(), 3);
-        assert_eq!(implementation.where_predicates()[0].unwrap().self_type().text, "T");
         assert_eq!(
-            implementation.where_predicates()[0].unwrap().trait_arguments()[0]
+            implementation.where_predicates()[0]
+                .unwrap()
+                .self_type()
+                .text,
+            "T"
+        );
+        assert_eq!(
+            implementation.where_predicates()[0]
+                .unwrap()
+                .trait_arguments()[0]
                 .unwrap()
                 .text,
             "T"
@@ -3878,7 +4010,13 @@ mod tests {
         };
         assert_eq!(implementation.generic_parameter_count(), 0);
         assert_eq!(implementation.where_predicate_count(), 1);
-        assert_eq!(implementation.where_predicates()[0].unwrap().self_type().text, "u32");
+        assert_eq!(
+            implementation.where_predicates()[0]
+                .unwrap()
+                .self_type()
+                .text,
+            "u32"
+        );
     }
 
     #[test]
@@ -3915,20 +4053,27 @@ mod tests {
         assert!(matches!(
             first,
             FunctionWherePredicate::Implemented {
-                self_type: TypeRef { text: "core::primitive::u32", .. },
+                self_type: TypeRef {
+                    text: "core::primitive::u32",
+                    ..
+                },
                 trait_name: "Visible",
                 ..
             }
         ));
         assert!(matches!(
             function.where_predicates()[1].unwrap(),
-            FunctionWherePredicate::Implemented { trait_name: "Small", .. }
+            FunctionWherePredicate::Implemented {
+                trait_name: "Small",
+                ..
+            }
         ));
     }
 
     #[test]
     fn parses_concrete_projection_equality_where_predicates() {
-        let source = "fn check() where <core::primitive::u32 as Iterator>::Item = core::primitive::u8, { }";
+        let source =
+            "fn check() where <core::primitive::u32 as Iterator>::Item = core::primitive::u8, { }";
         let module: TestModule<'_> = Parser::new(source).parse_module().unwrap();
         let Some(Item::Function(function)) = module.items()[0] else {
             panic!("expected function")
@@ -3936,10 +4081,16 @@ mod tests {
         assert!(matches!(
             function.where_predicates()[0].unwrap(),
             FunctionWherePredicate::ProjectionEquality {
-                self_type: TypeRef { text: "core::primitive::u32", .. },
+                self_type: TypeRef {
+                    text: "core::primitive::u32",
+                    ..
+                },
                 trait_name: "Iterator",
                 associated_type: "Item",
-                expected_type: TypeRef { text: "core::primitive::u8", .. },
+                expected_type: TypeRef {
+                    text: "core::primitive::u8",
+                    ..
+                },
                 ..
             }
         ));
