@@ -1246,6 +1246,15 @@ return origin; local-backed replacements fail closed. ORACLE-0002 accepts the
 stable parameter-backed combination and rejects both immediate and loop-carried
 local-backed returns with E0515.
 
+Nested-loop return summaries now replay only the bounded action prefix recorded
+at each ordered return control instead of applying the block's final alias state
+to every exit. Returns after an earlier unconditional nested control are
+unreachable and contribute no origin. Exact direct reassignments in a reachable
+prefix are supported; differing or local-backed reachable exits still fail
+closed. ORACLE-0002 accepts the parameter-backed ordered pair and rejects the
+earlier local-backed conditional return with E0515. This is source-ordered
+bounded transfer, not a nested-loop fixed point or general region inference.
+
 The first modern trait-solver foundation is an explicit bounded implemented-
 goal representation. Stable trait/type/inference/placeholder identities remain
 distinct; canonicalization replaces inference identities with first-occurrence

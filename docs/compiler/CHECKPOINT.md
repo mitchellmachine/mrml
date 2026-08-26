@@ -898,6 +898,18 @@ loop transfers, expressions, and unstable origins remain conservative. ORACLE-
 0002 accepts the stable same-origin reborrow and rejects a local-backed arm with
 E0515. Windows and Arch remain at 989 compiler tests per host.
 
+Nested-loop return-origin transfer now uses each return control's validated
+action index and source order. Each reachable return replays only its preceding
+bounded action prefix from the incoming state; an earlier unconditional nested
+control makes later returns unreachable. Direct alias assignments in that exact
+prefix are supported, while local-backed or inconsistent reachable exits remain
+fail-closed. ORACLE-0002 accepts the ordered parameter-backed case and rejects
+an earlier local-backed conditional return with E0515. Windows and Arch each
+pass 643 library tests, one component-interface probe, 10 conformance tests, and
+335 replacement tests: 989 compiler tests per host. General nested-loop fixed
+points, path-sensitive regions, and complete Polonius reasoning remain
+unsupported.
+
 Mixed conditional loop arms now partition exit and backedge evidence: supported
 terminal returns merge directly into the function result, while only nonterminal
 arms join the one-iteration state before its zero-iteration intersection. Direct

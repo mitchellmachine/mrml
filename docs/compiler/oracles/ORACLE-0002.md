@@ -351,6 +351,16 @@ expression-indexed output shapes only; it does not establish general expression,
 evaluation-order, place, register-allocation, memory-effect, or assembly
 semantics. Temporary source and metadata were removed.
 
+An independently authored Rust 2024 metadata-only nested-loop probe against
+this exact toolchain and commit accepted a conditional parameter-backed return
+followed by a path that temporarily assigned a local reference, restored the
+parameter, and returned it. The corresponding probe whose earlier conditional
+return was still local-backed failed with E0515 even though the later path
+reassigned the alias to the parameter. This is black-box evidence for those
+exact source-ordered return prefixes, not a nested-loop fixed point, general
+path-sensitive region inference, or complete Polonius semantics. Temporary
+sources and metadata were removed.
+
 An independently authored Rust 2024 metadata-only probe on 2026-08-26 against
 this exact toolchain and commit rejected mutation through a mutable-reference
 parameter after a shared-reference local was assigned from that parameter and

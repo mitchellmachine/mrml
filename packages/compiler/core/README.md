@@ -4110,6 +4110,18 @@ immediate or loop-carried local-backed returns with E0515. Both hosts remain at
 989 compiler tests. Break/continue, expressions, nested-loop transfer, and
 general fixed points remain unsupported.
 
+Nested-loop return summaries now consume the parser's exact action index and
+control order for every unconditional or conditional return. A reachable return
+receives only its source-preceding action prefix, and returns after an earlier
+unconditional nested control are ignored as unreachable. This admits exact
+direct parameter reassignments without letting a later reassignment rewrite an
+earlier return's origin. The pinned oracle accepts the ordered parameter-backed
+case and rejects the corresponding earlier local-backed return with E0515.
+Windows and native Arch Linux WSL each pass 643 library tests, one component-
+interface probe, 10 conformance tests, and 335 replacement tests: 989 compiler
+tests per host. This is bounded source-ordered transfer, not a nested-loop fixed
+point or region solver.
+
 Exact typed tuple literals now seed the same projected state when a local is
 declared. Every reference field is checked against the declared tuple element
 and return type; only a parameter-backed element records an origin. Scalar and
