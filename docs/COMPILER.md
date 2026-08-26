@@ -1372,9 +1372,13 @@ branches that contain actions before a terminal `break`, `continue`, or
 `return`. Each record preserves the condition, up to four scoped actions, the
 target-aware terminal, and its position among surrounding flat actions and
 controls. Parser tests cover local and expression actions followed by a return.
-CFG construction and execution deliberately reject any such record until their
-branch state, ownership events, scoped locals, and terminal edge are modeled;
-this is representation progress, not executable language support. Windows and
+CFG construction now gives the condition and scoped action body distinct basic
+blocks and routes true, false, and target-aware terminal edges. Ownership
+preanalysis assigns distinct condition, action, and return-value locations and
+keeps branch locals scoped. Compilation rejects these records before any
+evaluator or emitter fast path until state transfer, semantics, and native
+lowering are modeled; this is CFG/preanalysis support, not executable language
+support. Windows and
 native Arch Linux WSL each pass 644 library tests, one component-interface
 probe, 10 conformance tests, and 335 replacement tests: 990 compiler tests per
 host.

@@ -4243,10 +4243,13 @@ Flat modeled nested actions/controls now have iterative header convergence;
 nested branch-action representation and general regions remain incomplete.
 Nested conditional branches can now retain up to four scoped actions before a
 target-aware terminal in a dedicated parser record, including their exact
-position among surrounding actions and controls. This record is intentionally
-rejected by the runtime control-flow support gate until CFG, ownership,
-origin-transfer, semantic, and native-emission consumers model it. Focused
-tests cover retained branch actions and the fail-closed boundary. Windows and
+position among surrounding actions and controls. CFG construction now emits
+separate condition and action blocks with explicit false fallthrough and true
+terminal routing; ownership preanalysis gives conditions, scoped actions, and
+return values distinct mapped locations. Compilation rejects the record before
+evaluator or emitter selection until origin transfer, semantics, and native
+emission model it. Focused tests cover retained branch actions, CFG/ownership
+mapping, and the fail-closed compile boundary. Windows and
 native Arch Linux WSL each pass 644 library tests, one component-interface
 probe, 10 conformance tests, and 335 replacement tests: 990 compiler tests per
 host. This is parser/representation support, not executable nested branching.

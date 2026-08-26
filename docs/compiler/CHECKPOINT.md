@@ -662,10 +662,12 @@ incomplete.
 The nested branch-action representation now has a bounded parser-level record.
 It preserves a branch condition, up to four scoped local/assignment/expression
 actions, a target-aware terminal, and exact ordering relative to surrounding
-nested-loop actions and controls. The runtime support predicate rejects blocks
-that contain this record, with a focused test proving the fail-closed boundary;
-CFG facts, ownership preanalysis, origin transfer, semantics, and native
-emission are not yet implemented for it. Windows and Arch each pass 644 library
+nested-loop actions and controls. The CFG now assigns separate condition and
+scoped-action blocks, routes false fallthrough and target-aware true terminals,
+and maps condition/action/return ownership locations back to those control
+points. Compilation rejects the record at entry before evaluator or emitter
+selection, so origin transfer, semantics, and native emission remain
+unavailable without silent branch loss. Windows and Arch each pass 644 library
 tests, one component-interface probe, 10 conformance tests, and 335 replacement
 tests: 990 compiler tests per host.
 
