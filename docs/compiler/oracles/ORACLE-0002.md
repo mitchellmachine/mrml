@@ -413,6 +413,14 @@ sources and metadata were removed. This is exact multi-generation tuple-field
 evidence, not general aggregate history or region inference.
 
 Another independently authored Rust 2024 metadata-only probe against the same
+exact toolchain and commit created a mutable grandchild reborrow through a child
+moved from an exact tuple field. The oracle rejected a competing mutable borrow
+of the ultimate parameter owner with E0499 while the grandchild remained live,
+and accepted owner reuse after the grandchild's last use. Temporary sources and
+metadata were removed. This is bounded projected ancestry evidence, not general
+region inference.
+
+Another independently authored Rust 2024 metadata-only probe against the same
 exact toolchain and commit accepted assigning a parameter-backed tuple field
 into an existing mutable-reference local and returning that local. The same
 probe accepted an inferred alias initially moved from a local-backed tuple field,

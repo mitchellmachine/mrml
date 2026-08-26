@@ -756,6 +756,12 @@ moved child remained live, then accepted both owners after last use. Windows and
 Arch each pass 987 compiler tests. The traversal is fixed-capacity and does not
 infer unknown aggregate generations.
 
+Projected grandchild coverage proves that a mutable reborrow through a child
+moved from an exact tuple field recursively reaches the field's parameter owner.
+ORACLE-0002 rejected a live owner competitor with E0499 and accepted owner reuse
+after the grandchild's last use. Windows and Arch each pass 987 compiler tests.
+General indirect regions remain unsupported.
+
 Multi-field tuple literals retain a separate projected origin per field. A
 conditional reference element seeds its field only when both arms prove the
 same parameter; unequal first/second origins fail closed. Focused caller tests

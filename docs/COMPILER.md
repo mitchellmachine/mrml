@@ -1062,6 +1062,12 @@ with E0503 and the replacement owner fails with E0499 while the child remains
 live, while both owners are available after its last use. The traversal remains
 bounded by the existing effect and initialization capacities.
 
+A mutable grandchild reborrow through an exact tuple-field child now has focused
+evidence that the ancestry walk reaches the field's ultimate parameter owner.
+The owner conflicts while the grandchild remains live and is restored after its
+last use. ORACLE-0002 accepts the restoration control and rejects the live
+competitor with E0499. This is bounded projected ancestry, not general regions.
+
 The first modern trait-solver foundation is an explicit bounded implemented-
 goal representation. Stable trait/type/inference/placeholder identities remain
 distinct; canonicalization replaces inference identities with first-occurrence

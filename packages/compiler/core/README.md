@@ -3989,6 +3989,11 @@ and post-last-use restoration. The pinned oracle accepts those exact parameter-
 backed shapes and rejects the live competitor with E0499. Both hosts remain at
 987 tests.
 
+A mutable grandchild reborrow through an exact tuple-field child now has focused
+cross-host and oracle coverage. The ultimate parameter owner remains suspended
+while the grandchild is live and is restored after last use; the oracle rejects
+the live competitor with E0499. Both hosts remain at 987 tests.
+
 Multi-field initialization uses one independent key per tuple field. An exact
 conditional reference element records an origin only when both arms resolve to
 the same parameter; differing first/second origins remain unavailable. Focused
