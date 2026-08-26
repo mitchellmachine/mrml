@@ -14738,6 +14738,15 @@ fn runtime_reference_call_origin_parameter<const MAX_PARAMETERS: usize, const MA
         }
     }
 
+    fn local_is_return_compatible<const MAX_PARAMETERS: usize>(
+        target: crate::RuntimeCallTarget<'_, MAX_PARAMETERS>,
+        local: crate::LocalBinding<'_>,
+    ) -> bool {
+        local.ty.is_none_or(|ty| {
+            runtime_type_from_text(ty.text) == Some(runtime_type_from_scalar(target.return_type))
+        })
+    }
+
     fn local_origin<const MAX_PARAMETERS: usize, const MAX_NODES: usize>(
         target: crate::RuntimeCallTarget<'_, MAX_PARAMETERS>,
         local: crate::LocalBinding<'_>,
@@ -14746,9 +14755,7 @@ fn runtime_reference_call_origin_parameter<const MAX_PARAMETERS: usize, const MA
         local_origins: &[Option<usize>; MAX_PARAMETERS],
         local_count: usize,
     ) -> Option<usize> {
-        if local.ty.is_some_and(|ty| {
-            runtime_type_from_text(ty.text) != Some(runtime_type_from_scalar(target.return_type))
-        }) {
+        if !local_is_return_compatible(target, local) {
             return None;
         }
         recurse(
@@ -14768,6 +14775,7 @@ fn runtime_reference_call_origin_parameter<const MAX_PARAMETERS: usize, const MA
         local_names: &[Option<&str>; MAX_PARAMETERS],
         local_origins: &mut [Option<usize>; MAX_PARAMETERS],
         local_mutability: &[bool; MAX_PARAMETERS],
+        local_return_compatibility: &[bool; MAX_PARAMETERS],
         local_count: usize,
     ) -> Option<()> {
         if assignment.projection.is_some()
@@ -14778,7 +14786,7 @@ fn runtime_reference_call_origin_parameter<const MAX_PARAMETERS: usize, const MA
         let local_index = (0..local_count)
             .rev()
             .find(|index| local_names[*index] == Some(assignment.name))?;
-        if !local_mutability[local_index] {
+        if !local_mutability[local_index] || !local_return_compatibility[local_index] {
             return None;
         }
         let tree = crate::ExpressionParser::<MAX_NODES>::new(assignment.value)
@@ -14807,6 +14815,7 @@ fn runtime_reference_call_origin_parameter<const MAX_PARAMETERS: usize, const MA
         local_names: &mut [Option<&'source str>; MAX_PARAMETERS],
         local_origins: &mut [Option<usize>; MAX_PARAMETERS],
         local_mutability: &mut [bool; MAX_PARAMETERS],
+        local_return_compatibility: &mut [bool; MAX_PARAMETERS],
         local_count: &mut usize,
     ) -> Option<ConditionalActionOutcome> {
         for (action_index, action) in actions.iter().enumerate() {
@@ -14825,6 +14834,8 @@ fn runtime_reference_call_origin_parameter<const MAX_PARAMETERS: usize, const MA
                     *local_names.get_mut(*local_count)? = Some(local.name);
                     *local_origins.get_mut(*local_count)? = local_origin;
                     *local_mutability.get_mut(*local_count)? = local.mutable;
+                    *local_return_compatibility.get_mut(*local_count)? =
+                        local_is_return_compatible(target, local);
                     *local_count = local_count.checked_add(1)?;
                 }
                 crate::ConditionalAssignmentAction::Assignment(assignment) => {
@@ -14834,6 +14845,7 @@ fn runtime_reference_call_origin_parameter<const MAX_PARAMETERS: usize, const MA
                         local_names,
                         local_origins,
                         local_mutability,
+                        local_return_compatibility,
                         *local_count,
                     )?;
                 }
@@ -14869,6 +14881,7 @@ fn runtime_reference_call_origin_parameter<const MAX_PARAMETERS: usize, const MA
         local_names: &mut [Option<&'source str>; MAX_PARAMETERS],
         local_origins: &mut [Option<usize>; MAX_PARAMETERS],
         local_mutability: &mut [bool; MAX_PARAMETERS],
+        local_return_compatibility: &mut [bool; MAX_PARAMETERS],
         local_count: &mut usize,
     ) -> Option<()> {
         for action in actions.iter() {
@@ -14887,6 +14900,8 @@ fn runtime_reference_call_origin_parameter<const MAX_PARAMETERS: usize, const MA
             *local_names.get_mut(*local_count)? = Some(local.name);
             *local_origins.get_mut(*local_count)? = local_origin;
             *local_mutability.get_mut(*local_count)? = local.mutable;
+            *local_return_compatibility.get_mut(*local_count)? =
+                local_is_return_compatible(target, local);
             *local_count = local_count.checked_add(1)?;
         }
         Some(())
@@ -14899,6 +14914,7 @@ fn runtime_reference_call_origin_parameter<const MAX_PARAMETERS: usize, const MA
     let mut local_names = [None; MAX_PARAMETERS];
     let mut local_origins = [None; MAX_PARAMETERS];
     let mut local_mutability = [false; MAX_PARAMETERS];
+    let mut local_return_compatibility = [false; MAX_PARAMETERS];
     let mut local_count = 0usize;
     let mut merge = |candidate: usize| -> Option<()> {
         if origin.is_some_and(|existing| existing != candidate) {
@@ -14982,6 +14998,8 @@ fn runtime_reference_call_origin_parameter<const MAX_PARAMETERS: usize, const MA
                 *local_names.get_mut(local_count)? = Some(local.name);
                 *local_origins.get_mut(local_count)? = local_origin;
                 *local_mutability.get_mut(local_count)? = local.mutable;
+                *local_return_compatibility.get_mut(local_count)? =
+                    local_is_return_compatible(target, local);
                 local_count += 1;
             }
             crate::BodyStatement::Assignment(index) => {
@@ -14992,6 +15010,7 @@ fn runtime_reference_call_origin_parameter<const MAX_PARAMETERS: usize, const MA
                     &local_names,
                     &mut local_origins,
                     &local_mutability,
+                    &local_return_compatibility,
                     local_count,
                 )?;
             }
@@ -15022,6 +15041,7 @@ fn runtime_reference_call_origin_parameter<const MAX_PARAMETERS: usize, const MA
                     let mut branch_names = local_names;
                     let mut branch_origins = base_origins;
                     let mut branch_mutability = local_mutability;
+                    let mut branch_return_compatibility = local_return_compatibility;
                     let mut branch_local_count = local_count;
                     let outcome = apply_conditional_actions::<MAX_PARAMETERS, MAX_NODES>(
                         target,
@@ -15029,6 +15049,7 @@ fn runtime_reference_call_origin_parameter<const MAX_PARAMETERS: usize, const MA
                         &mut branch_names,
                         &mut branch_origins,
                         &mut branch_mutability,
+                        &mut branch_return_compatibility,
                         &mut branch_local_count,
                     )?;
                     match outcome {
@@ -15044,6 +15065,7 @@ fn runtime_reference_call_origin_parameter<const MAX_PARAMETERS: usize, const MA
                     let mut else_names = local_names;
                     let mut else_origins = base_origins;
                     let mut else_mutability = local_mutability;
+                    let mut else_return_compatibility = local_return_compatibility;
                     let mut else_local_count = local_count;
                     let outcome = apply_conditional_actions::<MAX_PARAMETERS, MAX_NODES>(
                         target,
@@ -15051,6 +15073,7 @@ fn runtime_reference_call_origin_parameter<const MAX_PARAMETERS: usize, const MA
                         &mut else_names,
                         &mut else_origins,
                         &mut else_mutability,
+                        &mut else_return_compatibility,
                         &mut else_local_count,
                     )?;
                     match outcome {
@@ -15085,6 +15108,7 @@ fn runtime_reference_call_origin_parameter<const MAX_PARAMETERS: usize, const MA
                     let mut iteration_names = local_names;
                     let mut iteration_origins = incoming_origins;
                     let mut iteration_mutability = local_mutability;
+                    let mut iteration_return_compatibility = local_return_compatibility;
                     let mut iteration_local_count = local_count;
                     for operation in loop_statement.operations().iter().flatten() {
                         match *operation {
@@ -15102,6 +15126,8 @@ fn runtime_reference_call_origin_parameter<const MAX_PARAMETERS: usize, const MA
                                 *iteration_origins.get_mut(iteration_local_count)? = local_origin;
                                 *iteration_mutability.get_mut(iteration_local_count)? =
                                     local.mutable;
+                                *iteration_return_compatibility.get_mut(iteration_local_count)? =
+                                    local_is_return_compatible(target, local);
                                 iteration_local_count = iteration_local_count.checked_add(1)?;
                             }
                             crate::LoopOperation::Assignment(assignment) => {
@@ -15111,6 +15137,7 @@ fn runtime_reference_call_origin_parameter<const MAX_PARAMETERS: usize, const MA
                                     &iteration_names,
                                     &mut iteration_origins,
                                     &iteration_mutability,
+                                    &iteration_return_compatibility,
                                     iteration_local_count,
                                 )?;
                             }
@@ -15163,6 +15190,7 @@ fn runtime_reference_call_origin_parameter<const MAX_PARAMETERS: usize, const MA
                             let mut block_names = local_names;
                             let mut block_origins = local_origins;
                             let mut block_mutability = local_mutability;
+                            let mut block_return_compatibility = local_return_compatibility;
                             let mut block_local_count = local_count;
                             apply_conditional_loop_locals::<MAX_PARAMETERS, MAX_NODES>(
                                 target,
@@ -15170,6 +15198,7 @@ fn runtime_reference_call_origin_parameter<const MAX_PARAMETERS: usize, const MA
                                 &mut block_names,
                                 &mut block_origins,
                                 &mut block_mutability,
+                                &mut block_return_compatibility,
                                 &mut block_local_count,
                             )?;
                             if let Some(crate::ConditionalLoopTerminal::Return(value)) =
@@ -15195,6 +15224,7 @@ fn runtime_reference_call_origin_parameter<const MAX_PARAMETERS: usize, const MA
                                     let mut arm_names = local_names;
                                     let mut arm_origins = local_origins;
                                     let mut arm_mutability = local_mutability;
+                                    let mut arm_return_compatibility = local_return_compatibility;
                                     let mut arm_local_count = local_count;
                                     apply_conditional_loop_locals::<MAX_PARAMETERS, MAX_NODES>(
                                         target,
@@ -15202,6 +15232,7 @@ fn runtime_reference_call_origin_parameter<const MAX_PARAMETERS: usize, const MA
                                         &mut arm_names,
                                         &mut arm_origins,
                                         &mut arm_mutability,
+                                        &mut arm_return_compatibility,
                                         &mut arm_local_count,
                                     )?;
                                     if let Some(crate::ConditionalLoopTerminal::Return(value)) =
@@ -15229,6 +15260,7 @@ fn runtime_reference_call_origin_parameter<const MAX_PARAMETERS: usize, const MA
                             let mut block_names = local_names;
                             let mut block_origins = local_origins;
                             let mut block_mutability = local_mutability;
+                            let mut block_return_compatibility = local_return_compatibility;
                             let mut block_local_count = local_count;
                             apply_conditional_loop_locals::<MAX_PARAMETERS, MAX_NODES>(
                                 target,
@@ -15236,6 +15268,7 @@ fn runtime_reference_call_origin_parameter<const MAX_PARAMETERS: usize, const MA
                                 &mut block_names,
                                 &mut block_origins,
                                 &mut block_mutability,
+                                &mut block_return_compatibility,
                                 &mut block_local_count,
                             )?;
                             for control in block.unconditional_controls().iter().flatten() {
@@ -35421,6 +35454,24 @@ mod tests {
             }),
             None
         );
+        for body_expression in [
+            concat!(
+                "let mut alias: &mut [u16] = &mut values[1..]; ",
+                "alias = &mut values[0]; alias"
+            ),
+            concat!(
+                "let mut alias: &mut [u16] = &mut values[1..]; ",
+                "if true { alias = &mut values[0]; } else { alias = &mut values[1]; } alias"
+            ),
+        ] {
+            assert_eq!(
+                runtime_reference_call_origin_parameter::<2, 32>(RuntimeCallTarget {
+                    body_expression,
+                    ..array_element_alias
+                }),
+                None
+            );
+        }
         assert_eq!(
             runtime_reference_call_origin_parameter::<2, 16>(RuntimeCallTarget {
                 body_expression: "&mut values[0]",
