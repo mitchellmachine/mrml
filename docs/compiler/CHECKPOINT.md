@@ -1511,6 +1511,19 @@ component-interface probe, 10 conformance tests, and 335 replacement tests: 985
 compiler tests per host. Register classes/allocation, projections, clobbers,
 arbitrary effects, and general inline assembly remain unimplemented.
 
+The first register-class increment implements the exact ORACLE-0002 shape
+`asm!("inc {value}", value = inout(reg) ...)`. A bounded named-template parser
+requires one identifier placeholder and the same declaration name, accepts the
+existing same-place or distinct-place `u64` inout operands, and deterministically
+allocates the sole class operand to RAX. It then uses the already verified
+ownership and increment/writeback paths. Positional, missing, mismatched, or
+repeated placeholders; other classes; additional operands; and invalid options
+fail closed. Windows gnullvm and native Arch Linux WSL each pass 639 library
+tests, one component-interface probe, 10 conformance tests, and 335 replacement
+tests: 985 compiler tests per host. Multi-operand allocation, other classes,
+projections, clobbers, arbitrary effects, and general inline assembly remain
+unimplemented.
+
 The premise-bearing rigid-normalization milestone proves the selected generic
 implementation's instantiated trait and projection predicates before exposing
 its associated value. It shares the caller's 16-frame rigid proof stack and

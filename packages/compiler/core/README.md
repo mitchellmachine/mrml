@@ -4693,6 +4693,17 @@ Windows gnullvm and native Arch Linux WSL each pass 985 compiler tests. This is
 **PARTIAL** distinct-inout evidence, not register allocation, output projection,
 general clobber/effect, or general assembly support.
 
+One named register-class operand is supported in the oracle-observed form
+`asm!("inc {value}", value = inout(reg) ...)`. The bounded parser requires one
+matching identifier placeholder/declaration, accepts the existing same-place or
+distinct-place `u64` inout shapes, and deterministically selects RAX for the
+sole class operand before reusing the checked ownership and writeback paths.
+Positional, missing, mismatched, or repeated placeholders, other classes,
+additional operands, and invalid options fail closed. Windows gnullvm and
+native Arch Linux WSL each pass 985 compiler tests. This is **PARTIAL** single-
+operand class-allocation evidence, not multi-operand allocation, other-class,
+projection, clobber/effect, or general assembly support.
+
 The projection-bearing term milestone uses a fixed 64-node arena for flat leaf
 terms and associated-type projections whose trait self/argument positions refer
 only to earlier nodes. Identical nodes intern to one stable identity; invalid

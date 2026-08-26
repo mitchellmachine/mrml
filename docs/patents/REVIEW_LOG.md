@@ -6023,3 +6023,16 @@ selection, or code-generation algorithm. Register classes, projections,
 general clobbers/effects, and general assembly remain absent. Broader compiler
 completion remains partial; this technical screen does not establish clearance
 or infringement and does not replace independent human dual review.
+
+# 2026-08-26 — Single named inline-assembly register class
+
+**Result: NOT_TRIGGERED after the single-class review.** This increment parses
+one named template placeholder and maps the sole supported general-register
+class operand deterministically to RAX before using the previously reviewed
+typed inout and published increment paths. Bounded identifier matching, one-
+operand class selection, and fail-closed rejection introduce no novel
+assembler, register-allocation, optimization, instruction-selection, or code-
+generation algorithm. Multi-operand allocation, other classes, projections,
+general clobbers/effects, and general assembly remain absent. Broader compiler
+completion remains partial; this technical screen does not establish clearance
+or infringement and does not replace independent human dual review.
