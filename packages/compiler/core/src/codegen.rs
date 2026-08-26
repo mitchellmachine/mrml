@@ -2474,6 +2474,50 @@ fn x86_64_inline_output_array_element<'source, const MAX_PARAMETERS: usize>(
     Ok(Some((index, local, element)))
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct X86_64InlineOutputPlace<'source> {
+    local_index: usize,
+    local: RuntimeLocal<'source>,
+    projections: RuntimePlaceProjections,
+    stack_offset: usize,
+}
+
+fn x86_64_inline_output_place<'source, const MAX_PARAMETERS: usize>(
+    function: &Function<'source, MAX_PARAMETERS>,
+    locals: &[Option<RuntimeLocal<'source>>],
+    output: &str,
+) -> Result<X86_64InlineOutputPlace<'source>, CodegenErrorKind> {
+    if let Some((local_index, local, field)) =
+        x86_64_inline_output_tuple_field(function, locals, output)?
+    {
+        return Ok(X86_64InlineOutputPlace {
+            local_index,
+            local,
+            projections: RuntimePlaceProjections::single(RuntimePlaceProjection::TupleField(field)),
+            stack_offset: field,
+        });
+    }
+    if let Some((local_index, local, element)) =
+        x86_64_inline_output_array_element(function, locals, output)?
+    {
+        return Ok(X86_64InlineOutputPlace {
+            local_index,
+            local,
+            projections: RuntimePlaceProjections::single(RuntimePlaceProjection::ArrayElement(
+                element,
+            )),
+            stack_offset: element,
+        });
+    }
+    let (local_index, local) = x86_64_inline_output_local(function, locals, output)?;
+    Ok(X86_64InlineOutputPlace {
+        local_index,
+        local,
+        projections: RuntimePlaceProjections::EMPTY,
+        stack_offset: 0,
+    })
+}
+
 fn encode_x86_64_naked_instruction_for_syntax(
     instruction: &str,
     att_syntax: bool,
@@ -8656,8 +8700,25 @@ fn preanalyze_x86_64_inline_local_access(
     span: Span,
     body_start: usize,
 ) -> Result<(), CodegenError> {
+    preanalyze_x86_64_inline_place_access(
+        facts,
+        local,
+        RuntimePlaceProjections::EMPTY,
+        access,
+        span,
+        body_start,
+    )
+}
+
+fn preanalyze_x86_64_inline_place_access(
+    facts: &mut RuntimeBodyFacts<'_>,
+    local: RuntimeLocal<'_>,
+    projections: RuntimePlaceProjections,
+    access: RuntimePlaceAccess,
+    span: Span,
+    body_start: usize,
+) -> Result<(), CodegenError> {
     let base = RuntimePlaceIdentity::Local(local.id);
-    let projections = RuntimePlaceProjections::EMPTY;
     facts
         .push_assignment_access(RuntimePlaceAccessFact {
             base,
@@ -8670,12 +8731,13 @@ fn preanalyze_x86_64_inline_local_access(
             kind,
             span: translate_span(body_start, span),
         })?;
-    let path = facts
-        .find_move_path(base, projections)
-        .ok_or(CodegenError {
+    let path = facts.find_move_path(base, projections);
+    if projections == RuntimePlaceProjections::EMPTY && path.is_none() {
+        return Err(CodegenError {
             kind: CodegenErrorKind::InvalidRuntimePlaceFacts,
             span: translate_span(body_start, span),
-        })?;
+        });
+    }
     let effect = match access {
         RuntimePlaceAccess::Write => RuntimePlaceEffectKind::Write,
         RuntimePlaceAccess::ReadModifyWrite => RuntimePlaceEffectKind::ReadModifyWrite,
@@ -8686,12 +8748,15 @@ fn preanalyze_x86_64_inline_local_access(
             });
         }
     };
-    facts
-        .push_place_effect(path, effect, span)
-        .map_err(|kind| CodegenError {
-            kind,
-            span: translate_span(body_start, span),
-        })
+    if let Some(path) = path {
+        facts
+            .push_place_effect(path, effect, span)
+            .map_err(|kind| CodegenError {
+                kind,
+                span: translate_span(body_start, span),
+            })?;
+    }
+    Ok(())
 }
 
 fn preanalyze_runtime_expression_statement_reads<
@@ -8753,83 +8818,16 @@ fn preanalyze_runtime_expression_statement_reads<
             );
         }
         Ok(Some(X86_64InlineAssembly::SetRax { output })) => {
-            if let Some((_, local, field)) =
-                x86_64_inline_output_tuple_field(function, locals, output).map_err(|kind| {
-                    CodegenError {
-                        kind,
-                        span: translate_span(body_start, statement.span),
-                    }
-                })?
-            {
-                let base = RuntimePlaceIdentity::Local(local.id);
-                let projections =
-                    RuntimePlaceProjections::single(RuntimePlaceProjection::TupleField(field));
-                let ty = local.ty;
-                facts
-                    .push_assignment_access(RuntimePlaceAccessFact {
-                        base,
-                        projections,
-                        ty,
-                        access: RuntimePlaceAccess::Write,
-                        span: statement.span,
-                    })
-                    .map_err(|kind| CodegenError {
-                        kind,
-                        span: translate_span(body_start, statement.span),
-                    })?;
-                if let Some(path) = facts.find_move_path(base, projections) {
-                    facts
-                        .push_place_effect(path, RuntimePlaceEffectKind::Write, statement.span)
-                        .map_err(|kind| CodegenError {
-                            kind,
-                            span: translate_span(body_start, statement.span),
-                        })?;
+            let place = x86_64_inline_output_place(function, locals, output).map_err(|kind| {
+                CodegenError {
+                    kind,
+                    span: translate_span(body_start, statement.span),
                 }
-                return Ok(());
-            }
-            if let Some((_, local, element)) =
-                x86_64_inline_output_array_element(function, locals, output).map_err(|kind| {
-                    CodegenError {
-                        kind,
-                        span: translate_span(body_start, statement.span),
-                    }
-                })?
-            {
-                let base = RuntimePlaceIdentity::Local(local.id);
-                let projections =
-                    RuntimePlaceProjections::single(RuntimePlaceProjection::ArrayElement(element));
-                facts
-                    .push_assignment_access(RuntimePlaceAccessFact {
-                        base,
-                        projections,
-                        ty: local.ty,
-                        access: RuntimePlaceAccess::Write,
-                        span: statement.span,
-                    })
-                    .map_err(|kind| CodegenError {
-                        kind,
-                        span: translate_span(body_start, statement.span),
-                    })?;
-                if let Some(path) = facts.find_move_path(base, projections) {
-                    facts
-                        .push_place_effect(path, RuntimePlaceEffectKind::Write, statement.span)
-                        .map_err(|kind| CodegenError {
-                            kind,
-                            span: translate_span(body_start, statement.span),
-                        })?;
-                }
-                return Ok(());
-            }
-            let (_, local) =
-                x86_64_inline_output_local(function, locals, output).map_err(|kind| {
-                    CodegenError {
-                        kind,
-                        span: translate_span(body_start, statement.span),
-                    }
-                })?;
-            return preanalyze_x86_64_inline_local_access(
+            })?;
+            return preanalyze_x86_64_inline_place_access(
                 facts,
-                local,
+                place.local,
+                place.projections,
                 RuntimePlaceAccess::Write,
                 statement.span,
                 body_start,
@@ -8869,171 +8867,32 @@ fn preanalyze_runtime_expression_statement_reads<
                     &tree,
                     statement.span,
                 )?;
-                if let Some((_, local, field)) =
-                    x86_64_inline_output_tuple_field(function, locals, output).map_err(|kind| {
-                        CodegenError {
-                            kind,
-                            span: translate_span(body_start, statement.span),
-                        }
-                    })?
-                {
-                    let base = RuntimePlaceIdentity::Local(local.id);
-                    let projections =
-                        RuntimePlaceProjections::single(RuntimePlaceProjection::TupleField(field));
-                    facts
-                        .push_assignment_access(RuntimePlaceAccessFact {
-                            base,
-                            projections,
-                            ty: local.ty,
-                            access: RuntimePlaceAccess::Write,
-                            span: statement.span,
-                        })
-                        .map_err(|kind| CodegenError {
-                            kind,
-                            span: translate_span(body_start, statement.span),
-                        })?;
-                    if let Some(path) = facts.find_move_path(base, projections) {
-                        facts
-                            .push_place_effect(path, RuntimePlaceEffectKind::Write, statement.span)
-                            .map_err(|kind| CodegenError {
-                                kind,
-                                span: translate_span(body_start, statement.span),
-                            })?;
-                    }
-                    return Ok(());
-                }
-                if let Some((_, local, element)) = x86_64_inline_output_array_element(
-                    function, locals, output,
-                )
-                .map_err(|kind| CodegenError {
-                    kind,
-                    span: translate_span(body_start, statement.span),
-                })? {
-                    let base = RuntimePlaceIdentity::Local(local.id);
-                    let projections = RuntimePlaceProjections::single(
-                        RuntimePlaceProjection::ArrayElement(element),
-                    );
-                    facts
-                        .push_assignment_access(RuntimePlaceAccessFact {
-                            base,
-                            projections,
-                            ty: local.ty,
-                            access: RuntimePlaceAccess::Write,
-                            span: statement.span,
-                        })
-                        .map_err(|kind| CodegenError {
-                            kind,
-                            span: translate_span(body_start, statement.span),
-                        })?;
-                    if let Some(path) = facts.find_move_path(base, projections) {
-                        facts
-                            .push_place_effect(path, RuntimePlaceEffectKind::Write, statement.span)
-                            .map_err(|kind| CodegenError {
-                                kind,
-                                span: translate_span(body_start, statement.span),
-                            })?;
-                    }
-                    return Ok(());
-                }
-                let (_, local) =
-                    x86_64_inline_output_local(function, locals, output).map_err(|kind| {
+                let place =
+                    x86_64_inline_output_place(function, locals, output).map_err(|kind| {
                         CodegenError {
                             kind,
                             span: translate_span(body_start, statement.span),
                         }
                     })?;
-                return preanalyze_x86_64_inline_local_access(
+                return preanalyze_x86_64_inline_place_access(
                     facts,
-                    local,
+                    place.local,
+                    place.projections,
                     RuntimePlaceAccess::Write,
                     statement.span,
                     body_start,
                 );
             }
-            if let Some((_, local, field)) =
-                x86_64_inline_output_tuple_field(function, locals, input).map_err(|kind| {
-                    CodegenError {
-                        kind,
-                        span: translate_span(body_start, statement.span),
-                    }
-                })?
-            {
-                let base = RuntimePlaceIdentity::Local(local.id);
-                let projections =
-                    RuntimePlaceProjections::single(RuntimePlaceProjection::TupleField(field));
-                facts
-                    .push_assignment_access(RuntimePlaceAccessFact {
-                        base,
-                        projections,
-                        ty: local.ty,
-                        access: RuntimePlaceAccess::ReadModifyWrite,
-                        span: statement.span,
-                    })
-                    .map_err(|kind| CodegenError {
-                        kind,
-                        span: translate_span(body_start, statement.span),
-                    })?;
-                if let Some(path) = facts.find_move_path(base, projections) {
-                    facts
-                        .push_place_effect(
-                            path,
-                            RuntimePlaceEffectKind::ReadModifyWrite,
-                            statement.span,
-                        )
-                        .map_err(|kind| CodegenError {
-                            kind,
-                            span: translate_span(body_start, statement.span),
-                        })?;
+            let place = x86_64_inline_output_place(function, locals, input).map_err(|kind| {
+                CodegenError {
+                    kind,
+                    span: translate_span(body_start, statement.span),
                 }
-                return Ok(());
-            }
-            if let Some((_, local, element)) =
-                x86_64_inline_output_array_element(function, locals, input).map_err(|kind| {
-                    CodegenError {
-                        kind,
-                        span: translate_span(body_start, statement.span),
-                    }
-                })?
-            {
-                let base = RuntimePlaceIdentity::Local(local.id);
-                let projections =
-                    RuntimePlaceProjections::single(RuntimePlaceProjection::ArrayElement(element));
-                facts
-                    .push_assignment_access(RuntimePlaceAccessFact {
-                        base,
-                        projections,
-                        ty: local.ty,
-                        access: RuntimePlaceAccess::ReadModifyWrite,
-                        span: statement.span,
-                    })
-                    .map_err(|kind| CodegenError {
-                        kind,
-                        span: translate_span(body_start, statement.span),
-                    })?;
-                if let Some(path) = facts.find_move_path(base, projections) {
-                    facts
-                        .push_place_effect(
-                            path,
-                            RuntimePlaceEffectKind::ReadModifyWrite,
-                            statement.span,
-                        )
-                        .map_err(|kind| CodegenError {
-                            kind,
-                            span: translate_span(body_start, statement.span),
-                        })?;
-                }
-                return Ok(());
-            }
-            let (_, local) =
-                x86_64_inline_output_local(function, locals, input).map_err(|kind| {
-                    CodegenError {
-                        kind,
-                        span: translate_span(body_start, statement.span),
-                    }
-                })?;
-            return preanalyze_x86_64_inline_local_access(
+            })?;
+            return preanalyze_x86_64_inline_place_access(
                 facts,
-                local,
+                place.local,
+                place.projections,
                 RuntimePlaceAccess::ReadModifyWrite,
                 statement.span,
                 body_start,
@@ -19499,6 +19358,37 @@ impl<
         Ok(())
     }
 
+    fn record_x86_64_inline_output_place(
+        &mut self,
+        place: X86_64InlineOutputPlace<'tree>,
+        access: RuntimePlaceAccess,
+        span: Span,
+    ) -> Result<usize, CodegenError> {
+        let fact = RuntimePlaceAccessFact {
+            base: RuntimePlaceIdentity::Local(place.local.id),
+            projections: place.projections,
+            ty: place.local.ty,
+            access,
+            span,
+        };
+        if self.preanalyzed_assignment_access_cursor < self.body_facts.assignment_access_count
+            && self.body_facts.assignment_accesses[self.preanalyzed_assignment_access_cursor]
+                == Some(fact)
+        {
+            self.preanalyzed_assignment_access_cursor += 1;
+        }
+        self.record_place_access_fact(
+            fact.base,
+            fact.projections,
+            fact.ty,
+            fact.access,
+            fact.span,
+        )?;
+        self.local_stack_slots_from(place.local_index + 1)?
+            .checked_add(place.stack_offset)
+            .ok_or(self.error(CodegenErrorKind::OutputTooSmall))
+    }
+
     fn record_identifier_read(
         &mut self,
         name: &str,
@@ -26218,87 +26108,7 @@ impl<
                 return self.emit(&[0x48, 0x39, 0xc0]);
             }
             Ok(Some(X86_64InlineAssembly::SetRax { output })) => {
-                if let Some((index, local, field)) = x86_64_inline_output_tuple_field(
-                    self.function,
-                    &self.locals[..self.saved_locals],
-                    output,
-                )
-                .map_err(|kind| CodegenError {
-                    kind,
-                    span: translate_span(body_start, statement.span),
-                })? {
-                    let fact = RuntimePlaceAccessFact {
-                        base: RuntimePlaceIdentity::Local(local.id),
-                        projections: RuntimePlaceProjections::single(
-                            RuntimePlaceProjection::TupleField(field),
-                        ),
-                        ty: local.ty,
-                        access: RuntimePlaceAccess::Write,
-                        span: statement.span,
-                    };
-                    if self.preanalyzed_assignment_access_cursor
-                        < self.body_facts.assignment_access_count
-                        && self.body_facts.assignment_accesses
-                            [self.preanalyzed_assignment_access_cursor]
-                            == Some(fact)
-                    {
-                        self.preanalyzed_assignment_access_cursor += 1;
-                    }
-                    self.record_place_access_fact(
-                        fact.base,
-                        fact.projections,
-                        fact.ty,
-                        fact.access,
-                        fact.span,
-                    )?;
-                    self.emit(&[0x48, 0xc7, 0xc0, 0x07, 0x00, 0x00, 0x00])?;
-                    let destination = self
-                        .local_stack_slots_from(index + 1)?
-                        .checked_add(field)
-                        .ok_or(self.error(CodegenErrorKind::OutputTooSmall))?;
-                    return self.emit_store_stack_slot(destination);
-                }
-                if let Some((index, local, element)) = x86_64_inline_output_array_element(
-                    self.function,
-                    &self.locals[..self.saved_locals],
-                    output,
-                )
-                .map_err(|kind| CodegenError {
-                    kind,
-                    span: translate_span(body_start, statement.span),
-                })? {
-                    let fact = RuntimePlaceAccessFact {
-                        base: RuntimePlaceIdentity::Local(local.id),
-                        projections: RuntimePlaceProjections::single(
-                            RuntimePlaceProjection::ArrayElement(element),
-                        ),
-                        ty: local.ty,
-                        access: RuntimePlaceAccess::Write,
-                        span: statement.span,
-                    };
-                    if self.preanalyzed_assignment_access_cursor
-                        < self.body_facts.assignment_access_count
-                        && self.body_facts.assignment_accesses
-                            [self.preanalyzed_assignment_access_cursor]
-                            == Some(fact)
-                    {
-                        self.preanalyzed_assignment_access_cursor += 1;
-                    }
-                    self.record_place_access_fact(
-                        fact.base,
-                        fact.projections,
-                        fact.ty,
-                        fact.access,
-                        fact.span,
-                    )?;
-                    self.emit(&[0x48, 0xc7, 0xc0, 0x07, 0x00, 0x00, 0x00])?;
-                    let destination = self
-                        .local_stack_slots_from(index + 1)?
-                        .checked_add(element)
-                        .ok_or(self.error(CodegenErrorKind::OutputTooSmall))?;
-                    return self.emit_store_stack_slot(destination);
-                }
-                let (index, local) = x86_64_inline_output_local(
+                let place = x86_64_inline_output_place(
                     self.function,
                     &self.locals[..self.saved_locals],
                     output,
@@ -26307,30 +26117,13 @@ impl<
                     kind,
                     span: translate_span(body_start, statement.span),
                 })?;
-                let fact = RuntimePlaceAccessFact {
-                    base: RuntimePlaceIdentity::Local(local.id),
-                    projections: RuntimePlaceProjections::EMPTY,
-                    ty: local.ty,
-                    access: RuntimePlaceAccess::Write,
-                    span: statement.span,
-                };
-                if self.preanalyzed_assignment_access_cursor
-                    < self.body_facts.assignment_access_count
-                    && self.body_facts.assignment_accesses
-                        [self.preanalyzed_assignment_access_cursor]
-                        == Some(fact)
-                {
-                    self.preanalyzed_assignment_access_cursor += 1;
-                }
-                self.record_place_access_fact(
-                    fact.base,
-                    fact.projections,
-                    fact.ty,
-                    fact.access,
-                    fact.span,
+                let destination = self.record_x86_64_inline_output_place(
+                    place,
+                    RuntimePlaceAccess::Write,
+                    statement.span,
                 )?;
                 self.emit(&[0x48, 0xc7, 0xc0, 0x07, 0x00, 0x00, 0x00])?;
-                return self.emit_store_stack_slot(self.local_stack_slots_from(index + 1)?);
+                return self.emit_store_stack_slot(destination);
             }
             Ok(Some(X86_64InlineAssembly::IncrementRax { input, output })) => {
                 if let Some(output) = output {
@@ -26358,99 +26151,7 @@ impl<
                             span: translate_span(body_start, statement.span),
                         });
                     }
-                    if let Some((index, local, field)) = x86_64_inline_output_tuple_field(
-                        self.function,
-                        &self.locals[..self.saved_locals],
-                        output,
-                    )
-                    .map_err(|kind| CodegenError {
-                        kind,
-                        span: translate_span(body_start, statement.span),
-                    })? {
-                        let fact = RuntimePlaceAccessFact {
-                            base: RuntimePlaceIdentity::Local(local.id),
-                            projections: RuntimePlaceProjections::single(
-                                RuntimePlaceProjection::TupleField(field),
-                            ),
-                            ty: local.ty,
-                            access: RuntimePlaceAccess::Write,
-                            span: statement.span,
-                        };
-                        if self.preanalyzed_assignment_access_cursor
-                            < self.body_facts.assignment_access_count
-                            && self.body_facts.assignment_accesses
-                                [self.preanalyzed_assignment_access_cursor]
-                                == Some(fact)
-                        {
-                            self.preanalyzed_assignment_access_cursor += 1;
-                        }
-                        self.record_place_access_fact(
-                            fact.base,
-                            fact.projections,
-                            fact.ty,
-                            fact.access,
-                            fact.span,
-                        )?;
-                        let previous_width = self.width;
-                        self.width = runtime_expression_width(ty)
-                            .ok_or(self.error(CodegenErrorKind::RuntimeTypeMismatch))?;
-                        let emission = self.emit_expression(&tree, tree.root(), 0);
-                        self.width = previous_width;
-                        emission?;
-                        self.emit(&[0x48, 0xff, 0xc0])?;
-                        let stack_slot = self
-                            .local_stack_slots_from(index + 1)?
-                            .checked_add(field)
-                            .ok_or(self.error(CodegenErrorKind::OutputTooSmall))?;
-                        return self.emit_store_stack_slot(stack_slot);
-                    }
-                    if let Some((index, local, element)) = x86_64_inline_output_array_element(
-                        self.function,
-                        &self.locals[..self.saved_locals],
-                        output,
-                    )
-                    .map_err(|kind| CodegenError {
-                        kind,
-                        span: translate_span(body_start, statement.span),
-                    })? {
-                        let fact = RuntimePlaceAccessFact {
-                            base: RuntimePlaceIdentity::Local(local.id),
-                            projections: RuntimePlaceProjections::single(
-                                RuntimePlaceProjection::ArrayElement(element),
-                            ),
-                            ty: local.ty,
-                            access: RuntimePlaceAccess::Write,
-                            span: statement.span,
-                        };
-                        if self.preanalyzed_assignment_access_cursor
-                            < self.body_facts.assignment_access_count
-                            && self.body_facts.assignment_accesses
-                                [self.preanalyzed_assignment_access_cursor]
-                                == Some(fact)
-                        {
-                            self.preanalyzed_assignment_access_cursor += 1;
-                        }
-                        self.record_place_access_fact(
-                            fact.base,
-                            fact.projections,
-                            fact.ty,
-                            fact.access,
-                            fact.span,
-                        )?;
-                        let previous_width = self.width;
-                        self.width = runtime_expression_width(ty)
-                            .ok_or(self.error(CodegenErrorKind::RuntimeTypeMismatch))?;
-                        let emission = self.emit_expression(&tree, tree.root(), 0);
-                        self.width = previous_width;
-                        emission?;
-                        self.emit(&[0x48, 0xff, 0xc0])?;
-                        let stack_slot = self
-                            .local_stack_slots_from(index + 1)?
-                            .checked_add(element)
-                            .ok_or(self.error(CodegenErrorKind::OutputTooSmall))?;
-                        return self.emit_store_stack_slot(stack_slot);
-                    }
-                    let (index, local) = x86_64_inline_output_local(
+                    let place = x86_64_inline_output_place(
                         self.function,
                         &self.locals[..self.saved_locals],
                         output,
@@ -26459,27 +26160,10 @@ impl<
                         kind,
                         span: translate_span(body_start, statement.span),
                     })?;
-                    let fact = RuntimePlaceAccessFact {
-                        base: RuntimePlaceIdentity::Local(local.id),
-                        projections: RuntimePlaceProjections::EMPTY,
-                        ty: local.ty,
-                        access: RuntimePlaceAccess::Write,
-                        span: statement.span,
-                    };
-                    if self.preanalyzed_assignment_access_cursor
-                        < self.body_facts.assignment_access_count
-                        && self.body_facts.assignment_accesses
-                            [self.preanalyzed_assignment_access_cursor]
-                            == Some(fact)
-                    {
-                        self.preanalyzed_assignment_access_cursor += 1;
-                    }
-                    self.record_place_access_fact(
-                        fact.base,
-                        fact.projections,
-                        fact.ty,
-                        fact.access,
-                        fact.span,
+                    let stack_slot = self.record_x86_64_inline_output_place(
+                        place,
+                        RuntimePlaceAccess::Write,
+                        statement.span,
                     )?;
                     let previous_width = self.width;
                     self.width = runtime_expression_width(ty)
@@ -26488,92 +26172,9 @@ impl<
                     self.width = previous_width;
                     emission?;
                     self.emit(&[0x48, 0xff, 0xc0])?;
-                    let stack_slot = self.local_stack_slots_from(index + 1)?;
                     return self.emit_store_stack_slot(stack_slot);
                 }
-                if let Some((index, local, field)) = x86_64_inline_output_tuple_field(
-                    self.function,
-                    &self.locals[..self.saved_locals],
-                    input,
-                )
-                .map_err(|kind| CodegenError {
-                    kind,
-                    span: translate_span(body_start, statement.span),
-                })? {
-                    let fact = RuntimePlaceAccessFact {
-                        base: RuntimePlaceIdentity::Local(local.id),
-                        projections: RuntimePlaceProjections::single(
-                            RuntimePlaceProjection::TupleField(field),
-                        ),
-                        ty: local.ty,
-                        access: RuntimePlaceAccess::ReadModifyWrite,
-                        span: statement.span,
-                    };
-                    if self.preanalyzed_assignment_access_cursor
-                        < self.body_facts.assignment_access_count
-                        && self.body_facts.assignment_accesses
-                            [self.preanalyzed_assignment_access_cursor]
-                            == Some(fact)
-                    {
-                        self.preanalyzed_assignment_access_cursor += 1;
-                    }
-                    self.record_place_access_fact(
-                        fact.base,
-                        fact.projections,
-                        fact.ty,
-                        fact.access,
-                        fact.span,
-                    )?;
-                    let stack_slot = self
-                        .local_stack_slots_from(index + 1)?
-                        .checked_add(field)
-                        .ok_or(self.error(CodegenErrorKind::OutputTooSmall))?;
-                    self.emit_stack_slot(stack_slot)?;
-                    self.emit(&[0x48, 0xff, 0xc0])?;
-                    return self.emit_store_stack_slot(stack_slot);
-                }
-                if let Some((index, local, element)) = x86_64_inline_output_array_element(
-                    self.function,
-                    &self.locals[..self.saved_locals],
-                    input,
-                )
-                .map_err(|kind| CodegenError {
-                    kind,
-                    span: translate_span(body_start, statement.span),
-                })? {
-                    let fact = RuntimePlaceAccessFact {
-                        base: RuntimePlaceIdentity::Local(local.id),
-                        projections: RuntimePlaceProjections::single(
-                            RuntimePlaceProjection::ArrayElement(element),
-                        ),
-                        ty: local.ty,
-                        access: RuntimePlaceAccess::ReadModifyWrite,
-                        span: statement.span,
-                    };
-                    if self.preanalyzed_assignment_access_cursor
-                        < self.body_facts.assignment_access_count
-                        && self.body_facts.assignment_accesses
-                            [self.preanalyzed_assignment_access_cursor]
-                            == Some(fact)
-                    {
-                        self.preanalyzed_assignment_access_cursor += 1;
-                    }
-                    self.record_place_access_fact(
-                        fact.base,
-                        fact.projections,
-                        fact.ty,
-                        fact.access,
-                        fact.span,
-                    )?;
-                    let stack_slot = self
-                        .local_stack_slots_from(index + 1)?
-                        .checked_add(element)
-                        .ok_or(self.error(CodegenErrorKind::OutputTooSmall))?;
-                    self.emit_stack_slot(stack_slot)?;
-                    self.emit(&[0x48, 0xff, 0xc0])?;
-                    return self.emit_store_stack_slot(stack_slot);
-                }
-                let (index, local) = x86_64_inline_output_local(
+                let place = x86_64_inline_output_place(
                     self.function,
                     &self.locals[..self.saved_locals],
                     input,
@@ -26582,29 +26183,11 @@ impl<
                     kind,
                     span: translate_span(body_start, statement.span),
                 })?;
-                let fact = RuntimePlaceAccessFact {
-                    base: RuntimePlaceIdentity::Local(local.id),
-                    projections: RuntimePlaceProjections::EMPTY,
-                    ty: local.ty,
-                    access: RuntimePlaceAccess::ReadModifyWrite,
-                    span: statement.span,
-                };
-                if self.preanalyzed_assignment_access_cursor
-                    < self.body_facts.assignment_access_count
-                    && self.body_facts.assignment_accesses
-                        [self.preanalyzed_assignment_access_cursor]
-                        == Some(fact)
-                {
-                    self.preanalyzed_assignment_access_cursor += 1;
-                }
-                self.record_place_access_fact(
-                    fact.base,
-                    fact.projections,
-                    fact.ty,
-                    fact.access,
-                    fact.span,
+                let stack_slot = self.record_x86_64_inline_output_place(
+                    place,
+                    RuntimePlaceAccess::ReadModifyWrite,
+                    statement.span,
                 )?;
-                let stack_slot = self.local_stack_slots_from(index + 1)?;
                 self.emit_stack_slot(stack_slot)?;
                 self.emit(&[0x48, 0xff, 0xc0])?;
                 return self.emit_store_stack_slot(stack_slot);
