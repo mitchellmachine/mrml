@@ -583,6 +583,16 @@ and Arch each pass 643 library tests, one component-interface probe, 10
 conformance tests, and 335 replacement tests: 989 compiler tests per host.
 General nested-loop fixed points remain incomplete.
 
+Nested normal-backedge analysis now admits one bounded normalization step. The
+candidate produced by the complete action sequence must be idempotent on an
+exact second replay, and every recorded return/break/continue prefix must retain
+identical outer-visible origins from the initial and candidate headers. The
+pinned oracle accepts a parameter overwrite before every conditional exit and
+rejects the same exit placed before normalization with E0515. Windows and Arch
+each pass 643 library tests, one component-interface probe, 10 conformance
+tests, and 335 replacement tests: 989 compiler tests per host. Multi-step,
+branching, and general nested-loop fixed points remain incomplete.
+
 The conditional callee-local reassignment milestone evaluates supported direct
 assignments from a copy of the incoming fixed local-origin state for every
 conditional outcome, then joins each local independently. A missing `else`

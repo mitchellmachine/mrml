@@ -152,6 +152,14 @@ exact mixed destinations participate in outlives checking, not general nested-
 loop fixed points or region inference. Temporary source and metadata were
 removed.
 
+An independently authored Rust 2024 metadata-only nested-backedge pair against
+this exact toolchain and commit accepted an initially local-backed alias when an
+unconditional parameter overwrite preceded every conditional inner-loop exit.
+Moving that conditional exit before the overwrite failed at the enclosing
+return with E0515. This is black-box evidence for that exact normalized cycle
+and early-exit distinction, not iterative fixed-point or general region
+inference. Temporary source and metadata were removed.
+
 An independently authored Rust 2024 metadata-only composed-loop pair against
 this exact toolchain and commit accepted an outer-loop same-origin mutable
 reassignment followed by an inner-loop conditional return. Replacing that outer

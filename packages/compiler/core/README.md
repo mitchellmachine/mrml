@@ -4195,6 +4195,13 @@ exact at both destinations; making either selected path local-backed fails
 closed and matches pinned-oracle E0515. Windows and Arch remain at 989 compiler
 tests per host. This is destination-separation evidence, not a general nested-
 loop fixed point.
+Nested normal backedges additionally admit a single normalized candidate when
+the full action transfer is idempotent on exact replay. All stored control
+prefixes must expose the same retained origins from the incoming and normalized
+headers, preventing an early exit from inheriting a later overwrite. The pinned
+oracle accepts normalization before every exit and rejects the reversed order
+with E0515. Both hosts remain at 989 compiler tests; multi-step and branching
+fixed points remain incomplete.
 Nested-loop ordered-return and stable-edge analysis is now factored over an
 explicit incoming state and composes after outer-loop declarations, assignments,
 and branch joins. Stable nested edges preserve that state for later outer

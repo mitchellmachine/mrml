@@ -1327,6 +1327,12 @@ states: a conditional outer break does not replace the inner exit used by later
 outer operations, and a conditional outer continue does not replace the inner
 exit routed to an enclosing break. ORACLE-0002 accepts the parameter-backed
 forms and rejects the local-backed alternatives with E0515.
+Nested normal backedges may now use one bounded normalized state when applying
+the complete action transfer a second time is idempotent. Every stored return,
+break, and continue prefix must expose the same retained origins from both the
+incoming and normalized headers; otherwise analysis fails closed. ORACLE-0002
+accepts an overwrite that precedes every exit and rejects an exit that can run
+before that overwrite with E0515. This is not iterative fixed-point solving.
 
 The first modern trait-solver foundation is an explicit bounded implemented-
 goal representation. Stable trait/type/inference/placeholder identities remain
