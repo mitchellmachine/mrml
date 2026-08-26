@@ -160,6 +160,16 @@ authority, or dependency mechanism. Broader alias and compiler completion
 remain partial; this technical screen establishes neither clearance nor
 infringement and does not replace independent human dual review.
 
+## 2026-08-26 — Projected-RHS alias control-flow joins
+
+Patent review: **NOT_TRIGGERED**. This bounded compiler-analysis increment feeds
+the existing typed tuple-field RHS into the already reviewed root-alias
+conditional and stable-loop equality joins. It adds no new dataflow algorithm,
+alias-analysis, region-solving, optimization, runtime, authority, or dependency
+mechanism. Broader control flow and compiler completion remain partial; this
+technical screen establishes neither clearance nor infringement and does not
+replace independent human dual review.
+
 ## 2026-08-26 — Activated-generation binding for Total inventory
 
 Patent review: **TRIGGERED** under the existing SystemRelease, deployment,
