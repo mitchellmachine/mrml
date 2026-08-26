@@ -564,7 +564,9 @@ impl<'source, const MAX_NODES: usize, const MAX_INSTRUCTIONS: usize>
             ExprKind::Return { operand } | ExprKind::LoopBreak { operand } => {
                 self.lower(operand, depth + 1)?
             }
-            ExprKind::InlineConst { operand } => self.lower(operand, depth + 1)?,
+            ExprKind::InlineConst { operand } | ExprKind::UnsafeBlock { operand } => {
+                self.lower(operand, depth + 1)?
+            }
             ExprKind::Sequence { first, then } => {
                 self.lower(first, depth + 1)?;
                 self.push(Instruction::Pop, expression.span)?;

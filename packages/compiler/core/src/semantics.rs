@@ -2384,6 +2384,7 @@ fn inline_const_has_invalid_capture<const MAX_NODES: usize>(
         | ExprKind::Ascribe { operand, .. }
         | ExprKind::Unary { operand, .. }
         | ExprKind::Return { operand }
+        | ExprKind::UnsafeBlock { operand }
         | ExprKind::LoopBreak { operand } => recurse(operand, inside_inline_const),
         ExprKind::Binary { left, right, .. } => {
             recurse(left, inside_inline_const) || recurse(right, inside_inline_const)
@@ -2577,7 +2578,8 @@ fn expression_contains_call<const MAX_NODES: usize>(
         | ExprKind::Unary { operand, .. }
         | ExprKind::Return { operand }
         | ExprKind::LoopBreak { operand }
-        | ExprKind::InlineConst { operand } => recurse(operand),
+        | ExprKind::InlineConst { operand }
+        | ExprKind::UnsafeBlock { operand } => recurse(operand),
         ExprKind::Binary { left, right, .. } => recurse(left) || recurse(right),
         ExprKind::Sequence { first, then } => recurse(first) || recurse(then),
         ExprKind::If {

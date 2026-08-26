@@ -853,6 +853,9 @@ pub enum ExprKind<'source> {
     InlineConst {
         operand: ExprId,
     },
+    UnsafeBlock {
+        operand: ExprId,
+    },
     Ascribe {
         operand: ExprId,
         target: ScalarType,
@@ -1146,6 +1149,17 @@ impl<'source, const MAX_NODES: usize> ExpressionTree<'source, MAX_NODES> {
         self.nodes.get(id.index()).and_then(Option::as_ref)
     }
 
+    pub(crate) fn is_within_unsafe_block(&self, id: ExprId) -> bool {
+        let Some(span) = self.expression(id).map(|expression| expression.span) else {
+            return false;
+        };
+        self.nodes().iter().flatten().any(|expression| {
+            matches!(expression.kind, ExprKind::UnsafeBlock { .. })
+                && expression.span.start <= span.start
+                && span.end <= expression.span.end
+        })
+    }
+
     pub(crate) fn is_boolean_expression(&self, id: ExprId, depth: usize) -> bool {
         if depth == MAX_EXPRESSION_DEPTH {
             return false;
@@ -1269,7 +1283,9 @@ impl<'source, const MAX_NODES: usize> ExpressionTree<'source, MAX_NODES> {
             ExprKind::Return { operand } | ExprKind::LoopBreak { operand } => {
                 self.is_boolean_expression(operand, depth + 1)
             }
-            ExprKind::InlineConst { operand } => self.is_boolean_expression(operand, depth + 1),
+            ExprKind::InlineConst { operand } | ExprKind::UnsafeBlock { operand } => {
+                self.is_boolean_expression(operand, depth + 1)
+            }
             ExprKind::Unary {
                 operator: UnaryOperator::Not,
                 operand,
@@ -1666,7 +1682,9 @@ impl<'source, const MAX_NODES: usize> ExpressionTree<'source, MAX_NODES> {
             ExprKind::Return { operand } | ExprKind::LoopBreak { operand } => {
                 self.evaluate_node(operand, resolver, depth + 1)
             }
-            ExprKind::InlineConst { operand } => self.evaluate_node(operand, resolver, depth + 1),
+            ExprKind::InlineConst { operand } | ExprKind::UnsafeBlock { operand } => {
+                self.evaluate_node(operand, resolver, depth + 1)
+            }
             ExprKind::Sequence { first, then } => {
                 self.evaluate_node(first, resolver, depth + 1)?;
                 self.evaluate_node(then, resolver, depth + 1)
@@ -1747,6 +1765,7 @@ impl<'source, const MAX_NODES: usize> ExpressionTree<'source, MAX_NODES> {
                 self.evaluate_array_element(selected, index, resolver, depth + 1)
             }
             ExprKind::InlineConst { operand }
+            | ExprKind::UnsafeBlock { operand }
             | ExprKind::LoopBreak { operand }
             | ExprKind::Return { operand } => {
                 self.evaluate_array_element(operand, index, resolver, depth + 1)
@@ -1797,6 +1816,7 @@ impl<'source, const MAX_NODES: usize> ExpressionTree<'source, MAX_NODES> {
                 _ => None,
             },
             ExprKind::InlineConst { operand }
+            | ExprKind::UnsafeBlock { operand }
             | ExprKind::LoopBreak { operand }
             | ExprKind::Return { operand } => self.array_length(operand, depth + 1),
             ExprKind::Sequence { then, .. } => self.array_length(then, depth + 1),
@@ -1849,6 +1869,7 @@ impl<'source, const MAX_NODES: usize> ExpressionTree<'source, MAX_NODES> {
             | ExprKind::IntegerFromBytes { integer_type, .. } => Some(integer_type),
             ExprKind::Unary { operand, .. }
             | ExprKind::InlineConst { operand }
+            | ExprKind::UnsafeBlock { operand }
             | ExprKind::Return { operand }
             | ExprKind::LoopBreak { operand } => {
                 self.resolved_integer_type(operand, resolver, depth + 1)
@@ -2173,6 +2194,7 @@ impl<'source, const MAX_NODES: usize> ExpressionParser<'source, MAX_NODES> {
             ExprKind::Unit => true,
             ExprKind::DefaultValue => false,
             ExprKind::InlineConst { operand }
+            | ExprKind::UnsafeBlock { operand }
             | ExprKind::Return { operand }
             | ExprKind::LoopBreak { operand } => self.node_is_unit(operand, depth + 1),
             ExprKind::Sequence { then, .. } => self.node_is_unit(then, depth + 1),
@@ -2305,6 +2327,7 @@ impl<'source, const MAX_NODES: usize> ExpressionParser<'source, MAX_NODES> {
                 self.loop_break_expression(loop_token, Some(label), depth + 1)
             }
             Some(token) if token.text == "const" => self.const_block_expression(token, depth + 1),
+            Some(token) if token.text == "unsafe" => self.unsafe_block_expression(token, depth + 1),
             Some(token) if token.kind == TokenKind::Identifier => {
                 if let Some(integer_type) = IntegerType::from_name(token.text)
                     && self
@@ -2671,6 +2694,25 @@ impl<'source, const MAX_NODES: usize> ExpressionParser<'source, MAX_NODES> {
     ) -> Result<ExprId, ExpressionError> {
         let (inner, _) = self.scalar_branch_block(depth + 1)?;
         Ok(inner)
+    }
+
+    fn unsafe_block_expression(
+        &mut self,
+        unsafe_token: Token<'source>,
+        depth: usize,
+    ) -> Result<ExprId, ExpressionError> {
+        let open = self.take()?;
+        let Some(_open) = open.filter(|token| token.kind == TokenKind::OpenBrace) else {
+            return Err(self.error(ExpressionErrorKind::ExpectedOpenBrace, open));
+        };
+        let (operand, end) = self.scalar_branch_block(depth + 1)?;
+        self.push(Expr {
+            kind: ExprKind::UnsafeBlock { operand },
+            span: Span {
+                start: unsafe_token.span.start,
+                end,
+            },
+        })
     }
 
     fn const_block_expression(
@@ -3362,6 +3404,7 @@ impl<'source, const MAX_NODES: usize> ExpressionParser<'source, MAX_NODES> {
             ExprKind::Cast { operand, .. }
             | ExprKind::Ascribe { operand, .. }
             | ExprKind::Unary { operand, .. }
+            | ExprKind::UnsafeBlock { operand }
             | ExprKind::Return { operand }
             | ExprKind::LoopBreak { operand } => {
                 self.substitute_identifier(operand, name, replacement, depth + 1)?;
@@ -6898,6 +6941,17 @@ mod tests {
     #[test]
     fn parses_scalar_block_expressions() {
         assert_eq!(evaluate("{ 40 + 2 }"), Ok(42));
+        assert_eq!(evaluate("unsafe { 40 + 2 }"), Ok(42));
+        assert_eq!(evaluate("unsafe { unsafe { 40 + 2 } }"), Ok(42));
+        let unsafe_tree = ExpressionParser::<8>::new("unsafe { 42 }").parse().unwrap();
+        let Some(Expr {
+            kind: ExprKind::UnsafeBlock { operand },
+            ..
+        }) = unsafe_tree.expression(unsafe_tree.root())
+        else {
+            panic!("expected typed unsafe block")
+        };
+        assert!(unsafe_tree.is_within_unsafe_block(*operand));
         assert_eq!(evaluate("{{ 40 + 2 }}"), Ok(42));
         assert_eq!(
             evaluate("if { true } { { 42 } } else { { 1 / 0 } }"),
@@ -6932,6 +6986,13 @@ mod tests {
         assert_eq!(
             ExpressionParser::<8>::new("{ 42").parse().unwrap_err().kind,
             ExpressionErrorKind::ExpectedCloseBrace
+        );
+        assert_eq!(
+            ExpressionParser::<8>::new("unsafe 42")
+                .parse()
+                .unwrap_err()
+                .kind,
+            ExpressionErrorKind::ExpectedOpenBrace
         );
     }
 

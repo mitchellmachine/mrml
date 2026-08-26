@@ -19243,7 +19243,8 @@ fn validate_runtime_inline_const<
         | ExprKind::Unary { operand, .. }
         | ExprKind::Return { operand }
         | ExprKind::LoopBreak { operand }
-        | ExprKind::InlineConst { operand } => recurse(operand)?,
+        | ExprKind::InlineConst { operand }
+        | ExprKind::UnsafeBlock { operand } => recurse(operand)?,
         ExprKind::Binary { left, right, .. } => {
             recurse(left)?;
             recurse(right)?;
@@ -19705,7 +19706,16 @@ fn runtime_expression_type_with_locals<
     let expression = tree
         .expression(id)
         .ok_or(CodegenErrorKind::RuntimeExpressionUnsupported)?;
+    let unsafe_context = function.unsafe_function || tree.is_within_unsafe_block(id);
     match expression.kind {
+        ExprKind::UnsafeBlock { operand } => runtime_expression_type_with_locals(
+            function,
+            resolver,
+            locals,
+            tree,
+            operand,
+            depth + 1,
+        ),
         ExprKind::Unit => Ok(RuntimeExpressionType::Unit),
         ExprKind::DefaultValue => Ok(RuntimeExpressionType::Default),
         ExprKind::Array {
@@ -19866,6 +19876,9 @@ fn runtime_expression_type_with_locals<
             )))
         }
         ExprKind::RawPointerDrop { base } => {
+            if !unsafe_context {
+                return Err(CodegenErrorKind::RuntimeTypeMismatch);
+            }
             if !matches!(
                 runtime_expression_type_with_locals(
                     function,
@@ -20138,6 +20151,9 @@ fn runtime_expression_type_with_locals<
             Ok(RuntimeExpressionType::RawPointer { pointee, mutable })
         }
         ExprKind::RawPointerAsReference { base, mutable } => {
+            if !unsafe_context {
+                return Err(CodegenErrorKind::RuntimeTypeMismatch);
+            }
             let RuntimeExpressionType::RawPointer {
                 pointee,
                 mutable: pointer_mutable,
@@ -20219,6 +20235,9 @@ fn runtime_expression_type_with_locals<
             value,
             returns_old,
         } => {
+            if !unsafe_context {
+                return Err(CodegenErrorKind::RuntimeTypeMismatch);
+            }
             let RuntimeExpressionType::RawPointer {
                 pointee,
                 mutable: true,
@@ -20252,6 +20271,9 @@ fn runtime_expression_type_with_locals<
             }
         }
         ExprKind::RawPointerWriteBytes { base, value, count } => {
+            if !unsafe_context {
+                return Err(CodegenErrorKind::RuntimeTypeMismatch);
+            }
             let RuntimeExpressionType::RawPointer { mutable: true, .. } =
                 runtime_expression_type_with_locals(
                     function,
@@ -20297,6 +20319,9 @@ fn runtime_expression_type_with_locals<
             count,
             ..
         } => {
+            if !unsafe_context {
+                return Err(CodegenErrorKind::RuntimeTypeMismatch);
+            }
             let RuntimeExpressionType::RawPointer { pointee, .. } =
                 runtime_expression_type_with_locals(
                     function,
@@ -20336,6 +20361,9 @@ fn runtime_expression_type_with_locals<
             Ok(RuntimeExpressionType::Unit)
         }
         ExprKind::RawPointerSwap { left, right } => {
+            if !unsafe_context {
+                return Err(CodegenErrorKind::RuntimeTypeMismatch);
+            }
             let RuntimeExpressionType::RawPointer {
                 pointee,
                 mutable: true,
@@ -20435,7 +20463,7 @@ fn runtime_expression_type_with_locals<
             disjoint,
             funnel,
         } => {
-            if !function.unsafe_function {
+            if !unsafe_context {
                 return Err(CodegenErrorKind::RuntimeTypeMismatch);
             }
             let base_type = runtime_expression_type_with_locals(
@@ -20530,7 +20558,7 @@ fn runtime_expression_type_with_locals<
             unchecked,
             lazy,
         } => {
-            if unchecked && !function.unsafe_function {
+            if unchecked && !unsafe_context {
                 return Err(CodegenErrorKind::RuntimeTypeMismatch);
             }
             if matches!(
@@ -21656,9 +21684,7 @@ fn runtime_expression_type_with_locals<
             Ok(RuntimeExpressionType::Integer(Some(target_type)))
         }
         ExprKind::IntegerWidthCast { base, target, mode } => {
-            if mode == crate::expression::IntegerWidthCastMode::Unchecked
-                && !function.unsafe_function
-            {
+            if mode == crate::expression::IntegerWidthCastMode::Unchecked && !unsafe_context {
                 return Err(CodegenErrorKind::RuntimeTypeMismatch);
             }
             let RuntimeExpressionType::Integer(Some(source_type)) =
@@ -22018,9 +22044,13 @@ fn runtime_expression_type_with_locals<
         ExprKind::RawPointerOffset {
             base,
             offset,
+            wrapping,
             signed,
             ..
         } => {
+            if !wrapping && !unsafe_context {
+                return Err(CodegenErrorKind::RuntimeTypeMismatch);
+            }
             let base_type = runtime_expression_type_with_locals(
                 function,
                 resolver,
@@ -22064,6 +22094,9 @@ fn runtime_expression_type_with_locals<
             unsigned,
             ..
         } => {
+            if !unsafe_context {
+                return Err(CodegenErrorKind::RuntimeTypeMismatch);
+            }
             let pointer_type = runtime_expression_type_with_locals(
                 function,
                 resolver,
@@ -22468,6 +22501,9 @@ fn runtime_expression_type_with_locals<
                     runtime_reference_target_type(target)
                 }
                 RuntimeExpressionType::RawPointer { pointee, .. } => {
+                    if !unsafe_context {
+                        return Err(CodegenErrorKind::RuntimeTypeMismatch);
+                    }
                     Ok(runtime_type_from_array_element(pointee))
                 }
                 _ => Err(CodegenErrorKind::RuntimeTypeMismatch),
@@ -25745,6 +25781,9 @@ impl<
             .expression(id)
             .ok_or(self.error(CodegenErrorKind::RuntimeExpressionUnsupported))?;
         match expression.kind {
+            ExprKind::UnsafeBlock { operand } => {
+                self.emit_expression_with_width(tree, operand, depth + 1)?;
+            }
             ExprKind::Unit | ExprKind::DefaultValue => self.emit(&[0x31, 0xc0])?,
             ExprKind::Array { .. } | ExprKind::ArrayRepeat { .. } | ExprKind::Tuple { .. } => {
                 return Err(self.error(CodegenErrorKind::RuntimeExpressionUnsupported));
@@ -49076,8 +49115,11 @@ mod tests {
     }
 
     #[test]
-    fn emits_unchecked_integer_operations_only_in_unsafe_functions() {
+    fn emits_unchecked_integer_operations_only_in_unsafe_contexts() {
         let sources = [
+            "#[unsafe(no_mangle)] pub extern \"C\" fn value(a: u8, b: u8) -> u8 { unsafe { a.unchecked_add(b) } }",
+            "#[unsafe(no_mangle)] pub extern \"C\" fn value(a: u8, n: u32) -> u8 { unsafe { let value = a; value.unchecked_shl(n) } }",
+            "#[unsafe(no_mangle)] pub extern \"C\" fn value(a: u64, b: u64) -> u64 { unsafe { unsafe { a.unchecked_disjoint_bitor(b) } } }",
             "#[unsafe(no_mangle)] pub unsafe extern \"C\" fn value(a: u8, b: u8) -> u8 { a.unchecked_add(b) }",
             "#[unsafe(no_mangle)] pub unsafe extern \"C\" fn value(a: i16, b: i16) -> i16 { a.unchecked_sub(b) }",
             "#[unsafe(no_mangle)] pub unsafe extern \"C\" fn value(a: u32, b: u32) -> u32 { a.unchecked_mul(b) }",
@@ -49106,6 +49148,7 @@ mod tests {
 
         for source in [
             "#[unsafe(no_mangle)] pub extern \"C\" fn value(a: u8, b: u8) -> u8 { a.unchecked_add(b) }",
+            "#[unsafe(no_mangle)] pub extern \"C\" fn value(a: u8, b: u8) -> u8 { (unsafe { a }).unchecked_add(b) }",
             "#[unsafe(no_mangle)] pub unsafe extern \"C\" fn value(a: u8) -> u8 { a.unchecked_add() }",
             "#[unsafe(no_mangle)] pub unsafe extern \"C\" fn value(a: u8, b: u8) -> u8 { a.unchecked_div_exact() }",
             "#[unsafe(no_mangle)] pub unsafe extern \"C\" fn value(a: u8, b: u16) -> u8 { a.unchecked_div_exact(b) }",

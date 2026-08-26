@@ -3088,6 +3088,9 @@ fn rustc_generic_integer_casts_reach_native_objects() {
 #[test]
 fn rustc_unchecked_integer_operations_reach_native_objects() {
     let sources = [
+        "#[unsafe(no_mangle)] pub extern \"C\" fn probe(a: u8, b: u8) -> u8 { unsafe { a.unchecked_add(b) } }",
+        "#[unsafe(no_mangle)] pub extern \"C\" fn probe(a: u8, n: u32) -> u8 { unsafe { let value = a; value.unchecked_shl(n) } }",
+        "#[unsafe(no_mangle)] pub extern \"C\" fn probe(a: u64, b: u64) -> u64 { unsafe { unsafe { a.unchecked_disjoint_bitor(b) } } }",
         "#[unsafe(no_mangle)] pub unsafe extern \"C\" fn probe(a: u8, b: u8) -> u8 { a.unchecked_add(b) }",
         "#[unsafe(no_mangle)] pub unsafe extern \"C\" fn probe(a: i16, b: i16) -> i16 { a.unchecked_sub(b) }",
         "#[unsafe(no_mangle)] pub unsafe extern \"C\" fn probe(a: u32, b: u32) -> u32 { a.unchecked_mul(b) }",
@@ -3113,6 +3116,11 @@ fn rustc_unchecked_integer_operations_reach_native_objects() {
 
     assert!(compile_wide(
         "#[unsafe(no_mangle)] pub extern \"C\" fn probe(a: u8, b: u8) -> u8 { a.unchecked_add(b) }",
+        ObjectFormat::Elf64,
+    )
+    .is_err());
+    assert!(compile_wide(
+        "#[unsafe(no_mangle)] pub extern \"C\" fn probe(a: u8, b: u8) -> u8 { (unsafe { a }).unchecked_add(b) }",
         ObjectFormat::Elf64,
     )
     .is_err());
@@ -3459,6 +3467,7 @@ fn rustc_checked_integer_option_expect_reaches_native_objects() {
 #[test]
 fn rustc_checked_integer_option_unwrap_unchecked_reaches_native_objects() {
     let sources = [
+        "#[unsafe(no_mangle)] pub extern \"C\" fn probe(a: u8, b: u8) -> u8 { unsafe { a.checked_add(b).unwrap_unchecked() } }",
         "#[unsafe(no_mangle)] pub unsafe extern \"C\" fn probe(a: u8, b: u8) -> u8 { a.checked_add(b).unwrap_unchecked() }",
         "#[unsafe(no_mangle)] pub unsafe extern \"C\" fn probe(a: u64, b: u64) -> i64 { a.checked_signed_diff(b).unwrap_unchecked() }",
         "#[unsafe(no_mangle)] pub unsafe extern \"C\" fn probe(input: i64) -> i16 { input.checked_truncate::<i16>().unwrap_unchecked() }",
@@ -5634,6 +5643,38 @@ fn rustc_scalar_raw_pointer_drops_reach_native_objects() {
     for source in sources {
         assert_eq!(compile_wide(source, ObjectFormat::Elf64), Ok(()));
         assert_eq!(compile_wide(source, ObjectFormat::Coff), Ok(()));
+    }
+}
+
+#[test]
+fn rustc_unsafe_blocks_scope_raw_pointer_authority() {
+    let sources = [
+        "#[unsafe(no_mangle)] pub extern \"C\" fn probe(input: *const u16) -> u16 { unsafe { *input } }",
+        "#[unsafe(no_mangle)] pub extern \"C\" fn probe(input: *mut u32, value: u32) { unsafe { input.write(value) } }",
+        "#[unsafe(no_mangle)] pub extern \"C\" fn probe(input: *mut u32, count: usize) -> *mut u32 { unsafe { input.add(count) } }",
+        "#[unsafe(no_mangle)] pub extern \"C\" fn probe(input: *const u32, origin: *const u32) -> isize { unsafe { input.offset_from(origin) } }",
+        "#[unsafe(no_mangle)] pub extern \"C\" fn probe(input: *const i16) -> i16 { unsafe { *input.as_ref_unchecked() } }",
+        "#[unsafe(no_mangle)] pub extern \"C\" fn probe(input: *mut u32) { unsafe { input.drop_in_place() } }",
+    ];
+    for source in sources {
+        assert_eq!(
+            compile_wide(source, ObjectFormat::Elf64),
+            Ok(()),
+            "{source}"
+        );
+        assert_eq!(compile_wide(source, ObjectFormat::Coff), Ok(()), "{source}");
+    }
+
+    for source in [
+        "#[unsafe(no_mangle)] pub extern \"C\" fn probe(input: *const u16) -> u16 { *input }",
+        "#[unsafe(no_mangle)] pub extern \"C\" fn probe(input: *mut u32, value: u32) { input.write(value) }",
+        "#[unsafe(no_mangle)] pub extern \"C\" fn probe(input: *mut u32, count: usize) -> *mut u32 { input.add(count) }",
+        "#[unsafe(no_mangle)] pub extern \"C\" fn probe(input: *const u16) -> u16 { *(unsafe { input }) }",
+    ] {
+        assert!(
+            compile_wide(source, ObjectFormat::Elf64).is_err(),
+            "{source}"
+        );
     }
 }
 
