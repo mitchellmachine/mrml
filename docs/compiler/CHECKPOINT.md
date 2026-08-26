@@ -1587,6 +1587,17 @@ same fail-closed syntax and behavior. Both canonical hosts pass the same 985
 compiler tests. This is a structural dependency for dynamic-index and
 dereference places, not a claim that either is implemented.
 
+The indirect inline-output milestone adds an explicit pointer-backed storage
+kind to that typed place. Exact `*name` output syntax resolves either a local or
+parameter whose base type is `&mut u64` or `*mut u64`, records the base identity
+plus `Dereference` projection, and emits an indirect load/writeback for RAX
+`lateout`, same-place `inout`, and distinct `inout`. Shared/immutable references,
+const raw pointers, other pointee types, malformed names, and unknown bases fail
+closed before emission. The exact dated oracle accepted all three independently
+authored mutable-reference shapes. Windows gnullvm and native Arch Linux WSL
+each pass 985 compiler tests. Dynamic indexes, nested projections, general
+memory operands/effects, and general assembly remain absent.
+
 The premise-bearing rigid-normalization milestone proves the selected generic
 implementation's instantiated trait and projection predicates before exposing
 its associated value. It shares the caller's 16-frame rigid proof stack and

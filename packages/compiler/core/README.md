@@ -4758,6 +4758,16 @@ removed 561 duplicated lines without broadening accepted syntax. Windows and
 native Arch Linux WSL each pass the unchanged 985-test compiler suite. Dynamic
 indexes and dereference outputs remain fail-closed.
 
+The typed place now distinguishes direct stack storage from an indirect pointer
+slot. Exact `*name` outputs accept a local or parameter with base type `&mut
+u64` or `*mut u64`, retain its base identity plus `Dereference` ownership
+projection, and perform indirect load/writeback for explicit RAX `lateout`,
+same-place `inout`, and split `inout`. Shared/immutable references, const raw
+pointers, other pointee types, malformed names, and unknown bases fail closed.
+The pinned oracle accepted all three original mutable-reference probes; Windows
+and native Arch Linux WSL each pass 985 compiler tests. Dynamic indexes, nested
+projections, and general memory-effect assembly remain unsupported.
+
 The projection-bearing term milestone uses a fixed 64-node arena for flat leaf
 terms and associated-type projections whose trait self/argument positions refer
 only to earlier nodes. Identical nodes intern to one stable identity; invalid

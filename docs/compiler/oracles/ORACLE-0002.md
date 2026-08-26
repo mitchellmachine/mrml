@@ -126,3 +126,11 @@ distinct-input `inout`. This is exact black-box acceptance evidence for those
 constant array-element output shapes only, not for dynamic indexing, general
 places, register allocation, or assembly semantics. Temporary source and
 metadata were removed.
+
+An independently authored Rust 2024 metadata-only probe against the same exact
+toolchain and commit compiled three explicit RAX forms whose output place was
+`*target` for `target: &mut u64`: `lateout`, same-place `inout`, and a distinct-
+input `inout`. This records black-box acceptance of those exact mutable-
+reference dereference shapes only; it does not establish general pointer,
+memory-effect, place, register-allocation, or assembly semantics. Temporary
+source and metadata were removed.
