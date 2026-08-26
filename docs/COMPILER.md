@@ -1393,7 +1393,9 @@ now carry an exact alternative index for every condition, scoped action block,
 and return value. Primary false and each conditional-alternative false edge
 advance in source order; an unconditional final arm closes fallthrough. Direct
 and helper-inlined x86-64 emission now walks the same bounded chain, and ELF64
-and COFF probes cover both paths.
+and COFF probes cover both paths. Indexed reference-return arms share the exact
+function-return outlives proof: all parameter-backed arms emit, while a local-
+backed origin in any later arm fails closed.
 The bounded constant evaluator selects
 exactly one arm, executes its actions under a lexical resolver checkpoint, and
 routes its target-aware terminal under the existing iteration limit. CFG

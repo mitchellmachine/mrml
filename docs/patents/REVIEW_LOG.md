@@ -49,6 +49,15 @@ typed session retention, and exact identity checks and adds no storage protocol,
 device mechanism, DMA, queue, interrupt, placement algorithm, or VM construction.
 Broader adaptive/Total MicroVM execution remains **TRIGGERED**.
 
+Passing the selected deployment-checkpoint and SystemRelease file states from
+that owner into the existing authenticated deployment-recovery operation is
+also **NOT_TRIGGERED**. This increment replaces detached fixture objects with
+conventional typed borrowing, exact object/generation equality, bounded extent
+validation, and existing independent capability checks. It adds no placement
+algorithm, VM construction, scheduler, interface transport, storage protocol,
+device, DMA, queue, interrupt, or hardware mechanism. The broader adaptive and
+Total MicroVM execution review remains **TRIGGERED**.
+
 ## 2026-08-26 — Canonical one-use installed recovery envelope
 
 Patent review: **NOT_TRIGGERED** for extending the existing one-use boot-recovery
@@ -8484,3 +8493,11 @@ of a fixed four-entry array. It adds no novel control-flow, region, alias,
 inference, optimization, or instruction-selection algorithm. Broader compiler
 completion remains partial; this technical screen is not a clearance or
 infringement conclusion and does not replace independent human dual review.
+
+# 2026-08-26 — Indexed alternative return-origin evidence
+
+**Result: NOT_TRIGGERED.** This increment adds independently authored accepted
+and rejected tests to the existing exact return-outlives classifier and native
+object pipeline; it introduces no new compiler or runtime mechanism. Broader
+compiler completion remains partial; this technical screen is not a clearance
+or infringement conclusion and does not replace independent human dual review.

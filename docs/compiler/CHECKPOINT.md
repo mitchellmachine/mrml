@@ -712,7 +712,9 @@ give every alternative condition, action block, and return value an exact arm
 index and route false edges through the ordered chain; an unconditional final
 arm is exhaustive. Direct and helper-inlined x86-64 emission now lowers all
 bounded alternatives in source order, with ELF64 and COFF probes for both
-paths. The exact dated oracle
+paths. Direct and helper-inlined mutable-reference chain probes retain the
+parameter origin across every indexed arm, and a later local-backed arm fails
+the exact return-outlives proof. The exact dated oracle
 accepts an independently authored Rust 2024 four-outcome chain. Windows and Arch each continue
 to pass 645 library tests, one component-interface probe, 10 conformance tests,
 and 336 replacement tests: 992 compiler tests per host.

@@ -184,6 +184,15 @@ COFF objects. This is syntax and const-control-shape evidence
 only, not general branch-chain, region, or native-code evidence. Temporary
 source and metadata were removed.
 
+An independently authored mutable-reference variant against this exact
+toolchain and commit accepted parameter-backed returns from the primary, two
+conditional alternatives, and final else. Replacing the first conditional
+alternative with a function-local mutable reference failed with E0515. MRML's
+separate direct and helper-inlined probes emit the all-parameter chain into
+ELF64 and COFF, while its focused outlives test rejects the local-backed arm.
+This is evidence for those exact indexed exits, not general regions or alias
+analysis. Temporary source and metadata were removed.
+
 An independently authored Rust 2024 metadata-only nested-break set against this
 exact toolchain and commit accepted a local-initialized alias overwritten by the
 parameter before an inner unconditional-loop break and returned afterward.
