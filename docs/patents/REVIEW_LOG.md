@@ -8123,3 +8123,14 @@ local-backed returns and all reference-bearing branch break/continue paths fail
 closed. Broader compiler completion remains partial; this technical screen is
 not a clearance or infringement conclusion and does not replace independent
 human dual review.
+
+# 2026-08-26 — Nested branch control-origin transfer
+
+**Result: NOT_TRIGGERED after the control-origin review.** This increment
+routes existing bounded branch-action state through already implemented
+inner/outer exit and backedge accumulators. It adds no new fixed-point solver,
+region or alias analysis, inference, optimization, instruction-selection, or
+code-generation algorithm. Inner continues admit only an exact incoming-state
+preservation proof; all unsupported state transitions fail closed. Broader
+compiler completion remains partial; this technical screen is not a clearance
+or infringement conclusion and does not replace independent human dual review.
