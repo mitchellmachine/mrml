@@ -876,6 +876,55 @@ pub fn encode_handoff_with_smp_and_service(
 }
 
 #[allow(clippy::too_many_arguments)]
+pub fn encode_handoff_with_smp_and_application(
+    image_version: u64,
+    entropy: [u8; 32],
+    image_measurement: [u8; 64],
+    secure_boot: bool,
+    measured_boot: bool,
+    rollback_protected: bool,
+    acpi_root: u64,
+    framebuffer: FramebufferInfo,
+    regions: &[MemoryRegion],
+    ap_trampoline: u64,
+    ap_stack_arena: u64,
+    application: ApplicationLaunch,
+    madt: &[u8],
+    output: &mut [u8],
+) -> Result<usize, HandoffError> {
+    if !(crate::PAGE_SIZE..0x10_0000).contains(&ap_trampoline)
+        || !ap_trampoline.is_multiple_of(crate::PAGE_SIZE)
+        || ap_stack_arena == 0
+        || !ap_stack_arena.is_multiple_of(crate::PAGE_SIZE)
+        || ap_stack_arena >> 52 != 0
+        || !(44..=MAX_HANDOFF_MADT_BYTES).contains(&madt.len())
+        || &madt[..4] != b"APIC"
+        || read_u32(madt, 4) as usize != madt.len()
+        || madt.iter().fold(0u8, |sum, byte| sum.wrapping_add(*byte)) != 0
+    {
+        return Err(HandoffError::NonCanonical);
+    }
+    encode_handoff_inner(
+        image_version,
+        entropy,
+        image_measurement,
+        secure_boot,
+        measured_boot,
+        rollback_protected,
+        false,
+        acpi_root,
+        framebuffer,
+        regions,
+        Some(madt),
+        Some((ap_trampoline, ap_stack_arena)),
+        None,
+        Some(application),
+        None,
+        output,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
 pub fn encode_handoff_with_smp_service_and_recovery(
     image_version: u64,
     entropy: [u8; 32],
@@ -1639,6 +1688,36 @@ mod tests {
         let decoded = BootHandoff::decode(&encoded, |_| {}).unwrap();
         assert_eq!(decoded.service(), Some(service));
         assert_eq!(decoded.application(), Some(application));
+
+        const APPLICATION_ONLY_LENGTH: usize = HANDOFF_HEADER_BYTES
+            + 2 * HANDOFF_REGION_BYTES
+            + HANDOFF_APPLICATION_BYTES
+            + 16
+            + 52;
+        let mut application_only = [0; APPLICATION_ONLY_LENGTH];
+        assert_eq!(
+            encode_handoff_with_smp_and_application(
+                17,
+                [1; 32],
+                [2; 64],
+                true,
+                true,
+                true,
+                0x9000,
+                framebuffer,
+                &regions,
+                0x8000,
+                0x40_0000,
+                application,
+                &madt,
+                &mut application_only,
+            ),
+            Ok(APPLICATION_ONLY_LENGTH)
+        );
+        let decoded_application_only =
+            BootHandoff::decode(&application_only, |_| {}).unwrap();
+        assert_eq!(decoded_application_only.service(), None);
+        assert_eq!(decoded_application_only.application(), Some(application));
 
         let mut malformed = encoded;
         let flags = read_u16(&malformed, 22) & !FLAG_APPLICATION_IMAGE;

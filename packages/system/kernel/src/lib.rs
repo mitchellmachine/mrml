@@ -96,7 +96,8 @@ pub use handoff::{
     HANDOFF_RECOVERY_STATE_BYTES, HANDOFF_REGION_BYTES, HANDOFF_SERVICE_BYTES, HandoffError, MAX_HANDOFF_BYTES,
     MAX_HANDOFF_MADT_BYTES, MAX_HANDOFF_REGIONS, RecoveryStateMetadata, ServiceLaunch, encode_handoff,
     encode_handoff_with_madt, encode_handoff_with_recovery, encode_handoff_with_smp,
-    encode_handoff_with_smp_and_service, encode_handoff_with_smp_service_and_recovery,
+    encode_handoff_with_smp_and_application, encode_handoff_with_smp_and_service,
+    encode_handoff_with_smp_service_and_recovery,
     encode_handoff_with_smp_service_application_and_recovery,
 };
 pub use host_resource::{
