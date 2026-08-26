@@ -5673,6 +5673,17 @@ tests: 999 compiler tests per host. General unsafe statement blocks, arbitrary
 assembly, general labels, unrestricted output places, runtime interrupt
 behavior, and physical privileged-mode evidence remain unsupported.
 
+The definite syscall-output initialization milestone at `21e1d328` adds an
+explicit initialized property to parsed scalar locals. `let name: u64;` creates
+the bounded local and move path but no initialization event. The existing
+initializedness dataflow rejects a read until the returning syscall's named
+output writes that path; immutable locals admit only their first write. The
+pinned oracle accepts the assembly-initialized form and rejects a direct read
+with E0381. Windows gnullvm and native Arch Linux WSL each pass 647 library
+tests, one component-interface probe, 10 conformance tests, and 342 replacement
+tests: 1,000 compiler tests per host. Other types, ordinary delayed assignment,
+branches, loops, and general assembly-output places remain unsupported.
+
 The bounded function-return outlives milestone at `962aedcc` passed all 764
 compiler and driver tests on Windows gnullvm and all 764 in release mode on
 native Arch Linux WSL, plus warnings-denied compiler-only Clippy on both hosts

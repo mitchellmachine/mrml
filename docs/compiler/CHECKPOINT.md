@@ -60,6 +60,16 @@ named edition can be adopted through a pinned, workspace-wide migration.
 
 ## Latest terminal noreturn assembly milestone
 
+Commit `21e1d328` represents explicit uninitialized `u64` locals without an
+initialization event and lets an exact returning syscall output perform their
+first write. Reads before that write fail, and immutable locals reject later
+writes. ORACLE-0002 accepts the split-output probe and rejects the direct read
+with E0381. Windows and native Arch Linux WSL each passed 647 library tests, 1
+component probe, 10 conformance tests, and 342 replacement tests: 1,000 compiler
+tests per host.
+
+### Preceding terminal halt-loop milestone
+
 Commit `9a312d4e` lowers the exact first-party terminal x86-64 `cli`, `2:`,
 `hlt`, `jmp 2b` assembly sequence with all permutations of its required
 `noreturn`, `nomem`, and `nostack` options. ORACLE-0002 accepts the comparison

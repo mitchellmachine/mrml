@@ -124,6 +124,7 @@ language as a whole.
 | Terminal noreturn assembly delta | **PARTIAL** | The parser marks only the final top-level expression statement as terminal. On x86-64, exact `asm!("int3", options(noreturn, nostack))` (with either option order) is admitted only in that position and an unsafe context, emits `CC`, suppresses the ordinary return sequence, and permits `!` function returns or never-to-value coercion. A following unreachable suffix, conditional placement, other templates/options, general never expressions, and broader unreachable-code lowering fail closed. |
 | Syscall assembly delta | **PARTIAL** | Exact x86-64 `asm!("int 0x80", ...)` accepts seven ordered `u64` operands in RAX, RDI, RSI, RDX, R10, R8, and R9. The terminal form requires inputs plus exact `noreturn, nostack`; the returning form requires RAX `inlateout`, input or `inlateout` for the remaining registers, mutable named-local or discarded outputs, and exact `nostack`. Inputs are preanalyzed/evaluated left-to-right, all post-interrupt results are preserved before output stores, and unsupported scopes, orderings, types, places, or options fail closed. General output places and other syscall/assembly shapes remain unsupported. |
 | Terminal halt-loop assembly delta | **PARTIAL** | Exact x86-64 `asm!("cli", "2:", "hlt", "jmp 2b", options(noreturn, nomem, nostack))` is recognized as one typed terminal form, accepts every option permutation, and emits fixed `FA F4 EB FD` without a return sequence. Unsafe scope and terminal placement are mandatory; altered templates, labels, options, or suffixes fail closed. This is native-object encoding evidence, not physical privileged-instruction execution. |
+| Definite assembly-output initialization delta | **PARTIAL** | Explicit `let name: u64;` declarations create a typed local and move path without an initialization event. Reads fail until a proven write. A returning `int 0x80` named output may perform the first write to a mutable or immutable local; immutable locals reject later writes. Other uninitialized types, control-flow joins, ordinary delayed assignment, and general output places remain unsupported. |
 | Modern `no_std` systems features | **PARTIAL** | Dependency-free native code generation covers integers, control flow, arrays, bounded scalar tuples, references, slices, raw pointers, COFF/ELF64, UEFI checks, and NVPTX checks. Up to eight typed x86-64 PC-relative branch-or-data relocations are structurally emitted for both native object formats. General assembly, naked entry-point integration, atomics, SIMD, full ABI/layout, general relocation families, linking, and package compilation remain missing. |
 
 Already implemented post-2024 or forward-looking work should be preserved rather
@@ -1910,6 +1911,24 @@ passed 646 unit, 1 component, 10 conformance, and 342 replacement tests (999
 total). The instructions were not executed, so this is not privileged-mode or
 physical CPU evidence; general labels and multi-template assembly remain
 unsupported.
+
+### Assembly-output definite-initialization checkpoint
+
+Explicit `let name: u64;` now creates a local fact and move-path root without a
+declaration initialization event. Its stack slot is storage only: the existing
+initializedness dataflow rejects reads until an exact write. Returning `int
+0x80` output preanalysis may perform the first write to either a mutable or
+immutable named local; an immutable local rejects subsequent writes. Emission
+allocates bounded storage while semantic initialization remains represented only
+by the write fact.
+
+The exact ORACLE-0002 Rust 2024 toolchain accepted the first-party-shaped split
+assembly output and rejected a direct uninitialized read with E0381. Independent
+ELF64 and COFF probes cover the accepted form, and a focused control rejects the
+read-before-write. Windows and Arch each passed 647 unit, 1 component, 10
+conformance, and 342 replacement tests (1,000 total). Only direct scalar `u64`
+declarations and exact syscall outputs are supported; general delayed
+initialization and CFG joins remain fail-closed.
 
 ## Non-negotiable implementation rules
 

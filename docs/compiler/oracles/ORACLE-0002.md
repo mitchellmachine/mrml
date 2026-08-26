@@ -1062,3 +1062,11 @@ options(noreturn, nomem, nostack))` in a safe function's unsafe block returning
 and option set only; it does not establish privileged instruction execution,
 general labels, multi-template assembly, or physical CPU evidence. Temporary
 source and metadata were removed.
+
+An independently authored Rust 2024 metadata-only definite-initialization pair
+against this exact toolchain and commit accepted an immutable `let state: u64;`
+initialized by a split RDX `inlateout` assembly output and then read after the
+assembly. A direct read of an uninitialized `u64` failed with E0381. This is
+black-box evidence for those exact declaration, output, and read positions only;
+it does not establish general delayed initialization or control-flow joins.
+Temporary sources and metadata were removed.
