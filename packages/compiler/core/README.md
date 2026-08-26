@@ -4768,15 +4768,16 @@ The pinned oracle accepted all three original mutable-reference probes; Windows
 and native Arch Linux WSL each pass 985 compiler tests. Dynamic indexes, nested
 projections, and general memory-effect assembly remain unsupported.
 
-Dynamic inline output indexing accepts `values[index]` for a mutable `[u64; N]`
-local and an exact `usize` local or parameter. The typed place carries an
-`Index` projection and dynamic-array storage; preanalysis records the index read,
-while emission evaluates it once, traps unless it is below `N`, preserves it
-across the fixed operation, and reuses the existing bounded element selector.
+Dynamic inline output indexing accepts a supported `usize` expression in
+`values[expression]` for a mutable `[u64; N]` local. The typed place carries an
+`Index` projection and dynamic-array storage; preanalysis records the expression
+reads, while emission evaluates it once, traps unless it is below `N`, preserves
+it across the fixed operation, and reuses the existing bounded element selector.
 Explicit RAX `lateout`, same-place `inout`, and split `inout` are covered. The
 pinned oracle accepted all three probes, and both canonical hosts pass 985
-compiler tests. General index expressions, nested projections, reference-array
-index outputs, and general assembly remain unsupported.
+compiler tests. Index expressions outside the existing bounded expression
+subset, nested projections, reference-array index outputs, and general assembly
+remain unsupported.
 
 The projection-bearing term milestone uses a fixed 64-node arena for flat leaf
 terms and associated-type projections whose trait self/argument positions refer

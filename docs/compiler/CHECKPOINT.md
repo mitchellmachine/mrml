@@ -1609,6 +1609,19 @@ three original forms. Windows gnullvm and native Arch Linux WSL each pass 985
 compiler tests. General index expressions, nested projections, reference-array
 index outputs, and general assembly remain absent.
 
+The expression-indexed output milestone generalizes that dynamic place to any
+`usize` expression supported by the bounded runtime expression engine. The
+normal type checker and read preanalysis now validate the parsed index, and the
+normal emitter evaluates it exactly once before the existing bounds check and
+saved-index load/writeback path. Focused coverage includes remainder and grouped
+addition expressions plus fail-closed non-`usize` indexes. The exact dated
+oracle accepted original Rust 2024 `lateout`, same-place `inout`, and distinct-
+input `inout` probes using those expression places. Windows gnullvm and native
+Arch Linux WSL each pass 639 library tests, one component-interface probe, 10
+conformance tests, and 335 replacement tests: 985 compiler tests per host.
+Expressions outside the existing bounded subset, nested projections, reference-
+array index outputs, and general assembly remain absent.
+
 The premise-bearing rigid-normalization milestone proves the selected generic
 implementation's instantiated trait and projection predicates before exposing
 its associated value. It shares the caller's 16-frame rigid proof stack and

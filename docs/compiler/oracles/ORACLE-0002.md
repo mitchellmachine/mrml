@@ -142,3 +142,11 @@ toolchain and commit compiled `values[index]` output places for a mutable
 of those exact dynamic-index shapes only, not evaluation order for effectful
 index expressions, general place semantics, register allocation, memory effects,
 or general assembly. Temporary source and metadata were removed.
+
+A follow-up independently authored Rust 2024 metadata-only probe against that
+same exact toolchain and commit compiled explicit RAX `lateout`, same-place
+`inout`, and distinct-input `inout` outputs indexed respectively by `index % 2`,
+`(index + 1) % 2`, and `index`. This records black-box acceptance of those exact
+expression-indexed output shapes only; it does not establish general expression,
+evaluation-order, place, register-allocation, memory-effect, or assembly
+semantics. Temporary source and metadata were removed.
