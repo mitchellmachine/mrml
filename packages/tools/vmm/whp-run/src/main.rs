@@ -38,7 +38,8 @@ use mrml_kernel::{
     MicrovmProjectionRequirements, ObjectId, PreparedIsolationServiceRoute,
     PreparedMicrovmApplicationBackend, ResourceCommand, Rights, ScheduledDeadlineVmBackend,
     ScheduledSmpVmBackend, SignedArtifact, TotalMicrovmClass, TrustRoot, VcpuReservationId,
-    VerifiedExecutable, VerifiedGpuKernelBundle, VirtualBlockBackend, VirtualBlockBackendAuthority,
+    TotalMicrovmInventory, TotalMicrovmInventoryEntry, VerifiedExecutable, VerifiedGpuKernelBundle,
+    VirtualBlockBackend, VirtualBlockBackendAuthority,
     VirtualBlockCompletionStatus, VirtualBlockConfigurationPage, VirtualBlockDevice,
     VirtualBlockDeviceState, VirtualBlockError, VirtualBlockMutationError,
     VirtualBlockPciAttachment, VirtualBlockPciAttachmentState, VirtualBlockPciCleanupMode,
@@ -3156,6 +3157,30 @@ fn application_main() -> Result<()> {
                 "application Total MicroVM admission was not satisfied"
             ));
         }
+        let mut inventory =
+            TotalMicrovmInventory::<1>::new(spec.system_generation(), spec.policy_generation())
+                .map_err(|error| anyhow!("application Total inventory failed: {:?}", error))?;
+        inventory
+            .insert(
+                TotalMicrovmInventoryEntry::new(
+                    spec.domain(),
+                    TotalMicrovmClass::MicrovmEligible,
+                    true,
+                )
+                .map_err(|error| anyhow!("application Total entry failed: {:?}", error))?,
+            )
+            .map_err(|error| anyhow!("application Total inventory failed: {:?}", error))?;
+        let proof = inventory
+            .finalize(&admission)
+            .map_err(|error| anyhow!("application strict Total failed: {:?}", error))?;
+        println!(
+            "isolation-inventory|status=PASS|backend=whp|system_generation={}|policy_generation={}|classified={}|eligible={}|microvm={}|native_fallback=0",
+            proof.system_generation,
+            proof.policy_generation,
+            proof.classified_domains,
+            proof.running_microvm_eligible,
+            proof.running_in_microvm,
+        );
         WhpGuestOwner::Application {
             launcher,
             endpoint,

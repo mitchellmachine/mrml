@@ -858,9 +858,13 @@ produces a `TotalMicrovmRuntimeProof` only when every required domain is live,
 every live eligible domain is in a microVM, every active substrate/boot/recovery
 exception is classified, no unsupported blocker runs, and native fallback is
 zero. A required unavailable component is failure, not permission to omit or
-launch it natively. Windows and Arch Linux each pass 549 kernel tests. Complete
-required-system inventory derivation and live WHP/KVM runner consumption remain
-**PLANNED**, so Total mode itself is not promoted.
+launch it natively. Windows and Arch Linux each pass 549 kernel tests. The real
+WHP and KVM application runners now finalize the exact one-domain inventory
+after Total admission and before guest execution; fresh signed probes on
+2026-08-26 emitted the same generation-bound proof with `classified=1`,
+`eligible=1`, `microvm=1`, and `native_fallback=0`. Complete
+SystemGeneration-derived required-system inventory remains **PLANNED**, so this
+focused application evidence does not promote Total mode itself.
 
 ```text
 Complexity impact: MEDIUM

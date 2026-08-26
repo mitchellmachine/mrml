@@ -3006,9 +3006,13 @@ or unavailable must-run components, eligible execution outside a microVM,
 running unsupported blockers, and any native fallback. Only an exact complete
 state yields `TotalMicrovmRuntimeProof` with bounded counts and generations;
 the proof carries no capability or launch authority. Windows and Arch Linux each
-pass 549 kernel tests. Required-system inventory derivation and real WHP/KVM
-runner consumption remain **PLANNED**, so this is unit-tested kernel mechanism,
-not end-to-end Total readiness.
+pass 549 kernel tests. The real WHP and KVM application runners now consume the
+finalizer after exact Total admission and before guest execution. Their focused
+suites pass 9 and 10 tests respectively, and fresh signed probes on 2026-08-26
+each emitted `classified=1`, `eligible=1`, `microvm=1`, and
+`native_fallback=0` for system/policy generation 1. Required-system inventory
+derivation remains **PLANNED**; this is a focused one-application proof, not
+end-to-end Total readiness.
 
 Patent review: `NOT_TRIGGERED` for this conventional fixed-capacity inventory,
 exact-match validation, and aggregate finalization over the already reviewed

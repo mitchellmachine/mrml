@@ -1059,8 +1059,10 @@ proof when a must-run domain is missing/unavailable, a class changes, an active
 domain is unclassified, eligible work runs outside a microVM, a blocker runs,
 or fallback is nonzero. Recovery may diagnose these typed failures but cannot
 delete an inventory requirement or relabel a substrate reason to make Total
-appear satisfied. Live runner recovery and complete required-system inventory
-remain **PLANNED**.
+appear satisfied. The real WHP and KVM application runners now finalize one
+exact application inventory before guest execution and emit the same bounded
+generation-bound proof. This is focused live launch evidence, not recovery
+authority or a complete required-system inventory; both remain **PLANNED**.
 
 Application-launch recovery must retain the exact runtime domain, application
 object, immutable application generation and artifact digest, active system

@@ -214,9 +214,13 @@ running/unavailable domain and mark each must-run component. The finalizer
 rejects missing or unavailable required domains, unknown active domains, class
 substitution, eligible execution outside a microVM, unsupported blockers, and
 native fallback before producing a bounded runtime proof. Windows and Arch
-Linux each pass 549 kernel tests. Complete SystemGeneration-derived inventory
-and live WHP/KVM consumption are the next gate; this does not yet establish
-required-system Total readiness.
+Linux each pass 549 kernel tests. The real WHP and KVM application runners now
+consume that finalizer after exact Total admission and before guest execution.
+Their focused suites pass 9 and 10 tests respectively, and fresh signed probes
+on 2026-08-26 each emitted `classified=1`, `eligible=1`, `microvm=1`, and
+`native_fallback=0` for the exact system/policy generation. Complete
+SystemGeneration-derived required-system inventory remains the next gate; this
+one-application proof does not establish required-system Total readiness.
 
 The deployment lane is defined in [DEPLOYMENT.md](DEPLOYMENT.md) and must not
 displace the current foundational gate. Later work proceeds as separate bounded
