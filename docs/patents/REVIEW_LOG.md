@@ -7526,3 +7526,15 @@ interprocedural inference, alias analysis, optimization, or code-generation
 mechanism. A general loop-region fixed point remains absent. Broader compiler
 completion remains partial; this technical screen is not a clearance or
 infringement conclusion and does not replace independent human dual review.
+
+# 2026-08-26 — Nested loop call-loan generation evidence
+
+**Result: NOT_TRIGGERED after the nested loop call-loan evidence review.** This
+increment adds independently authored regression evidence that the existing
+bounded conditional origin join and generation-sensitive CFG reachability retain
+their same-iteration safety and last-use release at an inner loop backedge. It
+introduces no new solver, dataflow framework, interprocedural inference, alias
+analysis, optimization, or code-generation mechanism. A general loop-region
+fixed point remains absent. Broader compiler completion remains partial; this
+technical screen is not a clearance or infringement conclusion and does not
+replace independent human dual review.
