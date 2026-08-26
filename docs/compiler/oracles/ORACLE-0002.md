@@ -1095,3 +1095,11 @@ two-arm initialization followed by a read for `i8`, `bool`, and `char`. This is
 black-box evidence for those exact primitive forms only; it does not establish
 raw-pointer provenance, reference lifetimes, aggregate initialization, or
 loop-carried joins. Temporary source and metadata were removed.
+
+An independently authored Rust 2024 metadata-only raw-pointer delayed-
+initialization probe against this exact toolchain and commit accepted an
+exhaustive `*const u8` branch initialization followed by `is_null`. This is
+black-box evidence for that exact thin-pointer form only; it does not establish
+general pointer provenance inference, delayed references, fat pointers,
+aggregates, or loop-carried initialization. Temporary source and metadata were
+removed.

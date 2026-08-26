@@ -58,7 +58,18 @@ oracle upgrade receives a new immutable record and differential classification
 against all prior accepted probes. Keep Cargo on edition 2024 until a newer
 named edition can be adopted through a pinned, workspace-wide migration.
 
-## Latest primitive scalar delayed-initialization milestone
+## Latest thin raw-pointer delayed-initialization milestone
+
+Commit `0a5f2cc6` parses exact uninitialized `*const T`/`*mut T` declarations
+and admits their direct or exhaustive conditional first writes through the
+existing initializedness path. It tracks writes without manufacturing pointer
+provenance. ORACLE-0002 accepts the independent exhaustive `*const u8` probe.
+Windows and native Arch Linux WSL each passed 647 library tests, 1 component
+probe, 10 conformance tests, and 346 replacement tests: 1,004 compiler tests per
+host. References, fat pointers, aggregates, and loop-carried initialization
+remain fail-closed.
+
+### Preceding primitive scalar delayed-initialization milestone
 
 Commit `1cfcc246` widens direct and bounded conditional delayed initialization
 from `u64` to every concrete primitive integer width plus `bool` and `char`.

@@ -5727,6 +5727,19 @@ nested-loop return coverage, general regions, named lifetime inference, or
 complete Polonius semantics. The `no_std`/allocation/unsafe hygiene scan
 remained empty.
 
+The thin raw-pointer delayed-initialization milestone at `0a5f2cc6` recognizes
+exact uninitialized `*const T` and `*mut T` declarations with a bounded type
+shape and passes direct or exhaustive conditional first writes through the
+existing move-path initializedness analysis. Pointer values continue to come
+from the existing cast/raw-pointer semantics; the initialization fact neither
+creates nor strengthens provenance. The pinned ORACLE-0002 toolchain accepted
+an exhaustive `*const u8` probe followed by `is_null`. ELF64 and COFF
+replacements additionally cover direct `*mut u32` initialization and address
+extraction, while a delayed reference control fails closed. Windows and native
+Arch Linux WSL each passed 647 library tests, 1 component probe, 10 conformance
+tests, and 346 replacement tests: 1,004 compiler tests per host. References, fat
+pointers, aggregates, and loop-carried initialization are not claimed.
+
 The primitive delayed-initialization milestone at `1cfcc246` widens the existing
 direct and conditional first-write path to every concrete primitive integer
 width plus `bool` and `char`. Preanalysis and emission use one admission
