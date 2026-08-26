@@ -561,6 +561,28 @@ mod tests {
     }
 
     #[test]
+    fn proves_trait_declaration_projection_requirements_before_codegen() {
+        let source = concat!(
+            "trait Parent<T> { type Output; } ",
+            "trait Child<T> where <T as Parent<T>>::Output = T {} ",
+            "impl<T> Parent<T> for T { type Output = T; } impl<T> Child<T> for T {} ",
+            "#[unsafe(no_mangle)] pub extern \"C\" fn answer() -> u64 ",
+            "where u32: Child<u32> { 42 }"
+        );
+        compile(source, "answer", ObjectFormat::Coff).unwrap();
+
+        let mismatch = source.replace("type Output = T", "type Output = u8");
+        let error = compile(&mismatch, "answer", ObjectFormat::Coff).unwrap_err();
+        assert!(matches!(
+            error.kind,
+            CompileErrorKind::TraitObligation(SourceTraitObligationError {
+                kind: crate::SourceTraitObligationErrorKind::Unsatisfied,
+                ..
+            })
+        ));
+    }
+
+    #[test]
     fn proves_inherited_source_supertraits_before_codegen() {
         let source = concat!(
             "trait Parent {} trait Child<Input>: Parent {} ",

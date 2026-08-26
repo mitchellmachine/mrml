@@ -150,7 +150,7 @@ pub enum SourceTraitDeclarationError {
     WrongRequirementArgumentCount,
     UnsupportedRequirementType,
     DuplicateRequirement,
-    UnsupportedProjectionRequirement,
+    UnknownRequirementAssociatedType,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -271,12 +271,6 @@ impl<'source> SourceTraitDeclarationTable<'source> {
             let mut where_predicates = [None; MAX_FUNCTION_WHERE_PREDICATES];
             let mut where_predicate_count = 0usize;
             for predicate in declaration.where_predicates().iter().flatten() {
-                if matches!(
-                    predicate,
-                    crate::TraitImplementationWherePredicate::ProjectionEquality { .. }
-                ) {
-                    return Err(SourceTraitDeclarationError::UnsupportedProjectionRequirement);
-                }
                 if where_predicates[..where_predicate_count]
                     .iter()
                     .flatten()
@@ -305,6 +299,22 @@ impl<'source> SourceTraitDeclarationTable<'source> {
                         .any(|argument| !supported(*argument))
                 {
                     return Err(SourceTraitDeclarationError::UnsupportedRequirementType);
+                }
+                if let crate::TraitImplementationWherePredicate::ProjectionEquality {
+                    associated_type,
+                    expected_type,
+                    ..
+                } = predicate
+                {
+                    if table
+                        .get_associated_type(target.id, associated_type)
+                        .is_none()
+                    {
+                        return Err(SourceTraitDeclarationError::UnknownRequirementAssociatedType);
+                    }
+                    if !supported(*expected_type) {
+                        return Err(SourceTraitDeclarationError::UnsupportedRequirementType);
+                    }
                 }
                 where_predicates[where_predicate_count] = Some(*predicate);
                 where_predicate_count += 1;
@@ -617,6 +627,19 @@ impl<'source> SourceTraitImplementationTable<'source> {
                                 table.intern_type(*argument)?;
                             }
                         }
+                        if let crate::TraitImplementationWherePredicate::ProjectionEquality {
+                            expected_type,
+                            ..
+                        } = predicate
+                        {
+                            if expected_type.text != "Self"
+                                && !declaration
+                                    .generic_parameters()
+                                    .contains(&Some(expected_type.text))
+                            {
+                                table.intern_type(*expected_type)?;
+                            }
+                        }
                     }
                 }
                 Item::Const(_) | Item::Static(_) => {}
@@ -859,13 +882,42 @@ impl<'source> SourceTraitImplementationTable<'source> {
                             span: argument.span,
                         })?;
                 }
-                if !clause.premises().contains(&Some(required)) {
-                    clause.push_premise(required).map_err(|kind| {
-                        SourceTraitImplementationError {
-                            kind: SourceTraitImplementationErrorKind::Goal(kind),
-                            span: predicate.trait_name_span(),
+                match predicate {
+                    crate::TraitImplementationWherePredicate::Implemented { .. } => {
+                        if !clause.premises().contains(&Some(required)) {
+                            clause.push_premise(required).map_err(|kind| {
+                                SourceTraitImplementationError {
+                                    kind: SourceTraitImplementationErrorKind::Goal(kind),
+                                    span: predicate.trait_name_span(),
+                                }
+                            })?;
                         }
-                    })?;
+                    }
+                    crate::TraitImplementationWherePredicate::ProjectionEquality {
+                        associated_type,
+                        associated_type_span,
+                        expected_type,
+                        ..
+                    } => {
+                        let associated = traits
+                            .get_associated_type(required_trait.id, associated_type)
+                            .unwrap();
+                        let expected = source_declaration_bound_type(
+                            *expected_type,
+                            &declaration,
+                            consequence,
+                            &table,
+                        )?;
+                        clause
+                            .push_projection_premise(
+                                BoundTraitProjection::new(required, associated.id),
+                                expected,
+                            )
+                            .map_err(|kind| SourceTraitImplementationError {
+                                kind: SourceTraitImplementationErrorKind::Goal(kind),
+                                span: *associated_type_span,
+                            })?;
+                    }
                 }
             }
             table
@@ -8894,6 +8946,31 @@ mod tests {
             SourceTraitObligationErrorKind::Unsatisfied
         );
 
+        let projection = concat!(
+            "trait Parent<T> { type Output; } ",
+            "trait Child<T> where <T as Parent<T>>::Output = T {} ",
+            "impl<T> Parent<T> for T { type Output = T; } impl<T> Child<T> for T {} ",
+            "fn check() where u32: Child<u32> {}"
+        );
+        let module = Parser::new(projection).parse_module::<10, 1>().unwrap();
+        let traits = SourceTraitDeclarationTable::from_module(&module).unwrap();
+        let implementations =
+            SourceTraitImplementationTable::from_module(&module, &traits).unwrap();
+        implementations.prove_module(&module, &traits).unwrap();
+
+        let mismatch = projection.replace("type Output = T", "type Output = u8");
+        let module = Parser::new(&mismatch).parse_module::<10, 1>().unwrap();
+        let traits = SourceTraitDeclarationTable::from_module(&module).unwrap();
+        let implementations =
+            SourceTraitImplementationTable::from_module(&module, &traits).unwrap();
+        assert_eq!(
+            implementations
+                .prove_module(&module, &traits)
+                .unwrap_err()
+                .kind,
+            SourceTraitObligationErrorKind::Unsatisfied
+        );
+
         let exact = concat!(
             "trait Gate<T> {} trait Child where Self: Gate<u8> {} ",
             "impl Gate<u8> for u32 {} impl Child for u32 {} ",
@@ -8944,9 +9021,9 @@ mod tests {
         assert_eq!(
             error(concat!(
                 "trait Parent { type Output; } ",
-                "trait Child where <Self as Parent>::Output = u8 {}"
+                "trait Child where <Self as Parent>::Missing = u8 {}"
             )),
-            SourceTraitDeclarationError::UnsupportedProjectionRequirement
+            SourceTraitDeclarationError::UnknownRequirementAssociatedType
         );
     }
 
