@@ -3117,7 +3117,7 @@ the activated signed release without exposing a detached effective policy. The
 full hosted stable-storage test advances authority epoch 8 to 9, commits the
 recovered configuration service, consumes a decoded Total handoff, prepares and
 commits one classified microVM route, and finalizes the generation-bound Total
-proof through the single recovered owner. Configuration passes 44 tests on both
+proof through the single recovered owner. Configuration passes 45 tests on both
 Windows and Arch Linux. A shared hosted-only recovery source now uses the
 existing exact-file and authenticated-authority recovery transaction to produce
 that same committed owner. The authority-checkpoint and configuration files now
@@ -3138,6 +3138,15 @@ authority epoch 9, configuration revision 1, one eligible microVM, and zero
 native fallback. This is controlled hosted recovery evidence, not durable-media,
 owner-presence, TPM, firmware, physical rollback, installed early-boot, or
 host-resistant evidence.
+
+The recovery control plane now has a reusable **PARTIALLY IMPLEMENTED** exact
+stable-selection pair. `SelectedStableSystemRecovery` binds distinct
+configuration and authority-checkpoint objects to one already validated
+volume/root generation; cross-root and duplicate-object construction fail.
+This data grants no capability and opens no runtime path. The hosted adapter
+consumes it before authority recovery, while real media selection and installed
+boot orchestration remain **PLANNED**. Configuration passes 45 tests on both
+Windows and Arch Linux; WHP remains 11/11 and KVM 12/12.
 
 Patent review: `TRIGGERED` under the existing signed-release, adaptive
 isolation, Total-MicroVM, automated VMM placement, and device-projection reviews

@@ -1451,6 +1451,60 @@ pub enum StableConfigurationRecoveryError<E> {
     Policy(PersistedRestartPolicyError),
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum SelectedStableSystemRecoveryError {
+    RootMismatch,
+    DuplicateObject,
+}
+
+/// Exact configuration and authority-checkpoint selections from one already
+/// integrity-validated stable-storage root. The pair is non-authorizing: owner
+/// approval, rollback freshness, file capabilities, and dependent validation
+/// are still required by the recovery transaction that consumes it.
+pub struct SelectedStableSystemRecovery<'a, const CONFIG_EXTENTS: usize, const AUTH_EXTENTS: usize>
+{
+    configuration: ReachableFileSelection<'a, CONFIG_EXTENTS>,
+    authority_checkpoint: ReachableFileSelection<'a, AUTH_EXTENTS>,
+}
+
+impl<'a, const CONFIG_EXTENTS: usize, const AUTH_EXTENTS: usize>
+    SelectedStableSystemRecovery<'a, CONFIG_EXTENTS, AUTH_EXTENTS>
+{
+    pub fn new(
+        configuration: ReachableFileSelection<'a, CONFIG_EXTENTS>,
+        authority_checkpoint: ReachableFileSelection<'a, AUTH_EXTENTS>,
+    ) -> Result<Self, SelectedStableSystemRecoveryError> {
+        if configuration.volume() != authority_checkpoint.volume()
+            || configuration.root_generation() != authority_checkpoint.root_generation()
+        {
+            return Err(SelectedStableSystemRecoveryError::RootMismatch);
+        }
+        if configuration.object() == authority_checkpoint.object() {
+            return Err(SelectedStableSystemRecoveryError::DuplicateObject);
+        }
+        Ok(Self {
+            configuration,
+            authority_checkpoint,
+        })
+    }
+
+    pub const fn volume(&self) -> VolumeId {
+        self.configuration.volume()
+    }
+
+    pub const fn root_generation(&self) -> u64 {
+        self.configuration.root_generation()
+    }
+
+    pub const fn configuration(&self) -> ReachableFileSelection<'a, CONFIG_EXTENTS> {
+        self.configuration
+    }
+
+    pub const fn authority_checkpoint(&self) -> ReachableFileSelection<'a, AUTH_EXTENTS> {
+        self.authority_checkpoint
+    }
+}
+
 /// Side-effect-free dependent validator for the storage authority recovery
 /// transaction. It uses one exact reconstructed file handle to recover the
 /// selected configuration generation and bind its restart policy, retaining

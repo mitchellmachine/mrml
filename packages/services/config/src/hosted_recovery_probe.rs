@@ -10,7 +10,7 @@
 use super::{
     ConfigTransaction, ConfigUpdate, ConfigValue, ConfigurationService, IsolationPolicySetting,
     OwnerIsolationSelection, PersistedRestartPolicy, RecoveredTotalAdmission,
-    RecoveredTotalAdmissionBuildError, SettingId, SettingSchema,
+    RecoveredTotalAdmissionBuildError, SelectedStableSystemRecovery, SettingId, SettingSchema,
     StableConfigurationRecoveryValidator, StableServiceRecoveryValidator,
     PERSISTED_RESTART_POLICY_BYTES,
 };
@@ -198,6 +198,7 @@ fn digest(bytes: &[u8]) -> [u8; 32] {
 }
 
 fn recover_reachable_files(
+    root_generation: u64,
     configuration_length: usize,
     configuration_bytes: &[u8; BLOCK_BYTES],
     authority_length: usize,
@@ -214,8 +215,10 @@ fn recover_reachable_files(
     let object_ids_pointer = MetadataPointer::new(21, 1).unwrap();
     let candidate = Superblock::new(
         header(),
-        ROOT_GENERATION,
-        ROOT_GENERATION - 1,
+        root_generation,
+        root_generation
+            .checked_sub(1)
+            .ok_or(HostedRecoveryProbeError::StorageLayout)?,
         root,
         root_pointer,
         allocation_pointer,
@@ -365,7 +368,7 @@ fn recover_reachable_files(
         .unwrap(),
         AllocationRecord::new(
             root,
-            ROOT_GENERATION,
+            root_generation,
             20,
             1,
             AllocationKind::AllocationMetadata,
@@ -373,7 +376,7 @@ fn recover_reachable_files(
         .unwrap(),
         AllocationRecord::new(
             root,
-            ROOT_GENERATION,
+            root_generation,
             21,
             1,
             AllocationKind::ObjectIdAllocatorMetadata,
@@ -397,12 +400,12 @@ fn recover_reachable_files(
         .unwrap(),
     ];
     let mut allocation = [0; BLOCK_BYTES];
-    AllocationImage::<10>::build(header(), ROOT_GENERATION, allocation_pointer, &records)
+    AllocationImage::<10>::build(header(), root_generation, allocation_pointer, &records)
         .map_err(|_| HostedRecoveryProbeError::StorageLayout)?
         .encode(&mut allocation)
         .map_err(|_| HostedRecoveryProbeError::StorageLayout)?;
     let mut object_ids = [0; BLOCK_BYTES];
-    ObjectIdAllocatorImage::build(header(), ROOT_GENERATION, Some(11), object_ids_pointer)
+    ObjectIdAllocatorImage::build(header(), root_generation, Some(11), object_ids_pointer)
         .map_err(|_| HostedRecoveryProbeError::StorageLayout)?
         .encode(&mut object_ids)
         .map_err(|_| HostedRecoveryProbeError::StorageLayout)?;
@@ -576,6 +579,7 @@ where
     authority_backend.bytes[..authority_length]
         .copy_from_slice(&authority_bytes[..authority_length]);
     let reachable = recover_reachable_files(
+        ROOT_GENERATION,
         checkpoint.length,
         &configuration_backend.bytes,
         authority_length,
@@ -587,6 +591,8 @@ where
     let authority_selection = reachable
         .select_file(authority_object)
         .ok_or(HostedRecoveryProbeError::StorageLayout)?;
+    let selected = SelectedStableSystemRecovery::new(configuration_selection, authority_selection)
+        .map_err(|_| HostedRecoveryProbeError::RecoveryRootMismatch)?;
     let mut bootstrap = StorageAuthorityTable::<1>::new();
     let bootstrap_file = bootstrap
         .insert(
@@ -623,7 +629,7 @@ where
     let mut recovered_bytes = [0; BLOCK_BYTES];
     let configuration_validator =
         StableConfigurationRecoveryValidator::<3, 2, _, _, _>::new_selected(
-            configuration_selection,
+            selected.configuration(),
             0,
             principal(),
             &capabilities,
@@ -639,7 +645,7 @@ where
     let mut authority_scratch = [0; 128];
     let (authorities, prepared_service) =
         recover_selected_validate_and_commit_stable_authorities::<1, 1, 1, _, _, _>(
-            authority_selection,
+            selected.authority_checkpoint(),
             &bootstrap,
             bootstrap_file,
             principal(),
@@ -673,5 +679,37 @@ where
         Err(RecoveredTotalAdmissionBuildError::ReleaseBuilder(error)) => {
             Err(HostedRecoveryProbeBuildError::ReleaseBuilder(error))
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::SelectedStableSystemRecoveryError;
+
+    #[test]
+    fn stable_system_selection_requires_distinct_files_from_one_exact_root() {
+        let configuration = [0x31; BLOCK_BYTES];
+        let authority = [0x41; BLOCK_BYTES];
+        let current = recover_reachable_files(14, 1, &configuration, 1, &authority).unwrap();
+        let previous = recover_reachable_files(13, 1, &configuration, 1, &authority).unwrap();
+        let configuration_selection = current.select_file(object(9)).unwrap();
+        let authority_selection = current.select_file(object(10)).unwrap();
+        let selected =
+            SelectedStableSystemRecovery::new(configuration_selection, authority_selection)
+                .unwrap();
+        assert_eq!(selected.volume(), volume());
+        assert_eq!(selected.root_generation(), 14);
+        assert!(matches!(
+            SelectedStableSystemRecovery::new(configuration_selection, configuration_selection),
+            Err(SelectedStableSystemRecoveryError::DuplicateObject)
+        ));
+        assert!(matches!(
+            SelectedStableSystemRecovery::new(
+                configuration_selection,
+                previous.select_file(object(10)).unwrap(),
+            ),
+            Err(SelectedStableSystemRecoveryError::RootMismatch)
+        ));
     }
 }

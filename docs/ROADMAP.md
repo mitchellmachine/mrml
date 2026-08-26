@@ -315,7 +315,7 @@ a stale recovery epoch fails. The resulting `RecoveredTotalAdmission` now owns
 the activated release and its sole policy-derived admission table. Route
 preparation exact-matches domain/class against that release before reserving the
 same table; unclassified-domain and policy-generation substitutions leave no
-launch state. Configuration suites pass 44 tests on Windows and Arch Linux.
+launch state. Configuration suites pass 45 tests on Windows and Arch Linux.
 Live WHP and nested KVM now consume that recovered owner from a shared
 hosted-only exact-file and authenticated-authority recovery source through
 route commit and final proof. Both checkpoint files are now selected from one
@@ -329,12 +329,23 @@ Production stable-media recovery, early-boot orchestration, menu presentation,
 OVMF/EFI-Shell execution, complete installed-system inventory, and end-to-end
 runtime enforcement remain **PLANNED**.
 
+The production-shaped stable-selection API is now **PARTIALLY IMPLEMENTED**.
+`SelectedStableSystemRecovery` admits only distinct configuration and authority
+checkpoint files selected from the same integrity-validated volume/root
+generation. It is non-authorizing and remains subordinate to owner approval,
+authenticated monotonic state, exact file capabilities, and dependent
+validation. Duplicate-object and prior-root substitution tests fail before the
+transaction. Windows and Arch Linux configuration suites pass 45 tests, WHP
+passes 11, and KVM passes 12. The hosted adapter is its only caller so far;
+real block-device selection, installed early-boot construction, and complete
+system enumeration remain the next gates.
+
 The shared live Total owner is now **PARTIALLY IMPLEMENTED**. WHP and nested
 KVM bind the effective boot policy and activated signed release into one
 `BootTotalAdmission`, preserve exact generation/catalog digests, prepare and
 commit the classified route through its owned table, and finalize from that
 same owner after vCPU/RAM/VMM construction. `RecoveredTotalAdmission` wraps the
-same object rather than creating a parallel table. Configuration passes 44
+same object rather than creating a parallel table. Configuration passes 45
 tests on both hosts, WHP passes 11, KVM passes 12, and fresh signed probes report
 one eligible microVM with zero fallback. The component-service runners now
 replace their release-owned transient admission with `RecoveredTotalAdmission`

@@ -817,6 +817,10 @@ the recovered join, removing rather than adding a policy mechanism. Selecting
 two exact files from the already implemented redundant-root graph and comparing
 the same volume/root generation across existing recovery records is conventional
 integrity and rollback validation, not a new storage or placement algorithm.
+Grouping the two already-selected files in a typed non-authorizing pair and
+rejecting duplicate objects or cross-root pairs is likewise conventional input
+validation; it does not add a filesystem, recovery, isolation, or scheduling
+algorithm.
 Because the
 broader combination of
 signed release classification, automated placement, isolation, recovery, and

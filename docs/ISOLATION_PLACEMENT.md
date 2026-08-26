@@ -756,10 +756,20 @@ authority reconstruction; root-generation substitution likewise fails. Fresh
 WHP and nested-KVM signed probes consume the
 resulting `RecoveredTotalAdmission`, each report one eligible microVM and zero
 native fallback, and complete the same exact-generation component path. WHP
-passes 11 runner tests, KVM passes 12, and configuration passes 44 on both
+passes 11 runner tests, KVM passes 12, and configuration passes 45 on both
 hosts. The in-memory source is controlled hosted evidence, not durable media,
 owner-presence, TPM, firmware, physical rollback, or installed early-boot
 orchestration; live recovered boot remains **PLANNED**.
+
+Stable-system selection is now a reusable **PARTIALLY IMPLEMENTED** boundary.
+`SelectedStableSystemRecovery` accepts the configuration checkpoint and
+authority checkpoint only when both are distinct objects selected from the
+same integrity-validated volume/root generation. It carries no authority and
+does not replace owner approval, rollback state, exact file capabilities, or
+dependent validation. Focused tests reject a duplicate object and a checkpoint
+from an older root before the recovery transaction. The hosted source now uses
+this boundary; real block-device selection and installed boot remain
+**PLANNED**.
 
 The runner-side boot overlay is no longer injected as an independent enum
 literal. Both hosted backends encode neutral accepted recovery state and the

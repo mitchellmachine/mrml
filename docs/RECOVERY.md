@@ -1137,7 +1137,7 @@ service-preparation operation accepts only a domain/class already classified by
 that release, reapplies the recovered package bounds, and reserves that owned
 table. An unclassified domain, policy-generation mismatch, or release
 substitution fails before launch state changes. Windows and Arch Linux each
-pass 44 configuration-service tests. A shared hosted-only source now
+pass 45 configuration-service tests. A shared hosted-only source now
 reconstructs this owner through the existing exact-file, authenticated
 authority-checkpoint, boot-bound monotonic-state, dependent-validation, and
 recovered-service publication transaction. It now selects both checkpoint files
@@ -1152,6 +1152,17 @@ Live WHP and nested-KVM component probes now
 consume this recovered owner through route commit and final proof. This is
 controlled in-memory recovery evidence, not production stable media,
 owner-presence, TPM, firmware, or installed early-boot recovery, which remain
+**PLANNED**.
+
+The next stable-selection boundary is **PARTIALLY IMPLEMENTED** as
+`SelectedStableSystemRecovery`. Configuration and authority-checkpoint files
+must be distinct selections from one integrity-validated volume/root
+generation before the authenticated recovery transaction can use them. The
+pair is explicitly non-authorizing: owner approval, monotonic rollback state,
+file capabilities, and dependent validation remain separate. Windows and Arch
+Linux each pass 45 configuration tests, including rejection of duplicate-file
+and prior-root substitution. The current caller is still the controlled hosted
+adapter; durable block-device selection and installed early boot remain
 **PLANNED**.
 
 WHP and nested KVM now consume the common inner `BootTotalAdmission` owner from
@@ -1189,7 +1200,7 @@ release-inventory builder; builder failure exposes neither policy nor admission.
 The full block-backed stable recovery test
 then prepares and commits a classified microVM route and obtains the final
 generation-bound Total proof from that same owner. Windows and Arch Linux each
-pass 44 configuration tests. This closes the detached-policy API gap. The
+pass 45 configuration tests. This closes the detached-policy API gap. The
 hosted runners now use the shared controlled recovered-state source; a
 component runner retains no transient effective-policy object, only the package
 bounds and identity required by the eventual recovered owner. A production
