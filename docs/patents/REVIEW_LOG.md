@@ -5475,6 +5475,17 @@ Broader trait solving and Rust conformance remain partial; this agent review
 does not establish clearance or infringement and does not replace independent
 human dual review.
 
+# 2026-08-26 — Source associated-type defaults
+
+**Result: NOT_TRIGGERED after the bounded associated-value reviews.** This
+increment conventionally selects an omitted associated value from its declared
+flat default and substitutes it through the existing exact or generic
+implementation head before insertion into the existing associated-value
+database. It adds no new normalization, unification, selection, coherence,
+proof-search, caching, or code-generation mechanism. Broader trait solving and
+Rust conformance remain partial; this agent review does not establish clearance
+or infringement and does not replace independent human dual review.
+
 # 2026-08-26 — Kernel parallel-vCPU runtime-slice accounting
 
 **Result: NOT_TRIGGERED after the fixed-period CPU-budget and linear runtime-

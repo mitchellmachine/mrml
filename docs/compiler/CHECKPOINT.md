@@ -1346,6 +1346,15 @@ gnullvm and native Arch Linux WSL each pass 610 library tests, one component-
 interface probe, 10 conformance tests, and 335 replacement tests: 956 compiler
 tests per host.
 
+The associated-type-default milestone parses flat declaration defaults and
+substitutes `Self`, a complete declaration parameter, or a concrete nominal
+type through each exact or generic implementation head when no explicit value
+is present. Explicit values override defaults, while missing non-defaulted
+values and projection/compound defaults remain fail-closed. Windows gnullvm and
+native Arch Linux WSL each pass 613 library tests, one component-interface
+probe, 10 conformance tests, and 335 replacement tests: 959 compiler tests per
+host.
+
 The premise-bearing rigid-normalization milestone proves the selected generic
 implementation's instantiated trait and projection predicates before exposing
 its associated value. It shares the caller's 16-frame rigid proof stack and

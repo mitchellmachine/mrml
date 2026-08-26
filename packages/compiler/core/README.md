@@ -4547,6 +4547,15 @@ constraints, and compound type terms remain unsupported. Windows gnullvm and
 native Arch Linux WSL each pass 610 library tests, one component probe, 10
 conformance tests, and 335 replacement tests: 956 compiler tests per host.
 
+The associated-type-default milestone admits flat defaults such as
+`type Output = Self`, a complete declaration parameter, or a concrete nominal
+type. Missing implementation values substitute the default through the exact
+or generic implementation head; explicit implementation values override it,
+and projection obligations observe the resulting stable associated value.
+Projection-valued and compound defaults remain fail-closed. Windows gnullvm and
+native Arch Linux WSL each pass 613 library tests, one component probe, 10
+conformance tests, and 335 replacement tests: 959 compiler tests per host.
+
 The projection-bearing term milestone uses a fixed 64-node arena for flat leaf
 terms and associated-type projections whose trait self/argument positions refer
 only to earlier nodes. Identical nodes intern to one stable identity; invalid
