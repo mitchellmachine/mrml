@@ -7133,3 +7133,15 @@ optimization, or code-generation algorithm. General call summaries remain
 absent. Broader compiler completion remains partial; this technical screen is
 not a clearance or infringement conclusion and does not replace independent
 human dual review.
+
+# 2026-08-26 — Call-derived shared-return outlives evidence
+
+**Result: NOT_TRIGGERED after the call-derived outlives evidence review.** This
+increment adds independently authored regression evidence that the existing
+bounded call-origin and return-outlives checks compose through one conventional
+mutable-to-shared reborrow. It introduces no new interprocedural analysis,
+lifetime inference, borrow-checking, alias-analysis, optimization, or code-
+generation algorithm. General call and lifetime inference remain absent.
+Broader compiler completion remains partial; this technical screen is not a
+clearance or infringement conclusion and does not replace independent human
+dual review.
