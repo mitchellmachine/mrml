@@ -8692,6 +8692,15 @@ generations, and geometry. Storage passes 130 tests on Windows and Arch Linux.
 No AHCI register discovery, DMA, interrupt, queue, block I/O, OVMF, or physical
 hardware was implemented or exercised.
 
+The next native-storage authority boundary is now **PARTIALLY IMPLEMENTED** as
+a typed ABAR mapping request. It requires a live `MAP | READ | WRITE`
+capability for the exact device object, nonzero configuration and mapping
+generations, and an aligned non-wrapping virtual range. Its platform contract is
+an exact supervisor RW/NX mapping bound to both generations. Missing rights,
+stale handles, object substitution, malformed ranges, and mapper failure publish
+nothing. Storage passes 138 tests on Windows and Arch Linux. No volatile MMIO,
+reset, DMA, interrupt, command, NCQ, or physical behavior was exercised.
+
 Configuration now **PARTIALLY IMPLEMENTS** one transactional bridge from that
 typed verifier to the existing installed recovery owner. Correlation,
 registration, read-session reacquisition, block-zero validation, and selected-

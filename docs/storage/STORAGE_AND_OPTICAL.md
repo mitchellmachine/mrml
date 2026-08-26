@@ -265,6 +265,18 @@ Storage passes 135 tests on Windows. Native PCI enumeration, ABAR mapping, AHCI
 register/DMA/interrupt mechanics, reacquisition, Arch Linux parity, and physical
 evidence remain **PLANNED**.
 
+The first ABAR authority boundary is now **PARTIALLY IMPLEMENTED** without
+claiming controller access. After the typed PCI snapshot validates the function
+and BAR geometry, `map_ahci_abar` requires one live capability carrying
+`MAP | READ | WRITE` for the expected device object, nonzero configuration and
+mapping generations, and an aligned non-wrapping virtual range. Its backend
+contract permits only a supervisor read/write, non-executable mapping of that
+exact range and binds revocation to both generations. Missing rights, stale
+handles, object substitution, malformed ranges, and backend refusal fail before
+publication. Storage passes 138 tests on Windows and Arch Linux. No ABAR
+register was accessed; HBA reset, port enumeration, DMA, interrupts, ATA/ATAPI,
+NCQ, native PCI enumeration, and physical evidence remain **PLANNED**.
+
 The configuration service now **PARTIALLY IMPLEMENTS** an atomic
 correlate/register/reacquire operation for this route. It admits the descriptor
 only through the typed verifier, creates the existing principal-bound read-only

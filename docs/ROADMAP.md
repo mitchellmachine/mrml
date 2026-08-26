@@ -184,6 +184,16 @@ enumeration, ABAR mapping, AHCI commands/DMA/interrupts, USB mass-storage,
 native VirtIO, Arch Linux parity for this increment, and hardware evidence
 remain **PLANNED**. WHP/KVM runner regression parity remains 11/12.
 
+The next storage dependency gate is now **PARTIALLY IMPLEMENTED** as a typed
+ABAR mapping request. It requires a live `MAP | READ | WRITE` capability for the
+exact device object, nonzero descriptor and mapping generations, and an aligned
+non-wrapping virtual range. The backend contract is supervisor-only, RW/NX,
+exact-range, and generation-bound; every authority, substitution, range, or
+backend failure publishes no mapping. Storage passes 138 tests on Windows and
+Arch Linux. This is not MMIO execution or hardware evidence. Controller reset,
+port/signature discovery, DMA, interrupts, ATA/ATAPI, NCQ, and physical
+validation remain **PLANNED**.
+
 Selected-device reopening and redundant-root reads are now **PARTIALLY
 IMPLEMENTED**. Exact path/media/geometry and block-zero header revalidation
 precedes both root reads; any mismatch, second-read failure, or protocol-close

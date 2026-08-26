@@ -9,6 +9,7 @@
 
 mod allocation;
 mod ahci_discovery;
+mod ahci_mapping;
 mod authority;
 mod authority_checkpoint;
 mod block;
@@ -38,6 +39,10 @@ pub use ahci_discovery::{
     AHCI_ABAR_MINIMUM_BYTES, AHCI_PCI_CLASS, AHCI_PCI_PROGRAMMING_INTERFACE,
     AHCI_PCI_SUBCLASS, AhciAbarDescriptor, AhciDiscoveryError, AhciPciFunctionSnapshot,
     PciFunctionLocation,
+};
+pub use ahci_mapping::{
+    AHCI_MMIO_PAGE_BYTES, AhciAbarMapping, AhciAbarMappingBackend, AhciAbarMappingError,
+    map_ahci_abar,
 };
 pub use authority::{
     StorageAuthorityError, StorageAuthorityReservation, StorageAuthorityTable, StorageHandle,

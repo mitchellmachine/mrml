@@ -1182,6 +1182,15 @@ tests on Windows and Arch Linux. A real driver must still derive this descriptor
 from native controller state; installed reacquisition and physical execution
 remain **PLANNED**.
 
+The following ABAR mapping authority gate is now **PARTIALLY IMPLEMENTED**.
+Only a live `MAP | READ | WRITE` capability for the exact device object may
+submit the validated descriptor to an exact-range supervisor RW/NX mapper. The
+request retains the PCI-configuration and mapping generations and rejects zero,
+unaligned, wrapping, stale, substituted, or backend-refused state before
+publication. Storage passes 138 tests on Windows and Arch Linux. It performs no
+volatile MMIO and proves no reset, DMA, interrupt, block I/O, reacquisition,
+OVMF, or physical-hardware behavior.
+
 The typed native route and installed recovery are now composed atomically as a
 **PARTIALLY IMPLEMENTED** configuration control plane. One bounded operation
 correlates and registers the descriptor, reacquires a read-only session, checks

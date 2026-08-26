@@ -265,6 +265,21 @@ current increment is limited to non-authorizing typed PCI-class and ABAR
 validation; it performs no MMIO, DMA, command submission, interrupt handling,
 reset, NCQ, or block I/O.
 
+## 2026-08-26 — Capability-bound AHCI ABAR mapping request
+
+Patent review: **TRIGGERED**, governed by the immediately preceding Canadian
+AHCI software-driver re-evaluation. This bounded increment implements only the
+authority and range checks that precede an exact supervisor RW/NX mapping of an
+already validated conventional AHCI ABAR. It performs no register access,
+controller reset, SATA Transport/Link/PHY behavior, DMA, interrupt handling,
+ATA/ATAPI command, NCQ, command aggregation, or proprietary scheduling. It does
+not implement the software-managed DMA-context architecture of NVIDIA US
+7,620,747, the controller circuitry of Intel US 7,805,543, Apple's internal
+device-controller concurrency, Intel US 9,128,699 aggregation, or the VxWorks
+method. The Canadian scope and exclusions recorded above remain mandatory; this
+technical screen is not legal advice, patent clearance, or permission for use
+outside that reviewed jurisdiction.
+
 ## 2026-08-26 — AHCI licensing prerequisite and continuing native-driver hold
 
 Patent review: **TRIGGERED**. Intel's published AHCI page says implementation
