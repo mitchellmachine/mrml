@@ -1297,6 +1297,15 @@ gnullvm and native Arch Linux WSL each pass 597 library tests, one component-
 interface probe, 10 conformance tests, and 335 replacement tests: 943 compiler
 tests per host.
 
+The source-supertrait `Self` milestone represents `Self` as an explicit parent-
+argument identity rather than a nominal source type. Bound implementations
+substitute their self term into inherited premises, while exact and transitive
+validation substitute the concrete implementation self identity. Missing
+matching parents remain unavailable before code generation. Windows gnullvm
+and native Arch Linux WSL each pass 598 library tests, one component-interface
+probe, 10 conformance tests, and 335 replacement tests: 944 compiler tests per
+host.
+
 The premise-bearing rigid-normalization milestone proves the selected generic
 implementation's instantiated trait and projection predicates before exposing
 its associated value. It shares the caller's 16-frame rigid proof stack and

@@ -4494,6 +4494,15 @@ gnullvm and native Arch Linux WSL each pass 597 library tests, one component
 probe, 10 conformance tests, and 335 replacement tests: 943 compiler tests per
 host.
 
+The source-supertrait `Self` milestone gives `Self` an explicit argument
+identity rather than interning it as an unrelated nominal type. Generic and
+conditional inherited premises substitute the bound implementation self term;
+exact and transitive validation substitute the concrete implementation self
+identity. Missing matching parent implementations still fail before code
+generation. Windows gnullvm and native Arch Linux WSL each pass 598 library
+tests, one component probe, 10 conformance tests, and 335 replacement tests:
+944 compiler tests per host.
+
 The projection-bearing term milestone uses a fixed 64-node arena for flat leaf
 terms and associated-type projections whose trait self/argument positions refer
 only to earlier nodes. Identical nodes intern to one stable identity; invalid

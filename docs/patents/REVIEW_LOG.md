@@ -5381,3 +5381,14 @@ no new type-constructor semantics, unification, selection, coherence,
 proof-search, caching, or code-generation mechanism. Broader trait solving and
 Rust conformance remain partial; this agent review does not establish clearance
 or infringement and does not replace independent human dual review.
+
+# 2026-08-26 — Source-supertrait `Self` substitution
+
+**Result: NOT_TRIGGERED after the bounded source-supertrait reviews.** This
+increment conventionally distinguishes the Rust `Self` keyword from nominal
+type identities and substitutes the already available implementation self term
+into existing parent goals. It adds no new type-constructor semantics,
+unification, selection, coherence, proof-search, caching, or code-generation
+mechanism. Broader trait solving and Rust conformance remain partial; this agent
+review does not establish clearance or infringement and does not replace
+independent human dual review.
