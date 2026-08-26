@@ -4216,6 +4216,7 @@ struct RuntimeLocal<'source> {
     name: &'source str,
     ty: RuntimeExpressionType,
     mutable: bool,
+    initialized: bool,
     stack_slots: usize,
 }
 
@@ -7963,6 +7964,7 @@ fn preanalyze_runtime_local_binding<
             name: local.name,
             ty,
             mutable: local.mutable,
+            initialized: local.initialized,
             stack_slots,
         });
         *local_count += 1;
@@ -8394,6 +8396,7 @@ fn preanalyze_runtime_local_binding<
         name: local.name,
         ty,
         mutable: local.mutable,
+        initialized: local.initialized,
         stack_slots,
     });
     *local_count += 1;
@@ -8406,7 +8409,7 @@ fn resolve_runtime_assignment_place<'source, const MAX_PARAMETERS: usize>(
     assignment: &crate::Assignment<'source>,
 ) -> Result<RuntimePlace<'source>, CodegenErrorKind> {
     let name = assignment.binding_name();
-    let (base, ty, binding_mutable) = if let Some((index, local)) =
+    let (base, ty, binding_mutable, binding_initialized) = if let Some((index, local)) =
         locals.iter().enumerate().rev().find_map(|(index, local)| {
             local
                 .filter(|local| local.name == name)
@@ -8419,6 +8422,7 @@ fn resolve_runtime_assignment_place<'source, const MAX_PARAMETERS: usize>(
             },
             local.ty,
             local.mutable,
+            local.initialized,
         )
     } else if let Some((index, parameter)) = function
         .parameters()
@@ -8432,6 +8436,7 @@ fn resolve_runtime_assignment_place<'source, const MAX_PARAMETERS: usize>(
             runtime_type_from_text(parameter.ty.text)
                 .ok_or(CodegenErrorKind::UnsupportedRuntimeType)?,
             false,
+            true,
         )
     } else {
         return Err(CodegenErrorKind::UnknownRuntimeName);
@@ -8446,6 +8451,11 @@ fn resolve_runtime_assignment_place<'source, const MAX_PARAMETERS: usize>(
             RuntimeExpressionType::Reference { mutable, .. } => mutable,
             _ => binding_mutable,
         },
+        None if assignment.operator == crate::AssignmentOperator::Assign
+            && !binding_initialized =>
+        {
+            true
+        }
         _ => binding_mutable,
     };
     Ok(RuntimePlace {
@@ -11171,6 +11181,36 @@ fn preanalyze_runtime_assignment_access<
         kind,
         span: assignment.name_span,
     })?;
+    if let RuntimePlaceBase::Local { id, .. } = place.base
+        && let Some(local) = locals.iter().flatten().find(|local| local.id == id)
+        && !local.mutable
+        && !local.initialized
+    {
+        let path = facts
+            .find_move_path(base, RuntimePlaceProjections::EMPTY)
+            .ok_or(CodegenError {
+                kind: CodegenErrorKind::InvalidRuntimePlaceFacts,
+                span: assignment.name_span,
+            })?;
+        if projections != RuntimePlaceProjections::EMPTY
+            || assignment.operator != crate::AssignmentOperator::Assign
+            || facts.initializations[..facts.initialization_count]
+                .iter()
+                .flatten()
+                .any(|initialization| initialization.path == path)
+            || facts.effects[..facts.effect_count]
+                .iter()
+                .flatten()
+                .any(|effect| {
+                    effect.path == path && matches!(effect.kind, RuntimePlaceEffectKind::Write)
+                })
+        {
+            return Err(CodegenError {
+                kind: CodegenErrorKind::ImmutableAssignment,
+                span: assignment.name_span,
+            });
+        }
+    }
     facts
         .push_assignment_access(RuntimePlaceAccessFact {
             base,
@@ -23327,6 +23367,7 @@ impl<
             name,
             ty,
             mutable,
+            initialized,
             stack_slots,
         });
         self.saved_locals += 1;
@@ -35440,6 +35481,11 @@ mod tests {
         let baseline =
             compile("#[unsafe(no_mangle)] pub unsafe extern \"C\" fn answer() -> u64 { 42 }")
                 .unwrap();
+        let delayed = compile(
+            "#[unsafe(no_mangle)] pub extern \"C\" fn answer() -> u64 { let value: u64; value = 42; value }",
+        )
+        .unwrap();
+        assert!(delayed.bytes().contains(&0xc3));
         for source in [
             "#[unsafe(no_mangle)] pub unsafe extern \"C\" fn answer() -> u64 { asm!(\"nop\"); 42 }",
             "#[unsafe(no_mangle)] pub extern \"C\" fn answer() -> u64 { unsafe { asm!(\"nop\"); } 42 }",
@@ -36037,6 +36083,10 @@ mod tests {
             (
                 "#[unsafe(no_mangle)] pub extern \"C\" fn answer() -> u64 { let value: u64; unsafe { asm!(\"nop\"); } value }",
                 CodegenErrorKind::RuntimeUseAfterMove,
+            ),
+            (
+                "#[unsafe(no_mangle)] pub extern \"C\" fn answer() -> u64 { let value: u64; value = 41; value = 42; value }",
+                CodegenErrorKind::ImmutableAssignment,
             ),
             (
                 concat!(
