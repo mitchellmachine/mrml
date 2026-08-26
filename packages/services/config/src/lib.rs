@@ -1720,6 +1720,46 @@ impl<const GRANTS: usize, const SETTINGS: usize, const AUDIT: usize>
         .bind_release_inventory(release)
     }
 
+    /// Keeps the recovered effective policy private while allowing the caller
+    /// to construct the exact authenticated release inventory with its policy
+    /// generation. A failed builder publishes neither an admission table nor a
+    /// detached policy value.
+    #[allow(clippy::too_many_arguments)]
+    pub fn build_total_boot_admission<
+        const DOMAINS: usize,
+        A: CapabilityAuthorizer + ?Sized,
+        F,
+        E,
+    >(
+        &self,
+        capabilities: &A,
+        system: IsolationPolicySetting,
+        system_read: Capability,
+        component: IsolationPolicySetting,
+        component_read: Capability,
+        handoff: &BootHandoff,
+        build_release: F,
+    ) -> Result<RecoveredTotalAdmission<DOMAINS>, RecoveredTotalAdmissionBuildError<E>>
+    where
+        F: FnOnce(u64) -> Result<ActivatedReleaseTotalMicrovmInventory<DOMAINS>, E>,
+    {
+        let policy = self
+            .compose_boot_isolation_policy(
+                capabilities,
+                system,
+                system_read,
+                component,
+                component_read,
+                handoff,
+            )
+            .map_err(RecoveredTotalAdmissionBuildError::Policy)?;
+        let release = build_release(policy.effective().policy_generation())
+            .map_err(RecoveredTotalAdmissionBuildError::ReleaseBuilder)?;
+        policy
+            .bind_release_inventory(release)
+            .map_err(RecoveredTotalAdmissionBuildError::Policy)
+    }
+
     pub fn into_parts(
         self,
     ) -> (
@@ -1729,6 +1769,12 @@ impl<const GRANTS: usize, const SETTINGS: usize, const AUDIT: usize>
     ) {
         (self.authorities, self.configuration, self.service)
     }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum RecoveredTotalAdmissionBuildError<E> {
+    Policy(ConfigError),
+    ReleaseBuilder(E),
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -5168,26 +5214,41 @@ mod tests {
         // SAFETY: this is the controlled hosted fixture named by the helper's
         // contract; it does not represent owner presence or durable hardware.
         let total = unsafe {
-            hosted_recovery_probe::recover_total_admission(
-                &current,
-                activated_configuration_release(domain, 1),
-            )
+            hosted_recovery_probe::recover_total_admission_with(&current, |policy_generation| {
+                Ok::<_, ()>(activated_configuration_release(domain, policy_generation))
+            })
         }
         .unwrap();
         assert_eq!(total.policy().authority_epoch(), 9);
         assert_eq!(total.policy().boot_accepted_epoch(), 8);
 
+        // The inventory builder sees only the recovered policy generation;
+        // failure returns no detached policy or admission owner.
+        assert!(matches!(
+            unsafe {
+                hosted_recovery_probe::recover_total_admission_with::<1, _, _>(
+                    &current,
+                    |policy_generation| {
+                        assert_eq!(policy_generation, 1);
+                        Err(7u8)
+                    },
+                )
+            },
+            Err(hosted_recovery_probe::HostedRecoveryProbeBuildError::ReleaseBuilder(7))
+        ));
+
         let (stale_bytes, stale_length) = hosted_total_handoff(7);
         let stale = BootHandoff::decode(&stale_bytes[..stale_length], |_| {}).unwrap();
         // SAFETY: same controlled hosted fixture; the stale handoff must not
         // redefine its independently fixed authenticated recovery state.
-        assert!(unsafe {
-            hosted_recovery_probe::recover_total_admission(
-                &stale,
-                activated_configuration_release(domain, 1),
-            )
-        }
-        .is_err());
+        assert!(
+            unsafe {
+                hosted_recovery_probe::recover_total_admission_with(&stale, |policy_generation| {
+                    Ok::<_, ()>(activated_configuration_release(domain, policy_generation))
+                })
+            }
+            .is_err()
+        );
     }
     const SYSTEM_GENERATION: u64 = 108;
 

@@ -10,8 +10,8 @@
 use super::{
     ConfigTransaction, ConfigUpdate, ConfigValue, ConfigurationService, IsolationPolicySetting,
     OwnerIsolationSelection, PERSISTED_RESTART_POLICY_BYTES, PersistedRestartPolicy,
-    RecoveredTotalAdmission, SettingId, SettingSchema, StableConfigurationRecoveryValidator,
-    StableServiceRecoveryValidator,
+    RecoveredTotalAdmission, RecoveredTotalAdmissionBuildError, SettingId, SettingSchema,
+    StableConfigurationRecoveryValidator, StableServiceRecoveryValidator,
 };
 use mrml_crypto::Sha3_256;
 use mrml_kernel::arch::x86_64::UserContext;
@@ -47,6 +47,18 @@ pub enum HostedRecoveryProbeError {
     Recovery,
     ServicePublication,
     Admission,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum HostedRecoveryProbeBuildError<E> {
+    Probe(HostedRecoveryProbeError),
+    ReleaseBuilder(E),
+}
+
+impl<E> From<HostedRecoveryProbeError> for HostedRecoveryProbeBuildError<E> {
+    fn from(error: HostedRecoveryProbeError) -> Self {
+        Self::Probe(error)
+    }
 }
 
 struct CheckpointBackend {
@@ -168,15 +180,21 @@ fn checkpoint_file(
 /// The caller must use this only as a controlled hosted probe. This function
 /// synthesizes the owner-approved checkpoint proof for its private in-memory
 /// fixture; it is not an owner-presence or production recovery boundary.
-pub unsafe fn recover_total_admission<const DOMAINS: usize>(
+pub unsafe fn recover_total_admission_with<const DOMAINS: usize, F, E>(
     handoff: &BootHandoff,
-    release: ActivatedReleaseTotalMicrovmInventory<DOMAINS>,
-) -> Result<RecoveredTotalAdmission<DOMAINS>, HostedRecoveryProbeError> {
+    build_release: F,
+) -> Result<RecoveredTotalAdmission<DOMAINS>, HostedRecoveryProbeBuildError<E>>
+where
+    F: FnOnce(u64) -> Result<ActivatedReleaseTotalMicrovmInventory<DOMAINS>, E>,
+{
     let recovery = handoff
         .recovery_state()
-        .ok_or(HostedRecoveryProbeError::MissingRecoveryState)?;
+        .ok_or(HostedRecoveryProbeError::MissingRecoveryState)
+        .map_err(HostedRecoveryProbeBuildError::Probe)?;
     if recovery.accepted_volume().is_some() || recovery.accepted_root_generation() != 0 {
-        return Err(HostedRecoveryProbeError::UnsupportedBoundRecoveryRoot);
+        return Err(HostedRecoveryProbeBuildError::Probe(
+            HostedRecoveryProbeError::UnsupportedBoundRecoveryRoot,
+        ));
     }
     let root_object = ObjectId(0x4852_5052_4f42_0001);
     let setting_object = ObjectId(0x4852_5052_4f42_0002);
@@ -369,17 +387,23 @@ pub unsafe fn recover_total_admission<const DOMAINS: usize>(
         .commit(authorities, &mut supervisor)
         .map_err(|_| HostedRecoveryProbeError::ServicePublication)?;
     if recovered.configuration().revision() != POLICY_GENERATION {
-        return Err(HostedRecoveryProbeError::Configuration);
+        return Err(HostedRecoveryProbeError::Configuration.into());
     }
-    recovered
-        .bind_total_boot_admission(
-            &capabilities,
-            system,
-            system_access,
-            component,
-            component_access,
-            handoff,
-            release,
-        )
-        .map_err(|_| HostedRecoveryProbeError::Admission)
+    match recovered.build_total_boot_admission(
+        &capabilities,
+        system,
+        system_access,
+        component,
+        component_access,
+        handoff,
+        build_release,
+    ) {
+        Ok(total) => Ok(total),
+        Err(RecoveredTotalAdmissionBuildError::Policy(_)) => {
+            Err(HostedRecoveryProbeError::Admission.into())
+        }
+        Err(RecoveredTotalAdmissionBuildError::ReleaseBuilder(error)) => {
+            Err(HostedRecoveryProbeBuildError::ReleaseBuilder(error))
+        }
+    }
 }

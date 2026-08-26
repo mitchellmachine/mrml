@@ -358,7 +358,9 @@ operation. `RecoveredSystemState::bind_total_boot_admission` capability-
 revalidates the persistent system/component settings, checks that the decoded
 handoff's accepted epoch is the predecessor of the committed authority epoch,
 composes the one-boot overlay, and binds the authenticated activated release
-without returning a detached effective policy. The full stable-storage test now
+without returning a detached effective policy. Its builder variant supplies
+only the recovered policy generation to release authentication/enumeration and
+publishes no admission when that builder fails. The full stable-storage test now
 continues through classified microVM route commit and
 `TotalMicrovmRuntimeProof`; Windows and Arch Linux each pass all 44
 configuration tests. The WHP/KVM component runners now construct and consume

@@ -9,7 +9,7 @@ use mrml_config::{
     IsolationPolicySetting, IsolationServiceBounds, IsolationServiceIdentity,
     MicrovmConfigurationServiceLauncher, OwnerIsolationSelection,
     PreparedMicrovmConfigurationLauncher, RecoveredTotalAdmission, SettingId,
-    hosted_recovery_probe::recover_total_admission,
+    hosted_recovery_probe::recover_total_admission_with,
 };
 #[cfg(target_os = "windows")]
 use mrml_crypto::{LAMPORT_PUBLIC_KEY_BYTES, Sha3_512};
@@ -2838,26 +2838,28 @@ fn application_main() -> Result<()> {
         let (release_bytes, expected_release_key) = component_release_authority
             .as_ref()
             .ok_or_else(|| anyhow!("missing authenticated WHP component release"))?;
-        let mut plan = RuntimeDomainAssignmentPlan::<2>::new(
-            release_bytes,
-            expected_release_key,
-            active_component_generation
-                .ok_or_else(|| anyhow!("missing activated WHP component release"))?,
-            configured.effective.policy_generation(),
-        )
-        .map_err(|error| anyhow!("WHP installed assignment plan failed: {:?}", error))?;
-        plan.assign_from_policy(|record| {
-            RuntimeDomainAssignment::new(record.package_id, configured.identity.domain())
-        })
-        .map_err(|error| anyhow!("WHP runtime assignment policy failed: {:?}", error))?;
-        let release = plan
-            .seal()
-            .map_err(|error| anyhow!("WHP release inventory sealing failed: {:?}", error))?;
         // SAFETY: this executable mode is a hosted controlled probe. The
         // helper's synthesized owner approval is never production recovery or
         // physical rollback evidence.
-        let total = unsafe { recover_total_admission(&decoded_boot_handoff, release) }
-            .map_err(|error| anyhow!("WHP recovered boot Total admission failed: {:?}", error))?;
+        let total = unsafe {
+            recover_total_admission_with(&decoded_boot_handoff, |policy_generation| {
+                let mut plan = RuntimeDomainAssignmentPlan::<2>::new(
+                    release_bytes,
+                    expected_release_key,
+                    active_component_generation
+                        .ok_or_else(|| anyhow!("missing activated WHP component release"))?,
+                    policy_generation,
+                )
+                .map_err(|error| anyhow!("WHP installed assignment plan failed: {:?}", error))?;
+                plan.assign_from_policy(|record| {
+                    RuntimeDomainAssignment::new(record.package_id, configured.identity.domain())
+                })
+                .map_err(|error| anyhow!("WHP runtime assignment policy failed: {:?}", error))?;
+                plan.seal()
+                    .map_err(|error| anyhow!("WHP release inventory sealing failed: {:?}", error))
+            })
+        }
+        .map_err(|error| anyhow!("WHP recovered boot Total admission failed: {:?}", error))?;
         println!(
             "isolation-recovery|status=PASS|backend=whp|authority_epoch={}|boot_accepted_epoch={}|configuration_revision={}",
             total.policy().authority_epoch(),

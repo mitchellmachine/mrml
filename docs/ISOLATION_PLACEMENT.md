@@ -771,6 +771,9 @@ requiring callers to retain an intermediate effective policy.
 `bind_total_boot_admission` revalidates both capabilities and settings, checks
 the decoded handoff epoch against the committed authority epoch, and returns the
 same `RecoveredTotalAdmission` owner used for route preparation and final proof.
+Its builder form keeps the recovered effective policy private and supplies only
+the recovered policy generation to the authenticated release-inventory builder;
+builder failure publishes neither an admission table nor a detached policy.
 The stable recovery test commits one eligible microVM route and finalizes its
 signed release inventory through that owner on Windows and Arch Linux. The
 hosted WHP/KVM component path now constructs that recovered owner through the

@@ -1177,7 +1177,10 @@ handoff and recovered-owner parity, not production recovered boot.
 `bind_total_boot_admission` transition. It joins the committed recovered
 authorities and configuration service, exact decoded handoff epoch/override,
 capability-revalidated policy settings, and authenticated activated release
-before returning any launch owner. The full block-backed stable recovery test
+before returning any launch owner. `build_total_boot_admission` additionally
+keeps that policy private while supplying only its generation to a one-use
+release-inventory builder; builder failure exposes neither policy nor admission.
+The full block-backed stable recovery test
 then prepares and commits a classified microVM route and obtains the final
 generation-bound Total proof from that same owner. Windows and Arch Linux each
 pass 44 configuration tests. This closes the detached-policy API gap. The

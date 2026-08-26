@@ -778,7 +778,10 @@ publication, signed-release inventory, and fail-closed microVM admission. The
 shared hosted source adds no new placement algorithm, authority class,
 cryptographic primitive, storage format, scheduler, VMM backend, or fallback.
 Its fixed in-memory source state remains independently bound from decoded
-handoff data so stale epochs fail closed. Because the broader combination of
+handoff data so stale epochs fail closed. The one-use release-builder callback
+is conventional control-flow sequencing and receives only the recovered policy
+generation; failure publishes no admission or detached policy. Because the
+broader combination of
 signed release classification, automated placement, isolation, recovery, and
 device projection is already under targeted worldwide review, that status
 remains `TRIGGERED`; no patent-clearance, non-infringement, or infringement
