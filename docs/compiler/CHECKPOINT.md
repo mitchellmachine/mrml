@@ -1379,18 +1379,20 @@ gnullvm and native Arch Linux WSL each pass 627 library tests, one component-
 interface probe, 10 conformance tests, and 335 replacement tests: 973 compiler
 tests per host.
 
-The trailing concrete trait-default milestone parses defaults such as
-`trait Convert<Input = u8>` and materializes omitted arguments in exact and
+The trailing trait-default milestone parses defaults such as
+`trait Convert<Input = u8, Output = Input>` and materializes omitted arguments in exact and
 generic implementation heads, supertraits, declaration/implementation
 premises, projection values/defaults, and function obligations. Defaults must
-form a trailing run of complete concrete nominal types; parameter-dependent,
-`Self`, lifetime/const, and compound defaults fail closed. Windows gnullvm and
+form a trailing run of complete concrete nominal types or references to an
+earlier trait type parameter. Forward/self-referential, `Self`, lifetime/const,
+and compound defaults fail closed. Earlier-parameter defaults copy the already
+materialized typed argument without introducing inference. Windows gnullvm and
 native Arch Linux WSL each pass 630 library tests, one component-interface
 probe, 10 conformance tests, and 335 replacement tests: 976 compiler tests per
 host.
 
-Default-equivalent predicate admission compares materialized argument tuples:
-an omitted default and the same explicitly written type are one semantic
+Default-equivalent predicate admission compares recursively materialized
+argument tuples: an omitted default chain and the same explicitly written types are one semantic
 requirement and duplicate declaration/implementation premises are rejected.
 
 The premise-bearing rigid-normalization milestone proves the selected generic

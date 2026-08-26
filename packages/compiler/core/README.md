@@ -4583,15 +4583,18 @@ projection proof. Windows gnullvm and native Arch Linux WSL each pass 627
 library tests, one component probe, 10 conformance tests, and 335 replacement
 tests: 973 compiler tests per host.
 
-The trailing concrete trait-default milestone admits defaults such as
-`trait Convert<Input = u8>` and materializes omitted arguments consistently in
+The trailing trait-default milestone admits defaults such as
+`trait Convert<Input = u8, Output = Input>` and materializes omitted arguments consistently in
 exact and generic implementation heads, supertraits, declaration and
 implementation premises, projection values/defaults, and function obligations.
-Only a trailing run of complete concrete nominal defaults is accepted;
-parameter-dependent, `Self`, lifetime/const, and compound defaults fail closed.
+Only a trailing run of complete concrete nominal defaults or references to an
+earlier trait type parameter is accepted; forward/self-referential, `Self`,
+lifetime/const, and compound defaults fail closed. Earlier-parameter defaults
+copy the already materialized typed argument rather than introducing inference.
 Predicate duplicate admission compares materialized argument tuples, so
-`Parent` and `Parent<u8>` are the same requirement when `u8` is the default and
-cannot bypass duplicate rejection through different spelling.
+`Parent` and `Parent<u8, u8>` are the same requirement for
+`trait Parent<T = u8, U = T>` and cannot bypass duplicate rejection through
+different spelling.
 Windows gnullvm and native Arch Linux WSL each pass 630 library tests, one
 component probe, 10 conformance tests, and 335 replacement tests: 976 compiler
 tests per host.
