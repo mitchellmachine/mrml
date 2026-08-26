@@ -96,3 +96,10 @@ exact commit compiled output-bearing named `inout(reg)` forms with
 output, and rejected `pure, nomem, readonly` because `nomem` and `readonly` are
 mutually exclusive. Temporary probe sources and metadata were removed after
 recording the black-box outcomes.
+
+A further independently authored metadata-only probe against the same exact
+commit compiled a two-operand named template with one `inout(reg)` and one
+`in(reg)` operand and compiled `asm!("nop", clobber_abi("C"))`. Separate
+invocations rejected a duplicate named operand, an unknown `clobber_abi`, and a
+generic register-class output combined with `clobber_abi("C")`, which requires
+explicit output registers. Temporary probe sources and metadata were removed.

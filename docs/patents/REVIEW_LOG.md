@@ -3929,6 +3929,20 @@ native dispatch remain `TRIGGERED` for separate selected-mechanism review. This
 technical screen establishes neither clearance nor infringement and does not
 replace independent human dual review.
 
+# 2026-08-26 — Two-register inline-assembly allocation
+
+**Result: NOT_TRIGGERED after the two-register review.** This increment maps
+two conventional general-register operands deterministically to RAX and RCX,
+uses ordinary stack preservation during expression evaluation, and emits the
+published x86-64 register-add encoding. Bounded parsing, typed ownership
+bookkeeping, fixed non-aliasing selection, and fail-closed capacity checks
+introduce no novel assembler, optimization, general register-allocation,
+instruction-selection, or code-generation algorithm. Three-or-more operands,
+other classes, general clobbers/effects, and general assembly remain absent.
+Broader compiler completion remains partial; this technical screen does not
+establish clearance or infringement and does not replace independent human dual
+review.
+
 # 2026-08-26 — Independent application-image artifact classification
 
 **Result: NOT_TRIGGERED after the existing signed-artifact and adaptive-placement

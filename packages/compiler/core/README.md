@@ -4713,6 +4713,15 @@ compiler tests. This validates declarations for the fixed templates only and
 does not claim actual assembly memory accesses, optimizer integration, general
 clobbers/effects, or general assembly.
 
+The exact named `add {left}, {right}` template admits a mutable `u64
+inout(reg)` left local and a typed `u64 in(reg)` right expression. The bounded
+allocator assigns RAX and RCX without aliasing, preserves the first live value
+across lowering the second expression, emits the fixed add, and writes back
+only to the left stack slot. Ownership facts retain right-expression reads and
+the left read-modify-write effect. Invalid names, types, mutability, surplus
+operands, classes, templates, and effects fail closed. Both canonical hosts pass
+985 compiler tests. This is **PARTIAL** two-operand allocation evidence.
+
 The projection-bearing term milestone uses a fixed 64-node arena for flat leaf
 terms and associated-type projections whose trait self/argument positions refer
 only to earlier nodes. Identical nodes intern to one stable identity; invalid

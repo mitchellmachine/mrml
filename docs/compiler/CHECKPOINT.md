@@ -1535,6 +1535,16 @@ one component-interface probe, 10 conformance tests, and 335 replacement tests:
 not evidence of actual assembly memory accesses, optimizer integration, general
 clobbers/effects, or general inline assembly.
 
+The two-register-class increment implements the exact oracle-proven named
+`add {left}, {right}` template with a mutable `u64 inout(reg)` left local and a
+typed `u64 in(reg)` right expression. Allocation is deterministic and non-
+aliasing: the left value is preserved on the evaluation stack, the right lowers
+once and moves to RCX, the left restores to RAX, and `add rax, rcx` writes back
+only to the left slot. Ownership facts record right-expression reads and a left
+read-modify-write effect. Invalid names, types, mutability, surplus operands,
+classes, templates, and effects fail closed. Both canonical hosts pass 985
+compiler tests. Three-or-more operands and general allocation remain absent.
+
 The premise-bearing rigid-normalization milestone proves the selected generic
 implementation's instantiated trait and projection predicates before exposing
 its associated value. It shares the caller's 16-frame rigid proof stack and
