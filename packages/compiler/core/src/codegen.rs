@@ -14738,11 +14738,21 @@ fn runtime_reference_call_origin_parameter<const MAX_PARAMETERS: usize, const MA
         }
     }
 
-    fn local_is_return_compatible<const MAX_PARAMETERS: usize>(
+    fn local_explicit_type_is_return_compatible<const MAX_PARAMETERS: usize>(
         target: crate::RuntimeCallTarget<'_, MAX_PARAMETERS>,
         local: crate::LocalBinding<'_>,
     ) -> bool {
         local.ty.is_none_or(|ty| {
+            runtime_type_from_text(ty.text) == Some(runtime_type_from_scalar(target.return_type))
+        })
+    }
+
+    fn local_is_return_compatible<const MAX_PARAMETERS: usize>(
+        target: crate::RuntimeCallTarget<'_, MAX_PARAMETERS>,
+        local: crate::LocalBinding<'_>,
+        origin: Option<usize>,
+    ) -> bool {
+        local.ty.map_or(origin.is_some(), |ty| {
             runtime_type_from_text(ty.text) == Some(runtime_type_from_scalar(target.return_type))
         })
     }
@@ -14755,7 +14765,7 @@ fn runtime_reference_call_origin_parameter<const MAX_PARAMETERS: usize, const MA
         local_origins: &[Option<usize>; MAX_PARAMETERS],
         local_count: usize,
     ) -> Option<usize> {
-        if !local_is_return_compatible(target, local) {
+        if !local_explicit_type_is_return_compatible(target, local) {
             return None;
         }
         recurse(
@@ -14835,7 +14845,7 @@ fn runtime_reference_call_origin_parameter<const MAX_PARAMETERS: usize, const MA
                     *local_origins.get_mut(*local_count)? = local_origin;
                     *local_mutability.get_mut(*local_count)? = local.mutable;
                     *local_return_compatibility.get_mut(*local_count)? =
-                        local_is_return_compatible(target, local);
+                        local_is_return_compatible(target, local, local_origin);
                     *local_count = local_count.checked_add(1)?;
                 }
                 crate::ConditionalAssignmentAction::Assignment(assignment) => {
@@ -14901,7 +14911,7 @@ fn runtime_reference_call_origin_parameter<const MAX_PARAMETERS: usize, const MA
             *local_origins.get_mut(*local_count)? = local_origin;
             *local_mutability.get_mut(*local_count)? = local.mutable;
             *local_return_compatibility.get_mut(*local_count)? =
-                local_is_return_compatible(target, local);
+                local_is_return_compatible(target, local, local_origin);
             *local_count = local_count.checked_add(1)?;
         }
         Some(())
@@ -14999,7 +15009,7 @@ fn runtime_reference_call_origin_parameter<const MAX_PARAMETERS: usize, const MA
                 *local_origins.get_mut(local_count)? = local_origin;
                 *local_mutability.get_mut(local_count)? = local.mutable;
                 *local_return_compatibility.get_mut(local_count)? =
-                    local_is_return_compatible(target, local);
+                    local_is_return_compatible(target, local, local_origin);
                 local_count += 1;
             }
             crate::BodyStatement::Assignment(index) => {
@@ -15127,7 +15137,7 @@ fn runtime_reference_call_origin_parameter<const MAX_PARAMETERS: usize, const MA
                                 *iteration_mutability.get_mut(iteration_local_count)? =
                                     local.mutable;
                                 *iteration_return_compatibility.get_mut(iteration_local_count)? =
-                                    local_is_return_compatible(target, local);
+                                    local_is_return_compatible(target, local, local_origin);
                                 iteration_local_count = iteration_local_count.checked_add(1)?;
                             }
                             crate::LoopOperation::Assignment(assignment) => {
@@ -35444,6 +35454,16 @@ mod tests {
             Some(0)
         );
         assert_eq!(
+            runtime_reference_call_origin_parameter::<2, 24>(RuntimeCallTarget {
+                body_expression: concat!(
+                    "let mut alias = &mut values[0]; ",
+                    "alias = &mut values[1]; alias"
+                ),
+                ..array_element_alias
+            }),
+            Some(0)
+        );
+        assert_eq!(
             runtime_reference_call_origin_parameter::<2, 16>(slice_subslice_alias),
             Some(0)
         );
@@ -35461,6 +35481,14 @@ mod tests {
             ),
             concat!(
                 "let mut alias: &mut [u16] = &mut values[1..]; ",
+                "if true { alias = &mut values[0]; } else { alias = &mut values[1]; } alias"
+            ),
+            concat!(
+                "let mut alias = &mut values[1..]; ",
+                "alias = &mut values[0]; alias"
+            ),
+            concat!(
+                "let mut alias = &mut values[1..]; ",
                 "if true { alias = &mut values[0]; } else { alias = &mut values[1]; } alias"
             ),
         ] {
