@@ -5529,6 +5529,17 @@ solving and Rust conformance remain partial; this agent review does not
 establish clearance or infringement and does not replace independent human dual
 review.
 
+# 2026-08-26 — Explicit source associated-type bindings
+
+**Result: NOT_TRIGGERED after the inline associated-binding review.** This
+increment routes an explicit declaration or implementation `where` bound
+through the already reviewed implemented/projection predicate desugaring. It
+adds no new predicate representation, normalization, unification, selection,
+coherence, proof-search, caching, or code-generation mechanism. Broader trait
+solving and Rust conformance remain partial; this agent review does not
+establish clearance or infringement and does not replace independent human dual
+review.
+
 # 2026-08-26 — Kernel parallel-vCPU runtime-slice accounting
 
 **Result: NOT_TRIGGERED after the fixed-period CPU-budget and linear runtime-
