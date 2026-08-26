@@ -7719,3 +7719,14 @@ local-backed exits fail closed; conditional continue and block-terminal control
 remain unsupported. Broader compiler completion remains partial; this technical
 screen is not a clearance or infringement conclusion and does not replace
 independent human dual review.
+
+# 2026-08-26 — Direct loop-continue suffix termination
+
+**Result: NOT_TRIGGERED after the direct-continue review.** This increment maps
+an existing direct continue to the current fixed-capacity backedge state and
+stops traversal of its unreachable suffix. It adds no fixed-point solver,
+region or alias analysis, path-sensitive inference, optimization, or code-
+generation algorithm. Conditional multi-backedge transfer remains unsupported.
+Broader compiler completion remains partial; this technical screen is not a
+clearance or infringement conclusion and does not replace independent human
+dual review.
