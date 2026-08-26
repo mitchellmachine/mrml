@@ -15806,7 +15806,10 @@ fn runtime_reference_call_origin_parameter<const MAX_PARAMETERS: usize, const MA
                             else {
                                 return false;
                             };
-                            if block.terminal.is_some() {
+                            if !matches!(
+                                block.terminal,
+                                None | Some(crate::ConditionalLoopTerminal::Return(_))
+                            ) {
                                 return false;
                             }
                             let primary_has_state =
@@ -15830,17 +15833,21 @@ fn runtime_reference_call_origin_parameter<const MAX_PARAMETERS: usize, const MA
                             else {
                                 return false;
                             };
-                            arms.iter().flatten().all(|arm| arm.terminal.is_none())
-                                && (primary_has_state
-                                    || arms.iter().flatten().any(|arm| {
-                                        arm.actions().iter().flatten().any(|action| {
-                                            matches!(
-                                                action,
-                                                crate::ConditionalLoopAction::Local(_)
-                                                    | crate::ConditionalLoopAction::Assignment(_)
-                                            )
-                                        })
-                                    }))
+                            arms.iter().flatten().all(|arm| {
+                                matches!(
+                                    arm.terminal,
+                                    None | Some(crate::ConditionalLoopTerminal::Return(_))
+                                )
+                            }) && (primary_has_state
+                                || arms.iter().flatten().any(|arm| {
+                                    arm.actions().iter().flatten().any(|action| {
+                                        matches!(
+                                            action,
+                                            crate::ConditionalLoopAction::Local(_)
+                                                | crate::ConditionalLoopAction::Assignment(_)
+                                        )
+                                    })
+                                }))
                         }
                         _ => false,
                     },
@@ -15916,7 +15923,10 @@ fn runtime_reference_call_origin_parameter<const MAX_PARAMETERS: usize, const MA
                                     .conditional_blocks()
                                     .get(block_index)
                                     .and_then(|value| *value)?;
-                                if block.terminal.is_some() {
+                                if !matches!(
+                                    block.terminal,
+                                    None | Some(crate::ConditionalLoopTerminal::Return(_))
+                                ) {
                                     return None;
                                 }
                                 let base_origins = iteration_origins;
@@ -15950,37 +15960,56 @@ fn runtime_reference_call_origin_parameter<const MAX_PARAMETERS: usize, const MA
                                         outcome_count = outcome_count.checked_add(1)?;
                                         Some(())
                                     };
-                                let mut apply_arm = |actions: &[Option<
-                                    crate::ConditionalLoopAction<'_>,
-                                >]|
-                                 -> Option<()> {
-                                    let mut arm_names = iteration_names;
-                                    let mut arm_origins = base_origins;
-                                    let mut arm_projected_origins = base_projected_origins;
-                                    let mut arm_types = iteration_types;
-                                    let mut arm_mutability = iteration_mutability;
-                                    let mut arm_return_compatibility =
-                                        iteration_return_compatibility;
-                                    let mut arm_local_count = iteration_local_count;
-                                    apply_conditional_loop_actions::<MAX_PARAMETERS, MAX_NODES>(
-                                        target,
-                                        actions,
-                                        &mut arm_names,
-                                        &mut arm_origins,
-                                        &mut arm_projected_origins,
-                                        &mut arm_types,
-                                        &mut arm_mutability,
-                                        &mut arm_return_compatibility,
-                                        &mut arm_local_count,
-                                        true,
-                                    )?;
-                                    merge_outcome(
-                                        arm_origins,
-                                        arm_projected_origins
-                                            .retain_local_prefix(iteration_local_count),
-                                    )
-                                };
-                                apply_arm(block.actions())?;
+                                let mut apply_arm =
+                                    |actions: &[Option<crate::ConditionalLoopAction<'_>>],
+                                     terminal: Option<crate::ConditionalLoopTerminal<'_>>|
+                                     -> Option<()> {
+                                        let mut arm_names = iteration_names;
+                                        let mut arm_origins = base_origins;
+                                        let mut arm_projected_origins = base_projected_origins;
+                                        let mut arm_types = iteration_types;
+                                        let mut arm_mutability = iteration_mutability;
+                                        let mut arm_return_compatibility =
+                                            iteration_return_compatibility;
+                                        let mut arm_local_count = iteration_local_count;
+                                        apply_conditional_loop_actions::<MAX_PARAMETERS, MAX_NODES>(
+                                            target,
+                                            actions,
+                                            &mut arm_names,
+                                            &mut arm_origins,
+                                            &mut arm_projected_origins,
+                                            &mut arm_types,
+                                            &mut arm_mutability,
+                                            &mut arm_return_compatibility,
+                                            &mut arm_local_count,
+                                            terminal.is_none(),
+                                        )?;
+                                        match terminal {
+                                            None => merge_outcome(
+                                                arm_origins,
+                                                arm_projected_origins
+                                                    .retain_local_prefix(iteration_local_count),
+                                            ),
+                                            Some(crate::ConditionalLoopTerminal::Return(value)) => {
+                                                let tree = value.parse_value::<MAX_NODES>().ok()?;
+                                                merge(recurse(
+                                                    target,
+                                                    &tree,
+                                                    tree.root(),
+                                                    0,
+                                                    &arm_names,
+                                                    &arm_origins,
+                                                    &arm_projected_origins,
+                                                    arm_local_count,
+                                                )?)
+                                            }
+                                            Some(
+                                                crate::ConditionalLoopTerminal::Break
+                                                | crate::ConditionalLoopTerminal::Continue,
+                                            ) => None,
+                                        }
+                                    };
+                                apply_arm(block.actions(), block.terminal)?;
                                 let mut has_unconditional_else = false;
                                 if let Some(else_index) = block.else_arm {
                                     let else_end = else_index.checked_add(block.else_arm_count)?;
@@ -15988,25 +16017,28 @@ fn runtime_reference_call_origin_parameter<const MAX_PARAMETERS: usize, const MA
                                         .conditional_else_arms()
                                         .get(else_index..else_end)?;
                                     for arm in arms.iter().flatten() {
-                                        if arm.terminal.is_some() {
+                                        if !matches!(
+                                            arm.terminal,
+                                            None | Some(crate::ConditionalLoopTerminal::Return(_))
+                                        ) {
                                             return None;
                                         }
                                         has_unconditional_else |= arm.condition.is_none();
-                                        apply_arm(arm.actions())?;
+                                        apply_arm(arm.actions(), arm.terminal)?;
                                     }
                                 }
+                                drop(apply_arm);
                                 if !has_unconditional_else {
                                     merge_outcome(base_origins, base_projected_origins)?;
                                 }
-                                if outcome_count == 0 {
-                                    return None;
+                                if outcome_count != 0 {
+                                    for local_index in 0..iteration_local_count {
+                                        iteration_origins[local_index] = (!ambiguous[local_index])
+                                            .then_some(joined_origins[local_index])
+                                            .flatten();
+                                    }
+                                    iteration_projected_origins = joined_projected_origins;
                                 }
-                                for local_index in 0..iteration_local_count {
-                                    iteration_origins[local_index] = (!ambiguous[local_index])
-                                        .then_some(joined_origins[local_index])
-                                        .flatten();
-                                }
-                                iteration_projected_origins = joined_projected_origins;
                             }
                             _ => return None,
                         }
@@ -36999,10 +37031,31 @@ mod tests {
             Some(0)
         );
         assert_eq!(
+            runtime_reference_call_origin_parameter::<4, 32>(RuntimeCallTarget {
+                body_expression: concat!(
+                    "let mut alias: &mut u16 = value; while repeat { ",
+                    "if first { return alias; } else { alias = &mut *alias; } } alias"
+                ),
+                ..loop_branch_fallthrough
+            }),
+            Some(0)
+        );
+        assert_eq!(
             runtime_reference_call_origin_parameter::<4, 40>(RuntimeCallTarget {
                 body_expression: concat!(
                     "let mut local: u16 = 1; let mut alias: &mut u16 = value; ",
                     "while repeat { if first { alias = &mut local; } } alias"
+                ),
+                ..loop_branch_fallthrough
+            }),
+            None
+        );
+        assert_eq!(
+            runtime_reference_call_origin_parameter::<4, 40>(RuntimeCallTarget {
+                body_expression: concat!(
+                    "let mut local: u16 = 1; let mut alias: &mut u16 = value; ",
+                    "while repeat { if first { return alias; } ",
+                    "else { alias = &mut local; } } alias"
                 ),
                 ..loop_branch_fallthrough
             }),
