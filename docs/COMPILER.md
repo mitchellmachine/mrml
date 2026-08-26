@@ -1377,6 +1377,11 @@ four-action limit and target-aware terminal. Direct and inline x86-64 emission
 lower the arms with scoped stack cleanup and independent target-aware terminals.
 Reference returns are admitted only when exact ownership preanalysis proves
 that the returned origin outlives the function.
+The alternative record may instead retain one explicit `else if` condition and
+its exact source span. The bounded constant evaluator tests that condition only
+after the primary condition is false and preserves fallthrough when both are
+false. CFG, ownership, and native emission for the conditional alternative
+remain fail-closed; longer alternative chains remain unrepresented.
 The bounded constant evaluator selects
 exactly one arm, executes its actions under a lexical resolver checkpoint, and
 routes its target-aware terminal under the existing iteration limit. CFG

@@ -163,6 +163,15 @@ outlives classifier also admits a parameter-backed mutable-reference else return
 and rejects a branch-local returned origin. Temporary source and metadata were
 removed.
 
+An independently authored Rust 2024 metadata-only nested-loop `else if` probe
+against this exact toolchain and commit accepted a scoped local followed by a
+return in both the primary and conditional alternative, plus false-path
+fallthrough to an inner break. MRML now retains one such alternative condition
+and evaluates its constant semantics, while CFG, ownership, and native emission
+remain fail-closed. This is syntax and control-shape evidence only, not general
+branch-chain, region, or native-code evidence. Temporary source and metadata
+were removed.
+
 An independently authored Rust 2024 metadata-only nested-break set against this
 exact toolchain and commit accepted a local-initialized alias overwritten by the
 parameter before an inner unconditional-loop break and returned afterward.
