@@ -396,6 +396,13 @@ use, and then mutated the non-origin local. This exact toolchain compiled the
 case, confirming non-lexical release rather than permanent consumption of the
 local argument. Temporary source and metadata were removed.
 
+An independently authored conditional-argument pair passed the same mutable
+parameter from both `if` arms to an identity callee. This exact toolchain
+accepted mutation after copying the result pointee and rejected a competing
+mutable borrow before the result's later use with E0499. This is exact evidence
+for expected-reference reborrows across that conditional join, not general call
+coercion or region inference. Temporary sources and metadata were removed.
+
 An independently authored Rust 2024 metadata-only probe against this exact
 toolchain and commit returned call-derived shared children through an explicit
 return and through a conditional early-return plus tail-return path. Both

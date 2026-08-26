@@ -1191,6 +1191,10 @@ prevents returning the otherwise parameter-origin result, matching the pinned
 oracle's E0515 and keeping loan lifetime distinct from pointer ancestry.
 After the result's last use, the same non-origin local loan ends and local
 mutation is accepted, matching the pinned oracle's non-lexical lifetime.
+Conditional reference arguments now inherit the call parameter's expected
+reborrow context in both arms: a live result blocks a competing owner borrow,
+and last use releases the joined loan. ORACLE-0002 matches with E0499 and an
+accepted post-use mutation respectively.
 
 The first modern trait-solver foundation is an explicit bounded implemented-
 goal representation. Stable trait/type/inference/placeholder identities remain

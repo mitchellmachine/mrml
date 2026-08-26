@@ -4043,6 +4043,10 @@ ancestry and the lifetime of every call-argument loan; MRML's bounded outlives
 failure matches the pinned oracle's E0515. Both hosts remain at 988 tests.
 Once the result's last use has occurred, the tied non-origin local loan ends and
 subsequent local mutation is accepted, matching the pinned oracle.
+Conditional same-place arguments also inherit the expected call-reference
+reborrow context in both arms. A live result blocks a competing borrow, while
+post-last-use mutation succeeds; the pinned oracle matches with E0499 and
+acceptance respectively. Both hosts remain at 988 compiler tests.
 
 Exact typed tuple literals now seed the same projected state when a local is
 declared. Every reference field is checked against the declared tuple element
