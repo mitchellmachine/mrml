@@ -662,22 +662,6 @@ impl<'source> SourceTraitImplementationTable<'source> {
             let mut seen = [None; MAX_TRAIT_ASSOCIATED_TYPES];
             let mut seen_count = 0usize;
             for source_value in implementation.associated_types().iter().flatten() {
-                if source_value
-                    .value
-                    .parse_trait_projection()
-                    .map_err(|_| SourceTraitImplementationError {
-                        kind:
-                            SourceTraitImplementationErrorKind::UnsupportedAssociatedTypeProjection,
-                        span: source_value.value.span,
-                    })?
-                    .is_some()
-                {
-                    return Err(SourceTraitImplementationError {
-                        kind:
-                            SourceTraitImplementationErrorKind::UnsupportedAssociatedTypeProjection,
-                        span: source_value.value.span,
-                    });
-                }
                 let associated = traits
                     .get_associated_type(trait_id, source_value.name)
                     .ok_or(SourceTraitImplementationError {
@@ -1197,6 +1181,11 @@ impl<'source> SourceTraitImplementationTable<'source> {
 
 fn source_implementation_is_exact_fact(implementation: &crate::TraitImplementation<'_>) -> bool {
     implementation.generic_parameter_count() == 0 && implementation.where_predicate_count() == 0
+        && !implementation
+            .associated_types()
+            .iter()
+            .flatten()
+            .any(|value| matches!(value.value.parse_trait_projection(), Ok(Some(_))))
 }
 
 fn source_implementation_predicates_same(
@@ -8601,20 +8590,17 @@ mod tests {
             SourceTraitObligationErrorKind::Unsatisfied
         );
 
-        let exact = Parser::new(concat!(
+        let exact_source = concat!(
             "trait Parent { type Output; } trait Child { type Output; } ",
             "impl Parent for u32 { type Output = u8; } ",
-            "impl Child for u32 { type Output = <u32 as Parent>::Output; }"
-        ))
-        .parse_module::<8, 1>()
-        .unwrap();
-        let traits = SourceTraitDeclarationTable::from_module(&exact).unwrap();
-        assert_eq!(
-            SourceTraitImplementationTable::from_module(&exact, &traits)
-                .unwrap_err()
-                .kind,
-            SourceTraitImplementationErrorKind::UnsupportedAssociatedTypeProjection
+            "impl Child for u32 { type Output = <u32 as Parent>::Output; } ",
+            "fn check() where <u32 as Child>::Output = u8 {}"
         );
+        let exact = Parser::new(exact_source).parse_module::<8, 1>().unwrap();
+        let traits = SourceTraitDeclarationTable::from_module(&exact).unwrap();
+        let implementations =
+            SourceTraitImplementationTable::from_module(&exact, &traits).unwrap();
+        implementations.prove_module(&exact, &traits).unwrap();
     }
 
     #[test]

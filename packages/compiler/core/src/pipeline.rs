@@ -475,6 +475,28 @@ mod tests {
     }
 
     #[test]
+    fn proves_projection_valued_exact_associated_types_before_codegen() {
+        let source = concat!(
+            "trait Parent { type Output; } trait Child { type Output; } ",
+            "impl Parent for u32 { type Output = u8; } ",
+            "impl Child for u32 { type Output = <u32 as Parent>::Output; } ",
+            "#[unsafe(no_mangle)] pub extern \"C\" fn answer() -> u64 ",
+            "where <u32 as Child>::Output = u8 { 42 }"
+        );
+        compile(source, "answer", ObjectFormat::Coff).unwrap();
+
+        let missing = source.replace("impl Parent for u32 { type Output = u8; } ", "");
+        let error = compile(&missing, "answer", ObjectFormat::Coff).unwrap_err();
+        assert!(matches!(
+            error.kind,
+            CompileErrorKind::TraitObligation(SourceTraitObligationError {
+                kind: crate::SourceTraitObligationErrorKind::Unsatisfied,
+                ..
+            })
+        ));
+    }
+
+    #[test]
     fn proves_generic_source_implementation_premises_before_codegen() {
         let source = concat!(
             "trait Parent<Input> {} trait Child<Input> { type Output; } ",
