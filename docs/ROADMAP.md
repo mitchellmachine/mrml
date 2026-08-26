@@ -222,6 +222,14 @@ on 2026-08-26 each emitted `classified=1`, `eligible=1`, `microvm=1`, and
 SystemGeneration-derived required-system inventory remains the next gate; this
 one-application proof does not establish required-system Total readiness.
 
+Boot-selector groundwork is now **PARTIALLY IMPLEMENTED** without skipping that
+runtime gate. The common UEFI library has one bounded allocation-free UTF-16
+LoadOptions parser for both boot-entry optional data and the EFI Shell form. It
+accepts only the configured-default form or the exact one-boot Total option,
+rejects ambiguity and additional tokens, passes 26 tests on Windows and Linux,
+and builds for UEFI. Actual loader consumption, authenticated handoff binding,
+expiry, menu presentation, and runtime enforcement remain **PLANNED**.
+
 The deployment lane is defined in [DEPLOYMENT.md](DEPLOYMENT.md) and must not
 displace the current foundational gate. Later work proceeds as separate bounded
 milestones: package/boot-safe formats; release/generation state; Store/catalog;

@@ -1009,6 +1009,13 @@ repeated failed persistent Total request may offer an explicit Balanced-once or
 Recovery choice, but must not mutate persistent policy automatically; authorized
 recovery policy changes are recorded where audit support exists.
 
+The UEFI library's bounded LoadOptions parser now recognizes the configured
+default or exact one-boot Total request identically for boot-entry optional data
+and an exact `BOOTX64.EFI` shell invocation. Recovery must still treat that
+decoded value as authority-free input: loader handoff binding, expiry, and
+runtime effect remain **PLANNED**, and malformed or unknown options fail rather
+than selecting Balanced or Recovery implicitly.
+
 The kernel now exposes a **PARTIALLY IMPLEMENTED**, read-only aggregate recovery
 view of isolation state. Recovery must possess `INSPECT` for the exact monitor
 object; names, configuration text, another object, an attenuated right, or a

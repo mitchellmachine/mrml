@@ -696,6 +696,16 @@ boot to Balanced. The owner may explicitly retry, boot Balanced once, or enter
 Recovery. Recovery remains a separate small audited environment and can repair
 policy or VMM/runtime generations without depending on successful Total mode.
 
+The common UEFI library now has a **PARTIALLY IMPLEMENTED** bounded parser for
+this selector. It accepts only empty LoadOptions, the exact Total option, or an
+exact `BOOTX64.EFI` shell program token followed by that option, and maps both
+menu optional data and shell input to the same authority-free typed selection.
+It rejects non-ASCII, oversized, embedded-NUL, ambiguous-whitespace, unknown,
+and extra-token inputs. Focused Windows/Linux tests pass and the UEFI target
+builds. Loader consumption, authenticated handoff binding, one-boot expiry, and
+strict runtime effect remain **PLANNED**; parser success is not a Total-mode
+boot or satisfaction claim.
+
 ## Resources, devices, security, and monitoring
 
 RAM, vCPU, `VirtualGPU`, VirtIO, device-projection, or VMM exhaustion in Total

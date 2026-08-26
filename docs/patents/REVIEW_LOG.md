@@ -1,5 +1,17 @@
 # Patent review log
 
+## 2026-08-26 — Bounded UEFI Total-mode LoadOptions parser
+
+Patent review: **NOT_TRIGGERED** for this conventional allocation-free exact
+token parser. It bounds UTF-16 input, recognizes one literal one-boot selection,
+and rejects malformed, ambiguous, unknown, or additional tokens. It introduces
+no VM construction, placement decision, fallback, transport, resource
+selection, boot trust, handoff composition, persistence, or runtime enforcement
+mechanism. Authenticated boot-time policy composition and the broader adaptive-
+isolation/Total MicroVM architecture remain **TRIGGERED** under the existing
+worldwide review. This technical screen establishes neither clearance nor
+infringement and does not replace independent human dual review.
+
 Historical paths in this log are intentionally preserved. The canonical
 [old-to-current source-path map](PATH_MIGRATION.md) locates their present
 implementations without altering the original review evidence.

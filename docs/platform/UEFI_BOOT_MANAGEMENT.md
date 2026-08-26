@@ -74,6 +74,18 @@ and runtime never silently continue as Balanced; retry, Balanced-once, or
 Recovery requires explicit owner selection. See
 [../ISOLATION_PLACEMENT.md](../ISOLATION_PLACEMENT.md).
 
+The shared UEFI library now provides the first **PARTIALLY IMPLEMENTED** parser
+prerequisite. One allocation-free, 128-UTF-16-unit parser accepts either the
+boot-entry option `--isolation=total-microvm` or that same option following an
+exact `BOOTX64.EFI` shell program token and produces one authority-free
+`TotalMicrovmOnce` selection. Empty options select the configured default;
+non-ASCII input, embedded NULs, ambiguous whitespace, unknown programs,
+additional tokens, and every other isolation spelling fail closed. Windows and
+Linux each pass 26 focused UEFI-library tests and the UEFI target builds. The
+loader does not yet consume this selection or authenticate it into the kernel
+handoff, so the menu, EFI Shell selector, and runtime boot effect remain
+**PLANNED**.
+
 The conventional fallback `\EFI\BOOT\BOOTX64.EFI` may be installed only under
 policy that proves ownership/non-conflict and previews backup/recovery or exact
 replacement. A shared ESP's existing fallback is never casually overwritten.

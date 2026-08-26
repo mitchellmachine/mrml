@@ -11,6 +11,100 @@ pub const BUFFER_TOO_SMALL: Status = (1usize << (usize::BITS - 1)) | 5;
 pub const LOAD_ERROR: Status = (1usize << (usize::BITS - 1)) | 1;
 pub const NOT_FOUND: Status = (1usize << (usize::BITS - 1)) | 14;
 
+pub const MAX_BOOT_LOAD_OPTION_UNITS: usize = 128;
+
+/// Authority-free one-boot isolation selection decoded from UEFI LoadOptions.
+/// The selected SystemGeneration, signatures, policy floors, and capabilities
+/// remain separate admission inputs; this value cannot authorize execution.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum BootIsolationSelection {
+    ConfiguredDefault,
+    TotalMicrovmOnce,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum BootLoadOptionError {
+    TooLong,
+    NonAscii,
+    EmbeddedNull,
+    NonCanonicalWhitespace,
+    UnknownProgram,
+    UnknownOption,
+}
+
+/// Parses the same bounded UEFI LoadOptions representation for a firmware boot
+/// entry and an EFI Shell launch. The only accepted option is the exact strict
+/// one-boot Total MicroVM request. An optional shell program token must name
+/// `BOOTX64.EFI`; filenames remain presentation and grant no authority.
+pub fn parse_boot_isolation_selection(
+    load_options: &[u16],
+) -> Result<BootIsolationSelection, BootLoadOptionError> {
+    if load_options.len() > MAX_BOOT_LOAD_OPTION_UNITS {
+        return Err(BootLoadOptionError::TooLong);
+    }
+
+    let input = match load_options.last() {
+        Some(0) => &load_options[..load_options.len() - 1],
+        _ => load_options,
+    };
+    if input.contains(&0) {
+        return Err(BootLoadOptionError::EmbeddedNull);
+    }
+    if input.iter().any(|unit| *unit > 0x7f) {
+        return Err(BootLoadOptionError::NonAscii);
+    }
+    if input.is_empty() {
+        return Ok(BootIsolationSelection::ConfiguredDefault);
+    }
+    if input.first() == Some(&u16::from(b' '))
+        || input.last() == Some(&u16::from(b' '))
+        || input.windows(2).any(|pair| pair == [u16::from(b' '); 2])
+        || input.iter().any(|unit| matches!(*unit, 0x09 | 0x0a | 0x0d))
+    {
+        return Err(BootLoadOptionError::NonCanonicalWhitespace);
+    }
+
+    let separator = input.iter().position(|unit| *unit == u16::from(b' '));
+    let (program, option) = match separator {
+        _ if input.first() == Some(&u16::from(b'-')) => (&[][..], Some(input)),
+        Some(index) => (&input[..index], Some(&input[index + 1..])),
+        None => (input, None),
+    };
+    if !program.is_empty() && !uefi_program_is_bootx64(program) {
+        return Err(BootLoadOptionError::UnknownProgram);
+    }
+    match option {
+        None => Ok(BootIsolationSelection::ConfiguredDefault),
+        Some(option) if ascii_eq(option, b"--isolation=total-microvm") => {
+            Ok(BootIsolationSelection::TotalMicrovmOnce)
+        }
+        Some(_) => Err(BootLoadOptionError::UnknownOption),
+    }
+}
+
+fn uefi_program_is_bootx64(program: &[u16]) -> bool {
+    let basename = program
+        .iter()
+        .rposition(|unit| matches!(*unit, 0x2f | 0x5c))
+        .map_or(program, |index| &program[index + 1..]);
+    ascii_eq_ignore_case(basename, b"BOOTX64.EFI")
+}
+
+fn ascii_eq(input: &[u16], expected: &[u8]) -> bool {
+    input.len() == expected.len()
+        && input
+            .iter()
+            .zip(expected)
+            .all(|(actual, expected)| *actual == u16::from(*expected))
+}
+
+fn ascii_eq_ignore_case(input: &[u16], expected: &[u8]) -> bool {
+    input.len() == expected.len()
+        && input.iter().zip(expected).all(|(actual, expected)| {
+            u8::try_from(*actual).is_ok_and(|actual| actual.eq_ignore_ascii_case(expected))
+        })
+}
+
 #[repr(C)]
 #[derive(Clone, Copy)]
 pub struct Guid {
@@ -725,6 +819,89 @@ fn hex(byte: u8) -> Option<u8> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn utf16_ascii(value: &str) -> [u16; MAX_BOOT_LOAD_OPTION_UNITS] {
+        let mut output = [0; MAX_BOOT_LOAD_OPTION_UNITS];
+        for (slot, byte) in output.iter_mut().zip(value.bytes()) {
+            *slot = u16::from(byte);
+        }
+        output
+    }
+
+    #[test]
+    fn boot_isolation_options_share_one_exact_menu_and_shell_policy() {
+        assert_eq!(
+            parse_boot_isolation_selection(&[]),
+            Ok(BootIsolationSelection::ConfiguredDefault)
+        );
+        assert_eq!(
+            parse_boot_isolation_selection(&[0]),
+            Ok(BootIsolationSelection::ConfiguredDefault)
+        );
+
+        let menu = utf16_ascii("--isolation=total-microvm");
+        let menu_length = "--isolation=total-microvm".len();
+        assert_eq!(
+            parse_boot_isolation_selection(&menu[..menu_length]),
+            Ok(BootIsolationSelection::TotalMicrovmOnce)
+        );
+        assert_eq!(
+            parse_boot_isolation_selection(&menu[..=menu_length]),
+            Ok(BootIsolationSelection::TotalMicrovmOnce)
+        );
+
+        let shell = utf16_ascii("FS0:\\EFI\\MRML\\BOOTX64.EFI --isolation=total-microvm");
+        let shell_length = "FS0:\\EFI\\MRML\\BOOTX64.EFI --isolation=total-microvm".len();
+        assert_eq!(
+            parse_boot_isolation_selection(&shell[..shell_length]),
+            Ok(BootIsolationSelection::TotalMicrovmOnce)
+        );
+        let program = utf16_ascii("bootx64.efi");
+        assert_eq!(
+            parse_boot_isolation_selection(&program[.."bootx64.efi".len()]),
+            Ok(BootIsolationSelection::ConfiguredDefault)
+        );
+    }
+
+    #[test]
+    fn boot_isolation_options_reject_ambiguity_and_unknown_tokens() {
+        let unknown = utf16_ascii("--isolation=balanced");
+        assert_eq!(
+            parse_boot_isolation_selection(&unknown[.."--isolation=balanced".len()]),
+            Err(BootLoadOptionError::UnknownOption)
+        );
+        let extra = utf16_ascii("--isolation=total-microvm extra");
+        assert_eq!(
+            parse_boot_isolation_selection(&extra[.."--isolation=total-microvm extra".len()]),
+            Err(BootLoadOptionError::UnknownOption)
+        );
+        let wrong_program = utf16_ascii("OTHER.EFI --isolation=total-microvm");
+        assert_eq!(
+            parse_boot_isolation_selection(
+                &wrong_program[.."OTHER.EFI --isolation=total-microvm".len()]
+            ),
+            Err(BootLoadOptionError::UnknownProgram)
+        );
+        let spaced = utf16_ascii("BOOTX64.EFI  --isolation=total-microvm");
+        assert_eq!(
+            parse_boot_isolation_selection(
+                &spaced[.."BOOTX64.EFI  --isolation=total-microvm".len()]
+            ),
+            Err(BootLoadOptionError::NonCanonicalWhitespace)
+        );
+        assert_eq!(
+            parse_boot_isolation_selection(&[b'-' as u16, 0, b'x' as u16]),
+            Err(BootLoadOptionError::EmbeddedNull)
+        );
+        assert_eq!(
+            parse_boot_isolation_selection(&[0x80]),
+            Err(BootLoadOptionError::NonAscii)
+        );
+        assert_eq!(
+            parse_boot_isolation_selection(&[b'x' as u16; MAX_BOOT_LOAD_OPTION_UNITS + 1]),
+            Err(BootLoadOptionError::TooLong)
+        );
+    }
 
     #[test]
     fn abi_layouts_match_x86_64_uefi() {
