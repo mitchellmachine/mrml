@@ -4,36 +4,40 @@
 
 #[cfg(target_os = "windows")]
 use mrml_config::{
-    AdmittedConfigurationGuestFactory, ConfigTransaction, ConfigurationMicrovmEndpoint,
-    ConfigurationService, IsolationPolicyApplicationPlan, IsolationPolicySetting,
-    IsolationServiceBounds, IsolationServiceIdentity, MicrovmConfigurationServiceLauncher,
-    OwnerIsolationSelection, PreparedMicrovmConfigurationLauncher, SettingId,
-    prepare_configured_isolation_service_route,
+    prepare_configured_isolation_service_route, AdmittedConfigurationGuestFactory,
+    ConfigTransaction, ConfigurationMicrovmEndpoint, ConfigurationService,
+    IsolationPolicyApplicationPlan, IsolationPolicySetting, IsolationServiceBounds,
+    IsolationServiceIdentity, MicrovmConfigurationServiceLauncher, OwnerIsolationSelection,
+    PreparedMicrovmConfigurationLauncher, SettingId,
 };
 #[cfg(target_os = "windows")]
-use mrml_crypto::{LAMPORT_PUBLIC_KEY_BYTES, Sha3_512};
+use mrml_crypto::{Sha3_512, LAMPORT_PUBLIC_KEY_BYTES};
 #[cfg(target_os = "windows")]
-use mrml_deployment::{DeploymentService, GenerationCandidate, encode_deployment_checkpoint};
-use mrml_error::{Result, anyhow};
+use mrml_deployment::{encode_deployment_checkpoint, DeploymentService, GenerationCandidate};
+use mrml_error::{anyhow, Result};
 #[cfg(target_os = "windows")]
-use mrml_kernel::arch::x86_64::{Mapping, PRIVILEGE_STACK_ARENA_PAGES, PagePermissions, VirtAddr};
+use mrml_kernel::arch::x86_64::{Mapping, PagePermissions, VirtAddr, PRIVILEGE_STACK_ARENA_PAGES};
 #[cfg(all(target_os = "windows", feature = "cuda"))]
 use mrml_kernel::verify_gpu_kernel_bundle;
 #[cfg(target_os = "windows")]
 use mrml_kernel::{
+    admit_microvm_projection, bind_component_service_handoff, bind_verified_application_image,
+    component_image_page_plan, prepare_microvm_guest_ram, release_component_image,
+    release_microvm_guest_ram, reserve_component_image, reserve_isolation_vcpus,
+    reserve_microvm_guest_ram, reserve_microvm_page_projection, route_isolation_application,
+    run_pci_configuration_once, run_pci_configuration_once_with_backend_mapper,
+    run_virtual_block_mmio_transaction_once, run_virtual_block_transaction_once,
     ActiveMicrovmProjectionPlan, AdmittedApplicationGuestFactory, AffinityDeadlineVmBackend,
     ApplicationLaunch, ApplicationMicrovmEndpoint, ArtifactKind, Capability, CapabilitySpace,
-    CpuBudgetId, CpuBudgetSpec, CpuBudgetTable, CpuRuntimeSlice, DeadlineVmBackend,
-    GPU_DOORBELL_PORT, GPU_QUEUE_MESSAGE_BYTES, GpuCommandRing, GpuQueueIdentity, GpuQueueReceiver,
-    GpuResourceResponse, GpuResourceResponseSender, GpuSharedQueueLayout, GpuVmmQueueBridge,
-    GuestMemory, HypercallRouter, InterruptPolicy, IsolationAdmissionTable,
-    IsolationApplicationBackend, IsolationApplicationSpec, IsolationMode, IsolationPlacement,
-    IsolationUnavailableReason, MAX_APPLICATION_IMAGE_BYTES, MAX_COMPONENT_IMAGE_REGIONS,
-    MemoryPoolTable, MicrovmPageProjectionKind, MicrovmProjectionDescriptor, MicrovmProjectionKind,
-    MicrovmProjectionPlan, MicrovmProjectionRequirements, ObjectId, PAGE_SIZE,
-    PreparedIsolationServiceRoute, PreparedMicrovmApplicationBackend, ResourceCommand, Rights,
-    SIGNED_ARTIFACT_OVERHEAD_BYTES, ScheduledDeadlineVmBackend, ScheduledSmpVmBackend,
-    SignedArtifact, TotalMicrovmClass, TrustRoot, VIRTUAL_BLOCK_FEATURE_FLUSH, VcpuReservationId,
+    CpuBudgetId, CpuBudgetSpec, CpuBudgetTable, CpuRuntimeSlice, DeadlineVmBackend, GpuCommandRing,
+    GpuQueueIdentity, GpuQueueReceiver, GpuResourceResponse, GpuResourceResponseSender,
+    GpuSharedQueueLayout, GpuVmmQueueBridge, GuestMemory, HypercallRouter, InterruptPolicy,
+    IsolationAdmissionTable, IsolationApplicationBackend, IsolationApplicationSpec, IsolationMode,
+    IsolationPlacement, IsolationUnavailableReason, MemoryPoolTable, MicrovmPageProjectionKind,
+    MicrovmProjectionDescriptor, MicrovmProjectionKind, MicrovmProjectionPlan,
+    MicrovmProjectionRequirements, ObjectId, PreparedIsolationServiceRoute,
+    PreparedMicrovmApplicationBackend, ResourceCommand, Rights, ScheduledDeadlineVmBackend,
+    ScheduledSmpVmBackend, SignedArtifact, TotalMicrovmClass, TrustRoot, VcpuReservationId,
     VerifiedExecutable, VerifiedGpuKernelBundle, VirtualBlockBackend, VirtualBlockBackendAuthority,
     VirtualBlockCompletionStatus, VirtualBlockConfigurationPage, VirtualBlockDevice,
     VirtualBlockDeviceState, VirtualBlockError, VirtualBlockMutationError,
@@ -45,30 +49,25 @@ use mrml_kernel::{
     VirtualPciAttachedResources, VirtualPciConfigurationMechanismOne,
     VirtualPciConfigurationRouter, VirtualPciIdentity, VirtualPciIoOutcome, VirtualPciLocation,
     VirtualPciMemoryBar, VirtualPciMmioWindow, VirtualPciNativeResourceError,
-    VirtualPciType0Function, VmBackend, VmDeadlineOutcome, VmExit, VmTable,
-    admit_microvm_projection, bind_component_service_handoff, bind_verified_application_image,
-    component_image_page_plan, prepare_microvm_guest_ram, release_component_image,
-    release_microvm_guest_ram, reserve_component_image, reserve_isolation_vcpus,
-    reserve_microvm_guest_ram, reserve_microvm_page_projection, route_isolation_application,
-    run_pci_configuration_once, run_pci_configuration_once_with_backend_mapper,
-    run_virtual_block_mmio_transaction_once, run_virtual_block_transaction_once,
+    VirtualPciType0Function, VmBackend, VmDeadlineOutcome, VmExit, VmTable, GPU_DOORBELL_PORT,
+    GPU_QUEUE_MESSAGE_BYTES, MAX_APPLICATION_IMAGE_BYTES, MAX_COMPONENT_IMAGE_REGIONS, PAGE_SIZE,
+    SIGNED_ARTIFACT_OVERHEAD_BYTES, VIRTUAL_BLOCK_FEATURE_FLUSH,
 };
 #[cfg(any(test, target_os = "windows"))]
 use mrml_kernel::{
-    FramebufferInfo, MemoryKind, MemoryRegion, PhysAddr, PixelFormat, RecoveryStateMetadata,
     encode_handoff, encode_handoff_with_application, encode_handoff_with_recovery,
-    encode_handoff_with_smp,
+    encode_handoff_with_smp, FramebufferInfo, MemoryKind, MemoryRegion, PhysAddr, PixelFormat,
+    RecoveryStateMetadata,
 };
 #[cfg(target_os = "windows")]
 use mrml_package_format::{
-    ComponentServicePlacement, InterfaceCatalogView, MAX_BOOT_PACKAGE_BYTES,
-    MAX_BOOT_RELEASE_BYTES, MAX_SYSTEM_RELEASE_BYTES, ManifestInterfaceDeclaration,
-    SystemGenerationDigestRecord, SystemGenerationView, admit_kernel_payload,
-    decode_canonical_manifest_interface, encode_interface_catalog, encode_system_generation,
-    resolve_activated_interface_catalog,
+    admit_kernel_payload, decode_canonical_manifest_interface, encode_interface_catalog,
+    encode_system_generation, resolve_activated_interface_catalog, ComponentServicePlacement,
+    InterfaceCatalogView, ManifestInterfaceDeclaration, SystemGenerationDigestRecord,
+    SystemGenerationView, MAX_BOOT_PACKAGE_BYTES, MAX_BOOT_RELEASE_BYTES, MAX_SYSTEM_RELEASE_BYTES,
 };
 #[cfg(target_os = "windows")]
-use mrml_runtime::{Instant, Vector, mrml_println as println};
+use mrml_runtime::{mrml_println as println, Instant, Vector};
 #[cfg(target_os = "windows")]
 use mrml_whp::{PreparedWhpGuest, WhpLaunchLayout, WhpSystem};
 
