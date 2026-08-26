@@ -15624,36 +15624,39 @@ fn runtime_reference_call_origin_parameter<const MAX_PARAMETERS: usize, const MA
     where
         F: FnMut(usize) -> Option<()>,
     {
-        let state_at = |action_index: usize| {
-            let mut names = local_names;
-            let mut origins = local_origins;
-            let mut projected = projected_origins;
-            let mut types = local_types;
-            let mut mutability = local_mutability;
-            let mut compatibility = local_return_compatibility;
-            let mut count = local_count;
-            apply_conditional_loop_actions::<MAX_PARAMETERS, MAX_NODES>(
-                target,
-                block.actions().get(..action_index)?,
-                &mut names,
-                &mut origins,
-                &mut projected,
-                &mut types,
-                &mut mutability,
-                &mut compatibility,
-                &mut count,
-                true,
-            )?;
-            Some((
-                names,
-                origins,
-                projected,
-                types,
-                mutability,
-                compatibility,
-                count,
-            ))
-        };
+        let state_at_from =
+            |action_index: usize,
+             mut origins: [Option<usize>; MAX_PARAMETERS],
+             mut projected: RuntimeCalleeProjectedOrigins<MAX_PARAMETERS>| {
+                let mut names = local_names;
+                let mut types = local_types;
+                let mut mutability = local_mutability;
+                let mut compatibility = local_return_compatibility;
+                let mut count = local_count;
+                apply_conditional_loop_actions::<MAX_PARAMETERS, MAX_NODES>(
+                    target,
+                    block.actions().get(..action_index)?,
+                    &mut names,
+                    &mut origins,
+                    &mut projected,
+                    &mut types,
+                    &mut mutability,
+                    &mut compatibility,
+                    &mut count,
+                    true,
+                )?;
+                Some((
+                    names,
+                    origins,
+                    projected,
+                    types,
+                    mutability,
+                    compatibility,
+                    count,
+                ))
+            };
+        let state_at =
+            |action_index: usize| state_at_from(action_index, local_origins, projected_origins);
         let prefix_preserves_state = |action_index: usize| -> Option<bool> {
             let (_, origins, projected, _, _, _, _) = state_at(action_index)?;
             Some(
@@ -15662,6 +15665,43 @@ fn runtime_reference_call_origin_parameter<const MAX_PARAMETERS: usize, const MA
                         .retain_local_prefix(local_count)
                         .has_same_origins(projected_origins),
             )
+        };
+        let normalized_backedge_is_stable = || -> Option<bool> {
+            let (_, candidate_origins, candidate_projected, _, _, _, _) =
+                state_at(block.action_count())?;
+            let candidate_projected = candidate_projected.retain_local_prefix(local_count);
+            let (_, repeated_origins, repeated_projected, _, _, _, _) =
+                state_at_from(block.action_count(), candidate_origins, candidate_projected)?;
+            if repeated_origins[..local_count] != candidate_origins[..local_count]
+                || !repeated_projected
+                    .retain_local_prefix(local_count)
+                    .has_same_origins(candidate_projected)
+            {
+                return Some(false);
+            }
+            let prefix_matches = |action_index: usize| -> Option<bool> {
+                let (_, initial_origins, initial_projected, _, _, _, _) = state_at(action_index)?;
+                let (_, repeated_origins, repeated_projected, _, _, _, _) =
+                    state_at_from(action_index, candidate_origins, candidate_projected)?;
+                Some(
+                    initial_origins[..local_count] == repeated_origins[..local_count]
+                        && initial_projected
+                            .retain_local_prefix(local_count)
+                            .has_same_origins(repeated_projected.retain_local_prefix(local_count)),
+                )
+            };
+            for action_index in block
+                .conditional_break_action_indices()
+                .iter()
+                .chain(block.conditional_continue_action_indices())
+                .chain(block.conditional_return_action_indices())
+                .chain(block.unconditional_control_action_indices())
+            {
+                if !prefix_matches(*action_index)? {
+                    return Some(false);
+                }
+            }
+            Some(true)
         };
         let mut exit_origins = [None; MAX_PARAMETERS];
         let mut exit_projected_origins = RuntimeCalleeProjectedOrigins::EMPTY;
@@ -15802,6 +15842,7 @@ fn runtime_reference_call_origin_parameter<const MAX_PARAMETERS: usize, const MA
         }
         if block.unconditional_controls().is_empty()
             && !prefix_preserves_state(block.action_count())?
+            && !normalized_backedge_is_stable()?
         {
             return None;
         }
@@ -38520,6 +38561,28 @@ mod tests {
                     "'outer: while first { loop { changed = &mut *value; ",
                     "if first { continue 'outer; } changed = &mut local; break; } ",
                     "break 'outer; } changed"
+                ),
+                ..nested_loop
+            }),
+            None
+        );
+        assert_eq!(
+            runtime_reference_call_origin_parameter::<2, 40>(RuntimeCallTarget {
+                body_expression: concat!(
+                    "let mut local: u16 = 1; let mut changed: &mut u16 = &mut local; ",
+                    "loop { loop { changed = value; if first { break; } } ",
+                    "return changed; }"
+                ),
+                ..nested_loop
+            }),
+            Some(0)
+        );
+        assert_eq!(
+            runtime_reference_call_origin_parameter::<2, 40>(RuntimeCallTarget {
+                body_expression: concat!(
+                    "let mut local: u16 = 1; let mut changed: &mut u16 = &mut local; ",
+                    "loop { loop { if first { break; } changed = value; } ",
+                    "return changed; }"
                 ),
                 ..nested_loop
             }),
