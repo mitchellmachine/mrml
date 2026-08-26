@@ -1085,7 +1085,10 @@ member; recovery must not synthesize a missing classification. General
 SystemRelease v2 now authenticates and exposes the exact catalog, while v1
 remains readable but has no runtime inventory. Recovery must report the latter
 as missing Total evidence rather than reconstructing or guessing it. Kernel
-construction from authenticated v2 records remains **PLANNED**.
+construction from authenticated v2 records is **IMPLEMENTED**, but recovery
+must recreate every exact live domain binding through the normal control plane;
+package names and recovered catalog bytes cannot grant or resurrect authority.
+Recovered end-to-end Total finalization remains **PLANNED**.
 
 Application-launch recovery must retain the exact runtime domain, application
 object, immutable application generation and artifact digest, active system

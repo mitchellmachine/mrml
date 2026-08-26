@@ -877,8 +877,9 @@ WHP and KVM application runners now finalize the exact one-domain inventory
 after Total admission and before guest execution; fresh signed probes on
 2026-08-26 emitted the same generation-bound proof with `classified=1`,
 `eligible=1`, `microvm=1`, and `native_fallback=0`. Complete
-SystemGeneration-derived required-system inventory remains **PLANNED**, so this
-focused application evidence does not promote Total mode itself.
+Consumption of the release-derived required-system inventory by these runners
+remains **PLANNED**, so this focused application evidence does not promote Total
+mode itself.
 
 Its canonical package-to-runtime classification prerequisite is now
 **PARTIALLY IMPLEMENTED** as the allocation-free `MRMLRI1` runtime-inventory
@@ -896,8 +897,12 @@ canonical generation; unclassified members fail closed. Windows and Arch Linux
 each pass 99 build-tool tests. General SystemRelease v2 now signs and verifies
 that exact inventory beside `MRMLSG2` and `MRMLIC1`; v1 remains parseable for
 compatibility but carries no inventory. A v1 release must never be treated as
-Total-ready merely because it is otherwise valid. Kernel inventory construction
-and complete runtime proof remain **PLANNED**.
+Total-ready merely because it is otherwise valid. The kernel now constructs its
+fixed-capacity `TotalMicrovmInventory` only from an authenticated v2 release and
+an exact package-to-live-domain binding supplied by the normal launch control
+plane. Signer, count, package, domain, class, and exception-reason substitution
+fail closed; metadata grants no domain authority. Complete admitted-system
+runtime proof remains **PLANNED**.
 
 ```text
 Complexity impact: MEDIUM

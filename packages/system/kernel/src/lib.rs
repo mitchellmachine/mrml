@@ -26,6 +26,7 @@ mod host_resource;
 mod ipc;
 mod isolation;
 mod isolation_monitor;
+mod isolation_release_inventory;
 mod isolation_total_runtime;
 mod memory;
 mod memory_resource;
@@ -145,6 +146,9 @@ pub use isolation::{
 pub use isolation_monitor::{
     HostSubstrateCounts, IsolationMonitorError, IsolationStatusSnapshot,
     IsolationUnavailableCounts, TotalMicrovmState, inspect_isolation_status,
+};
+pub use isolation_release_inventory::{
+    ReleaseInventoryError, RuntimeDomainBinding, total_inventory_from_system_release,
 };
 pub use isolation_total_runtime::{
     TotalMicrovmInventory, TotalMicrovmInventoryEntry, TotalMicrovmRuntimeError,

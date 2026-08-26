@@ -3011,13 +3011,22 @@ finalizer after exact Total admission and before guest execution. Their focused
 suites pass 9 and 10 tests respectively, and fresh signed probes on 2026-08-26
 each emitted `classified=1`, `eligible=1`, `microvm=1`, and
 `native_fallback=0` for system/policy generation 1. Required-system inventory
-derivation remains **PLANNED**; this is a focused one-application proof, not
-end-to-end Total readiness.
+derivation is now **IMPLEMENTED** at the kernel boundary: a bounded adapter
+accepts only a valid general SystemRelease v2 signed by the exact
+caller-policy-selected key, requires its `MRMLRI1` to exact-match the enclosed
+`MRMLSG2`, and requires one unique live-domain binding for every package record.
+It rejects v1, missing/excess bindings, duplicate package/domain identity, class
+substitution, and exception-reason substitution. Package names identify the
+binding; neither release nor manifest metadata grants domain authority. Windows
+and Arch Linux each pass 552 kernel tests. WHP/KVM runner consumption of this
+complete release-derived inventory remains **PLANNED**, so the existing live
+evidence is still a focused one-application proof, not end-to-end Total
+readiness.
 
-Patent review: `NOT_TRIGGERED` for this conventional fixed-capacity inventory,
-exact-match validation, and aggregate finalization over the already reviewed
-admission table. Broader adaptive isolation, automated VMM placement, and
-device projection remain `TRIGGERED` in
+Patent review: `TRIGGERED` under the existing signed-release, adaptive
+isolation, Total-MicroVM, automated VMM placement, and device-projection reviews
+now that authenticated package classifications are joined to live domain
+identities. See
 [patents/REVIEW_LOG.md](patents/REVIEW_LOG.md).
 
 The UEFI boot path now carries the first typed one-boot isolation request across

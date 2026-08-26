@@ -219,8 +219,9 @@ consume that finalizer after exact Total admission and before guest execution.
 Their focused suites pass 9 and 10 tests respectively, and fresh signed probes
 on 2026-08-26 each emitted `classified=1`, `eligible=1`, `microvm=1`, and
 `native_fallback=0` for the exact system/policy generation. Complete
-SystemGeneration-derived required-system inventory remains the next gate; this
-one-application proof does not establish required-system Total readiness.
+Runner consumption of the release-derived required-system inventory remains the
+next gate; this one-application proof does not establish required-system Total
+readiness.
 
 The first half of that gate is now **PARTIALLY IMPLEMENTED**: `MRMLRI1` is a
 bounded canonical runtime-inventory catalog whose records exact-bind every
@@ -235,7 +236,10 @@ digests. Build-tool suites pass 99 tests on Windows and Arch Linux. Signed
 release delivery is now **IMPLEMENTED** through backward-compatible general
 SystemRelease v2, which authenticates the exact three-record set and rejects
 inventory/generation mismatch; v1 continues to parse without an inventory.
-Kernel inventory construction and system-wide runtime proof remain next.
+Kernel construction is now **IMPLEMENTED**: a bounded adapter requires the
+selected signer plus an exact one-for-one binding between every authenticated
+package classification and its live domain, and rejects count, identity, class,
+or reason substitution. System-wide admission and runtime proof remain next.
 
 Boot-selector groundwork is now **PARTIALLY IMPLEMENTED** without skipping that
 runtime gate. The common UEFI library has one bounded allocation-free UTF-16

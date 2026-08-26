@@ -13,6 +13,18 @@ Broader compiler completion remains partial; this technical screen establishes
 neither clearance nor infringement and does not replace independent human dual
 review.
 
+## 2026-08-26 — Authenticated release-to-kernel Total inventory
+
+Patent review: **TRIGGERED** under the existing adaptive-isolation,
+Total-MicroVM, signed-release, runtime-classification, and kernel-enforcement
+reviews. This bounded adapter conventionally joins each authenticated package
+classification to one caller-supplied live domain identity and copies its class
+and must-run bit into the existing fixed-capacity finalizer input. Exact signer,
+count, identity, class, and explanatory-reason comparisons add no placement
+heuristic, VM construction, fallback, resource selection, scheduling, migration,
+transport, or hardware mechanism. No patent-clearance or non-infringement
+conclusion is made; independent human review remains required.
+
 ## 2026-08-26 — Branch-local callee return-origin merge
 
 Patent review: **NOT_TRIGGERED** for this bounded compiler-analysis increment.
