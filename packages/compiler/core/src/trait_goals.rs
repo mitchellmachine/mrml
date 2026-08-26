@@ -286,7 +286,6 @@ pub enum SourceTraitImplementationErrorKind {
     DuplicateGenericParameter,
     UnconstrainedGenericParameter,
     UnsupportedGenericSupertraits,
-    UnsupportedExactPremises,
     UnknownPremiseTrait,
     DuplicatePremise,
     Goal(TraitGoalError),
@@ -427,14 +426,8 @@ impl<'source> SourceTraitImplementationTable<'source> {
             let Item::TraitImplementation(implementation) = item else {
                 continue;
             };
-            if implementation.generic_parameter_count() != 0 {
+            if !source_implementation_is_exact_fact(implementation) {
                 continue;
-            }
-            if implementation.where_predicate_count() != 0 {
-                return Err(SourceTraitImplementationError {
-                    kind: SourceTraitImplementationErrorKind::UnsupportedExactPremises,
-                    span: implementation.trait_name_span,
-                });
             }
             let declaration = traits
                 .get(implementation.trait_name)
@@ -477,7 +470,7 @@ impl<'source> SourceTraitImplementationTable<'source> {
             let Item::TraitImplementation(implementation) = item else {
                 continue;
             };
-            if implementation.generic_parameter_count() == 0 {
+            if source_implementation_is_exact_fact(implementation) {
                 continue;
             }
             for (index, parameter) in implementation
@@ -634,7 +627,7 @@ impl<'source> SourceTraitImplementationTable<'source> {
             let Item::TraitImplementation(implementation) = item else {
                 continue;
             };
-            if implementation.generic_parameter_count() != 0 {
+            if !source_implementation_is_exact_fact(implementation) {
                 continue;
             }
             let trait_id = traits.get(implementation.trait_name).unwrap().id;
@@ -685,7 +678,7 @@ impl<'source> SourceTraitImplementationTable<'source> {
             let Item::TraitImplementation(implementation) = item else {
                 continue;
             };
-            if implementation.generic_parameter_count() == 0 {
+            if source_implementation_is_exact_fact(implementation) {
                 continue;
             }
             let trait_id = traits.get(implementation.trait_name).unwrap().id;
@@ -734,7 +727,7 @@ impl<'source> SourceTraitImplementationTable<'source> {
             let Item::TraitImplementation(implementation) = item else {
                 continue;
             };
-            if implementation.generic_parameter_count() != 0 {
+            if !source_implementation_is_exact_fact(implementation) {
                 continue;
             }
             let trait_id = traits.get(implementation.trait_name).unwrap().id;
@@ -1120,6 +1113,13 @@ impl<'source> SourceTraitImplementationTable<'source> {
         }
         Ok(())
     }
+}
+
+fn source_implementation_is_exact_fact(
+    implementation: &crate::TraitImplementation<'_>,
+) -> bool {
+    implementation.generic_parameter_count() == 0
+        && implementation.where_predicate_count() == 0
 }
 
 fn source_implementation_predicates_same(
@@ -8443,6 +8443,48 @@ mod tests {
         assert_eq!(
             implementations.prove_module(&module, &traits).unwrap_err().kind,
             SourceTraitObligationErrorKind::Unsatisfied
+        );
+    }
+
+    #[test]
+    fn proves_premise_bearing_exact_source_implementations() {
+        let satisfied = concat!(
+            "trait Parent<Input> {} trait Child<Input> { type Output; } ",
+            "impl Parent<u32> for u32 {} ",
+            "impl Child<u32> for u32 where u32: Parent<u32> { type Output = u8; } ",
+            "fn check() where u32: Child<u32>, <u32 as Child<u32>>::Output = u8 {}"
+        );
+        let module = Parser::new(satisfied).parse_module::<10, 1>().unwrap();
+        let traits = SourceTraitDeclarationTable::from_module(&module).unwrap();
+        let implementations =
+            SourceTraitImplementationTable::from_module(&module, &traits).unwrap();
+        implementations.prove_module(&module, &traits).unwrap();
+
+        let missing = satisfied.replace("impl Parent<u32> for u32 {} ", "");
+        let module = Parser::new(&missing).parse_module::<10, 1>().unwrap();
+        let traits = SourceTraitDeclarationTable::from_module(&module).unwrap();
+        let implementations =
+            SourceTraitImplementationTable::from_module(&module, &traits).unwrap();
+        assert_eq!(
+            implementations.prove_module(&module, &traits).unwrap_err().kind,
+            SourceTraitObligationErrorKind::Unsatisfied
+        );
+
+        let overlap = Parser::new(concat!(
+            "trait Parent<T> {} trait Child<T> {} ",
+            "impl Child<u32> for u32 {} ",
+            "impl Child<u32> for u32 where u32: Parent<u32> {}"
+        ))
+        .parse_module::<8, 1>()
+        .unwrap();
+        let traits = SourceTraitDeclarationTable::from_module(&overlap).unwrap();
+        assert_eq!(
+            SourceTraitImplementationTable::from_module(&overlap, &traits)
+                .unwrap_err()
+                .kind,
+            SourceTraitImplementationErrorKind::Goal(
+                TraitGoalError::OverlappingExactAndGenericImplementation
+            )
         );
     }
 

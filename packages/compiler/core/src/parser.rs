@@ -3867,6 +3867,21 @@ mod tests {
     }
 
     #[test]
+    fn parses_concrete_exact_implementation_premises() {
+        let source = concat!(
+            "trait Parent<T> {} trait Child<T> {} ",
+            "impl Child<u32> for u32 where u32: Parent<u32> {}"
+        );
+        let module: TestModule<'_> = Parser::new(source).parse_module().unwrap();
+        let Some(Item::TraitImplementation(implementation)) = module.items()[2] else {
+            panic!("expected implementation")
+        };
+        assert_eq!(implementation.generic_parameter_count(), 0);
+        assert_eq!(implementation.where_predicate_count(), 1);
+        assert_eq!(implementation.where_predicates()[0].unwrap().self_type().text, "u32");
+    }
+
+    #[test]
     fn rejects_unsupported_trait_implementation_forms() {
         let missing_for = Parser::new("impl Visible core::primitive::u32 {}")
             .parse_module::<3, 1>()

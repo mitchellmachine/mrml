@@ -497,6 +497,28 @@ mod tests {
     }
 
     #[test]
+    fn proves_premise_bearing_exact_implementations_before_codegen() {
+        let source = concat!(
+            "trait Parent<Input> {} trait Child<Input> { type Output; } ",
+            "impl Parent<u32> for u32 {} ",
+            "impl Child<u32> for u32 where u32: Parent<u32> { type Output = u8; } ",
+            "#[unsafe(no_mangle)] pub extern \"C\" fn answer() -> u64 ",
+            "where u32: Child<u32>, <u32 as Child<u32>>::Output = u8 { 42 }"
+        );
+        compile(source, "answer", ObjectFormat::Coff).unwrap();
+
+        let missing = source.replace("impl Parent<u32> for u32 {} ", "");
+        let error = compile(&missing, "answer", ObjectFormat::Coff).unwrap_err();
+        assert!(matches!(
+            error.kind,
+            CompileErrorKind::TraitObligation(SourceTraitObligationError {
+                kind: crate::SourceTraitObligationErrorKind::Unsatisfied,
+                ..
+            })
+        ));
+    }
+
+    #[test]
     fn reports_each_pipeline_boundary() {
         let parse = compile("fn broken(", "broken", ObjectFormat::Elf64).unwrap_err();
         assert!(matches!(parse.kind, CompileErrorKind::Parse(_)));
