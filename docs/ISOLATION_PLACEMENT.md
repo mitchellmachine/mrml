@@ -1196,6 +1196,20 @@ detached active identity. Controlled Windows evidence covers both authorized
 files and the signed release. Real service invocation, owner-policy lookup, and
 complete domain launch remain **PLANNED**.
 
+General recovered owner-policy assignment is now **PARTIALLY IMPLEMENTED**.
+`RecoveredSystemState::assign_runtime_domains` requires the recovered
+configuration revision to equal the assignment plan's policy generation and
+requires exactly one component-scoped, capability-readable persisted isolation
+setting for every package enumerated from the authenticated active release.
+Missing, duplicate, stale, revoked, wrongly scoped, or package-substituted
+bindings publish no partial assignment. The setting object's identity becomes
+the non-authorizing runtime-domain identity; it grants no capability, resource,
+route, or launch authority. The kernel's fixed-capacity policy transaction also
+leaves the plan empty when an external policy read fails after earlier
+decisions. Windows passes 566 kernel tests and 51 configuration tests. Real
+service invocation, distinct-domain construction, complete route admission,
+and whole-system WHP/KVM execution remain **PLANNED**.
+
 Its canonical package-to-runtime classification prerequisite is now
 **PARTIALLY IMPLEMENTED** as the allocation-free `MRMLRI1` runtime-inventory
 catalog. Every strictly ordered record binds package identity, version, artifact

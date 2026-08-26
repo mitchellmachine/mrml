@@ -230,6 +230,17 @@ the recovered plan. Deployment remains 6 passing tests on Windows. Invocation
 from the real configuration/service boot path and general owner-policy
 assignment remain **PLANNED**.
 
+Recovered configuration now **PARTIALLY IMPLEMENTS** complete owner-policy
+assignment over that plan. Its committed revision must equal the plan's policy
+generation, and each authenticated release package must exact-match one
+component-scoped persisted isolation setting readable through its own live
+capability. Count mismatch, omission, duplication, stale policy, revoked or
+wrong authority, and package substitution leave the assignment plan empty.
+Policy data identifies the intended runtime domain but neither metadata nor the
+setting capability grants domain construction or launch authority. Windows
+passes 566 kernel tests and 51 configuration tests. Production service wiring,
+resource construction, route admission, and complete launch remain **PLANNED**.
+
 - Complexity impact: MEDIUM
 - TCB impact: LOW
 - New parser boundary: YES

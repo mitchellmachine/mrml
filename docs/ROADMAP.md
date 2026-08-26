@@ -491,6 +491,19 @@ seals the plan only after both file reads and active-release equality succeed.
 Real configuration-service invocation, general owner policy, and construction
 of every enumerated domain remain **PLANNED**.
 
+Recovered configuration now **PARTIALLY IMPLEMENTS** general per-package
+runtime assignment over that authenticated activated release. The assignment
+generation must equal the committed configuration revision, and every
+enumerated package requires one exact component-scoped persisted policy read
+through its own live capability. Missing, duplicate, stale, revoked,
+wrong-authority, or substituted bindings fail atomically with zero published
+assignments. The persisted setting object supplies a non-authorizing domain
+identity only; normal resource and route admission remain mandatory. Windows
+passes 566 kernel tests and 51 configuration tests. Real service invocation,
+construction and admission of every assigned domain, and complete WHP/KVM
+system placement remain the next dependency gates; Total mode remains
+**PLANNED** end to end.
+
 The first half of that gate is now **PARTIALLY IMPLEMENTED**: `MRMLRI1` is a
 bounded canonical runtime-inventory catalog whose records exact-bind every
 `MRMLSG2` package identity, version, and artifact digest to Total class,

@@ -88,6 +88,19 @@ construction/finalization is kernel-private and the standalone application probe
 is labeled as scoped placement evidence rather than whole-system proof. This is
 the same conventional authority-boundary reduction and adds no mechanism.
 
+## 2026-08-26 — Recovered complete-release policy assignment
+
+Patent review: **NOT_TRIGGERED** for enumerating an already authenticated
+fixed-capacity release, equality-checking its policy generation against an
+already recovered configuration revision, capability-checking each existing
+persisted component setting, and publishing the resulting identity assignments
+only after every bounded decision succeeds. These are conventional bounded
+enumeration, access checks, equality checks, and atomic failure behavior. This
+increment adds no VM construction, placement algorithm, scheduler, interface
+transport, device, DMA, queue, interrupt, or boot mechanism. The broader
+adaptive-placement and Total-MicroVM mechanisms retain their existing
+**TRIGGERED** review; this technical screen is not patent clearance.
+
 ## 2026-08-26 — Canadian AHCI software-driver re-evaluation narrows the hold
 
 Patent review: **TRIGGERED**. This entry supersedes the blanket implementation

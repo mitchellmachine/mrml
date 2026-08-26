@@ -165,7 +165,8 @@ pub use isolation_monitor::{
 pub use isolation_release_inventory::{
     ActivatedReleaseTotalMicrovmInventory, ReleaseInventoryError, ReleaseTotalMicrovmInventory,
     RuntimeDomainAssignment, RuntimeDomainAssignmentPlan, RuntimeDomainBinding,
-    total_inventory_from_system_release, total_inventory_from_system_release_assignments,
+    RuntimeDomainPolicyAssignmentError, total_inventory_from_system_release,
+    total_inventory_from_system_release_assignments,
 };
 pub use isolation_total_runtime::{
     TotalMicrovmInventoryEntry, TotalMicrovmRuntimeError, TotalMicrovmRuntimeProof,

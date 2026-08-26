@@ -119,6 +119,12 @@ pub enum ReleaseInventoryError {
     Inventory(TotalMicrovmRuntimeError),
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum RuntimeDomainPolicyAssignmentError<E> {
+    Inventory(ReleaseInventoryError),
+    Decision(E),
+}
+
 /// Fixed-capacity control-plane transaction for assigning every authenticated
 /// installed release member to one policy-selected runtime domain. The plan
 /// retains the exact activated release identity and cannot be sealed with an
@@ -184,6 +190,10 @@ impl<'a, const N: usize> RuntimeDomainAssignmentPlan<'a, N> {
         self.count
     }
 
+    pub const fn policy_generation(&self) -> u64 {
+        self.policy_generation
+    }
+
     pub fn packages(&self) -> impl Iterator<Item = &'a str> + '_ {
         self.runtime.records().map(|record| record.package_id)
     }
@@ -230,6 +240,65 @@ impl<'a, const N: usize> RuntimeDomainAssignmentPlan<'a, N> {
         }
         if count != self.expected_len() {
             return Err(ReleaseInventoryError::BindingCount);
+        }
+        self.assignments = assignments;
+        self.count = count;
+        Ok(())
+    }
+
+    /// Generic atomic policy adapter. Decision failure publishes no partial
+    /// assignment, allowing configuration-backed policy reads to fail closed
+    /// without translating their error into release metadata.
+    pub fn assign_from_policy_transaction<F, E>(
+        &mut self,
+        mut decide: F,
+    ) -> Result<(), RuntimeDomainPolicyAssignmentError<E>>
+    where
+        F: FnMut(
+            mrml_package_format::RuntimeInventoryRecord<'a>,
+        ) -> Result<RuntimeDomainAssignment<'a>, E>,
+    {
+        if self.count != 0 {
+            return Err(RuntimeDomainPolicyAssignmentError::Inventory(
+                ReleaseInventoryError::BindingCount,
+            ));
+        }
+        let placeholder = RuntimeDomainAssignment {
+            package_id: "",
+            domain: ObjectId(0),
+            host_substrate_reason: None,
+        };
+        let mut assignments = [placeholder; N];
+        let mut count = 0;
+        let runtime = self.runtime;
+        for record in runtime.records() {
+            let assignment =
+                decide(record).map_err(RuntimeDomainPolicyAssignmentError::Decision)?;
+            if assignment.package_id != record.package_id {
+                return Err(RuntimeDomainPolicyAssignmentError::Inventory(
+                    ReleaseInventoryError::MissingBinding,
+                ));
+            }
+            if count >= self.expected_len() || count >= N {
+                return Err(RuntimeDomainPolicyAssignmentError::Inventory(
+                    ReleaseInventoryError::BindingCount,
+                ));
+            }
+            if assignments[..count]
+                .iter()
+                .any(|present| present.package_id == assignment.package_id)
+            {
+                return Err(RuntimeDomainPolicyAssignmentError::Inventory(
+                    ReleaseInventoryError::DuplicateBinding,
+                ));
+            }
+            assignments[count] = assignment;
+            count += 1;
+        }
+        if count != self.expected_len() {
+            return Err(RuntimeDomainPolicyAssignmentError::Inventory(
+                ReleaseInventoryError::BindingCount,
+            ));
         }
         self.assignments = assignments;
         self.count = count;
@@ -1235,6 +1304,7 @@ mod tests {
         })
         .unwrap();
         assert_eq!(visited, 2);
+        assert_eq!(plan.policy_generation(), POLICY);
         assert_eq!(plan.assigned_len(), plan.expected_len());
         assert_eq!(plan.seal().unwrap().release().len(), 1);
 
@@ -1274,6 +1344,26 @@ mod tests {
             rejected.seal(),
             Err(ReleaseInventoryError::BindingCount)
         ));
+
+        let mut configuration_rejected = RuntimeDomainAssignmentPlan::<2>::new(
+            &release[..release_length],
+            &key_id,
+            active,
+            POLICY,
+        )
+        .unwrap();
+        let mut configuration_decisions = 0;
+        assert_eq!(
+            configuration_rejected.assign_from_policy_transaction(|record| {
+                configuration_decisions += 1;
+                if configuration_decisions == 2 {
+                    return Err(7u8);
+                }
+                RuntimeDomainAssignment::new(record.package_id, domain).map_err(|_| 8u8)
+            }),
+            Err(RuntimeDomainPolicyAssignmentError::Decision(7u8))
+        );
+        assert_eq!(configuration_rejected.assigned_len(), 0);
 
         let mut mixed = RuntimeDomainAssignmentPlan::<2>::new(
             &release[..release_length],

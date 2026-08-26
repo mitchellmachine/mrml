@@ -19,15 +19,17 @@ use mrml_kernel::arch::x86_64::UserContext;
 use mrml_kernel::{
     ActivatedReleaseTotalMicrovmInventory, BootHandoff, BootIsolationOverride,
     BootRecoveryEnvelope, Capability, CapabilityError, CapabilitySpace, EarlyKernelContext,
-    InstalledRecoveryBootIdentity, InstalledRecoverySataRoute, InstalledRecoverySource,
-    IsolationAdmissionTable, IsolationBackendFailure, IsolationMode, IsolationPlacement,
-    IsolationServiceBackend, IsolationServiceRouteError, IsolationServiceSpec,
+    HostSubstrateReason, InstalledRecoveryBootIdentity, InstalledRecoverySataRoute,
+    InstalledRecoverySource, IsolationAdmissionTable, IsolationBackendFailure, IsolationMode,
+    IsolationPlacement, IsolationServiceBackend, IsolationServiceRouteError, IsolationServiceSpec,
     IsolationStatusSnapshot, IsolationUnavailableReason, MemoryBackingKind, MemoryObjectId,
     MemoryPoolId, MemoryPoolTable, MemoryResourceError, Message, ObjectId, PAGE_SIZE,
-    PreparedIsolationServiceRoute, Priority, RecoveryStateMetadata, RestartPolicy, Rights,
-    RoutedIsolationService, ServiceAddressSpaceEraser, ServiceCleanupError, ServiceError,
-    ServiceId, ServiceRegistrationPlan, ServiceState, ServiceSupervisor, TaskId, TaskRuntime,
-    TaskRuntimeError, prepare_isolation_service_route, route_isolation_service,
+    PreparedIsolationServiceRoute, Priority, RecoveryStateMetadata, ReleaseInventoryError,
+    RestartPolicy, Rights, RoutedIsolationService, RuntimeDomainAssignment,
+    RuntimeDomainAssignmentPlan, RuntimeDomainPolicyAssignmentError, ServiceAddressSpaceEraser,
+    ServiceCleanupError, ServiceError, ServiceId, ServiceRegistrationPlan, ServiceState,
+    ServiceSupervisor, TaskId, TaskRuntime, TaskRuntimeError, prepare_isolation_service_route,
+    route_isolation_service,
 };
 use mrml_storage::{
     AuthorityRecoveryValidator, BlockDeviceDescriptor, BlockDeviceId, BlockFileSession,
@@ -2548,6 +2550,68 @@ pub struct RecoveredSystemState<const GRANTS: usize, const SETTINGS: usize, cons
     service: ServiceId,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct RuntimeDomainPolicyBinding<'a> {
+    package_id: &'a str,
+    setting: IsolationPolicySetting,
+    read: Capability,
+    host_substrate_reason: Option<HostSubstrateReason>,
+}
+
+impl<'a> RuntimeDomainPolicyBinding<'a> {
+    pub const fn new(
+        package_id: &'a str,
+        setting: IsolationPolicySetting,
+        read: Capability,
+    ) -> Result<Self, ConfigError> {
+        Self::build(package_id, setting, read, None)
+    }
+
+    pub const fn host_substrate(
+        package_id: &'a str,
+        setting: IsolationPolicySetting,
+        read: Capability,
+        reason: HostSubstrateReason,
+    ) -> Result<Self, ConfigError> {
+        Self::build(package_id, setting, read, Some(reason))
+    }
+
+    const fn build(
+        package_id: &'a str,
+        setting: IsolationPolicySetting,
+        read: Capability,
+        host_substrate_reason: Option<HostSubstrateReason>,
+    ) -> Result<Self, ConfigError> {
+        if package_id.is_empty() || !matches!(setting.scope(), IsolationPolicyScope::Component) {
+            return Err(ConfigError::InvalidSchema);
+        }
+        Ok(Self {
+            package_id,
+            setting,
+            read,
+            host_substrate_reason,
+        })
+    }
+
+    pub const fn package_id(self) -> &'a str {
+        self.package_id
+    }
+
+    pub const fn domain(self) -> ObjectId {
+        self.setting.object()
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum RecoveredRuntimeDomainPolicyError {
+    Configuration(ConfigError),
+    Release(ReleaseInventoryError),
+    PolicyGenerationMismatch,
+    BindingCount,
+    MissingBinding,
+    DuplicateBinding,
+}
+
 /// The recovered configuration owner bound to the exact canonical boot record
 /// delivered once to its service task. Retaining the record beside committed
 /// recovery prevents later admission from accepting a detached replacement.
@@ -2575,6 +2639,77 @@ impl<const GRANTS: usize, const SETTINGS: usize, const AUDIT: usize>
 
     pub const fn service(&self) -> ServiceId {
         self.service
+    }
+
+    /// Applies one exact capability-readable component policy to every member
+    /// enumerated by the authenticated active release. The assignment plan
+    /// publishes atomically, and these identity decisions grant no domain
+    /// capability or launch authority.
+    pub fn assign_runtime_domains<
+        'release,
+        const DOMAINS: usize,
+        A: CapabilityAuthorizer + ?Sized,
+    >(
+        &self,
+        capabilities: &A,
+        plan: &mut RuntimeDomainAssignmentPlan<'release, DOMAINS>,
+        bindings: &[RuntimeDomainPolicyBinding<'_>],
+    ) -> Result<(), RecoveredRuntimeDomainPolicyError> {
+        if self.configuration.revision() == 0
+            || plan.policy_generation() != self.configuration.revision()
+        {
+            return Err(RecoveredRuntimeDomainPolicyError::PolicyGenerationMismatch);
+        }
+        if bindings.len() != plan.expected_len() {
+            return Err(RecoveredRuntimeDomainPolicyError::BindingCount);
+        }
+        for (index, binding) in bindings.iter().enumerate() {
+            if bindings[..index]
+                .iter()
+                .any(|present| present.package_id == binding.package_id)
+            {
+                return Err(RecoveredRuntimeDomainPolicyError::DuplicateBinding);
+            }
+            binding
+                .setting
+                .read(&self.configuration, capabilities, binding.read)
+                .and_then(PersistedIsolationPolicy::component_request)
+                .map_err(RecoveredRuntimeDomainPolicyError::Configuration)?;
+        }
+        for package_id in plan.packages() {
+            if !bindings
+                .iter()
+                .any(|binding| binding.package_id == package_id)
+            {
+                return Err(RecoveredRuntimeDomainPolicyError::MissingBinding);
+            }
+        }
+        plan.assign_from_policy_transaction(|record| {
+            let binding = bindings
+                .iter()
+                .find(|binding| binding.package_id == record.package_id)
+                .ok_or(RecoveredRuntimeDomainPolicyError::MissingBinding)?;
+            binding
+                .setting
+                .read(&self.configuration, capabilities, binding.read)
+                .and_then(PersistedIsolationPolicy::component_request)
+                .map_err(RecoveredRuntimeDomainPolicyError::Configuration)?;
+            match binding.host_substrate_reason {
+                Some(reason) => RuntimeDomainAssignment::host_substrate(
+                    record.package_id,
+                    binding.domain(),
+                    reason,
+                ),
+                None => RuntimeDomainAssignment::new(record.package_id, binding.domain()),
+            }
+            .map_err(RecoveredRuntimeDomainPolicyError::Release)
+        })
+        .map_err(|error| match error {
+            RuntimeDomainPolicyAssignmentError::Inventory(error) => {
+                RecoveredRuntimeDomainPolicyError::Release(error)
+            }
+            RuntimeDomainPolicyAssignmentError::Decision(error) => error,
+        })
     }
 
     /// Consumes committed recovery into an owner retaining the exact one-use
@@ -6563,10 +6698,8 @@ mod tests {
 
     const MEMORY_POOL_RIGHTS: Rights = Rights::ALLOCATE.union(Rights::INSPECT);
 
-    fn activated_configuration_release(
-        domain: ObjectId,
-        policy_generation: u64,
-    ) -> ActivatedReleaseTotalMicrovmInventory<1> {
+    fn configuration_release_records()
+    -> (std::vec::Vec<u8>, usize, [u8; 64], ActivatedSystemRelease) {
         let digest = [0x44; 64];
         let generation_record = SystemGenerationDigestRecord {
             package_id: "org.mrml.service.config",
@@ -6633,6 +6766,14 @@ mod tests {
         )
         .unwrap();
         let active = ActivatedSystemRelease::new(active_generation, parsed.identity());
+        (release, release_length, key_id, active)
+    }
+
+    fn activated_configuration_release(
+        domain: ObjectId,
+        policy_generation: u64,
+    ) -> ActivatedReleaseTotalMicrovmInventory<1> {
+        let (release, release_length, key_id, active) = configuration_release_records();
         let mut plan = RuntimeDomainAssignmentPlan::<1>::new(
             &release[..release_length],
             &key_id,
@@ -10253,6 +10394,89 @@ mod tests {
             assert_eq!(recovered.service().token(), 1u64 << 32);
             assert_eq!(recovered.configuration().revision(), 1);
             assert_eq!(recovered.authorities().epoch(), 9);
+
+            let (release, release_length, key_id, active) = configuration_release_records();
+            let mut runtime_plan = RuntimeDomainAssignmentPlan::<1>::new(
+                &release[..release_length],
+                &key_id,
+                active,
+                recovered.configuration().revision(),
+            )
+            .unwrap();
+            let runtime_binding = RuntimeDomainPolicyBinding::new(
+                "org.mrml.service.config",
+                component,
+                component_access,
+            )
+            .unwrap();
+            recovered
+                .assign_runtime_domains(&capabilities, &mut runtime_plan, &[runtime_binding])
+                .unwrap();
+            assert_eq!(runtime_plan.assigned_len(), 1);
+            let assigned_release = runtime_plan.seal().unwrap();
+            assert_eq!(assigned_release.release().len(), 1);
+            assert_eq!(
+                assigned_release
+                    .release()
+                    .entries()
+                    .next()
+                    .unwrap()
+                    .domain(),
+                component.object()
+            );
+
+            let mut missing_policy = RuntimeDomainAssignmentPlan::<1>::new(
+                &release[..release_length],
+                &key_id,
+                active,
+                recovered.configuration().revision(),
+            )
+            .unwrap();
+            assert_eq!(
+                recovered.assign_runtime_domains(&capabilities, &mut missing_policy, &[]),
+                Err(RecoveredRuntimeDomainPolicyError::BindingCount)
+            );
+            assert_eq!(missing_policy.assigned_len(), 0);
+
+            let mut wrong_authority = RuntimeDomainAssignmentPlan::<1>::new(
+                &release[..release_length],
+                &key_id,
+                active,
+                recovered.configuration().revision(),
+            )
+            .unwrap();
+            let wrong_binding = RuntimeDomainPolicyBinding::new(
+                "org.mrml.service.config",
+                component,
+                system_access,
+            )
+            .unwrap();
+            assert!(matches!(
+                recovered.assign_runtime_domains(
+                    &capabilities,
+                    &mut wrong_authority,
+                    &[wrong_binding],
+                ),
+                Err(RecoveredRuntimeDomainPolicyError::Configuration(_))
+            ));
+            assert_eq!(wrong_authority.assigned_len(), 0);
+
+            let mut stale_policy = RuntimeDomainAssignmentPlan::<1>::new(
+                &release[..release_length],
+                &key_id,
+                active,
+                recovered.configuration().revision() + 1,
+            )
+            .unwrap();
+            assert_eq!(
+                recovered.assign_runtime_domains(
+                    &capabilities,
+                    &mut stale_policy,
+                    &[runtime_binding],
+                ),
+                Err(RecoveredRuntimeDomainPolicyError::PolicyGenerationMismatch)
+            );
+            assert_eq!(stale_policy.assigned_len(), 0);
 
             const HANDOFF_LENGTH: usize = mrml_kernel::HANDOFF_HEADER_BYTES
                 + 2 * mrml_kernel::HANDOFF_REGION_BYTES
