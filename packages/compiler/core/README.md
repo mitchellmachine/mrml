@@ -4030,11 +4030,12 @@ host; general loop and region fixed points remain unsupported.
 
 Nested supported `loop` returns preserve that projected shared-child origin.
 Direct places passed to reference-typed call parameters now receive Rust's
-implicit reborrow effect even when they are not the returned-origin parameter;
-only the proven origin is attached to the result generation. The pinned oracle
-and MRML both accept the nonterminal inner backedge, while an inner-loop-local
-origin still fails with E0515. Both hosts pass 988 compiler tests; general loop
-fixed points remain absent.
+implicit reborrow effect. Every reference argument loan remains live with a
+reference result, while only the proven origin supplies returned-pointer
+ancestry. The pinned oracle and MRML accept the nonterminal backedge after the
+result dies and reject a competing non-origin borrow while it remains live
+(E0499 / `RuntimeBorrowConflict`). An inner-loop-local origin still fails with
+E0515. Both hosts pass 988 compiler tests; general loop fixed points are absent.
 
 Exact typed tuple literals now seed the same projected state when a local is
 declared. Every reference field is checked against the declared tuple element

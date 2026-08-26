@@ -873,12 +873,14 @@ General loop and region fixed points remain unsupported.
 
 Nested supported `loop` returns now retain projected callee-summary shared-child
 origins. Every direct place passed to a reference-typed parameter receives its
-implicit reborrow effect, while only the proven origin parameter is attached to
-the result generation. The formerly conservative nonterminal inner backedge now
-matches ORACLE-0002 and passes; an inner-loop-local origin still fails closed
-with E0515. Windows and Arch each pass 642 library tests, one component-interface
-probe, 10 conformance tests, and 335 replacement tests: 988 tests per host.
-General loop fixed points remain unsupported.
+implicit reborrow effect. Every reference argument loan remains live with a
+reference result, while only the proven origin supplies its pointer ancestry.
+The formerly conservative nonterminal inner backedge now matches ORACLE-0002
+and passes after the result dies; a competing borrow of a non-origin argument
+while the result is live fails with `RuntimeBorrowConflict`, matching E0499. An
+inner-loop-local origin still fails with E0515. Windows and Arch each pass 642
+library tests, one component-interface probe, 10 conformance tests, and 335
+replacement tests: 988 tests per host. General loop fixed points are unsupported.
 
 Multi-field tuple literals retain a separate projected origin per field. A
 conditional reference element seeds its field only when both arms prove the

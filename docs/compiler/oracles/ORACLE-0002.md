@@ -376,6 +376,13 @@ argument reborrows. This is exact evidence for direct reference places passed to
 those reference-typed parameters, not general call coercion or region inference.
 Temporary source and metadata were removed.
 
+A separate invocation kept the projected result live and attempted a competing
+mutable borrow of the non-origin first argument. This exact toolchain rejected
+the second borrow with E0499 because the first argument's call reborrow remained
+live through the later result use. Together these probes distinguish returned-
+pointer origin from the lifetime of every reference argument loan. Temporary
+source and metadata were removed.
+
 An independently authored Rust 2024 metadata-only probe against this exact
 toolchain and commit returned call-derived shared children through an explicit
 return and through a conditional early-return plus tail-return path. Both

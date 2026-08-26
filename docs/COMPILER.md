@@ -1181,11 +1181,12 @@ general loop or region fixed point.
 
 Nested supported `loop` returns now preserve the same projected-summary shared-
 child origin. Direct reference places passed to reference-typed parameters use
-implicit reborrow effects, including non-origin parameters of a reference-
-returning call; only the independently proven origin parameter is attached to
-the result generation. This permits the oracle-accepted nonterminal inner
-backedge without making unrelated arguments part of the returned loan. Matching
-inner-loop-local origins still fail closed with E0515.
+implicit reborrow effects. For a reference-returning call, every reference
+argument loan remains live with the result, while the independently proven
+origin parameter alone supplies the returned pointer ancestry. This permits the
+oracle-accepted backedge after the result dies and rejects a competing borrow of
+a non-origin argument while the result remains live. Matching inner-loop-local
+origins still fail closed with E0515.
 
 The first modern trait-solver foundation is an explicit bounded implemented-
 goal representation. Stable trait/type/inference/placeholder identities remain
