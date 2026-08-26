@@ -132,6 +132,7 @@ pub struct SourceTraitAssociatedType<'source> {
     pub trait_id: TraitId,
     pub name: &'source str,
     pub span: Span,
+    pub default: Option<TypeRef<'source>>,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -151,6 +152,7 @@ pub enum SourceTraitDeclarationError {
     UnsupportedRequirementType,
     DuplicateRequirement,
     UnknownRequirementAssociatedType,
+    UnsupportedAssociatedTypeDefault,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -329,6 +331,15 @@ impl<'source> SourceTraitDeclarationTable<'source> {
                 {
                     return Err(SourceTraitDeclarationError::DuplicateAssociatedType);
                 }
+                if source_associated.default.is_some_and(|default| {
+                    default.text != "Self"
+                        && !declaration
+                            .generic_parameters()
+                            .contains(&Some(default.text))
+                        && !supported_source_trait_type(default.text)
+                }) {
+                    return Err(SourceTraitDeclarationError::UnsupportedAssociatedTypeDefault);
+                }
                 let slot = table
                     .associated_types
                     .get_mut(table.associated_type_count)
@@ -339,6 +350,7 @@ impl<'source> SourceTraitDeclarationTable<'source> {
                     trait_id: TraitId::new(index as u32),
                     name: source_associated.name,
                     span: source_associated.span,
+                    default: source_associated.default,
                 });
                 table.associated_type_count += 1;
                 associated_types[associated_type_count] = Some(id);
@@ -400,6 +412,16 @@ impl<'source> SourceTraitDeclarationTable<'source> {
             .flatten()
             .copied()
             .find(|associated| associated.trait_id == trait_id && associated.name == name)
+    }
+
+    pub fn get_associated_type_by_id(
+        &self,
+        id: TraitAssociatedTypeId,
+    ) -> Option<SourceTraitAssociatedType<'source>> {
+        self.associated_types()
+            .get(id.get() as usize)
+            .copied()
+            .flatten()
     }
 
     fn visit_supertraits(
@@ -638,6 +660,17 @@ impl<'source> SourceTraitImplementationTable<'source> {
                                     .contains(&Some(expected_type.text))
                             {
                                 table.intern_type(*expected_type)?;
+                            }
+                        }
+                    }
+                    for associated in declaration.associated_types().iter().flatten() {
+                        if let Some(default) = associated.default {
+                            if default.text != "Self"
+                                && !declaration
+                                    .generic_parameters()
+                                    .contains(&Some(default.text))
+                            {
+                                table.intern_type(default)?;
                             }
                         }
                     }
@@ -976,6 +1009,44 @@ impl<'source> SourceTraitImplementationTable<'source> {
                         span: source_value.name_span,
                     })?;
             }
+            for associated_id in declaration.associated_types().iter().flatten() {
+                if seen[..seen_count].contains(&Some(*associated_id)) {
+                    continue;
+                }
+                let associated = traits.get_associated_type_by_id(*associated_id).unwrap();
+                let default = associated.default.ok_or(SourceTraitImplementationError {
+                    kind: SourceTraitImplementationErrorKind::MissingAssociatedTypeValue,
+                    span: implementation.trait_name_span,
+                })?;
+                let source_value = if default.text == "Self" {
+                    implementation.self_type
+                } else if let Some(index) = declaration
+                    .generic_parameters()
+                    .iter()
+                    .position(|parameter| *parameter == Some(default.text))
+                {
+                    implementation.trait_arguments()[index].unwrap()
+                } else {
+                    default
+                };
+                let value = table.get_type(source_value.text).unwrap().id;
+                table
+                    .associated_types
+                    .insert(
+                        &table.implementations,
+                        TraitAssociatedTypeValue::new(
+                            TraitImplementationId::new(implementation_index),
+                            associated.id,
+                            value,
+                        ),
+                    )
+                    .map_err(|kind| SourceTraitImplementationError {
+                        kind: SourceTraitImplementationErrorKind::Goal(kind),
+                        span: associated.span,
+                    })?;
+                seen[seen_count] = Some(associated.id);
+                seen_count += 1;
+            }
             if declaration.associated_type_count() != seen_count {
                 return Err(SourceTraitImplementationError {
                     kind: SourceTraitImplementationErrorKind::MissingAssociatedTypeValue,
@@ -1068,6 +1139,41 @@ impl<'source> SourceTraitImplementationTable<'source> {
                         kind: SourceTraitImplementationErrorKind::Goal(kind),
                         span: source_value.name_span,
                     })?;
+            }
+            for associated_id in declaration.associated_types().iter().flatten() {
+                if seen[..seen_count].contains(&Some(*associated_id)) {
+                    continue;
+                }
+                let associated = traits.get_associated_type_by_id(*associated_id).unwrap();
+                let default = associated.default.ok_or(SourceTraitImplementationError {
+                    kind: SourceTraitImplementationErrorKind::MissingAssociatedTypeValue,
+                    span: implementation.trait_name_span,
+                })?;
+                let source_value = if default.text == "Self" {
+                    implementation.self_type
+                } else if let Some(index) = declaration
+                    .generic_parameters()
+                    .iter()
+                    .position(|parameter| *parameter == Some(default.text))
+                {
+                    implementation.trait_arguments()[index].unwrap()
+                } else {
+                    default
+                };
+                let value = GenericTraitAssociatedTypeValue::new(
+                    GenericTraitImplementationId::new(generic_implementation_index),
+                    associated.id,
+                    source_bound_type(source_value, implementation, &table)?,
+                );
+                table
+                    .generic_associated_types
+                    .insert(&table.generic_implementations, value)
+                    .map_err(|kind| SourceTraitImplementationError {
+                        kind: SourceTraitImplementationErrorKind::Goal(kind),
+                        span: associated.span,
+                    })?;
+                seen[seen_count] = Some(associated.id);
+                seen_count += 1;
             }
             if declaration.associated_type_count() != seen_count {
                 return Err(SourceTraitImplementationError {
@@ -9267,6 +9373,39 @@ mod tests {
         let traits = SourceTraitDeclarationTable::from_module(&exact).unwrap();
         let implementations = SourceTraitImplementationTable::from_module(&exact, &traits).unwrap();
         implementations.prove_module(&exact, &traits).unwrap();
+    }
+
+    #[test]
+    fn applies_and_overrides_source_associated_type_defaults() {
+        let source = concat!(
+            "trait Value<T> { type SelfValue = Self; type Input = T; type Byte = u8; } ",
+            "impl<T> Value<T> for T { type Byte = u16; } ",
+            "fn check() where <u32 as Value<u32>>::SelfValue = u32, ",
+            "<u32 as Value<u32>>::Input = u32, <u32 as Value<u32>>::Byte = u16 {}"
+        );
+        let module = Parser::new(source).parse_module::<8, 1>().unwrap();
+        let traits = SourceTraitDeclarationTable::from_module(&module).unwrap();
+        let implementations =
+            SourceTraitImplementationTable::from_module(&module, &traits).unwrap();
+        implementations.prove_module(&module, &traits).unwrap();
+
+        let exact = concat!(
+            "trait Value { type Output = u8; } impl Value for u32 {} ",
+            "fn check() where <u32 as Value>::Output = u8 {}"
+        );
+        let module = Parser::new(exact).parse_module::<6, 1>().unwrap();
+        let traits = SourceTraitDeclarationTable::from_module(&module).unwrap();
+        let implementations =
+            SourceTraitImplementationTable::from_module(&module, &traits).unwrap();
+        implementations.prove_module(&module, &traits).unwrap();
+
+        let unsupported = Parser::new("trait Value<T> { type Output = Vec<T>; }")
+            .parse_module::<2, 1>()
+            .unwrap();
+        assert_eq!(
+            SourceTraitDeclarationTable::from_module(&unsupported),
+            Err(SourceTraitDeclarationError::UnsupportedAssociatedTypeDefault)
+        );
     }
 
     #[test]

@@ -604,6 +604,26 @@ mod tests {
     }
 
     #[test]
+    fn applies_associated_type_defaults_before_codegen() {
+        let source = concat!(
+            "trait Value<T> { type Output = T; } impl<T> Value<T> for T {} ",
+            "#[unsafe(no_mangle)] pub extern \"C\" fn answer() -> u64 ",
+            "where <u32 as Value<u32>>::Output = u32 { 42 }"
+        );
+        compile(source, "answer", ObjectFormat::Coff).unwrap();
+
+        let mismatch = source.replace("::Output = u32", "::Output = u8");
+        let error = compile(&mismatch, "answer", ObjectFormat::Coff).unwrap_err();
+        assert!(matches!(
+            error.kind,
+            CompileErrorKind::TraitObligation(SourceTraitObligationError {
+                kind: crate::SourceTraitObligationErrorKind::ProjectionMismatch,
+                ..
+            })
+        ));
+    }
+
+    #[test]
     fn proves_trait_declaration_parameter_bounds_before_codegen() {
         let source = concat!(
             "trait Parent<T> {} trait Child<T: Parent<T>> {} ",

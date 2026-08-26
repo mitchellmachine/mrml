@@ -916,6 +916,7 @@ impl<'source> TraitDeclaration<'source> {
 pub struct TraitAssociatedTypeDeclaration<'source> {
     pub name: &'source str,
     pub span: Span,
+    pub default: Option<TypeRef<'source>>,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -3582,10 +3583,16 @@ impl<'source> Parser<'source> {
                 return Err(self.error(ParseErrorKind::UnsupportedTraitBody, keyword));
             }
             let associated = self.identifier()?;
+            let default = if self.take_text("=")?.is_some() {
+                Some(self.type_until(&[TokenKind::Semicolon])?)
+            } else {
+                None
+            };
             self.expect_kind(TokenKind::Semicolon, ParseErrorKind::ExpectedSemicolon)?;
             associated_types[associated_type_count] = Some(TraitAssociatedTypeDeclaration {
                 name: associated.text,
                 span: associated.span,
+                default,
             });
             associated_type_count += 1;
         };
@@ -4039,6 +4046,7 @@ mod tests {
         };
         assert_eq!(declaration.associated_type_count(), 2);
         assert_eq!(declaration.associated_types()[0].unwrap().name, "Item");
+        assert_eq!(declaration.associated_types()[0].unwrap().default, None);
         let Some(Item::TraitImplementation(implementation)) = module.items()[1] else {
             panic!("expected implementation")
         };
@@ -4051,7 +4059,40 @@ mod tests {
     }
 
     #[test]
-    fn bounds_and_rejects_unsupported_associated_type_forms() {
+    fn parses_trait_associated_type_defaults() {
+        let source = "trait Value<T> { type SelfValue = Self; type Input = T; type Byte = u8; }";
+        let module: TestModule<'_> = Parser::new(source).parse_module().unwrap();
+        let Some(Item::Trait(declaration)) = module.items()[0] else {
+            panic!("expected trait")
+        };
+        assert_eq!(
+            declaration.associated_types()[0]
+                .unwrap()
+                .default
+                .unwrap()
+                .text,
+            "Self"
+        );
+        assert_eq!(
+            declaration.associated_types()[1]
+                .unwrap()
+                .default
+                .unwrap()
+                .text,
+            "T"
+        );
+        assert_eq!(
+            declaration.associated_types()[2]
+                .unwrap()
+                .default
+                .unwrap()
+                .text,
+            "u8"
+        );
+    }
+
+    #[test]
+    fn bounds_associated_types_and_rejects_unsupported_bounds() {
         let overflow = Parser::new(concat!(
             "trait Values { type T0; type T1; type T2; type T3; type T4; ",
             "type T5; type T6; type T7; type T8; }"
@@ -4059,11 +4100,6 @@ mod tests {
         .parse_module::<2, 1>()
         .unwrap_err();
         assert_eq!(overflow.kind, ParseErrorKind::TooManyAssociatedTypes);
-
-        let default = Parser::new("trait Values { type Item = u8; }")
-            .parse_module::<2, 1>()
-            .unwrap_err();
-        assert_eq!(default.kind, ParseErrorKind::ExpectedSemicolon);
 
         let bound = Parser::new("trait Values { type Item: Copy; }")
             .parse_module::<2, 1>()
