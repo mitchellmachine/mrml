@@ -1539,6 +1539,33 @@ impl WhpSystem {
         )
     }
 
+    /// Prepares one hosted service domain with two virtual processors behind
+    /// the emulated local APIC. The same authenticated handoff binds the SMP
+    /// topology and the later component-service attachment.
+    pub fn prepare_isolated_service_smp_kernel<'system>(
+        &'system self,
+        executable: &VerifiedExecutable<'_>,
+        handoff: &[u8],
+        layout: WhpLaunchLayout,
+    ) -> Result<PreparedWhpGuest<'system>, WhpError> {
+        self.prepare_guest_inner(
+            executable,
+            handoff,
+            layout,
+            KernelDevices {
+                framebuffer: false,
+                local_apic: true,
+                gpu_queue: None,
+                block_queue: None,
+                block_configuration: None,
+                block_resume: None,
+                trapped_mmio: None,
+                intercept_breakpoint: false,
+                cpus: 2,
+            },
+        )
+    }
+
     /// Prepares a kernel with its framebuffer and supervisor-only local APIC.
     pub fn prepare_timer_kernel<'system>(
         &'system self,

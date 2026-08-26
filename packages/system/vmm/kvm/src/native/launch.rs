@@ -1183,6 +1183,34 @@ impl KvmSystem {
         )
     }
 
+    /// Prepares one hosted service domain with two vCPUs behind KVM's in-kernel
+    /// interrupt controller. The authenticated SMP handoff and component pair
+    /// remain part of one guest construction transaction.
+    pub fn prepare_isolated_service_smp_kernel_guest<const N: usize>(
+        &self,
+        executable: &VerifiedExecutable<'_>,
+        handoff: &[u8],
+        layout: KvmLaunchLayout,
+    ) -> Result<PreparedKvmGuest<N>, KvmError> {
+        self.prepare_guest_inner(
+            0,
+            executable,
+            handoff,
+            layout,
+            KernelDevices {
+                framebuffer: true,
+                local_apic: true,
+                gpu_queue: None,
+                block_queue: None,
+                block_configuration: None,
+                block_resume: None,
+                trapped_mmio: None,
+                cpus: 2,
+                service_shared: true,
+            },
+        )
+    }
+
     /// Prepares a kernel guest with an in-kernel local APIC and its MMIO page.
     pub fn prepare_timer_kernel_guest<const N: usize>(
         &self,

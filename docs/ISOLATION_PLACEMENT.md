@@ -337,15 +337,36 @@ The kernel now retains a separate fixed slice slot for every vCPU in one
 reservation, bounded by the existing 64-vCPU affinity model. Simultaneous
 sibling slices remain charged to the same allowance, reconcile independently,
 and cannot be substituted by changing vCPU, logical CPU, priority, start, or
-charge. Any unresolved sibling continues to block release and rollover. This
-does not yet make the focused signed hosted profile multi-vCPU. The existing
-signed two-vCPU kernel probe now exercises the next backend gate: WHP and KVM
+charge. Any unresolved sibling continues to block release and rollover. The
+signed two-vCPU kernel probe exercises the backend gate: WHP and KVM
 consume two simultaneous 100-millisecond slices, bind separate runner threads
 to authorized logical CPUs 0 and 1 at host-normal priority, arm independent
 deadlines, restore both native scheduling states, and return exact per-runner
 host-wall measurements for independent reconciliation. This proves the shared
-mechanism under signed hosted SMP execution; it does not promote the one-vCPU
-component-service/Total route to multi-vCPU support.
+mechanism under signed hosted SMP execution.
+
+The focused exact-generation component route now has a distinct two-vCPU
+profile. The existing Total-mode transaction resolves and verifies the signed
+`org.mrml.zim` consumer and `org.mrml.zstd` provider, reserves exactly two vCPUs
+from one shared 200-millisecond budget, prepares one two-vCPU microVM, and
+precharges both 100-millisecond slices before either native runner starts. The
+BSP and AP emit the signed SMP proof under independent deadlines; the AP then
+halts and the BSP continues through the already-bound ABI-3 component data path.
+Service/control-plane construction is isolated behind a no-inline boundary so
+early SMP startup retains the fixed guarded stack contract. Guest teardown
+precedes two-vCPU reservation release and root retirement. A failed reservation,
+guest construction, deadline, SMP proof, or component stage never invokes the
+native-service route.
+
+Fresh one-use-signed profiles completed on 2026-08-26. WHP measured
+`bootstrap=6089us`, `application=3984us`, and total reconciled component runtime
+`10815us`; nested KVM measured `bootstrap=4415us`, `application=4086us`, total
+component runtime `9261us`; both reported `eligible=1`, `microvm=1`, and
+`native_fallback=0`. This proves one controlled hosted multi-vCPU component
+profile with WHP/KVM parity. It does not prove host-resistant isolation, trusted
+CPU time, physical topology, persistent boot selection, broad application
+compatibility, or required-system Total readiness; those broader milestones
+remain **PLANNED**.
 The runner measures host-wall elapsed time around backend entry, refunds only a
 verified underrun, and retains the complete precharge on overrun. Replay,
 substitution, exhaustion, invalid time, affinity, priority, or vCPU selection

@@ -3009,336 +3009,339 @@ unsafe fn run_kernel(bytes: *const u8, length: usize) -> ! {
     }
     #[cfg(feature = "service-probe")]
     unsafe {
-        let service_entry = hosted_service_entry();
-        let mut context_a = UserContext::new(
-            PhysAddr::new(SERVICE_ROOT).unwrap_or_else(|_| halt()),
-            service_entry,
-            SERVICE_STACK_TOP,
-        )
-        .unwrap_or_else(|_| halt());
-        #[cfg(feature = "component-service-probe")]
-        let service_b_entry = hosted_provider_entry();
-        #[cfg(not(feature = "component-service-probe"))]
-        let service_b_entry = service_entry + 0x200;
-        let mut context_b = UserContext::new(
-            PhysAddr::new(SERVICE_B_ROOT).unwrap_or_else(|_| halt()),
-            service_b_entry,
-            SERVICE_STACK_TOP,
-        )
-        .unwrap_or_else(|_| halt());
-        context_a.r12 = 1;
-        context_b.r12 = 1;
-        let runtime_pointer = core::ptr::addr_of_mut!(SERVICE_RUNTIME);
-        #[cfg(feature = "component-service-probe")]
-        {
-            let mut authorities = CapabilitySpace::<3>::new();
-            let mut memory = MemoryPoolTable::<1, 2>::new(0x5444).unwrap_or_else(|_| halt());
-            let runtime_pages =
-                AccountedTaskRuntime::<3, 9>::required_pages().unwrap_or_else(|_| halt());
-            let supervisor_pages =
-                AccountedServiceSupervisor::<3>::required_pages().unwrap_or_else(|_| halt());
-            let committed_pages = runtime_pages
-                .checked_add(supervisor_pages)
-                .unwrap_or_else(|| halt());
-            let (pool, pool_capability) = memory
-                .create_root(
-                    committed_pages,
-                    2,
-                    0,
-                    Rights::ALLOCATE
-                        .union(Rights::CONTROL)
-                        .union(Rights::INSPECT),
+        run_service_probe(&handoff, |handoff| {
+            let service_entry = hosted_service_entry();
+            let mut context_a = UserContext::new(
+                PhysAddr::new(SERVICE_ROOT).unwrap_or_else(|_| halt()),
+                service_entry,
+                SERVICE_STACK_TOP,
+            )
+            .unwrap_or_else(|_| halt());
+            #[cfg(feature = "component-service-probe")]
+            let service_b_entry = hosted_provider_entry();
+            #[cfg(not(feature = "component-service-probe"))]
+            let service_b_entry = service_entry + 0x200;
+            let mut context_b = UserContext::new(
+                PhysAddr::new(SERVICE_B_ROOT).unwrap_or_else(|_| halt()),
+                service_b_entry,
+                SERVICE_STACK_TOP,
+            )
+            .unwrap_or_else(|_| halt());
+            context_a.r12 = 1;
+            context_b.r12 = 1;
+            let runtime_pointer = core::ptr::addr_of_mut!(SERVICE_RUNTIME);
+            #[cfg(feature = "component-service-probe")]
+            {
+                let mut authorities = CapabilitySpace::<3>::new();
+                let mut memory = MemoryPoolTable::<1, 2>::new(0x5444).unwrap_or_else(|_| halt());
+                let runtime_pages =
+                    AccountedTaskRuntime::<3, 9>::required_pages().unwrap_or_else(|_| halt());
+                let supervisor_pages =
+                    AccountedServiceSupervisor::<3>::required_pages().unwrap_or_else(|_| halt());
+                let committed_pages = runtime_pages
+                    .checked_add(supervisor_pages)
+                    .unwrap_or_else(|| halt());
+                let (pool, pool_capability) = memory
+                    .create_root(
+                        committed_pages,
+                        2,
+                        0,
+                        Rights::ALLOCATE
+                            .union(Rights::CONTROL)
+                            .union(Rights::INSPECT),
+                        &mut authorities,
+                    )
+                    .unwrap_or_else(|_| halt());
+                let runtime = AccountedTaskRuntime::<3, 9>::new(
+                    1_000,
+                    1,
+                    pool,
+                    pool_capability,
+                    &mut memory,
                     &mut authorities,
                 )
                 .unwrap_or_else(|_| halt());
-            let runtime = AccountedTaskRuntime::<3, 9>::new(
-                1_000,
-                1,
-                pool,
-                pool_capability,
-                &mut memory,
-                &mut authorities,
-            )
-            .unwrap_or_else(|_| halt());
-            let supervisor = AccountedServiceSupervisor::<3>::new(
-                pool,
-                pool_capability,
-                &mut memory,
-                &mut authorities,
-            )
-            .unwrap_or_else(|_| halt());
-            if runtime.committed_pages() != runtime_pages
-                || supervisor.committed_pages() != supervisor_pages
-                || memory
-                    .usage(pool, pool_capability, &authorities)
-                    .map(|usage| usage.object_pages())
-                    != Ok(committed_pages)
-            {
-                halt();
-            }
-            runtime_pointer.write(Some(runtime));
-            core::ptr::addr_of_mut!(SERVICE_SUPERVISOR).write(Some(supervisor));
-            core::ptr::addr_of_mut!(COMPONENT_SERVICE_MEMORY).write(Some(memory));
-            core::ptr::addr_of_mut!(COMPONENT_SERVICE_MEMORY_AUTHORITIES).write(Some(authorities));
-            core::ptr::addr_of_mut!(COMPONENT_SERVICE_MEMORY_POOL)
-                .write(Some((pool, pool_capability)));
-        }
-        #[cfg(not(feature = "component-service-probe"))]
-        runtime_pointer.write(Some(
-            TaskRuntime::<3, 9>::new(1_000, 1).unwrap_or_else(|_| halt()),
-        ));
-        let runtime = (*runtime_pointer).as_mut().unwrap_or_else(|| halt());
-        let receiver = runtime
-            .create(Priority::NORMAL, context_a)
-            .unwrap_or_else(|_| halt());
-        #[cfg(feature = "service-restart-request-probe")]
-        let manager = runtime
-            .create(
-                Priority::RESPONSIVE,
-                UserContext::new(
-                    PhysAddr::new(SERVICE_C_ROOT).unwrap_or_else(|_| halt()),
-                    service_entry + 0x400,
-                    SERVICE_STACK_TOP,
+                let supervisor = AccountedServiceSupervisor::<3>::new(
+                    pool,
+                    pool_capability,
+                    &mut memory,
+                    &mut authorities,
                 )
-                .unwrap_or_else(|_| halt()),
-            )
-            .unwrap_or_else(|_| halt());
-        let sender = runtime
-            .create(Priority::NORMAL, context_b)
-            .unwrap_or_else(|_| halt());
-        #[cfg(feature = "component-service-probe")]
-        let supervisor = (*core::ptr::addr_of_mut!(SERVICE_SUPERVISOR))
-            .as_mut()
-            .unwrap_or_else(|| halt());
-        #[cfg(not(feature = "component-service-probe"))]
-        let mut supervisor_storage = ServiceSupervisor::<3>::new();
-        #[cfg(not(feature = "component-service-probe"))]
-        let supervisor = &mut supervisor_storage;
-        let service_a = supervisor
-            .register_with_policy(ObjectId(0xa0), receiver, RestartPolicy::ONCE_IMMEDIATE)
-            .unwrap_or_else(|_| halt());
-        let service_b = supervisor
-            .register_with_policy(ObjectId(0xa1), sender, RestartPolicy::ONCE_IMMEDIATE)
-            .unwrap_or_else(|_| halt());
-        #[cfg(feature = "service-restart-request-probe")]
-        let service_c = supervisor
-            .register_with_policy(ObjectId(0xa2), manager, RestartPolicy::ONCE_IMMEDIATE)
-            .unwrap_or_else(|_| halt());
-        let mut management = CapabilitySpace::<3>::new();
-        let control_a = management
-            .insert(ObjectId(0xa0), Rights::CONTROL)
-            .unwrap_or_else(|_| halt());
-        let control_b = management
-            .insert(ObjectId(0xa1), Rights::CONTROL)
-            .unwrap_or_else(|_| halt());
-        #[cfg(feature = "service-restart-request-probe")]
-        let control_c = management
-            .insert(ObjectId(0xa2), Rights::CONTROL)
-            .unwrap_or_else(|_| halt());
-        let endpoint_object = ObjectId(0x91);
-        let receiver_capability = runtime
-            .capabilities_mut(receiver)
-            .and_then(|space| {
-                space
-                    .insert(endpoint_object, Rights::SIGNAL)
-                    .map_err(|_| mrml_kernel::TaskRuntimeError::IntegrityFailure)
-            })
-            .unwrap_or_else(|_| halt());
-        let recovery_capability = handoff.recovery_state().map(|metadata| {
-            let object = ObjectId(0xa3);
-            let capability = runtime
+                .unwrap_or_else(|_| halt());
+                if runtime.committed_pages() != runtime_pages
+                    || supervisor.committed_pages() != supervisor_pages
+                    || memory
+                        .usage(pool, pool_capability, &authorities)
+                        .map(|usage| usage.object_pages())
+                        != Ok(committed_pages)
+                {
+                    halt();
+                }
+                runtime_pointer.write(Some(runtime));
+                core::ptr::addr_of_mut!(SERVICE_SUPERVISOR).write(Some(supervisor));
+                core::ptr::addr_of_mut!(COMPONENT_SERVICE_MEMORY).write(Some(memory));
+                core::ptr::addr_of_mut!(COMPONENT_SERVICE_MEMORY_AUTHORITIES)
+                    .write(Some(authorities));
+                core::ptr::addr_of_mut!(COMPONENT_SERVICE_MEMORY_POOL)
+                    .write(Some((pool, pool_capability)));
+            }
+            #[cfg(not(feature = "component-service-probe"))]
+            runtime_pointer.write(Some(
+                TaskRuntime::<3, 9>::new(1_000, 1).unwrap_or_else(|_| halt()),
+            ));
+            let runtime = (*runtime_pointer).as_mut().unwrap_or_else(|| halt());
+            let receiver = runtime
+                .create(Priority::NORMAL, context_a)
+                .unwrap_or_else(|_| halt());
+            #[cfg(feature = "service-restart-request-probe")]
+            let manager = runtime
+                .create(
+                    Priority::RESPONSIVE,
+                    UserContext::new(
+                        PhysAddr::new(SERVICE_C_ROOT).unwrap_or_else(|_| halt()),
+                        service_entry + 0x400,
+                        SERVICE_STACK_TOP,
+                    )
+                    .unwrap_or_else(|_| halt()),
+                )
+                .unwrap_or_else(|_| halt());
+            let sender = runtime
+                .create(Priority::NORMAL, context_b)
+                .unwrap_or_else(|_| halt());
+            #[cfg(feature = "component-service-probe")]
+            let supervisor = (*core::ptr::addr_of_mut!(SERVICE_SUPERVISOR))
+                .as_mut()
+                .unwrap_or_else(|| halt());
+            #[cfg(not(feature = "component-service-probe"))]
+            let mut supervisor_storage = ServiceSupervisor::<3>::new();
+            #[cfg(not(feature = "component-service-probe"))]
+            let supervisor = &mut supervisor_storage;
+            let service_a = supervisor
+                .register_with_policy(ObjectId(0xa0), receiver, RestartPolicy::ONCE_IMMEDIATE)
+                .unwrap_or_else(|_| halt());
+            let service_b = supervisor
+                .register_with_policy(ObjectId(0xa1), sender, RestartPolicy::ONCE_IMMEDIATE)
+                .unwrap_or_else(|_| halt());
+            #[cfg(feature = "service-restart-request-probe")]
+            let service_c = supervisor
+                .register_with_policy(ObjectId(0xa2), manager, RestartPolicy::ONCE_IMMEDIATE)
+                .unwrap_or_else(|_| halt());
+            let mut management = CapabilitySpace::<3>::new();
+            let control_a = management
+                .insert(ObjectId(0xa0), Rights::CONTROL)
+                .unwrap_or_else(|_| halt());
+            let control_b = management
+                .insert(ObjectId(0xa1), Rights::CONTROL)
+                .unwrap_or_else(|_| halt());
+            #[cfg(feature = "service-restart-request-probe")]
+            let control_c = management
+                .insert(ObjectId(0xa2), Rights::CONTROL)
+                .unwrap_or_else(|_| halt());
+            let endpoint_object = ObjectId(0x91);
+            let receiver_capability = runtime
                 .capabilities_mut(receiver)
                 .and_then(|space| {
                     space
-                        .insert(object, Rights::READ)
+                        .insert(endpoint_object, Rights::SIGNAL)
                         .map_err(|_| mrml_kernel::TaskRuntimeError::IntegrityFailure)
                 })
                 .unwrap_or_else(|_| halt());
-            let delivery =
-                BootRecoveryDelivery::new(receiver, object, metadata).unwrap_or_else(|_| halt());
-            core::ptr::addr_of_mut!(SERVICE_BOOT_RECOVERY).write(Some(delivery));
-            capability
+            let recovery_capability = handoff.recovery_state().map(|metadata| {
+                let object = ObjectId(0xa3);
+                let capability = runtime
+                    .capabilities_mut(receiver)
+                    .and_then(|space| {
+                        space
+                            .insert(object, Rights::READ)
+                            .map_err(|_| mrml_kernel::TaskRuntimeError::IntegrityFailure)
+                    })
+                    .unwrap_or_else(|_| halt());
+                let delivery = BootRecoveryDelivery::new(receiver, object, metadata)
+                    .unwrap_or_else(|_| halt());
+                core::ptr::addr_of_mut!(SERVICE_BOOT_RECOVERY).write(Some(delivery));
+                capability
+            });
+            #[cfg(feature = "block-service-probe")]
+            let (resource_capabilities, sender_resources) =
+                provision_service_resource(runtime, receiver, Some(sender));
+            #[cfg(feature = "component-service-probe")]
+            let (resource_capabilities, _) =
+                provision_service_resource(runtime, receiver, Some(sender));
+            #[cfg(not(any(feature = "block-service-probe", feature = "component-service-probe")))]
+            let (resource_capabilities, _) = provision_service_resource(runtime, receiver, None);
+            #[cfg(feature = "block-service-probe")]
+            let [sender_write, sender_read, sender_transfer] =
+                sender_resources.unwrap_or_else(|| halt());
+            #[cfg(feature = "component-service-probe")]
+            let resource_transfer = runtime
+                .capabilities_mut(receiver)
+                .and_then(|space| {
+                    space
+                        .insert(
+                            ObjectId(0x94),
+                            Rights::MAP
+                                .union(Rights::READ)
+                                .union(Rights::WRITE)
+                                .union(Rights::DELEGATE),
+                        )
+                        .map_err(|_| mrml_kernel::TaskRuntimeError::IntegrityFailure)
+                })
+                .unwrap_or_else(|_| halt());
+            #[cfg(not(feature = "block-service-probe"))]
+            let supervision_capability = runtime
+                .capabilities_mut(sender)
+                .and_then(|space| {
+                    space
+                        .insert(
+                            ObjectId(0xa1),
+                            Rights::READ.union(Rights::CONTROL).union(Rights::DELEGATE),
+                        )
+                        .map_err(|_| mrml_kernel::TaskRuntimeError::IntegrityFailure)
+                })
+                .unwrap_or_else(|_| halt());
+            let capability = runtime
+                .capabilities_mut(sender)
+                .and_then(|space| {
+                    space
+                        .insert(endpoint_object, Rights::SIGNAL)
+                        .map_err(|_| mrml_kernel::TaskRuntimeError::IntegrityFailure)
+                })
+                .unwrap_or_else(|_| halt());
+            let root_capability = runtime
+                .capabilities_mut(sender)
+                .and_then(|space| {
+                    space
+                        .insert(
+                            ObjectId(0x92),
+                            Rights::READ.union(Rights::CONTROL).union(Rights::DELEGATE),
+                        )
+                        .map_err(|_| mrml_kernel::TaskRuntimeError::IntegrityFailure)
+                })
+                .unwrap_or_else(|_| halt());
+            #[cfg(not(feature = "component-service-probe"))]
+            let setting_capability = runtime
+                .capabilities_mut(sender)
+                .and_then(|space| {
+                    space
+                        .insert(
+                            ObjectId(0x93),
+                            Rights::READ.union(Rights::WRITE).union(Rights::DELEGATE),
+                        )
+                        .map_err(|_| mrml_kernel::TaskRuntimeError::IntegrityFailure)
+                })
+                .unwrap_or_else(|_| halt());
+            #[cfg(feature = "service-restart-request-probe")]
+            let manager_signal = runtime
+                .capabilities_mut(manager)
+                .and_then(|space| {
+                    space
+                        .insert(endpoint_object, Rights::SIGNAL)
+                        .map_err(|_| mrml_kernel::TaskRuntimeError::IntegrityFailure)
+                })
+                .unwrap_or_else(|_| halt());
+            #[cfg(feature = "service-restart-request-probe")]
+            let manager_control = runtime
+                .capabilities_mut(manager)
+                .and_then(|space| {
+                    space
+                        .insert(ObjectId(0xa1), Rights::CONTROL.union(Rights::DELEGATE))
+                        .map_err(|_| mrml_kernel::TaskRuntimeError::IntegrityFailure)
+                })
+                .unwrap_or_else(|_| halt());
+            let endpoint = Endpoint::new(endpoint_object);
+            runtime
+                .connect_control_peers(receiver, sender, &endpoint, receiver_capability, capability)
+                .unwrap_or_else(|_| halt());
+            let receiver_context = runtime.context_mut(receiver).unwrap_or_else(|_| halt());
+            receiver_context.r13 = receiver_capability.token();
+            receiver_context.r14 = sender.token();
+            receiver_context.r15 = resource_capabilities[0].token();
+            #[cfg(feature = "component-service-probe")]
+            {
+                receiver_context.r12 = 1;
+                receiver_context.rbx = resource_transfer.token();
+            }
+            #[cfg(not(feature = "component-service-probe"))]
+            {
+                receiver_context.rbx = resource_capabilities[1].token();
+            }
+            receiver_context.r11 = recovery_capability.map_or(0, Capability::token);
+            #[cfg(feature = "service-restart-request-probe")]
+            {
+                receiver_context.rbp = manager.token();
+            }
+            let sender_context = runtime.context_mut(sender).unwrap_or_else(|_| halt());
+            sender_context.r13 = capability.token();
+            sender_context.r14 = receiver.token();
+            #[cfg(feature = "component-service-probe")]
+            {
+                sender_context.r12 = 1;
+            }
+            #[cfg(not(feature = "block-service-probe"))]
+            {
+                sender_context.r15 = root_capability.token();
+            }
+            #[cfg(feature = "block-service-probe")]
+            {
+                sender_context.r15 = sender_write.token();
+                sender_context.r11 = sender_read.token();
+            }
+            #[cfg(not(feature = "component-service-probe"))]
+            {
+                sender_context.rbx = setting_capability.token();
+            }
+            #[cfg(not(feature = "block-service-probe"))]
+            {
+                sender_context.rbp = supervision_capability.token();
+            }
+            #[cfg(feature = "block-service-probe")]
+            {
+                sender_context.rbp = sender_transfer.token();
+            }
+            #[cfg(not(feature = "block-service-probe"))]
+            {
+                sender_context.r10 = service_b.token();
+            }
+            #[cfg(feature = "block-service-probe")]
+            {
+                sender_context.r10 = root_capability.token();
+            }
+            #[cfg(feature = "service-restart-request-probe")]
+            {
+                let manager_context = runtime.context_mut(manager).unwrap_or_else(|_| halt());
+                manager_context.r13 = manager_signal.token();
+                manager_context.r14 = receiver.token();
+                manager_context.r15 = manager_control.token();
+                manager_context.rbx = service_b.token();
+            }
+            if !matches!(runtime.start(), ScheduleOutcome::Switch { from: None, to } if to == receiver)
+            {
+                halt();
+            }
+            core::ptr::addr_of_mut!(SERVICE_ENDPOINT).write(Some(endpoint));
+            #[cfg(not(feature = "component-service-probe"))]
+            core::ptr::addr_of_mut!(SERVICE_SUPERVISOR).write(Some(supervisor_storage));
+            core::ptr::addr_of_mut!(SERVICE_MANAGEMENT).write(Some(management));
+            #[cfg(feature = "service-restart-request-probe")]
+            {
+                core::ptr::addr_of_mut!(SERVICE_CONTROLS)
+                    .write(Some([control_a, control_b, control_c]));
+                core::ptr::addr_of_mut!(SERVICE_IDS).write(Some([service_a, service_b, service_c]));
+            }
+            #[cfg(not(feature = "service-restart-request-probe"))]
+            {
+                core::ptr::addr_of_mut!(SERVICE_CONTROLS)
+                    .write(Some([control_a, control_b, control_a]));
+                core::ptr::addr_of_mut!(SERVICE_IDS).write(Some([service_a, service_b, service_a]));
+            }
+            core::ptr::addr_of_mut!(SERVICE_RECEIVER_SIGNAL).write(Some(receiver_capability));
+            let context = (*runtime_pointer)
+                .as_ref()
+                .and_then(|runtime| runtime.context(receiver).ok())
+                .map(|context| context as *const UserContext)
+                .unwrap_or_else(|| halt());
+            enter_service_probe_context(&*context);
         });
-        #[cfg(feature = "block-service-probe")]
-        let (resource_capabilities, sender_resources) =
-            provision_service_resource(runtime, receiver, Some(sender));
-        #[cfg(feature = "component-service-probe")]
-        let (resource_capabilities, _) =
-            provision_service_resource(runtime, receiver, Some(sender));
-        #[cfg(not(any(feature = "block-service-probe", feature = "component-service-probe")))]
-        let (resource_capabilities, _) = provision_service_resource(runtime, receiver, None);
-        #[cfg(feature = "block-service-probe")]
-        let [sender_write, sender_read, sender_transfer] =
-            sender_resources.unwrap_or_else(|| halt());
-        #[cfg(feature = "component-service-probe")]
-        let resource_transfer = runtime
-            .capabilities_mut(receiver)
-            .and_then(|space| {
-                space
-                    .insert(
-                        ObjectId(0x94),
-                        Rights::MAP
-                            .union(Rights::READ)
-                            .union(Rights::WRITE)
-                            .union(Rights::DELEGATE),
-                    )
-                    .map_err(|_| mrml_kernel::TaskRuntimeError::IntegrityFailure)
-            })
-            .unwrap_or_else(|_| halt());
-        #[cfg(not(feature = "block-service-probe"))]
-        let supervision_capability = runtime
-            .capabilities_mut(sender)
-            .and_then(|space| {
-                space
-                    .insert(
-                        ObjectId(0xa1),
-                        Rights::READ.union(Rights::CONTROL).union(Rights::DELEGATE),
-                    )
-                    .map_err(|_| mrml_kernel::TaskRuntimeError::IntegrityFailure)
-            })
-            .unwrap_or_else(|_| halt());
-        let capability = runtime
-            .capabilities_mut(sender)
-            .and_then(|space| {
-                space
-                    .insert(endpoint_object, Rights::SIGNAL)
-                    .map_err(|_| mrml_kernel::TaskRuntimeError::IntegrityFailure)
-            })
-            .unwrap_or_else(|_| halt());
-        let root_capability = runtime
-            .capabilities_mut(sender)
-            .and_then(|space| {
-                space
-                    .insert(
-                        ObjectId(0x92),
-                        Rights::READ.union(Rights::CONTROL).union(Rights::DELEGATE),
-                    )
-                    .map_err(|_| mrml_kernel::TaskRuntimeError::IntegrityFailure)
-            })
-            .unwrap_or_else(|_| halt());
-        #[cfg(not(feature = "component-service-probe"))]
-        let setting_capability = runtime
-            .capabilities_mut(sender)
-            .and_then(|space| {
-                space
-                    .insert(
-                        ObjectId(0x93),
-                        Rights::READ.union(Rights::WRITE).union(Rights::DELEGATE),
-                    )
-                    .map_err(|_| mrml_kernel::TaskRuntimeError::IntegrityFailure)
-            })
-            .unwrap_or_else(|_| halt());
-        #[cfg(feature = "service-restart-request-probe")]
-        let manager_signal = runtime
-            .capabilities_mut(manager)
-            .and_then(|space| {
-                space
-                    .insert(endpoint_object, Rights::SIGNAL)
-                    .map_err(|_| mrml_kernel::TaskRuntimeError::IntegrityFailure)
-            })
-            .unwrap_or_else(|_| halt());
-        #[cfg(feature = "service-restart-request-probe")]
-        let manager_control = runtime
-            .capabilities_mut(manager)
-            .and_then(|space| {
-                space
-                    .insert(ObjectId(0xa1), Rights::CONTROL.union(Rights::DELEGATE))
-                    .map_err(|_| mrml_kernel::TaskRuntimeError::IntegrityFailure)
-            })
-            .unwrap_or_else(|_| halt());
-        let endpoint = Endpoint::new(endpoint_object);
-        runtime
-            .connect_control_peers(receiver, sender, &endpoint, receiver_capability, capability)
-            .unwrap_or_else(|_| halt());
-        let receiver_context = runtime.context_mut(receiver).unwrap_or_else(|_| halt());
-        receiver_context.r13 = receiver_capability.token();
-        receiver_context.r14 = sender.token();
-        receiver_context.r15 = resource_capabilities[0].token();
-        #[cfg(feature = "component-service-probe")]
-        {
-            receiver_context.r12 = 1;
-            receiver_context.rbx = resource_transfer.token();
-        }
-        #[cfg(not(feature = "component-service-probe"))]
-        {
-            receiver_context.rbx = resource_capabilities[1].token();
-        }
-        receiver_context.r11 = recovery_capability.map_or(0, Capability::token);
-        #[cfg(feature = "service-restart-request-probe")]
-        {
-            receiver_context.rbp = manager.token();
-        }
-        let sender_context = runtime.context_mut(sender).unwrap_or_else(|_| halt());
-        sender_context.r13 = capability.token();
-        sender_context.r14 = receiver.token();
-        #[cfg(feature = "component-service-probe")]
-        {
-            sender_context.r12 = 1;
-        }
-        #[cfg(not(feature = "block-service-probe"))]
-        {
-            sender_context.r15 = root_capability.token();
-        }
-        #[cfg(feature = "block-service-probe")]
-        {
-            sender_context.r15 = sender_write.token();
-            sender_context.r11 = sender_read.token();
-        }
-        #[cfg(not(feature = "component-service-probe"))]
-        {
-            sender_context.rbx = setting_capability.token();
-        }
-        #[cfg(not(feature = "block-service-probe"))]
-        {
-            sender_context.rbp = supervision_capability.token();
-        }
-        #[cfg(feature = "block-service-probe")]
-        {
-            sender_context.rbp = sender_transfer.token();
-        }
-        #[cfg(not(feature = "block-service-probe"))]
-        {
-            sender_context.r10 = service_b.token();
-        }
-        #[cfg(feature = "block-service-probe")]
-        {
-            sender_context.r10 = root_capability.token();
-        }
-        #[cfg(feature = "service-restart-request-probe")]
-        {
-            let manager_context = runtime.context_mut(manager).unwrap_or_else(|_| halt());
-            manager_context.r13 = manager_signal.token();
-            manager_context.r14 = receiver.token();
-            manager_context.r15 = manager_control.token();
-            manager_context.rbx = service_b.token();
-        }
-        if !matches!(runtime.start(), ScheduleOutcome::Switch { from: None, to } if to == receiver)
-        {
-            halt();
-        }
-        core::ptr::addr_of_mut!(SERVICE_ENDPOINT).write(Some(endpoint));
-        #[cfg(not(feature = "component-service-probe"))]
-        core::ptr::addr_of_mut!(SERVICE_SUPERVISOR).write(Some(supervisor_storage));
-        core::ptr::addr_of_mut!(SERVICE_MANAGEMENT).write(Some(management));
-        #[cfg(feature = "service-restart-request-probe")]
-        {
-            core::ptr::addr_of_mut!(SERVICE_CONTROLS)
-                .write(Some([control_a, control_b, control_c]));
-            core::ptr::addr_of_mut!(SERVICE_IDS).write(Some([service_a, service_b, service_c]));
-        }
-        #[cfg(not(feature = "service-restart-request-probe"))]
-        {
-            core::ptr::addr_of_mut!(SERVICE_CONTROLS)
-                .write(Some([control_a, control_b, control_a]));
-            core::ptr::addr_of_mut!(SERVICE_IDS).write(Some([service_a, service_b, service_a]));
-        }
-        core::ptr::addr_of_mut!(SERVICE_RECEIVER_SIGNAL).write(Some(receiver_capability));
-        let context = (*runtime_pointer)
-            .as_ref()
-            .and_then(|runtime| runtime.context(receiver).ok())
-            .map(|context| context as *const UserContext)
-            .unwrap_or_else(|| halt());
-        enter_service_probe_context(&*context);
     }
     #[cfg(feature = "user-probe")]
     unsafe {
@@ -3696,6 +3699,13 @@ unsafe fn run_kernel(bytes: *const u8, length: usize) -> ! {
             asm!("out dx, eax", in("dx") GPU_DOORBELL_PORT, in("eax") 2u32, options(nomem, nostack))
         };
     }
+    halt()
+}
+
+#[cfg(all(not(feature = "fault-probe"), feature = "service-probe"))]
+#[inline(never)]
+fn run_service_probe(handoff: &BootHandoff, probe: impl FnOnce(&BootHandoff)) -> ! {
+    probe(handoff);
     halt()
 }
 

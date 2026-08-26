@@ -146,6 +146,16 @@ name = "component_service_probe"
 targets = ["UEFI"]
 
 [[feature_profile]]
+features = ["service-probe", "component-service-probe", "smp-probe", "emulated-ap-timing", "ap-startup-trace"]
+name = "kvm_component_service_smp_probe"
+targets = ["UEFI"]
+
+[[feature_profile]]
+features = ["service-probe", "component-service-probe", "smp-probe", "whp-smp-probe", "emulated-ap-timing", "ap-startup-trace"]
+name = "whp_component_service_smp_probe"
+targets = ["UEFI"]
+
+[[feature_profile]]
 features = ["smp-probe", "emulated-ap-timing", "ap-startup-trace"]
 name = "kvm_smp_probe"
 targets = ["UEFI"]

@@ -372,9 +372,20 @@ scheduling state after each runner and cancellation worker retire, report each
 runner's host-wall elapsed time, and reconcile the two slices independently
 before releasing the reservation. Fresh release probes measured bootstrap/AP
 times of 6,519/3,593 microseconds on WHP and 4,601/4,229 microseconds on nested
-KVM. This is hosted signed SMP enforcement evidence, not yet a multi-vCPU
-component-service profile, trusted CPU time, physical-topology evidence, or a
-host-security boundary.
+KVM.
+
+The next dependency gate is now implemented for one focused component profile.
+The exact signed ZIM/Zstd Total-mode route reserves two vCPUs and one shared
+200-millisecond allowance before construction, prepares the same two-vCPU guest
+on WHP and KVM, requires the BSP/AP SMP proofs under separate deadlines, then
+continues the BSP through the already-bound ABI-3 component data plane. The AP
+halts after its proof. Service/control-plane construction is kept behind a
+no-inline boundary so early SMP startup retains its fixed guarded stack. Fresh
+one-use-signed probes measured 6,089/3,984 microseconds on WHP and 4,415/4,086
+microseconds on nested KVM; both reported one eligible microVM and zero native
+fallback. This is hosted signed multi-vCPU component evidence, not trusted CPU
+time, physical-topology evidence, broad Total-mode readiness, or a host-security
+boundary.
 
 Typed provider-resolution groundwork now matches canonical `REQUIRES` and
 `PROVIDES` edges only inside an immutable `SystemGeneration`. Interface name,

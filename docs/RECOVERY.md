@@ -1004,6 +1004,17 @@ repeated failed persistent Total request may offer an explicit Balanced-once or
 Recovery choice, but must not mutate persistent policy automatically; authorized
 recovery policy changes are recorded where audit support exists.
 
+The focused recovery oracle now includes the two-vCPU component profiles
+`whp_component_service_smp_probe` and `kvm_component_service_smp_probe`. Each
+must use fresh signed kernel/package artifacts, the exact signed ZIM/Zstd
+consumer/provider generations and signed general SystemRelease, and the
+`component-service-smp-probe` runner mode. Acceptance requires both SMP proofs,
+the complete ABI-3 component exchange and cleanup, release of exactly two vCPUs,
+and (where structured output is emitted) `native_fallback=0`. WHP evidence on
+2026-08-26 measured 6,089/3,984 microseconds; nested KVM measured 4,415/4,086
+microseconds. Both reported one eligible microVM, one running microVM, and zero
+native fallback. This is hosted controlled evidence only.
+
 For system-monitor work, recover the single canonical observer from
 [monitor/SYSTEM_MONITOR.md](monitor/SYSTEM_MONITOR.md). Its caches are
 disposable: after restart, reconstruct scoped snapshots from authoritative

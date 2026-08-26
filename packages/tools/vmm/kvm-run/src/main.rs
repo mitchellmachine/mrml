@@ -86,7 +86,7 @@ type ComponentCpuAuthority = (
     CpuBudgetId,
     Capability,
     VcpuReservationId,
-    u64,
+    [u64; 2],
 );
 
 #[cfg(target_os = "linux")]
@@ -112,7 +112,7 @@ fn run_component_vcpu<T>(
         .checked_add(u64::from(usage.spec().period_micros()))
         .ok_or_else(|| anyhow!("component vCPU period overflow"))?;
     let remaining_period =
-        u32::try_from(period_end.saturating_sub(*next_start)).unwrap_or(u32::MAX);
+        u32::try_from(period_end.saturating_sub(next_start[0])).unwrap_or(u32::MAX);
     let maximum = remaining_runtime.min(remaining_period);
     let slice: CpuRuntimeSlice = budgets
         .authorize_runtime_slice(
@@ -121,7 +121,7 @@ fn run_component_vcpu<T>(
             0,
             0,
             0,
-            *next_start,
+            next_start[0],
             maximum,
             capabilities,
         )
@@ -130,14 +130,124 @@ fn run_component_vcpu<T>(
     let result = run(slice);
     let elapsed = u64::try_from(started.elapsed().as_micros())
         .map_err(|_| anyhow!("component vCPU elapsed time overflow"))?;
-    let end = next_start
+    let end = next_start[0]
         .checked_add(elapsed)
         .ok_or_else(|| anyhow!("component vCPU runtime cursor overflow"))?;
     budgets
         .reconcile_runtime_slice(slice, *capability, end, capabilities)
         .map_err(|error| anyhow!("component vCPU runtime reconciliation failed: {:?}", error))?;
-    *next_start = end;
+    next_start[0] = end;
     result
+}
+
+#[cfg(target_os = "linux")]
+fn run_component_smp<B>(
+    cpu: &mut Option<ComponentCpuAuthority>,
+    backend: &mut B,
+) -> Result<([VmExit; 2], [u64; 2])>
+where
+    B: ScheduledSmpVmBackend,
+    B::Error: core::fmt::Debug,
+{
+    let (budgets, capabilities, _budget, capability, reservation, next_start) = cpu
+        .as_mut()
+        .ok_or_else(|| anyhow!("missing component SMP runtime authority"))?;
+    let usage = budgets
+        .usage(*_budget, *capability, capabilities)
+        .map_err(|error| anyhow!("component SMP usage failed: {:?}", error))?;
+    if usage.spec().maximum_parallelism() != 2 {
+        return Err(anyhow!("component SMP authority is not exactly two-vCPU"));
+    }
+    let maximum = usage.spec().runtime_micros() / 2;
+    let bootstrap = budgets
+        .authorize_runtime_slice(
+            *reservation,
+            *capability,
+            0,
+            0,
+            0,
+            next_start[0],
+            maximum,
+            capabilities,
+        )
+        .map_err(|error| anyhow!("component bootstrap vCPU charge failed: {:?}", error))?;
+    let application = match budgets.authorize_runtime_slice(
+        *reservation,
+        *capability,
+        1,
+        1,
+        0,
+        next_start[1],
+        maximum,
+        capabilities,
+    ) {
+        Ok(slice) => slice,
+        Err(error) => {
+            let _ = budgets.reconcile_runtime_slice(
+                bootstrap,
+                *capability,
+                next_start[0],
+                capabilities,
+            );
+            return Err(anyhow!(
+                "component application vCPU charge failed: {:?}",
+                error
+            ));
+        }
+    };
+    let run = ScheduledSmpVmBackend::run_smp_with_scheduling_deadlines(
+        backend,
+        [bootstrap.logical_cpu(), application.logical_cpu()],
+        [bootstrap.priority(), application.priority()],
+        [bootstrap.charged_micros(), application.charged_micros()],
+    );
+    let (elapsed, outcomes) = match run {
+        Ok(outcomes) => (
+            [outcomes[0].elapsed_micros(), outcomes[1].elapsed_micros()],
+            Ok(outcomes),
+        ),
+        Err(error) => (
+            [u64::from(maximum); 2],
+            Err(anyhow!(
+                "scheduled component SMP execution failed: {:?}",
+                error
+            )),
+        ),
+    };
+    for (index, (slice, elapsed)) in [bootstrap, application]
+        .into_iter()
+        .zip(elapsed)
+        .enumerate()
+    {
+        let end = next_start[index]
+            .checked_add(elapsed)
+            .ok_or_else(|| anyhow!("component SMP runtime cursor overflow"))?;
+        budgets
+            .reconcile_runtime_slice(slice, *capability, end, capabilities)
+            .map_err(|error| {
+                anyhow!(
+                    "component vCPU {} reconciliation failed: {:?}",
+                    index,
+                    error
+                )
+            })?;
+        next_start[index] = end;
+    }
+    let outcomes = outcomes?;
+    let [bootstrap, application] = outcomes;
+    let bootstrap = match bootstrap.outcome() {
+        VmDeadlineOutcome::Exit(exit) => exit,
+        VmDeadlineOutcome::Expired => {
+            return Err(anyhow!("component bootstrap vCPU deadline expired"));
+        }
+    };
+    let application = match application.outcome() {
+        VmDeadlineOutcome::Exit(exit) => exit,
+        VmDeadlineOutcome::Expired => {
+            return Err(anyhow!("component application vCPU deadline expired"));
+        }
+    };
+    Ok(([bootstrap, application], elapsed))
 }
 
 #[cfg(target_os = "linux")]
@@ -623,6 +733,7 @@ enum LaunchMode {
     UserProbe,
     ServiceProbe,
     ComponentServiceProbe,
+    ComponentServiceSmpProbe,
     ComponentReleaseInputs,
     BlockServiceProbe,
     BlockGuestDriverProbe,
@@ -648,6 +759,7 @@ impl LaunchMode {
             "user-probe" => Ok(Self::UserProbe),
             "service-probe" => Ok(Self::ServiceProbe),
             "component-service-probe" => Ok(Self::ComponentServiceProbe),
+            "component-service-smp-probe" => Ok(Self::ComponentServiceSmpProbe),
             "component-release-inputs" => Ok(Self::ComponentReleaseInputs),
             "block-service-probe" => Ok(Self::BlockServiceProbe),
             "block-guest-driver-probe" => Ok(Self::BlockGuestDriverProbe),
@@ -1798,8 +1910,10 @@ fn application_main() -> Result<()> {
         ));
     }
     let component_release_input_mode = mode == LaunchMode::ComponentReleaseInputs;
-    let component_service_mode =
-        component_release_input_mode || mode == LaunchMode::ComponentServiceProbe;
+    let component_smp_mode = mode == LaunchMode::ComponentServiceSmpProbe;
+    let component_service_mode = component_release_input_mode
+        || mode == LaunchMode::ComponentServiceProbe
+        || component_smp_mode;
     if component_service_mode != (arguments.len() == 14) {
         return Err(anyhow!(
             "component-service-probe requires exact consumer/provider signed artifacts plus one signed general SystemRelease and explicit public roots"
@@ -1845,6 +1959,7 @@ fn application_main() -> Result<()> {
         mode,
         LaunchMode::ServiceProbe
             | LaunchMode::ComponentServiceProbe
+            | LaunchMode::ComponentServiceSmpProbe
             | LaunchMode::ComponentReleaseInputs
             | LaunchMode::BlockServiceProbe
             | LaunchMode::ServiceRestartRequestProbe
@@ -1952,7 +2067,7 @@ fn application_main() -> Result<()> {
             | LaunchMode::SmpServiceMigrationProbe
             | LaunchMode::SmpPeriodicBalanceProbe
     );
-    let handoff = if smp_mode {
+    let handoff = if smp_mode || component_smp_mode {
         smp_boot_handoff(
             executable.artifact().version(),
             entropy,
@@ -1974,7 +2089,7 @@ fn application_main() -> Result<()> {
         )?
     };
     let user_probe = matches!(mode, LaunchMode::UserProbe | LaunchMode::PreemptionProbe);
-    let (image_virtual, handoff_virtual, stack_virtual) = if smp_mode {
+    let (image_virtual, handoff_virtual, stack_virtual) = if smp_mode || component_smp_mode {
         (0xffff_8001_4000_0000, 0xffff_8001_5000_0000, 0x100_0000)
     } else if user_probe {
         (0x0040_0000, 0x0200_0000, 0xffff_8001_6000_0000)
@@ -2165,7 +2280,9 @@ fn application_main() -> Result<()> {
     let preparation_started = Instant::now();
     let total_service_mode = matches!(
         mode,
-        LaunchMode::ServiceProbe | LaunchMode::ComponentServiceProbe
+        LaunchMode::ServiceProbe
+            | LaunchMode::ComponentServiceProbe
+            | LaunchMode::ComponentServiceSmpProbe
     );
     let component_generation = if component_service_mode {
         let consumer = service_executable
@@ -2360,7 +2477,12 @@ fn application_main() -> Result<()> {
         let mut capabilities = CapabilitySpace::<1>::new();
         let mut budgets = CpuBudgetTable::<1, 1>::new(0x1a53)
             .map_err(|error| anyhow!("component CPU table failed: {:?}", error))?;
-        let spec = CpuBudgetSpec::new(1, 100_000, 100_000, 0, 1)
+        let parallelism = if component_smp_mode { 2 } else { 1 };
+        let runtime = 100_000u32
+            .checked_mul(u32::from(parallelism))
+            .ok_or_else(|| anyhow!("component CPU runtime overflow"))?;
+        let affinity = if component_smp_mode { 0b11 } else { 1 };
+        let spec = CpuBudgetSpec::new(parallelism, runtime, runtime, 0, affinity)
             .map_err(|error| anyhow!("component CPU budget failed: {:?}", error))?;
         let (budget, capability) = budgets
             .create_root(spec, &mut capabilities)
@@ -2376,7 +2498,7 @@ fn application_main() -> Result<()> {
             &mut budgets,
             budget,
             capability,
-            1,
+            parallelism,
             &capabilities,
         )
         .map_err(|error| anyhow!("component vCPU reservation failed: {:?}", error))?;
@@ -2385,7 +2507,14 @@ fn application_main() -> Result<()> {
         budgets
             .start_runtime_period(reservation, capability, 0, &capabilities)
             .map_err(|error| anyhow!("component CPU runtime start failed: {:?}", error))?;
-        Some((budgets, capabilities, budget, capability, reservation, 0))
+        Some((
+            budgets,
+            capabilities,
+            budget,
+            capability,
+            reservation,
+            [0; 2],
+        ))
     } else {
         None
     };
@@ -2460,6 +2589,12 @@ fn application_main() -> Result<()> {
                 handoff.as_slice(),
                 layout,
             ),
+        LaunchMode::ComponentServiceSmpProbe => system
+            .prepare_isolated_service_smp_kernel_guest::<16>(
+                &executable,
+                handoff.as_slice(),
+                layout,
+            ),
         _ => system.prepare_kernel_guest::<16>(0, &executable, handoff.as_slice(), layout),
     };
     let mut guest = match guest_preparation {
@@ -2527,10 +2662,11 @@ fn application_main() -> Result<()> {
         None
     };
     if service_mode {
-        let local_apic = matches!(
-            mode,
-            LaunchMode::ServicePreemptionProbe | LaunchMode::SmpServiceMigrationProbe
-        );
+        let local_apic = component_smp_mode
+            || matches!(
+                mode,
+                LaunchMode::ServicePreemptionProbe | LaunchMode::SmpServiceMigrationProbe
+            );
         guest = if let Some(launch) = component_launch.as_ref() {
             let ram = component_ram
                 .as_mut()
@@ -2868,6 +3004,47 @@ fn application_main() -> Result<()> {
             elapsed[0], elapsed[1]
         );
         VmExit::Halted
+    } else if component_smp_mode {
+        let (exits, elapsed) = run_component_smp(&mut component_cpu, &mut guest)?;
+        let [bootstrap, application] = exits;
+        let expected_bootstrap = VmExit::Io {
+            port: SMP_PROBE_PORT,
+            size: 4,
+            write: true,
+            value: 2,
+        };
+        let expected_application = VmExit::Io {
+            port: SMP_PROBE_PORT,
+            size: 4,
+            write: true,
+            value: 0x0001_0001,
+        };
+        if bootstrap != expected_bootstrap || application != expected_application {
+            return Err(anyhow!(
+                "component SMP proof mismatch: bootstrap={:?} application={:?}",
+                bootstrap,
+                application
+            ));
+        }
+        println!(
+            "verified Total-mode component two-vCPU startup under KVM: bootstrap={}us application={}us",
+            elapsed[0], elapsed[1]
+        );
+        run_component_vcpu(&mut component_cpu, |slice| {
+            match ScheduledDeadlineVmBackend::run_with_scheduling_deadline(
+                &mut guest,
+                0,
+                slice.logical_cpu(),
+                slice.priority(),
+                slice.charged_micros(),
+            ) {
+                Ok(VmDeadlineOutcome::Exit(exit)) => Ok(exit),
+                Ok(VmDeadlineOutcome::Expired) => {
+                    Err(anyhow!("KVM component vCPU deadline expired"))
+                }
+                Err(error) => Err(anyhow!("KVM component execution failed: {:?}", error)),
+            }
+        })?
     } else if component_service_mode {
         run_component_vcpu(&mut component_cpu, |slice| {
             match ScheduledDeadlineVmBackend::run_with_scheduling_deadline(
@@ -3080,7 +3257,10 @@ fn application_main() -> Result<()> {
         }
         exit = VmBackend::run(&mut guest, 0)
             .map_err(|error| anyhow!("KVM execution after user proof failed: {:?}", error))?;
-    } else if mode == LaunchMode::ComponentServiceProbe {
+    } else if matches!(
+        mode,
+        LaunchMode::ComponentServiceProbe | LaunchMode::ComponentServiceSmpProbe
+    ) {
         let cleanup_stages = [0x21, 0x20, 0x40];
         let mut cleanup_stage = 0;
         for _ in 0..64 {
@@ -3723,7 +3903,9 @@ fn application_main() -> Result<()> {
                 "service probe unexpectedly modified the framebuffer"
             ));
         }
-        LaunchMode::ComponentServiceProbe if marker != [0; 4] => {
+        LaunchMode::ComponentServiceProbe | LaunchMode::ComponentServiceSmpProbe
+            if marker != [0; 4] =>
+        {
             return Err(anyhow!(
                 "component service probe unexpectedly modified the framebuffer"
             ));
@@ -3880,10 +4062,14 @@ fn application_main() -> Result<()> {
         cpu_runtime_micros,
     )) = component_cpu.take()
     {
+        let cpu_runtime_total = cpu_runtime_micros[0]
+            .checked_add(cpu_runtime_micros[1])
+            .ok_or_else(|| anyhow!("component CPU runtime total overflow"))?;
+        let expected_vcpus = if cpu_runtime_micros[1] == 0 { 1 } else { 2 };
         if budgets
             .release_vcpus(reservation, capability, &capabilities)
             .map_err(|error| anyhow!("component vCPU release failed: {:?}", error))?
-            != 1
+            != expected_vcpus
         {
             return Err(anyhow!("component vCPU release count mismatch"));
         }
@@ -3893,8 +4079,8 @@ fn application_main() -> Result<()> {
         if usage.reserved_parallelism() != 0
             || usage.active_reservations() != 0
             || usage.consumed_runtime_micros()
-                != u32::try_from(cpu_runtime_micros).unwrap_or(u32::MAX)
-            || cpu_runtime_micros == 0
+                != u32::try_from(cpu_runtime_total).unwrap_or(u32::MAX)
+            || cpu_runtime_total == 0
         {
             return Err(anyhow!("component vCPU authority was not reclaimed"));
         }
@@ -3903,7 +4089,7 @@ fn application_main() -> Result<()> {
             .map_err(|error| anyhow!("component CPU root retirement failed: {:?}", error))?;
         println!(
             "cpu|component_runtime={}us|accounting=elapsed-reconciled|logical_cpu=0|affinity=host-enforced|priority=host-normal|backend=kvm",
-            cpu_runtime_micros
+            cpu_runtime_total
         );
     }
     if let Some(admission) = isolation_admission.as_ref() {
@@ -4384,6 +4570,10 @@ mod tests {
         assert_eq!(
             LaunchMode::parse("component-service-probe").unwrap(),
             LaunchMode::ComponentServiceProbe
+        );
+        assert_eq!(
+            LaunchMode::parse("component-service-smp-probe").unwrap(),
+            LaunchMode::ComponentServiceSmpProbe
         );
         assert_eq!(
             LaunchMode::parse("component-release-inputs").unwrap(),

@@ -377,6 +377,12 @@ the common SMP proof, explicit emulated AP timing, and startup trace, while the
 WHP profile additionally selects its handshake transport. The exact
 `MRML_EMULATED_TSC_HZ` compile input remains explicit and receipt-bound rather
 than an ambient build variable.
+The canonical `kvm_component_service_smp_probe` and
+`whp_component_service_smp_probe` profiles compose that SMP contract with the
+existing signed component-service feature set. The WHP profile alone adds the
+WHP AP handshake. Both keep emulated timing and startup tracing explicit and
+receipt-bound; neither permits compiler fallback or changes package/interface
+identity.
 
 The authenticated package-derived positive path has executed under QEMU/EDK2
 with the raw trace `c8 b0 b2 b0 b2 c9 b0 b2 b2 a1 a2 a3 a4 a5 a6 a7 a8 b1
