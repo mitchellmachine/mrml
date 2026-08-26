@@ -669,10 +669,14 @@ points. Compilation rejects the record at entry before evaluator or emitter
 selection, so origin transfer, semantics, and native emission remain
 unavailable without silent branch loss. Constant semantics are now implemented:
 taken actions use a scoped resolver checkpoint and target-aware break, continue,
-and return reuse the existing bounded loop evaluator. Native semantics and
-origin transfer remain unavailable. Windows and Arch each pass 645 library
-tests, one component-interface probe, 10 conformance tests, and 335 replacement
-tests: 991 compiler tests per host.
+and return reuse the existing bounded loop evaluator. Direct and inline native
+x86-64 lowering now mirrors those actions, scoped cleanup, and terminals for
+scalar-only functions. A lexical reference-admission gate rejects the entire
+form before lowering when a signature or body contains reference syntax;
+origin transfer remains unavailable. ELF64 and COFF probes cover separate
+return, continue, and break prefixes. Windows and Arch each pass 645 library
+tests, one component-interface probe, 10 conformance tests, and 336 replacement
+tests: 992 compiler tests per host.
 
 The conditional callee-local reassignment milestone evaluates supported direct
 assignments from a copy of the incoming fixed local-origin state for every

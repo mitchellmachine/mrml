@@ -4246,16 +4246,19 @@ target-aware terminal in a dedicated parser record, including their exact
 position among surrounding actions and controls. CFG construction now emits
 separate condition and action blocks with explicit false fallthrough and true
 terminal routing; ownership preanalysis gives conditions, scoped actions, and
-return values distinct mapped locations. Compilation rejects the record before
-evaluator or emitter selection until origin transfer, semantics, and native
-emission model it. The bounded constant evaluator does execute these records,
-using lexical resolver truncation and the existing loop limit for inner/outer
+return values distinct mapped locations. Reference-carrying records are
+rejected before evaluator or emitter selection until origin transfer is
+modeled. The bounded constant evaluator executes these records using lexical
+resolver truncation and the existing loop limit for inner/outer
 break, continue, and return. Focused tests cover retained branch actions,
 CFG/ownership mapping, all constant terminal kinds, untaken fallthrough, and
-the fail-closed native compile boundary. Windows and native Arch Linux WSL each
-pass 645 library tests, one component-interface probe, 10 conformance tests,
-and 335 replacement tests: 991 compiler tests per host. This is constant
-semantics, not native executable nested branching.
+the fail-closed reference boundary. Direct and inline x86-64 emitters now lower
+scalar-only branch actions, scoped stack cleanup, and target-aware terminals;
+any reference syntax in the signature or body rejects the entire function.
+Separate return, continue, and break probes reach ELF64 and COFF objects.
+Windows and native Arch Linux WSL each pass 645 library tests, one component-
+interface probe, 10 conformance tests, and 336 replacement tests: 992 compiler
+tests per host.
 Nested-loop ordered-return and stable-edge analysis is now factored over an
 explicit incoming state and composes after outer-loop declarations, assignments,
 and branch joins. Stable nested edges preserve that state for later outer

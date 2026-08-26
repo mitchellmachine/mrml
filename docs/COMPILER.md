@@ -1375,16 +1375,18 @@ controls. Parser tests cover local and expression actions followed by a return.
 CFG construction now gives the condition and scoped action body distinct basic
 blocks and routes true, false, and target-aware terminal edges. Ownership
 preanalysis assigns distinct condition, action, and return-value locations and
-keeps branch locals scoped. Compilation rejects these records before any
-evaluator or emitter fast path until state transfer, semantics, and native
-lowering are modeled. The bounded constant evaluator already executes taken
-branch actions with lexical-scope truncation and routes inner/outer break,
+keeps branch locals scoped. Reference-carrying records are rejected before any
+evaluator or emitter fast path until origin state transfer is modeled. The
+bounded constant evaluator executes taken branch actions with lexical-scope
+truncation and routes inner/outer break,
 continue, and return terminals under the existing iteration limit. Focused
-constants cover all three terminals and untaken fallthrough. This is
-parser/CFG/preanalysis/const support, not native executable language
-support. Windows and
+constants cover all three terminals and untaken fallthrough. Direct and inline
+x86-64 emitters now lower the same terminal routing and scoped stack cleanup
+for scalar-only functions; any reference in the signature or body keeps the
+whole form fail-closed pending origin transfer. ELF64 and COFF object probes
+cover separate return, continue, and break prefixes. Windows and
 native Arch Linux WSL each pass 645 library tests, one component-interface
-probe, 10 conformance tests, and 335 replacement tests: 991 compiler tests per
+probe, 10 conformance tests, and 336 replacement tests: 992 compiler tests per
 host.
 
 The first modern trait-solver foundation is an explicit bounded implemented-
