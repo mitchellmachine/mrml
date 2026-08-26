@@ -1373,9 +1373,11 @@ rejection, substitution, and projection-aware proof with explicit `where`
 clauses. Positional arguments are preserved on both generated predicates so a
 mixed list retains one semantic trait instantiation. Equivalent explicit
 declaration and implementation `where` predicates use the same parser and
-desugaring. Windows gnullvm and native Arch Linux WSL each pass 624 library
-tests, one component-interface probe, 10 conformance tests, and 335 replacement
-tests: 970 compiler tests per host.
+desugaring. Supertrait bindings retain positional arguments on the parent edge
+and lower associated equalities into `Self` declaration requirements. Windows
+gnullvm and native Arch Linux WSL each pass 627 library tests, one component-
+interface probe, 10 conformance tests, and 335 replacement tests: 973 compiler
+tests per host.
 
 The premise-bearing rigid-normalization milestone proves the selected generic
 implementation's instantiated trait and projection predicates before exposing

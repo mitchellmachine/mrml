@@ -4576,9 +4576,12 @@ capacity, identity admission, duplicate rejection, and projection-aware proof.
 Positional arguments are preserved on both generated predicates, so mixed
 lists retain one semantic trait instantiation. The same parser now handles
 equivalent explicit declaration and implementation `where` predicates, so
-inline and explicit bindings cannot diverge. Windows gnullvm and native Arch
-Linux WSL each pass 624 library tests, one component probe, 10 conformance
-tests, and 335 replacement tests: 970 compiler tests per host.
+inline and explicit bindings cannot diverge. Supertrait bindings lower their
+positional arguments into the parent edge and their associated equalities into
+`Self` declaration requirements, preserving both transitive ancestry and
+projection proof. Windows gnullvm and native Arch Linux WSL each pass 627
+library tests, one component probe, 10 conformance tests, and 335 replacement
+tests: 973 compiler tests per host.
 
 The projection-bearing term milestone uses a fixed 64-node arena for flat leaf
 terms and associated-type projections whose trait self/argument positions refer

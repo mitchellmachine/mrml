@@ -5540,6 +5540,17 @@ solving and Rust conformance remain partial; this agent review does not
 establish clearance or infringement and does not replace independent human dual
 review.
 
+# 2026-08-26 — Source supertrait associated-type bindings
+
+**Result: NOT_TRIGGERED after the supertrait and associated-binding reviews.**
+This increment conventionally retains positional arguments on the existing
+supertrait edge and lowers associated bindings into the already reviewed `Self`
+projection requirements. It adds no new predicate representation,
+normalization, unification, selection, coherence, proof-search, caching, or
+code-generation mechanism. Broader trait solving and Rust conformance remain
+partial; this agent review does not establish clearance or infringement and
+does not replace independent human dual review.
+
 # 2026-08-26 — Kernel parallel-vCPU runtime-slice accounting
 
 **Result: NOT_TRIGGERED after the fixed-period CPU-budget and linear runtime-
