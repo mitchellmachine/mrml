@@ -4163,6 +4163,12 @@ current origin state to the backedge. The pinned oracle accepts a parameter-
 backed conditional return before that continue and identifies the later local
 assignment as unreachable. Both hosts remain at 989 compiler tests; conditional
 continue still needs a multi-backedge join.
+Conditional continue now feeds a bounded backedge accumulator while its false
+path continues through the remaining operations. Direct continue and normal
+fallthrough contribute to the same intersection before a `while` natural exit
+is computed. The pinned oracle accepts stable parameter-backed outcomes and
+rejects a local-backed fallthrough backedge with E0515. Both hosts remain at 989
+compiler tests; conditional-block terminal continue remains conservative.
 
 Exact typed tuple literals now seed the same projected state when a local is
 declared. Every reference field is checked against the declared tuple element

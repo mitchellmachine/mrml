@@ -527,6 +527,15 @@ later local assignment as unreachable. Windows and Arch each pass 643 library
 tests, one component-interface probe, 10 conformance tests, and 335 replacement
 tests: 989 compiler tests per host. Conditional continue remains unsupported.
 
+Conditional continue paths now accumulate independently from their false-path
+suffix, then intersect with direct-continue and normal-fallthrough backedges.
+The joined state feeds the existing condition-headed natural exit. ORACLE-0002
+accepts stable parameter-backed outcomes and rejects a local-backed fallthrough
+backedge reaching a `while` tail with E0515. Windows and Arch each pass 643
+library tests, one component-interface probe, 10 conformance tests, and 335
+replacement tests: 989 compiler tests per host. Conditional-block terminal
+continue remains unsupported.
+
 The conditional callee-local reassignment milestone evaluates supported direct
 assignments from a copy of the incoming fixed local-origin state for every
 conditional outcome, then joins each local independently. A missing `else`

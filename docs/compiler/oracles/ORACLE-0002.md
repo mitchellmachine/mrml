@@ -827,3 +827,10 @@ return before `continue` and reported the following local-backed assignment as
 unreachable. This is black-box evidence for that exact terminating suffix and
 backedge, not general loop or region inference. Temporary source and metadata
 were removed.
+
+An independently authored Rust 2024 metadata-only conditional-continue pair
+against this exact toolchain and commit accepted continue and normal-fallthrough
+backedges that both restored the same parameter origin. A condition-headed
+variant whose fallthrough backedge remained local-backed failed at the tail with
+E0515. This is black-box evidence for those exact backedge joins, not general
+loop or region inference. Temporary sources and metadata were removed.

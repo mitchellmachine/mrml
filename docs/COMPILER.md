@@ -1292,6 +1292,12 @@ current origin state to the backedge. Disconnected later assignments cannot
 alter return or iteration evidence. ORACLE-0002 accepts the exact stable return/
 continue shape and reports the retained suffix as unreachable. Conditional
 continue still requires a separate multi-backedge join.
+Conditional `continue` now contributes its current state to a bounded backedge
+accumulator while the false path continues through later operations. Normal
+fallthrough and direct continue add further outcomes; the joined backedge feeds
+the existing condition-headed natural-exit calculation. ORACLE-0002 accepts
+stable parameter-backed backedges and rejects a local-backed fallthrough
+backedge reaching a `while` tail with E0515.
 
 The first modern trait-solver foundation is an explicit bounded implemented-
 goal representation. Stable trait/type/inference/placeholder identities remain
