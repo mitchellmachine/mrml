@@ -1,5 +1,17 @@
 # Patent review log
 
+## 2026-08-26 — Signed runtime-inventory SystemRelease v2
+
+Patent review: **TRIGGERED** under the existing adaptive-isolation,
+Total-MicroVM, package-generation, signed-release, and runtime-classification
+reviews. This increment version-extends the existing conventional signed
+envelope with one additional bounded canonical record, offset, length, digest,
+and exact generation-membership validation. It retains v1 parsing and adds no
+placement choice, VM construction, fallback, resource selection, scheduling,
+migration, transport, or hardware mechanism. Kernel inventory construction and
+runtime enforcement remain separate pending increments. No patent-clearance or
+non-infringement conclusion is made; independent human review remains required.
+
 ## 2026-08-26 — Branch-local callee reference-origin state
 
 Patent review: **NOT_TRIGGERED** for this bounded compiler-analysis increment.

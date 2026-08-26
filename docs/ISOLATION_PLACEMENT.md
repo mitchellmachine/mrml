@@ -893,8 +893,11 @@ suites each pass 16 tests. Manifest V2 now accepts explicit `runtime_class` and
 reason for eligible work, and requires eligible work to support `MICROVM`.
 The public frontend derives `MRMLRI1` only from those manifests and the exact
 canonical generation; unclassified members fail closed. Windows and Arch Linux
-each pass 99 build-tool tests. Signed `SystemRelease` delivery, kernel inventory
-construction, and complete runtime proof remain **PLANNED**.
+each pass 99 build-tool tests. General SystemRelease v2 now signs and verifies
+that exact inventory beside `MRMLSG2` and `MRMLIC1`; v1 remains parseable for
+compatibility but carries no inventory. A v1 release must never be treated as
+Total-ready merely because it is otherwise valid. Kernel inventory construction
+and complete runtime proof remain **PLANNED**.
 
 ```text
 Complexity impact: MEDIUM

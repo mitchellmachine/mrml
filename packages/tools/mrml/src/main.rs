@@ -279,6 +279,9 @@ fn print_help() {
     println!(
         "       mrml release system-create GENERATION.mrmlbin INTERFACES.mrmlbin PRIVATE_KEY OUTPUT.mrs"
     );
+    println!(
+        "       mrml release system-create GENERATION.mrmlbin INTERFACES.mrmlbin RUNTIME.mrmlbin PRIVATE_KEY OUTPUT.mrs"
+    );
     println!("       mrml release runtime-inventory-create GENERATION.mrmlbin OUTPUT.mrmlbin");
     println!("       mrml release system-verify RELEASE.mrs PUBLIC_KEY");
     println!(
@@ -381,12 +384,12 @@ fn release_command(workspace: &Workspace, args: &[String]) -> Result<(), String>
     let operation = match args.first().map(String::as_str) {
         Some("create") if matches!(args.len(), 6 | 7) => "release-create",
         Some("verify") if args.len() == 3 => "release-verify",
-        Some("system-create") if args.len() == 5 => "system-release-create",
+        Some("system-create") if matches!(args.len(), 5 | 6) => "system-release-create",
         Some("system-verify") if args.len() == 3 => "system-release-verify",
         Some("runtime-inventory-create") if args.len() == 3 => "runtime-inventory-create",
         _ => {
             return Err(
-                "ReleaseUsageError { expected: create VERSION BOOTLOADER.mrp KERNEL.mrp CONFIGURATION.mrp PRIVATE_KEY [OUTPUT.mrs] | verify RELEASE.mrs PUBLIC_KEY | runtime-inventory-create GENERATION.mrmlbin OUTPUT.mrmlbin | system-create GENERATION.mrmlbin INTERFACES.mrmlbin PRIVATE_KEY OUTPUT.mrs | system-verify RELEASE.mrs PUBLIC_KEY }"
+                "ReleaseUsageError { expected: create VERSION BOOTLOADER.mrp KERNEL.mrp CONFIGURATION.mrp PRIVATE_KEY [OUTPUT.mrs] | verify RELEASE.mrs PUBLIC_KEY | runtime-inventory-create GENERATION.mrmlbin OUTPUT.mrmlbin | system-create GENERATION.mrmlbin INTERFACES.mrmlbin [RUNTIME.mrmlbin] PRIVATE_KEY OUTPUT.mrs | system-verify RELEASE.mrs PUBLIC_KEY }"
                     .into(),
             );
         }
@@ -521,26 +524,47 @@ fn package_command(workspace: &Workspace, args: &[String]) -> Result<(), String>
             );
             Ok(())
         }
-        Some("system-release-create") if args.len() == 5 => {
+        Some("system-release-create") if matches!(args.len(), 5 | 6) => {
             let generation = fs::read(&args[1])
                 .map_err(|error| format!("SystemReleaseGenerationRead {{ detail: {error} }}"))?;
             let catalog = fs::read(&args[2])
                 .map_err(|error| format!("SystemReleaseCatalogRead {{ detail: {error} }}"))?;
-            let mut private = fs::read(&args[3])
+            let (runtime, private_index, output_index) = if args.len() == 6 {
+                (
+                    Some(fs::read(&args[3]).map_err(|error| {
+                        format!("SystemReleaseRuntimeInventoryRead {{ detail: {error} }}")
+                    })?),
+                    4,
+                    5,
+                )
+            } else {
+                (None, 3, 4)
+            };
+            let mut private = fs::read(&args[private_index])
                 .map_err(|error| format!("SystemReleaseKeyRead {{ detail: {error} }}"))?;
-            let encoded = package::build_system_release(&generation, &catalog, &private)
-                .map_err(|error| format!("SystemReleaseBuild {{ detail: {error:?} }}"))?;
+            let encoded = if let Some(runtime) = runtime.as_deref() {
+                package::build_system_release_with_runtime_inventory(
+                    &generation,
+                    &catalog,
+                    runtime,
+                    &private,
+                )
+            } else {
+                package::build_system_release(&generation, &catalog, &private)
+            }
+            .map_err(|error| format!("SystemReleaseBuild {{ detail: {error:?} }}"))?;
             private.fill(0);
-            fs::remove_file(&args[3])
+            fs::remove_file(&args[private_index])
                 .map_err(|error| format!("SystemReleaseKeyConsume {{ detail: {error} }}"))?;
-            write_new(&args[4], &encoded, "general-system-release")?;
+            write_new(&args[output_index], &encoded, "general-system-release")?;
             let release = parse_system_release(&encoded)
                 .map_err(|error| format!("SystemReleaseSelfVerify {{ detail: {error:?} }}"))?;
             println!(
-                "system-release|operation=create-general|status=PASS|generation={}|bytes={}|output={}",
+                "system-release|operation=create-general|status=PASS|generation={}|runtime_inventory={}|bytes={}|output={}",
                 release.generation().generation(),
+                u8::from(release.runtime_inventory().is_some()),
                 encoded.len(),
-                args[4]
+                args[output_index]
             );
             Ok(())
         }
@@ -557,8 +581,9 @@ fn package_command(workspace: &Workspace, args: &[String]) -> Result<(), String>
                 return Err("SystemReleaseTrustRootMismatch".into());
             }
             println!(
-                "system-release|operation=verify-general|status=PASS|generation={}|digest={}",
+                "system-release|operation=verify-general|status=PASS|generation={}|runtime_inventory={}|digest={}",
                 release.generation().generation(),
+                u8::from(release.runtime_inventory().is_some()),
                 release
                     .content_digest()
                     .iter()
@@ -5056,6 +5081,7 @@ mod tests {
         fs::create_dir(&directory).unwrap();
         let generation_path = directory.join("generation.bin");
         let catalog_path = directory.join("catalog.bin");
+        let runtime_path = directory.join("runtime.bin");
         let private_path = directory.join("release.private");
         let public_path = directory.join("release.public");
         let release_path = directory.join("system.mrs");
@@ -5084,8 +5110,24 @@ mod tests {
         let mut catalog = [0; 256];
         let catalog_length =
             encode_interface_catalog(4, &[requirement], &[provider], &mut catalog).unwrap();
+        let runtime_record = RuntimeInventoryRecord {
+            package_id: "org.mrml.zstd",
+            version: 3,
+            artifact_digest: &[0x31; 64],
+            class: RuntimeIsolationClass::MicrovmEligible,
+            must_run: true,
+            preferred: RuntimeIsolationPlacement::NativeService,
+            minimum: RuntimeIsolationPlacement::NativeService,
+            maximum: RuntimeIsolationPlacement::Microvm,
+            supported: RuntimeIsolationPlacement::NativeService.bit()
+                | RuntimeIsolationPlacement::Microvm.bit(),
+            reason: "",
+        };
+        let mut runtime = [0; 256];
+        let runtime_length = encode_runtime_inventory(4, &[runtime_record], &mut runtime).unwrap();
         fs::write(&generation_path, &generation[..generation_length]).unwrap();
         fs::write(&catalog_path, &catalog[..catalog_length]).unwrap();
+        fs::write(&runtime_path, &runtime[..runtime_length]).unwrap();
         let private = vec![0x73; LAMPORT_PRIVATE_KEY_BYTES];
         let mut public = vec![0; LAMPORT_PUBLIC_KEY_BYTES];
         lamport_public_key(&private, &mut public).unwrap();
@@ -5098,12 +5140,19 @@ mod tests {
                 "system-create".into(),
                 generation_path.to_string_lossy().into_owned(),
                 catalog_path.to_string_lossy().into_owned(),
+                runtime_path.to_string_lossy().into_owned(),
                 private_path.to_string_lossy().into_owned(),
                 release_path.to_string_lossy().into_owned(),
             ],
         )
         .unwrap();
         assert!(!private_path.exists());
+        assert!(
+            parse_system_release(&fs::read(&release_path).unwrap())
+                .unwrap()
+                .runtime_inventory()
+                .is_some()
+        );
         release_command(
             &workspace,
             &[

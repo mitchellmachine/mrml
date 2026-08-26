@@ -132,8 +132,13 @@ an explicit complete runtime classification, and `mrml release
 runtime-inventory-create` derives the catalog from the workspace manifest plus
 the generation's exact version and digest. Missing classifications, unknown
 generation members, malformed policy, subsets, and substitutions fail closed.
-Windows and Arch Linux each pass 99 focused build-tool tests. Inclusion in the
-signed general `SystemRelease` remains **PLANNED**.
+Windows and Arch Linux each pass 99 focused build-tool tests. Signed delivery is
+now **IMPLEMENTED** as general SystemRelease format v2: it authenticates exact
+generation, interface-catalog, and runtime-inventory records under one content
+digest and signature, and parsing revalidates complete inventory membership
+against the enclosed generation. Existing two-record v1 releases remain
+readable but expose no runtime inventory and therefore cannot prove Total
+readiness. Kernel inventory construction remains **PLANNED**.
 
 - Complexity impact: MEDIUM
 - TCB impact: LOW

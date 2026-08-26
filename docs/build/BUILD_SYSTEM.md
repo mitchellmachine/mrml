@@ -512,8 +512,11 @@ resolved records, not Store graph resolution or signing-key custody.
 requires every exact member to resolve to a Manifest V2 package with explicit
 runtime classification, and emits a self-verified `MRMLRI1`. Manifest metadata
 does not grant authority, and the command cannot omit a generation member or
-substitute its version or digest. The inventory is not yet carried by the signed
-general release; that format integration remains the next gate.
+substitute its version or digest. `mrml release system-create` accepts that
+inventory as an optional third canonical record and emits signed general
+SystemRelease v2; omitting it intentionally emits the backward-compatible v1.
+Both versions remain parseable, but only v2 exposes an authenticated runtime
+inventory for later Total-mode admission.
 The optimized WHP/KVM runners also expose `component-release-inputs`: after
 verifying the exact kernel, ZIM consumer, Zstd provider, and public roots, each
 writes its canonical generation/catalog bytes for signing. The two backends

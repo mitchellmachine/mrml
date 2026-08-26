@@ -232,8 +232,10 @@ on Windows and Linux. Manifest V2 classification and public `MRMLRI1`
 derivation are now **IMPLEMENTED**: the builder rejects every unclassified or
 unknown generation member and retains the generation's exact versions and
 digests. Build-tool suites pass 99 tests on Windows and Arch Linux. Signed
-release delivery, kernel inventory construction, and system-wide runtime proof
-remain next.
+release delivery is now **IMPLEMENTED** through backward-compatible general
+SystemRelease v2, which authenticates the exact three-record set and rejects
+inventory/generation mismatch; v1 continues to parse without an inventory.
+Kernel inventory construction and system-wide runtime proof remain next.
 
 Boot-selector groundwork is now **PARTIALLY IMPLEMENTED** without skipping that
 runtime gate. The common UEFI library has one bounded allocation-free UTF-16

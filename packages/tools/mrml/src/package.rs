@@ -8,7 +8,9 @@ use crate::package_lamport::{
     lamport_public_key, lamport_sign, lamport_verify,
 };
 use crate::package_sha3::Sha3_512;
-use crate::system_release::{MAX_SYSTEM_RELEASE_BYTES, encode_system_release};
+use crate::system_release::{
+    MAX_SYSTEM_RELEASE_BYTES, encode_system_release, encode_system_release_with_runtime_inventory,
+};
 
 pub const MAGIC: [u8; 16] = *b"MRML-PACKAGE-v1\0";
 pub const FORMAT_VERSION: u16 = 1;
@@ -34,6 +36,25 @@ pub fn build_system_release(
     let mut output = vec![0; MAX_SYSTEM_RELEASE_BYTES];
     let total = encode_system_release(generation_bytes, catalog_bytes, private, &mut output)
         .map_err(|_| Error::Format)?;
+    output.truncate(total);
+    Ok(output)
+}
+
+pub fn build_system_release_with_runtime_inventory(
+    generation_bytes: &[u8],
+    catalog_bytes: &[u8],
+    runtime_inventory_bytes: &[u8],
+    private: &[u8],
+) -> Result<Vec<u8>, Error> {
+    let mut output = vec![0; MAX_SYSTEM_RELEASE_BYTES];
+    let total = encode_system_release_with_runtime_inventory(
+        generation_bytes,
+        catalog_bytes,
+        runtime_inventory_bytes,
+        private,
+        &mut output,
+    )
+    .map_err(|_| Error::Format)?;
     output.truncate(total);
     Ok(output)
 }
@@ -806,7 +827,9 @@ mod tests {
     use super::*;
     use crate::{
         ComponentInterfaceProvider, ComponentInterfaceRequirement, ComponentProviderForms,
-        SystemGenerationDigestRecord, encode_interface_catalog, encode_system_generation,
+        RuntimeInventoryRecord, RuntimeIsolationClass, RuntimeIsolationPlacement,
+        SystemGenerationDigestRecord, encode_interface_catalog, encode_runtime_inventory,
+        encode_system_generation,
     };
     use std::fs;
 
@@ -923,10 +946,57 @@ mod tests {
         let parsed = crate::parse_system_release(&release).unwrap();
         assert_eq!(parsed.generation().generation(), 7);
         assert_eq!(parsed.interface_catalog().generation(), 7);
+        assert!(parsed.runtime_inventory().is_none());
 
         let mut tampered = release;
         tampered[crate::SYSTEM_RELEASE_HEADER_BYTES + generation_length + catalog_length - 1] ^= 1;
         assert!(crate::parse_system_release(&tampered).is_err());
+
+        let runtime_record = RuntimeInventoryRecord {
+            package_id: "org.mrml.zstd",
+            version: 3,
+            artifact_digest: &[0x2f; 64],
+            class: RuntimeIsolationClass::MicrovmEligible,
+            must_run: true,
+            preferred: RuntimeIsolationPlacement::NativeService,
+            minimum: RuntimeIsolationPlacement::NativeService,
+            maximum: RuntimeIsolationPlacement::Microvm,
+            supported: RuntimeIsolationPlacement::NativeService.bit()
+                | RuntimeIsolationPlacement::Microvm.bit(),
+            reason: "",
+        };
+        let mut runtime = [0; 256];
+        let runtime_length = encode_runtime_inventory(7, &[runtime_record], &mut runtime).unwrap();
+        let release = build_system_release_with_runtime_inventory(
+            &generation[..generation_length],
+            &catalog[..catalog_length],
+            &runtime[..runtime_length],
+            &private_key(),
+        )
+        .unwrap();
+        let parsed = crate::parse_system_release(&release).unwrap();
+        assert_eq!(
+            parsed.runtime_inventory().unwrap().generation(),
+            parsed.generation().generation()
+        );
+        assert_eq!(parsed.runtime_inventory().unwrap().package_count(), 1);
+
+        let mut tampered = release;
+        let runtime_offset =
+            crate::SYSTEM_RELEASE_RUNTIME_HEADER_BYTES + generation_length + catalog_length;
+        tampered[runtime_offset + runtime_length - 1] ^= 1;
+        assert!(crate::parse_system_release(&tampered).is_err());
+
+        let wrong_length = encode_runtime_inventory(8, &[runtime_record], &mut runtime).unwrap();
+        assert!(
+            build_system_release_with_runtime_inventory(
+                &generation[..generation_length],
+                &catalog[..catalog_length],
+                &runtime[..wrong_length],
+                &private_key(),
+            )
+            .is_err()
+        );
     }
 
     #[test]

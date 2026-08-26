@@ -1081,8 +1081,11 @@ catalog to match every identity, version, and artifact digest in canonical
 reason, or changed placement bound is invalid. The catalog carries no recovery,
 launch, or policy authority. The build frontend now derives it from explicit
 Manifest V2 runtime classifications and rejects any unclassified generation
-member; recovery must not synthesize a missing classification. Signed release
-delivery and kernel construction from these records remain **PLANNED**.
+member; recovery must not synthesize a missing classification. General
+SystemRelease v2 now authenticates and exposes the exact catalog, while v1
+remains readable but has no runtime inventory. Recovery must report the latter
+as missing Total evidence rather than reconstructing or guessing it. Kernel
+construction from authenticated v2 records remains **PLANNED**.
 
 Application-launch recovery must retain the exact runtime domain, application
 object, immutable application generation and artifact digest, active system
