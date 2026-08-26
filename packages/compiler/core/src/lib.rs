@@ -36,9 +36,10 @@ pub use ir::{
 pub use lexer::{LexError, LexErrorKind, Lexer, Span, Token, TokenKind};
 pub use object::{
     MAX_X86_64_RELOCATIONS, ObjectError, ObjectFile, X86_64PcRelativeRelocation,
-    X86_64PcRelativeRelocationKind, emit_elf64_x86_64, emit_elf64_x86_64_with_relocation,
-    emit_elf64_x86_64_with_relocations, emit_x86_64_coff, emit_x86_64_coff_with_relocation,
-    emit_x86_64_coff_with_relocations,
+    X86_64PcRelativeRelocationKind, X86_64ReadonlyRelocation, emit_elf64_x86_64,
+    emit_elf64_x86_64_with_readonly_data, emit_elf64_x86_64_with_relocation,
+    emit_elf64_x86_64_with_relocations, emit_x86_64_coff, emit_x86_64_coff_with_readonly_data,
+    emit_x86_64_coff_with_relocation, emit_x86_64_coff_with_relocations,
 };
 pub use parser::{
     Assignment, AssignmentOperator, BodyStatement, ConditionalAssignment,

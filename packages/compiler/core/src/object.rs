@@ -16,7 +16,14 @@ pub enum ObjectError {
     OutputTooSmall,
     OffsetOverflow,
     InvalidRelocationOffset,
+    InvalidReadonlyDataOffset,
     TooManyRelocations,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct X86_64ReadonlyRelocation {
+    pub offset: usize,
+    pub data_offset: usize,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -129,6 +136,15 @@ impl<const MAX_BYTES: usize> Writer<MAX_BYTES> {
         Ok(())
     }
 
+    fn patch_i32(&mut self, offset: usize, value: i32) -> Result<(), ObjectError> {
+        let end = offset.checked_add(4).ok_or(ObjectError::OffsetOverflow)?;
+        self.bytes
+            .get_mut(offset..end)
+            .ok_or(ObjectError::OutputTooSmall)?
+            .copy_from_slice(&value.to_le_bytes());
+        Ok(())
+    }
+
     fn finish(self) -> ObjectFile<MAX_BYTES> {
         ObjectFile {
             bytes: self.bytes,
@@ -161,6 +177,28 @@ fn validate_relocations<const MAX_CODE_BYTES: usize>(
             .checked_add(4)
             .filter(|end| *end <= code.len())
             .ok_or(ObjectError::InvalidRelocationOffset)?;
+    }
+    Ok(())
+}
+
+fn validate_readonly_relocations<const MAX_CODE_BYTES: usize>(
+    code: &MachineCode<MAX_CODE_BYTES>,
+    data: &[u8],
+    relocations: &[X86_64ReadonlyRelocation],
+) -> Result<(), ObjectError> {
+    if relocations.len() > MAX_X86_64_RELOCATIONS {
+        return Err(ObjectError::TooManyRelocations);
+    }
+    for relocation in relocations {
+        relocation
+            .offset
+            .checked_add(4)
+            .filter(|end| *end <= code.len())
+            .ok_or(ObjectError::InvalidRelocationOffset)?;
+        if relocation.data_offset > data.len() {
+            return Err(ObjectError::InvalidReadonlyDataOffset);
+        }
+        i32::try_from(relocation.data_offset).map_err(|_| ObjectError::OffsetOverflow)?;
     }
     Ok(())
 }
@@ -418,6 +456,133 @@ pub fn emit_elf64_x86_64_with_relocations<
     Ok(writer.finish())
 }
 
+pub fn emit_elf64_x86_64_with_readonly_data<
+    const MAX_OBJECT_BYTES: usize,
+    const MAX_CODE_BYTES: usize,
+>(
+    symbol: &str,
+    code: &MachineCode<MAX_CODE_BYTES>,
+    data: &[u8],
+    relocations: &[X86_64ReadonlyRelocation],
+) -> Result<ObjectFile<MAX_OBJECT_BYTES>, ObjectError> {
+    validate_symbol(symbol)?;
+    validate_readonly_relocations(code, data, relocations)?;
+    const SECTION_NAMES: &[u8] = b"\0.text\0.rela.text\0.rodata\0.symtab\0.strtab\0.shstrtab\0";
+    let mut writer = Writer::new();
+
+    writer.write(b"\x7fELF")?;
+    writer.write(&[2, 1, 1, 0, 0])?;
+    writer.zeros(7)?;
+    writer.u16(1)?;
+    writer.u16(62)?;
+    writer.u32(1)?;
+    writer.u64(0)?;
+    writer.u64(0)?;
+    writer.u64(0)?;
+    writer.u32(0)?;
+    writer.u16(ELF_HEADER_BYTES as u16)?;
+    writer.u16(0)?;
+    writer.u16(0)?;
+    writer.u16(ELF_SECTION_HEADER_BYTES as u16)?;
+    writer.u16(7)?;
+    writer.u16(6)?;
+
+    let text_offset = writer.position;
+    writer.write(code.bytes())?;
+    writer.align(8)?;
+    let relocation_offset = writer.position;
+    for relocation in relocations {
+        writer.u64(to_u64(relocation.offset)?)?;
+        writer.u64((1u64 << 32) | 2)?;
+        let addend = i64::try_from(relocation.data_offset)
+            .map_err(|_| ObjectError::OffsetOverflow)?
+            .checked_sub(4)
+            .ok_or(ObjectError::OffsetOverflow)?;
+        writer.i64(addend)?;
+    }
+    let data_offset = writer.position;
+    writer.write(data)?;
+    writer.align(8)?;
+    let symbol_offset = writer.position;
+    writer.zeros(ELF_SYMBOL_BYTES)?;
+    writer.u32(0)?;
+    writer.write(&[0x03, 0])?;
+    writer.u16(3)?;
+    writer.u64(0)?;
+    writer.u64(0)?;
+    writer.u32(1)?;
+    writer.write(&[0x12, 0])?;
+    writer.u16(1)?;
+    writer.u64(0)?;
+    writer.u64(to_u64(code.len())?)?;
+    let string_offset = writer.position;
+    writer.write(&[0])?;
+    writer.write(symbol.as_bytes())?;
+    writer.write(&[0])?;
+    let string_size = writer.position - string_offset;
+    let section_name_offset = writer.position;
+    writer.write(SECTION_NAMES)?;
+    let section_name_size = writer.position - section_name_offset;
+    writer.align(8)?;
+    let section_headers_offset = writer.position;
+    writer.patch_u64(40, to_u64(section_headers_offset)?)?;
+
+    writer.zeros(ELF_SECTION_HEADER_BYTES)?;
+    elf_section(&mut writer, 1, 1, 6, text_offset, code.len(), 0, 0, 16, 0)?;
+    elf_section(
+        &mut writer,
+        7,
+        4,
+        0,
+        relocation_offset,
+        24usize
+            .checked_mul(relocations.len())
+            .ok_or(ObjectError::OffsetOverflow)?,
+        4,
+        1,
+        8,
+        24,
+    )?;
+    elf_section(&mut writer, 18, 1, 2, data_offset, data.len(), 0, 0, 1, 0)?;
+    elf_section(
+        &mut writer,
+        26,
+        2,
+        0,
+        symbol_offset,
+        ELF_SYMBOL_BYTES * 3,
+        5,
+        2,
+        8,
+        ELF_SYMBOL_BYTES,
+    )?;
+    elf_section(
+        &mut writer,
+        34,
+        3,
+        0,
+        string_offset,
+        string_size,
+        0,
+        0,
+        1,
+        0,
+    )?;
+    elf_section(
+        &mut writer,
+        42,
+        3,
+        0,
+        section_name_offset,
+        section_name_size,
+        0,
+        0,
+        1,
+        0,
+    )?;
+    Ok(writer.finish())
+}
+
 #[allow(clippy::too_many_arguments)]
 fn elf_section<const MAX_BYTES: usize>(
     writer: &mut Writer<MAX_BYTES>,
@@ -627,6 +792,108 @@ pub fn emit_x86_64_coff_with_relocations<
     Ok(writer.finish())
 }
 
+pub fn emit_x86_64_coff_with_readonly_data<
+    const MAX_OBJECT_BYTES: usize,
+    const MAX_CODE_BYTES: usize,
+>(
+    symbol: &str,
+    code: &MachineCode<MAX_CODE_BYTES>,
+    data: &[u8],
+    relocations: &[X86_64ReadonlyRelocation],
+) -> Result<ObjectFile<MAX_OBJECT_BYTES>, ObjectError> {
+    validate_symbol(symbol)?;
+    validate_readonly_relocations(code, data, relocations)?;
+    let text_offset = COFF_HEADER_BYTES + COFF_SECTION_HEADER_BYTES * 2;
+    let relocation_offset = text_offset
+        .checked_add(code.len())
+        .ok_or(ObjectError::OffsetOverflow)?;
+    let data_offset = relocation_offset
+        .checked_add(
+            10usize
+                .checked_mul(relocations.len())
+                .ok_or(ObjectError::OffsetOverflow)?,
+        )
+        .ok_or(ObjectError::OffsetOverflow)?;
+    let symbol_offset = data_offset
+        .checked_add(data.len())
+        .ok_or(ObjectError::OffsetOverflow)?;
+    let symbol_long = symbol.len() > 8;
+    let string_table_size = 4usize
+        .checked_add(if symbol_long {
+            symbol
+                .len()
+                .checked_add(1)
+                .ok_or(ObjectError::OffsetOverflow)?
+        } else {
+            0
+        })
+        .ok_or(ObjectError::OffsetOverflow)?;
+    let mut writer = Writer::new();
+
+    writer.u16(0x8664)?;
+    writer.u16(2)?;
+    writer.u32(0)?;
+    writer.u32(to_u32(symbol_offset)?)?;
+    writer.u32(2)?;
+    writer.u16(0)?;
+    writer.u16(0)?;
+
+    writer.write(b".text\0\0\0")?;
+    writer.u32(0)?;
+    writer.u32(0)?;
+    writer.u32(to_u32(code.len())?)?;
+    writer.u32(to_u32(text_offset)?)?;
+    writer.u32(to_u32(relocation_offset)?)?;
+    writer.u32(0)?;
+    writer.u16(u16::try_from(relocations.len()).map_err(|_| ObjectError::OffsetOverflow)?)?;
+    writer.u16(0)?;
+    writer.u32(0x6000_0020)?;
+
+    writer.write(b".rdata\0\0")?;
+    writer.u32(0)?;
+    writer.u32(0)?;
+    writer.u32(to_u32(data.len())?)?;
+    writer.u32(to_u32(data_offset)?)?;
+    writer.u32(0)?;
+    writer.u32(0)?;
+    writer.u16(0)?;
+    writer.u16(0)?;
+    writer.u32(0x4000_0040)?;
+
+    writer.write(code.bytes())?;
+    for relocation in relocations {
+        writer.patch_i32(
+            text_offset
+                .checked_add(relocation.offset)
+                .ok_or(ObjectError::OffsetOverflow)?,
+            i32::try_from(relocation.data_offset).map_err(|_| ObjectError::OffsetOverflow)?,
+        )?;
+    }
+    for relocation in relocations {
+        writer.u32(to_u32(relocation.offset)?)?;
+        writer.u32(1)?;
+        writer.u16(4)?;
+    }
+    writer.write(data)?;
+
+    coff_symbol_name(&mut writer, symbol, 4)?;
+    writer.u32(0)?;
+    writer.i16(1)?;
+    writer.u16(0x20)?;
+    writer.write(&[2, 0])?;
+    writer.write(b".rdata\0\0")?;
+    writer.u32(0)?;
+    writer.i16(2)?;
+    writer.u16(0)?;
+    writer.write(&[3, 0])?;
+    writer.u32(to_u32(string_table_size)?)?;
+    if symbol_long {
+        writer.write(symbol.as_bytes())?;
+        writer.write(&[0])?;
+    }
+    Ok(writer.finish())
+}
+
 fn coff_symbol_name<const MAX_BYTES: usize>(
     writer: &mut Writer<MAX_BYTES>,
     symbol: &str,
@@ -820,6 +1087,64 @@ mod tests {
         assert_eq!(
             emit_x86_64_coff_with_relocations::<2048, 16>("answer", &code, &too_many),
             Err(ObjectError::TooManyRelocations)
+        );
+    }
+
+    #[test]
+    fn emits_bounded_internal_readonly_data_relocations() {
+        let code = code();
+        let data = b"leftRIGHT";
+        let relocations = [
+            X86_64ReadonlyRelocation {
+                offset: 1,
+                data_offset: 0,
+            },
+            X86_64ReadonlyRelocation {
+                offset: 5,
+                data_offset: 4,
+            },
+        ];
+
+        let elf =
+            emit_elf64_x86_64_with_readonly_data::<1024, 16>("answer", &code, data, &relocations)
+                .unwrap();
+        let bytes = elf.bytes();
+        assert_eq!(u16_at(bytes, 60), 7);
+        assert_eq!(u16_at(bytes, 62), 6);
+        let sections = u64_at(bytes, 40) as usize;
+        let rela = sections + 2 * ELF_SECTION_HEADER_BYTES;
+        let rodata = sections + 3 * ELF_SECTION_HEADER_BYTES;
+        let entries = u64_at(bytes, rela + 24) as usize;
+        assert_eq!(u64_at(bytes, entries + 8), (1u64 << 32) | 2);
+        assert_eq!(u64_at(bytes, entries + 16), (-4i64) as u64);
+        assert_eq!(u64_at(bytes, entries + 24 + 16), 0);
+        let readonly_offset = u64_at(bytes, rodata + 24) as usize;
+        assert_eq!(&bytes[readonly_offset..readonly_offset + data.len()], data);
+        assert_eq!(u64_at(bytes, rodata + 8), 2);
+
+        let coff =
+            emit_x86_64_coff_with_readonly_data::<512, 16>("answer", &code, data, &relocations)
+                .unwrap();
+        let bytes = coff.bytes();
+        assert_eq!(u16_at(bytes, 2), 2);
+        assert_eq!(&bytes[60..68], b".rdata\0\0");
+        let text_offset = u32_at(bytes, 40) as usize;
+        let coff_relocations = u32_at(bytes, 44) as usize;
+        let readonly_offset = u32_at(bytes, 80) as usize;
+        assert_eq!(u32_at(bytes, text_offset + 1), 0);
+        assert_eq!(u32_at(bytes, text_offset + 5), 4);
+        assert_eq!(u32_at(bytes, coff_relocations + 4), 1);
+        assert_eq!(u32_at(bytes, coff_relocations + 10 + 4), 1);
+        assert_eq!(&bytes[readonly_offset..readonly_offset + data.len()], data);
+        assert_eq!(u32_at(bytes, 12), 2);
+
+        let invalid = X86_64ReadonlyRelocation {
+            offset: 1,
+            data_offset: data.len() + 1,
+        };
+        assert_eq!(
+            emit_elf64_x86_64_with_readonly_data::<1024, 16>("answer", &code, data, &[invalid]),
+            Err(ObjectError::InvalidReadonlyDataOffset)
         );
     }
 
