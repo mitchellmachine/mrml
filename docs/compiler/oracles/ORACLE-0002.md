@@ -1036,3 +1036,12 @@ suffix was unreachable. MRML deliberately rejects that nonterminal form until
 its bounded control-flow representation can model unreachable statement tails;
 this is a conservative classified delta, not claimed oracle equivalence.
 Temporary sources and metadata were removed.
+
+An independently authored Rust 2024 metadata-only terminal syscall probe against
+this exact toolchain and commit compiled `asm!("int 0x80", ...)` with ordered
+RAX, RDI, RSI, RDX, R10, R8, and R9 `u64` inputs and
+`options(noreturn, nostack)` in a safe function's unsafe block returning `!`.
+This records black-box admission of that exact source form only; it does not
+establish runtime interrupt behavior, other operands or options, returning
+syscalls, general assembly, or physical kernel evidence. Temporary source and
+metadata were removed.

@@ -122,6 +122,7 @@ language as a whole.
 | Modern unsafe-block delta | **PARTIAL** | A typed bounded `UnsafeBlock` expression now scopes the supported unchecked integer operations, unchecked casts/option extraction, and dangerous scalar raw-pointer dereference, reference conversion, read/write/fill/copy/swap/drop, non-wrapping offset, and pointer-difference operations. Nested blocks and bounded scalar locals are retained through constant, IR, semantic, type, and native-emission consumers. Lexically adjacent operations outside the block fail closed. Unsafe blocks around ordinary assembly statements, general statements, unsupported operations, unsafe traits/implementations, extern rules, complete provenance, and complete `unsafe_op_in_unsafe_fn` semantics remain absent; this row supersedes the general-unsafe-block wording above. |
 | Unsafe inline-assembly statement delta | **PARTIAL** | A bounded `ExpressionStatement` now carries an explicit unsafe-context property when the parser recognizes one `unsafe { asm!(...); }` statement, with an optional semicolon after the block. Both read preanalysis and native emission require that property or an unsafe function. Adjacent assembly after an unrelated unsafe block remains unauthorized. Multiple statements in the same unsafe block, nested unsafe assembly blocks, general macro statements, other unsupported assembly, and general statement-block lowering remain absent; this row narrows the assembly limitation in the unsafe-block delta above. |
 | Terminal noreturn assembly delta | **PARTIAL** | The parser marks only the final top-level expression statement as terminal. On x86-64, exact `asm!("int3", options(noreturn, nostack))` (with either option order) is admitted only in that position and an unsafe context, emits `CC`, suppresses the ordinary return sequence, and permits `!` function returns or never-to-value coercion. A following unreachable suffix, conditional placement, other templates/options, general never expressions, and broader unreachable-code lowering fail closed. |
+| Terminal syscall assembly delta | **PARTIAL** | Exact terminal x86-64 `asm!("int 0x80", ...)` accepts seven ordered `u64` inputs in RAX, RDI, RSI, RDX, R10, R8, and R9 plus exact `noreturn, nostack` options in either order. Inputs are parsed into bounded typed storage, preanalyzed left-to-right, loaded through the existing expression emitter, and followed by `CD 80` without a return sequence. Safe unscoped use, reordered/missing operands, wrong types, and nonterminal placement fail closed. Returning and inout syscall forms remain unsupported. |
 | Modern `no_std` systems features | **PARTIAL** | Dependency-free native code generation covers integers, control flow, arrays, bounded scalar tuples, references, slices, raw pointers, COFF/ELF64, UEFI checks, and NVPTX checks. Up to eight typed x86-64 PC-relative branch-or-data relocations are structurally emitted for both native object formats. General assembly, naked entry-point integration, atomics, SIMD, full ABI/layout, general relocation families, linking, and package compilation remain missing. |
 
 Already implemented post-2024 or forward-looking work should be preserved rather
@@ -1855,6 +1856,25 @@ component, 10 conformance, and 339 replacement tests (996 total). General never
 expressions, multiple-statement unsafe blocks, arbitrary noreturn assembly,
 unreachable suffixes, and physical instruction-execution evidence remain
 unsupported.
+
+### Terminal seven-register `int 0x80` checkpoint
+
+The x86-64 inline-assembly representation now retains exactly seven ordered
+`u64` input expressions for the first-party terminal syscall shape: RAX, RDI,
+RSI, RDX, R10, R8, and R9. A fixed-capacity delimiter scanner rejects missing,
+extra, reordered, or unbalanced fields. Read preanalysis and native lowering
+evaluate operands left-to-right, load the declared registers, emit `CD 80`, and
+omit a fabricated return. The form requires terminal placement, an unsafe
+context, and exact `noreturn, nostack` options in either order.
+
+The exact ORACLE-0002 Rust 2024 toolchain accepted the independently authored
+metadata-only comparison probe. ELF64 and COFF replacements exercise the same
+source, while focused controls reject safe unscoped, reordered-register, and
+nonterminal forms. Windows and Arch each passed 646 unit, 1 component, 10
+conformance, and 340 replacement tests (997 total). This is native-object
+encoding evidence only: the interrupt was not executed, and returning/inout
+syscalls, other register sets, general assembly, and physical kernel behavior
+remain unsupported.
 
 ## Non-negotiable implementation rules
 

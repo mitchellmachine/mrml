@@ -60,6 +60,17 @@ named edition can be adopted through a pinned, workspace-wide migration.
 
 ## Latest terminal noreturn assembly milestone
 
+Commit `3602f172` extends the terminal path with exact x86-64
+`asm!("int 0x80", ...)` containing seven ordered `u64` inputs in RAX, RDI,
+RSI, RDX, R10, R8, and R9 and exact `noreturn, nostack` options. The bounded
+parser, read preanalysis, left-to-right evaluation, register loads, and `CD 80`
+emission are covered for ELF64 and COFF. ORACLE-0002 accepts the comparison
+probe. Windows and native Arch Linux WSL each passed 646 library tests, 1
+component probe, 10 conformance tests, and 340 replacement tests: 997 compiler
+tests per host. Returning/inout syscall forms remain the next assembly gate.
+
+### Preceding terminal INT3 milestone
+
 Commit `01c14e8a` adds a typed terminal property to final top-level expression
 statements and lowers exact unsafe x86-64
 `asm!("int3", options(noreturn, nostack))` in either option order. It emits
