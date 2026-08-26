@@ -122,6 +122,7 @@ pub fn analyze_constants<
         let (name, name_span) = match item {
             Item::Function(function) => (function.name, function.name_span),
             Item::Const(constant) | Item::Static(constant) => (constant.name, constant.name_span),
+            Item::Trait(declaration) => (declaration.name, declaration.name_span),
         };
         if symbols[..symbol_count].contains(&Some(name)) {
             return Err(SemanticError {
@@ -133,7 +134,7 @@ pub fn analyze_constants<
 
         let constant = match item {
             Item::Const(constant) | Item::Static(constant) => constant,
-            Item::Function(_) => continue,
+            Item::Function(_) | Item::Trait(_) => continue,
         };
         if table.count == MAX_CONSTANTS {
             return Err(SemanticError {
@@ -5182,6 +5183,15 @@ mod tests {
         let error = analyze_constants::<4, 8, 4, 2>(&module, TargetLayout::X86_64).unwrap_err();
         assert_eq!(error.kind, SemanticErrorKind::DuplicateDefinition);
         assert_eq!(&source[error.span.start..error.span.end], "VALUE");
+    }
+
+    #[test]
+    fn rejects_duplicate_trait_and_value_names() {
+        let source = "trait Value {} const Value: u32 = 1;";
+        let module = Parser::new(source).parse_module::<4, 2>().unwrap();
+        let error = analyze_constants::<4, 8, 4, 2>(&module, TargetLayout::X86_64).unwrap_err();
+        assert_eq!(error.kind, SemanticErrorKind::DuplicateDefinition);
+        assert_eq!(&source[error.span.start..error.span.end], "Value");
     }
 
     #[test]

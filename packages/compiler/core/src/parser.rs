@@ -742,6 +742,14 @@ pub struct ConstItem<'source> {
     pub initializer_span: Span,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct TraitDeclaration<'source> {
+    pub public: bool,
+    pub name: &'source str,
+    pub name_span: Span,
+    pub body: Span,
+}
+
 impl<'source> ConstItem<'source> {
     pub fn parse_initializer<const MAX_NODES: usize>(
         &self,
@@ -755,6 +763,7 @@ pub enum Item<'source, const MAX_PARAMETERS: usize> {
     Function(Function<'source, MAX_PARAMETERS>),
     Const(ConstItem<'source>),
     Static(ConstItem<'source>),
+    Trait(TraitDeclaration<'source>),
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -791,6 +800,7 @@ pub enum ParseErrorKind {
     ExpectedSemicolon,
     ExpectedColon,
     ExpectedBody,
+    UnsupportedTraitBody,
     UnknownLoopLabel,
     UnexpectedClosingDelimiter,
     UnterminatedDelimiter,
@@ -2837,6 +2847,25 @@ impl<'source> Parser<'source> {
         })
     }
 
+    fn trait_declaration(&mut self, public: bool) -> Result<TraitDeclaration<'source>, ParseError> {
+        let name = self.identifier()?;
+        let body = self.body()?;
+        let contents = &self.source[body.start + 1..body.end - 1];
+        if Parser::new(contents).peek()?.is_none() {
+            Ok(TraitDeclaration {
+                public,
+                name: name.text,
+                name_span: name.span,
+                body,
+            })
+        } else {
+            Err(ParseError {
+                kind: ParseErrorKind::UnsupportedTraitBody,
+                span: body,
+            })
+        }
+    }
+
     pub fn parse_module<const MAX_ITEMS: usize, const MAX_PARAMETERS: usize>(
         mut self,
     ) -> Result<Module<'source, MAX_ITEMS, MAX_PARAMETERS>, ParseError> {
@@ -2986,6 +3015,7 @@ impl<'source> Parser<'source> {
                     }
                 }
                 Some("static") if !no_mangle => Item::Static(self.const_item(public)?),
+                Some("trait") if !no_mangle => Item::Trait(self.trait_declaration(public)?),
                 _ => return Err(self.error(ParseErrorKind::ExpectedItem, keyword)),
             };
             module.items[module.item_count] = Some(item);
@@ -3027,6 +3057,42 @@ mod tests {
             &source[function.body_expression_span.start..function.body_expression_span.end],
             function.body_expression
         );
+    }
+
+    #[test]
+    fn parses_bounded_marker_trait_declarations() {
+        let source = "pub trait Sendable {} trait Local { /* marker */ }";
+        let module: TestModule<'_> = Parser::new(source).parse_module().unwrap();
+        assert_eq!(module.item_count(), 2);
+        let Some(Item::Trait(sendable)) = module.items()[0] else {
+            panic!("expected public trait")
+        };
+        let Some(Item::Trait(local)) = module.items()[1] else {
+            panic!("expected private trait")
+        };
+        assert!(sendable.public);
+        assert_eq!(sendable.name, "Sendable");
+        assert_eq!(&source[sendable.body.start..sendable.body.end], "{}");
+        assert!(!local.public);
+        assert_eq!(local.name, "Local");
+    }
+
+    #[test]
+    fn rejects_unsupported_trait_contents_and_attributes() {
+        let body = Parser::new("trait Value { fn value(); }")
+            .parse_module::<2, 2>()
+            .unwrap_err();
+        assert_eq!(body.kind, ParseErrorKind::UnsupportedTraitBody);
+
+        let generic = Parser::new("trait Value<T> {}")
+            .parse_module::<2, 2>()
+            .unwrap_err();
+        assert_eq!(generic.kind, ParseErrorKind::ExpectedBody);
+
+        let attributed = Parser::new("#[unsafe(no_mangle)] trait Value {}")
+            .parse_module::<2, 2>()
+            .unwrap_err();
+        assert_eq!(attributed.kind, ParseErrorKind::ExpectedItem);
     }
 
     #[test]

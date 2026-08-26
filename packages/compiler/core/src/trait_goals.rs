@@ -5,6 +5,8 @@
 //! substitutions without confusing inference variables, placeholders, or
 //! concrete types.
 
+use crate::{Item, Module, Span};
+
 pub const MAX_TRAIT_GOAL_ARGUMENTS: usize = 8;
 pub const MAX_CANONICAL_TRAIT_VARIABLES: usize = 8;
 pub const MAX_TRAIT_IMPLEMENTATIONS: usize = 64;
@@ -17,6 +19,7 @@ pub const MAX_TRAIT_PROJECTION_DEPTH: usize = 16;
 pub const MAX_GENERIC_TRAIT_IMPLEMENTATIONS: usize = 64;
 pub const MAX_TRAIT_GOAL_TERMS: usize = 64;
 pub const MAX_COINDUCTIVE_TRAITS: usize = 64;
+pub const MAX_SOURCE_TRAIT_DECLARATIONS: usize = 64;
 
 #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
 pub struct TraitId(u32);
@@ -28,6 +31,80 @@ impl TraitId {
 
     pub const fn get(self) -> u32 {
         self.0
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct SourceTraitDeclaration<'source> {
+    pub id: TraitId,
+    pub name: &'source str,
+    pub name_span: Span,
+    pub public: bool,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum SourceTraitDeclarationError {
+    TooManyDeclarations,
+    DuplicateName,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct SourceTraitDeclarationTable<'source> {
+    declarations: [Option<SourceTraitDeclaration<'source>>; MAX_SOURCE_TRAIT_DECLARATIONS],
+    count: usize,
+}
+
+impl<'source> SourceTraitDeclarationTable<'source> {
+    pub fn from_module<const MAX_ITEMS: usize, const MAX_PARAMETERS: usize>(
+        module: &Module<'source, MAX_ITEMS, MAX_PARAMETERS>,
+    ) -> Result<Self, SourceTraitDeclarationError> {
+        let mut table = Self {
+            declarations: [None; MAX_SOURCE_TRAIT_DECLARATIONS],
+            count: 0,
+        };
+        for item in module.items().iter().flatten() {
+            let Item::Trait(declaration) = item else {
+                continue;
+            };
+            if table.declarations[..table.count]
+                .iter()
+                .flatten()
+                .any(|known| known.name == declaration.name)
+            {
+                return Err(SourceTraitDeclarationError::DuplicateName);
+            }
+            if table.count == MAX_SOURCE_TRAIT_DECLARATIONS {
+                return Err(SourceTraitDeclarationError::TooManyDeclarations);
+            }
+            table.declarations[table.count] = Some(SourceTraitDeclaration {
+                id: TraitId::new(table.count as u32),
+                name: declaration.name,
+                name_span: declaration.name_span,
+                public: declaration.public,
+            });
+            table.count += 1;
+        }
+        Ok(table)
+    }
+
+    pub const fn len(&self) -> usize {
+        self.count
+    }
+
+    pub const fn is_empty(&self) -> bool {
+        self.count == 0
+    }
+
+    pub fn declarations(&self) -> &[Option<SourceTraitDeclaration<'source>>] {
+        &self.declarations[..self.count]
+    }
+
+    pub fn get(&self, name: &str) -> Option<SourceTraitDeclaration<'source>> {
+        self.declarations()
+            .iter()
+            .flatten()
+            .copied()
+            .find(|declaration| declaration.name == name)
     }
 }
 
@@ -7031,6 +7108,57 @@ fn canonicalize_type(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::Parser;
+
+    #[test]
+    fn lowers_source_trait_declarations_to_stable_bounded_identities() {
+        let source = "trait First {} const VALUE: u8 = 1; pub trait Second {}";
+        let module = Parser::new(source).parse_module::<4, 2>().unwrap();
+        let table = SourceTraitDeclarationTable::from_module(&module).unwrap();
+        assert_eq!(table.len(), 2);
+        let first = table.get("First").unwrap();
+        let second = table.get("Second").unwrap();
+        assert_eq!(first.id, TraitId::new(0));
+        assert_eq!(second.id, TraitId::new(1));
+        assert!(!first.public);
+        assert!(second.public);
+        assert_eq!(
+            &source[second.name_span.start..second.name_span.end],
+            "Second"
+        );
+    }
+
+    #[test]
+    fn source_trait_identity_admission_rejects_duplicates_and_overflow() {
+        let duplicate = Parser::new("trait Same {} trait Same {}")
+            .parse_module::<65, 1>()
+            .unwrap();
+        assert_eq!(
+            SourceTraitDeclarationTable::from_module(&duplicate),
+            Err(SourceTraitDeclarationError::DuplicateName)
+        );
+
+        let source = concat!(
+            "trait T00 {} trait T01 {} trait T02 {} trait T03 {} trait T04 {} ",
+            "trait T05 {} trait T06 {} trait T07 {} trait T08 {} trait T09 {} ",
+            "trait T10 {} trait T11 {} trait T12 {} trait T13 {} trait T14 {} ",
+            "trait T15 {} trait T16 {} trait T17 {} trait T18 {} trait T19 {} ",
+            "trait T20 {} trait T21 {} trait T22 {} trait T23 {} trait T24 {} ",
+            "trait T25 {} trait T26 {} trait T27 {} trait T28 {} trait T29 {} ",
+            "trait T30 {} trait T31 {} trait T32 {} trait T33 {} trait T34 {} ",
+            "trait T35 {} trait T36 {} trait T37 {} trait T38 {} trait T39 {} ",
+            "trait T40 {} trait T41 {} trait T42 {} trait T43 {} trait T44 {} ",
+            "trait T45 {} trait T46 {} trait T47 {} trait T48 {} trait T49 {} ",
+            "trait T50 {} trait T51 {} trait T52 {} trait T53 {} trait T54 {} ",
+            "trait T55 {} trait T56 {} trait T57 {} trait T58 {} trait T59 {} ",
+            "trait T60 {} trait T61 {} trait T62 {} trait T63 {} trait T64 {}",
+        );
+        let overflow = Parser::new(source).parse_module::<65, 1>().unwrap();
+        assert_eq!(
+            SourceTraitDeclarationTable::from_module(&overflow),
+            Err(SourceTraitDeclarationError::TooManyDeclarations)
+        );
+    }
 
     fn concrete_clause(
         trait_id: u32,
