@@ -7620,3 +7620,15 @@ continue, expressions, nested-loop transfer, unstable origins, and general loop
 dataflow remain unsupported. Broader compiler completion remains partial; this
 technical screen is not a clearance or infringement conclusion and does not
 replace independent human dual review.
+
+# 2026-08-26 — Ordered nested-loop return-origin transfer
+
+**Result: NOT_TRIGGERED after the ordered nested-loop return review.** This
+increment reuses parser-recorded action indices and control order to replay a
+fixed-capacity source prefix before each existing nested return. It introduces
+no new fixed-point solver, region or alias analysis, path-sensitive inference,
+optimization, or code-generation algorithm. Local-backed or inconsistent
+reachable exits fail closed, and general nested-loop dataflow remains
+unsupported. Broader compiler completion remains partial; this technical screen
+is not a clearance or infringement conclusion and does not replace independent
+human dual review.
