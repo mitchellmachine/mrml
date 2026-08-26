@@ -4139,6 +4139,13 @@ after its last use. The pinned oracle rejects the overlap with E0503 and accepts
 the restoration control. Both hosts remain at 987 compiler tests; this is exact
 bounded ancestry evidence, not general region inference.
 
+Conditional mutable-parent reassignment now has focused direct-owner mutation
+coverage after a shared child is formed. The initializer owner and optional
+replacement owner both remain protected while the child is live and both become
+writable after its last use. The pinned oracle rejects each overlap with E0503
+and accepts the combined restoration control. Both hosts remain at 987 compiler
+tests; path-sensitive regions remain unsupported.
+
 The projected conditional-return outlives milestone validates every retained
 origin of the latest reference assignment when an exact tuple field is returned.
 The exact dated oracle rejects a conditional local/parameter generation with

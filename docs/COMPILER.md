@@ -1118,6 +1118,13 @@ grandchild's last use. ORACLE-0002 rejects the live case with E0503 and accepts
 the restoration control. This adds exact multi-level evidence to the existing
 bounded ancestry walk; it does not make the walk an unbounded region solver.
 
+Conditional reference-generation joins now have direct owner-mutation evidence
+for a shared child borrowed after an optional mutable-parent reassignment. Both
+the initial owner and the branch replacement owner remain protected until the
+child's last use, then both are restored. ORACLE-0002 rejects each live-owner
+mutation with E0503 and accepts the combined restoration control. This is a
+bounded reaching-definition join, not path-sensitive region selection.
+
 The first modern trait-solver foundation is an explicit bounded implemented-
 goal representation. Stable trait/type/inference/placeholder identities remain
 distinct; canonicalization replaces inference identities with first-occurrence

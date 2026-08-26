@@ -810,6 +810,12 @@ rejected while the grandchild remains live and accepted after its last use.
 ORACLE-0002 reports E0503 for the live case and accepts the control. Windows and
 Arch each pass 987 compiler tests; general indirect regions remain unsupported.
 
+A shared child created after an optional mutable-parent reassignment now has
+direct mutation coverage for both reaching owner generations. Each live-owner
+write is rejected and both owners are writable after the child's last use.
+ORACLE-0002 reports E0503 for both conflicts and accepts the combined control.
+Windows and Arch each pass 987 compiler tests; this remains a bounded CFG join.
+
 Multi-field tuple literals retain a separate projected origin per field. A
 conditional reference element seeds its field only when both arms prove the
 same parameter; unequal first/second origins fail closed. Focused caller tests

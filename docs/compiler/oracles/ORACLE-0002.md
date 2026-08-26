@@ -306,6 +306,15 @@ E0503; moving the grandchild's last use before the mutation compiled. This is
 black-box evidence for that exact three-level chain, not general region
 inference. Temporary probe sources and metadata were removed.
 
+An independently authored Rust 2024 metadata-only probe against this exact
+toolchain and commit initialized a mutable parent from one parameter, optionally
+reassigned it from a second parameter, and then formed a shared child. Separate
+invocations rejected direct mutation of the initializer owner and replacement
+owner with E0503 while the child was used later. A control that used the child
+before mutating both owners compiled. This is exact black-box evidence for the
+bounded conditional join, not general path-sensitive regions. Temporary probe
+sources and metadata were removed.
+
 ## Straight-line tuple-field callee-origin follow-up
 
 On 2026-08-26, an independently authored Rust 2024 metadata-only probe against
