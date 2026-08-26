@@ -7864,3 +7864,14 @@ optimization, or code-generation algorithm. Local-backed and outer-target
 controls fail closed; general nested-loop transfer remains incomplete. Broader
 compiler completion remains partial; this technical screen is not a clearance
 or infringement conclusion and does not replace independent human dual review.
+
+# 2026-08-26 — Labeled nested-loop origin routing
+
+**Result: NOT_TRIGGERED after the labeled nested-control review.** This
+increment routes already parsed outer-target break and continue states into the
+enclosing loop's existing fixed-capacity exit and backedge accumulators. It adds
+no novel fixed-point solver, region or alias analysis, path-sensitive inference,
+optimization, or code-generation algorithm. Ambiguous and local-backed states
+fail closed; general nested-loop fixed points remain incomplete. Broader
+compiler completion remains partial; this technical screen is not a clearance
+or infringement conclusion and does not replace independent human dual review.
