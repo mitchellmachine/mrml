@@ -9775,7 +9775,7 @@ fn preanalyze_runtime_expression_statement_reads<
         return Ok(());
     }
     match x86_64_inline_assembly(statement.expression) {
-        Ok(Some(_)) if !function.unsafe_function => {
+        Ok(Some(_)) if !function.unsafe_function && !statement.unsafe_context => {
             return Err(CodegenError {
                 kind: CodegenErrorKind::InlineAssemblyRequiresUnsafe,
                 span: translate_span(body_start, statement.span),
@@ -30120,7 +30120,7 @@ impl<
             return Ok(());
         }
         match x86_64_inline_assembly(statement.expression) {
-            Ok(Some(_)) if !self.function.unsafe_function => {
+            Ok(Some(_)) if !self.function.unsafe_function && !statement.unsafe_context => {
                 return Err(CodegenError {
                     kind: CodegenErrorKind::InlineAssemblyRequiresUnsafe,
                     span: translate_span(body_start, statement.span),
@@ -34809,6 +34809,7 @@ mod tests {
                 .unwrap();
         for source in [
             "#[unsafe(no_mangle)] pub unsafe extern \"C\" fn answer() -> u64 { asm!(\"nop\"); 42 }",
+            "#[unsafe(no_mangle)] pub extern \"C\" fn answer() -> u64 { unsafe { asm!(\"nop\"); } 42 }",
             "#[unsafe(no_mangle)] pub unsafe extern \"C\" fn answer() -> u64 { asm!(\"nop\", clobber_abi(\"C\")); 42 }",
             "#[unsafe(no_mangle)] pub unsafe extern \"C\" fn answer() -> u64 { asm!(\"nop\", options(nomem, nostack, preserves_flags)); 42 }",
             "#[unsafe(no_mangle)] pub unsafe extern \"C\" fn answer() -> u64 { asm!(\"nop\", options(preserves_flags, nomem)); 42 }",
@@ -34827,6 +34828,7 @@ mod tests {
 
         for source in [
             "#[unsafe(no_mangle)] pub unsafe extern \"C\" fn answer() -> u64 { asm!(\"pause\"); 42 }",
+            "#[unsafe(no_mangle)] pub extern \"C\" fn answer() -> u64 { unsafe { asm!(\"pause\"); } 42 }",
             "#[unsafe(no_mangle)] pub unsafe extern \"C\" fn answer() -> u64 { asm!(\"pause\", options(nomem, nostack, preserves_flags)); 42 }",
         ] {
             let code = compile(source).unwrap();
@@ -35300,6 +35302,10 @@ mod tests {
             ),
             (
                 "#[unsafe(no_mangle)] pub extern \"C\" fn answer() -> u64 { asm!(\"pause\"); 42 }",
+                CodegenErrorKind::InlineAssemblyRequiresUnsafe,
+            ),
+            (
+                "#[unsafe(no_mangle)] pub extern \"C\" fn answer() -> u64 { unsafe { 42; } asm!(\"pause\"); 42 }",
                 CodegenErrorKind::InlineAssemblyRequiresUnsafe,
             ),
             (

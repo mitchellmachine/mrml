@@ -707,6 +707,7 @@ pub enum BodyStatement {
 pub struct ExpressionStatement<'source> {
     pub expression: &'source str,
     pub span: Span,
+    pub unsafe_context: bool,
 }
 
 impl<'source> ExpressionStatement<'source> {
@@ -1630,6 +1631,36 @@ impl<'source> BodyParser<'source> {
     fn expression_statement_record(
         &mut self,
     ) -> Result<Option<ExpressionStatement<'source>>, ParseError> {
+        if self.peek()?.is_some_and(|token| token.text == "unsafe") {
+            let mut probe = self.clone();
+            probe.take()?;
+            let open = probe.take()?;
+            if !open.is_some_and(|token| token.kind == TokenKind::OpenBrace) {
+                return Err(probe.error(ParseErrorKind::ExpectedBody, open));
+            }
+            let Some(mut statement) = probe.plain_expression_statement_record()? else {
+                return Ok(None);
+            };
+            let close = probe.take()?;
+            if !close.is_some_and(|token| token.kind == TokenKind::CloseBrace) {
+                return Err(probe.error(ParseErrorKind::UnexpectedClosingDelimiter, close));
+            }
+            if probe
+                .peek()?
+                .is_some_and(|token| token.kind == TokenKind::Semicolon)
+            {
+                probe.take()?;
+            }
+            statement.unsafe_context = true;
+            *self = probe;
+            return Ok(Some(statement));
+        }
+        self.plain_expression_statement_record()
+    }
+
+    fn plain_expression_statement_record(
+        &mut self,
+    ) -> Result<Option<ExpressionStatement<'source>>, ParseError> {
         let Some(first) = self.peek()? else {
             return Ok(None);
         };
@@ -1641,6 +1672,7 @@ impl<'source> BodyParser<'source> {
                     start: first.span.start,
                     end: first.span.start,
                 },
+                unsafe_context: false,
             }));
         }
         if matches!(
@@ -1666,6 +1698,7 @@ impl<'source> BodyParser<'source> {
         Ok(Some(ExpressionStatement {
             expression: &self.source[span.start..span.end],
             span,
+            unsafe_context: false,
         }))
     }
 
@@ -2141,6 +2174,7 @@ impl<'source> BodyParser<'source> {
                         start: first.span.start,
                         end: first.span.start,
                     },
+                    unsafe_context: false,
                 });
             body.expression_statement_count += 1;
             return Ok(true);
@@ -2150,6 +2184,26 @@ impl<'source> BodyParser<'source> {
             "let" | "while" | "loop" | "return" | "break" | "continue"
         ) {
             return Ok(false);
+        }
+        if first.text == "unsafe" {
+            let mut probe = self.clone();
+            if let Some(statement) = probe.expression_statement_record()? {
+                if body.expression_statement_count == MAX_BODY_EXPRESSION_STATEMENTS {
+                    return Err(
+                        self.error(ParseErrorKind::TooManyExpressionStatements, Some(first))
+                    );
+                }
+                if !body.push_statement(BodyStatement::Expression(body.expression_statement_count))
+                {
+                    return Err(
+                        self.error(ParseErrorKind::TooManyExpressionStatements, Some(first))
+                    );
+                }
+                body.expression_statements[body.expression_statement_count] = Some(statement);
+                body.expression_statement_count += 1;
+                *self = probe;
+                return Ok(true);
+            }
         }
         if first.kind == TokenKind::Identifier {
             let mut assignment_probe = self.clone();
@@ -2177,6 +2231,7 @@ impl<'source> BodyParser<'source> {
         body.expression_statements[body.expression_statement_count] = Some(ExpressionStatement {
             expression: &self.source[span.start..span.end],
             span,
+            unsafe_context: false,
         });
         body.expression_statement_count += 1;
         *self = probe;
@@ -6384,6 +6439,30 @@ mod tests {
             function.parse_body::<1>().unwrap_err().kind,
             ParseErrorKind::TooManyExpressionStatements
         );
+    }
+
+    #[test]
+    fn preserves_scoped_unsafe_expression_statements() {
+        let module =
+            Parser::new("fn probe() -> u32 { unsafe { asm!(\"pause\"); } unsafe { 40 + 2; }; 42 }")
+                .parse_module::<2, 2>()
+                .unwrap();
+        let Some(Item::Function(function)) = module.items()[0] else {
+            panic!("expected function")
+        };
+        let body = function.parse_body::<2>().unwrap();
+        assert_eq!(body.expression_statement_count(), 2);
+        assert_eq!(
+            body.expression_statements()[0].unwrap().expression,
+            "asm!(\"pause\")"
+        );
+        assert!(body.expression_statements()[0].unwrap().unsafe_context);
+        assert_eq!(
+            body.expression_statements()[1].unwrap().expression,
+            "40 + 2"
+        );
+        assert!(body.expression_statements()[1].unwrap().unsafe_context);
+        assert_eq!(body.tail_expression, "42");
     }
 
     #[test]
