@@ -69,8 +69,10 @@ pub use block_service::{
     ExactNativeBlockCorrelationVerifier, InstalledRecoveryBlockSession,
     InstalledRecoverySessionError, MAX_CANONICAL_UEFI_BLOCK_DEVICE_PATH_BYTES,
     MAX_CANONICAL_UEFI_PCI_HOPS, NativeBlockCorrelationError, NativeBlockCorrelationVerifier,
-    PlatformBlockDeviceDescriptor, PlatformBlockDeviceIdentity, PlatformBlockTransport,
-    ServicedBlockDevice, canonical_uefi_block_stable_id, parse_canonical_uefi_sata_block_route,
+    NativeSataBlockRoute, NativeSataRouteError, PlatformBlockDeviceDescriptor,
+    PlatformBlockDeviceIdentity, PlatformBlockTransport, SataNativeBlockCorrelationError,
+    SataNativeBlockCorrelationVerifier, ServicedBlockDevice, canonical_uefi_block_stable_id,
+    parse_canonical_uefi_sata_block_route,
 };
 pub use cow::{
     CowMetadataImage, CowMetadataWrite, CowPlanError, CowPublicationBackend, CowPublicationPlan,

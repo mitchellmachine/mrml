@@ -8670,3 +8670,12 @@ loader carries the record it extracted before `ExitBootServices`. Kernel passes
 563 tests and UEFI 37 tests on Windows and Arch Linux, UEFI cross-builds on both,
 and WHP/KVM runners pass 11/12. This is codec, compile, and hosted parser parity,
 not native enumeration, device authorization, OVMF, or physical evidence.
+
+A transport-neutral **PARTIALLY IMPLEMENTED** native SATA verifier now consumes
+the handed record without reconstructing firmware bytes. Its authority-free
+native descriptor has bounded ACPI/PCI/SATA/optional-partition fields and no
+stable ID. Before atomic registration, the trusted verifier exact-matches every
+route/media field plus the boot stable ID, AHCI transport, controller/media
+generations, and geometry. Storage passes 130 tests on Windows and Arch Linux.
+No AHCI register discovery, DMA, interrupt, queue, block I/O, OVMF, or physical
+hardware was implemented or exercised.

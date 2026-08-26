@@ -1172,6 +1172,16 @@ Windows and Arch Linux, UEFI cross-builds on both, and WHP/KVM runners pass
 11/12. Native device enumeration, correlation, reacquisition, and physical
 execution remain **PLANNED**.
 
+The next native-correlation boundary is **PARTIALLY IMPLEMENTED** without
+claiming a controller driver. `NativeSataBlockRoute` holds only bounded
+independently supplied ACPI/PCI/SATA/optional-partition fields. The trusted
+verifier compares every field with the handed route and also requires its exact
+boot stable ID, AHCI transport, controller/media generations, and block geometry
+before the existing atomic non-authorizing registration. Storage passes 130
+tests on Windows and Arch Linux. A real driver must still derive this descriptor
+from native controller state; installed reacquisition and physical execution
+remain **PLANNED**.
+
 Recovery-session publication is now atomic across a bounded device set.
 `BlockSessionGrant` carries each explicit device/principal/rights decision, and
 `grant_sessions_atomic` preflights every registered identity, rights mask, and

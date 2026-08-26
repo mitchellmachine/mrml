@@ -1,6 +1,8 @@
 use crate::{SUPERBLOCK_BYTES, StorageBlockDevice, StoragePrincipal};
 use mrml_crypto::Sha3_256;
-use mrml_kernel::{InstalledRecoveryBootIdentity, InstalledRecoverySource};
+use mrml_kernel::{
+    InstalledRecoveryBootIdentity, InstalledRecoverySataRoute, InstalledRecoverySource,
+};
 
 pub const MAX_CANONICAL_UEFI_BLOCK_DEVICE_PATH_BYTES: usize = 4096;
 const UEFI_BLOCK_STABLE_ID_DOMAIN: &[u8] = b"MRML-UEFI-BLOCK-ID-v1\0";
@@ -164,6 +166,122 @@ impl CanonicalUefiSataBlockRoute {
             && self.port_multiplier_port == port_multiplier_port
             && self.logical_unit == logical_unit
             && self.media == media
+    }
+}
+
+/// Bounded SATA topology independently reported by a trusted native driver.
+/// It contains no stable identifier, local handle, registration, or I/O right;
+/// correlation must compare every field with the boot-extracted typed route.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct NativeSataBlockRoute {
+    root_hid: u32,
+    root_uid: u32,
+    pci_hops: [CanonicalUefiPciHop; MAX_CANONICAL_UEFI_PCI_HOPS],
+    pci_hop_count: u8,
+    hba_port: u16,
+    port_multiplier_port: u16,
+    logical_unit: u16,
+    media: Option<CanonicalUefiHardDriveMedia>,
+}
+
+impl NativeSataBlockRoute {
+    #[allow(clippy::too_many_arguments)]
+    pub fn new(
+        root_hid: u32,
+        root_uid: u32,
+        pci_hops: &[CanonicalUefiPciHop],
+        hba_port: u16,
+        port_multiplier_port: u16,
+        logical_unit: u16,
+        media: Option<CanonicalUefiHardDriveMedia>,
+    ) -> Result<Self, NativeSataRouteError> {
+        if pci_hops.is_empty()
+            || pci_hops.len() > MAX_CANONICAL_UEFI_PCI_HOPS
+            || hba_port == u16::MAX
+            || media.is_some_and(|value| !canonical_hard_drive_media_valid(value))
+        {
+            return Err(NativeSataRouteError::NonCanonical);
+        }
+        let mut stored_hops = [CanonicalUefiPciHop::default(); MAX_CANONICAL_UEFI_PCI_HOPS];
+        stored_hops[..pci_hops.len()].copy_from_slice(pci_hops);
+        Ok(Self {
+            root_hid,
+            root_uid,
+            pci_hops: stored_hops,
+            pci_hop_count: pci_hops.len() as u8,
+            hba_port,
+            port_multiplier_port,
+            logical_unit,
+            media,
+        })
+    }
+
+    pub const fn root_hid(self) -> u32 {
+        self.root_hid
+    }
+
+    pub const fn root_uid(self) -> u32 {
+        self.root_uid
+    }
+
+    pub fn pci_hops(&self) -> &[CanonicalUefiPciHop] {
+        &self.pci_hops[..usize::from(self.pci_hop_count)]
+    }
+
+    pub const fn hba_port(self) -> u16 {
+        self.hba_port
+    }
+
+    pub const fn port_multiplier_port(self) -> u16 {
+        self.port_multiplier_port
+    }
+
+    pub const fn logical_unit(self) -> u16 {
+        self.logical_unit
+    }
+
+    pub const fn media(self) -> Option<CanonicalUefiHardDriveMedia> {
+        self.media
+    }
+
+    fn matches_handoff(self, handoff: InstalledRecoverySataRoute) -> bool {
+        self.root_hid == handoff.root_hid()
+            && self.root_uid == handoff.root_uid()
+            && self.pci_hops().len() == handoff.pci_hops().len()
+            && self
+                .pci_hops()
+                .iter()
+                .zip(handoff.pci_hops())
+                .all(|(native, boot)| {
+                    native.device() == boot.device() && native.function() == boot.function()
+                })
+            && self.hba_port == handoff.hba_port()
+            && self.port_multiplier_port == handoff.port_multiplier_port()
+            && self.logical_unit == handoff.logical_unit()
+            && native_media_matches_handoff(self.media, handoff.media())
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum NativeSataRouteError {
+    NonCanonical,
+}
+
+fn native_media_matches_handoff(
+    native: Option<CanonicalUefiHardDriveMedia>,
+    handoff: Option<mrml_kernel::InstalledRecoveryHardDriveMedia>,
+) -> bool {
+    match (native, handoff) {
+        (None, None) => true,
+        (Some(native), Some(handoff)) => {
+            native.partition_number() == handoff.partition_number()
+                && native.partition_start() == handoff.partition_start()
+                && native.partition_size() == handoff.partition_size()
+                && native.signature() == handoff.signature()
+                && native.mbr_type() == handoff.mbr_type()
+                && native.signature_type() == handoff.signature_type()
+        }
+        _ => false,
     }
 }
 
@@ -594,6 +712,65 @@ unsafe impl NativeBlockCorrelationVerifier for ExactNativeBlockCorrelationVerifi
             || native.media_generation() != boot.media_generation()
         {
             return Err(ExactNativeBlockCorrelationError::IdentityMismatch);
+        }
+        Ok(())
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum SataNativeBlockCorrelationError {
+    UnsupportedSource,
+    TransportMismatch,
+    BootRouteMismatch,
+    NativeRouteMismatch,
+    IdentityMismatch,
+}
+
+/// Exact typed-route verifier for an AHCI descriptor independently enumerated
+/// by a trusted native driver. It compares topology and media fields directly;
+/// it never reconstructs UEFI device-path bytes or treats a digest as proof.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct SataNativeBlockCorrelationVerifier {
+    handoff: InstalledRecoverySataRoute,
+    native: NativeSataBlockRoute,
+}
+
+impl SataNativeBlockCorrelationVerifier {
+    pub const fn new(handoff: InstalledRecoverySataRoute, native: NativeSataBlockRoute) -> Self {
+        Self { handoff, native }
+    }
+}
+
+// SAFETY: success requires equality of every bounded independently supplied
+// native route field, the adjacent boot identity, and the candidate's exact
+// generations. A driver implementing the discovery side remains trusted to
+// source `native` from hardware rather than copied boot data.
+unsafe impl NativeBlockCorrelationVerifier for SataNativeBlockCorrelationVerifier {
+    type Error = SataNativeBlockCorrelationError;
+
+    fn verify(
+        &mut self,
+        boot: InstalledRecoveryBootIdentity,
+        candidate: PlatformBlockDeviceDescriptor,
+    ) -> Result<(), Self::Error> {
+        if boot.source() != InstalledRecoverySource::Uefi {
+            return Err(SataNativeBlockCorrelationError::UnsupportedSource);
+        }
+        if candidate.identity().transport() != PlatformBlockTransport::Ahci {
+            return Err(SataNativeBlockCorrelationError::TransportMismatch);
+        }
+        if self.handoff.stable_id() != boot.stable_id() {
+            return Err(SataNativeBlockCorrelationError::BootRouteMismatch);
+        }
+        if !self.native.matches_handoff(self.handoff) {
+            return Err(SataNativeBlockCorrelationError::NativeRouteMismatch);
+        }
+        let identity = candidate.identity();
+        if identity.stable_id() != boot.stable_id()
+            || identity.controller_generation() != boot.controller_generation()
+            || identity.media_generation() != boot.media_generation()
+        {
+            return Err(SataNativeBlockCorrelationError::IdentityMismatch);
         }
         Ok(())
     }
@@ -2356,5 +2533,212 @@ mod tests {
         assert_eq!(recovered, encoded);
         drop(volume);
         assert_eq!((backend.calls, backend.flushes), (3, 1));
+    }
+
+    #[test]
+    fn typed_sata_verifier_requires_every_independently_enumerated_route_field() {
+        let boot = installed_boot_identity(
+            InstalledRecoverySource::Uefi,
+            [0x51; 32],
+            7,
+            9,
+            BLOCK_SIZE as u32,
+            BLOCKS as u64,
+        );
+        let boot_hops = [mrml_kernel::InstalledRecoveryPciHop::new(5, 0).unwrap()];
+        let boot_media =
+            mrml_kernel::InstalledRecoveryHardDriveMedia::new(2, 2048, 4096, [0x6a; 16], 2, 2)
+                .unwrap();
+        let handoff = InstalledRecoverySataRoute::new(
+            0x0a03_41d0,
+            0,
+            &boot_hops,
+            3,
+            u16::MAX,
+            0,
+            Some(boot_media),
+            boot.stable_id(),
+        )
+        .unwrap();
+        let native_hops = [CanonicalUefiPciHop::new(5, 0).unwrap()];
+        let native_media =
+            CanonicalUefiHardDriveMedia::new(2, 2048, 4096, [0x6a; 16], 2, 2).unwrap();
+        let native = NativeSataBlockRoute::new(
+            0x0a03_41d0,
+            0,
+            &native_hops,
+            3,
+            u16::MAX,
+            0,
+            Some(native_media),
+        )
+        .unwrap();
+        let candidate = PlatformBlockDeviceDescriptor::new(
+            descriptor(),
+            PlatformBlockDeviceIdentity::new(
+                PlatformBlockTransport::Ahci,
+                boot.stable_id(),
+                boot.controller_generation(),
+                boot.media_generation(),
+            )
+            .unwrap(),
+        );
+        let mut service = BlockService::<1, 1>::new();
+        service
+            .register_correlated_installed_device(
+                &mut SataNativeBlockCorrelationVerifier::new(handoff, native),
+                boot,
+                candidate,
+            )
+            .unwrap();
+        assert_eq!(
+            service
+                .grant_installed_recovery_read_session(boot, owner(7))
+                .unwrap()
+                .platform_descriptor(),
+            candidate
+        );
+
+        let changed_hop = [CanonicalUefiPciHop::new(6, 0).unwrap()];
+        let changed_media =
+            CanonicalUefiHardDriveMedia::new(2, 2048, 4096, [0x6b; 16], 2, 2).unwrap();
+        let changed_routes = [
+            NativeSataBlockRoute::new(
+                native.root_hid() + 1,
+                native.root_uid(),
+                native.pci_hops(),
+                native.hba_port(),
+                native.port_multiplier_port(),
+                native.logical_unit(),
+                native.media(),
+            )
+            .unwrap(),
+            NativeSataBlockRoute::new(
+                native.root_hid(),
+                native.root_uid() + 1,
+                native.pci_hops(),
+                native.hba_port(),
+                native.port_multiplier_port(),
+                native.logical_unit(),
+                native.media(),
+            )
+            .unwrap(),
+            NativeSataBlockRoute::new(
+                native.root_hid(),
+                native.root_uid(),
+                &changed_hop,
+                native.hba_port(),
+                native.port_multiplier_port(),
+                native.logical_unit(),
+                native.media(),
+            )
+            .unwrap(),
+            NativeSataBlockRoute::new(
+                native.root_hid(),
+                native.root_uid(),
+                native.pci_hops(),
+                native.hba_port() + 1,
+                native.port_multiplier_port(),
+                native.logical_unit(),
+                native.media(),
+            )
+            .unwrap(),
+            NativeSataBlockRoute::new(
+                native.root_hid(),
+                native.root_uid(),
+                native.pci_hops(),
+                native.hba_port(),
+                0,
+                native.logical_unit(),
+                native.media(),
+            )
+            .unwrap(),
+            NativeSataBlockRoute::new(
+                native.root_hid(),
+                native.root_uid(),
+                native.pci_hops(),
+                native.hba_port(),
+                native.port_multiplier_port(),
+                1,
+                native.media(),
+            )
+            .unwrap(),
+            NativeSataBlockRoute::new(
+                native.root_hid(),
+                native.root_uid(),
+                native.pci_hops(),
+                native.hba_port(),
+                native.port_multiplier_port(),
+                native.logical_unit(),
+                Some(changed_media),
+            )
+            .unwrap(),
+        ];
+        for changed_route in changed_routes {
+            let mut verifier = SataNativeBlockCorrelationVerifier::new(handoff, changed_route);
+            assert_eq!(
+                verifier.verify(boot, candidate),
+                Err(SataNativeBlockCorrelationError::NativeRouteMismatch)
+            );
+        }
+
+        let changed_handoff = InstalledRecoverySataRoute::new(
+            handoff.root_hid(),
+            handoff.root_uid(),
+            handoff.pci_hops(),
+            handoff.hba_port(),
+            handoff.port_multiplier_port(),
+            handoff.logical_unit(),
+            handoff.media(),
+            [0x52; 32],
+        )
+        .unwrap();
+        let mut verifier = SataNativeBlockCorrelationVerifier::new(changed_handoff, native);
+        assert_eq!(
+            verifier.verify(boot, candidate),
+            Err(SataNativeBlockCorrelationError::BootRouteMismatch)
+        );
+
+        let wrong_transport = PlatformBlockDeviceDescriptor::new(
+            descriptor(),
+            PlatformBlockDeviceIdentity::new(
+                PlatformBlockTransport::Usb,
+                boot.stable_id(),
+                boot.controller_generation(),
+                boot.media_generation(),
+            )
+            .unwrap(),
+        );
+        let mut verifier = SataNativeBlockCorrelationVerifier::new(handoff, native);
+        assert_eq!(
+            verifier.verify(boot, wrong_transport),
+            Err(SataNativeBlockCorrelationError::TransportMismatch)
+        );
+        let changed_generation = PlatformBlockDeviceDescriptor::new(
+            descriptor(),
+            PlatformBlockDeviceIdentity::new(
+                PlatformBlockTransport::Ahci,
+                boot.stable_id(),
+                boot.controller_generation() + 1,
+                boot.media_generation(),
+            )
+            .unwrap(),
+        );
+        assert_eq!(
+            verifier.verify(boot, changed_generation),
+            Err(SataNativeBlockCorrelationError::IdentityMismatch)
+        );
+        let native_boot = installed_boot_identity(
+            InstalledRecoverySource::Ahci,
+            boot.stable_id(),
+            boot.controller_generation(),
+            boot.media_generation(),
+            boot.block_size(),
+            boot.block_count(),
+        );
+        assert_eq!(
+            verifier.verify(native_boot, candidate),
+            Err(SataNativeBlockCorrelationError::UnsupportedSource)
+        );
     }
 }

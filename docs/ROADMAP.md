@@ -3063,3 +3063,14 @@ before `ExitBootServices` and emits them together. Kernel passes 563 tests and
 UEFI 37 tests on Windows and Arch Linux, UEFI cross-builds on both, and the
 WHP/KVM runners pass 11/12. Native enumeration and exact correlation remain the
 next gate; no hardware execution is claimed.
+
+The transport-neutral native-correlation boundary is now **PARTIALLY
+IMPLEMENTED** for that handed SATA route. `NativeSataBlockRoute` accepts one
+bounded independently supplied ACPI/PCI/SATA/optional-partition topology but no
+stable ID, handle, registration, or authority. The trusted
+`SataNativeBlockCorrelationVerifier` exact-matches every route/media field, the
+adjacent boot stable ID, AHCI transport class, controller generation, media
+generation, and geometry before the existing atomic registration path may run.
+Storage passes 130 tests on Windows and Arch Linux. A real native driver that
+derives this descriptor from controller state, plus subsequent installed
+reacquisition and hardware evidence, remain **PLANNED**.

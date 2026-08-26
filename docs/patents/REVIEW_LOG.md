@@ -38,6 +38,17 @@ route reconstruction, device protocol, DMA, queue, or hardware behavior. Native
 AHCI, USB, VirtIO, and physical-route mechanisms retain their existing
 `TRIGGERED` reviews; this technical screen is not legal clearance.
 
+## 2026-08-26 — Transport-neutral native SATA route verifier
+
+Patent review: **NOT_TRIGGERED** for this bounded equality/control-plane
+increment. It defines an authority-free typed descriptor and compares existing
+ACPI/PCI/SATA/partition scalars, generations, transport, geometry, and identity
+for exact equality before the already reviewed atomic registration. It does not
+discover a controller, access AHCI registers, issue commands, allocate DMA,
+handle interrupts, schedule queues, or perform block I/O. Actual AHCI/native
+enumeration and broader adaptive/Total-MicroVM work retain their existing
+`TRIGGERED` reviews; this is not patent clearance.
+
 ## 2026-08-26 — Typed SATA route handoff integration
 
 Patent review: **NOT_TRIGGERED** for placing the already reviewed canonical

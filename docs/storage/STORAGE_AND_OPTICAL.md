@@ -250,6 +250,16 @@ on both, and WHP/KVM runners pass 11/12. Native enumeration and correlation
 remain **PLANNED**; no AHCI, USB, VirtIO, OVMF, or physical-device evidence is
 claimed.
 
+The native side of this equality boundary is now **PARTIALLY IMPLEMENTED** as
+`NativeSataBlockRoute` and `SataNativeBlockCorrelationVerifier`. A trusted
+driver supplies bounded ACPI/PCI/SATA/optional-partition fields with no copied
+stable ID or authority. The verifier exact-matches every field against the
+handed route and separately requires the boot stable ID, AHCI transport,
+controller/media generations, and geometry before existing atomic registration.
+Storage passes 130 tests on Windows and Arch Linux. Native controller discovery,
+AHCI register/DMA/interrupt mechanics, reacquisition, and physical evidence
+remain **PLANNED**.
+
 The `mrml` frontend may expose structured `disk`, `filesystem`, `optical`, and
 `media` operations. The PowerShell-inspired shell projects the same backend as
 typed `Get-*`, `Test-*`, `Initialize-*`, `New-*`, `Format-*`, `Write-*`, and
