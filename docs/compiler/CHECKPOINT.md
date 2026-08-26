@@ -1314,6 +1314,18 @@ an exact repeated requirement still fails admission. Windows gnullvm and native
 Arch Linux WSL each pass 599 library tests, one component-interface probe, 10
 conformance tests, and 335 replacement tests: 945 compiler tests per host.
 
+The trait-declaration requirement milestone parses and admits up to eight flat
+implemented-trait predicates after a declaration `where` keyword. `Self`, a
+complete declaration parameter, and concrete nominal types substitute through
+generic, conditional, and exact implementation clauses; prerequisites must
+prove before the declared trait is available. Unknown traits, wrong arity,
+duplicates, and compound terms fail closed during declaration admission.
+Projection-equality declaration requirements are parsed but rejected by a
+specific unsupported error for the next bounded slice. Windows gnullvm and
+native Arch Linux WSL each pass 603 library tests, one component-interface
+probe, 10 conformance tests, and 335 replacement tests: 949 compiler tests per
+host.
+
 The premise-bearing rigid-normalization milestone proves the selected generic
 implementation's instantiated trait and projection predicates before exposing
 its associated value. It shares the caller's 16-frame rigid proof stack and
