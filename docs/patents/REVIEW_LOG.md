@@ -7781,3 +7781,14 @@ Ambiguous and local-backed results fail closed; block-terminal control remains
 unsupported. Broader compiler completion remains partial; this technical screen
 is not a clearance or infringement conclusion and does not replace independent
 human dual review.
+
+# 2026-08-26 — Conditional loop-block control routing
+
+**Result: NOT_TRIGGERED after the loop-block control review.** This increment
+routes already parsed terminal break and continue arm states into the existing
+fixed-capacity exit and backedge accumulators. It adds no novel fixed-point
+solver, region or alias analysis, path-sensitive inference, optimization, or
+code-generation algorithm. Ambiguous and local-backed results fail closed;
+general nested-loop transfer remains unsupported. Broader compiler completion
+remains partial; this technical screen is not a clearance or infringement
+conclusion and does not replace independent human dual review.
