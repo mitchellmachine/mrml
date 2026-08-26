@@ -4099,6 +4099,15 @@ terminal and nested-loop handling preserves its previous projected-only guard.
 The pinned oracle accepts stable same-origin arm reborrows and rejects a local-
 backed arm with E0515. Both hosts remain at 989 compiler tests; this is not a
 general loop fixed point or region solver.
+Mixed terminal/fallthrough arms now use two distinct destinations in that same
+bounded transfer. A supported `return` contributes function-exit origin evidence
+and is excluded from the backedge join; nonterminal arms alone form iteration
+state before the mandatory zero-iteration intersection. Direct alias assignment
+remains nonterminal-only. The pinned oracle accepts the stable parameter-backed
+pair and rejects a local-backed fallthrough that can reach a subsequent return
+with E0515. Both hosts remain at 989 compiler tests. Break/continue, expressions,
+terminal direct assignment, nested-loop transfer, and general fixed points remain
+unsupported.
 
 Exact typed tuple literals now seed the same projected state when a local is
 declared. Every reference field is checked against the declared tuple element

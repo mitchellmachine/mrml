@@ -1238,6 +1238,12 @@ iteration state. Direct assignments to existing reference aliases are admitted
 only on this fallthrough path; terminal and nested-loop paths retain their prior
 fail-closed restrictions. ORACLE-0002 accepts stable reborrows and rejects a
 local-backed arm with E0515.
+That transfer now also separates mixed terminal and fallthrough arms. A supported
+`return` contributes only function-exit origin evidence, while nonterminal arms
+alone join into the iteration/backedge state; the zero-iteration path remains
+mandatory. Direct alias assignments stay limited to nonterminal arms. ORACLE-
+0002 accepts the stable parameter-backed combination and rejects a local-backed
+fallthrough whose origin can reach a later return with E0515.
 
 The first modern trait-solver foundation is an explicit bounded implemented-
 goal representation. Stable trait/type/inference/placeholder identities remain

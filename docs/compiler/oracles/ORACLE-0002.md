@@ -249,6 +249,14 @@ the returned alias with function-local storage, reporting E0515. This is exact
 bounded loop-arm fallthrough evidence, not general loop dataflow or named-
 lifetime inference. Temporary sources and metadata were removed.
 
+A mixed loop-arm pair returned the current parameter-backed alias from one arm
+and performed a stable reborrow on the other arm before the backedge. This exact
+toolchain compiled that form. It rejected a companion whose fallthrough arm
+stored a function-local reference, because a subsequent iteration could take the
+returning arm, reporting E0515. This is exact exit-versus-backedge evidence, not
+general loop fixed-point or named-lifetime inference. Temporary sources and
+metadata were removed.
+
 An independently authored Rust 2024 metadata-only probe against this exact
 toolchain and commit accepted a mutable scalar reference returned from index
 zero of a mutable two-element array-reference parameter. The caller could reuse

@@ -897,6 +897,15 @@ transfers, expressions, and unstable origins remain conservative. ORACLE-0002
 accepts the stable same-origin reborrow and rejects a local-backed arm with
 E0515. Windows and Arch remain at 989 compiler tests per host.
 
+Mixed conditional loop arms now partition exit and backedge evidence: supported
+terminal returns merge directly into the function result, while only nonterminal
+arms join the one-iteration state before its zero-iteration intersection. Direct
+alias assignment remains enabled only on nonterminal arms; terminal assignments,
+break, continue, expressions, and nested-loop transfer remain conservative.
+ORACLE-0002 accepts a parameter-backed return/stable-fallthrough pair and rejects
+a local-backed fallthrough that can reach a later return with E0515. Windows and
+Arch remain at 989 compiler tests per host.
+
 Direct and conditional return sites inside supported `loop` blocks now retain
 the projected callee summary's shared-child origin. Parameter-backed second
 arguments pass and matching loop-local second arguments fail closed. ORACLE-0002
