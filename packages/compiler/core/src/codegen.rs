@@ -30827,6 +30827,10 @@ mod tests {
                 count: 2,
                 mutable: true,
             };
+            let slice_reference = ScalarType::SliceReference {
+                element: crate::CallArrayElement::Integer(crate::IntegerType::U16),
+                mutable: true,
+            };
             let mut parameters = [None; MAX_PARAMETERS];
             match (name, argument_count) {
                 ("array_element", 1) => {
@@ -30836,6 +30840,20 @@ mod tests {
                     });
                     Some(RuntimeCallTarget {
                         name: "array_element",
+                        parameters,
+                        parameter_count: 1,
+                        return_type: reference,
+                        return_type_name: "&mut u16",
+                        body_expression: "&mut values[0]",
+                    })
+                }
+                ("slice_element", 1) => {
+                    parameters[0] = Some(RuntimeCallParameter {
+                        name: "values",
+                        ty: slice_reference,
+                    });
+                    Some(RuntimeCallTarget {
+                        name: "slice_element",
                         parameters,
                         parameter_count: 1,
                         return_type: reference,
@@ -35181,12 +35199,36 @@ mod tests {
             "let restored: &mut u16 = &mut input[0]; *restored }"
         ))
         .unwrap();
+        assert_eq!(
+            analyze(concat!(
+                "fn value(input: &mut [u16]) -> u16 { ",
+                "let returned: &mut u16 = slice_element(input); ",
+                "let competing: &mut u16 = &mut input[0]; ",
+                "*competing += 1; *returned }"
+            ))
+            .unwrap_err()
+            .kind,
+            CodegenErrorKind::RuntimeBorrowConflict
+        );
+        analyze(concat!(
+            "fn value(input: &mut [u16]) -> u16 { ",
+            "let returned: &mut u16 = slice_element(input); *returned += 1; ",
+            "let restored: &mut u16 = &mut input[0]; *restored }"
+        ))
+        .unwrap();
 
         let target = MutableReferenceCallResolver
             .resolve_runtime_call::<2>("array_element", 1)
             .unwrap();
         assert_eq!(
             runtime_reference_call_origin_parameter::<2, 16>(target),
+            Some(0)
+        );
+        let slice_target = MutableReferenceCallResolver
+            .resolve_runtime_call::<2>("slice_element", 1)
+            .unwrap();
+        assert_eq!(
+            runtime_reference_call_origin_parameter::<2, 16>(slice_target),
             Some(0)
         );
         assert_eq!(
