@@ -2030,6 +2030,23 @@ fat-reference assignment remains fail-closed pending its distinct branch value-
 materialization/origin path; slices, mutable `str`, aggregates, and general fat-
 pointer semantics are not claimed.
 
+### Conditional string-reference delayed-initialization checkpoint
+
+Exhaustive conditional first writes to an uninitialized shared `&str` local now
+have replacement coverage for the existing branch-aware two-machine-word value
+transport. The initializedness intersection requires both arms, and the
+assigned-loan/outlives path retains the parameter-backed origin through the
+join; no new origin or provenance rule is inferred.
+
+The exact ORACLE-0002 Rust 2024 toolchain accepted an independently authored
+conditional form whose two arms assign the same parameter-backed `&str` before
+return. ELF64 and COFF replacements cover that accepted form, while the existing
+missing-arm control remains rejected. Windows and Arch each passed 647 unit, 1
+component, 10 conformance, and 349 replacement tests (1,007 total). Static
+string literals still lack runtime object emission, and distinct-origin fat
+references, slices, mutable `str`, and general fat-pointer semantics are not
+claimed.
+
 ### Conditional thin-reference first-write checkpoint
 
 Exhaustive conditional first writes to one uninitialized thin-reference local

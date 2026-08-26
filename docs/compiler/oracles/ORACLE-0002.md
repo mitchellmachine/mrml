@@ -1129,3 +1129,11 @@ form without an `else` arm failed with E0381. This is black-box evidence for the
 exact direct two-word reference and missing-arm positions only; it does not
 establish conditional fat-reference value joins, slices, mutable `str`, or
 general fat-pointer semantics. Temporary sources and metadata were removed.
+
+An independently authored Rust 2024 metadata-only conditional string-reference
+probe against this exact toolchain and commit accepted exhaustive assignment of
+the same parameter-backed `&str` in both arms before return. This is black-box
+evidence for that exact conditional two-word reference and origin only; it does
+not establish static string-literal emission, distinct-origin fat-reference
+joins, slices, mutable `str`, or general fat-pointer semantics. The temporary
+source and metadata were removed.
