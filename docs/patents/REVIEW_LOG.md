@@ -7067,3 +7067,14 @@ generation algorithm. Deeper places, other element types, general memory effects
 and general assembly remain absent. Broader compiler completion remains partial;
 this technical screen is not a clearance or infringement conclusion and does
 not replace independent human dual review.
+
+# 2026-08-26 — Mutable-reference parameter loan invalidation
+
+**Result: NOT_TRIGGERED after the parameter-root invalidation review.** This
+increment applies MRML's existing bounded loan-mutation effect and liveness
+checks to conventional dereference writes through incoming mutable-reference
+parameters. It adds no novel borrow-checking, region-inference, alias-analysis,
+optimization, or code-generation algorithm. General regions and arbitrary
+projected-place invalidation remain absent. Broader compiler completion remains
+partial; this technical screen is not a clearance or infringement conclusion
+and does not replace independent human dual review.
