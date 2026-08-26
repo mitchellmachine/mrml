@@ -7838,11 +7838,16 @@ reservations share the same allowance, and invalid time, boundary crossing,
 exhaustion, stale identity, or missing execute authority rejects before entry.
 The authorization also records the exact domain, in-range vCPU index,
 affinity-allowed logical CPU, and bounded priority; hostile substitutions leave
-the runtime counter unchanged. A reservation may have only one linear in-flight
-slice. Exact reconciliation after backend return refunds only verified unused
-precharge. Replay and mismatched slices fail without mutation; release and
-period rollover reject an in-flight slice; overrun retains its complete charge
-and fails closed.
+the runtime counter unchanged. A reservation now has one fixed linear in-flight
+slot per vCPU, bounded by the existing 64-vCPU affinity representation. Sibling
+slices may be authorized concurrently but all precharge the same period
+allowance. Exact per-vCPU reconciliation after backend return refunds only that
+slice's verified unused precharge. Replay and substitutions of vCPU, logical
+CPU, priority, start, or charge fail without mutation; release and period
+rollover reject while any slot remains in flight; overrun retains its complete
+charge and fails closed. Windows and Arch Linux kernel simulation suites pass
+511 tests. The focused signed hosted component profile remains one vCPU, so
+WHP/KVM SMP runtime enforcement is a later gate.
 
 Both runners now precharge the remaining bounded 100-millisecond controlled-
 probe allowance and reconcile host-wall elapsed time around every component
@@ -7867,7 +7872,7 @@ closed. Focused live tests reject logical CPU 64 before entry and still expire
 the infinite-loop guest on authorized logical CPU 0.
 
 The ordinary signed component probes also complete through the same affinity
-and deadline path: Windows and Arch Linux kernel suites pass 510 tests, WHP
+and deadline path: Windows and Arch Linux kernel suites pass 511 tests, WHP
 passes 7, and KVM passes 8. Fresh optimized probes reported `logical_cpu=0`,
 `affinity=host-enforced`, and `priority=host-normal`, with 1,466 microseconds
 under WHP and 1,385 microseconds under KVM; KVM reported `eligible=1`,

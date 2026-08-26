@@ -330,8 +330,15 @@ The CPU gate now also precharges an exact bounded runtime slice before every
 focused component vCPU entry. One period allowance is shared across all
 reservations under the budget, so parallel vCPUs cannot amplify time authority;
 the dispatch also binds the reservation domain, in-range vCPU index, allowed
-logical CPU, and priority ceiling. Each issued slice is linear: another slice,
-reservation release, and period rollover are denied until exact reconciliation.
+logical CPU, and priority ceiling. Each issued slice is linear: another slice
+for that vCPU, reservation release, and period rollover are denied until exact
+reconciliation.
+The kernel now retains a separate fixed slice slot for every vCPU in one
+reservation, bounded by the existing 64-vCPU affinity model. Simultaneous
+sibling slices remain charged to the same allowance, reconcile independently,
+and cannot be substituted by changing vCPU, logical CPU, priority, start, or
+charge. Any unresolved sibling continues to block release and rollover. This
+does not yet make the focused signed hosted profile multi-vCPU.
 The runner measures host-wall elapsed time around backend entry, refunds only a
 verified underrun, and retains the complete precharge on overrun. Replay,
 substitution, exhaustion, invalid time, affinity, priority, or vCPU selection

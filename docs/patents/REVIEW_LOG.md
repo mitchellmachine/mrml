@@ -5474,3 +5474,16 @@ selection, coherence, proof-search, caching, or code-generation mechanism.
 Broader trait solving and Rust conformance remain partial; this agent review
 does not establish clearance or infringement and does not replace independent
 human dual review.
+
+# 2026-08-26 — Kernel parallel-vCPU runtime-slice accounting
+
+**Result: NOT_TRIGGERED after the fixed-period CPU-budget and linear runtime-
+reconciliation reviews.** This increment conventionally replaces one in-flight
+bookkeeping tuple with fixed per-index tuples and a bounded bit mask so existing
+vCPU reservations can retain and reconcile simultaneous precharges against the
+same non-amplifying allowance. It introduces no scheduler algorithm, placement
+policy, hypervisor mechanism, priority mapping, or hardware interface. Hosted
+WHP/KVM SMP runtime enforcement, broader scheduler policy, and the Total MicroVM
+architecture retain their existing `TRIGGERED` reviews. This technical screen
+does not establish clearance or infringement and does not replace independent
+human dual review.

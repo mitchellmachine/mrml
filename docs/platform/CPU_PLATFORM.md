@@ -149,9 +149,17 @@ Rejected vCPU, affinity, or priority choices consume no runtime. Each issued
 slice is now linear and blocks reservation release and period rollover until
 exactly reconciled. Reconciliation uses the observed backend-entry wall elapsed
 time, refunds only a verified underrun, rejects replay or substitution, and
-retains the full precharge on overrun. A shared `DeadlineVmBackend` contract now
-requires cancellation to be armed before entry and the cancellation worker to
-retire before native VM state may be released. WHP cancels the exact VP through
+retains the full precharge on overrun. Each reservation now has fixed per-vCPU
+in-flight state through the existing 64-vCPU ceiling. Multiple sibling slices
+may be live concurrently, but they
+precharge the same budget allowance and retain exact vCPU, logical-CPU,
+priority, start, and charge decisions for independent reconciliation. No sibling
+can refund another's authority, and any unresolved slot blocks release and
+period rollover. This remains allocation-free kernel simulation groundwork;
+the focused signed hosted component profile remains one vCPU. A shared
+`DeadlineVmBackend` contract now requires cancellation to be armed before entry
+and the cancellation worker to retire before native VM state may be released.
+WHP cancels the exact VP through
 the platform API. KVM sets `kvm_run.immediate_exit` before sending a reserved
 no-op signal to interrupt the exact runner thread, covering the pre-entry signal
 race. Focused infinite-loop guests expire on both live hosted backends. The

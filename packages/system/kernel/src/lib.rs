@@ -72,7 +72,7 @@ pub use component_memory::{
 };
 pub use cpu_resource::{
     CpuBudgetId, CpuBudgetSpec, CpuBudgetTable, CpuBudgetUsage, CpuResourceError,
-    CpuRuntimeReconciliation, CpuRuntimeSlice, VcpuReservationId,
+    CpuRuntimeReconciliation, CpuRuntimeSlice, MAX_CPU_BUDGET_VCPUS, VcpuReservationId,
 };
 pub use early::{EarlyKernelContext, EarlyKernelError};
 pub use framebuffer::{Color, FramebufferError, FramebufferInfo, FramebufferSurface, PixelFormat};

@@ -155,6 +155,12 @@ explicitly and downgrade the status rather than guessing.
   refund it from reconstructed data. Retain its full charge and fail the domain
   closed unless the exact live accounting instance can reconcile the matching
   slice; reservation release and period rollover remain blocked meanwhile.
+  A multi-vCPU reservation retains one fixed in-flight slot per vCPU, but every
+  slot charges one shared allowance. Recovery must reconcile each exact vCPU,
+  logical-CPU, priority, start, and charge tuple independently; it must never
+  merge sibling slots, transfer a refund, or clear the reservation merely
+  because one sibling returned. Any unresolved bit retains its charge and keeps
+  release and rollover blocked.
   A hosted deadline worker is also linear transient state: VM teardown, run-page
   unmapping, VP deletion, and accounting reconciliation must wait until the
   exact worker has retired. Recovery must never reconstruct a cancellation

@@ -2,6 +2,8 @@ use core::array;
 
 use crate::{Capability, CapabilityError, CapabilitySpace, ObjectId, Rights};
 
+pub const MAX_CPU_BUDGET_VCPUS: u16 = 64;
+
 const CPU_BUDGET_RIGHTS: Rights = Rights::ALLOCATE
     .union(Rights::CONTROL)
     .union(Rights::INSPECT)
@@ -38,6 +40,7 @@ impl CpuBudgetSpec {
         affinity_mask: u64,
     ) -> Result<Self, CpuResourceError> {
         if maximum_parallelism == 0
+            || maximum_parallelism > MAX_CPU_BUDGET_VCPUS
             || runtime_micros == 0
             || period_micros == 0
             || runtime_micros > period_micros
@@ -254,9 +257,11 @@ struct ReservationEntry {
     budget: CpuBudgetId,
     domain: ObjectId,
     parallelism: u16,
-    runtime_slice_start_micros: u64,
-    runtime_slice_charged_micros: u32,
-    runtime_slice_in_flight: bool,
+    runtime_slice_start_micros: [u64; MAX_CPU_BUDGET_VCPUS as usize],
+    runtime_slice_charged_micros: [u32; MAX_CPU_BUDGET_VCPUS as usize],
+    runtime_slice_logical_cpu: [u8; MAX_CPU_BUDGET_VCPUS as usize],
+    runtime_slice_priority: [u8; MAX_CPU_BUDGET_VCPUS as usize],
+    runtime_slice_in_flight: u64,
     occupied: bool,
 }
 
@@ -269,9 +274,11 @@ impl ReservationEntry {
         },
         domain: ObjectId(0),
         parallelism: 0,
-        runtime_slice_start_micros: 0,
-        runtime_slice_charged_micros: 0,
-        runtime_slice_in_flight: false,
+        runtime_slice_start_micros: [0; MAX_CPU_BUDGET_VCPUS as usize],
+        runtime_slice_charged_micros: [0; MAX_CPU_BUDGET_VCPUS as usize],
+        runtime_slice_logical_cpu: [0; MAX_CPU_BUDGET_VCPUS as usize],
+        runtime_slice_priority: [0; MAX_CPU_BUDGET_VCPUS as usize],
+        runtime_slice_in_flight: 0,
         occupied: false,
     };
 }
@@ -378,9 +385,11 @@ impl<const B: usize, const R: usize> CpuBudgetTable<B, R> {
             budget,
             domain,
             parallelism,
-            runtime_slice_start_micros: 0,
-            runtime_slice_charged_micros: 0,
-            runtime_slice_in_flight: false,
+            runtime_slice_start_micros: [0; MAX_CPU_BUDGET_VCPUS as usize],
+            runtime_slice_charged_micros: [0; MAX_CPU_BUDGET_VCPUS as usize],
+            runtime_slice_logical_cpu: [0; MAX_CPU_BUDGET_VCPUS as usize],
+            runtime_slice_priority: [0; MAX_CPU_BUDGET_VCPUS as usize],
+            runtime_slice_in_flight: 0,
             occupied: true,
         };
         Ok(VcpuReservationId {
@@ -402,7 +411,7 @@ impl<const B: usize, const R: usize> CpuBudgetTable<B, R> {
             .filter(|entry| entry.occupied && entry.generation == reservation.generation)
             .ok_or(CpuResourceError::InvalidReservation)?;
         let budget = *self.budget(entry.budget)?;
-        if entry.runtime_slice_in_flight {
+        if entry.runtime_slice_in_flight != 0 {
             return Err(CpuResourceError::RuntimeSliceInFlight);
         }
         if capabilities.authorize(capability, Rights::CONTROL)? != budget.authority {
@@ -476,7 +485,10 @@ impl<const B: usize, const R: usize> CpuBudgetTable<B, R> {
         }
         let reservation_id = reservation;
         let reservation = self.reservation(reservation_id)?;
-        if reservation.runtime_slice_in_flight {
+        let vcpu_bit = 1_u64
+            .checked_shl(u32::from(vcpu_index))
+            .ok_or(CpuResourceError::VcpuOutsideReservation)?;
+        if reservation.runtime_slice_in_flight & vcpu_bit != 0 {
             return Err(CpuResourceError::RuntimeSliceInFlight);
         }
         let budget = *self.budget(reservation.budget)?;
@@ -547,9 +559,12 @@ impl<const B: usize, const R: usize> CpuBudgetTable<B, R> {
             .reservations
             .get_mut(reservation_id.slot as usize)
             .ok_or(CpuResourceError::InvalidReservation)?;
-        reservation_mut.runtime_slice_start_micros = slice_start_micros;
-        reservation_mut.runtime_slice_charged_micros = slice_micros;
-        reservation_mut.runtime_slice_in_flight = true;
+        let vcpu_slot = usize::from(vcpu_index);
+        reservation_mut.runtime_slice_start_micros[vcpu_slot] = slice_start_micros;
+        reservation_mut.runtime_slice_charged_micros[vcpu_slot] = slice_micros;
+        reservation_mut.runtime_slice_logical_cpu[vcpu_slot] = logical_cpu;
+        reservation_mut.runtime_slice_priority[vcpu_slot] = priority;
+        reservation_mut.runtime_slice_in_flight |= vcpu_bit;
         Ok(CpuRuntimeSlice {
             reservation: reservation_id,
             domain: reservation.domain,
@@ -585,12 +600,21 @@ impl<const B: usize, const R: usize> CpuBudgetTable<B, R> {
                 CapabilityError::PermissionDenied,
             ));
         }
-        if !reservation.runtime_slice_in_flight {
+        if slice.vcpu_index >= reservation.parallelism {
+            return Err(CpuResourceError::RuntimeSliceMismatch);
+        }
+        let vcpu_bit = 1_u64
+            .checked_shl(u32::from(slice.vcpu_index))
+            .ok_or(CpuResourceError::RuntimeSliceMismatch)?;
+        if reservation.runtime_slice_in_flight & vcpu_bit == 0 {
             return Err(CpuResourceError::RuntimeSliceMissing);
         }
+        let vcpu_slot = usize::from(slice.vcpu_index);
         if slice.domain != reservation.domain
-            || slice.slice_start_micros != reservation.runtime_slice_start_micros
-            || slice.charged_micros != reservation.runtime_slice_charged_micros
+            || slice.slice_start_micros != reservation.runtime_slice_start_micros[vcpu_slot]
+            || slice.charged_micros != reservation.runtime_slice_charged_micros[vcpu_slot]
+            || slice.logical_cpu != reservation.runtime_slice_logical_cpu[vcpu_slot]
+            || slice.priority != reservation.runtime_slice_priority[vcpu_slot]
         {
             return Err(CpuResourceError::RuntimeSliceMismatch);
         }
@@ -620,9 +644,11 @@ impl<const B: usize, const R: usize> CpuBudgetTable<B, R> {
             budget_mut.consumed_runtime_micros
         };
         let reservation_mut = &mut self.reservations[slot];
-        reservation_mut.runtime_slice_start_micros = 0;
-        reservation_mut.runtime_slice_charged_micros = 0;
-        reservation_mut.runtime_slice_in_flight = false;
+        reservation_mut.runtime_slice_start_micros[vcpu_slot] = 0;
+        reservation_mut.runtime_slice_charged_micros[vcpu_slot] = 0;
+        reservation_mut.runtime_slice_logical_cpu[vcpu_slot] = 0;
+        reservation_mut.runtime_slice_priority[vcpu_slot] = 0;
+        reservation_mut.runtime_slice_in_flight &= !vcpu_bit;
         if overrun {
             return Err(CpuResourceError::RuntimeOverrun);
         }
@@ -838,6 +864,10 @@ mod tests {
             CpuBudgetSpec::new(1, 1, 1, 0, 0),
             Err(CpuResourceError::InvalidBudget)
         );
+        assert_eq!(
+            CpuBudgetSpec::new(MAX_CPU_BUDGET_VCPUS + 1, 1, 1, 0, 1),
+            Err(CpuResourceError::InvalidBudget)
+        );
     }
 
     #[test]
@@ -967,6 +997,96 @@ mod tests {
                 .unwrap()
                 .remaining_micros(),
             0
+        );
+    }
+
+    #[test]
+    fn parallel_vcpus_retain_distinct_linear_slices_under_one_reservation() {
+        let mut capabilities = CapabilitySpace::<1>::new();
+        let mut table = CpuBudgetTable::<1, 1>::new(6).unwrap();
+        let (budget, capability) = table.create_root(spec(2), &mut capabilities).unwrap();
+        let reservation = table
+            .reserve_vcpus(budget, capability, ObjectId(60), 2, &capabilities)
+            .unwrap();
+        table
+            .start_runtime_period(reservation, capability, 100, &capabilities)
+            .unwrap();
+
+        let bootstrap = table
+            .authorize_runtime_slice(reservation, capability, 0, 0, 0, 100, 3_000, &capabilities)
+            .unwrap();
+        let application = table
+            .authorize_runtime_slice(reservation, capability, 1, 1, 0, 100, 2_000, &capabilities)
+            .unwrap();
+        let usage = table.usage(budget, capability, &capabilities).unwrap();
+        assert_eq!(usage.consumed_runtime_micros(), 5_000);
+        assert_eq!(usage.in_flight_slices(), 2);
+        assert_eq!(
+            table.authorize_runtime_slice(reservation, capability, 0, 0, 0, 100, 1, &capabilities,),
+            Err(CpuResourceError::RuntimeSliceInFlight)
+        );
+        assert_eq!(
+            table.release_vcpus(reservation, capability, &capabilities),
+            Err(CpuResourceError::RuntimeSliceInFlight)
+        );
+
+        let mut substituted = application;
+        substituted.vcpu_index = 0;
+        assert_eq!(
+            table.reconcile_runtime_slice(substituted, capability, 1_100, &capabilities),
+            Err(CpuResourceError::RuntimeSliceMismatch)
+        );
+        let mut substituted = application;
+        substituted.logical_cpu = 0;
+        assert_eq!(
+            table.reconcile_runtime_slice(substituted, capability, 1_100, &capabilities),
+            Err(CpuResourceError::RuntimeSliceMismatch)
+        );
+        let mut substituted = application;
+        substituted.priority = 1;
+        assert_eq!(
+            table.reconcile_runtime_slice(substituted, capability, 1_100, &capabilities),
+            Err(CpuResourceError::RuntimeSliceMismatch)
+        );
+        let application_slice = application;
+        let application = table
+            .reconcile_runtime_slice(application, capability, 1_100, &capabilities)
+            .unwrap();
+        assert_eq!(application.actual_micros(), 1_000);
+        assert_eq!(application.refunded_micros(), 1_000);
+        assert_eq!(application.consumed_runtime_micros(), 4_000);
+        assert_eq!(
+            table.reconcile_runtime_slice(application_slice, capability, 1_100, &capabilities),
+            Err(CpuResourceError::RuntimeSliceMissing)
+        );
+        assert_eq!(
+            table.authorize_runtime_slice(
+                reservation,
+                capability,
+                1,
+                1,
+                0,
+                10_100,
+                1,
+                &capabilities,
+            ),
+            Err(CpuResourceError::RuntimeSliceInFlight)
+        );
+        assert_eq!(
+            table.release_vcpus(reservation, capability, &capabilities),
+            Err(CpuResourceError::RuntimeSliceInFlight)
+        );
+        let bootstrap = table
+            .reconcile_runtime_slice(bootstrap, capability, 2_100, &capabilities)
+            .unwrap();
+        assert_eq!(bootstrap.actual_micros(), 2_000);
+        assert_eq!(bootstrap.refunded_micros(), 1_000);
+        assert_eq!(bootstrap.consumed_runtime_micros(), 3_000);
+        let usage = table.usage(budget, capability, &capabilities).unwrap();
+        assert_eq!(usage.in_flight_slices(), 0);
+        assert_eq!(
+            table.release_vcpus(reservation, capability, &capabilities),
+            Ok(2)
         );
     }
 

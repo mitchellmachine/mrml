@@ -331,8 +331,13 @@ returns. A verified underrun refunds only unused precharge; mismatch, replay,
 release while in flight, time regression, exhaustion, and period crossing fail
 closed. An overrun retains the full charge and reports failure. Successful
 authorization retains the exact domain, vCPU, logical CPU, and priority
-decision for the runner.
-Windows and Arch Linux kernel suites pass 510 tests, the WHP runner passes 7,
+decision for the runner. A reservation now retains one distinct bounded linear
+slice slot per vCPU, up to the existing 64-vCPU/affinity ceiling, while every
+simultaneous slice still precharges the one shared period allowance. Sibling
+reconciliation cannot retire or refund another vCPU's charge; any unresolved
+slot blocks release and period rollover. This is kernel simulation groundwork;
+the signed hosted component profile still executes one vCPU.
+Windows and Arch Linux kernel suites pass 511 tests, the WHP runner passes 7,
 and the KVM runner passes 8. A backend-neutral deadline contract now arms
 cancellation before entry and waits for the cancellation worker to retire before
 return or teardown. WHP uses `WHvCancelRunVirtualProcessor`; KVM sets
