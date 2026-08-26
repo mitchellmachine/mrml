@@ -6203,3 +6203,20 @@ fn rustc_thin_reference_delayed_initialization_reaches_native_objects() {
     let local = "#[unsafe(no_mangle)] pub extern \"C\" fn probe() -> &u8 { let local: u8 = 42; let value: &u8; value = &local; value }";
     assert!(compile(local, ObjectFormat::Elf64).is_err());
 }
+
+#[test]
+fn rustc_conditional_reference_delayed_initialization_preserves_origins() {
+    for source in [
+        "#[unsafe(no_mangle)] pub extern \"C\" fn probe(input: &u8, choose: bool) -> &u8 { let value: &u8; if choose { value = input; } else { value = &*input; } value }",
+        "#[unsafe(no_mangle)] pub extern \"C\" fn probe(input: &mut u32, choose: bool) -> &mut u32 { let value: &mut u32; if choose { value = &mut *input; } else { value = input; } value }",
+    ] {
+        assert_eq!(compile(source, ObjectFormat::Elf64), Ok(()));
+        assert_eq!(compile(source, ObjectFormat::Coff), Ok(()));
+    }
+
+    let local = "#[unsafe(no_mangle)] pub extern \"C\" fn probe(input: &u8, choose: bool) -> &u8 { let storage: u8 = 42; let value: &u8; if choose { value = input; } else { value = &storage; } value }";
+    assert!(compile(local, ObjectFormat::Elf64).is_err());
+
+    let partial = "#[unsafe(no_mangle)] pub extern \"C\" fn probe(input: &u8, choose: bool) -> &u8 { let value: &u8; if choose { value = input; } value }";
+    assert!(compile(partial, ObjectFormat::Elf64).is_err());
+}
