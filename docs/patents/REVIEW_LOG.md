@@ -208,6 +208,16 @@ authority, or dependency mechanism. Broader lexical regions and compiler
 completion remain partial; this technical screen establishes neither clearance
 nor infringement and does not replace independent human dual review.
 
+## 2026-08-26 — Loop-local projected alias transfer
+
+Patent review: **NOT_TRIGGERED**. This bounded compiler-analysis increment feeds
+an iteration-local tuple field into the existing one-iteration/zero-iteration
+origin equality join. It adds no new fixed-point, loop, alias-analysis, region-
+solving, optimization, runtime, authority, or dependency mechanism. Broader loop
+and compiler completion remain partial; this technical screen establishes
+neither clearance nor infringement and does not replace independent human dual
+review.
+
 ## 2026-08-26 — Activated-generation binding for Total inventory
 
 Patent review: **TRIGGERED** under the existing SystemRelease, deployment,
