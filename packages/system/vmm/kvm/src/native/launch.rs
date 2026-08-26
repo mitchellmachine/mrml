@@ -228,6 +228,32 @@ impl<const N: usize> PreparedKvmGuest<N> {
         if loaded.entry() != application.entry() {
             return Err(KvmError::InvalidMapping);
         }
+        let store = KvmPageTableStore::open_existing(
+            &mut self.backend.memory,
+            self.table_physical,
+            self.table_pages,
+        )?;
+        let mut tables = PageTableBuilder::from_existing_root(store, self.root);
+        for mapping in [
+            Mapping::new(
+                VirtAddr::new(application.artifact_physical().get())
+                    .map_err(|_| KvmError::InvalidMapping)?,
+                application.artifact_physical(),
+                artifact_bytes / PAGE_SIZE,
+                PagePermissions::KERNEL_SHARED_READ,
+            )
+            .map_err(|_| KvmError::InvalidMapping)?,
+            Mapping::new(
+                VirtAddr::new(application.table_physical().get())
+                    .map_err(|_| KvmError::InvalidMapping)?,
+                application.table_physical(),
+                application.table_pages(),
+                PagePermissions::KERNEL_LOW_READ_WRITE,
+            )
+            .map_err(|_| KvmError::InvalidMapping)?,
+        ] {
+            tables.map(mapping).map_err(|_| KvmError::PageTable)?;
+        }
         Ok(self)
     }
 
@@ -1720,6 +1746,19 @@ impl KvmSystem {
             layout.handoff_virtual,
             layout.user,
         )?;
+        tables
+            .map(
+                Mapping::new(
+                    VirtAddr::new(layout.table_physical)
+                        .map_err(|_| KvmError::InvalidMapping)?,
+                    PhysAddr::new(layout.table_physical)
+                        .map_err(|_| KvmError::InvalidMapping)?,
+                    layout.table_pages,
+                    PagePermissions::KERNEL_LOW_READ_WRITE,
+                )
+                .map_err(|_| KvmError::InvalidMapping)?,
+            )
+            .map_err(|_| KvmError::PageTable)?;
         let stack_permissions = if smp {
             PagePermissions::KERNEL_LOW_READ_WRITE
         } else {

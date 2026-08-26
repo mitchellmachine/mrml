@@ -652,15 +652,15 @@ const FRAMEBUFFER: u64 = 0x00a0_0000;
 #[cfg(target_os = "linux")]
 const APPLICATION_PROBE_PORT: u16 = 0x4d66;
 #[cfg(target_os = "linux")]
-const APPLICATION_ARTIFACT_PHYSICAL: u64 = 0x0160_0000;
+const APPLICATION_ARTIFACT_PHYSICAL: u64 = 0x00a0_1000;
 #[cfg(target_os = "linux")]
-const APPLICATION_IMAGE_PHYSICAL: u64 = 0x0180_0000;
+const APPLICATION_IMAGE_PHYSICAL: u64 = 0x00a2_0000;
 #[cfg(target_os = "linux")]
-const APPLICATION_STACK_PHYSICAL: u64 = 0x0190_0000;
+const APPLICATION_STACK_PHYSICAL: u64 = 0x00a2_4000;
 #[cfg(target_os = "linux")]
 const APPLICATION_STACK_TOP: u64 = 0x0090_0000;
 #[cfg(target_os = "linux")]
-const APPLICATION_TABLE_PHYSICAL: u64 = 0x01a0_0000;
+const APPLICATION_TABLE_PHYSICAL: u64 = 0x00a3_0000;
 #[cfg(target_os = "linux")]
 const EXCEPTION_PROBE_PORT: u16 = 0x4d53;
 #[cfg(target_os = "linux")]
@@ -2222,7 +2222,9 @@ fn application_main() -> Result<()> {
             0xffff_8001_6000_0000,
         )
     };
-    let table_pages = if matches!(
+    let table_pages = if mode == LaunchMode::ApplicationProbe {
+        40
+    } else if matches!(
         mode,
         LaunchMode::SmpIpiProbe
             | LaunchMode::SmpServiceMigrationProbe
@@ -3238,6 +3240,23 @@ fn application_main() -> Result<()> {
             .map_err(|error| anyhow!("KVM execution failed: {:?}", error))?
     };
     if mode == LaunchMode::ApplicationProbe {
+        for stage in 1..=6u32 {
+            let expected = VmExit::Io {
+                port: APPLICATION_PROBE_PORT,
+                size: 4,
+                write: true,
+                value: 0xa000 | stage,
+            };
+            if exit != expected {
+                return Err(anyhow!(
+                    "Total-mode application stopped before signed-kernel stage {}: {:?}",
+                    stage,
+                    exit
+                ));
+            }
+            exit = VmBackend::run(&mut guest, 0)
+                .map_err(|error| anyhow!("KVM application continuation failed: {:?}", error))?;
+        }
         if exit
             != (VmExit::Io {
                 port: APPLICATION_PROBE_PORT,
@@ -3251,6 +3270,9 @@ fn application_main() -> Result<()> {
                 exit
             ));
         }
+        println!(
+            "verified ordered signed-kernel stages and authenticated CPL3 application exit under KVM"
+        );
         exit = VmExit::Halted;
     } else if mode == LaunchMode::GpuBenchmark {
         service_gpu_benchmark(
@@ -4622,7 +4644,7 @@ fn application_boot_handoff(
         region(FRAMEBUFFER, 1, MemoryKind::Mmio)?,
         region(
             APPLICATION_ARTIFACT_PHYSICAL,
-            0x500,
+            0xff,
             MemoryKind::Reserved,
         )?,
     ];

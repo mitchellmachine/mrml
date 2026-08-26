@@ -8015,17 +8015,31 @@ memory and all service/application backing ranges must be mutually disjoint.
 Length, flag, offset, trailing-byte, measurement, version, address, and overlap
 errors fail before region publication. Windows and Arch Linux kernel suites
 pass 530 tests, and the enlarged fixed handoff buffer cross-builds through the
-UEFI bootloader on both hosts. This is canonical codec and build evidence only;
-the bootloader does not yet populate or consume an application descriptor and
-no WHP/KVM application executed.
+UEFI bootloader on both hosts. The focused runners now populate the descriptor,
+attach the exact separately signed `ApplicationImage`, and give the signed
+kernel supervisor-only NX access to its immutable artifact and fresh page-table
+arenas. The active kernel page-table arena is likewise supervisor-only RW/NX so
+the kernel can clone its current upper-half mappings without an unmapped-CR3
+fault; low supervisor mappings are not copied into the application root.
 
 The x86-64 kernel mapping layer now has a separate
 `ApplicationAddressSpace`. It accepts only a matching authenticated
 `ApplicationImage` handoff identity, then reuses the existing final W^X PE,
 lower guard, user stack, supervisor-only kernel-clone, and preallocated page-
 table mechanism. A service artifact cannot satisfy the application check. The
-Windows kernel suite passes 531 tests; this is mapping-plan unit evidence, not
-live CR3 installation, task execution, WHP/KVM parity, or physical evidence.
+Windows kernel suite passes 531 tests. Fresh identical application, kernel, and
+package bytes then completed six ordered signed-kernel stages, private CR3/CPL3
+entry, the pointer-free exit syscall, task retirement, Total-mode ownership, and
+guest teardown under nested KVM (`verify=21678us`, `prepare=3017us`,
+`execute=1237us`, `total=102106us`) and WHP (`verify=17477us`, `prepare=3885us`,
+`execute=3746us`, `total=47237us`). Both backends rejected the same substituted
+application public root before VM execution with `application signature or PE
+policy rejected`; no native application path was invoked. WHP backend tests pass
+24 with one manual performance test ignored and its runner passes 8; KVM passes
+21 with one manual performance test ignored and its runner passes 9. This is
+hosted controlled application evidence, not general application loading, GUI or
+Semantic Scene Graph integration, required-system Total readiness, host
+resistance, bare metal, physical isolation, or recovery evidence.
 
 Exact commands and outcomes:
 

@@ -65,23 +65,31 @@ Three new persistent deltas are documented before implementation:
   specification. A distinct typed `ApplicationLaunch` handoff descriptor now
   reuses the bounded user-image layout validation without becoming a
   `ServiceLaunch`. Its canonical distinct-flag wire encoding, exact decode, and
-  mutually disjoint reserved backing validation are **IMPLEMENTED**; boot
-  consumption remains **PLANNED**. A distinct x86-64
+  mutually disjoint reserved backing validation and signed-kernel boot
+  consumption are **IMPLEMENTED** for the focused application profile. A distinct x86-64
   `ApplicationAddressSpace` now requires matching authenticated
   `ApplicationImage` identity and derives the same reviewed W^X PE, guarded
-  stack, and private page-table plan without accepting service identity. Live
-  CR3 installation and task launch remain **PLANNED**.
+  stack, and private page-table plan without accepting service identity. The
+  focused signed profile now installs that private CR3, enters the application
+  at CPL3, authenticates its pointer-free exit syscall, retires the task, and
+  tears down the admitted guest on WHP and KVM.
   The distinct syscall-only `org.mrml.app.isolation-probe` is
   now a real Manifest V2 `system-application` supporting native-process and microVM forms;
-  Windows and Arch Linux cross-build identical 3,072-byte PE output. It has not
-  been loaded or executed. The representative GUI application,
-  compositor/Semantic Scene Graph integration, application image
-  loading/execution, and WHP/KVM application probes remain **PLANNED**. A
+  Windows and Arch Linux cross-build identical PE output. Fresh separately
+  signed application/kernel/package artifacts executed through the same exact
+  generation-bound Total-mode route on WHP and nested KVM. The representative
+  GUI application, compositor/Semantic Scene Graph integration, general
+  application loading, and broad compatibility remain **PLANNED**. A
   backend-neutral microVM owner now rechecks and
   consumes one already constructed application guest, retains it behind an
   exact generational endpoint, refuses native dispatch, and preserves uncertain
-  teardown for retry. Focused tests use mock guests; VM construction and live
-  backend execution remain **PLANNED**.
+  teardown for retry. The focused application profile now transfers a real
+  prepared WHP/KVM guest into that owner, proves six ordered signed-kernel
+  stages plus the authenticated CPL3 exit, and completes teardown. Substituting
+  the application trust root is rejected identically before VM execution. This
+  is **PARTIALLY IMPLEMENTED** hosted controlled-probe evidence, not a GUI app,
+  general resolver/resource projection, required-system Total readiness,
+  host-resistant isolation, bare metal, or physical evidence.
   The configuration package now admits both forms and supplies a concrete
   configuration-specific adapter with focused fail-closed tests. The native
   form now uses a real accounted `TaskRuntime`/`ServiceSupervisor` launch and

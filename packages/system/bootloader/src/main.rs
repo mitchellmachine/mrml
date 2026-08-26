@@ -104,7 +104,9 @@ use mrml_kernel::arch::x86_64::{NativeX86VirtualBlockPortIo, X86VirtualBlockGues
 ))]
 use mrml_kernel::arch::x86_64::PreallocatedPageTableStore;
 #[cfg(feature = "application-probe")]
-use mrml_kernel::arch::x86_64::ApplicationAddressSpace;
+use mrml_kernel::arch::x86_64::{
+    ApplicationAddressSpace, PageTableBuildError, ServiceSpaceError,
+};
 #[cfg(feature = "uefi-service-preemption-probe")]
 use mrml_kernel::arch::x86_64::ServiceAddressSpace;
 #[cfg(feature = "component-service-probe")]
@@ -3477,6 +3479,7 @@ unsafe fn run_kernel(bytes: *const u8, length: usize) -> ! {
     }
     #[cfg(feature = "application-probe")]
     unsafe {
+        application_probe_trace(1);
         let application = handoff.application().unwrap_or_else(|| halt());
         let artifact_length =
             usize::try_from(application.artifact_length()).unwrap_or_else(|_| halt());
@@ -3495,16 +3498,33 @@ unsafe fn run_kernel(bytes: *const u8, length: usize) -> ! {
                 ArtifactKind::ApplicationImage,
             )
             .unwrap_or_else(|_| halt());
+        application_probe_trace(2);
         let plan = ApplicationAddressSpace::<40>::from_handoff(application, &verified, &[])
             .unwrap_or_else(|_| halt());
+        application_probe_trace(3);
         let store = PreallocatedPageTableStore::new(
             application.table_physical(),
             application.table_pages(),
         )
         .unwrap_or_else(|_| halt());
-        let tables = plan
-            .build_page_tables_with_current_kernel(store)
-            .unwrap_or_else(|_| halt());
+        let tables = match plan.build_page_tables_with_current_kernel(store) {
+            Ok(tables) => tables,
+            Err(error) => {
+                let detail = match error {
+                    ServiceSpaceError::Tables(PageTableBuildError::Storage) => 0x101,
+                    ServiceSpaceError::Tables(PageTableBuildError::InvalidIntermediate) => 0x102,
+                    ServiceSpaceError::Tables(PageTableBuildError::AlreadyMapped) => 0x103,
+                    ServiceSpaceError::Tables(PageTableBuildError::NotMapped) => 0x104,
+                    ServiceSpaceError::Tables(PageTableBuildError::MappingMismatch) => 0x105,
+                    ServiceSpaceError::Tables(PageTableBuildError::AddressOverflow) => 0x106,
+                    ServiceSpaceError::Tables(PageTableBuildError::Page(_)) => 0x107,
+                    _ => 0x1ff,
+                };
+                application_probe_trace(detail);
+                halt();
+            }
+        };
+        application_probe_trace(4);
         let context = UserContext::new(tables.root(), plan.entry(), plan.stack_top())
             .unwrap_or_else(|_| halt());
         let mut runtime = TaskRuntime::<1, 0>::new(1_000, 1).unwrap_or_else(|_| halt());
@@ -3514,12 +3534,14 @@ unsafe fn run_kernel(bytes: *const u8, length: usize) -> ! {
         if !matches!(runtime.start(), ScheduleOutcome::Switch { from: None, to } if to == task) {
             halt();
         }
+        application_probe_trace(5);
         core::ptr::addr_of_mut!(APPLICATION_RUNTIME).write(Some(runtime));
         let context = (*core::ptr::addr_of!(APPLICATION_RUNTIME))
             .as_ref()
             .and_then(|runtime| runtime.context(task).ok())
             .map(|context| context as *const UserContext)
             .unwrap_or_else(|| halt());
+        application_probe_trace(6);
         enter_application_probe_context(&*context);
     }
     #[cfg(feature = "service-preemption-probe")]
@@ -3912,6 +3934,18 @@ unsafe fn enter_application_probe_context(context: &UserContext) -> ! {
             .unwrap_or_else(|_| halt())
     };
     unsafe { enter_user_context_on_stack(context, transition_stack) }
+}
+
+#[cfg(feature = "application-probe")]
+fn application_probe_trace(stage: u32) {
+    unsafe {
+        asm!(
+            "out dx, eax",
+            in("dx") APPLICATION_PROBE_PORT,
+            in("eax") 0xa000u32 | stage,
+            options(nomem, nostack)
+        )
+    }
 }
 
 #[cfg(feature = "user-probe")]

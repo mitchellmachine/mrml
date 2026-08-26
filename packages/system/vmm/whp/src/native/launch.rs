@@ -312,6 +312,32 @@ impl<'system> PreparedWhpGuest<'system> {
         if entry != application.entry() {
             return Err(WhpError::InvalidMapping);
         }
+        let store = WhpPageTableStore::open_existing(
+            &mut self.partition,
+            self.table_physical,
+            self.table_pages,
+        )?;
+        let mut tables = PageTableBuilder::from_existing_root(store, self.root);
+        for mapping in [
+            Mapping::new(
+                VirtAddr::new(application.artifact_physical().get())
+                    .map_err(|_| WhpError::InvalidMapping)?,
+                application.artifact_physical(),
+                artifact_bytes / PAGE_SIZE,
+                PagePermissions::KERNEL_SHARED_READ,
+            )
+            .map_err(|_| WhpError::InvalidMapping)?,
+            Mapping::new(
+                VirtAddr::new(application.table_physical().get())
+                    .map_err(|_| WhpError::InvalidMapping)?,
+                application.table_physical(),
+                application.table_pages(),
+                PagePermissions::KERNEL_LOW_READ_WRITE,
+            )
+            .map_err(|_| WhpError::InvalidMapping)?,
+        ] {
+            tables.map(mapping).map_err(|_| WhpError::PageTable)?;
+        }
         Ok(self)
     }
 
@@ -2315,6 +2341,20 @@ fn build_page_tables(
             } else {
                 PagePermissions::KERNEL_READ
             },
+        )
+        .map_err(|_| WhpError::PageTable)?;
+    tables
+        .map(
+            Mapping::new(
+                VirtAddr::new(table_start).map_err(|_| WhpError::InvalidMapping)?,
+                PhysAddr::new(table_start).map_err(|_| WhpError::InvalidMapping)?,
+                layout
+                    .table_pages
+                    .checked_sub(1)
+                    .ok_or(WhpError::InvalidMapping)?,
+                PagePermissions::KERNEL_LOW_READ_WRITE,
+            )
+            .map_err(|_| WhpError::InvalidMapping)?,
         )
         .map_err(|_| WhpError::PageTable)?;
     let stack_permissions = if cpus == 2 {

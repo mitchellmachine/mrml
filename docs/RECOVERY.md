@@ -1058,7 +1058,11 @@ current descriptor shares only internal bounded image-layout validation with
 and requires mutually disjoint reserved backing ranges. Recovery must decode
 the exact application descriptor, reject truncation/trailing data/overlap, and
 must not reconstruct it by relabeling a recovered service descriptor. Boot
-consumption of the decoded application remains planned.
+consumption is implemented for the focused signed application profile: it
+reauthenticates the image, creates fresh W^X tables, enters CPL3, and retires the
+task on WHP and KVM. Recovery must still recreate those resources from the exact
+generation; neither a cached CR3 nor a retained microVM endpoint is reusable
+authority.
 The x86-64 recovery path may reconstruct an `ApplicationAddressSpace` only from
 that exact descriptor plus a matching verified `ApplicationImage`. The adapter
 reuses the W^X/guarded-stack mapping mechanism but rejects service artifact
@@ -1067,8 +1071,10 @@ identity; cached page-table roots or a prior service plan are not substitutes.
 The canonical workspace and lock now retain the syscall-only
 `org.mrml.app.isolation-probe` as a `system-application` with both supported
 placements. Recovery must not reinterpret its common PE compiler output as a
-service or UEFI loader. Identical Windows/Linux cross-build bytes are provenance
-evidence only and do not establish recovery or runtime execution.
+service or UEFI loader. Identical Windows/Linux cross-build bytes remain
+provenance evidence only. Fresh separately signed bytes now provide hosted
+runtime evidence on WHP and nested KVM, but do not establish recovered
+execution, host resistance, bare metal, or physical isolation.
 
 The focused recovery oracle now includes the two-vCPU component profiles
 `whp_component_service_smp_probe` and `kvm_component_service_smp_probe`. Each

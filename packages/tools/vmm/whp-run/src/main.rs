@@ -650,15 +650,15 @@ const FRAMEBUFFER: u64 = 0x00a0_0000;
 #[cfg(target_os = "windows")]
 const APPLICATION_PROBE_PORT: u16 = 0x4d66;
 #[cfg(target_os = "windows")]
-const APPLICATION_ARTIFACT_PHYSICAL: u64 = 0x0160_0000;
+const APPLICATION_ARTIFACT_PHYSICAL: u64 = 0x00a0_1000;
 #[cfg(target_os = "windows")]
-const APPLICATION_IMAGE_PHYSICAL: u64 = 0x0180_0000;
+const APPLICATION_IMAGE_PHYSICAL: u64 = 0x00a2_0000;
 #[cfg(target_os = "windows")]
-const APPLICATION_STACK_PHYSICAL: u64 = 0x0190_0000;
+const APPLICATION_STACK_PHYSICAL: u64 = 0x00a2_4000;
 #[cfg(target_os = "windows")]
 const APPLICATION_STACK_TOP: u64 = 0x0090_0000;
 #[cfg(target_os = "windows")]
-const APPLICATION_TABLE_PHYSICAL: u64 = 0x01a0_0000;
+const APPLICATION_TABLE_PHYSICAL: u64 = 0x00a3_0000;
 #[cfg(target_os = "windows")]
 const COMMAND_BASE: u64 = 0x00b0_0000;
 #[cfg(target_os = "windows")]
@@ -2143,7 +2143,9 @@ fn application_main() -> Result<()> {
             0xffff_8001_6000_0000,
         )
     };
-    let table_pages = if smp_ipi_mode || smp_service_migration_mode || smp_periodic_balance_mode {
+    let table_pages = if application_mode {
+        40
+    } else if smp_ipi_mode || smp_service_migration_mode || smp_periodic_balance_mode {
         64
     } else {
         32
@@ -3010,7 +3012,7 @@ fn application_main() -> Result<()> {
         );
         return Ok(());
     }
-    let exit = if hosted_smp {
+    let mut exit = if hosted_smp {
         let (exits, elapsed) = run_scheduled_smp(&mut guest)?;
         let [bootstrap, application] = exits;
         let expected_bootstrap = VmExit::Io {
@@ -3178,6 +3180,23 @@ fn application_main() -> Result<()> {
         return Ok(());
     }
     if application_mode {
+        for stage in 1..=6u32 {
+            let expected = VmExit::Io {
+                port: APPLICATION_PROBE_PORT,
+                size: 4,
+                write: true,
+                value: 0xa000 | stage,
+            };
+            if exit != expected {
+                return Err(anyhow!(
+                    "Total-mode application stopped before signed-kernel stage {}: {:?}",
+                    stage,
+                    exit
+                ));
+            }
+            exit = VmBackend::run(&mut guest, 0)
+                .map_err(|error| anyhow!("WHP application continuation failed: {:?}", error))?;
+        }
         if exit
             != (VmExit::Io {
                 port: APPLICATION_PROBE_PORT,
@@ -3199,6 +3218,9 @@ fn application_main() -> Result<()> {
                 "application probe unexpectedly modified the framebuffer"
             ));
         }
+        println!(
+            "verified ordered signed-kernel stages and authenticated CPL3 application exit under WHP"
+        );
         guest.finish()?;
         println!(
             "verified signed generation-bound Total-mode application CPL3 launch and teardown under WHP: verify={}us prepare={}us execute={}us total={}us",
@@ -4491,7 +4513,7 @@ fn application_boot_handoff(
         region(FRAMEBUFFER, 1, MemoryKind::Mmio)?,
         region(
             APPLICATION_ARTIFACT_PHYSICAL,
-            0x500,
+            0xff,
             MemoryKind::Reserved,
         )?,
     ];

@@ -4,6 +4,20 @@ Historical paths in this log are intentionally preserved. The canonical
 [old-to-current source-path map](PATH_MIGRATION.md) locates their present
 implementations without altering the original review evidence.
 
+## 2026-08-26 — Signed Total-mode application execution parity
+
+Patent review: **TRIGGERED** under the existing adaptive-isolation, application
+placement, VMM, package, and page-table reviews. This increment composes the
+existing caller-selected `MICROVM` route, exact signed artifact/generation
+binding, conventional W^X x86-64 page tables, CPL3 entry, syscall exit, and
+WHP/KVM guest lifecycle. It adds supervisor-only NX access to exact boot and
+active page-table arenas and an ordered controlled-probe trace; it does not add
+automatic placement/provider selection, migration, cross-placement transport,
+resource optimization, or a new VM construction algorithm. Identical
+substituted-root rejection is fail-closed evidence, not patent clearance. No
+non-infringement conclusion is made and independent human review remains
+required.
+
 ## 2026-08-26 — VirtualGPU control/data-plane authority binding
 
 Patent review: **TRIGGERED** under the existing native GPU, VirtualGPU, queue,
