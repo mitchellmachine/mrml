@@ -2030,6 +2030,25 @@ fat-reference assignment remains fail-closed pending its distinct branch value-
 materialization/origin path; slices, mutable `str`, aggregates, and general fat-
 pointer semantics are not claimed.
 
+### Bounded internal read-only object-data checkpoint
+
+The ELF64 and COFF object emitters now accept typed internal relocations that
+pair a checked code patch offset with a checked offset into caller-supplied
+read-only bytes. ELF emits an allocatable, non-writable `.rodata` section, a
+local section symbol, `R_X86_64_PC32`, and an explicit checked addend. COFF emits
+`.rdata`, a static internal symbol, `IMAGE_REL_AMD64_REL32`, and the corresponding
+checked in-place addend. The relocation count, every arithmetic operation and
+integer conversion, data bounds, and output capacity remain explicit and
+bounded.
+
+Structural tests exercise two independent code/data offsets, exact data bytes,
+section flags, relocation symbol indices, both addend forms, and rejection of a
+data offset beyond the supplied bytes. Windows and Arch each passed 648 unit, 1
+component, 10 conformance, and 349 replacement tests (1,008 total). This is an
+object representation foundation only: ordinary code generation does not yet
+produce internal data relocations, so runtime string literals remain
+fail-closed.
+
 ### Conditional string-reference delayed-initialization checkpoint
 
 Exhaustive conditional first writes to an uninitialized shared `&str` local now

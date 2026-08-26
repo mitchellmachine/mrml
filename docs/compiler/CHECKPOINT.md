@@ -58,7 +58,19 @@ oracle upgrade receives a new immutable record and differential classification
 against all prior accepted probes. Keep Cargo on edition 2024 until a newer
 named edition can be adopted through a pinned, workspace-wide migration.
 
-## Latest conditional string-reference initialization milestone
+## Latest bounded read-only object-data milestone
+
+Commit `93b3a998` adds typed, bounded internal read-only-data relocations to the
+ELF64 and COFF emitters. ELF uses `.rodata`, a local section symbol, and checked
+RELA addends; COFF uses `.rdata`, a static internal symbol, and checked REL32
+in-place addends. Structural tests cover two code/data offsets, exact section
+bytes and flags, symbol targeting, and out-of-range rejection. Windows and
+native Arch Linux WSL each passed 648 library tests, 1 component probe, 10
+conformance tests, and 349 replacement tests: 1,008 compiler tests per host.
+Ordinary code generation does not consume the contract yet, so runtime string
+literals remain fail-closed.
+
+### Preceding conditional string-reference initialization milestone
 
 Commit `801455c9` verifies exhaustive conditional first assignment of a shared
 `&str` local from parameter-backed values through the existing branch-aware

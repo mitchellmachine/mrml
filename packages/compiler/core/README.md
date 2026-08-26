@@ -2551,7 +2551,8 @@ evaluates a runtime message after the checked receiver, and uses the same
 bounded trap because this compiler does not embed diagnostic formatting in
 generated freestanding objects. String literals now have their own expression
 node and type as immutable `&str`; other runtime uses remain rejected until
-object data and relocation emission are implemented.
+ordinary code generation consumes the bounded internal read-only-data
+relocation contract.
 Unsafe `Option::unwrap_unchecked` returns the producer's candidate directly
 without testing its validity flag; safe functions reject the call, and callers
 must uphold Rust's `Some` precondition. These consumers share one
@@ -5828,3 +5829,16 @@ location maps to an exact CFG return edge, and only return controls carry a
 actions are not promoted. This remains bounded return escape analysis, not
 general regions, named lifetime inference, or complete Polonius semantics. The
 `no_std`/allocation/unsafe hygiene scan remained empty.
+
+The bounded internal read-only object-data milestone at `93b3a998` adds a typed
+`code offset` plus `data offset` relocation without treating compiler-owned
+literal bytes as an undefined external symbol. ELF64 emits `.rodata` with
+alloc/read-only flags, a local section symbol, `R_X86_64_PC32`, and a checked
+RELA addend. COFF emits `.rdata`, a static internal symbol,
+`IMAGE_REL_AMD64_REL32`, and a checked in-place addend. Both paths bound every
+offset, relocation count, conversion, and output write and reject a data offset
+beyond the supplied bytes. Structural tests cover two distinct offsets and
+exact bytes in both formats. Windows and native Arch Linux WSL each passed 648
+library tests, 1 component probe, 10 conformance tests, and 349 replacement
+tests: 1,008 compiler tests per host. The language pipeline does not consume
+this contract yet, so runtime string literals remain fail-closed.
