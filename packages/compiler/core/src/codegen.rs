@@ -15899,6 +15899,9 @@ fn runtime_reference_call_origin_parameter<const MAX_PARAMETERS: usize, const MA
                     let mut break_origins = [None; MAX_PARAMETERS];
                     let mut break_projected_origins = RuntimeCalleeProjectedOrigins::EMPTY;
                     let mut break_outcome_count = 0usize;
+                    let mut backedge_origins = [None; MAX_PARAMETERS];
+                    let mut backedge_projected_origins = RuntimeCalleeProjectedOrigins::EMPTY;
+                    let mut backedge_outcome_count = 0usize;
                     for operation in loop_statement.operations().iter().flatten() {
                         match *operation {
                             crate::LoopOperation::Local(local) => {
@@ -15978,6 +15981,16 @@ fn runtime_reference_call_origin_parameter<const MAX_PARAMETERS: usize, const MA
                                     local_count,
                                 )?;
                             }
+                            crate::LoopOperation::ConditionalContinue(_) => {
+                                merge_loop_exit_origins(
+                                    &mut backedge_origins,
+                                    &mut backedge_projected_origins,
+                                    &mut backedge_outcome_count,
+                                    iteration_origins,
+                                    iteration_projected_origins.retain_local_prefix(local_count),
+                                    local_count,
+                                )?;
+                            }
                             crate::LoopOperation::Return(value) => {
                                 let tree = value.parse_value::<MAX_NODES>().ok()?;
                                 merge(recurse(
@@ -16005,7 +16018,18 @@ fn runtime_reference_call_origin_parameter<const MAX_PARAMETERS: usize, const MA
                                 iteration_reaches_backedge = false;
                                 break;
                             }
-                            crate::LoopOperation::Continue => break,
+                            crate::LoopOperation::Continue => {
+                                merge_loop_exit_origins(
+                                    &mut backedge_origins,
+                                    &mut backedge_projected_origins,
+                                    &mut backedge_outcome_count,
+                                    iteration_origins,
+                                    iteration_projected_origins.retain_local_prefix(local_count),
+                                    local_count,
+                                )?;
+                                iteration_reaches_backedge = false;
+                                break;
+                            }
                             crate::LoopOperation::ConditionalBlock(block_index) => {
                                 let block = loop_statement
                                     .conditional_blocks()
@@ -16131,18 +16155,28 @@ fn runtime_reference_call_origin_parameter<const MAX_PARAMETERS: usize, const MA
                             _ => return None,
                         }
                     }
+                    if iteration_reaches_backedge {
+                        merge_loop_exit_origins(
+                            &mut backedge_origins,
+                            &mut backedge_projected_origins,
+                            &mut backedge_outcome_count,
+                            iteration_origins,
+                            iteration_projected_origins.retain_local_prefix(local_count),
+                            local_count,
+                        )?;
+                    }
                     if loop_statement.condition.is_some() {
                         let mut natural_origins = incoming_origins;
                         let mut natural_projected_origins = incoming_projected_origins;
-                        if iteration_reaches_backedge {
+                        if backedge_outcome_count != 0 {
                             for local_index in 0..local_count {
                                 natural_origins[local_index] = (incoming_origins[local_index]
-                                    == iteration_origins[local_index])
+                                    == backedge_origins[local_index])
                                     .then_some(incoming_origins[local_index])
                                     .flatten();
                             }
                             natural_projected_origins =
-                                incoming_projected_origins.intersect(iteration_projected_origins);
+                                incoming_projected_origins.intersect(backedge_projected_origins);
                         }
                         merge_loop_exit_origins(
                             &mut break_origins,
@@ -37846,6 +37880,40 @@ mod tests {
                 ..loop_choose
             }),
             Some(0)
+        );
+        let conditional_continue = RuntimeCallTarget {
+            name: loop_choose.name,
+            parameters: [
+                loop_choose.parameters[0],
+                loop_choose.parameters[1],
+                Some(RuntimeCallParameter {
+                    name: "second",
+                    ty: ScalarType::Bool,
+                }),
+            ],
+            parameter_count: 3,
+            return_type: loop_choose.return_type,
+            return_type_name: loop_choose.return_type_name,
+            body_expression: concat!(
+                "let mut local: u16 = 1; let mut changed: &mut u16 = value; loop { ",
+                "if first { return changed; } changed = value; ",
+                "if second { continue; } changed = &mut local; changed = value; }"
+            ),
+        };
+        assert_eq!(
+            runtime_reference_call_origin_parameter::<3, 48>(conditional_continue),
+            Some(0)
+        );
+        assert_eq!(
+            runtime_reference_call_origin_parameter::<3, 48>(RuntimeCallTarget {
+                body_expression: concat!(
+                    "let mut local: u16 = 1; let mut changed: &mut u16 = value; ",
+                    "while first { changed = value; if second { continue; } ",
+                    "changed = &mut local; } changed"
+                ),
+                ..conditional_continue
+            }),
+            None
         );
     }
 
