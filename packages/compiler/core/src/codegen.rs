@@ -1873,10 +1873,8 @@ fn compile_x86_64_naked_function<const MAX_BYTES: usize, const MAX_PARAMETERS: u
     source = source
         .strip_suffix(')')
         .ok_or_else(|| error(CodegenErrorKind::InvalidNakedAssembly))?;
-    let mut bytes = [0u8; MAX_BYTES];
-    let mut length = 0usize;
+    let mut instructions = [""; 8];
     let mut instruction_count = 0usize;
-    let mut terminating = false;
     let mut remaining = source.trim();
     while !remaining.is_empty() {
         if instruction_count == 8 {
@@ -1902,24 +1900,95 @@ fn compile_x86_64_naked_function<const MAX_BYTES: usize, const MAX_PARAMETERS: u
                 return Err(error(CodegenErrorKind::InvalidNakedAssembly));
             }
         }
-        let (encoding, encoding_length, is_terminating) =
-            encode_x86_64_naked_instruction(instruction)
-                .ok_or_else(|| error(CodegenErrorKind::InvalidNakedAssembly))?;
-        terminating = is_terminating;
-        let end = length
-            .checked_add(encoding_length)
-            .ok_or_else(|| error(CodegenErrorKind::OutputTooSmall))?;
-        bytes
-            .get_mut(length..end)
-            .ok_or_else(|| error(CodegenErrorKind::OutputTooSmall))?
-            .copy_from_slice(&encoding[..encoding_length]);
-        length = end;
+        instructions[instruction_count] = instruction;
         instruction_count += 1;
     }
-    if instruction_count == 0 || !terminating {
+    if instruction_count == 0 {
         return Err(error(CodegenErrorKind::InvalidNakedAssembly));
     }
-    MachineCode::from_bytes(&bytes[..length]).map_err(error)
+    let instructions = &instructions[..instruction_count];
+    let mut offsets = [0usize; 8];
+    let mut labels = [None; 8];
+    let mut length = 0usize;
+    for (index, instruction) in instructions.iter().enumerate() {
+        offsets[index] = length;
+        if let Some(label) = x86_64_naked_label_definition(instruction) {
+            let slot = &mut labels[(label - 2) as usize];
+            if slot.replace(length).is_some() {
+                return Err(error(CodegenErrorKind::InvalidNakedAssembly));
+            }
+            continue;
+        }
+        let encoding_length = if x86_64_naked_label_branch(instruction).is_some() {
+            5
+        } else {
+            encode_x86_64_naked_instruction(instruction)
+                .ok_or_else(|| error(CodegenErrorKind::InvalidNakedAssembly))?
+                .1
+        };
+        length = length
+            .checked_add(encoding_length)
+            .ok_or_else(|| error(CodegenErrorKind::OutputTooSmall))?;
+        if length > MAX_BYTES {
+            return Err(error(CodegenErrorKind::OutputTooSmall));
+        }
+    }
+    let mut bytes = [0u8; MAX_BYTES];
+    let mut terminating = false;
+    let mut emitted_length = 0usize;
+    for (index, instruction) in instructions.iter().enumerate() {
+        if x86_64_naked_label_definition(instruction).is_some() {
+            continue;
+        }
+        let (encoding, encoding_length, is_terminating) =
+            if let Some((label, direction)) = x86_64_naked_label_branch(instruction) {
+                let target = labels[(label - 2) as usize]
+                    .ok_or_else(|| error(CodegenErrorKind::InvalidNakedAssembly))?;
+                let origin = offsets[index]
+                    .checked_add(5)
+                    .ok_or_else(|| error(CodegenErrorKind::InvalidNakedAssembly))?;
+                if (direction == b'f' && target <= offsets[index])
+                    || (direction == b'b' && target > offsets[index])
+                {
+                    return Err(error(CodegenErrorKind::InvalidNakedAssembly));
+                }
+                let displacement = i64::try_from(target)
+                    .ok()
+                    .and_then(|target| i64::try_from(origin).ok().map(|origin| target - origin))
+                    .and_then(|displacement| i32::try_from(displacement).ok())
+                    .ok_or_else(|| error(CodegenErrorKind::InvalidNakedAssembly))?;
+                let mut encoding = [0u8; 10];
+                encoding[0] = 0xe9;
+                encoding[1..5].copy_from_slice(&displacement.to_le_bytes());
+                (encoding, 5, true)
+            } else {
+                encode_x86_64_naked_instruction(instruction)
+                    .ok_or_else(|| error(CodegenErrorKind::InvalidNakedAssembly))?
+            };
+        terminating = is_terminating;
+        let end = emitted_length + encoding_length;
+        bytes[emitted_length..end].copy_from_slice(&encoding[..encoding_length]);
+        emitted_length = end;
+    }
+    if !terminating {
+        return Err(error(CodegenErrorKind::InvalidNakedAssembly));
+    }
+    MachineCode::from_bytes(&bytes[..emitted_length]).map_err(error)
+}
+
+fn x86_64_naked_label_definition(instruction: &str) -> Option<u8> {
+    let bytes = instruction.as_bytes();
+    (bytes.len() == 2 && (b'2'..=b'9').contains(&bytes[0]) && bytes[1] == b':')
+        .then(|| bytes[0] - b'0')
+}
+
+fn x86_64_naked_label_branch(instruction: &str) -> Option<(u8, u8)> {
+    let bytes = instruction.as_bytes();
+    (bytes.len() == 6
+        && &bytes[..4] == b"jmp "
+        && (b'2'..=b'9').contains(&bytes[4])
+        && (bytes[5] == b'f' || bytes[5] == b'b'))
+        .then(|| (bytes[4] - b'0', bytes[5]))
 }
 
 fn encode_x86_64_naked_instruction(instruction: &str) -> Option<([u8; 10], usize, bool)> {
@@ -28625,6 +28694,23 @@ mod tests {
             ]
         );
 
+        let module = Parser::new(concat!(
+            "#[unsafe(naked)] unsafe extern \"C\" fn labels() { ",
+            "naked_asm!(\"2:\", \"nop\", \"jmp 3f\", \"int3\", \"3:\", \"jmp 2b\"); }"
+        ))
+        .parse_module::<1, 1>()
+        .unwrap();
+        let Some(Item::Function(function)) = module.items()[0] else {
+            panic!("expected function")
+        };
+        let code =
+            compile_x86_64_function::<_, 16, 1, 8>(&function, &NoConstants, X86_64Abi::SystemV)
+                .unwrap();
+        assert_eq!(
+            code.bytes(),
+            &[0x90, 0xe9, 1, 0, 0, 0, 0xcc, 0xe9, 0xf4, 0xff, 0xff, 0xff]
+        );
+
         for (source, expected) in [
             (
                 "#[unsafe(naked)] extern \"C\" fn f() { naked_asm!(\"ret\"); }",
@@ -28680,6 +28766,22 @@ mod tests {
             ),
             (
                 "#[unsafe(naked)] unsafe extern \"C\" fn f() { naked_asm!(\"mov [rax + 0x80000000], rbx\", \"ret\"); }",
+                CodegenErrorKind::InvalidNakedAssembly,
+            ),
+            (
+                "#[unsafe(naked)] unsafe extern \"C\" fn f() { naked_asm!(\"2:\", \"2:\", \"ret\"); }",
+                CodegenErrorKind::InvalidNakedAssembly,
+            ),
+            (
+                "#[unsafe(naked)] unsafe extern \"C\" fn f() { naked_asm!(\"jmp 2f\"); }",
+                CodegenErrorKind::InvalidNakedAssembly,
+            ),
+            (
+                "#[unsafe(naked)] unsafe extern \"C\" fn f() { naked_asm!(\"2:\", \"jmp 2f\"); }",
+                CodegenErrorKind::InvalidNakedAssembly,
+            ),
+            (
+                "#[unsafe(naked)] unsafe extern \"C\" fn f() { naked_asm!(\"jmp 2b\", \"2:\"); }",
                 CodegenErrorKind::InvalidNakedAssembly,
             ),
             (
