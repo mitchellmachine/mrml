@@ -883,6 +883,12 @@ unclassified read of a loan-backed fat-reference local as `LoanUse`, so later
 indexing keeps the call-result loan live. Scalar `Index` and `Subslice` remain
 distinct; mismatched, deeper, and unsupported shapes fail closed.
 
+Projected array-element and slice-subslice origins now survive one direct local
+alias in the callee. An explicit alias annotation must independently equal the
+declared return type before the alias receives an origin; inferred aliases keep
+the already compatible initializer result. This applies to every currently
+modeled local scope. Mismatched annotations fail conservative.
+
 The first modern trait-solver foundation is an explicit bounded implemented-
 goal representation. Stable trait/type/inference/placeholder identities remain
 distinct; canonicalization replaces inference identities with first-occurrence

@@ -3898,6 +3898,13 @@ hosts pass 640 library tests, one component-interface probe, 10 conformance
 tests, and 335 replacement tests: 986 compiler tests per host. General subslice
 disjointness, deeper projections, and region inference remain unsupported.
 
+One direct callee local alias now preserves those exact indexed-element or
+subslice origins. An explicit alias type must equal the declared call return
+type before the interprocedural proof retains an origin; inferred aliases use
+the initializer's already compatible result. Focused caller tests cover live
+conflicts and post-last-use restoration, while a mismatched annotation fails
+conservative.
+
 The conditional projected-reassignment milestone extends the bounded tuple-field
 loan chain across a conditional shared-reference assignment. The exact dated
 oracle rejects mutation of either conditional owner and of the field's replaced

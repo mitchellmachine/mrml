@@ -210,6 +210,12 @@ remained live with E0499. This is black-box evidence for that exact indexed
 array-reference shape, not general aggregate or index-sensitive alias analysis.
 Temporary sources and metadata were removed.
 
+Projected local-alias probes against the same oracle accepted an array-element
+alias, a slice-subslice alias, and owner access after the returned alias's last
+use. A live competing array-element borrow was rejected with E0499. MRML's
+standalone callee-origin proof additionally rejects an explicit alias annotation
+that differs from the declared return type.
+
 An independently authored Rust 2024 metadata-only probe against this exact
 toolchain and commit separately accepted a mutable scalar reference returned
 from index zero of a mutable slice-reference parameter, followed by owner reuse

@@ -609,6 +609,14 @@ library tests, one component-interface probe, 10 conformance tests, and 335
 replacement tests: 986 compiler tests per host. General subslice disjointness,
 deeper projections, and regions remain unsupported.
 
+The projected-alias hardening milestone carries exact array-element and slice-
+subslice parameter origins through one direct local alias. Explicit alias types
+must equal the call target's return type before origin retention; inferred
+aliases reuse the already compatible initializer result. Live competing caller
+borrows fail, post-last-use owner access succeeds, and mismatched explicit alias
+types fail the standalone interprocedural proof closed. Both canonical hosts
+pass 986 compiler tests.
+
 This is an initial typed body-fact slice, not a complete typed body IR and not a
 borrow checker. Unsupported aggregate-leaf call arguments, other aggregate-
 argument and call-derived fat-reference initializers, unsupported compound array
