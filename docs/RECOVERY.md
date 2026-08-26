@@ -1256,6 +1256,17 @@ uses this encoder. Windows kernel tests pass 561, UEFI tests pass 37, and the
 UEFI target cross-builds. Native driver correlation/reacquisition and delivery
 of a capability-bound live storage owner remain **PLANNED**.
 
+The storage service now **PARTIALLY IMPLEMENTS** the first post-handoff
+reacquisition boundary. A supervisor control-plane operation exact-matches the
+retained source class, opaque stable identifier, controller generation, media
+generation, block size, and block count against one live platform registration
+before publishing a new principal-bound read-only session. Missing or ambiguous
+matches and every tested identity/geometry substitution publish no session;
+identity never authorizes I/O, and the resulting session is rechecked by the
+ordinary block data plane. Windows and Arch Linux storage suites pass 125 tests.
+This is controlled service/type evidence, not native-driver correlation,
+WHP/KVM recovery execution, or physical storage evidence.
+
 The recovered installed selection is now retained across the boot-policy to
 Total-admission boundary. `RecoveredInstalledTotalAdmission` binds its exact
 device descriptor, serviced session selection, volume header, active root,

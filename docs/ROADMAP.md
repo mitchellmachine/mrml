@@ -137,6 +137,16 @@ cross-builds. This is **PARTIALLY IMPLEMENTED** codec/compile evidence. Exact
 native-driver correlation, live-session reacquisition, and physical execution
 remain the next storage-backed Total-admission gates.
 
+The first service-side reacquisition gate is now **PARTIALLY IMPLEMENTED**.
+`BlockService::grant_installed_recovery_read_session` treats the handoff record
+as non-authorizing input, requires exactly one live registration matching its
+source, stable identifier, controller/media generations, and geometry, and only
+then creates a principal-bound read-only session. Focused substitution tests
+fail before session publication; successful sessions cannot write. Storage
+passes 125 tests on Windows and Arch Linux. Native AHCI/USB/VirtIO enumeration,
+transport-specific correlation evidence, configuration recovery composition,
+WHP/KVM integration, and physical execution remain next gates.
+
 Selected-device reopening and redundant-root reads are now **PARTIALLY
 IMPLEMENTED**. Exact path/media/geometry and block-zero header revalidation
 precedes both root reads; any mismatch, second-read failure, or protocol-close

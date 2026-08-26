@@ -1,4 +1,5 @@
 use crate::{SUPERBLOCK_BYTES, StorageBlockDevice, StoragePrincipal};
+use mrml_kernel::{InstalledRecoveryBootIdentity, InstalledRecoverySource};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct BlockDeviceId(u64);
@@ -121,10 +122,66 @@ const fn stable_id_is_zero(value: &[u8; 32]) -> bool {
     true
 }
 
+fn platform_identity_matches_boot(
+    identity: PlatformBlockDeviceIdentity,
+    block: BlockDeviceDescriptor,
+    boot: InstalledRecoveryBootIdentity,
+) -> bool {
+    let transport = match boot.source() {
+        InstalledRecoverySource::Uefi => PlatformBlockTransport::Uefi,
+        InstalledRecoverySource::Ahci => PlatformBlockTransport::Ahci,
+        InstalledRecoverySource::Usb => PlatformBlockTransport::Usb,
+        InstalledRecoverySource::Virtio => PlatformBlockTransport::Virtio,
+        InstalledRecoverySource::Hosted => PlatformBlockTransport::Hosted,
+    };
+    identity.transport() == transport
+        && identity.stable_id() == boot.stable_id()
+        && identity.controller_generation() == boot.controller_generation()
+        && identity.media_generation() == boot.media_generation()
+        && block.block_size() == boot.block_size()
+        && block.block_count() == boot.block_count()
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct PlatformBlockDeviceDescriptor {
     block: BlockDeviceDescriptor,
     identity: PlatformBlockDeviceIdentity,
+}
+
+/// Capability-bearing result of correlating one non-authorizing boot identity
+/// with one exact live platform registration. The identity still identifies;
+/// only the independently created principal-bound session authorizes reads.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct InstalledRecoveryBlockSession {
+    boot: InstalledRecoveryBootIdentity,
+    platform: PlatformBlockDeviceDescriptor,
+    session: BlockSessionHandle,
+    principal: StoragePrincipal,
+}
+
+impl InstalledRecoveryBlockSession {
+    pub const fn boot_identity(self) -> InstalledRecoveryBootIdentity {
+        self.boot
+    }
+
+    pub const fn platform_descriptor(self) -> PlatformBlockDeviceDescriptor {
+        self.platform
+    }
+
+    pub const fn session(self) -> BlockSessionHandle {
+        self.session
+    }
+
+    pub const fn principal(self) -> StoragePrincipal {
+        self.principal
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum InstalledRecoverySessionError {
+    Missing,
+    Ambiguous,
+    Session(BlockServiceError<core::convert::Infallible>),
 }
 
 impl PlatformBlockDeviceDescriptor {
@@ -403,6 +460,50 @@ impl<const DEVICES: usize, const SESSIONS: usize> BlockService<DEVICES, SESSIONS
             };
         }
         Ok(handles)
+    }
+
+    /// Reacquires one installed recovery device after firmware handoff.
+    ///
+    /// The boot record grants nothing. This supervisor control-plane operation
+    /// requires one exact registered source, stable identifier, controller and
+    /// media generation, and geometry; zero or multiple matches fail closed.
+    /// Only after correlation does it create a new read-only session for the
+    /// explicit principal. The returned session remains subject to ordinary
+    /// per-operation authorization and generation revocation.
+    pub fn grant_installed_recovery_read_session(
+        &mut self,
+        boot: InstalledRecoveryBootIdentity,
+        principal: StoragePrincipal,
+    ) -> Result<InstalledRecoveryBlockSession, InstalledRecoverySessionError> {
+        let mut matched = None;
+        for (block, identity) in self
+            .devices
+            .iter()
+            .copied()
+            .zip(self.platform_identities.iter().copied())
+        {
+            let (Some(block), Some(identity)) = (block, identity) else {
+                continue;
+            };
+            if platform_identity_matches_boot(identity, block, boot) {
+                if matched
+                    .replace(PlatformBlockDeviceDescriptor::new(block, identity))
+                    .is_some()
+                {
+                    return Err(InstalledRecoverySessionError::Ambiguous);
+                }
+            }
+        }
+        let platform = matched.ok_or(InstalledRecoverySessionError::Missing)?;
+        let session = self
+            .grant(platform.block().id(), principal, BlockRights::READ)
+            .map_err(InstalledRecoverySessionError::Session)?;
+        Ok(InstalledRecoveryBlockSession {
+            boot,
+            platform,
+            session,
+            principal,
+        })
     }
 
     pub fn derive(
@@ -970,6 +1071,28 @@ mod tests {
         .unwrap()
     }
 
+    fn installed_boot_identity(
+        source: InstalledRecoverySource,
+        stable_id: [u8; 32],
+        controller_generation: u64,
+        media_generation: u64,
+        block_size: u32,
+        block_count: u64,
+    ) -> InstalledRecoveryBootIdentity {
+        InstalledRecoveryBootIdentity::new(
+            source,
+            stable_id,
+            controller_generation,
+            media_generation,
+            block_size,
+            block_count,
+            [0x61; 16],
+            1,
+            9,
+        )
+        .unwrap()
+    }
+
     fn owner(value: u64) -> StoragePrincipal {
         StoragePrincipal::new(value).unwrap()
     }
@@ -1128,6 +1251,94 @@ mod tests {
         assert_eq!(
             service.session_platform_descriptor(new_session, owner(1)),
             Ok(Some(replacement_platform))
+        );
+    }
+
+    #[test]
+    fn installed_recovery_reacquisition_exact_matches_before_read_only_grant() {
+        let platform = PlatformBlockDeviceDescriptor::new(descriptor(), platform_identity(5));
+        let mut service = BlockService::<1, 1>::new();
+        service
+            .register_platform_devices_atomic(&[platform])
+            .unwrap();
+        let exact = installed_boot_identity(
+            InstalledRecoverySource::Hosted,
+            [0x41; 32],
+            3,
+            5,
+            BLOCK_SIZE as u32,
+            BLOCKS as u64,
+        );
+        let mismatches = [
+            installed_boot_identity(
+                InstalledRecoverySource::Uefi,
+                [0x41; 32],
+                3,
+                5,
+                BLOCK_SIZE as u32,
+                BLOCKS as u64,
+            ),
+            installed_boot_identity(
+                InstalledRecoverySource::Hosted,
+                [0x42; 32],
+                3,
+                5,
+                BLOCK_SIZE as u32,
+                BLOCKS as u64,
+            ),
+            installed_boot_identity(
+                InstalledRecoverySource::Hosted,
+                [0x41; 32],
+                4,
+                5,
+                BLOCK_SIZE as u32,
+                BLOCKS as u64,
+            ),
+            installed_boot_identity(
+                InstalledRecoverySource::Hosted,
+                [0x41; 32],
+                3,
+                6,
+                BLOCK_SIZE as u32,
+                BLOCKS as u64,
+            ),
+            installed_boot_identity(
+                InstalledRecoverySource::Hosted,
+                [0x41; 32],
+                3,
+                5,
+                (BLOCK_SIZE * 2) as u32,
+                (BLOCKS / 2) as u64,
+            ),
+        ];
+        for mismatch in mismatches {
+            assert_eq!(
+                service.grant_installed_recovery_read_session(mismatch, owner(7)),
+                Err(InstalledRecoverySessionError::Missing)
+            );
+        }
+
+        let bound = service
+            .grant_installed_recovery_read_session(exact, owner(7))
+            .unwrap();
+        assert_eq!(bound.boot_identity(), exact);
+        assert_eq!(bound.platform_descriptor(), platform);
+        assert_eq!(bound.principal(), owner(7));
+        let mut backend = Backend::new(device());
+        let mut block = [0; BLOCK_SIZE];
+        service
+            .read_blocks(&mut backend, bound.session(), owner(7), 0, &mut block)
+            .unwrap();
+        assert_eq!(backend.calls, 1);
+        assert_eq!(
+            service.write_blocks(&mut backend, bound.session(), owner(7), 0, &block),
+            Err(BlockServiceError::Denied)
+        );
+        assert_eq!(
+            service.grant_installed_recovery_read_session(exact, owner(8)),
+            Err(InstalledRecoverySessionError::Session(
+                BlockServiceError::Capacity
+            ))
         );
     }
 

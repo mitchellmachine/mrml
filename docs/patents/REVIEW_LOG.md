@@ -1,5 +1,16 @@
 # Patent review log
 
+## 2026-08-26 — Installed recovery identity/session correlation
+
+Patent review: **NOT_TRIGGERED** for this increment. It adds a bounded exact
+equality join between an existing non-authorizing boot identity and an existing
+registered block descriptor, followed by the existing explicit read-only
+session grant. It introduces no new storage encoding, recovery algorithm,
+device protocol, virtualization mechanism, or hardware operation. Native
+AHCI/USB/VirtIO identity derivation and correlation, adaptive-placement/microVM
+execution, and the broader storage mechanisms retain their existing
+`TRIGGERED` reviews before implementation or claims expansion.
+
 ## 2026-08-26 — Installed recovery identity handoff binding
 
 Patent review: **NOT_TRIGGERED** for this canonical handoff integration. It uses

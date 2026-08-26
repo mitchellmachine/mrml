@@ -159,6 +159,16 @@ kernel tests pass 561, UEFI tests pass 37, and the UEFI target cross-builds.
 Native AHCI/USB identity correlation and live `BlockService` reacquisition
 remain **PLANNED**.
 
+The service half of live reacquisition is now **PARTIALLY IMPLEMENTED**. One
+bounded supervisor operation exact-matches the handed source, stable identifier,
+controller/media generations, and geometry against a unique registered platform
+descriptor before granting a principal-bound read-only session. Identity is
+still data rather than authority; write remains denied and all block reads use
+the ordinary session checks. Windows and Arch Linux storage suites pass 125
+tests. Native transport enumeration, the proof that its derived identity
+corresponds to the firmware source, configuration-service composition, and
+physical-media execution remain **PLANNED**.
+
 The `mrml` frontend may expose structured `disk`, `filesystem`, `optical`, and
 `media` operations. The PowerShell-inspired shell projects the same backend as
 typed `Get-*`, `Test-*`, `Initialize-*`, `New-*`, `Format-*`, `Write-*`, and

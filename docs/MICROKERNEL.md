@@ -3129,6 +3129,15 @@ stale epoch-7 handoff or substituted root generation fails before release.
 The recovered policy retains the committed volume/root identity so admission
 cannot discard the control plane's exact recovery binding before opening the
 runtime data plane.
+
+The next recovery control-plane join is **PARTIALLY IMPLEMENTED** in the storage
+service. The non-authorizing installed boot identity must uniquely match a live
+registered source, stable identifier, controller/media generation, and geometry
+before a principal receives a fresh read-only block session. The binding retains
+both records and the session; identity bytes cannot perform I/O, and ordinary
+per-operation session checks remain on the shortest-safe-path block data plane.
+Focused Windows and Arch Linux storage suites pass 125 tests. Native driver
+enumeration/correlation and hardware-backed execution remain **PLANNED**.
 The controlled path now retains the installed side of that binding as well.
 `RecoveredInstalledTotalAdmission` owns the exact serviced device selection,
 volume header, active root, recovered volume/root generation, activated release,
