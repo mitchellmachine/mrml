@@ -7773,6 +7773,16 @@ algorithm. General call coercion and region inference remain absent. Broader
 compiler completion remains partial; this technical screen is not a clearance
 or infringement conclusion and does not replace independent human dual review.
 
+# 2026-08-26 — Nested loop else-arm representation
+
+**Result: NOT_TRIGGERED after the representation review.** This increment adds
+one conventional fixed-capacity parser record for an explicit nested-loop
+`else` action/terminal arm and an early fail-closed execution gate. It adds no
+execution, fixed-point, region, alias, inference, optimization,
+instruction-selection, or code-generation algorithm. Broader compiler
+completion remains partial; this technical screen is not a clearance or
+infringement conclusion and does not replace independent human dual review.
+
 # 2026-08-26 — Conditional labeled nested-control evidence
 
 **Result: NOT_TRIGGERED after the conditional labeled-control review.** This
