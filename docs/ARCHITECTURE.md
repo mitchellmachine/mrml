@@ -332,6 +332,14 @@ domain is in an admitted microVM, failures never trigger automatic native
 fallback, and every required host/boot/recovery exception is classified and
 justified. Capabilities remain authoritative at every placement.
 
+Isolation visibility is now **PARTIALLY IMPLEMENTED** at the kernel boundary.
+One exact live `INSPECT` capability authorizes an aggregate snapshot derived
+from `IsolationAdmissionTable`; the result binds system/policy generations,
+requested mode, effective Total state, class/substrate/unavailability counts,
+and native fallback while omitting domain identities and all remediation
+authority. The monitor service, per-domain views, subscriptions, GUI/shell, and
+accessible semantic projection remain **PLANNED**.
+
 **ASPIRATIONAL:** a production-secure sovereign local-AI OS, broad device
 support, machine-checked noninterference, independently audited security, and
 additional architectures.

@@ -4,6 +4,18 @@ Historical paths in this log are intentionally preserved. The canonical
 [old-to-current source-path map](PATH_MIGRATION.md) locates their present
 implementations without altering the original review evidence.
 
+## 2026-08-26 — Capability-scoped aggregate isolation visibility
+
+Patent review: **NOT_TRIGGERED** for this reporting increment. It conventionally
+checks a caller-supplied exact-object `INSPECT` capability, iterates the existing
+authoritative bounded isolation admission records, and returns fixed aggregate
+counts plus existing generation and mode values. It adds no placement,
+classification, resource selection, VM construction, migration, scheduling,
+cross-placement transport, remediation, or optimization mechanism. The broader
+adaptive-isolation, Total MicroVM, VMM, resource/device projection, and monitor
+mechanisms retain their existing `TRIGGERED` reviews. This technical screen is
+not legal clearance and does not replace independent human review.
+
 ## 2026-08-26 — Signed Total-mode application execution parity
 
 Patent review: **TRIGGERED** under the existing adaptive-isolation, application

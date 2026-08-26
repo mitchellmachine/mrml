@@ -189,8 +189,20 @@ observation is not capture/injection. Storage health is not content access.
 Sensor inspection is not fan/voltage/frequency/power/thermal control. DMA/IOMMU
 views grant no physical addresses or mappings. Firmware, TPM, VBS, hosted VMM,
 nested VM, and bare-metal claims retain exact evidence and threat-model labels.
-Planned adaptive-isolation views distinguish requested/effective placement,
-policy source and generation, mandatory floor, eligibility classification,
+The kernel now has a **PARTIALLY IMPLEMENTED** aggregate adaptive-isolation
+projection. `inspect_isolation_status` requires a live `INSPECT` capability for
+one exact monitor object and derives an immutable snapshot directly from the
+authoritative `IsolationAdmissionTable`. It reports the active system and policy
+generations, requested mode, Total satisfaction state, running-class totals,
+every explicit host-substrate reason, unavailable-reason totals, and native
+fallback count. It intentionally contains no domain identities, content, or
+mutation authority; a different object, attenuated right, or revoked generation
+fails before disclosure. This is a kernel API with Windows/Linux unit evidence,
+not yet the monitor service, event stream, GUI, shell, or Semantic Scene Graph
+projection.
+
+Planned per-domain adaptive-isolation views distinguish requested/effective
+placement, policy source and generation, mandatory floor, eligibility classification,
 host-substrate reason, active/required unsupported blockers, resource cost,
 unavailable domains, and native-fallback count. The monitor reports actual
 placement rather than inferring it from Settings. Successful Total mode requires

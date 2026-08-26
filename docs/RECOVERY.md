@@ -1009,6 +1009,15 @@ repeated failed persistent Total request may offer an explicit Balanced-once or
 Recovery choice, but must not mutate persistent policy automatically; authorized
 recovery policy changes are recorded where audit support exists.
 
+The kernel now exposes a **PARTIALLY IMPLEMENTED**, read-only aggregate recovery
+view of isolation state. Recovery must possess `INSPECT` for the exact monitor
+object; names, configuration text, another object, an attenuated right, or a
+revoked handle cannot reveal it. The snapshot is rebuilt from the authoritative
+admission table and carries system/policy generations, requested mode, effective
+Total state, substrate/unavailability counts, and native fallback without domain
+identities or remediation authority. Recovery must not infer placement from
+Settings or treat this snapshot as authority to change policy, launch, or repair.
+
 Application-launch recovery must retain the exact runtime domain, application
 object, immutable application generation and artifact digest, active system
 generation, and applied policy generation. The kernel application route accepts

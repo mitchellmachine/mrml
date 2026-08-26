@@ -25,6 +25,7 @@ mod handoff;
 mod host_resource;
 mod ipc;
 mod isolation;
+mod isolation_monitor;
 mod memory;
 mod memory_resource;
 mod pe;
@@ -134,6 +135,10 @@ pub use isolation::{
     prepare_component_service_handoff, prepare_isolation_application_route,
     prepare_isolation_service_route, reserve_isolation_vcpus, route_isolation_application,
     route_isolation_service,
+};
+pub use isolation_monitor::{
+    HostSubstrateCounts, IsolationMonitorError, IsolationStatusSnapshot,
+    IsolationUnavailableCounts, TotalMicrovmState, inspect_isolation_status,
 };
 pub use memory::{
     FrameAllocator, MemoryError, MemoryKind, MemoryMap, MemoryRegion, PAGE_SIZE, PhysAddr,

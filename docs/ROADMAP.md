@@ -158,7 +158,8 @@ and storage/optical as separate sequential foundational OS tasks under
 the work-in-progress limit; do not combine them into one functional commit.
 
 Adaptive-isolation milestones remain separate: policy/object schema; one
-dual-placement service; one dual-placement GUI app; monitor visibility;
+dual-placement service; one dual-placement GUI app; monitor visibility
+(**PARTIALLY IMPLEMENTED** as a capability-scoped aggregate kernel snapshot);
 resource/device projection; Settings/shell policy; strict Total runtime;
 bootloader selector; EFI Shell selector; required-system Total readiness;
 broad application compatibility; and physical/performance evidence. A menu
@@ -166,6 +167,15 @@ entry, policy type, UI, or one guest cannot promote Total mode. Successful
 tested Total requires every running `MICROVM_ELIGIBLE` domain in a microVM, no
 active required `UNSUPPORTED_BLOCKER`, zero native fallback, and every host/
 boot/recovery exception explicitly enumerated and justified.
+
+The current monitor increment derives one immutable aggregate directly from the
+authoritative admission table after exact-object `INSPECT` authorization. It
+distinguishes Total not-requested/satisfied/unsatisfied state and counts every
+host-substrate and unavailability reason without revealing domain identities.
+The focused kernel suite passes 539 tests on Windows and Arch Linux. This is not
+a running monitor service, event stream, per-domain disclosure, GUI/shell, or
+WHP/KVM placement execution claim. The next adaptive-isolation dependency gate
+is resource and device projection.
 
 The deployment lane is defined in [DEPLOYMENT.md](DEPLOYMENT.md) and must not
 displace the current foundational gate. Later work proceeds as separate bounded

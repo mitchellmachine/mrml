@@ -683,8 +683,18 @@ QEMU, hosted WHP/KVM, nested virtualization, and physical Intel/AMD evidence are
 distinct. MicroVM isolation does not eliminate shared-hardware side channels or
 common-mode VMM, broker, scheduler, GPU, or device failures.
 
-The planned monitor is authoritative for actual runtime state rather than
-configuration files. It reports requested mode, effective status, eligibility,
+The kernel's **PARTIALLY IMPLEMENTED** aggregate monitor projection reads the
+authoritative admission table rather than configuration files. A caller must
+hold `INSPECT` for one exact monitor object. The immutable snapshot exposes the
+system/policy generations, requested mode, effective Total satisfaction,
+running class counts, each explicit host-substrate reason, unavailable-reason
+counts, and native-fallback count without domain identities or mutation
+authority. Wrong-object, attenuated, and stale capabilities disclose nothing.
+Windows and Arch Linux each pass the same focused kernel tests. Per-domain
+requested/effective placement, event delivery, resource cost, GUI, shell, and
+semantic accessibility projection remain **PLANNED**.
+
+The complete monitor reports requested mode, effective status, eligibility,
 placement and policy generation, substrate reasons, active/required blockers,
 unavailable domains, resource costs, and native-fallback count. Findings include
 `MICROVM_REQUIRED_BUT_UNAVAILABLE` and `TOTAL_MICROVM_DOWNGRADE_ATTEMPT`; neither
@@ -723,7 +733,9 @@ Documentation is not implementation evidence. Implement bounded milestones:
    Total-mode CPL3 lifecycle parity; in-guest surface transport, compositor and
    Semantic Scene Graph integration, rendering, and presentation remain
    **PLANNED**);
-4. monitor placement visibility;
+4. monitor placement visibility (**PARTIALLY IMPLEMENTED** for the
+   capability-scoped aggregate kernel snapshot; per-domain/service/UI projections
+   remain **PLANNED**);
 5. resource and device projections;
 6. persistent Settings and shell policy;
 7. strict Total runtime enforcement;
