@@ -7388,3 +7388,15 @@ generation algorithm. General shared-reference call and region inference remain
 absent. Broader compiler completion remains partial; this technical screen is
 not a clearance or infringement conclusion and does not replace independent
 human dual review.
+
+# 2026-08-26 — Conditional shared-reference call-join evidence
+
+**Result: NOT_TRIGGERED after the conditional shared-call evidence review.**
+This increment adds independently authored regression evidence that the existing
+bounded conditional loan join retains either possible immutable owner loan while
+a shared call result is live and releases both after last use. It introduces no
+new region solver, path-sensitive inference algorithm, alias analysis,
+optimization, or code-generation mechanism. General shared-reference call and
+region inference remain absent. Broader compiler completion remains partial;
+this technical screen is not a clearance or infringement conclusion and does
+not replace independent human dual review.
