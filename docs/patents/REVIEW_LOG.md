@@ -118,6 +118,16 @@ and compiler completion remain partial; this technical screen establishes
 neither clearance nor infringement and does not replace independent human dual
 review.
 
+## 2026-08-26 — Initialized projected-origin move
+
+Patent review: **NOT_TRIGGERED**. This bounded compiler-analysis increment
+copies an existing exact projected parameter origin into one direct typed local
+origin and makes the initializer hook neutral for non-tuple locals. It adds no
+new move-analysis, alias-analysis, region-solving, optimization, runtime,
+authority, or dependency mechanism. Broader alias and compiler completion
+remain partial; this technical screen establishes neither clearance nor
+infringement and does not replace independent human dual review.
+
 ## 2026-08-26 — Activated-generation binding for Total inventory
 
 Patent review: **TRIGGERED** under the existing SystemRelease, deployment,
