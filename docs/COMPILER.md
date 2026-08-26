@@ -124,7 +124,7 @@ language as a whole.
 | Terminal noreturn assembly delta | **PARTIAL** | The parser marks only the final top-level expression statement as terminal. On x86-64, exact `asm!("int3", options(noreturn, nostack))` (with either option order) is admitted only in that position and an unsafe context, emits `CC`, suppresses the ordinary return sequence, and permits `!` function returns or never-to-value coercion. A following unreachable suffix, conditional placement, other templates/options, general never expressions, and broader unreachable-code lowering fail closed. |
 | Syscall assembly delta | **PARTIAL** | Exact x86-64 `asm!("int 0x80", ...)` accepts seven ordered `u64` operands in RAX, RDI, RSI, RDX, R10, R8, and R9. The terminal form requires inputs plus exact `noreturn, nostack`; the returning form requires RAX `inlateout`, input or `inlateout` for the remaining registers, mutable named-local or discarded outputs, and exact `nostack`. Inputs are preanalyzed/evaluated left-to-right, all post-interrupt results are preserved before output stores, and unsupported scopes, orderings, types, places, or options fail closed. General output places and other syscall/assembly shapes remain unsupported. |
 | Terminal halt-loop assembly delta | **PARTIAL** | Exact x86-64 `asm!("cli", "2:", "hlt", "jmp 2b", options(noreturn, nomem, nostack))` is recognized as one typed terminal form, accepts every option permutation, and emits fixed `FA F4 EB FD` without a return sequence. Unsafe scope and terminal placement are mandatory; altered templates, labels, options, or suffixes fail closed. This is native-object encoding evidence, not physical privileged-instruction execution. |
-| Definite scalar initialization delta | **PARTIAL** | Explicit declarations of concrete primitive integers, `bool`, `char`, and thin `*const T`/`*mut T` raw pointers create typed locals and move paths without initialization events. Reads fail until a proven write. A direct ordinary `=` may perform the first write to a mutable or immutable local; the exact returning syscall output remains `u64`-only. Immutable locals reject later writes. Exhaustive bounded conditional-assignment arms may each perform the mutually exclusive first write, and the existing CFG intersection proves the join. References, aggregates, loop-carried initialization, projected first writes, and general assembly output places remain unsupported. |
+| Definite scalar initialization delta | **PARTIAL** | Explicit declarations of concrete primitive integers, `bool`, `char`, thin raw pointers, and thin scalar `&T`/`&mut T` references create typed locals and move paths without initialization events. Reads fail until a proven write. A direct ordinary `=` may perform the first write to a mutable or immutable local; the exact returning syscall output remains `u64`-only. Immutable locals reject later writes. Exhaustive bounded conditional-assignment arms may each perform the mutually exclusive first write, and the existing CFG intersection proves the join. Reference first writes retain assignment reborrow generations and participate in bounded return-outlives checking. Fat references, aggregates, loop-carried initialization, projected first writes, and general assembly output places remain unsupported. |
 | Modern `no_std` systems features | **PARTIAL** | Dependency-free native code generation covers integers, control flow, arrays, bounded scalar tuples, references, slices, raw pointers, COFF/ELF64, UEFI checks, and NVPTX checks. Up to eight typed x86-64 PC-relative branch-or-data relocations are structurally emitted for both native object formats. General assembly, naked entry-point integration, atomics, SIMD, full ABI/layout, general relocation families, linking, and package compilation remain missing. |
 
 Already implemented post-2024 or forward-looking work should be preserved rather
@@ -1996,6 +1996,23 @@ fails closed. Windows and Arch each passed 647 unit, 1 component, 10
 conformance, and 346 replacement tests (1,004 total). This does not claim general
 pointer provenance inference, references, fat pointers, aggregates, or loop-
 carried initialization.
+
+### Thin-reference delayed-initialization checkpoint
+
+Exact uninitialized `&T` and `&mut T` scalar declarations now use the existing
+assignment reborrow effects and write generations. An immutable uninitialized
+reference is permitted to contribute its one first assignment generation to the
+bounded loan relation; already initialized immutable references remain
+nonassignable. Return-outlives follows that generation to its borrowed path,
+accepting parameter storage and rejecting function-local storage.
+
+The exact ORACLE-0002 Rust 2024 toolchain accepted independently authored
+parameter-backed shared and mutable delayed-reference returns and rejected the
+local-backed form with E0515. ELF64 and COFF replacements cover both accepted
+forms and the local-backed control. Windows and Arch each passed 647 unit, 1
+component, 10 conformance, and 347 replacement tests (1,005 total). This does
+not claim named lifetime inference, fat references, conditional reference first-
+write origin joins, aggregates, or complete Polonius semantics.
 
 ## Non-negotiable implementation rules
 

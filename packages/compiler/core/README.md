@@ -5727,6 +5727,20 @@ nested-loop return coverage, general regions, named lifetime inference, or
 complete Polonius semantics. The `no_std`/allocation/unsafe hygiene scan
 remained empty.
 
+The thin-reference delayed-initialization milestone at `beb37de7` recognizes
+exact uninitialized scalar `&T` and `&mut T` declarations and connects their
+direct assignment reborrow effects to the first write generation. The assigned-
+loan view now admits an immutable local only when its declaration was
+uninitialized; already initialized immutable locals remain nonassignable. The
+bounded return-outlives proof follows that generation to parameter or local
+storage. The pinned ORACLE-0002 toolchain accepted parameter-backed shared and
+mutable delayed returns and rejected the local-backed form with E0515. ELF64 and
+COFF replacements cover all three controls. Windows and native Arch Linux WSL
+each passed 647 library tests, 1 component probe, 10 conformance tests, and 347
+replacement tests: 1,005 compiler tests per host. Named lifetime inference, fat
+references, conditional reference-origin joins, aggregates, and complete
+Polonius semantics are not claimed.
+
 The thin raw-pointer delayed-initialization milestone at `0a5f2cc6` recognizes
 exact uninitialized `*const T` and `*mut T` declarations with a bounded type
 shape and passes direct or exhaustive conditional first writes through the

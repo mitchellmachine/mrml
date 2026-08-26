@@ -1103,3 +1103,12 @@ black-box evidence for that exact thin-pointer form only; it does not establish
 general pointer provenance inference, delayed references, fat pointers,
 aggregates, or loop-carried initialization. Temporary source and metadata were
 removed.
+
+An independently authored Rust 2024 metadata-only delayed-reference set against
+this exact toolchain and commit accepted direct first assignment and return of
+parameter-backed `&u8` and `&mut u32` locals. The equivalent shared reference
+assigned from function-local storage failed with E0515. This is black-box
+evidence for those exact thin direct-assignment and return positions only; it
+does not establish named lifetime inference, fat references, conditional origin
+joins, aggregates, or complete Polonius semantics. Temporary sources and
+metadata were removed.
