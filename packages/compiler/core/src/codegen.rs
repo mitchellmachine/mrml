@@ -35323,6 +35323,8 @@ mod tests {
             "fn value(input: &mut u16, choose: bool) -> &u16 { loop { let returned: &mut u16 = choose(input, choose); let child: &u16 = &*returned; if choose { return child; } return child; } }",
             "fn value(first: &mut u16, second: &mut u16) -> &u16 { let returned: &mut u16 = tuple_field_assign(first, second); let child: &u16 = &*returned; child }",
             "fn value(first: &mut u16, second: &mut u16, choose: bool) -> &u16 { let returned: &mut u16 = branch_tuple_field_assign(first, second, choose); let child: &u16 = &*returned; child }",
+            "fn value(first: &mut u16, second: &mut u16) -> &u16 { let returned: &mut u16 = tuple_field_assign(first, second); let child: &u16 = &*returned; return child; }",
+            "fn value(first: &mut u16, second: &mut u16, choose: bool) -> &u16 { let returned: &mut u16 = branch_tuple_field_assign(first, second, choose); let child: &u16 = &*returned; if choose { return child; } child }",
         ] {
             analyze(source).unwrap();
         }
@@ -35335,6 +35337,8 @@ mod tests {
             "fn value(input: &mut u16, choose: bool) -> &u16 { loop { let mut local = *input; let returned: &mut u16 = choose(&mut local, choose); let child: &u16 = &*returned; if choose { return child; } return child; } }",
             "fn value(first: &mut u16, second: &mut u16) -> &u16 { let mut local = *second; let returned: &mut u16 = tuple_field_assign(first, &mut local); let child: &u16 = &*returned; child }",
             "fn value(first: &mut u16, second: &mut u16, choose: bool) -> &u16 { let mut local = *second; let returned: &mut u16 = branch_tuple_field_assign(first, &mut local, choose); let child: &u16 = &*returned; child }",
+            "fn value(first: &mut u16, second: &mut u16) -> &u16 { let mut local = *second; let returned: &mut u16 = tuple_field_assign(first, &mut local); let child: &u16 = &*returned; return child; }",
+            "fn value(first: &mut u16, second: &mut u16, choose: bool) -> &u16 { let mut local = *second; let returned: &mut u16 = branch_tuple_field_assign(first, &mut local, choose); let child: &u16 = &*returned; if choose { return child; } child }",
         ] {
             assert_eq!(
                 analyze(source).unwrap_err().kind,
