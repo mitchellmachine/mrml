@@ -1475,6 +1475,16 @@ pub enum StableSystemSelectionError<E> {
     InvalidPair(SelectedStableSystemRecoveryError),
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum StableTotalSystemSelectionError<E> {
+    Recovery(RecoveryError<E>),
+    MissingConfiguration,
+    MissingAuthorityCheckpoint,
+    MissingDeploymentCheckpoint,
+    MissingSystemRelease,
+    InvalidSet(SelectedStableSystemRecoveryError),
+}
+
 /// Owns the exact reachable graph selected from redundant stable-storage roots
 /// and the two object identities required for system recovery. File selections
 /// borrow this owner, preventing them from outliving or detaching from the
@@ -1497,6 +1507,51 @@ impl<const EXTENTS: usize, const OBJECTS: usize> RecoveredStableSystemSelection<
             .expect("validated stable-system authority checkpoint remains reachable");
         SelectedStableSystemRecovery::new(configuration, authority_checkpoint)
             .expect("validated stable-system pair remains exact")
+    }
+
+    pub const fn reachable(&self) -> &RecoveredReachableState<EXTENTS, OBJECTS> {
+        &self.reachable
+    }
+}
+
+/// Owns the exact four-file installed Total control-plane selection from one
+/// integrity-validated root. Names identify these files; this owner grants no
+/// file, configuration, deployment, or launch authority.
+pub struct RecoveredStableTotalSystemSelection<const EXTENTS: usize, const OBJECTS: usize> {
+    reachable: RecoveredReachableState<EXTENTS, OBJECTS>,
+    configuration: StorageObjectId,
+    authority_checkpoint: StorageObjectId,
+    deployment_checkpoint: StorageObjectId,
+    system_release: StorageObjectId,
+}
+
+impl<const EXTENTS: usize, const OBJECTS: usize>
+    RecoveredStableTotalSystemSelection<EXTENTS, OBJECTS>
+{
+    pub fn selected(&self) -> SelectedStableTotalSystemRecovery<'_, EXTENTS> {
+        let configuration = self
+            .reachable
+            .select_file(self.configuration)
+            .expect("validated Total configuration remains reachable");
+        let authority_checkpoint = self
+            .reachable
+            .select_file(self.authority_checkpoint)
+            .expect("validated Total authority checkpoint remains reachable");
+        let deployment_checkpoint = self
+            .reachable
+            .select_file(self.deployment_checkpoint)
+            .expect("validated Total deployment checkpoint remains reachable");
+        let system_release = self
+            .reachable
+            .select_file(self.system_release)
+            .expect("validated Total SystemRelease remains reachable");
+        SelectedStableTotalSystemRecovery::new(
+            configuration,
+            authority_checkpoint,
+            deployment_checkpoint,
+            system_release,
+        )
+        .expect("validated Total four-file set remains exact")
     }
 
     pub const fn reachable(&self) -> &RecoveredReachableState<EXTENTS, OBJECTS> {
@@ -2315,6 +2370,62 @@ pub fn recover_stable_system_selection<
     })
 }
 
+/// Selects the four installed control-plane files required to recover Total
+/// placement from one complete redundant-root graph. The result remains
+/// non-authorizing; each later read still requires its exact live capability.
+#[allow(clippy::too_many_arguments)]
+pub fn recover_stable_total_system_selection<
+    B: RecoveryMetadataBackend,
+    const ALLOCATIONS: usize,
+    const DIRECTORIES: usize,
+    const EXTENTS: usize,
+    const OBJECTS: usize,
+>(
+    header: VolumeHeader,
+    primary: &[u8],
+    secondary: &[u8],
+    backend: B,
+    scratch: &mut [u8],
+    configuration: StorageObjectId,
+    authority_checkpoint: StorageObjectId,
+    deployment_checkpoint: StorageObjectId,
+    system_release: StorageObjectId,
+) -> Result<
+    RecoveredStableTotalSystemSelection<EXTENTS, OBJECTS>,
+    StableTotalSystemSelectionError<B::Error>,
+> {
+    let reachable = recover_reachable_state::<_, ALLOCATIONS, DIRECTORIES, EXTENTS, OBJECTS>(
+        header, primary, secondary, backend, scratch,
+    )
+    .map_err(StableTotalSystemSelectionError::Recovery)?;
+    let configuration_selection = reachable
+        .select_file(configuration)
+        .ok_or(StableTotalSystemSelectionError::MissingConfiguration)?;
+    let authority_selection = reachable
+        .select_file(authority_checkpoint)
+        .ok_or(StableTotalSystemSelectionError::MissingAuthorityCheckpoint)?;
+    let deployment_selection = reachable
+        .select_file(deployment_checkpoint)
+        .ok_or(StableTotalSystemSelectionError::MissingDeploymentCheckpoint)?;
+    let release_selection = reachable
+        .select_file(system_release)
+        .ok_or(StableTotalSystemSelectionError::MissingSystemRelease)?;
+    SelectedStableTotalSystemRecovery::new(
+        configuration_selection,
+        authority_selection,
+        deployment_selection,
+        release_selection,
+    )
+    .map_err(StableTotalSystemSelectionError::InvalidSet)?;
+    Ok(RecoveredStableTotalSystemSelection {
+        reachable,
+        configuration,
+        authority_checkpoint,
+        deployment_checkpoint,
+        system_release,
+    })
+}
+
 /// Exact configuration and authority-checkpoint selections from one already
 /// integrity-validated stable-storage root. The pair is non-authorizing: owner
 /// approval, rollback freshness, file capabilities, and dependent validation
@@ -2360,6 +2471,76 @@ impl<'a, const CONFIG_EXTENTS: usize, const AUTH_EXTENTS: usize>
 
     pub const fn authority_checkpoint(&self) -> ReachableFileSelection<'a, AUTH_EXTENTS> {
         self.authority_checkpoint
+    }
+}
+
+/// Exact configuration, authority, deployment-checkpoint, and SystemRelease
+/// selections from one integrity-validated installed root.
+pub struct SelectedStableTotalSystemRecovery<'a, const EXTENTS: usize> {
+    configuration: ReachableFileSelection<'a, EXTENTS>,
+    authority_checkpoint: ReachableFileSelection<'a, EXTENTS>,
+    deployment_checkpoint: ReachableFileSelection<'a, EXTENTS>,
+    system_release: ReachableFileSelection<'a, EXTENTS>,
+}
+
+impl<'a, const EXTENTS: usize> SelectedStableTotalSystemRecovery<'a, EXTENTS> {
+    pub fn new(
+        configuration: ReachableFileSelection<'a, EXTENTS>,
+        authority_checkpoint: ReachableFileSelection<'a, EXTENTS>,
+        deployment_checkpoint: ReachableFileSelection<'a, EXTENTS>,
+        system_release: ReachableFileSelection<'a, EXTENTS>,
+    ) -> Result<Self, SelectedStableSystemRecoveryError> {
+        let selections = [
+            configuration,
+            authority_checkpoint,
+            deployment_checkpoint,
+            system_release,
+        ];
+        for selection in &selections[1..] {
+            if selection.volume() != configuration.volume()
+                || selection.root_generation() != configuration.root_generation()
+            {
+                return Err(SelectedStableSystemRecoveryError::RootMismatch);
+            }
+        }
+        for (index, selection) in selections.iter().enumerate() {
+            if selections[..index]
+                .iter()
+                .any(|present| present.object() == selection.object())
+            {
+                return Err(SelectedStableSystemRecoveryError::DuplicateObject);
+            }
+        }
+        Ok(Self {
+            configuration,
+            authority_checkpoint,
+            deployment_checkpoint,
+            system_release,
+        })
+    }
+
+    pub const fn volume(&self) -> VolumeId {
+        self.configuration.volume()
+    }
+
+    pub const fn root_generation(&self) -> u64 {
+        self.configuration.root_generation()
+    }
+
+    pub const fn configuration(&self) -> ReachableFileSelection<'a, EXTENTS> {
+        self.configuration
+    }
+
+    pub const fn authority_checkpoint(&self) -> ReachableFileSelection<'a, EXTENTS> {
+        self.authority_checkpoint
+    }
+
+    pub const fn deployment_checkpoint(&self) -> ReachableFileSelection<'a, EXTENTS> {
+        self.deployment_checkpoint
+    }
+
+    pub const fn system_release(&self) -> ReachableFileSelection<'a, EXTENTS> {
+        self.system_release
     }
 }
 

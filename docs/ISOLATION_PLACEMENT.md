@@ -1248,6 +1248,16 @@ tests on Windows. KVM source uses the identical path, but its Linux build is
 unavailable here because `cross_host_rust_target` is absent. The probe remains
 controlled hosted evidence, not production service-loop or full-system proof.
 
+The installed production prerequisite now has a **PARTIALLY IMPLEMENTED**
+four-file stable-root selection. Configuration, authority checkpoint,
+deployment checkpoint, and activated SystemRelease must be distinct reachable
+files from one exact integrity-validated volume/root generation. Their names
+identify; the retained graph and selections grant no read or placement
+authority. Focused tests accept the exact set and reject a duplicate object or
+prior-root member. Configuration remains 51 passing tests on Windows. The real
+serviced-volume adapter and service-loop control-plane construction remain
+**PLANNED**.
+
 Complete distinct-domain finalization now has focused **PARTIALLY IMPLEMENTED**
 kernel evidence. A signed two-package fixture assigns both must-run packages to
 different domains and binds the exact activated generation to one Total

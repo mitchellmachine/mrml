@@ -213,6 +213,10 @@ struct ReachableMetadataBackend {
     configuration_extents: [u8; BLOCK_BYTES],
     authority: [u8; BLOCK_BYTES],
     authority_extents: [u8; BLOCK_BYTES],
+    deployment: [u8; BLOCK_BYTES],
+    deployment_extents: [u8; BLOCK_BYTES],
+    release: [u8; BLOCK_BYTES],
+    release_extents: [u8; BLOCK_BYTES],
     allocation: [u8; BLOCK_BYTES],
     object_ids: [u8; BLOCK_BYTES],
 }
@@ -239,6 +243,10 @@ unsafe impl BlockServiceBackend for ReachableMetadataBackend {
             13 => &self.configuration_extents,
             14 => &self.authority,
             15 => &self.authority_extents,
+            16 => &self.deployment,
+            17 => &self.deployment_extents,
+            18 => &self.release,
+            19 => &self.release_extents,
             20 => &self.allocation,
             21 => &self.object_ids,
             _ => return Err(()),
@@ -392,10 +400,14 @@ fn build_reachable_device(
     let root = object(1);
     let configuration = object(9);
     let authority = object(10);
+    let deployment = object(11);
+    let release = object(12);
     let root_pointer = MetadataPointer::new(10, 1).unwrap();
     let entries_pointer = MetadataPointer::new(11, 1).unwrap();
     let configuration_extents_pointer = MetadataPointer::new(13, 1).unwrap();
     let authority_extents_pointer = MetadataPointer::new(15, 1).unwrap();
+    let deployment_extents_pointer = MetadataPointer::new(17, 1).unwrap();
+    let release_extents_pointer = MetadataPointer::new(19, 1).unwrap();
     let allocation_pointer = MetadataPointer::new(20, 1).unwrap();
     let object_ids_pointer = MetadataPointer::new(21, 1).unwrap();
     let candidate = Superblock::new(
@@ -411,7 +423,7 @@ fn build_reachable_device(
     .map_err(|_| HostedRecoveryProbeError::StorageLayout)?;
 
     let mut root_bytes = [0; BLOCK_BYTES];
-    DirectoryMetadata::new(header(), root, 2, None, 2, entries_pointer)
+    DirectoryMetadata::new(header(), root, 2, None, 4, entries_pointer)
         .map_err(|_| HostedRecoveryProbeError::StorageLayout)?
         .encode(
             (&mut root_bytes[..mrml_storage::DIRECTORY_METADATA_BYTES])
@@ -433,9 +445,23 @@ fn build_reachable_device(
             CONFIGURATION_GENERATION,
         )
         .map_err(|_| HostedRecoveryProbeError::StorageLayout)?,
+        DirectoryEntry::new(
+            StorageName::new("deployment-checkpoint").unwrap(),
+            deployment,
+            StorageObjectKind::File,
+            CONFIGURATION_GENERATION,
+        )
+        .map_err(|_| HostedRecoveryProbeError::StorageLayout)?,
+        DirectoryEntry::new(
+            StorageName::new("system-release").unwrap(),
+            release,
+            StorageObjectKind::File,
+            CONFIGURATION_GENERATION,
+        )
+        .map_err(|_| HostedRecoveryProbeError::StorageLayout)?,
     ];
     let mut entry_bytes = [0; BLOCK_BYTES];
-    DirectoryImage::<2>::build(header(), root, 2, entries_pointer, &entries)
+    DirectoryImage::<4>::build(header(), root, 2, entries_pointer, &entries)
         .map_err(|_| HostedRecoveryProbeError::StorageLayout)?
         .encode(&mut entry_bytes)
         .map_err(|_| HostedRecoveryProbeError::StorageLayout)?;
@@ -516,6 +542,84 @@ fn build_reachable_device(
     .encode(&mut authority_extents)
     .map_err(|_| HostedRecoveryProbeError::StorageLayout)?;
 
+    let deployment_data = [0x44; BLOCK_BYTES];
+    let mut deployment_metadata = [0; BLOCK_BYTES];
+    FileMetadata::new(
+        header(),
+        deployment,
+        CONFIGURATION_GENERATION,
+        1,
+        1,
+        deployment_extents_pointer,
+        digest(&deployment_data[..1]),
+    )
+    .map_err(|_| HostedRecoveryProbeError::StorageLayout)?
+    .encode(
+        (&mut deployment_metadata[..mrml_storage::FILE_METADATA_BYTES])
+            .try_into()
+            .unwrap(),
+    );
+    let deployment_extent = ExtentRecord::data(
+        deployment,
+        CONFIGURATION_GENERATION,
+        0,
+        1,
+        32,
+        digest(&deployment_data),
+    )
+    .map_err(|_| HostedRecoveryProbeError::StorageLayout)?;
+    let mut deployment_extents = [0; BLOCK_BYTES];
+    ExtentImage::<1>::build(
+        header(),
+        deployment,
+        CONFIGURATION_GENERATION,
+        1,
+        deployment_extents_pointer,
+        &[deployment_extent],
+    )
+    .map_err(|_| HostedRecoveryProbeError::StorageLayout)?
+    .encode(&mut deployment_extents)
+    .map_err(|_| HostedRecoveryProbeError::StorageLayout)?;
+
+    let release_data = [0x52; BLOCK_BYTES];
+    let mut release_metadata = [0; BLOCK_BYTES];
+    FileMetadata::new(
+        header(),
+        release,
+        CONFIGURATION_GENERATION,
+        1,
+        1,
+        release_extents_pointer,
+        digest(&release_data[..1]),
+    )
+    .map_err(|_| HostedRecoveryProbeError::StorageLayout)?
+    .encode(
+        (&mut release_metadata[..mrml_storage::FILE_METADATA_BYTES])
+            .try_into()
+            .unwrap(),
+    );
+    let release_extent = ExtentRecord::data(
+        release,
+        CONFIGURATION_GENERATION,
+        0,
+        1,
+        33,
+        digest(&release_data),
+    )
+    .map_err(|_| HostedRecoveryProbeError::StorageLayout)?;
+    let mut release_extents = [0; BLOCK_BYTES];
+    ExtentImage::<1>::build(
+        header(),
+        release,
+        CONFIGURATION_GENERATION,
+        1,
+        release_extents_pointer,
+        &[release_extent],
+    )
+    .map_err(|_| HostedRecoveryProbeError::StorageLayout)?
+    .encode(&mut release_extents)
+    .map_err(|_| HostedRecoveryProbeError::StorageLayout)?;
+
     let records = [
         AllocationRecord::new(root, 2, 10, 1, AllocationKind::ObjectMetadata).unwrap(),
         AllocationRecord::new(root, 2, 11, 1, AllocationKind::DirectoryEntries).unwrap(),
@@ -552,6 +656,38 @@ fn build_reachable_device(
         )
         .unwrap(),
         AllocationRecord::new(
+            deployment,
+            CONFIGURATION_GENERATION,
+            16,
+            1,
+            AllocationKind::ObjectMetadata,
+        )
+        .unwrap(),
+        AllocationRecord::new(
+            deployment,
+            CONFIGURATION_GENERATION,
+            17,
+            1,
+            AllocationKind::FileExtents,
+        )
+        .unwrap(),
+        AllocationRecord::new(
+            release,
+            CONFIGURATION_GENERATION,
+            18,
+            1,
+            AllocationKind::ObjectMetadata,
+        )
+        .unwrap(),
+        AllocationRecord::new(
+            release,
+            CONFIGURATION_GENERATION,
+            19,
+            1,
+            AllocationKind::FileExtents,
+        )
+        .unwrap(),
+        AllocationRecord::new(
             root,
             root_generation,
             20,
@@ -583,14 +719,30 @@ fn build_reachable_device(
             AllocationKind::FileData,
         )
         .unwrap(),
+        AllocationRecord::new(
+            deployment,
+            CONFIGURATION_GENERATION,
+            32,
+            1,
+            AllocationKind::FileData,
+        )
+        .unwrap(),
+        AllocationRecord::new(
+            release,
+            CONFIGURATION_GENERATION,
+            33,
+            1,
+            AllocationKind::FileData,
+        )
+        .unwrap(),
     ];
     let mut allocation = [0; BLOCK_BYTES];
-    AllocationImage::<10>::build(header(), root_generation, allocation_pointer, &records)
+    AllocationImage::<16>::build(header(), root_generation, allocation_pointer, &records)
         .map_err(|_| HostedRecoveryProbeError::StorageLayout)?
         .encode(&mut allocation)
         .map_err(|_| HostedRecoveryProbeError::StorageLayout)?;
     let mut object_ids = [0; BLOCK_BYTES];
-    ObjectIdAllocatorImage::build(header(), root_generation, Some(11), object_ids_pointer)
+    ObjectIdAllocatorImage::build(header(), root_generation, Some(13), object_ids_pointer)
         .map_err(|_| HostedRecoveryProbeError::StorageLayout)?
         .encode(&mut object_ids)
         .map_err(|_| HostedRecoveryProbeError::StorageLayout)?;
@@ -616,6 +768,10 @@ fn build_reachable_device(
         configuration_extents,
         authority: authority_metadata,
         authority_extents,
+        deployment: deployment_metadata,
+        deployment_extents,
+        release: release_metadata,
+        release_extents,
         allocation,
         object_ids,
     })
@@ -627,7 +783,7 @@ fn recover_reachable_files<'a>(
     boot: InstalledRecoveryBootIdentity,
     volume_scratch: &'a mut [u8],
 ) -> Result<
-    RecoveredInstalledStableSystemSelection<'a, ReachableMetadataBackend, 1, 1, 1, 3>,
+    RecoveredInstalledStableSystemSelection<'a, ReachableMetadataBackend, 1, 1, 1, 5>,
     HostedRecoveryProbeError,
 > {
     let installed = reacquire_handoff_installed_recovery_device(
@@ -641,7 +797,7 @@ fn recover_reachable_files<'a>(
     let mut primary_read = [0; BLOCK_BYTES];
     let mut secondary_read = [0; BLOCK_BYTES];
     let mut metadata_scratch = [0; BLOCK_BYTES];
-    let recovered = recover_serviced_stable_system_selection::<_, 1, 1, 10, 2, 1, 3>(
+    let recovered = recover_serviced_stable_system_selection::<_, 1, 1, 16, 4, 1, 5>(
         service,
         backend,
         installed,
@@ -1155,7 +1311,10 @@ pub unsafe fn recover_total_control_plane<const DOMAINS: usize>(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{SelectedStableSystemRecovery, SelectedStableSystemRecoveryError};
+    use crate::{
+        SelectedStableSystemRecovery, SelectedStableSystemRecoveryError,
+        SelectedStableTotalSystemRecovery,
+    };
 
     #[test]
     fn stable_system_selection_requires_distinct_files_from_one_exact_root() {
@@ -1205,6 +1364,47 @@ mod tests {
             SelectedStableSystemRecovery::new(
                 configuration_selection,
                 previous.selected().authority_checkpoint(),
+            ),
+            Err(SelectedStableSystemRecoveryError::RootMismatch)
+        ));
+        let deployment_selection = current
+            .recovered
+            .selected
+            .reachable()
+            .select_file(object(11))
+            .unwrap();
+        let release_selection = current
+            .recovered
+            .selected
+            .reachable()
+            .select_file(object(12))
+            .unwrap();
+        let total = SelectedStableTotalSystemRecovery::new(
+            configuration_selection,
+            selected.authority_checkpoint(),
+            deployment_selection,
+            release_selection,
+        )
+        .unwrap();
+        assert_eq!(total.volume(), volume());
+        assert_eq!(total.root_generation(), 14);
+        assert_eq!(total.deployment_checkpoint().object(), object(11));
+        assert_eq!(total.system_release().object(), object(12));
+        assert!(matches!(
+            SelectedStableTotalSystemRecovery::new(
+                configuration_selection,
+                selected.authority_checkpoint(),
+                deployment_selection,
+                configuration_selection,
+            ),
+            Err(SelectedStableSystemRecoveryError::DuplicateObject)
+        ));
+        assert!(matches!(
+            SelectedStableTotalSystemRecovery::new(
+                configuration_selection,
+                previous.selected().authority_checkpoint(),
+                deployment_selection,
+                release_selection,
             ),
             Err(SelectedStableSystemRecoveryError::RootMismatch)
         ));

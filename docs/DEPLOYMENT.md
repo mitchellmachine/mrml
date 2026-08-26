@@ -268,6 +268,16 @@ path but cannot cross-build on this Windows host without `cross_host_rust_target
 Real service-loop construction, distinct-domain launch/cleanup, and end-to-end
 system execution remain **PLANNED**.
 
+Installed-root selection for that production join is now **PARTIALLY
+IMPLEMENTED**. `SelectedStableTotalSystemRecovery` requires four distinct file
+objects—configuration, authority checkpoint, deployment checkpoint, and the
+activated SystemRelease—from one integrity-validated volume/root generation.
+The retaining owner keeps the complete reachable graph alive; the selection is
+data and grants none of the four required file capabilities. Missing files,
+duplicate objects, or prior-root substitution fail before service recovery.
+Configuration remains 51 passing Windows tests. Serviced block-volume recovery
+and live service-loop consumption of this four-file owner remain **PLANNED**.
+
 - Complexity impact: MEDIUM
 - TCB impact: LOW
 - New parser boundary: YES

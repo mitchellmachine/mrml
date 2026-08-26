@@ -1434,6 +1434,15 @@ and prior-root substitution. The current caller is still the controlled hosted
 adapter; durable block-device selection and installed early boot remain
 **PLANNED**.
 
+The installed Total variant is now **PARTIALLY IMPLEMENTED** as
+`SelectedStableTotalSystemRecovery`. Configuration state, its authority
+checkpoint, the deployment checkpoint, and the activated SystemRelease must be
+four distinct reachable files from the same integrity-validated volume/root
+generation. Retaining this selection preserves provenance but grants no read,
+configuration, deployment, or launch authority. Focused controlled tests reject
+duplicate and prior-root members. Serviced-volume and live service-image
+consumption remain **PLANNED**.
+
 `recover_stable_system_selection` now accepts the storage service's existing
 hostile metadata-backend contract, which `BlockVolume` already implements. It
 selects and retains one complete redundant-root graph in
