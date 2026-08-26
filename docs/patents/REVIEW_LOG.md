@@ -1,5 +1,17 @@
 # Patent review log
 
+## 2026-08-26 — Canonical SystemGeneration runtime-inventory catalog
+
+Patent review: **NOT_TRIGGERED** for this conventional bounded canonical metadata
+codec and exact one-for-one record comparison. It serializes caller-supplied
+package identity/version/digest, class, Boolean must-run state, placement bounds,
+supported-form bits, and explanatory text; it performs no classification,
+placement choice, VM construction, fallback, resource selection, transport, or
+runtime enforcement. Manifest-derived classification, signed release
+composition, and system-wide Total enforcement remain **TRIGGERED** under the
+existing adaptive-isolation review. This technical screen establishes neither
+clearance nor infringement and does not replace independent human dual review.
+
 ## 2026-08-26 — Reassigned callee reference-origin inference
 
 Patent review: **NOT_TRIGGERED** for this bounded compiler-analysis increment.

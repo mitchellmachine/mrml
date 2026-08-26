@@ -1074,6 +1074,14 @@ exact application inventory before guest execution and emit the same bounded
 generation-bound proof. This is focused live launch evidence, not recovery
 authority or a complete required-system inventory; both remain **PLANNED**.
 
+Recovery must eventually obtain required-domain classification only from the
+exact release-bound `MRMLRI1` catalog. Its implemented decoder requires the
+catalog to match every identity, version, and artifact digest in canonical
+`MRMLSG2`; a subset, reordered catalog, detached replacement, missing exception
+reason, or changed placement bound is invalid. The catalog carries no recovery,
+launch, or policy authority. Signed release delivery and kernel construction
+from these records remain **PLANNED**.
+
 Application-launch recovery must retain the exact runtime domain, application
 object, immutable application generation and artifact digest, active system
 generation, and applied policy generation. The kernel application route accepts

@@ -222,6 +222,15 @@ on 2026-08-26 each emitted `classified=1`, `eligible=1`, `microvm=1`, and
 SystemGeneration-derived required-system inventory remains the next gate; this
 one-application proof does not establish required-system Total readiness.
 
+The first half of that gate is now **PARTIALLY IMPLEMENTED**: `MRMLRI1` is a
+bounded canonical runtime-inventory catalog whose records exact-bind every
+`MRMLSG2` package identity, version, and artifact digest to Total class,
+must-run state, placement bounds/forms, and explicit exception reason. Complete
+membership equality is mandatory; subsets, substitutions, unknown values,
+invalid bounds, and noncanonical bytes fail. Package-format suites pass 16 tests
+on Windows and Linux. Manifest derivation, signed release delivery, kernel
+inventory construction, and system-wide runtime proof remain next.
+
 Boot-selector groundwork is now **PARTIALLY IMPLEMENTED** without skipping that
 runtime gate. The common UEFI library has one bounded allocation-free UTF-16
 LoadOptions parser for both boot-entry optional data and the EFI Shell form. It

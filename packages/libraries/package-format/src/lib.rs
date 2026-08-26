@@ -7,6 +7,7 @@ mod component_resolution;
 mod core;
 mod interface_catalog;
 mod release;
+mod runtime_inventory;
 mod system_generation;
 mod system_release;
 
@@ -17,5 +18,6 @@ pub use component_resolution::*;
 pub use core::*;
 pub use interface_catalog::*;
 pub use release::*;
+pub use runtime_inventory::*;
 pub use system_generation::*;
 pub use system_release::*;

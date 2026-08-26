@@ -119,6 +119,16 @@ component probe on WHP and nested KVM with zero KVM native fallback. Owner-root
 policy integration, stronger signing-key isolation, Store, installer/recovery
 persistence, rollback, and retained-root integration remain **PLANNED**.
 
+A third canonical release-bound prerequisite is now **PARTIALLY IMPLEMENTED**:
+the allocation-free `MRMLRI1` runtime-inventory catalog. It binds every package
+identity/version/artifact digest in the exact `MRMLSG2` generation to its Total
+class, must-run state, placement bounds, supported forms, and explicit exception
+reason. Decode rejects malformed fields, unknown classes/placements, invalid
+bounds, platform mixing, missing reasons, noncanonical order, and trailing data;
+exact validation rejects any subset or substituted generation member. This
+catalog is metadata and grants no capability. Manifest derivation and inclusion
+in the signed general `SystemRelease` remain **PLANNED**.
+
 - Complexity impact: MEDIUM
 - TCB impact: LOW
 - New parser boundary: YES

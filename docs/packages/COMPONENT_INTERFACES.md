@@ -59,6 +59,16 @@ and rejects truncation, trailing bytes, reserved fields, invalid identities, and
 over-capacity input. The codec is not a signature, admission decision, durable
 root, activation transaction, or authority.
 
+The same package-format layer now has a distinct canonical `MRMLRI1` runtime-
+inventory catalog rather than overloading interface declarations or package
+names with Total-mode meaning. Each entry exact-binds its generation member and
+records runtime class, must-run state, placement bounds/forms, and a mandatory
+reason for non-eligible exceptions. The decoder exact-matches the complete
+`MRMLSG2` membership before the catalog may describe that generation. Neither
+interface metadata nor runtime-inventory metadata grants capabilities. Build-
+tool derivation, signed release delivery, and kernel consumption remain
+**PLANNED**.
+
 **PARTIALLY IMPLEMENTED binding-identity prerequisite:** a fixed-capacity
 `InterfaceBindingTable` publishes generational binding IDs only after exact
 resolution and provider-form checks. Each entry owns immutable copies of the

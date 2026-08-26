@@ -880,6 +880,18 @@ after Total admission and before guest execution; fresh signed probes on
 SystemGeneration-derived required-system inventory remains **PLANNED**, so this
 focused application evidence does not promote Total mode itself.
 
+Its canonical package-to-runtime classification prerequisite is now
+**PARTIALLY IMPLEMENTED** as the allocation-free `MRMLRI1` runtime-inventory
+catalog. Every strictly ordered record binds package identity, version, artifact
+digest, Total class, must-run state, preferred/minimum/maximum placement,
+supported forms, and the explicit reason required for every non-eligible
+exception. A catalog is accepted only when its generation, count, and every
+identity/version/digest exactly match the complete canonical `MRMLSG2` object;
+subsets and detached substitutions fail. Windows and Linux package-format
+suites each pass 16 tests. Manifest V2 derivation, signed `SystemRelease`
+delivery, kernel inventory construction, and complete runtime proof remain
+**PLANNED**.
+
 ```text
 Complexity impact: MEDIUM
 TCB impact: LOW
