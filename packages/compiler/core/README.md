@@ -4005,6 +4005,11 @@ conditional choice between two tuple fields. The pinned oracle rejects live use
 of either owner with E0503 and accepts both after last use. Windows and Arch
 remain at 987 tests.
 
+A shared call through an exact tuple-field parent now has focused invalidation
+coverage against a live mutable child of that field. The pinned oracle rejects
+the overlap with E0502 and accepts the call after the child's last use. Windows
+and Arch remain at 987 tests.
+
 Multi-field initialization uses one independent key per tuple field. An exact
 conditional reference element records an origin only when both arms resolve to
 the same parameter; differing first/second origins remain unavailable. Focused

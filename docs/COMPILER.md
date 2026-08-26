@@ -1082,6 +1082,12 @@ child's last use. ORACLE-0002 reports E0503 for both live-owner controls and
 accepts both restoration controls. This remains a bounded call summary and
 conditional-expression relation, not general interprocedural regions.
 
+A shared call through an exact tuple-field parent now has focused invalidation
+evidence against a live mutable child reborrowed from that field. ORACLE-0002
+rejects the overlapping call with E0502 and accepts the same call after the
+child's last use. The existing call parameter type supplies the shared-reborrow
+context; unknown calls remain conservative.
+
 The first modern trait-solver foundation is an explicit bounded implemented-
 goal representation. Stable trait/type/inference/placeholder identities remain
 distinct; canonicalization replaces inference identities with first-occurrence

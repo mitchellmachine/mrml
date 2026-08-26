@@ -437,6 +437,13 @@ sources and metadata were removed. This is bounded conditional projected-call
 evidence, not general path-sensitive interprocedural region inference.
 
 Another independently authored Rust 2024 metadata-only probe against the same
+exact toolchain and commit passed an exact mutable-reference tuple field to a
+shared `read` function while a mutable child reborrowed from that field remained
+live. The oracle rejected the overlapping call with E0502 and accepted the call
+after the child's last use. Temporary sources and metadata were removed. This is
+projected call-scoped invalidation evidence, not general interprocedural regions.
+
+Another independently authored Rust 2024 metadata-only probe against the same
 exact toolchain and commit accepted assigning a parameter-backed tuple field
 into an existing mutable-reference local and returning that local. The same
 probe accepted an inferred alias initially moved from a local-backed tuple field,

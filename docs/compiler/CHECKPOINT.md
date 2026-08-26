@@ -776,6 +776,12 @@ of each after the assigned child's last use. Windows and Arch each pass 987
 compiler tests. General call summaries and path-sensitive regions remain
 unsupported.
 
+Projected shared-call invalidation now covers a shared call through an exact
+tuple-field parent while a mutable child of that field is live. ORACLE-0002
+rejected the overlap with E0502 and accepted the call after the child's last
+use. Windows and Arch each pass 987 compiler tests. Unknown call summaries and
+general regions remain unsupported.
+
 Multi-field tuple literals retain a separate projected origin per field. A
 conditional reference element seeds its field only when both arms prove the
 same parameter; unequal first/second origins fail closed. Focused caller tests
