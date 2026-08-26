@@ -9421,6 +9421,18 @@ mod tests {
                 .kind,
             SourceTraitObligationErrorKind::Unsatisfied
         );
+
+        let mixed = concat!(
+            "trait Parent<Input> { type Output; } trait Child<T> {} ",
+            "impl<T> Parent<u8> for T { type Output = T; } ",
+            "impl<T: Parent<u8, Output = T>> Child<T> for T {} ",
+            "fn check() where u32: Child<u32> {}"
+        );
+        let module = Parser::new(mixed).parse_module::<10, 1>().unwrap();
+        let traits = SourceTraitDeclarationTable::from_module(&module).unwrap();
+        let implementations =
+            SourceTraitImplementationTable::from_module(&module, &traits).unwrap();
+        implementations.prove_module(&module, &traits).unwrap();
     }
 
     #[test]

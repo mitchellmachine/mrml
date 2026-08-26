@@ -3501,14 +3501,20 @@ impl<'source> Parser<'source> {
             *predicate_count += 1;
             return Ok(());
         }
-        if trait_arguments[..trait_argument_count]
+        let mut positional_arguments = [None; MAX_SOURCE_TRAIT_ARGUMENTS];
+        let mut positional_argument_count = 0usize;
+        let binding_count = trait_arguments[..trait_argument_count]
             .iter()
             .flatten()
-            .any(|argument| !argument.text.contains('='))
-        {
-            return Err(self.error(ParseErrorKind::ExpectedType, None));
+            .filter(|argument| argument.text.contains('='))
+            .count();
+        for argument in trait_arguments[..trait_argument_count].iter().flatten() {
+            if !argument.text.contains('=') {
+                positional_arguments[positional_argument_count] = Some(*argument);
+                positional_argument_count += 1;
+            }
         }
-        if *predicate_count + 1 + trait_argument_count > MAX_FUNCTION_WHERE_PREDICATES {
+        if *predicate_count + 1 + binding_count > MAX_FUNCTION_WHERE_PREDICATES {
             return Err(self.error(ParseErrorKind::TooManyWherePredicates, None));
         }
         predicates[*predicate_count] = Some(TraitImplementationWherePredicate::Implemented {
@@ -3518,11 +3524,14 @@ impl<'source> Parser<'source> {
             },
             trait_name: bound.text,
             trait_name_span: bound.span,
-            trait_arguments: [None; MAX_SOURCE_TRAIT_ARGUMENTS],
-            trait_argument_count: 0,
+            trait_arguments: positional_arguments,
+            trait_argument_count: positional_argument_count,
         });
         *predicate_count += 1;
         for argument in trait_arguments[..trait_argument_count].iter().flatten() {
+            if !argument.text.contains('=') {
+                continue;
+            }
             let Some(equals) = argument.text.find('=') else {
                 unreachable!()
             };
@@ -3552,8 +3561,8 @@ impl<'source> Parser<'source> {
                     },
                     trait_name: bound.text,
                     trait_name_span: bound.span,
-                    trait_arguments: [None; MAX_SOURCE_TRAIT_ARGUMENTS],
-                    trait_argument_count: 0,
+                    trait_arguments: positional_arguments,
+                    trait_argument_count: positional_argument_count,
                     associated_type: name_text,
                     associated_type_span: Span {
                         start: argument.span.start + name_offset,
@@ -4146,10 +4155,22 @@ mod tests {
             })
         ));
 
-        let mixed = Parser::new("trait Child<T: Parent<T, Output = T>> {}")
-            .parse_module::<2, 1>()
-            .unwrap_err();
-        assert_eq!(mixed.kind, ParseErrorKind::ExpectedType);
+        let mixed: TestModule<'_> = Parser::new("trait Child<T: Parent<u8, Output = T>> {}")
+            .parse_module()
+            .unwrap();
+        let Some(Item::Trait(child)) = mixed.items()[0] else {
+            panic!("expected trait")
+        };
+        assert_eq!(
+            child.where_predicates()[0].unwrap().trait_argument_count(),
+            1
+        );
+        assert_eq!(
+            child.where_predicates()[1].unwrap().trait_arguments()[0]
+                .unwrap()
+                .text,
+            "u8"
+        );
     }
 
     #[test]

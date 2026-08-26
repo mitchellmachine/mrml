@@ -563,9 +563,9 @@ mod tests {
     #[test]
     fn proves_associated_bindings_on_parameter_bounds_before_codegen() {
         let source = concat!(
-            "trait Iterator { type Item; } trait Child<T> {} ",
-            "impl<T> Iterator for T { type Item = T; } ",
-            "impl<T: Iterator<Item = T>> Child<T> for T {} ",
+            "trait Iterator<Input> { type Item; } trait Child<T> {} ",
+            "impl<T> Iterator<u8> for T { type Item = T; } ",
+            "impl<T: Iterator<u8, Item = T>> Child<T> for T {} ",
             "#[unsafe(no_mangle)] pub extern \"C\" fn answer() -> u64 ",
             "where u32: Child<u32> { 42 }"
         );
