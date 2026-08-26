@@ -7663,3 +7663,14 @@ sensitive inference, optimization, or code-generation algorithm. Changed and
 local-backed state fails closed; broader compiler completion remains partial.
 This technical screen is not a clearance or infringement conclusion and does
 not replace independent human dual review.
+
+# 2026-08-26 — Loop conditional-return origin transfer
+
+**Result: NOT_TRIGGERED after the loop conditional-return review.** This
+increment routes an already parsed conditional return through the existing
+fixed-capacity local-origin state and function-exit join. It adds no fixed-point
+solver, region or alias analysis, path-sensitive inference, optimization, or
+code-generation algorithm. Local-backed exits fail closed, and unconditional
+or mixed loop-control transfer remains unsupported. Broader compiler completion
+remains partial; this technical screen is not a clearance or infringement
+conclusion and does not replace independent human dual review.
