@@ -36396,6 +36396,7 @@ mod tests {
 
         for source in [
             "fn value(input: &mut u16) -> u16 { let returned: &mut u16 = forward(input); let competing: &mut u16 = &mut *input; *competing += 1; *returned }",
+            "fn value(input: &mut u16, choose: bool) -> u16 { let returned: &mut u16 = forward(if choose { input } else { input }); let competing: &mut u16 = &mut *input; *competing += 1; *returned }",
             "fn value(first: &mut u16, second: &mut u16) -> u16 { let mut returned: &mut u16 = second; returned = forward(first); let competing: &mut u16 = &mut *first; *competing += 1; *returned }",
             "fn value(input: &mut u16) -> u16 { let returned: &mut u16 = reassign_forward(input); let competing: &mut u16 = &mut *input; *competing += 1; *returned }",
             "fn value(input: &mut u16, first: bool) -> u16 { let returned: &mut u16 = branch_forward(input, first); let competing: &mut u16 = &mut *input; *competing += 1; *returned }",
@@ -36426,6 +36427,7 @@ mod tests {
 
         for source in [
             "fn value(input: &mut u16) -> u16 { let returned: &mut u16 = forward(input); *returned += 1; let restored: &mut u16 = &mut *input; *restored }",
+            "fn value(input: &mut u16, choose: bool) -> u16 { let returned: &mut u16 = forward(if choose { input } else { input }); let copied = *returned; *input += 1; copied + *input }",
             "fn value(first: &mut u16, second: &mut u16) -> u16 { let mut returned: &mut u16 = second; returned = forward(first); *returned += 1; let restored: &mut u16 = &mut *first; *restored }",
             "fn value(input: &mut u16) -> u16 { let returned: &mut u16 = reassign_forward(input); *returned += 1; let restored: &mut u16 = &mut *input; *restored }",
             "fn value(input: &mut u16, first: bool) -> u16 { let returned: &mut u16 = branch_forward(input, first); *returned += 1; let restored: &mut u16 = &mut *input; *restored }",
