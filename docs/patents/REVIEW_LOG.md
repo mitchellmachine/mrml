@@ -1,5 +1,17 @@
 # Patent review log
 
+## 2026-08-26 — Retained installed-recovery Total owner
+
+Patent review: **NOT_TRIGGERED** for this ownership-only increment. It uses
+conventional typed composition to retain the already reviewed installed-device
+selection and recovered volume/root identity beside the existing release-owned
+Total admission, with exact equality checks before construction. It adds no
+discovery algorithm, persistent or wire format, cryptography, placement or
+scheduling policy, capability grant, native fallback, VMM/device protocol, DMA
+mechanism, or hardware-specific isolation technique. The underlying storage
+recovery, adaptive-isolation, SystemRelease, and Total-MicroVM reviews remain
+`TRIGGERED`; no patent-clearance or non-infringement conclusion is made.
+
 ## 2026-08-26 — Atomic committed-recovery Total admission join
 
 Patent review: **TRIGGERED** under the existing stable-storage recovery,
@@ -7213,3 +7225,15 @@ analysis, borrow-checking, alias-analysis, optimization, or code-generation
 algorithm. General loop and region fixed points remain absent. Broader compiler
 completion remains partial; this technical screen is not a clearance or
 infringement conclusion and does not replace independent human dual review.
+
+# 2026-08-26 — Nested projected call-derived shared-child return evidence
+
+**Result: NOT_TRIGGERED after the nested projected-return evidence review.**
+This increment adds independently authored regression evidence that existing
+bounded projected callee-origin and return-outlives checks compose at exhaustive
+nested-loop return sites. It introduces no new loop fixed point, lifetime
+inference, interprocedural analysis, borrow-checking, alias-analysis,
+optimization, or code-generation algorithm. General loop and region fixed
+points remain absent. Broader compiler completion remains partial; this
+technical screen is not a clearance or infringement conclusion and does not
+replace independent human dual review.
