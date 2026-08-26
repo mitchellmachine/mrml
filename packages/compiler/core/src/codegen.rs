@@ -2316,14 +2316,24 @@ fn x86_64_naked_att_register(register: &str) -> Option<u8> {
 }
 
 fn x86_64_naked_att_memory_address(operand: &str) -> Option<X86_64NakedMemoryAddress> {
-    let open = operand.find('(')?;
+    let Some(open) = operand.find('(') else {
+        return Some(X86_64NakedMemoryAddress {
+            base: None,
+            index: None,
+            scale: 0,
+            displacement: x86_64_naked_i32(operand.trim())?,
+        });
+    };
     let displacement = operand[..open].trim();
     let registers = operand[open + 1..].strip_suffix(')')?;
     if registers.contains(')') {
         return None;
     }
     let mut fields = registers.split(',');
-    let base = x86_64_naked_att_register(fields.next()?.trim())?;
+    let base = match fields.next()?.trim() {
+        "" => None,
+        base => Some(x86_64_naked_att_register(base)?),
+    };
     let index = fields.next().map(str::trim);
     let scale = fields.next().map(str::trim);
     if fields.next().is_some() {
@@ -2336,13 +2346,7 @@ fn x86_64_naked_att_memory_address(operand: &str) -> Option<X86_64NakedMemoryAdd
             if index == 4 {
                 return None;
             }
-            let scale = match scale {
-                None | Some("1") => 0,
-                Some("2") => 1,
-                Some("4") => 2,
-                Some("8") => 3,
-                _ => return None,
-            };
+            let scale = scale.map_or(Some(0), x86_64_naked_scale)?;
             (Some(index), scale)
         }
         _ => return None,
@@ -2350,12 +2354,7 @@ fn x86_64_naked_att_memory_address(operand: &str) -> Option<X86_64NakedMemoryAdd
     let displacement = if displacement.is_empty() {
         0
     } else {
-        let (bits, negative) = x86_64_naked_signed_immediate(displacement)?;
-        if negative {
-            i32::try_from(i64::from_le_bytes(bits.to_le_bytes())).ok()?
-        } else {
-            i32::try_from(bits).ok()?
-        }
+        x86_64_naked_i32(displacement)?
     };
     Some(X86_64NakedMemoryAddress {
         base,
@@ -2373,7 +2372,10 @@ fn encode_x86_64_naked_memory(
     address: X86_64NakedMemoryAddress,
     terminating: bool,
 ) -> Option<([u8; 10], usize, bool)> {
-    if register >= 16 || address.base >= 16 || address.index.is_some_and(|index| index >= 16) {
+    if register >= 16
+        || address.base.is_some_and(|base| base >= 16)
+        || address.index.is_some_and(|index| index >= 16)
+    {
         return None;
     }
     let mut encoding = [0u8; 10];
@@ -2382,7 +2384,7 @@ fn encode_x86_64_naked_memory(
         | ((wide as u8) << 3)
         | ((register >> 3) << 2)
         | (address.index.map_or(0, |index| index >> 3) << 1)
-        | (address.base >> 3);
+        | address.base.map_or(0, |base| base >> 3);
     if rex != 0x40 {
         encoding[length] = rex;
         length += 1;
@@ -2394,24 +2396,28 @@ fn encode_x86_64_naked_memory(
     encoding[length] = opcode;
     length += 1;
     let register = (register & 7) << 3;
-    let displacement_size = if address.displacement == 0 && address.base & 7 != 5 {
+    let displacement_size = if address.base.is_none() {
+        4
+    } else if address.displacement == 0 && address.base? & 7 != 5 {
         0
     } else if i8::try_from(address.displacement).is_ok() {
         1
     } else {
         4
     };
-    let mode = match displacement_size {
-        0 => 0,
-        1 => 0x40,
+    let mode = match (address.base, displacement_size) {
+        (None, _) => 0,
+        (_, 0) => 0,
+        (_, 1) => 0x40,
         _ => 0x80,
     };
-    let uses_sib = address.index.is_some() || address.base & 7 == 4;
-    encoding[length] = mode | register | if uses_sib { 4 } else { address.base & 7 };
+    let base = address.base.map_or(5, |base| base & 7);
+    let uses_sib = address.base.is_none() || address.index.is_some() || base == 4;
+    encoding[length] = mode | register | if uses_sib { 4 } else { base };
     length += 1;
     if uses_sib {
         let index = address.index.map_or(4, |index| index & 7);
-        encoding[length] = (address.scale << 6) | (index << 3) | (address.base & 7);
+        encoding[length] = (address.scale << 6) | (index << 3) | base;
         length += 1;
     }
     match displacement_size {
@@ -2430,7 +2436,7 @@ fn encode_x86_64_naked_memory(
 
 #[derive(Clone, Copy)]
 struct X86_64NakedMemoryAddress {
-    base: u8,
+    base: Option<u8>,
     index: Option<u8>,
     scale: u8,
     displacement: i32,
@@ -2439,15 +2445,49 @@ struct X86_64NakedMemoryAddress {
 fn x86_64_naked_memory_address(operand: &str) -> Option<X86_64NakedMemoryAddress> {
     let expression = operand.strip_prefix('[')?.strip_suffix(']')?.trim();
     let mut tokens = expression.split_whitespace();
-    let base = x86_64_naked_register(tokens.next()?)?;
+    let first = tokens.next()?;
+    let Some(first_register) = x86_64_naked_register(first) else {
+        let displacement = x86_64_naked_i32(first)?;
+        return tokens.next().is_none().then_some(X86_64NakedMemoryAddress {
+            base: None,
+            index: None,
+            scale: 0,
+            displacement,
+        });
+    };
+    let Some(operator) = tokens.next() else {
+        return Some(X86_64NakedMemoryAddress {
+            base: Some(first_register),
+            index: None,
+            scale: 0,
+            displacement: 0,
+        });
+    };
+    if operator == "*" {
+        if first_register == 4 {
+            return None;
+        }
+        let scale = x86_64_naked_scale(tokens.next()?)?;
+        let mut address = X86_64NakedMemoryAddress {
+            base: None,
+            index: Some(first_register),
+            scale,
+            displacement: 0,
+        };
+        let Some(displacement_operator) = tokens.next() else {
+            return Some(address);
+        };
+        if displacement_operator != "+" && displacement_operator != "-" {
+            return None;
+        }
+        address.displacement = x86_64_naked_displacement(tokens.next()?, displacement_operator)?;
+        return tokens.next().is_none().then_some(address);
+    }
     let mut address = X86_64NakedMemoryAddress {
-        base,
+        base: Some(first_register),
         index: None,
         scale: 0,
         displacement: 0,
-    };
-    let Some(operator) = tokens.next() else {
-        return Some(address);
     };
     if operator != "+" && operator != "-" {
         return None;
@@ -2458,13 +2498,7 @@ fn x86_64_naked_memory_address(operand: &str) -> Option<X86_64NakedMemoryAddress
             return None;
         }
         address.index = Some(index);
-        address.scale = match tokens.next()? {
-            "1" => 0,
-            "2" => 1,
-            "4" => 2,
-            "8" => 3,
-            _ => return None,
-        };
+        address.scale = x86_64_naked_scale(tokens.next()?)?;
         let Some(displacement_operator) = tokens.next() else {
             return Some(address);
         };
@@ -2476,6 +2510,25 @@ fn x86_64_naked_memory_address(operand: &str) -> Option<X86_64NakedMemoryAddress
         address.displacement = x86_64_naked_displacement(next, operator)?;
     }
     tokens.next().is_none().then_some(address)
+}
+
+fn x86_64_naked_scale(scale: &str) -> Option<u8> {
+    Some(match scale {
+        "1" => 0,
+        "2" => 1,
+        "4" => 2,
+        "8" => 3,
+        _ => return None,
+    })
+}
+
+fn x86_64_naked_i32(value: &str) -> Option<i32> {
+    let (bits, negative) = x86_64_naked_signed_immediate(value)?;
+    if negative {
+        i32::try_from(i64::from_le_bytes(bits.to_le_bytes())).ok()
+    } else {
+        i32::try_from(bits).ok()
+    }
 }
 
 fn x86_64_naked_displacement(value: &str, operator: &str) -> Option<i32> {
@@ -29037,6 +29090,34 @@ mod tests {
             ]
         );
 
+        for source in [
+            concat!(
+                "#[unsafe(naked)] unsafe extern \"C\" fn absolute() { naked_asm!(",
+                "\"mov r10, [0x12345678]\", \"mov [r9 * 4 - 16], r11\", ",
+                "\"jmp [0x1234]\"); }"
+            ),
+            concat!(
+                "#[unsafe(naked)] unsafe extern \"C\" fn absolute() { naked_asm!(",
+                "\"movq 0x12345678, %r10\", \"movq %r11, -16(,%r9,4)\", ",
+                "\"jmp *0x1234\", options(att_syntax)); }"
+            ),
+        ] {
+            let module = Parser::new(source).parse_module::<1, 1>().unwrap();
+            let Some(Item::Function(function)) = module.items()[0] else {
+                panic!("expected function")
+            };
+            let code =
+                compile_x86_64_function::<_, 24, 1, 8>(&function, &NoConstants, X86_64Abi::SystemV)
+                    .unwrap();
+            assert_eq!(
+                code.bytes(),
+                &[
+                    0x4c, 0x8b, 0x14, 0x25, 0x78, 0x56, 0x34, 0x12, 0x4e, 0x89, 0x1c, 0x8d, 0xf0,
+                    0xff, 0xff, 0xff, 0xff, 0x24, 0x25, 0x34, 0x12, 0, 0,
+                ]
+            );
+        }
+
         for (source, expected) in [
             (
                 "#[unsafe(naked)] extern \"C\" fn f() { naked_asm!(\"ret\"); }",
@@ -29095,6 +29176,14 @@ mod tests {
                 CodegenErrorKind::InvalidNakedAssembly,
             ),
             (
+                "#[unsafe(naked)] unsafe extern \"C\" fn f() { naked_asm!(\"mov rax, [0x80000000]\", \"ret\"); }",
+                CodegenErrorKind::InvalidNakedAssembly,
+            ),
+            (
+                "#[unsafe(naked)] unsafe extern \"C\" fn f() { naked_asm!(\"mov [rsp * 2], rbx\", \"ret\"); }",
+                CodegenErrorKind::InvalidNakedAssembly,
+            ),
+            (
                 "#[unsafe(naked)] unsafe extern \"C\" fn f() { naked_asm!(\"2:\", \"2:\", \"ret\"); }",
                 CodegenErrorKind::InvalidNakedAssembly,
             ),
@@ -29124,6 +29213,14 @@ mod tests {
             ),
             (
                 "#[unsafe(naked)] unsafe extern \"C\" fn f() { naked_asm!(\"movq (%rax,%rsp,2), %rbx\", \"ret\", options(att_syntax)); }",
+                CodegenErrorKind::InvalidNakedAssembly,
+            ),
+            (
+                "#[unsafe(naked)] unsafe extern \"C\" fn f() { naked_asm!(\"movq 0x80000000, %rax\", \"ret\", options(att_syntax)); }",
+                CodegenErrorKind::InvalidNakedAssembly,
+            ),
+            (
+                "#[unsafe(naked)] unsafe extern \"C\" fn f() { naked_asm!(\"movq %rbx, (,%rsp,2)\", \"ret\", options(att_syntax)); }",
                 CodegenErrorKind::InvalidNakedAssembly,
             ),
             (
