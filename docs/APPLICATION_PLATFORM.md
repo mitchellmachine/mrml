@@ -216,6 +216,17 @@ microVM queue reset invalidates every old ticket. The compositor runtime,
 object-creation policy, presentation, persistent desktop state, guest mapping,
 and WHP/KVM GUI execution remain unimplemented.
 
+The distinct `org.mrml.app.gui-probe` application is now a
+**PARTIALLY IMPLEMENTED** representative client. Its Manifest V2 policy permits
+native-process or microVM placement, while its `no_std` client state machine
+constructs only the canonical interface-owned 312-byte frame and accepts only a
+typed completion for the one outstanding serial. Native and microVM placement
+therefore do not change application protocol bytes. A separately signed release
+image completed the same exact-generation Total-mode CPL3 lifecycle on WHP and
+nested KVM. The executable does not yet send a surface commit from inside the
+guest; application IPC projection, compositor connection, Semantic Scene Graph,
+rendering, and presentation remain **PLANNED**.
+
 Constitution review for this bounded foundation:
 
 ```text

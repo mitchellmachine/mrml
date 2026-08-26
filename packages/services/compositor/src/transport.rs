@@ -1,68 +1,14 @@
 use core::array;
 use mrml_interface_gui_surface_v1 as abi;
+pub use mrml_interface_gui_surface_v1::{
+    SURFACE_CALL_BYTES, SurfaceCallFrame, decode_surface_call, encode_surface_call,
+};
 use mrml_kernel::{
     Capability, ControlEvent, Endpoint, GraphicsProtocolError, SurfaceDataPlaneBinding, TaskId,
     TaskRuntime, TaskRuntimeError, admit_surface_interface_commit,
 };
 
 use crate::GraphicsObjectRegistry;
-
-pub const SURFACE_CALL_BYTES: usize = abi::COMMIT_REQUEST_BYTES + abi::SURFACE_STATE_BYTES;
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub struct SurfaceCallFrame {
-    bytes: [u8; SURFACE_CALL_BYTES],
-}
-
-impl SurfaceCallFrame {
-    const EMPTY: Self = Self {
-        bytes: [0; SURFACE_CALL_BYTES],
-    };
-
-    pub const fn bytes(&self) -> &[u8; SURFACE_CALL_BYTES] {
-        &self.bytes
-    }
-}
-
-pub fn encode_surface_call(
-    surface: abi::OpaqueHandle,
-    output: abi::OpaqueHandle,
-    buffer: abi::OpaqueHandle,
-    state: abi::SurfaceState,
-) -> Result<SurfaceCallFrame, abi::SurfaceProtocolError> {
-    let state_bytes = abi::encode_surface_state(state)?;
-    let view = abi::BorrowedReadView::within(
-        0,
-        abi::SURFACE_STATE_BYTES as u64,
-        abi::SURFACE_STATE_BYTES as u64,
-    )
-    .ok_or(abi::SurfaceProtocolError::InvalidView)?;
-    let request = abi::encode_commit_request(surface, output, buffer, view)?;
-    let mut bytes = [0; SURFACE_CALL_BYTES];
-    bytes[..abi::COMMIT_REQUEST_BYTES].copy_from_slice(&request);
-    bytes[abi::COMMIT_REQUEST_BYTES..].copy_from_slice(&state_bytes);
-    Ok(SurfaceCallFrame { bytes })
-}
-
-pub fn decode_surface_call(
-    payload: &[u8],
-) -> Result<(abi::CommitEnvelope, abi::SurfaceState), abi::SurfaceProtocolError> {
-    if payload.len() != SURFACE_CALL_BYTES {
-        return Err(abi::SurfaceProtocolError::InvalidView);
-    }
-    let request: [u8; abi::COMMIT_REQUEST_BYTES] = payload[..abi::COMMIT_REQUEST_BYTES]
-        .try_into()
-        .map_err(|_| abi::SurfaceProtocolError::InvalidHeader)?;
-    let state_bytes: [u8; abi::SURFACE_STATE_BYTES] = payload[abi::COMMIT_REQUEST_BYTES..]
-        .try_into()
-        .map_err(|_| abi::SurfaceProtocolError::InvalidState)?;
-    let envelope = abi::decode_commit_request(&request, abi::SURFACE_STATE_BYTES as u64)?;
-    if envelope.state.offset() != 0 || envelope.state.length() != abi::SURFACE_STATE_BYTES as u64 {
-        return Err(abi::SurfaceProtocolError::InvalidView);
-    }
-    let state = abi::decode_surface_state(&state_bytes)?;
-    Ok((envelope, state))
-}
 
 #[derive(Debug, Eq, PartialEq)]
 pub enum SurfaceNativeTransportError {
@@ -212,7 +158,7 @@ pub enum SurfaceMicrovmQueueError {
 #[derive(Clone, Copy)]
 struct RequestSlot {
     sequence: u64,
-    frame: SurfaceCallFrame,
+    frame: Option<SurfaceCallFrame>,
     ready: bool,
     inflight: bool,
 }
@@ -220,7 +166,7 @@ struct RequestSlot {
 impl RequestSlot {
     const EMPTY: Self = Self {
         sequence: 0,
-        frame: SurfaceCallFrame::EMPTY,
+        frame: None,
         ready: false,
         inflight: false,
     };
@@ -290,7 +236,7 @@ impl<const N: usize> SurfaceMicrovmQueue<N> {
             return Err(SurfaceMicrovmQueueError::Full);
         }
         slot.sequence = sequence;
-        slot.frame = frame;
+        slot.frame = Some(frame);
         slot.ready = true;
         self.next_submit = next;
         Ok(SurfaceMicrovmTicket {
@@ -322,7 +268,7 @@ impl<const N: usize> SurfaceMicrovmQueue<N> {
                 queue_generation: self.generation,
                 sequence,
             },
-            slot.frame,
+            slot.frame.ok_or(SurfaceMicrovmQueueError::OutOfOrder)?,
         ))
     }
 
@@ -355,7 +301,7 @@ impl<const N: usize> SurfaceMicrovmQueue<N> {
         completion.ready = true;
         request.inflight = false;
         request.sequence = 0;
-        request.frame = SurfaceCallFrame::EMPTY;
+        request.frame = None;
         self.next_complete = next;
         Ok(())
     }

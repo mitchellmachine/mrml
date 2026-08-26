@@ -130,6 +130,14 @@ do not repeat provider resolution or placement policy. Artifact mismatch calls
 neither backend and returns the complete uncommitted transaction for bounded
 cleanup. This is focused hosted transaction evidence, not active
 `SystemGeneration` integration or a general runtime resolver.
+The generation-1 GUI surface interface now owns its complete canonical
+312-byte call frame rather than leaving native IPC or microVM adapters to
+assemble parallel representations. `org.mrml.app.gui-probe` and the compositor
+therefore compile against one exact codec while retaining separate package and
+placement identities. The app can construct protocol bytes and validate typed
+serial completions, but only a control-plane-created capability/handle binding
+can make those bytes actionable. Its current WHP/KVM lifecycle probe does not
+yet carry the frame across guest memory.
 The route and native adapter now additionally retain the active system
 generation. `ZstdResolvedServiceBinding` rejects a route from any other system
 generation even when interface, provider, and policy generations match, and

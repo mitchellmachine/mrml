@@ -41,3 +41,6 @@ targets = ["WINDOWS", "LINUX"]
 
 [[host_test]]
 targets = ["WINDOWS", "LINUX"]
+
+[[projected_build]]
+targets = ["UEFI"]

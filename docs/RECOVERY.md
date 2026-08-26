@@ -1133,6 +1133,14 @@ and Arch Linux/WSL cover the identical wire frame, native no-capability-transfer
 rule, common kernel admission, and stale-ticket rejection after queue reset;
 guest-mapped and recovered execution were not tested.
 
+`org.mrml.app.gui-probe` adds no persistent GUI recovery state. An interrupted
+client commit remains pending only in volatile application memory; recovery
+must discard it, recreate exact capabilities and handles through the control
+plane, and submit a new serial rather than treating an uncertain completion as
+success. Its fresh signed release image completed ordinary Total-mode CPL3
+launch and teardown on WHP and nested KVM, but no interrupted GUI session,
+surface transport, compositor restart, or recovered presentation was exercised.
+
 The focused recovery oracle now includes the two-vCPU component profiles
 `whp_component_service_smp_probe` and `kvm_component_service_smp_probe`. Each
 must use fresh signed kernel/package artifacts, the exact signed ZIM/Zstd

@@ -94,6 +94,14 @@ before returning a data-plane binding; neither transport can mint authority.
 This is **PARTIALLY IMPLEMENTED** hosted transport and unit-test evidence. The
 queue is not yet mapped into a guest, and WHP/KVM execution, presentation, and
 a representative GUI application remain **PLANNED**.
+The representative `org.mrml.app.gui-probe` package is now
+**PARTIALLY IMPLEMENTED** on both sides of that remaining connection. Its
+placement-independent client state machine uses the interface-owned fixed call
+frame, and its separately authenticated PE image completed the same
+generation-bound Total-mode CPL3 launch and teardown on WHP and nested KVM.
+Those probes prove application identity, fail-closed microVM placement, and
+backend lifecycle parity—not an in-guest surface call, compositor execution,
+semantic GUI, rendering, or presentation.
 The first compositor-side object registry is **PARTIALLY IMPLEMENTED** as a
 fixed-capacity `no_std` service component. It retains already-created exact
 capabilities and authoritative descriptors behind generational interface

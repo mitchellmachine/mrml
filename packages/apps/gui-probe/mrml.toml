@@ -1,0 +1,59 @@
+[manifest]
+format = "mrml"
+version = 2
+
+[package]
+default = false
+id = "org.mrml.app.gui-probe"
+kind = "application"
+name = "mrml-gui-probe"
+profile = "system-application"
+
+[isolation]
+default = "native-process"
+minimum = "native-process"
+supported = ["native-process", "microvm"]
+
+[[target]]
+arch = "x86_64"
+environment = "mrml"
+
+[[target]]
+arch = "x86_64"
+environment = "windows"
+
+[[target]]
+arch = "x86_64"
+environment = "linux"
+
+[[artifact]]
+kind = "lib"
+name = "mrml_gui_probe"
+
+[[artifact]]
+kind = "bin"
+name = "mrml-gui-probe"
+
+[rust]
+crate_name = "mrml_gui_probe"
+crate_type = "lib"
+source = "packages/apps/gui-probe/src/lib.rs"
+
+[[dependency]]
+alias = "mrml_interface_gui_surface_v1"
+compile_name = "mrml-interface-gui-surface-v1"
+package = "org.mrml.interface.gui.surface"
+scope = "compile"
+
+[[host_test]]
+targets = ["WINDOWS", "LINUX"]
+
+[[binary]]
+crate_name = "mrml_gui_probe_image"
+output = "mrml-gui-probe"
+self_extern = false
+source = "packages/apps/gui-probe/src/main.rs"
+
+[[target_triple]]
+target = "MRML_NATIVE"
+triple = "x86_64-unknown-uefi"

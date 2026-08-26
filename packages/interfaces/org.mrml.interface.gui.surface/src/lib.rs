@@ -9,6 +9,7 @@ pub const ABI_CALL_HEADER_BYTES: usize = 72;
 pub const COMMIT_REQUEST_BYTES: usize = ABI_CALL_HEADER_BYTES + 40;
 pub const COMMIT_RESPONSE_BYTES: usize = 16;
 pub const SURFACE_STATE_BYTES: usize = 200;
+pub const SURFACE_CALL_BYTES: usize = COMMIT_REQUEST_BYTES + SURFACE_STATE_BYTES;
 pub const MAX_DAMAGE_RECTS: usize = 8;
 pub const MAX_GRAPHICS_DIMENSION: u32 = 16_384;
 pub const MAX_GRAPHICS_BUFFER_BYTES: u64 = 1 << 30;
@@ -63,6 +64,52 @@ pub struct CommitEnvelope {
     pub output: OpaqueHandle,
     pub buffer: OpaqueHandle,
     pub state: BorrowedReadView,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct SurfaceCallFrame {
+    bytes: [u8; SURFACE_CALL_BYTES],
+}
+
+impl SurfaceCallFrame {
+    pub const fn bytes(&self) -> &[u8; SURFACE_CALL_BYTES] {
+        &self.bytes
+    }
+}
+
+pub fn encode_surface_call(
+    surface: OpaqueHandle,
+    output: OpaqueHandle,
+    buffer: OpaqueHandle,
+    state: SurfaceState,
+) -> Result<SurfaceCallFrame, SurfaceProtocolError> {
+    let state_bytes = encode_surface_state(state)?;
+    let view = BorrowedReadView::within(0, SURFACE_STATE_BYTES as u64, SURFACE_STATE_BYTES as u64)
+        .ok_or(SurfaceProtocolError::InvalidView)?;
+    let request = encode_commit_request(surface, output, buffer, view)?;
+    let mut bytes = [0; SURFACE_CALL_BYTES];
+    bytes[..COMMIT_REQUEST_BYTES].copy_from_slice(&request);
+    bytes[COMMIT_REQUEST_BYTES..].copy_from_slice(&state_bytes);
+    Ok(SurfaceCallFrame { bytes })
+}
+
+pub fn decode_surface_call(
+    payload: &[u8],
+) -> Result<(CommitEnvelope, SurfaceState), SurfaceProtocolError> {
+    if payload.len() != SURFACE_CALL_BYTES {
+        return Err(SurfaceProtocolError::InvalidView);
+    }
+    let request: [u8; COMMIT_REQUEST_BYTES] = payload[..COMMIT_REQUEST_BYTES]
+        .try_into()
+        .map_err(|_| SurfaceProtocolError::InvalidHeader)?;
+    let state_bytes: [u8; SURFACE_STATE_BYTES] = payload[COMMIT_REQUEST_BYTES..]
+        .try_into()
+        .map_err(|_| SurfaceProtocolError::InvalidState)?;
+    let envelope = decode_commit_request(&request, SURFACE_STATE_BYTES as u64)?;
+    if envelope.state.offset() != 0 || envelope.state.length() != SURFACE_STATE_BYTES as u64 {
+        return Err(SurfaceProtocolError::InvalidView);
+    }
+    Ok((envelope, decode_surface_state(&state_bytes)?))
 }
 
 pub fn encode_commit_request(
@@ -462,6 +509,32 @@ mod tests {
         assert_eq!(
             encode_surface_state(invalid),
             Err(SurfaceProtocolError::InvalidState)
+        );
+    }
+
+    #[test]
+    fn canonical_call_frame_is_shared_by_clients_and_transports() {
+        let surface = OpaqueHandle::new(1, 2).unwrap();
+        let output = OpaqueHandle::new(3, 4).unwrap();
+        let buffer = OpaqueHandle::new(5, 6).unwrap();
+        let frame = encode_surface_call(surface, output, buffer, state()).unwrap();
+        assert_eq!(frame.bytes().len(), SURFACE_CALL_BYTES);
+        assert_eq!(
+            decode_surface_call(frame.bytes()),
+            Ok((
+                CommitEnvelope {
+                    surface,
+                    output,
+                    buffer,
+                    state: BorrowedReadView::within(
+                        0,
+                        SURFACE_STATE_BYTES as u64,
+                        SURFACE_STATE_BYTES as u64,
+                    )
+                    .unwrap(),
+                },
+                state(),
+            ))
         );
     }
 }

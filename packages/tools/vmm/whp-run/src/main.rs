@@ -26,14 +26,14 @@ use mrml_kernel::{
     CpuBudgetSpec, CpuBudgetTable, CpuRuntimeSlice, DeadlineVmBackend, GPU_DOORBELL_PORT,
     GPU_QUEUE_MESSAGE_BYTES, GpuCommandRing, GpuQueueIdentity, GpuQueueReceiver,
     GpuResourceResponse, GpuResourceResponseSender, GpuSharedQueueLayout, GpuVmmQueueBridge,
-    GuestMemory, HypercallRouter, InterruptPolicy, IsolationAdmissionTable, IsolationMode,
-    IsolationApplicationBackend, IsolationPlacement, IsolationUnavailableReason,
+    GuestMemory, HypercallRouter, InterruptPolicy, IsolationAdmissionTable,
+    IsolationApplicationBackend, IsolationMode, IsolationPlacement, IsolationUnavailableReason,
     MAX_APPLICATION_IMAGE_BYTES, MAX_COMPONENT_IMAGE_REGIONS, MemoryPoolTable,
-    MicrovmPageProjectionKind, ObjectId, PAGE_SIZE, PreparedIsolationServiceRoute, ResourceCommand,
-    PreparedMicrovmApplicationBackend, Rights, SIGNED_ARTIFACT_OVERHEAD_BYTES,
+    MicrovmPageProjectionKind, ObjectId, PAGE_SIZE, PreparedIsolationServiceRoute,
+    PreparedMicrovmApplicationBackend, ResourceCommand, Rights, SIGNED_ARTIFACT_OVERHEAD_BYTES,
     ScheduledDeadlineVmBackend, ScheduledSmpVmBackend, SignedArtifact, TotalMicrovmClass,
-    TrustRoot, VIRTUAL_BLOCK_FEATURE_FLUSH, VcpuReservationId,
-    VerifiedExecutable, VerifiedGpuKernelBundle, VirtualBlockBackend, VirtualBlockBackendAuthority,
+    TrustRoot, VIRTUAL_BLOCK_FEATURE_FLUSH, VcpuReservationId, VerifiedExecutable,
+    VerifiedGpuKernelBundle, VirtualBlockBackend, VirtualBlockBackendAuthority,
     VirtualBlockCompletionStatus, VirtualBlockConfigurationPage, VirtualBlockDevice,
     VirtualBlockDeviceState, VirtualBlockError, VirtualBlockMutationError,
     VirtualBlockPciAttachment, VirtualBlockPciAttachmentState, VirtualBlockPciCleanupMode,
@@ -46,12 +46,11 @@ use mrml_kernel::{
     VirtualPciMemoryBar, VirtualPciMmioWindow, VirtualPciNativeResourceError,
     VirtualPciType0Function, VmBackend, VmDeadlineOutcome, VmExit, VmTable,
     bind_component_service_handoff, bind_verified_application_image, component_image_page_plan,
-    prepare_microvm_guest_ram,
-    release_component_image, release_microvm_guest_ram, reserve_component_image,
-    reserve_isolation_vcpus, reserve_microvm_guest_ram, reserve_microvm_page_projection,
-    route_isolation_application, run_pci_configuration_once,
-    run_pci_configuration_once_with_backend_mapper,
-    run_virtual_block_mmio_transaction_once, run_virtual_block_transaction_once,
+    prepare_microvm_guest_ram, release_component_image, release_microvm_guest_ram,
+    reserve_component_image, reserve_isolation_vcpus, reserve_microvm_guest_ram,
+    reserve_microvm_page_projection, route_isolation_application, run_pci_configuration_once,
+    run_pci_configuration_once_with_backend_mapper, run_virtual_block_mmio_transaction_once,
+    run_virtual_block_transaction_once,
 };
 #[cfg(any(test, target_os = "windows"))]
 use mrml_kernel::{
@@ -78,9 +77,8 @@ type WhpConfigurationLauncher<'system> = PreparedMicrovmConfigurationLauncher<
 >;
 
 #[cfg(target_os = "windows")]
-type WhpApplicationLauncher<'system> = PreparedMicrovmApplicationBackend<
-    AdmittedApplicationGuestFactory<PreparedWhpGuest<'system>>,
->;
+type WhpApplicationLauncher<'system> =
+    PreparedMicrovmApplicationBackend<AdmittedApplicationGuestFactory<PreparedWhpGuest<'system>>>;
 
 #[cfg(target_os = "windows")]
 const COMPONENT_MEMORY_OBJECTS: usize = 4 + 2 * (MAX_COMPONENT_IMAGE_REGIONS + 1);
@@ -654,7 +652,7 @@ const APPLICATION_ARTIFACT_PHYSICAL: u64 = 0x00a0_1000;
 #[cfg(target_os = "windows")]
 const APPLICATION_IMAGE_PHYSICAL: u64 = 0x00a2_0000;
 #[cfg(target_os = "windows")]
-const APPLICATION_STACK_PHYSICAL: u64 = 0x00a2_4000;
+const APPLICATION_STACK_PHYSICAL: u64 = 0x00a2_8000;
 #[cfg(target_os = "windows")]
 const APPLICATION_STACK_TOP: u64 = 0x0090_0000;
 #[cfg(target_os = "windows")]
@@ -1839,7 +1837,16 @@ fn application_main() -> Result<()> {
         );
         return Ok(());
     }
-    let application_mode = arguments.len() == 9 && arguments[5] == "application-probe";
+    let application_package_id = if arguments.len() == 9 {
+        match arguments[5].as_str() {
+            "application-probe" => Some("org.mrml.app.isolation-probe"),
+            "gui-application-probe" => Some("org.mrml.app.gui-probe"),
+            _ => None,
+        }
+    } else {
+        None
+    };
+    let application_mode = application_package_id.is_some();
     let service_mode = arguments.len() == 9 && arguments[5] == "service-probe";
     let component_release_input_mode =
         arguments.len() == 14 && arguments[5] == "component-release-inputs";
@@ -2097,7 +2104,7 @@ fn application_main() -> Result<()> {
                 application.artifact().version(),
                 *application.artifact().digest(),
             )
-            .map_err(|_| anyhow!("invalid typed application launch"))?,
+            .map_err(|error| anyhow!("invalid typed application launch: {:?}", error))?,
         )
     } else {
         None
@@ -2911,18 +2918,24 @@ fn application_main() -> Result<()> {
         isolation_preparation = Some(launch.into_route());
     }
     let mut guest = if let Some(application_executable) = application_executable.as_ref() {
+        let package_id = application_package_id
+            .ok_or_else(|| anyhow!("missing WHP application package identity"))?;
         let record = SystemGenerationDigestRecord {
-            package_id: "org.mrml.app.isolation-probe",
+            package_id,
             version: application_executable.artifact().version(),
             artifact_digest: application_executable.artifact().digest(),
         };
         let mut generation_bytes = [0u8; 256];
         let generation_length = encode_system_generation(1, &[record], &mut generation_bytes)
-            .map_err(|error| anyhow!("application SystemGeneration encoding failed: {:?}", error))?;
+            .map_err(|error| {
+                anyhow!("application SystemGeneration encoding failed: {:?}", error)
+            })?;
         let generation = SystemGenerationView::decode(&generation_bytes[..generation_length])
-            .map_err(|error| anyhow!("application SystemGeneration decoding failed: {:?}", error))?;
+            .map_err(|error| {
+                anyhow!("application SystemGeneration decoding failed: {:?}", error)
+            })?;
         let bound = bind_verified_application_image(
-            "org.mrml.app.isolation-probe",
+            package_id,
             generation,
             application_executable.artifact(),
         )
@@ -2948,7 +2961,9 @@ fn application_main() -> Result<()> {
             .map_err(|error| anyhow!("application Total route failed: {:?}", error))?;
         let endpoint = routed.into_endpoint();
         if endpoint.spec() != spec || !admission.total_microvm_report().satisfied() {
-            return Err(anyhow!("application Total MicroVM admission was not satisfied"));
+            return Err(anyhow!(
+                "application Total MicroVM admission was not satisfied"
+            ));
         }
         WhpGuestOwner::Application { launcher, endpoint }
     } else if let (Some(admission), Some(prepared)) =
@@ -4511,11 +4526,7 @@ fn application_boot_handoff(
         region(0x1000, 2, MemoryKind::Free)?,
         region(0x3000, 1, MemoryKind::Kernel)?,
         region(FRAMEBUFFER, 1, MemoryKind::Mmio)?,
-        region(
-            APPLICATION_ARTIFACT_PHYSICAL,
-            0xff,
-            MemoryKind::Reserved,
-        )?,
+        region(APPLICATION_ARTIFACT_PHYSICAL, 0xff, MemoryKind::Reserved)?,
     ];
     let mut encoded = [0u8; 512];
     let length = encode_handoff_with_application(
@@ -4622,7 +4633,7 @@ mod tests {
             PhysAddr::new(APPLICATION_ARTIFACT_PHYSICAL).unwrap(),
             100_000,
             PhysAddr::new(APPLICATION_IMAGE_PHYSICAL).unwrap(),
-            1,
+            5,
             0x1_4000_0000,
             0x1_4000_0080,
             PhysAddr::new(APPLICATION_STACK_PHYSICAL).unwrap(),

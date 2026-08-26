@@ -2158,7 +2158,13 @@ and 535 kernel tests. Native IPC and a backend-neutral microVM queue are now
 registry/kernel admission; eight focused compositor tests pass on Windows and
 Arch Linux/WSL. The queue is not guest-mapped or exercised through WHP/KVM;
 registry lifecycle in a running compositor and the representative dual-placement
-GUI application remain next.
+GUI application's live surface connection remain next. The new
+`org.mrml.app.gui-probe` already supplies a placement-independent client state
+machine over the interface-owned canonical frame and an independently signed
+application PE. The identical release artifact set completed the ordered
+six-stage signed-kernel CPL3 lifecycle and teardown in Total mode on WHP and
+nested KVM. This is **PARTIALLY IMPLEMENTED** identity/lifecycle parity; the
+executable does not yet issue a surface call from inside either placement.
 
 **PARTIALLY IMPLEMENTED (step 6 registry prerequisite):** the new
 `org.mrml.service.compositor` package owns a bounded volatile generational table

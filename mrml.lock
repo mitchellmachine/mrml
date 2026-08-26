@@ -4,7 +4,7 @@ version = 2
 toolchain = "nightly-2026-08-24"
 
 [graphs]
-compile_edges = 145
+compile_edges = 146
 build_tool_edges = 0
 runtime_interface_edges = 1
 package_edges = 139
@@ -20,6 +20,19 @@ isolation_supported = ["native-process"]
 compile_dependencies = ["org.mrml.library.agent", "org.mrml.library.error", "org.mrml.library.runtime", "org.mrml.library.terminal-style", "org.mrml.tool.host"]
 
 static_runtime = ["org.mrml.library.agent", "org.mrml.library.error", "org.mrml.library.runtime", "org.mrml.library.terminal-style", "org.mrml.tool.host"]
+boot_bound = []
+system_release_bound = []
+
+[[package]]
+id = "org.mrml.app.gui-probe"
+path = "packages/apps/gui-probe"
+isolation_default = "native-process"
+isolation_minimum = "native-process"
+isolation_maximum = "microvm"
+isolation_supported = ["native-process", "microvm"]
+compile_dependencies = ["org.mrml.interface.gui.surface"]
+
+static_runtime = []
 boot_bound = []
 system_release_bound = []
 

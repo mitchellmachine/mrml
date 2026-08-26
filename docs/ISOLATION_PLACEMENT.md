@@ -717,9 +717,12 @@ Documentation is not implementation evidence. Implement bounded milestones:
    manifest policy, a hosted supervised native-service ABI-3 call, and the
    separately hosted WHP/KVM microVM call; general resolver dispatch remains);
 3. one representative dual-placement GUI application (**PARTIALLY IMPLEMENTED**
-   for the generation-bound kernel route and dedicated native-process lifecycle
-   adapter and backend-neutral microVM guest owner; GUI, semantic,
-   image-execution, VM construction, and live backend work remain **PLANNED**);
+   for the generation-bound kernel route, dedicated native-process lifecycle
+   adapter, backend-neutral microVM guest owner, `org.mrml.app.gui-probe` client
+   state machine and exact application identity, and fresh signed WHP/KVM
+   Total-mode CPL3 lifecycle parity; in-guest surface transport, compositor and
+   Semantic Scene Graph integration, rendering, and presentation remain
+   **PLANNED**);
 4. monitor placement visibility;
 5. resource and device projections;
 6. persistent Settings and shell policy;
@@ -727,6 +730,29 @@ Documentation is not implementation evidence. Implement bounded milestones:
 8. bootloader and EFI Shell selectors;
 9. required-system Total readiness and broader application compatibility;
 10. recovery, adversarial, performance, and physical-hardware evidence.
+
+The representative GUI lifecycle evidence used fresh one-time Lamport keys and
+one identical release artifact set on 2026-08-26. Windows and Arch Linux built
+the same application PE with SHA-256
+`711fd41e67b1dbb5fad07ae573de35f328b33bec9e016819b24623245475da5f`.
+The exact build and execution shape was:
+
+```text
+mrml build org.mrml.app.gui-probe --target native --release
+mrml build org.mrml.system.bootloader --target uefi-x86_64 --release --feature-profile application_probe --compile-env MRML_APPLICATION_MIN_VERSION=1 --compile-env MRML_APPLICATION_ROOT_DIGEST_HEX=<fresh-application-public-key-digest>
+mrml-sign sign-bundle application 1 mrml-gui-probe.efi application.private application.signed
+mrml-sign sign-bundle kernel 1 mrml-kernel-pe.efi kernel.private kernel.signed
+mrml package create org.mrml.system.kernel kernel 1 x86_64 kernel kernel.signed kernel.mrp --private-key package.private
+mrml-whp-run.exe kernel.mrp package.public kernel.public 1 gui-application-probe application.signed application.public 1
+mrml-kvm-run kernel.mrp package.public kernel.public 1 gui-application-probe application.signed application.public 1
+```
+
+WHP reported `verify=17783us`, `prepare=3858us`, `execute=3843us`,
+`total=47794us`; nested KVM reported `verify=21682us`, `prepare=2797us`,
+`execute=1268us`, `total=104755us`. Both observed the six ordered signed-kernel
+stages, authenticated CPL3 exit, Total-mode satisfaction with no native
+fallback, and confirmed teardown. These are hosted controlled probes, not
+host-resistant isolation, an in-guest GUI call, bare metal, or physical evidence.
 
 Acceptance includes contradictory-manifest rejection, floor enforcement,
 owner strengthening, authorized Balanced weakening, exact-generation interface
