@@ -8100,3 +8100,14 @@ optimization, or code-generation algorithm. Executable lowering remains
 unsupported. Broader compiler completion remains partial; this technical
 screen is not a clearance or infringement conclusion and does not replace
 independent human dual review.
+
+# 2026-08-26 — Scalar nested branch native lowering
+
+**Result: NOT_TRIGGERED after the scalar lowering review.** This increment
+applies existing x86-64 condition, action, stack-cleanup, branch-patching, and
+return emitters to the bounded nested branch record. It adds no novel
+instruction selection, register allocation, control-flow, optimization,
+fixed-point, region, or alias algorithm. Reference-bearing signatures or bodies
+remain rejected before lowering. Broader compiler completion remains partial;
+this technical screen is not a clearance or infringement conclusion and does
+not replace independent human dual review.
