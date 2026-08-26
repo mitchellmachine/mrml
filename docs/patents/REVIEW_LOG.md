@@ -1,5 +1,31 @@
 # Patent review log
 
+## 2026-08-26 — Typed SATA boot-route extraction design-around
+
+Patent review: **TRIGGERED** because this increment begins the previously
+flagged firmware/native route-correlation mechanism. The implemented portion is
+limited to bounded decoding of the public UEFI ACPI-root, PCI, SATA, hard-drive
+media, and end-node layouts into MRML-owned typed equality data. It implements
+no AHCI command protocol, controller enumeration, DMA, interrupt, queue, or
+hardware behavior. See the authoritative
+[UEFI 2.10 Device Path Protocol](https://uefi.org/specs/UEFI/2.10/10_Protocols_Device_Path_Protocol.html).
+
+Targeted terms review found that UEFI's public specifications page grants
+read-only access unless the no-fee Adopter Agreement is executed, while the
+published contributor agreement describes worldwide RAND—not necessarily
+royalty-free—licenses for Necessary Claims and excludes non-compliant portions.
+See [UEFI specification access](https://uefi.org/specifications), the
+[Adopter Agreement](https://uefi.org/sites/default/files/resources/UEFI_Adopters_Agreement_100907.pdf),
+and the
+[Contributor Agreement](https://uefi.org/sites/default/files/resources/UEFI_Contributors_Agreement_051711.pdf).
+That is not sufficient evidence of a royalty-free patent grant. MRML therefore
+uses a design-around: extract typed route facts while already in the required
+UEFI loader, carry MRML-owned typed data across handoff, and compare native
+enumeration fields without reconstructing UEFI binary paths in native runtime.
+AHCI/USB/VirtIO protocol work remains paused under its existing `TRIGGERED`
+reviews pending targeted worldwide family/status or suitable royalty-free-grant
+evidence. This technical screen is not legal clearance.
+
 ## 2026-08-26 — Shared canonical UEFI device-path structural validation
 
 Patent review: **NOT_TRIGGERED**. This increment moves conventional bounded

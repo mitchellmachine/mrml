@@ -1140,6 +1140,16 @@ contract. Storage passes 128 tests and UEFI 37 tests on Windows and Arch Linux;
 UEFI cross-builds on both. Constructing the canonical path from native AHCI,
 USB, or VirtIO enumeration remains **PLANNED**.
 
+Strict SATA route extraction is now **PARTIALLY IMPLEMENTED** before the native
+boundary. It accepts only one ACPI-rooted path with one to eight bounded PCI
+hops, one valid SATA target, optional consistent partition media identity, and
+canonical termination. The resulting typed fields can be compared directly to
+native enumeration without implementing UEFI path reconstruction after boot;
+the full path digest remains identifying data and neither representation grants
+I/O. Storage passes 129 tests on Windows and Arch Linux; UEFI passes 37 and
+cross-builds on both. Handoff transport and native enumeration remain
+**PLANNED**.
+
 Recovery-session publication is now atomic across a bounded device set.
 `BlockSessionGrant` carries each explicit device/principal/rights decision, and
 `grant_sessions_atomic` preflights every registered identity, rights mask, and

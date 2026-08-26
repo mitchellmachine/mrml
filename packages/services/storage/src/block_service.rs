@@ -18,6 +18,314 @@ pub enum CanonicalUefiBlockDevicePathError {
     MissingEnd,
 }
 
+pub const MAX_CANONICAL_UEFI_PCI_HOPS: usize = 8;
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub struct CanonicalUefiPciHop {
+    device: u8,
+    function: u8,
+}
+
+impl CanonicalUefiPciHop {
+    pub const fn new(device: u8, function: u8) -> Option<Self> {
+        if device > 31 || function > 7 {
+            None
+        } else {
+            Some(Self { device, function })
+        }
+    }
+
+    pub const fn device(self) -> u8 {
+        self.device
+    }
+
+    pub const fn function(self) -> u8 {
+        self.function
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct CanonicalUefiHardDriveMedia {
+    partition_number: u32,
+    partition_start: u64,
+    partition_size: u64,
+    signature: [u8; 16],
+    mbr_type: u8,
+    signature_type: u8,
+}
+
+impl CanonicalUefiHardDriveMedia {
+    pub fn new(
+        partition_number: u32,
+        partition_start: u64,
+        partition_size: u64,
+        signature: [u8; 16],
+        mbr_type: u8,
+        signature_type: u8,
+    ) -> Option<Self> {
+        let media = Self {
+            partition_number,
+            partition_start,
+            partition_size,
+            signature,
+            mbr_type,
+            signature_type,
+        };
+        canonical_hard_drive_media_valid(media).then_some(media)
+    }
+
+    pub const fn partition_number(self) -> u32 {
+        self.partition_number
+    }
+
+    pub const fn partition_start(self) -> u64 {
+        self.partition_start
+    }
+
+    pub const fn partition_size(self) -> u64 {
+        self.partition_size
+    }
+
+    pub const fn signature(self) -> [u8; 16] {
+        self.signature
+    }
+
+    pub const fn mbr_type(self) -> u8 {
+        self.mbr_type
+    }
+
+    pub const fn signature_type(self) -> u8 {
+        self.signature_type
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct CanonicalUefiSataBlockRoute {
+    root_hid: u32,
+    root_uid: u32,
+    pci_hops: [CanonicalUefiPciHop; MAX_CANONICAL_UEFI_PCI_HOPS],
+    pci_hop_count: u8,
+    hba_port: u16,
+    port_multiplier_port: u16,
+    logical_unit: u16,
+    media: Option<CanonicalUefiHardDriveMedia>,
+    stable_id: [u8; 32],
+}
+
+impl CanonicalUefiSataBlockRoute {
+    pub const fn root_hid(self) -> u32 {
+        self.root_hid
+    }
+
+    pub const fn root_uid(self) -> u32 {
+        self.root_uid
+    }
+
+    pub fn pci_hops(&self) -> &[CanonicalUefiPciHop] {
+        &self.pci_hops[..usize::from(self.pci_hop_count)]
+    }
+
+    pub const fn hba_port(self) -> u16 {
+        self.hba_port
+    }
+
+    pub const fn port_multiplier_port(self) -> u16 {
+        self.port_multiplier_port
+    }
+
+    pub const fn logical_unit(self) -> u16 {
+        self.logical_unit
+    }
+
+    pub const fn media(self) -> Option<CanonicalUefiHardDriveMedia> {
+        self.media
+    }
+
+    pub const fn stable_id(self) -> [u8; 32] {
+        self.stable_id
+    }
+
+    /// Compares independently enumerated native route fields with this exact
+    /// boot-extracted route without reconstructing UEFI binary path bytes.
+    /// Equality identifies a candidate only and grants no registration or I/O.
+    pub fn matches_native_route(
+        &self,
+        root_hid: u32,
+        root_uid: u32,
+        pci_hops: &[CanonicalUefiPciHop],
+        hba_port: u16,
+        port_multiplier_port: u16,
+        logical_unit: u16,
+        media: Option<CanonicalUefiHardDriveMedia>,
+    ) -> bool {
+        self.root_hid == root_hid
+            && self.root_uid == root_uid
+            && self.pci_hops() == pci_hops
+            && self.hba_port == hba_port
+            && self.port_multiplier_port == port_multiplier_port
+            && self.logical_unit == logical_unit
+            && self.media == media
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum CanonicalUefiSataRouteError {
+    Path(CanonicalUefiBlockDevicePathError),
+    UnsupportedNode,
+    MissingPciHop,
+    TooManyPciHops,
+    InvalidPciAddress,
+    InvalidSataTarget,
+    InvalidHardDriveMedia,
+}
+
+/// Extracts the exact supported native-comparable SATA route from one
+/// canonical UEFI block device path. Supported order is ACPI root, one to eight
+/// PCI hops, one SATA node, an optional hard-drive media node, and end-entire.
+/// Unknown, reordered, repeated, or malformed nodes fail closed.
+pub fn parse_canonical_uefi_sata_block_route(
+    device_path: &[u8],
+) -> Result<CanonicalUefiSataBlockRoute, CanonicalUefiSataRouteError> {
+    let stable_id =
+        canonical_uefi_block_stable_id(device_path).map_err(CanonicalUefiSataRouteError::Path)?;
+    let mut offset = 0usize;
+    let root = route_node(device_path, &mut offset)?;
+    if root.len() != 12 || root[0] != 2 || root[1] != 1 {
+        return Err(CanonicalUefiSataRouteError::UnsupportedNode);
+    }
+    let root_hid = route_u32(root, 4)?;
+    let root_uid = route_u32(root, 8)?;
+    let mut pci_hops = [CanonicalUefiPciHop::default(); MAX_CANONICAL_UEFI_PCI_HOPS];
+    let mut pci_hop_count = 0usize;
+    loop {
+        let node = route_node(device_path, &mut offset)?;
+        if node[0] == 1 && node[1] == 1 {
+            if node.len() != 6 {
+                return Err(CanonicalUefiSataRouteError::UnsupportedNode);
+            }
+            if pci_hop_count == MAX_CANONICAL_UEFI_PCI_HOPS {
+                return Err(CanonicalUefiSataRouteError::TooManyPciHops);
+            }
+            let function = node[4];
+            let device = node[5];
+            if device > 31 || function > 7 {
+                return Err(CanonicalUefiSataRouteError::InvalidPciAddress);
+            }
+            pci_hops[pci_hop_count] = CanonicalUefiPciHop { device, function };
+            pci_hop_count += 1;
+            continue;
+        }
+        if pci_hop_count == 0 {
+            return Err(CanonicalUefiSataRouteError::MissingPciHop);
+        }
+        if node.len() != 10 || node[0] != 3 || node[1] != 18 {
+            return Err(CanonicalUefiSataRouteError::UnsupportedNode);
+        }
+        let hba_port = route_u16(node, 4)?;
+        let port_multiplier_port = route_u16(node, 6)?;
+        let logical_unit = route_u16(node, 8)?;
+        if hba_port == u16::MAX {
+            return Err(CanonicalUefiSataRouteError::InvalidSataTarget);
+        }
+        let next = route_node(device_path, &mut offset)?;
+        let media = if next[0] == 4 && next[1] == 1 {
+            if next.len() != 42 {
+                return Err(CanonicalUefiSataRouteError::InvalidHardDriveMedia);
+            }
+            let mut signature = [0; 16];
+            signature.copy_from_slice(
+                next.get(24..40)
+                    .ok_or(CanonicalUefiSataRouteError::InvalidHardDriveMedia)?,
+            );
+            let media = CanonicalUefiHardDriveMedia {
+                partition_number: route_u32(next, 4)?,
+                partition_start: route_u64(next, 8)?,
+                partition_size: route_u64(next, 16)?,
+                signature,
+                mbr_type: next[40],
+                signature_type: next[41],
+            };
+            if !canonical_hard_drive_media_valid(media) {
+                return Err(CanonicalUefiSataRouteError::InvalidHardDriveMedia);
+            }
+            let end = route_node(device_path, &mut offset)?;
+            if end != [0x7f, 0xff, 4, 0] {
+                return Err(CanonicalUefiSataRouteError::UnsupportedNode);
+            }
+            Some(media)
+        } else {
+            if next != [0x7f, 0xff, 4, 0] {
+                return Err(CanonicalUefiSataRouteError::UnsupportedNode);
+            }
+            None
+        };
+        if offset != device_path.len() {
+            return Err(CanonicalUefiSataRouteError::UnsupportedNode);
+        }
+        return Ok(CanonicalUefiSataBlockRoute {
+            root_hid,
+            root_uid,
+            pci_hops,
+            pci_hop_count: pci_hop_count as u8,
+            hba_port,
+            port_multiplier_port,
+            logical_unit,
+            media,
+            stable_id,
+        });
+    }
+}
+
+fn route_node<'a>(
+    path: &'a [u8],
+    offset: &mut usize,
+) -> Result<&'a [u8], CanonicalUefiSataRouteError> {
+    let header = path
+        .get(*offset..*offset + UEFI_DEVICE_PATH_HEADER_BYTES)
+        .ok_or(CanonicalUefiSataRouteError::UnsupportedNode)?;
+    let length = usize::from(u16::from_le_bytes([header[2], header[3]]));
+    let end = (*offset)
+        .checked_add(length)
+        .filter(|end| *end <= path.len())
+        .ok_or(CanonicalUefiSataRouteError::UnsupportedNode)?;
+    let node = &path[*offset..end];
+    *offset = end;
+    Ok(node)
+}
+
+fn route_u16(node: &[u8], offset: usize) -> Result<u16, CanonicalUefiSataRouteError> {
+    let bytes = node
+        .get(offset..offset + 2)
+        .ok_or(CanonicalUefiSataRouteError::UnsupportedNode)?;
+    Ok(u16::from_le_bytes([bytes[0], bytes[1]]))
+}
+
+fn route_u32(node: &[u8], offset: usize) -> Result<u32, CanonicalUefiSataRouteError> {
+    let bytes = node
+        .get(offset..offset + 4)
+        .ok_or(CanonicalUefiSataRouteError::UnsupportedNode)?;
+    Ok(u32::from_le_bytes([bytes[0], bytes[1], bytes[2], bytes[3]]))
+}
+
+fn route_u64(node: &[u8], offset: usize) -> Result<u64, CanonicalUefiSataRouteError> {
+    let bytes = node
+        .get(offset..offset + 8)
+        .ok_or(CanonicalUefiSataRouteError::UnsupportedNode)?;
+    Ok(u64::from_le_bytes([
+        bytes[0], bytes[1], bytes[2], bytes[3], bytes[4], bytes[5], bytes[6], bytes[7],
+    ]))
+}
+
+fn canonical_hard_drive_media_valid(media: CanonicalUefiHardDriveMedia) -> bool {
+    media.partition_number != 0
+        && media.partition_size != 0
+        && media
+            .partition_start
+            .checked_add(media.partition_size)
+            .is_some()
+        && media.signature.iter().any(|byte| *byte != 0)
+        && matches!((media.mbr_type, media.signature_type), (1, 1) | (2, 2))
+}
+
 /// Derives the one canonical boot-stable identifier from an already validated
 /// single-instance UEFI device path.
 ///
@@ -1812,6 +2120,91 @@ mod tests {
         assert_eq!(
             canonical_uefi_block_stable_id(&missing_end),
             Err(CanonicalUefiBlockDevicePathError::MissingEnd)
+        );
+    }
+
+    fn canonical_sata_path() -> [u8; 74] {
+        let mut path = [0u8; 74];
+        path[0..4].copy_from_slice(&[2, 1, 12, 0]);
+        path[4..8].copy_from_slice(&0x0a03_41d0u32.to_le_bytes());
+        path[8..12].copy_from_slice(&7u32.to_le_bytes());
+        path[12..18].copy_from_slice(&[1, 1, 6, 0, 2, 5]);
+        path[18..28].copy_from_slice(&[3, 18, 10, 0, 3, 0, 0xff, 0xff, 1, 0]);
+        path[28..32].copy_from_slice(&[4, 1, 42, 0]);
+        path[32..36].copy_from_slice(&2u32.to_le_bytes());
+        path[36..44].copy_from_slice(&2048u64.to_le_bytes());
+        path[44..52].copy_from_slice(&4096u64.to_le_bytes());
+        path[52..68].copy_from_slice(&[0x5a; 16]);
+        path[68] = 2;
+        path[69] = 2;
+        path[70..74].copy_from_slice(&[0x7f, 0xff, 4, 0]);
+        path
+    }
+
+    #[test]
+    fn canonical_sata_route_extracts_exact_root_pci_target_and_media() {
+        let path = canonical_sata_path();
+        let route = parse_canonical_uefi_sata_block_route(&path).unwrap();
+        assert_eq!(route.root_hid(), 0x0a03_41d0);
+        assert_eq!(route.root_uid(), 7);
+        assert_eq!(
+            route.pci_hops(),
+            &[CanonicalUefiPciHop {
+                device: 5,
+                function: 2
+            }]
+        );
+        assert_eq!(route.hba_port(), 3);
+        assert_eq!(route.port_multiplier_port(), u16::MAX);
+        assert_eq!(route.logical_unit(), 1);
+        let media = route.media().unwrap();
+        assert_eq!(media.partition_number(), 2);
+        assert_eq!(media.partition_start(), 2048);
+        assert_eq!(media.partition_size(), 4096);
+        assert_eq!(media.signature(), [0x5a; 16]);
+        assert_eq!(media.mbr_type(), 2);
+        assert_eq!(media.signature_type(), 2);
+        assert_eq!(
+            route.stable_id(),
+            canonical_uefi_block_stable_id(&path).unwrap()
+        );
+        assert!(route.matches_native_route(
+            route.root_hid(),
+            route.root_uid(),
+            route.pci_hops(),
+            route.hba_port(),
+            route.port_multiplier_port(),
+            route.logical_unit(),
+            route.media(),
+        ));
+        assert!(!route.matches_native_route(
+            route.root_hid(),
+            route.root_uid(),
+            route.pci_hops(),
+            route.hba_port() + 1,
+            route.port_multiplier_port(),
+            route.logical_unit(),
+            route.media(),
+        ));
+
+        let mut missing_pci = path;
+        missing_pci[12] = 3;
+        missing_pci[13] = 18;
+        assert_eq!(
+            parse_canonical_uefi_sata_block_route(&missing_pci),
+            Err(CanonicalUefiSataRouteError::MissingPciHop)
+        );
+        let mut invalid_function = path;
+        invalid_function[16] = 8;
+        assert_eq!(
+            parse_canonical_uefi_sata_block_route(&invalid_function),
+            Err(CanonicalUefiSataRouteError::InvalidPciAddress)
+        );
+        let mut invalid_partition = path;
+        invalid_partition[32..36].fill(0);
+        assert_eq!(
+            parse_canonical_uefi_sata_block_route(&invalid_partition),
+            Err(CanonicalUefiSataRouteError::InvalidHardDriveMedia)
         );
     }
 

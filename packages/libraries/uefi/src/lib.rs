@@ -5,11 +5,11 @@ pub mod tpm;
 use core::ffi::c_void;
 use mrml_storage::{
     BlockDeviceDescriptor, BlockDeviceId, BlockVolume, BlockVolumeError,
-    CanonicalUefiBlockDevicePathError, MAX_CANONICAL_UEFI_BLOCK_DEVICE_PATH_BYTES,
-    PlatformBlockDeviceDescriptor, PlatformBlockDeviceIdentity, PlatformBlockTransport,
-    RecoveredReachableState, RecoveryError, SUPERBLOCK_BYTES, StorageBlockDevice,
-    VOLUME_HEADER_BYTES, VolumeHeader, VolumeId, canonical_uefi_block_stable_id,
-    recover_reachable_state,
+    CanonicalUefiBlockDevicePathError, CanonicalUefiSataBlockRoute,
+    MAX_CANONICAL_UEFI_BLOCK_DEVICE_PATH_BYTES, PlatformBlockDeviceDescriptor,
+    PlatformBlockDeviceIdentity, PlatformBlockTransport, RecoveredReachableState, RecoveryError,
+    SUPERBLOCK_BYTES, StorageBlockDevice, VOLUME_HEADER_BYTES, VolumeHeader, VolumeId,
+    canonical_uefi_block_stable_id, parse_canonical_uefi_sata_block_route, recover_reachable_state,
 };
 
 pub type Status = usize;
@@ -723,6 +723,7 @@ pub struct UefiRecoveryHeaderCandidate {
     descriptor: PlatformBlockDeviceDescriptor,
     media: UefiBlockMediaSnapshot,
     header: VolumeHeader,
+    sata_route: Option<CanonicalUefiSataBlockRoute>,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -750,6 +751,10 @@ impl UefiRecoveryHeaderCandidate {
 
     pub const fn header(self) -> VolumeHeader {
         self.header
+    }
+
+    pub const fn sata_route(self) -> Option<CanonicalUefiSataBlockRoute> {
+        self.sata_route
     }
 }
 
@@ -782,6 +787,8 @@ pub unsafe fn probe_uefi_recovery_header(
             let path_length = copy_single_device_path(path, device_path_scratch)?;
             let descriptor =
                 uefi_platform_block_descriptor(id, media, &device_path_scratch[..path_length])?;
+            let sata_route =
+                parse_canonical_uefi_sata_block_route(&device_path_scratch[..path_length]).ok();
             read_uefi_recovery_block(protocol, media, 0, block)?;
             let header = VolumeHeader::decode(&block.as_slice()[..VOLUME_HEADER_BYTES])
                 .map_err(|_| UefiBlockDescriptorError::InvalidVolumeHeader)?;
@@ -797,6 +804,7 @@ pub unsafe fn probe_uefi_recovery_header(
                 descriptor,
                 media,
                 header,
+                sata_route,
             })
         })
     }
@@ -1069,6 +1077,7 @@ pub struct UefiRecoveredInstalledIdentity {
     volume: VolumeId,
     root_block: u64,
     root_generation: u64,
+    sata_route: Option<CanonicalUefiSataBlockRoute>,
 }
 
 impl UefiRecoveredInstalledIdentity {
@@ -1086,6 +1095,10 @@ impl UefiRecoveredInstalledIdentity {
 
     pub const fn root_generation(self) -> u64 {
         self.root_generation
+    }
+
+    pub const fn sata_route(self) -> Option<CanonicalUefiSataBlockRoute> {
+        self.sata_route
     }
 
     pub fn boot_identity(
@@ -1139,6 +1152,7 @@ pub fn bind_recovered_uefi_installed_identity<const EXTENTS: usize, const OBJECT
         volume: expected_volume,
         root_block: root.block(),
         root_generation: expected_root_generation,
+        sata_route: selected.sata_route,
     })
 }
 
@@ -2331,7 +2345,26 @@ mod tests {
             descriptor: uefi_platform_block_descriptor(id, media, &path).unwrap(),
             media,
             header: VolumeHeader::new(volume, 4096, 8, 1, 2).unwrap(),
+            sata_route: None,
         }
+    }
+
+    fn canonical_sata_device_path() -> [u8; 74] {
+        let mut path = [0u8; 74];
+        path[0..4].copy_from_slice(&[2, 1, 12, 0]);
+        path[4..8].copy_from_slice(&0x0a03_41d0u32.to_le_bytes());
+        path[8..12].copy_from_slice(&7u32.to_le_bytes());
+        path[12..18].copy_from_slice(&[1, 1, 6, 0, 2, 5]);
+        path[18..28].copy_from_slice(&[3, 18, 10, 0, 3, 0, 0xff, 0xff, 1, 0]);
+        path[28..32].copy_from_slice(&[4, 1, 42, 0]);
+        path[32..36].copy_from_slice(&2u32.to_le_bytes());
+        path[36..44].copy_from_slice(&2048u64.to_le_bytes());
+        path[44..52].copy_from_slice(&4096u64.to_le_bytes());
+        path[52..68].copy_from_slice(&[0x5a; 16]);
+        path[68] = 2;
+        path[69] = 2;
+        path[70..74].copy_from_slice(&[0x7f, 0xff, 4, 0]);
+        path
     }
 
     fn utf16_ascii(value: &str) -> [u16; MAX_BOOT_LOAD_OPTION_UNITS] {
@@ -2811,7 +2844,7 @@ mod tests {
         media.last_block = 63;
         let mut protocol = block_protocol(&mut media);
         protocol.read_blocks = recovery_block_read;
-        let mut path = [1u8, 1, 8, 0, 0xaa, 0xbb, 0xcc, 0xdd, 0x7f, 0xff, 4, 0];
+        let mut path = canonical_sata_device_path();
         let volume = VolumeId::new([0x51; 16]).unwrap();
         let header = VolumeHeader::new(volume, 4096, 8, 1, 2).unwrap();
         let mut source = [0u8; UEFI_RECOVERY_BLOCK_BYTES];
@@ -2851,6 +2884,10 @@ mod tests {
         assert_eq!(candidate.media().media_id(), 7);
         assert_eq!(candidate.descriptor().block().block_size(), 4096);
         assert_eq!(candidate.descriptor().block().block_count(), 8);
+        let route = candidate.sata_route().unwrap();
+        assert_eq!(route.root_uid(), 7);
+        assert_eq!(route.pci_hops()[0].device(), 5);
+        assert_eq!(route.hba_port(), 3);
         assert!(block.as_slice().iter().all(|byte| *byte == 0));
         assert_eq!(MOCK_CLOSE_CALLS.load(Ordering::SeqCst), 2);
 

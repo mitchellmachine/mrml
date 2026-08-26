@@ -3032,3 +3032,13 @@ driver can therefore reconstruct the same route without inventing a second
 identity scheme. Storage passes 128 tests and UEFI 37 tests on Windows and Arch
 Linux, with UEFI cross-builds on both. Native path reconstruction, protocol
 enumeration, driver attachment, OVMF, and physical evidence remain **PLANNED**.
+
+The first typed firmware/native route bridge is now **PARTIALLY IMPLEMENTED**
+for the strict SATA shape. A bounded parser accepts only ACPI root, one through
+eight valid PCI hops, one SATA target, an optional internally consistent
+hard-drive media node, and canonical end-entire. It retains the full stable-ID
+digest while exposing exact typed fields for equality against independently
+enumerated native state. Native comparison does not recreate UEFI binary path
+bytes and grants no authority. Storage passes 129 tests on Windows and Arch
+Linux; UEFI remains 37 tests and cross-builds on both. Carrying this typed route
+through handoff and a reviewed native enumerator remain the next gates.

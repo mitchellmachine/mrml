@@ -219,6 +219,16 @@ an independently reconstructed route using exactly the boot algorithm, but it
 does not reconstruct that route or grant device authority. Storage passes 128
 tests and UEFI 37 tests on Windows and Arch Linux; UEFI cross-builds on both.
 
+The supported SATA route now has a **PARTIALLY IMPLEMENTED** typed extraction
+design-around. `parse_canonical_uefi_sata_block_route` accepts only ACPI root,
+one to eight valid PCI nodes, SATA target, optional valid hard-drive media node,
+and end-entire. It retains the exact full-path stable digest and compares native
+root/PCI/SATA/partition fields directly; native code need not reconstruct UEFI
+binary path bytes. The typed route is data, not registration or I/O authority.
+Storage passes 129 tests on Windows and Arch Linux; UEFI remains 37 tests and
+cross-builds on both. Native AHCI enumeration and typed handoff remain
+**PLANNED**.
+
 The `mrml` frontend may expose structured `disk`, `filesystem`, `optical`, and
 `media` operations. The PowerShell-inspired shell projects the same backend as
 typed `Get-*`, `Test-*`, `Initialize-*`, `New-*`, `Format-*`, `Write-*`, and

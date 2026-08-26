@@ -8640,3 +8640,12 @@ and UEFI consumes it. The result is identity data only;
 it cannot open, map, register, or authorize a device. Storage passes 128 tests
 and UEFI 37 tests on Windows and Arch Linux, with UEFI cross-builds on both.
 Native reconstruction of those canonical bytes remains **PLANNED**.
+
+The design now avoids native reconstruction of UEFI bytes. A **PARTIALLY
+IMPLEMENTED** bounded extractor converts the supported ACPI/PCI/SATA/optional
+partition path into typed route fields during the firmware-side phase, retains
+the exact full-path stable digest, and offers equality against independently
+enumerated native fields. Unknown ordering, excess PCI depth, invalid BDF,
+reserved SATA port, inconsistent partition identity, and trailing nodes fail
+closed. Storage passes 129 tests on Windows and Arch Linux. Encoding this typed
+route in `BootHandoff` and consuming real native enumeration remain **PLANNED**.
