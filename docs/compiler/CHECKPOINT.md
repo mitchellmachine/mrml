@@ -659,10 +659,18 @@ stable local index plus a validated nonempty projection. Entries retain final
 projected type, parameter origin, and checked monotonic generation. Exact
 replacement updates one key; branch intersection keeps only identical typed
 origins and preserves the maximum generation. Invalid/empty projections and
-capacity overflow fail closed. Windows and Arch each pass 641 library, 1
-component, 10 conformance, and 335 replacement tests: 987 per host. Transfer
-integration remains unimplemented, so projected callee assignments still fail
-closed.
+capacity overflow fail closed. The first transfer integration now accepts one
+exact straight-line numeric tuple-field assignment on a mutable local. The RHS
+must match the projected field type; assignment replaces or clears the field
+generation, and return inference consults the exact projected state. Existing
+dereference/subslice local-origin behavior is unchanged. Conditional and loop
+projected writes still fail closed until their projected joins are connected.
+ORACLE-0002 accepts a field initialized from one mutable-reference parameter and
+replaced by a second, accepts owner reuse after the returned child's last use,
+and rejects a live competing borrow of the second owner with E0499. It rejects
+local-backed field initialization followed by parameter replacement with E0515,
+and MRML likewise does not claim that shape. Windows and Arch each pass 641
+library, 1 component, 10 conformance, and 335 replacement tests: 987 per host.
 
 Inferred locals now become reassignment-origin eligible only when their
 initializer already proved a compatible parameter origin. This preserves valid

@@ -3943,8 +3943,20 @@ independently of the declared function return.
 Projected callee origins now have a separate fixed-capacity typed state keyed by
 stable local index and a canonical nonempty projection. It retains final type,
 parameter origin, and monotonic generation; branch intersection keeps only
-identical typed origins. This is the prerequisite representation only:
-projected assignment transfer remains fail-closed until it is connected.
+identical typed origins.
+
+The first connected transfer is an exact straight-line numeric tuple-field
+assignment on a mutable local. The resolver validates the RHS reference type,
+replaces or clears that field's generation, and uses the exact field origin for
+return inference while preserving root-origin handling for dereferences and
+subslice paths. Focused tests cover replacement from the first parameter to the
+second, local-backed clearing, invalid fields, a live competing borrow, and
+post-last-use owner reuse. Conditional and loop projected writes remain fail-
+closed. The exact dated oracle accepts the two-parameter replacement and rejects
+the live competitor with E0499; it rejects a local-backed initialization followed
+by parameter replacement with E0515, so that shape remains outside MRML's
+accepted subset. Windows and Arch each pass 641 library, 1 component, 10
+conformance, and 335 replacement tests (987 per host).
 
 The conditional projected-reassignment milestone extends the bounded tuple-field
 loan chain across a conditional shared-reference assignment. The exact dated

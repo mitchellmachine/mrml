@@ -288,6 +288,21 @@ expression-indexed output shapes only; it does not establish general expression,
 evaluation-order, place, register-allocation, memory-effect, or assembly
 semantics. Temporary source and metadata were removed.
 
+## Straight-line tuple-field callee-origin follow-up
+
+On 2026-08-26, an independently authored Rust 2024 metadata-only probe against
+this exact toolchain and commit accepted a mutable-reference callee that
+initialized a one-element tuple field from one parameter, replaced that field
+with a second parameter, returned the field, and allowed the second owner to be
+reborrowed after the returned child's last use. A separate invocation rejected
+a competing mutable borrow of the second owner while that child remained live
+with E0499. The oracle rejected with E0515 a superficially similar callee whose
+field was initialized from local storage before parameter replacement. MRML
+therefore admits only the exact parameter-backed straight-line replacement and
+continues to reject the local-backed divergence. Temporary probe sources and
+metadata were removed. This is black-box evidence for that bounded shape, not
+general aggregate dataflow, conditional joins, loops, or region inference.
+
 An independently authored Rust 2024 metadata-only probe against that same exact
 toolchain and commit compiled `asm!("cmp rcx, rcx", in("rcx") value,
 options(nomem, nostack))`. This records black-box acceptance of that exact

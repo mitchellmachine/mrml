@@ -936,6 +936,19 @@ intersection retains only identical typed origins and the maximum observed
 generation. The state is not yet wired into callee transfer, so projected local
 assignments remain unsupported rather than falling back to scalar state.
 
+The first transfer integration admits one exact straight-line numeric tuple-
+field assignment on a mutable local. It validates the assignment RHS against
+the field type, records or replaces the field's parameter origin, clears a
+previous field origin when the RHS is local-backed, and consults that exact
+field state on return. Non-tuple projections retain their established root-
+origin behavior. Conditional and loop projected writes remain unsupported
+until their bounded state joins are connected. ORACLE-0002 accepts replacing a
+field initialized from one mutable-reference parameter with a second parameter,
+accepts owner reuse after the returned child's last use, and rejects a competing
+borrow of the second parameter while the child remains live with E0499. It
+rejects the superficially similar local-backed initialization-and-replacement
+shape with E0515, so MRML does not admit that divergence.
+
 The first modern trait-solver foundation is an explicit bounded implemented-
 goal representation. Stable trait/type/inference/placeholder identities remain
 distinct; canonicalization replaces inference identities with first-occurrence
