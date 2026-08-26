@@ -45,6 +45,12 @@ provider_profile = "core"
 scope = "compile"
 
 [[dependency]]
+alias = "mrml_deployment"
+compile_name = "mrml-deployment"
+package = "org.mrml.service.deployment"
+scope = "compile"
+
+[[dependency]]
 alias = "mrml_kernel"
 compile_name = "mrml-kernel"
 package = "org.mrml.system.kernel"

@@ -516,6 +516,16 @@ passing tests and exercises the resulting microVM route commitment and strict
 runtime authorization. Production service-loop invocation and complete
 multi-domain WHP/KVM launch are the next dependency gates.
 
+The authenticated cross-service owner is now **PARTIALLY IMPLEMENTED**.
+Deployment seals its exact assigned release while retaining the recovery epoch,
+selected checkpoint evidence, and recovered deployment service. Configuration
+consumes that retained inventory into one owner that also retains the delivered
+configuration recovery and sole installed admission table. No detached sealed
+release survives a failed policy, assignment, installed-identity, or admission
+join. Deployment passes 6 tests and configuration 51 tests on Windows. The next
+gate is real service-loop construction followed by distinct-domain backend
+construction and cleanup; end-to-end Total mode remains **PLANNED**.
+
 Backend probe wiring now **PARTIALLY IMPLEMENTS** the recovered assignment
 path on both WHP and KVM sources. Each runner enumerates the exact two signed
 release records, capability-reads their persisted component policy through the

@@ -1226,6 +1226,15 @@ configuration suite remains 51 passing tests and continues through exact
 microVM route commitment and strict runtime authorization. Real service-loop
 invocation and multi-domain WHP/KVM execution remain **PLANNED**.
 
+Configuration and deployment now share a **PARTIALLY IMPLEMENTED** retained
+control-plane owner. The recovered assignment can seal only into an activated
+inventory that still owns its authenticated deployment recovery evidence;
+configuration consumes that inventory and retains the deployment owner beside
+its delivered configuration owner and the only installed Total admission table.
+This join does not grant capabilities or prove execution. Deployment passes 6
+tests and configuration 51 tests on Windows. Service-loop invocation, distinct
+domain construction/cleanup, and complete WHP/KVM execution remain **PLANNED**.
+
 The shared hosted recovery probe and both backend runners now
 **PARTIALLY IMPLEMENT** recovered owner-policy assignment instead of minting a
 release inventory directly in a runner callback. The callback receives the

@@ -22,6 +22,13 @@ ownership and sequencing of the same existing checks and introduces no new
 placement, VM, scheduling, storage-protocol, DMA, queue, interrupt, or hardware
 mechanism.
 
+Sealing that assignment into a typed owner and retaining it beside the existing
+delivered configuration owner and admission table is also **NOT_TRIGGERED**.
+This is conventional ownership composition and failure ordering; it adds no VM
+construction, placement algorithm, scheduler, interface transport, device, DMA,
+queue, interrupt, or hardware mechanism. The broader adaptive/Total MicroVM
+mechanism remains **TRIGGERED**.
+
 ## 2026-08-26 — Canonical one-use installed recovery envelope
 
 Patent review: **NOT_TRIGGERED** for extending the existing one-use boot-recovery

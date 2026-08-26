@@ -253,6 +253,16 @@ suite remains 51 passing tests through microVM route commitment and strict
 runtime authorization. Live service-loop invocation and complete multi-domain
 launch remain **PLANNED**.
 
+The cross-service owner is now **PARTIALLY IMPLEMENTED**. Deployment seals an
+assigned release only into `RecoveredDeploymentRuntimeInventory`, retaining its
+authenticated recovery owner until configuration consumes the exact inventory.
+Configuration then returns one `RecoveredDeploymentTotalControlPlane` retaining
+both delivered configuration recovery and deployment recovery beside the sole
+installed admission table. Assignment, sealing, policy binding, or installed
+identity failure returns no joined owner. Deployment passes 6 tests and
+configuration 51 tests on Windows. Real service-loop construction of this owner,
+all-domain launch/cleanup, and end-to-end backend execution remain **PLANNED**.
+
 - Complexity impact: MEDIUM
 - TCB impact: LOW
 - New parser boundary: YES

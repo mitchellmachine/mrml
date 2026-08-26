@@ -15,6 +15,7 @@ use core::mem::size_of;
 use core::ops::{Deref, DerefMut};
 
 use mrml_crypto::Sha3_256;
+use mrml_deployment::{RecoveredDeploymentOwner, RecoveredRuntimeAssignment};
 use mrml_kernel::arch::x86_64::UserContext;
 use mrml_kernel::{
     ActivatedReleaseTotalMicrovmInventory, BootHandoff, BootIsolationOverride,
@@ -2626,6 +2627,22 @@ pub struct DeliveredRecoveredSystemState<
     delivered: BootRecoveryEnvelope,
 }
 
+/// Single Total-mode control-plane owner retaining both authenticated service
+/// recoveries beside the only installed admission table they produced. It
+/// grants no launch authority beyond the capabilities checked by the retained
+/// admission owner.
+pub struct RecoveredDeploymentTotalControlPlane<
+    const GRANTS: usize,
+    const SETTINGS: usize,
+    const AUDIT: usize,
+    const CANDIDATES: usize,
+    const DOMAINS: usize,
+> {
+    configuration: DeliveredRecoveredSystemState<GRANTS, SETTINGS, AUDIT>,
+    deployment: RecoveredDeploymentOwner<CANDIDATES>,
+    admission: RecoveredInstalledTotalAdmission<DOMAINS>,
+}
+
 impl<const GRANTS: usize, const SETTINGS: usize, const AUDIT: usize>
     RecoveredSystemState<GRANTS, SETTINGS, AUDIT>
 {
@@ -3230,6 +3247,73 @@ impl<const GRANTS: usize, const SETTINGS: usize, const AUDIT: usize>
         .map_err(RecoveredAssignedTotalAdmissionError::Installed)
     }
 
+    /// Consumes the authenticated deployment owner and its exact active-release
+    /// assignment into one retained control-plane owner. Failure publishes no
+    /// admission and cannot leave a detached sealed release behind.
+    #[allow(clippy::too_many_arguments)]
+    pub fn build_recovered_deployment_total_control_plane<
+        'release,
+        const CANDIDATES: usize,
+        const DOMAINS: usize,
+        A: CapabilityAuthorizer + ?Sized,
+    >(
+        self,
+        installed: InstalledRecoveryDeviceSelection,
+        capabilities: &A,
+        system: IsolationPolicySetting,
+        system_read: Capability,
+        component: IsolationPolicySetting,
+        component_read: Capability,
+        mut deployment: RecoveredRuntimeAssignment<'release, CANDIDATES, DOMAINS>,
+        bindings: &[RuntimeDomainPolicyBinding<'_>],
+    ) -> Result<
+        RecoveredDeploymentTotalControlPlane<GRANTS, SETTINGS, AUDIT, CANDIDATES, DOMAINS>,
+        RecoveredAssignedTotalAdmissionError,
+    > {
+        let (recovery_volume, recovery_root_generation) = validate_installed_selection_for_parts(
+            installed,
+            self.delivered.installed(),
+            self.delivered.sata_route(),
+        )
+        .map_err(RecoveredAssignedTotalAdmissionError::Installed)?;
+        let policy = self
+            .compose_boot_isolation_policy(
+                capabilities,
+                system,
+                system_read,
+                component,
+                component_read,
+            )
+            .map_err(RecoveredAssignedTotalAdmissionError::Policy)?;
+        if deployment.assignment().policy_generation() != policy.effective().policy_generation() {
+            return Err(RecoveredAssignedTotalAdmissionError::Assignment(
+                RecoveredRuntimeDomainPolicyError::PolicyGenerationMismatch,
+            ));
+        }
+        self.recovered
+            .assign_runtime_domains(capabilities, deployment.assignment_mut(), bindings)
+            .map_err(RecoveredAssignedTotalAdmissionError::Assignment)?;
+        let deployment = deployment
+            .seal()
+            .map_err(RecoveredAssignedTotalAdmissionError::Release)?;
+        let (deployment, release) = deployment.into_parts();
+        let total = policy
+            .bind_release_inventory(release)
+            .map_err(RecoveredAssignedTotalAdmissionError::Policy)?;
+        let admission = RecoveredInstalledTotalAdmission::bind_identity(
+            installed,
+            recovery_volume,
+            recovery_root_generation,
+            total,
+        )
+        .map_err(RecoveredAssignedTotalAdmissionError::Installed)?;
+        Ok(RecoveredDeploymentTotalControlPlane {
+            configuration: self,
+            deployment,
+            admission,
+        })
+    }
+
     pub fn into_parts(
         self,
     ) -> (
@@ -3237,6 +3321,41 @@ impl<const GRANTS: usize, const SETTINGS: usize, const AUDIT: usize>
         BootRecoveryEnvelope,
     ) {
         (self.recovered, self.delivered)
+    }
+}
+
+impl<
+    const GRANTS: usize,
+    const SETTINGS: usize,
+    const AUDIT: usize,
+    const CANDIDATES: usize,
+    const DOMAINS: usize,
+> RecoveredDeploymentTotalControlPlane<GRANTS, SETTINGS, AUDIT, CANDIDATES, DOMAINS>
+{
+    pub const fn configuration(&self) -> &DeliveredRecoveredSystemState<GRANTS, SETTINGS, AUDIT> {
+        &self.configuration
+    }
+
+    pub const fn deployment(&self) -> &RecoveredDeploymentOwner<CANDIDATES> {
+        &self.deployment
+    }
+
+    pub const fn admission(&self) -> &RecoveredInstalledTotalAdmission<DOMAINS> {
+        &self.admission
+    }
+
+    pub fn admission_mut(&mut self) -> &mut RecoveredInstalledTotalAdmission<DOMAINS> {
+        &mut self.admission
+    }
+
+    pub fn into_parts(
+        self,
+    ) -> (
+        DeliveredRecoveredSystemState<GRANTS, SETTINGS, AUDIT>,
+        RecoveredDeploymentOwner<CANDIDATES>,
+        RecoveredInstalledTotalAdmission<DOMAINS>,
+    ) {
+        (self.configuration, self.deployment, self.admission)
     }
 }
 

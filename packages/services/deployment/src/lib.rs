@@ -11,8 +11,8 @@ use core::array;
 
 use mrml_crypto::Sha3_256;
 use mrml_kernel::{
-    Capability, CapabilitySpace, ObjectId, ReleaseInventoryError, Rights,
-    RuntimeDomainAssignmentPlan,
+    ActivatedReleaseTotalMicrovmInventory, Capability, CapabilitySpace, ObjectId,
+    ReleaseInventoryError, Rights, RuntimeDomainAssignmentPlan,
 };
 use mrml_package_format::{
     ActivatedSystemGeneration, ActivatedSystemGenerationError, ActivatedSystemRelease,
@@ -1129,6 +1129,55 @@ pub struct RecoveredRuntimeAssignment<'a, const CANDIDATES: usize, const DOMAINS
     assignment: RuntimeDomainAssignmentPlan<'a, DOMAINS>,
 }
 
+/// Authenticated deployment recovery retained beside the exact activated
+/// runtime inventory produced from its selected SystemRelease. This owner is
+/// non-authorizing; configuration, resource, route, and launch capabilities
+/// remain mandatory.
+pub struct RecoveredDeploymentOwner<const CANDIDATES: usize> {
+    service: DeploymentService<CANDIDATES>,
+    recovery: DeploymentRecoveryState,
+}
+
+impl<const CANDIDATES: usize> RecoveredDeploymentOwner<CANDIDATES> {
+    pub const fn service(&self) -> &DeploymentService<CANDIDATES> {
+        &self.service
+    }
+
+    pub const fn recovery(&self) -> DeploymentRecoveryState {
+        self.recovery
+    }
+
+    pub fn into_parts(self) -> (DeploymentService<CANDIDATES>, DeploymentRecoveryState) {
+        (self.service, self.recovery)
+    }
+}
+
+pub struct RecoveredDeploymentRuntimeInventory<const CANDIDATES: usize, const DOMAINS: usize> {
+    owner: RecoveredDeploymentOwner<CANDIDATES>,
+    release: ActivatedReleaseTotalMicrovmInventory<DOMAINS>,
+}
+
+impl<const CANDIDATES: usize, const DOMAINS: usize>
+    RecoveredDeploymentRuntimeInventory<CANDIDATES, DOMAINS>
+{
+    pub const fn owner(&self) -> &RecoveredDeploymentOwner<CANDIDATES> {
+        &self.owner
+    }
+
+    pub const fn release(&self) -> &ActivatedReleaseTotalMicrovmInventory<DOMAINS> {
+        &self.release
+    }
+
+    pub fn into_parts(
+        self,
+    ) -> (
+        RecoveredDeploymentOwner<CANDIDATES>,
+        ActivatedReleaseTotalMicrovmInventory<DOMAINS>,
+    ) {
+        (self.owner, self.release)
+    }
+}
+
 impl<'a, const CANDIDATES: usize, const DOMAINS: usize>
     RecoveredRuntimeAssignment<'a, CANDIDATES, DOMAINS>
 {
@@ -1156,6 +1205,22 @@ impl<'a, const CANDIDATES: usize, const DOMAINS: usize>
         RuntimeDomainAssignmentPlan<'a, DOMAINS>,
     ) {
         (self.service, self.recovery, self.assignment)
+    }
+
+    /// Seals every assigned package while retaining the authenticated
+    /// deployment owner and recovery evidence that selected the release.
+    pub fn seal(
+        self,
+    ) -> Result<RecoveredDeploymentRuntimeInventory<CANDIDATES, DOMAINS>, ReleaseInventoryError>
+    {
+        let release = self.assignment.seal()?;
+        Ok(RecoveredDeploymentRuntimeInventory {
+            owner: RecoveredDeploymentOwner {
+                service: self.service,
+                recovery: self.recovery,
+            },
+            release,
+        })
     }
 }
 
@@ -2011,10 +2076,17 @@ mod tests {
                 mrml_kernel::RuntimeDomainAssignment::new(record.package_id, ObjectId(0x5a53_5444))
             })
             .unwrap();
-        let (_, recovered_state, recovered_plan) = recovered_assignment.into_parts();
-        assert_eq!(recovered_state, retained_recovery);
+        let recovered_inventory = recovered_assignment.seal().unwrap();
+        assert_eq!(recovered_inventory.owner().recovery(), retained_recovery);
         assert_eq!(
-            recovered_plan.seal().unwrap().active_release(),
+            recovered_inventory
+                .owner()
+                .service()
+                .active_release(&capabilities, inspect),
+            Ok(Some(activated_release))
+        );
+        assert_eq!(
+            recovered_inventory.release().active_release(),
             activated_release
         );
         let (decoded_root, decoded_active, decoded_release) =
