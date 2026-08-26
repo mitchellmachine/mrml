@@ -428,7 +428,7 @@ impl<'source> SourceTraitDeclarationTable<'source> {
                 if where_predicates[..where_predicate_count]
                     .iter()
                     .flatten()
-                    .any(|known| source_implementation_predicates_same(known, predicate))
+                    .any(|known| source_implementation_predicates_same(known, predicate, &table))
                 {
                     return Err(SourceTraitDeclarationError::DuplicateRequirement);
                 }
@@ -963,7 +963,7 @@ impl<'source> SourceTraitImplementationTable<'source> {
                 if implementation.where_predicates()[..predicate_index]
                     .iter()
                     .flatten()
-                    .any(|known| source_implementation_predicates_same(known, predicate))
+                    .any(|known| source_implementation_predicates_same(known, predicate, traits))
                 {
                     return Err(SourceTraitImplementationError {
                         kind: SourceTraitImplementationErrorKind::DuplicatePremise,
@@ -1932,15 +1932,37 @@ fn source_implementation_is_exact_fact(
 fn source_implementation_predicates_same(
     left: &crate::TraitImplementationWherePredicate<'_>,
     right: &crate::TraitImplementationWherePredicate<'_>,
+    traits: &SourceTraitDeclarationTable<'_>,
 ) -> bool {
+    let Some(declaration) = traits.get(left.trait_name()) else {
+        return false;
+    };
     let common = left.self_type().text == right.self_type().text
         && left.trait_name() == right.trait_name()
-        && left.trait_arguments().len() == right.trait_arguments().len()
-        && left
-            .trait_arguments()
-            .iter()
-            .zip(right.trait_arguments())
-            .all(|(left, right)| left.unwrap().text == right.unwrap().text);
+        && (0..declaration.generic_parameter_count).all(|index| {
+            let left = left
+                .trait_arguments()
+                .get(index)
+                .copied()
+                .flatten()
+                .or(declaration
+                    .generic_parameter_defaults()
+                    .get(index)
+                    .copied()
+                    .flatten());
+            let right = right
+                .trait_arguments()
+                .get(index)
+                .copied()
+                .flatten()
+                .or(declaration
+                    .generic_parameter_defaults()
+                    .get(index)
+                    .copied()
+                    .flatten());
+            left.zip(right)
+                .is_some_and(|(left, right)| left.text == right.text)
+        });
     if !common {
         return false;
     }
@@ -9308,6 +9330,31 @@ mod tests {
         assert_eq!(
             invalid("trait Bad<T, U = T> {}"),
             SourceTraitDeclarationError::UnsupportedGenericParameterDefault
+        );
+
+        let duplicate_declaration = Parser::new(concat!(
+            "trait Parent<T = u8> {} ",
+            "trait Child where Self: Parent, Self: Parent<u8> {}"
+        ))
+        .parse_module::<4, 1>()
+        .unwrap();
+        assert_eq!(
+            SourceTraitDeclarationTable::from_module(&duplicate_declaration),
+            Err(SourceTraitDeclarationError::DuplicateRequirement)
+        );
+
+        let duplicate_implementation = Parser::new(concat!(
+            "trait Parent<T = u8> {} trait Child {} ",
+            "impl<T> Child for T where T: Parent, T: Parent<u8> {}"
+        ))
+        .parse_module::<6, 1>()
+        .unwrap();
+        let traits = SourceTraitDeclarationTable::from_module(&duplicate_implementation).unwrap();
+        assert_eq!(
+            SourceTraitImplementationTable::from_module(&duplicate_implementation, &traits)
+                .unwrap_err()
+                .kind,
+            SourceTraitImplementationErrorKind::DuplicatePremise
         );
     }
 
