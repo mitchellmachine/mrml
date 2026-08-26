@@ -863,6 +863,15 @@ exits, and local-backed storage fails closed. Assignments and expressions remain
 unsupported because their repeated control-flow effects are not represented.
 This is bounded nested-loop return provenance, not a general loop fixed point.
 
+For a scalar-reference return, callee-origin inference now also accepts an exact
+indexed place rooted at a compatible array-reference or slice-reference
+parameter. The scalar element type must match, a mutable result requires a
+mutable parameter, and the place must contain exactly `Index` with at most one
+preceding explicit `Dereference`. The result retains the parameter origin for
+caller liveness. Identity, mismatched, shared-to-mutable, deeper, and unrelated
+projection shapes fail closed. This is the first non-tuple aggregate provenance
+slice, not general aggregate or index-sensitive alias analysis.
+
 The first modern trait-solver foundation is an explicit bounded implemented-
 goal representation. Stable trait/type/inference/placeholder identities remain
 distinct; canonicalization replaces inference identities with first-occurrence

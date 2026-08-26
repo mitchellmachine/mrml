@@ -3865,6 +3865,20 @@ library tests, one component-interface probe, 10 conformance tests, and 335
 replacement tests: 985 compiler tests per host. This is not a general nested-
 loop fixed point, path-sensitive analysis, or region solver.
 
+The indexed aggregate call-origin milestone recognizes a scalar-reference
+return whose exact read place is rooted at a compatible array-reference or
+slice-reference parameter and contains `Index`, optionally after one explicit
+`Dereference`. Element type and mutability must match. The caller retains the
+whole parameter origin, so a live indexed competitor conflicts and owner access
+returns after the child's last use. Identity, mismatched, shared-to-mutable,
+deeper, and unrelated projections fail closed. The exact dated oracle accepted
+the indexed array-element return and post-last-use reuse and rejected the live
+competitor with E0499. Windows gnullvm and native Arch Linux WSL each pass 640
+library tests, one component-interface probe, 10 conformance tests, and 335
+replacement tests: 986 compiler tests per host. This is the first non-tuple
+aggregate provenance slice, not general aggregate or index-sensitive alias
+analysis.
+
 The conditional projected-reassignment milestone extends the bounded tuple-field
 loan chain across a conditional shared-reference assignment. The exact dated
 oracle rejects mutation of either conditional owner and of the field's replaced

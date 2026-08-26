@@ -1,5 +1,17 @@
 # Patent review log
 
+## 2026-08-26 — Indexed aggregate callee return origins
+
+Patent review: **NOT_TRIGGERED** for this bounded compiler-analysis increment.
+It conventionally compares an existing typed read-place projection sequence,
+element type, and mutability against an array/slice-reference parameter and
+retains that existing parameter identifier. Mismatched and unsupported shapes
+fail conservative. It adds no novel aggregate or index-sensitive alias-analysis
+algorithm, region solver, optimization, runtime enforcement, authority model,
+or external dependency. Broader compiler completion remains partial; this
+technical screen establishes neither clearance nor infringement and does not
+replace independent human dual review.
+
 ## 2026-08-26 — Nested-loop local return origins
 
 Patent review: **NOT_TRIGGERED** for this bounded compiler-analysis increment.

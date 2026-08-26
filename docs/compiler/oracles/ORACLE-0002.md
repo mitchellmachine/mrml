@@ -201,6 +201,15 @@ E0499. This is black-box evidence for that exact nested-loop local-return shape,
 not a general nested-loop fixed point, path-sensitive analysis, or region
 inference. Temporary sources and metadata were removed.
 
+An independently authored Rust 2024 metadata-only probe against this exact
+toolchain and commit accepted a mutable scalar reference returned from index
+zero of a mutable two-element array-reference parameter. The caller could reuse
+that indexed place after the returned child's last use. A separate invocation
+rejected a competing mutable borrow of the same indexed place while the child
+remained live with E0499. This is black-box evidence for that exact indexed
+array-reference shape, not general aggregate or index-sensitive alias analysis.
+Temporary sources and metadata were removed.
+
 An independently authored Rust 2024 metadata-only probe against the same exact
 toolchain and commit compiled three explicit RAX forms whose output place was
 `*target` for `target: &mut u64`: `lateout`, same-place `inout`, and a distinct-

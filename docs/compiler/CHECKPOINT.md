@@ -577,6 +577,18 @@ WSL each pass 639 library tests, one component-interface probe, 10 conformance
 tests, and 335 replacement tests: 985 compiler tests per host. General nested-
 loop fixed-point, path-sensitive, and region analysis remain unsupported.
 
+The indexed aggregate call-origin milestone accepts a scalar-reference return
+from an exact indexed place rooted at a compatible array-reference or slice-
+reference parameter. Element type and mutability must match, and the projection
+is exactly `Index` with at most one preceding explicit `Dereference`. The caller
+retains the whole parameter origin. Identity, mismatched, shared-to-mutable,
+deeper, and unrelated projections fail closed. ORACLE-0002 accepted the indexed
+array-element return and post-last-use reuse and rejected a live competitor with
+E0499. Windows gnullvm and native Arch Linux WSL each pass 640 library tests,
+one component-interface probe, 10 conformance tests, and 335 replacement tests:
+986 compiler tests per host. General aggregate and index-sensitive alias
+analysis remain unsupported.
+
 This is an initial typed body-fact slice, not a complete typed body IR and not a
 borrow checker. Unsupported aggregate-leaf call arguments, other aggregate-
 argument and call-derived fat-reference initializers, unsupported compound array
