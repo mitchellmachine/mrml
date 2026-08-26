@@ -34869,6 +34869,7 @@ mod tests {
         for rejected in [
             "fn value(input: u16) -> u16 { let mut slot = input; let first: &mut u16 = &mut slot; let second: &mut u16 = &mut *first; let third: &mut u16 = &mut *second; *first += 1; *third }",
             "fn value(input: u16) -> u16 { let mut slot = input; let first: &mut u16 = &mut slot; let second: &mut u16 = &mut *first; let third: &u16 = &*second; *first += 1; *third }",
+            "fn value(input: &mut u16) -> u16 { let first: &mut u16 = &mut *input; let second: &mut u16 = &mut *first; let third: &u16 = &*second; *input += 1; *third }",
         ] {
             assert_eq!(
                 analyze(rejected).unwrap_err().kind,
@@ -34879,6 +34880,7 @@ mod tests {
         for accepted in [
             "fn value(input: u16) -> u16 { let mut slot = input; let first: &mut u16 = &mut slot; let second: &mut u16 = &mut *first; let third: &mut u16 = &mut *second; let copied = *third; *first += 1; copied + *first }",
             "fn value(input: u16) -> u16 { let mut slot = input; let first: &mut u16 = &mut slot; let second: &mut u16 = &mut *first; let third: &u16 = &*second; let copied = *third; *first += 1; copied + *first }",
+            "fn value(input: &mut u16) -> u16 { let first: &mut u16 = &mut *input; let second: &mut u16 = &mut *first; let third: &u16 = &*second; let copied = *third; *input += 1; copied + *input }",
         ] {
             analyze(accepted).unwrap();
         }
