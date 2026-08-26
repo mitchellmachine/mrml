@@ -4373,6 +4373,18 @@ Windows gnullvm and native Arch Linux WSL each pass 572 library tests, one
 component probe, 10 conformance tests, and 335 replacement tests: 918 compiler
 tests per host.
 
+The concrete source-trait-argument milestone admits up to eight positional type
+parameters on trait declarations and the same bounded number of concrete type
+arguments on exact implementations, implemented-trait predicates, and concrete
+projection equalities. Exact header selection includes every argument, so
+different concrete instantiations remain distinct and their associated values
+normalize through the selected implementation. Duplicate parameter names,
+wrong arity, unsupported argument types, overlap, unknown types, and capacity
+exhaustion fail closed. Generic implementations, inferred arguments, defaults,
+bounds, lifetimes, and const parameters remain unsupported. Windows gnullvm and
+native Arch Linux WSL each pass 575 library tests, one component probe, 10
+conformance tests, and 335 replacement tests: 921 compiler tests per host.
+
 The projection-bearing term milestone uses a fixed 64-node arena for flat leaf
 terms and associated-type projections whose trait self/argument positions refer
 only to earlier nodes. Identical nodes intern to one stable identity; invalid

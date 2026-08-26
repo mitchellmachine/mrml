@@ -1181,6 +1181,17 @@ constraints on generic binders remain unsupported. Windows gnullvm and native
 Arch Linux WSL each pass 572 library tests, one component-interface probe, 10
 conformance tests, and 335 replacement tests: 918 compiler tests per host.
 
+The concrete source-trait-argument milestone parses up to eight positional type
+parameters per trait and concrete arguments on exact implementations,
+implemented-trait predicates, and projection equalities. Argument-bearing exact
+headers select independently and retain their own associated values. Duplicate
+parameter names, wrong arity, unsupported argument types, overlap, unknown
+types, and capacity exhaustion fail closed. Generic implementations, inference,
+defaults, bounds, lifetimes, and const parameters remain unsupported. Windows
+gnullvm and native Arch Linux WSL each pass 575 library tests, one component-
+interface probe, 10 conformance tests, and 335 replacement tests: 921 compiler
+tests per host.
+
 The premise-bearing rigid-normalization milestone proves the selected generic
 implementation's instantiated trait and projection predicates before exposing
 its associated value. It shares the caller's 16-frame rigid proof stack and
