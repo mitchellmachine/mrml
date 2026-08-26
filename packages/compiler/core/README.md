@@ -4022,6 +4022,15 @@ tests and ORACLE-0002 cover both accepted replacements, local-backed clearing,
 live E0499 conflict, and post-last-use restoration. Both hosts remain at 987
 tests.
 
+Exact tuple-field RHS assignment now participates in the existing root-alias
+conditional and loop joins. Exhaustive equal-origin branches retain the field
+origin; a missing branch exposes a differing incoming alias and clears it. A
+stable loop reassigns the alias from an identity reborrow of the same field and
+intersects that with the zero-iteration incoming state, rejecting a differing
+origin. Focused tests and ORACLE-0002 cover both accepted forms, conservative
+controls, live E0499 conflict, and post-last-use restoration. Both hosts remain
+at 987 tests.
+
 The conditional projected-reassignment milestone extends the bounded tuple-field
 loan chain across a conditional shared-reference assignment. The exact dated
 oracle rejects mutation of either conditional owner and of the field's replaced

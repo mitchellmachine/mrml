@@ -369,6 +369,16 @@ rejected a live competing owner borrow with E0499. Temporary sources and metadat
 were removed. This is exact typed projected-assignment evidence, not general
 assignment, alias, or region inference.
 
+Another independently authored Rust 2024 metadata-only probe against the same
+exact toolchain and commit accepted assigning the same parameter-backed tuple
+field into a root mutable-reference alias in both exhaustive conditional arms.
+It also accepted initializing that alias from an identity reborrow of the field
+and repeating the same assignment in a `while`, then permitted owner reuse after
+the returned child's last use. A separate invocation rejected a live competing
+projected-owner borrow with E0499. Temporary sources and metadata were removed.
+This is exact equal-origin control-flow evidence, not general alias or region
+inference.
+
 An independently authored Rust 2024 metadata-only probe against that same exact
 toolchain and commit compiled `asm!("cmp rcx, rcx", in("rcx") value,
 options(nomem, nostack))`. This records black-box acceptance of that exact

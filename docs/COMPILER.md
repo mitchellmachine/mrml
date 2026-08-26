@@ -1007,6 +1007,15 @@ initializer origin as a false type gate. The oracle accepts both replacement
 forms, permits owner reuse after last use, and rejects a live competing borrow
 of the projected owner with E0499.
 
+Projected tuple-field RHS typing now composes with root-alias control-flow joins.
+Exhaustive conditional arms that assign the same field origin retain it, while a
+missing arm joins against the prior alias and becomes unknown when origins differ.
+A stable loop reborrows the same projected field into the alias and intersects
+that iteration with the zero-iteration incoming origin; a differing incoming
+alias fails closed. ORACLE-0002 accepts the equal-origin conditional and loop
+forms, permits owner reuse after last use, and rejects a live competing projected-
+owner borrow with E0499.
+
 The first modern trait-solver foundation is an explicit bounded implemented-
 goal representation. Stable trait/type/inference/placeholder identities remain
 distinct; canonicalization replaces inference identities with first-occurrence

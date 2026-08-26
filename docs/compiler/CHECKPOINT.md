@@ -700,6 +700,14 @@ field return and a loop identity-reborrow from that field, accepts owner reuse
 after last use, and rejects a live competing borrow with E0499. Windows and Arch
 remain at 987 tests per host.
 
+Root-alias conditional and stable-loop joins now accept an exact typed projected
+tuple-field RHS. Equal-origin exhaustive branches retain the field owner; a
+missing branch with a different incoming alias becomes unknown. The loop joins a
+projected self-reborrow with the zero-iteration projected incoming alias and
+rejects a differing incoming origin. ORACLE-0002 accepts both equal-origin forms,
+accepts restoration after last use, and rejects a live projected-owner competitor
+with E0499. Windows and Arch remain at 987 tests per host.
+
 Multi-field tuple literals retain a separate projected origin per field. A
 conditional reference element seeds its field only when both arms prove the
 same parameter; unequal first/second origins fail closed. Focused caller tests
