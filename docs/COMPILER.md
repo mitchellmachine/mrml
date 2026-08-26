@@ -1211,6 +1211,9 @@ ORACLE-0002 E0515. The new focused unit brings each host to 989 compiler tests.
 Conditional shared-call arguments retain both possible immutable owner loans at
 the join. Mutation of either owner fails while the result is live and succeeds
 after last use; ORACLE-0002 matches with E0506 and acceptance respectively.
+The same shared conditional join now participates in function-return outlives:
+all-parameter arms pass, while a parameter/local pair fails closed. ORACLE-0002
+accepts the former and rejects the latter with E0515.
 
 The first modern trait-solver foundation is an explicit bounded implemented-
 goal representation. Stable trait/type/inference/placeholder identities remain

@@ -923,6 +923,11 @@ at their join. A live result rejects mutation of either owner with
 `RuntimeBorrowConflict`, matching ORACLE-0002 E0506; after last use, both owners
 are mutable. Windows and Arch remain at 989 compiler tests per host.
 
+Conditional shared-call escape joins accept two parameter-backed arms and reject
+a parameter/local origin set with `RuntimeReferenceOutlivesFunction`, matching
+ORACLE-0002 E0515. Both hosts remain at 989 compiler tests; general shared-region
+inference remains unsupported.
+
 Multi-field tuple literals retain a separate projected origin per field. A
 conditional reference element seeds its field only when both arms prove the
 same parameter; unequal first/second origins fail closed. Focused caller tests

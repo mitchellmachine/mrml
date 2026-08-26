@@ -208,6 +208,13 @@ compiled a companion that copied the result and mutated both owners afterward.
 This is exact joined shared-loan evidence, not general path-sensitive regions.
 Temporary sources and metadata were removed.
 
+An independently authored conditional shared-call escape pair selected two
+shared parameters or selected a parameter and function-local storage before
+calling `shared_identity`. This exact toolchain compiled the all-parameter
+return and rejected the mixed local return with E0515. This is exact joined
+shared-origin escape evidence, not general region inference. Temporary sources
+and metadata were removed.
+
 An independently authored Rust 2024 metadata-only probe against this exact
 toolchain and commit accepted a mutable scalar reference returned from index
 zero of a mutable two-element array-reference parameter. The caller could reuse

@@ -4067,6 +4067,10 @@ Conditional shared-call arguments also preserve both possible immutable loans
 at the join. A live result blocks mutation of either owner, and last use releases
 both; pinned rustc matches with E0506 and post-use acceptance. Both hosts remain
 at 989 compiler tests.
+Conditional shared-call results also retain their full origin set at a function
+return. Two parameter arms pass; replacing either possible origin with local
+storage fails closed and matches pinned-oracle E0515. Both hosts remain at 989
+compiler tests.
 
 Exact typed tuple literals now seed the same projected state when a local is
 declared. Every reference field is checked against the declared tuple element
