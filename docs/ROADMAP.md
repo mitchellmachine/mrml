@@ -3175,6 +3175,10 @@ to the existing installed Total transaction. Controlled stable recovery proves
 that the delivered record alone grants nothing: live installed selection,
 capability-authorized settings, committed recovery, authenticated release
 inventory, microVM route commitment, and strict finalization all remain required.
-Windows passes 51 configuration tests and 12 WHP runner tests; the service image
-builds. Real service invocation, full activated-release enumeration, and KVM
+The committed recovered-system owner now consumes and retains the exact one-use
+envelope, rejects stale recovery before consulting settings or release state,
+and supplies that retained record to installed Total admission. The focused
+test no longer reconstructs a replacement envelope after delivery. Windows
+passes 566 kernel tests, 51 configuration tests, and 12 WHP runner tests; the
+service image builds. Real service invocation, full activated-release enumeration, and KVM
 parity for this increment remain **PLANNED**.

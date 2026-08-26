@@ -15,9 +15,8 @@ const BOOT_RECOVERY_ENVELOPE_VERSION: u16 = 1;
 const BOOT_RECOVERY_FLAG_INSTALLED: u16 = 1 << 0;
 const BOOT_RECOVERY_FLAG_SATA_ROUTE: u16 = 1 << 1;
 const BOOT_RECOVERY_FLAG_TOTAL_ONCE: u16 = 1 << 2;
-const BOOT_RECOVERY_KNOWN_FLAGS: u16 = BOOT_RECOVERY_FLAG_INSTALLED
-    | BOOT_RECOVERY_FLAG_SATA_ROUTE
-    | BOOT_RECOVERY_FLAG_TOTAL_ONCE;
+const BOOT_RECOVERY_KNOWN_FLAGS: u16 =
+    BOOT_RECOVERY_FLAG_INSTALLED | BOOT_RECOVERY_FLAG_SATA_ROUTE | BOOT_RECOVERY_FLAG_TOTAL_ONCE;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct BootRecoveryEnvelope {
@@ -114,8 +113,7 @@ impl BootRecoveryEnvelope {
         input: &[u8; BOOT_RECOVERY_ENVELOPE_BYTES],
     ) -> Result<Self, BootRecoveryEnvelopeError> {
         if input[..4] != BOOT_RECOVERY_ENVELOPE_MAGIC
-            || u16::from_le_bytes(input[4..6].try_into().unwrap())
-                != BOOT_RECOVERY_ENVELOPE_VERSION
+            || u16::from_le_bytes(input[4..6].try_into().unwrap()) != BOOT_RECOVERY_ENVELOPE_VERSION
         {
             return Err(BootRecoveryEnvelopeError::NonCanonical);
         }
@@ -174,16 +172,26 @@ impl BootRecoveryDelivery {
         object: ObjectId,
         metadata: RecoveryStateMetadata,
     ) -> Result<Self, BootRecoveryDeliveryError> {
+        let envelope = BootRecoveryEnvelope::new(metadata, None, None, None)
+            .map_err(|_| BootRecoveryDeliveryError::InvalidEnvelope)?;
+        Self::from_envelope(target, object, envelope)
+    }
+
+    /// Creates one-use delivery from an already canonical envelope. This is
+    /// useful when a trusted boot adapter has retained the typed record rather
+    /// than the original early context; the envelope remains non-authorizing.
+    pub fn from_envelope(
+        target: TaskId,
+        object: ObjectId,
+        envelope: BootRecoveryEnvelope,
+    ) -> Result<Self, BootRecoveryDeliveryError> {
         if object == ObjectId(0) {
             return Err(BootRecoveryDeliveryError::InvalidObject);
         }
         Ok(Self {
             target,
             object,
-            envelope: Some(
-                BootRecoveryEnvelope::new(metadata, None, None, None)
-                    .map_err(|_| BootRecoveryDeliveryError::InvalidEnvelope)?,
-            ),
+            envelope: Some(envelope),
         })
     }
 
@@ -192,17 +200,9 @@ impl BootRecoveryDelivery {
         object: ObjectId,
         early: &EarlyKernelContext<'_>,
     ) -> Result<Self, BootRecoveryDeliveryError> {
-        if object == ObjectId(0) {
-            return Err(BootRecoveryDeliveryError::InvalidObject);
-        }
-        Ok(Self {
-            target,
-            object,
-            envelope: Some(
-                BootRecoveryEnvelope::from_early(early)
-                    .map_err(|_| BootRecoveryDeliveryError::InvalidEnvelope)?,
-            ),
-        })
+        let envelope = BootRecoveryEnvelope::from_early(early)
+            .map_err(|_| BootRecoveryDeliveryError::InvalidEnvelope)?;
+        Self::from_envelope(target, object, envelope)
     }
 
     pub fn deliver<const TASKS: usize, const CAPS: usize>(
@@ -271,19 +271,9 @@ mod tests {
         )
         .unwrap();
         let hops = [InstalledRecoveryPciHop::new(31, 2).unwrap()];
-        let media = InstalledRecoveryHardDriveMedia::new(2, 2048, 4096, [0x55; 16], 2, 2)
-            .unwrap();
-        let route = InstalledRecoverySataRoute::new(
-            0,
-            0,
-            &hops,
-            0,
-            0,
-            0,
-            Some(media),
-            [0x31; 32],
-        )
-        .unwrap();
+        let media = InstalledRecoveryHardDriveMedia::new(2, 2048, 4096, [0x55; 16], 2, 2).unwrap();
+        let route =
+            InstalledRecoverySataRoute::new(0, 0, &hops, 0, 0, 0, Some(media), [0x31; 32]).unwrap();
         let envelope = BootRecoveryEnvelope::new(
             recovery,
             Some(installed),

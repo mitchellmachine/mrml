@@ -18,16 +18,15 @@ use mrml_crypto::Sha3_256;
 use mrml_kernel::arch::x86_64::UserContext;
 use mrml_kernel::{
     ActivatedReleaseTotalMicrovmInventory, BootHandoff, BootIsolationOverride,
-    BootRecoveryEnvelope, Capability,
-    CapabilityError, CapabilitySpace, InstalledRecoveryBootIdentity, InstalledRecoverySataRoute,
-    InstalledRecoverySource, IsolationAdmissionTable, IsolationBackendFailure, IsolationMode,
-    IsolationPlacement, IsolationServiceBackend, IsolationServiceRouteError, IsolationServiceSpec,
+    BootRecoveryEnvelope, Capability, CapabilityError, CapabilitySpace, EarlyKernelContext,
+    InstalledRecoveryBootIdentity, InstalledRecoverySataRoute, InstalledRecoverySource,
+    IsolationAdmissionTable, IsolationBackendFailure, IsolationMode, IsolationPlacement,
+    IsolationServiceBackend, IsolationServiceRouteError, IsolationServiceSpec,
     IsolationStatusSnapshot, IsolationUnavailableReason, MemoryBackingKind, MemoryObjectId,
     MemoryPoolId, MemoryPoolTable, MemoryResourceError, Message, ObjectId, PAGE_SIZE,
-    PreparedIsolationServiceRoute, Priority, RestartPolicy, Rights, RoutedIsolationService,
-    ServiceAddressSpaceEraser, ServiceCleanupError, ServiceError, ServiceId,
-    EarlyKernelContext, RecoveryStateMetadata, ServiceRegistrationPlan, ServiceState,
-    ServiceSupervisor, TaskId, TaskRuntime,
+    PreparedIsolationServiceRoute, Priority, RecoveryStateMetadata, RestartPolicy, Rights,
+    RoutedIsolationService, ServiceAddressSpaceEraser, ServiceCleanupError, ServiceError,
+    ServiceId, ServiceRegistrationPlan, ServiceState, ServiceSupervisor, TaskId, TaskRuntime,
     TaskRuntimeError, prepare_isolation_service_route, route_isolation_service,
 };
 use mrml_storage::{
@@ -2549,6 +2548,20 @@ pub struct RecoveredSystemState<const GRANTS: usize, const SETTINGS: usize, cons
     service: ServiceId,
 }
 
+/// The recovered configuration owner bound to the exact canonical boot record
+/// delivered once to its service task. Retaining the record beside committed
+/// recovery prevents later admission from accepting a detached replacement.
+/// The record remains non-authorizing; capability, live-device, release, and
+/// placement checks are still required by the operations below.
+pub struct DeliveredRecoveredSystemState<
+    const GRANTS: usize,
+    const SETTINGS: usize,
+    const AUDIT: usize,
+> {
+    recovered: RecoveredSystemState<GRANTS, SETTINGS, AUDIT>,
+    delivered: BootRecoveryEnvelope,
+}
+
 impl<const GRANTS: usize, const SETTINGS: usize, const AUDIT: usize>
     RecoveredSystemState<GRANTS, SETTINGS, AUDIT>
 {
@@ -2562,6 +2575,42 @@ impl<const GRANTS: usize, const SETTINGS: usize, const AUDIT: usize>
 
     pub const fn service(&self) -> ServiceId {
         self.service
+    }
+
+    /// Consumes committed recovery into an owner retaining the exact one-use
+    /// service delivery. A stale or substituted recovery root fails before
+    /// persistent isolation settings or release inventory can be consulted.
+    pub fn bind_delivered_boot(
+        self,
+        delivered: BootRecoveryEnvelope,
+    ) -> Result<DeliveredRecoveredSystemState<GRANTS, SETTINGS, AUDIT>, ConfigError> {
+        self.validate_delivered_boot(delivered)?;
+        Ok(DeliveredRecoveredSystemState {
+            recovered: self,
+            delivered,
+        })
+    }
+
+    /// Checks whether a decoded one-use delivery names this exact committed
+    /// recovery transaction. This is validation only and grants no authority.
+    pub fn validate_delivered_boot(
+        &self,
+        delivered: BootRecoveryEnvelope,
+    ) -> Result<(), ConfigError> {
+        self.validate_delivered_recovery(delivered.recovery())
+    }
+
+    fn validate_delivered_recovery(
+        &self,
+        recovery: RecoveryStateMetadata,
+    ) -> Result<(), ConfigError> {
+        if recovery.accepted_epoch().checked_add(1) != Some(self.authorities.epoch())
+            || recovery.accepted_volume() != Some(self.authorities.volume().bytes())
+            || recovery.accepted_root_generation() != self.authorities.root_generation()
+        {
+            return Err(ConfigError::RecoveryHandoffMismatch);
+        }
+        Ok(())
     }
 
     /// Revalidates isolation settings only after authenticated storage authority,
@@ -2649,12 +2698,7 @@ impl<const GRANTS: usize, const SETTINGS: usize, const AUDIT: usize>
         isolation_override: Option<BootIsolationOverride>,
     ) -> Result<RecoveredBootIsolationPolicy, ConfigError> {
         let recovery = recovery.ok_or(ConfigError::RecoveryHandoffMismatch)?;
-        if recovery.accepted_epoch().checked_add(1) != Some(self.authorities.epoch())
-            || recovery.accepted_volume() != Some(self.authorities.volume().bytes())
-            || recovery.accepted_root_generation() != self.authorities.root_generation()
-        {
-            return Err(ConfigError::RecoveryHandoffMismatch);
-        }
+        self.validate_delivered_recovery(recovery)?;
         let plan = IsolationPolicyApplicationPlan::load(
             &self.configuration,
             capabilities,
@@ -2923,6 +2967,81 @@ impl<const GRANTS: usize, const SETTINGS: usize, const AUDIT: usize>
         ServiceId,
     ) {
         (self.authorities, self.configuration, self.service)
+    }
+}
+
+impl<const GRANTS: usize, const SETTINGS: usize, const AUDIT: usize>
+    DeliveredRecoveredSystemState<GRANTS, SETTINGS, AUDIT>
+{
+    pub const fn recovered(&self) -> &RecoveredSystemState<GRANTS, SETTINGS, AUDIT> {
+        &self.recovered
+    }
+
+    pub const fn delivered(&self) -> BootRecoveryEnvelope {
+        self.delivered
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub fn compose_boot_isolation_policy<A: CapabilityAuthorizer + ?Sized>(
+        &self,
+        capabilities: &A,
+        system: IsolationPolicySetting,
+        system_read: Capability,
+        component: IsolationPolicySetting,
+        component_read: Capability,
+    ) -> Result<RecoveredBootIsolationPolicy, ConfigError> {
+        self.recovered.compose_delivered_boot_isolation_policy(
+            capabilities,
+            system,
+            system_read,
+            component,
+            component_read,
+            self.delivered,
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub fn build_installed_total_boot_admission<
+        const DOMAINS: usize,
+        A: CapabilityAuthorizer + ?Sized,
+        F,
+        E,
+    >(
+        &self,
+        installed: InstalledRecoveryDeviceSelection,
+        capabilities: &A,
+        system: IsolationPolicySetting,
+        system_read: Capability,
+        component: IsolationPolicySetting,
+        component_read: Capability,
+        build_release: F,
+    ) -> Result<
+        RecoveredInstalledTotalAdmission<DOMAINS>,
+        RecoveredInstalledTotalAdmissionBuildError<E>,
+    >
+    where
+        F: FnOnce(u64) -> Result<ActivatedReleaseTotalMicrovmInventory<DOMAINS>, E>,
+    {
+        self.recovered
+            .build_delivered_installed_total_boot_admission(
+                installed,
+                capabilities,
+                system,
+                system_read,
+                component,
+                component_read,
+                self.delivered,
+                build_release,
+            )
+    }
+
+    pub fn into_parts(
+        self,
+    ) -> (
+        RecoveredSystemState<GRANTS, SETTINGS, AUDIT>,
+        BootRecoveryEnvelope,
+    ) {
+        (self.recovered, self.delivered)
     }
 }
 
@@ -3935,9 +4054,7 @@ fn validate_installed_selection_for_parts(
     sata_route: Option<InstalledRecoverySataRoute>,
 ) -> Result<(VolumeId, u64), ConfigError> {
     let boot = boot.ok_or(ConfigError::RecoveryHandoffMismatch)?;
-    if boot.source() == InstalledRecoverySource::Uefi
-        && sata_route.is_none()
-    {
+    if boot.source() == InstalledRecoverySource::Uefi && sata_route.is_none() {
         return Err(ConfigError::RecoveryHandoffMismatch);
     }
     let platform = installed
@@ -10058,17 +10175,37 @@ mod tests {
             let recovery_metadata =
                 mrml_kernel::RecoveryStateMetadata::new(8, 1, Some(stable_volume().bytes()), 14)
                     .unwrap();
-            let mut delivery =
-                mrml_kernel::BootRecoveryDelivery::new(task, recovery_object, recovery_metadata)
-                    .unwrap();
+            let installed_boot = InstalledRecoveryBootIdentity::new(
+                InstalledRecoverySource::Hosted,
+                installed_platform_identity.stable_id(),
+                installed_platform_identity.controller_generation(),
+                installed_platform_identity.media_generation(),
+                descriptor.block_size(),
+                descriptor.block_count(),
+                stable_volume().bytes(),
+                stable_header().primary_superblock(),
+                14,
+            )
+            .unwrap();
+            let outbound_envelope = mrml_kernel::BootRecoveryEnvelope::new(
+                recovery_metadata,
+                Some(installed_boot),
+                None,
+                Some(BootIsolationOverride::TotalMicrovmOnce),
+            )
+            .unwrap();
+            let mut delivery = mrml_kernel::BootRecoveryDelivery::from_envelope(
+                task,
+                recovery_object,
+                outbound_envelope,
+            )
+            .unwrap();
             let mut delivered = [0xa5; mrml_kernel::BOOT_RECOVERY_ENVELOPE_BYTES];
             delivery
                 .deliver(&mut runtime, task, recovery_capability, &mut delivered)
                 .unwrap();
-            let delivered = mrml_kernel::BootRecoveryEnvelope::decode(&delivered)
-                .unwrap()
-                .recovery();
-            let mut boot_store = BootRecoveryAdmission::new(delivered)
+            let delivered_envelope = mrml_kernel::BootRecoveryEnvelope::decode(&delivered).unwrap();
+            let mut boot_store = BootRecoveryAdmission::new(delivered_envelope.recovery())
                 .unwrap()
                 .bind(&mut state_store);
             let mut supervisor = ServiceSupervisor::<1>::new();
@@ -10170,18 +10307,6 @@ mod tests {
             madt[44..].copy_from_slice(&[0, 8, 0, 1, 1, 0, 0, 0]);
             madt[9] = 0u8.wrapping_sub(madt.iter().fold(0u8, |sum, byte| sum.wrapping_add(*byte)));
             let mut handoff_bytes = [0u8; HANDOFF_LENGTH];
-            let installed_boot = InstalledRecoveryBootIdentity::new(
-                InstalledRecoverySource::Hosted,
-                installed_platform_identity.stable_id(),
-                installed_platform_identity.controller_generation(),
-                installed_platform_identity.media_generation(),
-                descriptor.block_size(),
-                descriptor.block_count(),
-                stable_volume().bytes(),
-                stable_header().primary_superblock(),
-                14,
-            )
-            .unwrap();
             mrml_kernel::encode_handoff_with_smp_service_recovery_isolation_and_installed(
                 7,
                 [1; 32],
@@ -10196,7 +10321,7 @@ mod tests {
                 0x8000,
                 0x40_0000,
                 launch,
-                Some(delivered),
+                Some(delivered_envelope.recovery()),
                 Some(installed_boot),
                 Some(BootIsolationOverride::TotalMicrovmOnce),
                 &madt,
@@ -10253,16 +10378,34 @@ mod tests {
                 incomplete.authorize_runtime(),
                 Err(mrml_kernel::TotalMicrovmRuntimeError::RequiredDomainMissing)
             ));
-            let delivered_envelope = mrml_kernel::BootRecoveryEnvelope::from_early(&early).unwrap();
-            let mut total = recovered
-                .build_delivered_installed_total_boot_admission(
+            let stale_delivered_recovery = mrml_kernel::RecoveryStateMetadata::new(
+                7,
+                1,
+                delivered_envelope.recovery().accepted_volume(),
+                delivered_envelope.recovery().accepted_root_generation(),
+            )
+            .unwrap();
+            let stale_delivered = mrml_kernel::BootRecoveryEnvelope::new(
+                stale_delivered_recovery,
+                delivered_envelope.installed(),
+                delivered_envelope.sata_route(),
+                delivered_envelope.isolation_override(),
+            )
+            .unwrap();
+            assert_eq!(
+                recovered.validate_delivered_boot(stale_delivered),
+                Err(ConfigError::RecoveryHandoffMismatch)
+            );
+            let delivered_recovered = recovered.bind_delivered_boot(delivered_envelope).unwrap();
+            assert_eq!(delivered_recovered.delivered(), delivered_envelope);
+            let mut total = delivered_recovered
+                .build_installed_total_boot_admission(
                     installed_selection,
                     &capabilities,
                     system,
                     system_access,
                     component,
                     component_access,
-                    delivered_envelope,
                     |policy_generation| {
                         Ok::<_, ()>(activated_configuration_release(domain, policy_generation))
                     },
@@ -10323,6 +10466,7 @@ mod tests {
             .unwrap();
             let stale_handoff =
                 BootHandoff::decode(&handoff_bytes[..stale_length], |_| {}).unwrap();
+            let recovered = delivered_recovered.recovered();
             let missing_installed: Result<
                 RecoveredInstalledTotalAdmission<1>,
                 RecoveredInstalledTotalAdmissionBuildError<()>,

@@ -21,6 +21,12 @@ selection, release-binding, and admission transaction is likewise
 **NOT_TRIGGERED**. This is conventional typed composition and reuses the already
 reviewed checks without adding a placement algorithm or execution mechanism.
 
+Consuming committed recovery into an owner that retains that exact delivered
+record is also **NOT_TRIGGERED**. The increment is conventional typed ownership,
+exact equality, and failure ordering; it adds no placement algorithm, VM
+mechanism, scheduler, storage protocol, DMA, queue, interrupt, or hardware
+behavior. The broader Total MicroVM mechanism remains **TRIGGERED**.
+
 ## 2026-08-26 — First-entry owner to installed Total admission
 
 Patent review: **NOT_TRIGGERED** for refactoring the existing recovered-policy

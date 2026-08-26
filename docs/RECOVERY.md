@@ -1591,9 +1591,13 @@ Recovered configuration now accepts the decoded envelope through a dedicated
 service-side installed Total builder. The record remains data: the builder still
 requires live installed selection, setting capabilities, committed authority
 epoch/root, and authenticated activated release before it can return the sole
-admission owner. The focused stable-recovery test commits its microVM route and
-seals the immutable runtime through this delivered-record path. Configuration
-passes 51 tests and WHP passes 12 focused runner tests on Windows. Real service
+admission owner. Committed recovery can now be consumed into a
+`DeliveredRecoveredSystemState` that retains the exact one-use record for the
+rest of this path and rejects stale recovery before settings or release work.
+The focused stable-recovery test delivers the full installed/Total envelope,
+retains that same decoded value, commits its microVM route, and seals the
+immutable runtime. Configuration passes 51 tests, kernel passes 566, and WHP
+passes 12 focused runner tests on Windows. Real service
 invocation and installed-media evidence remain **PLANNED**.
 
 `RecoveredSystemState` now provides an atomic
