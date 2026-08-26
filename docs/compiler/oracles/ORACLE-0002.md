@@ -166,6 +166,16 @@ fixed-template forms only; it does not establish other registers, general
 allocation, effects, or general assembly semantics. Temporary source and
 metadata were removed.
 
+A later independently authored Rust 2024 metadata-only probe against that same
+exact toolchain and commit compiled explicit input forms for RSI, RDI, and R8
+through R15. A focused follow-up compiled low-register and R15 inputs plus
+stored/discarded R15 outputs and same-place/distinct-input R15 inout. A separate
+probe invocation rejected RBX because LLVM reserves it, RSP because it is the
+stack pointer, and RBP because it is the frame pointer. This is black-box
+admission evidence for those exact registers and forms only, not general
+register allocation or assembly semantics. Temporary sources and metadata were
+removed.
+
 Another independently authored Rust 2024 metadata-only probe against that same
 exact toolchain and commit compiled explicit RAX `lateout`, same-place `inout`,
 and distinct-input output forms whose destinations indexed a `&mut [u64; 2]`

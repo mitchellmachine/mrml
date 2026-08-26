@@ -1701,6 +1701,17 @@ Linux WSL each pass 639 library tests, one component-interface probe, 10
 conformance tests, and 335 replacement tests: 985 compiler tests per host. Other
 explicit registers, generic allocation, and general assembly remain absent.
 
+The fixed explicit-GPR milestone replaces the three-register enum and manual
+template branches with one bounded register code shared by parsing and checked
+REX/ModRM encoding. Exact `cmp reg, reg` input, `mov reg, 7` stored/discarded
+output, and `inc reg` same-place/distinct-input inout admit RAX, RCX, RDX, RSI,
+RDI, and R8 through R15. Exact oracle probes accepted low and extended forms and
+all R15 output/inout shapes; independent rejection probes rejected RBX, RSP, and
+RBP, which MRML also rejects. Windows gnullvm and native Arch Linux WSL each pass
+639 library tests, one component-interface probe, 10 conformance tests, and 335
+replacement tests: 985 compiler tests per host. Arbitrary templates, register
+classes/general allocation, and general assembly remain absent.
+
 The premise-bearing rigid-normalization milestone proves the selected generic
 implementation's instantiated trait and projection predicates before exposing
 its associated value. It shares the caller's 16-frame rigid proof stack and

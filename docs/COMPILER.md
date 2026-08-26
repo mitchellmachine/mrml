@@ -140,6 +140,13 @@ The same typed fixed-register representation now includes RDX across exact
 inout templates. Stored and discarded outputs share the existing destination
 rules. This remains bounded template support, not general register allocation.
 
+Fixed explicit-GPR admission now uses one bounded register-code representation
+for RAX, RCX, RDX, RSI, RDI, and R8 through R15 across those same `cmp`,
+immediate-`mov`, and `inc` template families. Conventional checked REX/ModRM
+encoding replaces per-register branches. RBX, RSP, and RBP fail closed, matching
+the exact dated oracle; this still does not implement arbitrary templates or
+general allocation.
+
 ## Ownership and Polonius-direction roadmap
 
 The current borrowed-source AST and fixed-capacity expression arenas are useful

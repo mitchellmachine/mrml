@@ -4824,6 +4824,16 @@ reused. The exact dated oracle accepted all five independently authored Rust
 2024 forms, and both canonical hosts pass 985 compiler tests. Other explicit
 registers, generic allocation, and general assembly remain unsupported.
 
+The fixed explicit-GPR parser and encoder now admit the oracle-supported set
+RAX, RCX, RDX, RSI, RDI, and R8 through R15 for the same exact `cmp reg, reg`
+input, `mov reg, 7` output, and `inc reg` inout families. One bounded register
+code computes conventional REX/ModRM bytes for low and extended registers while
+all typed expression, place, ownership, bounds, discard, and writeback behavior
+remains shared. RBX, RSP, and RBP are rejected as the pinned oracle rejects them.
+Original low/extended-register probes and stored, discarded, same-place, and
+split R15 probes passed; both canonical hosts pass 985 compiler tests. General
+templates, register classes/allocation, and general assembly remain unsupported.
+
 Exact `asm!("mov rax, 7", lateout("rax") _)` is a discarded explicit output.
 Preanalysis records no language-place access, while emission still performs the
 declared RAX write. The exact dated oracle accepted the original Rust 2024 form,

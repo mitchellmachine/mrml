@@ -103,6 +103,20 @@ or new scheduling policy. Those adaptive-isolation mechanisms remain
 **TRIGGERED** under the existing review. Agent review is not legal clearance and
 does not replace independent human dual review.
 
+# 2026-08-26 — Bounded fixed explicit-GPR parsing and encoding
+
+**Result: NOT_TRIGGERED after the fixed-GPR review.** This increment replaces
+manual per-register branches with a conventional bounded name-to-register-code
+table and published x86-64 REX/ModRM bit placement for three already reviewed
+fixed instruction families. Admission follows independently observed oracle
+acceptance/rejection and reuses existing typed expression, destination,
+ownership, bounds, discard, and writeback machinery. It introduces no general
+assembler, register allocator, optimization, instruction selection, alias
+analysis, or novel code-generation algorithm. Arbitrary templates and general
+assembly remain absent. Broader compiler completion remains partial; this
+technical screen is not a clearance or infringement conclusion and does not
+replace independent human dual review.
+
 # 2026-08-26 — Fixed explicit RDX inline-assembly operands
 
 **Result: NOT_TRIGGERED after the fixed-RDX review.** This increment extends the
