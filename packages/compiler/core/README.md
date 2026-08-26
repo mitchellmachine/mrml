@@ -4527,6 +4527,16 @@ types also fail during admission. Windows gnullvm and native Arch Linux WSL each
 pass 604 library tests, one component probe, 10 conformance tests, and 335
 replacement tests: 950 compiler tests per host.
 
+The trait-parameter-bound milestone desugars implemented-trait bounds such as
+`trait Child<T: Parent<T> + Visible>` into the same bounded declaration
+requirements before semantic admission. Inline and explicit `where`
+requirements share the eight-predicate capacity and semantic duplicate check;
+their implementation proof and projection behavior therefore cannot diverge.
+Defaults, lifetime/const parameters, `?Sized`, associated constraints, and
+compound type terms remain unsupported. Windows gnullvm and native Arch Linux
+WSL each pass 607 library tests, one component probe, 10 conformance tests, and
+335 replacement tests: 953 compiler tests per host.
+
 The projection-bearing term milestone uses a fixed 64-node arena for flat leaf
 terms and associated-type projections whose trait self/argument positions refer
 only to earlier nodes. Identical nodes intern to one stable identity; invalid

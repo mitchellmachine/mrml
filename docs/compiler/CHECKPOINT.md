@@ -1327,6 +1327,15 @@ unknown associated types fail closed. Windows gnullvm and native Arch Linux WSL
 each pass 604 library tests, one component-interface probe, 10 conformance
 tests, and 335 replacement tests: 950 compiler tests per host.
 
+The trait-parameter-bound milestone parses `+`-separated implemented-trait
+bounds on declaration type parameters and desugars them into the same bounded
+requirement array used by an explicit declaration `where` clause. Both forms
+share capacity, duplicate admission, substitution, and proof. Defaults,
+lifetime/const parameters, `?Sized`, associated constraints, and compound type
+terms remain fail-closed. Windows gnullvm and native Arch Linux WSL each pass
+607 library tests, one component-interface probe, 10 conformance tests, and 335
+replacement tests: 953 compiler tests per host.
+
 The premise-bearing rigid-normalization milestone proves the selected generic
 implementation's instantiated trait and projection predicates before exposing
 its associated value. It shares the caller's 16-frame rigid proof stack and
