@@ -4338,6 +4338,18 @@ items, and method dispatch remain unsupported. Windows gnullvm and native Arch
 Linux WSL each pass 560 library tests, one component probe, 10 conformance
 tests, and 335 replacement tests: 906 compiler tests per host.
 
+The bounded source-supertrait milestone admits up to eight `+`-separated
+supertraits on each marker declaration. A two-pass declaration admission resolves
+forward names into stable trait IDs, rejects missing or duplicate edges, and
+performs a fixed 64-node acyclicity check. Exact implementation admission then
+checks every direct and transitive supertrait against the complete source exact-
+implementation database, independent of item order, before obligations or code
+generation run. Missing ancestors fail with the implementation source span.
+Generic supertraits, associated items, `?Sized`, higher-ranked bounds, and
+generic implementations remain unsupported. Windows gnullvm and native Arch
+Linux WSL each pass 564 library tests, one component probe, 10 conformance
+tests, and 335 replacement tests: 910 compiler tests per host.
+
 The projection-bearing term milestone uses a fixed 64-node arena for flat leaf
 terms and associated-type projections whose trait self/argument positions refer
 only to earlier nodes. Identical nodes intern to one stable identity; invalid

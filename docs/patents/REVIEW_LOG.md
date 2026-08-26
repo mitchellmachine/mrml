@@ -5093,3 +5093,16 @@ binding, manifest delivery, update, retention, servicing, adaptive-placement,
 and microVM mechanisms remain `TRIGGERED`; this agent review establishes
 neither clearance nor infringement and does not replace independent human dual
 review.
+
+# 2026-08-25 — Bounded source supertrait enforcement
+
+**Result: NOT_TRIGGERED after the existing trait-solver review.** This compiler
+increment stores a bounded directed graph of declared supertrait identities,
+rejects cycles with a conventional depth-first state walk, and queries the
+existing exact implementation database for every transitive ancestor before
+admitting source implementations. It adds no new candidate-selection,
+coherence, specialization, dispatch, runtime, cryptographic, storage,
+transport, codec, virtualization, or hardware mechanism. Broader modern trait
+solving retains its existing `TRIGGERED` review; generic supertraits and dynamic
+dispatch require review when their mechanisms are concrete. This agent review
+does not replace targeted independent human review.

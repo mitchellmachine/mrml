@@ -1149,6 +1149,18 @@ unsupported. Windows gnullvm and native Arch Linux WSL each pass 560 library
 tests, one component-interface probe, 10 conformance tests, and 335 replacement
 tests: 906 compiler tests per host.
 
+The bounded source-supertrait milestone parses up to eight marker supertraits,
+resolves forward declaration names in a second pass, and validates the fixed
+64-node graph as acyclic. Unknown and duplicate edges fail explicitly. After
+all exact source implementation headers are admitted, each implementation must
+prove every direct and transitive supertrait for the same stable type identity;
+item order cannot bypass the check and missing ancestors fail before code
+generation. Generic supertraits, associated items, `?Sized`, higher-ranked
+bounds, and generic implementations remain unsupported. Windows gnullvm and
+native Arch Linux WSL each pass 564 library tests, one component-interface
+probe, 10 conformance tests, and 335 replacement tests: 910 compiler tests per
+host.
+
 The premise-bearing rigid-normalization milestone proves the selected generic
 implementation's instantiated trait and projection predicates before exposing
 its associated value. It shares the caller's 16-frame rigid proof stack and
