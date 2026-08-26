@@ -1205,6 +1205,16 @@ substitution with zero backend reads. Storage passes 121 tests and configuration
 46 on both Windows and Arch Linux; WHP passes 11 and KVM 12. Platform discovery,
 real installed media, and early-boot construction remain **PLANNED**.
 
+Recovery-device discovery now has a bounded **PARTIALLY IMPLEMENTED** adapter.
+It accepts only already validated `DiscoveredRecoveryDevice` records, scans no
+more than an explicit compile-time candidate limit, and requires exactly one
+record for the expected volume before authenticating the record against the live
+block session. Candidate metadata grants no read authority. Tests reject zero
+capacity, excess candidates, absent volumes, ambiguous duplicate volumes, and
+the existing session/device substitutions. Configuration passes 47 tests on
+Windows and Arch Linux; WHP passes 11 and KVM 12. The hosted source supplies one
+in-memory candidate, not PCI/AHCI/VirtIO, installed-media, or physical evidence.
+
 WHP and nested KVM now consume the common inner `BootTotalAdmission` owner from
 effective-policy/release binding through classified route preparation,
 vCPU/RAM/VMM construction, microVM commit, and final release proof. The owner

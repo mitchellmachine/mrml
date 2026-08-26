@@ -8,12 +8,12 @@
 //! rollback evidence.
 
 use super::{
-    ConfigTransaction, ConfigUpdate, ConfigValue, ConfigurationService,
-    InstalledRecoveryDeviceSelection, IsolationPolicySetting, OwnerIsolationSelection,
+    ConfigTransaction, ConfigUpdate, ConfigValue, ConfigurationService, DiscoveredRecoveryDevice,
+    InstalledRecoveryDeviceDiscovery, IsolationPolicySetting, OwnerIsolationSelection,
     PERSISTED_RESTART_POLICY_BYTES, PersistedRestartPolicy, RecoveredBlockStableSystemSelection,
     RecoveredTotalAdmission, RecoveredTotalAdmissionBuildError, SettingId, SettingSchema,
     StableConfigurationRecoveryValidator, StableServiceRecoveryValidator,
-    recover_serviced_stable_system_selection,
+    discover_installed_recovery_device, recover_serviced_stable_system_selection,
 };
 use mrml_crypto::Sha3_256;
 use mrml_kernel::arch::x86_64::UserContext;
@@ -236,6 +236,18 @@ fn recovery_block_service()
         .grant(recovery_device(), principal(), BlockRights::READ)
         .map_err(|_| HostedRecoveryProbeError::StorageLayout)?;
     Ok((service, session))
+}
+
+struct ControlledRecoveryDiscovery {
+    candidate: Option<DiscoveredRecoveryDevice>,
+}
+
+impl InstalledRecoveryDeviceDiscovery for ControlledRecoveryDiscovery {
+    type Error = core::convert::Infallible;
+
+    fn next_candidate(&mut self) -> Result<Option<DiscoveredRecoveryDevice>, Self::Error> {
+        Ok(self.candidate.take())
+    }
 }
 
 fn object(local: u64) -> StorageObjectId {
@@ -501,14 +513,26 @@ fn recover_reachable_files<'a>(
     >,
     HostedRecoveryProbeError,
 > {
-    let installed = InstalledRecoveryDeviceSelection::new(
+    let candidate = DiscoveredRecoveryDevice::new(
+        BlockDeviceDescriptor::new(
+            recovery_device(),
+            BLOCK_BYTES as u32,
+            header().block_count(),
+        )
+        .ok_or(HostedRecoveryProbeError::StorageLayout)?,
+        header(),
+        header().primary_superblock(),
+    )
+    .map_err(|_| HostedRecoveryProbeError::StorageLayout)?;
+    let mut discovery = ControlledRecoveryDiscovery {
+        candidate: Some(candidate),
+    };
+    let installed = discover_installed_recovery_device::<_, 1, 1, 1>(
         service,
         session,
         principal(),
-        recovery_device(),
         volume(),
-        header(),
-        header().primary_superblock(),
+        &mut discovery,
     )
     .map_err(|_| HostedRecoveryProbeError::StorageLayout)?;
     let mut primary_read = [0; BLOCK_BYTES];

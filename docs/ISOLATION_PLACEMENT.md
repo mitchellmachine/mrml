@@ -809,6 +809,16 @@ source consumes this typed selection. This remains controlled in-memory evidence
 platform enumeration, physical media, and installed early-boot orchestration
 remain **PLANNED**.
 
+A bounded discovery join is now **PARTIALLY IMPLEMENTED** above that typed
+selection. `InstalledRecoveryDeviceDiscovery` yields validated, non-authorizing
+device/header candidates; the recovery control plane examines at most its
+declared capacity, requires exactly one candidate for the expected volume, and
+then joins that candidate to the independently live block session. Zero
+capacity, inventory overflow, missing volume, duplicate matching volumes, and
+session/device substitution fail closed. The shared hosted source exercises a
+single controlled candidate. Configuration passes 47 tests on Windows and Arch
+Linux, with WHP 11 and KVM 12; real platform enumeration remains **PLANNED**.
+
 The runner-side boot overlay is no longer injected as an independent enum
 literal. Both hosted backends encode neutral accepted recovery state and the
 one-boot request into the same canonical handoff installed for the guest, decode

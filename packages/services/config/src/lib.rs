@@ -1548,6 +1548,67 @@ pub enum InstalledRecoveryDeviceSelectionError {
     InvalidActiveRoot,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct DiscoveredRecoveryDevice {
+    descriptor: BlockDeviceDescriptor,
+    header: VolumeHeader,
+    active_superblock: u64,
+}
+
+impl DiscoveredRecoveryDevice {
+    pub fn new(
+        descriptor: BlockDeviceDescriptor,
+        header: VolumeHeader,
+        active_superblock: u64,
+    ) -> Result<Self, InstalledRecoveryDeviceSelectionError> {
+        if descriptor.block_size() != header.block_size()
+            || descriptor.block_count() != header.block_count()
+        {
+            return Err(InstalledRecoveryDeviceSelectionError::GeometryMismatch);
+        }
+        if active_superblock != header.primary_superblock()
+            && active_superblock != header.secondary_superblock()
+        {
+            return Err(InstalledRecoveryDeviceSelectionError::InvalidActiveRoot);
+        }
+        Ok(Self {
+            descriptor,
+            header,
+            active_superblock,
+        })
+    }
+
+    pub const fn descriptor(self) -> BlockDeviceDescriptor {
+        self.descriptor
+    }
+
+    pub const fn header(self) -> VolumeHeader {
+        self.header
+    }
+
+    pub const fn active_superblock(self) -> u64 {
+        self.active_superblock
+    }
+}
+
+/// Bounded platform adapter for already validated device/header candidates.
+/// Candidate metadata identifies possible recovery volumes but carries no I/O
+/// authority and cannot create a `BlockService` session.
+pub trait InstalledRecoveryDeviceDiscovery {
+    type Error;
+
+    fn next_candidate(&mut self) -> Result<Option<DiscoveredRecoveryDevice>, Self::Error>;
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum InstalledRecoveryDeviceDiscoveryError<E> {
+    Discovery(E),
+    Capacity,
+    Missing,
+    Ambiguous,
+    Selection(InstalledRecoveryDeviceSelectionError),
+}
+
 /// Typed control-plane binding for one installed recovery volume.
 ///
 /// Device and volume identities describe the intended object but grant no I/O.
@@ -1613,6 +1674,74 @@ impl InstalledRecoveryDeviceSelection {
     pub const fn active_superblock(self) -> u64 {
         self.active_superblock
     }
+}
+
+/// Selects exactly one bounded discovered volume and joins it to the exact live
+/// block session. Discovery is identification only; successful return still
+/// relies on `BlockService` to reauthorize every data-plane operation.
+pub fn discover_installed_recovery_device<
+    D: InstalledRecoveryDeviceDiscovery,
+    const DEVICES: usize,
+    const SESSIONS: usize,
+    const MAX_CANDIDATES: usize,
+>(
+    service: &BlockService<DEVICES, SESSIONS>,
+    session: BlockSessionHandle,
+    principal: StoragePrincipal,
+    expected_volume: VolumeId,
+    discovery: &mut D,
+) -> Result<InstalledRecoveryDeviceSelection, InstalledRecoveryDeviceDiscoveryError<D::Error>> {
+    if MAX_CANDIDATES == 0 {
+        return Err(InstalledRecoveryDeviceDiscoveryError::Capacity);
+    }
+    let mut selected = None;
+    for _ in 0..MAX_CANDIDATES {
+        let Some(candidate) = discovery
+            .next_candidate()
+            .map_err(InstalledRecoveryDeviceDiscoveryError::Discovery)?
+        else {
+            return finish_discovered_recovery_selection(
+                service,
+                session,
+                principal,
+                expected_volume,
+                selected,
+            );
+        };
+        if candidate.header.volume() == expected_volume {
+            if selected.replace(candidate).is_some() {
+                return Err(InstalledRecoveryDeviceDiscoveryError::Ambiguous);
+            }
+        }
+    }
+    if discovery
+        .next_candidate()
+        .map_err(InstalledRecoveryDeviceDiscoveryError::Discovery)?
+        .is_some()
+    {
+        return Err(InstalledRecoveryDeviceDiscoveryError::Capacity);
+    }
+    finish_discovered_recovery_selection(service, session, principal, expected_volume, selected)
+}
+
+fn finish_discovered_recovery_selection<const DEVICES: usize, const SESSIONS: usize, E>(
+    service: &BlockService<DEVICES, SESSIONS>,
+    session: BlockSessionHandle,
+    principal: StoragePrincipal,
+    expected_volume: VolumeId,
+    selected: Option<DiscoveredRecoveryDevice>,
+) -> Result<InstalledRecoveryDeviceSelection, InstalledRecoveryDeviceDiscoveryError<E>> {
+    let selected = selected.ok_or(InstalledRecoveryDeviceDiscoveryError::Missing)?;
+    InstalledRecoveryDeviceSelection::new(
+        service,
+        session,
+        principal,
+        selected.descriptor.id(),
+        expected_volume,
+        selected.header,
+        selected.active_superblock,
+    )
+    .map_err(InstalledRecoveryDeviceDiscoveryError::Selection)
 }
 
 /// Consumes one completely established recovery-device control-plane binding
@@ -7582,6 +7711,133 @@ mod tests {
             self.replacements += 1;
             Ok(())
         }
+    }
+
+    struct StableRecoveryDiscovery {
+        candidates: [Option<DiscoveredRecoveryDevice>; 3],
+        next: usize,
+    }
+
+    impl StableRecoveryDiscovery {
+        fn new(candidates: &[DiscoveredRecoveryDevice]) -> Self {
+            let mut stored = [None; 3];
+            for (slot, candidate) in stored.iter_mut().zip(candidates.iter().copied()) {
+                *slot = Some(candidate);
+            }
+            Self {
+                candidates: stored,
+                next: 0,
+            }
+        }
+    }
+
+    impl InstalledRecoveryDeviceDiscovery for StableRecoveryDiscovery {
+        type Error = u8;
+
+        fn next_candidate(&mut self) -> Result<Option<DiscoveredRecoveryDevice>, Self::Error> {
+            let candidate = self.candidates.get(self.next).copied().flatten();
+            self.next = self.next.saturating_add(1);
+            Ok(candidate)
+        }
+    }
+
+    fn discovered_recovery_device(
+        device: BlockDeviceId,
+        volume: VolumeId,
+    ) -> DiscoveredRecoveryDevice {
+        let header = VolumeHeader::new(
+            volume,
+            STABLE_BLOCK_BYTES as u32,
+            stable_header().block_count(),
+            stable_header().primary_superblock(),
+            stable_header().secondary_superblock(),
+        )
+        .unwrap();
+        DiscoveredRecoveryDevice::new(
+            BlockDeviceDescriptor::new(device, STABLE_BLOCK_BYTES as u32, header.block_count())
+                .unwrap(),
+            header,
+            header.primary_superblock(),
+        )
+        .unwrap()
+    }
+
+    #[test]
+    fn installed_recovery_discovery_is_bounded_unique_and_non_authorizing() {
+        let device = BlockDeviceId::new(7).unwrap();
+        let descriptor = BlockDeviceDescriptor::new(
+            device,
+            STABLE_BLOCK_BYTES as u32,
+            stable_header().block_count(),
+        )
+        .unwrap();
+        let mut service = BlockService::<1, 1>::new();
+        service.register_device(descriptor).unwrap();
+        let session = service
+            .grant(device, stable_principal(), BlockRights::READ)
+            .unwrap();
+        let candidate = discovered_recovery_device(device, stable_volume());
+        let other = discovered_recovery_device(
+            BlockDeviceId::new(8).unwrap(),
+            VolumeId::new([0x72; 16]).unwrap(),
+        );
+
+        let mut exact = StableRecoveryDiscovery::new(&[other, candidate]);
+        let selected = discover_installed_recovery_device::<_, 1, 1, 2>(
+            &service,
+            session,
+            stable_principal(),
+            stable_volume(),
+            &mut exact,
+        )
+        .unwrap();
+        assert_eq!(selected.descriptor(), descriptor);
+
+        let mut missing = StableRecoveryDiscovery::new(&[other]);
+        assert_eq!(
+            discover_installed_recovery_device::<_, 1, 1, 2>(
+                &service,
+                session,
+                stable_principal(),
+                stable_volume(),
+                &mut missing,
+            ),
+            Err(InstalledRecoveryDeviceDiscoveryError::Missing)
+        );
+        let duplicate = discovered_recovery_device(BlockDeviceId::new(9).unwrap(), stable_volume());
+        let mut ambiguous = StableRecoveryDiscovery::new(&[candidate, duplicate]);
+        assert_eq!(
+            discover_installed_recovery_device::<_, 1, 1, 2>(
+                &service,
+                session,
+                stable_principal(),
+                stable_volume(),
+                &mut ambiguous,
+            ),
+            Err(InstalledRecoveryDeviceDiscoveryError::Ambiguous)
+        );
+        let mut over_capacity = StableRecoveryDiscovery::new(&[other, candidate]);
+        assert_eq!(
+            discover_installed_recovery_device::<_, 1, 1, 1>(
+                &service,
+                session,
+                stable_principal(),
+                stable_volume(),
+                &mut over_capacity,
+            ),
+            Err(InstalledRecoveryDeviceDiscoveryError::Capacity)
+        );
+        let mut no_capacity = StableRecoveryDiscovery::new(&[candidate]);
+        assert_eq!(
+            discover_installed_recovery_device::<_, 1, 1, 0>(
+                &service,
+                session,
+                stable_principal(),
+                stable_volume(),
+                &mut no_capacity,
+            ),
+            Err(InstalledRecoveryDeviceDiscoveryError::Capacity)
+        );
     }
 
     #[test]

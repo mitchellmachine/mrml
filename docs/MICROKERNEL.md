@@ -3184,6 +3184,16 @@ invalid roots before any backend read. The hosted source consumes this binding,
 but platform enumeration, real media, and installed early boot remain
 **PLANNED**.
 
+The next bounded discovery join is **PARTIALLY IMPLEMENTED**.
+`InstalledRecoveryDeviceDiscovery` exposes already validated candidate metadata
+under a compile-time maximum and cannot grant an I/O session. Recovery requires
+exactly one candidate for the expected volume, rejects missing, ambiguous,
+overflowing, and zero-capacity inventories, and then authenticates the selected
+descriptor against the live session. The hosted source uses one controlled
+in-memory candidate. Windows and Arch Linux configuration suites pass 47 tests,
+WHP 11, and KVM 12. Native platform enumeration and installed early-boot
+ownership remain **PLANNED**.
+
 Patent review: `TRIGGERED` under the existing signed-release, adaptive
 isolation, Total-MicroVM, automated VMM placement, and device-projection reviews
 now that authenticated package classifications are joined to live domain

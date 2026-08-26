@@ -371,6 +371,16 @@ WHP passes 11 and KVM 12. The next dependency gate is platform enumeration that
 constructs this selection from an actually installed device, followed by
 early-boot ownership and lifecycle integration.
 
+The bounded enumeration join is now **PARTIALLY IMPLEMENTED** without claiming
+a platform backend. `InstalledRecoveryDeviceDiscovery` supplies validated
+candidate descriptors and volume headers under an exact maximum; selection
+requires one and only one expected volume and then cross-checks the candidate
+against the independently authorized session. Missing, ambiguous, overflowing,
+and zero-capacity inventories fail closed. Configuration passes 47 tests on both
+development hosts, WHP 11, and KVM 12. Implementing PCI/AHCI and VirtIO discovery
+sources and transferring the selected owner into installed early boot remain the
+next dependency gates.
+
 The next storage connection is now **PARTIALLY IMPLEMENTED** without claiming
 media evidence. `recover_stable_system_selection` accepts the existing hostile
 metadata backend implemented by `BlockVolume`, selects one complete redundant-
