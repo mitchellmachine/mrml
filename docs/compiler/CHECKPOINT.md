@@ -740,6 +740,15 @@ parameter-backed reborrow and post-last-use restoration and rejected live
 competition with E0499 and local-backed escape with E0515. Windows and Arch each
 pass 987 compiler tests. This adds evidence, not nested fixed-point analysis.
 
+Conditional projected-loan ancestry now follows an exact tuple field through
+its recorded initializer or latest reassignment origin instead of stopping at
+the projected path. A conditional assignment selecting either of two mutable-
+reference fields therefore retains both possible owners: live mutation of each
+owner fails, while both are restored after the child's last use. ORACLE-0002
+accepted both restoration controls and rejected both competitors with E0499.
+Windows and Arch each pass 987 compiler tests. Unknown projections and general
+path-sensitive regions remain unsupported.
+
 Multi-field tuple literals retain a separate projected origin per field. A
 conditional reference element seeds its field only when both arms prove the
 same parameter; unequal first/second origins fail closed. Focused caller tests

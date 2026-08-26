@@ -396,6 +396,15 @@ sources and metadata were removed. This is nested projected-return evidence, not
 nested fixed-point, alias, or region inference.
 
 Another independently authored Rust 2024 metadata-only probe against the same
+exact toolchain and commit assigned one of two explicit mutable-reference tuple
+field reborrows into an existing mutable-reference local. Separate invocations
+rejected mutation of the first and second possible owners while the selected
+child remained live with E0499. A passing invocation for each owner accepted
+reuse after the child's last use. Temporary sources and metadata were removed.
+This is conditional exact projected-loan evidence, not general path-sensitive
+alias or region inference.
+
+Another independently authored Rust 2024 metadata-only probe against the same
 exact toolchain and commit accepted assigning a parameter-backed tuple field
 into an existing mutable-reference local and returning that local. The same
 probe accepted an inferred alias initially moved from a local-backed tuple field,

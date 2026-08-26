@@ -1046,6 +1046,15 @@ post-last-use owner access succeeds, a live competitor fails with E0499, and a
 local-backed field fails with E0515. Nested fixed-point and region inference
 remain unsupported.
 
+Conditional assignment from two exact mutable-reference tuple fields now keeps
+each branch field's recorded owner in the bounded loan-ancestry walk. A later
+mutation of either possible owner conflicts while the assigned child remains
+live, and either owner is available after the child's last use. The ancestry
+step follows only exact tuple-field initializer or reassignment evidence;
+unknown projections remain conservative. ORACLE-0002 accepts both restoration
+controls and rejects both live competitors with E0499. This is not general
+path-sensitive alias or region inference.
+
 The first modern trait-solver foundation is an explicit bounded implemented-
 goal representation. Stable trait/type/inference/placeholder identities remain
 distinct; canonicalization replaces inference identities with first-occurrence
