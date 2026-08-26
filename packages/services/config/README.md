@@ -34,6 +34,10 @@ Implemented boundaries:
   object-shell, recovery, accessibility, automation, and test projections; the
   bytes bind exact setting/object/scope/native class/selection/revision while
   commit still requires root CONTROL and setting WRITE.
+- one shared privacy-bounded isolation semantic view that binds configured
+  selections and package floors/forms to a matching kernel policy generation
+  and requested mode, exposing either exact effective placement/source or a
+  blocked state without domain identities or mutation authority.
 
 Setting IDs and service tokens identify records but never grant authority.
 Secrets are intentionally outside this value model. The adapters are

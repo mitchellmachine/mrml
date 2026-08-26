@@ -641,8 +641,14 @@ root `CONTROL` and exact setting-object `WRITE`; wrong-object authority, stale
 revision, scope substitution, hidden bytes, and malformed native class fail
 before mutation. The resulting revision is the policy generation consumed by
 the existing application plan. Actual Settings widgets, object-shell text
-parsing/rendering, semantic accessibility projections, and restart/reboot UI
-remain **PLANNED**.
+parsing/rendering, and restart/reboot UI remain **PLANNED**. A shared read-only
+`IsolationPolicySemanticView` is now **PARTIALLY IMPLEMENTED** for Settings,
+shell, accessibility, automation, and authorized AI. It combines configured
+system/component selections, authenticated package bounds and supported forms,
+resolved placement/source or an explicit blocked state, and the kernel's
+privacy-bounded aggregate status. Policy-generation or requested-mode drift
+rejects the composition; the view contains no domain identity, capability, or
+mutation/launch authority.
 
 The planned Settings application and object shell project that one typed policy
 service. They distinguish configured default, requested boot mode, effective
@@ -659,7 +665,8 @@ decoding, scope separation, authenticated checkpoint recovery, reauthorization,
 stale-plan rejection, native-class substitution denial, package-bound floor and
 supported-form checks, no-fallback Total rejection, policy-generation handoff,
 stale route rejection, shared Settings/shell edit round-trip, wrong-object and
-stale-edit rejection, and proof that control-plane mismatches call no backend.
+stale-edit rejection, semantic-view generation/mode binding and blocked-state
+projection, and proof that control-plane mismatches call no backend.
 These are unit tests on hosted build targets, not boot, VMM, or physical-
 hardware evidence.
 

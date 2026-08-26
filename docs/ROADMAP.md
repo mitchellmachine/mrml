@@ -197,7 +197,11 @@ authority-free edit binds exact scope/object/setting/native-class/selection and
 expected revision, while commit separately requires root `CONTROL` and setting
 `WRITE`. Windows and Arch Linux each pass 41 configuration tests. Actual GUI,
 shell parsing/rendering, semantic accessibility, and restart/reboot presentation
-remain **PLANNED**; that common semantic projection is the next gate before
+remain **PLANNED**. The common privacy-bounded semantic projection is now
+**PARTIALLY IMPLEMENTED**: it exposes the configured selections, package bounds
+and supported forms, resolved placement/source or blocked state, and exact
+aggregate kernel snapshot only when policy generation and requested mode match.
+Concrete Settings and shell adapters are the remaining frontend gate before
 strict Total runtime enforcement.
 
 The deployment lane is defined in [DEPLOYMENT.md](DEPLOYMENT.md) and must not

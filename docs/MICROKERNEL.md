@@ -2968,6 +2968,19 @@ nonzero reserved bytes fail before mutation. Windows and Arch Linux each pass
 GUI, shell parser, semantic accessibility projection, boot selector, or Total
 runtime completion.
 
+The matching read path now composes one `IsolationPolicySemanticView` from the
+already reauthorized persisted policy, authenticated package placement bounds,
+and the kernel's separately capability-scoped aggregate monitor snapshot. It
+retains configured system/component selections, preferred/minimum/maximum and
+supported forms, resolved placement/source or an explicit component-blocked
+state, and the full privacy-bounded aggregate status. A stale policy generation
+or requested-mode mismatch rejects the composition. No domain identity,
+capability, unrelated setting, launch, or remediation operation enters the
+view. The same 41-test Windows and Arch Linux suites cover satisfied, blocked,
+stale-generation, and wrong-mode cases. This is shared semantic-service evidence,
+not a rendered GUI, shell parser, trusted accessibility surface, or Total-mode
+completion.
+
 Patent review: `NOT_TRIGGERED` for this conventional fixed-record
 encode/decode and optimistic revision-bound transaction composition. The
 broader adaptive placement and automated VMM/resource selection reviews remain

@@ -1039,7 +1039,11 @@ cannot apply it from those bytes alone: live configuration-root `CONTROL` and
 exact setting `WRITE` are still required, and a recovered stale revision fails
 without mutation. Recovery must not rewrite the expected revision, substitute a
 policy object, or treat frontend provenance as authority. GUI, shell, and
-semantic accessibility frontends remain **PLANNED**.
+concrete semantic accessibility frontends remain **PLANNED**. Recovery may use
+the shared read-only semantic view only after separately authorized policy and
+kernel-monitor reads. That view rejects policy-generation/requested-mode drift,
+contains aggregate counts rather than domain identities, and carries no repair,
+launch, or policy-mutation authority.
 
 Application-launch recovery must retain the exact runtime domain, application
 object, immutable application generation and artifact digest, active system

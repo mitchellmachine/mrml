@@ -20,10 +20,11 @@ use mrml_kernel::{
     prepare_isolation_service_route, route_isolation_service, Capability, CapabilityError,
     CapabilitySpace, IsolationAdmissionTable, IsolationBackendFailure, IsolationMode,
     IsolationPlacement, IsolationServiceBackend, IsolationServiceRouteError, IsolationServiceSpec,
-    IsolationUnavailableReason, MemoryBackingKind, MemoryObjectId, MemoryPoolId, MemoryPoolTable,
-    MemoryResourceError, Message, ObjectId, PreparedIsolationServiceRoute, Priority, RestartPolicy,
-    Rights, RoutedIsolationService, ServiceAddressSpaceEraser, ServiceCleanupError, ServiceError,
-    ServiceId, ServiceRegistrationPlan, ServiceState, ServiceSupervisor, TaskId, TaskRuntime,
+    IsolationStatusSnapshot, IsolationUnavailableReason, MemoryBackingKind, MemoryObjectId,
+    MemoryPoolId, MemoryPoolTable, MemoryResourceError, Message, ObjectId,
+    PreparedIsolationServiceRoute, Priority, RestartPolicy, Rights, RoutedIsolationService,
+    ServiceAddressSpaceEraser, ServiceCleanupError, ServiceError, ServiceId,
+    ServiceRegistrationPlan, ServiceState, ServiceSupervisor, TaskId, TaskRuntime,
     TaskRuntimeError, PAGE_SIZE,
 };
 use mrml_storage::{
@@ -2257,6 +2258,8 @@ impl IsolationPolicyApplicationPlan {
         Ok(AppliedIsolationPolicy {
             mode: self.system.system_mode()?,
             component_request: self.component.component_request()?,
+            system_selection: self.system.selection(),
+            component_selection: self.component.selection(),
             policy_generation: self.configuration_revision,
         })
     }
@@ -2266,6 +2269,8 @@ impl IsolationPolicyApplicationPlan {
 pub struct AppliedIsolationPolicy {
     mode: IsolationMode,
     component_request: Option<IsolationPlacement>,
+    system_selection: OwnerIsolationSelection,
+    component_selection: OwnerIsolationSelection,
     policy_generation: u64,
 }
 
@@ -2276,6 +2281,14 @@ impl AppliedIsolationPolicy {
 
     pub const fn component_request(self) -> Option<IsolationPlacement> {
         self.component_request
+    }
+
+    pub const fn system_selection(self) -> OwnerIsolationSelection {
+        self.system_selection
+    }
+
+    pub const fn component_selection(self) -> OwnerIsolationSelection {
+        self.component_selection
     }
 
     pub const fn policy_generation(self) -> u64 {
@@ -2315,6 +2328,99 @@ impl AppliedIsolationPolicy {
             source,
             policy_generation: self.policy_generation,
         })
+    }
+
+    /// Produces one read-only semantic truth for Settings, shell,
+    /// accessibility, automation, and authorized AI after the caller has
+    /// separately acquired the persisted policy and kernel monitor snapshot.
+    pub fn semantic_view(
+        self,
+        bounds: IsolationServiceBounds,
+        status: IsolationStatusSnapshot,
+    ) -> Result<IsolationPolicySemanticView, ConfigError> {
+        if status.policy_generation != self.policy_generation || status.requested_mode != self.mode
+        {
+            return Err(ConfigError::IsolationPolicyMismatch);
+        }
+        let admitted = self.admit_service(bounds).ok();
+        Ok(IsolationPolicySemanticView {
+            configured_system: self.system_selection,
+            configured_component: self.component_selection,
+            preferred: bounds.preferred,
+            minimum: bounds.minimum,
+            maximum: bounds.maximum,
+            native_supported: bounds.native_supported,
+            microvm_supported: bounds.microvm_supported,
+            effective_placement: admitted.map(AdmittedIsolationServicePolicy::placement),
+            policy_source: admitted.map(AdmittedIsolationServicePolicy::source),
+            component_blocked: admitted.is_none(),
+            status,
+        })
+    }
+}
+
+/// Privacy-bounded semantic projection shared by every authorized frontend.
+/// It contains aggregate kernel status and package-policy bounds, never domain
+/// identities, capabilities, setting values outside isolation policy, or a
+/// remediation/launch operation.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct IsolationPolicySemanticView {
+    configured_system: OwnerIsolationSelection,
+    configured_component: OwnerIsolationSelection,
+    preferred: IsolationPlacement,
+    minimum: IsolationPlacement,
+    maximum: IsolationPlacement,
+    native_supported: bool,
+    microvm_supported: bool,
+    effective_placement: Option<IsolationPlacement>,
+    policy_source: Option<IsolationPolicySource>,
+    component_blocked: bool,
+    status: IsolationStatusSnapshot,
+}
+
+impl IsolationPolicySemanticView {
+    pub const fn configured_system(self) -> OwnerIsolationSelection {
+        self.configured_system
+    }
+
+    pub const fn configured_component(self) -> OwnerIsolationSelection {
+        self.configured_component
+    }
+
+    pub const fn preferred(self) -> IsolationPlacement {
+        self.preferred
+    }
+
+    pub const fn minimum(self) -> IsolationPlacement {
+        self.minimum
+    }
+
+    pub const fn maximum(self) -> IsolationPlacement {
+        self.maximum
+    }
+
+    pub const fn native_supported(self) -> bool {
+        self.native_supported
+    }
+
+    pub const fn microvm_supported(self) -> bool {
+        self.microvm_supported
+    }
+
+    pub const fn effective_placement(self) -> Option<IsolationPlacement> {
+        self.effective_placement
+    }
+
+    pub const fn policy_source(self) -> Option<IsolationPolicySource> {
+        self.policy_source
+    }
+
+    pub const fn component_blocked(self) -> bool {
+        self.component_blocked
+    }
+
+    pub const fn status(self) -> IsolationStatusSnapshot {
+        self.status
     }
 }
 
@@ -4422,7 +4528,10 @@ fn write_u64(output: &mut [u8], offset: usize, value: u64) -> Result<(), ConfigE
 #[cfg(test)]
 mod tests {
     use super::*;
-    use mrml_kernel::{route_isolation_service, TotalMicrovmClass};
+    use mrml_kernel::{
+        route_isolation_service, HostSubstrateCounts, IsolationUnavailableCounts,
+        TotalMicrovmClass, TotalMicrovmState,
+    };
     use mrml_storage::{
         authority_checkpoint_digest, encode_authority_checkpoint,
         recover_validate_and_commit_stable_authorities, AuthenticatedAuthorityRecoveryState,
@@ -7808,6 +7917,74 @@ mod tests {
         let admission = applied.admission_table::<2>(SYSTEM_GENERATION).unwrap();
         assert_eq!(admission.mode(), IsolationMode::TotalMicrovm);
         assert_eq!(admission.policy_generation(), 1);
+        let status = IsolationStatusSnapshot {
+            system_generation: SYSTEM_GENERATION,
+            policy_generation: 1,
+            requested_mode: IsolationMode::TotalMicrovm,
+            total_state: TotalMicrovmState::Satisfied,
+            running_microvm_eligible: 1,
+            running_in_microvm: 1,
+            running_eligible_outside_microvm: 0,
+            running_boot_only: 0,
+            running_recovery_only: 0,
+            running_unsupported_blockers: 0,
+            unavailable_microvm_eligible: 0,
+            native_fallback: 0,
+            host_substrate: HostSubstrateCounts::default(),
+            unavailable: IsolationUnavailableCounts::default(),
+        };
+        let bounds = IsolationServiceBounds::new(
+            IsolationPlacement::NativeService,
+            IsolationPlacement::NativeService,
+            IsolationPlacement::Microvm,
+            true,
+            true,
+        )
+        .unwrap();
+        let view = applied.semantic_view(bounds, status).unwrap();
+        assert_eq!(
+            view.configured_system(),
+            OwnerIsolationSelection::TotalMicrovm
+        );
+        assert_eq!(
+            view.configured_component(),
+            OwnerIsolationSelection::Microvm
+        );
+        assert_eq!(
+            view.effective_placement(),
+            Some(IsolationPlacement::Microvm)
+        );
+        assert_eq!(
+            view.policy_source(),
+            Some(IsolationPolicySource::TotalMicrovm)
+        );
+        assert!(!view.component_blocked());
+        assert_eq!(view.status(), status);
+        let mut stale_status = status;
+        stale_status.policy_generation = 2;
+        assert_eq!(
+            applied.semantic_view(bounds, stale_status),
+            Err(ConfigError::IsolationPolicyMismatch)
+        );
+        stale_status = status;
+        stale_status.requested_mode = IsolationMode::Balanced;
+        assert_eq!(
+            applied.semantic_view(bounds, stale_status),
+            Err(ConfigError::IsolationPolicyMismatch)
+        );
+        let native_only = IsolationServiceBounds::new(
+            IsolationPlacement::NativeService,
+            IsolationPlacement::NativeService,
+            IsolationPlacement::NativeService,
+            true,
+            false,
+        )
+        .unwrap();
+        let blocked = applied.semantic_view(native_only, status).unwrap();
+        assert!(blocked.component_blocked());
+        assert_eq!(blocked.effective_placement(), None);
+        assert_eq!(blocked.policy_source(), None);
+        assert!(!blocked.microvm_supported());
         assert!(matches!(
             component.read(&configuration, &capabilities, system_access),
             Err(ConfigError::WrongObject)
@@ -8011,6 +8188,8 @@ mod tests {
         let default = AppliedIsolationPolicy {
             mode: IsolationMode::Balanced,
             component_request: None,
+            system_selection: OwnerIsolationSelection::Balanced,
+            component_selection: OwnerIsolationSelection::Default,
             policy_generation: 9,
         }
         .admit_service(dual)
@@ -8022,6 +8201,8 @@ mod tests {
         let total = AppliedIsolationPolicy {
             mode: IsolationMode::TotalMicrovm,
             component_request: Some(IsolationPlacement::NativeService),
+            system_selection: OwnerIsolationSelection::TotalMicrovm,
+            component_selection: OwnerIsolationSelection::Native,
             policy_generation: 10,
         }
         .admit_service(dual)
@@ -8056,6 +8237,8 @@ mod tests {
             AppliedIsolationPolicy {
                 mode: IsolationMode::TotalMicrovm,
                 component_request: None,
+                system_selection: OwnerIsolationSelection::TotalMicrovm,
+                component_selection: OwnerIsolationSelection::Default,
                 policy_generation: 11,
             }
             .admit_service(native_only),
@@ -8074,6 +8257,8 @@ mod tests {
             AppliedIsolationPolicy {
                 mode: IsolationMode::Custom,
                 component_request: Some(IsolationPlacement::NativeService),
+                system_selection: OwnerIsolationSelection::Custom,
+                component_selection: OwnerIsolationSelection::Native,
                 policy_generation: 12,
             }
             .admit_service(microvm_required),
