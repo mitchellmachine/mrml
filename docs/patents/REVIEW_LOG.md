@@ -1,5 +1,27 @@
 # Patent review log
 
+## 2026-08-26 — AHCI licensing prerequisite and continuing native-driver hold
+
+Patent review: **TRIGGERED**. Intel's published AHCI page says implementation
+requires an Intel license, and identifies its contributor agreement as providing
+a reciprocal, royalty-free license for products compliant with the licensed
+AHCI specification. The agreement itself limits that grant to a party that has
+entered the agreement as a Contributor or Adopter, to compliant portions and
+Necessary Claims within its stated scope, and subjects it to reciprocal-
+licensing, adoption, withdrawal, and termination terms. See Intel's
+[AHCI specification page](https://www.intel.com/content/www/us/en/io/serial-ata/ahci.html)
+and its [AHCI contributor agreement](https://www.intel.com/content/dam/www/public/us/en/documents/license-agreements/serial-ata-ahci-license-agreement.pdf).
+
+MRML has not executed that agreement and this review has not established the
+status or claim scope of every material right in every relevant jurisdiction.
+The agreement therefore does not presently authorize an AHCI implementation in
+this repository. Native AHCI controller discovery, command submission, DMA,
+interrupt handling, and block I/O remain paused. A future narrowly conformant
+implementation may proceed only after the owner has expressly authorized the
+applicable agreement and the required jurisdiction-by-jurisdiction claim/status
+review records the resulting scope; nonconformant extensions require separate
+review. This technical screen is not legal clearance.
+
 ## 2026-08-26 — Canonical handoff retention at first kernel entry
 
 Patent review: **NOT_TRIGGERED** for copying the existing decoded one-boot
