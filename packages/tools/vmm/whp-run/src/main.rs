@@ -21,15 +21,18 @@ use mrml_kernel::arch::x86_64::{Mapping, PRIVILEGE_STACK_ARENA_PAGES, PagePermis
 use mrml_kernel::verify_gpu_kernel_bundle;
 #[cfg(target_os = "windows")]
 use mrml_kernel::{
-    AffinityDeadlineVmBackend, ArtifactKind, Capability, CapabilitySpace, CpuBudgetId,
+    AdmittedApplicationGuestFactory, AffinityDeadlineVmBackend, ApplicationLaunch,
+    ApplicationMicrovmEndpoint, ArtifactKind, Capability, CapabilitySpace, CpuBudgetId,
     CpuBudgetSpec, CpuBudgetTable, CpuRuntimeSlice, DeadlineVmBackend, GPU_DOORBELL_PORT,
     GPU_QUEUE_MESSAGE_BYTES, GpuCommandRing, GpuQueueIdentity, GpuQueueReceiver,
     GpuResourceResponse, GpuResourceResponseSender, GpuSharedQueueLayout, GpuVmmQueueBridge,
     GuestMemory, HypercallRouter, InterruptPolicy, IsolationAdmissionTable, IsolationMode,
-    IsolationPlacement, IsolationUnavailableReason, MAX_COMPONENT_IMAGE_REGIONS, MemoryPoolTable,
+    IsolationApplicationBackend, IsolationPlacement, IsolationUnavailableReason,
+    MAX_APPLICATION_IMAGE_BYTES, MAX_COMPONENT_IMAGE_REGIONS, MemoryPoolTable,
     MicrovmPageProjectionKind, ObjectId, PAGE_SIZE, PreparedIsolationServiceRoute, ResourceCommand,
-    Rights, SIGNED_ARTIFACT_OVERHEAD_BYTES, ScheduledDeadlineVmBackend, ScheduledSmpVmBackend,
-    SignedArtifact, TotalMicrovmClass, TrustRoot, VIRTUAL_BLOCK_FEATURE_FLUSH, VcpuReservationId,
+    PreparedMicrovmApplicationBackend, Rights, SIGNED_ARTIFACT_OVERHEAD_BYTES,
+    ScheduledDeadlineVmBackend, ScheduledSmpVmBackend, SignedArtifact, TotalMicrovmClass,
+    TrustRoot, VIRTUAL_BLOCK_FEATURE_FLUSH, VcpuReservationId,
     VerifiedExecutable, VerifiedGpuKernelBundle, VirtualBlockBackend, VirtualBlockBackendAuthority,
     VirtualBlockCompletionStatus, VirtualBlockConfigurationPage, VirtualBlockDevice,
     VirtualBlockDeviceState, VirtualBlockError, VirtualBlockMutationError,
@@ -42,16 +45,19 @@ use mrml_kernel::{
     VirtualPciConfigurationRouter, VirtualPciIdentity, VirtualPciIoOutcome, VirtualPciLocation,
     VirtualPciMemoryBar, VirtualPciMmioWindow, VirtualPciNativeResourceError,
     VirtualPciType0Function, VmBackend, VmDeadlineOutcome, VmExit, VmTable,
-    bind_component_service_handoff, component_image_page_plan, prepare_microvm_guest_ram,
+    bind_component_service_handoff, bind_verified_application_image, component_image_page_plan,
+    prepare_microvm_guest_ram,
     release_component_image, release_microvm_guest_ram, reserve_component_image,
     reserve_isolation_vcpus, reserve_microvm_guest_ram, reserve_microvm_page_projection,
-    run_pci_configuration_once, run_pci_configuration_once_with_backend_mapper,
+    route_isolation_application, run_pci_configuration_once,
+    run_pci_configuration_once_with_backend_mapper,
     run_virtual_block_mmio_transaction_once, run_virtual_block_transaction_once,
 };
 #[cfg(any(test, target_os = "windows"))]
 use mrml_kernel::{
     FramebufferInfo, MemoryKind, MemoryRegion, PhysAddr, PixelFormat, RecoveryStateMetadata,
-    encode_handoff, encode_handoff_with_recovery, encode_handoff_with_smp,
+    encode_handoff, encode_handoff_with_application, encode_handoff_with_recovery,
+    encode_handoff_with_smp,
 };
 #[cfg(target_os = "windows")]
 use mrml_package_format::{
@@ -69,6 +75,11 @@ use mrml_whp::{PreparedWhpGuest, WhpLaunchLayout, WhpSystem};
 #[cfg(target_os = "windows")]
 type WhpConfigurationLauncher<'system> = PreparedMicrovmConfigurationLauncher<
     AdmittedConfigurationGuestFactory<PreparedWhpGuest<'system>>,
+>;
+
+#[cfg(target_os = "windows")]
+type WhpApplicationLauncher<'system> = PreparedMicrovmApplicationBackend<
+    AdmittedApplicationGuestFactory<PreparedWhpGuest<'system>>,
 >;
 
 #[cfg(target_os = "windows")]
@@ -464,6 +475,10 @@ fn prepare_configured_total_service(
 #[cfg(target_os = "windows")]
 enum WhpGuestOwner<'system> {
     Direct(PreparedWhpGuest<'system>),
+    Application {
+        launcher: WhpApplicationLauncher<'system>,
+        endpoint: ApplicationMicrovmEndpoint,
+    },
     Configuration {
         launcher: WhpConfigurationLauncher<'system>,
         endpoint: ConfigurationMicrovmEndpoint,
@@ -475,6 +490,9 @@ impl<'system> WhpGuestOwner<'system> {
     fn guest(&self) -> &PreparedWhpGuest<'system> {
         match self {
             Self::Direct(guest) => guest,
+            Self::Application { launcher, endpoint } => launcher
+                .active_guest(*endpoint)
+                .expect("stored application endpoint must select its retained guest"),
             Self::Configuration { launcher, endpoint } => launcher
                 .active_guest(*endpoint)
                 .expect("stored configuration endpoint must select its retained guest"),
@@ -484,6 +502,9 @@ impl<'system> WhpGuestOwner<'system> {
     fn guest_mut(&mut self) -> &mut PreparedWhpGuest<'system> {
         match self {
             Self::Direct(guest) => guest,
+            Self::Application { launcher, endpoint } => launcher
+                .active_guest_mut(*endpoint)
+                .expect("stored application endpoint must select its retained guest"),
             Self::Configuration { launcher, endpoint } => launcher
                 .active_guest_mut(*endpoint)
                 .expect("stored configuration endpoint must select its retained guest"),
@@ -493,17 +514,21 @@ impl<'system> WhpGuestOwner<'system> {
     fn into_direct(self) -> Result<PreparedWhpGuest<'system>> {
         match self {
             Self::Direct(guest) => Ok(guest),
-            Self::Configuration { .. } => Err(anyhow!(
-                "configuration microVM cannot enter an unrelated launch path"
+            Self::Application { .. } | Self::Configuration { .. } => Err(anyhow!(
+                "retained application/configuration microVM cannot enter an unrelated launch path"
             )),
         }
     }
 
     fn finish(mut self) -> Result<()> {
-        if let Self::Configuration { launcher, endpoint } = &mut self {
-            launcher
+        match &mut self {
+            Self::Application { launcher, endpoint } => launcher
+                .revoke(endpoint)
+                .map_err(|error| anyhow!("WHP application teardown failed: {:?}", error))?,
+            Self::Configuration { launcher, endpoint } => launcher
                 .revoke_microvm(endpoint)
-                .map_err(|error| anyhow!("WHP configuration teardown failed: {:?}", error))?;
+                .map_err(|error| anyhow!("WHP configuration teardown failed: {:?}", error))?,
+            Self::Direct(_) => {}
         }
         Ok(())
     }
@@ -622,6 +647,18 @@ impl ScheduledSmpVmBackend for WhpGuestOwner<'_> {
 const MAX_KERNEL_BUNDLE: usize = SIGNED_ARTIFACT_OVERHEAD_BYTES + 16 * 1024 * 1024;
 #[cfg(any(test, target_os = "windows"))]
 const FRAMEBUFFER: u64 = 0x00a0_0000;
+#[cfg(target_os = "windows")]
+const APPLICATION_PROBE_PORT: u16 = 0x4d66;
+#[cfg(target_os = "windows")]
+const APPLICATION_ARTIFACT_PHYSICAL: u64 = 0x0160_0000;
+#[cfg(target_os = "windows")]
+const APPLICATION_IMAGE_PHYSICAL: u64 = 0x0180_0000;
+#[cfg(target_os = "windows")]
+const APPLICATION_STACK_PHYSICAL: u64 = 0x0190_0000;
+#[cfg(target_os = "windows")]
+const APPLICATION_STACK_TOP: u64 = 0x0090_0000;
+#[cfg(target_os = "windows")]
+const APPLICATION_TABLE_PHYSICAL: u64 = 0x01a0_0000;
 #[cfg(target_os = "windows")]
 const COMMAND_BASE: u64 = 0x00b0_0000;
 #[cfg(target_os = "windows")]
@@ -1802,6 +1839,7 @@ fn application_main() -> Result<()> {
         );
         return Ok(());
     }
+    let application_mode = arguments.len() == 9 && arguments[5] == "application-probe";
     let service_mode = arguments.len() == 9 && arguments[5] == "service-probe";
     let component_release_input_mode =
         arguments.len() == 14 && arguments[5] == "component-release-inputs";
@@ -1842,6 +1880,7 @@ fn application_main() -> Result<()> {
     }
     if arguments.len() != 8
         && !service_artifact_mode
+        && !application_mode
         && !boot_mode
         && !timer_mode
         && !block_guest_driver_mode
@@ -1923,6 +1962,46 @@ fn application_main() -> Result<()> {
         (None, None) => None,
         _ => return Err(anyhow!("incomplete service verification inputs")),
     };
+    let application_bundle = if application_mode {
+        Some(mrml_runtime::read_file_bounded(
+            &arguments[6],
+            SIGNED_ARTIFACT_OVERHEAD_BYTES + MAX_APPLICATION_IMAGE_BYTES as usize,
+        )?)
+    } else {
+        None
+    };
+    let application_public = if application_mode {
+        let public = mrml_runtime::read_file_bounded(&arguments[7], LAMPORT_PUBLIC_KEY_BYTES)?;
+        if public.len() != LAMPORT_PUBLIC_KEY_BYTES {
+            return Err(anyhow!("invalid application public-key length"));
+        }
+        Some(public)
+    } else {
+        None
+    };
+    let application_executable = match (&application_bundle, &application_public) {
+        (Some(bundle), Some(public)) => {
+            let minimum = arguments[8]
+                .parse::<u64>()
+                .ok()
+                .filter(|version| *version != 0)
+                .ok_or_else(|| anyhow!("application minimum version must be nonzero"))?;
+            let root = TrustRoot::new(
+                ArtifactKind::ApplicationImage,
+                Sha3_512::digest(public),
+                minimum,
+            );
+            let signed = SignedArtifact::decode(bundle)
+                .map_err(|_| anyhow!("invalid signed application bundle"))?;
+            Some(
+                signed
+                    .verify_executable(&root, ArtifactKind::ApplicationImage)
+                    .map_err(|_| anyhow!("application signature or PE policy rejected"))?,
+            )
+        }
+        (None, None) => None,
+        _ => return Err(anyhow!("incomplete application verification inputs")),
+    };
     let provider_bundle = if component_service_mode {
         Some(mrml_runtime::read_file_bounded(
             &arguments[9],
@@ -1963,7 +2042,8 @@ fn application_main() -> Result<()> {
         (None, None) => None,
         _ => return Err(anyhow!("incomplete provider verification inputs")),
     };
-    let cuda_bundle = if service_artifact_mode
+    let cuda_bundle = if application_mode
+        || service_artifact_mode
         || boot_mode
         || timer_mode
         || block_guest_driver_mode
@@ -1987,12 +2067,54 @@ fn application_main() -> Result<()> {
     let mut entropy = [0u8; 32];
     mrml_runtime::fill_random(&mut entropy)
         .map_err(|_| anyhow!("operating-system boot entropy failed"))?;
+    let application_launch = if let (Some(bundle), Some(application)) =
+        (application_bundle.as_ref(), application_executable.as_ref())
+    {
+        let image_pages = u64::from(application.image().image_size())
+            .checked_add(PAGE_SIZE - 1)
+            .ok_or_else(|| anyhow!("application image-page rounding overflow"))?
+            / PAGE_SIZE;
+        let image_virtual = application.image().image_base();
+        Some(
+            ApplicationLaunch::new(
+                PhysAddr::new(APPLICATION_ARTIFACT_PHYSICAL)
+                    .map_err(|_| anyhow!("invalid application artifact address"))?,
+                bundle.len() as u64,
+                PhysAddr::new(APPLICATION_IMAGE_PHYSICAL)
+                    .map_err(|_| anyhow!("invalid application image address"))?,
+                image_pages,
+                image_virtual,
+                image_virtual
+                    .checked_add(u64::from(application.image().entry_rva()))
+                    .ok_or_else(|| anyhow!("application entry overflow"))?,
+                PhysAddr::new(APPLICATION_STACK_PHYSICAL)
+                    .map_err(|_| anyhow!("invalid application stack address"))?,
+                8,
+                APPLICATION_STACK_TOP,
+                PhysAddr::new(APPLICATION_TABLE_PHYSICAL)
+                    .map_err(|_| anyhow!("invalid application table address"))?,
+                32,
+                application.artifact().version(),
+                *application.artifact().digest(),
+            )
+            .map_err(|_| anyhow!("invalid typed application launch"))?,
+        )
+    } else {
+        None
+    };
     let hosted_smp = smp_mode
         || smp_scheduler_mode
         || smp_ipi_mode
         || smp_service_migration_mode
         || smp_periodic_balance_mode;
-    let handoff = if hosted_smp || component_smp_mode {
+    let handoff = if let Some(application) = application_launch {
+        application_boot_handoff(
+            executable.artifact().version(),
+            entropy,
+            *executable.artifact().digest(),
+            application,
+        )?
+    } else if hosted_smp || component_smp_mode {
         smp_boot_handoff(
             executable.artifact().version(),
             entropy,
@@ -2438,7 +2560,7 @@ fn application_main() -> Result<()> {
     } else {
         None
     };
-    let guest_preparation = if boot_mode {
+    let guest_preparation = if boot_mode || application_mode {
         system.prepare_boot_kernel(&executable, handoff.as_slice(), layout)
     } else if pci_configuration_mode {
         system.prepare_kernel_block_dynamic_mmio_guest(
@@ -2513,6 +2635,15 @@ fn application_main() -> Result<()> {
             ));
         }
     };
+    if let (Some(application), Some(bundle), Some(application_executable)) = (
+        application_launch,
+        application_bundle.as_ref(),
+        application_executable.as_ref(),
+    ) {
+        guest = guest
+            .attach_application_boot_resources(application, bundle, application_executable)
+            .map_err(|error| anyhow!("application boot-resource attachment failed: {:?}", error))?;
+    }
     let mut component_launch = if component_service_mode {
         let prepared = isolation_preparation
             .take()
@@ -2777,7 +2908,48 @@ fn application_main() -> Result<()> {
     if let Some(launch) = component_launch.take() {
         isolation_preparation = Some(launch.into_route());
     }
-    let mut guest = if let (Some(admission), Some(prepared)) =
+    let mut guest = if let Some(application_executable) = application_executable.as_ref() {
+        let record = SystemGenerationDigestRecord {
+            package_id: "org.mrml.app.isolation-probe",
+            version: application_executable.artifact().version(),
+            artifact_digest: application_executable.artifact().digest(),
+        };
+        let mut generation_bytes = [0u8; 256];
+        let generation_length = encode_system_generation(1, &[record], &mut generation_bytes)
+            .map_err(|error| anyhow!("application SystemGeneration encoding failed: {:?}", error))?;
+        let generation = SystemGenerationView::decode(&generation_bytes[..generation_length])
+            .map_err(|error| anyhow!("application SystemGeneration decoding failed: {:?}", error))?;
+        let bound = bind_verified_application_image(
+            "org.mrml.app.isolation-probe",
+            generation,
+            application_executable.artifact(),
+        )
+        .map_err(|error| anyhow!("application generation binding failed: {:?}", error))?;
+        let spec = bound
+            .route_spec(
+                ObjectId(0x4150_505f_444f_4d),
+                ObjectId(0x4150_505f_5052_4f42),
+                1,
+                IsolationPlacement::Microvm,
+            )
+            .map_err(|error| anyhow!("application route specification failed: {:?}", error))?;
+        let mut admission = IsolationAdmissionTable::<1>::new(
+            IsolationMode::TotalMicrovm,
+            generation.generation(),
+            1,
+        )
+        .map_err(|error| anyhow!("application Total admission failed: {:?}", error))?;
+        let mut launcher = PreparedMicrovmApplicationBackend::new(
+            AdmittedApplicationGuestFactory::new(spec, guest),
+        );
+        let routed = route_isolation_application(&mut admission, &mut launcher, spec)
+            .map_err(|error| anyhow!("application Total route failed: {:?}", error))?;
+        let endpoint = routed.into_endpoint();
+        if endpoint.spec() != spec || !admission.total_microvm_report().satisfied() {
+            return Err(anyhow!("application Total MicroVM admission was not satisfied"));
+        }
+        WhpGuestOwner::Application { launcher, endpoint }
+    } else if let (Some(admission), Some(prepared)) =
         (isolation_admission.as_mut(), isolation_preparation)
     {
         let spec = prepared.spec();
@@ -2998,6 +3170,38 @@ fn application_main() -> Result<()> {
         }
         println!(
             "verified Boot kernel reached its expected halt under WHP: verify={}us prepare={}us execute={}us total={}us",
+            verification_micros,
+            preparation_micros,
+            execution_started.elapsed().as_micros(),
+            total_started.elapsed().as_micros()
+        );
+        return Ok(());
+    }
+    if application_mode {
+        if exit
+            != (VmExit::Io {
+                port: APPLICATION_PROBE_PORT,
+                size: 4,
+                write: true,
+                value: 1,
+            })
+        {
+            return Err(anyhow!(
+                "Total-mode application did not exit through the authenticated CPL3 path: {:?}",
+                exit
+            ));
+        }
+        let mut marker = [0u8; 4];
+        VmBackend::read_guest(&guest, FRAMEBUFFER, &mut marker)
+            .map_err(|_| anyhow!("application framebuffer is unreadable"))?;
+        if marker != [0; 4] {
+            return Err(anyhow!(
+                "application probe unexpectedly modified the framebuffer"
+            ));
+        }
+        guest.finish()?;
+        println!(
+            "verified signed generation-bound Total-mode application CPL3 launch and teardown under WHP: verify={}us prepare={}us execute={}us total={}us",
             verification_micros,
             preparation_micros,
             execution_started.elapsed().as_micros(),
@@ -4182,7 +4386,7 @@ fn application_main() -> Result<()> {
 
 #[cfg(any(test, target_os = "windows"))]
 struct EncodedHandoff {
-    bytes: [u8; 316],
+    bytes: [u8; 512],
     length: usize,
 }
 
@@ -4223,7 +4427,7 @@ fn boot_handoff(
         region(0x3000, 1, MemoryKind::Kernel)?,
         region(FRAMEBUFFER, framebuffer_pages, MemoryKind::Mmio)?,
     ];
-    let mut encoded = [0u8; 316];
+    let mut encoded = [0u8; 512];
     let length = match recovery_state {
         Some(recovery_state) => encode_handoff_with_recovery(
             version,
@@ -4254,6 +4458,60 @@ fn boot_handoff(
     .map_err(|_| anyhow!("handoff construction failed"))?;
     if length != 240 + usize::from(recovery_state.is_some()) * 40 {
         return Err(anyhow!("unexpected handoff length"));
+    }
+    Ok(EncodedHandoff {
+        bytes: encoded,
+        length,
+    })
+}
+
+#[cfg(any(test, target_os = "windows"))]
+fn application_boot_handoff(
+    version: u64,
+    entropy: [u8; 32],
+    measurement: [u8; 64],
+    application: ApplicationLaunch,
+) -> Result<EncodedHandoff> {
+    let framebuffer = FramebufferInfo::new(
+        FRAMEBUFFER,
+        0x1000,
+        16,
+        16,
+        16,
+        PixelFormat::BlueGreenRedReserved,
+    )
+    .map_err(|_| anyhow!("invalid fixed framebuffer description"))?;
+    let region = |address, pages, kind| {
+        let address = PhysAddr::new(address).map_err(|_| anyhow!("unaligned launch region"))?;
+        MemoryRegion::new(address, pages, kind).map_err(|_| anyhow!("invalid launch region"))
+    };
+    let regions = [
+        region(0x1000, 2, MemoryKind::Free)?,
+        region(0x3000, 1, MemoryKind::Kernel)?,
+        region(FRAMEBUFFER, 1, MemoryKind::Mmio)?,
+        region(
+            APPLICATION_ARTIFACT_PHYSICAL,
+            0x500,
+            MemoryKind::Reserved,
+        )?,
+    ];
+    let mut encoded = [0u8; 512];
+    let length = encode_handoff_with_application(
+        version,
+        entropy,
+        measurement,
+        true,
+        false,
+        false,
+        0x9000,
+        framebuffer,
+        &regions,
+        application,
+        &mut encoded,
+    )
+    .map_err(|_| anyhow!("canonical application handoff construction failed"))?;
+    if length != 424 {
+        return Err(anyhow!("unexpected canonical application handoff length"));
     }
     Ok(EncodedHandoff {
         bytes: encoded,
@@ -4294,7 +4552,7 @@ fn smp_boot_handoff(
     madt[52..60].copy_from_slice(&[0, 8, 1, 1, 1, 0, 0, 0]);
     let checksum = madt.iter().fold(0u8, |sum, byte| sum.wrapping_add(*byte));
     madt[9] = madt[9].wrapping_sub(checksum);
-    let mut encoded = [0u8; 316];
+    let mut encoded = [0u8; 512];
     let length = encode_handoff_with_smp(
         version,
         entropy,
@@ -4311,7 +4569,7 @@ fn smp_boot_handoff(
         &mut encoded,
     )
     .map_err(|_| anyhow!("SMP handoff construction failed"))?;
-    if length != encoded.len() {
+    if length != 316 {
         return Err(anyhow!("unexpected SMP handoff length"));
     }
     Ok(EncodedHandoff {
@@ -4334,6 +4592,32 @@ mod tests {
         assert_eq!(decoded.evidence().image_version(), 9);
         assert_eq!(decoded.evidence().entropy(), &[0x35; 32]);
         assert_eq!(decoded.evidence().image_measurement(), &[0xa7; 64]);
+    }
+
+    #[test]
+    fn application_handoff_is_typed_and_does_not_invent_smp_state() {
+        let application = ApplicationLaunch::new(
+            PhysAddr::new(APPLICATION_ARTIFACT_PHYSICAL).unwrap(),
+            100_000,
+            PhysAddr::new(APPLICATION_IMAGE_PHYSICAL).unwrap(),
+            1,
+            0x1_4000_0000,
+            0x1_4000_0080,
+            PhysAddr::new(APPLICATION_STACK_PHYSICAL).unwrap(),
+            8,
+            APPLICATION_STACK_TOP,
+            PhysAddr::new(APPLICATION_TABLE_PHYSICAL).unwrap(),
+            32,
+            7,
+            [0x71; 64],
+        )
+        .unwrap();
+        let encoded = application_boot_handoff(9, [0x35; 32], [0xa7; 64], application).unwrap();
+        let decoded = BootHandoff::decode(encoded.as_slice(), |_| {}).unwrap();
+        assert_eq!(decoded.application(), Some(application));
+        assert_eq!(decoded.service(), None);
+        assert_eq!(decoded.ap_trampoline(), None);
+        assert_eq!(decoded.madt(encoded.as_slice()), None);
     }
 
     #[test]

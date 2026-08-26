@@ -827,6 +827,40 @@ pub fn encode_handoff_with_smp(
 }
 
 #[allow(clippy::too_many_arguments)]
+pub fn encode_handoff_with_application(
+    image_version: u64,
+    entropy: [u8; 32],
+    image_measurement: [u8; 64],
+    secure_boot: bool,
+    measured_boot: bool,
+    rollback_protected: bool,
+    acpi_root: u64,
+    framebuffer: FramebufferInfo,
+    regions: &[MemoryRegion],
+    application: ApplicationLaunch,
+    output: &mut [u8],
+) -> Result<usize, HandoffError> {
+    encode_handoff_inner(
+        image_version,
+        entropy,
+        image_measurement,
+        secure_boot,
+        measured_boot,
+        rollback_protected,
+        false,
+        acpi_root,
+        framebuffer,
+        regions,
+        None,
+        None,
+        None,
+        Some(application),
+        None,
+        output,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
 pub fn encode_handoff_with_smp_and_service(
     image_version: u64,
     entropy: [u8; 32],
@@ -1718,6 +1752,30 @@ mod tests {
             BootHandoff::decode(&application_only, |_| {}).unwrap();
         assert_eq!(decoded_application_only.service(), None);
         assert_eq!(decoded_application_only.application(), Some(application));
+
+        const NON_SMP_APPLICATION_LENGTH: usize =
+            HANDOFF_HEADER_BYTES + 2 * HANDOFF_REGION_BYTES + HANDOFF_APPLICATION_BYTES;
+        let mut non_smp_application = [0; NON_SMP_APPLICATION_LENGTH];
+        assert_eq!(
+            encode_handoff_with_application(
+                17,
+                [1; 32],
+                [2; 64],
+                true,
+                true,
+                true,
+                0x9000,
+                framebuffer,
+                &regions,
+                application,
+                &mut non_smp_application,
+            ),
+            Ok(NON_SMP_APPLICATION_LENGTH)
+        );
+        let decoded_non_smp = BootHandoff::decode(&non_smp_application, |_| {}).unwrap();
+        assert_eq!(decoded_non_smp.ap_trampoline(), None);
+        assert_eq!(decoded_non_smp.madt(&non_smp_application), None);
+        assert_eq!(decoded_non_smp.application(), Some(application));
 
         let mut malformed = encoded;
         let flags = read_u16(&malformed, 22) & !FLAG_APPLICATION_IMAGE;
