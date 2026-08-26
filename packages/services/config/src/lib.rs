@@ -25,7 +25,8 @@ use mrml_kernel::{
     MemoryPoolId, MemoryPoolTable, MemoryResourceError, Message, ObjectId, PAGE_SIZE,
     PreparedIsolationServiceRoute, Priority, RestartPolicy, Rights, RoutedIsolationService,
     ServiceAddressSpaceEraser, ServiceCleanupError, ServiceError, ServiceId,
-    ServiceRegistrationPlan, ServiceState, ServiceSupervisor, TaskId, TaskRuntime,
+    EarlyKernelContext, RecoveryStateMetadata, ServiceRegistrationPlan, ServiceState,
+    ServiceSupervisor, TaskId, TaskRuntime,
     TaskRuntimeError, prepare_isolation_service_route, route_isolation_service,
 };
 use mrml_storage::{
@@ -2576,9 +2577,53 @@ impl<const GRANTS: usize, const SETTINGS: usize, const AUDIT: usize>
         component_read: Capability,
         handoff: &BootHandoff,
     ) -> Result<RecoveredBootIsolationPolicy, ConfigError> {
-        let recovery = handoff
-            .recovery_state()
-            .ok_or(ConfigError::RecoveryHandoffMismatch)?;
+        self.compose_boot_isolation_policy_from_parts(
+            capabilities,
+            system,
+            system_read,
+            component,
+            component_read,
+            handoff.recovery_state(),
+            handoff.isolation_override(),
+        )
+    }
+
+    /// Production-shaped counterpart that consumes only the typed values
+    /// retained by first kernel entry. The original handoff cannot be replaced
+    /// or re-decoded after `EarlyKernelContext` has admitted it.
+    #[allow(clippy::too_many_arguments)]
+    pub fn compose_early_boot_isolation_policy<A: CapabilityAuthorizer + ?Sized>(
+        &self,
+        capabilities: &A,
+        system: IsolationPolicySetting,
+        system_read: Capability,
+        component: IsolationPolicySetting,
+        component_read: Capability,
+        early: &EarlyKernelContext<'_>,
+    ) -> Result<RecoveredBootIsolationPolicy, ConfigError> {
+        self.compose_boot_isolation_policy_from_parts(
+            capabilities,
+            system,
+            system_read,
+            component,
+            component_read,
+            early.recovery_state(),
+            early.isolation_override(),
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn compose_boot_isolation_policy_from_parts<A: CapabilityAuthorizer + ?Sized>(
+        &self,
+        capabilities: &A,
+        system: IsolationPolicySetting,
+        system_read: Capability,
+        component: IsolationPolicySetting,
+        component_read: Capability,
+        recovery: Option<RecoveryStateMetadata>,
+        isolation_override: Option<BootIsolationOverride>,
+    ) -> Result<RecoveredBootIsolationPolicy, ConfigError> {
+        let recovery = recovery.ok_or(ConfigError::RecoveryHandoffMismatch)?;
         if recovery.accepted_epoch().checked_add(1) != Some(self.authorities.epoch())
             || recovery.accepted_volume() != Some(self.authorities.volume().bytes())
             || recovery.accepted_root_generation() != self.authorities.root_generation()
@@ -2595,7 +2640,7 @@ impl<const GRANTS: usize, const SETTINGS: usize, const AUDIT: usize>
         )?;
         let effective = plan
             .apply(&self.configuration, capabilities)?
-            .compose_boot_override(handoff.isolation_override());
+            .compose_boot_override(isolation_override);
         Ok(RecoveredBootIsolationPolicy {
             effective,
             authority_epoch: self.authorities.epoch(),
@@ -2723,6 +2768,62 @@ impl<const GRANTS: usize, const SETTINGS: usize, const AUDIT: usize>
                     RecoveredInstalledTotalAdmissionBuildError::ReleaseBuilder(error)
                 }
             })?;
+        RecoveredInstalledTotalAdmission::bind_identity(
+            installed,
+            recovery_volume,
+            recovery_root_generation,
+            total,
+        )
+        .map_err(RecoveredInstalledTotalAdmissionBuildError::Installed)
+    }
+
+    /// Joins live installed recovery and release construction directly to the
+    /// first-entry owner. This path cannot consume a detached replacement
+    /// `BootHandoff`; all recovery and installed facts come from `early`.
+    #[allow(clippy::too_many_arguments)]
+    pub fn build_early_installed_total_boot_admission<
+        const DOMAINS: usize,
+        A: CapabilityAuthorizer + ?Sized,
+        F,
+        E,
+    >(
+        &self,
+        installed: InstalledRecoveryDeviceSelection,
+        capabilities: &A,
+        system: IsolationPolicySetting,
+        system_read: Capability,
+        component: IsolationPolicySetting,
+        component_read: Capability,
+        early: &EarlyKernelContext<'_>,
+        build_release: F,
+    ) -> Result<
+        RecoveredInstalledTotalAdmission<DOMAINS>,
+        RecoveredInstalledTotalAdmissionBuildError<E>,
+    >
+    where
+        F: FnOnce(u64) -> Result<ActivatedReleaseTotalMicrovmInventory<DOMAINS>, E>,
+    {
+        let (recovery_volume, recovery_root_generation) = validate_installed_selection_for_parts(
+            installed,
+            early.installed_recovery(),
+            early.installed_recovery_sata_route(),
+        )
+        .map_err(RecoveredInstalledTotalAdmissionBuildError::Installed)?;
+        let policy = self
+            .compose_early_boot_isolation_policy(
+                capabilities,
+                system,
+                system_read,
+                component,
+                component_read,
+                early,
+            )
+            .map_err(RecoveredInstalledTotalAdmissionBuildError::Policy)?;
+        let release = build_release(policy.effective().policy_generation())
+            .map_err(RecoveredInstalledTotalAdmissionBuildError::ReleaseBuilder)?;
+        let total = policy
+            .bind_release_inventory(release)
+            .map_err(RecoveredInstalledTotalAdmissionBuildError::Policy)?;
         RecoveredInstalledTotalAdmission::bind_identity(
             installed,
             recovery_volume,
@@ -3739,11 +3840,21 @@ fn validate_installed_selection_for_handoff(
     installed: InstalledRecoveryDeviceSelection,
     handoff: &BootHandoff,
 ) -> Result<(VolumeId, u64), ConfigError> {
-    let boot = handoff
-        .installed_recovery()
-        .ok_or(ConfigError::RecoveryHandoffMismatch)?;
+    validate_installed_selection_for_parts(
+        installed,
+        handoff.installed_recovery(),
+        handoff.installed_recovery_sata_route(),
+    )
+}
+
+fn validate_installed_selection_for_parts(
+    installed: InstalledRecoveryDeviceSelection,
+    boot: Option<InstalledRecoveryBootIdentity>,
+    sata_route: Option<InstalledRecoverySataRoute>,
+) -> Result<(VolumeId, u64), ConfigError> {
+    let boot = boot.ok_or(ConfigError::RecoveryHandoffMismatch)?;
     if boot.source() == InstalledRecoverySource::Uefi
-        && handoff.installed_recovery_sata_route().is_none()
+        && sata_route.is_none()
     {
         return Err(ConfigError::RecoveryHandoffMismatch);
     }
@@ -10008,14 +10119,15 @@ mod tests {
             )
             .unwrap();
             let handoff = BootHandoff::decode(&handoff_bytes, |_| {}).unwrap();
+            let early = EarlyKernelContext::from_handoff(&handoff, &regions).unwrap();
             let boot_policy = recovered
-                .compose_boot_isolation_policy(
+                .compose_early_boot_isolation_policy(
                     &capabilities,
                     system,
                     system_access,
                     component,
                     component_access,
-                    &handoff,
+                    &early,
                 )
                 .unwrap();
             assert_eq!(boot_policy.authority_epoch(), 9);
@@ -10057,14 +10169,14 @@ mod tests {
                 Err(mrml_kernel::TotalMicrovmRuntimeError::RequiredDomainMissing)
             ));
             let mut total = recovered
-                .build_installed_total_boot_admission(
+                .build_early_installed_total_boot_admission(
                     installed_selection,
                     &capabilities,
                     system,
                     system_access,
                     component,
                     component_access,
-                    &handoff,
+                    &early,
                     |policy_generation| {
                         Ok::<_, ()>(activated_configuration_release(domain, policy_generation))
                     },

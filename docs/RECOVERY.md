@@ -1562,6 +1562,16 @@ and authenticated recovery must still establish the later joins. The Windows
 kernel suite passes 565 tests and the standard UEFI image cross-builds. Live
 installed recovery orchestration remains **PLANNED**.
 
+The configuration recovery control plane now **PARTIALLY IMPLEMENTS** the next
+join directly from `EarlyKernelContext`. Its installed Total builder consumes
+only the retained recovery/identity/route/override values, the live installed
+selection, capability-revalidated settings, and an authenticated release
+inventory; it does not accept a second decoded handoff. The focused stable
+recovery test carries the resulting owner through route commit and immutable
+runtime authorization. Configuration passes 51 tests and the WHP runner
+cross-builds on Windows. Actual early-boot service invocation and complete
+installed runtime enumeration remain **PLANNED**.
+
 `RecoveredSystemState` now provides an atomic
 `bind_total_boot_admission` transition. It joins the committed recovered
 authorities and configuration service, exact decoded handoff epoch/override,

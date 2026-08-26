@@ -907,6 +907,13 @@ SATA route. A UEFI installed identity without the adjacent route fails before
 profile work. The fields are non-authorizing and cannot replace native discovery
 or authenticated recovery. Windows passes 565 kernel tests and the standard
 UEFI image cross-builds; live installed Total orchestration remains **PLANNED**.
+Recovered configuration now consumes this first-entry owner directly for one
+focused installed Total path: it validates the retained installed identity,
+revalidates committed policy from the retained recovery epoch/override, builds
+the authenticated release inventory, commits the microVM route, and seals the
+runtime without accepting a replacement `BootHandoff`. Configuration passes 51
+tests and the WHP runner cross-builds on Windows. Real early-boot service wiring
+and complete domain enumeration remain **PLANNED**.
 
 Committed recovery now exposes one atomic release-binding operation rather than
 requiring callers to retain an intermediate effective policy.

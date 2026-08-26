@@ -3149,3 +3149,10 @@ Windows kernel suite passes 565 tests, and the standard UEFI image cross-builds
 on Windows; earlier Arch and component-profile evidence is not extended by this
 increment. This retained data remains non-authorizing and does not establish
 effective placement or replace the later recovery and admission control planes.
+The configuration control plane now consumes this exact first-entry owner in
+one focused installed Total path. It joins the live installed selection,
+committed recovery, capability-revalidated policy, authenticated release
+inventory, microVM route commit, and immutable runtime authorization without a
+replacement `BootHandoff`. Configuration passes 51 tests and the WHP runner
+cross-builds on Windows. Real early-boot invocation and complete activated-
+release domain enumeration remain **PLANNED**.

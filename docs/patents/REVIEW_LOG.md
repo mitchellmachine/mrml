@@ -1,5 +1,16 @@
 # Patent review log
 
+## 2026-08-26 — First-entry owner to installed Total admission
+
+Patent review: **NOT_TRIGGERED** for refactoring the existing recovered-policy
+and installed-selection equality checks to consume typed values retained by
+`EarlyKernelContext`, then using the existing authenticated release/admission
+transaction. This is conventional ownership transfer, exact equality, and
+failure ordering. It adds no placement algorithm, VM mechanism, scheduler,
+storage protocol, DMA, queue, interrupt, or persistent format. The broader Total
+MicroVM and native-storage mechanisms retain their existing **TRIGGERED**
+reviews; this technical screen is not patent clearance.
+
 ## 2026-08-26 — Retained installed recovery state at first kernel entry
 
 Patent review: **NOT_TRIGGERED** for copying already decoded canonical recovery,
