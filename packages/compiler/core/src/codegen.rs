@@ -15871,6 +15871,7 @@ fn runtime_reference_call_origin_parameter<const MAX_PARAMETERS: usize, const MA
                     let mut iteration_mutability = local_mutability;
                     let mut iteration_return_compatibility = local_return_compatibility;
                     let mut iteration_local_count = local_count;
+                    let mut iteration_reaches_backedge = true;
                     for operation in loop_statement.operations().iter().flatten() {
                         match *operation {
                             crate::LoopOperation::Local(local) => {
@@ -15939,6 +15940,21 @@ fn runtime_reference_call_origin_parameter<const MAX_PARAMETERS: usize, const MA
                                     &iteration_projected_origins,
                                     iteration_local_count,
                                 )?)?;
+                            }
+                            crate::LoopOperation::Return(value) => {
+                                let tree = value.parse_value::<MAX_NODES>().ok()?;
+                                merge(recurse(
+                                    target,
+                                    &tree,
+                                    tree.root(),
+                                    0,
+                                    &iteration_names,
+                                    &iteration_origins,
+                                    &iteration_projected_origins,
+                                    iteration_local_count,
+                                )?)?;
+                                iteration_reaches_backedge = false;
+                                break;
                             }
                             crate::LoopOperation::ConditionalBlock(block_index) => {
                                 let block = loop_statement
@@ -16065,14 +16081,19 @@ fn runtime_reference_call_origin_parameter<const MAX_PARAMETERS: usize, const MA
                             _ => return None,
                         }
                     }
-                    for local_index in 0..local_count {
-                        local_origins[local_index] = (incoming_origins[local_index]
-                            == iteration_origins[local_index])
-                            .then_some(incoming_origins[local_index])
-                            .flatten();
+                    if iteration_reaches_backedge {
+                        for local_index in 0..local_count {
+                            local_origins[local_index] = (incoming_origins[local_index]
+                                == iteration_origins[local_index])
+                                .then_some(incoming_origins[local_index])
+                                .flatten();
+                        }
+                        projected_origins =
+                            incoming_projected_origins.intersect(iteration_projected_origins);
+                    } else {
+                        local_origins = incoming_origins;
+                        projected_origins = incoming_projected_origins;
                     }
-                    projected_origins =
-                        incoming_projected_origins.intersect(iteration_projected_origins);
                     continue;
                 }
                 for operation in loop_statement.operations().iter().flatten() {
@@ -37680,6 +37701,28 @@ mod tests {
                     "let mut local: u16 = 1; loop { ",
                     "let mut changed: &mut u16 = value; changed = &mut local; ",
                     "if first { return changed; } }"
+                ),
+                ..loop_choose
+            }),
+            None
+        );
+        assert_eq!(
+            runtime_reference_call_origin_parameter::<2, 24>(RuntimeCallTarget {
+                body_expression: concat!(
+                    "loop { let mut changed: &mut u16 = value; ",
+                    "changed = &mut *changed; return changed; ",
+                    "changed = value; }"
+                ),
+                ..loop_choose
+            }),
+            Some(0)
+        );
+        assert_eq!(
+            runtime_reference_call_origin_parameter::<2, 32>(RuntimeCallTarget {
+                body_expression: concat!(
+                    "let mut local: u16 = 1; loop { ",
+                    "let mut changed: &mut u16 = value; changed = &mut local; ",
+                    "return changed; changed = value; }"
                 ),
                 ..loop_choose
             }),
