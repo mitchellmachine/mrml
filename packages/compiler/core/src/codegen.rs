@@ -35317,6 +35317,7 @@ mod tests {
         for source in [
             "fn value(input: &mut u16) -> &u16 { let returned: &mut u16 = identity(input); let child: &u16 = &*returned; child }",
             "fn value(input: &mut u16, choose: bool) -> &u16 { let returned: &mut u16 = choose(input, choose); let child: &u16 = &*returned; child }",
+            "fn value(first: &mut u16, second: &mut u16, choose: bool) -> &u16 { let returned: &mut u16 = forward(if choose { first } else { second }); let child: &u16 = &*returned; child }",
             "fn value(input: &mut u16) -> &u16 { let returned: &mut u16 = identity(input); let child: &u16 = &*returned; return child; }",
             "fn value(input: &mut u16, choose: bool) -> &u16 { let returned: &mut u16 = choose(input, choose); let child: &u16 = &*returned; if choose { return child; } child }",
             "fn value(input: &mut u16) -> &u16 { loop { let returned: &mut u16 = identity(input); let child: &u16 = &*returned; return child; } }",
@@ -35335,6 +35336,7 @@ mod tests {
         for source in [
             "fn value(input: &mut u16) -> &u16 { let mut local = *input; let returned: &mut u16 = identity(&mut local); let child: &u16 = &*returned; child }",
             "fn value(input: &mut u16, choose: bool) -> &u16 { let mut local = *input; let returned: &mut u16 = choose(&mut local, choose); let child: &u16 = &*returned; child }",
+            "fn value(input: &mut u16, choose: bool) -> &u16 { let mut local = *input; let returned: &mut u16 = forward(if choose { input } else { &mut local }); let child: &u16 = &*returned; child }",
             "fn value(input: &mut u16) -> &u16 { let mut local = *input; let returned: &mut u16 = identity(&mut local); let child: &u16 = &*returned; return child; }",
             "fn value(input: &mut u16, choose: bool) -> &u16 { let mut local = *input; let returned: &mut u16 = choose(&mut local, choose); let child: &u16 = &*returned; if choose { return child; } child }",
             "fn value(input: &mut u16) -> &u16 { loop { let mut local = *input; let returned: &mut u16 = identity(&mut local); let child: &u16 = &*returned; return child; } }",
