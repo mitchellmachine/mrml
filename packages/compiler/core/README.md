@@ -4791,6 +4791,13 @@ shared slices and non-`u64` elements fail closed. The pinned oracle accepted all
 three forms and both canonical hosts pass 985 compiler tests. Deeper places and
 general assembly remain unsupported.
 
+The fixed explicit-output node now carries its register identity. Exact
+`asm!("mov rcx, 7", lateout("rcx") place)` reuses every typed RAX destination;
+after the declared RCX write, the value enters the common writeback channel.
+`lateout("rcx") _` omits that transfer and place effect. The exact dated oracle
+accepted both forms, and both canonical hosts pass 985 compiler tests. Other
+explicit registers and general allocation remain unsupported.
+
 Exact `asm!("mov rax, 7", lateout("rax") _)` is a discarded explicit output.
 Preanalysis records no language-place access, while emission still performs the
 declared RAX write. The exact dated oracle accepted the original Rust 2024 form,

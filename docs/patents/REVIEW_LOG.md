@@ -91,6 +91,18 @@ or new scheduling policy. Those adaptive-isolation mechanisms remain
 **TRIGGERED** under the existing review. Agent review is not legal clearance and
 does not replace independent human dual review.
 
+# 2026-08-26 — Explicit RCX inline-assembly outputs
+
+**Result: NOT_TRIGGERED after the explicit-RCX review.** This increment adds a
+typed RAX/RCX selector to the already reviewed fixed output node, uses published
+x86-64 immediate-move and register-move encodings, and reuses the existing typed
+destination and writeback machinery. Discarded RCX output omits the transfer and
+place effect. It introduces no novel assembler, register allocator, optimization,
+instruction selection, alias analysis, or code-generation algorithm. Other
+registers and general assembly remain absent. Broader compiler completion remains
+partial; this technical screen is not a clearance or infringement conclusion and
+does not replace independent human dual review.
+
 # 2026-08-26 — Discarded explicit inline-assembly output
 
 **Result: NOT_TRIGGERED after the discarded-output review.** This increment

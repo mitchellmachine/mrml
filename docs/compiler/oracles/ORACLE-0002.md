@@ -166,6 +166,13 @@ records black-box acceptance of that exact discarded explicit-output form only;
 it does not establish other clobbers, register allocation, effects, or general
 assembly semantics. Temporary source and metadata were removed.
 
+Another independently authored Rust 2024 metadata-only probe against that same
+exact toolchain and commit compiled `asm!("mov rcx, 7", lateout("rcx") value)`
+and the corresponding discarded `_` output. This records black-box acceptance
+of those exact RCX output forms only; it does not establish other registers,
+register allocation, effects, or general assembly semantics. Temporary source
+and metadata were removed.
+
 A subsequent independently authored Rust 2024 metadata-only probe against that
 same exact toolchain and commit compiled explicit RAX `lateout`, same-place
 `inout`, and distinct-input output forms whose destinations indexed a mutable

@@ -1659,6 +1659,17 @@ tests, one component-interface probe, 10 conformance tests, and 335 replacement
 tests: 985 compiler tests per host. Other explicit clobbers, additional registers,
 general effects, and general assembly remain absent.
 
+The explicit RCX-output milestone generalizes the fixed output representation
+to carry RAX or RCX identity. Exact `mov rcx, 7` plus `lateout("rcx")` reuses the
+existing typed destination, ownership, bounds, and writeback path; a non-
+discarded RCX value is transferred to the common writeback register only after
+the declared instruction, while `_` produces no place effect or transfer. The
+exact dated oracle accepted both independently authored Rust 2024 forms. Windows
+gnullvm and native Arch Linux WSL each pass 639 library tests, one component-
+interface probe, 10 conformance tests, and 335 replacement tests: 985 compiler
+tests per host. Other explicit registers, generic allocation, and general
+assembly remain absent.
+
 The premise-bearing rigid-normalization milestone proves the selected generic
 implementation's instantiated trait and projection predicates before exposing
 its associated value. It shares the caller's 16-frame rigid proof stack and
