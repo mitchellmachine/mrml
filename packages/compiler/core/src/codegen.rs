@@ -15588,6 +15588,22 @@ fn runtime_reference_call_origin_parameter<const MAX_PARAMETERS: usize, const MA
         Some(())
     }
 
+    #[derive(Clone, Copy)]
+    struct NestedLoopOriginOutcomes<const MAX_PARAMETERS: usize> {
+        inner_exit: Option<(
+            [Option<usize>; MAX_PARAMETERS],
+            RuntimeCalleeProjectedOrigins<MAX_PARAMETERS>,
+        )>,
+        outer_break: Option<(
+            [Option<usize>; MAX_PARAMETERS],
+            RuntimeCalleeProjectedOrigins<MAX_PARAMETERS>,
+        )>,
+        outer_continue: Option<(
+            [Option<usize>; MAX_PARAMETERS],
+            RuntimeCalleeProjectedOrigins<MAX_PARAMETERS>,
+        )>,
+    }
+
     fn analyze_nested_loop_origins<
         'source,
         F,
@@ -15604,12 +15620,7 @@ fn runtime_reference_call_origin_parameter<const MAX_PARAMETERS: usize, const MA
         local_return_compatibility: [bool; MAX_PARAMETERS],
         local_count: usize,
         merge: &mut F,
-    ) -> Option<
-        Option<(
-            [Option<usize>; MAX_PARAMETERS],
-            RuntimeCalleeProjectedOrigins<MAX_PARAMETERS>,
-        )>,
-    >
+    ) -> Option<NestedLoopOriginOutcomes<MAX_PARAMETERS>>
     where
         F: FnMut(usize) -> Option<()>,
     {
@@ -15655,42 +15666,93 @@ fn runtime_reference_call_origin_parameter<const MAX_PARAMETERS: usize, const MA
         let mut exit_origins = [None; MAX_PARAMETERS];
         let mut exit_projected_origins = RuntimeCalleeProjectedOrigins::EMPTY;
         let mut exit_count = 0usize;
-        for ((action_index, target_kind), _) in block
+        let mut outer_break_origins = [None; MAX_PARAMETERS];
+        let mut outer_break_projected_origins = RuntimeCalleeProjectedOrigins::EMPTY;
+        let mut outer_break_count = 0usize;
+        let mut outer_continue_origins = [None; MAX_PARAMETERS];
+        let mut outer_continue_projected_origins = RuntimeCalleeProjectedOrigins::EMPTY;
+        let mut outer_continue_count = 0usize;
+        for ((action_index, target_kind), control_order) in block
             .conditional_break_action_indices()
             .iter()
             .zip(block.conditional_break_targets())
             .zip(block.conditional_break_control_orders())
         {
-            if *target_kind != crate::NestedLoopControlTarget::Inner {
-                return None;
+            if block
+                .unconditional_control_orders()
+                .iter()
+                .any(|order| order < control_order)
+            {
+                continue;
             }
             let (_, origins, projected, _, _, _, _) = state_at(*action_index)?;
+            let (joined_origins, joined_projected, outcome_count) = match *target_kind {
+                crate::NestedLoopControlTarget::Inner => (
+                    &mut exit_origins,
+                    &mut exit_projected_origins,
+                    &mut exit_count,
+                ),
+                crate::NestedLoopControlTarget::Outer => (
+                    &mut outer_break_origins,
+                    &mut outer_break_projected_origins,
+                    &mut outer_break_count,
+                ),
+            };
             merge_loop_exit_origins(
-                &mut exit_origins,
-                &mut exit_projected_origins,
-                &mut exit_count,
+                joined_origins,
+                joined_projected,
+                outcome_count,
                 origins,
                 projected.retain_local_prefix(local_count),
                 local_count,
             )?;
         }
-        for (action_index, target_kind) in block
+        for ((action_index, target_kind), control_order) in block
             .conditional_continue_action_indices()
             .iter()
             .zip(block.conditional_continue_targets())
+            .zip(block.conditional_continue_control_orders())
         {
-            if *target_kind != crate::NestedLoopControlTarget::Inner
-                || !prefix_preserves_state(*action_index)?
+            if block
+                .unconditional_control_orders()
+                .iter()
+                .any(|order| order < control_order)
             {
-                return None;
+                continue;
+            }
+            match *target_kind {
+                crate::NestedLoopControlTarget::Inner => {
+                    if !prefix_preserves_state(*action_index)? {
+                        return None;
+                    }
+                }
+                crate::NestedLoopControlTarget::Outer => {
+                    let (_, origins, projected, _, _, _, _) = state_at(*action_index)?;
+                    merge_loop_exit_origins(
+                        &mut outer_continue_origins,
+                        &mut outer_continue_projected_origins,
+                        &mut outer_continue_count,
+                        origins,
+                        projected.retain_local_prefix(local_count),
+                        local_count,
+                    )?;
+                }
             }
         }
-        for (control, action_index) in block
+        for ((control, action_index), control_order) in block
             .unconditional_controls()
             .iter()
             .flatten()
             .zip(block.unconditional_control_action_indices())
+            .zip(block.unconditional_control_orders())
         {
+            if block
+                .unconditional_control_orders()
+                .iter()
+                .any(|order| order < control_order)
+            {
+                continue;
+            }
             match *control {
                 crate::NestedLoopUnconditionalControl::Break(
                     crate::NestedLoopControlTarget::Inner,
@@ -15708,6 +15770,32 @@ fn runtime_reference_call_origin_parameter<const MAX_PARAMETERS: usize, const MA
                 crate::NestedLoopUnconditionalControl::Continue(
                     crate::NestedLoopControlTarget::Inner,
                 ) if prefix_preserves_state(*action_index)? => {}
+                crate::NestedLoopUnconditionalControl::Break(
+                    crate::NestedLoopControlTarget::Outer,
+                ) => {
+                    let (_, origins, projected, _, _, _, _) = state_at(*action_index)?;
+                    merge_loop_exit_origins(
+                        &mut outer_break_origins,
+                        &mut outer_break_projected_origins,
+                        &mut outer_break_count,
+                        origins,
+                        projected.retain_local_prefix(local_count),
+                        local_count,
+                    )?;
+                }
+                crate::NestedLoopUnconditionalControl::Continue(
+                    crate::NestedLoopControlTarget::Outer,
+                ) => {
+                    let (_, origins, projected, _, _, _, _) = state_at(*action_index)?;
+                    merge_loop_exit_origins(
+                        &mut outer_continue_origins,
+                        &mut outer_continue_projected_origins,
+                        &mut outer_continue_count,
+                        origins,
+                        projected.retain_local_prefix(local_count),
+                        local_count,
+                    )?;
+                }
                 crate::NestedLoopUnconditionalControl::Return(_) => {}
                 _ => return None,
             }
@@ -15784,7 +15872,13 @@ fn runtime_reference_call_origin_parameter<const MAX_PARAMETERS: usize, const MA
                 local_count,
             )?;
         }
-        Some((exit_count != 0).then_some((exit_origins, exit_projected_origins)))
+        Some(NestedLoopOriginOutcomes {
+            inner_exit: (exit_count != 0).then_some((exit_origins, exit_projected_origins)),
+            outer_break: (outer_break_count != 0)
+                .then_some((outer_break_origins, outer_break_projected_origins)),
+            outer_continue: (outer_continue_count != 0)
+                .then_some((outer_continue_origins, outer_continue_projected_origins)),
+        })
     }
 
     let body =
@@ -16081,7 +16175,23 @@ fn runtime_reference_call_origin_parameter<const MAX_PARAMETERS: usize, const MA
                                         crate::ConditionalLoopAction::Local(_)
                                             | crate::ConditionalLoopAction::Assignment(_)
                                     )
-                                })
+                                }) || block
+                                    .conditional_break_targets()
+                                    .iter()
+                                    .chain(block.conditional_continue_targets())
+                                    .any(|target| *target == crate::NestedLoopControlTarget::Outer)
+                                    || block.unconditional_controls().iter().flatten().any(
+                                        |control| {
+                                            matches!(
+                                                control,
+                                                crate::NestedLoopUnconditionalControl::Break(
+                                                    crate::NestedLoopControlTarget::Outer
+                                                ) | crate::NestedLoopUnconditionalControl::Continue(
+                                                    crate::NestedLoopControlTarget::Outer
+                                                )
+                                            )
+                                        },
+                                    )
                             }),
                         _ => false,
                     },
@@ -16364,7 +16474,7 @@ fn runtime_reference_call_origin_parameter<const MAX_PARAMETERS: usize, const MA
                                     .nested_blocks()
                                     .get(block_index)
                                     .and_then(|value| *value)?;
-                                let nested_exit =
+                                let nested_outcomes =
                                     analyze_nested_loop_origins::<_, MAX_PARAMETERS, MAX_NODES>(
                                         target,
                                         block,
@@ -16377,7 +16487,28 @@ fn runtime_reference_call_origin_parameter<const MAX_PARAMETERS: usize, const MA
                                         iteration_local_count,
                                         &mut merge,
                                     )?;
-                                let Some((nested_origins, nested_projected_origins)) = nested_exit
+                                if let Some((origins, projected)) = nested_outcomes.outer_break {
+                                    merge_loop_exit_origins(
+                                        &mut break_origins,
+                                        &mut break_projected_origins,
+                                        &mut break_outcome_count,
+                                        origins,
+                                        projected.retain_local_prefix(local_count),
+                                        local_count,
+                                    )?;
+                                }
+                                if let Some((origins, projected)) = nested_outcomes.outer_continue {
+                                    merge_loop_exit_origins(
+                                        &mut backedge_origins,
+                                        &mut backedge_projected_origins,
+                                        &mut backedge_outcome_count,
+                                        origins,
+                                        projected.retain_local_prefix(local_count),
+                                        local_count,
+                                    )?;
+                                }
+                                let Some((nested_origins, nested_projected_origins)) =
+                                    nested_outcomes.inner_exit
                                 else {
                                     iteration_reaches_backedge = false;
                                     break;
@@ -38302,6 +38433,47 @@ mod tests {
                 body_expression: concat!(
                     "let mut local: u16 = 1; let mut changed: &mut u16 = &mut local; ",
                     "loop { while first { changed = value; break; } return changed; }"
+                ),
+                ..nested_loop
+            }),
+            None
+        );
+        assert_eq!(
+            runtime_reference_call_origin_parameter::<2, 40>(RuntimeCallTarget {
+                body_expression: concat!(
+                    "let mut local: u16 = 1; let mut changed: &mut u16 = &mut local; ",
+                    "'outer: loop { loop { changed = value; break 'outer; } } changed"
+                ),
+                ..nested_loop
+            }),
+            Some(0)
+        );
+        assert_eq!(
+            runtime_reference_call_origin_parameter::<2, 40>(RuntimeCallTarget {
+                body_expression: concat!(
+                    "let mut local: u16 = 1; let mut changed: &mut u16 = value; ",
+                    "'outer: loop { loop { changed = &mut local; break 'outer; } } changed"
+                ),
+                ..nested_loop
+            }),
+            None
+        );
+        assert_eq!(
+            runtime_reference_call_origin_parameter::<2, 40>(RuntimeCallTarget {
+                body_expression: concat!(
+                    "let mut changed: &mut u16 = &mut *value; 'outer: while first { ",
+                    "loop { changed = &mut *value; continue 'outer; } } changed"
+                ),
+                ..nested_loop
+            }),
+            Some(0)
+        );
+        assert_eq!(
+            runtime_reference_call_origin_parameter::<2, 40>(RuntimeCallTarget {
+                body_expression: concat!(
+                    "let mut local: u16 = 1; let mut changed: &mut u16 = &mut *value; ",
+                    "'outer: while first { loop { changed = &mut local; ",
+                    "continue 'outer; } } changed"
                 ),
                 ..nested_loop
             }),
