@@ -7503,3 +7503,15 @@ code-generation mechanism. A general loop-region fixed point remains absent.
 Broader compiler completion remains partial; this technical screen is not a
 clearance or infringement conclusion and does not replace independent human
 dual review.
+
+# 2026-08-26 — Conditional loop call-loan generation evidence
+
+**Result: NOT_TRIGGERED after the conditional loop call-loan evidence review.**
+This increment adds independently authored regression evidence that the existing
+bounded conditional origin join and generation-sensitive reachability protect
+either possible shared owner in the current iteration and release both after
+last use before the backedge. It introduces no new solver, dataflow framework,
+interprocedural inference, alias analysis, optimization, or code-generation
+mechanism. A general loop-region fixed point remains absent. Broader compiler
+completion remains partial; this technical screen is not a clearance or
+infringement conclusion and does not replace independent human dual review.
