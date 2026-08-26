@@ -1,5 +1,15 @@
 # Patent review log
 
+## 2026-08-26 — Exact native block correlation verifier
+
+Patent review: **NOT_TRIGGERED** for this equality-only verifier. It compares an
+existing opaque identifier and existing generation/transport scalars and adds no
+route derivation, device protocol, discovery algorithm, or hardware behavior.
+Keeping registration/capability issuance in the control plane and ordinary
+session reads on the established data plane adds no new mechanism. Native route
+reconstruction plus AHCI, USB, VirtIO, storage, and Total-MicroVM mechanisms
+retain their existing `TRIGGERED` reviews.
+
 ## 2026-08-26 — Verifier-backed firmware/native block correlation boundary
 
 Patent review: **NOT_TRIGGERED** for this interface/control-plane increment. It
@@ -7740,3 +7750,15 @@ generation algorithm. Conditional multi-backedge transfer remains unsupported.
 Broader compiler completion remains partial; this technical screen is not a
 clearance or infringement conclusion and does not replace independent human
 dual review.
+
+# 2026-08-26 — Conditional loop-continue backedge join
+
+**Result: NOT_TRIGGERED after the conditional-continue review.** This increment
+uses conventional fixed-capacity meet accumulation for conditional-continue,
+direct-continue, and normal-fallthrough backedge outcomes before the existing
+loop-exit calculation. It adds no novel fixed-point solver, region or alias
+analysis, path-sensitive inference, optimization, or code-generation algorithm.
+Ambiguous and local-backed results fail closed; block-terminal control remains
+unsupported. Broader compiler completion remains partial; this technical screen
+is not a clearance or infringement conclusion and does not replace independent
+human dual review.
