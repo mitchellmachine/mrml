@@ -918,6 +918,11 @@ mutable argument borrow, but its retained loan kind is attenuated to shared.
 Live caller mutation conflicts with that shared result; mutation after its last
 use succeeds.
 
+The same attenuation is now independently exercised for two-word slice
+references through a mutable subslice local and a second shared local alias.
+Indexing the returned shared slice keeps its originating loan live; this is
+direct fat-reference evidence rather than an inference from thin elements.
+
 The first modern trait-solver foundation is an explicit bounded implemented-
 goal representation. Stable trait/type/inference/placeholder identities remain
 distinct; canonicalization replaces inference identities with first-occurrence

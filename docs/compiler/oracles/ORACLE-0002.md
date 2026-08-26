@@ -237,6 +237,11 @@ A projected mutable-to-shared return probe accepted a callee local declared as
 `&mut u16` and returned as `&u16`, plus caller mutation after the result's last
 use. The corresponding live caller mutation was rejected with E0503.
 
+The fat-reference variant accepted a mutable subslice passed through mutable
+and shared slice locals and returned as `&[u16]`, followed by mutation after its
+last indexed use. Mutating the same owner before that indexed use was rejected
+with two E0503 diagnostics.
+
 An independently authored Rust 2024 metadata-only probe against this exact
 toolchain and commit separately accepted a mutable scalar reference returned
 from index zero of a mutable slice-reference parameter, followed by owner reuse

@@ -1,5 +1,15 @@
 # Patent review log
 
+## 2026-08-26 — Shared fat-slice origin evidence
+
+Patent review: **NOT_TRIGGERED**. This increment adds direct two-word slice
+tests and exact-oracle probes for the already reviewed directional reference
+compatibility and loan attenuation. It adds no new alias-analysis mechanism,
+region solver, optimization, runtime enforcement, authority model, or external
+dependency. Broader compiler completion remains partial; this technical screen
+establishes neither clearance nor infringement and does not replace independent
+human dual review.
+
 ## 2026-08-26 — Mutable-to-shared projected origin attenuation
 
 Patent review: **NOT_TRIGGERED** for this bounded compiler-analysis increment.

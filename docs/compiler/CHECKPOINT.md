@@ -642,6 +642,12 @@ shared destination but records the resulting loan as shared. A live caller
 mutation conflicts, post-last-use mutation succeeds, and ORACLE-0002 rejects
 the live indexed-array case with E0503. Both hosts pass 986 tests.
 
+Shared fat-slice evidence covers a mutable slice subslice flowing through a
+mutable local and then a shared local before return. Caller indexing retains
+loan liveness: a live mutation conflicts and post-last-use mutation succeeds.
+ORACLE-0002 rejects the live case with two E0503 diagnostics. Both hosts pass
+986 compiler tests.
+
 Inferred locals now become reassignment-origin eligible only when their
 initializer already proved a compatible parameter origin. This preserves valid
 indexed scalar alias replacement while preventing an inferred slice alias from

@@ -3930,6 +3930,11 @@ destination loan is attenuated to shared. This retains caller liveness and
 rejects mutation before the shared result's last use without granting mutable
 authority to the result.
 
+The two-word slice path has separate coverage: a mutable subslice flows through
+mutable and shared callee locals into a shared slice result. Later indexing is a
+loan use, so live caller mutation conflicts while mutation after the last index
+read succeeds.
+
 The conditional projected-reassignment milestone extends the bounded tuple-field
 loan chain across a conditional shared-reference assignment. The exact dated
 oracle rejects mutation of either conditional owner and of the field's replaced
