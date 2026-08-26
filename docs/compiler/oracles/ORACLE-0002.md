@@ -87,3 +87,12 @@ These are black-box syntax and validation observations from original probes,
 not copied upstream source or tests. They establish neither general inline-
 assembly compatibility nor permission to omit MRML's independent bounded
 register, option, template, clobber, control-flow, and safety validation.
+
+An additional independently authored metadata-only probe on the same date and
+exact commit compiled output-bearing named `inout(reg)` forms with
+`options(pure, nomem)`, `options(pure, readonly)`, and standalone
+`options(readonly)`. Separate invocations rejected `pure` without `nomem` or
+`readonly`, rejected `pure, nomem` on an input-only form because it had no
+output, and rejected `pure, nomem, readonly` because `nomem` and `readonly` are
+mutually exclusive. Temporary probe sources and metadata were removed after
+recording the black-box outcomes.

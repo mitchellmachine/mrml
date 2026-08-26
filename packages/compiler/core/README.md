@@ -4704,6 +4704,15 @@ native Arch Linux WSL each pass 985 compiler tests. This is **PARTIAL** single-
 operand class-allocation evidence, not multi-operand allocation, other-class,
 projection, clobber/effect, or general assembly support.
 
+The output-bearing fixed forms accept the exact-oracle-observed effect sets
+`pure+nomem`, `pure+readonly`, and standalone `readonly`. `pure` without an
+output or without either memory declaration fails closed, as does combining
+`nomem` with `readonly`; options remain unique and `preserves_flags` remains
+template-specific. Windows gnullvm and native Arch Linux WSL each pass 985
+compiler tests. This validates declarations for the fixed templates only and
+does not claim actual assembly memory accesses, optimizer integration, general
+clobbers/effects, or general assembly.
+
 The projection-bearing term milestone uses a fixed 64-node arena for flat leaf
 terms and associated-type projections whose trait self/argument positions refer
 only to earlier nodes. Identical nodes intern to one stable identity; invalid

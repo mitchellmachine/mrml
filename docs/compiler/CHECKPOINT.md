@@ -1524,6 +1524,17 @@ tests: 985 compiler tests per host. Multi-operand allocation, other classes,
 projections, clobbers, arbitrary effects, and general inline assembly remain
 unimplemented.
 
+Exact ORACLE-0002 follow-up probes establish and the bounded option validator
+implements output-bearing `pure+nomem`, `pure+readonly`, and standalone
+`readonly`. `pure` requires an output and one of the two memory declarations;
+`nomem` and `readonly` are mutually exclusive. Existing duplicate-option,
+template-specific `preserves_flags`, and unsupported-option rejection remains
+in force. Windows gnullvm and native Arch Linux WSL each pass 639 library tests,
+one component-interface probe, 10 conformance tests, and 335 replacement tests:
+985 compiler tests per host. This is declarative validation for fixed templates,
+not evidence of actual assembly memory accesses, optimizer integration, general
+clobbers/effects, or general inline assembly.
+
 The premise-bearing rigid-normalization milestone proves the selected generic
 implementation's instantiated trait and projection predicates before exposing
 its associated value. It shares the caller's 16-frame rigid proof stack and

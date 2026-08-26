@@ -6036,3 +6036,15 @@ generation algorithm. Multi-operand allocation, other classes, projections,
 general clobbers/effects, and general assembly remain absent. Broader compiler
 completion remains partial; this technical screen does not establish clearance
 or infringement and does not replace independent human dual review.
+
+# 2026-08-26 — Inline-assembly effect-option validation
+
+**Result: NOT_TRIGGERED after the effect-validation review.** This increment
+implements conventional consistency checks among declarative `pure`, `nomem`,
+`readonly`, output, and flag-preservation properties observed from the exact
+dated Rust oracle. Fixed boolean bookkeeping and fail-closed combination checks
+introduce no novel assembler, optimizer, alias-analysis, register-allocation,
+instruction-selection, or code-generation algorithm. Actual assembly memory
+accesses, general clobbers/effects, and general assembly remain absent. Broader
+compiler completion remains partial; this technical screen does not establish
+clearance or infringement and does not replace independent human dual review.
