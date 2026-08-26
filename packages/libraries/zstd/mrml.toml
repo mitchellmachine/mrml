@@ -13,6 +13,8 @@ profile = "library"
 default = "native-service"
 minimum = "native-service"
 supported = ["native-service", "microvm"]
+runtime_class = "microvm-eligible"
+must_run = true
 
 [[provides]]
 binding = "dynamic"

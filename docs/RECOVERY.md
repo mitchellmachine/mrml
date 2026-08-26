@@ -1088,7 +1088,11 @@ as missing Total evidence rather than reconstructing or guessing it. Kernel
 construction from authenticated v2 records is **IMPLEMENTED**, but recovery
 must recreate every exact live domain binding through the normal control plane;
 package names and recovered catalog bytes cannot grant or resurrect authority.
-Recovered end-to-end Total finalization remains **PLANNED**.
+The focused WHP/KVM ZIM/Zstd path now proves that normal launch control can join
+two compatible package records to one admitted microVM and finalize the signed
+inventory before its stable ABI data plane runs. That transient hosted probe
+does not persist or recover the binding and therefore does not advance recovery
+status. Recovered end-to-end Total finalization remains **PLANNED**.
 
 Application-launch recovery must retain the exact runtime domain, application
 object, immutable application generation and artifact digest, active system

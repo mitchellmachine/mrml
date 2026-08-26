@@ -64,8 +64,10 @@ pub enum ReleaseInventoryError {
 
 /// Constructs the kernel's complete strict-Total inventory only from one
 /// authenticated SystemRelease v2 and the exact package-to-live-domain bindings
-/// created by the normal launch control plane. Package names identify records;
-/// neither package metadata nor this translation grants domain authority.
+/// created by the normal launch control plane. Multiple compatible packages
+/// may share one domain; their must-run state is conservatively combined.
+/// Package names identify records; neither package metadata nor this
+/// translation grants domain authority.
 pub fn total_inventory_from_system_release<const N: usize>(
     release_bytes: &[u8],
     expected_key_id: &[u8; 64],
@@ -86,9 +88,10 @@ pub fn total_inventory_from_system_release<const N: usize>(
         if binding.package_id.is_empty() || binding.domain.0 == 0 {
             return Err(ReleaseInventoryError::InvalidBinding);
         }
-        if bindings[..index].iter().any(|present| {
-            present.package_id == binding.package_id || present.domain == binding.domain
-        }) {
+        if bindings[..index]
+            .iter()
+            .any(|present| present.package_id == binding.package_id)
+        {
             return Err(ReleaseInventoryError::DuplicateBinding);
         }
     }
@@ -125,9 +128,31 @@ pub fn total_inventory_from_system_release<const N: usize>(
         if binding.reason != record.reason {
             return Err(ReleaseInventoryError::ReasonMismatch);
         }
+    }
+    for (index, binding) in bindings.iter().enumerate() {
+        if bindings[..index]
+            .iter()
+            .any(|present| present.domain == binding.domain)
+        {
+            continue;
+        }
+        let mut must_be_running = false;
+        for colocated in bindings
+            .iter()
+            .filter(|candidate| candidate.domain == binding.domain)
+        {
+            if colocated.class != binding.class || colocated.reason != binding.reason {
+                return Err(ReleaseInventoryError::ClassificationMismatch);
+            }
+            let record = runtime
+                .records()
+                .find(|record| record.package_id == colocated.package_id)
+                .ok_or(ReleaseInventoryError::MissingBinding)?;
+            must_be_running |= record.must_run;
+        }
         inventory
             .insert(
-                TotalMicrovmInventoryEntry::new(binding.domain, binding.class, record.must_run)
+                TotalMicrovmInventoryEntry::new(binding.domain, binding.class, must_be_running)
                     .map_err(ReleaseInventoryError::Inventory)?,
             )
             .map_err(ReleaseInventoryError::Inventory)?;
@@ -217,6 +242,88 @@ mod tests {
                 &mut output,
             )
         }
+        .unwrap();
+        (output, length, key_id)
+    }
+
+    fn build_colocated_release() -> ([u8; MAX_SYSTEM_RELEASE_BYTES], usize, [u8; 64]) {
+        let first_digest = [0x31; 64];
+        let second_digest = [0x32; 64];
+        let generation_records = [
+            SystemGenerationDigestRecord {
+                package_id: "org.mrml.zim",
+                version: 7,
+                artifact_digest: &first_digest,
+            },
+            SystemGenerationDigestRecord {
+                package_id: "org.mrml.zstd",
+                version: 8,
+                artifact_digest: &second_digest,
+            },
+        ];
+        let mut generation = [0; 320];
+        let generation_length =
+            encode_system_generation(13, &generation_records, &mut generation).unwrap();
+        let provider = ComponentInterfaceProvider::exact(
+            "org.mrml.zstd",
+            "org.mrml.interface.compression.zstd",
+            3,
+            [0x52; 32],
+            ComponentProviderForms::MICROVM,
+        )
+        .unwrap();
+        let requirement = ComponentInterfaceRequirement::exact(
+            "org.mrml.zim",
+            "org.mrml.interface.compression.zstd",
+            3,
+            [0x52; 32],
+        )
+        .unwrap();
+        let mut catalog = [0; 256];
+        let catalog_length =
+            encode_interface_catalog(13, &[requirement], &[provider], &mut catalog).unwrap();
+        let runtime_records = [
+            RuntimeInventoryRecord {
+                package_id: "org.mrml.zim",
+                version: 7,
+                artifact_digest: &first_digest,
+                class: RuntimeIsolationClass::MicrovmEligible,
+                must_run: false,
+                preferred: RuntimeIsolationPlacement::InProcess,
+                minimum: RuntimeIsolationPlacement::InProcess,
+                maximum: RuntimeIsolationPlacement::Microvm,
+                supported: RuntimeIsolationPlacement::InProcess.bit()
+                    | RuntimeIsolationPlacement::Microvm.bit(),
+                reason: "",
+            },
+            RuntimeInventoryRecord {
+                package_id: "org.mrml.zstd",
+                version: 8,
+                artifact_digest: &second_digest,
+                class: RuntimeIsolationClass::MicrovmEligible,
+                must_run: true,
+                preferred: RuntimeIsolationPlacement::NativeService,
+                minimum: RuntimeIsolationPlacement::NativeService,
+                maximum: RuntimeIsolationPlacement::Microvm,
+                supported: RuntimeIsolationPlacement::NativeService.bit()
+                    | RuntimeIsolationPlacement::Microvm.bit(),
+                reason: "",
+            },
+        ];
+        let mut runtime = [0; 512];
+        let runtime_length = encode_runtime_inventory(13, &runtime_records, &mut runtime).unwrap();
+        let private = [0x71; LAMPORT_PRIVATE_KEY_BYTES];
+        let mut public = [0; LAMPORT_PUBLIC_KEY_BYTES];
+        lamport_public_key(&private, &mut public).unwrap();
+        let key_id = mrml_crypto::Sha3_512::digest(&public);
+        let mut output = [0; MAX_SYSTEM_RELEASE_BYTES];
+        let length = encode_system_release_with_runtime_inventory(
+            &generation[..generation_length],
+            &catalog[..catalog_length],
+            &runtime[..runtime_length],
+            &private,
+            &mut output,
+        )
         .unwrap();
         (output, length, key_id)
     }
@@ -326,7 +433,7 @@ mod tests {
     }
 
     #[test]
-    fn release_inventory_requires_exact_count_and_unique_domains() {
+    fn release_inventory_requires_exact_binding_count() {
         let (release, release_length, key_id) = build_release(true, 13);
         assert!(matches!(
             total_inventory_from_system_release::<1>(
@@ -360,5 +467,39 @@ mod tests {
             ),
             Err(ReleaseInventoryError::BindingCount)
         ));
+    }
+
+    #[test]
+    fn compatible_colocated_packages_form_one_conservative_domain() {
+        let (release, release_length, key_id) = build_colocated_release();
+        let domain = ObjectId(0x5a49_4d5f_5a53_5444);
+        let bindings = [
+            RuntimeDomainBinding::new(
+                "org.mrml.zim",
+                domain,
+                TotalMicrovmClass::MicrovmEligible,
+                "",
+            )
+            .unwrap(),
+            RuntimeDomainBinding::new(
+                "org.mrml.zstd",
+                domain,
+                TotalMicrovmClass::MicrovmEligible,
+                "",
+            )
+            .unwrap(),
+        ];
+        let inventory = total_inventory_from_system_release::<2>(
+            &release[..release_length],
+            &key_id,
+            POLICY,
+            &bindings,
+        )
+        .unwrap();
+        let entry = inventory.entries().next().unwrap();
+        assert_eq!(inventory.len(), 1);
+        assert_eq!(entry.domain(), domain);
+        assert_eq!(entry.class(), TotalMicrovmClass::MicrovmEligible);
+        assert!(entry.must_be_running());
     }
 }

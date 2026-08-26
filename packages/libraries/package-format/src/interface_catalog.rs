@@ -68,7 +68,7 @@ pub fn decode_canonical_manifest_interface(
     let mut interface = None;
     let mut generation = None;
     let mut declaration = 0u8;
-    let mut provider_forms = 0u8;
+    let mut supported_forms = None;
     for raw in text.lines() {
         let line = raw.trim();
         if line.is_empty() || line.starts_with('#') {
@@ -111,7 +111,7 @@ pub fn decode_canonical_manifest_interface(
                         .ok_or(InterfaceCatalogError::InterfaceGeneration)?,
                 )
             }
-            ("[isolation]", "supported") => provider_forms = decode_supported_forms(value)?,
+            ("[isolation]", "supported") => supported_forms = Some(value),
             _ => {}
         }
     }
@@ -131,8 +131,10 @@ pub fn decode_canonical_manifest_interface(
             interface,
             generation,
             fingerprint,
-            ComponentProviderForms::from_bits(provider_forms)
-                .ok_or(InterfaceCatalogError::ProviderForms)?,
+            ComponentProviderForms::from_bits(decode_supported_forms(
+                supported_forms.ok_or(InterfaceCatalogError::ProviderForms)?,
+            )?)
+            .ok_or(InterfaceCatalogError::ProviderForms)?,
         )
         .map(ManifestInterfaceDeclaration::Provider)
         .map_err(InterfaceCatalogError::Declaration),
@@ -712,7 +714,7 @@ mod tests {
 
     #[test]
     fn canonical_manifest_declarations_supply_exact_catalog_fields() {
-        const REQUIREMENT: &[u8] = b"[manifest]\nformat = \"mrml\"\nversion = 2\n\n[package]\nid = \"org.mrml.zim\"\n\n[[requires]]\nbinding = \"dynamic\"\nfingerprint = \"6a6a6a6a6a6a6a6a6a6a6a6a6a6a6a6a6a6a6a6a6a6a6a6a6a6a6a6a6a6a6a6a\"\nform = \"isolated-service\"\ngeneration = 3\ninterface = \"org.mrml.interface.compression.zstd\"\n";
+        const REQUIREMENT: &[u8] = b"[manifest]\nformat = \"mrml\"\nversion = 2\n\n[package]\nid = \"org.mrml.zim\"\n\n[isolation]\nsupported = [\"in-process\", \"native-service\", \"microvm\"]\n\n[[requires]]\nbinding = \"dynamic\"\nfingerprint = \"6a6a6a6a6a6a6a6a6a6a6a6a6a6a6a6a6a6a6a6a6a6a6a6a6a6a6a6a6a6a6a6a\"\nform = \"isolated-service\"\ngeneration = 3\ninterface = \"org.mrml.interface.compression.zstd\"\n";
         const PROVIDER: &[u8] = b"[manifest]\nformat = \"mrml\"\nversion = 2\n\n[package]\nid = \"org.mrml.zstd\"\n\n[isolation]\nsupported = [\"native-service\", \"microvm\"]\n\n[[provides]]\nbinding = \"dynamic\"\nfingerprint = \"6a6a6a6a6a6a6a6a6a6a6a6a6a6a6a6a6a6a6a6a6a6a6a6a6a6a6a6a6a6a6a6a\"\nform = \"isolated-service\"\ngeneration = 3\ninterface = \"org.mrml.interface.compression.zstd\"\n";
         const MALFORMED: &[u8] = b"[manifest]\nformat = \"mrml\"\nversion = 2\n\n[package]\nid = \"org.mrml.zstd\"\n\n[isolation]\nsupported = [\"microvm\"]\n\n[[provides]]\nbinding = \"path\"\nfingerprint = \"6a6a6a6a6a6a6a6a6a6a6a6a6a6a6a6a6a6a6a6a6a6a6a6a6a6a6a6a6a6a6a6a\"\nform = \"isolated-service\"\ngeneration = 3\ninterface = \"org.mrml.interface.compression.zstd\"\n";
         let requirement = match decode_canonical_manifest_interface(REQUIREMENT).unwrap() {

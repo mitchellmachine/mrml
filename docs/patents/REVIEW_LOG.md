@@ -1,5 +1,21 @@
 # Patent review log
 
+## 2026-08-26 — Release-derived Total inventory in WHP/KVM component probes
+
+Patent review: **TRIGGERED** under the existing adaptive-isolation,
+Total-MicroVM, signed-release, runtime-classification, stable-interface, and VMM
+reviews. This increment conventionally emits the same bounded authenticated
+generation/interface/runtime records on each backend, joins two caller-bound
+package identities to one already authorized domain, conservatively combines
+must-run state, and invokes the existing strict finalizer before the unchanged
+component queue runs. It adds no placement heuristic, native fallback,
+scheduler, migration, device protocol, DMA mechanism, or hardware-specific
+isolation mechanism. The parser correction defers interpretation of provider
+forms until the manifest declaration is known, so a consumer's in-process
+placement support cannot be mistaken for provider-service transport authority.
+No patent-clearance or non-infringement conclusion is made; independent human
+review remains required.
+
 ## 2026-08-26 — Indexed aggregate callee return origins
 
 Patent review: **NOT_TRIGGERED** for this bounded compiler-analysis increment.

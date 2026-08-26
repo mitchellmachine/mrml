@@ -9,6 +9,14 @@ kind = "library"
 name = "mrml-zim"
 profile = "library"
 
+[isolation]
+default = "in-process"
+minimum = "in-process"
+maximum = "microvm"
+supported = ["in-process", "native-service", "microvm"]
+runtime_class = "microvm-eligible"
+must_run = true
+
 [[requires]]
 binding = "dynamic"
 fingerprint = "6a62bdd594af284f51edc1734aa15851e5de37ef7e21103b665454c743e2126c"

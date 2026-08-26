@@ -237,9 +237,17 @@ release delivery is now **IMPLEMENTED** through backward-compatible general
 SystemRelease v2, which authenticates the exact three-record set and rejects
 inventory/generation mismatch; v1 continues to parse without an inventory.
 Kernel construction is now **IMPLEMENTED**: a bounded adapter requires the
-selected signer plus an exact one-for-one binding between every authenticated
-package classification and its live domain, and rejects count, identity, class,
-or reason substitution. System-wide admission and runtime proof remain next.
+selected signer plus an exact package binding for every authenticated
+classification, rejects count, identity, class, reason, or incompatible-
+co-location substitution, and conservatively combines colocated must-run state.
+Focused runner consumption is now **PARTIALLY IMPLEMENTED**. WHP and nested KVM
+produced byte-identical 201/207/225-byte generation, interface, and runtime
+records; the same freshly signed 99,369-byte v2 release finalized one colocated
+ZIM/Zstd domain as `classified=1`, `eligible=1`, `microvm=1`, and
+`native_fallback=0` before execution. Windows and Linux pass 553 kernel tests,
+WHP passes 9 runner tests, KVM passes 10, and the build frontend passes 99 on
+each host. Complete installed-system enumeration, recovery reconstruction, and
+boot-selected end-to-end runtime proof remain next.
 
 Boot-selector groundwork is now **PARTIALLY IMPLEMENTED** without skipping that
 runtime gate. The common UEFI library has one bounded allocation-free UTF-16

@@ -3015,13 +3015,21 @@ derivation is now **IMPLEMENTED** at the kernel boundary: a bounded adapter
 accepts only a valid general SystemRelease v2 signed by the exact
 caller-policy-selected key, requires its `MRMLRI1` to exact-match the enclosed
 `MRMLSG2`, and requires one unique live-domain binding for every package record.
-It rejects v1, missing/excess bindings, duplicate package/domain identity, class
-substitution, and exception-reason substitution. Package names identify the
-binding; neither release nor manifest metadata grants domain authority. Windows
-and Arch Linux each pass 552 kernel tests. WHP/KVM runner consumption of this
-complete release-derived inventory remains **PLANNED**, so the existing live
-evidence is still a focused one-application proof, not end-to-end Total
-readiness.
+It rejects v1, missing/excess bindings, duplicate package identity, incompatible
+co-location, class substitution, and exception-reason substitution. Compatible
+packages may share one live domain and conservatively combine must-run state.
+Package names identify the binding; neither release nor manifest metadata grants
+domain authority. Windows and Arch Linux each pass 553 kernel tests. WHP/KVM
+runner consumption is now **PARTIALLY IMPLEMENTED** for the focused ZIM/Zstd
+component generation. Both runners produce byte-identical 201-byte `MRMLSG2`,
+207-byte `MRMLIC1`, and 225-byte `MRMLRI1` records. The same freshly signed
+99,369-byte SystemRelease v2 authenticated all three, joined both packages to
+one already admitted microVM domain, and finalized `classified=1`, `eligible=1`,
+`microvm=1`, and `native_fallback=0` before guest execution on WHP and nested
+KVM. The stable component ABI data plane then ran without per-request package or
+policy resolution. This is hosted controlled evidence for one colocated
+consumer/provider domain, not complete installed-system Total readiness,
+recovery, host-resistant isolation, or physical-hardware evidence.
 
 Patent review: `TRIGGERED` under the existing signed-release, adaptive
 isolation, Total-MicroVM, automated VMM placement, and device-projection reviews

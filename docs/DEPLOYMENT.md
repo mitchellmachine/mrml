@@ -141,8 +141,19 @@ readable but expose no runtime inventory and therefore cannot prove Total
 readiness. Kernel inventory construction is now **IMPLEMENTED** through a
 bounded adapter that requires the caller-policy-selected signer, v2 inventory,
 and an exact one-for-one package-to-live-domain binding. It rejects missing,
-duplicate, class-substituted, reason-substituted, or excess bindings before
-publishing an inventory. End-to-end generation admission remains **PLANNED**.
+duplicate-package, incompatible-co-location, class-substituted,
+reason-substituted, or excess bindings before publishing an inventory.
+Compatible colocated packages conservatively combine must-run state. End-to-end
+runner consumption is now **PARTIALLY IMPLEMENTED** for the focused ZIM/Zstd
+component release. WHP and KVM each derive the same 201-byte generation,
+207-byte interface catalog, and 225-byte runtime inventory; all three records
+are byte-identical across backends. One freshly signed 99,369-byte v2 release
+then authenticated those records, bound both packages to one admitted microVM
+domain, and finalized `classified=1`, `eligible=1`, `microvm=1`, and
+`native_fallback=0` before guest execution on WHP and nested KVM. This is hosted
+controlled-probe evidence for one focused release, not a complete installed-
+system inventory, recovery proof, or host-resistant isolation. Full-system
+generation admission remains **PLANNED**.
 
 - Complexity impact: MEDIUM
 - TCB impact: LOW

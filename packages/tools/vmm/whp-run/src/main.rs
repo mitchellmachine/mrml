@@ -4,42 +4,38 @@
 
 #[cfg(target_os = "windows")]
 use mrml_config::{
-    prepare_configured_isolation_service_route, AdmittedConfigurationGuestFactory,
-    ConfigTransaction, ConfigurationMicrovmEndpoint, ConfigurationService,
-    IsolationPolicyApplicationPlan, IsolationPolicySetting, IsolationServiceBounds,
-    IsolationServiceIdentity, MicrovmConfigurationServiceLauncher, OwnerIsolationSelection,
-    PreparedMicrovmConfigurationLauncher, SettingId,
+    AdmittedConfigurationGuestFactory, ConfigTransaction, ConfigurationMicrovmEndpoint,
+    ConfigurationService, IsolationPolicyApplicationPlan, IsolationPolicySetting,
+    IsolationServiceBounds, IsolationServiceIdentity, MicrovmConfigurationServiceLauncher,
+    OwnerIsolationSelection, PreparedMicrovmConfigurationLauncher, SettingId,
+    prepare_configured_isolation_service_route,
 };
 #[cfg(target_os = "windows")]
-use mrml_crypto::{Sha3_512, LAMPORT_PUBLIC_KEY_BYTES};
+use mrml_crypto::{LAMPORT_PUBLIC_KEY_BYTES, Sha3_512};
 #[cfg(target_os = "windows")]
-use mrml_deployment::{encode_deployment_checkpoint, DeploymentService, GenerationCandidate};
-use mrml_error::{anyhow, Result};
+use mrml_deployment::{DeploymentService, GenerationCandidate, encode_deployment_checkpoint};
+use mrml_error::{Result, anyhow};
 #[cfg(target_os = "windows")]
-use mrml_kernel::arch::x86_64::{Mapping, PagePermissions, VirtAddr, PRIVILEGE_STACK_ARENA_PAGES};
+use mrml_kernel::arch::x86_64::{Mapping, PRIVILEGE_STACK_ARENA_PAGES, PagePermissions, VirtAddr};
 #[cfg(all(target_os = "windows", feature = "cuda"))]
 use mrml_kernel::verify_gpu_kernel_bundle;
 #[cfg(target_os = "windows")]
 use mrml_kernel::{
-    admit_microvm_projection, bind_component_service_handoff, bind_verified_application_image,
-    component_image_page_plan, prepare_microvm_guest_ram, release_component_image,
-    release_microvm_guest_ram, reserve_component_image, reserve_isolation_vcpus,
-    reserve_microvm_guest_ram, reserve_microvm_page_projection, route_isolation_application,
-    run_pci_configuration_once, run_pci_configuration_once_with_backend_mapper,
-    run_virtual_block_mmio_transaction_once, run_virtual_block_transaction_once,
     ActiveMicrovmProjectionPlan, AdmittedApplicationGuestFactory, AffinityDeadlineVmBackend,
     ApplicationLaunch, ApplicationMicrovmEndpoint, ArtifactKind, Capability, CapabilitySpace,
-    CpuBudgetId, CpuBudgetSpec, CpuBudgetTable, CpuRuntimeSlice, DeadlineVmBackend, GpuCommandRing,
-    GpuQueueIdentity, GpuQueueReceiver, GpuResourceResponse, GpuResourceResponseSender,
-    GpuSharedQueueLayout, GpuVmmQueueBridge, GuestMemory, HypercallRouter, InterruptPolicy,
-    IsolationAdmissionTable, IsolationApplicationBackend, IsolationApplicationSpec, IsolationMode,
-    IsolationPlacement, IsolationUnavailableReason, MemoryPoolTable, MicrovmPageProjectionKind,
-    MicrovmProjectionDescriptor, MicrovmProjectionKind, MicrovmProjectionPlan,
-    MicrovmProjectionRequirements, ObjectId, PreparedIsolationServiceRoute,
-    PreparedMicrovmApplicationBackend, ResourceCommand, Rights, ScheduledDeadlineVmBackend,
-    ScheduledSmpVmBackend, SignedArtifact, TotalMicrovmClass, TrustRoot, VcpuReservationId,
-    TotalMicrovmInventory, TotalMicrovmInventoryEntry, VerifiedExecutable, VerifiedGpuKernelBundle,
-    VirtualBlockBackend, VirtualBlockBackendAuthority,
+    CpuBudgetId, CpuBudgetSpec, CpuBudgetTable, CpuRuntimeSlice, DeadlineVmBackend,
+    GPU_DOORBELL_PORT, GPU_QUEUE_MESSAGE_BYTES, GpuCommandRing, GpuQueueIdentity, GpuQueueReceiver,
+    GpuResourceResponse, GpuResourceResponseSender, GpuSharedQueueLayout, GpuVmmQueueBridge,
+    GuestMemory, HypercallRouter, InterruptPolicy, IsolationAdmissionTable,
+    IsolationApplicationBackend, IsolationApplicationSpec, IsolationMode, IsolationPlacement,
+    IsolationUnavailableReason, MAX_APPLICATION_IMAGE_BYTES, MAX_COMPONENT_IMAGE_REGIONS,
+    MemoryPoolTable, MicrovmPageProjectionKind, MicrovmProjectionDescriptor, MicrovmProjectionKind,
+    MicrovmProjectionPlan, MicrovmProjectionRequirements, ObjectId, PAGE_SIZE,
+    PreparedIsolationServiceRoute, PreparedMicrovmApplicationBackend, ResourceCommand, Rights,
+    RuntimeDomainBinding, SIGNED_ARTIFACT_OVERHEAD_BYTES, ScheduledDeadlineVmBackend,
+    ScheduledSmpVmBackend, SignedArtifact, TotalMicrovmClass, TotalMicrovmInventory,
+    TotalMicrovmInventoryEntry, TrustRoot, VIRTUAL_BLOCK_FEATURE_FLUSH, VcpuReservationId,
+    VerifiedExecutable, VerifiedGpuKernelBundle, VirtualBlockBackend, VirtualBlockBackendAuthority,
     VirtualBlockCompletionStatus, VirtualBlockConfigurationPage, VirtualBlockDevice,
     VirtualBlockDeviceState, VirtualBlockError, VirtualBlockMutationError,
     VirtualBlockPciAttachment, VirtualBlockPciAttachmentState, VirtualBlockPciCleanupMode,
@@ -50,25 +46,32 @@ use mrml_kernel::{
     VirtualPciAttachedResources, VirtualPciConfigurationMechanismOne,
     VirtualPciConfigurationRouter, VirtualPciIdentity, VirtualPciIoOutcome, VirtualPciLocation,
     VirtualPciMemoryBar, VirtualPciMmioWindow, VirtualPciNativeResourceError,
-    VirtualPciType0Function, VmBackend, VmDeadlineOutcome, VmExit, VmTable, GPU_DOORBELL_PORT,
-    GPU_QUEUE_MESSAGE_BYTES, MAX_APPLICATION_IMAGE_BYTES, MAX_COMPONENT_IMAGE_REGIONS, PAGE_SIZE,
-    SIGNED_ARTIFACT_OVERHEAD_BYTES, VIRTUAL_BLOCK_FEATURE_FLUSH,
+    VirtualPciType0Function, VmBackend, VmDeadlineOutcome, VmExit, VmTable,
+    admit_microvm_projection, bind_component_service_handoff, bind_verified_application_image,
+    component_image_page_plan, prepare_microvm_guest_ram, release_component_image,
+    release_microvm_guest_ram, reserve_component_image, reserve_isolation_vcpus,
+    reserve_microvm_guest_ram, reserve_microvm_page_projection, route_isolation_application,
+    run_pci_configuration_once, run_pci_configuration_once_with_backend_mapper,
+    run_virtual_block_mmio_transaction_once, run_virtual_block_transaction_once,
+    total_inventory_from_system_release,
 };
 #[cfg(any(test, target_os = "windows"))]
 use mrml_kernel::{
+    FramebufferInfo, MemoryKind, MemoryRegion, PhysAddr, PixelFormat, RecoveryStateMetadata,
     encode_handoff, encode_handoff_with_application, encode_handoff_with_recovery,
-    encode_handoff_with_smp, FramebufferInfo, MemoryKind, MemoryRegion, PhysAddr, PixelFormat,
-    RecoveryStateMetadata,
+    encode_handoff_with_smp,
 };
 #[cfg(target_os = "windows")]
 use mrml_package_format::{
-    admit_kernel_payload, decode_canonical_manifest_interface, encode_interface_catalog,
-    encode_system_generation, resolve_activated_interface_catalog, ComponentServicePlacement,
-    InterfaceCatalogView, ManifestInterfaceDeclaration, SystemGenerationDigestRecord,
-    SystemGenerationView, MAX_BOOT_PACKAGE_BYTES, MAX_BOOT_RELEASE_BYTES, MAX_SYSTEM_RELEASE_BYTES,
+    ComponentServicePlacement, InterfaceCatalogView, MAX_BOOT_PACKAGE_BYTES,
+    MAX_BOOT_RELEASE_BYTES, MAX_SYSTEM_RELEASE_BYTES, ManifestInterfaceDeclaration,
+    RuntimeInventoryRecord, RuntimeIsolationClass, RuntimeIsolationPlacement,
+    SystemGenerationDigestRecord, SystemGenerationView, admit_kernel_payload,
+    decode_canonical_manifest_interface, encode_interface_catalog, encode_runtime_inventory,
+    encode_system_generation, resolve_activated_interface_catalog,
 };
 #[cfg(target_os = "windows")]
-use mrml_runtime::{mrml_println as println, Instant, Vector};
+use mrml_runtime::{Instant, Vector, mrml_println as println};
 #[cfg(target_os = "windows")]
 use mrml_whp::{PreparedWhpGuest, WhpLaunchLayout, WhpSystem};
 
@@ -2039,7 +2042,7 @@ fn application_main() -> Result<()> {
     let application_mode = application_package_id.is_some();
     let service_mode = arguments.len() == 9 && arguments[5] == "service-probe";
     let component_release_input_mode =
-        arguments.len() == 14 && arguments[5] == "component-release-inputs";
+        arguments.len() == 15 && arguments[5] == "component-release-inputs";
     let component_smp_mode = arguments.len() == 14 && arguments[5] == "component-service-smp-probe";
     let component_service_mode = component_release_input_mode
         || component_smp_mode
@@ -2090,7 +2093,7 @@ fn application_main() -> Result<()> {
         && !smp_periodic_balance_mode
     {
         return Err(anyhow!(
-            "usage: mrml-whp-run KERNEL.mrp PACKAGE.public KERNEL.public MINIMUM_VERSION MODE [SYSTEM.mrs SYSTEM_RELEASE.public | ARTIFACT.signed ARTIFACT.public ARTIFACT_MINIMUM_VERSION | CONSUMER.signed CONSUMER.public CONSUMER_MINIMUM PROVIDER.signed PROVIDER.public PROVIDER_MINIMUM GENERAL_SYSTEM.mrs GENERAL_SYSTEM.public]\n       MODE component-release-inputs writes GENERATION.bin CATALOG.bin in the final two positions after verifying the same component inputs\n       mrml-whp-run --verify-boot-artifacts KERNEL.mrp PACKAGE.public MINIMUM_VERSION SYSTEM.mrs SYSTEM_RELEASE.public\n       mrml-whp-run --export-cuda-bundle OUTPUT.ptx"
+            "usage: mrml-whp-run KERNEL.mrp PACKAGE.public KERNEL.public MINIMUM_VERSION MODE [SYSTEM.mrs SYSTEM_RELEASE.public | ARTIFACT.signed ARTIFACT.public ARTIFACT_MINIMUM_VERSION | CONSUMER.signed CONSUMER.public CONSUMER_MINIMUM PROVIDER.signed PROVIDER.public PROVIDER_MINIMUM GENERAL_SYSTEM.mrs GENERAL_SYSTEM.public]\n       MODE component-release-inputs writes GENERATION.bin CATALOG.bin RUNTIME.bin in the final three positions after verifying the same component inputs\n       mrml-whp-run --verify-boot-artifacts KERNEL.mrp PACKAGE.public MINIMUM_VERSION SYSTEM.mrs SYSTEM_RELEASE.public\n       mrml-whp-run --export-cuda-bundle OUTPUT.ptx"
         ));
     }
     let minimum_version = arguments[4]
@@ -2576,6 +2579,38 @@ fn application_main() -> Result<()> {
         let catalog_digest = InterfaceCatalogView::decode(&catalog[..catalog_length])
             .map_err(|error| anyhow!("WHP interface catalog decoding failed: {:?}", error))?
             .digest();
+        let runtime_records = [
+            RuntimeInventoryRecord {
+                package_id: "org.mrml.zim",
+                version: consumer.artifact().version(),
+                artifact_digest: consumer.artifact().digest(),
+                class: RuntimeIsolationClass::MicrovmEligible,
+                must_run: true,
+                preferred: RuntimeIsolationPlacement::InProcess,
+                minimum: RuntimeIsolationPlacement::InProcess,
+                maximum: RuntimeIsolationPlacement::Microvm,
+                supported: RuntimeIsolationPlacement::InProcess.bit()
+                    | RuntimeIsolationPlacement::NativeService.bit()
+                    | RuntimeIsolationPlacement::Microvm.bit(),
+                reason: "",
+            },
+            RuntimeInventoryRecord {
+                package_id: "org.mrml.zstd",
+                version: records[1].version,
+                artifact_digest: records[1].artifact_digest,
+                class: RuntimeIsolationClass::MicrovmEligible,
+                must_run: true,
+                preferred: RuntimeIsolationPlacement::NativeService,
+                minimum: RuntimeIsolationPlacement::NativeService,
+                maximum: RuntimeIsolationPlacement::Microvm,
+                supported: RuntimeIsolationPlacement::NativeService.bit()
+                    | RuntimeIsolationPlacement::Microvm.bit(),
+                reason: "",
+            },
+        ];
+        let mut runtime = [0u8; 512];
+        let runtime_length = encode_runtime_inventory(1, &runtime_records, &mut runtime)
+            .map_err(|error| anyhow!("WHP runtime inventory failed: {:?}", error))?;
         Some((
             bytes,
             length,
@@ -2583,19 +2618,31 @@ fn application_main() -> Result<()> {
             catalog,
             catalog_length,
             catalog_digest,
+            runtime,
+            runtime_length,
         ))
     } else {
         None
     };
-    let active_component_generation = if let Some((bytes, length, _, catalog, catalog_length, _)) =
-        component_generation.as_ref()
+    let mut component_release_authority = None;
+    let active_component_generation = if let Some((
+        bytes,
+        length,
+        _,
+        catalog,
+        catalog_length,
+        _,
+        runtime,
+        runtime_length,
+    )) = component_generation.as_ref()
     {
         if component_release_input_mode {
             mrml_runtime::write_file(&arguments[12], &bytes[..*length])?;
             mrml_runtime::write_file(&arguments[13], &catalog[..*catalog_length])?;
+            mrml_runtime::write_file(&arguments[14], &runtime[..*runtime_length])?;
             println!(
-                "component-release-inputs|status=PASS|backend=whp|generation_bytes={}|catalog_bytes={}",
-                length, catalog_length
+                "component-release-inputs|status=PASS|backend=whp|generation_bytes={}|catalog_bytes={}|runtime_bytes={}",
+                length, catalog_length, runtime_length
             );
             return Ok(());
         }
@@ -2655,12 +2702,12 @@ fn application_main() -> Result<()> {
             .map_err(|error| anyhow!("WHP generation checkpoint failed: {:?}", error))?;
         let recovered = DeploymentService::<1>::recover(deployment_root, &checkpoint)
             .map_err(|error| anyhow!("WHP generation recovery failed: {:?}", error))?;
-        Some(
-            recovered
-                .active(&capabilities, inspect)
-                .map_err(|error| anyhow!("WHP active generation read failed: {:?}", error))?
-                .ok_or_else(|| anyhow!("WHP recovered no active SystemGeneration"))?,
-        )
+        let recovered_active = recovered
+            .active(&capabilities, inspect)
+            .map_err(|error| anyhow!("WHP active generation read failed: {:?}", error))?
+            .ok_or_else(|| anyhow!("WHP recovered no active SystemGeneration"))?;
+        component_release_authority = Some((release_bytes, expected_release_key));
+        Some(recovered_active)
     } else {
         None
     };
@@ -2877,7 +2924,7 @@ fn application_main() -> Result<()> {
         let prepared = isolation_preparation
             .take()
             .ok_or_else(|| anyhow!("missing prepared component isolation route"))?;
-        let (generation_bytes, generation_length, _, catalog_bytes, catalog_length, _) =
+        let (generation_bytes, generation_length, _, catalog_bytes, catalog_length, _, _, _) =
             component_generation
                 .as_ref()
                 .ok_or_else(|| anyhow!("missing canonical component SystemGeneration"))?;
@@ -3201,6 +3248,44 @@ fn application_main() -> Result<()> {
         let admitted_guest = routed.into_endpoint();
         if !admission.total_microvm_report().satisfied() {
             return Err(anyhow!("WHP Total MicroVM admission was not satisfied"));
+        }
+        if component_service_mode {
+            let (release_bytes, expected_release_key) = component_release_authority
+                .as_ref()
+                .ok_or_else(|| anyhow!("missing authenticated WHP component release"))?;
+            let bindings = [
+                RuntimeDomainBinding::new(
+                    "org.mrml.zim",
+                    spec.domain(),
+                    TotalMicrovmClass::MicrovmEligible,
+                    "",
+                )
+                .map_err(|error| anyhow!("WHP ZIM runtime binding failed: {:?}", error))?,
+                RuntimeDomainBinding::new(
+                    "org.mrml.zstd",
+                    spec.domain(),
+                    TotalMicrovmClass::MicrovmEligible,
+                    "",
+                )
+                .map_err(|error| anyhow!("WHP Zstd runtime binding failed: {:?}", error))?,
+            ];
+            let inventory = total_inventory_from_system_release::<2>(
+                release_bytes,
+                expected_release_key,
+                spec.policy_generation(),
+                &bindings,
+            )
+            .map_err(|error| anyhow!("WHP release inventory admission failed: {:?}", error))?;
+            let proof = inventory.finalize(admission).map_err(|error| {
+                anyhow!("WHP release inventory finalization failed: {:?}", error)
+            })?;
+            println!(
+                "component-total-inventory|status=PASS|backend=whp|classified={}|eligible={}|microvm={}|native_fallback={}",
+                proof.classified_domains,
+                proof.running_microvm_eligible,
+                proof.running_in_microvm,
+                admission.total_microvm_report().native_fallback
+            );
         }
         let mut launcher = PreparedMicrovmConfigurationLauncher::new(
             AdmittedConfigurationGuestFactory::new(spec, admitted_guest),
