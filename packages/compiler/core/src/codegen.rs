@@ -14973,26 +14973,55 @@ fn runtime_reference_call_origin_parameter<const MAX_PARAMETERS: usize, const MA
             }
             crate::BodyStatement::Loop(index) => {
                 let loop_statement = body.while_loops().get(index).and_then(|value| *value)?;
-                let has_assignment = loop_statement
-                    .operations()
-                    .iter()
-                    .flatten()
-                    .any(|operation| matches!(operation, crate::LoopOperation::Assignment(_)));
-                if has_assignment {
+                let has_local_state_operation =
+                    loop_statement
+                        .operations()
+                        .iter()
+                        .flatten()
+                        .any(|operation| {
+                            matches!(
+                                operation,
+                                crate::LoopOperation::Local(_)
+                                    | crate::LoopOperation::Assignment(_)
+                            )
+                        });
+                if has_local_state_operation {
                     let incoming_origins = local_origins;
+                    let mut iteration_names = local_names;
                     let mut iteration_origins = incoming_origins;
+                    let mut iteration_mutability = local_mutability;
+                    let mut iteration_local_count = local_count;
                     for operation in loop_statement.operations().iter().flatten() {
-                        let crate::LoopOperation::Assignment(assignment) = *operation else {
-                            return None;
-                        };
-                        apply_assignment::<MAX_PARAMETERS, MAX_NODES>(
-                            target,
-                            assignment,
-                            &local_names,
-                            &mut iteration_origins,
-                            &local_mutability,
-                            local_count,
-                        )?;
+                        match *operation {
+                            crate::LoopOperation::Local(local) => {
+                                let tree = local.parse_initializer::<MAX_NODES>().ok()?;
+                                let local_origin = recurse(
+                                    target,
+                                    &tree,
+                                    tree.root(),
+                                    0,
+                                    &iteration_names,
+                                    &iteration_origins,
+                                    iteration_local_count,
+                                );
+                                *iteration_names.get_mut(iteration_local_count)? = Some(local.name);
+                                *iteration_origins.get_mut(iteration_local_count)? = local_origin;
+                                *iteration_mutability.get_mut(iteration_local_count)? =
+                                    local.mutable;
+                                iteration_local_count = iteration_local_count.checked_add(1)?;
+                            }
+                            crate::LoopOperation::Assignment(assignment) => {
+                                apply_assignment::<MAX_PARAMETERS, MAX_NODES>(
+                                    target,
+                                    assignment,
+                                    &iteration_names,
+                                    &mut iteration_origins,
+                                    &iteration_mutability,
+                                    iteration_local_count,
+                                )?;
+                            }
+                            _ => return None,
+                        }
                     }
                     for local_index in 0..local_count {
                         local_origins[local_index] = (incoming_origins[local_index]
@@ -30843,6 +30872,27 @@ mod tests {
                         ),
                     })
                 }
+                ("loop_local_forward", 2) if MAX_PARAMETERS >= 2 => {
+                    parameters[0] = Some(RuntimeCallParameter {
+                        name: "value",
+                        ty: reference,
+                    });
+                    parameters[1] = Some(RuntimeCallParameter {
+                        name: "repeat",
+                        ty: ScalarType::Bool,
+                    });
+                    Some(RuntimeCallTarget {
+                        name: "loop_local_forward",
+                        parameters,
+                        parameter_count: 2,
+                        return_type: reference,
+                        return_type_name: "&mut u16",
+                        body_expression: concat!(
+                            "let mut result: &mut u16 = value; while repeat { ",
+                            "let iteration: &mut u16 = &mut *result; result = iteration; } result"
+                        ),
+                    })
+                }
                 ("touch", 1) => {
                     parameters[0] = Some(RuntimeCallParameter {
                         name: "value",
@@ -34802,6 +34852,7 @@ mod tests {
             "fn value(input: &mut u16, repeat: bool) -> u16 { let returned: &mut u16 = loop_forward(input, repeat); let competing: &mut u16 = &mut *input; *competing += 1; *returned }",
             "fn value(input: &mut u16, first: bool) -> u16 { let returned: &mut u16 = branch_local_forward(input, first); let competing: &mut u16 = &mut *input; *competing += 1; *returned }",
             "fn value(input: &mut u16, first: bool) -> u16 { let returned: &mut u16 = branch_local_return(input, first); let competing: &mut u16 = &mut *input; *competing += 1; *returned }",
+            "fn value(input: &mut u16, repeat: bool) -> u16 { let returned: &mut u16 = loop_local_forward(input, repeat); let competing: &mut u16 = &mut *input; *competing += 1; *returned }",
         ] {
             assert_eq!(
                 analyze(source).unwrap_err().kind,
@@ -34817,6 +34868,7 @@ mod tests {
             "fn value(input: &mut u16, repeat: bool) -> u16 { let returned: &mut u16 = loop_forward(input, repeat); *returned += 1; let restored: &mut u16 = &mut *input; *restored }",
             "fn value(input: &mut u16, first: bool) -> u16 { let returned: &mut u16 = branch_local_forward(input, first); *returned += 1; let restored: &mut u16 = &mut *input; *restored }",
             "fn value(input: &mut u16, first: bool) -> u16 { let returned: &mut u16 = branch_local_return(input, first); *returned += 1; let restored: &mut u16 = &mut *input; *restored }",
+            "fn value(input: &mut u16, repeat: bool) -> u16 { let returned: &mut u16 = loop_local_forward(input, repeat); *returned += 1; let restored: &mut u16 = &mut *input; *restored }",
         ] {
             analyze(source).unwrap();
         }
@@ -34861,6 +34913,13 @@ mod tests {
             .unwrap();
         assert_eq!(
             runtime_reference_call_origin_parameter::<3, 32>(branch_local_return),
+            Some(0)
+        );
+        let loop_local_forward = MutableReferenceCallResolver
+            .resolve_runtime_call::<3>("loop_local_forward", 2)
+            .unwrap();
+        assert_eq!(
+            runtime_reference_call_origin_parameter::<3, 32>(loop_local_forward),
             Some(0)
         );
         assert_eq!(
