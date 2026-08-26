@@ -1214,6 +1214,11 @@ after last use; ORACLE-0002 matches with E0506 and acceptance respectively.
 The same shared conditional join now participates in function-return outlives:
 all-parameter arms pass, while a parameter/local pair fails closed. ORACLE-0002
 accepts the former and rejects the latter with E0515.
+Loop-carried loan reachability now treats a borrower reinitialization as a new
+dynamic generation. A later static use reached only after wrapping past that
+generation cannot keep the prior iteration's loan alive. Shared-call mutation
+before a same-iteration use still fails; copying first releases the loan before
+mutation and the backedge. ORACLE-0002 matches with E0506 and acceptance.
 
 The first modern trait-solver foundation is an explicit bounded implemented-
 goal representation. Stable trait/type/inference/placeholder identities remain

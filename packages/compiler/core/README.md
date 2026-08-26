@@ -4071,6 +4071,11 @@ Conditional shared-call results also retain their full origin set at a function
 return. Two parameter arms pass; replacing either possible origin with local
 storage fails closed and matches pinned-oracle E0515. Both hosts remain at 989
 compiler tests.
+Loop-carried loan liveness now separates dynamic borrower generations at the
+static reinitialization point. A later use in the same iteration still blocks
+owner mutation, while an old loan does not flow through the next iteration's
+generation after its last use. The pinned oracle matches with E0506 and an
+accepted copy-before-mutation case. Both hosts remain at 989 compiler tests.
 
 Exact typed tuple literals now seed the same projected state when a local is
 declared. Every reference field is checked against the declared tuple element

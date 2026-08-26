@@ -863,6 +863,13 @@ fail closed; ORACLE-0002 reports E0515 at both local return sites. Windows and
 Arch remain at 988 compiler tests per host. General interprocedural lifetime
 inference remains unsupported.
 
+Loop CFG loan reachability now blocks the current borrower generation point and
+does not attribute an earlier static use reached after event-order wrap to the
+prior dynamic generation. A shared-call result used after owner mutation still
+fails with `RuntimeBorrowConflict`/E0506; copying the pointee first permits owner
+mutation and the next iteration. Windows and Arch remain at 989 compiler tests.
+This is a bounded generation rule, not a general loop-region fixed point.
+
 Direct and conditional return sites inside supported `loop` blocks now retain
 the projected callee summary's shared-child origin. Parameter-backed second
 arguments pass and matching loop-local second arguments fail closed. ORACLE-0002

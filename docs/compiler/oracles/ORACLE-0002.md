@@ -215,6 +215,13 @@ return and rejected the mixed local return with E0515. This is exact joined
 shared-origin escape evidence, not general region inference. Temporary sources
 and metadata were removed.
 
+An independently authored `while` pair created a shared identity-call result on
+each iteration. This exact toolchain rejected owner mutation followed by a use
+of that result with E0506. A companion copied the pointee first, mutated the
+owner, and allowed the loop backedge. This is exact non-lexical evidence across
+per-iteration reference generations, not a general loop-region fixed point.
+Temporary sources and metadata were removed.
+
 An independently authored Rust 2024 metadata-only probe against this exact
 toolchain and commit accepted a mutable scalar reference returned from index
 zero of a mutable two-element array-reference parameter. The caller could reuse
