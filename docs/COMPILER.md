@@ -1068,6 +1068,13 @@ The owner conflicts while the grandchild remains live and is restored after its
 last use. ORACLE-0002 accepts the restoration control and rejects the live
 competitor with E0499. This is bounded projected ancestry, not general regions.
 
+A call-derived mutable reference assigned into an existing local now has focused
+ancestry evidence when the call's exact returned parameter argument is a tuple
+field. The call-scoped reborrow, destination generation, field origin, and
+ultimate owner remain connected: a live owner competitor fails with E0499 and
+owner reuse after the returned child's last use succeeds. Unsupported callees
+and unclassified projected arguments remain conservative.
+
 The first modern trait-solver foundation is an explicit bounded implemented-
 goal representation. Stable trait/type/inference/placeholder identities remain
 distinct; canonicalization replaces inference identities with first-occurrence

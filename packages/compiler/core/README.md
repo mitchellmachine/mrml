@@ -3994,6 +3994,12 @@ cross-host and oracle coverage. The ultimate parameter owner remains suspended
 while the grandchild is live and is restored after last use; the oracle rejects
 the live competitor with E0499. Both hosts remain at 987 tests.
 
+An exact identity-call result assigned into an existing mutable-reference local
+now has focused projected-argument ancestry coverage. A tuple-field argument
+remains connected through the call result to its ultimate owner; the oracle
+rejects a live competitor with E0499 and accepts restoration after last use.
+Both hosts remain at 987 tests.
+
 Multi-field initialization uses one independent key per tuple field. An exact
 conditional reference element records an origin only when both arms resolve to
 the same parameter; differing first/second origins remain unavailable. Focused

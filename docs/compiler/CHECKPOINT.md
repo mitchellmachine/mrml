@@ -762,6 +762,13 @@ ORACLE-0002 rejected a live owner competitor with E0499 and accepted owner reuse
 after the grandchild's last use. Windows and Arch each pass 987 compiler tests.
 General indirect regions remain unsupported.
 
+Projected call-assignment coverage proves that an exact identity-call result
+assigned into an existing mutable-reference local retains ancestry when its
+returned argument is a tuple field. ORACLE-0002 rejected a live ultimate-owner
+competitor with E0499 and accepted restoration after the assigned child's last
+use. Windows and Arch each pass 987 compiler tests. This does not generalize
+unknown call summaries or projected arguments.
+
 Multi-field tuple literals retain a separate projected origin per field. A
 conditional reference element seeds its field only when both arms prove the
 same parameter; unequal first/second origins fail closed. Focused caller tests
