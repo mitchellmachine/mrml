@@ -7643,3 +7643,14 @@ reachable exits fail closed, and general nested-loop dataflow remains
 unsupported. Broader compiler completion remains partial; this technical screen
 is not a clearance or infringement conclusion and does not replace independent
 human dual review.
+
+# 2026-08-26 — Nested-loop origin stability gate
+
+**Result: NOT_TRIGGERED after the nested-loop stability review.** This increment
+uses conventional equality of fixed-capacity abstract origin facts to require
+that already modeled inner backedge and break/continue prefixes preserve their
+incoming state. It adds no fixed-point solver, region or alias analysis, path-
+sensitive inference, optimization, or code-generation algorithm. Changed and
+local-backed state fails closed; broader compiler completion remains partial.
+This technical screen is not a clearance or infringement conclusion and does
+not replace independent human dual review.
