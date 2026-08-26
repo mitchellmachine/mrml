@@ -8111,3 +8111,15 @@ fixed-point, region, or alias algorithm. Reference-bearing signatures or bodies
 remain rejected before lowering. Broader compiler completion remains partial;
 this technical screen is not a clearance or infringement conclusion and does
 not replace independent human dual review.
+
+# 2026-08-26 — Nested branch return-origin transfer
+
+**Result: NOT_TRIGGERED after the return-origin review.** This increment reuses
+the existing bounded action-state transfer and return-origin recursion for a
+conditional nested-loop terminal. It adds no new fixed-point solver, region or
+alias analysis, inference, optimization, instruction-selection, or
+code-generation algorithm. Only a parameter-backed reborrow is admitted;
+local-backed returns and all reference-bearing branch break/continue paths fail
+closed. Broader compiler completion remains partial; this technical screen is
+not a clearance or infringement conclusion and does not replace independent
+human dual review.
