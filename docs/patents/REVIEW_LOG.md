@@ -7089,3 +7089,14 @@ alias-analysis, optimization, or code-generation algorithm. General indirect
 regions remain absent. Broader compiler completion remains partial; this
 technical screen is not a clearance or infringement conclusion and does not
 replace independent human dual review.
+
+# 2026-08-26 — Conditional owner-generation invalidation evidence
+
+**Result: NOT_TRIGGERED after the conditional-generation evidence review.**
+This increment adds independently authored regression evidence for the existing
+bounded reaching-definition, loan-ancestry, and liveness checks when an optional
+reference reassignment leaves two possible owner generations. It introduces no
+new borrow-checking, region-inference, alias-analysis, optimization, or code-
+generation algorithm. Path-sensitive regions remain absent. Broader compiler
+completion remains partial; this technical screen is not a clearance or
+infringement conclusion and does not replace independent human dual review.
