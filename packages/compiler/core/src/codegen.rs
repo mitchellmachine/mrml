@@ -703,6 +703,7 @@ pub fn compile_x86_64_function_with_options<
         .return_type
         .map_or(function.name_span, |ty| ty.span);
     let returns_unit = return_type_text == "()";
+    let returns_never = return_type_text == "!";
     let returns_bool = return_type_text == "bool";
     let returns_char = return_type_text == "char";
     let return_array = runtime_array_type(return_type_text);
@@ -711,8 +712,9 @@ pub fn compile_x86_64_function_with_options<
     let returns_zero_sized_array = return_array
         .and_then(runtime_array_abi_layout)
         .is_some_and(|(_, bytes, _)| bytes == 0);
-    let returns_value_free = returns_unit || returns_zero_sized_array;
+    let returns_value_free = returns_unit || returns_never || returns_zero_sized_array;
     if !returns_unit
+        && !returns_never
         && !returns_bool
         && !returns_char
         && runtime_width(return_type_text).is_none()
@@ -783,6 +785,7 @@ pub fn compile_x86_64_function_with_options<
         Some(_) => "u64",
         None if returns_bool
             || returns_unit
+            || returns_never
             || return_reference.is_some()
             || return_pointer.is_some() =>
         {
@@ -861,7 +864,9 @@ pub fn compile_x86_64_function_with_options<
         } else {
             operand_type
         };
-    let expected_type = if returns_unit {
+    let expected_type = if returns_never {
+        RuntimeExpressionType::Never
+    } else if returns_unit {
         RuntimeExpressionType::Unit
     } else if returns_bool {
         RuntimeExpressionType::Bool
@@ -2014,7 +2019,7 @@ pub fn compile_x86_64_function_with_options<
             _ => {}
         }
     }
-    if body.tail_diverges {
+    if x86_64_body_tail_diverges(&body) {
         return emitter.finish();
     }
     let tree = body
@@ -2249,6 +2254,7 @@ enum X86_64InlineAssembly<'source> {
     Nop,
     NopCClobber,
     Pause,
+    Int3Noreturn,
     CompareRegister {
         register: X86_64InlineRegister,
         input: &'source str,
@@ -2334,6 +2340,14 @@ fn x86_64_inline_assembly(
             .ok_or(CodegenErrorKind::InvalidInlineAssembly)?;
         x86_64_inline_assembly_options(options, true, false)?;
         return Ok(Some(X86_64InlineAssembly::Pause));
+    }
+    if let Some(arguments) = arguments.strip_prefix("\"int3\"") {
+        return match arguments.trim() {
+            ", options(noreturn, nostack)" | ", options(nostack, noreturn)" => {
+                Ok(Some(X86_64InlineAssembly::Int3Noreturn))
+            }
+            _ => Err(CodegenErrorKind::InvalidInlineAssembly),
+        };
     }
     if let Some(named) = arguments.strip_prefix("\"add {") {
         let separator = named
@@ -2447,6 +2461,32 @@ fn x86_64_inline_assembly(
             }))
         }
     }
+}
+
+fn x86_64_body_tail_diverges<const MAX_LOCALS: usize>(
+    body: &crate::FunctionBody<'_, MAX_LOCALS>,
+) -> bool {
+    if body.tail_diverges {
+        return true;
+    }
+    if !body.implicit_unit {
+        return false;
+    }
+    let Some(crate::BodyStatement::Expression(index)) =
+        body.statements().iter().flatten().next_back().copied()
+    else {
+        return false;
+    };
+    body.expression_statements()
+        .get(index)
+        .and_then(|statement| *statement)
+        .is_some_and(|statement| {
+            statement.terminal
+                && matches!(
+                    x86_64_inline_assembly(statement.expression),
+                    Ok(Some(X86_64InlineAssembly::Int3Noreturn))
+                )
+        })
 }
 
 fn x86_64_inline_fixed_register_operand(
@@ -9786,6 +9826,13 @@ fn preanalyze_runtime_expression_statement_reads<
             | X86_64InlineAssembly::NopCClobber
             | X86_64InlineAssembly::Pause,
         )) => return Ok(()),
+        Ok(Some(X86_64InlineAssembly::Int3Noreturn)) if statement.terminal => return Ok(()),
+        Ok(Some(X86_64InlineAssembly::Int3Noreturn)) => {
+            return Err(CodegenError {
+                kind: CodegenErrorKind::InvalidInlineAssembly,
+                span: translate_span(body_start, statement.span),
+            });
+        }
         Ok(Some(X86_64InlineAssembly::CompareRegister { input, .. })) => {
             let tree = crate::ExpressionParser::<MAX_EXPRESSION_NODES>::new(input)
                 .parse()
@@ -15207,7 +15254,8 @@ fn preanalyze_runtime_body_declarations<
     facts: &mut RuntimeBodyFacts<'source>,
 ) -> Result<usize, CodegenError> {
     facts.ownership_statement_count = body.statement_count();
-    facts.ownership_has_tail = !body.tail_diverges && !body.tail_expression.is_empty();
+    let tail_diverges = x86_64_body_tail_diverges(body);
+    facts.ownership_has_tail = !tail_diverges && !body.tail_expression.is_empty();
     facts
         .record_ownership_statement_shapes(body)
         .map_err(|kind| CodegenError {
@@ -15302,7 +15350,7 @@ fn preanalyze_runtime_body_declarations<
             }
         }
     }
-    if !body.tail_diverges && !body.tail_expression.is_empty() {
+    if !tail_diverges && !body.tail_expression.is_empty() {
         facts.current_ownership_event_location = RuntimeOwnershipEventLocation::Tail;
         preanalyze_runtime_return_expression_reads::<R, MAX_PARAMETERS, MAX_EXPRESSION_NODES>(
             facts,
@@ -18041,7 +18089,7 @@ fn runtime_reference_call_origin_parameter<const MAX_PARAMETERS: usize, const MA
             crate::BodyStatement::Expression(_) => return None,
         }
     }
-    if !body.tail_diverges && !body.tail_expression.is_empty() {
+    if !x86_64_body_tail_diverges(&body) && !body.tail_expression.is_empty() {
         let tree = body.parse_tail::<MAX_NODES>().ok()?;
         merge(recurse(
             target,
@@ -24619,7 +24667,7 @@ impl<
                     }
                 }
             }
-            if body.tail_diverges && !tail_unreachable {
+            if x86_64_body_tail_diverges(&body) && !tail_unreachable {
                 tail_unreachable = true;
             }
             if tail_unreachable {
@@ -30132,6 +30180,15 @@ impl<
             Ok(Some(X86_64InlineAssembly::Pause)) => {
                 return self.emit(&[0xf3, 0x90]);
             }
+            Ok(Some(X86_64InlineAssembly::Int3Noreturn)) if statement.terminal => {
+                return self.emit(&[0xcc]);
+            }
+            Ok(Some(X86_64InlineAssembly::Int3Noreturn)) => {
+                return Err(CodegenError {
+                    kind: CodegenErrorKind::InvalidInlineAssembly,
+                    span: translate_span(body_start, statement.span),
+                });
+            }
             Ok(Some(X86_64InlineAssembly::CompareRegister { register, input })) => {
                 let tree = crate::ExpressionParser::<MAX_EXPRESSION_NODES>::new(input)
                     .parse()
@@ -34827,6 +34884,16 @@ mod tests {
         }
 
         for source in [
+            "#[unsafe(no_mangle)] pub extern \"C\" fn trap() -> ! { unsafe { asm!(\"int3\", options(noreturn, nostack)); } }",
+            "#[unsafe(no_mangle)] pub unsafe extern \"C\" fn trap() -> ! { asm!(\"int3\", options(nostack, noreturn)); }",
+            "#[unsafe(no_mangle)] pub extern \"C\" fn trap() -> u64 { unsafe { asm!(\"int3\", options(noreturn, nostack)); } }",
+        ] {
+            let code = compile(source).unwrap();
+            assert_eq!(code.bytes().last(), Some(&0xcc), "{source}");
+            assert!(!code.bytes().contains(&0xc3), "{source}");
+        }
+
+        for source in [
             "#[unsafe(no_mangle)] pub unsafe extern \"C\" fn answer() -> u64 { asm!(\"pause\"); 42 }",
             "#[unsafe(no_mangle)] pub extern \"C\" fn answer() -> u64 { unsafe { asm!(\"pause\"); } 42 }",
             "#[unsafe(no_mangle)] pub unsafe extern \"C\" fn answer() -> u64 { asm!(\"pause\", options(nomem, nostack, preserves_flags)); 42 }",
@@ -35307,6 +35374,22 @@ mod tests {
             (
                 "#[unsafe(no_mangle)] pub extern \"C\" fn answer() -> u64 { unsafe { 42; } asm!(\"pause\"); 42 }",
                 CodegenErrorKind::InlineAssemblyRequiresUnsafe,
+            ),
+            (
+                "#[unsafe(no_mangle)] pub extern \"C\" fn trap() -> ! { asm!(\"int3\", options(noreturn, nostack)); }",
+                CodegenErrorKind::InlineAssemblyRequiresUnsafe,
+            ),
+            (
+                "#[unsafe(no_mangle)] pub extern \"C\" fn trap() -> u64 { unsafe { asm!(\"int3\", options(noreturn, nostack)); } 42 }",
+                CodegenErrorKind::InvalidInlineAssembly,
+            ),
+            (
+                "#[unsafe(no_mangle)] pub unsafe extern \"C\" fn trap() -> ! { asm!(\"int3\", options(noreturn)); }",
+                CodegenErrorKind::InvalidInlineAssembly,
+            ),
+            (
+                "#[unsafe(no_mangle)] pub unsafe extern \"C\" fn trap() -> ! { asm!(\"int3\"); }",
+                CodegenErrorKind::InvalidInlineAssembly,
             ),
             (
                 "#[unsafe(no_mangle)] pub unsafe extern \"C\" fn answer() -> u64 { asm!(\"pause\", clobber_abi(\"C\")); 42 }",

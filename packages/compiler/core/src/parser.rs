@@ -708,6 +708,7 @@ pub struct ExpressionStatement<'source> {
     pub expression: &'source str,
     pub span: Span,
     pub unsafe_context: bool,
+    pub terminal: bool,
 }
 
 impl<'source> ExpressionStatement<'source> {
@@ -1673,6 +1674,7 @@ impl<'source> BodyParser<'source> {
                     end: first.span.start,
                 },
                 unsafe_context: false,
+                terminal: false,
             }));
         }
         if matches!(
@@ -1699,6 +1701,7 @@ impl<'source> BodyParser<'source> {
             expression: &self.source[span.start..span.end],
             span,
             unsafe_context: false,
+            terminal: false,
         }))
     }
 
@@ -2175,6 +2178,7 @@ impl<'source> BodyParser<'source> {
                         end: first.span.start,
                     },
                     unsafe_context: false,
+                    terminal: false,
                 });
             body.expression_statement_count += 1;
             return Ok(true);
@@ -2232,6 +2236,7 @@ impl<'source> BodyParser<'source> {
             expression: &self.source[span.start..span.end],
             span,
             unsafe_context: false,
+            terminal: false,
         });
         body.expression_statement_count += 1;
         *self = probe;
@@ -3020,6 +3025,15 @@ impl<'source> BodyParser<'source> {
                 start: tail_end,
                 end: tail_end,
             };
+            if let Some(BodyStatement::Expression(index)) = body.statements[..body.statement_count]
+                .iter()
+                .flatten()
+                .next_back()
+                .copied()
+                && let Some(statement) = body.expression_statements[index].as_mut()
+            {
+                statement.terminal = true;
+            }
             let last_loop_diverges = body.while_loops[..body.while_loop_count]
                 .iter()
                 .flatten()

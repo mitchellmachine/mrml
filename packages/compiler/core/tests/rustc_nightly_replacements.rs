@@ -6065,3 +6065,20 @@ fn rustc_pause_inline_assembly_reaches_native_objects() {
     )
     .is_err());
 }
+
+#[test]
+fn rustc_terminal_int3_inline_assembly_reaches_native_objects() {
+    for source in [
+        "#[unsafe(no_mangle)] pub extern \"C\" fn probe() -> ! { unsafe { asm!(\"int3\", options(noreturn, nostack)); } }",
+        "#[unsafe(no_mangle)] pub unsafe extern \"C\" fn probe() -> ! { asm!(\"int3\", options(nostack, noreturn)); }",
+        "#[unsafe(no_mangle)] pub extern \"C\" fn probe() -> u64 { unsafe { asm!(\"int3\", options(noreturn, nostack)); } }",
+    ] {
+        assert_eq!(compile(source, ObjectFormat::Elf64), Ok(()), "{source}");
+        assert_eq!(compile(source, ObjectFormat::Coff), Ok(()), "{source}");
+    }
+    assert!(compile(
+        "#[unsafe(no_mangle)] pub extern \"C\" fn probe() -> u64 { unsafe { asm!(\"int3\", options(noreturn, nostack)); } 42 }",
+        ObjectFormat::Elf64,
+    )
+    .is_err());
+}
