@@ -519,6 +519,27 @@ mod tests {
     }
 
     #[test]
+    fn proves_inherited_source_supertraits_before_codegen() {
+        let source = concat!(
+            "trait Parent {} trait Child<Input>: Parent {} ",
+            "impl Parent for u32 {} impl<T> Child<T> for T {} ",
+            "#[unsafe(no_mangle)] pub extern \"C\" fn answer() -> u64 ",
+            "where u32: Child<u32> { 42 }"
+        );
+        compile(source, "answer", ObjectFormat::Coff).unwrap();
+
+        let missing = source.replace("impl Parent for u32 {} ", "");
+        let error = compile(&missing, "answer", ObjectFormat::Coff).unwrap_err();
+        assert!(matches!(
+            error.kind,
+            CompileErrorKind::TraitObligation(SourceTraitObligationError {
+                kind: crate::SourceTraitObligationErrorKind::Unsatisfied,
+                ..
+            })
+        ));
+    }
+
+    #[test]
     fn proves_generic_source_projection_premises_before_codegen() {
         let source = concat!(
             "trait Parent<Input> { type Output; } trait Child<Input> {} ",

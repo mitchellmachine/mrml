@@ -288,7 +288,6 @@ pub enum SourceTraitImplementationErrorKind {
     WrongTraitArgumentCount,
     DuplicateGenericParameter,
     UnconstrainedGenericParameter,
-    UnsupportedGenericSupertraits,
     UnknownPremiseTrait,
     DuplicatePremise,
     UnsupportedAssociatedTypeProjection,
@@ -526,12 +525,6 @@ impl<'source> SourceTraitImplementationTable<'source> {
                     span: implementation.trait_name_span,
                 });
             }
-            if declaration.supertrait_count() != 0 {
-                return Err(SourceTraitImplementationError {
-                    kind: SourceTraitImplementationErrorKind::UnsupportedGenericSupertraits,
-                    span: implementation.trait_name_span,
-                });
-            }
             let mut consequence = BoundImplementedTraitGoal::new(
                 declaration.id,
                 source_bound_type(implementation.self_type, implementation, &table)?,
@@ -634,6 +627,27 @@ impl<'source> SourceTraitImplementationTable<'source> {
                                 span: *associated_type_span,
                             })?;
                     }
+                }
+            }
+            for supertrait_id in declaration.supertraits().iter().flatten() {
+                let supertrait = traits.get_by_id(*supertrait_id).unwrap();
+                if supertrait.generic_parameter_count != 0 {
+                    return Err(SourceTraitImplementationError {
+                        kind: SourceTraitImplementationErrorKind::WrongTraitArgumentCount,
+                        span: implementation.trait_name_span,
+                    });
+                }
+                let inherited = BoundImplementedTraitGoal::new(
+                    supertrait.id,
+                    consequence.self_type,
+                );
+                if !clause.premises().contains(&Some(inherited)) {
+                    clause.push_premise(inherited).map_err(|kind| {
+                        SourceTraitImplementationError {
+                            kind: SourceTraitImplementationErrorKind::Goal(kind),
+                            span: implementation.trait_name_span,
+                        }
+                    })?;
                 }
             }
             table
@@ -8488,6 +8502,57 @@ mod tests {
                 .kind,
             SourceTraitImplementationErrorKind::DuplicatePremise
         );
+    }
+
+    #[test]
+    fn proves_inherited_source_supertrait_premises() {
+        let satisfied = concat!(
+            "trait Parent {} trait Child<Input>: Parent {} ",
+            "impl Parent for u32 {} impl<T> Child<T> for T {} ",
+            "fn check() where u32: Child<u32> {}"
+        );
+        let module = Parser::new(satisfied).parse_module::<10, 1>().unwrap();
+        let traits = SourceTraitDeclarationTable::from_module(&module).unwrap();
+        let implementations =
+            SourceTraitImplementationTable::from_module(&module, &traits).unwrap();
+        implementations.prove_module(&module, &traits).unwrap();
+
+        let missing = satisfied.replace("impl Parent for u32 {} ", "");
+        let module = Parser::new(&missing).parse_module::<10, 1>().unwrap();
+        let traits = SourceTraitDeclarationTable::from_module(&module).unwrap();
+        let implementations =
+            SourceTraitImplementationTable::from_module(&module, &traits).unwrap();
+        assert_eq!(
+            implementations
+                .prove_module(&module, &traits)
+                .unwrap_err()
+                .kind,
+            SourceTraitObligationErrorKind::Unsatisfied
+        );
+
+        let conditional = concat!(
+            "trait Parent {} trait Gate {} trait Child: Parent {} ",
+            "impl Parent for u32 {} impl Gate for u32 {} ",
+            "impl Child for u32 where u32: Gate {} ",
+            "fn check() where u32: Child {}"
+        );
+        let module = Parser::new(conditional).parse_module::<10, 1>().unwrap();
+        let traits = SourceTraitDeclarationTable::from_module(&module).unwrap();
+        let implementations =
+            SourceTraitImplementationTable::from_module(&module, &traits).unwrap();
+        implementations.prove_module(&module, &traits).unwrap();
+
+        let duplicate_explicit = satisfied.replace(
+            "impl<T> Child<T> for T {}",
+            "impl<T> Child<T> for T where T: Parent {}",
+        );
+        let module = Parser::new(&duplicate_explicit)
+            .parse_module::<10, 1>()
+            .unwrap();
+        let traits = SourceTraitDeclarationTable::from_module(&module).unwrap();
+        let implementations =
+            SourceTraitImplementationTable::from_module(&module, &traits).unwrap();
+        implementations.prove_module(&module, &traits).unwrap();
     }
 
     #[test]
