@@ -4722,6 +4722,14 @@ the left read-modify-write effect. Invalid names, types, mutability, surplus
 operands, classes, templates, and effects fail closed. Both canonical hosts pass
 985 compiler tests. This is **PARTIAL** two-operand allocation evidence.
 
+The exact `asm!("nop", clobber_abi("C"))` form has a distinct typed clobber
+case. Statement boundaries keep language values in checked stack storage, so no
+register-resident value silently survives the declared C clobber. Unknown ABI
+names, generic outputs with a clobber ABI, extra declarations, and non-no-op
+clobber templates fail closed. Both canonical hosts pass 985 compiler tests.
+Other ABI sets, explicit clobber outputs, and general clobber integration remain
+absent.
+
 The projection-bearing term milestone uses a fixed 64-node arena for flat leaf
 terms and associated-type projections whose trait self/argument positions refer
 only to earlier nodes. Identical nodes intern to one stable identity; invalid

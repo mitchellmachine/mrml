@@ -1545,6 +1545,15 @@ read-modify-write effect. Invalid names, types, mutability, surplus operands,
 classes, templates, and effects fail closed. Both canonical hosts pass 985
 compiler tests. Three-or-more operands and general allocation remain absent.
 
+The typed clobber increment admits the exact oracle-proven
+`asm!("nop", clobber_abi("C"))` case. Ordinary statement lowering retains all
+language values in checked stack storage across this boundary, so the fixed
+no-op has no hidden register-resident value to preserve. Unknown ABI names,
+generic outputs combined with a clobber ABI, additional declarations, and
+non-no-op clobber templates fail closed. Both canonical hosts pass 985 compiler
+tests. Other ABI clobber sets, explicit clobber outputs, and general clobber
+integration remain absent.
+
 The premise-bearing rigid-normalization milestone proves the selected generic
 implementation's instantiated trait and projection predicates before exposing
 its associated value. It shares the caller's 16-frame rigid proof stack and

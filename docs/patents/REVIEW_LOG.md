@@ -3943,6 +3943,17 @@ Broader compiler completion remains partial; this technical screen does not
 establish clearance or infringement and does not replace independent human dual
 review.
 
+# 2026-08-26 — Typed C inline-assembly clobber
+
+**Result: NOT_TRIGGERED after the C-clobber review.** This increment validates
+one conventional ABI name and records the fixed no-op as a typed clobber case
+at an existing stack-resident statement boundary. Exact string validation and
+fail-closed incompatibility checks introduce no novel ABI, assembler, register-
+allocation, optimization, or code-generation algorithm. Other ABI sets,
+explicit clobber outputs, and general clobber integration remain absent. Broader
+compiler completion remains partial; this technical screen does not establish
+clearance or infringement and does not replace independent human dual review.
+
 # 2026-08-26 — Independent application-image artifact classification
 
 **Result: NOT_TRIGGERED after the existing signed-artifact and adaptive-placement
