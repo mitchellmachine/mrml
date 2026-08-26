@@ -1255,8 +1255,9 @@ files from one exact integrity-validated volume/root generation. Their names
 identify; the retained graph and selections grant no read or placement
 authority. Focused tests accept the exact set and reject a duplicate object or
 prior-root member. Configuration remains 51 passing tests on Windows. The real
-serviced-volume adapter and service-loop control-plane construction remain
-**PLANNED**.
+serviced-volume adapter now reads both redundant roots through one exact
+installed session and retains that data plane beside the four-file owner.
+Service-loop control-plane construction remains **PLANNED**.
 
 Complete distinct-domain finalization now has focused **PARTIALLY IMPLEMENTED**
 kernel evidence. A signed two-package fixture assigns both must-run packages to

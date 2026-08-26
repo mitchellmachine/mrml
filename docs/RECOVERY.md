@@ -1441,7 +1441,9 @@ four distinct reachable files from the same integrity-validated volume/root
 generation. Retaining this selection preserves provenance but grants no read,
 configuration, deployment, or launch authority. Focused controlled tests reject
 duplicate and prior-root members. Serviced-volume and live service-image
-consumption remain **PLANNED**.
+recovery is now **PARTIALLY IMPLEMENTED**: the same installed session reads both
+redundant roots and remains retained beside the four-file owner. Live
+service-image consumption remains **PLANNED**.
 
 `recover_stable_system_selection` now accepts the storage service's existing
 hostile metadata-backend contract, which `BlockVolume` already implements. It

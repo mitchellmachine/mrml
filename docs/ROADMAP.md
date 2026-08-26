@@ -546,7 +546,9 @@ SystemRelease—to one integrity-validated volume/root generation while retainin
 the graph that established them. The selection grants no file capability.
 Focused controlled tests reject duplicate-object and prior-root substitution;
 configuration remains 51 passing Windows tests. Serviced-volume construction
-and real service-loop consumption are the next dependency gate.
+is now **PARTIALLY IMPLEMENTED** through one exclusive installed session and
+retained block data plane. Real service-loop consumption is the next dependency
+gate.
 
 The kernel now **PARTIALLY IMPLEMENTS** focused complete multi-domain
 finalization evidence. An authenticated two-package release assigns two

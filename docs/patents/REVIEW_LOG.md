@@ -43,6 +43,12 @@ placement algorithm, VM construction, scheduler, interface transport, device,
 DMA, queue, interrupt, or hardware mechanism. Broader adaptive/Total MicroVM
 execution remains **TRIGGERED**.
 
+Carrying that four-file owner through the existing serviced block-volume read
+is also **NOT_TRIGGERED**. It reuses conventional redundant-root validation,
+typed session retention, and exact identity checks and adds no storage protocol,
+device mechanism, DMA, queue, interrupt, placement algorithm, or VM construction.
+Broader adaptive/Total MicroVM execution remains **TRIGGERED**.
+
 ## 2026-08-26 — Canonical one-use installed recovery envelope
 
 Patent review: **NOT_TRIGGERED** for extending the existing one-use boot-recovery

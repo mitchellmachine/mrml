@@ -276,7 +276,9 @@ The retaining owner keeps the complete reachable graph alive; the selection is
 data and grants none of the four required file capabilities. Missing files,
 duplicate objects, or prior-root substitution fail before service recovery.
 Configuration remains 51 passing Windows tests. Serviced block-volume recovery
-and live service-loop consumption of this four-file owner remain **PLANNED**.
+is now **PARTIALLY IMPLEMENTED**: one installed session reads both redundant
+roots, validates the complete graph, and retains the same exclusive data plane
+beside the four-file owner. Live service-loop consumption remains **PLANNED**.
 
 - Complexity impact: MEDIUM
 - TCB impact: LOW

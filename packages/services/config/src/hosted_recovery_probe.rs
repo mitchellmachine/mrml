@@ -10,10 +10,10 @@
 use super::{
     ConfigTransaction, ConfigUpdate, ConfigValue, ConfigurationService, IsolationPolicySetting,
     OwnerIsolationSelection, PERSISTED_RESTART_POLICY_BYTES, PersistedRestartPolicy,
-    RecoveredDeploymentTotalControlPlane, RecoveredInstalledStableSystemSelection,
+    RecoveredDeploymentTotalControlPlane, RecoveredInstalledStableTotalSystemSelection,
     RuntimeDomainPolicyBinding, SettingId, SettingSchema, StableConfigurationRecoveryValidator,
     StableServiceRecoveryValidator, reacquire_handoff_installed_recovery_device,
-    recover_serviced_stable_system_selection,
+    recover_serviced_stable_total_system_selection,
 };
 use mrml_crypto::Sha3_256;
 use mrml_deployment::{
@@ -783,7 +783,7 @@ fn recover_reachable_files<'a>(
     boot: InstalledRecoveryBootIdentity,
     volume_scratch: &'a mut [u8],
 ) -> Result<
-    RecoveredInstalledStableSystemSelection<'a, ReachableMetadataBackend, 1, 1, 1, 5>,
+    RecoveredInstalledStableTotalSystemSelection<'a, ReachableMetadataBackend, 1, 1, 1, 5>,
     HostedRecoveryProbeError,
 > {
     let installed = reacquire_handoff_installed_recovery_device(
@@ -797,7 +797,7 @@ fn recover_reachable_files<'a>(
     let mut primary_read = [0; BLOCK_BYTES];
     let mut secondary_read = [0; BLOCK_BYTES];
     let mut metadata_scratch = [0; BLOCK_BYTES];
-    let recovered = recover_serviced_stable_system_selection::<_, 1, 1, 16, 4, 1, 5>(
+    let recovered = recover_serviced_stable_total_system_selection::<_, 1, 1, 16, 4, 1, 5>(
         service,
         backend,
         installed,
@@ -807,6 +807,8 @@ fn recover_reachable_files<'a>(
         &mut metadata_scratch,
         object(9),
         object(10),
+        object(11),
+        object(12),
     )
     .map_err(|_| HostedRecoveryProbeError::StorageLayout)?;
     if recovered.selected().volume() != VolumeId::new(boot.volume()).unwrap()
@@ -814,10 +816,7 @@ fn recover_reachable_files<'a>(
     {
         return Err(HostedRecoveryProbeError::RecoveryRootMismatch);
     }
-    Ok(RecoveredInstalledStableSystemSelection {
-        installed,
-        recovered,
-    })
+    Ok(recovered)
 }
 
 fn deployment_file(

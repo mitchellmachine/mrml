@@ -1569,6 +1569,37 @@ pub struct RecoveredBlockStableSystemSelection<
     volume: BlockVolume<'a, D>,
 }
 
+pub struct RecoveredBlockStableTotalSystemSelection<
+    'a,
+    D: StorageBlockDevice,
+    const EXTENTS: usize,
+    const OBJECTS: usize,
+> {
+    selected: RecoveredStableTotalSystemSelection<EXTENTS, OBJECTS>,
+    volume: BlockVolume<'a, D>,
+}
+
+impl<'a, D: StorageBlockDevice, const EXTENTS: usize, const OBJECTS: usize>
+    RecoveredBlockStableTotalSystemSelection<'a, D, EXTENTS, OBJECTS>
+{
+    pub fn selected(&self) -> SelectedStableTotalSystemRecovery<'_, EXTENTS> {
+        self.selected.selected()
+    }
+
+    pub const fn volume(&self) -> &BlockVolume<'a, D> {
+        &self.volume
+    }
+
+    pub fn into_parts(
+        self,
+    ) -> (
+        RecoveredStableTotalSystemSelection<EXTENTS, OBJECTS>,
+        BlockVolume<'a, D>,
+    ) {
+        (self.selected, self.volume)
+    }
+}
+
 impl<'a, D: StorageBlockDevice, const EXTENTS: usize, const OBJECTS: usize>
     RecoveredBlockStableSystemSelection<'a, D, EXTENTS, OBJECTS>
 {
@@ -1597,9 +1628,21 @@ pub enum BlockStableSystemSelectionError<E> {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum BlockStableTotalSystemSelectionError<E> {
+    Volume(BlockVolumeError<E>),
+    Selection(StableTotalSystemSelectionError<BlockVolumeError<E>>),
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum ServicedStableSystemSelectionError<E> {
     Session(BlockServiceError<core::convert::Infallible>),
     Selection(BlockStableSystemSelectionError<BlockServiceError<E>>),
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum ServicedStableTotalSystemSelectionError<E> {
+    Session(BlockServiceError<core::convert::Infallible>),
+    Selection(BlockStableTotalSystemSelectionError<BlockServiceError<E>>),
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -2124,6 +2167,59 @@ pub struct RecoveredInstalledStableSystemSelection<
     >,
 }
 
+pub struct RecoveredInstalledStableTotalSystemSelection<
+    'a,
+    B: BlockServiceBackend,
+    const DEVICES: usize,
+    const SESSIONS: usize,
+    const EXTENTS: usize,
+    const OBJECTS: usize,
+> {
+    installed: InstalledRecoveryDeviceSelection,
+    recovered: RecoveredBlockStableTotalSystemSelection<
+        'a,
+        ServicedBlockDevice<'a, B, DEVICES, SESSIONS>,
+        EXTENTS,
+        OBJECTS,
+    >,
+}
+
+impl<
+    'a,
+    B: BlockServiceBackend,
+    const DEVICES: usize,
+    const SESSIONS: usize,
+    const EXTENTS: usize,
+    const OBJECTS: usize,
+> RecoveredInstalledStableTotalSystemSelection<'a, B, DEVICES, SESSIONS, EXTENTS, OBJECTS>
+{
+    pub const fn installed(&self) -> InstalledRecoveryDeviceSelection {
+        self.installed
+    }
+
+    pub fn selected(&self) -> SelectedStableTotalSystemRecovery<'_, EXTENTS> {
+        self.recovered.selected()
+    }
+
+    pub const fn volume(&self) -> &BlockVolume<'a, ServicedBlockDevice<'a, B, DEVICES, SESSIONS>> {
+        self.recovered.volume()
+    }
+
+    pub fn into_parts(
+        self,
+    ) -> (
+        InstalledRecoveryDeviceSelection,
+        RecoveredBlockStableTotalSystemSelection<
+            'a,
+            ServicedBlockDevice<'a, B, DEVICES, SESSIONS>,
+            EXTENTS,
+            OBJECTS,
+        >,
+    ) {
+        (self.installed, self.recovered)
+    }
+}
+
 impl<
     'a,
     B: BlockServiceBackend,
@@ -2281,6 +2377,63 @@ pub fn recover_serviced_stable_system_selection<
     .map_err(ServicedStableSystemSelectionError::Selection)
 }
 
+/// Serviced installed-device counterpart for the four-file Total recovery
+/// owner. The selected session remains the only data-plane path; names and
+/// recovered identities grant no block or file authority.
+#[allow(clippy::too_many_arguments)]
+pub fn recover_serviced_stable_total_system_selection<
+    'a,
+    B: BlockServiceBackend,
+    const DEVICES: usize,
+    const SESSIONS: usize,
+    const ALLOCATIONS: usize,
+    const DIRECTORIES: usize,
+    const EXTENTS: usize,
+    const OBJECTS: usize,
+>(
+    service: &'a BlockService<DEVICES, SESSIONS>,
+    backend: &'a mut B,
+    installed: InstalledRecoveryDeviceSelection,
+    volume_scratch: &'a mut [u8],
+    primary_block: &mut [u8],
+    secondary_block: &mut [u8],
+    metadata_scratch: &mut [u8],
+    configuration: StorageObjectId,
+    authority_checkpoint: StorageObjectId,
+    deployment_checkpoint: StorageObjectId,
+    system_release: StorageObjectId,
+) -> Result<
+    RecoveredInstalledStableTotalSystemSelection<'a, B, DEVICES, SESSIONS, EXTENTS, OBJECTS>,
+    ServicedStableTotalSystemSelectionError<B::Error>,
+> {
+    let device = ServicedBlockDevice::new(service, backend, installed.session, installed.principal)
+        .map_err(ServicedStableTotalSystemSelectionError::Session)?;
+    let recovered = recover_block_stable_total_system_selection::<
+        _,
+        ALLOCATIONS,
+        DIRECTORIES,
+        EXTENTS,
+        OBJECTS,
+    >(
+        installed.header,
+        installed.active_superblock,
+        device,
+        volume_scratch,
+        primary_block,
+        secondary_block,
+        metadata_scratch,
+        configuration,
+        authority_checkpoint,
+        deployment_checkpoint,
+        system_release,
+    )
+    .map_err(ServicedStableTotalSystemSelectionError::Selection)?;
+    Ok(RecoveredInstalledStableTotalSystemSelection {
+        installed,
+        recovered,
+    })
+}
+
 /// Reads both redundant roots and validates the complete selected graph through
 /// one exclusive `BlockVolume`, retaining that same device generation beside
 /// the resulting stable-system selection.
@@ -2328,6 +2481,58 @@ pub fn recover_block_stable_system_selection<
         )
         .map_err(BlockStableSystemSelectionError::Selection)?;
     Ok(RecoveredBlockStableSystemSelection { selected, volume })
+}
+
+/// Reads redundant roots through one exclusive block volume and retains the
+/// exact four-file Total control-plane selection beside that same data plane.
+#[allow(clippy::too_many_arguments)]
+pub fn recover_block_stable_total_system_selection<
+    'a,
+    D: StorageBlockDevice,
+    const ALLOCATIONS: usize,
+    const DIRECTORIES: usize,
+    const EXTENTS: usize,
+    const OBJECTS: usize,
+>(
+    header: VolumeHeader,
+    active_superblock: u64,
+    device: D,
+    volume_scratch: &'a mut [u8],
+    primary_block: &mut [u8],
+    secondary_block: &mut [u8],
+    metadata_scratch: &mut [u8],
+    configuration: StorageObjectId,
+    authority_checkpoint: StorageObjectId,
+    deployment_checkpoint: StorageObjectId,
+    system_release: StorageObjectId,
+) -> Result<
+    RecoveredBlockStableTotalSystemSelection<'a, D, EXTENTS, OBJECTS>,
+    BlockStableTotalSystemSelectionError<D::Error>,
+> {
+    let mut volume = BlockVolume::new(header, active_superblock, device, volume_scratch)
+        .map_err(BlockStableTotalSystemSelectionError::Volume)?;
+    volume
+        .read_recovery_superblocks(primary_block, secondary_block)
+        .map_err(BlockStableTotalSystemSelectionError::Volume)?;
+    if primary_block.len() < SUPERBLOCK_BYTES || secondary_block.len() < SUPERBLOCK_BYTES {
+        return Err(BlockStableTotalSystemSelectionError::Volume(
+            BlockVolumeError::InvalidRange,
+        ));
+    }
+    let selected =
+        recover_stable_total_system_selection::<_, ALLOCATIONS, DIRECTORIES, EXTENTS, OBJECTS>(
+            header,
+            &primary_block[..SUPERBLOCK_BYTES],
+            &secondary_block[..SUPERBLOCK_BYTES],
+            &mut volume,
+            metadata_scratch,
+            configuration,
+            authority_checkpoint,
+            deployment_checkpoint,
+            system_release,
+        )
+        .map_err(BlockStableTotalSystemSelectionError::Selection)?;
+    Ok(RecoveredBlockStableTotalSystemSelection { selected, volume })
 }
 
 /// Selects one complete redundant-root graph through the supplied hostile
