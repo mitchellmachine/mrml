@@ -3473,6 +3473,8 @@ impl<'source> Parser<'source> {
         let name = self.identifier()?;
         let mut generic_parameters = [None; MAX_SOURCE_TRAIT_ARGUMENTS];
         let mut generic_parameter_count = 0usize;
+        let mut where_predicates = [None; MAX_FUNCTION_WHERE_PREDICATES];
+        let mut where_predicate_count = 0usize;
         if self.take_text("<")?.is_some() {
             loop {
                 if generic_parameter_count == MAX_SOURCE_TRAIT_ARGUMENTS {
@@ -3482,6 +3484,40 @@ impl<'source> Parser<'source> {
                 let parameter = self.identifier()?;
                 generic_parameters[generic_parameter_count] = Some(parameter.text);
                 generic_parameter_count += 1;
+                let mut consumed_declaration_close = false;
+                if self.take_text(":")?.is_some() {
+                    loop {
+                        if where_predicate_count == MAX_FUNCTION_WHERE_PREDICATES {
+                            let token = self.peek()?;
+                            return Err(self.error(ParseErrorKind::TooManyWherePredicates, token));
+                        }
+                        let bound = self.identifier()?;
+                        let (trait_arguments, trait_argument_count, consumed_outer_close) =
+                            self.source_trait_arguments()?;
+                        where_predicates[where_predicate_count] =
+                            Some(TraitImplementationWherePredicate::Implemented {
+                                self_type: TypeRef {
+                                    text: parameter.text,
+                                    span: parameter.span,
+                                },
+                                trait_name: bound.text,
+                                trait_name_span: bound.span,
+                                trait_arguments,
+                                trait_argument_count,
+                            });
+                        where_predicate_count += 1;
+                        if consumed_outer_close {
+                            consumed_declaration_close = true;
+                            break;
+                        }
+                        if self.take_text("+")?.is_none() {
+                            break;
+                        }
+                    }
+                }
+                if consumed_declaration_close {
+                    break;
+                }
                 if self.take_text(",")?.is_some() {
                     continue;
                 }
@@ -3519,7 +3555,14 @@ impl<'source> Parser<'source> {
                 }
             }
         }
-        let (where_predicates, where_predicate_count) = self.trait_where_predicates()?;
+        let (explicit_predicates, explicit_predicate_count) = self.trait_where_predicates()?;
+        if where_predicate_count + explicit_predicate_count > MAX_FUNCTION_WHERE_PREDICATES {
+            let token = self.peek()?;
+            return Err(self.error(ParseErrorKind::TooManyWherePredicates, token));
+        }
+        where_predicates[where_predicate_count..where_predicate_count + explicit_predicate_count]
+            .copy_from_slice(&explicit_predicates[..explicit_predicate_count]);
+        where_predicate_count += explicit_predicate_count;
         let open = self.expect_kind(TokenKind::OpenBrace, ParseErrorKind::ExpectedBody)?;
         let mut associated_types = [None; MAX_TRAIT_ASSOCIATED_TYPES];
         let mut associated_type_count = 0usize;
@@ -3991,6 +4034,27 @@ mod tests {
         let second = child.where_predicates()[1].unwrap();
         assert_eq!(second.self_type().text, "Self");
         assert_eq!(second.trait_name(), "Visible");
+    }
+
+    #[test]
+    fn desugars_trait_parameter_bounds_into_declaration_requirements() {
+        let source = "trait Child<T: Parent<T> + Visible, U: Parent<u8>> {}";
+        let module: TestModule<'_> = Parser::new(source).parse_module().unwrap();
+        let Some(Item::Trait(child)) = module.items()[0] else {
+            panic!("expected trait")
+        };
+        assert_eq!(child.generic_parameter_count(), 2);
+        assert_eq!(child.where_predicate_count(), 3);
+        assert_eq!(child.where_predicates()[0].unwrap().self_type().text, "T");
+        assert_eq!(child.where_predicates()[0].unwrap().trait_name(), "Parent");
+        assert_eq!(child.where_predicates()[1].unwrap().trait_name(), "Visible");
+        assert_eq!(child.where_predicates()[2].unwrap().self_type().text, "U");
+        assert_eq!(
+            child.where_predicates()[2].unwrap().trait_arguments()[0]
+                .unwrap()
+                .text,
+            "u8"
+        );
     }
 
     #[test]

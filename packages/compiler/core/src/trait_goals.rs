@@ -9028,6 +9028,44 @@ mod tests {
     }
 
     #[test]
+    fn proves_trait_declaration_parameter_bounds() {
+        let source = concat!(
+            "trait Parent<T> {} trait Visible {} ",
+            "trait Child<T: Parent<T> + Visible> {} ",
+            "impl<T> Parent<T> for T {} impl<T> Visible for T {} ",
+            "impl<T> Child<T> for T {} fn check() where u32: Child<u32> {}"
+        );
+        let module = Parser::new(source).parse_module::<10, 1>().unwrap();
+        let traits = SourceTraitDeclarationTable::from_module(&module).unwrap();
+        let implementations =
+            SourceTraitImplementationTable::from_module(&module, &traits).unwrap();
+        implementations.prove_module(&module, &traits).unwrap();
+
+        let missing = source.replace("impl<T> Visible for T {} ", "");
+        let module = Parser::new(&missing).parse_module::<10, 1>().unwrap();
+        let traits = SourceTraitDeclarationTable::from_module(&module).unwrap();
+        let implementations =
+            SourceTraitImplementationTable::from_module(&module, &traits).unwrap();
+        assert_eq!(
+            implementations
+                .prove_module(&module, &traits)
+                .unwrap_err()
+                .kind,
+            SourceTraitObligationErrorKind::Unsatisfied
+        );
+
+        let duplicate = Parser::new(concat!(
+            "trait Parent<T> {} trait Child<T: Parent<T>> where T: Parent<T> {}"
+        ))
+        .parse_module::<4, 1>()
+        .unwrap();
+        assert_eq!(
+            SourceTraitDeclarationTable::from_module(&duplicate),
+            Err(SourceTraitDeclarationError::DuplicateRequirement)
+        );
+    }
+
+    #[test]
     fn proves_inherited_source_supertrait_premises() {
         let satisfied = concat!(
             "trait Parent {} trait Child<Input>: Parent {} ",
