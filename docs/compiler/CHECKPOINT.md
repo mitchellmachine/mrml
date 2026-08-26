@@ -888,6 +888,15 @@ E0506; copying first permits both owner writes across the nested loop structure.
 Windows and Arch remain at 989 compiler tests per host. This is nested bounded
 CFG evidence, not a general loop-region fixed point.
 
+The callee-origin engine now applies one bounded transfer to each nonterminal
+conditional arm inside a supported `while`, joins only its fallthrough states
+(including the implicit unchanged path when no final `else` exists), and then
+intersects that result with the zero-iteration input. Existing reference aliases
+may receive direct assignments on this exact path. Terminal arms, nested-loop
+transfers, expressions, and unstable origins remain conservative. ORACLE-0002
+accepts the stable same-origin reborrow and rejects a local-backed arm with
+E0515. Windows and Arch remain at 989 compiler tests per host.
+
 Direct and conditional return sites inside supported `loop` blocks now retain
 the projected callee summary's shared-child origin. Parameter-backed second
 arguments pass and matching loop-local second arguments fail closed. ORACLE-0002

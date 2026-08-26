@@ -1231,6 +1231,13 @@ Nested `while` control flow now retains that conditional shared-call generation
 boundary at the inner backedge. A live same-iteration result still protects the
 selected owner, while copying first permits both owner mutations across the
 inner and outer loop structure. ORACLE-0002 matches with E0506 and acceptance.
+The bounded callee-origin transfer now joins nonterminal conditional arms inside
+a supported `while` iteration, includes an implicit fallthrough path when there
+is no final `else`, and then intersects the joined iteration with the zero-
+iteration state. Direct assignments to existing reference aliases are admitted
+only on this fallthrough path; terminal and nested-loop paths retain their prior
+fail-closed restrictions. ORACLE-0002 accepts stable reborrows and rejects a
+local-backed arm with E0515.
 
 The first modern trait-solver foundation is an explicit bounded implemented-
 goal representation. Stable trait/type/inference/placeholder identities remain

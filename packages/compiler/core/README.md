@@ -4090,6 +4090,15 @@ inner backedge. A later same-iteration result use protects either possible owner
 copying first releases both candidate loans before mutation across the nested
 loop structure. Pinned rustc matches with E0506 and acceptance; both hosts
 remain at 989 compiler tests. This remains bounded CFG evidence.
+Nonterminal conditional arms inside a supported callee `while` now participate
+in the one-iteration origin transfer. Each arm receives the incoming bounded
+local/projected state, fallthrough outcomes intersect, an absent final `else`
+adds the unchanged path, and the result still intersects the zero-iteration
+state. Direct assignment is enabled only for existing aliases on this path;
+terminal and nested-loop handling preserves its previous projected-only guard.
+The pinned oracle accepts stable same-origin arm reborrows and rejects a local-
+backed arm with E0515. Both hosts remain at 989 compiler tests; this is not a
+general loop fixed point or region solver.
 
 Exact typed tuple literals now seed the same projected state when a local is
 declared. Every reference field is checked against the declared tuple element

@@ -242,6 +242,13 @@ pointee before mutating both owners across the inner backedge. This is exact
 nested joined-loan generation evidence, not a general loop-region fixed point.
 Temporary sources and metadata were removed.
 
+A mutable-reference return pair exercised nonterminal `if`/`else` assignments
+inside a `while`. This exact toolchain compiled stable same-origin reborrows in
+both arms and rejected a companion whose conditional fallthrough could replace
+the returned alias with function-local storage, reporting E0515. This is exact
+bounded loop-arm fallthrough evidence, not general loop dataflow or named-
+lifetime inference. Temporary sources and metadata were removed.
+
 An independently authored Rust 2024 metadata-only probe against this exact
 toolchain and commit accepted a mutable scalar reference returned from index
 zero of a mutable two-element array-reference parameter. The caller could reuse
