@@ -8649,3 +8649,12 @@ enumerated native fields. Unknown ordering, excess PCI depth, invalid BDF,
 reserved SATA port, inconsistent partition identity, and trailing nodes fail
 closed. Storage passes 129 tests on Windows and Arch Linux. Encoding this typed
 route in `BootHandoff` and consuming real native enumeration remain **PLANNED**.
+
+The next boundary prerequisite is now **PARTIALLY IMPLEMENTED** as a
+kernel-owned canonical 128-byte route record. It preserves the bounded typed
+ACPI/PCI/SATA/optional-partition fields and exact stable ID, rejects malformed
+or nonzero reserved state, and carries no firmware handle, local pointer, or
+capability. UEFI produces that record only after rechecking the stable ID
+against the recovered descriptor. Kernel passes 563 tests and UEFI 37 tests on
+Windows and Arch Linux, with UEFI cross-builds on both. Publishing it through
+`BootHandoff` and authorizing a matched native device remain **PLANNED**.

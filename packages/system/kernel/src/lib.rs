@@ -124,8 +124,10 @@ pub use host_resource::{
     HostResourceRetireError, HostResourceTable, HostResourceTableError,
 };
 pub use installed_recovery::{
-    INSTALLED_RECOVERY_BOOT_IDENTITY_BYTES, InstalledRecoveryBootIdentity,
-    InstalledRecoveryBootIdentityError, InstalledRecoverySource,
+    INSTALLED_RECOVERY_BOOT_IDENTITY_BYTES, INSTALLED_RECOVERY_SATA_ROUTE_BYTES,
+    InstalledRecoveryBootIdentity, InstalledRecoveryBootIdentityError,
+    InstalledRecoveryHardDriveMedia, InstalledRecoveryPciHop, InstalledRecoverySataRoute,
+    InstalledRecoverySataRouteError, InstalledRecoverySource, MAX_INSTALLED_RECOVERY_PCI_HOPS,
 };
 pub use ipc::{
     AuthorizedIpcCapability, AuthorizedSharedIpcBuffer, Endpoint, IpcError, IpcSharedBufferBackend,

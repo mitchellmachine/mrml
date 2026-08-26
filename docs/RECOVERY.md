@@ -1150,6 +1150,17 @@ I/O. Storage passes 129 tests on Windows and Arch Linux; UEFI passes 37 and
 cross-builds on both. Handoff transport and native enumeration remain
 **PLANNED**.
 
+A kernel-owned canonical 128-byte SATA route record is now **PARTIALLY
+IMPLEMENTED** as the next handoff prerequisite. It carries only the bounded
+ACPI root, one through eight PCI hops, SATA target, optional partition identity,
+and exact stable ID. Reserved bytes, unused hop slots, invalid field pairings,
+and zero identity fail closed. UEFI can translate the retained firmware route
+only when its stable ID still matches the recovered block descriptor. The
+record grants no I/O authority. Kernel passes 563 tests and UEFI 37 tests on
+Windows and Arch Linux, with UEFI cross-builds on both. `BootHandoff`
+integration and comparison with independently enumerated native state remain
+**PLANNED**.
+
 Recovery-session publication is now atomic across a bounded device set.
 `BlockSessionGrant` carries each explicit device/principal/rights decision, and
 `grant_sessions_atomic` preflights every registered identity, rights mask, and

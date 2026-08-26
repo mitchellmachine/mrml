@@ -38,6 +38,17 @@ route reconstruction, device protocol, DMA, queue, or hardware behavior. Native
 AHCI, USB, VirtIO, and physical-route mechanisms retain their existing
 `TRIGGERED` reviews; this technical screen is not legal clearance.
 
+## 2026-08-26 — Canonical typed SATA handoff record
+
+Patent review: **TRIGGERED** retained from the typed SATA route and native
+storage work. This increment canonically encodes and decodes already extracted
+MRML-owned scalar fields with fixed bounds, reserved-zero validation, and exact
+stable-ID equality. It does not reconstruct UEFI device-path bytes or implement
+AHCI, USB, VirtIO, discovery, DMA, interrupts, or hardware I/O, and therefore
+continues the documented design-around rather than adding a transport
+mechanism. Transport-specific implementation and worldwide claim/status review
+remain paused or separately reviewed; this entry is not patent clearance.
+
 ## 2026-08-26 — Shared canonical UEFI block stable-ID digest
 
 Patent review: **NOT_TRIGGERED** for extracting the repository's existing

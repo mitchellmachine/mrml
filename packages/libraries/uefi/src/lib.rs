@@ -1066,6 +1066,7 @@ pub enum UefiReachableRecoveryError {
 pub enum UefiInstalledRecoveryIdentityError {
     VolumeMismatch,
     RootGenerationMismatch,
+    Route,
 }
 
 /// Authority-free identity retained after one exact installed graph has been
@@ -1099,6 +1100,53 @@ impl UefiRecoveredInstalledIdentity {
 
     pub const fn sata_route(self) -> Option<CanonicalUefiSataBlockRoute> {
         self.sata_route
+    }
+
+    pub fn sata_handoff_route(
+        self,
+    ) -> Result<Option<mrml_kernel::InstalledRecoverySataRoute>, UefiInstalledRecoveryIdentityError>
+    {
+        let Some(route) = self.sata_route else {
+            return Ok(None);
+        };
+        if route.stable_id() != self.descriptor.identity().stable_id() {
+            return Err(UefiInstalledRecoveryIdentityError::Route);
+        }
+        let mut hops = [mrml_kernel::InstalledRecoveryPciHop::default();
+            mrml_kernel::MAX_INSTALLED_RECOVERY_PCI_HOPS];
+        if route.pci_hops().len() > hops.len() {
+            return Err(UefiInstalledRecoveryIdentityError::Route);
+        }
+        for (output, input) in hops.iter_mut().zip(route.pci_hops()) {
+            *output = mrml_kernel::InstalledRecoveryPciHop::new(input.device(), input.function())
+                .ok_or(UefiInstalledRecoveryIdentityError::Route)?;
+        }
+        let media = route
+            .media()
+            .map(|media| {
+                mrml_kernel::InstalledRecoveryHardDriveMedia::new(
+                    media.partition_number(),
+                    media.partition_start(),
+                    media.partition_size(),
+                    media.signature(),
+                    media.mbr_type(),
+                    media.signature_type(),
+                )
+                .ok_or(UefiInstalledRecoveryIdentityError::Route)
+            })
+            .transpose()?;
+        mrml_kernel::InstalledRecoverySataRoute::new(
+            route.root_hid(),
+            route.root_uid(),
+            &hops[..route.pci_hops().len()],
+            route.hba_port(),
+            route.port_multiplier_port(),
+            route.logical_unit(),
+            media,
+            route.stable_id(),
+        )
+        .map(Some)
+        .map_err(|_| UefiInstalledRecoveryIdentityError::Route)
     }
 
     pub fn boot_identity(
@@ -2888,6 +2936,20 @@ mod tests {
         assert_eq!(route.root_uid(), 7);
         assert_eq!(route.pci_hops()[0].device(), 5);
         assert_eq!(route.hba_port(), 3);
+        let retained = UefiRecoveredInstalledIdentity {
+            descriptor: candidate.descriptor(),
+            volume,
+            root_block: 1,
+            root_generation: 2,
+            sata_route: candidate.sata_route(),
+        };
+        let handoff_route = retained.sata_handoff_route().unwrap().unwrap();
+        assert_eq!(handoff_route.root_uid(), 7);
+        assert_eq!(handoff_route.pci_hops()[0].device(), 5);
+        assert_eq!(
+            handoff_route.stable_id(),
+            candidate.descriptor().identity().stable_id()
+        );
         assert!(block.as_slice().iter().all(|byte| *byte == 0));
         assert_eq!(MOCK_CLOSE_CALLS.load(Ordering::SeqCst), 2);
 

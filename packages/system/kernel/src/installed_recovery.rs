@@ -1,4 +1,265 @@
 pub const INSTALLED_RECOVERY_BOOT_IDENTITY_BYTES: usize = 104;
+pub const INSTALLED_RECOVERY_SATA_ROUTE_BYTES: usize = 128;
+pub const MAX_INSTALLED_RECOVERY_PCI_HOPS: usize = 8;
+
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub struct InstalledRecoveryPciHop {
+    device: u8,
+    function: u8,
+}
+
+impl InstalledRecoveryPciHop {
+    pub const fn new(device: u8, function: u8) -> Option<Self> {
+        if device > 31 || function > 7 {
+            None
+        } else {
+            Some(Self { device, function })
+        }
+    }
+
+    pub const fn device(self) -> u8 {
+        self.device
+    }
+
+    pub const fn function(self) -> u8 {
+        self.function
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct InstalledRecoveryHardDriveMedia {
+    partition_number: u32,
+    partition_start: u64,
+    partition_size: u64,
+    signature: [u8; 16],
+    mbr_type: u8,
+    signature_type: u8,
+}
+
+impl InstalledRecoveryHardDriveMedia {
+    pub fn new(
+        partition_number: u32,
+        partition_start: u64,
+        partition_size: u64,
+        signature: [u8; 16],
+        mbr_type: u8,
+        signature_type: u8,
+    ) -> Option<Self> {
+        let media = Self {
+            partition_number,
+            partition_start,
+            partition_size,
+            signature,
+            mbr_type,
+            signature_type,
+        };
+        installed_media_valid(media).then_some(media)
+    }
+
+    pub const fn partition_number(self) -> u32 {
+        self.partition_number
+    }
+
+    pub const fn partition_start(self) -> u64 {
+        self.partition_start
+    }
+
+    pub const fn partition_size(self) -> u64 {
+        self.partition_size
+    }
+
+    pub const fn signature(self) -> [u8; 16] {
+        self.signature
+    }
+
+    pub const fn mbr_type(self) -> u8 {
+        self.mbr_type
+    }
+
+    pub const fn signature_type(self) -> u8 {
+        self.signature_type
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct InstalledRecoverySataRoute {
+    root_hid: u32,
+    root_uid: u32,
+    pci_hops: [InstalledRecoveryPciHop; MAX_INSTALLED_RECOVERY_PCI_HOPS],
+    pci_hop_count: u8,
+    hba_port: u16,
+    port_multiplier_port: u16,
+    logical_unit: u16,
+    media: Option<InstalledRecoveryHardDriveMedia>,
+    stable_id: [u8; 32],
+}
+
+impl InstalledRecoverySataRoute {
+    #[allow(clippy::too_many_arguments)]
+    pub fn new(
+        root_hid: u32,
+        root_uid: u32,
+        pci_hops: &[InstalledRecoveryPciHop],
+        hba_port: u16,
+        port_multiplier_port: u16,
+        logical_unit: u16,
+        media: Option<InstalledRecoveryHardDriveMedia>,
+        stable_id: [u8; 32],
+    ) -> Result<Self, InstalledRecoverySataRouteError> {
+        if pci_hops.is_empty()
+            || pci_hops.len() > MAX_INSTALLED_RECOVERY_PCI_HOPS
+            || hba_port == u16::MAX
+            || stable_id.iter().all(|byte| *byte == 0)
+            || media.is_some_and(|value| !installed_media_valid(value))
+        {
+            return Err(InstalledRecoverySataRouteError::NonCanonical);
+        }
+        if pci_hops
+            .iter()
+            .any(|hop| hop.device > 31 || hop.function > 7)
+        {
+            return Err(InstalledRecoverySataRouteError::NonCanonical);
+        }
+        let mut stored_hops = [InstalledRecoveryPciHop::default(); MAX_INSTALLED_RECOVERY_PCI_HOPS];
+        stored_hops[..pci_hops.len()].copy_from_slice(pci_hops);
+        Ok(Self {
+            root_hid,
+            root_uid,
+            pci_hops: stored_hops,
+            pci_hop_count: pci_hops.len() as u8,
+            hba_port,
+            port_multiplier_port,
+            logical_unit,
+            media,
+            stable_id,
+        })
+    }
+
+    pub const fn root_hid(self) -> u32 {
+        self.root_hid
+    }
+    pub const fn root_uid(self) -> u32 {
+        self.root_uid
+    }
+    pub fn pci_hops(&self) -> &[InstalledRecoveryPciHop] {
+        &self.pci_hops[..usize::from(self.pci_hop_count)]
+    }
+    pub const fn hba_port(self) -> u16 {
+        self.hba_port
+    }
+    pub const fn port_multiplier_port(self) -> u16 {
+        self.port_multiplier_port
+    }
+    pub const fn logical_unit(self) -> u16 {
+        self.logical_unit
+    }
+    pub const fn media(self) -> Option<InstalledRecoveryHardDriveMedia> {
+        self.media
+    }
+    pub const fn stable_id(self) -> [u8; 32] {
+        self.stable_id
+    }
+
+    pub fn encode(self) -> [u8; INSTALLED_RECOVERY_SATA_ROUTE_BYTES] {
+        let mut output = [0; INSTALLED_RECOVERY_SATA_ROUTE_BYTES];
+        output[0] = 1;
+        output[1] = self.pci_hop_count;
+        output[2] = u8::from(self.media.is_some());
+        output[4..8].copy_from_slice(&self.root_hid.to_le_bytes());
+        output[8..12].copy_from_slice(&self.root_uid.to_le_bytes());
+        output[12..14].copy_from_slice(&self.hba_port.to_le_bytes());
+        output[14..16].copy_from_slice(&self.port_multiplier_port.to_le_bytes());
+        output[16..18].copy_from_slice(&self.logical_unit.to_le_bytes());
+        for (index, hop) in self.pci_hops().iter().enumerate() {
+            output[24 + index * 2] = hop.device;
+            output[25 + index * 2] = hop.function;
+        }
+        if let Some(media) = self.media {
+            output[40..44].copy_from_slice(&media.partition_number.to_le_bytes());
+            output[44..52].copy_from_slice(&media.partition_start.to_le_bytes());
+            output[52..60].copy_from_slice(&media.partition_size.to_le_bytes());
+            output[60..76].copy_from_slice(&media.signature);
+            output[76] = media.mbr_type;
+            output[77] = media.signature_type;
+        }
+        output[96..128].copy_from_slice(&self.stable_id);
+        output
+    }
+
+    pub fn decode(
+        input: &[u8; INSTALLED_RECOVERY_SATA_ROUTE_BYTES],
+    ) -> Result<Self, InstalledRecoverySataRouteError> {
+        let hop_count = usize::from(input[1]);
+        let media_present = match input[2] {
+            0 => false,
+            1 => true,
+            _ => return Err(InstalledRecoverySataRouteError::NonCanonical),
+        };
+        if input[0] != 1
+            || hop_count == 0
+            || hop_count > MAX_INSTALLED_RECOVERY_PCI_HOPS
+            || input[3] != 0
+            || input[18..24].iter().any(|byte| *byte != 0)
+            || input[24 + hop_count * 2..40].iter().any(|byte| *byte != 0)
+            || input[78..96].iter().any(|byte| *byte != 0)
+        {
+            return Err(InstalledRecoverySataRouteError::NonCanonical);
+        }
+        let mut hops = [InstalledRecoveryPciHop::default(); MAX_INSTALLED_RECOVERY_PCI_HOPS];
+        for (index, hop) in hops[..hop_count].iter_mut().enumerate() {
+            *hop = InstalledRecoveryPciHop::new(input[24 + index * 2], input[25 + index * 2])
+                .ok_or(InstalledRecoverySataRouteError::NonCanonical)?;
+        }
+        let media = if media_present {
+            let mut signature = [0; 16];
+            signature.copy_from_slice(&input[60..76]);
+            Some(
+                InstalledRecoveryHardDriveMedia::new(
+                    read_u32(input, 40),
+                    read_u64(input, 44),
+                    read_u64(input, 52),
+                    signature,
+                    input[76],
+                    input[77],
+                )
+                .ok_or(InstalledRecoverySataRouteError::NonCanonical)?,
+            )
+        } else {
+            if input[40..78].iter().any(|byte| *byte != 0) {
+                return Err(InstalledRecoverySataRouteError::NonCanonical);
+            }
+            None
+        };
+        let mut stable_id = [0; 32];
+        stable_id.copy_from_slice(&input[96..128]);
+        Self::new(
+            read_u32(input, 4),
+            read_u32(input, 8),
+            &hops[..hop_count],
+            read_u16(input, 12),
+            read_u16(input, 14),
+            read_u16(input, 16),
+            media,
+            stable_id,
+        )
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum InstalledRecoverySataRouteError {
+    NonCanonical,
+}
+
+fn installed_media_valid(media: InstalledRecoveryHardDriveMedia) -> bool {
+    media.partition_number != 0
+        && media.partition_size != 0
+        && media
+            .partition_start
+            .checked_add(media.partition_size)
+            .is_some()
+        && media.signature.iter().any(|byte| *byte != 0)
+        && matches!((media.mbr_type, media.signature_type), (1, 1) | (2, 2))
+}
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum InstalledRecoverySource {
@@ -159,6 +420,14 @@ fn read_u64(input: &[u8], offset: usize) -> u64 {
     u64::from_le_bytes(input[offset..offset + 8].try_into().unwrap())
 }
 
+fn read_u32(input: &[u8], offset: usize) -> u32 {
+    u32::from_le_bytes(input[offset..offset + 4].try_into().unwrap())
+}
+
+fn read_u16(input: &[u8], offset: usize) -> u16 {
+    u16::from_le_bytes(input[offset..offset + 2].try_into().unwrap())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -174,6 +443,25 @@ mod tests {
             [0x61; 16],
             2,
             17,
+        )
+        .unwrap()
+    }
+
+    fn sata_route() -> InstalledRecoverySataRoute {
+        let hops = [
+            InstalledRecoveryPciHop::new(3, 0).unwrap(),
+            InstalledRecoveryPciHop::new(5, 2).unwrap(),
+        ];
+        let media = InstalledRecoveryHardDriveMedia::new(2, 2048, 4096, [0x5a; 16], 2, 2).unwrap();
+        InstalledRecoverySataRoute::new(
+            0x0a03_41d0,
+            7,
+            &hops,
+            3,
+            u16::MAX,
+            1,
+            Some(media),
+            [0x51; 32],
         )
         .unwrap()
     }
@@ -221,5 +509,50 @@ mod tests {
             InstalledRecoveryBootIdentity::decode(&malformed),
             Err(InstalledRecoveryBootIdentityError::NonCanonical)
         );
+    }
+
+    #[test]
+    fn canonical_sata_route_round_trips_without_authority_or_local_handles() {
+        let route = sata_route();
+        let encoded = route.encode();
+        assert_eq!(InstalledRecoverySataRoute::decode(&encoded), Ok(route));
+        assert_eq!(route.pci_hops().len(), 2);
+        assert_eq!(route.pci_hops()[1].device(), 5);
+        assert_eq!(route.hba_port(), 3);
+        assert_eq!(route.media().unwrap().signature(), [0x5a; 16]);
+        assert_eq!(route.stable_id(), [0x51; 32]);
+        assert!(encoded[18..24].iter().all(|byte| *byte == 0));
+        assert!(encoded[28..40].iter().all(|byte| *byte == 0));
+        assert!(encoded[78..96].iter().all(|byte| *byte == 0));
+    }
+
+    #[test]
+    fn sata_route_decoder_rejects_reserved_hop_media_and_identity_substitution() {
+        let encoded = sata_route().encode();
+        for index in [3usize, 18, 28, 78] {
+            let mut malformed = encoded;
+            malformed[index] = 1;
+            assert_eq!(
+                InstalledRecoverySataRoute::decode(&malformed),
+                Err(InstalledRecoverySataRouteError::NonCanonical)
+            );
+        }
+        for (index, value) in [(0usize, 2u8), (1, 0), (2, 2), (24, 32), (25, 8)] {
+            let mut malformed = encoded;
+            malformed[index] = value;
+            assert!(InstalledRecoverySataRoute::decode(&malformed).is_err());
+        }
+        let mut malformed = encoded;
+        malformed[40..44].fill(0);
+        assert!(InstalledRecoverySataRoute::decode(&malformed).is_err());
+        let mut malformed = encoded;
+        malformed[96..128].fill(0);
+        assert!(InstalledRecoverySataRoute::decode(&malformed).is_err());
+
+        let mut no_media = encoded;
+        no_media[2] = 0;
+        assert!(InstalledRecoverySataRoute::decode(&no_media).is_err());
+        no_media[40..78].fill(0);
+        assert!(InstalledRecoverySataRoute::decode(&no_media).is_ok());
     }
 }

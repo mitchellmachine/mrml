@@ -229,6 +229,16 @@ Storage passes 129 tests on Windows and Arch Linux; UEFI remains 37 tests and
 cross-builds on both. Native AHCI enumeration and typed handoff remain
 **PLANNED**.
 
+The typed-handoff prerequisite is now **PARTIALLY IMPLEMENTED** as a canonical
+128-byte kernel record. It binds the route version, ACPI root, one through eight
+PCI hops, SATA target, optional partition identity, and exact stable ID while
+requiring all reserved and unused bytes to be zero. The UEFI boundary translates
+its retained route only when the full stable ID still equals the recovered block
+descriptor. This authority-free record avoids native reconstruction of firmware
+bytes. Kernel passes 563 tests and UEFI 37 tests on Windows and Arch Linux, with
+UEFI cross-builds on both. `BootHandoff` carriage and independently enumerated
+native correlation remain **PLANNED**.
+
 The `mrml` frontend may expose structured `disk`, `filesystem`, `optical`, and
 `media` operations. The PowerShell-inspired shell projects the same backend as
 typed `Get-*`, `Test-*`, `Initialize-*`, `New-*`, `Format-*`, `Write-*`, and

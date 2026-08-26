@@ -3042,3 +3042,13 @@ enumerated native state. Native comparison does not recreate UEFI binary path
 bytes and grants no authority. Storage passes 129 tests on Windows and Arch
 Linux; UEFI remains 37 tests and cross-builds on both. Carrying this typed route
 through handoff and a reviewed native enumerator remain the next gates.
+
+The handoff prerequisite is now **PARTIALLY IMPLEMENTED** as a kernel-owned
+canonical 128-byte SATA route record. It binds the record version, ACPI root,
+one through eight PCI hops, SATA target, optional partition identity, and exact
+stable ID; decoding rejects nonzero reserved or unused bytes and malformed
+field combinations. UEFI translates its retained route only when that stable ID
+still equals the recovered descriptor identity. This record contains no handle
+or authority. Kernel passes 563 tests and UEFI 37 tests on Windows and Arch
+Linux, with UEFI cross-builds on both. Integrating it into `BootHandoff` and
+consuming independently enumerated native state remain **PLANNED**.
