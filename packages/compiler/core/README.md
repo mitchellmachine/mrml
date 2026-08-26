@@ -4775,9 +4775,12 @@ reads, while emission evaluates it once, traps unless it is below `N`, preserves
 it across the fixed operation, and reuses the existing bounded element selector.
 Explicit RAX `lateout`, same-place `inout`, and split `inout` are covered. The
 pinned oracle accepted all three probes, and both canonical hosts pass 985
-compiler tests. Index expressions outside the existing bounded expression
-subset, nested projections, reference-array index outputs, and general assembly
-remain unsupported.
+compiler tests. Mutable fixed-array reference parameters and locals now reuse
+the same path with ordered `Dereference` and `Index` ownership projections and
+the existing checked reference-array address helpers; shared references and
+non-`u64` elements fail closed. Index expressions outside the existing bounded
+expression subset, deeper nested projections, and general assembly remain
+unsupported.
 
 The projection-bearing term milestone uses a fixed 64-node arena for flat leaf
 terms and associated-type projections whose trait self/argument positions refer

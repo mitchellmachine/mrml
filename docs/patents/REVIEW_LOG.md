@@ -6256,3 +6256,16 @@ reference-array outputs, general memory effects, and general assembly remain
 absent. Broader compiler completion remains partial; this technical screen is
 not a clearance or infringement conclusion and does not replace independent
 human dual review.
+
+# 2026-08-26 — Indexed reference inline-assembly outputs
+
+**Result: NOT_TRIGGERED after the indexed-reference review.** This increment
+combines conventional fixed-array-reference pointer addressing with the already
+reviewed bounded index evaluation, bounds check, and explicit RAX output paths.
+Ordered ownership projections, stack-slot accounting, published x86-64 scaled
+address encodings, and reuse of the existing reference load/store helpers add no
+novel assembler, register-allocation, optimization, instruction-selection,
+alias-analysis, or code-generation algorithm. Deeper nested places, slices,
+general memory effects, and general assembly remain absent. Broader compiler
+completion remains partial; this technical screen is not a clearance or
+infringement conclusion and does not replace independent human dual review.

@@ -150,3 +150,12 @@ same exact toolchain and commit compiled explicit RAX `lateout`, same-place
 expression-indexed output shapes only; it does not establish general expression,
 evaluation-order, place, register-allocation, memory-effect, or assembly
 semantics. Temporary source and metadata were removed.
+
+Another independently authored Rust 2024 metadata-only probe against that same
+exact toolchain and commit compiled explicit RAX `lateout`, same-place `inout`,
+and distinct-input output forms whose destinations indexed a `&mut [u64; 2]`
+parameter with a runtime `usize` expression. This records black-box acceptance
+of those exact mutable fixed-array-reference output shapes only; it does not
+establish general nested-place, borrowing, evaluation-order, register-allocation,
+memory-effect, or assembly semantics. Temporary source and metadata were
+removed.

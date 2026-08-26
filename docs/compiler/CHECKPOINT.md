@@ -1622,6 +1622,20 @@ conformance tests, and 335 replacement tests: 985 compiler tests per host.
 Expressions outside the existing bounded subset, nested projections, reference-
 array index outputs, and general assembly remain absent.
 
+The indexed reference-output milestone extends that expression-indexed place to
+mutable `[u64; N]` references held in parameters or locals. The typed place
+records ordered `Dereference` and `Index` projections, resolves the pointer slot
+before emission, and reuses the existing checked reference-array address/load/
+store helpers after evaluating the index once. Parameter slots include all live
+local stack slots; this also corrects explicit scalar dereference outputs when a
+parameter pointee is written while locals are live. Focused tests cover RAX
+`lateout`, same-place `inout`, distinct-input `inout`, local-reference storage,
+and fail-closed shared/non-`u64` references. The exact dated oracle accepted all
+three parameter-reference forms. Windows gnullvm and native Arch Linux WSL each
+pass 639 library tests, one component-interface probe, 10 conformance tests, and
+335 replacement tests: 985 compiler tests per host. Deeper nested projections,
+slice outputs, general memory effects, and general assembly remain absent.
+
 The premise-bearing rigid-normalization milestone proves the selected generic
 implementation's instantiated trait and projection predicates before exposing
 its associated value. It shares the caller's 16-frame rigid proof stack and
