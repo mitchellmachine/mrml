@@ -42,6 +42,22 @@ provider or placement, carry a general interface invocation, persist policy, or
 provide transparent cross-placement transport. A fully resolved representative
 dual-placement service remains **PLANNED**.
 
+Applications now have a separate bounded kernel routing prerequisite rather
+than being represented as services. One typed specification binds the runtime
+domain, application object, immutable application generation and artifact
+digest, active `SystemGeneration`, applied policy generation, and exactly one
+of `NATIVE_PROCESS` or `MICROVM`. The prepared transaction invokes only the
+selected backend and publishes the domain only after matching readiness
+evidence. Stale system or policy generations reach neither backend. Strict
+Total mode rejects native-process placement before construction; failed
+microVM construction records typed unavailability and never tries the native
+backend. Focused hosted kernel tests cover both placements, immutable identity,
+stale generations, backend exclusivity, and zero fallback. This is
+**PARTIALLY IMPLEMENTED** application-launch control-plane groundwork, not the
+representative dual-placement GUI application: no GUI package, compositor,
+Semantic Scene Graph integration, application supervisor adapter, or WHP/KVM
+application probe exists yet.
+
 The kernel admission prerequisite now binds every prepared, running,
 unavailable, and routed domain to both a nonzero active `SystemGeneration` and
 the applied isolation-policy generation. A stale system generation is rejected
@@ -661,7 +677,9 @@ Documentation is not implementation evidence. Implement bounded milestones:
 2. one representative dual-placement service (**PARTIALLY IMPLEMENTED** for
    manifest policy, a hosted supervised native-service ABI-3 call, and the
    separately hosted WHP/KVM microVM call; general resolver dispatch remains);
-3. one representative dual-placement GUI application;
+3. one representative dual-placement GUI application (**PARTIALLY IMPLEMENTED**
+   only for the separate generation-bound kernel application route; GUI,
+   supervisor, semantic, and backend adapters remain **PLANNED**);
 4. monitor placement visibility;
 5. resource and device projections;
 6. persistent Settings and shell policy;

@@ -1004,6 +1004,15 @@ repeated failed persistent Total request may offer an explicit Balanced-once or
 Recovery choice, but must not mutate persistent policy automatically; authorized
 recovery policy changes are recorded where audit support exists.
 
+Application-launch recovery must retain the exact runtime domain, application
+object, immutable application generation and artifact digest, active system
+generation, and applied policy generation. The kernel application route accepts
+only `NATIVE_PROCESS` or `MICROVM`; in Total mode a native request is rejected
+before backend construction and a failed microVM launch is retained as
+unavailable without probing the native backend. These are hosted unit-tested
+control-plane invariants, not evidence of a GUI application or WHP/KVM
+application execution.
+
 The focused recovery oracle now includes the two-vCPU component profiles
 `whp_component_service_smp_probe` and `kvm_component_service_smp_probe`. Each
 must use fresh signed kernel/package artifacts, the exact signed ZIM/Zstd

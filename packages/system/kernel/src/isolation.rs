@@ -53,6 +53,7 @@ pub enum IsolationLaunchEvidence {
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum IsolationUnavailableReason {
+    NativeProcessResource,
     NativeServiceResource,
     VirtualizationUnavailable,
     MemoryBudget,
@@ -61,6 +62,80 @@ pub enum IsolationUnavailableReason {
     DeviceProjection,
     VmmResource,
     InterfaceTransport,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct IsolationApplicationSpec {
+    domain: ObjectId,
+    application: ObjectId,
+    application_generation: u64,
+    application_artifact: [u8; 64],
+    system_generation: u64,
+    policy_generation: u64,
+    placement: IsolationPlacement,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum IsolationApplicationSpecError {
+    InvalidGeneration,
+    InvalidArtifactDigest,
+    UnsupportedPlacement,
+}
+
+impl IsolationApplicationSpec {
+    pub fn new(
+        domain: ObjectId,
+        application: ObjectId,
+        application_generation: u64,
+        application_artifact: [u8; 64],
+        system_generation: u64,
+        policy_generation: u64,
+        placement: IsolationPlacement,
+    ) -> Result<Self, IsolationApplicationSpecError> {
+        if application_generation == 0 || system_generation == 0 || policy_generation == 0 {
+            return Err(IsolationApplicationSpecError::InvalidGeneration);
+        }
+        if application_artifact == [0; 64] {
+            return Err(IsolationApplicationSpecError::InvalidArtifactDigest);
+        }
+        if !matches!(
+            placement,
+            IsolationPlacement::NativeProcess | IsolationPlacement::Microvm
+        ) {
+            return Err(IsolationApplicationSpecError::UnsupportedPlacement);
+        }
+        Ok(Self {
+            domain,
+            application,
+            application_generation,
+            application_artifact,
+            system_generation,
+            policy_generation,
+            placement,
+        })
+    }
+
+    pub const fn domain(self) -> ObjectId {
+        self.domain
+    }
+    pub const fn application(self) -> ObjectId {
+        self.application
+    }
+    pub const fn application_generation(self) -> u64 {
+        self.application_generation
+    }
+    pub const fn application_artifact(self) -> [u8; 64] {
+        self.application_artifact
+    }
+    pub const fn system_generation(self) -> u64 {
+        self.system_generation
+    }
+    pub const fn policy_generation(self) -> u64 {
+        self.policy_generation
+    }
+    pub const fn placement(self) -> IsolationPlacement {
+        self.placement
+    }
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -792,6 +867,185 @@ pub fn launch_prepared_component_service<B: IsolationServiceBackend, const DOMAI
         .map_err(PreparedComponentServiceRouteError::Route)
 }
 
+pub trait IsolationApplicationBackend {
+    type Endpoint;
+    type Error;
+
+    fn launch_native_process(
+        &mut self,
+        spec: IsolationApplicationSpec,
+    ) -> Result<Self::Endpoint, IsolationBackendFailure<Self::Error>>;
+
+    fn launch_microvm_application(
+        &mut self,
+        spec: IsolationApplicationSpec,
+    ) -> Result<Self::Endpoint, IsolationBackendFailure<Self::Error>>;
+
+    fn revoke(&mut self, endpoint: &Self::Endpoint) -> Result<(), Self::Error>;
+}
+
+#[derive(Debug, Eq, PartialEq)]
+pub enum IsolationApplicationRouteError<E, Endpoint> {
+    Admission(IsolationLaunchError),
+    Backend {
+        reason: IsolationUnavailableReason,
+        error: E,
+    },
+    Rollback {
+        admission: IsolationLaunchError,
+        error: E,
+        endpoint: Endpoint,
+        prepared: PreparedIsolationApplicationRoute,
+    },
+}
+
+#[derive(Debug, Eq, PartialEq)]
+pub struct PreparedIsolationApplicationRoute {
+    spec: IsolationApplicationSpec,
+    launch: PreparedIsolationLaunch,
+}
+
+impl PreparedIsolationApplicationRoute {
+    pub const fn spec(&self) -> IsolationApplicationSpec {
+        self.spec
+    }
+
+    pub fn unavailable<const DOMAINS: usize>(
+        self,
+        admission: &mut IsolationAdmissionTable<DOMAINS>,
+        reason: IsolationUnavailableReason,
+    ) -> Result<(), IsolationLaunchError> {
+        admission.unavailable(self.launch, reason).map(|_| ())
+    }
+
+    pub fn cancel<const DOMAINS: usize>(
+        self,
+        admission: &mut IsolationAdmissionTable<DOMAINS>,
+    ) -> Result<(), IsolationLaunchError> {
+        admission.cancel(self.launch)
+    }
+
+    pub fn commit<E, const DOMAINS: usize>(
+        self,
+        admission: &mut IsolationAdmissionTable<DOMAINS>,
+        endpoint: E,
+    ) -> Result<RoutedIsolationApplication<E>, (Self, IsolationLaunchError, E)> {
+        let evidence = match self.spec.placement {
+            IsolationPlacement::NativeProcess => IsolationLaunchEvidence::NativeReady,
+            IsolationPlacement::Microvm => IsolationLaunchEvidence::MicrovmReady,
+            _ => unreachable!("IsolationApplicationSpec rejected non-application placement"),
+        };
+        if let Err(error) = admission.commit(&self.launch, evidence) {
+            return Err((self, error, endpoint));
+        }
+        Ok(RoutedIsolationApplication {
+            endpoint,
+            spec: self.spec,
+        })
+    }
+}
+
+#[derive(Debug, Eq, PartialEq)]
+pub struct RoutedIsolationApplication<E> {
+    endpoint: E,
+    spec: IsolationApplicationSpec,
+}
+
+impl<E> RoutedIsolationApplication<E> {
+    pub const fn endpoint(&self) -> &E {
+        &self.endpoint
+    }
+    pub fn into_endpoint(self) -> E {
+        self.endpoint
+    }
+    pub const fn spec(&self) -> IsolationApplicationSpec {
+        self.spec
+    }
+}
+
+/// Prepares one immutable application generation for either native-process or
+/// microVM execution. Total mode rejects native placement here, before either
+/// backend is called; package metadata identifies the application but grants no
+/// runtime capability or authority.
+pub fn prepare_isolation_application_route<const DOMAINS: usize>(
+    admission: &mut IsolationAdmissionTable<DOMAINS>,
+    spec: IsolationApplicationSpec,
+) -> Result<PreparedIsolationApplicationRoute, IsolationLaunchError> {
+    let request = IsolationLaunchRequest::new(
+        spec.domain,
+        spec.system_generation,
+        spec.policy_generation,
+        TotalMicrovmClass::MicrovmEligible,
+        spec.placement,
+    )?;
+    admission
+        .prepare(request)
+        .map(|launch| PreparedIsolationApplicationRoute { spec, launch })
+}
+
+pub fn route_isolation_application<B: IsolationApplicationBackend, const DOMAINS: usize>(
+    admission: &mut IsolationAdmissionTable<DOMAINS>,
+    backend: &mut B,
+    spec: IsolationApplicationSpec,
+) -> Result<
+    RoutedIsolationApplication<B::Endpoint>,
+    IsolationApplicationRouteError<B::Error, B::Endpoint>,
+> {
+    let prepared = prepare_isolation_application_route(admission, spec)
+        .map_err(IsolationApplicationRouteError::Admission)?;
+    launch_prepared_isolation_application_route(admission, backend, prepared)
+}
+
+/// Launches exactly the selected application placement. Backend failure records
+/// typed unavailability and never probes or falls back to the other backend.
+pub fn launch_prepared_isolation_application_route<
+    B: IsolationApplicationBackend,
+    const DOMAINS: usize,
+>(
+    admission: &mut IsolationAdmissionTable<DOMAINS>,
+    backend: &mut B,
+    prepared: PreparedIsolationApplicationRoute,
+) -> Result<
+    RoutedIsolationApplication<B::Endpoint>,
+    IsolationApplicationRouteError<B::Error, B::Endpoint>,
+> {
+    let spec = prepared.spec();
+    let launched = match spec.placement {
+        IsolationPlacement::NativeProcess => backend.launch_native_process(spec),
+        IsolationPlacement::Microvm => backend.launch_microvm_application(spec),
+        _ => unreachable!("IsolationApplicationSpec rejected non-application placement"),
+    };
+    let endpoint = match launched {
+        Ok(endpoint) => endpoint,
+        Err(failure) => {
+            prepared
+                .unavailable(admission, failure.reason)
+                .map_err(IsolationApplicationRouteError::Admission)?;
+            return Err(IsolationApplicationRouteError::Backend {
+                reason: failure.reason,
+                error: failure.error,
+            });
+        }
+    };
+    match prepared.commit(admission, endpoint) {
+        Ok(routed) => Ok(routed),
+        Err((prepared, admission_error, endpoint)) => match backend.revoke(&endpoint) {
+            Ok(()) => {
+                prepared
+                    .cancel(admission)
+                    .map_err(IsolationApplicationRouteError::Admission)?;
+                Err(IsolationApplicationRouteError::Admission(admission_error))
+            }
+            Err(error) => Err(IsolationApplicationRouteError::Rollback {
+                admission: admission_error,
+                error,
+                endpoint,
+                prepared,
+            }),
+        },
+    }
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct IsolationLaunchRequest {
     domain: ObjectId,
@@ -1325,6 +1579,49 @@ mod tests {
         }
     }
 
+    impl IsolationApplicationBackend for DualBackend {
+        type Endpoint = u64;
+        type Error = BackendError;
+
+        fn launch_native_process(
+            &mut self,
+            spec: IsolationApplicationSpec,
+        ) -> Result<Self::Endpoint, IsolationBackendFailure<Self::Error>> {
+            self.native_launches += 1;
+            if let Some(reason) = self.failure {
+                Err(IsolationBackendFailure::new(
+                    reason,
+                    BackendError::Unavailable,
+                ))
+            } else {
+                Ok(0x3000 | spec.application_generation())
+            }
+        }
+
+        fn launch_microvm_application(
+            &mut self,
+            spec: IsolationApplicationSpec,
+        ) -> Result<Self::Endpoint, IsolationBackendFailure<Self::Error>> {
+            self.microvm_launches += 1;
+            if let Some(reason) = self.failure {
+                Err(IsolationBackendFailure::new(
+                    reason,
+                    BackendError::Unavailable,
+                ))
+            } else {
+                Ok(0x4000 | spec.application_generation())
+            }
+        }
+
+        fn revoke(&mut self, _endpoint: &Self::Endpoint) -> Result<(), Self::Error> {
+            if self.revoke_fails {
+                Err(BackendError::Revoke)
+            } else {
+                Ok(())
+            }
+        }
+    }
+
     fn backend() -> DualBackend {
         DualBackend {
             native_launches: 0,
@@ -1343,6 +1640,19 @@ mod tests {
             SYSTEM_GENERATION,
             7,
             TotalMicrovmClass::MicrovmEligible,
+            placement,
+        )
+        .unwrap()
+    }
+
+    fn application_spec(placement: IsolationPlacement) -> IsolationApplicationSpec {
+        IsolationApplicationSpec::new(
+            ObjectId(0x71),
+            ObjectId(0x4d52_4d4c_4150_50),
+            12,
+            [0xa5; 64],
+            SYSTEM_GENERATION,
+            7,
             placement,
         )
         .unwrap()
@@ -1609,6 +1919,173 @@ mod tests {
             ),
             (0, 1)
         );
+    }
+
+    #[test]
+    fn application_spec_binds_exact_immutable_identity_and_allowed_placements() {
+        let spec = application_spec(IsolationPlacement::NativeProcess);
+        assert_eq!(spec.domain(), ObjectId(0x71));
+        assert_eq!(spec.application(), ObjectId(0x4d52_4d4c_4150_50));
+        assert_eq!(spec.application_generation(), 12);
+        assert_eq!(spec.application_artifact(), [0xa5; 64]);
+        assert_eq!(spec.system_generation(), SYSTEM_GENERATION);
+        assert_eq!(spec.policy_generation(), 7);
+        assert_eq!(spec.placement(), IsolationPlacement::NativeProcess);
+        assert_eq!(
+            IsolationApplicationSpec::new(
+                ObjectId(1),
+                ObjectId(2),
+                1,
+                [1; 64],
+                SYSTEM_GENERATION,
+                7,
+                IsolationPlacement::NativeService,
+            ),
+            Err(IsolationApplicationSpecError::UnsupportedPlacement)
+        );
+        assert_eq!(
+            IsolationApplicationSpec::new(
+                ObjectId(1),
+                ObjectId(2),
+                1,
+                [0; 64],
+                SYSTEM_GENERATION,
+                7,
+                IsolationPlacement::Microvm,
+            ),
+            Err(IsolationApplicationSpecError::InvalidArtifactDigest)
+        );
+    }
+
+    #[test]
+    fn balanced_application_routes_exactly_one_selected_backend() {
+        let mut native_table =
+            IsolationAdmissionTable::<1>::new(IsolationMode::Balanced, SYSTEM_GENERATION, 7)
+                .unwrap();
+        let mut native_backend = backend();
+        let native = route_isolation_application(
+            &mut native_table,
+            &mut native_backend,
+            application_spec(IsolationPlacement::NativeProcess),
+        )
+        .unwrap();
+        assert_eq!(native.spec().placement(), IsolationPlacement::NativeProcess);
+        assert_eq!(
+            (
+                native_backend.native_launches,
+                native_backend.microvm_launches
+            ),
+            (1, 0)
+        );
+
+        let mut microvm_table =
+            IsolationAdmissionTable::<1>::new(IsolationMode::Balanced, SYSTEM_GENERATION, 7)
+                .unwrap();
+        let mut microvm_backend = backend();
+        let microvm = route_isolation_application(
+            &mut microvm_table,
+            &mut microvm_backend,
+            application_spec(IsolationPlacement::Microvm),
+        )
+        .unwrap();
+        assert_eq!(microvm.spec().application(), native.spec().application());
+        assert_eq!(
+            microvm.spec().application_generation(),
+            native.spec().application_generation()
+        );
+        assert_eq!(
+            microvm.spec().application_artifact(),
+            native.spec().application_artifact()
+        );
+        assert_eq!(microvm.spec().placement(), IsolationPlacement::Microvm);
+        assert_eq!(
+            (
+                microvm_backend.native_launches,
+                microvm_backend.microvm_launches
+            ),
+            (0, 1)
+        );
+    }
+
+    #[test]
+    fn total_application_rejects_native_before_backend_and_never_falls_back() {
+        let mut table =
+            IsolationAdmissionTable::<1>::new(IsolationMode::TotalMicrovm, SYSTEM_GENERATION, 7)
+                .unwrap();
+        let mut backend = backend();
+        assert_eq!(
+            route_isolation_application(
+                &mut table,
+                &mut backend,
+                application_spec(IsolationPlacement::NativeProcess),
+            ),
+            Err(IsolationApplicationRouteError::Admission(
+                IsolationLaunchError::TotalMicrovmDowngradeAttempt
+            ))
+        );
+        assert_eq!((backend.native_launches, backend.microvm_launches), (0, 0));
+
+        backend.failure = Some(IsolationUnavailableReason::VmmResource);
+        assert_eq!(
+            route_isolation_application(
+                &mut table,
+                &mut backend,
+                application_spec(IsolationPlacement::Microvm),
+            ),
+            Err(IsolationApplicationRouteError::Backend {
+                reason: IsolationUnavailableReason::VmmResource,
+                error: BackendError::Unavailable,
+            })
+        );
+        assert_eq!((backend.native_launches, backend.microvm_launches), (0, 1));
+        assert_eq!(table.running().count(), 0);
+        assert_eq!(
+            table.unavailable_domains().next().unwrap().reason(),
+            IsolationUnavailableReason::VmmResource
+        );
+        assert!(table.total_microvm_report().satisfied());
+        assert_eq!(table.total_microvm_report().native_fallback, 0);
+    }
+
+    #[test]
+    fn application_route_rejects_stale_system_and_policy_before_backend() {
+        let mut table =
+            IsolationAdmissionTable::<1>::new(IsolationMode::Balanced, SYSTEM_GENERATION, 7)
+                .unwrap();
+        let mut backend = backend();
+        let stale_system = IsolationApplicationSpec::new(
+            ObjectId(0x71),
+            ObjectId(0x72),
+            12,
+            [0xa5; 64],
+            SYSTEM_GENERATION - 1,
+            7,
+            IsolationPlacement::Microvm,
+        )
+        .unwrap();
+        assert_eq!(
+            route_isolation_application(&mut table, &mut backend, stale_system),
+            Err(IsolationApplicationRouteError::Admission(
+                IsolationLaunchError::InvalidSystemGeneration
+            ))
+        );
+        let stale_policy = IsolationApplicationSpec::new(
+            ObjectId(0x71),
+            ObjectId(0x72),
+            12,
+            [0xa5; 64],
+            SYSTEM_GENERATION,
+            8,
+            IsolationPlacement::Microvm,
+        )
+        .unwrap();
+        assert_eq!(
+            route_isolation_application(&mut table, &mut backend, stale_policy),
+            Err(IsolationApplicationRouteError::Admission(
+                IsolationLaunchError::InvalidPolicyGeneration
+            ))
+        );
+        assert_eq!((backend.native_launches, backend.microvm_launches), (0, 0));
     }
 
     #[test]

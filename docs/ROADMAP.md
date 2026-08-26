@@ -37,6 +37,14 @@ Three new persistent deltas are documented before implementation:
   downgrades or active blockers. A bounded routing prerequisite now dispatches
   a caller-selected service placement to distinct native-service or microVM
   backend entries while preserving exact interface and provider generations.
+  A separate application route now binds the application object, immutable
+  application generation and artifact digest, active system generation, and
+  policy generation to either native-process or microVM execution. It invokes
+  only the selected backend, rejects stale identities before launch, and makes
+  a failed Total-mode microVM unavailable with zero native fallback. This is
+  kernel control-plane groundwork; the representative GUI application,
+  compositor/Semantic Scene Graph integration, application supervisor adapter,
+  and WHP/KVM application probes remain **PLANNED**.
   The configuration package now admits both forms and supplies a concrete
   configuration-specific adapter with focused fail-closed tests. The native
   form now uses a real accounted `TaskRuntime`/`ServiceSupervisor` launch and
