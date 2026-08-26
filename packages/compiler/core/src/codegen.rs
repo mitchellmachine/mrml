@@ -2077,6 +2077,7 @@ pub fn compile_x86_64_naked_relocatable<
 #[derive(Clone, Copy)]
 enum X86_64InlineAssembly<'source> {
     Nop,
+    NopCClobber,
     CompareRax {
         input: &'source str,
     },
@@ -2115,6 +2116,9 @@ fn x86_64_inline_assembly(
         let arguments = arguments.trim();
         if arguments.is_empty() {
             return Ok(Some(X86_64InlineAssembly::Nop));
+        }
+        if arguments == ", clobber_abi(\"C\")" {
+            return Ok(Some(X86_64InlineAssembly::NopCClobber));
         }
         let options = arguments
             .strip_prefix(',')
@@ -8600,7 +8604,7 @@ fn preanalyze_runtime_expression_statement_reads<
                 span: translate_span(body_start, statement.span),
             });
         }
-        Ok(Some(X86_64InlineAssembly::Nop)) => return Ok(()),
+        Ok(Some(X86_64InlineAssembly::Nop | X86_64InlineAssembly::NopCClobber)) => return Ok(()),
         Ok(Some(X86_64InlineAssembly::CompareRax { input })) => {
             let tree = crate::ExpressionParser::<MAX_EXPRESSION_NODES>::new(input)
                 .parse()
@@ -25857,7 +25861,9 @@ impl<
                     span: translate_span(body_start, statement.span),
                 });
             }
-            Ok(Some(X86_64InlineAssembly::Nop)) => return self.emit(&[0x90]),
+            Ok(Some(X86_64InlineAssembly::Nop | X86_64InlineAssembly::NopCClobber)) => {
+                return self.emit(&[0x90]);
+            }
             Ok(Some(X86_64InlineAssembly::CompareRax { input })) => {
                 let tree = crate::ExpressionParser::<MAX_EXPRESSION_NODES>::new(input)
                     .parse()
@@ -29937,6 +29943,7 @@ mod tests {
                 .unwrap();
         for source in [
             "#[unsafe(no_mangle)] pub unsafe extern \"C\" fn answer() -> u64 { asm!(\"nop\"); 42 }",
+            "#[unsafe(no_mangle)] pub unsafe extern \"C\" fn answer() -> u64 { asm!(\"nop\", clobber_abi(\"C\")); 42 }",
             "#[unsafe(no_mangle)] pub unsafe extern \"C\" fn answer() -> u64 { asm!(\"nop\", options(nomem, nostack, preserves_flags)); 42 }",
             "#[unsafe(no_mangle)] pub unsafe extern \"C\" fn answer() -> u64 { asm!(\"nop\", options(preserves_flags, nomem)); 42 }",
         ] {
@@ -30078,6 +30085,14 @@ mod tests {
             ),
             (
                 "#[unsafe(no_mangle)] pub unsafe extern \"C\" fn answer() -> u64 { asm!(\"nop\", options(readonly)); 42 }",
+                CodegenErrorKind::InvalidInlineAssembly,
+            ),
+            (
+                "#[unsafe(no_mangle)] pub unsafe extern \"C\" fn answer() -> u64 { asm!(\"nop\", clobber_abi(\"MRML\")); 42 }",
+                CodegenErrorKind::InvalidInlineAssembly,
+            ),
+            (
+                "#[unsafe(no_mangle)] pub unsafe extern \"C\" fn answer() -> u64 { let mut value: u64 = 0; asm!(\"mov {}, 7\", out(reg) value, clobber_abi(\"C\")); value }",
                 CodegenErrorKind::InvalidInlineAssembly,
             ),
             (
