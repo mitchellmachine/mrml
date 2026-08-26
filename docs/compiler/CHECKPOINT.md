@@ -508,6 +508,17 @@ metadata failed build-graph validation; that run is recorded as blocked, not
 passing evidence. General interprocedural CFG, alias, and region analysis remain
 unsupported.
 
+The loop callee-local reassignment milestone applies one bounded transfer when a
+`while` body contains only supported direct assignments, then joins it with the
+incoming zero-iteration state. Same-origin reborrows remain exact; a changed
+origin becomes unknown. Mixed control, return, local, expression, nested-loop,
+or unsupported assignment operations remain conservative. ORACLE-0002 accepted
+the same-origin loop and post-last-use owner reuse and rejected a live competing
+mutable owner borrow with E0499. Windows gnullvm and native Arch Linux WSL each
+pass 639 library tests, one component-interface probe, 10 conformance tests, and
+335 replacement tests: 985 compiler tests per host. General loop fixed-point,
+path-sensitive, alias, and region analysis remain unsupported.
+
 This is an initial typed body-fact slice, not a complete typed body IR and not a
 borrow checker. Unsupported aggregate-leaf call arguments, other aggregate-
 argument and call-derived fat-reference initializers, unsupported compound array

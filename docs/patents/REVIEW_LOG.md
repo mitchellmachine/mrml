@@ -1,5 +1,17 @@
 # Patent review log
 
+## 2026-08-26 — Stable loop callee reference-origin join
+
+Patent review: **NOT_TRIGGERED** for this bounded compiler-analysis increment.
+It conventionally applies one fixed-table assignment transfer and compares the
+result with the incoming zero-iteration state, retaining only equal existing
+parameter-origin identifiers. Changed or unsupported loop states fail
+conservative. It adds no novel fixed-point or alias-analysis algorithm, region
+solver, optimization, runtime enforcement, authority model, or external
+dependency. Broader compiler completion remains partial; this technical screen
+establishes neither clearance nor infringement and does not replace independent
+human dual review.
+
 ## 2026-08-26 — Conditional callee reference-origin joins
 
 Patent review: **NOT_TRIGGERED** for this bounded compiler-analysis increment.

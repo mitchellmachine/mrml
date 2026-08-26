@@ -817,6 +817,14 @@ Branch-local declarations, returns, expressions, projected or compound writes,
 and other unsupported branch actions fail the proof closed. This is an exact
 conditional-assignment join, not general interprocedural CFG or region analysis.
 
+For a `while` body consisting only of supported direct assignments, callee
+return-origin inference now performs one bounded transfer and joins it with the
+incoming zero-iteration state. Same-origin reborrows therefore retain their
+parameter origin, while any changed origin becomes unknown. Loops mixing these
+assignments with control, returns, locals, expressions, nested loops, or other
+unsupported operations fail conservative. This exact stable-origin slice is not
+general loop fixed-point, path-sensitive, alias, or region analysis.
+
 The first modern trait-solver foundation is an explicit bounded implemented-
 goal representation. Stable trait/type/inference/placeholder identities remain
 distinct; canonicalization replaces inference identities with first-occurrence

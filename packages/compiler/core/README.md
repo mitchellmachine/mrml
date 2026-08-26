@@ -3792,6 +3792,18 @@ rerun was blocked before compiler execution by concurrent invalid isolation
 metadata in `org.mrml.library.uefi`; it is not passing evidence for this
 increment. This is not general interprocedural CFG, alias, or region analysis.
 
+The loop callee-local reassignment milestone handles a `while` body made only of
+supported direct assignments. It applies one bounded transfer from the incoming
+local-origin state and joins the result with that same zero-iteration state.
+Equal origins remain exact; changed origins become unknown. Mixed controls,
+returns, locals, expressions, nested loops, and unsupported assignments fail
+conservative. The exact dated oracle accepted the same-origin loop and owner
+reuse after the returned child's last use, and rejected a live competing mutable
+owner borrow with E0499. Windows gnullvm and native Arch Linux WSL each pass 639
+library tests, one component-interface probe, 10 conformance tests, and 335
+replacement tests: 985 compiler tests per host. This is not general loop fixed-
+point, path-sensitive, alias, or region analysis.
+
 The conditional projected-reassignment milestone extends the bounded tuple-field
 loan chain across a conditional shared-reference assignment. The exact dated
 oracle rejects mutation of either conditional owner and of the field's replaced
