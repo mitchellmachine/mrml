@@ -807,6 +807,19 @@ algorithm. Other registers and general assembly remain absent. Broader compiler
 completion remains partial; this technical screen is not a clearance or
 infringement conclusion and does not replace independent human dual review.
 
+# 2026-08-26 — Projected call-derived shared-return outlives evidence
+
+**Result: NOT_TRIGGERED after the projected call-return evidence review.** This
+increment adds independently authored regression evidence that the existing
+bounded callee-origin and return-outlives checks compose when a proven second-
+parameter origin passes through tuple-field replacement and a shared child of
+the returned mutable reference. It introduces no new lifetime inference,
+interprocedural analysis, borrow-checking, alias-analysis, optimization, or
+code-generation algorithm. General interprocedural lifetime inference remains
+absent. Broader compiler completion remains partial; this technical screen is
+not a clearance or infringement conclusion and does not replace independent
+human dual review.
+
 # 2026-08-26 — Explicit RCX inline-assembly outputs
 
 **Result: NOT_TRIGGERED after the explicit-RCX review.** This increment adds a
