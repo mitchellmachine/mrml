@@ -8706,3 +8706,13 @@ UEFI-installed recovery also requires its adjacent SATA route. The returned
 release-derived admission table through final proof. Missing installed state
 prevents the release builder from running. Configuration passes 51 tests on
 Windows and Arch Linux; WHP/KVM pass 11/12 as hosted regression only.
+
+Installed Total admission now has a **PARTIALLY IMPLEMENTED** one-way runtime
+seal. Once every required release-classified domain has committed, consuming
+`authorize_runtime` retains the installed device selection, recovered policy,
+authenticated release, immutable completed admission view, and final proof in
+one `RecoveredInstalledTotalRuntime`. Callers cannot prepare another route or
+mutate admission through that owner. Incomplete classification yields no runtime
+owner. The WHP and KVM component launch implementations keep this owner alive
+through guest execution. Configuration passes 51 tests on both hosts and runner
+regressions pass 11/12; fresh signed execution was not rerun for this increment.

@@ -1185,3 +1185,13 @@ cannot invoke the release builder, and successful admission retains that exact
 selection beside the only release-derived admission table through final runtime
 proof. This is controlled Windows/Arch unit evidence plus WHP/KVM regression,
 not installed native execution or physical isolation evidence.
+
+The completed installed admission is now consumed into a **PARTIALLY
+IMPLEMENTED** read-only runtime authorization before component guest execution.
+The seal retains the exact installed selection, recovered policy, authenticated
+release inventory, completed admission table, and runtime proof as one object;
+it exposes inspection but no further route preparation or admission mutation.
+Required-domain absence produces no runtime owner. WHP and KVM component paths
+retain the seal across execution, so a detached scalar proof cannot replace the
+control-plane owner. Current evidence is Windows/Arch configuration unit tests
+and WHP/KVM runner regression, not fresh signed or physical execution.

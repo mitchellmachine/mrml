@@ -3107,3 +3107,15 @@ retains the exact selection in `RecoveredInstalledTotalAdmission` through final
 runtime proof. Configuration passes 51 tests on Windows and Arch Linux;
 WHP/KVM regression runners pass 11/12 without claiming native SATA execution.
 Real native descriptor discovery and installed kernel wiring remain **PLANNED**.
+
+The installed Total owner now has a **PARTIALLY IMPLEMENTED** consuming runtime
+transition. `authorize_runtime` succeeds only after the authenticated release
+inventory finalizes against the owner-held admission table, then seals the
+installed selection, recovered policy, release inventory, admission state, and
+runtime proof into one read-only `RecoveredInstalledTotalRuntime`. An incomplete
+required domain returns `RequiredDomainMissing` and produces no runtime owner.
+WHP and KVM component launch paths now retain this sealed owner for the guest
+execution lifetime instead of separating a proof from mutable admission state.
+Configuration passes 51 tests on Windows and Arch Linux; WHP/KVM runner suites
+pass 11/12. This is compile, unit, and hosted regression evidence; a fresh signed
+component execution and production installed-kernel wiring remain **PLANNED**.

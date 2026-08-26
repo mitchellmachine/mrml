@@ -3725,6 +3725,16 @@ pub struct RecoveredInstalledTotalAdmission<const DOMAINS: usize> {
     total: RecoveredTotalAdmission<DOMAINS>,
 }
 
+/// Read-only runtime authorization produced only by consuming the complete
+/// installed Total admission owner after every required domain has committed.
+/// The installed storage selection, recovered policy, authenticated release,
+/// admission table, and final proof remain one lifetime-bound object while
+/// guests execute; callers cannot reopen preparation or mutate admission.
+pub struct RecoveredInstalledTotalRuntime<const DOMAINS: usize> {
+    total: RecoveredInstalledTotalAdmission<DOMAINS>,
+    proof: mrml_kernel::TotalMicrovmRuntimeProof,
+}
+
 fn validate_installed_selection_for_handoff(
     installed: InstalledRecoveryDeviceSelection,
     handoff: &BootHandoff,
@@ -3853,6 +3863,36 @@ impl<const DOMAINS: usize> RecoveredInstalledTotalAdmission<DOMAINS> {
         &self,
     ) -> Result<mrml_kernel::TotalMicrovmRuntimeProof, mrml_kernel::TotalMicrovmRuntimeError> {
         self.total.finalize()
+    }
+
+    pub fn authorize_runtime(
+        self,
+    ) -> Result<RecoveredInstalledTotalRuntime<DOMAINS>, mrml_kernel::TotalMicrovmRuntimeError>
+    {
+        let proof = self.finalize()?;
+        Ok(RecoveredInstalledTotalRuntime { total: self, proof })
+    }
+}
+
+impl<const DOMAINS: usize> RecoveredInstalledTotalRuntime<DOMAINS> {
+    pub const fn installed(&self) -> InstalledRecoveryDeviceSelection {
+        self.total.installed()
+    }
+
+    pub const fn policy(&self) -> RecoveredBootIsolationPolicy {
+        self.total.policy()
+    }
+
+    pub const fn release(&self) -> &ActivatedReleaseTotalMicrovmInventory<DOMAINS> {
+        self.total.release()
+    }
+
+    pub const fn admission(&self) -> &IsolationAdmissionTable<DOMAINS> {
+        self.total.admission()
+    }
+
+    pub const fn proof(&self) -> mrml_kernel::TotalMicrovmRuntimeProof {
+        self.proof
     }
 }
 
@@ -9998,6 +10038,24 @@ mod tests {
             assert_eq!(admission.policy_generation(), 1);
 
             let domain = ObjectId(0x434f_4e46_4947_0001);
+            let incomplete = recovered
+                .build_installed_total_boot_admission(
+                    installed_selection,
+                    &capabilities,
+                    system,
+                    system_access,
+                    component,
+                    component_access,
+                    &handoff,
+                    |policy_generation| {
+                        Ok::<_, ()>(activated_configuration_release(domain, policy_generation))
+                    },
+                )
+                .unwrap();
+            assert!(matches!(
+                incomplete.authorize_runtime(),
+                Err(mrml_kernel::TotalMicrovmRuntimeError::RequiredDomainMissing)
+            ));
             let mut total = recovered
                 .build_installed_total_boot_admission(
                     installed_selection,
@@ -10036,7 +10094,10 @@ mod tests {
             let routed = prepared.commit(total.admission_mut(), 0x51u64).unwrap();
             assert_eq!(routed.domain(), domain);
             assert_eq!(routed.into_endpoint(), 0x51);
-            let proof = total.finalize().unwrap();
+            let runtime = total.authorize_runtime().unwrap();
+            assert_eq!(runtime.installed(), installed_selection);
+            assert_eq!(runtime.admission().running().count(), 1);
+            let proof = runtime.proof();
             assert_eq!(proof.classified_domains, 1);
             assert_eq!(proof.running_microvm_eligible, 1);
             assert_eq!(proof.running_in_microvm, 1);

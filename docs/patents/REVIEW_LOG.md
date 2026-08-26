@@ -1,5 +1,16 @@
 # Patent review log
 
+## 2026-08-26 — Consuming installed Total runtime authorization
+
+Patent review: **NOT_TRIGGERED** for consuming the existing installed admission
+owner only after its existing inventory finalizer succeeds, then retaining its
+already reviewed selection, policy, release, table, and proof in a read-only
+typed owner. This is conventional typestate, ownership, and failure ordering; it
+adds no VM construction, placement algorithm, scheduling, device protocol, DMA,
+queue, interrupt, or hardware mechanism. Broader adaptive/Total-MicroVM and
+native storage work retain their existing `TRIGGERED` reviews; this technical
+screen is not patent clearance.
+
 ## 2026-08-26 — Installed recovery owner to Total admission composition
 
 Patent review: **NOT_TRIGGERED** for rechecking an already authenticated live

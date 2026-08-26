@@ -1211,6 +1211,16 @@ strict route preparation and final proof, while missing identity fails before
 release construction. Configuration passes 51 tests on Windows and Arch Linux;
 WHP/KVM 11/12 are regression evidence only, not native SATA evidence.
 
+Final installed Total authorization is now **PARTIALLY IMPLEMENTED** as a
+consuming ownership transition. Successful finalization retains the exact live
+installed selection, recovered policy, authenticated release, admission table,
+and `TotalMicrovmRuntimeProof` together in a read-only runtime owner. Missing
+required domains fail with no runtime authorization. The WHP/KVM component paths
+retain that owner through execution rather than keeping a mutable pre-launch
+admission beside a detached proof. Configuration passes 51 tests on Windows and
+Arch Linux and runner regressions pass 11/12; no fresh signed component or native
+installed-device execution is claimed by this increment.
+
 Recovery-session publication is now atomic across a bounded device set.
 `BlockSessionGrant` carries each explicit device/principal/rights decision, and
 `grant_sessions_atomic` preflights every registered identity, rights mask, and

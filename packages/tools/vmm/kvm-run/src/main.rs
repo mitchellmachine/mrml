@@ -7,8 +7,8 @@ use mrml_config::{
     ConfigurationService, EffectiveBootIsolationPolicy, IsolationPolicyApplicationPlan,
     IsolationPolicySetting, IsolationServiceBounds, IsolationServiceIdentity,
     MicrovmConfigurationServiceLauncher, OwnerIsolationSelection,
-    PreparedMicrovmConfigurationLauncher, RecoveredInstalledTotalAdmission, SettingId,
-    hosted_recovery_probe::recover_total_admission_with,
+    PreparedMicrovmConfigurationLauncher, RecoveredInstalledTotalAdmission,
+    RecoveredInstalledTotalRuntime, SettingId, hosted_recovery_probe::recover_total_admission_with,
 };
 #[cfg(target_os = "linux")]
 use mrml_crypto::{LAMPORT_PUBLIC_KEY_BYTES, Sha3_512};
@@ -3027,6 +3027,7 @@ fn application_main() -> Result<()> {
         (None, None) => None,
         _ => return Err(anyhow!("KVM Total policy/admission ownership mismatch")),
     };
+    let mut installed_total_runtime: Option<RecoveredInstalledTotalRuntime<2>> = None;
     let mut component_cpu = if component_service_mode {
         let mut capabilities = CapabilitySpace::<1>::new();
         let mut budgets = CpuBudgetTable::<1, 1>::new(0x1a53)
@@ -3554,21 +3555,23 @@ fn application_main() -> Result<()> {
             return Err(anyhow!("KVM Total MicroVM admission was not satisfied"));
         }
         if component_service_mode {
-            let proof = match admission {
-                KvmTotalAdmission::Recovered(total) => total
-                    .finalize()
-                    .map_err(|error| anyhow!("KVM recovered finalization failed: {:?}", error))?,
-                KvmTotalAdmission::Standalone(_) => {
-                    return Err(anyhow!("KVM component route lost release-owned admission"));
+            let runtime = match isolation_admission.take() {
+                Some(KvmTotalAdmission::Recovered(total)) => {
+                    total.authorize_runtime().map_err(|error| {
+                        anyhow!("KVM recovered runtime authorization failed: {:?}", error)
+                    })?
                 }
+                _ => return Err(anyhow!("KVM component route lost installed Total owner")),
             };
+            let proof = runtime.proof();
             println!(
                 "component-total-inventory|status=PASS|backend=kvm|classified={}|eligible={}|microvm={}|native_fallback={}",
                 proof.classified_domains,
                 proof.running_microvm_eligible,
                 proof.running_in_microvm,
-                admission.total_microvm_report().native_fallback
+                runtime.admission().total_microvm_report().native_fallback
             );
+            installed_total_runtime = Some(runtime);
         }
         let mut launcher = PreparedMicrovmConfigurationLauncher::new(
             AdmittedConfigurationGuestFactory::new(spec, admitted_guest),
@@ -4797,7 +4800,11 @@ fn application_main() -> Result<()> {
             cpu_runtime_total
         );
     }
-    if let Some(admission) = isolation_admission.as_ref() {
+    if let Some(admission) = installed_total_runtime
+        .as_ref()
+        .map(RecoveredInstalledTotalRuntime::admission)
+        .or_else(|| isolation_admission.as_ref().map(|value| &**value))
+    {
         let report = admission.total_microvm_report();
         println!(
             "isolation|requested=total-microvm|status=satisfied|backend=kvm|policy_generation={}|eligible={}|microvm={}|native_fallback={}",
