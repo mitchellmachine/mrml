@@ -352,6 +352,15 @@ callee retained the explicit `'a: 'b` relationship required by tuple-field
 replacement. This is evidence for those exact sites, not general
 interprocedural lifetime inference. Temporary sources and metadata were removed.
 
+Another independently authored Rust 2024 metadata-only probe against this exact
+toolchain and commit returned that projected callee result's shared child from
+direct and conditional sites inside `loop` blocks. Both parameter-backed forms
+compiled. Matching loop-local forms failed with E0515 at their return sites.
+The oracle-only callee retained the explicit `'a: 'b` relationship required by
+tuple-field replacement. This is evidence for those exact loop-return shapes,
+not a general loop or region fixed point. Temporary sources and metadata were
+removed.
+
 An independently authored Rust 2024 metadata-only probe against this exact
 toolchain and commit returned call-derived shared children through an explicit
 return and through a conditional early-return plus tail-return path. Both

@@ -4021,6 +4021,13 @@ matching local-backed forms fail the bounded outlives check. The pinned oracle
 reports E0515 at both local return sites. Windows and Arch remain at 988 compiler
 tests per host; general interprocedural lifetime inference remains unsupported.
 
+Direct and conditional returns inside supported `loop` blocks now preserve the
+same projected call-derived shared-child origin. Parameter-backed second
+arguments pass, while matching loop-local second arguments fail the bounded
+outlives check. The pinned oracle accepts both parameter forms and rejects both
+local escapes with E0515. Windows and Arch remain at 988 compiler tests per
+host; general loop and region fixed points remain unsupported.
+
 Exact typed tuple literals now seed the same projected state when a local is
 declared. Every reference field is checked against the declared tuple element
 and return type; only a parameter-backed element records an origin. Scalar and

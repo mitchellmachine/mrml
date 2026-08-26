@@ -863,6 +863,14 @@ fail closed; ORACLE-0002 reports E0515 at both local return sites. Windows and
 Arch remain at 988 compiler tests per host. General interprocedural lifetime
 inference remains unsupported.
 
+Direct and conditional return sites inside supported `loop` blocks now retain
+the projected callee summary's shared-child origin. Parameter-backed second
+arguments pass and matching loop-local second arguments fail closed. ORACLE-0002
+accepts both parameter cases and rejects both local escapes with E0515. Windows
+and Arch each pass 642 library tests, one component-interface probe, 10
+conformance tests, and 335 replacement tests: 988 compiler tests per host.
+General loop and region fixed points remain unsupported.
+
 Multi-field tuple literals retain a separate projected origin per field. A
 conditional reference element seeds its field only when both arms prove the
 same parameter; unequal first/second origins fail closed. Focused caller tests

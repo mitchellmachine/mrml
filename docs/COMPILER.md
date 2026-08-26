@@ -1172,6 +1172,13 @@ matching local-backed children fail closed. ORACLE-0002 reports E0515 at both
 local return sites. This is bounded return-site composition, not general
 interprocedural lifetime inference.
 
+Projected callee-summary shared children now also retain that proven origin at
+direct and conditional return sites inside supported `loop` blocks. Parameter-
+backed second arguments remain valid, while equivalent loop-local second
+arguments fail closed. ORACLE-0002 accepts both parameter forms and reports
+E0515 for both local escapes. This is bounded loop-return composition, not a
+general loop or region fixed point.
+
 The first modern trait-solver foundation is an explicit bounded implemented-
 goal representation. Stable trait/type/inference/placeholder identities remain
 distinct; canonicalization replaces inference identities with first-occurrence
