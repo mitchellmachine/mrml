@@ -5880,3 +5880,15 @@ optimization, instruction-selection, or code-generation algorithm. General
 relocation and linking remain absent. Broader compiler completion remains
 partial; this technical screen does not establish clearance or infringement and
 does not replace independent human dual review.
+
+# 2026-08-26 — Relocation-aware naked external branches
+
+**Result: NOT_TRIGGERED after the pipeline-integration review.** This increment
+recognizes one conventional direct external jump identifier, preserves its
+checked patch offset in a typed result, rejects unresolved output through the
+ordinary machine-code API, and routes the record into the already reviewed
+ELF64/COFF relocation writers. It introduces no novel linker, assembler,
+relocation, optimization, instruction-selection, or code-generation algorithm.
+General relocations and linking remain absent. Broader compiler completion
+remains partial; this technical screen does not establish clearance or
+infringement and does not replace independent human dual review.

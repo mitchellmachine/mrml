@@ -4631,9 +4631,12 @@ The object layer separately emits one typed checked x86-64 PC-relative external
 relocation as ELF64 `.rela.text`/`R_X86_64_PLT32` with addend `-4` or COFF
 `IMAGE_REL_AMD64_REL32`; exact structural tests cover undefined symbols, string
 tables, relocation entries, and invalid patch ranges without changing existing
-relocation-free output. Naked symbol operands are not connected yet. Windows
-gnullvm and native Arch Linux WSL each pass 634 library tests,
-one component probe, 10 conformance tests, and 335 replacement tests: 980
+relocation-free output. One validated direct `jmp symbol` now returns code plus
+a typed external-branch record; ordinary `MachineCode` compilation rejects it,
+while the object pipeline immediately consumes it. Multiple externals and
+invalid identifiers fail closed in Intel and AT&T modes. Windows gnullvm and
+native Arch Linux WSL each pass 635 library tests,
+one component probe, 10 conformance tests, and 335 replacement tests: 981
 compiler tests per host.
 
 The projection-bearing term milestone uses a fixed 64-node arena for flat leaf
