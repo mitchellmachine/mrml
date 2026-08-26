@@ -9178,6 +9178,9 @@ fn preanalyze_runtime_expression_statement_reads<
             );
         }
         Ok(Some(X86_64InlineAssembly::SetRax { output })) => {
+            if output == "_" {
+                return Ok(());
+            }
             let place = x86_64_inline_output_place(function, locals, output).map_err(|kind| {
                 CodegenError {
                     kind,
@@ -26735,6 +26738,9 @@ impl<
                 return self.emit(&[0x48, 0x39, 0xc0]);
             }
             Ok(Some(X86_64InlineAssembly::SetRax { output })) => {
+                if output == "_" {
+                    return self.emit(&[0x48, 0xc7, 0xc0, 0x07, 0x00, 0x00, 0x00]);
+                }
                 let place = x86_64_inline_output_place(
                     self.function,
                     &self.locals[..self.saved_locals],
@@ -30775,6 +30781,17 @@ mod tests {
                     .any(|bytes| bytes == [0x48, 0xc7, 0xc0, 0x07, 0, 0, 0])
             );
         }
+        let discarded_output = compile(concat!(
+            "#[unsafe(no_mangle)] pub unsafe extern \"C\" fn answer() -> u64 { ",
+            "asm!(\"mov rax, 7\", lateout(\"rax\") _); 42 }"
+        ))
+        .unwrap();
+        assert!(
+            discarded_output
+                .bytes()
+                .windows(7)
+                .any(|bytes| bytes == [0x48, 0xc7, 0xc0, 0x07, 0, 0, 0])
+        );
         let projected_output = compile(concat!(
             "#[unsafe(no_mangle)] pub unsafe extern \"C\" fn answer() -> u64 { ",
             "let mut values: (u64, u64) = (1, 2); ",
