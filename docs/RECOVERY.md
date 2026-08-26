@@ -161,6 +161,13 @@ explicitly and downgrade the status rather than guessing.
   merge sibling slots, transfer a refund, or clear the reservation merely
   because one sibling returned. Any unresolved bit retains its charge and keeps
   release and rollover blocked.
+  Hosted SMP adds one native runner and deadline worker per live vCPU. Recovery
+  must never treat one runner's exit, elapsed measurement, affinity restoration,
+  priority restoration, or cancellation retirement as evidence for its sibling.
+  Both exact runner states must retire and both slices must reconcile before VM
+  teardown or reservation release. A missing result retains that slice's full
+  precharge and fails the domain closed; persisted thread handles, cancellation
+  pointers, and native scheduling snapshots are never reconstructed.
   A hosted deadline worker is also linear transient state: VM teardown, run-page
   unmapping, VP deletion, and accounting reconciliation must wait until the
   exact worker has retired. Recovery must never reconstruct a cancellation

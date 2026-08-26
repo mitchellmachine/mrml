@@ -10,7 +10,8 @@ use mrml_kernel::arch::x86_64::{
 use mrml_kernel::{
     AffinityDeadlineVmBackend, BootHandoff, DeadlineVmBackend, IoReadCompleter, MAX_PE_SECTIONS,
     MmioWriteCompleter, PAGE_SIZE, PeImage, PhysAddr, RevocableVmBackend,
-    ScheduledDeadlineVmBackend, VerifiedExecutable, VmBackend, VmDeadlineOutcome, VmExit,
+    ScheduledDeadlineVmBackend, ScheduledSmpVmBackend, ScheduledVcpuOutcome, VerifiedExecutable,
+    VmBackend, VmDeadlineOutcome, VmExit,
 };
 
 use crate::{KVM_API_VERSION, KvmError, KvmMemoryRegion, complete_io_read, decode_run_page};
@@ -1769,6 +1770,161 @@ impl<const N: usize> KvmBackend<N> {
         };
         Ok((bootstrap?, secondary?))
     }
+
+    pub(crate) fn run_smp_with_scheduling_deadlines(
+        &mut self,
+        logical_cpus: [u8; 2],
+        priorities: [u8; 2],
+        maximum_micros: [u32; 2],
+    ) -> Result<[ScheduledVcpuOutcome; 2], KvmError> {
+        if self.mapping_poisoned {
+            return Err(KvmError::MappingStateUncertain);
+        }
+        if logical_cpus[0] == logical_cpus[1] {
+            return Err(KvmError::InvalidVcpu);
+        }
+        if logical_cpus.iter().any(|cpu| *cpu >= 64) {
+            return Err(KvmError::InvalidAffinity);
+        }
+        if priorities != [0, 0] {
+            return Err(KvmError::InvalidPriority);
+        }
+        if maximum_micros.contains(&0) {
+            return Err(KvmError::InvalidDeadline);
+        }
+        let mut application = self.secondary.take().ok_or(KvmError::InvalidVcpu)?;
+        let bootstrap_priority = ThreadPriorityGuard::bind(priorities[0])?;
+        let bootstrap_affinity = match ThreadAffinityGuard::bind(logical_cpus[0]) {
+            Ok(guard) => guard,
+            Err(error) => return bootstrap_priority.restore().and(Err(error)),
+        };
+        let bootstrap_started = mrml_runtime::Instant::now();
+        let result = mrml_runtime::Shared::new(mrml_runtime::SpinMutex::new(None));
+        let worker_result = result.clone();
+        if mrml_runtime::spawn_detached(move || {
+            let priority = match ThreadPriorityGuard::bind(priorities[1]) {
+                Ok(guard) => guard,
+                Err(error) => {
+                    *worker_result.lock() = Some(Err(error));
+                    return;
+                }
+            };
+            let affinity = match ThreadAffinityGuard::bind(logical_cpus[1]) {
+                Ok(guard) => guard,
+                Err(error) => {
+                    *worker_result.lock() = Some(priority.restore().and(Err(error)));
+                    return;
+                }
+            };
+            let started = mrml_runtime::Instant::now();
+            let run = (|| {
+                loop {
+                    match application.mp_state()? {
+                        KVM_MP_STATE_UNINITIALIZED => {
+                            if remaining_smp_runtime(&started, maximum_micros[1]).is_err() {
+                                break Ok(VmDeadlineOutcome::Expired);
+                            }
+                            mrml_runtime::yield_now();
+                        }
+                        _ => {
+                            let outcome = loop {
+                                let remaining =
+                                    match remaining_smp_runtime(&started, maximum_micros[1]) {
+                                        Ok(remaining) => remaining,
+                                        Err(()) => break VmDeadlineOutcome::Expired,
+                                    };
+                                let outcome = application.run_with_deadline(remaining)?;
+                                let VmDeadlineOutcome::Exit(exit) = outcome else {
+                                    break outcome;
+                                };
+                                if let VmExit::Io {
+                                    port: 0x00e9,
+                                    size: 1,
+                                    write: true,
+                                    value,
+                                } = exit
+                                {
+                                    mrml_runtime::mrml_println!(
+                                        "KVM_SMP_TRACE stage={:#04x}",
+                                        value
+                                    );
+                                    continue;
+                                }
+                                if matches!(
+                                    exit,
+                                    VmExit::Io {
+                                        port: 0x4d5e | 0x4d60,
+                                        size: 4,
+                                        write: true,
+                                        ..
+                                    }
+                                ) {
+                                    continue;
+                                }
+                                break VmDeadlineOutcome::Exit(exit);
+                            };
+                            break Ok(outcome);
+                        }
+                    }
+                }
+            })();
+            let elapsed = u64::try_from(started.elapsed().as_micros()).unwrap_or(u64::MAX);
+            let affinity_restored = affinity.restore();
+            let priority_restored = priority.restore();
+            let restored = affinity_restored.and(priority_restored);
+            *worker_result.lock() = Some(
+                restored
+                    .and(run)
+                    .map(|outcome| ScheduledVcpuOutcome::new(outcome, elapsed)),
+            );
+        })
+        .is_err()
+        {
+            let affinity_restored = bootstrap_affinity.restore();
+            let priority_restored = bootstrap_priority.restore();
+            affinity_restored.and(priority_restored)?;
+            return Err(KvmError::SystemCall);
+        }
+
+        let bootstrap_run = (|| {
+            loop {
+                let remaining = match remaining_smp_runtime(&bootstrap_started, maximum_micros[0]) {
+                    Ok(remaining) => remaining,
+                    Err(()) => break Ok(VmDeadlineOutcome::Expired),
+                };
+                let outcome = self.vcpu.run_with_deadline(remaining)?;
+                let VmDeadlineOutcome::Exit(exit) = outcome else {
+                    break Ok(outcome);
+                };
+                if let VmExit::Io {
+                    port: 0x00e9,
+                    size: 1,
+                    write: true,
+                    value,
+                } = exit
+                {
+                    mrml_runtime::mrml_println!("KVM_SMP_TRACE stage={:#04x}", value);
+                    continue;
+                }
+                break Ok(VmDeadlineOutcome::Exit(exit));
+            }
+        })();
+        let bootstrap_elapsed =
+            u64::try_from(bootstrap_started.elapsed().as_micros()).unwrap_or(u64::MAX);
+        let bootstrap_affinity_restored = bootstrap_affinity.restore();
+        let bootstrap_priority_restored = bootstrap_priority.restore();
+        let bootstrap_restored = bootstrap_affinity_restored.and(bootstrap_priority_restored);
+        let application_run = loop {
+            if let Some(outcome) = result.lock().take() {
+                break outcome;
+            }
+            mrml_runtime::yield_now();
+        };
+        bootstrap_restored?;
+        let bootstrap = ScheduledVcpuOutcome::new(bootstrap_run?, bootstrap_elapsed);
+        let application = application_run?;
+        Ok([bootstrap, application])
+    }
     pub fn map_memory(
         &mut self,
         guest_address: u64,
@@ -1796,6 +1952,15 @@ impl<const N: usize> KvmBackend<N> {
     pub(crate) fn snapshot(&self) -> Result<KvmVcpuSnapshot, KvmError> {
         self.vcpu.snapshot()
     }
+}
+
+fn remaining_smp_runtime(started: &mrml_runtime::Instant, maximum_micros: u32) -> Result<u32, ()> {
+    let elapsed = started.elapsed().as_micros();
+    let remaining = u128::from(maximum_micros).checked_sub(elapsed).ok_or(())?;
+    u32::try_from(remaining)
+        .ok()
+        .filter(|value| *value != 0)
+        .ok_or(())
 }
 
 impl<const N: usize> VmBackend for KvmBackend<N> {
@@ -1885,6 +2050,22 @@ impl<const N: usize> ScheduledDeadlineVmBackend for KvmBackend<N> {
         let result = self.run_with_affinity_deadline(vcpu, logical_cpu, maximum_micros);
         priority.restore()?;
         result
+    }
+}
+
+impl<const N: usize> ScheduledSmpVmBackend for KvmBackend<N> {
+    fn run_smp_with_scheduling_deadlines(
+        &mut self,
+        logical_cpus: [u8; 2],
+        priorities: [u8; 2],
+        maximum_micros: [u32; 2],
+    ) -> Result<[ScheduledVcpuOutcome; 2], Self::Error> {
+        KvmBackend::run_smp_with_scheduling_deadlines(
+            self,
+            logical_cpus,
+            priorities,
+            maximum_micros,
+        )
     }
 }
 

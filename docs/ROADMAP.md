@@ -337,7 +337,7 @@ simultaneous slice still precharges the one shared period allowance. Sibling
 reconciliation cannot retire or refund another vCPU's charge; any unresolved
 slot blocks release and period rollover. This is kernel simulation groundwork;
 the signed hosted component profile still executes one vCPU.
-Windows and Arch Linux kernel suites pass 511 tests, the WHP runner passes 7,
+Windows and Arch Linux kernel suites pass 512 tests, the WHP runner passes 7,
 and the KVM runner passes 8. A backend-neutral deadline contract now arms
 cancellation before entry and waits for the cancellation worker to retire before
 return or teardown. WHP uses `WHvCancelRunVirtualProcessor`; KVM sets
@@ -361,6 +361,20 @@ scheduler priority 0 before entry, verifies the applied state, and restores and
 verifies the complete prior native state after affinity, vCPU, and deadline-
 worker retirement. Any nonzero class or uncertain transition fails before
 successful return.
+
+The signed two-vCPU kernel probes now cross a separate backend-neutral
+`ScheduledSmpVmBackend` contract. Before either runner starts, one bounded CPU
+budget reserves two vCPUs and simultaneously precharges two 100-millisecond
+slices from one shared 200-millisecond allowance. WHP and KVM apply the exact
+logical-CPU 0/1 and host-normal decisions inside the two native runner threads,
+arm a per-runner deadline across every intermediate exit, restore native
+scheduling state after each runner and cancellation worker retire, report each
+runner's host-wall elapsed time, and reconcile the two slices independently
+before releasing the reservation. Fresh release probes measured bootstrap/AP
+times of 6,519/3,593 microseconds on WHP and 4,601/4,229 microseconds on nested
+KVM. This is hosted signed SMP enforcement evidence, not yet a multi-vCPU
+component-service profile, trusted CPU time, physical-topology evidence, or a
+host-security boundary.
 
 Typed provider-resolution groundwork now matches canonical `REQUIRES` and
 `PROVIDES` edges only inside an immutable `SystemGeneration`. Interface name,

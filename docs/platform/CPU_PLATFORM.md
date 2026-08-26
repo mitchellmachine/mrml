@@ -178,6 +178,20 @@ restore and verify it after affinity, vCPU, and deadline-worker retirement.
 Nonzero priority fails before entry. MRML does not equate Windows dynamic
 priority levels with Linux real-time scheduling policies.
 
+A two-vCPU hosted path is now **PARTIALLY IMPLEMENTED** for the signed kernel
+SMP probe. `ScheduledSmpVmBackend` accepts two already-authorized scheduling
+decisions and returns a separate outcome and conservative host-wall duration
+for each runner. One two-vCPU reservation precharges two 100-millisecond slices
+against a single 200-millisecond allowance. WHP and KVM enforce logical CPUs 0
+and 1, host-normal priority, and a deadline inside the respective concurrent
+runner threads; every intermediate guest exit consumes the remaining original
+deadline rather than resetting it. Both runners and cancellation workers retire
+and restore native state before the slices reconcile independently and the
+reservation is released. Fresh release probes measured 6,519/3,593 microseconds
+on WHP and 4,601/4,229 microseconds on nested KVM. This remains hosted evidence,
+not trusted CPU time, physical topology, general scheduling, or multi-vCPU
+adaptive component admission.
+
 The focused signed ZIM/Zstd component profile now consumes one exact
 domain-bound vCPU reservation before either hosted backend constructs its
 guest. The uncommitted isolation route and budget reservation are composed in

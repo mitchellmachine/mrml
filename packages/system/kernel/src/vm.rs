@@ -710,6 +710,47 @@ pub trait ScheduledDeadlineVmBackend: AffinityDeadlineVmBackend {
     ) -> Result<VmDeadlineOutcome, Self::Error>;
 }
 
+/// One backend-observed result from a concurrently scheduled vCPU. Elapsed
+/// host-wall time is reported per runner so the CPU control plane can reconcile
+/// each independently precharged slice; it is conservative hosted accounting,
+/// not trusted guest CPU time.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct ScheduledVcpuOutcome {
+    outcome: VmDeadlineOutcome,
+    elapsed_micros: u64,
+}
+
+impl ScheduledVcpuOutcome {
+    pub const fn new(outcome: VmDeadlineOutcome, elapsed_micros: u64) -> Self {
+        Self {
+            outcome,
+            elapsed_micros,
+        }
+    }
+
+    pub const fn outcome(self) -> VmDeadlineOutcome {
+        self.outcome
+    }
+
+    pub const fn elapsed_micros(self) -> u64 {
+        self.elapsed_micros
+    }
+}
+
+/// Backend-neutral contract for two concurrent bounded vCPU runners. Each
+/// array position is the matching vCPU index. Both native scheduling states
+/// must be applied before that runner's first entry and restored only after its
+/// run and cancellation worker have retired. Failure or expiry never permits a
+/// native fallback or an unbounded sibling runner.
+pub trait ScheduledSmpVmBackend: VmBackend {
+    fn run_smp_with_scheduling_deadlines(
+        &mut self,
+        logical_cpus: [u8; 2],
+        priorities: [u8; 2],
+        maximum_micros: [u32; 2],
+    ) -> Result<[ScheduledVcpuOutcome; 2], Self::Error>;
+}
+
 /// Backend contract for completing one exact scalar input exit before another
 /// vCPU entry. Implementations must bind completion to the still-pending exit's
 /// vCPU, port, and width and must not report success after partial register or
@@ -1296,5 +1337,18 @@ mod tests {
         assert_eq!(table.account_exit(id), Err(VmError::ExitBudgetExceeded));
         assert_eq!(table.state(id), Ok(VmState::Failed));
         assert_eq!(table.start(id), Err(VmError::InvalidVmState));
+    }
+
+    #[test]
+    fn scheduled_vcpu_outcome_retains_exact_runner_measurement() {
+        let exit = VmExit::Io {
+            port: 0x4d5c,
+            size: 4,
+            write: true,
+            value: 2,
+        };
+        let outcome = ScheduledVcpuOutcome::new(VmDeadlineOutcome::Exit(exit), 4_321);
+        assert_eq!(outcome.outcome(), VmDeadlineOutcome::Exit(exit));
+        assert_eq!(outcome.elapsed_micros(), 4_321);
     }
 }

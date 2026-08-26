@@ -338,7 +338,14 @@ reservation, bounded by the existing 64-vCPU affinity model. Simultaneous
 sibling slices remain charged to the same allowance, reconcile independently,
 and cannot be substituted by changing vCPU, logical CPU, priority, start, or
 charge. Any unresolved sibling continues to block release and rollover. This
-does not yet make the focused signed hosted profile multi-vCPU.
+does not yet make the focused signed hosted profile multi-vCPU. The existing
+signed two-vCPU kernel probe now exercises the next backend gate: WHP and KVM
+consume two simultaneous 100-millisecond slices, bind separate runner threads
+to authorized logical CPUs 0 and 1 at host-normal priority, arm independent
+deadlines, restore both native scheduling states, and return exact per-runner
+host-wall measurements for independent reconciliation. This proves the shared
+mechanism under signed hosted SMP execution; it does not promote the one-vCPU
+component-service/Total route to multi-vCPU support.
 The runner measures host-wall elapsed time around backend entry, refunds only a
 verified underrun, and retains the complete precharge on overrun. Replay,
 substitution, exhaustion, invalid time, affinity, priority, or vCPU selection

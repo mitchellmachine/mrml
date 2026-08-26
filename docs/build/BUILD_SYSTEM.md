@@ -371,6 +371,12 @@ Kernel/VMM tests exact-match slice digests, reject wrong architecture/stale
 generation, prove exact combination binding, and admit only authorized slices.
 UEFI testing builds, packages/extracts, and boots `BOOTX64.EFI` under QEMU with an
 expected signed probe before any exact physical-hardware claim.
+The canonical `kvm_smp_probe` and `whp_smp_probe` feature profiles now make the
+two hosted SMP kernel variants reproducible through `mrml build`; both select
+the common SMP proof, explicit emulated AP timing, and startup trace, while the
+WHP profile additionally selects its handshake transport. The exact
+`MRML_EMULATED_TSC_HZ` compile input remains explicit and receipt-bound rather
+than an ambient build variable.
 
 The authenticated package-derived positive path has executed under QEMU/EDK2
 with the raw trace `c8 b0 b2 b0 b2 c9 b0 b2 b2 a1 a2 a3 a4 a5 a6 a7 a8 b1

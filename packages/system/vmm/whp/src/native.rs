@@ -557,6 +557,57 @@ impl WhpVcpuRunner {
         }
         Ok(exit)
     }
+
+    fn run_with_deadline(&mut self, maximum_micros: u32) -> Result<VmDeadlineOutcome, WhpError> {
+        if maximum_micros == 0 {
+            return Err(WhpError::InvalidDeadline);
+        }
+        const ARMED: u8 = 0;
+        const RETURNED: u8 = 1;
+        const EXPIRED: u8 = 2;
+        const CANCEL_FAILED: u8 = 3;
+        let phase = mrml_runtime::Shared::new(AtomicU8::new(ARMED));
+        let retired = mrml_runtime::Shared::new(AtomicBool::new(false));
+        let worker_phase = phase.clone();
+        let worker_retired = retired.clone();
+        let cancellation = WhpRunCancellation {
+            partition: self.partition,
+            api: self.api,
+            index: self.index,
+        };
+        mrml_runtime::spawn_detached(move || {
+            let started = mrml_runtime::Instant::now();
+            loop {
+                if worker_phase.load(Ordering::Acquire) != ARMED {
+                    break;
+                }
+                if started.elapsed() >= Duration::from_micros(u64::from(maximum_micros)) {
+                    if worker_phase
+                        .compare_exchange(ARMED, EXPIRED, Ordering::AcqRel, Ordering::Acquire)
+                        .is_ok()
+                        && cancellation.request().is_err()
+                    {
+                        worker_phase.store(CANCEL_FAILED, Ordering::Release);
+                    }
+                    break;
+                }
+                mrml_runtime::yield_now();
+            }
+            worker_retired.store(true, Ordering::Release);
+        })
+        .map_err(|_| WhpError::SystemCall(-1))?;
+        let result = self.run();
+        let _ = phase.compare_exchange(ARMED, RETURNED, Ordering::AcqRel, Ordering::Acquire);
+        while !retired.load(Ordering::Acquire) {
+            mrml_runtime::yield_now();
+        }
+        match phase.load(Ordering::Acquire) {
+            RETURNED => result.map(VmDeadlineOutcome::Exit),
+            EXPIRED => Ok(VmDeadlineOutcome::Expired),
+            CANCEL_FAILED => Err(WhpError::SystemCall(-1)),
+            _ => Err(WhpError::InvalidRegisterState),
+        }
+    }
 }
 
 impl PreparedWhpPartition<'_> {

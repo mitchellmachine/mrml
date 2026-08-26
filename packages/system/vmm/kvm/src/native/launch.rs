@@ -1042,6 +1042,21 @@ impl<const N: usize> mrml_kernel::ScheduledDeadlineVmBackend for PreparedKvmGues
     }
 }
 
+impl<const N: usize> mrml_kernel::ScheduledSmpVmBackend for PreparedKvmGuest<N> {
+    fn run_smp_with_scheduling_deadlines(
+        &mut self,
+        logical_cpus: [u8; 2],
+        priorities: [u8; 2],
+        maximum_micros: [u32; 2],
+    ) -> Result<[mrml_kernel::ScheduledVcpuOutcome; 2], Self::Error> {
+        if self.trapped_mmio_retired {
+            return Err(KvmError::InvalidMapping);
+        }
+        self.backend
+            .run_smp_with_scheduling_deadlines(logical_cpus, priorities, maximum_micros)
+    }
+}
+
 impl<const N: usize> mrml_kernel::IoReadCompleter for PreparedKvmGuest<N> {
     fn complete_io_read(
         &mut self,

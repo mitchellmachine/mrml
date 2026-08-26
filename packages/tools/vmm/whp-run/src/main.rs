@@ -28,8 +28,8 @@ use mrml_kernel::{
     GuestMemory, HypercallRouter, InterruptPolicy, IsolationAdmissionTable, IsolationMode,
     IsolationPlacement, IsolationUnavailableReason, MAX_COMPONENT_IMAGE_REGIONS, MemoryPoolTable,
     MicrovmPageProjectionKind, ObjectId, PAGE_SIZE, PreparedIsolationServiceRoute, ResourceCommand,
-    Rights, SIGNED_ARTIFACT_OVERHEAD_BYTES, ScheduledDeadlineVmBackend, SignedArtifact,
-    TotalMicrovmClass, TrustRoot, VIRTUAL_BLOCK_FEATURE_FLUSH, VcpuReservationId,
+    Rights, SIGNED_ARTIFACT_OVERHEAD_BYTES, ScheduledDeadlineVmBackend, ScheduledSmpVmBackend,
+    SignedArtifact, TotalMicrovmClass, TrustRoot, VIRTUAL_BLOCK_FEATURE_FLUSH, VcpuReservationId,
     VerifiedExecutable, VerifiedGpuKernelBundle, VirtualBlockBackend, VirtualBlockBackendAuthority,
     VirtualBlockCompletionStatus, VirtualBlockConfigurationPage, VirtualBlockDevice,
     VirtualBlockDeviceState, VirtualBlockError, VirtualBlockMutationError,
@@ -137,6 +137,120 @@ fn run_component_vcpu<T>(
         .map_err(|error| anyhow!("component vCPU runtime reconciliation failed: {:?}", error))?;
     *next_start = end;
     result
+}
+
+#[cfg(target_os = "windows")]
+fn run_scheduled_smp<B>(backend: &mut B) -> Result<([VmExit; 2], [u64; 2])>
+where
+    B: ScheduledSmpVmBackend,
+    B::Error: core::fmt::Debug,
+{
+    const SLICE_MICROS: u32 = 100_000;
+    let mut capabilities = CapabilitySpace::<1>::new();
+    let mut budgets = CpuBudgetTable::<1, 1>::new(0x1a54)
+        .map_err(|error| anyhow!("SMP CPU table failed: {:?}", error))?;
+    let spec = CpuBudgetSpec::new(2, 2 * SLICE_MICROS, 2 * SLICE_MICROS, 0, 0b11)
+        .map_err(|error| anyhow!("SMP CPU budget failed: {:?}", error))?;
+    let (budget, capability) = budgets
+        .create_root(spec, &mut capabilities)
+        .map_err(|error| anyhow!("SMP CPU root failed: {:?}", error))?;
+    let reservation = budgets
+        .reserve_vcpus(
+            budget,
+            capability,
+            ObjectId(0x534d_505f_5052_4f42),
+            2,
+            &capabilities,
+        )
+        .map_err(|error| anyhow!("SMP vCPU reservation failed: {:?}", error))?;
+    budgets
+        .start_runtime_period(reservation, capability, 0, &capabilities)
+        .map_err(|error| anyhow!("SMP CPU runtime start failed: {:?}", error))?;
+    let bootstrap = budgets
+        .authorize_runtime_slice(
+            reservation,
+            capability,
+            0,
+            0,
+            0,
+            0,
+            SLICE_MICROS,
+            &capabilities,
+        )
+        .map_err(|error| anyhow!("bootstrap SMP runtime charge failed: {:?}", error))?;
+    let application = match budgets.authorize_runtime_slice(
+        reservation,
+        capability,
+        1,
+        1,
+        0,
+        0,
+        SLICE_MICROS,
+        &capabilities,
+    ) {
+        Ok(slice) => slice,
+        Err(error) => {
+            let _ = budgets.reconcile_runtime_slice(bootstrap, capability, 0, &capabilities);
+            let _ = budgets.release_vcpus(reservation, capability, &capabilities);
+            let _ = budgets.retire_root(budget, capability, &mut capabilities);
+            return Err(anyhow!(
+                "application SMP runtime charge failed: {:?}",
+                error
+            ));
+        }
+    };
+    let run = ScheduledSmpVmBackend::run_smp_with_scheduling_deadlines(
+        backend,
+        [bootstrap.logical_cpu(), application.logical_cpu()],
+        [bootstrap.priority(), application.priority()],
+        [bootstrap.charged_micros(), application.charged_micros()],
+    );
+    let (ends, outcomes) = match run {
+        Ok(outcomes) => (
+            [outcomes[0].elapsed_micros(), outcomes[1].elapsed_micros()],
+            Ok(outcomes),
+        ),
+        Err(error) => (
+            [u64::from(SLICE_MICROS); 2],
+            Err(anyhow!("scheduled WHP SMP execution failed: {:?}", error)),
+        ),
+    };
+    let bootstrap_reconciliation =
+        budgets.reconcile_runtime_slice(bootstrap, capability, ends[0], &capabilities);
+    let application_reconciliation =
+        budgets.reconcile_runtime_slice(application, capability, ends[1], &capabilities);
+    let released = budgets
+        .release_vcpus(reservation, capability, &capabilities)
+        .map_err(|error| anyhow!("SMP vCPU release failed: {:?}", error));
+    let retired = budgets
+        .retire_root(budget, capability, &mut capabilities)
+        .map_err(|error| anyhow!("SMP CPU root retirement failed: {:?}", error));
+    bootstrap_reconciliation.map_err(|error| {
+        anyhow!(
+            "bootstrap SMP runtime reconciliation failed at {}us: {:?}",
+            ends[0],
+            error
+        )
+    })?;
+    application_reconciliation.map_err(|error| {
+        anyhow!(
+            "application SMP runtime reconciliation failed at {}us: {:?}",
+            ends[1],
+            error
+        )
+    })?;
+    released?;
+    retired?;
+    let outcomes = outcomes?;
+    let bootstrap_exit = match outcomes[0].outcome() {
+        VmDeadlineOutcome::Exit(exit) => exit,
+        VmDeadlineOutcome::Expired => return Err(anyhow!("WHP bootstrap vCPU deadline expired")),
+    };
+    let application_exit = match outcomes[1].outcome() {
+        VmDeadlineOutcome::Exit(exit) => exit,
+        VmDeadlineOutcome::Expired => return Err(anyhow!("WHP application vCPU deadline expired")),
+    };
+    Ok(([bootstrap_exit, application_exit], ends))
 }
 
 #[cfg(target_os = "windows")]
@@ -372,6 +486,23 @@ impl ScheduledDeadlineVmBackend for WhpGuestOwner<'_> {
             vcpu,
             logical_cpu,
             priority,
+            maximum_micros,
+        )
+    }
+}
+
+#[cfg(target_os = "windows")]
+impl ScheduledSmpVmBackend for WhpGuestOwner<'_> {
+    fn run_smp_with_scheduling_deadlines(
+        &mut self,
+        logical_cpus: [u8; 2],
+        priorities: [u8; 2],
+        maximum_micros: [u32; 2],
+    ) -> core::result::Result<[mrml_kernel::ScheduledVcpuOutcome; 2], Self::Error> {
+        ScheduledSmpVmBackend::run_smp_with_scheduling_deadlines(
+            self.guest_mut(),
+            logical_cpus,
+            priorities,
             maximum_micros,
         )
     }
@@ -2581,9 +2712,8 @@ fn application_main() -> Result<()> {
         return Ok(());
     }
     let exit = if hosted_smp {
-        let (bootstrap, application) = guest
-            .run_smp()
-            .map_err(|error| anyhow!("WHP SMP execution failed: {:?}", error))?;
+        let (exits, elapsed) = run_scheduled_smp(&mut guest)?;
+        let [bootstrap, application] = exits;
         let expected_bootstrap = VmExit::Io {
             port: if smp_periodic_balance_mode {
                 0x4d64
@@ -2626,7 +2756,9 @@ fn application_main() -> Result<()> {
             ));
         }
         println!(
-            "verified signed two-vCPU kernel startup under WHP: verify={}us prepare={}us execute={}us total={}us",
+            "verified signed scheduled two-vCPU kernel startup under WHP: bootstrap={}us application={}us verify={}us prepare={}us execute={}us total={}us",
+            elapsed[0],
+            elapsed[1],
             verification_micros,
             preparation_micros,
             execution_started.elapsed().as_micros(),

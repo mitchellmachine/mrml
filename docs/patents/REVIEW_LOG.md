@@ -5563,3 +5563,17 @@ WHP/KVM SMP runtime enforcement, broader scheduler policy, and the Total MicroVM
 architecture retain their existing `TRIGGERED` reviews. This technical screen
 does not establish clearance or infringement and does not replace independent
 human dual review.
+
+# 2026-08-26 — Hosted two-vCPU scheduling and deadline composition
+
+**Result: NOT_TRIGGERED after the existing hosted deadline, affinity, normal-
+priority, SMP-runner, and CPU-budget reviews.** This increment conventionally
+applies those already reviewed controls inside each of two existing native
+runner threads, carries one decreasing deadline across intermediate exits, and
+returns separate elapsed measurements for reconciliation against the existing
+shared allowance. It introduces no scheduler algorithm, hypervisor protocol,
+hardware interface, priority class, placement policy, or fallback mechanism.
+Broader scheduler policy, adaptive multi-vCPU component admission, and Total
+MicroVM enforcement retain their existing `TRIGGERED` reviews. This technical
+screen does not establish clearance or infringement and does not replace
+independent human dual review.

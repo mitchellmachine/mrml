@@ -7846,8 +7846,29 @@ slice's verified unused precharge. Replay and substitutions of vCPU, logical
 CPU, priority, start, or charge fail without mutation; release and period
 rollover reject while any slot remains in flight; overrun retains its complete
 charge and fails closed. Windows and Arch Linux kernel simulation suites pass
-511 tests. The focused signed hosted component profile remains one vCPU, so
-WHP/KVM SMP runtime enforcement is a later gate.
+512 tests. The focused signed hosted component profile remains one vCPU.
+
+The hosted SMP gate is now implemented for the existing signed two-vCPU kernel
+probe. A backend-neutral `ScheduledSmpVmBackend` receives two exact logical-CPU,
+priority, and maximum-runtime decisions and returns an outcome plus host-wall
+elapsed time for each runner. The runner creates one two-vCPU budget, precharges
+simultaneous 100-millisecond slices from one shared 200-millisecond period, and
+does not enter either native vCPU before both charges exist. KVM binds and
+bounds its BSP and AP `KvmVcpu` threads; WHP does the same for VP 0 and the
+separately owned VP 1 runner. Intermediate debug and handshake exits consume
+the remaining original deadline and never reset it. Both implementations wait
+for cancellation-worker retirement, restore affinity and priority inside the
+owning thread, reconcile both linear slices independently, release the
+reservation, and retire the root before reporting success.
+
+Fresh release-mode, freshly signed probes passed with the same semantic
+two-vCPU proof: WHP reported bootstrap 6,519 microseconds and application 3,593
+microseconds; nested KVM reported 4,601 and 4,229 microseconds. Windows and Arch
+Linux kernel suites pass 512 tests, WHP passes 24 with one manual performance
+test ignored, KVM passes 21 with one manual performance test ignored, and their
+runner suites pass 7 and 8. These are hosted controlled measurements with
+WHP/KVM parity, not trusted guest CPU time, exact physical-topology evidence,
+bare-metal evidence, or a multi-vCPU adaptive component-service path.
 
 Both runners now precharge the remaining bounded 100-millisecond controlled-
 probe allowance and reconcile host-wall elapsed time around every component
@@ -7872,7 +7893,7 @@ closed. Focused live tests reject logical CPU 64 before entry and still expire
 the infinite-loop guest on authorized logical CPU 0.
 
 The ordinary signed component probes also complete through the same affinity
-and deadline path: Windows and Arch Linux kernel suites pass 511 tests, WHP
+and deadline path: Windows and Arch Linux kernel suites pass 512 tests, WHP
 passes 7, and KVM passes 8. Fresh optimized probes reported `logical_cpu=0`,
 `affinity=host-enforced`, and `priority=host-normal`, with 1,466 microseconds
 under WHP and 1,385 microseconds under KVM; KVM reported `eligible=1`,

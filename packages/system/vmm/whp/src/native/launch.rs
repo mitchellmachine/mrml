@@ -7,17 +7,97 @@ use mrml_kernel::arch::x86_64::{
 use mrml_kernel::{
     ArtifactKind, BootHandoff, DeadlineVmBackend, GpuSharedQueueLayout, GpuVmmMemory,
     MAX_PE_SECTIONS, PAGE_SIZE, PeImage, PhysAddr, PreparedComponentServiceLaunch,
-    RevocableVmBackend, ServiceAddressSpaceEraser, TaskId, VerifiedExecutable,
-    VirtualBlockConfigurationPage, VirtualBlockQueueLayout, VirtualBlockResumePage,
-    VirtualBlockVmmMemory, VmBackend, VmExit,
+    RevocableVmBackend, ScheduledVcpuOutcome, ServiceAddressSpaceEraser, TaskId,
+    VerifiedExecutable, VirtualBlockConfigurationPage, VirtualBlockQueueLayout,
+    VirtualBlockResumePage, VirtualBlockVmmMemory, VmBackend, VmExit,
 };
 
 use crate::{GuestRange, MapPermissions, WhpError};
 
-use super::{PreparedWhpPartition, WhpSystem};
+use super::{
+    PreparedWhpPartition, ThreadAffinityGuard, ThreadPriorityGuard, WhpSystem, WhpVcpuRunner,
+};
 
 const XAPIC_BASE: u64 = 0xfee0_0000;
 const MAX_ISOLATED_SERVICES: usize = 3;
+
+fn remaining_smp_runtime(started: &mrml_runtime::Instant, maximum_micros: u32) -> Result<u32, ()> {
+    let elapsed = started.elapsed().as_micros();
+    let remaining = u128::from(maximum_micros).checked_sub(elapsed).ok_or(())?;
+    u32::try_from(remaining)
+        .ok()
+        .filter(|value| *value != 0)
+        .ok_or(())
+}
+
+fn run_scheduled_secondary(
+    runner: &mut WhpVcpuRunner,
+    started: &mrml_runtime::Instant,
+    maximum_micros: u32,
+) -> Result<mrml_kernel::VmDeadlineOutcome, WhpError> {
+    let first = loop {
+        let remaining = match remaining_smp_runtime(started, maximum_micros) {
+            Ok(remaining) => remaining,
+            Err(()) => return Ok(mrml_kernel::VmDeadlineOutcome::Expired),
+        };
+        let outcome = runner.run_with_deadline(remaining)?;
+        if let mrml_kernel::VmDeadlineOutcome::Exit(VmExit::Io {
+            port: 0x00e9,
+            size: 1,
+            write: true,
+            value,
+        }) = outcome
+        {
+            mrml_runtime::mrml_println!("WHP_SMP_TRACE stage={:#04x}", value);
+            continue;
+        }
+        break outcome;
+    };
+    match first {
+        mrml_kernel::VmDeadlineOutcome::Exit(VmExit::Io {
+            port: 0x4d5d,
+            size: 4,
+            write: true,
+            value: 0x0001_0001,
+        }) => {
+            runner.restore_trampoline_rw()?;
+            loop {
+                let remaining = match remaining_smp_runtime(started, maximum_micros) {
+                    Ok(remaining) => remaining,
+                    Err(()) => return Ok(mrml_kernel::VmDeadlineOutcome::Expired),
+                };
+                let outcome = runner.run_with_deadline(remaining)?;
+                let mrml_kernel::VmDeadlineOutcome::Exit(exit) = outcome else {
+                    return Ok(outcome);
+                };
+                if let VmExit::Io {
+                    port: 0x00e9,
+                    size: 1,
+                    write: true,
+                    value,
+                } = exit
+                {
+                    mrml_runtime::mrml_println!("WHP_SMP_TRACE stage={:#04x}", value);
+                    continue;
+                }
+                if matches!(
+                    exit,
+                    VmExit::Io {
+                        port: 0x4d5e | 0x4d60,
+                        size: 4,
+                        write: true,
+                        ..
+                    }
+                ) {
+                    continue;
+                }
+                return Ok(mrml_kernel::VmDeadlineOutcome::Exit(exit));
+            }
+        }
+        mrml_kernel::VmDeadlineOutcome::Expired => Ok(first),
+        _ => Err(WhpError::MalformedExit),
+    }
+}
 
 #[derive(Clone, Copy)]
 struct KernelDevices {
@@ -686,6 +766,138 @@ impl<'system> PreparedWhpGuest<'system> {
             .protect_runtime_trampoline(trampoline, false)?;
         Ok((bootstrap, application))
     }
+
+    pub fn run_smp_with_scheduling_deadlines(
+        &mut self,
+        logical_cpus: [u8; 2],
+        priorities: [u8; 2],
+        maximum_micros: [u32; 2],
+    ) -> Result<[ScheduledVcpuOutcome; 2], WhpError> {
+        self.partition.ensure_mapping_coherent()?;
+        if logical_cpus[0] == logical_cpus[1] {
+            return Err(WhpError::InvalidVcpu);
+        }
+        if logical_cpus.iter().any(|cpu| *cpu >= 64) {
+            return Err(WhpError::InvalidAffinity);
+        }
+        if priorities != [0, 0] {
+            return Err(WhpError::InvalidPriority);
+        }
+        if maximum_micros.contains(&0) {
+            return Err(WhpError::InvalidDeadline);
+        }
+        let trampoline = self.ap_trampoline.ok_or(WhpError::InvalidMapping)?;
+        let bootstrap_priority = ThreadPriorityGuard::bind(priorities[0])?;
+        let bootstrap_affinity = match ThreadAffinityGuard::bind(logical_cpus[0]) {
+            Ok(guard) => guard,
+            Err(error) => return bootstrap_priority.restore().and(Err(error)),
+        };
+        let bootstrap_started = mrml_runtime::Instant::now();
+        let result = mrml_runtime::Shared::new(mrml_runtime::SpinMutex::new(None));
+        let mut secondary_started = false;
+        let mut trampoline_protected = false;
+        let bootstrap_run = (|| {
+            loop {
+                let remaining = match remaining_smp_runtime(&bootstrap_started, maximum_micros[0]) {
+                    Ok(remaining) => remaining,
+                    Err(()) => break Ok(mrml_kernel::VmDeadlineOutcome::Expired),
+                };
+                let outcome = self.partition.run_vp_with_deadline(0, remaining)?;
+                let mrml_kernel::VmDeadlineOutcome::Exit(exit) = outcome else {
+                    break Ok(outcome);
+                };
+                if let VmExit::Io {
+                    port: 0x00e9,
+                    size: 1,
+                    write: true,
+                    value,
+                } = exit
+                {
+                    mrml_runtime::mrml_println!("WHP_SMP_TRACE stage={:#04x}", value);
+                }
+                if let VmExit::Io {
+                    port: 0x00e9,
+                    size: 1,
+                    write: true,
+                    value: 0x21,
+                } = exit
+                {
+                    if secondary_started {
+                        break Err(WhpError::InvalidVcpu);
+                    }
+                    self.partition
+                        .protect_runtime_trampoline(trampoline, true)?;
+                    trampoline_protected = true;
+                    let mut runner = self.partition.secondary_runner(trampoline)?;
+                    let worker_result = result.clone();
+                    if mrml_runtime::spawn_detached(move || {
+                        let priority = match ThreadPriorityGuard::bind(priorities[1]) {
+                            Ok(guard) => guard,
+                            Err(error) => {
+                                *worker_result.lock() = Some(Err(error));
+                                return;
+                            }
+                        };
+                        let affinity = match ThreadAffinityGuard::bind(logical_cpus[1]) {
+                            Ok(guard) => guard,
+                            Err(error) => {
+                                *worker_result.lock() = Some(priority.restore().and(Err(error)));
+                                return;
+                            }
+                        };
+                        let started = mrml_runtime::Instant::now();
+                        let run = run_scheduled_secondary(&mut runner, &started, maximum_micros[1]);
+                        let elapsed =
+                            u64::try_from(started.elapsed().as_micros()).unwrap_or(u64::MAX);
+                        let affinity_restored = affinity.restore();
+                        let priority_restored = priority.restore();
+                        let restored = affinity_restored.and(priority_restored);
+                        *worker_result.lock() = Some(
+                            restored
+                                .and(run)
+                                .map(|outcome| ScheduledVcpuOutcome::new(outcome, elapsed)),
+                        );
+                    })
+                    .is_err()
+                    {
+                        break Err(WhpError::PlatformUnavailable);
+                    }
+                    secondary_started = true;
+                    continue;
+                }
+                if matches!(exit, VmExit::Io { port: 0x00e9, .. }) {
+                    continue;
+                }
+                break Ok(mrml_kernel::VmDeadlineOutcome::Exit(exit));
+            }
+        })();
+        let bootstrap_elapsed =
+            u64::try_from(bootstrap_started.elapsed().as_micros()).unwrap_or(u64::MAX);
+        let affinity_restored = bootstrap_affinity.restore();
+        let priority_restored = bootstrap_priority.restore();
+        let bootstrap_restored = affinity_restored.and(priority_restored);
+        let application_run = if secondary_started {
+            loop {
+                if let Some(outcome) = result.lock().take() {
+                    break outcome;
+                }
+                mrml_runtime::yield_now();
+            }
+        } else {
+            Err(WhpError::InvalidVcpu)
+        };
+        let trampoline_restored = if trampoline_protected {
+            self.partition.protect_runtime_trampoline(trampoline, false)
+        } else {
+            Ok(())
+        };
+        bootstrap_restored?;
+        trampoline_restored?;
+        let bootstrap = ScheduledVcpuOutcome::new(bootstrap_run?, bootstrap_elapsed);
+        let application = application_run?;
+        Ok([bootstrap, application])
+    }
+
     pub fn read_guest(&self, address: u64, output: &mut [u8]) -> Result<(), WhpError> {
         self.partition.read_guest(address, output)
     }
@@ -1185,6 +1397,25 @@ impl mrml_kernel::ScheduledDeadlineVmBackend for PreparedWhpGuest<'_> {
         }
         self.partition
             .run_vp_with_scheduling_deadline(vcpu, logical_cpu, priority, maximum_micros)
+    }
+}
+
+impl mrml_kernel::ScheduledSmpVmBackend for PreparedWhpGuest<'_> {
+    fn run_smp_with_scheduling_deadlines(
+        &mut self,
+        logical_cpus: [u8; 2],
+        priorities: [u8; 2],
+        maximum_micros: [u32; 2],
+    ) -> Result<[ScheduledVcpuOutcome; 2], Self::Error> {
+        if self.trapped_mmio_retired {
+            return Err(WhpError::InvalidMapping);
+        }
+        PreparedWhpGuest::run_smp_with_scheduling_deadlines(
+            self,
+            logical_cpus,
+            priorities,
+            maximum_micros,
+        )
     }
 }
 

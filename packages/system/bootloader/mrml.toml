@@ -145,6 +145,16 @@ features = ["service-probe", "component-service-probe"]
 name = "component_service_probe"
 targets = ["UEFI"]
 
+[[feature_profile]]
+features = ["smp-probe", "emulated-ap-timing", "ap-startup-trace"]
+name = "kvm_smp_probe"
+targets = ["UEFI"]
+
+[[feature_profile]]
+features = ["smp-probe", "whp-smp-probe", "emulated-ap-timing", "ap-startup-trace"]
+name = "whp_smp_probe"
+targets = ["UEFI"]
+
 [[absent_compile_env]]
 name = "MRML_EMULATED_TSC_HZ"
 
