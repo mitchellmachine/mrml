@@ -635,20 +635,6 @@ pub fn compile_x86_64_function_with_options<
             kind: CodegenErrorKind::Body(error.kind),
             span: translate_span(function.body_expression_span.start, error.span),
         })?;
-    if parsed_body
-        .while_loops()
-        .iter()
-        .flatten()
-        .flat_map(|loop_statement| loop_statement.nested_blocks().iter().flatten())
-        .flat_map(|block| block.conditional_blocks().iter().flatten())
-        .filter_map(|branch| branch.else_arm())
-        .any(|arm| arm.condition().is_some())
-    {
-        return Err(CodegenError {
-            kind: CodegenErrorKind::RuntimeExpressionUnsupported,
-            span: function.body_expression_span,
-        });
-    }
     let mut body_has_aggregate_local = false;
     for local in parsed_body.locals().iter().flatten() {
         if local
@@ -1242,6 +1228,21 @@ pub fn compile_x86_64_function_with_options<
                             emitter.truncate_scoped_locals(branch_checkpoint)?;
                             if let Some(else_arm) = branch.else_arm() {
                                 emitter.patch_forward_branch(false_branch)?;
+                                let else_false_branch = if let Some(condition) = else_arm
+                                    .parse_condition::<MAX_EXPRESSION_NODES>()
+                                    .map_err(|error| CodegenError {
+                                        kind: CodegenErrorKind::Expression(error.kind),
+                                        span: translate_span(
+                                            function.body_expression_span.start
+                                                + else_arm.condition_span().start,
+                                            error.span,
+                                        ),
+                                    })? {
+                                    emitter.emit_inline_loop_arm_condition(&condition)?;
+                                    Some(emitter.emit_forward_branch(0x84)?)
+                                } else {
+                                    None
+                                };
                                 let else_checkpoint = emitter.saved_locals;
                                 for branch_action in else_arm.actions().iter().flatten() {
                                     match branch_action {
@@ -1299,6 +1300,9 @@ pub fn compile_x86_64_function_with_options<
                                     }
                                 }
                                 emitter.truncate_scoped_locals(else_checkpoint)?;
+                                if let Some(else_false_branch) = else_false_branch {
+                                    emitter.patch_forward_branch(else_false_branch)?;
+                                }
                             } else {
                                 emitter.patch_forward_branch(false_branch)?;
                             }
@@ -25290,6 +25294,20 @@ impl<
                     self.truncate_scoped_locals(branch_checkpoint)?;
                     if let Some(else_arm) = branch.else_arm() {
                         self.patch_forward_branch(false_branch)?;
+                        let else_false_branch = if let Some(condition) = else_arm
+                            .parse_condition::<MAX_NODES>()
+                            .map_err(|error| CodegenError {
+                                kind: CodegenErrorKind::Expression(error.kind),
+                                span: translate_span(
+                                    body_start + else_arm.condition_span().start,
+                                    error.span,
+                                ),
+                            })? {
+                            self.emit_inline_loop_arm_condition(&condition)?;
+                            Some(self.emit_forward_branch(0x84)?)
+                        } else {
+                            None
+                        };
                         let else_checkpoint = self.saved_locals;
                         for branch_action in else_arm.actions().iter().flatten() {
                             match branch_action {
@@ -25354,6 +25372,9 @@ impl<
                             }
                         }
                         self.truncate_scoped_locals(else_checkpoint)?;
+                        if let Some(else_false_branch) = else_false_branch {
+                            self.patch_forward_branch(else_false_branch)?;
+                        }
                     } else {
                         self.patch_forward_branch(false_branch)?;
                     }
@@ -41927,11 +41948,11 @@ mod tests {
                 "missing control point for {location:?}",
             );
         }
-        assert_eq!(
+        assert!(
             compile_x86_64_function::<_, 256, 2, 16>(&function, &NoConstants, X86_64Abi::SystemV,)
-                .unwrap_err()
-                .kind,
-            CodegenErrorKind::RuntimeExpressionUnsupported,
+                .unwrap()
+                .len()
+                > 11,
         );
     }
 

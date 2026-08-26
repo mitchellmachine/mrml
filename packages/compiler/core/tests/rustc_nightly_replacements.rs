@@ -633,8 +633,8 @@ fn rustc_nested_loop_actions_have_an_executable_replacement() {
 fn rustc_nested_branch_actions_reach_native_objects() {
     // Independently authored bounded scalar branch-action probe. The nested
     // branches exercise action prefixes before return, continue, and break,
-    // including direct and inlined scalar else arms and parameter-backed
-    // reference returns whose exact origins pass ownership preanalysis.
+    // including direct and inlined scalar else/else-if arms and parameter-
+    // backed reference returns whose exact origins pass ownership preanalysis.
     for source in [
         "#[unsafe(no_mangle)] pub extern \"C\" fn probe(stop: u32) -> u32 { loop { loop { if stop != 0 { let result: u32 = stop + 40; result + 1; return result; } } } }",
         "#[unsafe(no_mangle)] pub extern \"C\" fn probe(limit: u32) -> u32 { let mut inner: u32 = 0; loop { while inner < limit { inner += 1; if inner < limit { inner += 0; continue; } } return inner; } }",
@@ -642,6 +642,8 @@ fn rustc_nested_branch_actions_reach_native_objects() {
         "#[unsafe(no_mangle)] pub extern \"C\" fn probe(stop: bool, input: u32) -> u32 { loop { loop { if stop { let selected: u32 = input + 1; return selected; } else { let fallback: u32 = input + 2; return fallback; } } } }",
         "fn select(stop: bool, input: u32) -> u32 { loop { loop { if stop { let selected: u32 = input + 3; return selected; } else { let fallback: u32 = input + 4; return fallback; } } } } #[unsafe(no_mangle)] pub extern \"C\" fn probe(stop: bool, input: u32) -> u32 { select(stop, input) }",
         "#[unsafe(no_mangle)] pub extern \"C\" fn probe(input: &mut u32, stop: bool) -> &mut u32 { loop { loop { if stop { return input; } else { *input += 1; return input; } } } }",
+        "#[unsafe(no_mangle)] pub extern \"C\" fn probe(primary: bool, alternative: bool, input: u32) -> u32 { loop { loop { if primary { let selected: u32 = input + 5; return selected; } else if alternative { let fallback: u32 = input + 6; return fallback; } break; } return input; } }",
+        "fn select(primary: bool, alternative: bool, input: u32) -> u32 { loop { loop { if primary { let selected: u32 = input + 7; return selected; } else if alternative { let fallback: u32 = input + 8; return fallback; } break; } return input; } } #[unsafe(no_mangle)] pub extern \"C\" fn probe(primary: bool, alternative: bool, input: u32) -> u32 { select(primary, alternative, input) }",
     ] {
         for format in [ObjectFormat::Elf64, ObjectFormat::Coff] {
             compile_source_function::<2048, 1536, 4, 4, 4, 64>(
