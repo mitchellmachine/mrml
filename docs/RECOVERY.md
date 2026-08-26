@@ -1130,6 +1130,18 @@ list. It still does not persist or recover the binding and therefore does not
 advance recovery status. Recovered end-to-end Total finalization remains
 **PLANNED**.
 
+The recovered-policy/release ownership boundary is now **PARTIALLY
+IMPLEMENTED**. `RecoveredTotalAdmission` owns the exact activated release and
+the admission table derived from the same recovered effective policy. Its
+service-preparation operation accepts only a domain/class already classified by
+that release, reapplies the recovered package bounds, and reserves that owned
+table. An unclassified domain, policy-generation mismatch, or release
+substitution fails before launch state changes. Windows and Arch Linux each
+pass 43 configuration-service tests. The focused proof constructs the typed
+recovered result in a hosted unit test; the live WHP/KVM runners do not yet
+consume the committed stable-recovery object, so live early-boot recovery and
+end-to-end Total finalization remain **PLANNED**.
+
 Application-launch recovery must retain the exact runtime domain, application
 object, immutable application generation and artifact digest, active system
 generation, and applied policy generation. The kernel application route accepts

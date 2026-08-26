@@ -3066,6 +3066,17 @@ retains the exact package identity. The WHP/KVM runners no longer name the
 ZIM/Zstd members independently. General per-package owner-policy lookup and
 distinct-domain launch construction remain **PLANNED**.
 
+Recovered Total preparation now has a single-owner boundary in the
+configuration service. `RecoveredTotalAdmission` retains both the activated
+release inventory and its policy-derived admission table; preparing a service
+through it first exact-matches the domain and class against the release,
+reapplies the recovered effective placement policy and bounds, and reserves
+that same table. An unclassified domain publishes no pending, running, or
+unavailable state, and a release/policy-generation mismatch cannot construct
+the wrapper. Windows and Arch Linux configuration suites pass 43 tests. This is
+hosted typed-state evidence; WHP/KVM live runner consumption of the committed
+stable-recovery object and real early-boot orchestration remain **PLANNED**.
+
 Patent review: `TRIGGERED` under the existing signed-release, adaptive
 isolation, Total-MicroVM, automated VMM placement, and device-projection reviews
 now that authenticated package classifications are joined to live domain

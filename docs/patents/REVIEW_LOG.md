@@ -1,5 +1,18 @@
 # Patent review log
 
+## 2026-08-26 — Recovered release-owned route preparation
+
+Patent review: **TRIGGERED** under the existing SystemRelease, configuration
+recovery, adaptive-isolation, Total-MicroVM, and VMM reviews. This increment
+uses conventional typed ownership and exact domain/class equality to require
+that recovered service routes be prepared through the admission table owned
+beside the authenticated activated-release inventory. It adds no placement or
+scheduling heuristic, parser or signature format, capability grant, native
+fallback, VM/device protocol, DMA mechanism, or hardware-specific isolation
+mechanism. Live early-boot recovery consumption remains unimplemented. No
+patent-clearance or non-infringement conclusion is made; independent human
+review remains required.
+
 ## 2026-08-26 — Atomic authenticated runtime-policy enumeration
 
 Patent review: **TRIGGERED** under the existing SystemRelease,

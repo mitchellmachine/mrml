@@ -311,9 +311,14 @@ passes 10.
 Focused decoded-handoff delivery into recovered configuration is now
 **PARTIALLY IMPLEMENTED**: only a committed recovered system state can
 capability-revalidate the exact settings and compose the canonical handoff, and
-a stale recovery epoch fails. Live early-boot orchestration, menu presentation,
-OVMF/EFI-Shell execution, complete installed-system inventory, and end-to-end
-runtime enforcement remain **PLANNED**.
+a stale recovery epoch fails. The resulting `RecoveredTotalAdmission` now owns
+the activated release and its sole policy-derived admission table. Route
+preparation exact-matches domain/class against that release before reserving the
+same table; unclassified-domain and policy-generation substitutions leave no
+launch state. Configuration suites pass 43 tests on Windows and Arch Linux.
+Live WHP/KVM consumption of that recovered owner, early-boot orchestration,
+menu presentation, OVMF/EFI-Shell execution, complete installed-system
+inventory, and end-to-end runtime enforcement remain **PLANNED**.
 
 The deployment lane is defined in [DEPLOYMENT.md](DEPLOYMENT.md) and must not
 displace the current foundational gate. Later work proceeds as separate bounded

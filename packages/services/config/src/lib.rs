@@ -2600,6 +2600,45 @@ impl<const DOMAINS: usize> RecoveredTotalAdmission<DOMAINS> {
         &mut self.admission
     }
 
+    /// Applies the recovered effective policy and reserves one exact service
+    /// route only when its domain/class is already present in the authenticated
+    /// release inventory owned by this transaction. Package metadata and
+    /// identity remain non-authorizing; the returned route is still
+    /// uncommitted and backend construction must use this same admission table.
+    pub fn prepare_service(
+        &mut self,
+        bounds: IsolationServiceBounds,
+        identity: IsolationServiceIdentity,
+    ) -> Result<PreparedIsolationServiceRoute, ConfiguredIsolationPreparationError> {
+        if !self
+            .release
+            .release()
+            .entries()
+            .any(|entry| entry.domain() == identity.domain && entry.class() == identity.class)
+        {
+            return Err(ConfiguredIsolationPreparationError::Configuration(
+                ConfigError::SchemaViolation,
+            ));
+        }
+        let admitted = self
+            .policy
+            .effective
+            .admit_service(bounds)
+            .map_err(ConfiguredIsolationPreparationError::Configuration)?;
+        let spec = admitted
+            .service_spec(
+                self.release.system_generation(),
+                identity.domain,
+                identity.interface,
+                identity.interface_generation,
+                identity.provider_generation,
+                identity.class,
+            )
+            .map_err(ConfiguredIsolationPreparationError::Configuration)?;
+        prepare_isolation_service_route(&mut self.admission, spec)
+            .map_err(ConfiguredIsolationPreparationError::Admission)
+    }
+
     pub fn finalize(
         &self,
     ) -> Result<mrml_kernel::TotalMicrovmRuntimeProof, mrml_kernel::TotalMicrovmRuntimeError> {
@@ -4854,10 +4893,23 @@ fn write_u64(output: &mut [u8], offset: usize, value: u64) -> Result<(), ConfigE
 
 #[cfg(test)]
 mod tests {
+    extern crate std;
+
     use super::*;
+    use mrml_crypto::{
+        LAMPORT_PRIVATE_KEY_BYTES, LAMPORT_PUBLIC_KEY_BYTES, Sha3_512, lamport_public_key,
+    };
     use mrml_kernel::{
-        HostSubstrateCounts, IsolationUnavailableCounts, TotalMicrovmClass, TotalMicrovmState,
-        route_isolation_service,
+        HostSubstrateCounts, IsolationUnavailableCounts, RuntimeDomainAssignment,
+        RuntimeDomainAssignmentPlan, TotalMicrovmClass, TotalMicrovmState, route_isolation_service,
+    };
+    use mrml_package_format::{
+        ActivatedSystemGeneration, ActivatedSystemRelease, ComponentInterfaceProvider,
+        ComponentInterfaceRequirement, ComponentProviderForms, MAX_SYSTEM_RELEASE_BYTES,
+        RuntimeInventoryRecord, RuntimeIsolationClass, RuntimeIsolationPlacement,
+        SystemGenerationDigestRecord, encode_interface_catalog, encode_runtime_inventory,
+        encode_system_generation, encode_system_release_with_runtime_inventory,
+        parse_system_release,
     };
     use mrml_storage::{
         AUTHORITY_RECOVERY_STATE_BYTES, AuthenticatedAuthorityRecoveryState,
@@ -4870,8 +4922,91 @@ mod tests {
         VolumeId, authority_checkpoint_digest, encode_authority_checkpoint,
         recover_validate_and_commit_stable_authorities,
     };
+    use std::vec;
 
     const MEMORY_POOL_RIGHTS: Rights = Rights::ALLOCATE.union(Rights::INSPECT);
+
+    fn activated_configuration_release(
+        domain: ObjectId,
+        policy_generation: u64,
+    ) -> ActivatedReleaseTotalMicrovmInventory<1> {
+        let digest = [0x44; 64];
+        let generation_record = SystemGenerationDigestRecord {
+            package_id: "org.mrml.service.config",
+            version: 5,
+            artifact_digest: &digest,
+        };
+        let mut generation = [0; 192];
+        let generation_length =
+            encode_system_generation(33, &[generation_record], &mut generation).unwrap();
+        let provider = ComponentInterfaceProvider::exact(
+            "org.mrml.service.config",
+            "org.mrml.interface.config",
+            1,
+            [0x52; 32],
+            ComponentProviderForms::MICROVM,
+        )
+        .unwrap();
+        let requirement = ComponentInterfaceRequirement::exact(
+            "org.mrml.service.config",
+            "org.mrml.interface.config",
+            1,
+            [0x52; 32],
+        )
+        .unwrap();
+        let mut catalog = [0; 256];
+        let catalog_length =
+            encode_interface_catalog(33, &[requirement], &[provider], &mut catalog).unwrap();
+        let runtime_record = RuntimeInventoryRecord {
+            package_id: "org.mrml.service.config",
+            version: 5,
+            artifact_digest: &digest,
+            class: RuntimeIsolationClass::MicrovmEligible,
+            must_run: true,
+            preferred: RuntimeIsolationPlacement::NativeService,
+            minimum: RuntimeIsolationPlacement::NativeService,
+            maximum: RuntimeIsolationPlacement::Microvm,
+            supported: RuntimeIsolationPlacement::NativeService.bit()
+                | RuntimeIsolationPlacement::Microvm.bit(),
+            reason: "",
+        };
+        let mut runtime = [0; 256];
+        let runtime_length = encode_runtime_inventory(33, &[runtime_record], &mut runtime).unwrap();
+        let private = [0x67; LAMPORT_PRIVATE_KEY_BYTES];
+        let mut public = [0; LAMPORT_PUBLIC_KEY_BYTES];
+        lamport_public_key(&private, &mut public).unwrap();
+        let key_id = Sha3_512::digest(&public);
+        let mut release = vec![0; MAX_SYSTEM_RELEASE_BYTES];
+        let release_length = encode_system_release_with_runtime_inventory(
+            &generation[..generation_length],
+            &catalog[..catalog_length],
+            &runtime[..runtime_length],
+            &private,
+            &mut release,
+        )
+        .unwrap();
+        let parsed = parse_system_release(&release[..release_length]).unwrap();
+        let active_generation = ActivatedSystemGeneration::new(
+            33,
+            parsed.generation().digest(),
+            parsed.interface_catalog().digest(),
+            7,
+            0x5155,
+            3,
+        )
+        .unwrap();
+        let active = ActivatedSystemRelease::new(active_generation, parsed.identity());
+        let mut plan = RuntimeDomainAssignmentPlan::<1>::new(
+            &release[..release_length],
+            &key_id,
+            active,
+            policy_generation,
+        )
+        .unwrap();
+        plan.assign_from_policy(|record| RuntimeDomainAssignment::new(record.package_id, domain))
+            .unwrap();
+        plan.seal().unwrap()
+    }
     const SYSTEM_GENERATION: u64 = 108;
 
     type TestPolicySubstrate = AccountedPolicyServiceSubstrate<2, 4, 2, 3, 2>;
@@ -8812,6 +8947,80 @@ mod tests {
             )
             .is_err()
         );
+    }
+
+    #[test]
+    fn recovered_total_admission_prepares_only_release_classified_service_routes() {
+        let persistent = AppliedIsolationPolicy {
+            mode: IsolationMode::Balanced,
+            component_request: Some(IsolationPlacement::NativeService),
+            system_selection: OwnerIsolationSelection::Balanced,
+            component_selection: OwnerIsolationSelection::Native,
+            policy_generation: 9,
+        };
+        let policy = RecoveredBootIsolationPolicy {
+            effective: persistent
+                .compose_boot_override(Some(BootIsolationOverride::TotalMicrovmOnce)),
+            authority_epoch: 12,
+            configuration_revision: 9,
+            configuration_service: ServiceId::from_token((3u64 << 32) | 1),
+            boot_accepted_epoch: 11,
+        };
+        let domain = ObjectId(0x434f_4e46_4947_0001);
+        let release = activated_configuration_release(domain, 9);
+        let mut total = policy.bind_release_inventory(release).unwrap();
+        let bounds = IsolationServiceBounds::new(
+            IsolationPlacement::NativeService,
+            IsolationPlacement::NativeService,
+            IsolationPlacement::Microvm,
+            true,
+            true,
+        )
+        .unwrap();
+        let identity = IsolationServiceIdentity::new(
+            domain,
+            ObjectId(0x434f_4e46_0000_0001),
+            1,
+            5,
+            TotalMicrovmClass::MicrovmEligible,
+        )
+        .unwrap();
+        let prepared = total.prepare_service(bounds, identity).unwrap();
+        assert_eq!(prepared.spec().placement(), IsolationPlacement::Microvm);
+        assert_eq!(prepared.spec().system_generation(), 33);
+        assert_eq!(prepared.spec().policy_generation(), 9);
+        let routed = prepared.commit(total.admission_mut(), 0x51u64).unwrap();
+        assert_eq!(routed.domain(), domain);
+        assert_eq!(routed.into_endpoint(), 0x51);
+        let proof = total.finalize().unwrap();
+        assert_eq!(proof.classified_domains, 1);
+        assert_eq!(proof.running_microvm_eligible, 1);
+        assert_eq!(proof.running_in_microvm, 1);
+
+        let release = activated_configuration_release(domain, 9);
+        let mut rejected = policy.bind_release_inventory(release).unwrap();
+        let unclassified = IsolationServiceIdentity::new(
+            ObjectId(domain.0 + 1),
+            ObjectId(0x434f_4e46_0000_0001),
+            1,
+            5,
+            TotalMicrovmClass::MicrovmEligible,
+        )
+        .unwrap();
+        assert_eq!(
+            rejected.prepare_service(bounds, unclassified),
+            Err(ConfiguredIsolationPreparationError::Configuration(
+                ConfigError::SchemaViolation
+            ))
+        );
+        assert_eq!(rejected.admission().running().count(), 0);
+        assert_eq!(rejected.admission().unavailable_domains().count(), 0);
+
+        let release = activated_configuration_release(domain, 10);
+        assert!(matches!(
+            policy.bind_release_inventory(release),
+            Err(ConfigError::IsolationPolicyMismatch)
+        ));
     }
 
     #[test]

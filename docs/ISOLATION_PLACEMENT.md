@@ -713,15 +713,20 @@ Total without changing the stored owner selections or policy generation;
 native-only package bounds fail before VMM construction. WHP and nested KVM
 inject that same typed overlay over a Balanced/native configuration and exercise
 one release-derived eligible component as a microVM with zero native fallback.
-The focused configuration suites pass 42 tests on Windows and Arch Linux; the
+The focused configuration suites pass 43 tests on Windows and Arch Linux; the
 WHP runner passes 9 tests and the KVM runner passes 10.
 A focused recovery path now **PARTIALLY IMPLEMENTS** the next connection. Only a
 fully committed recovered system state may revalidate the exact system and
 component settings, require the canonical decoded `BootHandoff` recovery epoch
 to be the predecessor of the committed authority epoch, and compose its typed
 overlay. The result retains the authority epoch, configuration revision, and
-configuration-service generation as non-authorizing provenance before creating
-kernel admission. A stale handoff epoch fails. This passes within the 42-test
+configuration-service generation as non-authorizing provenance. Its
+`RecoveredTotalAdmission` now owns the activated release inventory and the only
+admission table allowed to prepare its routes. Service preparation first proves
+that the exact domain and class occur in that release, reapplies the recovered
+effective policy and authenticated bounds, then reserves the same owned table;
+an unclassified domain changes no launch state. A stale handoff epoch or
+release/policy-generation mismatch fails. This passes within the 43-test
 configuration suites on both hosts. Real early-boot orchestration still does not
 deliver the live loader handoff and recovered state into complete installed-
 generation admission. Menu presentation, live OVMF/EFI-Shell selection, that
