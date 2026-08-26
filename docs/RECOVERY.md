@@ -978,15 +978,17 @@ disposable: after restart, reconstruct scoped snapshots from authoritative
 services, expose sequence gaps and incomplete sources, and never infer
 completeness or execute remediation from stale state.
 
-For component-launch recovery, canonical `MRMLSG2` bytes are now a required
-input to the shared runtime resolver. A recovered `ActivatedSystemGeneration`
-identity alone is insufficient: its digest and generation must exactly match
-those validated bytes before an in-generation consumer/provider can produce a
-kernel/VMM handoff. Recovery must retain the selected generation bytes and
-provider declarations together; it must never reconstruct a provider from a
+For component-launch recovery, canonical `MRMLSG2` generation bytes and
+canonical bounded `MRMLIC1` interface-catalog bytes are required inputs to the
+shared runtime resolver. A recovered `ActivatedSystemGeneration` identity alone
+is insufficient: its two digests and generation must exactly match both
+validated records before an in-generation consumer/provider can produce a
+kernel/VMM handoff. Recovery must retain the selected generation and catalog
+bytes together; it must never reconstruct a provider from a
 filename, path search, current-latest package, or a declaration outside that
-generation. Persistent authenticated storage and general manifest delivery for
-those inputs remain planned.
+generation. The version-2 activation checkpoint and authenticated recovery
+state retain both digests. Persistent hardware-backed storage and complete
+Manifest V2 catalog delivery remain planned.
 
 Compare the current source and tests with the first incomplete security gate in
 ROADMAP. Choose the smallest coherent end-to-end milestone that advances that

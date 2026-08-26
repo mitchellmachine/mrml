@@ -61,24 +61,27 @@ authority is required to inspect the active record. Candidate handles carry
 slot generations, activation is two-phase and one-use, stale expected-active
 state and replay fail closed, and ordinary forward activation refuses implicit
 rollback. Commit publishes an immutable `ActivatedSystemGeneration` containing
-the generation number, complete canonical-generation SHA3-512 digest,
-activation sequence, and source object/generation identity. Kernel isolation
+the generation number, separate SHA3-512 digests of the complete canonical
+generation and canonical interface catalog, activation sequence, and source
+object/generation identity. Kernel isolation
 admission consumes that typed record, and both focused WHP/KVM component paths
 now construct admission only after this activation transaction. Windows and
 Arch Linux deployment-service suites pass 3 tests; package-format suites pass
-6, kernel suites pass 509, WHP passes 7, and KVM passes 8. The current hosted
+12, kernel suites pass 509, WHP passes 7, and KVM passes 8. The current hosted
 probe stages an already verified transient local generation. The activation
-checkpoint now has a canonical fixed 160-byte SHA3-256-bound encoding. Its
+checkpoint now has a canonical fixed 224-byte SHA3-256-bound version-2
+encoding. Its
 publication composes the prepared activation and a new stable-file generation
 through one COW `StorageTransaction` receipt: the service remains inactive
 before receipt publication, commit consumes the exact file participant and
 activation token, and recovery reads only the caller-selected exact file
 generation through storage authority and verified extents. Windows and Arch
 Linux simulation tests cover clean publication/recovery and corruption rejection
-at the authenticated extent boundary. A separate fixed 192-byte authenticated
-recovery-state contract now binds a monotonic epoch, activation sequence,
-generation/digest/source identity, exact volume/object/file generation, and
-checkpoint digest. Publication advances it by exact compare-and-store only
+at the authenticated extent boundary. A separate fixed 256-byte version-2
+authenticated recovery-state contract now binds a monotonic epoch, activation
+sequence, generation digest, interface-catalog digest, source identity, exact
+volume/object/file generation, and checkpoint digest. Publication advances it
+by exact compare-and-store only
 after the COW receipt exists; recovery requires complete equality, so an older
 valid stable file fails when authenticated state names a newer generation.
 This is Windows/Linux unit simulation against an abstract authenticated store,

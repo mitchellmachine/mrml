@@ -2,6 +2,7 @@
 pub struct ActivatedSystemGeneration {
     generation: u64,
     generation_digest: [u8; 64],
+    interface_catalog_digest: [u8; 64],
     activation_sequence: u64,
     source_object: u64,
     source_generation: u64,
@@ -11,6 +12,7 @@ impl ActivatedSystemGeneration {
     pub const fn new(
         generation: u64,
         generation_digest: [u8; 64],
+        interface_catalog_digest: [u8; 64],
         activation_sequence: u64,
         source_object: u64,
         source_generation: u64,
@@ -21,12 +23,13 @@ impl ActivatedSystemGeneration {
         if source_object == 0 {
             return Err(ActivatedSystemGenerationError::SourceObject);
         }
-        if all_zero(&generation_digest) {
+        if all_zero(&generation_digest) || all_zero(&interface_catalog_digest) {
             return Err(ActivatedSystemGenerationError::Digest);
         }
         Ok(Self {
             generation,
             generation_digest,
+            interface_catalog_digest,
             activation_sequence,
             source_object,
             source_generation,
@@ -39,6 +42,10 @@ impl ActivatedSystemGeneration {
 
     pub const fn generation_digest(&self) -> &[u8; 64] {
         &self.generation_digest
+    }
+
+    pub const fn interface_catalog_digest(&self) -> &[u8; 64] {
+        &self.interface_catalog_digest
     }
 
     pub const fn activation_sequence(self) -> u64 {
@@ -78,14 +85,20 @@ mod tests {
 
     #[test]
     fn active_generation_requires_exact_nonzero_identity() {
-        let active = ActivatedSystemGeneration::new(8, [0x51; 64], 3, 0x400, 9).unwrap();
+        let active =
+            ActivatedSystemGeneration::new(8, [0x51; 64], [0x72; 64], 3, 0x400, 9).unwrap();
         assert_eq!(active.generation(), 8);
         assert_eq!(active.generation_digest(), &[0x51; 64]);
+        assert_eq!(active.interface_catalog_digest(), &[0x72; 64]);
         assert_eq!(active.activation_sequence(), 3);
         assert_eq!(active.source_object(), 0x400);
         assert_eq!(active.source_generation(), 9);
         assert_eq!(
-            ActivatedSystemGeneration::new(8, [0; 64], 3, 0x400, 9),
+            ActivatedSystemGeneration::new(8, [0; 64], [0x72; 64], 3, 0x400, 9),
+            Err(ActivatedSystemGenerationError::Digest)
+        );
+        assert_eq!(
+            ActivatedSystemGeneration::new(8, [0x51; 64], [0; 64], 3, 0x400, 9),
             Err(ActivatedSystemGenerationError::Digest)
         );
     }

@@ -1,10 +1,14 @@
 pub mod abi;
+#[path = "../../../libraries/package-format/src/activation.rs"]
+pub mod activation;
 pub mod binding;
 #[path = "../../../libraries/package-format/src/component_launch.rs"]
 pub mod component_launch;
-#[path = "../../../libraries/package-format/src/system_generation.rs"]
-pub mod system_generation;
+#[path = "../../../libraries/package-format/src/component_resolution.rs"]
+pub mod component_resolution;
 pub mod generation;
+#[path = "../../../libraries/package-format/src/interface_catalog.rs"]
+pub mod interface_catalog;
 pub mod isolation;
 pub mod loader;
 pub mod manifest;
@@ -14,6 +18,14 @@ pub mod resolver;
 pub mod runtime_placement;
 pub mod schema;
 pub mod servicing;
+#[path = "../../../libraries/package-format/src/system_generation.rs"]
+pub mod system_generation;
+
+pub use activation::*;
+pub use component_launch::*;
+pub use component_resolution::*;
+pub use interface_catalog::*;
+pub use system_generation::*;
 
 extern crate self as mrml_crypto;
 

@@ -7880,19 +7880,21 @@ focused WHP and KVM runners stage transient local generation 1 through the
 bounded capability-authorized `DeploymentService` two-phase activation path,
 then create kernel admission from its immutable `ActivatedSystemGeneration`.
 This does not prove authenticated persistent generation storage or recovery.
-The kernel can now decode a canonical 280-byte component-service launch
+The kernel can now decode a canonical 344-byte component-service launch
 handoff emitted from the build tool's resolved launch model. It validates the
 complete record before reserving admission, or binds the identical decoded
 record to an already CPU/RAM-reserved route without rebuilding that route.
 Route domain, interface, provider, system/policy generations, placement, class,
-the complete canonical `SystemGeneration` SHA3-512 digest, fingerprint, and
-both artifact digests must remain exact. A reused generation number with
-different generation bytes fails before backend construction. The focused
-WHP/KVM runners now use a shared allocation-free `MRMLSG2` decoder and activated
-resolver before this codec: the complete canonical bytes must match the
+the complete canonical `SystemGeneration` SHA3-512 digest, independent canonical
+`MRMLIC1` interface-catalog SHA3-512 digest, fingerprint, and both artifact
+digests must remain exact. A reused generation number with different generation
+or catalog bytes fails before backend construction. The focused WHP/KVM runners
+now use shared allocation-free `MRMLSG2` and `MRMLIC1` decoders and activated
+resolver before this codec: both complete canonical records must match the
 recovered `ActivatedSystemGeneration`, both packages must occur in that
-generation, and exactly one provider must match the interface object, ABI
-generation, fingerprint, and selected microVM form. The resolver derives both
+generation, and exactly one catalog requirement/provider pair must match the
+capability-selected interface object, ABI generation, fingerprint, and selected
+microVM form. The resolver derives both
 artifact digests and the immutable provider generation; the runners no longer
 assemble those fields directly. They apply the resulting shared handoff before
 attaching either verified image. The deployment service's
@@ -7900,10 +7902,12 @@ focused Windows/Linux test also binds activation publication to one exact stable
 COW file-generation receipt and recovers only through the selected file
 generation and verified extent. An independent authenticated-state-store
 contract now pins the monotonic epoch, activation sequence, exact stable object
-and file generation, generation/source identity, and checkpoint digest; an
+and file generation, generation/catalog/source identity, and checkpoint digest; an
 older valid file is rejected when that state names a successor. This is hosted
 codec and storage/monotonic-store simulation plus backend-parity evidence, not
 a concrete TPM/NVRAM backend, physical durability, or physical isolation.
+Complete catalog derivation from all Manifest V2 records and persistent
+hardware-backed catalog delivery remain planned.
 
 The focused test sends the generated 104-byte request and one attenuated shared-
 buffer capability from the caller to the launched provider task, executes the

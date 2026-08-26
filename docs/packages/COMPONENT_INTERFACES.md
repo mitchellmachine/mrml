@@ -129,29 +129,35 @@ runs. Existing running routes keep their original system generation; no update
 retargeting or executable patching is introduced. The focused runners now stage
 and commit their transient local generation through the bounded
 capability-authorized `DeploymentService` activation transaction before kernel
-admission. The shared package-format runtime now decodes the complete canonical
-`MRMLSG2` bytes without allocation, verifies their SHA3-512 digest and numeric
-generation against the recovered `ActivatedSystemGeneration`, and selects one
-provider only when the consumer and provider are exact members of those bytes
-and interface object, ABI generation, fingerprint, and selected service form
-all match. Missing, ambiguous, out-of-generation, wrong-ABI, wrong-fingerprint,
-unsupported-placement, noncanonical, and digest-substituted inputs fail closed.
+admission. The shared package-format runtime now decodes complete canonical
+`MRMLSG2` generation bytes and bounded `MRMLIC1` interface-catalog bytes without
+allocation. It verifies both SHA3-512 digests and both numeric generations
+against the recovered `ActivatedSystemGeneration`, then selects one provider
+only when the consumer and provider are exact generation members and exactly
+one catalog requirement/provider pair matches interface identity, ABI
+generation, fingerprint, and selected service form. The caller still supplies
+the capability-selected interface object; catalog metadata grants no authority.
+Missing, ambiguous, out-of-generation, wrong-ABI, wrong-fingerprint,
+unsupported-placement, noncanonical, and either digest-substituted input fails
+closed.
 It then emits the existing immutable component launch handoff; names and
 metadata still grant no capability. Both focused WHP/KVM component paths use
 this resolver instead of assembling the ZIM/Zstd tuple directly. General
-manifest/declaration delivery, persistent authenticated generation storage,
+complete catalog derivation from every Manifest V2 declaration, persistent
+authenticated generation/catalog storage,
 and resolver-driven native-service dispatch remain **PLANNED**.
 The canonical build-tool-to-kernel representation is now **PARTIALLY
-IMPLEMENTED** as `ComponentServiceLaunchHandoff`: a fixed 280-byte little-
+IMPLEMENTED** as `ComponentServiceLaunchHandoff`: a fixed 344-byte little-
 endian record shared by the package-format library, `mrml`, kernel, WHP, and
 KVM. It contains no pointers, paths, filenames, capabilities, or endpoint. The
 build side derives all package/interface fields from
 `PreparedGenerationBoundServiceLaunch`; the kernel side revalidates the record
 against active system/policy admission and the exact resource-reserved route.
-The record also binds the SHA3-512 digest of the complete canonical
-`SystemGeneration`; matching numeric generations with different package bytes
-fail before backend invocation. Windows and Arch Linux package-format suites
-pass 9 tests, DeploymentService suites pass 3, build-tool suites pass 80,
+The record also binds separate SHA3-512 digests of the complete canonical
+`SystemGeneration` and its canonical interface catalog; matching numeric
+generations with different package or declaration bytes fail before backend
+invocation. Windows and Arch Linux package-format suites pass 12 tests,
+DeploymentService suites pass 3, build-tool suites pass 87,
 kernel suites pass 509, WHP passes 7, and KVM passes 8. The activation record
 also round-trips a canonical digest-bound checkpoint; focused deployment tests
 publish and recover it through one exact stable COW file-generation receipt,

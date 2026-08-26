@@ -9,7 +9,7 @@ pub const MAX_RUNTIME_INTERFACE_PROVIDERS: usize = 1024;
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct ComponentInterfaceRequirement<'a> {
     consumer_package: &'a str,
-    interface_object: u64,
+    interface_name: &'a str,
     interface_generation: u32,
     fingerprint: [u8; 32],
 }
@@ -17,22 +17,38 @@ pub struct ComponentInterfaceRequirement<'a> {
 impl<'a> ComponentInterfaceRequirement<'a> {
     pub fn exact(
         consumer_package: &'a str,
-        interface_object: u64,
+        interface_name: &'a str,
         interface_generation: u32,
         fingerprint: [u8; 32],
     ) -> Result<Self, ComponentResolutionError> {
         validate_edge(
             consumer_package,
-            interface_object,
+            interface_name,
             interface_generation,
             &fingerprint,
         )?;
         Ok(Self {
             consumer_package,
-            interface_object,
+            interface_name,
             interface_generation,
             fingerprint,
         })
+    }
+
+    pub const fn consumer_package(self) -> &'a str {
+        self.consumer_package
+    }
+
+    pub const fn interface_name(self) -> &'a str {
+        self.interface_name
+    }
+
+    pub const fn interface_generation(self) -> u32 {
+        self.interface_generation
+    }
+
+    pub const fn fingerprint(self) -> [u8; 32] {
+        self.fingerprint
     }
 }
 
@@ -44,7 +60,16 @@ impl ComponentProviderForms {
     pub const MICROVM: Self = Self(1 << 1);
     pub const NATIVE_SERVICE_OR_MICROVM: Self = Self(Self::NATIVE_SERVICE.0 | Self::MICROVM.0);
 
-    const fn supports(self, placement: ComponentServicePlacement) -> bool {
+    pub const fn from_bits(bits: u8) -> Option<Self> {
+        let forms = Self(bits);
+        if forms.valid() { Some(forms) } else { None }
+    }
+
+    pub const fn bits(self) -> u8 {
+        self.0
+    }
+
+    pub(crate) const fn supports(self, placement: ComponentServicePlacement) -> bool {
         let required = match placement {
             ComponentServicePlacement::NativeService => Self::NATIVE_SERVICE.0,
             ComponentServicePlacement::Microvm => Self::MICROVM.0,
@@ -60,7 +85,7 @@ impl ComponentProviderForms {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct ComponentInterfaceProvider<'a> {
     provider_package: &'a str,
-    interface_object: u64,
+    interface_name: &'a str,
     interface_generation: u32,
     fingerprint: [u8; 32],
     forms: ComponentProviderForms,
@@ -69,14 +94,14 @@ pub struct ComponentInterfaceProvider<'a> {
 impl<'a> ComponentInterfaceProvider<'a> {
     pub fn exact(
         provider_package: &'a str,
-        interface_object: u64,
+        interface_name: &'a str,
         interface_generation: u32,
         fingerprint: [u8; 32],
         forms: ComponentProviderForms,
     ) -> Result<Self, ComponentResolutionError> {
         validate_edge(
             provider_package,
-            interface_object,
+            interface_name,
             interface_generation,
             &fingerprint,
         )?;
@@ -85,11 +110,31 @@ impl<'a> ComponentInterfaceProvider<'a> {
         }
         Ok(Self {
             provider_package,
-            interface_object,
+            interface_name,
             interface_generation,
             fingerprint,
             forms,
         })
+    }
+
+    pub const fn provider_package(self) -> &'a str {
+        self.provider_package
+    }
+
+    pub const fn interface_name(self) -> &'a str {
+        self.interface_name
+    }
+
+    pub const fn interface_generation(self) -> u32 {
+        self.interface_generation
+    }
+
+    pub const fn fingerprint(self) -> [u8; 32] {
+        self.fingerprint
+    }
+
+    pub const fn forms(self) -> ComponentProviderForms {
+        self.forms
     }
 }
 
@@ -122,6 +167,7 @@ pub fn resolve_activated_component_service(
     providers: &[ComponentInterfaceProvider<'_>],
     policy_generation: u64,
     domain_object: u64,
+    interface_object: u64,
     placement: ComponentServicePlacement,
 ) -> Result<ComponentServiceLaunchHandoff, ComponentResolutionError> {
     let generation = SystemGenerationView::decode(generation_bytes)
@@ -150,7 +196,7 @@ pub fn resolve_activated_component_service(
         let package = generation
             .package(provider.provider_package)
             .ok_or(ComponentResolutionError::PackageOutsideGeneration)?;
-        if provider.interface_object == requirement.interface_object
+        if provider.interface_name == requirement.interface_name
             && provider.interface_generation == requirement.interface_generation
             && provider.fingerprint == requirement.fingerprint
             && provider.forms.supports(placement)
@@ -166,11 +212,12 @@ pub fn resolve_activated_component_service(
         active.generation(),
         policy_generation,
         domain_object,
-        requirement.interface_object,
+        interface_object,
         requirement.interface_generation,
         provider.version(),
         placement,
         *active.generation_digest(),
+        *active.interface_catalog_digest(),
         requirement.fingerprint,
         *consumer.artifact_digest(),
         *provider.artifact_digest(),
@@ -178,10 +225,10 @@ pub fn resolve_activated_component_service(
     .map_err(ComponentResolutionError::LaunchHandoff)
 }
 
-fn provider_key(provider: ComponentInterfaceProvider<'_>) -> (&str, u64, u32, [u8; 32], u8) {
+fn provider_key(provider: ComponentInterfaceProvider<'_>) -> (&str, &str, u32, [u8; 32], u8) {
     (
         provider.provider_package,
-        provider.interface_object,
+        provider.interface_name,
         provider.interface_generation,
         provider.fingerprint,
         provider.forms.0,
@@ -190,20 +237,24 @@ fn provider_key(provider: ComponentInterfaceProvider<'_>) -> (&str, u64, u32, [u
 
 fn validate_edge(
     package: &str,
-    interface_object: u64,
+    interface_name: &str,
     interface_generation: u32,
     fingerprint: &[u8; 32],
 ) -> Result<(), ComponentResolutionError> {
     if !package_identifier(package) {
         return Err(ComponentResolutionError::InvalidPackageIdentity);
     }
-    if interface_object == 0 || interface_generation == 0 {
+    if !interface_identifier(interface_name) || interface_generation == 0 {
         return Err(ComponentResolutionError::InterfaceIdentity);
     }
     if fingerprint.iter().all(|byte| *byte == 0) {
         return Err(ComponentResolutionError::Fingerprint);
     }
     Ok(())
+}
+
+fn interface_identifier(value: &str) -> bool {
+    package_identifier(value) && value.starts_with("org.mrml.interface.")
 }
 
 fn package_identifier(value: &str) -> bool {
@@ -216,6 +267,7 @@ mod tests {
     use crate::{SystemGenerationDigestRecord, encode_system_generation};
 
     const INTERFACE: u64 = 0x5a53_5444_0000_0003;
+    const INTERFACE_NAME: &str = "org.mrml.interface.compression.zstd";
     const FINGERPRINT: [u8; 32] = [0x35; 32];
 
     fn generation_bytes(output: &mut [u8]) -> (usize, ActivatedSystemGeneration) {
@@ -237,7 +289,7 @@ mod tests {
             .digest();
         (
             length,
-            ActivatedSystemGeneration::new(108, digest, 4, 0x500, 9).unwrap(),
+            ActivatedSystemGeneration::new(108, digest, [0x61; 64], 4, 0x500, 9).unwrap(),
         )
     }
 
@@ -246,11 +298,11 @@ mod tests {
         let mut bytes = [0u8; 256];
         let (length, active) = generation_bytes(&mut bytes);
         let requirement =
-            ComponentInterfaceRequirement::exact("org.mrml.zim", INTERFACE, 3, FINGERPRINT)
+            ComponentInterfaceRequirement::exact("org.mrml.zim", INTERFACE_NAME, 3, FINGERPRINT)
                 .unwrap();
         let provider = ComponentInterfaceProvider::exact(
             "org.mrml.zstd",
-            INTERFACE,
+            INTERFACE_NAME,
             3,
             FINGERPRINT,
             ComponentProviderForms::NATIVE_SERVICE_OR_MICROVM,
@@ -263,6 +315,7 @@ mod tests {
             &[provider],
             7,
             0x700,
+            INTERFACE,
             ComponentServicePlacement::Microvm,
         )
         .unwrap();
@@ -277,11 +330,11 @@ mod tests {
         let mut bytes = [0u8; 256];
         let (length, active) = generation_bytes(&mut bytes);
         let requirement =
-            ComponentInterfaceRequirement::exact("org.mrml.zim", INTERFACE, 3, FINGERPRINT)
+            ComponentInterfaceRequirement::exact("org.mrml.zim", INTERFACE_NAME, 3, FINGERPRINT)
                 .unwrap();
         let provider = ComponentInterfaceProvider::exact(
             "org.mrml.zstd",
-            INTERFACE,
+            INTERFACE_NAME,
             3,
             FINGERPRINT,
             ComponentProviderForms::MICROVM,
@@ -296,6 +349,7 @@ mod tests {
                 &[provider],
                 7,
                 0x700,
+                INTERFACE,
                 ComponentServicePlacement::Microvm,
             ),
             Err(ComponentResolutionError::ActiveGenerationDigestMismatch)
@@ -309,6 +363,7 @@ mod tests {
                 &[provider, provider],
                 7,
                 0x700,
+                INTERFACE,
                 ComponentServicePlacement::Microvm,
             ),
             Err(ComponentResolutionError::NonCanonicalProviders)
@@ -316,7 +371,7 @@ mod tests {
 
         let wrong_abi = ComponentInterfaceProvider::exact(
             "org.mrml.zstd",
-            INTERFACE,
+            INTERFACE_NAME,
             4,
             FINGERPRINT,
             ComponentProviderForms::MICROVM,
@@ -330,6 +385,7 @@ mod tests {
                 &[wrong_abi],
                 7,
                 0x700,
+                INTERFACE,
                 ComponentServicePlacement::Microvm,
             ),
             Err(ComponentResolutionError::MissingExactProvider)
@@ -337,7 +393,7 @@ mod tests {
 
         let native_only = ComponentInterfaceProvider::exact(
             "org.mrml.zstd",
-            INTERFACE,
+            INTERFACE_NAME,
             3,
             FINGERPRINT,
             ComponentProviderForms::NATIVE_SERVICE,
@@ -351,13 +407,21 @@ mod tests {
                 &[native_only],
                 7,
                 0x700,
+                INTERFACE,
                 ComponentServicePlacement::Microvm,
             ),
             Err(ComponentResolutionError::MissingExactProvider)
         );
 
-        let wrong_active =
-            ActivatedSystemGeneration::new(109, *active.generation_digest(), 4, 0x500, 9).unwrap();
+        let wrong_active = ActivatedSystemGeneration::new(
+            109,
+            *active.generation_digest(),
+            *active.interface_catalog_digest(),
+            4,
+            0x500,
+            9,
+        )
+        .unwrap();
         assert_eq!(
             resolve_activated_component_service(
                 wrong_active,
@@ -366,6 +430,7 @@ mod tests {
                 &[provider],
                 7,
                 0x700,
+                INTERFACE,
                 ComponentServicePlacement::Microvm,
             ),
             Err(ComponentResolutionError::ActiveGenerationMismatch)
@@ -373,7 +438,7 @@ mod tests {
 
         let outside = ComponentInterfaceProvider::exact(
             "org.mrml.absent",
-            INTERFACE,
+            INTERFACE_NAME,
             3,
             FINGERPRINT,
             ComponentProviderForms::MICROVM,
@@ -387,6 +452,7 @@ mod tests {
                 &[outside],
                 7,
                 0x700,
+                INTERFACE,
                 ComponentServicePlacement::Microvm,
             ),
             Err(ComponentResolutionError::PackageOutsideGeneration)

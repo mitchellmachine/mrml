@@ -4,10 +4,14 @@ use crate::component_launch::{
     ComponentServiceLaunchHandoff, ComponentServiceLaunchHandoffError, ComponentServicePlacement,
 };
 use crate::generation::{SystemGeneration, SystemPackage};
+use crate::interface_catalog::{
+    InterfaceCatalogView, MAX_SINGLE_INTERFACE_CATALOG_BYTES, encode_interface_catalog,
+};
 use crate::isolation::{EffectivePlacement, IsolationPlacement, PlacementSource};
 use crate::loader::ImmutableLoadPlan;
 use crate::resolver::{ProviderForm, ResolvedInterfaceProvider};
 use crate::system_generation::{SystemGenerationDigestRecord, system_generation_digest};
+use crate::{ComponentInterfaceProvider, ComponentInterfaceRequirement, ComponentProviderForms};
 
 /// One exact, immutable handoff from generation-bound interface resolution to
 /// an already selected isolated-service placement. Package and interface names
@@ -172,6 +176,7 @@ pub enum ServiceLaunchAdmissionError {
 pub struct PreparedGenerationBoundServiceLaunch {
     system_generation: u64,
     system_generation_digest: [u8; 64],
+    interface_catalog_digest: [u8; 64],
     resolved: ResolvedInterfaceProvider,
     placement: IsolationPlacement,
     source: PlacementSource,
@@ -254,9 +259,41 @@ impl PreparedGenerationBoundServiceLaunch {
         let system_generation_digest =
             system_generation_digest(system.generation(), &generation_records)
                 .map_err(|_| PreparedServiceLaunchError::InvalidSystemGeneration)?;
+        let requirement = ComponentInterfaceRequirement::exact(
+            resolved.consumer().package_id(),
+            resolved.interface().name(),
+            resolved.interface().generation(),
+            resolved.fingerprint(),
+        )
+        .map_err(|_| PreparedServiceLaunchError::InvalidInterfaceCatalog)?;
+        let forms = match effective.placement() {
+            IsolationPlacement::NativeService => ComponentProviderForms::NATIVE_SERVICE,
+            IsolationPlacement::Microvm => ComponentProviderForms::MICROVM,
+            _ => return Err(PreparedServiceLaunchError::InvalidInterfaceCatalog),
+        };
+        let provider_declaration = ComponentInterfaceProvider::exact(
+            resolved.provider().package_id(),
+            resolved.interface().name(),
+            resolved.interface().generation(),
+            resolved.fingerprint(),
+            forms,
+        )
+        .map_err(|_| PreparedServiceLaunchError::InvalidInterfaceCatalog)?;
+        let mut catalog = [0u8; MAX_SINGLE_INTERFACE_CATALOG_BYTES];
+        let catalog_length = encode_interface_catalog(
+            system.generation(),
+            &[requirement],
+            &[provider_declaration],
+            &mut catalog,
+        )
+        .map_err(|_| PreparedServiceLaunchError::InvalidInterfaceCatalog)?;
+        let interface_catalog_digest = InterfaceCatalogView::decode(&catalog[..catalog_length])
+            .map_err(|_| PreparedServiceLaunchError::InvalidInterfaceCatalog)?
+            .digest();
         Ok(Self {
             system_generation: system.generation(),
             system_generation_digest,
+            interface_catalog_digest,
             resolved,
             placement: effective.placement(),
             source: effective.source(),
@@ -308,6 +345,7 @@ impl PreparedGenerationBoundServiceLaunch {
             self.resolved.provider().version(),
             placement,
             self.system_generation_digest,
+            self.interface_catalog_digest,
             self.resolved.fingerprint(),
             *self.consumer.package().artifact_digest(),
             *self.provider.package().artifact_digest(),
@@ -359,6 +397,7 @@ impl PreparedGenerationBoundServiceLaunch {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum PreparedServiceLaunchError {
     InvalidSystemGeneration,
+    InvalidInterfaceCatalog,
     TotalMicrovmException,
     UnsupportedServicePlacement,
     ProviderFormMismatch,

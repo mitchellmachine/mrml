@@ -216,25 +216,31 @@ record. Configuration-derived service specifications use that active value;
 the native Zstd binding and WHP/KVM commit paths reject or detect any stale
 value before opening the data plane. Windows and Arch Linux kernel, Zstd, and
 configuration suites plus WHP/KVM runner suites pass. The runners now stage and
-commit their transient local generation through a bounded capability-authorized,
-two-phase, one-use `DeploymentService` activation transaction and construct
-kernel admission from its typed immutable result. A canonical 160-byte
+commit their transient local generation and canonical interface-catalog digest
+through a bounded capability-authorized, two-phase, one-use `DeploymentService`
+activation transaction and construct kernel admission from its typed immutable
+result. A canonical 224-byte version-2
 activation checkpoint and one receipt-bound stable COW file transaction now
 publish/recover the same record in focused Windows/Linux simulation; WHP/KVM
-re-decode that checkpoint before admission. A separate fixed authenticated
-recovery-state contract now compare-and-stores a monotonic epoch and pins the
+re-decode that checkpoint before admission. A separate fixed 256-byte version-2
+authenticated recovery-state contract now compare-and-stores a monotonic epoch and pins the
 exact volume/object/file generation plus activation/checkpoint identities;
 focused Windows/Linux tests reject replay of an older valid file. A concrete
 TPM/NVRAM/recovery-journal backend, physical durability, and general manifest-
 driven launch remain **PLANNED**. The canonical build-tool-to-
-kernel format itself is now **PARTIALLY IMPLEMENTED**: a shared fixed 280-byte
+kernel format itself is now **PARTIALLY IMPLEMENTED**: a shared fixed 344-byte
 record carries the resolved system/provider/interface generations,
 fingerprint, placement, applied policy generation, capability-selected object
-IDs, the SHA3-512 digest of the complete canonical `SystemGeneration`, and exact
-consumer/provider digests. Kernel decoding and both focused VMM runners reject
-substitutions—including reused generation numbers with different canonical
-bytes—before backend invocation. Windows/Arch Linux package-format 6,
-DeploymentService 3, build-tool 80, and kernel 509 test suites pass; WHP passes
+IDs, separate SHA3-512 digests of the complete canonical `SystemGeneration` and
+bounded canonical `MRMLIC1` interface catalog, and exact consumer/provider
+digests. The shared no-allocation resolver derives the handoff from the two
+active records without accepting requirement/provider declarations after
+activation. Kernel decoding and both focused VMM runners reject substitutions—
+including reused generation numbers with different generation or catalog
+bytes—before backend invocation. Complete workspace-wide catalog construction
+from every Manifest V2 declaration remains **PLANNED**. Windows/Arch Linux
+package-format 12, DeploymentService 3, build-tool 87, and kernel 509 test
+suites pass; WHP passes
 7 and KVM passes 8.
 A backend-neutral linear control-plane admission now binds those two immutable
 load plans to the exact generation/interface placement before an endpoint

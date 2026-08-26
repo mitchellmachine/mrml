@@ -61,20 +61,22 @@ accepted monotonic epoch and exact volume/object/file generation to that
 checkpoint and rejects replay of an older valid file in Windows/Linux unit
 simulation. A concrete TPM/NVRAM/recovery-journal backend, physical durability,
 and general runtime delivery remain **PLANNED**.
-The build/kernel boundary now has a canonical fixed 280-byte, pointer-free
+The build/kernel boundary now has a canonical fixed 344-byte, pointer-free
 component-service launch handoff in the shared package-format library. The
 build tool derives system generation, provider generation, interface
 generation/fingerprint, placement, the SHA3-512 digest of the complete
-canonical `SystemGeneration`, and both artifact digests only from its
+canonical `SystemGeneration`, the SHA3-512 digest of the canonical `MRMLIC1`
+interface catalog, and both artifact digests only from its
 linear resolved launch; it accepts only capability-selected kernel object IDs
 and the applied policy generation as later authority input. Kernel decoding
 rejects bad magic/length, reserved bytes, unknown placement, zero identities,
 zero or substituted artifacts, stale active generations, a reused generation
-number with different canonical bytes, and any mismatch with an already
-resource-reserved route before backend invocation. Both focused WHP/KVM
+number with different generation or interface-catalog bytes, and any mismatch
+with an already resource-reserved route before backend invocation. Both focused WHP/KVM
 runners now use this codec instead of the raw binder and derive its active
 generation input from the same `DeploymentService` transaction. Persisted
-generation selection and recovery remain **PLANNED**.
+Complete Manifest V2 catalog delivery and hardware-backed generation selection
+and recovery remain **PLANNED**.
 
 The canonical `org.mrml.zstd`/`org.mrml.zim` manifests now select the
 `isolated-service` interface form, and Zstd permits native-service or microVM

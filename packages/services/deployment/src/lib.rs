@@ -18,16 +18,17 @@ use mrml_storage::{
     StoragePrincipal, StorageTransaction, TransactionError, TransactionReceipt,
 };
 
-pub const DEPLOYMENT_CHECKPOINT_BYTES: usize = 160;
-pub const DEPLOYMENT_RECOVERY_STATE_BYTES: usize = 192;
-const DEPLOYMENT_CHECKPOINT_MAGIC: [u8; 8] = *b"MRMLDA1\0";
-const DEPLOYMENT_CHECKPOINT_VERSION: u16 = 1;
-const DEPLOYMENT_RECOVERY_STATE_MAGIC: [u8; 16] = *b"MRML-DEPLSTATE1\0";
+pub const DEPLOYMENT_CHECKPOINT_BYTES: usize = 224;
+pub const DEPLOYMENT_RECOVERY_STATE_BYTES: usize = 256;
+const DEPLOYMENT_CHECKPOINT_MAGIC: [u8; 8] = *b"MRMLDA2\0";
+const DEPLOYMENT_CHECKPOINT_VERSION: u16 = 2;
+const DEPLOYMENT_RECOVERY_STATE_MAGIC: [u8; 16] = *b"MRML-DEPLSTATE2\0";
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct GenerationCandidate {
     generation: u64,
     generation_digest: [u8; 64],
+    interface_catalog_digest: [u8; 64],
     source_object: u64,
     source_generation: u64,
 }
@@ -36,6 +37,7 @@ impl GenerationCandidate {
     pub const fn new(
         generation: u64,
         generation_digest: [u8; 64],
+        interface_catalog_digest: [u8; 64],
         source_object: u64,
         source_generation: u64,
     ) -> Result<Self, DeploymentError> {
@@ -45,12 +47,13 @@ impl GenerationCandidate {
         if source_object == 0 {
             return Err(DeploymentError::InvalidSource);
         }
-        if all_zero(&generation_digest) {
+        if all_zero(&generation_digest) || all_zero(&interface_catalog_digest) {
             return Err(DeploymentError::InvalidDigest);
         }
         Ok(Self {
             generation,
             generation_digest,
+            interface_catalog_digest,
             source_object,
             source_generation,
         })
@@ -188,6 +191,7 @@ impl<const CANDIDATES: usize> DeploymentService<CANDIDATES> {
         let active = ActivatedSystemGeneration::new(
             candidate.generation,
             candidate.generation_digest,
+            candidate.interface_catalog_digest,
             self.next_activation_sequence,
             candidate.source_object,
             candidate.source_generation,
@@ -216,6 +220,7 @@ impl<const CANDIDATES: usize> DeploymentService<CANDIDATES> {
         ActivatedSystemGeneration::new(
             slot.candidate.generation,
             slot.candidate.generation_digest,
+            slot.candidate.interface_catalog_digest,
             self.next_activation_sequence,
             slot.candidate.source_object,
             slot.candidate.source_generation,
@@ -313,8 +318,9 @@ pub fn encode_deployment_checkpoint(
     bytes[40..48].copy_from_slice(&active.source_object().to_le_bytes());
     bytes[48..56].copy_from_slice(&active.source_generation().to_le_bytes());
     bytes[56..120].copy_from_slice(active.generation_digest());
+    bytes[120..184].copy_from_slice(active.interface_catalog_digest());
     let digest = Sha3_256::digest(&bytes);
-    bytes[120..152].copy_from_slice(&digest);
+    bytes[184..216].copy_from_slice(&digest);
     Ok(bytes)
 }
 
@@ -326,23 +332,26 @@ pub fn decode_deployment_checkpoint(
         || read_u16(bytes, 8)? != DEPLOYMENT_CHECKPOINT_VERSION
         || read_u16(bytes, 10)? as usize != DEPLOYMENT_CHECKPOINT_BYTES
         || read_u32(bytes, 12)? as usize != DEPLOYMENT_CHECKPOINT_BYTES
-        || bytes[152..].iter().any(|byte| *byte != 0)
+        || bytes[216..].iter().any(|byte| *byte != 0)
     {
         return Err(DeploymentError::InvalidCheckpoint);
     }
     let mut expected = [0; DEPLOYMENT_CHECKPOINT_BYTES];
     expected.copy_from_slice(bytes);
     let mut claimed = [0; 32];
-    claimed.copy_from_slice(&expected[120..152]);
-    expected[120..152].fill(0);
+    claimed.copy_from_slice(&expected[184..216]);
+    expected[184..216].fill(0);
     if Sha3_256::digest(&expected) != claimed {
         return Err(DeploymentError::InvalidCheckpoint);
     }
     let mut generation_digest = [0; 64];
     generation_digest.copy_from_slice(&bytes[56..120]);
+    let mut interface_catalog_digest = [0; 64];
+    interface_catalog_digest.copy_from_slice(&bytes[120..184]);
     let active = ActivatedSystemGeneration::new(
         read_u64(bytes, 24)?,
         generation_digest,
+        interface_catalog_digest,
         read_u64(bytes, 32)?,
         read_u64(bytes, 40)?,
         read_u64(bytes, 48)?,
@@ -551,18 +560,19 @@ pub fn encode_deployment_recovery_state(
     bytes[56..64].copy_from_slice(&file.local().to_le_bytes());
     bytes[64..72].copy_from_slice(&file_generation.to_le_bytes());
     bytes[72..136].copy_from_slice(active.generation_digest());
-    bytes[136..168].copy_from_slice(&Sha3_256::digest(&encode_deployment_checkpoint(
+    bytes[136..200].copy_from_slice(active.interface_catalog_digest());
+    bytes[200..232].copy_from_slice(&Sha3_256::digest(&encode_deployment_checkpoint(
         root, active,
     )?));
-    bytes[168..176].copy_from_slice(&active.source_object().to_le_bytes());
-    bytes[176..184].copy_from_slice(&active.source_generation().to_le_bytes());
+    bytes[232..240].copy_from_slice(&active.source_object().to_le_bytes());
+    bytes[240..248].copy_from_slice(&active.source_generation().to_le_bytes());
     Ok(bytes)
 }
 
 pub fn decode_deployment_recovery_state(
     bytes: &[u8; DEPLOYMENT_RECOVERY_STATE_BYTES],
 ) -> Result<DeploymentRecoveryState, DeploymentError> {
-    if bytes[..16] != DEPLOYMENT_RECOVERY_STATE_MAGIC || bytes[184..].iter().any(|byte| *byte != 0)
+    if bytes[..16] != DEPLOYMENT_RECOVERY_STATE_MAGIC || bytes[248..].iter().any(|byte| *byte != 0)
     {
         return Err(DeploymentError::InvalidRecoveryState);
     }
@@ -579,15 +589,18 @@ pub fn decode_deployment_recovery_state(
     let file_generation = read_u64(bytes, 64)?;
     let mut generation_digest = [0; 64];
     generation_digest.copy_from_slice(&bytes[72..136]);
+    let mut interface_catalog_digest = [0; 64];
+    interface_catalog_digest.copy_from_slice(&bytes[136..200]);
     let mut checkpoint_digest = [0; 32];
-    checkpoint_digest.copy_from_slice(&bytes[136..168]);
-    let source_object = read_u64(bytes, 168)?;
-    let source_generation = read_u64(bytes, 176)?;
+    checkpoint_digest.copy_from_slice(&bytes[200..232]);
+    let source_object = read_u64(bytes, 232)?;
+    let source_generation = read_u64(bytes, 240)?;
     if sequence == 0 && generation == 0 {
         if volume_bytes.iter().any(|byte| *byte != 0)
             || file_object != 0
             || file_generation != 0
             || generation_digest.iter().any(|byte| *byte != 0)
+            || interface_catalog_digest.iter().any(|byte| *byte != 0)
             || checkpoint_digest.iter().any(|byte| *byte != 0)
             || source_object != 0
             || source_generation != 0
@@ -608,6 +621,7 @@ pub fn decode_deployment_recovery_state(
     let active = ActivatedSystemGeneration::new(
         generation,
         generation_digest,
+        interface_catalog_digest,
         sequence,
         source_object,
         source_generation,
@@ -1091,7 +1105,14 @@ mod tests {
     }
 
     fn candidate(generation: u64, marker: u8) -> GenerationCandidate {
-        GenerationCandidate::new(generation, [marker; 64], 0x700, generation + 10).unwrap()
+        GenerationCandidate::new(
+            generation,
+            [marker; 64],
+            [marker.wrapping_add(1); 64],
+            0x700,
+            generation + 10,
+        )
+        .unwrap()
     }
 
     #[test]
@@ -1108,6 +1129,7 @@ mod tests {
         let active = service.commit_activation(prepared).unwrap();
         assert_eq!(active.generation(), 8);
         assert_eq!(active.generation_digest(), &[0x51; 64]);
+        assert_eq!(active.interface_catalog_digest(), &[0x52; 64]);
         assert_eq!(service.active(&capabilities, inspect), Ok(Some(active)));
         assert_eq!(
             service.commit_activation(prepared),

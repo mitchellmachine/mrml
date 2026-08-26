@@ -265,6 +265,8 @@ pub struct RoutedIsolationService<E> {
 pub struct PreparedIsolationServiceRoute {
     spec: IsolationServiceSpec,
     launch: PreparedIsolationLaunch,
+    system_generation_digest: Option<[u8; 64]>,
+    interface_catalog_digest: Option<[u8; 64]>,
 }
 
 #[derive(Debug, Eq, PartialEq)]
@@ -375,6 +377,8 @@ impl PreparedIsolationServiceRoute {
 #[derive(Debug, Eq, PartialEq)]
 pub struct PreparedComponentServiceLaunch {
     route: PreparedIsolationServiceRoute,
+    system_generation_digest: [u8; 64],
+    interface_catalog_digest: [u8; 64],
     consumer_artifact: [u8; 64],
     provider_artifact: [u8; 64],
     interface_fingerprint: [u8; 32],
@@ -387,6 +391,8 @@ impl PreparedComponentServiceLaunch {
         interface_generation: u32,
         provider_generation: u64,
         system_generation: u64,
+        system_generation_digest: [u8; 64],
+        interface_catalog_digest: [u8; 64],
         interface_fingerprint: [u8; 32],
         consumer_artifact: [u8; 64],
         provider_artifact: [u8; 64],
@@ -399,6 +405,16 @@ impl PreparedComponentServiceLaunch {
             Some(ComponentServiceLaunchError::RouteIdentityMismatch)
         } else if spec.system_generation() != system_generation {
             Some(ComponentServiceLaunchError::SystemGenerationMismatch)
+        } else if system_generation_digest == [0; 64] || interface_catalog_digest == [0; 64] {
+            Some(ComponentServiceLaunchError::InvalidGenerationDigest)
+        } else if route
+            .system_generation_digest
+            .is_some_and(|digest| digest != system_generation_digest)
+            || route
+                .interface_catalog_digest
+                .is_some_and(|digest| digest != interface_catalog_digest)
+        {
+            Some(ComponentServiceLaunchError::GenerationDigestMismatch)
         } else if interface_fingerprint == [0; 32] {
             Some(ComponentServiceLaunchError::InvalidInterfaceFingerprint)
         } else if consumer_artifact == [0; 64] || provider_artifact == [0; 64] {
@@ -413,6 +429,8 @@ impl PreparedComponentServiceLaunch {
         }
         Ok(Self {
             route,
+            system_generation_digest,
+            interface_catalog_digest,
             consumer_artifact,
             provider_artifact,
             interface_fingerprint,
@@ -425,6 +443,14 @@ impl PreparedComponentServiceLaunch {
 
     pub const fn consumer_artifact(&self) -> &[u8; 64] {
         &self.consumer_artifact
+    }
+
+    pub const fn system_generation_digest(&self) -> &[u8; 64] {
+        &self.system_generation_digest
+    }
+
+    pub const fn interface_catalog_digest(&self) -> &[u8; 64] {
+        &self.interface_catalog_digest
     }
 
     pub const fn provider_artifact(&self) -> &[u8; 64] {
@@ -479,6 +505,8 @@ impl PreparedComponentServiceLaunch {
 pub enum ComponentServiceLaunchError {
     RouteIdentityMismatch,
     SystemGenerationMismatch,
+    InvalidGenerationDigest,
+    GenerationDigestMismatch,
     InvalidInterfaceFingerprint,
     InvalidArtifactDigest,
     ArtifactSubstitution,
@@ -504,6 +532,7 @@ pub enum PreparedComponentServiceRouteError<E, Endpoint> {
 pub enum ComponentServiceHandoffError {
     Decode(ComponentServiceLaunchHandoffError),
     SystemGenerationDigestMismatch,
+    InterfaceCatalogDigestMismatch,
     Spec(IsolationServiceSpecError),
     Admission(IsolationLaunchError),
     Binding {
@@ -524,6 +553,12 @@ pub fn prepare_component_service_handoff<const DOMAINS: usize>(
         .map_err(ComponentServiceHandoffError::Decode)?;
     if admission.system_generation_digest() != Some(handoff.system_generation_digest()) {
         return Err(ComponentServiceHandoffError::SystemGenerationDigestMismatch);
+    }
+    if admission
+        .interface_catalog_digest()
+        .is_some_and(|digest| digest != handoff.interface_catalog_digest())
+    {
+        return Err(ComponentServiceHandoffError::InterfaceCatalogDigestMismatch);
     }
     let placement = match handoff.placement() {
         ComponentServicePlacement::NativeService => IsolationPlacement::NativeService,
@@ -582,6 +617,8 @@ pub fn bind_component_service_handoff(
         expected.interface_generation(),
         expected.provider_generation(),
         expected.system_generation(),
+        *handoff.system_generation_digest(),
+        *handoff.interface_catalog_digest(),
         *handoff.interface_fingerprint(),
         *handoff.consumer_artifact(),
         *handoff.provider_artifact(),
@@ -599,9 +636,16 @@ pub fn prepare_isolation_service_route<const DOMAINS: usize>(
         spec.class,
         spec.placement,
     )?;
+    let system_generation_digest = admission.system_generation_digest;
+    let interface_catalog_digest = admission.interface_catalog_digest;
     admission
         .prepare(request)
-        .map(|launch| PreparedIsolationServiceRoute { spec, launch })
+        .map(|launch| PreparedIsolationServiceRoute {
+            spec,
+            launch,
+            system_generation_digest,
+            interface_catalog_digest,
+        })
 }
 
 impl<E> RoutedIsolationService<E> {
@@ -863,6 +907,7 @@ pub struct IsolationAdmissionTable<const DOMAINS: usize> {
     mode: IsolationMode,
     system_generation: u64,
     system_generation_digest: Option<[u8; 64]>,
+    interface_catalog_digest: Option<[u8; 64]>,
     policy_generation: u64,
     slots: [Option<LaunchSlot>; DOMAINS],
     unavailable: [Option<UnavailableIsolationDomain>; DOMAINS],
@@ -888,6 +933,7 @@ impl<const DOMAINS: usize> IsolationAdmissionTable<DOMAINS> {
             mode,
             system_generation,
             system_generation_digest: None,
+            interface_catalog_digest: None,
             policy_generation,
             slots: array::from_fn(|_| None),
             unavailable: array::from_fn(|_| None),
@@ -922,12 +968,14 @@ impl<const DOMAINS: usize> IsolationAdmissionTable<DOMAINS> {
         active: ActivatedSystemGeneration,
         policy_generation: u64,
     ) -> Result<Self, IsolationLaunchError> {
-        Self::new_generation_bound(
+        let mut table = Self::new_generation_bound(
             mode,
             active.generation(),
             *active.generation_digest(),
             policy_generation,
-        )
+        )?;
+        table.interface_catalog_digest = Some(*active.interface_catalog_digest());
+        Ok(table)
     }
 
     pub const fn mode(&self) -> IsolationMode {
@@ -944,6 +992,10 @@ impl<const DOMAINS: usize> IsolationAdmissionTable<DOMAINS> {
 
     pub const fn system_generation_digest(&self) -> Option<&[u8; 64]> {
         self.system_generation_digest.as_ref()
+    }
+
+    pub const fn interface_catalog_digest(&self) -> Option<&[u8; 64]> {
+        self.interface_catalog_digest.as_ref()
     }
 
     pub fn prepare(
@@ -1591,6 +1643,8 @@ mod tests {
             spec.interface_generation(),
             spec.provider_generation(),
             spec.system_generation(),
+            [0x51; 64],
+            [0x61; 64],
             [0x3a; 32],
             [0x18; 64],
             [0x2f; 64],
@@ -1654,6 +1708,8 @@ mod tests {
             spec.interface_generation(),
             spec.provider_generation(),
             spec.system_generation(),
+            [0x51; 64],
+            [0x61; 64],
             [0x3a; 32],
             [0x18; 64],
             [0x2f; 64],
@@ -1685,15 +1741,24 @@ mod tests {
             9,
             ComponentServicePlacement::Microvm,
             [0x51; 64],
+            [0x61; 64],
             [0x3a; 32],
             [0x18; 64],
             [0x2f; 64],
         )
         .unwrap();
-        let mut table = IsolationAdmissionTable::<1>::new_generation_bound(
-            IsolationMode::TotalMicrovm,
+        let active = ActivatedSystemGeneration::new(
             SYSTEM_GENERATION,
             [0x51; 64],
+            [0x61; 64],
+            1,
+            0x500,
+            1,
+        )
+        .unwrap();
+        let mut table = IsolationAdmissionTable::<1>::new_activated(
+            IsolationMode::TotalMicrovm,
+            active,
             7,
         )
         .unwrap();
@@ -1722,6 +1787,7 @@ mod tests {
             9,
             ComponentServicePlacement::Microvm,
             [0x51; 64],
+            [0x61; 64],
             [0x3a; 32],
             [0x18; 64],
             [0x2f; 64],
@@ -1744,6 +1810,7 @@ mod tests {
             9,
             ComponentServicePlacement::Microvm,
             [0x52; 64],
+            [0x61; 64],
             [0x3a; 32],
             [0x18; 64],
             [0x2f; 64],
@@ -1752,6 +1819,27 @@ mod tests {
         assert_eq!(
             prepare_component_service_handoff(&mut table, &substituted_generation.encode()),
             Err(ComponentServiceHandoffError::SystemGenerationDigestMismatch)
+        );
+        assert_eq!((backend.native_launches, backend.microvm_launches), (0, 1));
+
+        let substituted_catalog = ComponentServiceLaunchHandoff::new(
+            SYSTEM_GENERATION,
+            7,
+            0x46,
+            0x434f_4e46_4947,
+            1,
+            9,
+            ComponentServicePlacement::Microvm,
+            [0x51; 64],
+            [0x62; 64],
+            [0x3a; 32],
+            [0x18; 64],
+            [0x2f; 64],
+        )
+        .unwrap();
+        assert_eq!(
+            prepare_component_service_handoff(&mut table, &substituted_catalog.encode()),
+            Err(ComponentServiceHandoffError::InterfaceCatalogDigestMismatch)
         );
         assert_eq!((backend.native_launches, backend.microvm_launches), (0, 1));
     }
@@ -1769,6 +1857,8 @@ mod tests {
             spec.interface_generation(),
             spec.provider_generation(),
             spec.system_generation(),
+            [0x51; 64],
+            [0x61; 64],
             [0x3a; 32],
             [0x18; 64],
             [0x2f; 64],
@@ -1811,6 +1901,8 @@ mod tests {
             spec.interface_generation(),
             spec.provider_generation(),
             spec.system_generation(),
+            [0x51; 64],
+            [0x61; 64],
             [0x3a; 32],
             [0x18; 64],
             [0x2f; 64],
@@ -1875,22 +1967,44 @@ mod tests {
         for expected in [
             ComponentServiceLaunchError::RouteIdentityMismatch,
             ComponentServiceLaunchError::SystemGenerationMismatch,
+            ComponentServiceLaunchError::InvalidGenerationDigest,
+            ComponentServiceLaunchError::GenerationDigestMismatch,
             ComponentServiceLaunchError::InvalidInterfaceFingerprint,
             ComponentServiceLaunchError::InvalidArtifactDigest,
             ComponentServiceLaunchError::ArtifactSubstitution,
         ] {
-            let mut table = IsolationAdmissionTable::<1>::new(
-                IsolationMode::TotalMicrovm,
-                SYSTEM_GENERATION,
-                7,
-            )
-            .unwrap();
+            let mut table = if expected == ComponentServiceLaunchError::GenerationDigestMismatch {
+                let active = ActivatedSystemGeneration::new(
+                    SYSTEM_GENERATION,
+                    [0x51; 64],
+                    [0x61; 64],
+                    1,
+                    0x500,
+                    1,
+                )
+                .unwrap();
+                IsolationAdmissionTable::<1>::new_activated(IsolationMode::TotalMicrovm, active, 7)
+                    .unwrap()
+            } else {
+                IsolationAdmissionTable::<1>::new(IsolationMode::TotalMicrovm, SYSTEM_GENERATION, 7)
+                    .unwrap()
+            };
             let spec = service_spec(IsolationPlacement::Microvm);
             let route = prepare_isolation_service_route(&mut table, spec).unwrap();
-            let (interface, system_generation, fingerprint, consumer, provider) = match expected {
+            let (
+                interface,
+                system_generation,
+                generation_digest,
+                catalog_digest,
+                fingerprint,
+                consumer,
+                provider,
+            ) = match expected {
                 ComponentServiceLaunchError::RouteIdentityMismatch => (
                     ObjectId(spec.interface().0 + 1),
                     spec.system_generation(),
+                    [0x51; 64],
+                    [0x61; 64],
                     [0x3a; 32],
                     [0x18; 64],
                     [0x2f; 64],
@@ -1898,6 +2012,26 @@ mod tests {
                 ComponentServiceLaunchError::SystemGenerationMismatch => (
                     spec.interface(),
                     spec.system_generation() - 1,
+                    [0x51; 64],
+                    [0x61; 64],
+                    [0x3a; 32],
+                    [0x18; 64],
+                    [0x2f; 64],
+                ),
+                ComponentServiceLaunchError::InvalidGenerationDigest => (
+                    spec.interface(),
+                    spec.system_generation(),
+                    [0; 64],
+                    [0x61; 64],
+                    [0x3a; 32],
+                    [0x18; 64],
+                    [0x2f; 64],
+                ),
+                ComponentServiceLaunchError::GenerationDigestMismatch => (
+                    spec.interface(),
+                    spec.system_generation(),
+                    [0x52; 64],
+                    [0x61; 64],
                     [0x3a; 32],
                     [0x18; 64],
                     [0x2f; 64],
@@ -1905,6 +2039,8 @@ mod tests {
                 ComponentServiceLaunchError::InvalidInterfaceFingerprint => (
                     spec.interface(),
                     spec.system_generation(),
+                    [0x51; 64],
+                    [0x61; 64],
                     [0; 32],
                     [0x18; 64],
                     [0x2f; 64],
@@ -1912,6 +2048,8 @@ mod tests {
                 ComponentServiceLaunchError::InvalidArtifactDigest => (
                     spec.interface(),
                     spec.system_generation(),
+                    [0x51; 64],
+                    [0x61; 64],
                     [0x3a; 32],
                     [0; 64],
                     [0x2f; 64],
@@ -1919,6 +2057,8 @@ mod tests {
                 ComponentServiceLaunchError::ArtifactSubstitution => (
                     spec.interface(),
                     spec.system_generation(),
+                    [0x51; 64],
+                    [0x61; 64],
                     [0x3a; 32],
                     [0x2f; 64],
                     [0x2f; 64],
@@ -1930,6 +2070,8 @@ mod tests {
                 spec.interface_generation(),
                 spec.provider_generation(),
                 system_generation,
+                generation_digest,
+                catalog_digest,
                 fingerprint,
                 consumer,
                 provider,

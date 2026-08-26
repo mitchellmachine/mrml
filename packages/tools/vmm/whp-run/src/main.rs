@@ -55,9 +55,10 @@ use mrml_kernel::{
 #[cfg(target_os = "windows")]
 use mrml_package_format::{
     ComponentInterfaceProvider, ComponentInterfaceRequirement, ComponentProviderForms,
-    ComponentServicePlacement, MAX_BOOT_PACKAGE_BYTES, MAX_BOOT_RELEASE_BYTES,
-    SystemGenerationDigestRecord, SystemGenerationView, admit_kernel_payload,
-    encode_system_generation, resolve_activated_component_service,
+    ComponentServicePlacement, InterfaceCatalogView, MAX_BOOT_PACKAGE_BYTES,
+    MAX_BOOT_RELEASE_BYTES, SystemGenerationDigestRecord, SystemGenerationView,
+    admit_kernel_payload, encode_interface_catalog, encode_system_generation,
+    resolve_activated_interface_catalog,
 };
 #[cfg(target_os = "windows")]
 use mrml_runtime::{Instant, Vector, mrml_println as println};
@@ -1911,48 +1912,77 @@ fn application_main() -> Result<()> {
         let digest = SystemGenerationView::decode(&bytes[..length])
             .map_err(|error| anyhow!("WHP SystemGeneration decoding failed: {:?}", error))?
             .digest();
-        Some((bytes, length, digest))
-    } else {
-        None
-    };
-    let active_component_generation = if let Some((_, _, digest)) = component_generation.as_ref() {
-        let deployment_root = ObjectId(0x4445_504c_4f59);
-        let mut capabilities = CapabilitySpace::<2>::new();
-        let control = capabilities
-            .insert(deployment_root, Rights::CONTROL)
-            .map_err(|error| anyhow!("WHP deployment authority failed: {:?}", error))?;
-        let inspect = capabilities
-            .insert(deployment_root, Rights::READ)
-            .map_err(|error| anyhow!("WHP deployment inspection failed: {:?}", error))?;
-        let mut deployment = DeploymentService::<1>::new(deployment_root)
-            .map_err(|error| anyhow!("WHP DeploymentService failed: {:?}", error))?;
-        let candidate = deployment
-            .stage(
-                &capabilities,
-                control,
-                GenerationCandidate::new(1, *digest, 0x5359_5347_454e, 1)
-                    .map_err(|error| anyhow!("WHP generation candidate failed: {:?}", error))?,
-            )
-            .map_err(|error| anyhow!("WHP candidate staging failed: {:?}", error))?;
-        let prepared = deployment
-            .prepare_activation(&capabilities, control, candidate, None)
-            .map_err(|error| anyhow!("WHP generation preparation failed: {:?}", error))?;
-        let active = deployment
-            .commit_activation(prepared)
-            .map_err(|error| anyhow!("WHP generation activation failed: {:?}", error))?;
-        let checkpoint = encode_deployment_checkpoint(deployment_root, active)
-            .map_err(|error| anyhow!("WHP generation checkpoint failed: {:?}", error))?;
-        let recovered = DeploymentService::<1>::recover(deployment_root, &checkpoint)
-            .map_err(|error| anyhow!("WHP generation recovery failed: {:?}", error))?;
-        Some(
-            recovered
-                .active(&capabilities, inspect)
-                .map_err(|error| anyhow!("WHP active generation read failed: {:?}", error))?
-                .ok_or_else(|| anyhow!("WHP recovered no active SystemGeneration"))?,
+        let requirement = ComponentInterfaceRequirement::exact(
+            "org.mrml.zim",
+            "org.mrml.interface.compression.zstd",
+            3,
+            ZSTD_INTERFACE_FINGERPRINT,
         )
+        .map_err(|error| anyhow!("WHP interface requirement failed: {:?}", error))?;
+        let provider = ComponentInterfaceProvider::exact(
+            "org.mrml.zstd",
+            "org.mrml.interface.compression.zstd",
+            3,
+            ZSTD_INTERFACE_FINGERPRINT,
+            ComponentProviderForms::NATIVE_SERVICE_OR_MICROVM,
+        )
+        .map_err(|error| anyhow!("WHP interface provider failed: {:?}", error))?;
+        let mut catalog = [0u8; 256];
+        let catalog_length = encode_interface_catalog(1, &[requirement], &[provider], &mut catalog)
+            .map_err(|error| anyhow!("WHP interface catalog failed: {:?}", error))?;
+        let catalog_digest = InterfaceCatalogView::decode(&catalog[..catalog_length])
+            .map_err(|error| anyhow!("WHP interface catalog decoding failed: {:?}", error))?
+            .digest();
+        Some((
+            bytes,
+            length,
+            digest,
+            catalog,
+            catalog_length,
+            catalog_digest,
+        ))
     } else {
         None
     };
+    let active_component_generation =
+        if let Some((_, _, digest, _, _, catalog_digest)) = component_generation.as_ref() {
+            let deployment_root = ObjectId(0x4445_504c_4f59);
+            let mut capabilities = CapabilitySpace::<2>::new();
+            let control = capabilities
+                .insert(deployment_root, Rights::CONTROL)
+                .map_err(|error| anyhow!("WHP deployment authority failed: {:?}", error))?;
+            let inspect = capabilities
+                .insert(deployment_root, Rights::READ)
+                .map_err(|error| anyhow!("WHP deployment inspection failed: {:?}", error))?;
+            let mut deployment = DeploymentService::<1>::new(deployment_root)
+                .map_err(|error| anyhow!("WHP DeploymentService failed: {:?}", error))?;
+            let candidate = deployment
+                .stage(
+                    &capabilities,
+                    control,
+                    GenerationCandidate::new(1, *digest, *catalog_digest, 0x5359_5347_454e, 1)
+                        .map_err(|error| anyhow!("WHP generation candidate failed: {:?}", error))?,
+                )
+                .map_err(|error| anyhow!("WHP candidate staging failed: {:?}", error))?;
+            let prepared = deployment
+                .prepare_activation(&capabilities, control, candidate, None)
+                .map_err(|error| anyhow!("WHP generation preparation failed: {:?}", error))?;
+            let active = deployment
+                .commit_activation(prepared)
+                .map_err(|error| anyhow!("WHP generation activation failed: {:?}", error))?;
+            let checkpoint = encode_deployment_checkpoint(deployment_root, active)
+                .map_err(|error| anyhow!("WHP generation checkpoint failed: {:?}", error))?;
+            let recovered = DeploymentService::<1>::recover(deployment_root, &checkpoint)
+                .map_err(|error| anyhow!("WHP generation recovery failed: {:?}", error))?;
+            Some(
+                recovered
+                    .active(&capabilities, inspect)
+                    .map_err(|error| anyhow!("WHP active generation read failed: {:?}", error))?
+                    .ok_or_else(|| anyhow!("WHP recovered no active SystemGeneration"))?,
+            )
+        } else {
+            None
+        };
     let mut isolation_admission = if service_mode || component_service_mode {
         Some(
             match active_component_generation {
@@ -2113,33 +2143,21 @@ fn application_main() -> Result<()> {
         let prepared = isolation_preparation
             .take()
             .ok_or_else(|| anyhow!("missing prepared component isolation route"))?;
-        let (generation_bytes, generation_length, _) = component_generation
-            .as_ref()
-            .ok_or_else(|| anyhow!("missing canonical component SystemGeneration"))?;
-        let requirement = ComponentInterfaceRequirement::exact(
-            "org.mrml.zim",
-            0x5a53_5444_0000_0003,
-            3,
-            ZSTD_INTERFACE_FINGERPRINT,
-        )
-        .map_err(|error| anyhow!("component interface requirement failed: {:?}", error))?;
-        let provider = ComponentInterfaceProvider::exact(
-            "org.mrml.zstd",
-            0x5a53_5444_0000_0003,
-            3,
-            ZSTD_INTERFACE_FINGERPRINT,
-            ComponentProviderForms::NATIVE_SERVICE_OR_MICROVM,
-        )
-        .map_err(|error| anyhow!("component interface provider failed: {:?}", error))?;
-        let handoff = resolve_activated_component_service(
+        let (generation_bytes, generation_length, _, catalog_bytes, catalog_length, _) =
+            component_generation
+                .as_ref()
+                .ok_or_else(|| anyhow!("missing canonical component SystemGeneration"))?;
+        let handoff = resolve_activated_interface_catalog(
             *active_component_generation
                 .as_ref()
                 .ok_or_else(|| anyhow!("missing active component SystemGeneration"))?,
             &generation_bytes[..*generation_length],
-            requirement,
-            &[provider],
+            &catalog_bytes[..*catalog_length],
+            "org.mrml.zim",
+            "org.mrml.interface.compression.zstd",
             1,
             0x5a49_4d5f_5a53_5444,
+            0x5a53_5444_0000_0003,
             ComponentServicePlacement::Microvm,
         )
         .map_err(|error| anyhow!("component interface resolution failed: {:?}", error))?;
