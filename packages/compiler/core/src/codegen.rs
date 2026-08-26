@@ -8345,6 +8345,13 @@ fn preanalyze_runtime_expression_at_reads_with_tuple<
                         kind: CodegenErrorKind::RuntimeExpressionUnsupported,
                         span: assignment_span,
                     })?;
+                let result_may_carry_reference = matches!(
+                    target.return_type,
+                    crate::ScalarType::Reference { .. }
+                        | crate::ScalarType::ArrayReference { .. }
+                        | crate::ScalarType::SliceReference { .. }
+                        | crate::ScalarType::StrReference { .. }
+                );
                 let result_origin_parameter = runtime_reference_call_origin_parameter::<
                     MAX_PARAMETERS,
                     MAX_EXPRESSION_NODES,
@@ -8618,7 +8625,10 @@ fn preanalyze_runtime_expression_at_reads_with_tuple<
                             _ => RuntimeReadEffectContext::Move,
                         };
                         let generation_borrower = facts.current_loan_generation_borrower;
-                        if carries_result_origin {
+                        if carries_result_origin
+                            || (result_may_carry_reference
+                                && matches!(expected, RuntimeExpressionType::Reference { .. }))
+                        {
                             facts.current_loan_generation_borrower =
                                 facts.pending_loan_generation_borrower;
                         }
@@ -36395,6 +36405,7 @@ mod tests {
             "fn value(input: &mut u16, repeat: bool, first: bool) -> u16 { let returned: &mut u16 = loop_branch_local_return(input, repeat, first); let competing: &mut u16 = &mut *input; *competing += 1; *returned }",
             "fn value(input: &mut u16, repeat: bool, first: bool) -> u16 { let returned: &mut u16 = loop_branch_tuple_assign_return(input, repeat, first); let competing: &mut u16 = &mut *input; *competing += 1; *returned }",
             "fn value(first: &mut u16, second: &mut u16) -> u16 { let returned: &mut u16 = tuple_field_assign(first, second); let competing: &mut u16 = &mut *second; *competing += 1; *returned }",
+            "fn value(first: &mut u16, second: &mut u16) -> u16 { let returned: &mut u16 = tuple_field_assign(first, second); let competing: &mut u16 = &mut *first; *competing += 1; *returned }",
             "fn value(input: &mut u16) -> u16 { let returned: &mut u16 = tuple_field_initialize(input); let competing: &mut u16 = &mut *input; *competing += 1; *returned }",
             "fn value(input: &mut u16) -> u16 { let returned: &mut u16 = tuple_field_move(input); let competing: &mut u16 = &mut *input; *competing += 1; *returned }",
             "fn value(first: &mut u16, second: &mut u16) -> u16 { let returned: &mut u16 = tuple_field_assign_alias(first, second); let competing: &mut u16 = &mut *second; *competing += 1; *returned }",
