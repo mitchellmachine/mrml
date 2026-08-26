@@ -2079,6 +2079,14 @@ enum X86_64InlineAssembly<'source> {
     Nop,
     CompareRax { input: &'source str },
     SetRax { output: &'source str },
+    IncrementRax { inout: &'source str },
+}
+
+#[derive(Clone, Copy)]
+enum X86_64InlineOperandKind {
+    Input,
+    Output,
+    InOut,
 }
 
 fn x86_64_inline_assembly(
@@ -2107,11 +2115,28 @@ fn x86_64_inline_assembly(
         x86_64_inline_assembly_options(options, true)?;
         return Ok(Some(X86_64InlineAssembly::Nop));
     }
-    let (arguments, operand_prefix, preserves_flags, output) =
+    let (arguments, operand_prefix, preserves_flags, operand_kind) =
         if let Some(arguments) = arguments.strip_prefix("\"cmp rax, rax\"") {
-            (arguments, "in(\"rax\")", false, false)
+            (
+                arguments,
+                "in(\"rax\")",
+                false,
+                X86_64InlineOperandKind::Input,
+            )
         } else if let Some(arguments) = arguments.strip_prefix("\"mov rax, 7\"") {
-            (arguments, "lateout(\"rax\")", true, true)
+            (
+                arguments,
+                "lateout(\"rax\")",
+                true,
+                X86_64InlineOperandKind::Output,
+            )
+        } else if let Some(arguments) = arguments.strip_prefix("\"inc rax\"") {
+            (
+                arguments,
+                "inout(\"rax\")",
+                false,
+                X86_64InlineOperandKind::InOut,
+            )
         } else {
             return Err(CodegenErrorKind::InvalidInlineAssembly);
         };
@@ -2139,10 +2164,13 @@ fn x86_64_inline_assembly(
     if let Some(options) = options {
         x86_64_inline_assembly_options(options, preserves_flags)?;
     }
-    if output {
-        return Ok(Some(X86_64InlineAssembly::SetRax { output: input }));
+    match operand_kind {
+        X86_64InlineOperandKind::Input => Ok(Some(X86_64InlineAssembly::CompareRax { input })),
+        X86_64InlineOperandKind::Output => Ok(Some(X86_64InlineAssembly::SetRax { output: input })),
+        X86_64InlineOperandKind::InOut => {
+            Ok(Some(X86_64InlineAssembly::IncrementRax { inout: input }))
+        }
     }
-    Ok(Some(X86_64InlineAssembly::CompareRax { input }))
 }
 
 fn x86_64_inline_assembly_options(
@@ -8468,6 +8496,46 @@ fn preanalyze_runtime_expression_statement_reads<
                 })?;
             return facts
                 .push_place_effect(path, RuntimePlaceEffectKind::Write, statement.span)
+                .map_err(|kind| CodegenError {
+                    kind,
+                    span: translate_span(body_start, statement.span),
+                });
+        }
+        Ok(Some(X86_64InlineAssembly::IncrementRax { inout })) => {
+            let (_, local) =
+                x86_64_inline_output_local(function, locals, inout).map_err(|kind| {
+                    CodegenError {
+                        kind,
+                        span: translate_span(body_start, statement.span),
+                    }
+                })?;
+            let base = RuntimePlaceIdentity::Local(local.id);
+            let projections = RuntimePlaceProjections::EMPTY;
+            let fact = RuntimePlaceAccessFact {
+                base,
+                projections,
+                ty: local.ty,
+                access: RuntimePlaceAccess::ReadModifyWrite,
+                span: statement.span,
+            };
+            facts
+                .push_assignment_access(fact)
+                .map_err(|kind| CodegenError {
+                    kind,
+                    span: translate_span(body_start, statement.span),
+                })?;
+            let path = facts
+                .find_move_path(base, projections)
+                .ok_or(CodegenError {
+                    kind: CodegenErrorKind::InvalidRuntimePlaceFacts,
+                    span: translate_span(body_start, statement.span),
+                })?;
+            return facts
+                .push_place_effect(
+                    path,
+                    RuntimePlaceEffectKind::ReadModifyWrite,
+                    statement.span,
+                )
                 .map_err(|kind| CodegenError {
                     kind,
                     span: translate_span(body_start, statement.span),
@@ -25636,6 +25704,43 @@ impl<
                 self.emit(&[0x48, 0xc7, 0xc0, 0x07, 0x00, 0x00, 0x00])?;
                 return self.emit_store_stack_slot(self.local_stack_slots_from(index + 1)?);
             }
+            Ok(Some(X86_64InlineAssembly::IncrementRax { inout })) => {
+                let (index, local) = x86_64_inline_output_local(
+                    self.function,
+                    &self.locals[..self.saved_locals],
+                    inout,
+                )
+                .map_err(|kind| CodegenError {
+                    kind,
+                    span: translate_span(body_start, statement.span),
+                })?;
+                let fact = RuntimePlaceAccessFact {
+                    base: RuntimePlaceIdentity::Local(local.id),
+                    projections: RuntimePlaceProjections::EMPTY,
+                    ty: local.ty,
+                    access: RuntimePlaceAccess::ReadModifyWrite,
+                    span: statement.span,
+                };
+                if self.preanalyzed_assignment_access_cursor
+                    < self.body_facts.assignment_access_count
+                    && self.body_facts.assignment_accesses
+                        [self.preanalyzed_assignment_access_cursor]
+                        == Some(fact)
+                {
+                    self.preanalyzed_assignment_access_cursor += 1;
+                }
+                self.record_place_access_fact(
+                    fact.base,
+                    fact.projections,
+                    fact.ty,
+                    fact.access,
+                    fact.span,
+                )?;
+                let stack_slot = self.local_stack_slots_from(index + 1)?;
+                self.emit_stack_slot(stack_slot)?;
+                self.emit(&[0x48, 0xff, 0xc0])?;
+                return self.emit_store_stack_slot(stack_slot);
+            }
             Ok(None) => {}
             Err(kind) => {
                 return Err(CodegenError {
@@ -29514,6 +29619,24 @@ mod tests {
                     .any(|bytes| bytes == [0x48, 0xc7, 0xc0, 0x07, 0, 0, 0])
             );
         }
+        for source in [
+            concat!(
+                "#[unsafe(no_mangle)] pub unsafe extern \"C\" fn answer() -> u64 { ",
+                "let mut value: u64 = 6; asm!(\"inc rax\", inout(\"rax\") value); value }"
+            ),
+            concat!(
+                "#[unsafe(no_mangle)] pub unsafe extern \"C\" fn answer() -> u64 { ",
+                "let mut value: u64 = 6; asm!(\"inc rax\", inout(\"rax\") value, ",
+                "options(nomem, nostack)); value }"
+            ),
+        ] {
+            let code = compile(source).unwrap();
+            assert!(
+                code.bytes()
+                    .windows(3)
+                    .any(|bytes| bytes == [0x48, 0xff, 0xc0])
+            );
+        }
 
         for (source, expected) in [
             (
@@ -29570,6 +29693,22 @@ mod tests {
             ),
             (
                 "#[unsafe(no_mangle)] pub unsafe extern \"C\" fn answer() -> u64 { let mut value: u64 = 0; asm!(\"mov rax, 7\", lateout(\"rcx\") value); value }",
+                CodegenErrorKind::InvalidInlineAssembly,
+            ),
+            (
+                "#[unsafe(no_mangle)] pub unsafe extern \"C\" fn answer() -> u64 { let value: u64 = 6; asm!(\"inc rax\", inout(\"rax\") value); value }",
+                CodegenErrorKind::ImmutableAssignment,
+            ),
+            (
+                "#[unsafe(no_mangle)] pub unsafe extern \"C\" fn answer() -> u32 { let mut value: u32 = 6; asm!(\"inc rax\", inout(\"rax\") value); value }",
+                CodegenErrorKind::RuntimeTypeMismatch,
+            ),
+            (
+                "#[unsafe(no_mangle)] pub unsafe extern \"C\" fn answer() -> u64 { let mut value: u64 = 6; asm!(\"inc rax\", inout(\"rax\") value, options(preserves_flags)); value }",
+                CodegenErrorKind::InvalidInlineAssembly,
+            ),
+            (
+                "#[unsafe(no_mangle)] pub unsafe extern \"C\" fn answer() -> u64 { let mut value: u64 = 6; asm!(\"inc rax\", inout(\"rcx\") value); value }",
                 CodegenErrorKind::InvalidInlineAssembly,
             ),
         ] {
