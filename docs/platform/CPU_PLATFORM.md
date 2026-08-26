@@ -145,11 +145,14 @@ regression, period crossing, zero slices, stale reservations, and arithmetic
 failure reject before execution authority is issued. Each authorization now
 also binds the exact reserved domain, an in-range vCPU index, one logical CPU
 allowed by the affinity mask, and a priority no stronger than the ceiling.
-Rejected vCPU, affinity, or priority choices consume no runtime. Focused Windows
-and Linux tests pass. This does not yet program a host or APIC deadline from the slice,
-reconcile actual elapsed time, enforce priority/class/affinity, derive child
-budgets, or prove physical topology behavior. Those integrations remain
-**PLANNED**.
+Rejected vCPU, affinity, or priority choices consume no runtime. Each issued
+slice is now linear and blocks reservation release and period rollover until
+exactly reconciled. Reconciliation uses the observed backend-entry wall elapsed
+time, refunds only a verified underrun, rejects replay or substitution, and
+retains the full precharge on overrun. Focused Windows and Arch Linux tests
+pass. This does not yet program a host or APIC deadline from the slice, prove a
+trusted CPU-time source, enforce priority/class/affinity, derive child budgets,
+or prove physical topology behavior. Those integrations remain **PLANNED**.
 
 The focused signed ZIM/Zstd component profile now consumes one exact
 domain-bound vCPU reservation before either hosted backend constructs its
@@ -158,14 +161,22 @@ one fail-closed kernel operation: exhaustion records `VCPU_BUDGET`
 unavailability and zero native fallback. Successful WHP and nested-KVM runs
 retain the reservation until confirmed guest teardown, then verify zero
 reserved parallelism and retire the root. Every focused component vCPU entry is
-now preceded by an exact one-microsecond maximum-slice charge, and teardown
-verifies the shared budget consumed exactly the number of issued entries. This
-charge is authorized for vCPU 0 on allowed logical CPU 0 at the exact budget
-ceiling on both runners. This is hosted controlled dispatch-admission evidence,
-not measured guest CPU time
-or a host timer guarantee; deadline programming, elapsed-time reconciliation,
-priority, affinity, general scheduler, multi-vCPU, and physical-topology
-enforcement remain **PLANNED**.
+now preceded by precharging the remaining bounded 100-millisecond controlled-
+probe allowance. The runner measures host-wall elapsed time across the backend
+entry, reconciles exactly once, and teardown verifies the resulting cumulative
+runtime before retiring authority. Fresh signed probes reported 764 microseconds
+under WHP and 1,181 microseconds under nested KVM. The charge is authorized for
+vCPU 0 on allowed logical CPU 0 at the exact budget ceiling on both runners.
+This is hosted controlled elapsed-accounting evidence, not trusted guest CPU
+time or a host/APIC deadline guarantee; deadline programming, priority,
+affinity, general scheduler, multi-vCPU, and physical-topology enforcement
+remain **PLANNED**.
+
+Engineering Constitution complexity score: complexity impact `MEDIUM`, TCB
+impact `MEDIUM`, new parser `NO`, new authority model `NO`, new persistent state
+`NO`, external dependency `NO`, failure isolated `YES`, and existing-object
+reuse `YES` through `CpuBudgetTable`, exact reservations, and the shared
+KVM/WHP runner boundary.
 
 ## System power policy
 

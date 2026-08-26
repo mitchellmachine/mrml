@@ -323,18 +323,23 @@ native fallback. Scheduler enforcement, native physical backing, other
 profiles, and broader device-specific projection accounting are the current
 gates.
 
-The vCPU budget now has a first runtime-enforcement prerequisite: one explicit
-fixed period, a shared allowance across parallel reservations, and exact
-maximum-slice charging before each focused component vCPU entry. Exhaustion,
-time regression, period crossing, stale authority, out-of-range vCPU, denied
-affinity, and excessive priority fail before dispatch and without partial
-charging. Successful authorization retains the exact domain, vCPU, logical CPU,
-and priority decision for the runner.
-Windows/Linux kernel suites and fresh WHP/KVM hosted probes pass, including
-zero KVM native fallback. This is deterministic dispatch-admission accounting,
-not elapsed-time or hardware-deadline evidence. Backend timer programming,
-elapsed reconciliation, priority/affinity, multiple profiles/vCPUs, and general
-scheduler integration remain current gates.
+The vCPU budget now has **PARTIALLY IMPLEMENTED** runtime enforcement: one
+explicit fixed period, a shared allowance across parallel reservations, and
+exact maximum-slice precharging before each focused component vCPU entry.
+Every slice is linear and must be reconciled exactly once after the backend
+returns. A verified underrun refunds only unused precharge; mismatch, replay,
+release while in flight, time regression, exhaustion, and period crossing fail
+closed. An overrun retains the full charge and reports failure. Successful
+authorization retains the exact domain, vCPU, logical CPU, and priority
+decision for the runner.
+Windows and Arch Linux kernel suites pass 510 tests, the WHP runner passes 7,
+and the KVM runner passes 8. Fresh signed hosted probes measured and reconciled
+764 microseconds on WHP and 1,181 microseconds on KVM; KVM reported one eligible
+microVM and zero native fallback. These are conservative host-wall elapsed
+measurements around hosted backend entry, not trusted CPU-time or hardware-
+deadline evidence. Backend timer/APIC deadline programming, priority/affinity,
+multiple profiles/vCPUs, and general scheduler integration remain current
+gates.
 
 Typed provider-resolution groundwork now matches canonical `REQUIRES` and
 `PROVIDES` edges only inside an immutable `SystemGeneration`. Interface name,

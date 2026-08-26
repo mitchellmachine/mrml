@@ -330,12 +330,15 @@ The CPU gate now also precharges an exact bounded runtime slice before every
 focused component vCPU entry. One period allowance is shared across all
 reservations under the budget, so parallel vCPUs cannot amplify time authority;
 the dispatch also binds the reservation domain, in-range vCPU index, allowed
-logical CPU, and priority ceiling. Exhaustion, invalid time, affinity, priority,
-or vCPU selection fails without charging and before entry. Both hosted probes
-verify issued-slice accounting through teardown. The one-microsecond values are
-deterministic controlled-probe maximum charges, not measurements or proof that
-WHP/KVM enforces a one-microsecond deadline. Backend deadline programming and
-actual elapsed-time reconciliation remain **PLANNED**.
+logical CPU, and priority ceiling. Each issued slice is linear: another slice,
+reservation release, and period rollover are denied until exact reconciliation.
+The runner measures host-wall elapsed time around backend entry, refunds only a
+verified underrun, and retains the complete precharge on overrun. Replay,
+substitution, exhaustion, invalid time, affinity, priority, or vCPU selection
+fails closed. Fresh signed WHP and nested-KVM probes reconciled 764 and 1,181
+microseconds respectively; KVM retained zero native fallback. These hosted
+measurements do not prove trusted CPU time or a hardware deadline. Backend
+deadline programming and general scheduler enforcement remain **PLANNED**.
 
 ## One policy, several placements
 

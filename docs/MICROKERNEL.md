@@ -7838,13 +7838,21 @@ reservations share the same allowance, and invalid time, boundary crossing,
 exhaustion, stale identity, or missing execute authority rejects before entry.
 The authorization also records the exact domain, in-range vCPU index,
 affinity-allowed logical CPU, and bounded priority; hostile substitutions leave
-the runtime counter unchanged.
-Teardown verifies that consumed slices equal issued entries before retiring the
-budget. Windows and Linux kernel suites passed 506 tests, WHP passed 7, KVM
-passed 8, and fresh signed hosted probes passed with zero KVM native fallback.
-The deterministic one-microsecond probe slices are accounting tokens, not
-measured execution or proof of a host/APIC deadline; timer programming and
-elapsed-time reconciliation remain planned.
+the runtime counter unchanged. A reservation may have only one linear in-flight
+slice. Exact reconciliation after backend return refunds only verified unused
+precharge. Replay and mismatched slices fail without mutation; release and
+period rollover reject an in-flight slice; overrun retains its complete charge
+and fails closed.
+
+Both runners now precharge the remaining bounded 100-millisecond controlled-
+probe allowance and reconcile host-wall elapsed time around every component
+backend entry. Teardown compares the cumulative reconciled runtime before
+retiring the budget. Windows and Arch Linux kernel suites passed 510 tests, WHP
+passed 7, and KVM passed 8. Fresh signed hosted probes reported 764 microseconds
+under WHP and 1,181 microseconds under KVM; KVM reported `eligible=1`,
+`microvm=1`, and `native_fallback=0`. This is hosted conservative accounting,
+not trusted guest CPU-time, hardware timer, APIC deadline, or physical-hardware
+evidence. Backend deadline programming remains planned.
 
 ### Hosted supervised native Zstd service lifecycle
 

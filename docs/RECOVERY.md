@@ -150,6 +150,11 @@ explicitly and downgrade the status rather than guessing.
   monitor, and hardware milestones: `docs/platform/CPU_PLATFORM.md`. These are
   planned unless exact code and focused evidence establish otherwise; CPU age
   never substitutes for affectedness evaluation.
+  A runtime slice precharged before vCPU entry is linear transient authority.
+  Recovery must never infer that an unresolved in-flight slice was unused or
+  refund it from reconstructed data. Retain its full charge and fail the domain
+  closed unless the exact live accounting instance can reconcile the matching
+  slice; reservation release and period rollover remain blocked meanwhile.
 - Boot image and loader: `packages/system/bootloader/`, `packages/libraries/uefi/`
 - CPL3 service image: `packages/system/service-image/`
 - Shared VM policy: `vm.rs`, `vm_dispatch.rs`, `vm_interrupt.rs`

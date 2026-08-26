@@ -19,20 +19,20 @@ use mrml_kernel::arch::x86_64::{Mapping, PRIVILEGE_STACK_ARENA_PAGES, PagePermis
 #[cfg(target_os = "linux")]
 use mrml_kernel::{
     ArtifactKind, Capability, CapabilitySpace, CpuBudgetId, CpuBudgetSpec, CpuBudgetTable,
-    GPU_DOORBELL_PORT, GPU_QUEUE_MESSAGE_BYTES, GpuCommandRing, GpuQueueIdentity, GpuQueueReceiver,
-    GpuResourceResponse, GpuResourceResponseSender, GpuSharedQueueLayout, GpuVmmQueueBridge,
-    GuestMemory, HypercallRouter, InterruptPolicy, IsolationAdmissionTable, IsolationMode,
-    IsolationPlacement, IsolationUnavailableReason, MAX_COMPONENT_IMAGE_REGIONS, MemoryPoolTable,
-    MicrovmPageProjectionKind, ObjectId, PAGE_SIZE, PreparedIsolationServiceRoute, ResourceCommand,
-    Rights, SIGNED_ARTIFACT_OVERHEAD_BYTES, SignedArtifact, TotalMicrovmClass, TrustRoot,
-    VIRTUAL_BLOCK_FEATURE_FLUSH, VcpuReservationId, VerifiedExecutable, VerifiedGpuKernelBundle,
-    VirtualBlockBackend, VirtualBlockBackendAuthority, VirtualBlockCompletionStatus,
-    VirtualBlockConfigurationPage, VirtualBlockDevice, VirtualBlockDeviceState, VirtualBlockError,
-    VirtualBlockMutationError, VirtualBlockPciAttachment, VirtualBlockPciAttachmentState,
-    VirtualBlockPciCleanupMode, VirtualBlockPciCleanupRecord, VirtualBlockPciFunctionRevoker,
-    VirtualBlockPciGuestMemoryMapper, VirtualBlockPciGuestWindowBackend,
-    VirtualBlockPciResourceRevoker, VirtualBlockProcessOutcome, VirtualBlockQueueBridge,
-    VirtualBlockQueueLayout, VirtualBlockRequest, VirtualBlockResumePage,
+    CpuRuntimeSlice, GPU_DOORBELL_PORT, GPU_QUEUE_MESSAGE_BYTES, GpuCommandRing, GpuQueueIdentity,
+    GpuQueueReceiver, GpuResourceResponse, GpuResourceResponseSender, GpuSharedQueueLayout,
+    GpuVmmQueueBridge, GuestMemory, HypercallRouter, InterruptPolicy, IsolationAdmissionTable,
+    IsolationMode, IsolationPlacement, IsolationUnavailableReason, MAX_COMPONENT_IMAGE_REGIONS,
+    MemoryPoolTable, MicrovmPageProjectionKind, ObjectId, PAGE_SIZE, PreparedIsolationServiceRoute,
+    ResourceCommand, Rights, SIGNED_ARTIFACT_OVERHEAD_BYTES, SignedArtifact, TotalMicrovmClass,
+    TrustRoot, VIRTUAL_BLOCK_FEATURE_FLUSH, VcpuReservationId, VerifiedExecutable,
+    VerifiedGpuKernelBundle, VirtualBlockBackend, VirtualBlockBackendAuthority,
+    VirtualBlockCompletionStatus, VirtualBlockConfigurationPage, VirtualBlockDevice,
+    VirtualBlockDeviceState, VirtualBlockError, VirtualBlockMutationError,
+    VirtualBlockPciAttachment, VirtualBlockPciAttachmentState, VirtualBlockPciCleanupMode,
+    VirtualBlockPciCleanupRecord, VirtualBlockPciFunctionRevoker, VirtualBlockPciGuestMemoryMapper,
+    VirtualBlockPciGuestWindowBackend, VirtualBlockPciResourceRevoker, VirtualBlockProcessOutcome,
+    VirtualBlockQueueBridge, VirtualBlockQueueLayout, VirtualBlockRequest, VirtualBlockResumePage,
     VirtualBlockTransactionOutcome, VirtualBlockTransport, VirtualBlockVmmMemory,
     VirtualPciAttachedResources, VirtualPciConfigurationMechanismOne,
     VirtualPciConfigurationRouter, VirtualPciIdentity, VirtualPciIoOutcome, VirtualPciLocation,
@@ -88,11 +88,31 @@ type ComponentCpuAuthority = (
 );
 
 #[cfg(target_os = "linux")]
-fn precharge_component_vcpu(cpu: &mut Option<ComponentCpuAuthority>) -> Result<()> {
-    let (budgets, capabilities, _, capability, reservation, next_start) = cpu
+fn run_component_vcpu<T>(
+    cpu: &mut Option<ComponentCpuAuthority>,
+    run: impl FnOnce() -> Result<T>,
+) -> Result<T> {
+    let (budgets, capabilities, budget, capability, reservation, next_start) = cpu
         .as_mut()
         .ok_or_else(|| anyhow!("missing component vCPU runtime authority"))?;
-    budgets
+    let usage = budgets
+        .usage(*budget, *capability, capabilities)
+        .map_err(|error| anyhow!("component vCPU usage failed: {:?}", error))?;
+    let remaining_runtime = usage
+        .spec()
+        .runtime_micros()
+        .checked_sub(usage.consumed_runtime_micros())
+        .ok_or_else(|| anyhow!("component vCPU runtime accounting underflow"))?;
+    let period_start = usage
+        .runtime_period_start_micros()
+        .ok_or_else(|| anyhow!("component vCPU period was not started"))?;
+    let period_end = period_start
+        .checked_add(u64::from(usage.spec().period_micros()))
+        .ok_or_else(|| anyhow!("component vCPU period overflow"))?;
+    let remaining_period =
+        u32::try_from(period_end.saturating_sub(*next_start)).unwrap_or(u32::MAX);
+    let maximum = remaining_runtime.min(remaining_period);
+    let slice: CpuRuntimeSlice = budgets
         .authorize_runtime_slice(
             *reservation,
             *capability,
@@ -100,14 +120,22 @@ fn precharge_component_vcpu(cpu: &mut Option<ComponentCpuAuthority>) -> Result<(
             0,
             u8::MAX,
             *next_start,
-            1,
+            maximum,
             capabilities,
         )
         .map_err(|error| anyhow!("component vCPU runtime charge failed: {:?}", error))?;
-    *next_start = next_start
-        .checked_add(1)
+    let started = Instant::now();
+    let result = run();
+    let elapsed = u64::try_from(started.elapsed().as_micros())
+        .map_err(|_| anyhow!("component vCPU elapsed time overflow"))?;
+    let end = next_start
+        .checked_add(elapsed)
         .ok_or_else(|| anyhow!("component vCPU runtime cursor overflow"))?;
-    Ok(())
+    budgets
+        .reconcile_runtime_slice(slice, *capability, end, capabilities)
+        .map_err(|error| anyhow!("component vCPU runtime reconciliation failed: {:?}", error))?;
+    *next_start = end;
+    result
 }
 
 #[cfg(target_os = "linux")]
@@ -2152,7 +2180,7 @@ fn application_main() -> Result<()> {
         let mut capabilities = CapabilitySpace::<1>::new();
         let mut budgets = CpuBudgetTable::<1, 1>::new(0x1a53)
             .map_err(|error| anyhow!("component CPU table failed: {:?}", error))?;
-        let spec = CpuBudgetSpec::new(1, 10_000, 10_000, u8::MAX, 1)
+        let spec = CpuBudgetSpec::new(1, 100_000, 100_000, u8::MAX, 1)
             .map_err(|error| anyhow!("component CPU budget failed: {:?}", error))?;
         let (budget, capability) = budgets
             .create_root(spec, &mut capabilities)
@@ -2608,9 +2636,6 @@ fn application_main() -> Result<()> {
         );
         return Ok(());
     }
-    if component_service_mode {
-        precharge_component_vcpu(&mut component_cpu)?;
-    }
     let mut exit = if smp_mode {
         let (bootstrap, application) = guest
             .run_smp()
@@ -2660,6 +2685,11 @@ fn application_main() -> Result<()> {
             ));
         }
         VmExit::Halted
+    } else if component_service_mode {
+        run_component_vcpu(&mut component_cpu, || {
+            VmBackend::run(&mut guest, 0)
+                .map_err(|error| anyhow!("KVM component execution failed: {:?}", error))
+        })?
     } else {
         VmBackend::run(&mut guest, 0)
             .map_err(|error| anyhow!("KVM execution failed: {:?}", error))?
@@ -2884,9 +2914,10 @@ fn application_main() -> Result<()> {
                 }
                 _ => return Err(anyhow!("KVM component service stage mismatch: {:?}", exit)),
             }
-            precharge_component_vcpu(&mut component_cpu)?;
-            exit = VmBackend::run(&mut guest, 0)
-                .map_err(|error| anyhow!("KVM component service execution failed: {:?}", error))?;
+            exit = run_component_vcpu(&mut component_cpu, || {
+                VmBackend::run(&mut guest, 0)
+                    .map_err(|error| anyhow!("KVM component service execution failed: {:?}", error))
+            })?;
         }
         if exit != VmExit::Halted {
             return Err(anyhow!(
@@ -3632,8 +3663,14 @@ fn application_main() -> Result<()> {
             return Err(anyhow!("component memory was not completely reclaimed"));
         }
     }
-    if let Some((mut budgets, mut capabilities, budget, capability, reservation, charged_slices)) =
-        component_cpu.take()
+    if let Some((
+        mut budgets,
+        mut capabilities,
+        budget,
+        capability,
+        reservation,
+        cpu_runtime_micros,
+    )) = component_cpu.take()
     {
         if budgets
             .release_vcpus(reservation, capability, &capabilities)
@@ -3647,14 +3684,19 @@ fn application_main() -> Result<()> {
             .map_err(|error| anyhow!("component CPU inspection failed: {:?}", error))?;
         if usage.reserved_parallelism() != 0
             || usage.active_reservations() != 0
-            || usage.consumed_runtime_micros() != u32::try_from(charged_slices).unwrap_or(u32::MAX)
-            || charged_slices == 0
+            || usage.consumed_runtime_micros()
+                != u32::try_from(cpu_runtime_micros).unwrap_or(u32::MAX)
+            || cpu_runtime_micros == 0
         {
             return Err(anyhow!("component vCPU authority was not reclaimed"));
         }
         budgets
             .retire_root(budget, capability, &mut capabilities)
             .map_err(|error| anyhow!("component CPU root retirement failed: {:?}", error))?;
+        println!(
+            "cpu|component_runtime={}us|accounting=elapsed-reconciled|backend=kvm",
+            cpu_runtime_micros
+        );
     }
     if let Some(admission) = isolation_admission.as_ref() {
         let report = admission.total_microvm_report();

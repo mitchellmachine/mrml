@@ -5249,6 +5249,18 @@ microVM work retain their existing `TRIGGERED` reviews; this agent review does
 not establish clearance or infringement and does not replace independent human
 dual review.
 
+# 2026-08-25 — Linear vCPU elapsed-runtime reconciliation
+
+**Result: NOT_TRIGGERED after the existing CPU-budget review.** This bounded
+increment applies conventional precharge, host-wall elapsed measurement, unused-
+charge refund, and exact-once accounting around an existing hosted vCPU entry.
+It adds no scheduler-selection algorithm, timer/deadline programming, topology,
+power policy, virtualization protocol, or hardware mechanism. General scheduler
+policy, adaptive placement, microVM construction, and backend deadline
+enforcement retain their existing `TRIGGERED` reviews; this agent review does
+not establish clearance or infringement and does not replace independent human
+dual review.
+
 # 2026-08-25 — Signed general SystemRelease envelope admission
 
 **Result: NOT_TRIGGERED after the existing package/release, Lamport-signature,

@@ -22,20 +22,20 @@ use mrml_kernel::verify_gpu_kernel_bundle;
 #[cfg(target_os = "windows")]
 use mrml_kernel::{
     ArtifactKind, Capability, CapabilitySpace, CpuBudgetId, CpuBudgetSpec, CpuBudgetTable,
-    GPU_DOORBELL_PORT, GPU_QUEUE_MESSAGE_BYTES, GpuCommandRing, GpuQueueIdentity, GpuQueueReceiver,
-    GpuResourceResponse, GpuResourceResponseSender, GpuSharedQueueLayout, GpuVmmQueueBridge,
-    GuestMemory, HypercallRouter, InterruptPolicy, IsolationAdmissionTable, IsolationMode,
-    IsolationPlacement, IsolationUnavailableReason, MAX_COMPONENT_IMAGE_REGIONS, MemoryPoolTable,
-    MicrovmPageProjectionKind, ObjectId, PAGE_SIZE, PreparedIsolationServiceRoute, ResourceCommand,
-    Rights, SIGNED_ARTIFACT_OVERHEAD_BYTES, SignedArtifact, TotalMicrovmClass, TrustRoot,
-    VIRTUAL_BLOCK_FEATURE_FLUSH, VcpuReservationId, VerifiedExecutable, VerifiedGpuKernelBundle,
-    VirtualBlockBackend, VirtualBlockBackendAuthority, VirtualBlockCompletionStatus,
-    VirtualBlockConfigurationPage, VirtualBlockDevice, VirtualBlockDeviceState, VirtualBlockError,
-    VirtualBlockMutationError, VirtualBlockPciAttachment, VirtualBlockPciAttachmentState,
-    VirtualBlockPciCleanupMode, VirtualBlockPciCleanupRecord, VirtualBlockPciFunctionRevoker,
-    VirtualBlockPciGuestMemoryMapper, VirtualBlockPciGuestWindowBackend,
-    VirtualBlockPciResourceRevoker, VirtualBlockProcessOutcome, VirtualBlockQueueBridge,
-    VirtualBlockQueueLayout, VirtualBlockRequest, VirtualBlockResumePage,
+    CpuRuntimeSlice, GPU_DOORBELL_PORT, GPU_QUEUE_MESSAGE_BYTES, GpuCommandRing, GpuQueueIdentity,
+    GpuQueueReceiver, GpuResourceResponse, GpuResourceResponseSender, GpuSharedQueueLayout,
+    GpuVmmQueueBridge, GuestMemory, HypercallRouter, InterruptPolicy, IsolationAdmissionTable,
+    IsolationMode, IsolationPlacement, IsolationUnavailableReason, MAX_COMPONENT_IMAGE_REGIONS,
+    MemoryPoolTable, MicrovmPageProjectionKind, ObjectId, PAGE_SIZE, PreparedIsolationServiceRoute,
+    ResourceCommand, Rights, SIGNED_ARTIFACT_OVERHEAD_BYTES, SignedArtifact, TotalMicrovmClass,
+    TrustRoot, VIRTUAL_BLOCK_FEATURE_FLUSH, VcpuReservationId, VerifiedExecutable,
+    VerifiedGpuKernelBundle, VirtualBlockBackend, VirtualBlockBackendAuthority,
+    VirtualBlockCompletionStatus, VirtualBlockConfigurationPage, VirtualBlockDevice,
+    VirtualBlockDeviceState, VirtualBlockError, VirtualBlockMutationError,
+    VirtualBlockPciAttachment, VirtualBlockPciAttachmentState, VirtualBlockPciCleanupMode,
+    VirtualBlockPciCleanupRecord, VirtualBlockPciFunctionRevoker, VirtualBlockPciGuestMemoryMapper,
+    VirtualBlockPciGuestWindowBackend, VirtualBlockPciResourceRevoker, VirtualBlockProcessOutcome,
+    VirtualBlockQueueBridge, VirtualBlockQueueLayout, VirtualBlockRequest, VirtualBlockResumePage,
     VirtualBlockTransactionOutcome, VirtualBlockTransport, VirtualBlockVmmMemory,
     VirtualPciAttachedResources, VirtualPciConfigurationMechanismOne,
     VirtualPciConfigurationRouter, VirtualPciIdentity, VirtualPciIoOutcome, VirtualPciLocation,
@@ -88,11 +88,31 @@ type ComponentCpuAuthority = (
 );
 
 #[cfg(target_os = "windows")]
-fn precharge_component_vcpu(cpu: &mut Option<ComponentCpuAuthority>) -> Result<()> {
-    let (budgets, capabilities, _, capability, reservation, next_start) = cpu
+fn run_component_vcpu<T>(
+    cpu: &mut Option<ComponentCpuAuthority>,
+    run: impl FnOnce() -> Result<T>,
+) -> Result<T> {
+    let (budgets, capabilities, budget, capability, reservation, next_start) = cpu
         .as_mut()
         .ok_or_else(|| anyhow!("missing component vCPU runtime authority"))?;
-    budgets
+    let usage = budgets
+        .usage(*budget, *capability, capabilities)
+        .map_err(|error| anyhow!("component vCPU usage failed: {:?}", error))?;
+    let remaining_runtime = usage
+        .spec()
+        .runtime_micros()
+        .checked_sub(usage.consumed_runtime_micros())
+        .ok_or_else(|| anyhow!("component vCPU runtime accounting underflow"))?;
+    let period_start = usage
+        .runtime_period_start_micros()
+        .ok_or_else(|| anyhow!("component vCPU period was not started"))?;
+    let period_end = period_start
+        .checked_add(u64::from(usage.spec().period_micros()))
+        .ok_or_else(|| anyhow!("component vCPU period overflow"))?;
+    let remaining_period =
+        u32::try_from(period_end.saturating_sub(*next_start)).unwrap_or(u32::MAX);
+    let maximum = remaining_runtime.min(remaining_period);
+    let slice: CpuRuntimeSlice = budgets
         .authorize_runtime_slice(
             *reservation,
             *capability,
@@ -100,14 +120,22 @@ fn precharge_component_vcpu(cpu: &mut Option<ComponentCpuAuthority>) -> Result<(
             0,
             u8::MAX,
             *next_start,
-            1,
+            maximum,
             capabilities,
         )
         .map_err(|error| anyhow!("component vCPU runtime charge failed: {:?}", error))?;
-    *next_start = next_start
-        .checked_add(1)
+    let started = Instant::now();
+    let result = run();
+    let elapsed = u64::try_from(started.elapsed().as_micros())
+        .map_err(|_| anyhow!("component vCPU elapsed time overflow"))?;
+    let end = next_start
+        .checked_add(elapsed)
         .ok_or_else(|| anyhow!("component vCPU runtime cursor overflow"))?;
-    Ok(())
+    budgets
+        .reconcile_runtime_slice(slice, *capability, end, capabilities)
+        .map_err(|error| anyhow!("component vCPU runtime reconciliation failed: {:?}", error))?;
+    *next_start = end;
+    result
 }
 
 #[cfg(target_os = "windows")]
@@ -2078,7 +2106,7 @@ fn application_main() -> Result<()> {
         let mut capabilities = CapabilitySpace::<1>::new();
         let mut budgets = CpuBudgetTable::<1, 1>::new(0x1a53)
             .map_err(|error| anyhow!("component CPU table failed: {:?}", error))?;
-        let spec = CpuBudgetSpec::new(1, 10_000, 10_000, u8::MAX, 1)
+        let spec = CpuBudgetSpec::new(1, 100_000, 100_000, u8::MAX, 1)
             .map_err(|error| anyhow!("component CPU budget failed: {:?}", error))?;
         let (budget, capability) = budgets
             .create_root(spec, &mut capabilities)
@@ -2558,10 +2586,16 @@ fn application_main() -> Result<()> {
         );
         return Ok(());
     } else {
-        if component_service_mode {
-            precharge_component_vcpu(&mut component_cpu)?;
-        }
-        match VmBackend::run(&mut guest, 0) {
+        let run_result = if component_service_mode {
+            run_component_vcpu(&mut component_cpu, || {
+                VmBackend::run(&mut guest, 0)
+                    .map_err(|error| anyhow!("WHP component execution failed: {:?}", error))
+            })
+        } else {
+            VmBackend::run(&mut guest, 0)
+                .map_err(|error| anyhow!("WHP execution failed: {:?}", error))
+        };
+        match run_result {
             Ok(exit) => exit,
             Err(error) => {
                 let mut marker = [0u8; 4];
@@ -2973,7 +3007,7 @@ fn application_main() -> Result<()> {
                             budget,
                             capability,
                             reservation,
-                            charged_slices,
+                            cpu_runtime_micros,
                         ) = component_cpu
                             .take()
                             .ok_or_else(|| anyhow!("missing component vCPU authority"))?;
@@ -2995,8 +3029,8 @@ fn application_main() -> Result<()> {
                         if usage.reserved_parallelism() != 0
                             || usage.active_reservations() != 0
                             || usage.consumed_runtime_micros()
-                                != u32::try_from(charged_slices).unwrap_or(u32::MAX)
-                            || charged_slices == 0
+                                != u32::try_from(cpu_runtime_micros).unwrap_or(u32::MAX)
+                            || cpu_runtime_micros == 0
                         {
                             return Err(anyhow!("component vCPU authority was not reclaimed"));
                         }
@@ -3006,7 +3040,8 @@ fn application_main() -> Result<()> {
                                 anyhow!("component CPU root retirement failed: {:?}", error)
                             })?;
                         println!(
-                            "verified exact-generation ZIM/Zstd component data path and lifecycle cleanup under WHP: verify={}us prepare={}us execute={}us total={}us",
+                            "verified exact-generation ZIM/Zstd component data path and lifecycle cleanup under WHP: cpu_runtime={}us verify={}us prepare={}us execute={}us total={}us",
+                            cpu_runtime_micros,
                             verification_micros,
                             preparation_micros,
                             execution_started.elapsed().as_micros(),
@@ -3017,9 +3052,10 @@ fn application_main() -> Result<()> {
                 }
                 _ => return Err(anyhow!("WHP component service stage mismatch: {:?}", exit)),
             }
-            precharge_component_vcpu(&mut component_cpu)?;
-            exit = VmBackend::run(&mut guest, 0)
-                .map_err(|error| anyhow!("WHP component service execution failed: {:?}", error))?;
+            exit = run_component_vcpu(&mut component_cpu, || {
+                VmBackend::run(&mut guest, 0)
+                    .map_err(|error| anyhow!("WHP component service execution failed: {:?}", error))
+            })?;
         }
         return Err(anyhow!(
             "WHP component service probe exceeded its stage bound"

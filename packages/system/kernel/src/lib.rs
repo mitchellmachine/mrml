@@ -71,8 +71,8 @@ pub use component_memory::{
     reserve_microvm_control_memory, reserve_microvm_guest_ram, reserve_microvm_page_projection,
 };
 pub use cpu_resource::{
-    CpuBudgetId, CpuBudgetSpec, CpuBudgetTable, CpuBudgetUsage, CpuResourceError, CpuRuntimeSlice,
-    VcpuReservationId,
+    CpuBudgetId, CpuBudgetSpec, CpuBudgetTable, CpuBudgetUsage, CpuResourceError,
+    CpuRuntimeReconciliation, CpuRuntimeSlice, VcpuReservationId,
 };
 pub use early::{EarlyKernelContext, EarlyKernelError};
 pub use framebuffer::{Color, FramebufferError, FramebufferInfo, FramebufferSurface, PixelFormat};
