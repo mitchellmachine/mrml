@@ -635,42 +635,6 @@ pub fn compile_x86_64_function_with_options<
             kind: CodegenErrorKind::Body(error.kind),
             span: translate_span(function.body_expression_span.start, error.span),
         })?;
-    let has_nested_branch_actions = parsed_body
-        .while_loops()
-        .iter()
-        .flatten()
-        .flat_map(|loop_statement| loop_statement.nested_blocks().iter().flatten())
-        .any(|block| !block.conditional_blocks().is_empty());
-    let nested_branch_has_non_return_terminal = parsed_body
-        .while_loops()
-        .iter()
-        .flatten()
-        .flat_map(|loop_statement| loop_statement.nested_blocks().iter().flatten())
-        .flat_map(|block| block.conditional_blocks().iter().flatten())
-        .any(|branch| {
-            !matches!(
-                branch.terminal,
-                crate::NestedLoopUnconditionalControl::Return(_)
-            )
-        });
-    let nested_branch_may_carry_references = function.body_expression.as_bytes().contains(&b'&')
-        || function
-            .parameters()
-            .iter()
-            .flatten()
-            .any(|parameter| parameter.ty.text.as_bytes().contains(&b'&'))
-        || function
-            .return_type
-            .is_some_and(|ty| ty.text.as_bytes().contains(&b'&'));
-    if has_nested_branch_actions
-        && nested_branch_may_carry_references
-        && nested_branch_has_non_return_terminal
-    {
-        return Err(CodegenError {
-            kind: CodegenErrorKind::RuntimeExpressionUnsupported,
-            span: function.body_expression_span,
-        });
-    }
     let mut body_has_aggregate_local = false;
     for local in parsed_body.locals().iter().flatten() {
         if local
@@ -16168,6 +16132,15 @@ fn runtime_reference_call_origin_parameter<const MAX_PARAMETERS: usize, const MA
                         .has_same_origins(projected_origins),
             )
         };
+        let branch_preserves_state = |branch_index: usize| -> Option<bool> {
+            let (_, origins, projected, _, _, _, _) = state_at_branch(branch_index)?;
+            Some(
+                origins[..local_count] == local_origins[..local_count]
+                    && projected
+                        .retain_local_prefix(local_count)
+                        .has_same_origins(projected_origins),
+            )
+        };
         let normalized_backedge_is_stable = |backedge_action_index: usize,
                                              prefix_bounded: bool|
          -> Option<bool> {
@@ -16366,6 +16339,67 @@ fn runtime_reference_call_origin_parameter<const MAX_PARAMETERS: usize, const MA
         let mut outer_continue_origins = [None; MAX_PARAMETERS];
         let mut outer_continue_projected_origins = RuntimeCalleeProjectedOrigins::EMPTY;
         let mut outer_continue_count = 0usize;
+        for (branch_index, (branch, control_order)) in block
+            .conditional_blocks()
+            .iter()
+            .flatten()
+            .zip(block.conditional_block_control_orders())
+            .enumerate()
+        {
+            if block
+                .unconditional_control_orders()
+                .iter()
+                .any(|order| order < control_order)
+            {
+                continue;
+            }
+            match branch.terminal {
+                crate::NestedLoopUnconditionalControl::Break(target_kind) => {
+                    let (_, origins, projected, _, _, _, _) = state_at_branch(branch_index)?;
+                    let (joined_origins, joined_projected, outcome_count) = match target_kind {
+                        crate::NestedLoopControlTarget::Inner => (
+                            &mut exit_origins,
+                            &mut exit_projected_origins,
+                            &mut exit_count,
+                        ),
+                        crate::NestedLoopControlTarget::Outer => (
+                            &mut outer_break_origins,
+                            &mut outer_break_projected_origins,
+                            &mut outer_break_count,
+                        ),
+                    };
+                    merge_loop_exit_origins(
+                        joined_origins,
+                        joined_projected,
+                        outcome_count,
+                        origins,
+                        projected.retain_local_prefix(local_count),
+                        local_count,
+                    )?;
+                }
+                crate::NestedLoopUnconditionalControl::Continue(
+                    crate::NestedLoopControlTarget::Inner,
+                ) => {
+                    if !branch_preserves_state(branch_index)? {
+                        return None;
+                    }
+                }
+                crate::NestedLoopUnconditionalControl::Continue(
+                    crate::NestedLoopControlTarget::Outer,
+                ) => {
+                    let (_, origins, projected, _, _, _, _) = state_at_branch(branch_index)?;
+                    merge_loop_exit_origins(
+                        &mut outer_continue_origins,
+                        &mut outer_continue_projected_origins,
+                        &mut outer_continue_count,
+                        origins,
+                        projected.retain_local_prefix(local_count),
+                        local_count,
+                    )?;
+                }
+                crate::NestedLoopUnconditionalControl::Return(_) => {}
+            }
+        }
         for ((action_index, target_kind), control_order) in block
             .conditional_break_action_indices()
             .iter()
@@ -16578,7 +16612,7 @@ fn runtime_reference_call_origin_parameter<const MAX_PARAMETERS: usize, const MA
                 continue;
             }
             let crate::NestedLoopUnconditionalControl::Return(value) = branch.terminal else {
-                return None;
+                continue;
             };
             let (names, origins, projected, _, _, _, count) = state_at_branch(branch_index)?;
             let tree = value.parse_value::<MAX_NODES>().ok()?;
@@ -16911,6 +16945,22 @@ fn runtime_reference_call_origin_parameter<const MAX_PARAMETERS: usize, const MA
                                     .iter()
                                     .chain(block.conditional_continue_targets())
                                     .any(|target| *target == crate::NestedLoopControlTarget::Outer)
+                                    || block.conditional_blocks().iter().flatten().any(|branch| {
+                                        branch.actions().iter().flatten().any(|action| {
+                                            matches!(
+                                                action,
+                                                crate::ConditionalLoopAction::Local(_)
+                                                    | crate::ConditionalLoopAction::Assignment(_)
+                                            )
+                                        }) || matches!(
+                                            branch.terminal,
+                                            crate::NestedLoopUnconditionalControl::Break(
+                                                crate::NestedLoopControlTarget::Outer
+                                            ) | crate::NestedLoopUnconditionalControl::Continue(
+                                                crate::NestedLoopControlTarget::Outer
+                                            )
+                                        )
+                                    })
                                     || block.unconditional_controls().iter().flatten().any(
                                         |control| {
                                             matches!(
@@ -41192,6 +41242,25 @@ mod tests {
             compile_x86_64_function::<_, 256, 2, 16>(&function, &NoConstants, X86_64Abi::SystemV,)
                 .is_ok()
         );
+
+        for source in [
+            "#[unsafe(no_mangle)] pub extern \"C\" fn value(input: &mut u64, stop: bool) -> &mut u64 { loop { loop { if stop { let alias: &mut u64 = &mut *input; break; } break; } return input; } }",
+            "#[unsafe(no_mangle)] pub extern \"C\" fn value(input: &mut u64, stop: bool) -> &mut u64 { loop { loop { if stop { let alias: &mut u64 = &mut *input; continue; } return input; } } }",
+        ] {
+            let module = Parser::new(source).parse_module::<2, 2>().unwrap();
+            let Some(Item::Function(function)) = module.items()[0] else {
+                panic!("expected function")
+            };
+            assert!(
+                compile_x86_64_function::<_, 256, 2, 16>(
+                    &function,
+                    &NoConstants,
+                    X86_64Abi::SystemV,
+                )
+                .is_ok(),
+                "failed to compile {source}",
+            );
+        }
     }
 
     #[test]
