@@ -2087,6 +2087,10 @@ enum X86_64InlineAssembly<'source> {
         input: &'source str,
         output: Option<&'source str>,
     },
+    AddRaxRcx {
+        left: &'source str,
+        right: &'source str,
+    },
 }
 
 #[derive(Clone, Copy)]
@@ -2121,6 +2125,60 @@ fn x86_64_inline_assembly(
             .ok_or(CodegenErrorKind::InvalidInlineAssembly)?;
         x86_64_inline_assembly_options(options, true, false)?;
         return Ok(Some(X86_64InlineAssembly::Nop));
+    }
+    if let Some(named) = arguments.strip_prefix("\"add {") {
+        let separator = named
+            .find("}, {")
+            .ok_or(CodegenErrorKind::InvalidInlineAssembly)?;
+        let left_name = &named[..separator];
+        let right_template = &named[separator + 4..];
+        let template_end = right_template
+            .find("}\"")
+            .ok_or(CodegenErrorKind::InvalidInlineAssembly)?;
+        let right_name = &right_template[..template_end];
+        if left_name == right_name
+            || x86_64_naked_external_symbol(left_name) != Some(left_name)
+            || x86_64_naked_external_symbol(right_name) != Some(right_name)
+        {
+            return Err(CodegenErrorKind::InvalidInlineAssembly);
+        }
+        let declarations = right_template[template_end + 2..]
+            .trim()
+            .strip_prefix(',')
+            .ok_or(CodegenErrorKind::InvalidInlineAssembly)?
+            .trim();
+        let declarations = x86_64_inline_operand_with_options(declarations, false, true)?;
+        let (left_declaration, right_declaration) = declarations
+            .split_once(',')
+            .ok_or(CodegenErrorKind::InvalidInlineAssembly)?;
+        let (declared_left, left) = left_declaration
+            .split_once('=')
+            .ok_or(CodegenErrorKind::InvalidInlineAssembly)?;
+        let (declared_right, right) = right_declaration
+            .split_once('=')
+            .ok_or(CodegenErrorKind::InvalidInlineAssembly)?;
+        if declared_left.trim() != left_name || declared_right.trim() != right_name {
+            return Err(CodegenErrorKind::InvalidInlineAssembly);
+        }
+        let left = left
+            .trim()
+            .strip_prefix("inout(reg)")
+            .ok_or(CodegenErrorKind::InvalidInlineAssembly)?
+            .trim();
+        let right = right
+            .trim()
+            .strip_prefix("in(reg)")
+            .ok_or(CodegenErrorKind::InvalidInlineAssembly)?
+            .trim();
+        if left.is_empty()
+            || right.is_empty()
+            || left.contains("=>")
+            || left.contains(',')
+            || right.contains(',')
+        {
+            return Err(CodegenErrorKind::InvalidInlineAssembly);
+        }
+        return Ok(Some(X86_64InlineAssembly::AddRaxRcx { left, right }));
     }
     if let Some(named) = arguments.strip_prefix("\"inc {") {
         let template_end = named
@@ -8649,6 +8707,54 @@ fn preanalyze_runtime_expression_statement_reads<
                         span: translate_span(body_start, statement.span),
                     }
                 })?;
+            return preanalyze_x86_64_inline_local_access(
+                facts,
+                local,
+                RuntimePlaceAccess::ReadModifyWrite,
+                statement.span,
+                body_start,
+            );
+        }
+        Ok(Some(X86_64InlineAssembly::AddRaxRcx { left, right })) => {
+            let (_, local) =
+                x86_64_inline_output_local(function, locals, left).map_err(|kind| {
+                    CodegenError {
+                        kind,
+                        span: translate_span(body_start, statement.span),
+                    }
+                })?;
+            let tree = crate::ExpressionParser::<MAX_EXPRESSION_NODES>::new(right)
+                .parse()
+                .map_err(|error| CodegenError {
+                    kind: CodegenErrorKind::Expression(error.kind),
+                    span: translate_span(body_start + statement.span.start, error.span),
+                })?;
+            let ty = runtime_expression_type_with_locals(
+                function,
+                resolver,
+                locals,
+                &tree,
+                tree.root(),
+                0,
+            )
+            .map_err(|kind| CodegenError {
+                kind,
+                span: translate_span(body_start, statement.span),
+            })?;
+            if ty != RuntimeExpressionType::Integer(Some(crate::IntegerType::U64)) {
+                return Err(CodegenError {
+                    kind: CodegenErrorKind::RuntimeTypeMismatch,
+                    span: translate_span(body_start, statement.span),
+                });
+            }
+            preanalyze_runtime_expression_reads(
+                facts,
+                locals,
+                function,
+                resolver,
+                &tree,
+                statement.span,
+            )?;
             return preanalyze_x86_64_inline_local_access(
                 facts,
                 local,
@@ -25923,6 +26029,80 @@ impl<
                 self.emit(&[0x48, 0xff, 0xc0])?;
                 return self.emit_store_stack_slot(stack_slot);
             }
+            Ok(Some(X86_64InlineAssembly::AddRaxRcx { left, right })) => {
+                let (index, local) = x86_64_inline_output_local(
+                    self.function,
+                    &self.locals[..self.saved_locals],
+                    left,
+                )
+                .map_err(|kind| CodegenError {
+                    kind,
+                    span: translate_span(body_start, statement.span),
+                })?;
+                let tree = crate::ExpressionParser::<MAX_EXPRESSION_NODES>::new(right)
+                    .parse()
+                    .map_err(|error| CodegenError {
+                        kind: CodegenErrorKind::Expression(error.kind),
+                        span: translate_span(body_start + statement.span.start, error.span),
+                    })?;
+                let ty = runtime_expression_type_with_locals(
+                    self.function,
+                    self.resolver,
+                    &self.locals[..self.saved_locals],
+                    &tree,
+                    tree.root(),
+                    0,
+                )
+                .map_err(|kind| CodegenError {
+                    kind,
+                    span: translate_span(body_start, statement.span),
+                })?;
+                if ty != RuntimeExpressionType::Integer(Some(crate::IntegerType::U64)) {
+                    return Err(CodegenError {
+                        kind: CodegenErrorKind::RuntimeTypeMismatch,
+                        span: translate_span(body_start, statement.span),
+                    });
+                }
+                let fact = RuntimePlaceAccessFact {
+                    base: RuntimePlaceIdentity::Local(local.id),
+                    projections: RuntimePlaceProjections::EMPTY,
+                    ty: local.ty,
+                    access: RuntimePlaceAccess::ReadModifyWrite,
+                    span: statement.span,
+                };
+                if self.preanalyzed_assignment_access_cursor
+                    < self.body_facts.assignment_access_count
+                    && self.body_facts.assignment_accesses
+                        [self.preanalyzed_assignment_access_cursor]
+                        == Some(fact)
+                {
+                    self.preanalyzed_assignment_access_cursor += 1;
+                }
+                self.record_place_access_fact(
+                    fact.base,
+                    fact.projections,
+                    fact.ty,
+                    fact.access,
+                    fact.span,
+                )?;
+                let stack_slot = self.local_stack_slots_from(index + 1)?;
+                self.emit_stack_slot(stack_slot)?;
+                self.emit(&[0x50])?;
+                self.evaluation_depth += 1;
+                let previous_width = self.width;
+                self.width = runtime_expression_width(ty)
+                    .ok_or(self.error(CodegenErrorKind::RuntimeTypeMismatch))?;
+                let emission = self.emit_expression(&tree, tree.root(), 0);
+                self.width = previous_width;
+                if let Err(error) = emission {
+                    self.evaluation_depth -= 1;
+                    return Err(error);
+                }
+                self.emit(&[0x48, 0x89, 0xc1])?;
+                self.evaluation_depth -= 1;
+                self.emit(&[0x58, 0x48, 0x01, 0xc8])?;
+                return self.emit_store_stack_slot(stack_slot);
+            }
             Ok(None) => {}
             Err(kind) => {
                 return Err(CodegenError {
@@ -29864,6 +30044,24 @@ mod tests {
                     .any(|bytes| bytes == [0x48, 0xff, 0xc0])
             );
         }
+        let two_registers = compile(concat!(
+            "#[unsafe(no_mangle)] pub unsafe extern \"C\" fn answer(right: u64) -> u64 { ",
+            "let mut left: u64 = 6; asm!(\"add {left}, {right}\", ",
+            "left = inout(reg) left, right = in(reg) right, options(pure, nomem)); left }"
+        ))
+        .unwrap();
+        assert!(
+            two_registers
+                .bytes()
+                .windows(3)
+                .any(|bytes| bytes == [0x48, 0x89, 0xc1])
+        );
+        assert!(
+            two_registers
+                .bytes()
+                .windows(3)
+                .any(|bytes| bytes == [0x48, 0x01, 0xc8])
+        );
 
         for (source, expected) in [
             (
@@ -29980,6 +30178,26 @@ mod tests {
             ),
             (
                 "#[unsafe(no_mangle)] pub unsafe extern \"C\" fn answer() -> u64 { let mut value: u64 = 6; asm!(\"inc {value}\", value = inout(reg) value, options(pure, nomem, readonly)); value }",
+                CodegenErrorKind::InvalidInlineAssembly,
+            ),
+            (
+                "#[unsafe(no_mangle)] pub unsafe extern \"C\" fn answer(right: u64) -> u64 { let left: u64 = 6; asm!(\"add {left}, {right}\", left = inout(reg) left, right = in(reg) right); left }",
+                CodegenErrorKind::ImmutableAssignment,
+            ),
+            (
+                "#[unsafe(no_mangle)] pub unsafe extern \"C\" fn answer(right: u32) -> u64 { let mut left: u64 = 6; asm!(\"add {left}, {right}\", left = inout(reg) left, right = in(reg) right); left }",
+                CodegenErrorKind::RuntimeTypeMismatch,
+            ),
+            (
+                "#[unsafe(no_mangle)] pub unsafe extern \"C\" fn answer(right: u64) -> u64 { let mut left: u64 = 6; asm!(\"add {left}, {right}\", right = inout(reg) left, left = in(reg) right); left }",
+                CodegenErrorKind::InvalidInlineAssembly,
+            ),
+            (
+                "#[unsafe(no_mangle)] pub unsafe extern \"C\" fn answer(right: u64) -> u64 { let mut left: u64 = 6; asm!(\"add {left}, {left}\", left = inout(reg) left, right = in(reg) right); left }",
+                CodegenErrorKind::InvalidInlineAssembly,
+            ),
+            (
+                "#[unsafe(no_mangle)] pub unsafe extern \"C\" fn answer(right: u64) -> u64 { let mut left: u64 = 6; asm!(\"add {left}, {right}\", left = inout(reg) left, right = in(reg) right, extra = in(reg) right); left }",
                 CodegenErrorKind::InvalidInlineAssembly,
             ),
         ] {
