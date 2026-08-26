@@ -4047,6 +4047,13 @@ the scoped projected entry. Focused caller/control tests and ORACLE-0002 cover
 the accepted form, E0499 live conflict, E0515 local-backed escape, and restoration
 after last use. Both hosts remain at 987 tests.
 
+A conditional block within a supported loop may now assign an exact typed tuple
+field into a branch-local mutable-reference alias immediately before returning
+it. This path is restricted to a discovered tuple-field RHS, and every reachable
+return must retain the same parameter origin. Pinned-oracle evidence accepts the
+parameter-backed reborrow and post-last-use owner reuse and rejects a live
+competitor and a local-backed field return. Both hosts remain at 987 tests.
+
 The conditional projected-reassignment milestone extends the bounded tuple-field
 loan chain across a conditional shared-reference assignment. The exact dated
 oracle rejects mutation of either conditional owner and of the field's replaced

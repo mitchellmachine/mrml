@@ -724,6 +724,16 @@ incoming-state intersection. ORACLE-0002 accepts the stable form, rejects a live
 competitor with E0499, and rejects local-backed escape with E0515. Windows and
 Arch remain at 987 tests per host.
 
+The projected loop-branch return slice permits a conditional loop arm to create
+an exact typed tuple from a mutable-reference alias reborrow, assign that field
+back into the alias, and immediately return it. The bounded action walker admits
+only tuple-field assignment RHS places; other loop-arm assignments and
+expressions remain conservative. ORACLE-0002 accepted the parameter-backed form
+and post-last-use owner reuse, rejected a live competing owner borrow with
+E0499, and rejected a local-backed field return with E0515. Windows and Arch
+each pass 987 compiler tests. General loop dataflow and regions remain
+unsupported.
+
 Multi-field tuple literals retain a separate projected origin per field. A
 conditional reference element seeds its field only when both arms prove the
 same parameter; unequal first/second origins fail closed. Focused caller tests

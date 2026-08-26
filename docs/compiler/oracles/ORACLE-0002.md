@@ -378,6 +378,16 @@ with E0515. Temporary sources and metadata were removed. This is one stable
 zero/one-iteration origin join, not general loop or region inference.
 
 Another independently authored Rust 2024 metadata-only probe against the same
+exact toolchain and commit accepted creating a one-field mutable-reference tuple
+from a branch-local alias reborrow inside a `while` conditional block, assigning
+the field back into that alias, and immediately returning it. The caller could
+reuse the owner after the returned child's last use. Separate invocations
+rejected a live competing owner borrow with E0499 and a branch tuple borrowing
+function-local storage with E0515. Temporary sources and metadata were removed.
+This is exact projected assignment before a loop-branch return, not general loop
+dataflow, alias, or region inference.
+
+Another independently authored Rust 2024 metadata-only probe against the same
 exact toolchain and commit accepted assigning a parameter-backed tuple field
 into an existing mutable-reference local and returning that local. The same
 probe accepted an inferred alias initially moved from a local-backed tuple field,

@@ -1031,6 +1031,15 @@ existing incoming-state intersection. ORACLE-0002 accepts the stable form,
 rejects a live competing owner borrow with E0499, and rejects the local-backed
 iteration with E0515.
 
+Conditional blocks inside a supported loop may now transfer an exact typed
+tuple field into a branch-local mutable-reference alias before an immediate
+return. Only a discovered tuple-field RHS enters this bounded action path;
+ordinary assignments and expression statements remain conservative. The return
+origin must still agree with every other reachable return and the loop tail.
+ORACLE-0002 accepts the parameter-backed reborrow and post-last-use owner reuse,
+rejects a live competing owner borrow with E0499, and rejects a local-backed
+field return with E0515. This is not general loop dataflow or region inference.
+
 The first modern trait-solver foundation is an explicit bounded implemented-
 goal representation. Stable trait/type/inference/placeholder identities remain
 distinct; canonicalization replaces inference identities with first-occurrence
