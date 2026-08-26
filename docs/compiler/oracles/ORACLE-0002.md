@@ -391,6 +391,11 @@ referenced local storage. This is exact evidence that result pointer ancestry
 does not erase non-origin argument lifetime constraints. Temporary source and
 metadata were removed.
 
+The complementary invocation copied the result pointee, ended the result's last
+use, and then mutated the non-origin local. This exact toolchain compiled the
+case, confirming non-lexical release rather than permanent consumption of the
+local argument. Temporary source and metadata were removed.
+
 An independently authored Rust 2024 metadata-only probe against this exact
 toolchain and commit returned call-derived shared children through an explicit
 return and through a conditional early-return plus tail-return path. Both

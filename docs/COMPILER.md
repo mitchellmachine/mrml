@@ -1189,6 +1189,8 @@ a non-origin argument while the result remains live. Matching inner-loop-local
 origins still fail closed with E0515. A local-backed non-origin argument also
 prevents returning the otherwise parameter-origin result, matching the pinned
 oracle's E0515 and keeping loan lifetime distinct from pointer ancestry.
+After the result's last use, the same non-origin local loan ends and local
+mutation is accepted, matching the pinned oracle's non-lexical lifetime.
 
 The first modern trait-solver foundation is an explicit bounded implemented-
 goal representation. Stable trait/type/inference/placeholder identities remain

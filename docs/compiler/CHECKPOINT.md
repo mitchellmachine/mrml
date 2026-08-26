@@ -888,6 +888,10 @@ parameter-backed second argument, but a local first-argument loan still prevents
 escape. MRML fails with `RuntimeReferenceOutlivesFunction`, matching ORACLE-0002
 E0515. Both hosts remain at 988 compiler tests.
 
+The complementary last-use case copies through the result, then mutates the
+non-origin local successfully after its tied loan dies. ORACLE-0002 accepts the
+same non-lexical release. Windows and Arch remain at 988 compiler tests.
+
 Multi-field tuple literals retain a separate projected origin per field. A
 conditional reference element seeds its field only when both arms prove the
 same parameter; unequal first/second origins fail closed. Focused caller tests
