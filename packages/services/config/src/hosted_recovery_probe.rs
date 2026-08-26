@@ -13,7 +13,7 @@ use super::{
     RecoveredBlockStableSystemSelection, RecoveredTotalAdmission,
     RecoveredTotalAdmissionBuildError, SettingId, SettingSchema,
     StableConfigurationRecoveryValidator, StableServiceRecoveryValidator,
-    recover_block_stable_system_selection,
+    recover_serviced_stable_system_selection,
 };
 use mrml_crypto::Sha3_256;
 use mrml_kernel::arch::x86_64::UserContext;
@@ -23,13 +23,14 @@ use mrml_kernel::{
 };
 use mrml_storage::{
     AUTHORITY_RECOVERY_STATE_BYTES, AllocationImage, AllocationKind, AllocationRecord,
-    AuthorityCheckpointProofIssuer, AuthorityRecoveryStateStore, BootRecoveryAdmission,
-    DirectoryEntry, DirectoryImage, DirectoryMetadata, ExtentImage, ExtentRecord, FileMetadata,
-    FileReadBackend, MetadataPointer, ObjectIdAllocatorImage, OwnerApprovedAuthorityCheckpoint,
-    SUPERBLOCK_BYTES, StorageAuthorityTable, StorageBlockDevice, StorageName, StorageObjectId,
-    StorageObjectKind, StoragePrincipal, StorageRecoveryGrant, StorageRights, Superblock,
-    VolumeHeader, VolumeId, authority_checkpoint_digest, encode_authority_checkpoint,
-    recover_selected_validate_and_commit_stable_authorities,
+    AuthorityCheckpointProofIssuer, AuthorityRecoveryStateStore, BlockDeviceDescriptor,
+    BlockDeviceId, BlockRights, BlockService, BlockServiceBackend, BlockSessionHandle,
+    BootRecoveryAdmission, DirectoryEntry, DirectoryImage, DirectoryMetadata, ExtentImage,
+    ExtentRecord, FileMetadata, FileReadBackend, MetadataPointer, ObjectIdAllocatorImage,
+    OwnerApprovedAuthorityCheckpoint, SUPERBLOCK_BYTES, ServicedBlockDevice, StorageAuthorityTable,
+    StorageName, StorageObjectId, StorageObjectKind, StoragePrincipal, StorageRecoveryGrant,
+    StorageRights, Superblock, VolumeHeader, VolumeId, authority_checkpoint_digest,
+    encode_authority_checkpoint, recover_selected_validate_and_commit_stable_authorities,
 };
 
 const BLOCK_BYTES: usize = 4096;
@@ -106,11 +107,16 @@ struct ReachableMetadataBackend {
     object_ids: [u8; BLOCK_BYTES],
 }
 
-unsafe impl StorageBlockDevice for ReachableMetadataBackend {
+unsafe impl BlockServiceBackend for ReachableMetadataBackend {
     type Error = ();
 
-    fn read_blocks(&mut self, block: u64, output: &mut [u8]) -> Result<(), Self::Error> {
-        if self.fail_block == Some(block) {
+    fn read_blocks(
+        &mut self,
+        device: BlockDeviceId,
+        block: u64,
+        output: &mut [u8],
+    ) -> Result<(), Self::Error> {
+        if device != recovery_device() || self.fail_block == Some(block) {
             return Err(());
         }
         let source = match block {
@@ -133,16 +139,22 @@ unsafe impl StorageBlockDevice for ReachableMetadataBackend {
         Ok(())
     }
 
-    fn write_blocks(&mut self, _block: u64, _input: &[u8]) -> Result<(), Self::Error> {
+    fn write_blocks(
+        &mut self,
+        _device: BlockDeviceId,
+        _block: u64,
+        _input: &[u8],
+    ) -> Result<(), Self::Error> {
         Err(())
     }
 
-    fn flush(&mut self) -> Result<(), Self::Error> {
+    fn flush(&mut self, _device: BlockDeviceId) -> Result<(), Self::Error> {
         Err(())
     }
 
     fn replace_superblock(
         &mut self,
+        _device: BlockDeviceId,
         _block: u64,
         _encoded: &[u8; SUPERBLOCK_BYTES],
     ) -> Result<(), Self::Error> {
@@ -203,6 +215,29 @@ fn header() -> VolumeHeader {
     VolumeHeader::new(volume(), BLOCK_BYTES as u32, 100, 1, 2).unwrap()
 }
 
+fn recovery_device() -> BlockDeviceId {
+    BlockDeviceId::new(1).unwrap()
+}
+
+fn recovery_block_service()
+-> Result<(BlockService<1, 1>, BlockSessionHandle), HostedRecoveryProbeError> {
+    let mut service = BlockService::<1, 1>::new();
+    service
+        .register_device(
+            BlockDeviceDescriptor::new(
+                recovery_device(),
+                BLOCK_BYTES as u32,
+                header().block_count(),
+            )
+            .ok_or(HostedRecoveryProbeError::StorageLayout)?,
+        )
+        .map_err(|_| HostedRecoveryProbeError::StorageLayout)?;
+    let session = service
+        .grant(recovery_device(), principal(), BlockRights::READ)
+        .map_err(|_| HostedRecoveryProbeError::StorageLayout)?;
+    Ok((service, session))
+}
+
 fn object(local: u64) -> StorageObjectId {
     StorageObjectId::new(volume(), local).unwrap()
 }
@@ -217,18 +252,14 @@ fn digest(bytes: &[u8]) -> [u8; 32] {
     digest.finalize()
 }
 
-fn recover_reachable_files<'a>(
+fn build_reachable_device(
     root_generation: u64,
     configuration_length: usize,
     configuration_bytes: &[u8; BLOCK_BYTES],
     authority_length: usize,
     authority_bytes: &[u8; BLOCK_BYTES],
     fail_block: Option<u64>,
-    volume_scratch: &'a mut [u8],
-) -> Result<
-    RecoveredBlockStableSystemSelection<'a, ReachableMetadataBackend, 1, 3>,
-    HostedRecoveryProbeError,
-> {
+) -> Result<ReachableMetadataBackend, HostedRecoveryProbeError> {
     let root = object(1);
     let configuration = object(9);
     let authority = object(10);
@@ -441,7 +472,7 @@ fn recover_reachable_files<'a>(
             .try_into()
             .expect("canonical superblock prefix"),
     );
-    let backend = ReachableMetadataBackend {
+    Ok(ReachableMetadataBackend {
         fail_block,
         primary,
         secondary: [0; BLOCK_BYTES],
@@ -453,20 +484,39 @@ fn recover_reachable_files<'a>(
         authority_extents,
         allocation,
         object_ids,
-    };
+    })
+}
+
+fn recover_reachable_files<'a>(
+    service: &'a BlockService<1, 1>,
+    backend: &'a mut ReachableMetadataBackend,
+    session: BlockSessionHandle,
+    volume_scratch: &'a mut [u8],
+) -> Result<
+    RecoveredBlockStableSystemSelection<
+        'a,
+        ServicedBlockDevice<'a, ReachableMetadataBackend, 1, 1>,
+        1,
+        3,
+    >,
+    HostedRecoveryProbeError,
+> {
     let mut primary_read = [0; BLOCK_BYTES];
     let mut secondary_read = [0; BLOCK_BYTES];
     let mut metadata_scratch = [0; BLOCK_BYTES];
-    recover_block_stable_system_selection::<_, 10, 2, 1, 3>(
+    recover_serviced_stable_system_selection::<_, 1, 1, 10, 2, 1, 3>(
+        service,
+        backend,
+        session,
+        principal(),
         header(),
         header().primary_superblock(),
-        backend,
         volume_scratch,
         &mut primary_read,
         &mut secondary_read,
         &mut metadata_scratch,
-        configuration,
-        authority,
+        object(9),
+        object(10),
     )
     .map_err(|_| HostedRecoveryProbeError::StorageLayout)
 }
@@ -616,14 +666,20 @@ where
     };
     authority_backend.bytes[..authority_length]
         .copy_from_slice(&authority_bytes[..authority_length]);
-    let mut volume_scratch = [0; BLOCK_BYTES];
-    let reachable = recover_reachable_files(
+    let mut recovery_device_backend = build_reachable_device(
         ROOT_GENERATION,
         checkpoint.length,
         &configuration_backend.bytes,
         authority_length,
         &authority_backend.bytes,
         None,
+    )?;
+    let (recovery_block_service, recovery_session) = recovery_block_service()?;
+    let mut volume_scratch = [0; BLOCK_BYTES];
+    let reachable = recover_reachable_files(
+        &recovery_block_service,
+        &mut recovery_device_backend,
+        recovery_session,
         &mut volume_scratch,
     )?;
     let selected = reachable.selected();
@@ -727,23 +783,23 @@ mod tests {
         let authority = [0x41; BLOCK_BYTES];
         let mut current_scratch = [0; BLOCK_BYTES];
         let mut previous_scratch = [0; BLOCK_BYTES];
+        let mut current_backend =
+            build_reachable_device(14, 1, &configuration, 1, &authority, None).unwrap();
+        let mut previous_backend =
+            build_reachable_device(13, 1, &configuration, 1, &authority, None).unwrap();
+        let (current_service, current_session) = recovery_block_service().unwrap();
+        let (previous_service, previous_session) = recovery_block_service().unwrap();
         let current = recover_reachable_files(
-            14,
-            1,
-            &configuration,
-            1,
-            &authority,
-            None,
+            &current_service,
+            &mut current_backend,
+            current_session,
             &mut current_scratch,
         )
         .unwrap();
         let previous = recover_reachable_files(
-            13,
-            1,
-            &configuration,
-            1,
-            &authority,
-            None,
+            &previous_service,
+            &mut previous_backend,
+            previous_session,
             &mut previous_scratch,
         )
         .unwrap();
@@ -763,14 +819,21 @@ mod tests {
             Err(SelectedStableSystemRecoveryError::RootMismatch)
         ));
         let mut failed_scratch = [0; BLOCK_BYTES];
+        let mut failed_backend = build_reachable_device(
+            14,
+            1,
+            &configuration,
+            1,
+            &authority,
+            Some(header().secondary_superblock()),
+        )
+        .unwrap();
+        let (failed_service, failed_session) = recovery_block_service().unwrap();
         assert!(
             recover_reachable_files(
-                14,
-                1,
-                &configuration,
-                1,
-                &authority,
-                Some(header().secondary_superblock()),
+                &failed_service,
+                &mut failed_backend,
+                failed_session,
                 &mut failed_scratch,
             )
             .is_err()

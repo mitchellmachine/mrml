@@ -854,6 +854,9 @@ Checking an existing generational `BlockService` session and exact principal
 before wrapping the existing serviced-device adapter is conventional capability
 validation and API composition. It adds no storage, recovery, placement,
 scheduling, or virtualization algorithm.
+Adopting that existing serviced-device path in the controlled WHP/KVM recovery
+source changes only composition and lifetime retention; it adds no new
+mechanism to the triggered combination.
 Because the
 broader combination of
 signed release classification, automated placement, isolation, recovery, and

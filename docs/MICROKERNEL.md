@@ -3168,8 +3168,10 @@ The next control-plane gate is **PARTIALLY IMPLEMENTED** through
 generation and principal validation precede `ServicedBlockDevice` construction
 and all root I/O; wrong-owner and revoked-session cases perform zero backend
 reads. Configuration passes 46 tests on both development hosts, WHP passes 11,
-and KVM 12. Positive runner adoption and installed-device discovery remain
-**PLANNED**.
+and KVM 12. The shared hosted source now retains that exact serviced-device
+authority chain through recovery. Fresh signed WHP and nested-KVM probes each
+reported root 14, one eligible microVM, and zero native fallback. Installed-
+device discovery remains **PLANNED**.
 
 Patent review: `TRIGGERED` under the existing signed-release, adaptive
 isolation, Total-MicroVM, automated VMM placement, and device-projection reviews

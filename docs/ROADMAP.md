@@ -354,9 +354,11 @@ Capability-bound stable-device admission is now **PARTIALLY IMPLEMENTED**.
 `BlockService` session and principal before constructing the serviced device or
 issuing root reads. Wrong-principal and revoked-session tests cause zero backend
 I/O. Windows and Arch Linux each pass 46 configuration tests; WHP passes 11 and
-KVM 12. The hosted positive path still uses the raw controlled device adapter;
-adopting the serviced path, installed discovery, and early-boot orchestration
-remain next.
+KVM 12. The hosted positive path now registers its controlled device, grants an
+exact read-only recovery session, and retains the service/session/backend/volume
+chain through committed recovery. Fresh signed probes on both backends reported
+root generation 14, one eligible microVM, and zero native fallback. Installed
+discovery and early-boot orchestration remain next.
 
 The next storage connection is now **PARTIALLY IMPLEMENTED** without claiming
 media evidence. `recover_stable_system_selection` accepts the existing hostile

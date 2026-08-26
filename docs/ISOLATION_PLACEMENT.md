@@ -794,9 +794,12 @@ Capability-bound device admission is now **PARTIALLY IMPLEMENTED** as
 `BlockService` session and principal before constructing `ServicedBlockDevice`
 or issuing either root read. Wrong-principal and revoked-session tests observe
 zero backend reads. Configuration passes 46 tests on Windows and Arch Linux;
-WHP remains 11/11 and KVM 12/12. The controlled runner has not yet adopted this
-entry point, so positive end-to-end serviced recovery and installed discovery
-remain next.
+WHP remains 11/11 and KVM 12/12. The shared hosted source now adopts this entry
+point: it registers the controlled device, grants the exact recovery principal
+a read-only session, and retains service, session, backend, volume, and selected
+graph through authority recovery. Fresh signed WHP and nested-KVM probes each
+reported recovery root 14, one eligible microVM, and zero native fallback.
+Installed discovery remains next.
 
 The runner-side boot overlay is no longer injected as an independent enum
 literal. Both hosted backends encode neutral accepted recovery state and the

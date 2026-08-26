@@ -1187,8 +1187,12 @@ The authority half of device selection is now **PARTIALLY IMPLEMENTED**.
 `BlockService` session owned by the supplied principal before it can create the
 serviced device or read storage. A wrong principal and a revoked generation
 both fail with zero backend reads. Windows and Arch Linux each pass 46
-configuration tests; WHP remains 11 and KVM 12. Positive adoption by the hosted
-recovery source, device discovery, and installed early boot remain next.
+configuration tests; WHP remains 11 and KVM 12. The shared hosted recovery
+source now positively consumes this path: its exact read-only session, service,
+backend, `BlockVolume`, and selected graph remain live through committed
+authority recovery. Fresh signed WHP and nested-KVM probes reported root 14,
+one eligible microVM, and zero fallback. Installed-device discovery and early
+boot remain next.
 
 WHP and nested KVM now consume the common inner `BootTotalAdmission` owner from
 effective-policy/release binding through classified route preparation,
