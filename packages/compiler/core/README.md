@@ -3940,6 +3940,12 @@ with the local's retained type before updating provenance. This preserves
 directional mutable-to-shared coercion but rejects shared-to-mutable transfer
 independently of the declared function return.
 
+Projected callee origins now have a separate fixed-capacity typed state keyed by
+stable local index and a canonical nonempty projection. It retains final type,
+parameter origin, and monotonic generation; branch intersection keeps only
+identical typed origins. This is the prerequisite representation only:
+projected assignment transfer remains fail-closed until it is connected.
+
 The conditional projected-reassignment milestone extends the bounded tuple-field
 loan chain across a conditional shared-reference assignment. The exact dated
 oracle rejects mutation of either conditional owner and of the field's replaced

@@ -928,6 +928,14 @@ checks it against the retained local type before updating origin state. The
 directional rule permits mutable-to-shared assignment and rejects shared-to-
 mutable assignment even when the function's return itself is shared.
 
+A bounded projected-callee-origin state now provides the dependency for
+projected local assignment transfer. Each entry keys a stable local index and
+validated nonempty projection, retains the canonical final type, parameter
+origin, and monotonic generation, and consumes fixed capacity. Branch
+intersection retains only identical typed origins and the maximum observed
+generation. The state is not yet wired into callee transfer, so projected local
+assignments remain unsupported rather than falling back to scalar state.
+
 The first modern trait-solver foundation is an explicit bounded implemented-
 goal representation. Stable trait/type/inference/placeholder identities remain
 distinct; canonicalization replaces inference identities with first-occurrence

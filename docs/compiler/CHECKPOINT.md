@@ -654,6 +654,16 @@ accepted; shared-to-mutable fails the standalone callee proof closed rather
 than exploiting a compatible shared function return. ORACLE-0002 accepts the
 former and rejects the latter with E0308. Both hosts pass 986 tests.
 
+The projected-callee-origin foundation adds a fixed-capacity table keyed by
+stable local index plus a validated nonempty projection. Entries retain final
+projected type, parameter origin, and checked monotonic generation. Exact
+replacement updates one key; branch intersection keeps only identical typed
+origins and preserves the maximum generation. Invalid/empty projections and
+capacity overflow fail closed. Windows and Arch each pass 641 library, 1
+component, 10 conformance, and 335 replacement tests: 987 per host. Transfer
+integration remains unimplemented, so projected callee assignments still fail
+closed.
+
 Inferred locals now become reassignment-origin eligible only when their
 initializer already proved a compatible parameter origin. This preserves valid
 indexed scalar alias replacement while preventing an inferred slice alias from
