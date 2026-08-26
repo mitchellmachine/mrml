@@ -7868,13 +7868,29 @@ the infinite-loop guest on authorized logical CPU 0.
 
 The ordinary signed component probes also complete through the same affinity
 and deadline path: Windows and Arch Linux kernel suites pass 510 tests, WHP
-passes 7, and KVM passes 8. Fresh optimized probes reported `logical_cpu=0`
-and `affinity=host-enforced`, with 1,006 microseconds under WHP and 1,204
-microseconds under KVM; KVM reported `eligible=1`, `microvm=1`, and
+passes 7, and KVM passes 8. Fresh optimized probes reported `logical_cpu=0`,
+`affinity=host-enforced`, and `priority=host-normal`, with 1,466 microseconds
+under WHP and 1,385 microseconds under KVM; KVM reported `eligible=1`,
+`microvm=1`, and
 `native_fallback=0`. This is hosted conservative accounting, cancellation, and
-affinity evidence, not trusted guest CPU-time, exact deadline latency, native
-APIC enforcement, host-priority enforcement, physical-hardware evidence, or a
-security boundary against the host.
+affinity/normal-priority evidence, not trusted guest CPU-time, exact deadline
+latency, native
+APIC enforcement, stronger host-priority classes, physical-hardware evidence,
+or a security boundary against the host.
+
+The next bounded scheduling increment implements exactly one portable
+host-priority class rather than treating unrelated host numbers as equivalent.
+The focused CPU budget now has ceiling 0 and issues slices at priority 0. A
+shared `ScheduledDeadlineVmBackend` passes that already-authorized value without
+another policy decision. WHP captures the current thread priority, applies and
+verifies `THREAD_PRIORITY_NORMAL`, then restores and verifies the prior value.
+KVM requires the runner to begin in `SCHED_OTHER` at scheduler priority 0,
+applies and verifies that same state, then restores and verifies the complete
+prior policy/parameter pair. Priority 1 fails before guest entry in focused live
+tests; priority 0 still expires the infinite-loop guest and both tests compare
+the post-run native state with the captured state. Stronger/different classes,
+nice values, real-time policies, admission mapping, and general scheduler
+integration remain planned.
 
 ### Hosted supervised native Zstd service lifecycle
 

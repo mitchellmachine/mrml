@@ -343,11 +343,18 @@ now passes directly to a backend-neutral affinity contract; each backend binds
 the runner before entry, retires the run and deadline worker, and restores the
 complete prior affinity before return. Invalid CPU indices and uncertain bind
 or restoration fail closed. Fresh signed WHP and nested-KVM component probes
-completed on logical CPU 0 and reconciled 1,006 and 1,204 microseconds
+completed on logical CPU 0 and reconciled 1,466 and 1,385 microseconds
 respectively; KVM retained zero native fallback. These hosted mechanisms do not
 prove trusted CPU time, exact deadline latency, native APIC enforcement,
 physical topology, or a boundary against the host. Priority-class and general
-scheduler enforcement remain **PLANNED**.
+scheduler expansion remain **PLANNED**, except for one now-enforced common
+host-normal class. The focused budget has priority ceiling 0 and passes the
+slice's exact priority directly to a shared scheduling contract. WHP applies
+and verifies `THREAD_PRIORITY_NORMAL`; KVM applies and verifies `SCHED_OTHER`
+with scheduler priority 0. Both restore and verify the complete prior native
+state after the bounded run. Nonzero classes and uncertain transitions fail
+before successful return; no numeric equivalence with stronger host policies is
+inferred.
 
 ## One policy, several placements
 

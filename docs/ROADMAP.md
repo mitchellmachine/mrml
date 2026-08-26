@@ -343,13 +343,19 @@ WHP and KVM bind the runner before entry and restore its complete prior affinity
 only after the deadline worker and vCPU run have retired. Unsupported CPU
 indices, bind failure, or restoration uncertainty fail closed. Fresh signed
 hosted component probes completed normally on logical CPU 0 and reconciled
-1,006 microseconds on WHP and 1,204 microseconds on KVM; KVM reported one
+1,466 microseconds on WHP and 1,385 microseconds on KVM; KVM reported one
 eligible microVM and zero native fallback. These are host-scheduled cancellation
 and affinity mechanisms plus conservative host-wall measurements, not trusted
 CPU-time, exact latency, APIC enforcement, physical-topology evidence, or a
 boundary against a compromised host. Native APIC deadlines, priority-class
-enforcement, multiple profiles/vCPUs, and general scheduler integration remain
-current gates.
+expansion beyond the newly enforced host-normal class, multiple profiles/vCPUs,
+and general scheduler integration remain current gates. The focused profile's
+priority ceiling and every issued slice are now exactly 0. A separate shared
+contract applies Windows `THREAD_PRIORITY_NORMAL` or Linux `SCHED_OTHER` with
+scheduler priority 0 before entry, verifies the applied state, and restores and
+verifies the complete prior native state after affinity, vCPU, and deadline-
+worker retirement. Any nonzero class or uncertain transition fails before
+successful return.
 
 Typed provider-resolution groundwork now matches canonical `REQUIRES` and
 `PROVIDES` edges only inside an immutable `SystemGeneration`. Interface name,

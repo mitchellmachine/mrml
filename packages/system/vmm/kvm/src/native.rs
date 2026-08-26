@@ -9,8 +9,8 @@ use mrml_kernel::arch::x86_64::{
 };
 use mrml_kernel::{
     AffinityDeadlineVmBackend, BootHandoff, DeadlineVmBackend, IoReadCompleter, MAX_PE_SECTIONS,
-    MmioWriteCompleter, PAGE_SIZE, PeImage, PhysAddr, RevocableVmBackend, VerifiedExecutable,
-    VmBackend, VmDeadlineOutcome, VmExit,
+    MmioWriteCompleter, PAGE_SIZE, PeImage, PhysAddr, RevocableVmBackend,
+    ScheduledDeadlineVmBackend, VerifiedExecutable, VmBackend, VmDeadlineOutcome, VmExit,
 };
 
 use crate::{KVM_API_VERSION, KvmError, KvmMemoryRegion, complete_io_read, decode_run_page};
@@ -121,6 +121,12 @@ unsafe extern "C" {
     fn pthread_kill(thread: usize, signal: c_int) -> c_int;
     fn pthread_getaffinity_np(thread: usize, set_size: usize, set: *mut CpuSet) -> c_int;
     fn pthread_setaffinity_np(thread: usize, set_size: usize, set: *const CpuSet) -> c_int;
+    fn pthread_getschedparam(
+        thread: usize,
+        policy: *mut c_int,
+        parameter: *mut SchedParam,
+    ) -> c_int;
+    fn pthread_setschedparam(thread: usize, policy: c_int, parameter: *const SchedParam) -> c_int;
     fn signal(signal: c_int, handler: usize) -> usize;
 }
 
@@ -128,6 +134,80 @@ unsafe extern "C" {
 #[repr(C)]
 struct CpuSet {
     words: [u64; 16],
+}
+
+#[derive(Clone, Copy)]
+#[repr(C)]
+struct SchedParam {
+    sched_priority: c_int,
+}
+
+const SCHED_OTHER: c_int = 0;
+
+pub(crate) fn current_thread_priority() -> Result<(c_int, c_int), KvmError> {
+    let mut policy = -1;
+    let mut parameter = SchedParam { sched_priority: -1 };
+    if unsafe { pthread_getschedparam(pthread_self(), &mut policy, &mut parameter) } != 0 {
+        return Err(KvmError::InvalidPriority);
+    }
+    Ok((policy, parameter.sched_priority))
+}
+
+struct ThreadPriorityGuard {
+    thread: usize,
+    previous_policy: c_int,
+    previous_parameter: SchedParam,
+    restored: bool,
+}
+
+impl ThreadPriorityGuard {
+    fn bind(priority: u8) -> Result<Self, KvmError> {
+        if priority != 0 {
+            return Err(KvmError::InvalidPriority);
+        }
+        let thread = unsafe { pthread_self() };
+        let (previous_policy, previous_priority) = current_thread_priority()?;
+        if previous_policy != SCHED_OTHER || previous_priority != 0 {
+            return Err(KvmError::InvalidPriority);
+        }
+        let normal = SchedParam { sched_priority: 0 };
+        if unsafe { pthread_setschedparam(thread, SCHED_OTHER, &normal) } != 0
+            || current_thread_priority()? != (SCHED_OTHER, 0)
+        {
+            return Err(KvmError::InvalidPriority);
+        }
+        Ok(Self {
+            thread,
+            previous_policy,
+            previous_parameter: SchedParam {
+                sched_priority: previous_priority,
+            },
+            restored: false,
+        })
+    }
+
+    fn restore(mut self) -> Result<(), KvmError> {
+        if unsafe {
+            pthread_setschedparam(self.thread, self.previous_policy, &self.previous_parameter)
+        } != 0
+            || current_thread_priority()?
+                != (self.previous_policy, self.previous_parameter.sched_priority)
+        {
+            return Err(KvmError::InvalidPriority);
+        }
+        self.restored = true;
+        Ok(())
+    }
+}
+
+impl Drop for ThreadPriorityGuard {
+    fn drop(&mut self) {
+        if !self.restored {
+            let _ = unsafe {
+                pthread_setschedparam(self.thread, self.previous_policy, &self.previous_parameter)
+            };
+        }
+    }
 }
 
 pub(crate) fn current_thread_affinity() -> Result<[u64; 16], KvmError> {
@@ -1783,6 +1863,27 @@ impl<const N: usize> AffinityDeadlineVmBackend for KvmBackend<N> {
         let affinity = ThreadAffinityGuard::bind(logical_cpu)?;
         let result = self.vcpu.run_with_deadline(maximum_micros);
         affinity.restore()?;
+        result
+    }
+}
+
+impl<const N: usize> ScheduledDeadlineVmBackend for KvmBackend<N> {
+    fn run_with_scheduling_deadline(
+        &mut self,
+        vcpu: u32,
+        logical_cpu: u8,
+        priority: u8,
+        maximum_micros: u32,
+    ) -> Result<VmDeadlineOutcome, Self::Error> {
+        if self.mapping_poisoned {
+            return Err(KvmError::MappingStateUncertain);
+        }
+        if vcpu != self.vcpu_id {
+            return Err(KvmError::InvalidVcpu);
+        }
+        let priority = ThreadPriorityGuard::bind(priority)?;
+        let result = self.run_with_affinity_deadline(vcpu, logical_cpu, maximum_micros);
+        priority.restore()?;
         result
     }
 }

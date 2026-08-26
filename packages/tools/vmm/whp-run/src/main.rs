@@ -28,15 +28,15 @@ use mrml_kernel::{
     GuestMemory, HypercallRouter, InterruptPolicy, IsolationAdmissionTable, IsolationMode,
     IsolationPlacement, IsolationUnavailableReason, MAX_COMPONENT_IMAGE_REGIONS, MemoryPoolTable,
     MicrovmPageProjectionKind, ObjectId, PAGE_SIZE, PreparedIsolationServiceRoute, ResourceCommand,
-    Rights, SIGNED_ARTIFACT_OVERHEAD_BYTES, SignedArtifact, TotalMicrovmClass, TrustRoot,
-    VIRTUAL_BLOCK_FEATURE_FLUSH, VcpuReservationId, VerifiedExecutable, VerifiedGpuKernelBundle,
-    VirtualBlockBackend, VirtualBlockBackendAuthority, VirtualBlockCompletionStatus,
-    VirtualBlockConfigurationPage, VirtualBlockDevice, VirtualBlockDeviceState, VirtualBlockError,
-    VirtualBlockMutationError, VirtualBlockPciAttachment, VirtualBlockPciAttachmentState,
-    VirtualBlockPciCleanupMode, VirtualBlockPciCleanupRecord, VirtualBlockPciFunctionRevoker,
-    VirtualBlockPciGuestMemoryMapper, VirtualBlockPciGuestWindowBackend,
-    VirtualBlockPciResourceRevoker, VirtualBlockProcessOutcome, VirtualBlockQueueBridge,
-    VirtualBlockQueueLayout, VirtualBlockRequest, VirtualBlockResumePage,
+    Rights, SIGNED_ARTIFACT_OVERHEAD_BYTES, ScheduledDeadlineVmBackend, SignedArtifact,
+    TotalMicrovmClass, TrustRoot, VIRTUAL_BLOCK_FEATURE_FLUSH, VcpuReservationId,
+    VerifiedExecutable, VerifiedGpuKernelBundle, VirtualBlockBackend, VirtualBlockBackendAuthority,
+    VirtualBlockCompletionStatus, VirtualBlockConfigurationPage, VirtualBlockDevice,
+    VirtualBlockDeviceState, VirtualBlockError, VirtualBlockMutationError,
+    VirtualBlockPciAttachment, VirtualBlockPciAttachmentState, VirtualBlockPciCleanupMode,
+    VirtualBlockPciCleanupRecord, VirtualBlockPciFunctionRevoker, VirtualBlockPciGuestMemoryMapper,
+    VirtualBlockPciGuestWindowBackend, VirtualBlockPciResourceRevoker, VirtualBlockProcessOutcome,
+    VirtualBlockQueueBridge, VirtualBlockQueueLayout, VirtualBlockRequest, VirtualBlockResumePage,
     VirtualBlockTransactionOutcome, VirtualBlockTransport, VirtualBlockVmmMemory,
     VirtualPciAttachedResources, VirtualPciConfigurationMechanismOne,
     VirtualPciConfigurationRouter, VirtualPciIdentity, VirtualPciIoOutcome, VirtualPciLocation,
@@ -119,7 +119,7 @@ fn run_component_vcpu<T>(
             *capability,
             0,
             0,
-            u8::MAX,
+            0,
             *next_start,
             maximum,
             capabilities,
@@ -353,6 +353,25 @@ impl AffinityDeadlineVmBackend for WhpGuestOwner<'_> {
             self.guest_mut(),
             vcpu,
             logical_cpu,
+            maximum_micros,
+        )
+    }
+}
+
+#[cfg(target_os = "windows")]
+impl ScheduledDeadlineVmBackend for WhpGuestOwner<'_> {
+    fn run_with_scheduling_deadline(
+        &mut self,
+        vcpu: u32,
+        logical_cpu: u8,
+        priority: u8,
+        maximum_micros: u32,
+    ) -> core::result::Result<VmDeadlineOutcome, Self::Error> {
+        ScheduledDeadlineVmBackend::run_with_scheduling_deadline(
+            self.guest_mut(),
+            vcpu,
+            logical_cpu,
+            priority,
             maximum_micros,
         )
     }
@@ -2135,7 +2154,7 @@ fn application_main() -> Result<()> {
         let mut capabilities = CapabilitySpace::<1>::new();
         let mut budgets = CpuBudgetTable::<1, 1>::new(0x1a53)
             .map_err(|error| anyhow!("component CPU table failed: {:?}", error))?;
-        let spec = CpuBudgetSpec::new(1, 100_000, 100_000, u8::MAX, 1)
+        let spec = CpuBudgetSpec::new(1, 100_000, 100_000, 0, 1)
             .map_err(|error| anyhow!("component CPU budget failed: {:?}", error))?;
         let (budget, capability) = budgets
             .create_root(spec, &mut capabilities)
@@ -2617,10 +2636,11 @@ fn application_main() -> Result<()> {
     } else {
         let run_result = if component_service_mode {
             run_component_vcpu(&mut component_cpu, |slice| {
-                match AffinityDeadlineVmBackend::run_with_affinity_deadline(
+                match ScheduledDeadlineVmBackend::run_with_scheduling_deadline(
                     &mut guest,
                     0,
                     slice.logical_cpu(),
+                    slice.priority(),
                     slice.charged_micros(),
                 ) {
                     Ok(VmDeadlineOutcome::Exit(exit)) => Ok(exit),
@@ -3079,7 +3099,7 @@ fn application_main() -> Result<()> {
                                 anyhow!("component CPU root retirement failed: {:?}", error)
                             })?;
                         println!(
-                            "verified exact-generation ZIM/Zstd component data path and lifecycle cleanup under WHP: cpu_runtime={}us logical_cpu=0 affinity=host-enforced verify={}us prepare={}us execute={}us total={}us",
+                            "verified exact-generation ZIM/Zstd component data path and lifecycle cleanup under WHP: cpu_runtime={}us logical_cpu=0 affinity=host-enforced priority=host-normal verify={}us prepare={}us execute={}us total={}us",
                             cpu_runtime_micros,
                             verification_micros,
                             preparation_micros,
@@ -3092,10 +3112,11 @@ fn application_main() -> Result<()> {
                 _ => return Err(anyhow!("WHP component service stage mismatch: {:?}", exit)),
             }
             exit = run_component_vcpu(&mut component_cpu, |slice| {
-                match AffinityDeadlineVmBackend::run_with_affinity_deadline(
+                match ScheduledDeadlineVmBackend::run_with_scheduling_deadline(
                     &mut guest,
                     0,
                     slice.logical_cpu(),
+                    slice.priority(),
                     slice.charged_micros(),
                 ) {
                     Ok(VmDeadlineOutcome::Exit(exit)) => Ok(exit),

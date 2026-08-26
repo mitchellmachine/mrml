@@ -695,6 +695,21 @@ pub trait AffinityDeadlineVmBackend: DeadlineVmBackend {
     ) -> Result<VmDeadlineOutcome, Self::Error>;
 }
 
+/// Applies one backend-neutral priority class already authorized by the CPU
+/// control plane together with affinity and deadline enforcement. Priority 0 is
+/// the initial host-normal class; unsupported values must fail before entry.
+/// Implementations must restore the complete native scheduling state before
+/// return and treat uncertain restoration as failure.
+pub trait ScheduledDeadlineVmBackend: AffinityDeadlineVmBackend {
+    fn run_with_scheduling_deadline(
+        &mut self,
+        vcpu: u32,
+        logical_cpu: u8,
+        priority: u8,
+        maximum_micros: u32,
+    ) -> Result<VmDeadlineOutcome, Self::Error>;
+}
+
 /// Backend contract for completing one exact scalar input exit before another
 /// vCPU entry. Implementations must bind completion to the still-pending exit's
 /// vCPU, port, and width and must not report success after partial register or

@@ -87,8 +87,13 @@ unsafe extern "system" {
     fn VirtualFree(address: *mut c_void, size: usize, free_type: u32) -> i32;
     fn GetCurrentThread() -> Handle;
     fn GetThreadGroupAffinity(thread: Handle, affinity: *mut GroupAffinity) -> i32;
+    fn GetThreadPriority(thread: Handle) -> i32;
     fn SetThreadAffinityMask(thread: Handle, affinity_mask: usize) -> usize;
+    fn SetThreadPriority(thread: Handle, priority: i32) -> i32;
 }
+
+const THREAD_PRIORITY_NORMAL: i32 = 0;
+const THREAD_PRIORITY_ERROR_RETURN: i32 = 0x7fff_ffff;
 
 #[derive(Clone, Copy)]
 #[repr(C)]
@@ -110,6 +115,60 @@ pub(crate) fn current_thread_affinity() -> Result<(u16, usize), WhpError> {
         return Err(WhpError::InvalidAffinity);
     }
     Ok((affinity.group, affinity.mask))
+}
+
+pub(crate) fn current_thread_priority() -> Result<i32, WhpError> {
+    let priority = unsafe { GetThreadPriority(GetCurrentThread()) };
+    if priority == THREAD_PRIORITY_ERROR_RETURN {
+        return Err(WhpError::InvalidPriority);
+    }
+    Ok(priority)
+}
+
+struct ThreadPriorityGuard {
+    thread: Handle,
+    previous: i32,
+    restored: bool,
+}
+
+impl ThreadPriorityGuard {
+    fn bind(priority: u8) -> Result<Self, WhpError> {
+        if priority != 0 {
+            return Err(WhpError::InvalidPriority);
+        }
+        let thread = unsafe { GetCurrentThread() };
+        let previous = current_thread_priority()?;
+        if unsafe { SetThreadPriority(thread, THREAD_PRIORITY_NORMAL) } == 0 {
+            return Err(WhpError::InvalidPriority);
+        }
+        if current_thread_priority() != Ok(THREAD_PRIORITY_NORMAL) {
+            let _ = unsafe { SetThreadPriority(thread, previous) };
+            return Err(WhpError::InvalidPriority);
+        }
+        Ok(Self {
+            thread,
+            previous,
+            restored: false,
+        })
+    }
+
+    fn restore(mut self) -> Result<(), WhpError> {
+        if unsafe { SetThreadPriority(self.thread, self.previous) } == 0
+            || current_thread_priority()? != self.previous
+        {
+            return Err(WhpError::InvalidPriority);
+        }
+        self.restored = true;
+        Ok(())
+    }
+}
+
+impl Drop for ThreadPriorityGuard {
+    fn drop(&mut self) {
+        if !self.restored {
+            let _ = unsafe { SetThreadPriority(self.thread, self.previous) };
+        }
+    }
 }
 
 struct ThreadAffinityGuard {
@@ -1078,6 +1137,19 @@ impl PreparedWhpPartition<'_> {
         let affinity = ThreadAffinityGuard::bind(logical_cpu)?;
         let result = self.run_vp_with_deadline(index, maximum_micros);
         affinity.restore()?;
+        result
+    }
+
+    pub(crate) fn run_vp_with_scheduling_deadline(
+        &mut self,
+        index: u32,
+        logical_cpu: u8,
+        priority: u8,
+        maximum_micros: u32,
+    ) -> Result<VmDeadlineOutcome, WhpError> {
+        let priority = ThreadPriorityGuard::bind(priority)?;
+        let result = self.run_vp_with_affinity_deadline(index, logical_cpu, maximum_micros);
+        priority.restore()?;
         result
     }
 

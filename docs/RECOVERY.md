@@ -164,6 +164,11 @@ explicitly and downgrade the status rather than guessing.
   affinity was restored after both vCPU and deadline-worker retirement. Never
   persist or reconstruct a native thread handle or prior CPU set; uncertain
   restoration fails the domain closed and requires host-process recovery.
+  Native host-priority state follows the same rule. Recovery may retain the
+  authorized MRML class but must never persist or reconstruct a native thread
+  handle, Windows priority value, or Linux scheduler policy/parameter pair.
+  Control-plane completion requires verified restoration after affinity, vCPU,
+  and deadline-worker retirement; uncertainty requires host-process recovery.
 - Boot image and loader: `packages/system/bootloader/`, `packages/libraries/uefi/`
 - CPL3 service image: `packages/system/service-image/`
 - Shared VM policy: `vm.rs`, `vm_dispatch.rs`, `vm_interrupt.rs`

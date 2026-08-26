@@ -249,8 +249,9 @@ pub use vm::{
     AffinityDeadlineVmBackend, DeadlineVmBackend, GuestAccess, GuestMappingId, GuestMappingRevoker,
     GuestMemory, GuestRegion, HYPERCALL_BYTES, Hypercall, HypercallOperation, HypercallRouter,
     IoReadCompleter, MAX_GUEST_REGIONS, MappingRevocationError, MmioWriteCompleter,
-    RevocableVmBackend, RoutedHypercall, VmBackend, VmDeadlineOutcome, VmError, VmExit, VmId,
-    VmRunError, VmState, VmTable, decode_hypercall_exit, revoke_mapping_before_resume,
+    RevocableVmBackend, RoutedHypercall, ScheduledDeadlineVmBackend, VmBackend, VmDeadlineOutcome,
+    VmError, VmExit, VmId, VmRunError, VmState, VmTable, decode_hypercall_exit,
+    revoke_mapping_before_resume,
 };
 pub use vm_dispatch::{
     ExitDisposition, IoDirection, IoPortPolicy, IoPortRule, MAX_IO_PORT_RULES, dispatch_vm_exit,

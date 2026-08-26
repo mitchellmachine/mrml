@@ -1026,6 +1026,22 @@ impl<const N: usize> mrml_kernel::AffinityDeadlineVmBackend for PreparedKvmGuest
     }
 }
 
+impl<const N: usize> mrml_kernel::ScheduledDeadlineVmBackend for PreparedKvmGuest<N> {
+    fn run_with_scheduling_deadline(
+        &mut self,
+        vcpu: u32,
+        logical_cpu: u8,
+        priority: u8,
+        maximum_micros: u32,
+    ) -> Result<mrml_kernel::VmDeadlineOutcome, Self::Error> {
+        if self.trapped_mmio_retired {
+            return Err(KvmError::InvalidMapping);
+        }
+        self.backend
+            .run_with_scheduling_deadline(vcpu, logical_cpu, priority, maximum_micros)
+    }
+}
+
 impl<const N: usize> mrml_kernel::IoReadCompleter for PreparedKvmGuest<N> {
     fn complete_io_read(
         &mut self,
@@ -2407,6 +2423,7 @@ mod tests {
             .prepare_kernel_guest::<7>(0, &executable, &valid_handoff(), layout)
             .unwrap();
         let affinity_before = crate::native::current_thread_affinity().unwrap();
+        let priority_before = crate::native::current_thread_priority().unwrap();
         assert_eq!(
             DeadlineVmBackend::run_with_deadline(&mut guest, 0, 0),
             Err(KvmError::InvalidDeadline)
@@ -2418,14 +2435,24 @@ mod tests {
             Err(KvmError::InvalidAffinity)
         );
         assert_eq!(
-            mrml_kernel::AffinityDeadlineVmBackend::run_with_affinity_deadline(
-                &mut guest, 0, 0, 10_000,
+            mrml_kernel::ScheduledDeadlineVmBackend::run_with_scheduling_deadline(
+                &mut guest, 0, 0, 1, 10_000,
+            ),
+            Err(KvmError::InvalidPriority)
+        );
+        assert_eq!(
+            mrml_kernel::ScheduledDeadlineVmBackend::run_with_scheduling_deadline(
+                &mut guest, 0, 0, 0, 10_000,
             ),
             Ok(mrml_kernel::VmDeadlineOutcome::Expired)
         );
         assert_eq!(
             crate::native::current_thread_affinity().unwrap(),
             affinity_before
+        );
+        assert_eq!(
+            crate::native::current_thread_priority().unwrap(),
+            priority_before
         );
     }
 
