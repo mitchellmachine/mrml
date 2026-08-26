@@ -583,6 +583,18 @@ mod tests {
     }
 
     #[test]
+    fn proves_associated_bindings_in_explicit_where_clauses_before_codegen() {
+        let source = concat!(
+            "trait Parent<Input> { type Output; } trait Child<T> {} ",
+            "impl<T> Parent<u8> for T { type Output = T; } ",
+            "impl<T> Child<T> for T where T: Parent<u8, Output = T> {} ",
+            "#[unsafe(no_mangle)] pub extern \"C\" fn answer() -> u64 ",
+            "where u32: Child<u32> { 42 }"
+        );
+        compile(source, "answer", ObjectFormat::Coff).unwrap();
+    }
+
+    #[test]
     fn proves_trait_declaration_where_requirements_before_codegen() {
         let source = concat!(
             "trait Parent<T> {} trait Child<T> where T: Parent<T> {} ",

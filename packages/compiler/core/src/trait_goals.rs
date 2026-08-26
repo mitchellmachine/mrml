@@ -9436,6 +9436,33 @@ mod tests {
     }
 
     #[test]
+    fn proves_associated_bindings_in_explicit_source_where_clauses() {
+        let source = concat!(
+            "trait Parent<Input> { type Output; } ",
+            "trait Child<T> where T: Parent<u8, Output = T> {} ",
+            "impl<T> Parent<u8> for T { type Output = T; } impl<T> Child<T> for T {} ",
+            "fn check() where u32: Child<u32> {}"
+        );
+        let module = Parser::new(source).parse_module::<10, 1>().unwrap();
+        let traits = SourceTraitDeclarationTable::from_module(&module).unwrap();
+        let implementations =
+            SourceTraitImplementationTable::from_module(&module, &traits).unwrap();
+        implementations.prove_module(&module, &traits).unwrap();
+
+        let implementation = concat!(
+            "trait Parent<Input> { type Output; } trait Child<T> {} ",
+            "impl<T> Parent<u8> for T { type Output = T; } ",
+            "impl<T> Child<T> for T where T: Parent<u8, Output = T> {} ",
+            "fn check() where u32: Child<u32> {}"
+        );
+        let module = Parser::new(implementation).parse_module::<10, 1>().unwrap();
+        let traits = SourceTraitDeclarationTable::from_module(&module).unwrap();
+        let implementations =
+            SourceTraitImplementationTable::from_module(&module, &traits).unwrap();
+        implementations.prove_module(&module, &traits).unwrap();
+    }
+
+    #[test]
     fn proves_inherited_source_supertrait_premises() {
         let satisfied = concat!(
             "trait Parent {} trait Child<Input>: Parent {} ",
