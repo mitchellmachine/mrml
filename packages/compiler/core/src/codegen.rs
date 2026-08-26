@@ -1877,33 +1877,42 @@ fn compile_x86_64_naked_function<const MAX_BYTES: usize, const MAX_PARAMETERS: u
     let mut length = 0usize;
     let mut instruction_count = 0usize;
     let mut terminating = false;
-    for literal in source.split(',') {
+    let mut remaining = source.trim();
+    while !remaining.is_empty() {
         if instruction_count == 8 {
             return Err(error(CodegenErrorKind::InvalidNakedAssembly));
         }
-        let literal = literal.trim();
-        let instruction = literal
+        let literal = remaining
             .strip_prefix('"')
-            .and_then(|literal| literal.strip_suffix('"'))
             .ok_or_else(|| error(CodegenErrorKind::InvalidNakedAssembly))?;
-        let encoding: &[u8] = match instruction.trim() {
-            "nop" => &[0x90],
-            "ret" => &[0xc3],
-            "int3" => &[0xcc],
-            "ud2" => &[0x0f, 0x0b],
-            "cli" => &[0xfa],
-            "sti" => &[0xfb],
-            "hlt" => &[0xf4],
-            _ => return Err(error(CodegenErrorKind::InvalidNakedAssembly)),
-        };
-        terminating = matches!(instruction.trim(), "ret" | "ud2" | "hlt");
+        let close = literal
+            .find('"')
+            .ok_or_else(|| error(CodegenErrorKind::InvalidNakedAssembly))?;
+        let instruction = literal[..close].trim();
+        if instruction.as_bytes().contains(&b'\\') {
+            return Err(error(CodegenErrorKind::InvalidNakedAssembly));
+        }
+        remaining = literal[close + 1..].trim_start();
+        if !remaining.is_empty() {
+            remaining = remaining
+                .strip_prefix(',')
+                .ok_or_else(|| error(CodegenErrorKind::InvalidNakedAssembly))?
+                .trim_start();
+            if remaining.is_empty() {
+                return Err(error(CodegenErrorKind::InvalidNakedAssembly));
+            }
+        }
+        let (encoding, encoding_length, is_terminating) =
+            encode_x86_64_naked_instruction(instruction)
+                .ok_or_else(|| error(CodegenErrorKind::InvalidNakedAssembly))?;
+        terminating = is_terminating;
         let end = length
-            .checked_add(encoding.len())
+            .checked_add(encoding_length)
             .ok_or_else(|| error(CodegenErrorKind::OutputTooSmall))?;
         bytes
             .get_mut(length..end)
             .ok_or_else(|| error(CodegenErrorKind::OutputTooSmall))?
-            .copy_from_slice(encoding);
+            .copy_from_slice(&encoding[..encoding_length]);
         length = end;
         instruction_count += 1;
     }
@@ -1911,6 +1920,76 @@ fn compile_x86_64_naked_function<const MAX_BYTES: usize, const MAX_PARAMETERS: u
         return Err(error(CodegenErrorKind::InvalidNakedAssembly));
     }
     MachineCode::from_bytes(&bytes[..length]).map_err(error)
+}
+
+fn encode_x86_64_naked_instruction(instruction: &str) -> Option<([u8; 4], usize, bool)> {
+    let fixed = match instruction {
+        "nop" => Some(([0x90, 0, 0, 0], 1, false)),
+        "ret" => Some(([0xc3, 0, 0, 0], 1, true)),
+        "int3" => Some(([0xcc, 0, 0, 0], 1, false)),
+        "ud2" => Some(([0x0f, 0x0b, 0, 0], 2, true)),
+        "cli" => Some(([0xfa, 0, 0, 0], 1, false)),
+        "sti" => Some(([0xfb, 0, 0, 0], 1, false)),
+        "hlt" => Some(([0xf4, 0, 0, 0], 1, true)),
+        "swapgs" => Some(([0x0f, 0x01, 0xf8, 0], 3, false)),
+        "iretq" => Some(([0x48, 0xcf, 0, 0], 2, true)),
+        _ => None,
+    };
+    if fixed.is_some() {
+        return fixed;
+    }
+    let (mnemonic, operands) = instruction.split_once(' ')?;
+    let operands = operands.trim();
+    match mnemonic {
+        "push" | "pop" => {
+            let register = x86_64_naked_register(operands)?;
+            let opcode = if mnemonic == "push" { 0x50 } else { 0x58 };
+            if register < 8 {
+                Some(([opcode + register, 0, 0, 0], 1, false))
+            } else {
+                Some(([0x41, opcode + (register & 7), 0, 0], 2, false))
+            }
+        }
+        "jmp" => {
+            let register = x86_64_naked_register(operands)?;
+            if register < 8 {
+                Some(([0xff, 0xe0 + register, 0, 0], 2, true))
+            } else {
+                Some(([0x41, 0xff, 0xe0 + (register & 7), 0], 3, true))
+            }
+        }
+        "mov" => {
+            let (destination, source) = operands.split_once(',')?;
+            let destination = x86_64_naked_register(destination.trim())?;
+            let source = x86_64_naked_register(source.trim())?;
+            let rex = 0x48 | ((source >> 3) << 2) | (destination >> 3);
+            let modrm = 0xc0 | ((source & 7) << 3) | (destination & 7);
+            Some(([rex, 0x89, modrm, 0], 3, false))
+        }
+        _ => None,
+    }
+}
+
+fn x86_64_naked_register(register: &str) -> Option<u8> {
+    Some(match register {
+        "rax" => 0,
+        "rcx" => 1,
+        "rdx" => 2,
+        "rbx" => 3,
+        "rsp" => 4,
+        "rbp" => 5,
+        "rsi" => 6,
+        "rdi" => 7,
+        "r8" => 8,
+        "r9" => 9,
+        "r10" => 10,
+        "r11" => 11,
+        "r12" => 12,
+        "r13" => 13,
+        "r14" => 14,
+        "r15" => 15,
+        _ => return None,
+    })
 }
 
 fn validate_stable_export<const MAX_PARAMETERS: usize>(
@@ -28297,7 +28376,8 @@ mod tests {
     fn emits_restricted_naked_functions_without_a_prologue_or_epilogue() {
         let module = Parser::new(concat!(
             "#[unsafe(naked)] pub unsafe extern \"C\" fn entry() ",
-            "{ naked_asm!(\"nop\", \"cli\", \"sti\", \"ret\"); }"
+            "{ naked_asm!(\"push rax\", \"push r12\", \"mov rax, rsp\", ",
+            "\"mov r9, r15\", \"pop r12\", \"pop rax\", \"swapgs\", \"iretq\"); }"
         ))
         .parse_module::<1, 1>()
         .unwrap();
@@ -28305,9 +28385,15 @@ mod tests {
             panic!("expected function")
         };
         let code =
-            compile_x86_64_function::<_, 16, 1, 8>(&function, &NoConstants, X86_64Abi::SystemV)
+            compile_x86_64_function::<_, 32, 1, 8>(&function, &NoConstants, X86_64Abi::SystemV)
                 .unwrap();
-        assert_eq!(code.bytes(), &[0x90, 0xfa, 0xfb, 0xc3]);
+        assert_eq!(
+            code.bytes(),
+            &[
+                0x50, 0x41, 0x54, 0x48, 0x89, 0xe0, 0x4d, 0x89, 0xf9, 0x41, 0x5c, 0x58, 0x0f, 0x01,
+                0xf8, 0x48, 0xcf,
+            ]
+        );
 
         for (source, expected) in [
             (
@@ -28327,7 +28413,11 @@ mod tests {
                 CodegenErrorKind::NakedFunctionReturnUnsupported,
             ),
             (
-                "#[unsafe(naked)] unsafe extern \"C\" fn f() { naked_asm!(\"mov rax, rbx\"); }",
+                "#[unsafe(naked)] unsafe extern \"C\" fn f() { naked_asm!(\"add rax, rbx\", \"ret\"); }",
+                CodegenErrorKind::InvalidNakedAssembly,
+            ),
+            (
+                "#[unsafe(naked)] unsafe extern \"C\" fn f() { naked_asm!(\"push eax\", \"ret\"); }",
                 CodegenErrorKind::InvalidNakedAssembly,
             ),
             (
