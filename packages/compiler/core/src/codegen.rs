@@ -32258,6 +32258,28 @@ mod tests {
                         ),
                     })
                 }
+                ("nested_loop_tuple_assign", 2) if MAX_PARAMETERS >= 2 => {
+                    parameters[0] = Some(RuntimeCallParameter {
+                        name: "value",
+                        ty: reference,
+                    });
+                    parameters[1] = Some(RuntimeCallParameter {
+                        name: "first",
+                        ty: ScalarType::Bool,
+                    });
+                    Some(RuntimeCallTarget {
+                        name: "nested_loop_tuple_assign",
+                        parameters,
+                        parameter_count: 2,
+                        return_type: reference,
+                        return_type_name: "&mut u16",
+                        body_expression: concat!(
+                            "loop { loop { let mut alias: &mut u16 = value; ",
+                            "let pair: (&mut u16,) = (&mut *alias,); alias = pair.0; ",
+                            "if first { return alias; } } }"
+                        ),
+                    })
+                }
                 _ => None,
             }
         }
@@ -37013,6 +37035,7 @@ mod tests {
         for source in [
             "fn value(input: &mut u16, first: bool) -> u16 { let returned: &mut u16 = nested_loop(input, first); let competing: &mut u16 = &mut *input; *competing += 1; *returned }",
             "fn value(input: &mut u16, alternate: &mut u16, first: bool) -> u16 { let mut returned: &mut u16 = alternate; returned = nested_loop(input, first); let competing: &mut u16 = &mut *input; *competing += 1; *returned }",
+            "fn value(input: &mut u16, first: bool) -> u16 { let returned: &mut u16 = nested_loop_tuple_assign(input, first); let competing: &mut u16 = &mut *input; *competing += 1; *returned }",
         ] {
             assert_eq!(
                 analyze(source).unwrap_err().kind,
@@ -37023,6 +37046,7 @@ mod tests {
         for source in [
             "fn value(input: &mut u16, first: bool) -> u16 { let returned: &mut u16 = nested_loop(input, first); *returned += 1; let restored: &mut u16 = &mut *input; *restored }",
             "fn value(input: &mut u16, alternate: &mut u16, first: bool) -> u16 { let mut returned: &mut u16 = alternate; returned = nested_loop(input, first); *returned += 1; let restored: &mut u16 = &mut *input; *restored }",
+            "fn value(input: &mut u16, first: bool) -> u16 { let returned: &mut u16 = nested_loop_tuple_assign(input, first); *returned += 1; let restored: &mut u16 = &mut *input; *restored }",
         ] {
             analyze(source).unwrap();
         }
@@ -37033,6 +37057,25 @@ mod tests {
         assert_eq!(
             runtime_reference_call_origin_parameter::<2, 24>(nested_loop),
             Some(0)
+        );
+        let nested_loop_tuple_assign = MutableReferenceCallResolver
+            .resolve_runtime_call::<2>("nested_loop_tuple_assign", 2)
+            .unwrap();
+        assert_eq!(
+            runtime_reference_call_origin_parameter::<2, 32>(nested_loop_tuple_assign),
+            Some(0)
+        );
+        assert_eq!(
+            runtime_reference_call_origin_parameter::<2, 40>(RuntimeCallTarget {
+                body_expression: concat!(
+                    "let mut local: u16 = 1; loop { loop { ",
+                    "let mut alias: &mut u16 = value; ",
+                    "let pair: (&mut u16,) = (&mut local,); alias = pair.0; ",
+                    "if first { return alias; } } }"
+                ),
+                ..nested_loop_tuple_assign
+            }),
+            None
         );
         assert_eq!(
             runtime_reference_call_origin_parameter::<2, 24>(RuntimeCallTarget {
