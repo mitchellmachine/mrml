@@ -5240,3 +5240,17 @@ mechanism. General release delivery, signing-key handling, servicing, adaptive
 placement, and microVM work retain their existing `TRIGGERED` reviews; this
 agent review does not establish clearance or infringement and does not replace
 independent human dual review.
+
+# 2026-08-25 — General SystemRelease CLI and focused VMM delivery
+
+**Result: NOT_TRIGGERED after the signed general SystemRelease envelope
+review.** This increment adds conventional file input/output and explicit
+public-root comparison around the existing bounded encoder/parser, consumes the
+existing one-use private-key file, and makes both focused VMM launchers use the
+existing signed-envelope deployment constructor instead of raw canonical
+records. It adds no cryptographic primitive, trust authority, selection,
+ranking, dependency solver, update algorithm, transport, virtualization, or
+recovery mechanism. Broader release delivery, signing-key custody, adaptive
+placement, and microVM work retain their existing `TRIGGERED` reviews; this
+agent review does not establish clearance or infringement and does not replace
+independent human dual review.

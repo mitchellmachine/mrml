@@ -180,8 +180,13 @@ pair, and deployment rejects corruption or any signer identity other than the
 one selected by caller policy before staging. This preserves the control/data
 split: policy fixes signer and authority once; exact authenticated canonical
 records then enter the existing parser without a second declaration path.
-Workspace/Store delivery and focused VMM consumption of the signed envelope
-remain **PLANNED**.
+The public build frontend now creates/verifies this envelope with a consumed
+one-use key and explicit public root. Both focused VMM component runners require
+that artifact and root, derive the deployment candidate only from the envelope,
+and reject any digest mismatch against the separately verified consumer and
+provider before Total-mode kernel admission. Windows and Arch Linux build/test
+parity exists; a fresh WHP/KVM component execution with the new command-line
+contract and workspace/Store delivery remain **PLANNED**.
 The canonical provider now builds its own `mrml-zstd-service.efi` artifact—never
 an alias of the generic configuration service—with an x86-64 architecture trap,
 one private 4 KiB scratch page, and exact launch-register endpoint/caller/

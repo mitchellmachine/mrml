@@ -104,9 +104,17 @@ policy; the signature identifies and authenticates bytes but grants no
 capability or admission authority. The resulting candidate still passes through
 the existing capability-authorized staging transaction. Corruption, generation
 mismatch, and unexpected-signer tests fail before staging on Windows and Linux.
-CLI output, owner-root policy integration, signing-key isolation, Store,
-installer/recovery persistence, rollback and retention integration, and focused
-WHP/KVM consumption of this signed envelope remain **PLANNED**.
+The public `mrml release system-create` command now consumes exact canonical
+generation/catalog files plus a one-use key, deletes that key after successful
+encoding, and creates a new `.mrs`; `system-verify` requires an explicit public
+root. Both focused component runners now require the `.mrs` and public root,
+stage only `GenerationCandidate::from_system_release`, and compare its admitted
+digests with the locally verified consumer/provider artifacts before Total-mode
+kernel admission. Windows and Arch Linux build-tool tests pass 92 cases; WHP
+passes 7 and KVM passes 8 compile/unit cases. A fresh signed component execution
+with this new input contract has not yet been recorded. Owner-root policy
+integration, stronger signing-key isolation, Store, installer/recovery
+persistence, rollback, and retained-root integration remain **PLANNED**.
 
 - Complexity impact: MEDIUM
 - TCB impact: LOW

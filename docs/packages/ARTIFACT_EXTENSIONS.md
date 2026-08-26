@@ -3,8 +3,8 @@
 Status: **PARTIALLY IMPLEMENTED**. The package, boot `SystemRelease`, and general
 generation/catalog `SystemRelease` formats have distinct internal magic,
 explicit format versions, bounded authenticated metadata, and content digests.
-The general format currently has library encode/verify/admission coverage, not
-a public output command. `mrml package create` now defaults to
+The general format has library encode/verify/admission coverage and the public
+`mrml release system-create`/`system-verify` commands. `mrml package create` now defaults to
 `<package-id>-<version>.mrp`, `release-create` defaults to
 `mrml-system-<version>.mrs`, and the standalone Zstd ABI-3 schema is `3.mri`.
 Complete `SystemImage` and detached-signature output tooling remains **PLANNED**.
@@ -17,7 +17,7 @@ MRML uses these preferred user-facing extensions:
 | --- | --- | --- |
 | `.mrp` | signed deployable MRML Package (MRP) | format/default naming/filename-independence tested |
 | `.mri` | standalone MRML interface definition (MRI) | Zstd ABI-3 schema migrated |
-| `.mrs` | distinct serialized `SystemRelease` (MRS) | boot format/default naming implemented; general format library implemented |
+| `.mrs` | distinct serialized `SystemRelease` (MRS) | boot format/default naming and general create/verify implemented |
 | `.mrz` | complete deployable MRML `SystemImage` (MRZ) | convention defined; complete image tooling planned |
 | `.mrsig` | detached MRML signature (MRSIG) | convention defined; optional tooling planned |
 

@@ -274,6 +274,10 @@ fn print_help() {
     );
     println!("       mrml release verify RELEASE.mrs PUBLIC_KEY");
     println!(
+        "       mrml release system-create GENERATION.mrmlbin INTERFACES.mrmlbin PRIVATE_KEY OUTPUT.mrs"
+    );
+    println!("       mrml release system-verify RELEASE.mrs PUBLIC_KEY");
+    println!(
         "       mrml package adversarial-boot-fixture CASE BOOTLOADER_PACKAGE CONFIGURATION_PACKAGE KERNEL_SIGNED PACKAGE_PRIVATE RELEASE_PRIVATE KERNEL_OUTPUT RELEASE_OUTPUT"
     );
     println!(
@@ -296,9 +300,11 @@ fn release_command(workspace: &Workspace, args: &[String]) -> Result<(), String>
     let operation = match args.first().map(String::as_str) {
         Some("create") if matches!(args.len(), 6 | 7) => "release-create",
         Some("verify") if args.len() == 3 => "release-verify",
+        Some("system-create") if args.len() == 5 => "system-release-create",
+        Some("system-verify") if args.len() == 3 => "system-release-verify",
         _ => {
             return Err(
-                "ReleaseUsageError { expected: create VERSION BOOTLOADER.mrp KERNEL.mrp CONFIGURATION.mrp PRIVATE_KEY [OUTPUT.mrs] | verify RELEASE.mrs PUBLIC_KEY }"
+                "ReleaseUsageError { expected: create VERSION BOOTLOADER.mrp KERNEL.mrp CONFIGURATION.mrp PRIVATE_KEY [OUTPUT.mrs] | verify RELEASE.mrs PUBLIC_KEY | system-create GENERATION.mrmlbin INTERFACES.mrmlbin PRIVATE_KEY OUTPUT.mrs | system-verify RELEASE.mrs PUBLIC_KEY }"
                     .into(),
             );
         }
@@ -411,6 +417,52 @@ fn package_command(workspace: &Workspace, args: &[String]) -> Result<(), String>
                 release.version,
                 release
                     .digest
+                    .iter()
+                    .map(|byte| format!("{byte:02x}"))
+                    .collect::<String>()
+            );
+            Ok(())
+        }
+        Some("system-release-create") if args.len() == 5 => {
+            let generation = fs::read(&args[1])
+                .map_err(|error| format!("SystemReleaseGenerationRead {{ detail: {error} }}"))?;
+            let catalog = fs::read(&args[2])
+                .map_err(|error| format!("SystemReleaseCatalogRead {{ detail: {error} }}"))?;
+            let mut private = fs::read(&args[3])
+                .map_err(|error| format!("SystemReleaseKeyRead {{ detail: {error} }}"))?;
+            let encoded = package::build_system_release(&generation, &catalog, &private)
+                .map_err(|error| format!("SystemReleaseBuild {{ detail: {error:?} }}"))?;
+            private.fill(0);
+            fs::remove_file(&args[3])
+                .map_err(|error| format!("SystemReleaseKeyConsume {{ detail: {error} }}"))?;
+            write_new(&args[4], &encoded, "general-system-release")?;
+            let release = parse_system_release(&encoded)
+                .map_err(|error| format!("SystemReleaseSelfVerify {{ detail: {error:?} }}"))?;
+            println!(
+                "system-release|operation=create-general|status=PASS|generation={}|bytes={}|output={}",
+                release.generation().generation(),
+                encoded.len(),
+                args[4]
+            );
+            Ok(())
+        }
+        Some("system-release-verify") if args.len() == 3 => {
+            let bytes = fs::read(&args[1])
+                .map_err(|error| format!("SystemReleaseRead {{ detail: {error} }}"))?;
+            let public = fs::read(&args[2])
+                .map_err(|error| format!("SystemReleaseRootRead {{ detail: {error} }}"))?;
+            let release = parse_system_release(&bytes)
+                .map_err(|error| format!("SystemReleaseVerify {{ detail: {error:?} }}"))?;
+            if public.len() != LAMPORT_PUBLIC_KEY_BYTES
+                || Sha3_512::digest(&public) != release.key_id()
+            {
+                return Err("SystemReleaseTrustRootMismatch".into());
+            }
+            println!(
+                "system-release|operation=verify-general|status=PASS|generation={}|digest={}",
+                release.generation().generation(),
+                release
+                    .content_digest()
                     .iter()
                     .map(|byte| format!("{byte:02x}"))
                     .collect::<String>()
@@ -4818,6 +4870,91 @@ mod tests {
                 .unwrap_err()
                 .starts_with("ReleaseUsageError")
         );
+    }
+    #[test]
+    fn general_release_cli_consumes_one_use_key_and_verifies_explicit_root() {
+        let suffix = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let directory = std::env::temp_dir().join(format!(
+            "mrml-system-release-{}-{suffix}",
+            std::process::id()
+        ));
+        fs::create_dir(&directory).unwrap();
+        let generation_path = directory.join("generation.bin");
+        let catalog_path = directory.join("catalog.bin");
+        let private_path = directory.join("release.private");
+        let public_path = directory.join("release.public");
+        let release_path = directory.join("system.mrs");
+        let records = [SystemGenerationDigestRecord {
+            package_id: "org.mrml.zstd",
+            version: 3,
+            artifact_digest: &[0x31; 64],
+        }];
+        let mut generation = [0; 128];
+        let generation_length = encode_system_generation(4, &records, &mut generation).unwrap();
+        let requirement = ComponentInterfaceRequirement::exact(
+            "org.mrml.zim",
+            "org.mrml.interface.compression.zstd",
+            3,
+            [0x6a; 32],
+        )
+        .unwrap();
+        let provider = ComponentInterfaceProvider::exact(
+            "org.mrml.zstd",
+            "org.mrml.interface.compression.zstd",
+            3,
+            [0x6a; 32],
+            ComponentProviderForms::MICROVM,
+        )
+        .unwrap();
+        let mut catalog = [0; 256];
+        let catalog_length =
+            encode_interface_catalog(4, &[requirement], &[provider], &mut catalog).unwrap();
+        fs::write(&generation_path, &generation[..generation_length]).unwrap();
+        fs::write(&catalog_path, &catalog[..catalog_length]).unwrap();
+        let private = vec![0x73; LAMPORT_PRIVATE_KEY_BYTES];
+        let mut public = vec![0; LAMPORT_PUBLIC_KEY_BYTES];
+        lamport_public_key(&private, &mut public).unwrap();
+        fs::write(&private_path, &private).unwrap();
+        fs::write(&public_path, &public).unwrap();
+        let workspace = workspace(Vec::new());
+        release_command(
+            &workspace,
+            &[
+                "system-create".into(),
+                generation_path.to_string_lossy().into_owned(),
+                catalog_path.to_string_lossy().into_owned(),
+                private_path.to_string_lossy().into_owned(),
+                release_path.to_string_lossy().into_owned(),
+            ],
+        )
+        .unwrap();
+        assert!(!private_path.exists());
+        release_command(
+            &workspace,
+            &[
+                "system-verify".into(),
+                release_path.to_string_lossy().into_owned(),
+                public_path.to_string_lossy().into_owned(),
+            ],
+        )
+        .unwrap();
+        public[0] ^= 1;
+        fs::write(&public_path, &public).unwrap();
+        assert_eq!(
+            release_command(
+                &workspace,
+                &[
+                    "system-verify".into(),
+                    release_path.to_string_lossy().into_owned(),
+                    public_path.to_string_lossy().into_owned(),
+                ],
+            ),
+            Err("SystemReleaseTrustRootMismatch".into())
+        );
+        fs::remove_dir_all(directory).unwrap();
     }
     #[test]
     fn selector_ignores_option_values() {

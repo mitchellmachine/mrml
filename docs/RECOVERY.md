@@ -990,6 +990,14 @@ generation. The version-2 activation checkpoint and authenticated recovery
 state retain both digests. Persistent hardware-backed storage and complete
 Manifest V2 catalog delivery remain planned.
 
+The focused WHP/KVM recovery-to-admission path now also requires the general
+signed `SystemRelease` bytes and an explicit caller-selected public root before
+staging the recovered generation. It compares the admitted generation/catalog
+digests with the locally verified component artifacts before kernel admission;
+recovery cannot replace the signed pair with raw records. This is compile/unit
+evidence for the hosted runners, not persistent Store media, TPM/NVRAM trust-root
+recovery, or a fresh end-to-end component execution.
+
 Compare the current source and tests with the first incomplete security gate in
 ROADMAP. Choose the smallest coherent end-to-end milestone that advances that
 gate and can be tested in the available environments. Preserve backend-neutral

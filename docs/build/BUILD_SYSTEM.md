@@ -472,8 +472,11 @@ signed boot `SystemRelease` `.mrs`; `mrml release verify` checks its signature
 against an explicit public root. Separately, the build library can encode a
 bounded general `SystemRelease` containing the exact canonical `MRMLSG2`
 generation and `MRMLIC1` interface catalog, and deployment verifies its bytes,
-signature, and caller-policy-selected signer identity before staging. This is
-library integration, not yet a public CLI or Store release composer. General
+signature, and caller-policy-selected signer identity before staging.
+`mrml release system-create` now writes this general `.mrs` from explicit
+canonical record files and consumes its one-use private key; `system-verify`
+requires an explicit public root. This is a public bounded composer for already
+resolved records, not Store graph resolution or signing-key custody. General
 Store release composition remains **PLANNED**. `mrml image` will combine a release with content-addressed packages,
 boot/recovery, profile, and optional content into the canonical Zstd image
 without needless duplication. Media tooling follows

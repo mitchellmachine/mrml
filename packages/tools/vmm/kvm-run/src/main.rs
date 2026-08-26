@@ -54,9 +54,10 @@ use mrml_kvm::{KvmLaunchLayout, KvmSystem, PreparedKvmGuest};
 #[cfg(target_os = "linux")]
 use mrml_package_format::{
     ComponentServicePlacement, InterfaceCatalogView, MAX_BOOT_PACKAGE_BYTES,
-    MAX_BOOT_RELEASE_BYTES, SystemGenerationDigestRecord, SystemGenerationView,
-    ManifestInterfaceDeclaration, admit_kernel_payload, decode_canonical_manifest_interface,
-    encode_interface_catalog, encode_system_generation, resolve_activated_interface_catalog,
+    MAX_BOOT_RELEASE_BYTES, MAX_SYSTEM_RELEASE_BYTES, ManifestInterfaceDeclaration,
+    SystemGenerationDigestRecord, SystemGenerationView, admit_kernel_payload,
+    decode_canonical_manifest_interface, encode_interface_catalog, encode_system_generation,
+    resolve_activated_interface_catalog,
 };
 #[cfg(target_os = "linux")]
 use mrml_runtime::Instant;
@@ -1569,10 +1570,10 @@ fn application_main() -> Result<()> {
         );
         return Ok(());
     }
-    if arguments.len() != 6 && arguments.len() != 8 && arguments.len() != 9 && arguments.len() != 12
+    if arguments.len() != 6 && arguments.len() != 8 && arguments.len() != 9 && arguments.len() != 14
     {
         return Err(anyhow!(
-            "usage: mrml-kvm-run KERNEL.mrp PACKAGE.public KERNEL.public MINIMUM_VERSION MODE [SYSTEM.mrs SYSTEM_RELEASE.public | ARTIFACT.signed ARTIFACT.public ARTIFACT_MINIMUM_VERSION | CONSUMER.signed CONSUMER.public CONSUMER_MINIMUM PROVIDER.signed PROVIDER.public PROVIDER_MINIMUM]\n       mrml-kvm-run --verify-boot-artifacts KERNEL.mrp PACKAGE.public MINIMUM_VERSION SYSTEM.mrs SYSTEM_RELEASE.public\n       mrml-kvm-run --export-cuda-bundle OUTPUT.ptx"
+            "usage: mrml-kvm-run KERNEL.mrp PACKAGE.public KERNEL.public MINIMUM_VERSION MODE [SYSTEM.mrs SYSTEM_RELEASE.public | ARTIFACT.signed ARTIFACT.public ARTIFACT_MINIMUM_VERSION | CONSUMER.signed CONSUMER.public CONSUMER_MINIMUM PROVIDER.signed PROVIDER.public PROVIDER_MINIMUM GENERAL_SYSTEM.mrs GENERAL_SYSTEM.public]\n       mrml-kvm-run --verify-boot-artifacts KERNEL.mrp PACKAGE.public MINIMUM_VERSION SYSTEM.mrs SYSTEM_RELEASE.public\n       mrml-kvm-run --export-cuda-bundle OUTPUT.ptx"
         ));
     }
     let minimum_version = arguments[4]
@@ -1587,9 +1588,9 @@ fn application_main() -> Result<()> {
         ));
     }
     let component_service_mode = mode == LaunchMode::ComponentServiceProbe;
-    if component_service_mode != (arguments.len() == 12) {
+    if component_service_mode != (arguments.len() == 14) {
         return Err(anyhow!(
-            "component-service-probe requires exact consumer and provider signed artifacts, public keys, and minimum versions"
+            "component-service-probe requires exact consumer/provider signed artifacts plus one signed general SystemRelease and explicit public roots"
         ));
     }
     if matches!(
@@ -2015,50 +2016,74 @@ fn application_main() -> Result<()> {
     } else {
         None
     };
-    let active_component_generation =
-        if let Some((bytes, length, _, catalog, catalog_length, _)) = component_generation.as_ref() {
-            let deployment_root = ObjectId(0x4445_504c_4f59);
-            let mut capabilities = CapabilitySpace::<2>::new();
-            let control = capabilities
-                .insert(deployment_root, Rights::CONTROL)
-                .map_err(|error| anyhow!("KVM deployment authority failed: {:?}", error))?;
-            let inspect = capabilities
-                .insert(deployment_root, Rights::READ)
-                .map_err(|error| anyhow!("KVM deployment inspection failed: {:?}", error))?;
-            let mut deployment = DeploymentService::<1>::new(deployment_root)
-                .map_err(|error| anyhow!("KVM DeploymentService failed: {:?}", error))?;
-            let candidate = deployment
-                .stage(
-                    &capabilities,
-                    control,
-                    GenerationCandidate::from_canonical_records(
-                        &bytes[..*length],
-                        &catalog[..*catalog_length],
-                        0x5359_5347_454e,
-                        1,
-                    )
-                        .map_err(|error| anyhow!("KVM generation candidate failed: {:?}", error))?,
+    let active_component_generation = if let Some((bytes, length, _, catalog, catalog_length, _)) =
+        component_generation.as_ref()
+    {
+        let release_bytes =
+            mrml_runtime::read_file_bounded(&arguments[12], MAX_SYSTEM_RELEASE_BYTES)?;
+        let release_public =
+            mrml_runtime::read_file_bounded(&arguments[13], LAMPORT_PUBLIC_KEY_BYTES)?;
+        if release_public.len() != LAMPORT_PUBLIC_KEY_BYTES {
+            return Err(anyhow!(
+                "invalid KVM general SystemRelease public-key length"
+            ));
+        }
+        let expected_release_key = Sha3_512::digest(&release_public);
+        let deployment_root = ObjectId(0x4445_504c_4f59);
+        let mut capabilities = CapabilitySpace::<2>::new();
+        let control = capabilities
+            .insert(deployment_root, Rights::CONTROL)
+            .map_err(|error| anyhow!("KVM deployment authority failed: {:?}", error))?;
+        let inspect = capabilities
+            .insert(deployment_root, Rights::READ)
+            .map_err(|error| anyhow!("KVM deployment inspection failed: {:?}", error))?;
+        let mut deployment = DeploymentService::<1>::new(deployment_root)
+            .map_err(|error| anyhow!("KVM DeploymentService failed: {:?}", error))?;
+        let candidate = deployment
+            .stage(
+                &capabilities,
+                control,
+                GenerationCandidate::from_system_release(
+                    &release_bytes,
+                    &expected_release_key,
+                    0x5359_5347_454e,
+                    1,
                 )
-                .map_err(|error| anyhow!("KVM candidate staging failed: {:?}", error))?;
-            let prepared = deployment
-                .prepare_activation(&capabilities, control, candidate, None)
-                .map_err(|error| anyhow!("KVM generation preparation failed: {:?}", error))?;
-            let active = deployment
-                .commit_activation(prepared)
-                .map_err(|error| anyhow!("KVM generation activation failed: {:?}", error))?;
-            let checkpoint = encode_deployment_checkpoint(deployment_root, active)
-                .map_err(|error| anyhow!("KVM generation checkpoint failed: {:?}", error))?;
-            let recovered = DeploymentService::<1>::recover(deployment_root, &checkpoint)
-                .map_err(|error| anyhow!("KVM generation recovery failed: {:?}", error))?;
-            Some(
-                recovered
-                    .active(&capabilities, inspect)
-                    .map_err(|error| anyhow!("KVM active generation read failed: {:?}", error))?
-                    .ok_or_else(|| anyhow!("KVM recovered no active SystemGeneration"))?,
+                .map_err(|error| anyhow!("KVM generation candidate failed: {:?}", error))?,
             )
-        } else {
-            None
-        };
+            .map_err(|error| anyhow!("KVM candidate staging failed: {:?}", error))?;
+        let prepared = deployment
+            .prepare_activation(&capabilities, control, candidate, None)
+            .map_err(|error| anyhow!("KVM generation preparation failed: {:?}", error))?;
+        let active = deployment
+            .commit_activation(prepared)
+            .map_err(|error| anyhow!("KVM generation activation failed: {:?}", error))?;
+        if *active.generation_digest()
+            != SystemGenerationView::decode(&bytes[..*length])
+                .map_err(|error| anyhow!("KVM local generation decode failed: {:?}", error))?
+                .digest()
+            || *active.interface_catalog_digest()
+                != InterfaceCatalogView::decode(&catalog[..*catalog_length])
+                    .map_err(|error| anyhow!("KVM local catalog decode failed: {:?}", error))?
+                    .digest()
+        {
+            return Err(anyhow!(
+                "KVM SystemRelease did not bind the verified component artifacts"
+            ));
+        }
+        let checkpoint = encode_deployment_checkpoint(deployment_root, active)
+            .map_err(|error| anyhow!("KVM generation checkpoint failed: {:?}", error))?;
+        let recovered = DeploymentService::<1>::recover(deployment_root, &checkpoint)
+            .map_err(|error| anyhow!("KVM generation recovery failed: {:?}", error))?;
+        Some(
+            recovered
+                .active(&capabilities, inspect)
+                .map_err(|error| anyhow!("KVM active generation read failed: {:?}", error))?
+                .ok_or_else(|| anyhow!("KVM recovered no active SystemGeneration"))?,
+        )
+    } else {
+        None
+    };
     let mut isolation_admission = if total_service_mode {
         Some(
             match active_component_generation {

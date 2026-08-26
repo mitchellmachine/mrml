@@ -250,10 +250,15 @@ suites pass; WHP passes
 Deployment candidates in both runners are now derived from the complete
 canonical generation/catalog byte pair rather than caller-supplied digests;
 cross-generation pairing fails before staging. A bounded general signed
-`SystemRelease` codec and build/deployment library path now authenticate that
-exact pair and require the signer identity selected by caller policy before
-staging. CLI/Store/recovery delivery, owner-root policy integration, and focused
-WHP/KVM consumption of the signed envelope remain **PLANNED**.
+`SystemRelease` codec and build/deployment path now authenticate that exact pair
+and require the signer identity selected by caller policy before staging. The
+public CLI consumes a one-use key to create the general `.mrs` and verifies it
+against an explicit public root. WHP and KVM component probes now require that
+artifact/root, stage only its exact candidate, and cross-check its roots against
+the separately verified artifacts before Total-mode admission. Windows/Arch
+Linux build tests pass 92 cases, WHP 7 and KVM 8; fresh component execution with
+the new argument contract, Store/recovery delivery, and owner-root policy
+integration remain **PLANNED**.
 A backend-neutral linear control-plane admission now binds those two immutable
 load plans to the exact generation/interface placement before an endpoint
 exists. Only a subsequently returned backend endpoint can be published into the

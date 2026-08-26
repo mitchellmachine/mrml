@@ -51,8 +51,13 @@ configuration service derives service specifications from the admission
 table's active system generation rather than package metadata. The focused
 WHP/KVM component probe stages and commits one explicit local generation through
 the bounded capability-authorized `DeploymentService` activation transaction,
-then passes its immutable typed activation record into kernel admission. This is
-hosted activation and kernel/runtime identity evidence. The service now also
+then passes its immutable typed activation record into kernel admission. The
+component runners now require a signed general `SystemRelease` and explicit
+public root, derive the deployment candidate only from that artifact, and
+cross-check its generation/catalog roots against the locally verified
+consumer/provider before Total-mode admission. This is hosted activation and
+kernel/runtime identity evidence; the updated signed-release input path has
+compile/unit parity but not a fresh recorded component execution. The service now also
 publishes/reconstructs the same typed record through one receipt-bound stable
 COW file-generation transaction in focused Windows/Linux simulation tests, and
 the hosted WHP/KVM paths re-decode the canonical recovery checkpoint before
@@ -61,6 +66,22 @@ accepted monotonic epoch and exact volume/object/file generation to that
 checkpoint and rejects replay of an older valid file in Windows/Linux unit
 simulation. A concrete TPM/NVRAM/recovery-journal backend, physical durability,
 and general runtime delivery remain **PLANNED**.
+
+- Complexity impact: MEDIUM
+- TCB impact: LOW
+- New parser boundary: NO
+- New authority model: NO
+- New persistent state: NO
+- External dependency: NO
+- Failure isolated: YES
+- Existing-object reuse: HIGH
+
+This increment reuses the existing bounded release parser, deployment
+transaction, explicit trust-root identity, active-generation record, and both
+backend adapters. It removes a raw-record bypass from the focused VMM control
+plane without adding authority: the caller-selected root and deployment
+capability establish authority, then exact authenticated records take the
+shortest safe path into kernel admission.
 The build/kernel boundary now has a canonical fixed 344-byte, pointer-free
 component-service launch handoff in the shared package-format library. The
 build tool derives system generation, provider generation, interface
