@@ -1179,6 +1179,12 @@ arguments fail closed. ORACLE-0002 accepts both parameter forms and reports
 E0515 for both local escapes. This is bounded loop-return composition, not a
 general loop or region fixed point.
 
+Nested supported `loop` returns now preserve the same projected-summary shared-
+child origin when every inner path terminates. Parameter-backed second arguments
+pass; matching inner-loop-local arguments fail closed. A nonterminal inner
+backedge after moving the arguments remains a use-after-move error. ORACLE-0002
+accepts the exhaustive parameter form and reports E0515 for the local escape.
+
 The first modern trait-solver foundation is an explicit bounded implemented-
 goal representation. Stable trait/type/inference/placeholder identities remain
 distinct; canonicalization replaces inference identities with first-occurrence

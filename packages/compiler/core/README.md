@@ -4028,6 +4028,13 @@ outlives check. The pinned oracle accepts both parameter forms and rejects both
 local escapes with E0515. Windows and Arch remain at 988 compiler tests per
 host; general loop and region fixed points remain unsupported.
 
+Nested supported `loop` returns preserve that projected shared-child origin
+when every inner path terminates. Parameter-backed second arguments pass;
+inner-loop-local arguments fail the outlives check, and a nonterminal backedge
+after moving call arguments remains a use-after-move error. The pinned oracle
+accepts the exhaustive parameter form and rejects the local escape with E0515.
+Both hosts remain at 988 compiler tests; general loop fixed points are absent.
+
 Exact typed tuple literals now seed the same projected state when a local is
 declared. Every reference field is checked against the declared tuple element
 and return type; only a parameter-backed element records an origin. Scalar and
