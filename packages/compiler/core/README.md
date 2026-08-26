@@ -4015,6 +4015,12 @@ while a shared child remains live and accepted after that child's last use. The
 pinned oracle reports E0502 for the overlap. Windows and Arch remain at 987
 tests.
 
+Explicit mutable-to-shared assignment from an exact or conditional tuple field
+now has focused ancestry coverage. Every possible owner remains protected from a
+live competing mutable reborrow and is restored after the shared child's last
+use. The pinned oracle reports E0503 for direct live-owner use. Windows and Arch
+remain at 987 tests.
+
 Multi-field initialization uses one independent key per tuple field. An exact
 conditional reference element records an origin only when both arms resolve to
 the same parameter; differing first/second origins remain unavailable. Focused

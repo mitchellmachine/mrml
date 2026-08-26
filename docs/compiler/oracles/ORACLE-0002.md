@@ -451,6 +451,14 @@ shared child's last use. Temporary sources and metadata were removed. This is
 exact projected mutable-call invalidation evidence, not general regions.
 
 Another independently authored Rust 2024 metadata-only probe against the same
+exact toolchain and commit assigned mutable-reference tuple fields into explicit
+shared-reference locals, both directly and through a conditional field choice.
+The oracle rejected direct use of the exact owner and each conditional owner
+with E0503 while the shared child remained live, and accepted owner reuse after
+the child's last use. Temporary sources and metadata were removed. This is exact
+mutable-to-shared projected-coercion evidence, not general region inference.
+
+Another independently authored Rust 2024 metadata-only probe against the same
 exact toolchain and commit accepted assigning a parameter-backed tuple field
 into an existing mutable-reference local and returning that local. The same
 probe accepted an inferred alias initially moved from a local-backed tuple field,

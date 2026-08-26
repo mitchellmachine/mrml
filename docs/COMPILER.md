@@ -1094,6 +1094,13 @@ the overlap with E0502 and accepts the mutable call after the shared child's las
 use. Together these slices cover exact shared/mutable call conflicts through a
 tuple field, not arbitrary projected call arguments or regions.
 
+Mutable-to-shared assignment coercion now has exact and conditional tuple-field
+ancestry evidence. An explicit shared-reference destination borrows rather than
+moves each mutable field source, protects every possible owner against a live
+competing mutable reborrow, and releases those owners after the shared child's
+last use. ORACLE-0002 rejects the corresponding direct owner uses with E0503 and
+accepts the post-last-use controls. General coercion sites remain partial.
+
 The first modern trait-solver foundation is an explicit bounded implemented-
 goal representation. Stable trait/type/inference/placeholder identities remain
 distinct; canonicalization replaces inference identities with first-occurrence

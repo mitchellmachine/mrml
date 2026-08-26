@@ -788,6 +788,13 @@ rejected the overlap with E0502 and accepted the call after the child's last
 use. Windows and Arch each pass 987 compiler tests. This complements the shared-
 call case without claiming general projected call summaries or regions.
 
+Mutable-to-shared projected assignment coverage now includes one exact tuple
+field and a conditional choice between two fields. Each explicit shared-
+reference destination retains all possible owners; focused MRML tests reject
+live competing mutable reborrows and accept restoration after last use.
+ORACLE-0002 rejected direct live-owner use with E0503 and accepted the same
+restoration controls. Windows and Arch each pass 987 compiler tests.
+
 Multi-field tuple literals retain a separate projected origin per field. A
 conditional reference element seeds its field only when both arms prove the
 same parameter; unequal first/second origins fail closed. Focused caller tests
