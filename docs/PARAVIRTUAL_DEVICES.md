@@ -110,6 +110,14 @@ unmapping, TLB-coherent hotplug, or production hotplug.
 MicroVM selection follows [ISOLATION_PLACEMENT.md](ISOLATION_PLACEMENT.md);
 selecting placement does not itself delegate any device.
 
+The kernel's **PARTIALLY IMPLEMENTED** generic pre-construction projection plan
+now requires the exact declared set of capability-authorized, generational
+interface/device projections before a microVM backend may begin allocation.
+Missing or stale projections return typed isolation-unavailability reasons and
+the unpublished RAM/vCPU reservations; no native fallback is selected. This is
+common admission groundwork, not a VirtIO transport, device-specific queue,
+live WHP/KVM attachment, hotplug, reset, DMA, or physical-device claim.
+
 A microVM receives devices derived from exactly the application's capabilities:
 
 ```text

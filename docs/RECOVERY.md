@@ -1018,6 +1018,15 @@ Total state, substrate/unavailability counts, and native fallback without domain
 identities or remediation authority. Recovery must not infer placement from
 Settings or treat this snapshot as authority to change policy, launch, or repair.
 
+Recovery of a failed microVM projection must retain the linear kernel plan or
+the exact returned unpublished resources. RAM validation failure returns the
+same `MicrovmGuestRam`; later validation failure aborts the untouched prepared
+RAM back to that reservation; the live vCPU reservation and descriptor set are
+also returned. Recovery may explicitly release or retry them, but must not
+reconstruct identities from names, substitute generations or capabilities, or
+use projection failure to launch natively. Live backend teardown integration is
+still **PLANNED**, so this is hosted kernel lifecycle evidence only.
+
 Application-launch recovery must retain the exact runtime domain, application
 object, immutable application generation and artifact digest, active system
 generation, and applied policy generation. The kernel application route accepts

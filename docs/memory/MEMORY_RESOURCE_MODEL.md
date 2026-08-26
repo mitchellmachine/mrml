@@ -190,6 +190,18 @@ reports the exact shortage; it never causes native fallback. Resource pressure
 may reduce availability, throttle, or stop work, but cannot weaken placement.
 Balanced may use a visible policy-permitted alternative within mandatory floors.
 
+The adaptive-isolation path now has a **PARTIALLY IMPLEMENTED** linear
+`MicrovmProjectionPlan`. Before backend allocation begins it revalidates the
+exact guest-RAM object capability and backing kind, exact RAM page count, and a
+live same-domain vCPU reservation inspected through its parent budget
+capability. A new recoverable RAM-preparation form returns the exact unpublished
+reservation on validation failure rather than losing quantitative authority.
+The plan also retains the exact required capability projections. Windows and
+Arch Linux unit tests cover successful consumption, RAM/vCPU mismatch, missing
+`VirtualGPU`, stale interface authority, and recoverable RAM failure. Native
+WHP/KVM construction from this plan and teardown/accounting integration remain
+**PLANNED**.
+
 Default policy selects NUMA placement, migration, tiering, and huge pages while
 preserving object identity. Advanced authority may request node/device locality,
 interleave, latency class, or large-page preference, subject to policy. Physical

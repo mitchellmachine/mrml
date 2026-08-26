@@ -340,6 +340,14 @@ and native fallback while omitting domain identities and all remediation
 authority. The monitor service, per-domain views, subscriptions, GUI/shell, and
 accessible semantic projection remain **PLANNED**.
 
+MicroVM resource/device admission is also **PARTIALLY IMPLEMENTED**. One linear
+pre-construction plan exact-matches the domain and route system/policy
+generations, quantitative guest RAM and vCPU reservations, and the complete
+required set of capability-authorized generational projections. Failure maps to
+typed isolation unavailability, returns unpublished quantitative authority for
+cleanup/retry, and cannot select a native fallback. Live WHP/KVM consumption of
+this plan and device-specific lifecycle evidence remain **PLANNED**.
+
 **ASPIRATIONAL:** a production-secure sovereign local-AI OS, broad device
 support, machine-checked noninterference, independently audited security, and
 additional architectures.

@@ -23,6 +23,13 @@ pub struct VcpuReservationId {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct VcpuReservationInfo {
+    pub reservation: VcpuReservationId,
+    pub domain: ObjectId,
+    pub parallelism: u16,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct CpuBudgetSpec {
     maximum_parallelism: u16,
     runtime_micros: u32,
@@ -437,6 +444,29 @@ impl<const B: usize, const R: usize> CpuBudgetTable<B, R> {
             ..ReservationEntry::EMPTY
         };
         Ok(entry.parallelism)
+    }
+
+    /// Inspects one exact live reservation through its parent budget authority.
+    /// The returned identity is descriptive and cannot schedule or release a
+    /// vCPU reservation.
+    pub fn inspect_vcpu_reservation<const C: usize>(
+        &self,
+        reservation: VcpuReservationId,
+        capability: Capability,
+        capabilities: &CapabilitySpace<C>,
+    ) -> Result<VcpuReservationInfo, CpuResourceError> {
+        let entry = self.reservation(reservation)?;
+        let budget = *self.budget(entry.budget)?;
+        if capabilities.authorize(capability, Rights::INSPECT)? != budget.authority {
+            return Err(CpuResourceError::Capability(
+                CapabilityError::PermissionDenied,
+            ));
+        }
+        Ok(VcpuReservationInfo {
+            reservation,
+            domain: entry.domain,
+            parallelism: entry.parallelism,
+        })
     }
 
     pub fn start_runtime_period<const C: usize>(

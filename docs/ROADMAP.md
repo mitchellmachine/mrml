@@ -174,8 +174,17 @@ distinguishes Total not-requested/satisfied/unsatisfied state and counts every
 host-substrate and unavailability reason without revealing domain identities.
 The focused kernel suite passes 539 tests on Windows and Arch Linux. This is not
 a running monitor service, event stream, per-domain disclosure, GUI/shell, or
-WHP/KVM placement execution claim. The next adaptive-isolation dependency gate
-is resource and device projection.
+WHP/KVM placement execution claim.
+
+Resource/device projection is now **PARTIALLY IMPLEMENTED** at the next kernel
+control-plane boundary. A linear plan validates exact route generations, guest
+RAM pages and object authority, same-domain live vCPU identity/count, and an
+exact no-duplicate set of interface/device capability projections before any
+backend allocation phase. Focused Windows and Arch Linux suites each pass 545
+kernel tests. The plan is not yet consumed by the WHP/KVM application factories,
+so live attachment, teardown accounting, device-specific reset/revocation, and
+physical evidence remain **PLANNED**. That consumption is the next gate before
+persistent Settings and shell policy.
 
 The deployment lane is defined in [DEPLOYMENT.md](DEPLOYMENT.md) and must not
 displace the current foundational gate. Later work proceeds as separate bounded

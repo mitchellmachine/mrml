@@ -4,6 +4,19 @@ Historical paths in this log are intentionally preserved. The canonical
 [old-to-current source-path map](PATH_MIGRATION.md) locates their present
 implementations without altering the original review evidence.
 
+## 2026-08-26 — Linear microVM resource/device projection admission
+
+Patent review: **TRIGGERED** under the existing adaptive-isolation, Total
+MicroVM, quantitative resource, VirtualGPU, paravirtual-device, capability,
+VMM, and device-projection reviews. This increment composes existing
+caller-supplied exact RAM and vCPU reservations with an exact bounded set of
+capability-authorized generational projection descriptors before backend
+construction. It adds typed deterministic shortage mapping and recoverable
+prepublication failure, but no automatic placement, workload classification,
+resource optimization, VM construction, device protocol, DMA mechanism,
+scheduling algorithm, migration, or hardware attachment. No patent-clearance or
+non-infringement conclusion is made; independent human review remains required.
+
 ## 2026-08-26 — Capability-scoped aggregate isolation visibility
 
 Patent review: **NOT_TRIGGERED** for this reporting increment. It conventionally

@@ -683,6 +683,40 @@ QEMU, hosted WHP/KVM, nested virtualization, and physical Intel/AMD evidence are
 distinct. MicroVM isolation does not eliminate shared-hardware side channels or
 common-mode VMM, broker, scheduler, GPU, or device failures.
 
+The kernel now has a **PARTIALLY IMPLEMENTED** pre-construction projection
+gate. A linear `MicrovmProjectionPlan` binds one nonzero domain plus exact route
+system/policy generations to an exact committed guest-RAM reservation, a live
+same-domain vCPU reservation with the required parallelism, and the exact set of
+required interface, `VirtualGPU`, network, file-portal, input, audio, device,
+secret-operation, and IPC projections. Every descriptor retains a nonzero
+generation and must reauthorize its exact object and rights. Missing, duplicate,
+unexpected, stale, attenuated, wrong-object, RAM-size, vCPU-domain, and vCPU-count
+cases fail before any backend allocation phase and map to `MEMORY_BUDGET`,
+`VCPU_BUDGET`, `VIRTUAL_GPU`, `DEVICE_PROJECTION`, or `INTERFACE_TRANSPORT`.
+Validation failure returns the exact unpublished RAM and vCPU reservations for
+explicit cleanup or retry; it never selects native placement. Application
+requirements can be derived only from a `MICROVM` route and retain that route's
+domain and system/policy generations. General service integration, actual
+WHP/KVM guest construction from this plan, device-specific lifecycle proofs,
+and physical isolation remain **PLANNED**.
+
+```text
+Complexity impact: MEDIUM
+TCB impact: LOW
+New parser boundary: NO
+New authority model: NO
+New persistent state: NO
+External dependency: NO
+Failure isolated: YES
+Existing-object reuse: HIGH
+```
+
+The Engineering Constitution reviews are satisfied for this bounded gate:
+owner-selected policy remains bounded only by mandatory floors, no publisher or
+provider authority is added, and hostile stale/wrong/attenuated capabilities,
+generation/resource mismatch, duplication, omission, and unexpected projection
+all fail before backend mutation. Independent human review remains required.
+
 The kernel's **PARTIALLY IMPLEMENTED** aggregate monitor projection reads the
 authoritative admission table rather than configuration files. A caller must
 hold `INSPECT` for one exact monitor object. The immutable snapshot exposes the
@@ -736,7 +770,9 @@ Documentation is not implementation evidence. Implement bounded milestones:
 4. monitor placement visibility (**PARTIALLY IMPLEMENTED** for the
    capability-scoped aggregate kernel snapshot; per-domain/service/UI projections
    remain **PLANNED**);
-5. resource and device projections;
+5. resource and device projections (**PARTIALLY IMPLEMENTED** for the linear
+   kernel pre-construction plan; live WHP/KVM and device-specific integration
+   remain **PLANNED**);
 6. persistent Settings and shell policy;
 7. strict Total runtime enforcement;
 8. bootloader and EFI Shell selectors;

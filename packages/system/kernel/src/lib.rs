@@ -28,6 +28,7 @@ mod isolation;
 mod isolation_monitor;
 mod memory;
 mod memory_resource;
+mod microvm_projection;
 mod pe;
 mod platform;
 mod policy;
@@ -83,13 +84,15 @@ pub use component_memory::{
     ComponentImageReleaseSummary, MAX_COMPONENT_IMAGE_REGIONS, MicrovmControlMemory,
     MicrovmGuestRam, MicrovmGuestRamError, MicrovmPageProjection, MicrovmPageProjectionKind,
     PreparedMicrovmGuestRam, account_component_executable, component_image_page_plan,
-    prepare_microvm_guest_ram, release_component_image, release_microvm_control_memory,
-    release_microvm_guest_ram, reserve_component_executable_mapping, reserve_component_image,
-    reserve_microvm_control_memory, reserve_microvm_guest_ram, reserve_microvm_page_projection,
+    prepare_microvm_guest_ram, prepare_microvm_guest_ram_recoverable, release_component_image,
+    release_microvm_control_memory, release_microvm_guest_ram,
+    reserve_component_executable_mapping, reserve_component_image, reserve_microvm_control_memory,
+    reserve_microvm_guest_ram, reserve_microvm_page_projection,
 };
 pub use cpu_resource::{
     CpuBudgetId, CpuBudgetSpec, CpuBudgetTable, CpuBudgetUsage, CpuResourceError,
     CpuRuntimeReconciliation, CpuRuntimeSlice, MAX_CPU_BUDGET_VCPUS, VcpuReservationId,
+    VcpuReservationInfo,
 };
 pub use early::{EarlyKernelContext, EarlyKernelError};
 pub use framebuffer::{Color, FramebufferError, FramebufferInfo, FramebufferSurface, PixelFormat};
@@ -148,6 +151,11 @@ pub use memory_resource::{
     MemoryMappingBackend, MemoryMappingBackendRequest, MemoryMappingId,
     MemoryMappingOperationError, MemoryObjectBackingBackend, MemoryObjectId, MemoryPhysicalBacking,
     MemoryPoolId, MemoryPoolTable, MemoryResourceError, MemoryRevocationSummary, MemoryUsage,
+};
+pub use microvm_projection::{
+    MicrovmProjectionDescriptor, MicrovmProjectionError, MicrovmProjectionFailure,
+    MicrovmProjectionIdentity, MicrovmProjectionKind, MicrovmProjectionPlan,
+    MicrovmProjectionRequirements, admit_microvm_projection,
 };
 pub use pe::{
     MAX_PE_IMAGE_BYTES, MAX_PE_RELOCATIONS, MAX_PE_SECTIONS, PeAllocatedRegion, PeAllocationError,

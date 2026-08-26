@@ -254,6 +254,10 @@ pub struct ActiveMicrovmGuestRam {
 }
 
 impl ActiveMicrovmGuestRam {
+    pub const fn object(&self) -> MemoryObjectId {
+        self.reservation.object
+    }
+
     pub const fn pages(&self) -> u64 {
         self.reservation.pages
     }
@@ -669,17 +673,39 @@ pub fn prepare_microvm_guest_ram<const P: usize, const O: usize, const M: usize,
     capability: Capability,
     capabilities: &CapabilitySpace<C>,
 ) -> Result<PreparedMicrovmGuestRam, MicrovmGuestRamError> {
-    table
-        .object_physical_backing(reservation.object, capability, capabilities)
-        .map_err(MicrovmGuestRamError::Capability)?;
-    if table
-        .object_backing(reservation.object)
-        .map_err(MicrovmGuestRamError::Capability)?
-        != MemoryBackingKind::Guest
+    prepare_microvm_guest_ram_recoverable(table, reservation, capability, capabilities)
+        .map_err(|(error, _reservation)| error)
+}
+
+/// Recoverable form used by fail-closed launch composition. Validation failure
+/// returns the exact unpublished reservation so the caller can release or retry
+/// it instead of losing quantitative authority.
+pub fn prepare_microvm_guest_ram_recoverable<
+    const P: usize,
+    const O: usize,
+    const M: usize,
+    const C: usize,
+>(
+    table: &MemoryPoolTable<P, O, M>,
+    reservation: MicrovmGuestRam,
+    capability: Capability,
+    capabilities: &CapabilitySpace<C>,
+) -> Result<PreparedMicrovmGuestRam, (MicrovmGuestRamError, MicrovmGuestRam)> {
+    if let Err(error) = table.object_physical_backing(reservation.object, capability, capabilities)
     {
-        return Err(MicrovmGuestRamError::Capability(
-            MemoryResourceError::InvalidObject,
-        ));
+        return Err((MicrovmGuestRamError::Capability(error), reservation));
+    }
+    match table.object_backing(reservation.object) {
+        Ok(MemoryBackingKind::Guest) => {}
+        Ok(_) => {
+            return Err((
+                MicrovmGuestRamError::Capability(MemoryResourceError::InvalidObject),
+                reservation,
+            ));
+        }
+        Err(error) => {
+            return Err((MicrovmGuestRamError::Capability(error), reservation));
+        }
     }
     let remaining_pages = reservation.pages;
     Ok(PreparedMicrovmGuestRam {
