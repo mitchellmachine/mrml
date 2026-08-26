@@ -15666,44 +15666,9 @@ fn runtime_reference_call_origin_parameter<const MAX_PARAMETERS: usize, const MA
                         .has_same_origins(projected_origins),
             )
         };
-        let normalized_backedge_is_stable = || -> Option<bool> {
-            let (_, candidate_origins, candidate_projected, _, _, _, _) =
-                state_at(block.action_count())?;
-            let candidate_projected = candidate_projected.retain_local_prefix(local_count);
-            let (_, repeated_origins, repeated_projected, _, _, _, _) =
-                state_at_from(block.action_count(), candidate_origins, candidate_projected)?;
-            if repeated_origins[..local_count] != candidate_origins[..local_count]
-                || !repeated_projected
-                    .retain_local_prefix(local_count)
-                    .has_same_origins(candidate_projected)
-            {
-                return Some(false);
-            }
-            let prefix_matches = |action_index: usize| -> Option<bool> {
-                let (_, initial_origins, initial_projected, _, _, _, _) = state_at(action_index)?;
-                let (_, repeated_origins, repeated_projected, _, _, _, _) =
-                    state_at_from(action_index, candidate_origins, candidate_projected)?;
-                Some(
-                    initial_origins[..local_count] == repeated_origins[..local_count]
-                        && initial_projected
-                            .retain_local_prefix(local_count)
-                            .has_same_origins(repeated_projected.retain_local_prefix(local_count)),
-                )
-            };
-            for action_index in block
-                .conditional_break_action_indices()
-                .iter()
-                .chain(block.conditional_continue_action_indices())
-                .chain(block.conditional_return_action_indices())
-                .chain(block.unconditional_control_action_indices())
-            {
-                if !prefix_matches(*action_index)? {
-                    return Some(false);
-                }
-            }
-            Some(true)
-        };
-        let normalized_prefix_backedge_is_stable = |backedge_action_index: usize| -> Option<bool> {
+        let normalized_backedge_is_stable = |backedge_action_index: usize,
+                                             prefix_bounded: bool|
+         -> Option<bool> {
             let (_, candidate_origins, candidate_projected, _, _, _, _) =
                 state_at(backedge_action_index)?;
             let candidate_projected = candidate_projected.retain_local_prefix(local_count);
@@ -15736,7 +15701,7 @@ fn runtime_reference_call_origin_parameter<const MAX_PARAMETERS: usize, const MA
                 .chain(block.conditional_continue_action_indices())
                 .chain(block.conditional_return_action_indices())
                 .chain(block.unconditional_control_action_indices())
-                .filter(|action_index| **action_index <= backedge_action_index)
+                .filter(|action_index| !prefix_bounded || **action_index <= backedge_action_index)
             {
                 if !prefix_matches(*action_index)? {
                     return Some(false);
@@ -15803,7 +15768,8 @@ fn runtime_reference_call_origin_parameter<const MAX_PARAMETERS: usize, const MA
             }
             match *target_kind {
                 crate::NestedLoopControlTarget::Inner => {
-                    if !prefix_preserves_state(*action_index)? && !normalized_backedge_is_stable()?
+                    if !prefix_preserves_state(*action_index)?
+                        && !normalized_backedge_is_stable(block.action_count(), false)?
                     {
                         return None;
                     }
@@ -15852,7 +15818,7 @@ fn runtime_reference_call_origin_parameter<const MAX_PARAMETERS: usize, const MA
                 crate::NestedLoopUnconditionalControl::Continue(
                     crate::NestedLoopControlTarget::Inner,
                 ) if prefix_preserves_state(*action_index)?
-                    || normalized_prefix_backedge_is_stable(*action_index)? => {}
+                    || normalized_backedge_is_stable(*action_index, true)? => {}
                 crate::NestedLoopUnconditionalControl::Break(
                     crate::NestedLoopControlTarget::Outer,
                 ) => {
@@ -15885,7 +15851,7 @@ fn runtime_reference_call_origin_parameter<const MAX_PARAMETERS: usize, const MA
         }
         if block.unconditional_controls().is_empty()
             && !prefix_preserves_state(block.action_count())?
-            && !normalized_backedge_is_stable()?
+            && !normalized_backedge_is_stable(block.action_count(), false)?
         {
             return None;
         }
