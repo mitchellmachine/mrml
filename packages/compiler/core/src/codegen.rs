@@ -14905,6 +14905,35 @@ fn runtime_reference_call_origin_parameter<const MAX_PARAMETERS: usize, const MA
             }
             crate::BodyStatement::Loop(index) => {
                 let loop_statement = body.while_loops().get(index).and_then(|value| *value)?;
+                let has_assignment = loop_statement
+                    .operations()
+                    .iter()
+                    .flatten()
+                    .any(|operation| matches!(operation, crate::LoopOperation::Assignment(_)));
+                if has_assignment {
+                    let incoming_origins = local_origins;
+                    let mut iteration_origins = incoming_origins;
+                    for operation in loop_statement.operations().iter().flatten() {
+                        let crate::LoopOperation::Assignment(assignment) = *operation else {
+                            return None;
+                        };
+                        apply_assignment::<MAX_PARAMETERS, MAX_NODES>(
+                            target,
+                            assignment,
+                            &local_names,
+                            &mut iteration_origins,
+                            &local_mutability,
+                            local_count,
+                        )?;
+                    }
+                    for local_index in 0..local_count {
+                        local_origins[local_index] = (incoming_origins[local_index]
+                            == iteration_origins[local_index])
+                            .then_some(incoming_origins[local_index])
+                            .flatten();
+                    }
+                    continue;
+                }
                 for operation in loop_statement.operations().iter().flatten() {
                     match *operation {
                         crate::LoopOperation::ConditionalReturn(value) => {
@@ -30682,6 +30711,27 @@ mod tests {
                         ),
                     })
                 }
+                ("loop_forward", 2) if MAX_PARAMETERS >= 2 => {
+                    parameters[0] = Some(RuntimeCallParameter {
+                        name: "value",
+                        ty: reference,
+                    });
+                    parameters[1] = Some(RuntimeCallParameter {
+                        name: "repeat",
+                        ty: ScalarType::Bool,
+                    });
+                    Some(RuntimeCallTarget {
+                        name: "loop_forward",
+                        parameters,
+                        parameter_count: 2,
+                        return_type: reference,
+                        return_type_name: "&mut u16",
+                        body_expression: concat!(
+                            "let mut alias: &mut u16 = value; ",
+                            "while repeat { alias = &mut *alias; } alias"
+                        ),
+                    })
+                }
                 ("touch", 1) => {
                     parameters[0] = Some(RuntimeCallParameter {
                         name: "value",
@@ -34638,6 +34688,7 @@ mod tests {
             "fn value(first: &mut u16, second: &mut u16) -> u16 { let mut returned: &mut u16 = second; returned = forward(first); let competing: &mut u16 = &mut *first; *competing += 1; *returned }",
             "fn value(input: &mut u16) -> u16 { let returned: &mut u16 = reassign_forward(input); let competing: &mut u16 = &mut *input; *competing += 1; *returned }",
             "fn value(input: &mut u16, first: bool) -> u16 { let returned: &mut u16 = branch_forward(input, first); let competing: &mut u16 = &mut *input; *competing += 1; *returned }",
+            "fn value(input: &mut u16, repeat: bool) -> u16 { let returned: &mut u16 = loop_forward(input, repeat); let competing: &mut u16 = &mut *input; *competing += 1; *returned }",
         ] {
             assert_eq!(
                 analyze(source).unwrap_err().kind,
@@ -34650,6 +34701,7 @@ mod tests {
             "fn value(first: &mut u16, second: &mut u16) -> u16 { let mut returned: &mut u16 = second; returned = forward(first); *returned += 1; let restored: &mut u16 = &mut *first; *restored }",
             "fn value(input: &mut u16) -> u16 { let returned: &mut u16 = reassign_forward(input); *returned += 1; let restored: &mut u16 = &mut *input; *restored }",
             "fn value(input: &mut u16, first: bool) -> u16 { let returned: &mut u16 = branch_forward(input, first); *returned += 1; let restored: &mut u16 = &mut *input; *restored }",
+            "fn value(input: &mut u16, repeat: bool) -> u16 { let returned: &mut u16 = loop_forward(input, repeat); *returned += 1; let restored: &mut u16 = &mut *input; *restored }",
         ] {
             analyze(source).unwrap();
         }
@@ -34673,6 +34725,13 @@ mod tests {
             .unwrap();
         assert_eq!(
             runtime_reference_call_origin_parameter::<3, 32>(branch_forward),
+            Some(0)
+        );
+        let loop_forward = MutableReferenceCallResolver
+            .resolve_runtime_call::<3>("loop_forward", 2)
+            .unwrap();
+        assert_eq!(
+            runtime_reference_call_origin_parameter::<3, 32>(loop_forward),
             Some(0)
         );
         assert_eq!(
