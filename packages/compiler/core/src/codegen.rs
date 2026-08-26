@@ -4019,6 +4019,18 @@ impl<const MAX_ORIGINS: usize> RuntimeCalleeProjectedOrigins<MAX_ORIGINS> {
             .copied()
     }
 
+    fn clear(&mut self, local: usize, projections: RuntimePlaceProjections) -> Option<()> {
+        let index = self.entries[..self.count].iter().position(|entry| {
+            entry.is_some_and(|entry| entry.local == local && entry.projections == projections)
+        })?;
+        for shifted in index..self.count.checked_sub(1)? {
+            self.entries[shifted] = self.entries[shifted + 1];
+        }
+        self.count -= 1;
+        self.entries[self.count] = None;
+        Some(())
+    }
+
     fn intersect(self, other: Self) -> Self {
         let mut joined = Self::EMPTY;
         for left in self.entries[..self.count].iter().flatten() {
@@ -14696,11 +14708,28 @@ fn runtime_reference_call_origin_parameter<const MAX_PARAMETERS: usize, const MA
         place: RuntimeReadPlace<'_>,
         local_names: &[Option<&str>; MAX_PARAMETERS],
         local_origins: &[Option<usize>; MAX_PARAMETERS],
+        projected_origins: &RuntimeCalleeProjectedOrigins<MAX_PARAMETERS>,
         local_count: usize,
     ) -> Option<usize> {
         for index in (0..local_count).rev() {
             if local_names[index] == Some(place.name) {
-                return local_origins[index];
+                if place.projections.count == 0 {
+                    return local_origins[index];
+                }
+                if !place.projections.items[..place.projections.count]
+                    .iter()
+                    .any(|projection| {
+                        matches!(projection, Some(RuntimePlaceProjection::TupleField(_)))
+                    })
+                {
+                    return local_origins[index];
+                }
+                let projected = projected_origins.get(index, place.projections)?;
+                return runtime_types_compatible(
+                    projected.ty,
+                    runtime_type_from_scalar(target.return_type),
+                )
+                .then_some(projected.origin);
             }
         }
         let RuntimeExpressionType::Reference {
@@ -14775,13 +14804,21 @@ fn runtime_reference_call_origin_parameter<const MAX_PARAMETERS: usize, const MA
         depth: usize,
         local_names: &[Option<&str>; MAX_PARAMETERS],
         local_origins: &[Option<usize>; MAX_PARAMETERS],
+        projected_origins: &RuntimeCalleeProjectedOrigins<MAX_PARAMETERS>,
         local_count: usize,
     ) -> Option<usize> {
         if depth == 64 {
             return None;
         }
         if let Some(place) = discover_runtime_read_place(tree, id).ok().flatten() {
-            return compatible_place(target, place, local_names, local_origins, local_count);
+            return compatible_place(
+                target,
+                place,
+                local_names,
+                local_origins,
+                projected_origins,
+                local_count,
+            );
         }
         match tree.expression(id)?.kind {
             ExprKind::Unary {
@@ -14798,6 +14835,7 @@ fn runtime_reference_call_origin_parameter<const MAX_PARAMETERS: usize, const MA
                 depth + 1,
                 local_names,
                 local_origins,
+                projected_origins,
                 local_count,
             ),
             ExprKind::Sequence { then, .. } => recurse(
@@ -14807,6 +14845,7 @@ fn runtime_reference_call_origin_parameter<const MAX_PARAMETERS: usize, const MA
                 depth + 1,
                 local_names,
                 local_origins,
+                projected_origins,
                 local_count,
             ),
             ExprKind::If {
@@ -14826,6 +14865,7 @@ fn runtime_reference_call_origin_parameter<const MAX_PARAMETERS: usize, const MA
                     depth + 1,
                     local_names,
                     local_origins,
+                    projected_origins,
                     local_count,
                 )?;
                 let else_origin = recurse(
@@ -14835,6 +14875,7 @@ fn runtime_reference_call_origin_parameter<const MAX_PARAMETERS: usize, const MA
                     depth + 1,
                     local_names,
                     local_origins,
+                    projected_origins,
                     local_count,
                 )?;
                 (then_origin == else_origin).then_some(then_origin)
@@ -14870,6 +14911,7 @@ fn runtime_reference_call_origin_parameter<const MAX_PARAMETERS: usize, const MA
         tree: &crate::ExpressionTree<'_, MAX_NODES>,
         local_names: &[Option<&str>; MAX_PARAMETERS],
         local_origins: &[Option<usize>; MAX_PARAMETERS],
+        projected_origins: &RuntimeCalleeProjectedOrigins<MAX_PARAMETERS>,
         local_count: usize,
     ) -> Option<usize> {
         if !local_explicit_type_is_return_compatible(target, local) {
@@ -14882,6 +14924,7 @@ fn runtime_reference_call_origin_parameter<const MAX_PARAMETERS: usize, const MA
             0,
             local_names,
             local_origins,
+            projected_origins,
             local_count,
         )
     }
@@ -15084,20 +15127,20 @@ fn runtime_reference_call_origin_parameter<const MAX_PARAMETERS: usize, const MA
         assignment: crate::Assignment<'_>,
         local_names: &[Option<&str>; MAX_PARAMETERS],
         local_origins: &mut [Option<usize>; MAX_PARAMETERS],
+        projected_origins: &mut RuntimeCalleeProjectedOrigins<MAX_PARAMETERS>,
         local_types: &[Option<RuntimeExpressionType>; MAX_PARAMETERS],
         local_mutability: &[bool; MAX_PARAMETERS],
         local_return_compatibility: &[bool; MAX_PARAMETERS],
         local_count: usize,
+        allow_projected: bool,
     ) -> Option<()> {
-        if assignment.projection.is_some()
-            || assignment.operator != crate::AssignmentOperator::Assign
-        {
+        if assignment.operator != crate::AssignmentOperator::Assign {
             return None;
         }
         let local_index = (0..local_count)
             .rev()
             .find(|index| local_names[*index] == Some(assignment.name))?;
-        if !local_mutability[local_index] || !local_return_compatibility[local_index] {
+        if !local_mutability[local_index] {
             return None;
         }
         let tree = crate::ExpressionParser::<MAX_NODES>::new(assignment.value)
@@ -15110,6 +15153,7 @@ fn runtime_reference_call_origin_parameter<const MAX_PARAMETERS: usize, const MA
             0,
             local_names,
             local_origins,
+            projected_origins,
             local_count,
         );
         let assignment_type = inferred_reference_expression_type(
@@ -15121,9 +15165,34 @@ fn runtime_reference_call_origin_parameter<const MAX_PARAMETERS: usize, const MA
             local_count,
             0,
         )?;
+        if let Some(projection) = assignment.projection {
+            if !allow_projected {
+                return None;
+            }
+            let projections = RuntimePlaceProjections::from_assignment(Some(projection)).ok()?;
+            let projected_type =
+                runtime_place_projected_type(local_types[local_index]?, projections)?;
+            if !runtime_types_compatible(assignment_type, projected_type) {
+                return None;
+            }
+            if let Some(origin) = origin {
+                projected_origins.set(
+                    local_index,
+                    local_types[local_index]?,
+                    projections,
+                    origin,
+                )?;
+            } else {
+                let _ = projected_origins.clear(local_index, projections);
+            }
+            return Some(());
+        }
         if !local_types[local_index]
             .is_some_and(|local_type| runtime_types_compatible(assignment_type, local_type))
         {
+            return None;
+        }
+        if !local_return_compatibility[local_index] {
             return None;
         }
         local_origins[local_index] = origin;
@@ -15140,6 +15209,7 @@ fn runtime_reference_call_origin_parameter<const MAX_PARAMETERS: usize, const MA
         actions: &[Option<crate::ConditionalAssignmentAction<'source>>],
         local_names: &mut [Option<&'source str>; MAX_PARAMETERS],
         local_origins: &mut [Option<usize>; MAX_PARAMETERS],
+        projected_origins: &mut RuntimeCalleeProjectedOrigins<MAX_PARAMETERS>,
         local_types: &mut [Option<RuntimeExpressionType>; MAX_PARAMETERS],
         local_mutability: &mut [bool; MAX_PARAMETERS],
         local_return_compatibility: &mut [bool; MAX_PARAMETERS],
@@ -15156,6 +15226,7 @@ fn runtime_reference_call_origin_parameter<const MAX_PARAMETERS: usize, const MA
                         &tree,
                         local_names,
                         local_origins,
+                        projected_origins,
                         *local_count,
                     );
                     let local_type = local_type(
@@ -15181,10 +15252,12 @@ fn runtime_reference_call_origin_parameter<const MAX_PARAMETERS: usize, const MA
                         assignment,
                         local_names,
                         local_origins,
+                        projected_origins,
                         local_types,
                         local_mutability,
                         local_return_compatibility,
                         *local_count,
+                        false,
                     )?;
                 }
                 crate::ConditionalAssignmentAction::Expression(_) => return None,
@@ -15200,6 +15273,7 @@ fn runtime_reference_call_origin_parameter<const MAX_PARAMETERS: usize, const MA
                         0,
                         local_names,
                         local_origins,
+                        projected_origins,
                         *local_count,
                     )?;
                     return Some(ConditionalActionOutcome::Returns(origin));
@@ -15218,6 +15292,7 @@ fn runtime_reference_call_origin_parameter<const MAX_PARAMETERS: usize, const MA
         actions: &[Option<crate::ConditionalLoopAction<'source>>],
         local_names: &mut [Option<&'source str>; MAX_PARAMETERS],
         local_origins: &mut [Option<usize>; MAX_PARAMETERS],
+        projected_origins: &mut RuntimeCalleeProjectedOrigins<MAX_PARAMETERS>,
         local_types: &mut [Option<RuntimeExpressionType>; MAX_PARAMETERS],
         local_mutability: &mut [bool; MAX_PARAMETERS],
         local_return_compatibility: &mut [bool; MAX_PARAMETERS],
@@ -15234,6 +15309,7 @@ fn runtime_reference_call_origin_parameter<const MAX_PARAMETERS: usize, const MA
                 &tree,
                 local_names,
                 local_origins,
+                projected_origins,
                 *local_count,
             );
             let local_type = local_type(
@@ -15262,6 +15338,7 @@ fn runtime_reference_call_origin_parameter<const MAX_PARAMETERS: usize, const MA
     let mut origin = None;
     let mut local_names = [None; MAX_PARAMETERS];
     let mut local_origins = [None; MAX_PARAMETERS];
+    let mut projected_origins = RuntimeCalleeProjectedOrigins::EMPTY;
     let mut local_types = [None; MAX_PARAMETERS];
     let mut local_mutability = [false; MAX_PARAMETERS];
     let mut local_return_compatibility = [false; MAX_PARAMETERS];
@@ -15288,6 +15365,7 @@ fn runtime_reference_call_origin_parameter<const MAX_PARAMETERS: usize, const MA
                     0,
                     &local_names,
                     &local_origins,
+                    &projected_origins,
                     local_count,
                 )?)?;
             }
@@ -15305,6 +15383,7 @@ fn runtime_reference_call_origin_parameter<const MAX_PARAMETERS: usize, const MA
                         0,
                         &local_names,
                         &local_origins,
+                        &projected_origins,
                         local_count,
                     )?)?;
                 }
@@ -15317,6 +15396,7 @@ fn runtime_reference_call_origin_parameter<const MAX_PARAMETERS: usize, const MA
                         0,
                         &local_names,
                         &local_origins,
+                        &projected_origins,
                         local_count,
                     )?)?;
                 }
@@ -15331,6 +15411,7 @@ fn runtime_reference_call_origin_parameter<const MAX_PARAMETERS: usize, const MA
                     0,
                     &local_names,
                     &local_origins,
+                    &projected_origins,
                     local_count,
                 )?)?;
             }
@@ -15343,6 +15424,7 @@ fn runtime_reference_call_origin_parameter<const MAX_PARAMETERS: usize, const MA
                     &tree,
                     &local_names,
                     &local_origins,
+                    &projected_origins,
                     local_count,
                 );
                 let local_type = local_type(
@@ -15369,10 +15451,12 @@ fn runtime_reference_call_origin_parameter<const MAX_PARAMETERS: usize, const MA
                     assignment,
                     &local_names,
                     &mut local_origins,
+                    &mut projected_origins,
                     &local_types,
                     &local_mutability,
                     &local_return_compatibility,
                     local_count,
+                    true,
                 )?;
             }
             crate::BodyStatement::ConditionalAssignment(index) => {
@@ -15401,6 +15485,7 @@ fn runtime_reference_call_origin_parameter<const MAX_PARAMETERS: usize, const MA
                 for branch in conditional.branches().iter().flatten() {
                     let mut branch_names = local_names;
                     let mut branch_origins = base_origins;
+                    let mut branch_projected_origins = projected_origins;
                     let mut branch_types = local_types;
                     let mut branch_mutability = local_mutability;
                     let mut branch_return_compatibility = local_return_compatibility;
@@ -15410,6 +15495,7 @@ fn runtime_reference_call_origin_parameter<const MAX_PARAMETERS: usize, const MA
                         branch.actions(),
                         &mut branch_names,
                         &mut branch_origins,
+                        &mut branch_projected_origins,
                         &mut branch_types,
                         &mut branch_mutability,
                         &mut branch_return_compatibility,
@@ -15427,6 +15513,7 @@ fn runtime_reference_call_origin_parameter<const MAX_PARAMETERS: usize, const MA
                 } else {
                     let mut else_names = local_names;
                     let mut else_origins = base_origins;
+                    let mut else_projected_origins = projected_origins;
                     let mut else_types = local_types;
                     let mut else_mutability = local_mutability;
                     let mut else_return_compatibility = local_return_compatibility;
@@ -15436,6 +15523,7 @@ fn runtime_reference_call_origin_parameter<const MAX_PARAMETERS: usize, const MA
                         conditional.else_actions(),
                         &mut else_names,
                         &mut else_origins,
+                        &mut else_projected_origins,
                         &mut else_types,
                         &mut else_mutability,
                         &mut else_return_compatibility,
@@ -15472,6 +15560,7 @@ fn runtime_reference_call_origin_parameter<const MAX_PARAMETERS: usize, const MA
                     let incoming_origins = local_origins;
                     let mut iteration_names = local_names;
                     let mut iteration_origins = incoming_origins;
+                    let mut iteration_projected_origins = projected_origins;
                     let mut iteration_types = local_types;
                     let mut iteration_mutability = local_mutability;
                     let mut iteration_return_compatibility = local_return_compatibility;
@@ -15486,6 +15575,7 @@ fn runtime_reference_call_origin_parameter<const MAX_PARAMETERS: usize, const MA
                                     &tree,
                                     &iteration_names,
                                     &iteration_origins,
+                                    &iteration_projected_origins,
                                     iteration_local_count,
                                 );
                                 let local_type = local_type(
@@ -15512,10 +15602,12 @@ fn runtime_reference_call_origin_parameter<const MAX_PARAMETERS: usize, const MA
                                     assignment,
                                     &iteration_names,
                                     &mut iteration_origins,
+                                    &mut iteration_projected_origins,
                                     &iteration_types,
                                     &iteration_mutability,
                                     &iteration_return_compatibility,
                                     iteration_local_count,
+                                    false,
                                 )?;
                             }
                             _ => return None,
@@ -15540,6 +15632,7 @@ fn runtime_reference_call_origin_parameter<const MAX_PARAMETERS: usize, const MA
                                 0,
                                 &local_names,
                                 &local_origins,
+                                &projected_origins,
                                 local_count,
                             )?)?;
                         }
@@ -15552,6 +15645,7 @@ fn runtime_reference_call_origin_parameter<const MAX_PARAMETERS: usize, const MA
                                 0,
                                 &local_names,
                                 &local_origins,
+                                &projected_origins,
                                 local_count,
                             )?)?;
                         }
@@ -15566,6 +15660,7 @@ fn runtime_reference_call_origin_parameter<const MAX_PARAMETERS: usize, const MA
                                 .and_then(|value| *value)?;
                             let mut block_names = local_names;
                             let mut block_origins = local_origins;
+                            let mut block_projected_origins = projected_origins;
                             let mut block_types = local_types;
                             let mut block_mutability = local_mutability;
                             let mut block_return_compatibility = local_return_compatibility;
@@ -15575,6 +15670,7 @@ fn runtime_reference_call_origin_parameter<const MAX_PARAMETERS: usize, const MA
                                 block.actions(),
                                 &mut block_names,
                                 &mut block_origins,
+                                &mut block_projected_origins,
                                 &mut block_types,
                                 &mut block_mutability,
                                 &mut block_return_compatibility,
@@ -15591,6 +15687,7 @@ fn runtime_reference_call_origin_parameter<const MAX_PARAMETERS: usize, const MA
                                     0,
                                     &block_names,
                                     &block_origins,
+                                    &block_projected_origins,
                                     block_local_count,
                                 )?)?;
                             }
@@ -15602,6 +15699,7 @@ fn runtime_reference_call_origin_parameter<const MAX_PARAMETERS: usize, const MA
                                 for arm in arms.iter().flatten() {
                                     let mut arm_names = local_names;
                                     let mut arm_origins = local_origins;
+                                    let mut arm_projected_origins = projected_origins;
                                     let mut arm_types = local_types;
                                     let mut arm_mutability = local_mutability;
                                     let mut arm_return_compatibility = local_return_compatibility;
@@ -15611,6 +15709,7 @@ fn runtime_reference_call_origin_parameter<const MAX_PARAMETERS: usize, const MA
                                         arm.actions(),
                                         &mut arm_names,
                                         &mut arm_origins,
+                                        &mut arm_projected_origins,
                                         &mut arm_types,
                                         &mut arm_mutability,
                                         &mut arm_return_compatibility,
@@ -15627,6 +15726,7 @@ fn runtime_reference_call_origin_parameter<const MAX_PARAMETERS: usize, const MA
                                             0,
                                             &arm_names,
                                             &arm_origins,
+                                            &arm_projected_origins,
                                             arm_local_count,
                                         )?)?;
                                     }
@@ -15640,6 +15740,7 @@ fn runtime_reference_call_origin_parameter<const MAX_PARAMETERS: usize, const MA
                                 .and_then(|value| *value)?;
                             let mut block_names = local_names;
                             let mut block_origins = local_origins;
+                            let mut block_projected_origins = projected_origins;
                             let mut block_types = local_types;
                             let mut block_mutability = local_mutability;
                             let mut block_return_compatibility = local_return_compatibility;
@@ -15649,6 +15750,7 @@ fn runtime_reference_call_origin_parameter<const MAX_PARAMETERS: usize, const MA
                                 block.actions(),
                                 &mut block_names,
                                 &mut block_origins,
+                                &mut block_projected_origins,
                                 &mut block_types,
                                 &mut block_mutability,
                                 &mut block_return_compatibility,
@@ -15666,6 +15768,7 @@ fn runtime_reference_call_origin_parameter<const MAX_PARAMETERS: usize, const MA
                                         0,
                                         &block_names,
                                         &block_origins,
+                                        &block_projected_origins,
                                         block_local_count,
                                     )?)?;
                                 }
@@ -15679,6 +15782,7 @@ fn runtime_reference_call_origin_parameter<const MAX_PARAMETERS: usize, const MA
                                     0,
                                     &block_names,
                                     &block_origins,
+                                    &block_projected_origins,
                                     block_local_count,
                                 )?)?;
                             }
@@ -15702,6 +15806,7 @@ fn runtime_reference_call_origin_parameter<const MAX_PARAMETERS: usize, const MA
             0,
             &local_names,
             &local_origins,
+            &projected_origins,
             local_count,
         )?)?;
     }
@@ -31451,6 +31556,27 @@ mod tests {
                         ),
                     })
                 }
+                ("tuple_field_assign", 2) if MAX_PARAMETERS >= 3 => {
+                    parameters[0] = Some(RuntimeCallParameter {
+                        name: "first",
+                        ty: reference,
+                    });
+                    parameters[1] = Some(RuntimeCallParameter {
+                        name: "second",
+                        ty: reference,
+                    });
+                    Some(RuntimeCallTarget {
+                        name: "tuple_field_assign",
+                        parameters,
+                        parameter_count: 2,
+                        return_type: reference,
+                        return_type_name: "&mut u16",
+                        body_expression: concat!(
+                            "let mut pair: (&mut u16,) = (first,); ",
+                            "pair.0 = second; pair.0"
+                        ),
+                    })
+                }
                 ("branch_forward", 2) if MAX_PARAMETERS >= 2 => {
                     parameters[0] = Some(RuntimeCallParameter {
                         name: "value",
@@ -35547,6 +35673,7 @@ mod tests {
             "fn value(input: &mut u16, first: bool) -> u16 { let returned: &mut u16 = branch_local_return(input, first); let competing: &mut u16 = &mut *input; *competing += 1; *returned }",
             "fn value(input: &mut u16, repeat: bool) -> u16 { let returned: &mut u16 = loop_local_forward(input, repeat); let competing: &mut u16 = &mut *input; *competing += 1; *returned }",
             "fn value(input: &mut u16, repeat: bool, first: bool) -> u16 { let returned: &mut u16 = loop_branch_local_return(input, repeat, first); let competing: &mut u16 = &mut *input; *competing += 1; *returned }",
+            "fn value(first: &mut u16, second: &mut u16) -> u16 { let returned: &mut u16 = tuple_field_assign(first, second); let competing: &mut u16 = &mut *second; *competing += 1; *returned }",
         ] {
             assert_eq!(
                 analyze(source).unwrap_err().kind,
@@ -35564,6 +35691,7 @@ mod tests {
             "fn value(input: &mut u16, first: bool) -> u16 { let returned: &mut u16 = branch_local_return(input, first); *returned += 1; let restored: &mut u16 = &mut *input; *restored }",
             "fn value(input: &mut u16, repeat: bool) -> u16 { let returned: &mut u16 = loop_local_forward(input, repeat); *returned += 1; let restored: &mut u16 = &mut *input; *restored }",
             "fn value(input: &mut u16, repeat: bool, first: bool) -> u16 { let returned: &mut u16 = loop_branch_local_return(input, repeat, first); *returned += 1; let restored: &mut u16 = &mut *input; *restored }",
+            "fn value(first: &mut u16, second: &mut u16) -> u16 { let returned: &mut u16 = tuple_field_assign(first, second); *returned += 1; let restored: &mut u16 = &mut *second; *restored }",
         ] {
             analyze(source).unwrap();
         }
@@ -35581,6 +35709,34 @@ mod tests {
         assert_eq!(
             runtime_reference_call_origin_parameter::<2, 16>(reassign_forward),
             Some(0)
+        );
+        let tuple_field_assign = MutableReferenceCallResolver
+            .resolve_runtime_call::<3>("tuple_field_assign", 2)
+            .unwrap();
+        assert_eq!(
+            runtime_reference_call_origin_parameter::<3, 32>(tuple_field_assign),
+            Some(1)
+        );
+        assert_eq!(
+            runtime_reference_call_origin_parameter::<3, 32>(RuntimeCallTarget {
+                body_expression: concat!(
+                    "let mut local_value: u16 = 1; ",
+                    "let mut pair: (&mut u16,) = (first,); ",
+                    "pair.0 = &mut local_value; pair.0"
+                ),
+                ..tuple_field_assign
+            }),
+            None
+        );
+        assert_eq!(
+            runtime_reference_call_origin_parameter::<3, 32>(RuntimeCallTarget {
+                body_expression: concat!(
+                    "let mut pair: (&mut u16,) = (first,); ",
+                    "pair.1 = second; pair.1"
+                ),
+                ..tuple_field_assign
+            }),
+            None
         );
         let branch_forward = MutableReferenceCallResolver
             .resolve_runtime_call::<3>("branch_forward", 2)
