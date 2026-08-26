@@ -16086,42 +16086,52 @@ fn runtime_reference_call_origin_parameter<const MAX_PARAMETERS: usize, const MA
             };
         let state_at =
             |action_index: usize| state_at_from(action_index, local_origins, projected_origins);
+        let state_at_branch_from =
+            |branch_index: usize,
+             source_origins: [Option<usize>; MAX_PARAMETERS],
+             source_projected: RuntimeCalleeProjectedOrigins<MAX_PARAMETERS>| {
+                let branch = block
+                    .conditional_blocks()
+                    .get(branch_index)
+                    .copied()
+                    .flatten()?;
+                let (
+                    mut names,
+                    mut origins,
+                    mut projected,
+                    mut types,
+                    mut mutability,
+                    mut compatibility,
+                    mut count,
+                ) = state_at_from(
+                    *block.conditional_block_action_indices().get(branch_index)?,
+                    source_origins,
+                    source_projected,
+                )?;
+                apply_conditional_loop_actions::<MAX_PARAMETERS, MAX_NODES>(
+                    target,
+                    branch.actions(),
+                    &mut names,
+                    &mut origins,
+                    &mut projected,
+                    &mut types,
+                    &mut mutability,
+                    &mut compatibility,
+                    &mut count,
+                    true,
+                )?;
+                Some((
+                    names,
+                    origins,
+                    projected,
+                    types,
+                    mutability,
+                    compatibility,
+                    count,
+                ))
+            };
         let state_at_branch = |branch_index: usize| {
-            let branch = block
-                .conditional_blocks()
-                .get(branch_index)
-                .copied()
-                .flatten()?;
-            let (
-                mut names,
-                mut origins,
-                mut projected,
-                mut types,
-                mut mutability,
-                mut compatibility,
-                mut count,
-            ) = state_at(*block.conditional_block_action_indices().get(branch_index)?)?;
-            apply_conditional_loop_actions::<MAX_PARAMETERS, MAX_NODES>(
-                target,
-                branch.actions(),
-                &mut names,
-                &mut origins,
-                &mut projected,
-                &mut types,
-                &mut mutability,
-                &mut compatibility,
-                &mut count,
-                true,
-            )?;
-            Some((
-                names,
-                origins,
-                projected,
-                types,
-                mutability,
-                compatibility,
-                count,
-            ))
+            state_at_branch_from(branch_index, local_origins, projected_origins)
         };
         let prefix_preserves_state = |action_index: usize| -> Option<bool> {
             let (_, origins, projected, _, _, _, _) = state_at(action_index)?;
@@ -16234,6 +16244,34 @@ fn runtime_reference_call_origin_parameter<const MAX_PARAMETERS: usize, const MA
                         local_count,
                     )?;
                 }
+                for (branch_index, (branch, control_order)) in block
+                    .conditional_blocks()
+                    .iter()
+                    .flatten()
+                    .zip(block.conditional_block_control_orders())
+                    .enumerate()
+                {
+                    if *control_order >= terminal_order
+                        || !matches!(
+                            branch.terminal,
+                            crate::NestedLoopUnconditionalControl::Continue(
+                                crate::NestedLoopControlTarget::Inner
+                            )
+                        )
+                    {
+                        continue;
+                    }
+                    let (_, origins, projected, _, _, _, _) =
+                        state_at_branch_from(branch_index, source_origins, source_projected)?;
+                    merge_loop_exit_origins(
+                        &mut joined_origins,
+                        &mut joined_projected,
+                        &mut joined_count,
+                        origins,
+                        projected.retain_local_prefix(local_count),
+                        local_count,
+                    )?;
+                }
                 if terminal_is_inner_continue {
                     let (_, action_index, _) = terminal?;
                     let (_, origins, projected, _, _, _, _) =
@@ -16290,6 +16328,18 @@ fn runtime_reference_call_origin_parameter<const MAX_PARAMETERS: usize, const MA
                             .has_same_origins(repeated_projected.retain_local_prefix(local_count)),
                 )
             };
+            let branch_prefix_matches = |branch_index: usize| -> Option<bool> {
+                let (_, initial_origins, initial_projected, _, _, _, _) =
+                    state_at_branch(branch_index)?;
+                let (_, repeated_origins, repeated_projected, _, _, _, _) =
+                    state_at_branch_from(branch_index, header_origins, header_projected)?;
+                Some(
+                    initial_origins[..local_count] == repeated_origins[..local_count]
+                        && initial_projected
+                            .retain_local_prefix(local_count)
+                            .has_same_origins(repeated_projected.retain_local_prefix(local_count)),
+                )
+            };
             for ((action_index, _), control_order) in block
                 .conditional_break_action_indices()
                 .iter()
@@ -16319,6 +16369,27 @@ fn runtime_reference_call_origin_parameter<const MAX_PARAMETERS: usize, const MA
                     && *target_kind == crate::NestedLoopControlTarget::Outer
                     && !prefix_matches(*action_index)?
                 {
+                    return Some(false);
+                }
+            }
+            for (branch_index, (branch, control_order)) in block
+                .conditional_blocks()
+                .iter()
+                .flatten()
+                .zip(block.conditional_block_control_orders())
+                .enumerate()
+            {
+                if *control_order >= terminal_order
+                    || matches!(
+                        branch.terminal,
+                        crate::NestedLoopUnconditionalControl::Continue(
+                            crate::NestedLoopControlTarget::Inner
+                        )
+                    )
+                {
+                    continue;
+                }
+                if !branch_prefix_matches(branch_index)? {
                     return Some(false);
                 }
             }
@@ -16380,7 +16451,9 @@ fn runtime_reference_call_origin_parameter<const MAX_PARAMETERS: usize, const MA
                 crate::NestedLoopUnconditionalControl::Continue(
                     crate::NestedLoopControlTarget::Inner,
                 ) => {
-                    if !branch_preserves_state(branch_index)? {
+                    if !branch_preserves_state(branch_index)?
+                        && !joined_backedge_header_is_stable()?
+                    {
                         return None;
                     }
                 }
@@ -41246,6 +41319,7 @@ mod tests {
         for source in [
             "#[unsafe(no_mangle)] pub extern \"C\" fn value(input: &mut u64, stop: bool) -> &mut u64 { loop { loop { if stop { let alias: &mut u64 = &mut *input; break; } break; } return input; } }",
             "#[unsafe(no_mangle)] pub extern \"C\" fn value(input: &mut u64, stop: bool) -> &mut u64 { loop { loop { if stop { let alias: &mut u64 = &mut *input; continue; } return input; } } }",
+            "#[unsafe(no_mangle)] pub extern \"C\" fn value(input: &mut u64, stop: bool) -> &mut u64 { let mut alias: &mut u64 = input; loop { loop { if stop { alias = &mut *alias; continue; } return alias; } } }",
         ] {
             let module = Parser::new(source).parse_module::<2, 2>().unwrap();
             let Some(Item::Function(function)) = module.items()[0] else {
