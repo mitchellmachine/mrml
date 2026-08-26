@@ -387,6 +387,14 @@ function-local storage with E0515. Temporary sources and metadata were removed.
 This is exact projected assignment before a loop-branch return, not general loop
 dataflow, alias, or region inference.
 
+A further independently authored Rust 2024 metadata-only probe against the same
+exact toolchain and commit accepted the same alias-reborrow tuple-field transfer
+inside a nested loop before a conditional return, and accepted owner reuse after
+the returned child's last use. Separate invocations rejected a live competing
+owner borrow with E0499 and a function-local backing store with E0515. Temporary
+sources and metadata were removed. This is nested projected-return evidence, not
+nested fixed-point, alias, or region inference.
+
 Another independently authored Rust 2024 metadata-only probe against the same
 exact toolchain and commit accepted assigning a parameter-backed tuple field
 into an existing mutable-reference local and returning that local. The same

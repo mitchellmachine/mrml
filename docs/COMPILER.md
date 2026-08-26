@@ -1040,6 +1040,12 @@ ORACLE-0002 accepts the parameter-backed reborrow and post-last-use owner reuse,
 rejects a live competing owner borrow with E0499, and rejects a local-backed
 field return with E0515. This is not general loop dataflow or region inference.
 
+The same exact tuple-field assignment rule is now covered in a nested loop block
+before a conditional return. The nested return retains the parameter origin,
+post-last-use owner access succeeds, a live competitor fails with E0499, and a
+local-backed field fails with E0515. Nested fixed-point and region inference
+remain unsupported.
+
 The first modern trait-solver foundation is an explicit bounded implemented-
 goal representation. Stable trait/type/inference/placeholder identities remain
 distinct; canonicalization replaces inference identities with first-occurrence

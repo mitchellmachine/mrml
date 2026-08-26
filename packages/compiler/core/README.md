@@ -4054,6 +4054,11 @@ return must retain the same parameter origin. Pinned-oracle evidence accepts the
 parameter-backed reborrow and post-last-use owner reuse and rejects a live
 competitor and a local-backed field return. Both hosts remain at 987 tests.
 
+Nested loop blocks now have focused coverage for the same exact tuple-field
+assignment before a conditional return. Pinned-oracle evidence accepts the
+parameter-backed result and owner restoration after last use and rejects live
+competition and local-backed escape. Both hosts remain at 987 tests.
+
 The conditional projected-reassignment milestone extends the bounded tuple-field
 loan chain across a conditional shared-reference assignment. The exact dated
 oracle rejects mutation of either conditional owner and of the field's replaced

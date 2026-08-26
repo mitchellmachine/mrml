@@ -734,6 +734,12 @@ E0499, and rejected a local-backed field return with E0515. Windows and Arch
 each pass 987 compiler tests. General loop dataflow and regions remain
 unsupported.
 
+Nested-loop projected-return evidence now applies the same bounded tuple-field
+assignment action before a conditional return. ORACLE-0002 accepted the
+parameter-backed reborrow and post-last-use restoration and rejected live
+competition with E0499 and local-backed escape with E0515. Windows and Arch each
+pass 987 compiler tests. This adds evidence, not nested fixed-point analysis.
+
 Multi-field tuple literals retain a separate projected origin per field. A
 conditional reference element seeds its field only when both arms prove the
 same parameter; unequal first/second origins fail closed. Focused caller tests
