@@ -55,7 +55,9 @@ Three new persistent deltas are documented before implementation:
   package in one canonical `SystemGeneration`; mismatches publish no route
   specification. A distinct typed `ApplicationLaunch` handoff descriptor now
   reuses the bounded user-image layout validation without becoming a
-  `ServiceLaunch`; its wire encoding and boot consumption remain **PLANNED**.
+  `ServiceLaunch`. Its canonical distinct-flag wire encoding, exact decode, and
+  mutually disjoint reserved backing validation are **IMPLEMENTED**; boot
+  consumption remains **PLANNED**.
   The distinct syscall-only `org.mrml.app.isolation-probe` is
   now a real Manifest V2 `system-application` supporting native-process and microVM forms;
   Windows and Arch Linux cross-build identical 3,072-byte PE output. It has not

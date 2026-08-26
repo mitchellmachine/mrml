@@ -80,7 +80,10 @@ than requiring these bytes to masquerade as a service or boot artifact.
 The kernel handoff model now likewise has a distinct typed `ApplicationLaunch`
 descriptor. It reuses the reviewed bounded user-image layout checks internally
 but cannot be passed as `ServiceLaunch` or thereby acquire a service identity.
-Wire encoding and boot consumption of that descriptor remain **PLANNED**.
+The canonical handoff now encodes service and application under distinct flags
+and fixed descriptors, requires all backing ranges to be reserved and mutually
+disjoint, and rejects truncation, trailing bytes, or overlap before publication.
+Boot consumption of the application descriptor remains **PLANNED**.
 No application loader or runtime consumes the verified bytes yet. A
 backend-neutral microVM owner now accepts one already constructed guest only
 after rechecking the complete immutable application route, consumes that guest

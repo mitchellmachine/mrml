@@ -8007,6 +8007,18 @@ hosted controlled-probe evidence, not manifest-driven workspace/Store delivery,
 host resistance, bare metal, physical isolation, or complete required-system
 Total readiness.
 
+The canonical boot handoff now carries an optional ordinary application launch
+as a distinct 160-byte typed descriptor and flag after any service descriptor.
+Both share only the reviewed bounded PE user-layout validation: their artifact,
+image, stack, and page-table backing must each be contained in reserved/kernel
+memory and all service/application backing ranges must be mutually disjoint.
+Length, flag, offset, trailing-byte, measurement, version, address, and overlap
+errors fail before region publication. Windows and Arch Linux kernel suites
+pass 530 tests, and the enlarged fixed handoff buffer cross-builds through the
+UEFI bootloader on both hosts. This is canonical codec and build evidence only;
+the bootloader does not yet populate or consume an application descriptor and
+no WHP/KVM application executed.
+
 Exact commands and outcomes:
 
 ```text

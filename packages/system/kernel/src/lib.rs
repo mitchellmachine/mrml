@@ -92,11 +92,12 @@ pub use early::{EarlyKernelContext, EarlyKernelError};
 pub use framebuffer::{Color, FramebufferError, FramebufferInfo, FramebufferSurface, PixelFormat};
 pub use grant::{DirectoryGrant, GrantError, GrantMode, MAX_HOST_PATH};
 pub use handoff::{
-    ApplicationLaunch, BootHandoff, HANDOFF_HEADER_BYTES, HANDOFF_RECOVERY_STATE_BYTES,
-    HANDOFF_REGION_BYTES, HANDOFF_SERVICE_BYTES, HandoffError, MAX_HANDOFF_BYTES,
+    ApplicationLaunch, BootHandoff, HANDOFF_APPLICATION_BYTES, HANDOFF_HEADER_BYTES,
+    HANDOFF_RECOVERY_STATE_BYTES, HANDOFF_REGION_BYTES, HANDOFF_SERVICE_BYTES, HandoffError, MAX_HANDOFF_BYTES,
     MAX_HANDOFF_MADT_BYTES, MAX_HANDOFF_REGIONS, RecoveryStateMetadata, ServiceLaunch, encode_handoff,
     encode_handoff_with_madt, encode_handoff_with_recovery, encode_handoff_with_smp,
     encode_handoff_with_smp_and_service, encode_handoff_with_smp_service_and_recovery,
+    encode_handoff_with_smp_service_application_and_recovery,
 };
 pub use host_resource::{
     DirectHostResourceError, DirectHostResourceMemory, HostResourceIoError, HostResourceMemory,

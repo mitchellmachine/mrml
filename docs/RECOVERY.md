@@ -1049,8 +1049,11 @@ using `service` changes the authenticated artifact statement and is rejected by
 application admission rather than treated as a compatible encoding.
 Recovery code must likewise retain typed `ApplicationLaunch` identity. The
 current descriptor shares only internal bounded image-layout validation with
-`ServiceLaunch`; it is not yet encoded in the canonical handoff and must not be
-reconstructed by relabeling a recovered service descriptor.
+`ServiceLaunch`. The canonical handoff now encodes both under distinct flags
+and requires mutually disjoint reserved backing ranges. Recovery must decode
+the exact application descriptor, reject truncation/trailing data/overlap, and
+must not reconstruct it by relabeling a recovered service descriptor. Boot
+consumption of the decoded application remains planned.
 
 The canonical workspace and lock now retain the syscall-only
 `org.mrml.app.isolation-probe` as a `system-application` with both supported
