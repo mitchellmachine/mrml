@@ -1125,6 +1125,18 @@ closed. Windows gnullvm and native Arch Linux WSL each pass 551 library tests,
 one component-interface probe, 10 conformance tests, and 335 replacement tests:
 897 compiler tests per host.
 
+The exact source-implementation milestone accepts empty `impl Trait for Type {}`
+items in the canonical parser and lowers them into the existing exact solver
+database. Declared traits resolve to their stable IDs; supported nominal paths
+intern in a separate 64-entry source-order type table. Existing solver admission
+rejects overlapping heads. Unknown traits, unsupported self types, nonempty
+bodies, malformed forms, and capacity overflow fail with focused diagnostics.
+Generic, negative, unsafe, and default implementations, trait arguments,
+associated items, and source-level obligations remain unsupported. Windows
+gnullvm and native Arch Linux WSL each pass 555 library tests, one component-
+interface probe, 10 conformance tests, and 335 replacement tests: 901 compiler
+tests per host.
+
 The premise-bearing rigid-normalization milestone proves the selected generic
 implementation's instantiated trait and projection predicates before exposing
 its associated value. It shares the caller's 16-frame rigid proof stack and

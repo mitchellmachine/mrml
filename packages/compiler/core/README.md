@@ -48,7 +48,8 @@ Unsupported borrowing, traits, provenance, unsafe behavior, ABI, assembly,
 const evaluation, control flow, and security metadata continue to fail closed.
 
 The implemented bootstrap grammar currently recognizes module-level `fn`, `const fn`,
-typed `const`, immutable typed `static`, and marker `trait Name {}` items, optional `pub`, named typed parameters, optional return
+typed `const`, immutable typed `static`, marker `trait Name {}`, and empty exact
+`impl Trait for Type {}` items, optional `pub`, named typed parameters, optional return
 types, nested generic and tuple/array type syntax, balanced function bodies, and
 bounded constant initializers. Function bodies additionally parse a bounded
 prefix of typed or inferred `let` bindings, including `let mut`, followed by bounded simple
@@ -4310,6 +4311,18 @@ methods, `impl` items, and trait use in types remain unsupported and fail closed
 Windows gnullvm and native Arch Linux WSL each pass 551 library tests, one
 component probe, 10 conformance tests, and 335 replacement tests: 897 compiler
 tests per host.
+
+The exact source-implementation milestone admits allocation-free
+`impl Trait for Type {}` items with empty bodies. Lowering resolves the trait
+through the declaration table, interns up to 64 source-order nominal path type
+identities, and inserts identified headers into the existing exact
+implementation database. Thus existing exact selection and overlap rejection
+operate on source-derived facts. Unknown traits, duplicate heads, non-path self
+types, nonempty bodies, and type capacity overflow fail explicitly. Generic,
+negative, unsafe, and default implementations, trait arguments, associated
+items, and use-site trait obligations remain unsupported. Windows gnullvm and
+native Arch Linux WSL each pass 555 library tests, one component probe, 10
+conformance tests, and 335 replacement tests: 901 compiler tests per host.
 
 The projection-bearing term milestone uses a fixed 64-node arena for flat leaf
 terms and associated-type projections whose trait self/argument positions refer
