@@ -7918,14 +7918,22 @@ the endpoint and ticket for an exact retry. A strict Total-mode test proves the
 native placement request is rejected by admission before any supervisor launch,
 with zero native fallback.
 
-Evidence for this increment is hosted unit/build evidence. The standalone EFI
-service image did not execute freshly through this resolver, and this does not
-prove manifest-driven runtime declaration delivery, WHP/KVM host resistance,
-bare metal, or physical isolation. A retained-artifact WHP attempt exited
-without a terminal record; nested KVM reached the guest but reported the older
-retained kernel stage as `Halted`. Neither is counted as successful fresh live
-evidence. The prior signed component probes remain historical microVM-placement
-evidence only.
+Fresh current-source artifacts now executed through this signed-release path.
+Both optimized runners independently verified the same kernel, ZIM consumer,
+Zstd provider, and roots and emitted byte-identical 201-byte `MRMLSG2` and
+207-byte `MRMLIC1` records. `mrml release system-create` consumed one fresh
+development-only Lamport key and produced one 99,064-byte `.mrs`; explicit-root
+verification passed and the private key no longer existed. Nested KVM consumed
+that release, reported `eligible=1`, `microvm=1`, `native_fallback=0`, and reached
+the expected halt (`verify=25663us`, `prepare=6690us`, `execute=1231us`,
+`total=126826us`). WHP consumed the identical release and completed the exact-
+generation ZIM/Zstd data path and lifecycle cleanup (`verify=20027us`,
+`prepare=4869us`, `execute=3314us`, `total=51694us`). An initial retained-
+artifact attempt was correctly excluded: KVM reported the obsolete guest stage
+as `Halted`, while WHP produced no terminal record and was terminated. This is
+hosted controlled-probe evidence, not manifest-driven workspace/Store delivery,
+host resistance, bare metal, physical isolation, or complete required-system
+Total readiness.
 
 Exact commands and outcomes:
 

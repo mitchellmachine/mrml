@@ -476,9 +476,16 @@ signature, and caller-policy-selected signer identity before staging.
 `mrml release system-create` now writes this general `.mrs` from explicit
 canonical record files and consumes its one-use private key; `system-verify`
 requires an explicit public root. This is a public bounded composer for already
-resolved records, not Store graph resolution or signing-key custody. General
-Store release composition remains **PLANNED**. `mrml image` will combine a release with content-addressed packages,
-boot/recovery, profile, and optional content into the canonical Zstd image
+resolved records, not Store graph resolution or signing-key custody.
+The optimized WHP/KVM runners also expose `component-release-inputs`: after
+verifying the exact kernel, ZIM consumer, Zstd provider, and public roots, each
+writes its canonical generation/catalog bytes for signing. The two backends
+produced byte-identical 201/207-byte records from current artifacts; the public
+frontend consumed a one-use key to sign them and both runners consumed the same
+resulting `.mrs`.
+General Store release composition remains **PLANNED**. `mrml image` will combine
+a release with content-addressed packages, boot/recovery, profile, and optional
+content into the canonical Zstd image
 without needless duplication. Media tooling follows
 [DEPLOYMENT.md](../DEPLOYMENT.md).
 

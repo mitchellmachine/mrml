@@ -1486,7 +1486,10 @@ fn application_main() -> Result<()> {
         return Ok(());
     }
     let service_mode = arguments.len() == 9 && arguments[5] == "service-probe";
-    let component_service_mode = arguments.len() == 14 && arguments[5] == "component-service-probe";
+    let component_release_input_mode =
+        arguments.len() == 14 && arguments[5] == "component-release-inputs";
+    let component_service_mode = component_release_input_mode
+        || (arguments.len() == 14 && arguments[5] == "component-service-probe");
     let block_service_mode = arguments.len() == 9 && arguments[5] == "block-service-probe";
     let service_restart_request_mode =
         arguments.len() == 9 && arguments[5] == "service-restart-request-probe";
@@ -1532,7 +1535,7 @@ fn application_main() -> Result<()> {
         && !smp_periodic_balance_mode
     {
         return Err(anyhow!(
-            "usage: mrml-whp-run KERNEL.mrp PACKAGE.public KERNEL.public MINIMUM_VERSION MODE [SYSTEM.mrs SYSTEM_RELEASE.public | ARTIFACT.signed ARTIFACT.public ARTIFACT_MINIMUM_VERSION | CONSUMER.signed CONSUMER.public CONSUMER_MINIMUM PROVIDER.signed PROVIDER.public PROVIDER_MINIMUM GENERAL_SYSTEM.mrs GENERAL_SYSTEM.public]\n       mrml-whp-run --verify-boot-artifacts KERNEL.mrp PACKAGE.public MINIMUM_VERSION SYSTEM.mrs SYSTEM_RELEASE.public\n       mrml-whp-run --export-cuda-bundle OUTPUT.ptx"
+            "usage: mrml-whp-run KERNEL.mrp PACKAGE.public KERNEL.public MINIMUM_VERSION MODE [SYSTEM.mrs SYSTEM_RELEASE.public | ARTIFACT.signed ARTIFACT.public ARTIFACT_MINIMUM_VERSION | CONSUMER.signed CONSUMER.public CONSUMER_MINIMUM PROVIDER.signed PROVIDER.public PROVIDER_MINIMUM GENERAL_SYSTEM.mrs GENERAL_SYSTEM.public]\n       MODE component-release-inputs writes GENERATION.bin CATALOG.bin in the final two positions after verifying the same component inputs\n       mrml-whp-run --verify-boot-artifacts KERNEL.mrp PACKAGE.public MINIMUM_VERSION SYSTEM.mrs SYSTEM_RELEASE.public\n       mrml-whp-run --export-cuda-bundle OUTPUT.ptx"
         ));
     }
     let minimum_version = arguments[4]
@@ -1947,6 +1950,15 @@ fn application_main() -> Result<()> {
     let active_component_generation = if let Some((bytes, length, _, catalog, catalog_length, _)) =
         component_generation.as_ref()
     {
+        if component_release_input_mode {
+            mrml_runtime::write_file(&arguments[12], &bytes[..*length])?;
+            mrml_runtime::write_file(&arguments[13], &catalog[..*catalog_length])?;
+            println!(
+                "component-release-inputs|status=PASS|backend=whp|generation_bytes={}|catalog_bytes={}",
+                length, catalog_length
+            );
+            return Ok(());
+        }
         let release_bytes =
             mrml_runtime::read_file_bounded(&arguments[12], MAX_SYSTEM_RELEASE_BYTES)?;
         let release_public =

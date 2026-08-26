@@ -256,9 +256,12 @@ public CLI consumes a one-use key to create the general `.mrs` and verifies it
 against an explicit public root. WHP and KVM component probes now require that
 artifact/root, stage only its exact candidate, and cross-check its roots against
 the separately verified artifacts before Total-mode admission. Windows/Arch
-Linux build tests pass 92 cases, WHP 7 and KVM 8; fresh component execution with
-the new argument contract, Store/recovery delivery, and owner-root policy
-integration remain **PLANNED**.
+Linux build tests pass 92 cases, WHP 7 and KVM 8. Fresh optimized runners
+independently emitted byte-identical canonical records from freshly signed
+current artifacts and then consumed the same 99,064-byte `.mrs`: WHP completed
+the data path/cleanup and nested KVM reported `eligible=1`, `microvm=1`,
+`native_fallback=0` before the expected halt. Store/recovery delivery and
+owner-root policy integration remain **PLANNED**.
 A backend-neutral linear control-plane admission now binds those two immutable
 load plans to the exact generation/interface placement before an endpoint
 exists. Only a subsequently returned backend endpoint can be published into the

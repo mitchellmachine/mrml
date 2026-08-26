@@ -184,9 +184,12 @@ The public build frontend now creates/verifies this envelope with a consumed
 one-use key and explicit public root. Both focused VMM component runners require
 that artifact and root, derive the deployment candidate only from the envelope,
 and reject any digest mismatch against the separately verified consumer and
-provider before Total-mode kernel admission. Windows and Arch Linux build/test
-parity exists; a fresh WHP/KVM component execution with the new command-line
-contract and workspace/Store delivery remain **PLANNED**.
+provider before Total-mode kernel admission. The optimized runners independently
+verified freshly signed current artifacts and emitted byte-identical canonical
+records, then consumed one identical freshly signed 99,064-byte release. WHP
+completed the exact-generation data path and cleanup; nested KVM reported one
+eligible microVM and zero native fallback before the expected halt. Workspace/
+Store delivery remains **PLANNED**.
 The canonical provider now builds its own `mrml-zstd-service.efi` artifact—never
 an alias of the generic configuration service—with an x86-64 architecture trap,
 one private 4 KiB scratch page, and exact launch-register endpoint/caller/

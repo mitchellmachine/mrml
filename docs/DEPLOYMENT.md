@@ -111,9 +111,12 @@ root. Both focused component runners now require the `.mrs` and public root,
 stage only `GenerationCandidate::from_system_release`, and compare its admitted
 digests with the locally verified consumer/provider artifacts before Total-mode
 kernel admission. Windows and Arch Linux build-tool tests pass 92 cases; WHP
-passes 7 and KVM passes 8 compile/unit cases. A fresh signed component execution
-with this new input contract has not yet been recorded. Owner-root policy
-integration, stronger signing-key isolation, Store, installer/recovery
+passes 7 and KVM passes 8 compile/unit cases. Each optimized runner now also has
+a `component-release-inputs` mode which verifies the same current artifacts and
+emits its canonical records; their 201-byte generation and 207-byte catalog were
+byte-identical. One freshly created 99,064-byte `.mrs` then completed the current
+component probe on WHP and nested KVM with zero KVM native fallback. Owner-root
+policy integration, stronger signing-key isolation, Store, installer/recovery
 persistence, rollback, and retained-root integration remain **PLANNED**.
 
 - Complexity impact: MEDIUM

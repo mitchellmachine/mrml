@@ -55,9 +55,11 @@ then passes its immutable typed activation record into kernel admission. The
 component runners now require a signed general `SystemRelease` and explicit
 public root, derive the deployment candidate only from that artifact, and
 cross-check its generation/catalog roots against the locally verified
-consumer/provider before Total-mode admission. This is hosted activation and
-kernel/runtime identity evidence; the updated signed-release input path has
-compile/unit parity but not a fresh recorded component execution. The service now also
+consumer/provider before Total-mode admission. Each optimized runner independently
+emitted byte-identical canonical records from freshly signed current artifacts,
+then consumed the same freshly signed release. Nested KVM reported one eligible
+microVM with zero native fallback; WHP completed the exact data path and cleanup.
+This is hosted activation and kernel/runtime identity evidence. The service now also
 publishes/reconstructs the same typed record through one receipt-bound stable
 COW file-generation transaction in focused Windows/Linux simulation tests, and
 the hosted WHP/KVM paths re-decode the canonical recovery checkpoint before

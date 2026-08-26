@@ -415,6 +415,7 @@ enum LaunchMode {
     UserProbe,
     ServiceProbe,
     ComponentServiceProbe,
+    ComponentReleaseInputs,
     BlockServiceProbe,
     BlockGuestDriverProbe,
     PciConfigurationProbe,
@@ -439,6 +440,7 @@ impl LaunchMode {
             "user-probe" => Ok(Self::UserProbe),
             "service-probe" => Ok(Self::ServiceProbe),
             "component-service-probe" => Ok(Self::ComponentServiceProbe),
+            "component-release-inputs" => Ok(Self::ComponentReleaseInputs),
             "block-service-probe" => Ok(Self::BlockServiceProbe),
             "block-guest-driver-probe" => Ok(Self::BlockGuestDriverProbe),
             "pci-configuration-probe" => Ok(Self::PciConfigurationProbe),
@@ -451,7 +453,7 @@ impl LaunchMode {
             "smp-service-migration-probe" => Ok(Self::SmpServiceMigrationProbe),
             "smp-periodic-balance-probe" => Ok(Self::SmpPeriodicBalanceProbe),
             _ => Err(anyhow!(
-                "mode must be boot, fault-probe, timer-probe, preemption-probe, user-probe, service-probe, component-service-probe, block-service-probe, block-guest-driver-probe, pci-configuration-probe, service-restart-request-probe, service-preemption-probe, gpu-benchmark, smp-probe, smp-scheduler-probe, smp-ipi-probe, smp-service-migration-probe, or smp-periodic-balance-probe"
+                "mode must be boot, fault-probe, timer-probe, preemption-probe, user-probe, service-probe, component-service-probe, component-release-inputs, block-service-probe, block-guest-driver-probe, pci-configuration-probe, service-restart-request-probe, service-preemption-probe, gpu-benchmark, smp-probe, smp-scheduler-probe, smp-ipi-probe, smp-service-migration-probe, or smp-periodic-balance-probe"
             )),
         }
     }
@@ -1573,7 +1575,7 @@ fn application_main() -> Result<()> {
     if arguments.len() != 6 && arguments.len() != 8 && arguments.len() != 9 && arguments.len() != 14
     {
         return Err(anyhow!(
-            "usage: mrml-kvm-run KERNEL.mrp PACKAGE.public KERNEL.public MINIMUM_VERSION MODE [SYSTEM.mrs SYSTEM_RELEASE.public | ARTIFACT.signed ARTIFACT.public ARTIFACT_MINIMUM_VERSION | CONSUMER.signed CONSUMER.public CONSUMER_MINIMUM PROVIDER.signed PROVIDER.public PROVIDER_MINIMUM GENERAL_SYSTEM.mrs GENERAL_SYSTEM.public]\n       mrml-kvm-run --verify-boot-artifacts KERNEL.mrp PACKAGE.public MINIMUM_VERSION SYSTEM.mrs SYSTEM_RELEASE.public\n       mrml-kvm-run --export-cuda-bundle OUTPUT.ptx"
+            "usage: mrml-kvm-run KERNEL.mrp PACKAGE.public KERNEL.public MINIMUM_VERSION MODE [SYSTEM.mrs SYSTEM_RELEASE.public | ARTIFACT.signed ARTIFACT.public ARTIFACT_MINIMUM_VERSION | CONSUMER.signed CONSUMER.public CONSUMER_MINIMUM PROVIDER.signed PROVIDER.public PROVIDER_MINIMUM GENERAL_SYSTEM.mrs GENERAL_SYSTEM.public]\n       MODE component-release-inputs writes GENERATION.bin CATALOG.bin in the final two positions after verifying the same component inputs\n       mrml-kvm-run --verify-boot-artifacts KERNEL.mrp PACKAGE.public MINIMUM_VERSION SYSTEM.mrs SYSTEM_RELEASE.public\n       mrml-kvm-run --export-cuda-bundle OUTPUT.ptx"
         ));
     }
     let minimum_version = arguments[4]
@@ -1587,7 +1589,9 @@ fn application_main() -> Result<()> {
             "SystemRelease binding is accepted only for boot mode"
         ));
     }
-    let component_service_mode = mode == LaunchMode::ComponentServiceProbe;
+    let component_release_input_mode = mode == LaunchMode::ComponentReleaseInputs;
+    let component_service_mode =
+        component_release_input_mode || mode == LaunchMode::ComponentServiceProbe;
     if component_service_mode != (arguments.len() == 14) {
         return Err(anyhow!(
             "component-service-probe requires exact consumer/provider signed artifacts plus one signed general SystemRelease and explicit public roots"
@@ -1633,6 +1637,7 @@ fn application_main() -> Result<()> {
         mode,
         LaunchMode::ServiceProbe
             | LaunchMode::ComponentServiceProbe
+            | LaunchMode::ComponentReleaseInputs
             | LaunchMode::BlockServiceProbe
             | LaunchMode::ServiceRestartRequestProbe
             | LaunchMode::ServicePreemptionProbe
@@ -2019,6 +2024,15 @@ fn application_main() -> Result<()> {
     let active_component_generation = if let Some((bytes, length, _, catalog, catalog_length, _)) =
         component_generation.as_ref()
     {
+        if component_release_input_mode {
+            mrml_runtime::write_file(&arguments[12], &bytes[..*length])?;
+            mrml_runtime::write_file(&arguments[13], &catalog[..*catalog_length])?;
+            println!(
+                "component-release-inputs|status=PASS|backend=kvm|generation_bytes={}|catalog_bytes={}",
+                length, catalog_length
+            );
+            return Ok(());
+        }
         let release_bytes =
             mrml_runtime::read_file_bounded(&arguments[12], MAX_SYSTEM_RELEASE_BYTES)?;
         let release_public =
@@ -4120,6 +4134,10 @@ mod tests {
         assert_eq!(
             LaunchMode::parse("component-service-probe").unwrap(),
             LaunchMode::ComponentServiceProbe
+        );
+        assert_eq!(
+            LaunchMode::parse("component-release-inputs").unwrap(),
+            LaunchMode::ComponentReleaseInputs
         );
         assert_eq!(
             LaunchMode::parse("block-service-probe").unwrap(),
