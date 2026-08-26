@@ -1445,6 +1445,17 @@ impl<'source> BodyParser<'source> {
                         }
                         _ => None,
                     }
+                } else if explicit_type.text == "&" {
+                    let mut pointee = uninitialized_probe.take()?;
+                    if pointee.is_some_and(|token| token.text == "mut") {
+                        pointee = uninitialized_probe.take()?;
+                    }
+                    pointee
+                        .filter(|pointee| pointee.kind == TokenKind::Identifier)
+                        .map(|pointee| Span {
+                            start: explicit_type.span.start,
+                            end: pointee.span.end,
+                        })
                 } else {
                     None
                 };

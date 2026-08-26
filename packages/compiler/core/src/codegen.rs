@@ -6704,7 +6704,7 @@ impl<'source> RuntimeBodyFacts<'source> {
             return None;
         };
         let local = self.locals.get(borrower.0).and_then(|local| *local)?;
-        if !local.mutable {
+        if !local.mutable && local.initialized {
             return None;
         }
         let RuntimeExpressionType::Reference { mutable, .. } = root.ty else {
@@ -19024,6 +19024,10 @@ fn runtime_type_supports_uninitialized_scalar(ty: RuntimeExpressionType) -> bool
             | RuntimeExpressionType::Bool
             | RuntimeExpressionType::Char
             | RuntimeExpressionType::RawPointer { .. }
+            | RuntimeExpressionType::Reference {
+                target: RuntimeReferenceTarget::Scalar(_),
+                ..
+            }
     )
 }
 
