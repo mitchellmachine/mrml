@@ -15,36 +15,39 @@ use core::mem::size_of;
 use core::ops::{Deref, DerefMut};
 
 use mrml_crypto::Sha3_256;
-use mrml_deployment::{RecoveredDeploymentOwner, RecoveredRuntimeAssignment};
+use mrml_deployment::{
+    recover_and_read_runtime_assignment, DeploymentRecoveryStateStore, RecoveredDeploymentOwner,
+    RecoveredRuntimeAssignment, RecoveredRuntimeAssignmentError,
+};
 use mrml_kernel::arch::x86_64::UserContext;
 use mrml_kernel::{
+    prepare_isolation_service_route, route_isolation_service,
     ActivatedReleaseTotalMicrovmInventory, BootHandoff, BootIsolationOverride,
     BootRecoveryEnvelope, Capability, CapabilityError, CapabilitySpace, EarlyKernelContext,
     HostSubstrateReason, InstalledRecoveryBootIdentity, InstalledRecoverySataRoute,
     InstalledRecoverySource, IsolationAdmissionTable, IsolationBackendFailure, IsolationMode,
     IsolationPlacement, IsolationServiceBackend, IsolationServiceRouteError, IsolationServiceSpec,
     IsolationStatusSnapshot, IsolationUnavailableReason, MemoryBackingKind, MemoryObjectId,
-    MemoryPoolId, MemoryPoolTable, MemoryResourceError, Message, ObjectId, PAGE_SIZE,
+    MemoryPoolId, MemoryPoolTable, MemoryResourceError, Message, ObjectId,
     PreparedIsolationServiceRoute, Priority, RecoveryStateMetadata, ReleaseInventoryError,
     RestartPolicy, Rights, RoutedIsolationService, RuntimeDomainAssignment,
     RuntimeDomainAssignmentPlan, RuntimeDomainPolicyAssignmentError, ServiceAddressSpaceEraser,
     ServiceCleanupError, ServiceError, ServiceId, ServiceRegistrationPlan, ServiceState,
-    ServiceSupervisor, TaskId, TaskRuntime, TaskRuntimeError, prepare_isolation_service_route,
-    route_isolation_service,
+    ServiceSupervisor, TaskId, TaskRuntime, TaskRuntimeError, PAGE_SIZE,
 };
 use mrml_storage::{
-    AuthorityRecoveryValidator, BlockDeviceDescriptor, BlockDeviceId, BlockFileSession,
-    BlockService, BlockServiceBackend, BlockServiceError, BlockSessionHandle, BlockVolume,
-    BlockVolumeError, CommittedRecoveredStorageAuthorities, ExtentMap, FileMetadata,
+    recover_reachable_state, AuthorityRecoveryValidator, BlockDeviceDescriptor, BlockDeviceId,
+    BlockFileSession, BlockService, BlockServiceBackend, BlockServiceError, BlockSessionHandle,
+    BlockVolume, BlockVolumeError, CommittedRecoveredStorageAuthorities, ExtentMap, FileMetadata,
     FileReadBackend, FileReadError, FileState, FileWriteBackend, FileWriteError,
     InstalledRecoverySessionError, MetadataError, MetadataPointer, NativeBlockCorrelationError,
     NativeSataBlockRoute, PlatformBlockDeviceDescriptor, PlatformBlockDeviceIdentity,
     PlatformBlockTransport, PreparedFileWrite, ReachableFileSelection, RecoveredReachableState,
-    RecoveredStorageAuthorities, RecoveryError, RecoveryMetadataBackend, SUPERBLOCK_BYTES,
+    RecoveredStorageAuthorities, RecoveryError, RecoveryMetadataBackend,
     SataNativeBlockCorrelationError, SataNativeBlockCorrelationVerifier, ServicedBlockDevice,
     StorageAuthorityTable, StorageBlockDevice, StorageHandle, StorageObjectId, StoragePrincipal,
-    StorageTransaction, TransactionError, TransactionReceipt, VOLUME_HEADER_BYTES, VolumeHeader,
-    VolumeId, recover_reachable_state,
+    StorageTransaction, TransactionError, TransactionReceipt, VolumeHeader, VolumeId,
+    SUPERBLOCK_BYTES, VOLUME_HEADER_BYTES,
 };
 
 #[cfg(any(test, target_os = "windows", target_os = "linux"))]
@@ -463,13 +466,13 @@ pub struct SupervisedNativeConfigurationLauncher<
 }
 
 impl<
-    E,
-    const TASKS: usize,
-    const CAPS: usize,
-    const SERVICES: usize,
-    const SETTINGS: usize,
-    const AUDIT: usize,
-> SupervisedNativeConfigurationLauncher<E, TASKS, CAPS, SERVICES, SETTINGS, AUDIT>
+        E,
+        const TASKS: usize,
+        const CAPS: usize,
+        const SERVICES: usize,
+        const SETTINGS: usize,
+        const AUDIT: usize,
+    > SupervisedNativeConfigurationLauncher<E, TASKS, CAPS, SERVICES, SETTINGS, AUDIT>
 {
     pub const fn new(
         substrate: AccountedPolicyServiceSubstrate<TASKS, CAPS, SERVICES, SETTINGS, AUDIT>,
@@ -502,13 +505,13 @@ impl<
 }
 
 impl<
-    E: ServiceAddressSpaceEraser,
-    const TASKS: usize,
-    const CAPS: usize,
-    const SERVICES: usize,
-    const SETTINGS: usize,
-    const AUDIT: usize,
-> NativeConfigurationServiceLauncher
+        E: ServiceAddressSpaceEraser,
+        const TASKS: usize,
+        const CAPS: usize,
+        const SERVICES: usize,
+        const SETTINGS: usize,
+        const AUDIT: usize,
+    > NativeConfigurationServiceLauncher
     for SupervisedNativeConfigurationLauncher<E, TASKS, CAPS, SERVICES, SETTINGS, AUDIT>
 {
     type Endpoint = NativeConfigurationEndpoint;
@@ -2185,13 +2188,13 @@ pub struct RecoveredInstalledStableTotalSystemSelection<
 }
 
 impl<
-    'a,
-    B: BlockServiceBackend,
-    const DEVICES: usize,
-    const SESSIONS: usize,
-    const EXTENTS: usize,
-    const OBJECTS: usize,
-> RecoveredInstalledStableTotalSystemSelection<'a, B, DEVICES, SESSIONS, EXTENTS, OBJECTS>
+        'a,
+        B: BlockServiceBackend,
+        const DEVICES: usize,
+        const SESSIONS: usize,
+        const EXTENTS: usize,
+        const OBJECTS: usize,
+    > RecoveredInstalledStableTotalSystemSelection<'a, B, DEVICES, SESSIONS, EXTENTS, OBJECTS>
 {
     pub const fn installed(&self) -> InstalledRecoveryDeviceSelection {
         self.installed
@@ -2221,13 +2224,13 @@ impl<
 }
 
 impl<
-    'a,
-    B: BlockServiceBackend,
-    const DEVICES: usize,
-    const SESSIONS: usize,
-    const EXTENTS: usize,
-    const OBJECTS: usize,
-> RecoveredInstalledStableSystemSelection<'a, B, DEVICES, SESSIONS, EXTENTS, OBJECTS>
+        'a,
+        B: BlockServiceBackend,
+        const DEVICES: usize,
+        const SESSIONS: usize,
+        const EXTENTS: usize,
+        const OBJECTS: usize,
+    > RecoveredInstalledStableSystemSelection<'a, B, DEVICES, SESSIONS, EXTENTS, OBJECTS>
 {
     pub const fn installed(&self) -> InstalledRecoveryDeviceSelection {
         self.installed
@@ -2749,6 +2752,71 @@ impl<'a, const EXTENTS: usize> SelectedStableTotalSystemRecovery<'a, EXTENTS> {
     }
 }
 
+/// Recovers deployment state and reads its active SystemRelease only through
+/// the two exact file generations selected from the same installed root as the
+/// configuration and authority checkpoint. The selection is provenance, not
+/// authority; both independent file capabilities remain mandatory.
+#[allow(clippy::too_many_arguments)]
+pub fn recover_selected_runtime_assignment<
+    'release,
+    const CANDIDATES: usize,
+    const DOMAINS: usize,
+    const CAPS: usize,
+    const EXTENTS: usize,
+    const CHECKPOINT_AUTHORITIES: usize,
+    const RELEASE_AUTHORITIES: usize,
+    CB: FileReadBackend,
+    RB: FileReadBackend,
+    S: DeploymentRecoveryStateStore,
+>(
+    root: ObjectId,
+    selected: SelectedStableTotalSystemRecovery<'_, EXTENTS>,
+    checkpoint_authority: &StorageAuthorityTable<CHECKPOINT_AUTHORITIES>,
+    checkpoint_handle: StorageHandle,
+    release_authority: &StorageAuthorityTable<RELEASE_AUTHORITIES>,
+    release_handle: StorageHandle,
+    principal: StoragePrincipal,
+    state_store: &S,
+    checkpoint_backend: &mut CB,
+    release_backend: &mut RB,
+    capabilities: &CapabilitySpace<CAPS>,
+    inspect: Capability,
+    output: &'release mut [u8],
+    policy_generation: u64,
+) -> Result<
+    RecoveredRuntimeAssignment<'release, CANDIDATES, DOMAINS>,
+    RecoveredRuntimeAssignmentError<CB::Error, RB::Error, S::Error>,
+> {
+    recover_and_read_runtime_assignment::<
+        CANDIDATES,
+        DOMAINS,
+        CAPS,
+        EXTENTS,
+        EXTENTS,
+        CHECKPOINT_AUTHORITIES,
+        RELEASE_AUTHORITIES,
+        _,
+        _,
+        _,
+    >(
+        root,
+        selected.deployment_checkpoint().file_state(),
+        checkpoint_authority,
+        checkpoint_handle,
+        selected.system_release().file_state(),
+        release_authority,
+        release_handle,
+        principal,
+        state_store,
+        checkpoint_backend,
+        release_backend,
+        capabilities,
+        inspect,
+        output,
+        policy_generation,
+    )
+}
+
 /// Side-effect-free dependent validator for the storage authority recovery
 /// transaction. It uses one exact reconstructed file handle to recover the
 /// selected configuration generation and bind its restart policy, retaining
@@ -2777,13 +2845,13 @@ pub struct StableConfigurationRecoveryValidator<
 }
 
 impl<
-    'a,
-    const SETTINGS: usize,
-    const AUDIT: usize,
-    const EXTENTS: usize,
-    A: CapabilityAuthorizer + ?Sized,
-    B: FileReadBackend,
-> StableConfigurationRecoveryValidator<'a, SETTINGS, AUDIT, EXTENTS, A, B>
+        'a,
+        const SETTINGS: usize,
+        const AUDIT: usize,
+        const EXTENTS: usize,
+        A: CapabilityAuthorizer + ?Sized,
+        B: FileReadBackend,
+    > StableConfigurationRecoveryValidator<'a, SETTINGS, AUDIT, EXTENTS, A, B>
 {
     #[allow(clippy::too_many_arguments)]
     pub fn new(
@@ -2851,13 +2919,13 @@ impl<
 // table and builds unpublished in-memory configuration/policy values. It
 // retains no storage handle or table reference and performs no mutation.
 unsafe impl<
-    const GRANTS: usize,
-    const SETTINGS: usize,
-    const AUDIT: usize,
-    const EXTENTS: usize,
-    A: CapabilityAuthorizer + ?Sized,
-    B: FileReadBackend,
-> AuthorityRecoveryValidator<GRANTS>
+        const GRANTS: usize,
+        const SETTINGS: usize,
+        const AUDIT: usize,
+        const EXTENTS: usize,
+        A: CapabilityAuthorizer + ?Sized,
+        B: FileReadBackend,
+    > AuthorityRecoveryValidator<GRANTS>
     for StableConfigurationRecoveryValidator<'_, SETTINGS, AUDIT, EXTENTS, A, B>
 {
     type Output = RecoveredStableConfiguration<SETTINGS, AUDIT>;
@@ -3723,12 +3791,12 @@ impl<const GRANTS: usize, const SETTINGS: usize, const AUDIT: usize>
 }
 
 impl<
-    const GRANTS: usize,
-    const SETTINGS: usize,
-    const AUDIT: usize,
-    const CANDIDATES: usize,
-    const DOMAINS: usize,
-> RecoveredDeploymentTotalControlPlane<GRANTS, SETTINGS, AUDIT, CANDIDATES, DOMAINS>
+        const GRANTS: usize,
+        const SETTINGS: usize,
+        const AUDIT: usize,
+        const CANDIDATES: usize,
+        const DOMAINS: usize,
+    > RecoveredDeploymentTotalControlPlane<GRANTS, SETTINGS, AUDIT, CANDIDATES, DOMAINS>
 {
     pub const fn configuration(&self) -> &DeliveredRecoveredSystemState<GRANTS, SETTINGS, AUDIT> {
         &self.configuration
@@ -3788,12 +3856,12 @@ impl<
 }
 
 impl<
-    const GRANTS: usize,
-    const SETTINGS: usize,
-    const AUDIT: usize,
-    const CANDIDATES: usize,
-    const DOMAINS: usize,
-> RecoveredDeploymentTotalRuntime<GRANTS, SETTINGS, AUDIT, CANDIDATES, DOMAINS>
+        const GRANTS: usize,
+        const SETTINGS: usize,
+        const AUDIT: usize,
+        const CANDIDATES: usize,
+        const DOMAINS: usize,
+    > RecoveredDeploymentTotalRuntime<GRANTS, SETTINGS, AUDIT, CANDIDATES, DOMAINS>
 {
     pub const fn configuration(&self) -> &DeliveredRecoveredSystemState<GRANTS, SETTINGS, AUDIT> {
         &self.configuration
@@ -3879,14 +3947,14 @@ pub struct StableServiceRecoveryValidator<
 }
 
 impl<
-    'a,
-    const SETTINGS: usize,
-    const AUDIT: usize,
-    const EXTENTS: usize,
-    const SERVICES: usize,
-    A: CapabilityAuthorizer + ?Sized,
-    B: FileReadBackend,
-> StableServiceRecoveryValidator<'a, SETTINGS, AUDIT, EXTENTS, SERVICES, A, B>
+        'a,
+        const SETTINGS: usize,
+        const AUDIT: usize,
+        const EXTENTS: usize,
+        const SERVICES: usize,
+        A: CapabilityAuthorizer + ?Sized,
+        B: FileReadBackend,
+    > StableServiceRecoveryValidator<'a, SETTINGS, AUDIT, EXTENTS, SERVICES, A, B>
 {
     pub const fn new(
         configuration: StableConfigurationRecoveryValidator<'a, SETTINGS, AUDIT, EXTENTS, A, B>,
@@ -3905,14 +3973,14 @@ impl<
 // only planned against immutable supervisor state; no lifecycle mutation occurs
 // until a committed-authority wrapper later consumes the output.
 unsafe impl<
-    const GRANTS: usize,
-    const SETTINGS: usize,
-    const AUDIT: usize,
-    const EXTENTS: usize,
-    const SERVICES: usize,
-    A: CapabilityAuthorizer + ?Sized,
-    B: FileReadBackend,
-> AuthorityRecoveryValidator<GRANTS>
+        const GRANTS: usize,
+        const SETTINGS: usize,
+        const AUDIT: usize,
+        const EXTENTS: usize,
+        const SERVICES: usize,
+        A: CapabilityAuthorizer + ?Sized,
+        B: FileReadBackend,
+    > AuthorityRecoveryValidator<GRANTS>
     for StableServiceRecoveryValidator<'_, SETTINGS, AUDIT, EXTENTS, SERVICES, A, B>
 {
     type Output = PreparedRecoveredService<SETTINGS, AUDIT>;
@@ -5721,12 +5789,12 @@ pub struct AccountedPolicyServiceSubstrate<
 }
 
 impl<
-    const TASKS: usize,
-    const CAPS: usize,
-    const SERVICES: usize,
-    const SETTINGS: usize,
-    const AUDIT: usize,
-> AccountedPolicyServiceSubstrate<TASKS, CAPS, SERVICES, SETTINGS, AUDIT>
+        const TASKS: usize,
+        const CAPS: usize,
+        const SERVICES: usize,
+        const SETTINGS: usize,
+        const AUDIT: usize,
+    > AccountedPolicyServiceSubstrate<TASKS, CAPS, SERVICES, SETTINGS, AUDIT>
 {
     #[allow(clippy::too_many_arguments)]
     pub fn new<const POOLS: usize, const OBJECTS: usize, const AUTHORITIES: usize>(
@@ -7554,7 +7622,17 @@ mod tests {
         assert_eq!(total.installed_admission().recovery_root_generation(), 14);
         assert_eq!(total.policy().authority_epoch(), 9);
         assert_eq!(total.policy().boot_accepted_epoch(), 8);
-        assert_eq!(total.deployment().recovery().epoch(), 1);
+        let deployment_recovery = total.deployment().recovery();
+        assert_eq!(deployment_recovery.epoch(), 1);
+        assert_eq!(
+            deployment_recovery.volume(),
+            Some(VolumeId::new([0x51; 16]).unwrap())
+        );
+        assert_eq!(deployment_recovery.file_object(), 11);
+        assert_eq!(deployment_recovery.file_generation(), 2);
+        let activated = deployment_recovery.active().unwrap();
+        assert_eq!(activated.source_object(), 12);
+        assert_eq!(activated.source_generation(), 2);
 
         // A substituted release fails before a joined owner is returned.
         let mut substituted_release = release.clone();
@@ -7578,12 +7656,12 @@ mod tests {
         // redefine its independently fixed authenticated recovery state.
         assert!(
             unsafe {
-                hosted_recovery_probe::recover_total_control_plane::<1>(
-                    &stale,
-                    &release[..release_length],
-                    &key_id,
-                )
-            }
+            hosted_recovery_probe::recover_total_control_plane::<1>(
+                &stale,
+                &release[..release_length],
+                &key_id,
+            )
+        }
             .is_err()
         );
 
@@ -10849,21 +10927,21 @@ mod tests {
             let mut denied_export = [0; 512];
             assert!(
                 prepare_block_stable_configuration(
-                    &configuration,
-                    &capabilities,
-                    root,
-                    &current,
-                    &storage_authority,
-                    file,
-                    stable_principal(),
-                    denied_next,
-                    denied_metadata,
-                    MetadataPointer::new(5, 1).unwrap(),
-                    &[],
-                    &mut denied_export,
-                    &mut denied_volume,
-                    &mut denied_file_scratch,
-                )
+                &configuration,
+                &capabilities,
+                root,
+                &current,
+                &storage_authority,
+                file,
+                stable_principal(),
+                denied_next,
+                denied_metadata,
+                MetadataPointer::new(5, 1).unwrap(),
+                &[],
+                &mut denied_export,
+                &mut denied_volume,
+                &mut denied_file_scratch,
+            )
                 .is_err()
             );
         }
@@ -11037,7 +11115,7 @@ mod tests {
             drop(boot_store);
             assert!(
                 supervisor
-                    .plan_registration(ObjectId(82), task, RestartPolicy::ONCE_IMMEDIATE)
+                .plan_registration(ObjectId(82), task, RestartPolicy::ONCE_IMMEDIATE)
                     .is_ok()
             );
             let recovered = prepared_service
@@ -12631,12 +12709,12 @@ mod tests {
         );
         assert!(
             IsolationServiceBounds::new(
-                IsolationPlacement::NativeService,
-                IsolationPlacement::Microvm,
-                IsolationPlacement::Microvm,
-                true,
-                true,
-            )
+            IsolationPlacement::NativeService,
+            IsolationPlacement::Microvm,
+            IsolationPlacement::Microvm,
+            true,
+            true,
+        )
             .is_err()
         );
     }

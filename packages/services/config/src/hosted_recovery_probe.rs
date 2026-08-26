@@ -8,44 +8,44 @@
 //! rollback evidence.
 
 use super::{
-    ConfigTransaction, ConfigUpdate, ConfigValue, ConfigurationService, IsolationPolicySetting,
-    OwnerIsolationSelection, PERSISTED_RESTART_POLICY_BYTES, PersistedRestartPolicy,
+    reacquire_handoff_installed_recovery_device, recover_selected_runtime_assignment,
+    recover_serviced_stable_total_system_selection, ConfigTransaction, ConfigUpdate, ConfigValue,
+    ConfigurationService, IsolationPolicySetting, OwnerIsolationSelection, PersistedRestartPolicy,
     RecoveredDeploymentTotalControlPlane, RecoveredInstalledStableTotalSystemSelection,
     RuntimeDomainPolicyBinding, SettingId, SettingSchema, StableConfigurationRecoveryValidator,
-    StableServiceRecoveryValidator, reacquire_handoff_installed_recovery_device,
-    recover_serviced_stable_total_system_selection,
+    StableServiceRecoveryValidator, PERSISTED_RESTART_POLICY_BYTES,
 };
 use mrml_crypto::Sha3_256;
 use mrml_deployment::{
-    DEPLOYMENT_RECOVERY_STATE_BYTES, DeploymentRecoveryStateStore, DeploymentService,
-    GenerationCandidate, encode_deployment_recovery_state_with_release,
-    encode_deployment_release_checkpoint, recover_and_read_runtime_assignment,
+    encode_deployment_recovery_state_with_release, encode_deployment_release_checkpoint,
+    DeploymentRecoveryStateStore, DeploymentService, GenerationCandidate,
+    DEPLOYMENT_RECOVERY_STATE_BYTES,
 };
+use mrml_kernel::arch::x86_64::UserContext;
 #[cfg(test)]
 use mrml_kernel::InstalledRecoverySource;
-use mrml_kernel::arch::x86_64::UserContext;
 use mrml_kernel::{
     BootHandoff, BootRecoveryEnvelope, CapabilitySpace, InstalledRecoveryBootIdentity, ObjectId,
     Priority, Rights, ServiceSupervisor, TaskRuntime,
 };
 use mrml_package_format::MAX_SYSTEM_RELEASE_BYTES;
 use mrml_storage::{
-    AUTHORITY_RECOVERY_STATE_BYTES, AllocationImage, AllocationKind, AllocationRecord,
-    AuthorityCheckpointProofIssuer, AuthorityRecoveryStateStore, BlockDeviceDescriptor,
-    BlockDeviceId, BlockService, BlockServiceBackend, BootRecoveryAdmission, DirectoryEntry,
-    DirectoryImage, DirectoryMetadata, ExtentImage, ExtentMap, ExtentRecord, FileMetadata,
-    FileReadBackend, FileState, MetadataPointer, ObjectIdAllocatorImage,
-    OwnerApprovedAuthorityCheckpoint, PlatformBlockDeviceDescriptor, PlatformBlockDeviceIdentity,
-    PlatformBlockTransport, SUPERBLOCK_BYTES, StorageAuthorityTable, StorageName, StorageObjectId,
-    StorageObjectKind, StoragePrincipal, StorageRecoveryGrant, StorageRights, Superblock,
-    VolumeHeader, VolumeId, authority_checkpoint_digest, encode_authority_checkpoint,
-    recover_selected_validate_and_commit_stable_authorities,
+    authority_checkpoint_digest, encode_authority_checkpoint,
+    recover_selected_validate_and_commit_stable_authorities, AllocationImage, AllocationKind,
+    AllocationRecord, AuthorityCheckpointProofIssuer, AuthorityRecoveryStateStore,
+    BlockDeviceDescriptor, BlockDeviceId, BlockService, BlockServiceBackend, BootRecoveryAdmission,
+    DirectoryEntry, DirectoryImage, DirectoryMetadata, ExtentImage, ExtentRecord, FileMetadata,
+    FileReadBackend, MetadataPointer, ObjectIdAllocatorImage, OwnerApprovedAuthorityCheckpoint,
+    PlatformBlockDeviceDescriptor, PlatformBlockDeviceIdentity, PlatformBlockTransport,
+    StorageAuthorityTable, StorageName, StorageObjectId, StorageObjectKind, StoragePrincipal,
+    StorageRecoveryGrant, StorageRights, Superblock, VolumeHeader, VolumeId,
+    AUTHORITY_RECOVERY_STATE_BYTES, SUPERBLOCK_BYTES,
 };
 
 const BLOCK_BYTES: usize = 4096;
 const MAX_HOSTED_RELEASE_BYTES: usize = 512 * 1024;
-const MAX_RELEASE_EXTENTS: usize = MAX_HOSTED_RELEASE_BYTES.div_ceil(BLOCK_BYTES);
-const RELEASE_BLOCK_BASE: u64 = 32;
+const MAX_RELEASE_BLOCKS: usize = MAX_HOSTED_RELEASE_BYTES.div_ceil(BLOCK_BYTES);
+const RELEASE_BLOCK_BASE: u64 = 33;
 const CONFIGURATION_GENERATION: u64 = 2;
 const ROOT_GENERATION: u64 = 14;
 const POLICY_GENERATION: u64 = 1;
@@ -61,6 +61,10 @@ pub enum HostedRecoveryProbeError {
     RecoveryRootMismatch,
     Configuration,
     StorageLayout,
+    InstalledDevice,
+    StableSelection,
+    ReleaseLayout,
+    AllocationLayout,
     AuthorityCheckpoint,
     Recovery,
     ServicePublication,
@@ -107,20 +111,22 @@ unsafe impl FileReadBackend for DeploymentReleaseBackend<'_> {
         output: &mut [u8],
     ) -> Result<(), Self::Error> {
         let physical_block = record.physical_block().ok_or(())?;
+        let block_count = usize::try_from(record.block_count()).map_err(|_| ())?;
         if record.file() != self.object
             || record.metadata_generation() != self.generation
-            || record.block_count() != 1
-            || physical_block < RELEASE_BLOCK_BASE
+            || physical_block != RELEASE_BLOCK_BASE
+            || block_count == 0
+            || block_count > MAX_RELEASE_BLOCKS
         {
             return Err(());
         }
-        let block = usize::try_from(physical_block - RELEASE_BLOCK_BASE).map_err(|_| ())?;
-        let start = block.checked_mul(BLOCK_BYTES).ok_or(())?;
-        let available_end = start.saturating_add(BLOCK_BYTES).min(self.bytes.len());
-        let mut padded = [0; BLOCK_BYTES];
-        padded[..available_end.saturating_sub(start)]
-            .copy_from_slice(self.bytes.get(start..available_end).ok_or(())?);
-        if record.content_digest() != digest(&padded) {
+        let extent_bytes = block_count.checked_mul(BLOCK_BYTES).ok_or(())?;
+        if self.bytes.len() > extent_bytes || extent_bytes > MAX_HOSTED_RELEASE_BYTES {
+            return Err(());
+        }
+        let mut padded = [0; MAX_HOSTED_RELEASE_BYTES];
+        padded[..self.bytes.len()].copy_from_slice(self.bytes);
+        if record.content_digest() != digest(&padded[..extent_bytes]) {
             return Err(());
         }
         let within = usize::try_from(byte_offset).map_err(|_| ())?;
@@ -389,14 +395,25 @@ fn digest(bytes: &[u8]) -> [u8; 32] {
     digest.finalize()
 }
 
-fn build_reachable_device(
+fn build_reachable_total_device(
     root_generation: u64,
     configuration_length: usize,
     configuration_bytes: &[u8; BLOCK_BYTES],
     authority_length: usize,
     authority_bytes: &[u8; BLOCK_BYTES],
+    deployment_length: usize,
+    deployment_bytes: &[u8; BLOCK_BYTES],
+    release_bytes: &[u8],
     fail_block: Option<u64>,
 ) -> Result<ReachableMetadataBackend, HostedRecoveryProbeError> {
+    if deployment_length == 0
+        || deployment_length > BLOCK_BYTES
+        || release_bytes.is_empty()
+        || release_bytes.len() > MAX_HOSTED_RELEASE_BYTES
+        || release_bytes.len() > MAX_SYSTEM_RELEASE_BYTES
+    {
+        return Err(HostedRecoveryProbeError::StorageLayout);
+    }
     let root = object(1);
     let configuration = object(9);
     let authority = object(10);
@@ -542,16 +559,15 @@ fn build_reachable_device(
     .encode(&mut authority_extents)
     .map_err(|_| HostedRecoveryProbeError::StorageLayout)?;
 
-    let deployment_data = [0x44; BLOCK_BYTES];
     let mut deployment_metadata = [0; BLOCK_BYTES];
     FileMetadata::new(
         header(),
         deployment,
         CONFIGURATION_GENERATION,
-        1,
+        u64::try_from(deployment_length).map_err(|_| HostedRecoveryProbeError::StorageLayout)?,
         1,
         deployment_extents_pointer,
-        digest(&deployment_data[..1]),
+        digest(&deployment_bytes[..deployment_length]),
     )
     .map_err(|_| HostedRecoveryProbeError::StorageLayout)?
     .encode(
@@ -565,7 +581,7 @@ fn build_reachable_device(
         0,
         1,
         32,
-        digest(&deployment_data),
+        digest(deployment_bytes),
     )
     .map_err(|_| HostedRecoveryProbeError::StorageLayout)?;
     let mut deployment_extents = [0; BLOCK_BYTES];
@@ -573,7 +589,7 @@ fn build_reachable_device(
         header(),
         deployment,
         CONFIGURATION_GENERATION,
-        1,
+        u64::try_from(deployment_length).map_err(|_| HostedRecoveryProbeError::StorageLayout)?,
         deployment_extents_pointer,
         &[deployment_extent],
     )
@@ -581,16 +597,30 @@ fn build_reachable_device(
     .encode(&mut deployment_extents)
     .map_err(|_| HostedRecoveryProbeError::StorageLayout)?;
 
-    let release_data = [0x52; BLOCK_BYTES];
+    let release_block_count = release_bytes.len().div_ceil(BLOCK_BYTES);
+    if RELEASE_BLOCK_BASE
+        .checked_add(
+            u64::try_from(release_block_count)
+                .map_err(|_| HostedRecoveryProbeError::ReleaseLayout)?,
+        )
+        .is_none_or(|end| end > header().block_count())
+    {
+        return Err(HostedRecoveryProbeError::ReleaseLayout);
+    }
+    let mut padded_release = [0; MAX_HOSTED_RELEASE_BYTES];
+    padded_release[..release_bytes.len()].copy_from_slice(release_bytes);
+    let padded_release_length = release_block_count
+        .checked_mul(BLOCK_BYTES)
+        .ok_or(HostedRecoveryProbeError::StorageLayout)?;
     let mut release_metadata = [0; BLOCK_BYTES];
     FileMetadata::new(
         header(),
         release,
         CONFIGURATION_GENERATION,
-        1,
+        u64::try_from(release_bytes.len()).map_err(|_| HostedRecoveryProbeError::StorageLayout)?,
         1,
         release_extents_pointer,
-        digest(&release_data[..1]),
+        digest(release_bytes),
     )
     .map_err(|_| HostedRecoveryProbeError::StorageLayout)?
     .encode(
@@ -602,23 +632,23 @@ fn build_reachable_device(
         release,
         CONFIGURATION_GENERATION,
         0,
-        1,
+        u32::try_from(release_block_count).map_err(|_| HostedRecoveryProbeError::StorageLayout)?,
         33,
-        digest(&release_data),
+        digest(&padded_release[..padded_release_length]),
     )
-    .map_err(|_| HostedRecoveryProbeError::StorageLayout)?;
+    .map_err(|_| HostedRecoveryProbeError::ReleaseLayout)?;
     let mut release_extents = [0; BLOCK_BYTES];
     ExtentImage::<1>::build(
         header(),
         release,
         CONFIGURATION_GENERATION,
-        1,
+        u64::try_from(release_bytes.len()).map_err(|_| HostedRecoveryProbeError::StorageLayout)?,
         release_extents_pointer,
         &[release_extent],
     )
-    .map_err(|_| HostedRecoveryProbeError::StorageLayout)?
+    .map_err(|_| HostedRecoveryProbeError::ReleaseLayout)?
     .encode(&mut release_extents)
-    .map_err(|_| HostedRecoveryProbeError::StorageLayout)?;
+    .map_err(|_| HostedRecoveryProbeError::ReleaseLayout)?;
 
     let records = [
         AllocationRecord::new(root, 2, 10, 1, AllocationKind::ObjectMetadata).unwrap(),
@@ -731,16 +761,17 @@ fn build_reachable_device(
             release,
             CONFIGURATION_GENERATION,
             33,
-            1,
+            u32::try_from(release_block_count)
+                .map_err(|_| HostedRecoveryProbeError::StorageLayout)?,
             AllocationKind::FileData,
         )
         .unwrap(),
     ];
     let mut allocation = [0; BLOCK_BYTES];
     AllocationImage::<16>::build(header(), root_generation, allocation_pointer, &records)
-        .map_err(|_| HostedRecoveryProbeError::StorageLayout)?
+        .map_err(|_| HostedRecoveryProbeError::AllocationLayout)?
         .encode(&mut allocation)
-        .map_err(|_| HostedRecoveryProbeError::StorageLayout)?;
+        .map_err(|_| HostedRecoveryProbeError::AllocationLayout)?;
     let mut object_ids = [0; BLOCK_BYTES];
     ObjectIdAllocatorImage::build(header(), root_generation, Some(13), object_ids_pointer)
         .map_err(|_| HostedRecoveryProbeError::StorageLayout)?
@@ -777,6 +808,29 @@ fn build_reachable_device(
     })
 }
 
+#[cfg(test)]
+fn build_reachable_device(
+    root_generation: u64,
+    configuration_length: usize,
+    configuration_bytes: &[u8; BLOCK_BYTES],
+    authority_length: usize,
+    authority_bytes: &[u8; BLOCK_BYTES],
+    fail_block: Option<u64>,
+) -> Result<ReachableMetadataBackend, HostedRecoveryProbeError> {
+    let deployment = [0x44; BLOCK_BYTES];
+    build_reachable_total_device(
+        root_generation,
+        configuration_length,
+        configuration_bytes,
+        authority_length,
+        authority_bytes,
+        1,
+        &deployment,
+        &[0x52],
+        fail_block,
+    )
+}
+
 fn recover_reachable_files<'a>(
     service: &'a mut BlockService<1, 1>,
     backend: &'a mut ReachableMetadataBackend,
@@ -793,7 +847,7 @@ fn recover_reachable_files<'a>(
         principal(),
         volume_scratch,
     )
-    .map_err(|_| HostedRecoveryProbeError::StorageLayout)?;
+    .map_err(|_| HostedRecoveryProbeError::InstalledDevice)?;
     let mut primary_read = [0; BLOCK_BYTES];
     let mut secondary_read = [0; BLOCK_BYTES];
     let mut metadata_scratch = [0; BLOCK_BYTES];
@@ -810,102 +864,13 @@ fn recover_reachable_files<'a>(
         object(11),
         object(12),
     )
-    .map_err(|_| HostedRecoveryProbeError::StorageLayout)?;
+    .map_err(|_| HostedRecoveryProbeError::StableSelection)?;
     if recovered.selected().volume() != VolumeId::new(boot.volume()).unwrap()
         || recovered.selected().root_generation() != boot.root_generation()
     {
         return Err(HostedRecoveryProbeError::RecoveryRootMismatch);
     }
     Ok(recovered)
-}
-
-fn deployment_file(
-    object: StorageObjectId,
-    generation: u64,
-    length: usize,
-    physical_block: u64,
-    bytes: &[u8; BLOCK_BYTES],
-) -> Result<FileState<1>, HostedRecoveryProbeError> {
-    if length == 0 || length > BLOCK_BYTES {
-        return Err(HostedRecoveryProbeError::Deployment);
-    }
-    let extent = ExtentRecord::data(object, generation, 0, 1, physical_block, digest(bytes))
-        .map_err(|_| HostedRecoveryProbeError::Deployment)?;
-    FileState::new(
-        object,
-        generation,
-        u64::try_from(length).map_err(|_| HostedRecoveryProbeError::Deployment)?,
-        ExtentMap::<1>::build(
-            header(),
-            object,
-            generation,
-            u64::try_from(length).map_err(|_| HostedRecoveryProbeError::Deployment)?,
-            &[extent],
-        )
-        .map_err(|_| HostedRecoveryProbeError::Deployment)?,
-    )
-    .map_err(|_| HostedRecoveryProbeError::Deployment)
-}
-
-fn deployment_release_file(
-    object: StorageObjectId,
-    generation: u64,
-    bytes: &[u8],
-) -> Result<FileState<MAX_RELEASE_EXTENTS>, HostedRecoveryProbeError> {
-    if bytes.is_empty()
-        || bytes.len() > MAX_HOSTED_RELEASE_BYTES
-        || bytes.len() > MAX_SYSTEM_RELEASE_BYTES
-    {
-        return Err(HostedRecoveryProbeError::Deployment);
-    }
-    let count = bytes.len().div_ceil(BLOCK_BYTES);
-    let first = {
-        let mut padded = [0; BLOCK_BYTES];
-        let first_length = bytes.len().min(BLOCK_BYTES);
-        padded[..first_length].copy_from_slice(&bytes[..first_length]);
-        ExtentRecord::data(
-            object,
-            generation,
-            0,
-            1,
-            RELEASE_BLOCK_BASE,
-            digest(&padded),
-        )
-        .map_err(|_| HostedRecoveryProbeError::Deployment)?
-    };
-    let mut records = [first; MAX_RELEASE_EXTENTS];
-    for (index, record) in records[..count].iter_mut().enumerate() {
-        let start = index
-            .checked_mul(BLOCK_BYTES)
-            .ok_or(HostedRecoveryProbeError::Deployment)?;
-        let end = start.saturating_add(BLOCK_BYTES).min(bytes.len());
-        let mut padded = [0; BLOCK_BYTES];
-        padded[..end - start].copy_from_slice(&bytes[start..end]);
-        *record = ExtentRecord::data(
-            object,
-            generation,
-            u64::try_from(index).map_err(|_| HostedRecoveryProbeError::Deployment)?,
-            1,
-            RELEASE_BLOCK_BASE
-                + u64::try_from(index).map_err(|_| HostedRecoveryProbeError::Deployment)?,
-            digest(&padded),
-        )
-        .map_err(|_| HostedRecoveryProbeError::Deployment)?;
-    }
-    FileState::new(
-        object,
-        generation,
-        u64::try_from(bytes.len()).map_err(|_| HostedRecoveryProbeError::Deployment)?,
-        ExtentMap::<MAX_RELEASE_EXTENTS>::build(
-            header(),
-            object,
-            generation,
-            u64::try_from(bytes.len()).map_err(|_| HostedRecoveryProbeError::Deployment)?,
-            &records[..count],
-        )
-        .map_err(|_| HostedRecoveryProbeError::Deployment)?,
-    )
-    .map_err(|_| HostedRecoveryProbeError::Deployment)
 }
 
 /// Builds one hosted, authenticated recovery transaction and atomically binds
@@ -944,6 +909,70 @@ pub unsafe fn recover_total_control_plane<const DOMAINS: usize>(
             HostedRecoveryProbeError::RecoveryRootMismatch,
         ));
     }
+
+    // Build the deployment evidence before the installed graph so the exact
+    // checkpoint and signed release bytes become objects in that graph. The
+    // later recovery path is then unable to substitute parallel file states.
+    let deployment_root = ObjectId(0x4445_504c_4f59);
+    let mut deployment_capabilities = CapabilitySpace::<2>::new();
+    let control = deployment_capabilities
+        .insert(deployment_root, Rights::CONTROL)
+        .map_err(|_| HostedRecoveryProbeError::Deployment)?;
+    let inspect = deployment_capabilities
+        .insert(deployment_root, Rights::READ)
+        .map_err(|_| HostedRecoveryProbeError::Deployment)?;
+    let mut deployment_service = DeploymentService::<1>::new(deployment_root)
+        .map_err(|_| HostedRecoveryProbeError::Deployment)?;
+    let release_object = object(12);
+    let candidate = deployment_service
+        .stage(
+            &deployment_capabilities,
+            control,
+            GenerationCandidate::from_system_release(
+                release_bytes,
+                expected_release_key,
+                release_object.local(),
+                CONFIGURATION_GENERATION,
+            )
+            .map_err(|_| HostedRecoveryProbeError::Deployment)?,
+        )
+        .map_err(|_| HostedRecoveryProbeError::Deployment)?;
+    let prepared = deployment_service
+        .prepare_activation(&deployment_capabilities, control, candidate, None)
+        .map_err(|_| HostedRecoveryProbeError::Deployment)?;
+    let active = deployment_service
+        .commit_activation(prepared)
+        .map_err(|_| HostedRecoveryProbeError::Deployment)?;
+    let active_release = deployment_service
+        .active_release(&deployment_capabilities, inspect)
+        .map_err(|_| HostedRecoveryProbeError::Deployment)?
+        .ok_or(HostedRecoveryProbeError::Deployment)?;
+    let checkpoint_object = object(11);
+    let deployment_checkpoint =
+        encode_deployment_release_checkpoint(deployment_root, active_release)
+            .map_err(|_| HostedRecoveryProbeError::Deployment)?;
+    let deployment_state_store = DeploymentStateStore {
+        bytes: encode_deployment_recovery_state_with_release(
+            1,
+            deployment_root,
+            active,
+            Some(active_release),
+            checkpoint_object,
+            CONFIGURATION_GENERATION,
+        )
+        .map_err(|_| HostedRecoveryProbeError::Deployment)?,
+    };
+    let mut checkpoint_backend = DeploymentFileBackend {
+        object: checkpoint_object,
+        generation: CONFIGURATION_GENERATION,
+        bytes: [0; BLOCK_BYTES],
+    };
+    checkpoint_backend.bytes[..deployment_checkpoint.len()].copy_from_slice(&deployment_checkpoint);
+    let mut release_backend = DeploymentReleaseBackend {
+        object: release_object,
+        generation: CONFIGURATION_GENERATION,
+        bytes: release_bytes,
+    };
     let root_object = ObjectId(0x4852_5052_4f42_0001);
     let setting_object = ObjectId(0x4852_5052_4f42_0002);
     let service_object = ObjectId(0x4852_5052_4f42_0003);
@@ -1063,12 +1092,15 @@ pub unsafe fn recover_total_control_plane<const DOMAINS: usize>(
     };
     authority_backend.bytes[..authority_length]
         .copy_from_slice(&authority_bytes[..authority_length]);
-    let mut recovery_device_backend = build_reachable_device(
+    let mut recovery_device_backend = build_reachable_total_device(
         ROOT_GENERATION,
         checkpoint.length,
         &configuration_backend.bytes,
         authority_length,
         &authority_backend.bytes,
+        deployment_checkpoint.len(),
+        &checkpoint_backend.bytes,
+        release_bytes,
         None,
     )?;
     let mut recovery_block_service = recovery_block_service()?;
@@ -1163,74 +1195,6 @@ pub unsafe fn recover_total_control_plane<const DOMAINS: usize>(
         .bind_delivered_boot(delivered)
         .map_err(|_| HostedRecoveryProbeBuildError::Probe(HostedRecoveryProbeError::Admission))?;
 
-    let deployment_root = ObjectId(0x4445_504c_4f59);
-    let mut deployment_capabilities = CapabilitySpace::<2>::new();
-    let control = deployment_capabilities
-        .insert(deployment_root, Rights::CONTROL)
-        .map_err(|_| HostedRecoveryProbeError::Deployment)?;
-    let inspect = deployment_capabilities
-        .insert(deployment_root, Rights::READ)
-        .map_err(|_| HostedRecoveryProbeError::Deployment)?;
-    let mut deployment = DeploymentService::<1>::new(deployment_root)
-        .map_err(|_| HostedRecoveryProbeError::Deployment)?;
-    let release_object = object(41);
-    let candidate = deployment
-        .stage(
-            &deployment_capabilities,
-            control,
-            GenerationCandidate::from_system_release(
-                release_bytes,
-                expected_release_key,
-                release_object.local(),
-                1,
-            )
-            .map_err(|_| HostedRecoveryProbeError::Deployment)?,
-        )
-        .map_err(|_| HostedRecoveryProbeError::Deployment)?;
-    let prepared = deployment
-        .prepare_activation(&deployment_capabilities, control, candidate, None)
-        .map_err(|_| HostedRecoveryProbeError::Deployment)?;
-    let active = deployment
-        .commit_activation(prepared)
-        .map_err(|_| HostedRecoveryProbeError::Deployment)?;
-    let active_release = deployment
-        .active_release(&deployment_capabilities, inspect)
-        .map_err(|_| HostedRecoveryProbeError::Deployment)?
-        .ok_or(HostedRecoveryProbeError::Deployment)?;
-
-    let checkpoint_object = object(40);
-    let checkpoint = encode_deployment_release_checkpoint(deployment_root, active_release)
-        .map_err(|_| HostedRecoveryProbeError::Deployment)?;
-    let state_store = DeploymentStateStore {
-        bytes: encode_deployment_recovery_state_with_release(
-            1,
-            deployment_root,
-            active,
-            Some(active_release),
-            checkpoint_object,
-            2,
-        )
-        .map_err(|_| HostedRecoveryProbeError::Deployment)?,
-    };
-    let mut checkpoint_backend = DeploymentFileBackend {
-        object: checkpoint_object,
-        generation: 2,
-        bytes: [0; BLOCK_BYTES],
-    };
-    checkpoint_backend.bytes[..checkpoint.len()].copy_from_slice(&checkpoint);
-    let checkpoint_file = deployment_file(
-        checkpoint_object,
-        2,
-        checkpoint.len(),
-        40,
-        &checkpoint_backend.bytes,
-    )?;
-    let mut release_backend = DeploymentReleaseBackend {
-        object: release_object,
-        generation: 1,
-        bytes: release_bytes,
-    };
-    let release_file = deployment_release_file(release_object, 1, release_bytes)?;
     let mut checkpoint_authority = StorageAuthorityTable::<1>::new();
     let checkpoint_handle = checkpoint_authority
         .insert(
@@ -1250,27 +1214,15 @@ pub unsafe fn recover_total_control_plane<const DOMAINS: usize>(
         )
         .map_err(|_| HostedRecoveryProbeError::Deployment)?;
     let mut release_output = [0; MAX_HOSTED_RELEASE_BYTES];
-    let deployment = recover_and_read_runtime_assignment::<
-        1,
-        DOMAINS,
-        2,
-        1,
-        MAX_RELEASE_EXTENTS,
-        1,
-        1,
-        _,
-        _,
-        _,
-    >(
+    let deployment = recover_selected_runtime_assignment::<1, DOMAINS, 2, 1, 1, 1, _, _, _>(
         deployment_root,
-        &checkpoint_file,
+        selected,
         &checkpoint_authority,
         checkpoint_handle,
-        &release_file,
         &release_authority,
         release_handle,
         principal(),
-        &state_store,
+        &deployment_state_store,
         &mut checkpoint_backend,
         &mut release_backend,
         &deployment_capabilities,

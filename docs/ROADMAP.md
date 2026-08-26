@@ -547,8 +547,15 @@ the graph that established them. The selection grants no file capability.
 Focused controlled tests reject duplicate-object and prior-root substitution;
 configuration remains 51 passing Windows tests. Serviced-volume construction
 is now **PARTIALLY IMPLEMENTED** through one exclusive installed session and
-retained block data plane. Real service-loop consumption is the next dependency
-gate.
+retained block data plane. Deployment recovery now consumes the selected
+deployment-checkpoint and SystemRelease `FileState`s directly: the controlled
+owner retains checkpoint object 11/generation 2 while its activated generation
+identifies release object 12/generation 2 from that same root. Separate file
+capabilities remain mandatory, and a substituted release still publishes no
+owner. Configuration passes 51 tests, deployment 6, and WHP 12 on Windows;
+the Linux KVM cross-build is unavailable on this host because
+`cross_host_rust_target` is absent. Production service-loop invocation is the
+next dependency gate.
 
 The kernel now **PARTIALLY IMPLEMENTS** focused complete multi-domain
 finalization evidence. An authenticated two-package release assigns two

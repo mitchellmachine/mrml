@@ -1257,7 +1257,15 @@ authority. Focused tests accept the exact set and reject a duplicate object or
 prior-root member. Configuration remains 51 passing tests on Windows. The real
 serviced-volume adapter now reads both redundant roots through one exact
 installed session and retains that data plane beside the four-file owner.
-Service-loop control-plane construction remains **PLANNED**.
+`recover_selected_runtime_assignment` now lends only the deployment checkpoint
+and SystemRelease from that owner into deployment recovery while independently
+requiring both file capabilities. The hosted evidence retains checkpoint object
+11/generation 2 and an activated source at object 12/generation 2 from the same
+root; the former detached objects 40/41 no longer exist in this path. Windows
+passes 51 configuration, 6 deployment, and 12 WHP runner tests. KVM uses the
+same source, but its Linux cross-build remains unavailable here because
+`cross_host_rust_target` is absent. Service-loop control-plane construction
+remains **PLANNED**.
 
 Complete distinct-domain finalization now has focused **PARTIALLY IMPLEMENTED**
 kernel evidence. A signed two-package fixture assigns both must-run packages to

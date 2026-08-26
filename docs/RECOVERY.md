@@ -1443,7 +1443,14 @@ configuration, deployment, or launch authority. Focused controlled tests reject
 duplicate and prior-root members. Serviced-volume and live service-image
 recovery is now **PARTIALLY IMPLEMENTED**: the same installed session reads both
 redundant roots and remains retained beside the four-file owner. Live
-service-image consumption remains **PLANNED**.
+service-image consumption remains **PLANNED**. The deployment half now consumes
+the exact checkpoint and SystemRelease selections borrowed from that owner,
+rather than constructing detached file states. Controlled evidence retains
+checkpoint object 11/generation 2 and active-release source object
+12/generation 2 from root 14; both reads still require independent storage
+capabilities. Windows passes 51 configuration, 6 deployment, and 12 WHP runner
+tests. The KVM source is shared, but its Linux cross-build was unavailable on
+this Windows host because `cross_host_rust_target` is absent.
 
 `recover_stable_system_selection` now accepts the storage service's existing
 hostile metadata-backend contract, which `BlockVolume` already implements. It
