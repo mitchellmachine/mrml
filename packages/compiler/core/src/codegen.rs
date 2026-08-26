@@ -1971,35 +1971,106 @@ fn encode_x86_64_naked_instruction(instruction: &str) -> Option<([u8; 10], usize
             }
         }
         "jmp" => {
-            let register = x86_64_naked_register(operands)?;
-            if register < 8 {
-                Some(([0xff, 0xe0 + register, 0, 0, 0, 0, 0, 0, 0, 0], 2, true))
+            if let Some(register) = x86_64_naked_register(operands) {
+                if register < 8 {
+                    Some(([0xff, 0xe0 + register, 0, 0, 0, 0, 0, 0, 0, 0], 2, true))
+                } else {
+                    Some((
+                        [0x41, 0xff, 0xe0 + (register & 7), 0, 0, 0, 0, 0, 0, 0],
+                        3,
+                        true,
+                    ))
+                }
             } else {
-                Some((
-                    [0x41, 0xff, 0xe0 + (register & 7), 0, 0, 0, 0, 0, 0, 0],
-                    3,
-                    true,
-                ))
+                let base = x86_64_naked_memory_base(operands)?;
+                encode_x86_64_naked_memory(None, 0xff, false, 4, base, true)
             }
         }
         "mov" => {
             let (destination, source) = operands.split_once(',')?;
-            let destination = x86_64_naked_register(destination.trim())?;
-            if let Some(source) = x86_64_naked_register(source.trim()) {
-                let rex = 0x48 | ((source >> 3) << 2) | (destination >> 3);
-                let modrm = 0xc0 | ((source & 7) << 3) | (destination & 7);
-                Some(([rex, 0x89, modrm, 0, 0, 0, 0, 0, 0, 0], 3, false))
+            let destination = destination.trim();
+            let source = source.trim();
+            if let Some(destination) = x86_64_naked_register(destination) {
+                if let Some(source) = x86_64_naked_register(source) {
+                    let rex = 0x48 | ((source >> 3) << 2) | (destination >> 3);
+                    let modrm = 0xc0 | ((source & 7) << 3) | (destination & 7);
+                    Some(([rex, 0x89, modrm, 0, 0, 0, 0, 0, 0, 0], 3, false))
+                } else if let Some(base) = x86_64_naked_memory_base(source) {
+                    encode_x86_64_naked_memory(None, 0x8b, true, destination, base, false)
+                } else {
+                    let immediate = x86_64_naked_immediate(source)?;
+                    let mut encoding = [0u8; 10];
+                    encoding[0] = 0x48 | (destination >> 3);
+                    encoding[1] = 0xb8 + (destination & 7);
+                    encoding[2..10].copy_from_slice(&immediate.to_le_bytes());
+                    Some((encoding, 10, false))
+                }
             } else {
-                let immediate = x86_64_naked_immediate(source.trim())?;
-                let mut encoding = [0u8; 10];
-                encoding[0] = 0x48 | (destination >> 3);
-                encoding[1] = 0xb8 + (destination & 7);
-                encoding[2..10].copy_from_slice(&immediate.to_le_bytes());
-                Some((encoding, 10, false))
+                let base = x86_64_naked_memory_base(destination)?;
+                let source = x86_64_naked_register(source)?;
+                encode_x86_64_naked_memory(None, 0x89, true, source, base, false)
             }
+        }
+        "lgdt" | "lidt" | "invlpg" => {
+            let base = x86_64_naked_memory_base(operands)?;
+            let extension = match mnemonic {
+                "lgdt" => 2,
+                "lidt" => 3,
+                _ => 7,
+            };
+            encode_x86_64_naked_memory(Some(0x0f), 0x01, false, extension, base, false)
         }
         _ => None,
     }
+}
+
+fn encode_x86_64_naked_memory(
+    prefix: Option<u8>,
+    opcode: u8,
+    wide: bool,
+    register: u8,
+    base: u8,
+    terminating: bool,
+) -> Option<([u8; 10], usize, bool)> {
+    if register >= 16 || base >= 16 {
+        return None;
+    }
+    let mut encoding = [0u8; 10];
+    let mut length = 0usize;
+    let rex = 0x40 | ((wide as u8) << 3) | ((register >> 3) << 2) | (base >> 3);
+    if rex != 0x40 {
+        encoding[length] = rex;
+        length += 1;
+    }
+    if let Some(prefix) = prefix {
+        encoding[length] = prefix;
+        length += 1;
+    }
+    encoding[length] = opcode;
+    length += 1;
+    let register = (register & 7) << 3;
+    match base & 7 {
+        4 => {
+            encoding[length] = register | 4;
+            encoding[length + 1] = 0x24;
+            length += 2;
+        }
+        5 => {
+            encoding[length] = 0x40 | register | 5;
+            encoding[length + 1] = 0;
+            length += 2;
+        }
+        base => {
+            encoding[length] = register | base;
+            length += 1;
+        }
+    }
+    Some((encoding, length, terminating))
+}
+
+fn x86_64_naked_memory_base(operand: &str) -> Option<u8> {
+    let register = operand.strip_prefix('[')?.strip_suffix(']')?.trim();
+    x86_64_naked_register(register)
 }
 
 fn x86_64_naked_immediate(source: &str) -> Option<u64> {
@@ -28436,8 +28507,8 @@ mod tests {
     fn emits_restricted_naked_functions_without_a_prologue_or_epilogue() {
         let module = Parser::new(concat!(
             "#[unsafe(naked)] pub unsafe extern \"C\" fn entry() ",
-            "{ naked_asm!(\"push rax\", \"push r12\", \"mov rax, rsp\", ",
-            "\"mov r9, r15\", \"mov r10, 0x1234\", \"pop r12\", \"swapgs\", \"iretq\"); }"
+            "{ naked_asm!(\"mov r11, [r12]\", \"mov [rbp], r11\", ",
+            "\"mov r10, 0x1234\", \"lgdt [r13]\", \"swapgs\", \"jmp [rax]\"); }"
         ))
         .parse_module::<1, 1>()
         .unwrap();
@@ -28450,8 +28521,8 @@ mod tests {
         assert_eq!(
             code.bytes(),
             &[
-                0x50, 0x41, 0x54, 0x48, 0x89, 0xe0, 0x4d, 0x89, 0xf9, 0x49, 0xba, 0x34, 0x12, 0, 0,
-                0, 0, 0, 0, 0x41, 0x5c, 0x0f, 0x01, 0xf8, 0x48, 0xcf,
+                0x4d, 0x8b, 0x1c, 0x24, 0x4c, 0x89, 0x5d, 0x00, 0x49, 0xba, 0x34, 0x12, 0, 0, 0, 0,
+                0, 0, 0x41, 0x0f, 0x01, 0x55, 0x00, 0x0f, 0x01, 0xf8, 0xff, 0x20,
             ]
         );
 
@@ -28486,6 +28557,14 @@ mod tests {
             ),
             (
                 "#[unsafe(naked)] unsafe extern \"C\" fn f() { naked_asm!(\"mov rax, 1__0\", \"ret\"); }",
+                CodegenErrorKind::InvalidNakedAssembly,
+            ),
+            (
+                "#[unsafe(naked)] unsafe extern \"C\" fn f() { naked_asm!(\"mov rax, [rip]\", \"ret\"); }",
+                CodegenErrorKind::InvalidNakedAssembly,
+            ),
+            (
+                "#[unsafe(naked)] unsafe extern \"C\" fn f() { naked_asm!(\"mov [rax + 8], rbx\", \"ret\"); }",
                 CodegenErrorKind::InvalidNakedAssembly,
             ),
             (
