@@ -4798,6 +4798,15 @@ after the declared RCX write, the value enters the common writeback channel.
 accepted both forms, and both canonical hosts pass 985 compiler tests. Other
 explicit registers and general allocation remain unsupported.
 
+The fixed explicit-inout node now carries the same RAX-or-RCX identity. Exact
+`asm!("inc rcx", inout("rcx") ...)` accepts both same-place and split `u64`
+forms and reuses every typed destination, ownership effect, bounds check, and
+writeback path. Input lowering transfers the value to RCX before the declared
+increment and returns it to the common writeback channel afterward. The exact
+dated oracle accepted both original Rust 2024 forms, and both canonical hosts
+pass 985 compiler tests. Other explicit registers, generic allocation, and
+general assembly remain unsupported.
+
 Exact `asm!("mov rax, 7", lateout("rax") _)` is a discarded explicit output.
 Preanalysis records no language-place access, while emission still performs the
 declared RAX write. The exact dated oracle accepted the original Rust 2024 form,

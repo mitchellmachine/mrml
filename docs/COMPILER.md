@@ -125,6 +125,11 @@ than reimplemented: unsafe attributes, broad modern integer APIs, modern raw
 pointer address/provenance-facing APIs, bounded never coercion, and fixed-capacity
 `no_std` compilation. Their documented limits remain binding.
 
+The modern inline-assembly row additionally includes exact explicit RCX
+same-place and split `inout` for the fixed `inc rcx` template. These forms reuse
+the documented typed output-place and ownership machinery; other explicit
+registers, generic allocation, and general assembly remain absent.
+
 ## Ownership and Polonius-direction roadmap
 
 The current borrowed-source AST and fixed-capacity expression arenas are useful

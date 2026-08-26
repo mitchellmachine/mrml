@@ -1670,6 +1670,18 @@ interface probe, 10 conformance tests, and 335 replacement tests: 985 compiler
 tests per host. Other explicit registers, generic allocation, and general
 assembly remain absent.
 
+The explicit RCX-inout milestone generalizes the fixed inout representation to
+carry the same RAX-or-RCX identity as fixed outputs. Exact `inc rcx` with
+`inout("rcx")` accepts same-place and distinct-input `u64` destinations through
+the existing typed place, ownership, bounds, and writeback machinery. The input
+enters RCX before the declared instruction and returns to the common writeback
+register afterward. Mismatched template and explicit-register pairs fail
+closed. The exact dated oracle accepted both independently authored Rust 2024
+forms. Windows gnullvm and native Arch Linux WSL each pass 639 library tests,
+one component-interface probe, 10 conformance tests, and 335 replacement tests:
+985 compiler tests per host. Other explicit registers, generic allocation, and
+general assembly remain absent.
+
 The premise-bearing rigid-normalization milestone proves the selected generic
 implementation's instantiated trait and projection predicates before exposing
 its associated value. It shares the caller's 16-frame rigid proof stack and

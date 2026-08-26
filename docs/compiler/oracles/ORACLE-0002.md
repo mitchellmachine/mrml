@@ -180,3 +180,10 @@ same exact toolchain and commit compiled explicit RAX `lateout`, same-place
 acceptance of those exact mutable-slice output shapes only; it does not establish
 general unsized-place, borrowing, evaluation-order, register-allocation, memory-
 effect, or assembly semantics. Temporary source and metadata were removed.
+
+An independently authored Rust 2024 metadata-only probe against that same exact
+toolchain and commit compiled `asm!("inc rcx", inout("rcx") value)` and
+`asm!("inc rcx", inout("rcx") input => output)`. This records black-box
+acceptance of those exact same-place and split explicit-RCX inout forms only; it
+does not establish other registers, allocation, effects, or general assembly
+semantics. Temporary source and metadata were removed.
