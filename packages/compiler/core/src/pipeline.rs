@@ -475,6 +475,28 @@ mod tests {
     }
 
     #[test]
+    fn proves_generic_source_projection_premises_before_codegen() {
+        let source = concat!(
+            "trait Parent<Input> { type Output; } trait Child<Input> {} ",
+            "impl Parent<u32> for u32 { type Output = u8; } ",
+            "impl<T> Child<T> for T where <T as Parent<T>>::Output = u8 {} ",
+            "#[unsafe(no_mangle)] pub extern \"C\" fn answer() -> u64 ",
+            "where u32: Child<u32> { 42 }"
+        );
+        compile(source, "answer", ObjectFormat::Coff).unwrap();
+
+        let mismatch = source.replace("::Output = u8 {}", "::Output = u16 {}");
+        let error = compile(&mismatch, "answer", ObjectFormat::Coff).unwrap_err();
+        assert!(matches!(
+            error.kind,
+            CompileErrorKind::TraitObligation(SourceTraitObligationError {
+                kind: crate::SourceTraitObligationErrorKind::Unsatisfied,
+                ..
+            })
+        ));
+    }
+
+    #[test]
     fn reports_each_pipeline_boundary() {
         let parse = compile("fn broken(", "broken", ObjectFormat::Elf64).unwrap_err();
         assert!(matches!(parse.kind, CompileErrorKind::Parse(_)));
