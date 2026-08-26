@@ -8191,3 +8191,14 @@ code-generation algorithm. Inner continues admit only an exact incoming-state
 preservation proof; all unsupported state transitions fail closed. Broader
 compiler completion remains partial; this technical screen is not a clearance
 or infringement conclusion and does not replace independent human dual review.
+
+# 2026-08-26 — Nested branch backedge convergence
+
+**Result: NOT_TRIGGERED after the backedge-convergence review.** This increment
+feeds an existing bounded nested-branch action transfer into the compiler's
+already documented monotone origin meet and fixed iteration bound. It adds no
+new region or alias analysis, inference method, optimization,
+instruction-selection, or code-generation algorithm. Post-backedge exits must
+match the converged header, and unsupported transitions fail closed. Broader
+compiler completion remains partial; this technical screen is not a clearance
+or infringement conclusion and does not replace independent human dual review.
