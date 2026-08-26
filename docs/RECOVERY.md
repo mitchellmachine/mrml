@@ -1205,6 +1205,15 @@ failure erases both outputs. Windows and Arch Linux each pass 35 UEFI-library
 tests and cross-build the target. Reachable-root validation, stable authority
 recovery, and loader-to-kernel ownership transfer remain next.
 
+The selected UEFI generation now has a **PARTIALLY IMPLEMENTED** read-only
+`StorageBlockDevice` bridge for the existing native recovery stack. It exists
+only during one exact reopen, revalidates block zero before lending access,
+copies through aligned private storage, zeroes a complete multi-block output on
+late failure, and denies write/flush/replacement. A close failure prevents the
+operation result from escaping. Windows and Arch Linux each pass 36 UEFI-library
+tests and cross-build the target. Running reachable-graph recovery inside this
+session remains next.
+
 The recovered installed selection is now retained across the boot-policy to
 Total-admission boundary. `RecoveredInstalledTotalAdmission` binds its exact
 device descriptor, serviced session selection, volume header, active root,

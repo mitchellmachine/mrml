@@ -3292,6 +3292,13 @@ read, or close uncertainty. Windows and Arch Linux each pass 35 library tests
 and cross-build the UEFI artifact. Reachable graph recovery and real loader
 execution remain absent.
 
+The UEFI library now lends a read-only `StorageBlockDevice` only inside an exact
+selected-device reopen. It rechecks block zero, uses aligned private transfers,
+zeroes complete multi-block output after any late failure, rejects all mutation,
+and drops the operation result if protocol close is uncertain. Windows and Arch
+Linux each pass 36 library tests and cross-build the UEFI artifact. The shared
+reachable-graph validator is not yet invoked through it.
+
 The bounded discovery result now remains owned through the complete serviced
 recovery read. `RecoveredInstalledStableSystemSelection` retains the exact
 installed selection beside the `BlockVolume` and reachable graph produced from

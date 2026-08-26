@@ -110,6 +110,16 @@ either protocol after successful I/O. Windows and Arch Linux each pass 35 UEFI-
 library tests and cross-build the target. Root graph validation and real-loader
 ownership transfer remain **PLANNED**.
 
+A read-only exact-generation `StorageBlockDevice` adapter is now **PARTIALLY
+IMPLEMENTED** for the selected UEFI handle. It is lent only inside one reopened,
+path/media/header-revalidated protocol lifetime, uses private aligned transfer
+storage, and publishes a multi-block read only if every constituent 4 KiB block
+succeeds. A late failure zeroes the complete caller destination. Write, flush,
+and superblock replacement are always denied, and close uncertainty discards the
+operation result. Windows and Arch Linux each pass 36 UEFI-library tests and
+cross-build the target. The reachable-graph validator has not yet been composed
+through this adapter.
+
 The `mrml` frontend may expose structured `disk`, `filesystem`, `optical`, and
 `media` operations. The PowerShell-inspired shell projects the same backend as
 typed `Get-*`, `Test-*`, `Initialize-*`, `New-*`, `Format-*`, `Write-*`, and

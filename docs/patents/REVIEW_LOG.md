@@ -1,5 +1,16 @@
 # Patent review log
 
+## 2026-08-26 — Read-only exact-generation UEFI storage adapter
+
+Patent review: **NOT_TRIGGERED** for this interface adapter. It applies
+conventional private aligned buffering, complete-copy publication, failure
+zeroing, read-only method denial, and scoped protocol lifetime to the existing
+`StorageBlockDevice` contract and reviewed UEFI reads. It adds no storage layout
+or recovery algorithm, caching/scheduling policy, cryptography, placement
+policy, native fallback, queue/DMA mechanism, or hardware isolation method.
+Broader storage, firmware, adaptive-isolation, and Total-MicroVM reviews remain
+`TRIGGERED`; no patent-clearance or non-infringement conclusion is made.
+
 ## 2026-08-26 — Exact UEFI selected-device redundant-root reopen
 
 Patent review: **NOT_TRIGGERED** for this recovery-lifecycle integration. It

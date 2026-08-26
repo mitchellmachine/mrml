@@ -6,8 +6,8 @@ use core::ffi::c_void;
 use mrml_crypto::Sha3_256;
 use mrml_storage::{
     BlockDeviceDescriptor, BlockDeviceId, PlatformBlockDeviceDescriptor,
-    PlatformBlockDeviceIdentity, PlatformBlockTransport, VOLUME_HEADER_BYTES, VolumeHeader,
-    VolumeId,
+    PlatformBlockDeviceIdentity, PlatformBlockTransport, SUPERBLOCK_BYTES, StorageBlockDevice,
+    VOLUME_HEADER_BYTES, VolumeHeader, VolumeId,
 };
 
 pub type Status = usize;
@@ -351,6 +351,8 @@ pub enum UefiBlockDescriptorError {
     VolumeGeometryMismatch,
     SelectedDeviceChanged,
     VolumeHeaderChanged,
+    InvalidRecoveryReadBuffer,
+    ReadOnlyRecoveryDevice,
 }
 
 pub const OPEN_PROTOCOL_GET_PROTOCOL: u32 = 0x0000_0002;
@@ -920,6 +922,116 @@ pub unsafe fn read_selected_uefi_recovery_roots(
         secondary.erase();
     }
     result
+}
+
+/// Read-only exact-generation UEFI adapter for the shared native storage stack.
+/// It owns aligned private transfer storage; caller output is published only
+/// after every requested 4 KiB block completes under the same media snapshot.
+pub struct UefiRecoveryStorageDevice<'a> {
+    protocol: &'a mut BlockIoProtocol,
+    media: UefiBlockMediaSnapshot,
+    transfer: UefiRecoveryBlock,
+}
+
+impl Drop for UefiRecoveryStorageDevice<'_> {
+    fn drop(&mut self) {
+        self.transfer.erase();
+    }
+}
+
+unsafe impl StorageBlockDevice for UefiRecoveryStorageDevice<'_> {
+    type Error = UefiBlockDescriptorError;
+
+    fn read_blocks(&mut self, block: u64, output: &mut [u8]) -> Result<(), Self::Error> {
+        output.fill(0);
+        if output.is_empty() || !output.len().is_multiple_of(UEFI_RECOVERY_BLOCK_BYTES) {
+            return Err(UefiBlockDescriptorError::InvalidRecoveryReadBuffer);
+        }
+        for (index, destination) in output
+            .chunks_exact_mut(UEFI_RECOVERY_BLOCK_BYTES)
+            .enumerate()
+        {
+            let logical = block
+                .checked_add(
+                    u64::try_from(index).map_err(|_| UefiBlockDescriptorError::RecoveryRange)?,
+                )
+                .ok_or(UefiBlockDescriptorError::RecoveryRange)?;
+            if let Err(error) = unsafe {
+                read_uefi_recovery_block(self.protocol, self.media, logical, &mut self.transfer)
+            } {
+                output.fill(0);
+                self.transfer.erase();
+                return Err(error);
+            }
+            destination.copy_from_slice(self.transfer.as_slice());
+            self.transfer.erase();
+        }
+        Ok(())
+    }
+
+    fn write_blocks(&mut self, _: u64, _: &[u8]) -> Result<(), Self::Error> {
+        Err(UefiBlockDescriptorError::ReadOnlyRecoveryDevice)
+    }
+
+    fn flush(&mut self) -> Result<(), Self::Error> {
+        Err(UefiBlockDescriptorError::ReadOnlyRecoveryDevice)
+    }
+
+    fn replace_superblock(
+        &mut self,
+        _: u64,
+        _: &[u8; SUPERBLOCK_BYTES],
+    ) -> Result<(), Self::Error> {
+        Err(UefiBlockDescriptorError::ReadOnlyRecoveryDevice)
+    }
+}
+
+/// Reopens and exact-revalidates a selected device, rechecks block zero, and
+/// lends a read-only `StorageBlockDevice` to one synchronous operation. The
+/// protocol relationship is closed before the operation result can escape.
+///
+/// # Safety
+///
+/// The selected handle and boot services must remain firmware-valid for the
+/// complete synchronous operation.
+pub unsafe fn with_selected_uefi_storage_device<R>(
+    services: &BootServices,
+    image: Handle,
+    selected: UefiRecoveryHeaderCandidate,
+    device_path_scratch: &mut [u8; MAX_UEFI_DEVICE_PATH_BYTES],
+    operation: impl FnOnce(UefiRecoveryStorageDevice<'_>) -> R,
+) -> Result<R, UefiBlockDescriptorError> {
+    unsafe {
+        with_opened_uefi_block_protocols(services, image, selected.handle, |protocol, path| {
+            let media = snapshot_uefi_block_media(protocol)?;
+            if media != selected.media {
+                return Err(UefiBlockDescriptorError::SelectedDeviceChanged);
+            }
+            let path_length = copy_single_device_path(path, device_path_scratch)?;
+            let descriptor = uefi_platform_block_descriptor(
+                selected.descriptor.block().id(),
+                media,
+                &device_path_scratch[..path_length],
+            )?;
+            if descriptor != selected.descriptor {
+                return Err(UefiBlockDescriptorError::SelectedDeviceChanged);
+            }
+            let mut transfer = UefiRecoveryBlock::new();
+            read_uefi_recovery_block(protocol, media, 0, &mut transfer)?;
+            let header = VolumeHeader::decode(&transfer.as_slice()[..VOLUME_HEADER_BYTES])
+                .map_err(|_| UefiBlockDescriptorError::VolumeHeaderChanged)?;
+            transfer.erase();
+            if header != selected.header {
+                return Err(UefiBlockDescriptorError::VolumeHeaderChanged);
+            }
+            let device = UefiRecoveryStorageDevice {
+                protocol,
+                media,
+                transfer,
+            };
+            Ok(operation(device))
+        })
+    }
 }
 
 unsafe fn with_opened_uefi_block_protocols<R>(
@@ -2763,6 +2875,120 @@ mod tests {
         ));
         assert!(primary.as_slice().iter().all(|byte| *byte == 0));
         assert!(secondary.as_slice().iter().all(|byte| *byte == 0));
+
+        MOCK_CLOSE_STATUS.store(SUCCESS, Ordering::SeqCst);
+        MOCK_BLOCK_PROTOCOL.store(core::ptr::null_mut(), Ordering::SeqCst);
+        MOCK_DEVICE_PATH.store(core::ptr::null_mut(), Ordering::SeqCst);
+        ROOT_HEADER_SOURCE.store(core::ptr::null_mut(), Ordering::SeqCst);
+        ROOT_PRIMARY_SOURCE.store(core::ptr::null_mut(), Ordering::SeqCst);
+        ROOT_SECONDARY_SOURCE.store(core::ptr::null_mut(), Ordering::SeqCst);
+    }
+
+    #[test]
+    fn selected_storage_adapter_is_read_only_exact_generation_and_atomic() {
+        let _guard = MockFirmwareGuard::acquire();
+        let mut media = valid_block_media();
+        media.media_id = 7;
+        media.block_size = 512;
+        media.last_block = 63;
+        let mut protocol = block_protocol(&mut media);
+        protocol.read_blocks = recovery_root_read;
+        let mut path = [1u8, 1, 8, 0, 0xaa, 0xbb, 0xcc, 0xdd, 0x7f, 0xff, 4, 0];
+        let header = VolumeHeader::new(VolumeId::new([0x51; 16]).unwrap(), 4096, 8, 1, 2).unwrap();
+        let mut header_source = [0u8; UEFI_RECOVERY_BLOCK_BYTES];
+        header.encode(
+            (&mut header_source[..VOLUME_HEADER_BYTES])
+                .try_into()
+                .unwrap(),
+        );
+        let mut primary_source = [0x31u8; UEFI_RECOVERY_BLOCK_BYTES];
+        let mut secondary_source = [0x32u8; UEFI_RECOVERY_BLOCK_BYTES];
+        ROOT_HEADER_SOURCE.store(header_source.as_mut_ptr(), Ordering::SeqCst);
+        ROOT_PRIMARY_SOURCE.store(primary_source.as_mut_ptr(), Ordering::SeqCst);
+        ROOT_SECONDARY_SOURCE.store(secondary_source.as_mut_ptr(), Ordering::SeqCst);
+        ROOT_FAIL_LBA.store(usize::MAX, Ordering::SeqCst);
+        MOCK_BLOCK_PROTOCOL.store(
+            (&mut protocol as *mut BlockIoProtocol).cast(),
+            Ordering::SeqCst,
+        );
+        MOCK_DEVICE_PATH.store(path.as_mut_ptr().cast(), Ordering::SeqCst);
+        MOCK_CLOSE_STATUS.store(SUCCESS, Ordering::SeqCst);
+        let services = mock_boot_services();
+        let image = core::ptr::without_provenance_mut::<c_void>(1);
+        let handle = core::ptr::without_provenance_mut::<c_void>(2);
+        let mut path_scratch = [0u8; MAX_UEFI_DEVICE_PATH_BYTES];
+        let mut block = UefiRecoveryBlock::new();
+        let selected = unsafe {
+            probe_uefi_recovery_header(
+                &services,
+                image,
+                handle,
+                BlockDeviceId::new(1).unwrap(),
+                &mut path_scratch,
+                &mut block,
+            )
+        }
+        .unwrap();
+
+        let (read, output, write, flush, replace) = unsafe {
+            with_selected_uefi_storage_device(
+                &services,
+                image,
+                selected,
+                &mut path_scratch,
+                |mut device| {
+                    let mut output = [0u8; UEFI_RECOVERY_BLOCK_BYTES * 2];
+                    let read = device.read_blocks(1, &mut output);
+                    let write = device.write_blocks(1, &[0; UEFI_RECOVERY_BLOCK_BYTES]);
+                    let flush = device.flush();
+                    let replace = device.replace_superblock(1, &[0; SUPERBLOCK_BYTES]);
+                    (read, output, write, flush, replace)
+                },
+            )
+        }
+        .unwrap();
+        assert_eq!(read, Ok(()));
+        assert_eq!(&output[..UEFI_RECOVERY_BLOCK_BYTES], &primary_source);
+        assert_eq!(&output[UEFI_RECOVERY_BLOCK_BYTES..], &secondary_source);
+        assert_eq!(write, Err(UefiBlockDescriptorError::ReadOnlyRecoveryDevice));
+        assert_eq!(flush, Err(UefiBlockDescriptorError::ReadOnlyRecoveryDevice));
+        assert_eq!(
+            replace,
+            Err(UefiBlockDescriptorError::ReadOnlyRecoveryDevice)
+        );
+
+        ROOT_FAIL_LBA.store(16, Ordering::SeqCst);
+        let (read, output) = unsafe {
+            with_selected_uefi_storage_device(
+                &services,
+                image,
+                selected,
+                &mut path_scratch,
+                |mut device| {
+                    let mut output = [0xa5u8; UEFI_RECOVERY_BLOCK_BYTES * 2];
+                    let read = device.read_blocks(1, &mut output);
+                    (read, output)
+                },
+            )
+        }
+        .unwrap();
+        assert_eq!(read, Err(UefiBlockDescriptorError::ReadBlock(LOAD_ERROR)));
+        assert!(output.iter().all(|byte| *byte == 0));
+
+        ROOT_FAIL_LBA.store(usize::MAX, Ordering::SeqCst);
+        MOCK_CLOSE_STATUS.store(LOAD_ERROR, Ordering::SeqCst);
+        assert!(matches!(
+            unsafe {
+                with_selected_uefi_storage_device(
+                    &services,
+                    image,
+                    selected,
+                    &mut path_scratch,
+                    |_| 7u8,
+                )
+            },
+            Err(UefiBlockDescriptorError::CloseProtocol(LOAD_ERROR))
+        ));
 
         MOCK_CLOSE_STATUS.store(SUCCESS, Ordering::SeqCst);
         MOCK_BLOCK_PROTOCOL.store(core::ptr::null_mut(), Ordering::SeqCst);

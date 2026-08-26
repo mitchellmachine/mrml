@@ -95,6 +95,13 @@ Arch Linux each pass 34 focused tests and cross-build the UEFI target. Exact
 reopening for redundant-root recovery and real-loader ownership transfer are
 the next gate.
 
+The exact-generation read-only UEFI `StorageBlockDevice` adapter is now
+**PARTIALLY IMPLEMENTED**. It reuses native storage interfaces, publishes no
+partial multi-block read, denies mutation, and cannot outlive its reopened
+protocol session. Windows and Arch Linux each pass 36 focused tests and
+cross-build the UEFI target. Composing `BlockVolume` and reachable-graph
+recovery inside that session is the next gate.
+
 Selected-device reopening and redundant-root reads are now **PARTIALLY
 IMPLEMENTED**. Exact path/media/geometry and block-zero header revalidation
 precedes both root reads; any mismatch, second-read failure, or protocol-close

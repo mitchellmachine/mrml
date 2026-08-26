@@ -136,6 +136,11 @@ block-zero header must remain identical; root bytes are erased if either read or
 protocol close fails. This remains library/mock evidence rather than production
 loader execution.
 
+An exact-generation read-only storage adapter can now be lent within one
+selected-device protocol session. It revalidates the descriptor/header, exposes
+only complete native 4 KiB reads, denies mutation, and cannot survive protocol
+closure. The production loader has not yet used it for graph recovery.
+
 The conventional fallback `\EFI\BOOT\BOOTX64.EFI` may be installed only under
 policy that proves ownership/non-conflict and previews backup/recovery or exact
 replacement. A shared ESP's existing fallback is never casually overwritten.
