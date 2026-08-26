@@ -39,10 +39,20 @@ pub struct Parameter<'source> {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub struct FunctionWherePredicate<'source> {
-    pub self_type: TypeRef<'source>,
-    pub trait_name: &'source str,
-    pub trait_name_span: Span,
+pub enum FunctionWherePredicate<'source> {
+    Implemented {
+        self_type: TypeRef<'source>,
+        trait_name: &'source str,
+        trait_name_span: Span,
+    },
+    ProjectionEquality {
+        self_type: TypeRef<'source>,
+        trait_name: &'source str,
+        trait_name_span: Span,
+        associated_type: &'source str,
+        associated_type_span: Span,
+        expected_type: TypeRef<'source>,
+    },
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -2920,14 +2930,47 @@ impl<'source> Parser<'source> {
                     let token = self.peek()?;
                     return Err(self.error(ParseErrorKind::TooManyWherePredicates, token));
                 }
-                let self_type = self.type_until(&[TokenKind::Colon])?;
-                self.expect_kind(TokenKind::Colon, ParseErrorKind::ExpectedColon)?;
-                let trait_name = self.identifier()?;
-                where_predicates[where_predicate_count] = Some(FunctionWherePredicate {
-                    self_type,
-                    trait_name: trait_name.text,
-                    trait_name_span: trait_name.span,
-                });
+                let predicate = if self.take_text("<")?.is_some() {
+                    let self_type = self.type_until_text("as")?;
+                    let as_token = self.take()?;
+                    if !as_token.is_some_and(|token| token.text == "as") {
+                        return Err(self.error(ParseErrorKind::ExpectedIdentifier, as_token));
+                    }
+                    let trait_name = self.identifier()?;
+                    let close = self.take()?;
+                    if !close.is_some_and(|token| token.text == ">") {
+                        return Err(self.error(ParseErrorKind::ExpectedType, close));
+                    }
+                    let separator = self.take()?;
+                    if !separator.is_some_and(|token| token.text == "::") {
+                        return Err(self.error(ParseErrorKind::ExpectedIdentifier, separator));
+                    }
+                    let associated_type = self.identifier()?;
+                    let equals = self.take()?;
+                    if !equals.is_some_and(|token| token.text == "=") {
+                        return Err(self.error(ParseErrorKind::ExpectedType, equals));
+                    }
+                    let expected_type =
+                        self.type_until_kind_or_text(TokenKind::OpenBrace, ",")?;
+                    FunctionWherePredicate::ProjectionEquality {
+                        self_type,
+                        trait_name: trait_name.text,
+                        trait_name_span: trait_name.span,
+                        associated_type: associated_type.text,
+                        associated_type_span: associated_type.span,
+                        expected_type,
+                    }
+                } else {
+                    let self_type = self.type_until(&[TokenKind::Colon])?;
+                    self.expect_kind(TokenKind::Colon, ParseErrorKind::ExpectedColon)?;
+                    let trait_name = self.identifier()?;
+                    FunctionWherePredicate::Implemented {
+                        self_type,
+                        trait_name: trait_name.text,
+                        trait_name_span: trait_name.span,
+                    }
+                };
+                where_predicates[where_predicate_count] = Some(predicate);
                 where_predicate_count += 1;
                 if self.take_text(",")?.is_none() {
                     break;
@@ -3472,9 +3515,37 @@ mod tests {
         assert_eq!(function.return_type.unwrap().text, "u32");
         assert_eq!(function.where_predicate_count(), 2);
         let first = function.where_predicates()[0].unwrap();
-        assert_eq!(first.self_type.text, "core::primitive::u32");
-        assert_eq!(first.trait_name, "Visible");
-        assert_eq!(function.where_predicates()[1].unwrap().trait_name, "Small");
+        assert!(matches!(
+            first,
+            FunctionWherePredicate::Implemented {
+                self_type: TypeRef { text: "core::primitive::u32", .. },
+                trait_name: "Visible",
+                ..
+            }
+        ));
+        assert!(matches!(
+            function.where_predicates()[1].unwrap(),
+            FunctionWherePredicate::Implemented { trait_name: "Small", .. }
+        ));
+    }
+
+    #[test]
+    fn parses_concrete_projection_equality_where_predicates() {
+        let source = "fn check() where <core::primitive::u32 as Iterator>::Item = core::primitive::u8, { }";
+        let module: TestModule<'_> = Parser::new(source).parse_module().unwrap();
+        let Some(Item::Function(function)) = module.items()[0] else {
+            panic!("expected function")
+        };
+        assert!(matches!(
+            function.where_predicates()[0].unwrap(),
+            FunctionWherePredicate::ProjectionEquality {
+                self_type: TypeRef { text: "core::primitive::u32", .. },
+                trait_name: "Iterator",
+                associated_type: "Item",
+                expected_type: TypeRef { text: "core::primitive::u8", .. },
+                ..
+            }
+        ));
     }
 
     #[test]

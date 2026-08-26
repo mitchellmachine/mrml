@@ -6,7 +6,8 @@
 //! concrete types.
 
 use crate::{
-    Function, Item, MAX_TRAIT_ASSOCIATED_TYPES, MAX_TRAIT_SUPERTRAITS, Module, Span, TypeRef,
+    Function, FunctionWherePredicate, Item, MAX_TRAIT_ASSOCIATED_TYPES, MAX_TRAIT_SUPERTRAITS,
+    Module, Span, TypeRef,
 };
 
 pub const MAX_TRAIT_GOAL_ARGUMENTS: usize = 8;
@@ -275,6 +276,8 @@ pub enum SourceTraitObligationErrorKind {
     UnknownTrait,
     UnknownType,
     DuplicatePredicate,
+    UnknownAssociatedType,
+    ProjectionMismatch,
     Unsatisfied,
     Ambiguous,
     Goal(TraitGoalError),
@@ -321,7 +324,19 @@ impl<'source> SourceTraitImplementationTable<'source> {
                 }
                 Item::Function(function) => {
                     for predicate in function.where_predicates().iter().flatten() {
-                        table.intern_type(predicate.self_type)?;
+                        match predicate {
+                            FunctionWherePredicate::Implemented { self_type, .. } => {
+                                table.intern_type(*self_type)?;
+                            }
+                            FunctionWherePredicate::ProjectionEquality {
+                                self_type,
+                                expected_type,
+                                ..
+                            } => {
+                                table.intern_type(*self_type)?;
+                                table.intern_type(*expected_type)?;
+                            }
+                        }
                     }
                 }
                 Item::Const(_) | Item::Static(_) | Item::Trait(_) => {}
@@ -446,28 +461,90 @@ impl<'source> SourceTraitImplementationTable<'source> {
             if function.where_predicates()[..index]
                 .iter()
                 .flatten()
-                .any(|known| {
-                    known.self_type.text == predicate.self_type.text
-                        && known.trait_name == predicate.trait_name
+                .any(|known| match (known, predicate) {
+                    (
+                        FunctionWherePredicate::Implemented {
+                            self_type: left_self,
+                            trait_name: left_trait,
+                            ..
+                        },
+                        FunctionWherePredicate::Implemented {
+                            self_type: right_self,
+                            trait_name: right_trait,
+                            ..
+                        },
+                    ) => left_self.text == right_self.text && left_trait == right_trait,
+                    (
+                        FunctionWherePredicate::ProjectionEquality {
+                            self_type: left_self,
+                            trait_name: left_trait,
+                            associated_type: left_associated,
+                            expected_type: left_expected,
+                            ..
+                        },
+                        FunctionWherePredicate::ProjectionEquality {
+                            self_type: right_self,
+                            trait_name: right_trait,
+                            associated_type: right_associated,
+                            expected_type: right_expected,
+                            ..
+                        },
+                    ) => {
+                        left_self.text == right_self.text
+                            && left_trait == right_trait
+                            && left_associated == right_associated
+                            && left_expected.text == right_expected.text
+                    }
+                    _ => false,
                 })
             {
                 return Err(SourceTraitObligationError {
                     kind: SourceTraitObligationErrorKind::DuplicatePredicate,
-                    span: predicate.trait_name_span,
+                    span: match predicate {
+                        FunctionWherePredicate::Implemented { trait_name_span, .. }
+                        | FunctionWherePredicate::ProjectionEquality { trait_name_span, .. } => {
+                            *trait_name_span
+                        }
+                    },
                 });
             }
+            let (
+                self_type_ref,
+                trait_name,
+                trait_name_span,
+                projection,
+            ) = match predicate {
+                FunctionWherePredicate::Implemented {
+                    self_type,
+                    trait_name,
+                    trait_name_span,
+                } => (*self_type, *trait_name, *trait_name_span, None),
+                FunctionWherePredicate::ProjectionEquality {
+                    self_type,
+                    trait_name,
+                    trait_name_span,
+                    associated_type,
+                    associated_type_span,
+                    expected_type,
+                } => (
+                    *self_type,
+                    *trait_name,
+                    *trait_name_span,
+                    Some((*associated_type, *associated_type_span, *expected_type)),
+                ),
+            };
             let trait_id = traits
-                .get(predicate.trait_name)
+                .get(trait_name)
                 .ok_or(SourceTraitObligationError {
                     kind: SourceTraitObligationErrorKind::UnknownTrait,
-                    span: predicate.trait_name_span,
+                    span: trait_name_span,
                 })?
                 .id;
             let self_type = self
-                .get_type(predicate.self_type.text)
+                .get_type(self_type_ref.text)
                 .ok_or(SourceTraitObligationError {
                     kind: SourceTraitObligationErrorKind::UnknownType,
-                    span: predicate.self_type.span,
+                    span: self_type_ref.span,
                 })?
                 .id;
             let goal = canonicalize_implemented_trait_goal(ImplementedTraitGoal::new(
@@ -476,20 +553,71 @@ impl<'source> SourceTraitImplementationTable<'source> {
             ))
             .map_err(|kind| SourceTraitObligationError {
                 kind: SourceTraitObligationErrorKind::Goal(kind),
-                span: predicate.trait_name_span,
+                span: trait_name_span,
             })?;
+            if let Some((associated_name, associated_span, expected_type_ref)) = projection {
+                let associated = traits.get_associated_type(trait_id, associated_name).ok_or(
+                    SourceTraitObligationError {
+                        kind: SourceTraitObligationErrorKind::UnknownAssociatedType,
+                        span: associated_span,
+                    },
+                )?;
+                let expected_type = self.get_type(expected_type_ref.text).ok_or(
+                    SourceTraitObligationError {
+                        kind: SourceTraitObligationErrorKind::UnknownType,
+                        span: expected_type_ref.span,
+                    },
+                )?;
+                match self.associated_types.normalize(
+                    &self.implementations,
+                    goal,
+                    associated.id,
+                ) {
+                    TraitProjectionSolution::Unique(value) if value == expected_type.id => continue,
+                    TraitProjectionSolution::Unique(_) => {
+                        return Err(SourceTraitObligationError {
+                            kind: SourceTraitObligationErrorKind::ProjectionMismatch,
+                            span: expected_type_ref.span,
+                        });
+                    }
+                    TraitProjectionSolution::NoSolution => {
+                        return Err(SourceTraitObligationError {
+                            kind: SourceTraitObligationErrorKind::Unsatisfied,
+                            span: associated_span,
+                        });
+                    }
+                    TraitProjectionSolution::Ambiguous => {
+                        return Err(SourceTraitObligationError {
+                            kind: SourceTraitObligationErrorKind::Ambiguous,
+                            span: associated_span,
+                        });
+                    }
+                    TraitProjectionSolution::Cycle => {
+                        return Err(SourceTraitObligationError {
+                            kind: SourceTraitObligationErrorKind::Goal(TraitGoalError::InvalidGoal),
+                            span: associated_span,
+                        });
+                    }
+                    TraitProjectionSolution::Overflow => {
+                        return Err(SourceTraitObligationError {
+                            kind: SourceTraitObligationErrorKind::Goal(TraitGoalError::InvalidGoal),
+                            span: associated_span,
+                        });
+                    }
+                }
+            }
             match self.implementations.solve(goal) {
                 TraitGoalSolution::Unique(_) => {}
                 TraitGoalSolution::NoSolution => {
                     return Err(SourceTraitObligationError {
                         kind: SourceTraitObligationErrorKind::Unsatisfied,
-                        span: predicate.trait_name_span,
+                        span: trait_name_span,
                     });
                 }
                 TraitGoalSolution::Ambiguous => {
                     return Err(SourceTraitObligationError {
                         kind: SourceTraitObligationErrorKind::Ambiguous,
-                        span: predicate.trait_name_span,
+                        span: trait_name_span,
                     });
                 }
             }
@@ -7812,6 +7940,37 @@ mod tests {
             ),
             TraitProjectionSolution::Unique(value_type)
         );
+    }
+
+    #[test]
+    fn proves_concrete_source_projection_equalities() {
+        let source = concat!(
+            "trait Iterator { type Item; } ",
+            "impl Iterator for u32 { type Item = u8; } ",
+            "fn check() where <u32 as Iterator>::Item = u8 {}"
+        );
+        let module = Parser::new(source).parse_module::<6, 1>().unwrap();
+        let traits = SourceTraitDeclarationTable::from_module(&module).unwrap();
+        let implementations =
+            SourceTraitImplementationTable::from_module(&module, &traits).unwrap();
+        implementations.prove_module(&module, &traits).unwrap();
+
+        for (expected, kind) in [
+            ("u16", SourceTraitObligationErrorKind::ProjectionMismatch),
+            ("u8", SourceTraitObligationErrorKind::UnknownAssociatedType),
+        ] {
+            let source = if kind == SourceTraitObligationErrorKind::UnknownAssociatedType {
+                "trait Iterator { type Item; } impl Iterator for u32 { type Item = u8; } fn check() where <u32 as Iterator>::Missing = u8 {}"
+            } else {
+                "trait Iterator { type Item; } impl Iterator for u32 { type Item = u8; } fn check() where <u32 as Iterator>::Item = u16 {}"
+            };
+            let module = Parser::new(source).parse_module::<6, 1>().unwrap();
+            let traits = SourceTraitDeclarationTable::from_module(&module).unwrap();
+            let implementations =
+                SourceTraitImplementationTable::from_module(&module, &traits).unwrap();
+            let error = implementations.prove_module(&module, &traits).unwrap_err();
+            assert_eq!(error.kind, kind, "expected {expected}");
+        }
     }
 
     #[test]

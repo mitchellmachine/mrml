@@ -391,6 +391,26 @@ mod tests {
     }
 
     #[test]
+    fn proves_source_projection_equalities_before_codegen() {
+        let complete = concat!(
+            "trait Iterator { type Item; } impl Iterator for u32 { type Item = u8; } ",
+            "#[unsafe(no_mangle)] pub extern \"C\" fn answer() -> u64 ",
+            "where <u32 as Iterator>::Item = u8 { 42 }"
+        );
+        compile(complete, "answer", ObjectFormat::Coff).unwrap();
+
+        let mismatch = complete.replace("= u8 { 42 }", "= u16 { 42 }");
+        let error = compile(&mismatch, "answer", ObjectFormat::Coff).unwrap_err();
+        assert!(matches!(
+            error.kind,
+            CompileErrorKind::TraitObligation(SourceTraitObligationError {
+                kind: crate::SourceTraitObligationErrorKind::ProjectionMismatch,
+                ..
+            })
+        ));
+    }
+
+    #[test]
     fn reports_each_pipeline_boundary() {
         let parse = compile("fn broken(", "broken", ObjectFormat::Elf64).unwrap_err();
         assert!(matches!(parse.kind, CompileErrorKind::Parse(_)));
