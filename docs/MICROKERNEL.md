@@ -3299,6 +3299,15 @@ and drops the operation result if protocol close is uncertain. Windows and Arch
 Linux each pass 36 library tests and cross-build the UEFI artifact. The shared
 reachable-graph validator is not yet invoked through it.
 
+The shared reachable-graph validator is now invoked through that exact selected
+UEFI session. `BlockVolume` reads both redundant roots and services the complete
+allocation/object-ID/directory/file metadata traversal without a second UEFI
+recovery implementation. All scratch is erased after the synchronous operation,
+and an uncertain protocol close suppresses an otherwise valid result. Windows
+and Arch Linux each pass 37 library tests and cross-build the UEFI artifact.
+This is mocked firmware evidence; real-loader invocation and early-boot owner
+transfer remain **PLANNED**.
+
 The bounded discovery result now remains owned through the complete serviced
 recovery read. `RecoveredInstalledStableSystemSelection` retains the exact
 installed selection beside the `BlockVolume` and reachable graph produced from

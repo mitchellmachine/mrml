@@ -1214,6 +1214,15 @@ operation result from escaping. Windows and Arch Linux each pass 36 UEFI-library
 tests and cross-build the target. Running reachable-graph recovery inside this
 session remains next.
 
+The selected UEFI generation now runs the shared reachable-graph recovery
+inside that same reopened protocol lifetime. `BlockVolume` reads both roots and
+the existing bounded validator traverses the complete selected metadata graph;
+UEFI does not define a parallel parser or fallback policy. All root, block, and
+metadata scratch is erased before return. A firmware read or close uncertainty
+publishes no recovered state. Windows and Arch Linux each pass 37 UEFI-library
+tests and cross-build the target. Real-loader invocation and loader-to-kernel
+transfer of the exact recovered owner remain next.
+
 The recovered installed selection is now retained across the boot-policy to
 Total-admission boundary. `RecoveredInstalledTotalAdmission` binds its exact
 device descriptor, serviced session selection, volume header, active root,

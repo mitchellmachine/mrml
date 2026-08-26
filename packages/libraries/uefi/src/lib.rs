@@ -5,9 +5,10 @@ pub mod tpm;
 use core::ffi::c_void;
 use mrml_crypto::Sha3_256;
 use mrml_storage::{
-    BlockDeviceDescriptor, BlockDeviceId, PlatformBlockDeviceDescriptor,
-    PlatformBlockDeviceIdentity, PlatformBlockTransport, SUPERBLOCK_BYTES, StorageBlockDevice,
-    VOLUME_HEADER_BYTES, VolumeHeader, VolumeId,
+    BlockDeviceDescriptor, BlockDeviceId, BlockVolume, BlockVolumeError,
+    PlatformBlockDeviceDescriptor, PlatformBlockDeviceIdentity, PlatformBlockTransport,
+    RecoveredReachableState, RecoveryError, SUPERBLOCK_BYTES, StorageBlockDevice,
+    VOLUME_HEADER_BYTES, VolumeHeader, VolumeId, recover_reachable_state,
 };
 
 pub type Status = usize;
@@ -1034,6 +1035,78 @@ pub unsafe fn with_selected_uefi_storage_device<R>(
     }
 }
 
+#[derive(Debug, Eq, PartialEq)]
+pub enum UefiReachableRecoveryError {
+    Firmware(UefiBlockDescriptorError),
+    Volume(BlockVolumeError<UefiBlockDescriptorError>),
+    Recovery(RecoveryError<BlockVolumeError<UefiBlockDescriptorError>>),
+}
+
+/// Reopens one exact selected UEFI media generation and validates its complete
+/// reachable metadata graph through the shared storage recovery implementation.
+/// The firmware protocol remains open across redundant-root selection and every
+/// metadata read; no UEFI-specific metadata parser or second recovery policy is
+/// introduced. All caller-provided recovery scratch is erased before return.
+///
+/// A successful graph is discarded if either protocol cannot be closed
+/// conclusively, because the exact-generation servicing relationship would then
+/// have an uncertain lifetime.
+///
+/// # Safety
+///
+/// The selected handle and boot services must remain firmware-valid for the
+/// complete synchronous operation. Each scratch block must be distinct.
+#[allow(clippy::too_many_arguments)]
+pub unsafe fn recover_selected_uefi_reachable_state<
+    const ALLOCATIONS: usize,
+    const DIRECTORIES: usize,
+    const EXTENTS: usize,
+    const OBJECTS: usize,
+>(
+    services: &BootServices,
+    image: Handle,
+    selected: UefiRecoveryHeaderCandidate,
+    device_path_scratch: &mut [u8; MAX_UEFI_DEVICE_PATH_BYTES],
+    volume_scratch: &mut [u8; UEFI_RECOVERY_BLOCK_BYTES],
+    primary: &mut [u8; UEFI_RECOVERY_BLOCK_BYTES],
+    secondary: &mut [u8; UEFI_RECOVERY_BLOCK_BYTES],
+    metadata_scratch: &mut [u8],
+) -> Result<RecoveredReachableState<EXTENTS, OBJECTS>, UefiReachableRecoveryError> {
+    let header = selected.header;
+    let operation = unsafe {
+        with_selected_uefi_storage_device(
+            services,
+            image,
+            selected,
+            device_path_scratch,
+            |device| {
+                let mut volume =
+                    BlockVolume::new(header, header.primary_superblock(), device, volume_scratch)
+                        .map_err(UefiReachableRecoveryError::Volume)?;
+                volume
+                    .read_recovery_superblocks(primary, secondary)
+                    .map_err(UefiReachableRecoveryError::Volume)?;
+                recover_reachable_state::<_, ALLOCATIONS, DIRECTORIES, EXTENTS, OBJECTS>(
+                    header,
+                    &primary[..SUPERBLOCK_BYTES],
+                    &secondary[..SUPERBLOCK_BYTES],
+                    &mut volume,
+                    metadata_scratch,
+                )
+                .map_err(UefiReachableRecoveryError::Recovery)
+            },
+        )
+    };
+    volume_scratch.fill(0);
+    primary.fill(0);
+    secondary.fill(0);
+    metadata_scratch.fill(0);
+    match operation {
+        Ok(result) => result,
+        Err(error) => Err(UefiReachableRecoveryError::Firmware(error)),
+    }
+}
+
 unsafe fn with_opened_uefi_block_protocols<R>(
     services: &BootServices,
     image: Handle,
@@ -1791,6 +1864,10 @@ fn hex(byte: u8) -> Option<u8> {
 mod tests {
     use super::*;
     use core::sync::atomic::{AtomicBool, AtomicPtr, AtomicUsize, Ordering};
+    use mrml_storage::{
+        AllocationImage, AllocationKind, AllocationRecord, DirectoryImage, DirectoryMetadata,
+        MetadataPointer, ObjectIdAllocatorImage, StorageObjectId, Superblock,
+    };
 
     static MOCK_FIRMWARE_LOCK: AtomicBool = AtomicBool::new(false);
 
@@ -1833,6 +1910,8 @@ mod tests {
     static ROOT_PRIMARY_SOURCE: AtomicPtr<u8> = AtomicPtr::new(core::ptr::null_mut());
     static ROOT_SECONDARY_SOURCE: AtomicPtr<u8> = AtomicPtr::new(core::ptr::null_mut());
     static ROOT_FAIL_LBA: AtomicUsize = AtomicUsize::new(usize::MAX);
+    static GRAPH_SOURCE: AtomicPtr<u8> = AtomicPtr::new(core::ptr::null_mut());
+    static GRAPH_SOURCE_BYTES: AtomicUsize = AtomicUsize::new(0);
 
     unsafe extern "efiapi" fn mock_get_memory_map(
         _: *mut usize,
@@ -2048,6 +2127,40 @@ mod tests {
             return LOAD_ERROR;
         }
         unsafe { core::ptr::copy_nonoverlapping(source, output.cast::<u8>(), bytes) };
+        if usize::try_from(lba).ok() == Some(ROOT_FAIL_LBA.load(Ordering::SeqCst)) {
+            LOAD_ERROR
+        } else {
+            SUCCESS
+        }
+    }
+
+    unsafe extern "efiapi" fn recovery_graph_read(
+        _: *mut BlockIoProtocol,
+        media_id: u32,
+        lba: u64,
+        bytes: usize,
+        output: *mut c_void,
+    ) -> Status {
+        if media_id != 7 || bytes != UEFI_RECOVERY_BLOCK_BYTES || output.is_null() {
+            return LOAD_ERROR;
+        }
+        let source = GRAPH_SOURCE.load(Ordering::SeqCst);
+        let source_bytes = GRAPH_SOURCE_BYTES.load(Ordering::SeqCst);
+        let offset = match usize::try_from(lba)
+            .ok()
+            .and_then(|lba| lba.checked_mul(512))
+        {
+            Some(offset) => offset,
+            None => return LOAD_ERROR,
+        };
+        let end = match offset.checked_add(bytes) {
+            Some(end) => end,
+            None => return LOAD_ERROR,
+        };
+        if source.is_null() || end > source_bytes {
+            return LOAD_ERROR;
+        }
+        unsafe { core::ptr::copy_nonoverlapping(source.add(offset), output.cast::<u8>(), bytes) };
         if usize::try_from(lba).ok() == Some(ROOT_FAIL_LBA.load(Ordering::SeqCst)) {
             LOAD_ERROR
         } else {
@@ -2996,6 +3109,173 @@ mod tests {
         ROOT_HEADER_SOURCE.store(core::ptr::null_mut(), Ordering::SeqCst);
         ROOT_PRIMARY_SOURCE.store(core::ptr::null_mut(), Ordering::SeqCst);
         ROOT_SECONDARY_SOURCE.store(core::ptr::null_mut(), Ordering::SeqCst);
+    }
+
+    #[test]
+    fn selected_uefi_device_runs_shared_reachable_graph_recovery_atomically() {
+        let _guard = MockFirmwareGuard::acquire();
+        const BLOCKS: usize = 7;
+        let volume_id = VolumeId::new([0x71; 16]).unwrap();
+        let header = VolumeHeader::new(volume_id, 4096, BLOCKS as u64, 1, 2).unwrap();
+        let root = StorageObjectId::new(volume_id, 1).unwrap();
+        let root_pointer = MetadataPointer::new(3, 1).unwrap();
+        let entries_pointer = MetadataPointer::new(4, 1).unwrap();
+        let allocation_pointer = MetadataPointer::new(5, 1).unwrap();
+        let allocator_pointer = MetadataPointer::new(6, 1).unwrap();
+        let candidate =
+            Superblock::new(header, 5, 4, root, root_pointer, allocation_pointer).unwrap();
+
+        let mut disk = [0u8; BLOCKS * UEFI_RECOVERY_BLOCK_BYTES];
+        header.encode((&mut disk[..VOLUME_HEADER_BYTES]).try_into().unwrap());
+        let mut encoded_superblock = [0u8; SUPERBLOCK_BYTES];
+        candidate.encode(&mut encoded_superblock);
+        disk[UEFI_RECOVERY_BLOCK_BYTES..UEFI_RECOVERY_BLOCK_BYTES + SUPERBLOCK_BYTES]
+            .copy_from_slice(&encoded_superblock);
+        disk[UEFI_RECOVERY_BLOCK_BYTES * 2..UEFI_RECOVERY_BLOCK_BYTES * 2 + SUPERBLOCK_BYTES]
+            .copy_from_slice(&encoded_superblock);
+        DirectoryMetadata::new(header, root, 2, None, 0, entries_pointer)
+            .unwrap()
+            .encode(
+                (&mut disk[UEFI_RECOVERY_BLOCK_BYTES * 3
+                    ..UEFI_RECOVERY_BLOCK_BYTES * 3 + mrml_storage::DIRECTORY_METADATA_BYTES])
+                    .try_into()
+                    .unwrap(),
+            );
+        DirectoryImage::<1>::build(header, root, 2, entries_pointer, &[])
+            .unwrap()
+            .encode(&mut disk[UEFI_RECOVERY_BLOCK_BYTES * 4..UEFI_RECOVERY_BLOCK_BYTES * 5])
+            .unwrap();
+        let records = [
+            AllocationRecord::new(root, 2, 3, 1, AllocationKind::ObjectMetadata).unwrap(),
+            AllocationRecord::new(root, 2, 4, 1, AllocationKind::DirectoryEntries).unwrap(),
+            AllocationRecord::new(root, 5, 5, 1, AllocationKind::AllocationMetadata).unwrap(),
+            AllocationRecord::new(root, 5, 6, 1, AllocationKind::ObjectIdAllocatorMetadata)
+                .unwrap(),
+        ];
+        AllocationImage::<4>::build(header, 5, allocation_pointer, &records)
+            .unwrap()
+            .encode(&mut disk[UEFI_RECOVERY_BLOCK_BYTES * 5..UEFI_RECOVERY_BLOCK_BYTES * 6])
+            .unwrap();
+        ObjectIdAllocatorImage::build(header, 5, Some(2), allocator_pointer)
+            .unwrap()
+            .encode(&mut disk[UEFI_RECOVERY_BLOCK_BYTES * 6..UEFI_RECOVERY_BLOCK_BYTES * 7])
+            .unwrap();
+
+        let mut media = valid_block_media();
+        media.media_id = 7;
+        media.block_size = 512;
+        media.last_block = (BLOCKS * 8 - 1) as u64;
+        let mut protocol = block_protocol(&mut media);
+        protocol.read_blocks = recovery_graph_read;
+        let mut path = [1u8, 1, 8, 0, 0xaa, 0xbb, 0xcc, 0xdd, 0x7f, 0xff, 4, 0];
+        GRAPH_SOURCE.store(disk.as_mut_ptr(), Ordering::SeqCst);
+        GRAPH_SOURCE_BYTES.store(disk.len(), Ordering::SeqCst);
+        ROOT_FAIL_LBA.store(usize::MAX, Ordering::SeqCst);
+        MOCK_BLOCK_PROTOCOL.store(
+            (&mut protocol as *mut BlockIoProtocol).cast(),
+            Ordering::SeqCst,
+        );
+        MOCK_DEVICE_PATH.store(path.as_mut_ptr().cast(), Ordering::SeqCst);
+        MOCK_CLOSE_STATUS.store(SUCCESS, Ordering::SeqCst);
+        MOCK_CLOSE_CALLS.store(0, Ordering::SeqCst);
+        let services = mock_boot_services();
+        let image = core::ptr::without_provenance_mut::<c_void>(1);
+        let handle = core::ptr::without_provenance_mut::<c_void>(2);
+        let mut path_scratch = [0u8; MAX_UEFI_DEVICE_PATH_BYTES];
+        let mut probe = UefiRecoveryBlock::new();
+        let selected = unsafe {
+            probe_uefi_recovery_header(
+                &services,
+                image,
+                handle,
+                BlockDeviceId::new(1).unwrap(),
+                &mut path_scratch,
+                &mut probe,
+            )
+        }
+        .unwrap();
+        MOCK_CLOSE_CALLS.store(0, Ordering::SeqCst);
+        let mut volume_scratch = [0xa5; UEFI_RECOVERY_BLOCK_BYTES];
+        let mut primary = [0xa5; UEFI_RECOVERY_BLOCK_BYTES];
+        let mut secondary = [0xa5; UEFI_RECOVERY_BLOCK_BYTES];
+        let mut metadata_scratch = [0xa5; UEFI_RECOVERY_BLOCK_BYTES];
+
+        let recovered = unsafe {
+            recover_selected_uefi_reachable_state::<4, 1, 1, 1>(
+                &services,
+                image,
+                selected,
+                &mut path_scratch,
+                &mut volume_scratch,
+                &mut primary,
+                &mut secondary,
+                &mut metadata_scratch,
+            )
+        }
+        .unwrap();
+        assert_eq!(recovered.selected().superblock(), candidate);
+        assert_eq!(recovered.file_count(), 0);
+        assert!(!recovered.selected().used_fallback());
+        assert_eq!(MOCK_CLOSE_CALLS.load(Ordering::SeqCst), 2);
+        assert!(volume_scratch.iter().all(|byte| *byte == 0));
+        assert!(primary.iter().all(|byte| *byte == 0));
+        assert!(secondary.iter().all(|byte| *byte == 0));
+        assert!(metadata_scratch.iter().all(|byte| *byte == 0));
+
+        ROOT_FAIL_LBA.store(40, Ordering::SeqCst);
+        assert!(matches!(
+            unsafe {
+                recover_selected_uefi_reachable_state::<4, 1, 1, 1>(
+                    &services,
+                    image,
+                    selected,
+                    &mut path_scratch,
+                    &mut volume_scratch,
+                    &mut primary,
+                    &mut secondary,
+                    &mut metadata_scratch,
+                )
+            },
+            Err(UefiReachableRecoveryError::Recovery(
+                RecoveryError::Backend(BlockVolumeError::Device(
+                    UefiBlockDescriptorError::ReadBlock(LOAD_ERROR)
+                ))
+            ))
+        ));
+        assert!(volume_scratch.iter().all(|byte| *byte == 0));
+        assert!(primary.iter().all(|byte| *byte == 0));
+        assert!(secondary.iter().all(|byte| *byte == 0));
+        assert!(metadata_scratch.iter().all(|byte| *byte == 0));
+
+        ROOT_FAIL_LBA.store(usize::MAX, Ordering::SeqCst);
+        MOCK_CLOSE_STATUS.store(LOAD_ERROR, Ordering::SeqCst);
+        assert!(matches!(
+            unsafe {
+                recover_selected_uefi_reachable_state::<4, 1, 1, 1>(
+                    &services,
+                    image,
+                    selected,
+                    &mut path_scratch,
+                    &mut volume_scratch,
+                    &mut primary,
+                    &mut secondary,
+                    &mut metadata_scratch,
+                )
+            },
+            Err(UefiReachableRecoveryError::Firmware(
+                UefiBlockDescriptorError::CloseProtocol(LOAD_ERROR)
+            ))
+        ));
+        assert!(volume_scratch.iter().all(|byte| *byte == 0));
+        assert!(primary.iter().all(|byte| *byte == 0));
+        assert!(secondary.iter().all(|byte| *byte == 0));
+        assert!(metadata_scratch.iter().all(|byte| *byte == 0));
+
+        MOCK_CLOSE_STATUS.store(SUCCESS, Ordering::SeqCst);
+        GRAPH_SOURCE.store(core::ptr::null_mut(), Ordering::SeqCst);
+        GRAPH_SOURCE_BYTES.store(0, Ordering::SeqCst);
+        MOCK_BLOCK_PROTOCOL.store(core::ptr::null_mut(), Ordering::SeqCst);
+        MOCK_DEVICE_PATH.store(core::ptr::null_mut(), Ordering::SeqCst);
     }
 
     #[test]

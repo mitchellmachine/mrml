@@ -120,6 +120,16 @@ operation result. Windows and Arch Linux each pass 36 UEFI-library tests and
 cross-build the target. The reachable-graph validator has not yet been composed
 through this adapter.
 
+Complete reachable-graph validation through that exact UEFI generation is now
+**PARTIALLY IMPLEMENTED**. One operation keeps the selected Block I/O and device-
+path protocols open while the shared `BlockVolume` reads both redundant roots
+and the existing storage validator traverses allocation, object-ID, directory,
+and file metadata. No UEFI-specific filesystem parser or recovery selector is
+introduced. Scratch is erased on every outcome, and close uncertainty discards
+an otherwise valid recovered graph. Windows and Arch Linux each pass 37 UEFI-
+library tests and cross-build the target. Real-loader invocation and transfer of
+the recovered installed owner into early boot remain **PLANNED**.
+
 The `mrml` frontend may expose structured `disk`, `filesystem`, `optical`, and
 `media` operations. The PowerShell-inspired shell projects the same backend as
 typed `Get-*`, `Test-*`, `Initialize-*`, `New-*`, `Format-*`, `Write-*`, and

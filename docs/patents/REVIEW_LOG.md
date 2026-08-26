@@ -1,5 +1,17 @@
 # Patent review log
 
+## 2026-08-26 — UEFI reachable-graph recovery composition
+
+Patent review: **NOT_TRIGGERED** for this integration increment. It composes the
+existing exact-generation UEFI block adapter, `BlockVolume`, redundant-root
+reader, and previously reviewed reachable-graph validator under one conventional
+scoped protocol lifetime, with scratch erasure and failure propagation. It adds
+no storage layout, recovery or selection algorithm, cryptography, caching or
+scheduling policy, placement policy, native fallback, queue/DMA mechanism, or
+hardware isolation method. Broader storage, firmware, adaptive-isolation, and
+Total-MicroVM reviews remain `TRIGGERED`; no patent-clearance or non-infringement
+conclusion is made.
+
 ## 2026-08-26 — Read-only exact-generation UEFI storage adapter
 
 Patent review: **NOT_TRIGGERED** for this interface adapter. It applies

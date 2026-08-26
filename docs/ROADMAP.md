@@ -102,13 +102,21 @@ protocol session. Windows and Arch Linux each pass 36 focused tests and
 cross-build the UEFI target. Composing `BlockVolume` and reachable-graph
 recovery inside that session is the next gate.
 
+The shared reachable-graph validator now executes through the exact selected
+UEFI storage session. The selected protocols stay open across redundant-root
+reads and the complete bounded metadata traversal; all scratch is erased, and
+close uncertainty discards success. Windows and Arch Linux each pass 37 focused
+tests and cross-build the UEFI target. This is **PARTIALLY IMPLEMENTED** mocked-
+firmware integration evidence. Invoking it from the real loader and transferring
+the resulting exact installed-recovery owner into early boot are the next gate.
+
 Selected-device reopening and redundant-root reads are now **PARTIALLY
 IMPLEMENTED**. Exact path/media/geometry and block-zero header revalidation
 precedes both root reads; any mismatch, second-read failure, or protocol-close
 uncertainty erases both roots. Windows and Arch Linux each pass 35 focused tests
 and cross-build the UEFI target. Connecting these roots to the existing
-reachable-graph recovery and transferring that owner from the real loader are
-the next gate.
+reachable-graph recovery is now implemented through the scoped adapter;
+transferring that owner from the real loader is the next gate.
 
 Installed recovery ownership now crosses the Total-admission boundary in the
 controlled backend-parity path. `RecoveredInstalledTotalAdmission` retains the
