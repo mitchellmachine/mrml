@@ -12,6 +12,10 @@ interrupt, or hardware behavior. Broader Total MicroVM and native-storage work
 retain their existing **TRIGGERED** reviews; this technical screen is not patent
 clearance.
 
+Forwarding and redecoding the unchanged bounded envelope through the existing
+service IPC is part of the same **NOT_TRIGGERED** conventional data-transfer
+increment. It adds no new mechanism or authority.
+
 ## 2026-08-26 — First-entry owner to installed Total admission
 
 Patent review: **NOT_TRIGGERED** for refactoring the existing recovered-policy

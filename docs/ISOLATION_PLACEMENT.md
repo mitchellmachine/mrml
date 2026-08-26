@@ -922,9 +922,12 @@ through the existing exact-task, exact-object, `READ`-only, one-use syscall.
 Unknown flags, hidden absent-section bytes, root/volume mismatch, route/source or
 stable-ID substitution, replay, wrong task, and copy uncertainty fail closed.
 The service image decodes the same envelope and uses its recovery subsection for
-the existing storage path. Kernel passes 566 tests; configuration passes 51;
+the existing storage path. Receiver-to-configuration-sender IPC now carries and
+redecodes the complete envelope rather than reducing it to recovery scalars;
+the sender derives monotonic recovery input only after that decode. Kernel
+passes 566 tests; configuration passes 51;
 service image, component-profile UEFI image, and WHP runner cross-build on
-Windows. Service-side installed Total construction and KVM execution for this
+Windows. Service-side consumption of the installed/Total subsections and KVM execution for this
 increment remain **PLANNED**.
 
 Committed recovery now exposes one atomic release-binding operation rather than

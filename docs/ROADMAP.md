@@ -3163,7 +3163,9 @@ syscall transfers recovery state, optional installed identity, required UEFI
 route, and one-boot Total request atomically; hostile flags, padding, presence,
 source, stable-ID, volume, root, task, capability, replay, and user-copy cases
 fail closed. The service image decodes that record and continues its existing
-recovery from the contained recovery state. Windows passes 566 kernel and 51
+recovery from the contained recovery state. The receiver-to-sender service IPC
+now carries and redecodes the entire envelope rather than a detached 40-byte
+subset. Windows passes 566 kernel and 51
 configuration tests; service image, component UEFI profile, and WHP runner
 cross-build. KVM and full service-side installed Total construction are not yet
 claimed.

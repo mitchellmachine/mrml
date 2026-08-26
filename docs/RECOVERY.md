@@ -1580,7 +1580,10 @@ every cross-record mismatch before use. Delivery remains exact-task,
 capability-scoped, one-use, and erases scratch after the validated user copy;
 copy uncertainty consumes the delivery rather than permitting replay. The real
 service image decodes the envelope, while its current storage recovery consumes
-only the recovery subsection. Kernel passes 566 tests and the service/UEFI
+only the recovery subsection. Its receiver forwards the complete canonical
+envelope through bounded service IPC, and the configuration sender redecodes it
+before deriving that recovery input; installed and Total fields are not silently
+dropped at the IPC boundary. Kernel passes 566 tests and the service/UEFI
 images cross-build on Windows. Complete service-side installed Total admission
 remains **PLANNED**.
 

@@ -421,9 +421,9 @@ unsafe extern "sysv64" fn mrml_configuration_receiver(
     let scratch = unsafe { &mut *core::ptr::addr_of_mut!(PROBE_RECEIVER_SCRATCH) };
     scratch.0.fill(0);
     let mut response = [0u8; BLOCK_RESPONSE_BYTES];
-    let mut ready = [0; 8 + HANDOFF_RECOVERY_STATE_BYTES];
+    let mut ready = [0; 8 + BOOT_RECOVERY_ENVELOPE_BYTES];
     ready[..8].copy_from_slice(&session.token().to_le_bytes());
-    ready[8..].copy_from_slice(&recovery.encode());
+    ready[8..].copy_from_slice(&recovery_envelope.encode());
     unsafe { send_buffer(endpoint, sender, &ready, &[]) };
     ready.fill(0);
     for _ in 0..18 {
@@ -1208,7 +1208,7 @@ unsafe extern "sysv64" fn mrml_configuration_sender(
     root_capability: u64,
     shared_read: u64,
 ) -> ! {
-    let mut ready = [0u8; 8 + HANDOFF_RECOVERY_STATE_BYTES];
+    let mut ready = [0u8; 8 + BOOT_RECOVERY_ENVELOPE_BYTES];
     let mut no_capabilities = [0u64; 0];
     let (length, count) = unsafe { receive_buffer(&mut ready, &mut no_capabilities) };
     if length != ready.len() || count != 0 {
@@ -1218,8 +1218,11 @@ unsafe extern "sysv64" fn mrml_configuration_sender(
         ready[..8].try_into().unwrap_or_else(|_| halt()),
     ))
     .unwrap_or_else(|| halt());
-    let recovery = RecoveryStateMetadata::decode(ready[8..].try_into().unwrap_or_else(|_| halt()))
-        .unwrap_or_else(|_| halt());
+    let recovery_envelope = BootRecoveryEnvelope::decode(
+        ready[8..].try_into().unwrap_or_else(|_| halt()),
+    )
+    .unwrap_or_else(|_| halt());
+    let recovery = recovery_envelope.recovery();
     ready.fill(0);
     let mut device = RemoteBlockDevice {
         endpoint,
