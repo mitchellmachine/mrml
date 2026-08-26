@@ -830,6 +830,8 @@ pub struct TraitSupertrait<'source> {
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct TraitImplementation<'source> {
+    generic_parameters: [Option<&'source str>; MAX_SOURCE_TRAIT_ARGUMENTS],
+    generic_parameter_count: usize,
     pub trait_name: &'source str,
     pub trait_name_span: Span,
     trait_arguments: [Option<TypeRef<'source>>; MAX_SOURCE_TRAIT_ARGUMENTS],
@@ -842,6 +844,13 @@ pub struct TraitImplementation<'source> {
 }
 
 impl<'source> TraitImplementation<'source> {
+    pub fn generic_parameters(&self) -> &[Option<&'source str>] {
+        &self.generic_parameters[..self.generic_parameter_count]
+    }
+
+    pub const fn generic_parameter_count(&self) -> usize {
+        self.generic_parameter_count
+    }
     pub fn trait_arguments(&self) -> &[Option<TypeRef<'source>>] {
         &self.trait_arguments[..self.trait_argument_count]
     }
@@ -3249,6 +3258,27 @@ impl<'source> Parser<'source> {
     }
 
     fn trait_implementation(&mut self) -> Result<TraitImplementation<'source>, ParseError> {
+        let mut generic_parameters = [None; MAX_SOURCE_TRAIT_ARGUMENTS];
+        let mut generic_parameter_count = 0usize;
+        if self.take_text("<")?.is_some() {
+            loop {
+                if generic_parameter_count == MAX_SOURCE_TRAIT_ARGUMENTS {
+                    let token = self.peek()?;
+                    return Err(self.error(ParseErrorKind::TooManyGenericArguments, token));
+                }
+                let parameter = self.identifier()?;
+                generic_parameters[generic_parameter_count] = Some(parameter.text);
+                generic_parameter_count += 1;
+                if self.take_text(",")?.is_some() {
+                    continue;
+                }
+                let close = self.take()?;
+                if !close.is_some_and(|token| token.text == ">") {
+                    return Err(self.error(ParseErrorKind::UnterminatedDelimiter, close));
+                }
+                break;
+            }
+        }
         let trait_name = self.identifier()?;
         let (trait_arguments, trait_argument_count, consumed_outer_close) =
             self.source_trait_arguments()?;
@@ -3294,6 +3324,8 @@ impl<'source> Parser<'source> {
             associated_type_count += 1;
         };
         Ok(TraitImplementation {
+            generic_parameters,
+            generic_parameter_count,
             trait_name: trait_name.text,
             trait_name_span: trait_name.span,
             trait_arguments,
@@ -3630,6 +3662,19 @@ mod tests {
         };
         assert_eq!(implementation.trait_argument_count(), 2);
         assert_eq!(implementation.trait_arguments()[1].unwrap().text, "core::primitive::u16");
+    }
+
+    #[test]
+    fn parses_bounded_flat_generic_trait_implementations() {
+        let source = "trait Identity<Input> { type Output; } impl<T> Identity<T> for T { type Output = T; }";
+        let module: TestModule<'_> = Parser::new(source).parse_module().unwrap();
+        let Some(Item::TraitImplementation(implementation)) = module.items()[1] else {
+            panic!("expected implementation")
+        };
+        assert_eq!(implementation.generic_parameters(), &[Some("T")]);
+        assert_eq!(implementation.trait_arguments()[0].unwrap().text, "T");
+        assert_eq!(implementation.self_type.text, "T");
+        assert_eq!(implementation.associated_types()[0].unwrap().value.text, "T");
     }
 
     #[test]

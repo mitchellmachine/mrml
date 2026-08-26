@@ -432,6 +432,27 @@ mod tests {
     }
 
     #[test]
+    fn proves_flat_generic_source_implementations_before_codegen() {
+        let source = concat!(
+            "trait Identity<Input> { type Output; } ",
+            "impl<T> Identity<T> for T { type Output = T; } ",
+            "#[unsafe(no_mangle)] pub extern \"C\" fn answer() -> u64 ",
+            "where u32: Identity<u32>, <u8 as Identity<u8>>::Output = u8 { 42 }"
+        );
+        compile(source, "answer", ObjectFormat::Coff).unwrap();
+
+        let mismatch = source.replace("::Output = u8", "::Output = u16");
+        let error = compile(&mismatch, "answer", ObjectFormat::Coff).unwrap_err();
+        assert!(matches!(
+            error.kind,
+            CompileErrorKind::TraitObligation(SourceTraitObligationError {
+                kind: crate::SourceTraitObligationErrorKind::ProjectionMismatch,
+                ..
+            })
+        ));
+    }
+
+    #[test]
     fn reports_each_pipeline_boundary() {
         let parse = compile("fn broken(", "broken", ObjectFormat::Elf64).unwrap_err();
         assert!(matches!(parse.kind, CompileErrorKind::Parse(_)));
