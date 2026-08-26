@@ -16005,6 +16005,7 @@ fn runtime_reference_call_origin_parameter<const MAX_PARAMETERS: usize, const MA
                                 iteration_reaches_backedge = false;
                                 break;
                             }
+                            crate::LoopOperation::Continue => break,
                             crate::LoopOperation::ConditionalBlock(block_index) => {
                                 let block = loop_statement
                                     .conditional_blocks()
@@ -37834,6 +37835,17 @@ mod tests {
                 ..loop_choose
             }),
             None
+        );
+        assert_eq!(
+            runtime_reference_call_origin_parameter::<2, 40>(RuntimeCallTarget {
+                body_expression: concat!(
+                    "let mut local: u16 = 1; let mut changed: &mut u16 = value; ",
+                    "loop { changed = value; if first { return changed; } ",
+                    "continue; changed = &mut local; }"
+                ),
+                ..loop_choose
+            }),
+            Some(0)
         );
     }
 
