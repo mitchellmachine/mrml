@@ -35806,7 +35806,7 @@ mod tests {
             let mut facts = RuntimeBodyFacts::EMPTY;
             preanalyze_runtime_body_declarations::<_, 8, 32>(
                 &function,
-                &NoConstants,
+                &MutableReferenceCallResolver,
                 &body,
                 "u16",
                 function.body_expression_span.start,
@@ -35839,6 +35839,13 @@ mod tests {
             CodegenErrorKind::RuntimeBorrowConflict
         );
         analyze("fn value(first: &mut u16, second: &mut u16) -> u16 { let pair = (&mut *first,); let child: &mut u16 = pair.0; let grandchild: &mut u16 = &mut *child; *grandchild += 1; let restored: &mut u16 = &mut *first; *restored }").unwrap();
+
+        let projected_call_assignment_live = "fn value(first: &mut u16, second: &mut u16) -> u16 { let pair = (&mut *first,); let mut child: &mut u16 = second; child = identity(pair.0); let competing: &mut u16 = &mut *first; *competing += 1; *child }";
+        assert_eq!(
+            analyze(projected_call_assignment_live).unwrap_err().kind,
+            CodegenErrorKind::RuntimeBorrowConflict
+        );
+        analyze("fn value(first: &mut u16, second: &mut u16) -> u16 { let pair = (&mut *first,); let mut child: &mut u16 = second; child = identity(pair.0); *child += 1; let restored: &mut u16 = &mut *first; *restored }").unwrap();
     }
 
     #[test]
