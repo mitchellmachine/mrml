@@ -369,6 +369,27 @@ mod tests {
     }
 
     #[test]
+    fn proves_exact_source_supertraits_through_generic_parents() {
+        let source = concat!(
+            "trait Gate {} trait Parent {} trait Child: Parent {} ",
+            "impl Gate for u32 {} impl Parent for u32 where u32: Gate {} ",
+            "impl Child for u32 {} ",
+            "#[unsafe(no_mangle)] pub extern \"C\" fn answer() -> u64 { 42 }"
+        );
+        compile(source, "answer", ObjectFormat::Coff).unwrap();
+
+        let unavailable = source.replace("impl Gate for u32 {} ", "");
+        let error = compile(&unavailable, "answer", ObjectFormat::Coff).unwrap_err();
+        assert!(matches!(
+            error.kind,
+            CompileErrorKind::TraitImplementation(SourceTraitImplementationError {
+                kind: crate::SourceTraitImplementationErrorKind::MissingSupertraitImplementation,
+                ..
+            })
+        ));
+    }
+
+    #[test]
     fn rejects_missing_source_associated_type_values_before_codegen() {
         let complete = concat!(
             "trait Iterator { type Item; } impl Iterator for u32 { type Item = u8; } ",

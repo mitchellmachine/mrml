@@ -1169,22 +1169,35 @@ impl<'source> SourceTraitImplementationTable<'source> {
             .get_by_id(trait_id)
             .ok_or(SourceTraitImplementationErrorKind::UnknownTrait)?;
         for supertrait in declaration.supertraits().iter().flatten() {
-            let goal = canonicalize_implemented_trait_goal(ImplementedTraitGoal::new(
+            let goal = ImplementedTraitGoal::new(
                 *supertrait,
                 TraitGoalType::Concrete(self_type),
-            ))
-            .map_err(SourceTraitImplementationErrorKind::Goal)?;
-            match self.implementations.solve(goal) {
-                TraitGoalSolution::Unique(_) => {}
-                TraitGoalSolution::NoSolution => {
+            );
+            match solve_concrete_trait_goal_with_projection_environment(
+                &self.implementations,
+                &self.generic_implementations,
+                &TraitWhereClauseDatabase::EMPTY,
+                &self.associated_types,
+                &self.generic_associated_types,
+                goal,
+            )
+            .map_err(SourceTraitImplementationErrorKind::Goal)?
+            {
+                TraitProofSolution::Proven => {}
+                TraitProofSolution::NoSolution => {
                     return Err(
                         SourceTraitImplementationErrorKind::MissingSupertraitImplementation,
                     );
                 }
-                TraitGoalSolution::Ambiguous => {
+                TraitProofSolution::Ambiguous => {
                     return Err(
                         SourceTraitImplementationErrorKind::AmbiguousSupertraitImplementation,
                     );
+                }
+                TraitProofSolution::Cycle | TraitProofSolution::Overflow => {
+                    return Err(SourceTraitImplementationErrorKind::Goal(
+                        TraitGoalError::InvalidGoal,
+                    ));
                 }
             }
             self.prove_supertraits(*supertrait, self_type, traits, depth + 1)?;
@@ -8744,6 +8757,39 @@ mod tests {
         let error = SourceTraitImplementationTable::from_module(&missing, &traits).unwrap_err();
         assert_eq!(
             error.kind,
+            SourceTraitImplementationErrorKind::MissingSupertraitImplementation
+        );
+
+        let generic_parent = Parser::new(concat!(
+            "trait Parent {} trait Child: Parent {} ",
+            "impl<T> Parent for T {} impl Child for u32 {}"
+        ))
+        .parse_module::<8, 1>()
+        .unwrap();
+        let traits = SourceTraitDeclarationTable::from_module(&generic_parent).unwrap();
+        SourceTraitImplementationTable::from_module(&generic_parent, &traits).unwrap();
+
+        let conditional_parent = Parser::new(concat!(
+            "trait Gate {} trait Parent {} trait Child: Parent {} ",
+            "impl Gate for u32 {} impl Parent for u32 where u32: Gate {} ",
+            "impl Child for u32 {}"
+        ))
+        .parse_module::<10, 1>()
+        .unwrap();
+        let traits = SourceTraitDeclarationTable::from_module(&conditional_parent).unwrap();
+        SourceTraitImplementationTable::from_module(&conditional_parent, &traits).unwrap();
+
+        let unavailable = Parser::new(concat!(
+            "trait Gate {} trait Parent {} trait Child: Parent {} ",
+            "impl Parent for u32 where u32: Gate {} impl Child for u32 {}"
+        ))
+        .parse_module::<8, 1>()
+        .unwrap();
+        let traits = SourceTraitDeclarationTable::from_module(&unavailable).unwrap();
+        assert_eq!(
+            SourceTraitImplementationTable::from_module(&unavailable, &traits)
+                .unwrap_err()
+                .kind,
             SourceTraitImplementationErrorKind::MissingSupertraitImplementation
         );
     }
