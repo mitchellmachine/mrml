@@ -1,10 +1,19 @@
 #![no_std]
 
+mod transport;
+
 use core::array;
 use mrml_interface_gui_surface_v1::OpaqueHandle;
 use mrml_kernel::{
     Capability, DisplayOutputIdentity, GraphicsBufferDescriptor, GraphicsProtocolError,
     SurfaceIdentity, SurfaceObjectResolver,
+};
+
+pub use transport::{
+    SURFACE_CALL_BYTES, SurfaceCallFrame, SurfaceMicrovmQueue, SurfaceMicrovmQueueError,
+    SurfaceMicrovmServiceError, SurfaceMicrovmTicket, SurfaceNativeTransportError,
+    decode_surface_call, encode_surface_call, serve_microvm_surface_once,
+    serve_native_surface_once,
 };
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]

@@ -208,10 +208,13 @@ advances the slot generation and returns retained authority for explicit cleanup
 Each service instance also requires a nonzero supervisor generation encoded
 separately from the slot counter, so a restarted registry cannot accept an old
 same-slot handle. Slot-counter exhaustion permanently retires that slot rather
-than wrapping. It does not mint capabilities. The compositor runtime,
-object-creation policy,
-native/microVM transport, presentation, and persistent desktop state remain
-unimplemented.
+than wrapping. It does not mint capabilities. A bounded transport slice is now
+**PARTIALLY IMPLEMENTED**: native task IPC and a backend-neutral microVM queue
+carry the identical fixed surface frame into the same registry and kernel
+admission. Native calls reject unexpected senders and capability transfer;
+microVM queue reset invalidates every old ticket. The compositor runtime,
+object-creation policy, presentation, persistent desktop state, guest mapping,
+and WHP/KVM GUI execution remain unimplemented.
 
 Constitution review for this bounded foundation:
 

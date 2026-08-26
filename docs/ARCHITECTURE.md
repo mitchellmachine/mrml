@@ -87,7 +87,13 @@ The stable wire-protocol portion is now **PARTIALLY IMPLEMENTED** as
 `org.mrml.interface.gui.surface@1`: a fingerprinted fixed commit/state/response
 codec feeds the same admission through a trusted handle resolver. The resolver,
 not interface bytes, supplies live capabilities and authoritative descriptors.
-Native IPC and microVM transports for these bytes remain **PLANNED**.
+The compositor package now carries the same 312-byte call frame through either
+capability-checked native task IPC or a bounded, generation-reset microVM queue.
+Both paths resolve trusted registry state and call the same kernel admission
+before returning a data-plane binding; neither transport can mint authority.
+This is **PARTIALLY IMPLEMENTED** hosted transport and unit-test evidence. The
+queue is not yet mapped into a guest, and WHP/KVM execution, presentation, and
+a representative GUI application remain **PLANNED**.
 The first compositor-side object registry is **PARTIALLY IMPLEMENTED** as a
 fixed-capacity `no_std` service component. It retains already-created exact
 capabilities and authoritative descriptors behind generational interface

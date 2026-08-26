@@ -1124,6 +1124,15 @@ wrong-kind lookup, stale reuse, duplicate rejection, exact descriptor retention,
 and the canonical interface-to-kernel admission path; recovered execution was
 not tested.
 
+The bounded native and microVM surface transports add no recovery authority.
+Recovery discards native inbox state and every microVM request, completion, and
+ticket; it recreates the control-plane capabilities and registry first, then
+creates a queue with a strictly newer nonzero generation. It never replays an
+uncertain or in-flight commit. Eight focused compositor tests on both Windows
+and Arch Linux/WSL cover the identical wire frame, native no-capability-transfer
+rule, common kernel admission, and stale-ticket rejection after queue reset;
+guest-mapped and recovered execution were not tested.
+
 The focused recovery oracle now includes the two-vCPU component profiles
 `whp_component_service_smp_probe` and `kvm_component_service_smp_probe`. Each
 must use fresh signed kernel/package artifacts, the exact signed ZIM/Zstd

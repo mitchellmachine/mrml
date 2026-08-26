@@ -2153,9 +2153,12 @@ eight-rectangle damage ceiling, and typed response. A kernel adapter revalidates
 the source-level state, resolves opaque handles through a trusted object resolver,
 compares wire buffer metadata with the authoritative descriptor, and invokes the
 same capability admission. Windows and Arch Linux/WSL pass three interface tests
-and 535 kernel tests. Native IPC, microVM queue transport, registry lifecycle in
-a running compositor, and the representative dual-placement GUI application
-remain next.
+and 535 kernel tests. Native IPC and a backend-neutral microVM queue are now
+**PARTIALLY IMPLEMENTED** with the identical fixed surface frame and common
+registry/kernel admission; eight focused compositor tests pass on Windows and
+Arch Linux/WSL. The queue is not guest-mapped or exercised through WHP/KVM;
+registry lifecycle in a running compositor and the representative dual-placement
+GUI application remain next.
 
 **PARTIALLY IMPLEMENTED (step 6 registry prerequisite):** the new
 `org.mrml.service.compositor` package owns a bounded volatile generational table

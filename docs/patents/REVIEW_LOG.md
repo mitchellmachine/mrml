@@ -5848,6 +5848,20 @@ generation algorithm. Broader assembly support and compiler completion remain
 partial; this technical screen does not establish clearance or infringement and
 does not replace independent human dual review.
 
+# 2026-08-26 — Native and microVM surface transport slice
+
+**Result: TRIGGERED under the existing graphics-object/compositor review.**
+This increment carries the already reviewed fixed surface record through the
+existing capability-checked task IPC or a conventional bounded array queue with
+monotonic sequence numbers, explicit backpressure, typed completion, and
+generation-reset invalidation. Both paths use the same existing registry and
+kernel admission; the queue cannot create capabilities or select objects. It
+adds no composition, damage-discovery, rendering, presentation, scheduling,
+compression, remote-display, or hardware algorithm, and it does not yet map
+shared guest memory. The broader surface/compositor/microVM review remains
+triggered; no patent-clearance, non-infringement, or infringement conclusion is
+made, and independent human dual review remains required.
+
 # 2026-08-26 — Base-register naked memory operands
 
 **Result: NOT_TRIGGERED after the memory-encoding review.** This increment uses
