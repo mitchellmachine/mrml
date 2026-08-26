@@ -1922,17 +1922,17 @@ fn compile_x86_64_naked_function<const MAX_BYTES: usize, const MAX_PARAMETERS: u
     MachineCode::from_bytes(&bytes[..length]).map_err(error)
 }
 
-fn encode_x86_64_naked_instruction(instruction: &str) -> Option<([u8; 4], usize, bool)> {
+fn encode_x86_64_naked_instruction(instruction: &str) -> Option<([u8; 10], usize, bool)> {
     let fixed = match instruction {
-        "nop" => Some(([0x90, 0, 0, 0], 1, false)),
-        "ret" => Some(([0xc3, 0, 0, 0], 1, true)),
-        "int3" => Some(([0xcc, 0, 0, 0], 1, false)),
-        "ud2" => Some(([0x0f, 0x0b, 0, 0], 2, true)),
-        "cli" => Some(([0xfa, 0, 0, 0], 1, false)),
-        "sti" => Some(([0xfb, 0, 0, 0], 1, false)),
-        "hlt" => Some(([0xf4, 0, 0, 0], 1, true)),
-        "swapgs" => Some(([0x0f, 0x01, 0xf8, 0], 3, false)),
-        "iretq" => Some(([0x48, 0xcf, 0, 0], 2, true)),
+        "nop" => Some(([0x90, 0, 0, 0, 0, 0, 0, 0, 0, 0], 1, false)),
+        "ret" => Some(([0xc3, 0, 0, 0, 0, 0, 0, 0, 0, 0], 1, true)),
+        "int3" => Some(([0xcc, 0, 0, 0, 0, 0, 0, 0, 0, 0], 1, false)),
+        "ud2" => Some(([0x0f, 0x0b, 0, 0, 0, 0, 0, 0, 0, 0], 2, true)),
+        "cli" => Some(([0xfa, 0, 0, 0, 0, 0, 0, 0, 0, 0], 1, false)),
+        "sti" => Some(([0xfb, 0, 0, 0, 0, 0, 0, 0, 0, 0], 1, false)),
+        "hlt" => Some(([0xf4, 0, 0, 0, 0, 0, 0, 0, 0, 0], 1, true)),
+        "swapgs" => Some(([0x0f, 0x01, 0xf8, 0, 0, 0, 0, 0, 0, 0], 3, false)),
+        "iretq" => Some(([0x48, 0xcf, 0, 0, 0, 0, 0, 0, 0, 0], 2, true)),
         _ => None,
     };
     if fixed.is_some() {
@@ -1942,32 +1942,92 @@ fn encode_x86_64_naked_instruction(instruction: &str) -> Option<([u8; 4], usize,
     let operands = operands.trim();
     match mnemonic {
         "push" | "pop" => {
-            let register = x86_64_naked_register(operands)?;
+            let register = x86_64_naked_register(operands);
             let opcode = if mnemonic == "push" { 0x50 } else { 0x58 };
-            if register < 8 {
-                Some(([opcode + register, 0, 0, 0], 1, false))
+            if let Some(register) = register {
+                if register < 8 {
+                    Some(([opcode + register, 0, 0, 0, 0, 0, 0, 0, 0, 0], 1, false))
+                } else {
+                    Some((
+                        [0x41, opcode + (register & 7), 0, 0, 0, 0, 0, 0, 0, 0],
+                        2,
+                        false,
+                    ))
+                }
+            } else if mnemonic == "push" {
+                let immediate = x86_64_naked_immediate(operands)?;
+                if immediate <= i8::MAX as u64 {
+                    Some(([0x6a, immediate as u8, 0, 0, 0, 0, 0, 0, 0, 0], 2, false))
+                } else if immediate <= i32::MAX as u64 {
+                    let mut encoding = [0u8; 10];
+                    encoding[0] = 0x68;
+                    encoding[1..5].copy_from_slice(&(immediate as u32).to_le_bytes());
+                    Some((encoding, 5, false))
+                } else {
+                    None
+                }
             } else {
-                Some(([0x41, opcode + (register & 7), 0, 0], 2, false))
+                None
             }
         }
         "jmp" => {
             let register = x86_64_naked_register(operands)?;
             if register < 8 {
-                Some(([0xff, 0xe0 + register, 0, 0], 2, true))
+                Some(([0xff, 0xe0 + register, 0, 0, 0, 0, 0, 0, 0, 0], 2, true))
             } else {
-                Some(([0x41, 0xff, 0xe0 + (register & 7), 0], 3, true))
+                Some((
+                    [0x41, 0xff, 0xe0 + (register & 7), 0, 0, 0, 0, 0, 0, 0],
+                    3,
+                    true,
+                ))
             }
         }
         "mov" => {
             let (destination, source) = operands.split_once(',')?;
             let destination = x86_64_naked_register(destination.trim())?;
-            let source = x86_64_naked_register(source.trim())?;
-            let rex = 0x48 | ((source >> 3) << 2) | (destination >> 3);
-            let modrm = 0xc0 | ((source & 7) << 3) | (destination & 7);
-            Some(([rex, 0x89, modrm, 0], 3, false))
+            if let Some(source) = x86_64_naked_register(source.trim()) {
+                let rex = 0x48 | ((source >> 3) << 2) | (destination >> 3);
+                let modrm = 0xc0 | ((source & 7) << 3) | (destination & 7);
+                Some(([rex, 0x89, modrm, 0, 0, 0, 0, 0, 0, 0], 3, false))
+            } else {
+                let immediate = x86_64_naked_immediate(source.trim())?;
+                let mut encoding = [0u8; 10];
+                encoding[0] = 0x48 | (destination >> 3);
+                encoding[1] = 0xb8 + (destination & 7);
+                encoding[2..10].copy_from_slice(&immediate.to_le_bytes());
+                Some((encoding, 10, false))
+            }
         }
         _ => None,
     }
+}
+
+fn x86_64_naked_immediate(source: &str) -> Option<u64> {
+    let (radix, digits) = source
+        .strip_prefix("0x")
+        .map_or((10u64, source), |digits| (16, digits));
+    let mut value = 0u64;
+    let mut saw_digit = false;
+    let mut separator = false;
+    for byte in digits.bytes() {
+        if byte == b'_' && saw_digit && !separator {
+            separator = true;
+            continue;
+        }
+        let digit = match byte {
+            b'0'..=b'9' => (byte - b'0') as u64,
+            b'a'..=b'f' if radix == 16 => (byte - b'a' + 10) as u64,
+            b'A'..=b'F' if radix == 16 => (byte - b'A' + 10) as u64,
+            _ => return None,
+        };
+        if digit >= radix {
+            return None;
+        }
+        value = value.checked_mul(radix)?.checked_add(digit)?;
+        saw_digit = true;
+        separator = false;
+    }
+    (saw_digit && !separator).then_some(value)
 }
 
 fn x86_64_naked_register(register: &str) -> Option<u8> {
@@ -28377,7 +28437,7 @@ mod tests {
         let module = Parser::new(concat!(
             "#[unsafe(naked)] pub unsafe extern \"C\" fn entry() ",
             "{ naked_asm!(\"push rax\", \"push r12\", \"mov rax, rsp\", ",
-            "\"mov r9, r15\", \"pop r12\", \"pop rax\", \"swapgs\", \"iretq\"); }"
+            "\"mov r9, r15\", \"mov r10, 0x1234\", \"pop r12\", \"swapgs\", \"iretq\"); }"
         ))
         .parse_module::<1, 1>()
         .unwrap();
@@ -28390,8 +28450,8 @@ mod tests {
         assert_eq!(
             code.bytes(),
             &[
-                0x50, 0x41, 0x54, 0x48, 0x89, 0xe0, 0x4d, 0x89, 0xf9, 0x41, 0x5c, 0x58, 0x0f, 0x01,
-                0xf8, 0x48, 0xcf,
+                0x50, 0x41, 0x54, 0x48, 0x89, 0xe0, 0x4d, 0x89, 0xf9, 0x49, 0xba, 0x34, 0x12, 0, 0,
+                0, 0, 0, 0, 0x41, 0x5c, 0x0f, 0x01, 0xf8, 0x48, 0xcf,
             ]
         );
 
@@ -28418,6 +28478,14 @@ mod tests {
             ),
             (
                 "#[unsafe(naked)] unsafe extern \"C\" fn f() { naked_asm!(\"push eax\", \"ret\"); }",
+                CodegenErrorKind::InvalidNakedAssembly,
+            ),
+            (
+                "#[unsafe(naked)] unsafe extern \"C\" fn f() { naked_asm!(\"push 0x80000000\", \"ret\"); }",
+                CodegenErrorKind::InvalidNakedAssembly,
+            ),
+            (
+                "#[unsafe(naked)] unsafe extern \"C\" fn f() { naked_asm!(\"mov rax, 1__0\", \"ret\"); }",
                 CodegenErrorKind::InvalidNakedAssembly,
             ),
             (
