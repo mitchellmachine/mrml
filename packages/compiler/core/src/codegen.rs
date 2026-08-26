@@ -15604,7 +15604,12 @@ fn runtime_reference_call_origin_parameter<const MAX_PARAMETERS: usize, const MA
         local_return_compatibility: [bool; MAX_PARAMETERS],
         local_count: usize,
         merge: &mut F,
-    ) -> Option<()>
+    ) -> Option<
+        Option<(
+            [Option<usize>; MAX_PARAMETERS],
+            RuntimeCalleeProjectedOrigins<MAX_PARAMETERS>,
+        )>,
+    >
     where
         F: FnMut(usize) -> Option<()>,
     {
@@ -15647,12 +15652,36 @@ fn runtime_reference_call_origin_parameter<const MAX_PARAMETERS: usize, const MA
                         .has_same_origins(projected_origins),
             )
         };
-        for action_index in block
+        let mut exit_origins = [None; MAX_PARAMETERS];
+        let mut exit_projected_origins = RuntimeCalleeProjectedOrigins::EMPTY;
+        let mut exit_count = 0usize;
+        for ((action_index, target_kind), _) in block
             .conditional_break_action_indices()
             .iter()
-            .chain(block.conditional_continue_action_indices())
+            .zip(block.conditional_break_targets())
+            .zip(block.conditional_break_control_orders())
         {
-            if !prefix_preserves_state(*action_index)? {
+            if *target_kind != crate::NestedLoopControlTarget::Inner {
+                return None;
+            }
+            let (_, origins, projected, _, _, _, _) = state_at(*action_index)?;
+            merge_loop_exit_origins(
+                &mut exit_origins,
+                &mut exit_projected_origins,
+                &mut exit_count,
+                origins,
+                projected.retain_local_prefix(local_count),
+                local_count,
+            )?;
+        }
+        for (action_index, target_kind) in block
+            .conditional_continue_action_indices()
+            .iter()
+            .zip(block.conditional_continue_targets())
+        {
+            if *target_kind != crate::NestedLoopControlTarget::Inner
+                || !prefix_preserves_state(*action_index)?
+            {
                 return None;
             }
         }
@@ -15662,10 +15691,25 @@ fn runtime_reference_call_origin_parameter<const MAX_PARAMETERS: usize, const MA
             .flatten()
             .zip(block.unconditional_control_action_indices())
         {
-            if !matches!(control, crate::NestedLoopUnconditionalControl::Return(_))
-                && !prefix_preserves_state(*action_index)?
-            {
-                return None;
+            match *control {
+                crate::NestedLoopUnconditionalControl::Break(
+                    crate::NestedLoopControlTarget::Inner,
+                ) => {
+                    let (_, origins, projected, _, _, _, _) = state_at(*action_index)?;
+                    merge_loop_exit_origins(
+                        &mut exit_origins,
+                        &mut exit_projected_origins,
+                        &mut exit_count,
+                        origins,
+                        projected.retain_local_prefix(local_count),
+                        local_count,
+                    )?;
+                }
+                crate::NestedLoopUnconditionalControl::Continue(
+                    crate::NestedLoopControlTarget::Inner,
+                ) if prefix_preserves_state(*action_index)? => {}
+                crate::NestedLoopUnconditionalControl::Return(_) => {}
+                _ => return None,
             }
         }
         if block.unconditional_controls().is_empty()
@@ -15730,7 +15774,17 @@ fn runtime_reference_call_origin_parameter<const MAX_PARAMETERS: usize, const MA
                 count,
             )?)?;
         }
-        Some(())
+        if block.entry_condition.is_some() {
+            merge_loop_exit_origins(
+                &mut exit_origins,
+                &mut exit_projected_origins,
+                &mut exit_count,
+                local_origins,
+                projected_origins,
+                local_count,
+            )?;
+        }
+        Some((exit_count != 0).then_some((exit_origins, exit_projected_origins)))
     }
 
     let body =
@@ -16016,6 +16070,19 @@ fn runtime_reference_call_origin_parameter<const MAX_PARAMETERS: usize, const MA
                                     })
                                 })
                         }
+                        crate::LoopOperation::NestedBlock(block_index) => loop_statement
+                            .nested_blocks()
+                            .get(block_index)
+                            .and_then(|value| *value)
+                            .is_some_and(|block| {
+                                block.actions().iter().flatten().any(|action| {
+                                    matches!(
+                                        action,
+                                        crate::ConditionalLoopAction::Local(_)
+                                            | crate::ConditionalLoopAction::Assignment(_)
+                                    )
+                                })
+                            }),
                         _ => false,
                     },
                 );
@@ -16297,18 +16364,27 @@ fn runtime_reference_call_origin_parameter<const MAX_PARAMETERS: usize, const MA
                                     .nested_blocks()
                                     .get(block_index)
                                     .and_then(|value| *value)?;
-                                analyze_nested_loop_origins::<_, MAX_PARAMETERS, MAX_NODES>(
-                                    target,
-                                    block,
-                                    iteration_names,
-                                    iteration_origins,
-                                    iteration_projected_origins,
-                                    iteration_types,
-                                    iteration_mutability,
-                                    iteration_return_compatibility,
-                                    iteration_local_count,
-                                    &mut merge,
-                                )?;
+                                let nested_exit =
+                                    analyze_nested_loop_origins::<_, MAX_PARAMETERS, MAX_NODES>(
+                                        target,
+                                        block,
+                                        iteration_names,
+                                        iteration_origins,
+                                        iteration_projected_origins,
+                                        iteration_types,
+                                        iteration_mutability,
+                                        iteration_return_compatibility,
+                                        iteration_local_count,
+                                        &mut merge,
+                                    )?;
+                                let Some((nested_origins, nested_projected_origins)) = nested_exit
+                                else {
+                                    iteration_reaches_backedge = false;
+                                    break;
+                                };
+                                iteration_origins[..iteration_local_count]
+                                    .copy_from_slice(&nested_origins[..iteration_local_count]);
+                                iteration_projected_origins = nested_projected_origins;
                             }
                             _ => return None,
                         }
@@ -38196,6 +38272,36 @@ mod tests {
                 body_expression: concat!(
                     "loop { loop { let mut local: u16 = 1; ",
                     "let changed: &mut u16 = &mut local; if first { return changed; } } }"
+                ),
+                ..nested_loop
+            }),
+            None
+        );
+        assert_eq!(
+            runtime_reference_call_origin_parameter::<2, 40>(RuntimeCallTarget {
+                body_expression: concat!(
+                    "let mut local: u16 = 1; let mut changed: &mut u16 = &mut local; ",
+                    "loop { loop { changed = value; break; } return changed; }"
+                ),
+                ..nested_loop
+            }),
+            Some(0)
+        );
+        assert_eq!(
+            runtime_reference_call_origin_parameter::<2, 40>(RuntimeCallTarget {
+                body_expression: concat!(
+                    "let mut local: u16 = 1; let mut changed: &mut u16 = value; ",
+                    "loop { loop { changed = &mut local; break; } return changed; }"
+                ),
+                ..nested_loop
+            }),
+            None
+        );
+        assert_eq!(
+            runtime_reference_call_origin_parameter::<2, 40>(RuntimeCallTarget {
+                body_expression: concat!(
+                    "let mut local: u16 = 1; let mut changed: &mut u16 = &mut local; ",
+                    "loop { while first { changed = value; break; } return changed; }"
                 ),
                 ..nested_loop
             }),
