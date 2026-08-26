@@ -2077,9 +2077,16 @@ pub fn compile_x86_64_naked_relocatable<
 #[derive(Clone, Copy)]
 enum X86_64InlineAssembly<'source> {
     Nop,
-    CompareRax { input: &'source str },
-    SetRax { output: &'source str },
-    IncrementRax { inout: &'source str },
+    CompareRax {
+        input: &'source str,
+    },
+    SetRax {
+        output: &'source str,
+    },
+    IncrementRax {
+        input: &'source str,
+        output: Option<&'source str>,
+    },
 }
 
 #[derive(Clone, Copy)]
@@ -2168,7 +2175,13 @@ fn x86_64_inline_assembly(
         X86_64InlineOperandKind::Input => Ok(Some(X86_64InlineAssembly::CompareRax { input })),
         X86_64InlineOperandKind::Output => Ok(Some(X86_64InlineAssembly::SetRax { output: input })),
         X86_64InlineOperandKind::InOut => {
-            Ok(Some(X86_64InlineAssembly::IncrementRax { inout: input }))
+            let mut operands = input.split("=>");
+            let input = operands.next().unwrap_or_default().trim();
+            let output = operands.next().map(str::trim);
+            if operands.next().is_some() || input.is_empty() || output.is_some_and(str::is_empty) {
+                return Err(CodegenErrorKind::InvalidInlineAssembly);
+            }
+            Ok(Some(X86_64InlineAssembly::IncrementRax { input, output }))
         }
     }
 }
@@ -8407,6 +8420,51 @@ fn preanalyze_runtime_assignment_reads<
     result
 }
 
+fn preanalyze_x86_64_inline_local_access(
+    facts: &mut RuntimeBodyFacts<'_>,
+    local: RuntimeLocal<'_>,
+    access: RuntimePlaceAccess,
+    span: Span,
+    body_start: usize,
+) -> Result<(), CodegenError> {
+    let base = RuntimePlaceIdentity::Local(local.id);
+    let projections = RuntimePlaceProjections::EMPTY;
+    facts
+        .push_assignment_access(RuntimePlaceAccessFact {
+            base,
+            projections,
+            ty: local.ty,
+            access,
+            span,
+        })
+        .map_err(|kind| CodegenError {
+            kind,
+            span: translate_span(body_start, span),
+        })?;
+    let path = facts
+        .find_move_path(base, projections)
+        .ok_or(CodegenError {
+            kind: CodegenErrorKind::InvalidRuntimePlaceFacts,
+            span: translate_span(body_start, span),
+        })?;
+    let effect = match access {
+        RuntimePlaceAccess::Write => RuntimePlaceEffectKind::Write,
+        RuntimePlaceAccess::ReadModifyWrite => RuntimePlaceEffectKind::ReadModifyWrite,
+        RuntimePlaceAccess::Read => {
+            return Err(CodegenError {
+                kind: CodegenErrorKind::InvalidRuntimePlaceFacts,
+                span: translate_span(body_start, span),
+            });
+        }
+    };
+    facts
+        .push_place_effect(path, effect, span)
+        .map_err(|kind| CodegenError {
+            kind,
+            span: translate_span(body_start, span),
+        })
+}
+
 fn preanalyze_runtime_expression_statement_reads<
     'source,
     R: ConstantResolver,
@@ -8473,73 +8531,77 @@ fn preanalyze_runtime_expression_statement_reads<
                         span: translate_span(body_start, statement.span),
                     }
                 })?;
-            let base = RuntimePlaceIdentity::Local(local.id);
-            let projections = RuntimePlaceProjections::EMPTY;
-            let fact = RuntimePlaceAccessFact {
-                base,
-                projections,
-                ty: local.ty,
-                access: RuntimePlaceAccess::Write,
-                span: statement.span,
-            };
-            facts
-                .push_assignment_access(fact)
-                .map_err(|kind| CodegenError {
-                    kind,
-                    span: translate_span(body_start, statement.span),
-                })?;
-            let path = facts
-                .find_move_path(base, projections)
-                .ok_or(CodegenError {
-                    kind: CodegenErrorKind::InvalidRuntimePlaceFacts,
-                    span: translate_span(body_start, statement.span),
-                })?;
-            return facts
-                .push_place_effect(path, RuntimePlaceEffectKind::Write, statement.span)
-                .map_err(|kind| CodegenError {
-                    kind,
-                    span: translate_span(body_start, statement.span),
-                });
+            return preanalyze_x86_64_inline_local_access(
+                facts,
+                local,
+                RuntimePlaceAccess::Write,
+                statement.span,
+                body_start,
+            );
         }
-        Ok(Some(X86_64InlineAssembly::IncrementRax { inout })) => {
+        Ok(Some(X86_64InlineAssembly::IncrementRax { input, output })) => {
+            if let Some(output) = output {
+                let tree = crate::ExpressionParser::<MAX_EXPRESSION_NODES>::new(input)
+                    .parse()
+                    .map_err(|error| CodegenError {
+                        kind: CodegenErrorKind::Expression(error.kind),
+                        span: translate_span(body_start + statement.span.start, error.span),
+                    })?;
+                let ty = runtime_expression_type_with_locals(
+                    function,
+                    resolver,
+                    locals,
+                    &tree,
+                    tree.root(),
+                    0,
+                )
+                .map_err(|kind| CodegenError {
+                    kind,
+                    span: translate_span(body_start, statement.span),
+                })?;
+                if ty != RuntimeExpressionType::Integer(Some(crate::IntegerType::U64)) {
+                    return Err(CodegenError {
+                        kind: CodegenErrorKind::RuntimeTypeMismatch,
+                        span: translate_span(body_start, statement.span),
+                    });
+                }
+                preanalyze_runtime_expression_reads(
+                    facts,
+                    locals,
+                    function,
+                    resolver,
+                    &tree,
+                    statement.span,
+                )?;
+                let (_, local) =
+                    x86_64_inline_output_local(function, locals, output).map_err(|kind| {
+                        CodegenError {
+                            kind,
+                            span: translate_span(body_start, statement.span),
+                        }
+                    })?;
+                return preanalyze_x86_64_inline_local_access(
+                    facts,
+                    local,
+                    RuntimePlaceAccess::Write,
+                    statement.span,
+                    body_start,
+                );
+            }
             let (_, local) =
-                x86_64_inline_output_local(function, locals, inout).map_err(|kind| {
+                x86_64_inline_output_local(function, locals, input).map_err(|kind| {
                     CodegenError {
                         kind,
                         span: translate_span(body_start, statement.span),
                     }
                 })?;
-            let base = RuntimePlaceIdentity::Local(local.id);
-            let projections = RuntimePlaceProjections::EMPTY;
-            let fact = RuntimePlaceAccessFact {
-                base,
-                projections,
-                ty: local.ty,
-                access: RuntimePlaceAccess::ReadModifyWrite,
-                span: statement.span,
-            };
-            facts
-                .push_assignment_access(fact)
-                .map_err(|kind| CodegenError {
-                    kind,
-                    span: translate_span(body_start, statement.span),
-                })?;
-            let path = facts
-                .find_move_path(base, projections)
-                .ok_or(CodegenError {
-                    kind: CodegenErrorKind::InvalidRuntimePlaceFacts,
-                    span: translate_span(body_start, statement.span),
-                })?;
-            return facts
-                .push_place_effect(
-                    path,
-                    RuntimePlaceEffectKind::ReadModifyWrite,
-                    statement.span,
-                )
-                .map_err(|kind| CodegenError {
-                    kind,
-                    span: translate_span(body_start, statement.span),
-                });
+            return preanalyze_x86_64_inline_local_access(
+                facts,
+                local,
+                RuntimePlaceAccess::ReadModifyWrite,
+                statement.span,
+                body_start,
+            );
         }
         Ok(None) => {}
         Err(kind) => {
@@ -25704,11 +25766,77 @@ impl<
                 self.emit(&[0x48, 0xc7, 0xc0, 0x07, 0x00, 0x00, 0x00])?;
                 return self.emit_store_stack_slot(self.local_stack_slots_from(index + 1)?);
             }
-            Ok(Some(X86_64InlineAssembly::IncrementRax { inout })) => {
+            Ok(Some(X86_64InlineAssembly::IncrementRax { input, output })) => {
+                if let Some(output) = output {
+                    let tree = crate::ExpressionParser::<MAX_EXPRESSION_NODES>::new(input)
+                        .parse()
+                        .map_err(|error| CodegenError {
+                            kind: CodegenErrorKind::Expression(error.kind),
+                            span: translate_span(body_start + statement.span.start, error.span),
+                        })?;
+                    let ty = runtime_expression_type_with_locals(
+                        self.function,
+                        self.resolver,
+                        &self.locals[..self.saved_locals],
+                        &tree,
+                        tree.root(),
+                        0,
+                    )
+                    .map_err(|kind| CodegenError {
+                        kind,
+                        span: translate_span(body_start, statement.span),
+                    })?;
+                    if ty != RuntimeExpressionType::Integer(Some(crate::IntegerType::U64)) {
+                        return Err(CodegenError {
+                            kind: CodegenErrorKind::RuntimeTypeMismatch,
+                            span: translate_span(body_start, statement.span),
+                        });
+                    }
+                    let (index, local) = x86_64_inline_output_local(
+                        self.function,
+                        &self.locals[..self.saved_locals],
+                        output,
+                    )
+                    .map_err(|kind| CodegenError {
+                        kind,
+                        span: translate_span(body_start, statement.span),
+                    })?;
+                    let fact = RuntimePlaceAccessFact {
+                        base: RuntimePlaceIdentity::Local(local.id),
+                        projections: RuntimePlaceProjections::EMPTY,
+                        ty: local.ty,
+                        access: RuntimePlaceAccess::Write,
+                        span: statement.span,
+                    };
+                    if self.preanalyzed_assignment_access_cursor
+                        < self.body_facts.assignment_access_count
+                        && self.body_facts.assignment_accesses
+                            [self.preanalyzed_assignment_access_cursor]
+                            == Some(fact)
+                    {
+                        self.preanalyzed_assignment_access_cursor += 1;
+                    }
+                    self.record_place_access_fact(
+                        fact.base,
+                        fact.projections,
+                        fact.ty,
+                        fact.access,
+                        fact.span,
+                    )?;
+                    let previous_width = self.width;
+                    self.width = runtime_expression_width(ty)
+                        .ok_or(self.error(CodegenErrorKind::RuntimeTypeMismatch))?;
+                    let emission = self.emit_expression(&tree, tree.root(), 0);
+                    self.width = previous_width;
+                    emission?;
+                    self.emit(&[0x48, 0xff, 0xc0])?;
+                    let stack_slot = self.local_stack_slots_from(index + 1)?;
+                    return self.emit_store_stack_slot(stack_slot);
+                }
                 let (index, local) = x86_64_inline_output_local(
                     self.function,
                     &self.locals[..self.saved_locals],
-                    inout,
+                    input,
                 )
                 .map_err(|kind| CodegenError {
                     kind,
@@ -29637,6 +29765,18 @@ mod tests {
                     .any(|bytes| bytes == [0x48, 0xff, 0xc0])
             );
         }
+        let split_inout = compile(concat!(
+            "#[unsafe(no_mangle)] pub unsafe extern \"C\" fn answer(input: u64) -> u64 { ",
+            "let mut output: u64 = 0; asm!(\"inc rax\", inout(\"rax\") input => output, ",
+            "options(nomem, nostack)); output }"
+        ))
+        .unwrap();
+        assert!(
+            split_inout
+                .bytes()
+                .windows(3)
+                .any(|bytes| bytes == [0x48, 0xff, 0xc0])
+        );
 
         for (source, expected) in [
             (
@@ -29709,6 +29849,22 @@ mod tests {
             ),
             (
                 "#[unsafe(no_mangle)] pub unsafe extern \"C\" fn answer() -> u64 { let mut value: u64 = 6; asm!(\"inc rax\", inout(\"rcx\") value); value }",
+                CodegenErrorKind::InvalidInlineAssembly,
+            ),
+            (
+                "#[unsafe(no_mangle)] pub unsafe extern \"C\" fn answer(input: u32) -> u64 { let mut output: u64 = 0; asm!(\"inc rax\", inout(\"rax\") input => output); output }",
+                CodegenErrorKind::RuntimeTypeMismatch,
+            ),
+            (
+                "#[unsafe(no_mangle)] pub unsafe extern \"C\" fn answer(input: u64) -> u64 { let output: u64 = 0; asm!(\"inc rax\", inout(\"rax\") input => output); output }",
+                CodegenErrorKind::ImmutableAssignment,
+            ),
+            (
+                "#[unsafe(no_mangle)] pub unsafe extern \"C\" fn answer(input: u64) -> u64 { let mut output: u64 = 0; asm!(\"inc rax\", inout(\"rax\") input =>); output }",
+                CodegenErrorKind::InvalidInlineAssembly,
+            ),
+            (
+                "#[unsafe(no_mangle)] pub unsafe extern \"C\" fn answer(input: u64) -> u64 { let mut output: u64 = 0; asm!(\"inc rax\", inout(\"rax\") input => output => output); output }",
                 CodegenErrorKind::InvalidInlineAssembly,
             ),
         ] {
