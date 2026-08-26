@@ -50,8 +50,11 @@ Three new persistent deltas are documented before implementation:
   groundwork. A bounded executable `ApplicationImage` artifact kind now admits
   independently authenticated application bytes and fails closed when code
   incorrectly asks the fixed five-root early-boot release for an application
-  root. The distinct syscall-only `org.mrml.app.isolation-probe` is now a real
-  Manifest V2 `system-application` supporting native-process and microVM forms;
+  root. Route-ready application identity is now derived only when the verified
+  artifact kind, version, and SHA3-512 payload digest exactly match the named
+  package in one canonical `SystemGeneration`; mismatches publish no route
+  specification. The distinct syscall-only `org.mrml.app.isolation-probe` is
+  now a real Manifest V2 `system-application` supporting native-process and microVM forms;
   Windows and Arch Linux cross-build identical 3,072-byte PE output. It has not
   been loaded or executed. The representative GUI application,
   compositor/Semantic Scene Graph integration, application image

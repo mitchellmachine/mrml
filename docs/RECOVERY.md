@@ -1037,6 +1037,14 @@ fails with `MissingTrustRoot`. Recovery must reacquire the exact independently
 selected application root and signed artifact through the eventual package and
 generation admission path. This is unit-tested artifact-boundary evidence, not
 an implemented application loader or recovered application execution path.
+
+The kernel now derives route-ready application identity only after the verified
+artifact kind, version, and SHA3-512 digest match the exact named package record
+in a decoded canonical `SystemGeneration`. Recovery must retain both inputs and
+must never reconstruct this binding from scalar cache fields, a filename, or a
+newer package. Kind, absence, version, and digest mismatch fail before route
+creation.
+
 The canonical workspace and lock now retain the syscall-only
 `org.mrml.app.isolation-probe` as a `system-application` with both supported
 placements. Recovery must not reinterpret its common PE compiler output as a

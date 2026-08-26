@@ -71,8 +71,11 @@ kernel artifact boundary now recognizes a bounded executable
 selected application root. It is intentionally outside the fixed five-root
 early-boot `SystemRelease`: asking that release to supply an application root
 fails closed instead of indexing beyond its root set. This is typed admission
-groundwork only; no application loader or runtime consumes the verified bytes
-yet. A
+groundwork only. A separate kernel binding now accepts route-ready application
+identity only when that verified artifact's kind, version, and SHA3-512 payload
+digest exactly match the named package record in one canonical active
+`SystemGeneration`; absence or substitution produces no route specification.
+No application loader or runtime consumes the verified bytes yet. A
 backend-neutral microVM owner now accepts one already constructed guest only
 after rechecking the complete immutable application route, consumes that guest
 once, exposes it solely through a generational endpoint, refuses native-process

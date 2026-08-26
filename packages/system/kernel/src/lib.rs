@@ -6,6 +6,7 @@
 //! narrow types so their unsafe boundaries can be reviewed independently.
 
 pub mod arch;
+mod application_artifact;
 mod application_lifecycle;
 mod application_microvm;
 mod artifact;
@@ -51,6 +52,9 @@ pub use artifact::{
     RELEASE_MANIFEST_BYTES, ReleaseManifest, SIGNED_ARTIFACT_HEADER_BYTES,
     SIGNED_ARTIFACT_OVERHEAD_BYTES, SignedArtifact, TrustRoot, VerifiedArtifact,
     VerifiedExecutable, VerifiedRelease, artifact_statement, executable_image_limit,
+};
+pub use application_artifact::{
+    ApplicationArtifactBindingError, VerifiedApplicationImage, bind_verified_application_image,
 };
 pub use application_lifecycle::{
     NativeApplicationBackend, NativeApplicationEndpoint, NativeApplicationError,
