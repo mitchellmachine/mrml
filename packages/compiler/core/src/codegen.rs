@@ -2074,7 +2074,15 @@ pub fn compile_x86_64_naked_relocatable<
     })
 }
 
-fn x86_64_inline_assembly_nop(expression: &str) -> Result<Option<()>, CodegenErrorKind> {
+#[derive(Clone, Copy)]
+enum X86_64InlineAssembly<'source> {
+    Nop,
+    CompareRax { input: &'source str },
+}
+
+fn x86_64_inline_assembly(
+    expression: &str,
+) -> Result<Option<X86_64InlineAssembly<'_>>, CodegenErrorKind> {
     let expression = expression.trim();
     let Some(arguments) = expression.strip_prefix("asm!(") else {
         return Ok(None);
@@ -2083,20 +2091,54 @@ fn x86_64_inline_assembly_nop(expression: &str) -> Result<Option<()>, CodegenErr
         .strip_suffix(')')
         .ok_or(CodegenErrorKind::InvalidInlineAssembly)?
         .trim();
-    let Some(arguments) = arguments.strip_prefix("\"nop\"") else {
-        return Err(CodegenErrorKind::InvalidInlineAssembly);
-    };
-    let arguments = arguments.trim();
-    if arguments.is_empty() {
-        return Ok(Some(()));
+    if let Some(arguments) = arguments.strip_prefix("\"nop\"") {
+        let arguments = arguments.trim();
+        if arguments.is_empty() {
+            return Ok(Some(X86_64InlineAssembly::Nop));
+        }
+        let options = arguments
+            .strip_prefix(',')
+            .ok_or(CodegenErrorKind::InvalidInlineAssembly)?
+            .trim()
+            .strip_prefix("options(")
+            .and_then(|options| options.strip_suffix(')'))
+            .ok_or(CodegenErrorKind::InvalidInlineAssembly)?;
+        x86_64_inline_assembly_options(options, true)?;
+        return Ok(Some(X86_64InlineAssembly::Nop));
     }
-    let options = arguments
+    let arguments = arguments
+        .strip_prefix("\"cmp rax, rax\"")
+        .ok_or(CodegenErrorKind::InvalidInlineAssembly)?
+        .trim()
         .strip_prefix(',')
         .ok_or(CodegenErrorKind::InvalidInlineAssembly)?
         .trim()
-        .strip_prefix("options(")
-        .and_then(|options| options.strip_suffix(')'))
-        .ok_or(CodegenErrorKind::InvalidInlineAssembly)?;
+        .strip_prefix("in(\"rax\")")
+        .ok_or(CodegenErrorKind::InvalidInlineAssembly)?
+        .trim();
+    let (input, options) = if let Some(options_start) = arguments.rfind(", options(") {
+        let options = arguments[options_start + 2..]
+            .strip_prefix("options(")
+            .and_then(|options| options.strip_suffix(')'))
+            .ok_or(CodegenErrorKind::InvalidInlineAssembly)?;
+        (&arguments[..options_start], Some(options))
+    } else {
+        (arguments, None)
+    };
+    let input = input.trim();
+    if input.is_empty() {
+        return Err(CodegenErrorKind::InvalidInlineAssembly);
+    }
+    if let Some(options) = options {
+        x86_64_inline_assembly_options(options, false)?;
+    }
+    Ok(Some(X86_64InlineAssembly::CompareRax { input }))
+}
+
+fn x86_64_inline_assembly_options(
+    options: &str,
+    allow_preserves_flags: bool,
+) -> Result<(), CodegenErrorKind> {
     let mut seen_nomem = false;
     let mut seen_nostack = false;
     let mut seen_preserves_flags = false;
@@ -2105,7 +2147,7 @@ fn x86_64_inline_assembly_nop(expression: &str) -> Result<Option<()>, CodegenErr
         let seen = match option {
             "nomem" => &mut seen_nomem,
             "nostack" => &mut seen_nostack,
-            "preserves_flags" => &mut seen_preserves_flags,
+            "preserves_flags" if allow_preserves_flags => &mut seen_preserves_flags,
             _ => return Err(CodegenErrorKind::InvalidInlineAssembly),
         };
         if option.is_empty() || *seen {
@@ -2117,7 +2159,7 @@ fn x86_64_inline_assembly_nop(expression: &str) -> Result<Option<()>, CodegenErr
     if option_count == 0 {
         return Err(CodegenErrorKind::InvalidInlineAssembly);
     }
-    Ok(Some(()))
+    Ok(())
 }
 
 fn encode_x86_64_naked_instruction_for_syntax(
@@ -8311,13 +8353,47 @@ fn preanalyze_runtime_expression_statement_reads<
     if statement.expression.is_empty() {
         return Ok(());
     }
-    match x86_64_inline_assembly_nop(statement.expression) {
-        Ok(Some(())) if function.unsafe_function => return Ok(()),
-        Ok(Some(())) => {
+    match x86_64_inline_assembly(statement.expression) {
+        Ok(Some(_)) if !function.unsafe_function => {
             return Err(CodegenError {
                 kind: CodegenErrorKind::InlineAssemblyRequiresUnsafe,
                 span: translate_span(body_start, statement.span),
             });
+        }
+        Ok(Some(X86_64InlineAssembly::Nop)) => return Ok(()),
+        Ok(Some(X86_64InlineAssembly::CompareRax { input })) => {
+            let tree = crate::ExpressionParser::<MAX_EXPRESSION_NODES>::new(input)
+                .parse()
+                .map_err(|error| CodegenError {
+                    kind: CodegenErrorKind::Expression(error.kind),
+                    span: translate_span(body_start + statement.span.start, error.span),
+                })?;
+            let ty = runtime_expression_type_with_locals(
+                function,
+                resolver,
+                locals,
+                &tree,
+                tree.root(),
+                0,
+            )
+            .map_err(|kind| CodegenError {
+                kind,
+                span: translate_span(body_start, statement.span),
+            })?;
+            if ty != RuntimeExpressionType::Integer(Some(crate::IntegerType::U64)) {
+                return Err(CodegenError {
+                    kind: CodegenErrorKind::RuntimeTypeMismatch,
+                    span: translate_span(body_start, statement.span),
+                });
+            }
+            return preanalyze_runtime_expression_reads(
+                facts,
+                locals,
+                function,
+                resolver,
+                &tree,
+                statement.span,
+            );
         }
         Ok(None) => {}
         Err(kind) => {
@@ -25406,13 +25482,46 @@ impl<
         if statement.expression.is_empty() {
             return Ok(());
         }
-        match x86_64_inline_assembly_nop(statement.expression) {
-            Ok(Some(())) if self.function.unsafe_function => return self.emit(&[0x90]),
-            Ok(Some(())) => {
+        match x86_64_inline_assembly(statement.expression) {
+            Ok(Some(_)) if !self.function.unsafe_function => {
                 return Err(CodegenError {
                     kind: CodegenErrorKind::InlineAssemblyRequiresUnsafe,
                     span: translate_span(body_start, statement.span),
                 });
+            }
+            Ok(Some(X86_64InlineAssembly::Nop)) => return self.emit(&[0x90]),
+            Ok(Some(X86_64InlineAssembly::CompareRax { input })) => {
+                let tree = crate::ExpressionParser::<MAX_EXPRESSION_NODES>::new(input)
+                    .parse()
+                    .map_err(|error| CodegenError {
+                        kind: CodegenErrorKind::Expression(error.kind),
+                        span: translate_span(body_start + statement.span.start, error.span),
+                    })?;
+                let ty = runtime_expression_type_with_locals(
+                    self.function,
+                    self.resolver,
+                    &self.locals[..self.saved_locals],
+                    &tree,
+                    tree.root(),
+                    0,
+                )
+                .map_err(|kind| CodegenError {
+                    kind,
+                    span: translate_span(body_start, statement.span),
+                })?;
+                if ty != RuntimeExpressionType::Integer(Some(crate::IntegerType::U64)) {
+                    return Err(CodegenError {
+                        kind: CodegenErrorKind::RuntimeTypeMismatch,
+                        span: translate_span(body_start, statement.span),
+                    });
+                }
+                let previous_width = self.width;
+                self.width = runtime_expression_width(ty)
+                    .ok_or(self.error(CodegenErrorKind::RuntimeTypeMismatch))?;
+                let emission = self.emit_expression(&tree, tree.root(), 0);
+                self.width = previous_width;
+                emission?;
+                return self.emit(&[0x48, 0x39, 0xc0]);
             }
             Ok(None) => {}
             Err(kind) => {
@@ -29263,6 +29372,18 @@ mod tests {
             assert!(insertion < code.len());
         }
 
+        let compare = compile(concat!(
+            "#[unsafe(no_mangle)] pub unsafe extern \"C\" fn answer(value: u64) -> u64 { ",
+            "asm!(\"cmp rax, rax\", in(\"rax\") value, options(nomem, nostack)); value }"
+        ))
+        .unwrap();
+        assert!(
+            compare
+                .bytes()
+                .windows(3)
+                .any(|bytes| bytes == [0x48, 0x39, 0xc0])
+        );
+
         for (source, expected) in [
             (
                 "#[unsafe(no_mangle)] pub extern \"C\" fn answer() -> u64 { asm!(\"nop\"); 42 }",
@@ -29282,6 +29403,22 @@ mod tests {
             ),
             (
                 "#[unsafe(no_mangle)] pub unsafe extern \"C\" fn answer() -> u64 { asm!(\"nop\", in(\"rax\") 1); 42 }",
+                CodegenErrorKind::InvalidInlineAssembly,
+            ),
+            (
+                "#[unsafe(no_mangle)] pub extern \"C\" fn answer(value: u64) -> u64 { asm!(\"cmp rax, rax\", in(\"rax\") value); value }",
+                CodegenErrorKind::InlineAssemblyRequiresUnsafe,
+            ),
+            (
+                "#[unsafe(no_mangle)] pub unsafe extern \"C\" fn answer(value: u32) -> u32 { asm!(\"cmp rax, rax\", in(\"rax\") value); value }",
+                CodegenErrorKind::RuntimeTypeMismatch,
+            ),
+            (
+                "#[unsafe(no_mangle)] pub unsafe extern \"C\" fn answer(value: u64) -> u64 { asm!(\"cmp rax, rax\", in(\"rax\") value, options(preserves_flags)); value }",
+                CodegenErrorKind::InvalidInlineAssembly,
+            ),
+            (
+                "#[unsafe(no_mangle)] pub unsafe extern \"C\" fn answer() -> u64 { asm!(\"cmp rax, rax\", in(\"rax\")); 42 }",
                 CodegenErrorKind::InvalidInlineAssembly,
             ),
         ] {
