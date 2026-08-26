@@ -10,6 +10,7 @@ pub const MAX_CONDITIONAL_LOOP_ELSE_ARMS: usize = 4;
 pub const MAX_NESTED_LOOP_ACTIONS: usize = 4;
 pub const MAX_NESTED_LOOP_BLOCKS: usize = 4;
 pub const MAX_NESTED_LOOP_CONDITIONAL_BLOCKS: usize = 4;
+pub const MAX_NESTED_LOOP_CONDITIONAL_ELSE_ARMS: usize = 4;
 pub const MAX_NESTED_LOOP_CONDITIONAL_BREAKS: usize = 4;
 pub const MAX_NESTED_LOOP_CONDITIONAL_CONTINUES: usize = 4;
 pub const MAX_NESTED_LOOP_CONDITIONAL_RETURNS: usize = 4;
@@ -461,7 +462,8 @@ pub struct NestedLoopConditionalBlock<'source> {
     actions: [Option<ConditionalLoopAction<'source>>; MAX_CONDITIONAL_LOOP_ACTIONS],
     action_count: usize,
     pub terminal: NestedLoopUnconditionalControl<'source>,
-    else_arm: Option<NestedLoopConditionalArm<'source>>,
+    else_arms: [Option<NestedLoopConditionalArm<'source>>; MAX_NESTED_LOOP_CONDITIONAL_ELSE_ARMS],
+    else_arm_count: usize,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -483,7 +485,19 @@ impl<'source> NestedLoopConditionalBlock<'source> {
     }
 
     pub const fn else_arm(&self) -> Option<&NestedLoopConditionalArm<'source>> {
-        self.else_arm.as_ref()
+        if self.else_arm_count == 0 {
+            None
+        } else {
+            self.else_arms[0].as_ref()
+        }
+    }
+
+    pub fn else_arms(&self) -> &[Option<NestedLoopConditionalArm<'source>>] {
+        &self.else_arms[..self.else_arm_count]
+    }
+
+    pub const fn else_arm_count(&self) -> usize {
+        self.else_arm_count
     }
 
     pub fn parse_condition<const MAX_NODES: usize>(
@@ -2472,11 +2486,16 @@ impl<'source> BodyParser<'source> {
                                 inner_label,
                                 label,
                             )?;
-                            let else_arm = if probe
-                                .peek()?
-                                .is_some_and(|token| token.text == "else")
-                            {
+                            let mut else_arms = [None; MAX_NESTED_LOOP_CONDITIONAL_ELSE_ARMS];
+                            let mut else_arm_count = 0usize;
+                            while probe.peek()?.is_some_and(|token| token.text == "else") {
                                 probe.take()?;
+                                if else_arm_count == MAX_NESTED_LOOP_CONDITIONAL_ELSE_ARMS {
+                                    return Err(probe.error(
+                                        ParseErrorKind::TooManyConditionalLoopElseArms,
+                                        probe.lookahead,
+                                    ));
+                                }
                                 let else_condition_span = if probe
                                     .peek()?
                                     .is_some_and(|token| token.text == "if")
@@ -2502,17 +2521,19 @@ impl<'source> BodyParser<'source> {
                                     arm.condition = Some(&self.source[span.start..span.end]);
                                     arm.condition_span = span;
                                 }
-                                Some(arm)
-                            } else {
-                                None
-                            };
+                                else_arms[else_arm_count] = Some(arm);
+                                else_arm_count += 1;
+                                if arm.condition.is_none() {
+                                    break;
+                                }
+                            }
                             let condition = ConditionalLoopControl {
                                 condition: &self.source[condition_span.start..condition_span.end],
                                 condition_span,
                             };
                             let this_control_order = control_order;
                             control_order += 1;
-                            if primary.action_count != 0 || else_arm.is_some() {
+                            if primary.action_count != 0 || else_arm_count != 0 {
                                 if nested_conditional_block_count
                                     == MAX_NESTED_LOOP_CONDITIONAL_BLOCKS
                                 {
@@ -2530,7 +2551,8 @@ impl<'source> BodyParser<'source> {
                                         actions: primary.actions,
                                         action_count: primary.action_count,
                                         terminal: primary.terminal,
-                                        else_arm,
+                                        else_arms,
+                                        else_arm_count,
                                     });
                                 nested_conditional_block_action_indices
                                     [nested_conditional_block_count] = action_count;
@@ -5679,6 +5701,26 @@ mod tests {
                 ..
             })
         ));
+
+        let nested_branch_chain = Parser::new(
+            "fn nested(primary: bool, first: bool, second: bool) -> u8 { loop { loop { if primary { return 40; } else if first { return 50; } else if second { return 60; } else { return 70; } } } }",
+        )
+        .parse_module::<1, 4>()
+        .unwrap();
+        let Some(Item::Function(function)) = nested_branch_chain.items()[0] else {
+            panic!("expected function")
+        };
+        let body = function.parse_body::<4>().unwrap();
+        let outer = body.while_loops()[0].unwrap();
+        let Some(LoopOperation::NestedBlock(index)) = outer.operations()[0] else {
+            panic!("expected nested loop block")
+        };
+        let branch = outer.nested_blocks()[index].unwrap().conditional_blocks()[0].unwrap();
+        assert_eq!(branch.else_arm_count(), 3);
+        let arms = branch.else_arms();
+        assert_eq!(arms[0].unwrap().condition(), Some("first"));
+        assert_eq!(arms[1].unwrap().condition(), Some("second"));
+        assert_eq!(arms[2].unwrap().condition(), None);
 
         let multiple_returns = Parser::new(
             "fn nested(limit: u64, first: u64, second: u64) -> u64 { let mut outer: u64 = 0; let mut inner: u64 = 0; while outer < limit { while inner < 3 { inner += 1; if inner == first { return 40; } if inner == second { return 50; } } outer += 1; inner = 0; } outer }",

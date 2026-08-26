@@ -635,6 +635,19 @@ pub fn compile_x86_64_function_with_options<
             kind: CodegenErrorKind::Body(error.kind),
             span: translate_span(function.body_expression_span.start, error.span),
         })?;
+    if parsed_body
+        .while_loops()
+        .iter()
+        .flatten()
+        .flat_map(|loop_statement| loop_statement.nested_blocks().iter().flatten())
+        .flat_map(|block| block.conditional_blocks().iter().flatten())
+        .any(|branch| branch.else_arm_count() > 1)
+    {
+        return Err(CodegenError {
+            kind: CodegenErrorKind::RuntimeExpressionUnsupported,
+            span: function.body_expression_span,
+        });
+    }
     let mut body_has_aggregate_local = false;
     for local in parsed_body.locals().iter().flatten() {
         if local
@@ -12258,6 +12271,9 @@ fn nested_loop_has_supported_control_flow(
             for action in else_arm.actions() {
                 action.ok_or(CodegenErrorKind::InvalidRuntimeControlFlowFacts)?;
             }
+        }
+        if branch.else_arm_count() > 1 {
+            return Ok(false);
         }
     }
     for action in block.actions() {
@@ -41953,6 +41969,18 @@ mod tests {
                 .unwrap()
                 .len()
                 > 11,
+        );
+
+        let chain_source = "#[unsafe(no_mangle)] pub extern \"C\" fn value(primary: bool, first: bool, second: bool) -> u64 { loop { loop { if primary { return 40; } else if first { return 50; } else if second { return 60; } else { return 70; } } } }";
+        let module = Parser::new(chain_source).parse_module::<1, 4>().unwrap();
+        let Some(Item::Function(function)) = module.items()[0] else {
+            panic!("expected function")
+        };
+        assert_eq!(
+            compile_x86_64_function::<_, 256, 4, 16>(&function, &NoConstants, X86_64Abi::SystemV,)
+                .unwrap_err()
+                .kind,
+            CodegenErrorKind::RuntimeExpressionUnsupported,
         );
     }
 
