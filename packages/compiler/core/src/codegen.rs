@@ -16172,29 +16172,42 @@ fn runtime_reference_call_origin_parameter<const MAX_PARAMETERS: usize, const MA
                                 .nested_blocks()
                                 .get(block_index)
                                 .and_then(|value| *value)?;
-                            let mut block_names = local_names;
-                            let mut block_origins = local_origins;
-                            let mut block_projected_origins = projected_origins;
-                            let mut block_types = local_types;
-                            let mut block_mutability = local_mutability;
-                            let mut block_return_compatibility = local_return_compatibility;
-                            let mut block_local_count = local_count;
-                            apply_conditional_loop_actions::<MAX_PARAMETERS, MAX_NODES>(
-                                target,
-                                block.actions(),
-                                &mut block_names,
-                                &mut block_origins,
-                                &mut block_projected_origins,
-                                &mut block_types,
-                                &mut block_mutability,
-                                &mut block_return_compatibility,
-                                &mut block_local_count,
-                                false,
-                            )?;
-                            for control in block.unconditional_controls().iter().flatten() {
+                            for ((control, action_index), control_order) in block
+                                .unconditional_controls()
+                                .iter()
+                                .flatten()
+                                .zip(block.unconditional_control_action_indices())
+                                .zip(block.unconditional_control_orders())
+                            {
                                 if let crate::NestedLoopUnconditionalControl::Return(value) =
                                     *control
                                 {
+                                    if block
+                                        .unconditional_control_orders()
+                                        .iter()
+                                        .any(|order| order < control_order)
+                                    {
+                                        continue;
+                                    }
+                                    let mut block_names = local_names;
+                                    let mut block_origins = local_origins;
+                                    let mut block_projected_origins = projected_origins;
+                                    let mut block_types = local_types;
+                                    let mut block_mutability = local_mutability;
+                                    let mut block_return_compatibility = local_return_compatibility;
+                                    let mut block_local_count = local_count;
+                                    apply_conditional_loop_actions::<MAX_PARAMETERS, MAX_NODES>(
+                                        target,
+                                        block.actions().get(..*action_index)?,
+                                        &mut block_names,
+                                        &mut block_origins,
+                                        &mut block_projected_origins,
+                                        &mut block_types,
+                                        &mut block_mutability,
+                                        &mut block_return_compatibility,
+                                        &mut block_local_count,
+                                        true,
+                                    )?;
                                     let tree = value.parse_value::<MAX_NODES>().ok()?;
                                     merge(recurse(
                                         target,
@@ -16208,7 +16221,39 @@ fn runtime_reference_call_origin_parameter<const MAX_PARAMETERS: usize, const MA
                                     )?)?;
                                 }
                             }
-                            for value in block.conditional_returns().iter().flatten() {
+                            for ((value, action_index), control_order) in block
+                                .conditional_returns()
+                                .iter()
+                                .flatten()
+                                .zip(block.conditional_return_action_indices())
+                                .zip(block.conditional_return_control_orders())
+                            {
+                                if block
+                                    .unconditional_control_orders()
+                                    .iter()
+                                    .any(|order| order < control_order)
+                                {
+                                    continue;
+                                }
+                                let mut block_names = local_names;
+                                let mut block_origins = local_origins;
+                                let mut block_projected_origins = projected_origins;
+                                let mut block_types = local_types;
+                                let mut block_mutability = local_mutability;
+                                let mut block_return_compatibility = local_return_compatibility;
+                                let mut block_local_count = local_count;
+                                apply_conditional_loop_actions::<MAX_PARAMETERS, MAX_NODES>(
+                                    target,
+                                    block.actions().get(..*action_index)?,
+                                    &mut block_names,
+                                    &mut block_origins,
+                                    &mut block_projected_origins,
+                                    &mut block_types,
+                                    &mut block_mutability,
+                                    &mut block_return_compatibility,
+                                    &mut block_local_count,
+                                    true,
+                                )?;
                                 let tree = value.parse_value::<MAX_NODES>().ok()?;
                                 merge(recurse(
                                     target,
@@ -37696,7 +37741,29 @@ mod tests {
                 ),
                 ..nested_loop
             }),
+            Some(0)
+        );
+        assert_eq!(
+            runtime_reference_call_origin_parameter::<2, 40>(RuntimeCallTarget {
+                body_expression: concat!(
+                    "let mut local: u16 = 1; let mut changed: &mut u16 = &mut local; ",
+                    "loop { loop { if first { return changed; } ",
+                    "changed = value; return changed; } }"
+                ),
+                ..nested_loop
+            }),
             None
+        );
+        assert_eq!(
+            runtime_reference_call_origin_parameter::<2, 40>(RuntimeCallTarget {
+                body_expression: concat!(
+                    "let mut local: u16 = 1; let mut changed: &mut u16 = value; ",
+                    "loop { loop { if first { return changed; } ",
+                    "changed = &mut local; changed = value; return changed; } }"
+                ),
+                ..nested_loop
+            }),
+            Some(0)
         );
         assert_eq!(
             runtime_reference_call_origin_parameter::<2, 24>(RuntimeCallTarget {
