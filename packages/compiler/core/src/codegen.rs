@@ -35927,6 +35927,17 @@ mod tests {
         ] {
             analyze(source).unwrap();
         }
+
+        for source in [
+            "fn value(first: &mut u16, second: &mut u16, choose: bool) -> u16 { let mut parent: &mut u16 = &mut *first; while choose { parent = &mut *second; break; } let child: &u16 = &*parent; *first += 1; *child }",
+            "fn value(first: &mut u16, second: &mut u16, choose: bool) -> u16 { let mut parent: &mut u16 = &mut *first; while choose { parent = &mut *second; break; } let child: &u16 = &*parent; *second += 1; *child }",
+        ] {
+            assert_eq!(
+                analyze(source).unwrap_err().kind,
+                CodegenErrorKind::RuntimeBorrowConflict
+            );
+        }
+        analyze("fn value(first: &mut u16, second: &mut u16, choose: bool) -> u16 { let mut parent: &mut u16 = &mut *first; while choose { parent = &mut *second; break; } let child: &u16 = &*parent; let copied = *child; *first += 1; *second += 1; copied + *first + *second }").unwrap();
     }
 
     #[test]
