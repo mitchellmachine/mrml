@@ -174,8 +174,14 @@ Windows/Linux unit simulation. Concrete TPM/NVRAM/recovery-journal integration
 and general manifest-driven declaration delivery remain **PLANNED**.
 Both focused VMM paths now pass the complete canonical generation/catalog byte
 pair into `DeploymentService`, which derives both activation roots and rejects
-cross-generation pairing before staging. General signed SystemRelease catalog
-artifact delivery remains **PLANNED**.
+cross-generation pairing before staging. The shared package-format library now
+also provides a bounded signed general `SystemRelease` envelope for that exact
+pair, and deployment rejects corruption or any signer identity other than the
+one selected by caller policy before staging. This preserves the control/data
+split: policy fixes signer and authority once; exact authenticated canonical
+records then enter the existing parser without a second declaration path.
+Workspace/Store delivery and focused VMM consumption of the signed envelope
+remain **PLANNED**.
 The canonical provider now builds its own `mrml-zstd-service.efi` artifact—never
 an alias of the generic configuration service—with an x86-64 architecture trap,
 one private 4 KiB scratch page, and exact launch-register endpoint/caller/

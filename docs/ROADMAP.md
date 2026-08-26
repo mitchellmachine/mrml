@@ -249,8 +249,11 @@ suites pass; WHP passes
 7 and KVM passes 8.
 Deployment candidates in both runners are now derived from the complete
 canonical generation/catalog byte pair rather than caller-supplied digests;
-cross-generation pairing fails before staging. General signed SystemRelease
-catalog artifact delivery remains **PLANNED**.
+cross-generation pairing fails before staging. A bounded general signed
+`SystemRelease` codec and build/deployment library path now authenticate that
+exact pair and require the signer identity selected by caller policy before
+staging. CLI/Store/recovery delivery, owner-root policy integration, and focused
+WHP/KVM consumption of the signed envelope remain **PLANNED**.
 A backend-neutral linear control-plane admission now binds those two immutable
 load plans to the exact generation/interface placement before an endpoint
 exists. Only a subsequently returned backend endpoint can be published into the

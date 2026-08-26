@@ -13,7 +13,8 @@ use mrml_crypto::Sha3_256;
 use mrml_kernel::{Capability, CapabilitySpace, ObjectId, Rights};
 use mrml_package_format::{
     ActivatedSystemGeneration, ActivatedSystemGenerationError, InterfaceCatalogError,
-    InterfaceCatalogView, SystemGenerationDecodeError, SystemGenerationView,
+    InterfaceCatalogView, SystemGenerationDecodeError, SystemGenerationView, SystemReleaseError,
+    parse_system_release,
 };
 use mrml_storage::{
     ExtentMap, FileMetadata, FileReadBackend, FileReadError, FileState, FileWriteBackend,
@@ -87,6 +88,29 @@ impl GenerationCandidate {
             generation.generation(),
             generation.digest(),
             catalog.digest(),
+            source_object,
+            source_generation,
+        )
+    }
+
+    /// Admits only a cryptographically valid general SystemRelease from the
+    /// signer identity selected by the caller's control-plane policy, then
+    /// derives the candidate from the exact enclosed canonical records.
+    pub fn from_system_release(
+        release_bytes: &[u8],
+        expected_key_id: &[u8; 64],
+        source_object: u64,
+        source_generation: u64,
+    ) -> Result<Self, DeploymentError> {
+        let release =
+            parse_system_release(release_bytes).map_err(DeploymentError::InvalidSystemRelease)?;
+        if release.key_id() != *expected_key_id {
+            return Err(DeploymentError::SystemReleaseSignerMismatch);
+        }
+        Self::new(
+            release.generation().generation(),
+            release.generation().digest(),
+            release.interface_catalog().digest(),
             source_object,
             source_generation,
         )
@@ -317,6 +341,8 @@ pub enum DeploymentError {
     InvalidGenerationRecord(SystemGenerationDecodeError),
     InvalidInterfaceCatalog(InterfaceCatalogError),
     GenerationRecordMismatch,
+    InvalidSystemRelease(SystemReleaseError),
+    SystemReleaseSignerMismatch,
     InvalidDigest,
     InvalidSource,
     Unauthorized,
@@ -864,9 +890,13 @@ const fn all_zero(value: &[u8; 64]) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use mrml_crypto::{
+        LAMPORT_PRIVATE_KEY_BYTES, LAMPORT_PUBLIC_KEY_BYTES, LAMPORT_SIGNATURE_BYTES,
+    };
     use mrml_package_format::{
         ComponentInterfaceProvider, ComponentInterfaceRequirement, ComponentProviderForms,
-        SystemGenerationDigestRecord, encode_interface_catalog, encode_system_generation,
+        SYSTEM_RELEASE_HEADER_BYTES, SystemGenerationDigestRecord, encode_interface_catalog,
+        encode_system_generation, encode_system_release,
     };
     use mrml_storage::{
         CowMetadataImage, CowMetadataWrite, CowPublicationBackend, CowPublicationPlan,
@@ -1186,6 +1216,49 @@ mod tests {
         )
         .unwrap();
         assert_eq!(candidate.generation(), 7);
+
+        let private = [0x5a; LAMPORT_PRIVATE_KEY_BYTES];
+        let mut release = [0; SYSTEM_RELEASE_HEADER_BYTES
+            + 128
+            + 256
+            + LAMPORT_PUBLIC_KEY_BYTES
+            + LAMPORT_SIGNATURE_BYTES];
+        let release_length = encode_system_release(
+            &generation[..generation_length],
+            &catalog[..catalog_length],
+            &private,
+            &mut release,
+        )
+        .unwrap();
+        let parsed_release = parse_system_release(&release[..release_length]).unwrap();
+        let expected_key_id = parsed_release.key_id();
+        let signed_candidate = GenerationCandidate::from_system_release(
+            &release[..release_length],
+            &expected_key_id,
+            0x700,
+            2,
+        )
+        .unwrap();
+        assert_eq!(signed_candidate, candidate);
+        assert_eq!(
+            GenerationCandidate::from_system_release(
+                &release[..release_length],
+                &[0x99; 64],
+                0x700,
+                2,
+            ),
+            Err(DeploymentError::SystemReleaseSignerMismatch)
+        );
+        release[SYSTEM_RELEASE_HEADER_BYTES] ^= 1;
+        assert!(matches!(
+            GenerationCandidate::from_system_release(
+                &release[..release_length],
+                &expected_key_id,
+                0x700,
+                2,
+            ),
+            Err(DeploymentError::InvalidSystemRelease(_))
+        ));
 
         catalog[8..16].copy_from_slice(&8u64.to_le_bytes());
         assert_eq!(

@@ -469,8 +469,12 @@ launch probe a firmware boot.
 `mrml release create` now consumes the exact signed bootloader, kernel, and
 configuration `.mrp` packages plus a one-use signing key and emits the bounded
 signed boot `SystemRelease` `.mrs`; `mrml release verify` checks its signature
-against an explicit public root. General Store release composition remains
-**PLANNED**. `mrml image` will combine a release with content-addressed packages,
+against an explicit public root. Separately, the build library can encode a
+bounded general `SystemRelease` containing the exact canonical `MRMLSG2`
+generation and `MRMLIC1` interface catalog, and deployment verifies its bytes,
+signature, and caller-policy-selected signer identity before staging. This is
+library integration, not yet a public CLI or Store release composer. General
+Store release composition remains **PLANNED**. `mrml image` will combine a release with content-addressed packages,
 boot/recovery, profile, and optional content into the canonical Zstd image
 without needless duplication. Media tooling follows
 [DEPLOYMENT.md](../DEPLOYMENT.md).

@@ -85,9 +85,9 @@ by exact compare-and-store only
 after the COW receipt exists; recovery requires complete equality, so an older
 valid stable file fails when authenticated state names a newer generation.
 This is Windows/Linux unit simulation against an abstract authenticated store,
-not TPM/NVRAM evidence. Concrete recovery-journal/TPM integration, physical durability,
-SystemRelease admission, rollback authorization, retained-root integration,
-and general runtime delivery remain **PLANNED**.
+not TPM/NVRAM evidence. Concrete recovery-journal/TPM integration, physical
+durability, rollback authorization, retained-root integration, and general
+runtime delivery remain **PLANNED**.
 
 The candidate boundary now accepts complete canonical `MRMLSG2` generation and
 `MRMLIC1` interface-catalog records through
@@ -95,9 +95,34 @@ The candidate boundary now accepts complete canonical `MRMLSG2` generation and
 their numeric generations to match, and derives both activation digests itself;
 callers on this path cannot pair detached digests with substituted bytes. The
 focused WHP/KVM paths use this constructor before capability-authorized staging.
-Windows and Linux tests include cross-generation catalog rejection. This is
-canonical-record admission, not yet general signed `SystemRelease` artifact
-delivery.
+Windows and Linux tests include cross-generation catalog rejection. A separate
+bounded general `SystemRelease` envelope now authenticates the exact `MRMLSG2`
+and `MRMLIC1` byte pair with the existing SHA3-512/Lamport primitives. The
+build-tool library emits it, and `DeploymentService` accepts it only when its
+cryptographic signer identity exactly matches the identity selected by caller
+policy; the signature identifies and authenticates bytes but grants no
+capability or admission authority. The resulting candidate still passes through
+the existing capability-authorized staging transaction. Corruption, generation
+mismatch, and unexpected-signer tests fail before staging on Windows and Linux.
+CLI output, owner-root policy integration, signing-key isolation, Store,
+installer/recovery persistence, rollback and retention integration, and focused
+WHP/KVM consumption of this signed envelope remain **PLANNED**.
+
+- Complexity impact: MEDIUM
+- TCB impact: LOW
+- New parser boundary: YES
+- New authority model: NO
+- New persistent state: NO
+- External dependency: NO
+- Failure isolated: YES
+- Existing-object reuse: HIGH
+
+This is a bounded, allocation-free composition of the existing canonical
+generation/catalog records and existing cryptography. A distinct internal magic
+avoids overloading the earlier boot-only release record. It creates no new
+authority or persistent state: control-plane policy selects the expected signer
+and authorizes staging, while the admitted exact bytes take the shortest safe
+path into the existing candidate parser.
 
 > Installation, updating, offline servicing, recovery, system imaging, and
 > system snapshots are different operations over the same immutable package and

@@ -8,6 +8,7 @@ use crate::package_lamport::{
     lamport_public_key, lamport_sign, lamport_verify,
 };
 use crate::package_sha3::Sha3_512;
+use crate::system_release::{MAX_SYSTEM_RELEASE_BYTES, encode_system_release};
 
 pub const MAGIC: [u8; 16] = *b"MRML-PACKAGE-v1\0";
 pub const FORMAT_VERSION: u16 = 1;
@@ -24,6 +25,18 @@ pub const INTERFACE_EXTENSION: &str = "mri";
 pub const DETACHED_SIGNATURE_EXTENSION: &str = "mrsig";
 const SIGNED: u16 = 1;
 const ZSTD: &str = "zstd";
+
+pub fn build_system_release(
+    generation_bytes: &[u8],
+    catalog_bytes: &[u8],
+    private: &[u8],
+) -> Result<Vec<u8>, Error> {
+    let mut output = vec![0; MAX_SYSTEM_RELEASE_BYTES];
+    let total = encode_system_release(generation_bytes, catalog_bytes, private, &mut output)
+        .map_err(|_| Error::Format)?;
+    output.truncate(total);
+    Ok(output)
+}
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum Error {
@@ -791,6 +804,10 @@ fn put_u64(b: &mut [u8], o: usize, v: u64) -> Result<(), Error> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::{
+        ComponentInterfaceProvider, ComponentInterfaceRequirement, ComponentProviderForms,
+        SystemGenerationDigestRecord, encode_interface_catalog, encode_system_generation,
+    };
     use std::fs;
 
     fn private_key() -> Vec<u8> {
@@ -868,6 +885,48 @@ mod tests {
         (0..LAMPORT_PRIVATE_KEY_BYTES)
             .map(|index| (index as u64 * 193 + seed as u64) as u8)
             .collect()
+    }
+
+    #[test]
+    fn general_system_release_signs_exact_generation_and_catalog_bytes() {
+        let records = [SystemGenerationDigestRecord {
+            package_id: "org.mrml.zstd",
+            version: 3,
+            artifact_digest: &[0x2f; 64],
+        }];
+        let mut generation = [0; 128];
+        let generation_length = encode_system_generation(7, &records, &mut generation).unwrap();
+        let requirement = ComponentInterfaceRequirement::exact(
+            "org.mrml.zstd",
+            "org.mrml.interface.compression.zstd",
+            3,
+            [0x6a; 32],
+        )
+        .unwrap();
+        let provider = ComponentInterfaceProvider::exact(
+            "org.mrml.zstd",
+            "org.mrml.interface.compression.zstd",
+            3,
+            [0x6a; 32],
+            ComponentProviderForms::MICROVM,
+        )
+        .unwrap();
+        let mut catalog = [0; 256];
+        let catalog_length =
+            encode_interface_catalog(7, &[requirement], &[provider], &mut catalog).unwrap();
+        let release = build_system_release(
+            &generation[..generation_length],
+            &catalog[..catalog_length],
+            &private_key(),
+        )
+        .unwrap();
+        let parsed = crate::parse_system_release(&release).unwrap();
+        assert_eq!(parsed.generation().generation(), 7);
+        assert_eq!(parsed.interface_catalog().generation(), 7);
+
+        let mut tampered = release;
+        tampered[crate::SYSTEM_RELEASE_HEADER_BYTES + generation_length + catalog_length - 1] ^= 1;
+        assert!(crate::parse_system_release(&tampered).is_err());
     }
 
     #[test]

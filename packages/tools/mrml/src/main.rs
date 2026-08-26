@@ -21,12 +21,15 @@ pub mod schema;
 pub mod servicing;
 #[path = "../../../libraries/package-format/src/system_generation.rs"]
 pub mod system_generation;
+#[path = "../../../libraries/package-format/src/system_release.rs"]
+pub mod system_release;
 
 pub use activation::*;
 pub use component_launch::*;
 pub use component_resolution::*;
 pub use interface_catalog::*;
 pub use system_generation::*;
+pub use system_release::*;
 
 extern crate self as mrml_crypto;
 
@@ -47,7 +50,10 @@ mod package_sha3;
 pub use package_sha3::Sha3_512;
 #[path = "../../../libraries/crypto/src/lamport.rs"]
 mod package_lamport;
-pub use package_lamport::{LAMPORT_PUBLIC_KEY_BYTES, LAMPORT_SIGNATURE_BYTES, lamport_verify};
+pub use package_lamport::{
+    LAMPORT_PRIVATE_KEY_BYTES, LAMPORT_PUBLIC_KEY_BYTES, LAMPORT_SIGNATURE_BYTES,
+    lamport_public_key, lamport_sign, lamport_verify,
+};
 #[path = "../../../libraries/package-format/src/core.rs"]
 #[allow(dead_code)]
 mod boot_package_core;

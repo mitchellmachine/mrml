@@ -8,6 +8,7 @@ mod core;
 mod interface_catalog;
 mod release;
 mod system_generation;
+mod system_release;
 
 pub use activation::*;
 pub use admission::*;
@@ -17,3 +18,4 @@ pub use core::*;
 pub use interface_catalog::*;
 pub use release::*;
 pub use system_generation::*;
+pub use system_release::*;

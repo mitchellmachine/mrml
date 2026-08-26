@@ -5202,3 +5202,18 @@ mechanism. General SystemRelease delivery, servicing, adaptive placement, and
 microVM work retain their existing `TRIGGERED` reviews; this agent review does
 not establish clearance or infringement and does not replace independent human
 dual review.
+
+# 2026-08-25 — Signed general SystemRelease envelope admission
+
+**Result: NOT_TRIGGERED after the existing package/release, Lamport-signature,
+and canonical deployment reviews.** This increment conventionally concatenates
+the existing canonical generation and interface-catalog records inside a
+bounded, domain-separated, signed envelope, verifies exact offsets and digests,
+and compares the embedded signer identity with the identity selected by caller
+policy before using the existing capability-authorized staging path. It adds no
+new cryptographic primitive, trust authority, selection, ranking, dependency
+solver, update algorithm, compression, transport, virtualization, or recovery
+mechanism. General release delivery, signing-key handling, servicing, adaptive
+placement, and microVM work retain their existing `TRIGGERED` reviews; this
+agent review does not establish clearance or infringement and does not replace
+independent human dual review.
