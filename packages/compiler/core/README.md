@@ -4423,6 +4423,17 @@ Windows gnullvm and native Arch Linux WSL each pass 583 library tests, one
 component probe, 10 conformance tests, and 335 replacement tests: 929 compiler
 tests per host.
 
+The premise-bearing exact source-implementation milestone lowers a concrete
+implementation with one or more `where` predicates as a zero-parameter bounded
+clause rather than an unconditional exact fact. It therefore reuses generic
+clause coherence, recursive implemented/projection premise proof, and generic
+associated-value normalization while preserving a fully concrete head. Missing
+premises make the implementation unavailable, and an unconditional exact fact
+with the same head is rejected as overlap. Conditional implementations of traits
+with source supertraits remain unsupported. Windows gnullvm and native Arch
+Linux WSL each pass 586 library tests, one component probe, 10 conformance tests,
+and 335 replacement tests: 932 compiler tests per host.
+
 The projection-bearing term milestone uses a fixed 64-node arena for flat leaf
 terms and associated-type projections whose trait self/argument positions refer
 only to earlier nodes. Identical nodes intern to one stable identity; invalid
