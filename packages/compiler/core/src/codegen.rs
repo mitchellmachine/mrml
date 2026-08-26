@@ -2085,7 +2085,8 @@ enum X86_64InlineAssembly<'source> {
         register: X86_64InlineOutputRegister,
         output: &'source str,
     },
-    IncrementRax {
+    IncrementRegister {
+        register: X86_64InlineOutputRegister,
         input: &'source str,
         output: Option<&'source str>,
     },
@@ -2217,7 +2218,11 @@ fn x86_64_inline_assembly(
             .trim();
         let operand = x86_64_inline_operand_with_options(operand, false, true)?;
         let (input, output) = x86_64_inline_inout_places(operand)?;
-        return Ok(Some(X86_64InlineAssembly::IncrementRax { input, output }));
+        return Ok(Some(X86_64InlineAssembly::IncrementRegister {
+            register: X86_64InlineOutputRegister::Rax,
+            input,
+            output,
+        }));
     }
     let (arguments, operand_prefix, preserves_flags, operand_kind, output_register) =
         if let Some(arguments) = arguments.strip_prefix("\"cmp rax, rax\"") {
@@ -2250,7 +2255,15 @@ fn x86_64_inline_assembly(
                 "inout(\"rax\")",
                 false,
                 X86_64InlineOperandKind::InOut,
-                None,
+                Some(X86_64InlineOutputRegister::Rax),
+            )
+        } else if let Some(arguments) = arguments.strip_prefix("\"inc rcx\"") {
+            (
+                arguments,
+                "inout(\"rcx\")",
+                false,
+                X86_64InlineOperandKind::InOut,
+                Some(X86_64InlineOutputRegister::Rcx),
             )
         } else {
             return Err(CodegenErrorKind::InvalidInlineAssembly);
@@ -2276,7 +2289,11 @@ fn x86_64_inline_assembly(
         })),
         X86_64InlineOperandKind::InOut => {
             let (input, output) = x86_64_inline_inout_places(input)?;
-            Ok(Some(X86_64InlineAssembly::IncrementRax { input, output }))
+            Ok(Some(X86_64InlineAssembly::IncrementRegister {
+                register: output_register.ok_or(CodegenErrorKind::InvalidInlineAssembly)?,
+                input,
+                output,
+            }))
         }
     }
 }
@@ -9226,7 +9243,7 @@ fn preanalyze_runtime_expression_statement_reads<
                 body_start,
             );
         }
-        Ok(Some(X86_64InlineAssembly::IncrementRax { input, output })) => {
+        Ok(Some(X86_64InlineAssembly::IncrementRegister { input, output, .. })) => {
             if let Some(output) = output {
                 let tree = crate::ExpressionParser::<MAX_EXPRESSION_NODES>::new(input)
                     .parse()
@@ -26793,7 +26810,11 @@ impl<
                 }
                 return self.emit_x86_64_inline_output_store(destination);
             }
-            Ok(Some(X86_64InlineAssembly::IncrementRax { input, output })) => {
+            Ok(Some(X86_64InlineAssembly::IncrementRegister {
+                register,
+                input,
+                output,
+            })) => {
                 if let Some(output) = output {
                     let tree = crate::ExpressionParser::<MAX_EXPRESSION_NODES>::new(input)
                         .parse()
@@ -26840,7 +26861,12 @@ impl<
                     let emission = self.emit_expression(&tree, tree.root(), 0);
                     self.width = previous_width;
                     emission?;
-                    self.emit(&[0x48, 0xff, 0xc0])?;
+                    match register {
+                        X86_64InlineOutputRegister::Rax => self.emit(&[0x48, 0xff, 0xc0])?,
+                        X86_64InlineOutputRegister::Rcx => {
+                            self.emit(&[0x48, 0x89, 0xc1, 0x48, 0xff, 0xc1, 0x48, 0x89, 0xc8])?
+                        }
+                    }
                     return self.emit_x86_64_inline_output_store(destination);
                 }
                 let place = x86_64_inline_output_place(
@@ -26859,7 +26885,12 @@ impl<
                 )?;
                 self.emit_x86_64_inline_output_prepare::<MAX_EXPRESSION_NODES>(destination)?;
                 self.emit_x86_64_inline_output_load(destination)?;
-                self.emit(&[0x48, 0xff, 0xc0])?;
+                match register {
+                    X86_64InlineOutputRegister::Rax => self.emit(&[0x48, 0xff, 0xc0])?,
+                    X86_64InlineOutputRegister::Rcx => {
+                        self.emit(&[0x48, 0x89, 0xc1, 0x48, 0xff, 0xc1, 0x48, 0x89, 0xc8])?
+                    }
+                }
                 return self.emit_x86_64_inline_output_store(destination);
             }
             Ok(Some(X86_64InlineAssembly::AddRaxRcx { left, right })) => {
@@ -30912,6 +30943,29 @@ mod tests {
         for source in [
             concat!(
                 "#[unsafe(no_mangle)] pub unsafe extern \"C\" fn answer() -> u64 { ",
+                "let mut value: u64 = 6; asm!(\"inc rcx\", inout(\"rcx\") value); value }"
+            ),
+            concat!(
+                "#[unsafe(no_mangle)] pub unsafe extern \"C\" fn answer(input: u64) -> u64 { ",
+                "let mut output: u64 = 0; ",
+                "asm!(\"inc rcx\", inout(\"rcx\") input => output); output }"
+            ),
+            concat!(
+                "#[unsafe(no_mangle)] pub unsafe extern \"C\" fn answer(input: u64) -> u64 { ",
+                "let mut values: (u64, u64) = (0, 1); ",
+                "asm!(\"inc rcx\", inout(\"rcx\") input => values.1); values.1 }"
+            ),
+        ] {
+            let code = compile(source).unwrap();
+            assert!(
+                code.bytes()
+                    .windows(9)
+                    .any(|bytes| bytes == [0x48, 0x89, 0xc1, 0x48, 0xff, 0xc1, 0x48, 0x89, 0xc8])
+            );
+        }
+        for source in [
+            concat!(
+                "#[unsafe(no_mangle)] pub unsafe extern \"C\" fn answer() -> u64 { ",
                 "let mut values: [u64; 2] = [1, 2]; ",
                 "asm!(\"mov rax, 7\", lateout(\"rax\") values[1]); values[1] }"
             ),
@@ -31181,6 +31235,10 @@ mod tests {
             ),
             (
                 "#[unsafe(no_mangle)] pub unsafe extern \"C\" fn answer() -> u64 { let mut value: u64 = 6; asm!(\"inc rax\", inout(\"rcx\") value); value }",
+                CodegenErrorKind::InvalidInlineAssembly,
+            ),
+            (
+                "#[unsafe(no_mangle)] pub unsafe extern \"C\" fn answer() -> u64 { let mut value: u64 = 6; asm!(\"inc rcx\", inout(\"rax\") value); value }",
                 CodegenErrorKind::InvalidInlineAssembly,
             ),
             (
