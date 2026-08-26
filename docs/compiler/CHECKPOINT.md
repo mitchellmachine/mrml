@@ -1104,6 +1104,16 @@ native Arch Linux WSL each pass 545 library tests, one component-interface probe
 Backtracking over unresolved coinductive answers and source integration remain
 unsupported.
 
+The projection-resolved coinduction milestone threads classification through the
+existential associated-value environment. An unresolved implemented-trait cycle
+is deferred only while another bounded predicate may refine the state; a rigid
+projection equality can then bind the query variable and the retried classified
+cycle preserves that answer. Missing associated values remain `NoSolution`, and
+a pass with no refinement remains `Cycle`. Windows gnullvm and native Arch Linux
+WSL each pass 546 library tests, one component-interface probe, 10 conformance
+tests, and 335 replacement tests: 892 compiler tests per host. General candidate
+backtracking and source integration remain unsupported.
+
 The premise-bearing rigid-normalization milestone proves the selected generic
 implementation's instantiated trait and projection predicates before exposing
 its associated value. It shares the caller's 16-frame rigid proof stack and

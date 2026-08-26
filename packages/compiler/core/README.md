@@ -4290,6 +4290,15 @@ Arch Linux WSL each pass 545 library tests, one component probe, 10 conformance
 tests, and 335 replacement tests: 891 compiler tests per host. Backtracking over
 unresolved coinductive answers and source integration remain unsupported.
 
+The projection-resolved coinduction entry point defers an unresolved classified
+implemented-trait cycle within the fixed predicate scheduler while another
+predicate may refine the state. A rigid projection equality can bind the query
+variable before retry; missing values remain `NoSolution`, and no progress
+remains `Cycle`. Windows gnullvm and native Arch Linux WSL each pass 546 library
+tests, one component probe, 10 conformance tests, and 335 replacement tests: 892
+compiler tests per host. General candidate backtracking and source integration
+remain unsupported.
+
 The projection-bearing term milestone uses a fixed 64-node arena for flat leaf
 terms and associated-type projections whose trait self/argument positions refer
 only to earlier nodes. Identical nodes intern to one stable identity; invalid
