@@ -1244,10 +1244,19 @@ arguments, and associated identity, and lowers them into the existing bounded
 generic projection representation. Concrete obligations recursively prove the
 projected implementation through the existing 16-frame normalizer. Missing
 implementations fail closed; malformed projections, unknown identities, wrong
-arity, unsupported compound positions, and projection-valued unconditional
-exact implementations are rejected. Windows gnullvm and native Arch Linux WSL
+arity, and unsupported compound positions are rejected. Windows gnullvm and
+native Arch Linux WSL
 each pass 589 library tests, one component-interface probe, 10 conformance
 tests, and 335 replacement tests: 935 compiler tests per host.
+
+The exact projection-valued associated-type milestone represents an
+unconditional concrete implementation containing a projection value as a
+zero-parameter bounded clause. Existing exact/generic coherence is preserved,
+and recursive implementation proof plus projection normalization are shared
+with the generic source form. A missing projected implementation remains
+unavailable before code generation. Windows gnullvm and native Arch Linux WSL
+each pass 590 library tests, one component-interface probe, 10 conformance
+tests, and 335 replacement tests: 936 compiler tests per host.
 
 The premise-bearing rigid-normalization milestone proves the selected generic
 implementation's instantiated trait and projection predicates before exposing
