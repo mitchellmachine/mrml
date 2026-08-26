@@ -1,8 +1,10 @@
 use crate::semantics::evaluate_scalar_const_function;
 use crate::{
     CodegenErrorKind, CodegenOptions, ConstantResolver, ConstantTable, Item, Module, ObjectError,
-    ObjectFile, ParseErrorKind, Parser, SemanticErrorKind, Span, TargetLayout, X86_64Abi,
-    analyze_constants, compile_x86_64_function_with_options, emit_elf64_x86_64, emit_x86_64_coff,
+    ObjectFile, ParseErrorKind, Parser, SemanticErrorKind, SourceTraitDeclarationError,
+    SourceTraitDeclarationTable, SourceTraitImplementationError, SourceTraitImplementationTable,
+    SourceTraitObligationError, Span, TargetLayout, X86_64Abi, analyze_constants,
+    compile_x86_64_function_with_options, emit_elf64_x86_64, emit_x86_64_coff,
 };
 
 struct PipelineResolver<
@@ -132,6 +134,9 @@ pub enum ObjectFormat {
 pub enum CompileErrorKind {
     Parse(ParseErrorKind),
     Semantic(SemanticErrorKind),
+    TraitDeclaration(SourceTraitDeclarationError),
+    TraitImplementation(SourceTraitImplementationError),
+    TraitObligation(SourceTraitObligationError),
     FunctionNotFound,
     Codegen(CodegenErrorKind),
     Object(ObjectError),
@@ -148,6 +153,9 @@ impl CompileError {
         match self.kind {
             CompileErrorKind::Parse(_) => "source parsing failed",
             CompileErrorKind::Semantic(_) => "semantic analysis failed",
+            CompileErrorKind::TraitDeclaration(_) => "trait declaration admission failed",
+            CompileErrorKind::TraitImplementation(_) => "trait implementation admission failed",
+            CompileErrorKind::TraitObligation(_) => "trait obligation proof failed",
             CompileErrorKind::FunctionNotFound => "requested function was not found",
             CompileErrorKind::Codegen(_) => "machine-code generation failed",
             CompileErrorKind::Object(_) => "object emission failed",
@@ -234,6 +242,24 @@ pub fn compile_source_function_with_options<
             kind: CompileErrorKind::FunctionNotFound,
             span: None,
         })?;
+    let traits =
+        SourceTraitDeclarationTable::from_module(&module).map_err(|error| CompileError {
+            kind: CompileErrorKind::TraitDeclaration(error),
+            span: None,
+        })?;
+    let implementations =
+        SourceTraitImplementationTable::from_module(&module, &traits).map_err(|error| {
+            CompileError {
+                kind: CompileErrorKind::TraitImplementation(error),
+                span: Some(error.span),
+            }
+        })?;
+    implementations
+        .prove_module(&module, &traits)
+        .map_err(|error| CompileError {
+            kind: CompileErrorKind::TraitObligation(error),
+            span: Some(error.span),
+        })?;
     let abi = match format {
         ObjectFormat::Elf64 => X86_64Abi::SystemV,
         ObjectFormat::Coff => X86_64Abi::Windows,
@@ -298,6 +324,32 @@ mod tests {
         assert_eq!(&elf.bytes()[..4], b"\x7fELF");
         let coff = compile(source, "answer", ObjectFormat::Coff).unwrap();
         assert_eq!(&coff.bytes()[..2], &0x8664u16.to_le_bytes());
+    }
+
+    #[test]
+    fn enforces_concrete_source_trait_obligations_before_codegen() {
+        let satisfied = concat!(
+            "trait Visible {} impl Visible for u32 {} ",
+            "#[unsafe(no_mangle)] pub extern \"C\" fn answer() -> u64 where u32: Visible { 42 }"
+        );
+        compile(satisfied, "answer", ObjectFormat::Coff).unwrap();
+
+        let missing = concat!(
+            "trait Visible {} ",
+            "#[unsafe(no_mangle)] pub extern \"C\" fn answer() -> u64 where u32: Visible { 42 }"
+        );
+        let error = compile(missing, "answer", ObjectFormat::Coff).unwrap_err();
+        assert!(matches!(
+            error.kind,
+            CompileErrorKind::TraitObligation(SourceTraitObligationError {
+                kind: crate::SourceTraitObligationErrorKind::Unsatisfied,
+                ..
+            })
+        ));
+        assert_eq!(
+            &missing[error.span.unwrap().start..error.span.unwrap().end],
+            "Visible"
+        );
     }
 
     #[test]

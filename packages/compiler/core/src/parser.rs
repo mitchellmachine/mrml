@@ -18,6 +18,7 @@ pub const MAX_BODY_EXPRESSION_STATEMENTS: usize = 8;
 pub const MAX_BODY_RETURNS: usize = 8;
 pub const MAX_CONDITIONAL_RETURN_BRANCHES: usize = 4;
 pub const MAX_BODY_CONDITIONAL_ASSIGNMENTS: usize = 8;
+pub const MAX_FUNCTION_WHERE_PREDICATES: usize = 8;
 pub const MAX_CONDITIONAL_ASSIGNMENT_BRANCHES: usize = 4;
 pub const MAX_CONDITIONAL_BRANCH_ACTIONS: usize = 4;
 const MAX_BODY_TAIL_EXPRESSION_NODES: usize = 128;
@@ -33,6 +34,13 @@ pub struct Parameter<'source> {
     pub name: &'source str,
     pub span: Span,
     pub ty: TypeRef<'source>,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct FunctionWherePredicate<'source> {
+    pub self_type: TypeRef<'source>,
+    pub trait_name: &'source str,
+    pub trait_name_span: Span,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -53,6 +61,8 @@ pub struct Function<'source, const MAX_PARAMETERS: usize> {
     parameters: [Option<Parameter<'source>>; MAX_PARAMETERS],
     parameter_count: usize,
     pub return_type: Option<TypeRef<'source>>,
+    where_predicates: [Option<FunctionWherePredicate<'source>>; MAX_FUNCTION_WHERE_PREDICATES],
+    where_predicate_count: usize,
     pub body: Span,
     pub body_expression: &'source str,
     pub body_expression_span: Span,
@@ -65,6 +75,14 @@ impl<'source, const MAX_PARAMETERS: usize> Function<'source, MAX_PARAMETERS> {
 
     pub const fn parameter_count(&self) -> usize {
         self.parameter_count
+    }
+
+    pub fn where_predicates(&self) -> &[Option<FunctionWherePredicate<'source>>] {
+        &self.where_predicates[..self.where_predicate_count]
+    }
+
+    pub const fn where_predicate_count(&self) -> usize {
+        self.where_predicate_count
     }
 
     pub fn parse_body_expression<const MAX_NODES: usize>(
@@ -818,6 +836,7 @@ pub enum ParseErrorKind {
     NestingLimitExceeded,
     TooManyItems,
     TooManyParameters,
+    TooManyWherePredicates,
     TooManyLocals,
     TooManyLoopAssignments,
     TooManyLoopOperations,
@@ -2565,6 +2584,58 @@ impl<'source> Parser<'source> {
         })
     }
 
+    fn type_until_kind_or_text(
+        &mut self,
+        terminator_kind: TokenKind,
+        terminator_text: &str,
+    ) -> Result<TypeRef<'source>, ParseError> {
+        let Some(first) = self.peek()? else {
+            return Err(self.error(ParseErrorKind::ExpectedType, None));
+        };
+        if first.kind == terminator_kind || first.text == terminator_text {
+            return Err(self.error(ParseErrorKind::ExpectedType, Some(first)));
+        }
+        let start = first.span.start;
+        let mut end = start;
+        let mut angle_depth = 0usize;
+        let mut delimiter_depth = 0usize;
+        loop {
+            let Some(token) = self.peek()? else {
+                return Err(self.error(ParseErrorKind::UnterminatedDelimiter, None));
+            };
+            if angle_depth == 0
+                && delimiter_depth == 0
+                && (token.kind == terminator_kind || token.text == terminator_text)
+            {
+                break;
+            }
+            match token.text {
+                "<" => angle_depth = angle_depth.saturating_add(1),
+                ">" if angle_depth != 0 => angle_depth -= 1,
+                _ => {}
+            }
+            match token.kind {
+                TokenKind::OpenParen | TokenKind::OpenBracket => {
+                    delimiter_depth = delimiter_depth.saturating_add(1);
+                }
+                TokenKind::CloseParen | TokenKind::CloseBracket if delimiter_depth != 0 => {
+                    delimiter_depth -= 1;
+                }
+                _ => {}
+            }
+            end = token.span.end;
+            self.take()?;
+        }
+        let text = self.source[start..end].trim_end();
+        Ok(TypeRef {
+            text,
+            span: Span {
+                start,
+                end: start + text.len(),
+            },
+        })
+    }
+
     fn type_until_text(&mut self, terminator: &str) -> Result<TypeRef<'source>, ParseError> {
         let Some(first) = self.peek()? else {
             return Err(self.error(ParseErrorKind::ExpectedType, None));
@@ -2779,10 +2850,38 @@ impl<'source> Parser<'source> {
             ParseErrorKind::ExpectedParameterSeparator,
         )?;
         let return_type = if self.take_text("->")?.is_some() {
-            Some(self.type_until(&[TokenKind::OpenBrace])?)
+            Some(self.type_until_kind_or_text(TokenKind::OpenBrace, "where")?)
         } else {
             None
         };
+        let mut where_predicates = [None; MAX_FUNCTION_WHERE_PREDICATES];
+        let mut where_predicate_count = 0usize;
+        if self.take_text("where")?.is_some() {
+            loop {
+                if where_predicate_count == MAX_FUNCTION_WHERE_PREDICATES {
+                    let token = self.peek()?;
+                    return Err(self.error(ParseErrorKind::TooManyWherePredicates, token));
+                }
+                let self_type = self.type_until(&[TokenKind::Colon])?;
+                self.expect_kind(TokenKind::Colon, ParseErrorKind::ExpectedColon)?;
+                let trait_name = self.identifier()?;
+                where_predicates[where_predicate_count] = Some(FunctionWherePredicate {
+                    self_type,
+                    trait_name: trait_name.text,
+                    trait_name_span: trait_name.span,
+                });
+                where_predicate_count += 1;
+                if self.take_text(",")?.is_none() {
+                    break;
+                }
+                if self
+                    .peek()?
+                    .is_some_and(|token| token.kind == TokenKind::OpenBrace)
+                {
+                    break;
+                }
+            }
+        }
         let body = self.body()?;
         let untrimmed = &self.source[body.start + 1..body.end - 1];
         let body_expression = untrimmed.trim();
@@ -2799,6 +2898,8 @@ impl<'source> Parser<'source> {
             parameters,
             parameter_count,
             return_type,
+            where_predicates,
+            where_predicate_count,
             body,
             body_expression,
             body_expression_span: Span {
@@ -3166,6 +3267,37 @@ mod tests {
             .parse_module::<3, 1>()
             .unwrap_err();
         assert_eq!(public.kind, ParseErrorKind::ExpectedItem);
+    }
+
+    #[test]
+    fn parses_bounded_concrete_function_where_predicates() {
+        let source = "fn check() -> u32 where core::primitive::u32: Visible, u8: Small, { 1 }";
+        let module: TestModule<'_> = Parser::new(source).parse_module().unwrap();
+        let Some(Item::Function(function)) = module.items()[0] else {
+            panic!("expected function")
+        };
+        assert_eq!(function.return_type.unwrap().text, "u32");
+        assert_eq!(function.where_predicate_count(), 2);
+        let first = function.where_predicates()[0].unwrap();
+        assert_eq!(first.self_type.text, "core::primitive::u32");
+        assert_eq!(first.trait_name, "Visible");
+        assert_eq!(function.where_predicates()[1].unwrap().trait_name, "Small");
+    }
+
+    #[test]
+    fn bounds_and_rejects_unsupported_function_where_predicates() {
+        let overflow = Parser::new(concat!(
+            "fn check() where T0: Trait, T1: Trait, T2: Trait, T3: Trait, ",
+            "T4: Trait, T5: Trait, T6: Trait, T7: Trait, T8: Trait {}"
+        ))
+        .parse_module::<2, 1>()
+        .unwrap_err();
+        assert_eq!(overflow.kind, ParseErrorKind::TooManyWherePredicates);
+
+        let compound = Parser::new("fn check() where u32: First + Second {}")
+            .parse_module::<2, 1>()
+            .unwrap_err();
+        assert_eq!(compound.kind, ParseErrorKind::ExpectedBody);
     }
 
     #[test]

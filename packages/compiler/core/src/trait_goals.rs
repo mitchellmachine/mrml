@@ -5,7 +5,7 @@
 //! substitutions without confusing inference variables, placeholders, or
 //! concrete types.
 
-use crate::{Item, Module, Span};
+use crate::{Function, Item, Module, Span, TypeRef};
 
 pub const MAX_TRAIT_GOAL_ARGUMENTS: usize = 8;
 pub const MAX_CANONICAL_TRAIT_VARIABLES: usize = 8;
@@ -125,6 +125,22 @@ pub enum SourceTraitImplementationErrorKind {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum SourceTraitObligationErrorKind {
+    UnknownTrait,
+    UnknownType,
+    DuplicatePredicate,
+    Unsatisfied,
+    Ambiguous,
+    Goal(TraitGoalError),
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct SourceTraitObligationError {
+    pub kind: SourceTraitObligationErrorKind,
+    pub span: Span,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct SourceTraitImplementationError {
     pub kind: SourceTraitImplementationErrorKind,
     pub span: Span,
@@ -147,6 +163,19 @@ impl<'source> SourceTraitImplementationTable<'source> {
             type_count: 0,
             implementations: TraitImplementationDatabase::EMPTY,
         };
+        for item in module.items().iter().flatten() {
+            match item {
+                Item::TraitImplementation(implementation) => {
+                    table.intern_type(implementation.self_type)?;
+                }
+                Item::Function(function) => {
+                    for predicate in function.where_predicates().iter().flatten() {
+                        table.intern_type(predicate.self_type)?;
+                    }
+                }
+                Item::Const(_) | Item::Static(_) | Item::Trait(_) => {}
+            }
+        }
         let mut implementation_count = 0u32;
         for item in module.items().iter().flatten() {
             let Item::TraitImplementation(implementation) = item else {
@@ -159,30 +188,7 @@ impl<'source> SourceTraitImplementationTable<'source> {
                     span: implementation.trait_name_span,
                 })?
                 .id;
-            if !supported_source_trait_type(implementation.self_type.text) {
-                return Err(SourceTraitImplementationError {
-                    kind: SourceTraitImplementationErrorKind::UnsupportedSelfType,
-                    span: implementation.self_type.span,
-                });
-            }
-            let self_type = if let Some(known) = table.get_type(implementation.self_type.text) {
-                known.id
-            } else {
-                let slot = table.types.get_mut(table.type_count).ok_or(
-                    SourceTraitImplementationError {
-                        kind: SourceTraitImplementationErrorKind::TooManyTypes,
-                        span: implementation.self_type.span,
-                    },
-                )?;
-                let id = TraitTypeId::new(table.type_count as u32);
-                *slot = Some(SourceTraitType {
-                    id,
-                    name: implementation.self_type.text,
-                    span: implementation.self_type.span,
-                });
-                table.type_count += 1;
-                id
-            };
+            let self_type = table.get_type(implementation.self_type.text).unwrap().id;
             table
                 .implementations
                 .insert(TraitImplementationHeader::new(
@@ -213,6 +219,109 @@ impl<'source> SourceTraitImplementationTable<'source> {
 
     pub const fn implementations(&self) -> &TraitImplementationDatabase {
         &self.implementations
+    }
+
+    pub fn prove_function<const MAX_PARAMETERS: usize>(
+        &self,
+        function: &Function<'source, MAX_PARAMETERS>,
+        traits: &SourceTraitDeclarationTable<'source>,
+    ) -> Result<(), SourceTraitObligationError> {
+        for (index, predicate) in function.where_predicates().iter().flatten().enumerate() {
+            if function.where_predicates()[..index]
+                .iter()
+                .flatten()
+                .any(|known| {
+                    known.self_type.text == predicate.self_type.text
+                        && known.trait_name == predicate.trait_name
+                })
+            {
+                return Err(SourceTraitObligationError {
+                    kind: SourceTraitObligationErrorKind::DuplicatePredicate,
+                    span: predicate.trait_name_span,
+                });
+            }
+            let trait_id = traits
+                .get(predicate.trait_name)
+                .ok_or(SourceTraitObligationError {
+                    kind: SourceTraitObligationErrorKind::UnknownTrait,
+                    span: predicate.trait_name_span,
+                })?
+                .id;
+            let self_type = self
+                .get_type(predicate.self_type.text)
+                .ok_or(SourceTraitObligationError {
+                    kind: SourceTraitObligationErrorKind::UnknownType,
+                    span: predicate.self_type.span,
+                })?
+                .id;
+            let goal = canonicalize_implemented_trait_goal(ImplementedTraitGoal::new(
+                trait_id,
+                TraitGoalType::Concrete(self_type),
+            ))
+            .map_err(|kind| SourceTraitObligationError {
+                kind: SourceTraitObligationErrorKind::Goal(kind),
+                span: predicate.trait_name_span,
+            })?;
+            match self.implementations.solve(goal) {
+                TraitGoalSolution::Unique(_) => {}
+                TraitGoalSolution::NoSolution => {
+                    return Err(SourceTraitObligationError {
+                        kind: SourceTraitObligationErrorKind::Unsatisfied,
+                        span: predicate.trait_name_span,
+                    });
+                }
+                TraitGoalSolution::Ambiguous => {
+                    return Err(SourceTraitObligationError {
+                        kind: SourceTraitObligationErrorKind::Ambiguous,
+                        span: predicate.trait_name_span,
+                    });
+                }
+            }
+        }
+        Ok(())
+    }
+
+    pub fn prove_module<const MAX_ITEMS: usize, const MAX_PARAMETERS: usize>(
+        &self,
+        module: &Module<'source, MAX_ITEMS, MAX_PARAMETERS>,
+        traits: &SourceTraitDeclarationTable<'source>,
+    ) -> Result<(), SourceTraitObligationError> {
+        for item in module.items().iter().flatten() {
+            if let Item::Function(function) = item {
+                self.prove_function(function, traits)?;
+            }
+        }
+        Ok(())
+    }
+
+    fn intern_type(
+        &mut self,
+        source_type: TypeRef<'source>,
+    ) -> Result<TraitTypeId, SourceTraitImplementationError> {
+        if !supported_source_trait_type(source_type.text) {
+            return Err(SourceTraitImplementationError {
+                kind: SourceTraitImplementationErrorKind::UnsupportedSelfType,
+                span: source_type.span,
+            });
+        }
+        if let Some(known) = self.get_type(source_type.text) {
+            return Ok(known.id);
+        }
+        let slot = self
+            .types
+            .get_mut(self.type_count)
+            .ok_or(SourceTraitImplementationError {
+                kind: SourceTraitImplementationErrorKind::TooManyTypes,
+                span: source_type.span,
+            })?;
+        let id = TraitTypeId::new(self.type_count as u32);
+        *slot = Some(SourceTraitType {
+            id,
+            name: source_type.text,
+            span: source_type.span,
+        });
+        self.type_count += 1;
+        Ok(id)
     }
 }
 
@@ -7356,6 +7465,80 @@ mod tests {
         let traits = SourceTraitDeclarationTable::from_module(&overflow).unwrap();
         let error = SourceTraitImplementationTable::from_module(&overflow, &traits).unwrap_err();
         assert_eq!(error.kind, SourceTraitImplementationErrorKind::TooManyTypes);
+    }
+
+    #[test]
+    fn proves_concrete_source_function_obligations() {
+        let source = concat!(
+            "trait Visible {} trait Small {} ",
+            "impl Visible for core::primitive::u32 {} impl Small for u8 {} ",
+            "fn check() where core::primitive::u32: Visible, u8: Small {}"
+        );
+        let module = Parser::new(source).parse_module::<8, 1>().unwrap();
+        let traits = SourceTraitDeclarationTable::from_module(&module).unwrap();
+        let implementations =
+            SourceTraitImplementationTable::from_module(&module, &traits).unwrap();
+        let Some(Item::Function(function)) = module.items()[4] else {
+            panic!("expected checked function")
+        };
+        implementations.prove_function(&function, &traits).unwrap();
+    }
+
+    #[test]
+    fn source_function_obligations_reject_missing_unknown_and_duplicate_predicates() {
+        let missing = Parser::new("trait Visible {} fn check() where u32: Visible {}")
+            .parse_module::<4, 1>()
+            .unwrap();
+        let traits = SourceTraitDeclarationTable::from_module(&missing).unwrap();
+        let implementations =
+            SourceTraitImplementationTable::from_module(&missing, &traits).unwrap();
+        let Some(Item::Function(function)) = missing.items()[1] else {
+            panic!("expected function")
+        };
+        assert_eq!(
+            implementations
+                .prove_function(&function, &traits)
+                .unwrap_err()
+                .kind,
+            SourceTraitObligationErrorKind::Unsatisfied
+        );
+
+        let unknown = Parser::new("fn check() where u32: Missing {}")
+            .parse_module::<4, 1>()
+            .unwrap();
+        let traits = SourceTraitDeclarationTable::from_module(&unknown).unwrap();
+        let implementations =
+            SourceTraitImplementationTable::from_module(&unknown, &traits).unwrap();
+        let Some(Item::Function(function)) = unknown.items()[0] else {
+            panic!("expected function")
+        };
+        assert_eq!(
+            implementations
+                .prove_function(&function, &traits)
+                .unwrap_err()
+                .kind,
+            SourceTraitObligationErrorKind::UnknownTrait
+        );
+
+        let duplicate = Parser::new(concat!(
+            "trait Visible {} impl Visible for u32 {} ",
+            "fn check() where u32: Visible, u32: Visible {}"
+        ))
+        .parse_module::<5, 1>()
+        .unwrap();
+        let traits = SourceTraitDeclarationTable::from_module(&duplicate).unwrap();
+        let implementations =
+            SourceTraitImplementationTable::from_module(&duplicate, &traits).unwrap();
+        let Some(Item::Function(function)) = duplicate.items()[2] else {
+            panic!("expected function")
+        };
+        assert_eq!(
+            implementations
+                .prove_function(&function, &traits)
+                .unwrap_err()
+                .kind,
+            SourceTraitObligationErrorKind::DuplicatePredicate
+        );
     }
 
     fn concrete_clause(
