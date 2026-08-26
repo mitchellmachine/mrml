@@ -7573,3 +7573,16 @@ algorithm. Terminal, nested-loop, expression, unstable-origin, and unsupported
 assignment paths remain fail closed. Broader compiler completion remains
 partial; this technical screen is not a clearance or infringement conclusion
 and does not replace independent human dual review.
+
+# 2026-08-26 — Mixed loop exit/backedge origin partition
+
+**Result: NOT_TRIGGERED after the mixed loop-path origin review.** This increment
+uses conventional control-flow partitioning so supported terminal-return origins
+feed the existing function-exit join while nonterminal arm states feed the
+existing bounded iteration and zero-iteration intersections. It introduces no
+general fixed-point solver, region or alias analysis, path-sensitive inference,
+optimization, or code-generation algorithm. Break, continue, expressions,
+terminal direct assignment, nested-loop transfer, and unstable origins remain
+fail closed. Broader compiler completion remains partial; this technical screen
+is not a clearance or infringement conclusion and does not replace independent
+human dual review.
