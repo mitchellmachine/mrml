@@ -1261,6 +1261,13 @@ facts; generation-only changes are ignored, but a changed or local-backed
 origin fails closed. ORACLE-0002 accepts a temporary local assignment restored
 to the parameter before the backedge and rejects an unrestored local origin
 with E0515. This is an exact stability criterion, not a general fixed point.
+The same one-iteration transfer now resolves direct conditional-return
+operations after supported local declarations and assignments. The taken edge
+contributes its exact current origin to the function-exit merge; the untaken
+edge retains the current state for later operations and the backedge join.
+ORACLE-0002 accepts a same-origin reborrow before that return and rejects a
+local-backed replacement with E0515. Unconditional return and mixed loop-control
+transfer remain separate incomplete steps.
 
 The first modern trait-solver foundation is an explicit bounded implemented-
 goal representation. Stable trait/type/inference/placeholder identities remain

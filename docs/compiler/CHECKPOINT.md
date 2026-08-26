@@ -921,6 +921,17 @@ interface probe, 10 conformance tests, and 335 replacement tests: 989 compiler
 tests per host. This is bounded stable-backedge proof, not general nested-loop
 fixed-point or region inference.
 
+Direct conditional returns now participate in the loop local-origin transfer
+after supported declarations and assignments. Their taken edge merges the
+current exact parameter origin into the function result, while their untaken
+edge continues with the unchanged current state toward later operations and the
+backedge/zero-iteration intersection. ORACLE-0002 accepts the stable same-origin
+reborrow and rejects a local-backed replacement with E0515. Windows and Arch
+each pass 643 library tests, one component-interface probe, 10 conformance
+tests, and 335 replacement tests: 989 compiler tests per host. Unconditional
+return, mixed break/continue transfer, and general fixed points remain
+unsupported.
+
 Mixed conditional loop arms now partition exit and backedge evidence: supported
 terminal returns merge directly into the function result, while only nonterminal
 arms join the one-iteration state before its zero-iteration intersection. Direct

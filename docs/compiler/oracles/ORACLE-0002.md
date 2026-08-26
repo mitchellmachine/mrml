@@ -127,6 +127,14 @@ constant array-element output shapes only, not for dynamic indexing, general
 places, register allocation, or assembly semantics. Temporary source and
 metadata were removed.
 
+An independently authored Rust 2024 metadata-only loop probe against this exact
+toolchain and commit accepted a same-origin mutable reborrow assignment before a
+direct conditional return. The matching probe that replaced the alias with
+function-local storage failed at that return with E0515. This is black-box
+evidence for that exact conditional exit after local-origin transfer, not a
+general loop fixed point, region inference, or complete Polonius semantics.
+Temporary sources and metadata were removed.
+
 An independently authored Rust 2024 metadata-only probe against this exact
 toolchain and commit accepted a mutable-reference forwarding callee whose local
 alias was directly reassigned through `&mut *alias`, plus a caller that reused the

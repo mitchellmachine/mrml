@@ -4130,6 +4130,15 @@ backedge and rejects the unrestored cycle with E0515. Windows and native Arch
 Linux WSL each pass 643 library tests, one component-interface probe, 10
 conformance tests, and 335 replacement tests: 989 compiler tests per host. This
 does not claim a general nested-loop fixed point or region solver.
+Direct conditional-return operations are now accepted in the same loop state
+transfer after supported local declarations and assignments. A taken return
+uses the exact current alias/projected state for the function-exit origin; the
+false path continues toward later operations and the existing iteration join.
+The pinned oracle accepts a stable parameter reborrow and rejects a local-backed
+replacement with E0515. Windows and native Arch Linux WSL each pass 643 library
+tests, one component-interface probe, 10 conformance tests, and 335 replacement
+tests: 989 compiler tests per host. Unconditional returns and mixed loop control
+remain conservative.
 
 Exact typed tuple literals now seed the same projected state when a local is
 declared. Every reference field is checked against the declared tuple element
