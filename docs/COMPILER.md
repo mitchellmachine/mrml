@@ -119,6 +119,7 @@ language as a whole.
 | Never-type improvements | **PARTIAL** | Structurally diverging inlined helpers and bounded never-to-supported-result coercion exist. General `!` inference, never parameters, public never ABI, and arbitrary divergence analysis do not. |
 | Modern patterns and match | **PARTIAL** | Bounded scalar constant/range/wildcard patterns and limited matches exist. Destructuring, match ergonomics, guards and ownership-sensitive patterns are incomplete. |
 | Modern unsafe rules | **PARTIAL** | Unsafe functions gate a bounded unchecked integer/raw-pointer subset and unsupported operations fail closed. General unsafe blocks, unsafe traits/impls, extern rules, assembly, provenance, and complete `unsafe_op_in_unsafe_fn` semantics are absent. |
+| Modern unsafe-block delta | **PARTIAL** | A typed bounded `UnsafeBlock` expression now scopes the supported unchecked integer operations, unchecked casts/option extraction, and dangerous scalar raw-pointer dereference, reference conversion, read/write/fill/copy/swap/drop, non-wrapping offset, and pointer-difference operations. Nested blocks and bounded scalar locals are retained through constant, IR, semantic, type, and native-emission consumers. Lexically adjacent operations outside the block fail closed. Unsafe blocks around ordinary assembly statements, general statements, unsupported operations, unsafe traits/implementations, extern rules, complete provenance, and complete `unsafe_op_in_unsafe_fn` semantics remain absent; this row supersedes the general-unsafe-block wording above. |
 | Modern `no_std` systems features | **PARTIAL** | Dependency-free native code generation covers integers, control flow, arrays, bounded scalar tuples, references, slices, raw pointers, COFF/ELF64, UEFI checks, and NVPTX checks. Up to eight typed x86-64 PC-relative branch-or-data relocations are structurally emitted for both native object formats. General assembly, naked entry-point integration, atomics, SIMD, full ABI/layout, general relocation families, linking, and package compilation remain missing. |
 
 Already implemented post-2024 or forward-looking work should be preserved rather
@@ -1788,6 +1789,28 @@ ORACLE-0002 Rust 2024 toolchain accepted the metadata-only comparison probe.
 Windows and Arch each passed 645 unit, 1 component, 10 conformance, and 337
 replacement tests (993 total). This remains one fixed template, not general
 inline-assembly support or physical CPU execution evidence.
+
+### Typed bounded unsafe-block checkpoint
+
+The expression graph now preserves `unsafe { ... }` as a typed `UnsafeBlock`
+node with a checked source span rather than erasing the boundary. Constant,
+semantic, IR, type, and native-emission consumers transparently retain the
+operand while unsafe admission checks require either an unsafe function or
+lexical containment by that node. The bounded scope covers the existing
+unchecked integer operations, unchecked integer casts and option extraction,
+and dangerous scalar raw-pointer dereference, reference conversion,
+read/write/fill/copy/swap/drop, non-wrapping offsets, and pointer differences.
+Safe raw-pointer inspection, casts, address manipulation, alignment queries,
+and wrapping offsets remain safe. A control with an unsafe block around only
+the pointer value does not authorize a dereference outside the block.
+
+Independently authored ELF64 and COFF probes cover nested blocks, block-local
+bindings, integer operations, and raw-pointer operations. ORACLE-0002 accepts
+the scoped forms and rejects the escaped dereference with E0133. Windows and
+Arch each passed 645 unit, 1 component, 10 conformance, and 338 replacement
+tests (994 total). General statement blocks, assembly inside unsafe blocks,
+unsafe traits/implementations, full raw-pointer provenance, complete const
+unsafe rules, and `unsafe_op_in_unsafe_fn` lint semantics remain unsupported.
 
 ## Non-negotiable implementation rules
 

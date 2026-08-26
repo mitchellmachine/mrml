@@ -12,6 +12,10 @@ protocol, interface transport, DMA, queue, interrupt, or hardware behavior.
 The broader adaptive/Total MicroVM mechanism remains **TRIGGERED**; this
 technical screen is not patent clearance.
 
+The focused two-domain late-failure/retry test and correction of live prepared-
+set cardinality are part of the same **NOT_TRIGGERED** conventional transaction
+and container-accounting work. They add no backend or placement mechanism.
+
 ## 2026-08-26 — Active deployment release to complete runtime assignment
 
 Patent review: **NOT_TRIGGERED** for joining the existing capability-authorized
@@ -8523,3 +8527,14 @@ instruction-selection, optimization, synchronization, scheduling, or runtime
 algorithm. Broader compiler completion remains partial; this technical screen
 is not a clearance or infringement conclusion and does not replace independent
 human dual review.
+
+# 2026-08-26 — Typed bounded unsafe-block scope
+
+**Result: NOT_TRIGGERED.** This increment represents a conventional lexical
+unsafe block as one typed bounded expression node and applies existing unsafe
+admission checks to operations whose source spans are contained by that node.
+It also corrects the existing dangerous raw-pointer operations to require an
+unsafe function or block. It introduces no new alias, provenance, optimization,
+instruction-selection, memory-management, or runtime algorithm. Broader
+compiler completion remains partial; this technical screen is not a clearance
+or infringement conclusion and does not replace independent human dual review.

@@ -645,6 +645,16 @@ argument reborrows. This is exact evidence for direct reference places passed to
 those reference-typed parameters, not general call coercion or region inference.
 Temporary source and metadata were removed.
 
+An independently authored Rust 2024 metadata-only unsafe-block set against this
+exact toolchain and commit compiled scoped `unchecked_add`, raw-pointer
+dereference, write, `add`, `offset_from`, `as_ref_unchecked`, and
+`drop_in_place` operations in otherwise safe functions. A control that wrapped
+only the pointer value in `unsafe` and dereferenced it afterward failed with
+E0133. This records black-box acceptance and lexical containment for those exact
+forms only; it does not establish general unsafe statements, traits,
+implementations, assembly, provenance, const safety, lint behavior, or other
+operations. Temporary sources and metadata were removed.
+
 A separate invocation kept the projected result live and attempted a competing
 mutable borrow of the non-origin first argument. This exact toolchain rejected
 the second borrow with E0499 because the first argument's call reborrow remained
