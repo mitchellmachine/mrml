@@ -7842,3 +7842,14 @@ backed states fail closed; general nested-loop exit transfer remains unsupported
 Broader compiler completion remains partial; this technical screen is not a
 clearance or infringement conclusion and does not replace independent human
 dual review.
+
+# 2026-08-26 — Nested inner-break origin export
+
+**Result: NOT_TRIGGERED after the nested inner-break review.** This increment
+uses conventional fixed-capacity meet accumulation for inner-break exits and
+the existing zero-iteration join for condition-headed inner loops. It adds no
+novel fixed-point solver, region or alias analysis, path-sensitive inference,
+optimization, or code-generation algorithm. Local-backed and outer-target
+controls fail closed; general nested-loop transfer remains incomplete. Broader
+compiler completion remains partial; this technical screen is not a clearance
+or infringement conclusion and does not replace independent human dual review.
