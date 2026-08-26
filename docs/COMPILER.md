@@ -1205,6 +1205,9 @@ ORACLE-0002 accepts the former and rejects the latter with E0515.
 Scalar shared-reference call parameters and results now exercise the same
 bounded loan model. A live shared result blocks owner mutation, while last use
 releases the loan; ORACLE-0002 matches with E0502 and acceptance respectively.
+Shared-call escape analysis accepts a parameter-backed identity result and
+rejects a local-backed result with the bounded outlives diagnostic, matching
+ORACLE-0002 E0515. The new focused unit brings each host to 989 compiler tests.
 
 The first modern trait-solver foundation is an explicit bounded implemented-
 goal representation. Stable trait/type/inference/placeholder identities remain

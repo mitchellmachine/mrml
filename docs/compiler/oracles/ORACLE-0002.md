@@ -424,6 +424,12 @@ before mutating the owner and compiled successfully. This is exact shared-call
 loan-liveness evidence, not general call or region inference. Temporary sources
 and metadata were removed.
 
+A shared-call escape pair against this exact toolchain and commit returned a
+`shared_identity` result backed by a parameter or by function-local storage.
+The parameter case compiled and the local case failed with E0515. This is exact
+scalar shared-reference return-outlives evidence, not general lifetime
+inference. Temporary sources and metadata were removed.
+
 An independently authored Rust 2024 metadata-only probe against this exact
 toolchain and commit returned call-derived shared children through an explicit
 return and through a conditional early-return plus tail-return path. Both

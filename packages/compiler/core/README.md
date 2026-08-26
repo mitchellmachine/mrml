@@ -4059,6 +4059,10 @@ Scalar shared-reference parameters/results now have a bounded identity-call
 path. The returned shared loan blocks owner mutation while live and releases
 after last use, matching pinned-oracle E0502 and acceptance. Both hosts remain
 at 988 compiler tests; general shared-reference call inference is unsupported.
+The shared identity result also participates in bounded return-outlives checks:
+parameter ancestry passes and local ancestry fails, matching pinned-oracle
+E0515. A new focused unit raises both hosts to 989 compiler tests (643 library,
+one component, 10 conformance, and 335 replacement tests).
 
 Exact typed tuple literals now seed the same projected state when a local is
 declared. Every reference field is checked against the declared tuple element
