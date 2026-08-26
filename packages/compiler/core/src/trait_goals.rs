@@ -286,6 +286,9 @@ pub enum SourceTraitImplementationErrorKind {
     DuplicateGenericParameter,
     UnconstrainedGenericParameter,
     UnsupportedGenericSupertraits,
+    UnsupportedExactPremises,
+    UnknownPremiseTrait,
+    DuplicatePremise,
     Goal(TraitGoalError),
 }
 
@@ -361,6 +364,22 @@ impl<'source> SourceTraitImplementationTable<'source> {
                             table.intern_type(associated.value)?;
                         }
                     }
+                    for predicate in implementation.where_predicates().iter().flatten() {
+                        if !implementation
+                            .generic_parameters()
+                            .contains(&Some(predicate.self_type.text))
+                        {
+                            table.intern_type(predicate.self_type)?;
+                        }
+                        for argument in predicate.trait_arguments().iter().flatten() {
+                            if !implementation
+                                .generic_parameters()
+                                .contains(&Some(argument.text))
+                            {
+                                table.intern_type(*argument)?;
+                            }
+                        }
+                    }
                 }
                 Item::Function(function) => {
                     for predicate in function.where_predicates().iter().flatten() {
@@ -398,6 +417,12 @@ impl<'source> SourceTraitImplementationTable<'source> {
             };
             if implementation.generic_parameter_count() != 0 {
                 continue;
+            }
+            if implementation.where_predicate_count() != 0 {
+                return Err(SourceTraitImplementationError {
+                    kind: SourceTraitImplementationErrorKind::UnsupportedExactPremises,
+                    span: implementation.trait_name_span,
+                });
             }
             let declaration = traits
                 .get(implementation.trait_name)
@@ -499,7 +524,7 @@ impl<'source> SourceTraitImplementationTable<'source> {
                     });
                 }
             }
-            let clause = TraitWhereClause::new(
+            let mut clause = TraitWhereClause::new(
                 implementation.generic_parameter_count(),
                 consequence,
             )
@@ -507,6 +532,62 @@ impl<'source> SourceTraitImplementationTable<'source> {
                 kind: SourceTraitImplementationErrorKind::Goal(kind),
                 span: implementation.trait_name_span,
             })?;
+            for (predicate_index, predicate) in implementation
+                .where_predicates()
+                .iter()
+                .flatten()
+                .enumerate()
+            {
+                if implementation.where_predicates()[..predicate_index]
+                    .iter()
+                    .flatten()
+                    .any(|known| {
+                        known.self_type.text == predicate.self_type.text
+                            && known.trait_name == predicate.trait_name
+                            && known.trait_arguments().len() == predicate.trait_arguments().len()
+                            && known
+                                .trait_arguments()
+                                .iter()
+                                .zip(predicate.trait_arguments())
+                                .all(|(left, right)| left.unwrap().text == right.unwrap().text)
+                    })
+                {
+                    return Err(SourceTraitImplementationError {
+                        kind: SourceTraitImplementationErrorKind::DuplicatePremise,
+                        span: predicate.trait_name_span,
+                    });
+                }
+                let premise_trait = traits.get(predicate.trait_name).ok_or(
+                    SourceTraitImplementationError {
+                        kind: SourceTraitImplementationErrorKind::UnknownPremiseTrait,
+                        span: predicate.trait_name_span,
+                    },
+                )?;
+                if premise_trait.generic_parameter_count != predicate.trait_argument_count() {
+                    return Err(SourceTraitImplementationError {
+                        kind: SourceTraitImplementationErrorKind::WrongTraitArgumentCount,
+                        span: predicate.trait_name_span,
+                    });
+                }
+                let mut premise = BoundImplementedTraitGoal::new(
+                    premise_trait.id,
+                    source_bound_type(predicate.self_type, implementation, &table)?,
+                );
+                for argument in predicate.trait_arguments().iter().flatten() {
+                    premise
+                        .push_argument(source_bound_type(*argument, implementation, &table)?)
+                        .map_err(|kind| SourceTraitImplementationError {
+                            kind: SourceTraitImplementationErrorKind::Goal(kind),
+                            span: argument.span,
+                        })?;
+                }
+                clause
+                    .push_premise(premise)
+                    .map_err(|kind| SourceTraitImplementationError {
+                        kind: SourceTraitImplementationErrorKind::Goal(kind),
+                        span: predicate.trait_name_span,
+                    })?;
+            }
             table
                 .generic_implementations
                 .insert_coherent_with_exact(
@@ -8232,6 +8313,45 @@ mod tests {
                 .unwrap_err()
                 .kind,
             SourceTraitImplementationErrorKind::UnconstrainedGenericParameter
+        );
+    }
+
+    #[test]
+    fn proves_bounded_generic_source_implementation_premises() {
+        let satisfied = concat!(
+            "trait Parent<Input> {} trait Child<Input> { type Output; } ",
+            "impl Parent<u32> for u32 {} ",
+            "impl<T> Child<T> for T where T: Parent<T> { type Output = T; } ",
+            "fn check() where u32: Child<u32>, <u32 as Child<u32>>::Output = u32 {}"
+        );
+        let module = Parser::new(satisfied).parse_module::<10, 1>().unwrap();
+        let traits = SourceTraitDeclarationTable::from_module(&module).unwrap();
+        let implementations =
+            SourceTraitImplementationTable::from_module(&module, &traits).unwrap();
+        implementations.prove_module(&module, &traits).unwrap();
+
+        let missing = satisfied.replace("u32: Child<u32>", "u8: Child<u8>");
+        let module = Parser::new(&missing).parse_module::<10, 1>().unwrap();
+        let traits = SourceTraitDeclarationTable::from_module(&module).unwrap();
+        let implementations =
+            SourceTraitImplementationTable::from_module(&module, &traits).unwrap();
+        assert_eq!(
+            implementations.prove_module(&module, &traits).unwrap_err().kind,
+            SourceTraitObligationErrorKind::Unsatisfied
+        );
+
+        let duplicate = Parser::new(concat!(
+            "trait Parent<T> {} trait Child<T> {} ",
+            "impl<T> Child<T> for T where T: Parent<T>, T: Parent<T> {}"
+        ))
+        .parse_module::<6, 1>()
+        .unwrap();
+        let traits = SourceTraitDeclarationTable::from_module(&duplicate).unwrap();
+        assert_eq!(
+            SourceTraitImplementationTable::from_module(&duplicate, &traits)
+                .unwrap_err()
+                .kind,
+            SourceTraitImplementationErrorKind::DuplicatePremise
         );
     }
 

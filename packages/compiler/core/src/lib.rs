@@ -50,8 +50,8 @@ pub use parser::{
     MAX_TRAIT_ASSOCIATED_TYPES, MAX_TRAIT_SUPERTRAITS,
     Module, NestedLoopBlock, NestedLoopControlTarget, NestedLoopUnconditionalControl, Parameter,
     ParseError, ParseErrorKind, Parser, TraitAssociatedTypeDeclaration,
-    TraitAssociatedTypeImplementation, TraitDeclaration, TraitImplementation, TraitSupertrait,
-    TypeRef, WhileLoop,
+    TraitAssociatedTypeImplementation, TraitDeclaration, TraitImplementation,
+    TraitImplementationWherePredicate, TraitSupertrait, TypeRef, WhileLoop,
 };
 pub use pipeline::{
     CompileError, CompileErrorKind, ObjectFormat, compile_source_function,
