@@ -15480,6 +15480,7 @@ fn runtime_reference_call_origin_parameter<const MAX_PARAMETERS: usize, const MA
         local_mutability: &mut [bool; MAX_PARAMETERS],
         local_return_compatibility: &mut [bool; MAX_PARAMETERS],
         local_count: &mut usize,
+        allow_direct_assignment: bool,
     ) -> Option<()> {
         for action in actions.iter() {
             match *action.as_ref()? {
@@ -15523,15 +15524,17 @@ fn runtime_reference_call_origin_parameter<const MAX_PARAMETERS: usize, const MA
                     *local_count = local_count.checked_add(1)?;
                 }
                 crate::ConditionalLoopAction::Assignment(assignment) => {
-                    let value = assignment.parse_value::<MAX_NODES>().ok()?;
-                    let place = discover_runtime_read_place(&value, value.root()).ok()??;
-                    if !place.projections.items[..place.projections.count]
-                        .iter()
-                        .any(|projection| {
-                            matches!(projection, Some(RuntimePlaceProjection::TupleField(_)))
-                        })
-                    {
-                        return None;
+                    if !allow_direct_assignment {
+                        let value = assignment.parse_value::<MAX_NODES>().ok()?;
+                        let place = discover_runtime_read_place(&value, value.root()).ok()??;
+                        if !place.projections.items[..place.projections.count]
+                            .iter()
+                            .any(|projection| {
+                                matches!(projection, Some(RuntimePlaceProjection::TupleField(_)))
+                            })
+                        {
+                            return None;
+                        }
                     }
                     apply_assignment::<MAX_PARAMETERS, MAX_NODES>(
                         target,
@@ -15790,18 +15793,58 @@ fn runtime_reference_call_origin_parameter<const MAX_PARAMETERS: usize, const MA
             }
             crate::BodyStatement::Loop(index) => {
                 let loop_statement = body.while_loops().get(index).and_then(|value| *value)?;
-                let has_local_state_operation =
-                    loop_statement
-                        .operations()
-                        .iter()
-                        .flatten()
-                        .any(|operation| {
-                            matches!(
-                                operation,
-                                crate::LoopOperation::Local(_)
-                                    | crate::LoopOperation::Assignment(_)
-                            )
-                        });
+                let has_local_state_operation = loop_statement.operations().iter().flatten().any(
+                    |operation| match *operation {
+                        crate::LoopOperation::Local(_) | crate::LoopOperation::Assignment(_) => {
+                            true
+                        }
+                        crate::LoopOperation::ConditionalBlock(block_index) => {
+                            let Some(block) = loop_statement
+                                .conditional_blocks()
+                                .get(block_index)
+                                .and_then(|value| *value)
+                            else {
+                                return false;
+                            };
+                            if block.terminal.is_some() {
+                                return false;
+                            }
+                            let primary_has_state =
+                                block.actions().iter().flatten().any(|action| {
+                                    matches!(
+                                        action,
+                                        crate::ConditionalLoopAction::Local(_)
+                                            | crate::ConditionalLoopAction::Assignment(_)
+                                    )
+                                });
+                            let Some(else_index) = block.else_arm else {
+                                return primary_has_state;
+                            };
+                            let Some(else_end) = else_index.checked_add(block.else_arm_count)
+                            else {
+                                return false;
+                            };
+                            let Some(arms) = loop_statement
+                                .conditional_else_arms()
+                                .get(else_index..else_end)
+                            else {
+                                return false;
+                            };
+                            arms.iter().flatten().all(|arm| arm.terminal.is_none())
+                                && (primary_has_state
+                                    || arms.iter().flatten().any(|arm| {
+                                        arm.actions().iter().flatten().any(|action| {
+                                            matches!(
+                                                action,
+                                                crate::ConditionalLoopAction::Local(_)
+                                                    | crate::ConditionalLoopAction::Assignment(_)
+                                            )
+                                        })
+                                    }))
+                        }
+                        _ => false,
+                    },
+                );
                 if has_local_state_operation {
                     let incoming_origins = local_origins;
                     let incoming_projected_origins = projected_origins;
@@ -15867,6 +15910,103 @@ fn runtime_reference_call_origin_parameter<const MAX_PARAMETERS: usize, const MA
                                     iteration_local_count,
                                     true,
                                 )?;
+                            }
+                            crate::LoopOperation::ConditionalBlock(block_index) => {
+                                let block = loop_statement
+                                    .conditional_blocks()
+                                    .get(block_index)
+                                    .and_then(|value| *value)?;
+                                if block.terminal.is_some() {
+                                    return None;
+                                }
+                                let base_origins = iteration_origins;
+                                let base_projected_origins = iteration_projected_origins;
+                                let mut joined_origins = [None; MAX_PARAMETERS];
+                                let mut joined_projected_origins =
+                                    RuntimeCalleeProjectedOrigins::EMPTY;
+                                let mut ambiguous = [false; MAX_PARAMETERS];
+                                let mut outcome_count = 0usize;
+                                let mut merge_outcome =
+                                    |outcome: [Option<usize>; MAX_PARAMETERS],
+                                     projected_outcome: RuntimeCalleeProjectedOrigins<
+                                        MAX_PARAMETERS,
+                                    >|
+                                     -> Option<()> {
+                                        if outcome_count == 0 {
+                                            joined_origins = outcome;
+                                            joined_projected_origins = projected_outcome;
+                                        } else {
+                                            for local_index in 0..iteration_local_count {
+                                                if joined_origins[local_index]
+                                                    != outcome[local_index]
+                                                {
+                                                    joined_origins[local_index] = None;
+                                                    ambiguous[local_index] = true;
+                                                }
+                                            }
+                                            joined_projected_origins = joined_projected_origins
+                                                .intersect(projected_outcome);
+                                        }
+                                        outcome_count = outcome_count.checked_add(1)?;
+                                        Some(())
+                                    };
+                                let mut apply_arm = |actions: &[Option<
+                                    crate::ConditionalLoopAction<'_>,
+                                >]|
+                                 -> Option<()> {
+                                    let mut arm_names = iteration_names;
+                                    let mut arm_origins = base_origins;
+                                    let mut arm_projected_origins = base_projected_origins;
+                                    let mut arm_types = iteration_types;
+                                    let mut arm_mutability = iteration_mutability;
+                                    let mut arm_return_compatibility =
+                                        iteration_return_compatibility;
+                                    let mut arm_local_count = iteration_local_count;
+                                    apply_conditional_loop_actions::<MAX_PARAMETERS, MAX_NODES>(
+                                        target,
+                                        actions,
+                                        &mut arm_names,
+                                        &mut arm_origins,
+                                        &mut arm_projected_origins,
+                                        &mut arm_types,
+                                        &mut arm_mutability,
+                                        &mut arm_return_compatibility,
+                                        &mut arm_local_count,
+                                        true,
+                                    )?;
+                                    merge_outcome(
+                                        arm_origins,
+                                        arm_projected_origins
+                                            .retain_local_prefix(iteration_local_count),
+                                    )
+                                };
+                                apply_arm(block.actions())?;
+                                let mut has_unconditional_else = false;
+                                if let Some(else_index) = block.else_arm {
+                                    let else_end = else_index.checked_add(block.else_arm_count)?;
+                                    let arms = loop_statement
+                                        .conditional_else_arms()
+                                        .get(else_index..else_end)?;
+                                    for arm in arms.iter().flatten() {
+                                        if arm.terminal.is_some() {
+                                            return None;
+                                        }
+                                        has_unconditional_else |= arm.condition.is_none();
+                                        apply_arm(arm.actions())?;
+                                    }
+                                }
+                                if !has_unconditional_else {
+                                    merge_outcome(base_origins, base_projected_origins)?;
+                                }
+                                if outcome_count == 0 {
+                                    return None;
+                                }
+                                for local_index in 0..iteration_local_count {
+                                    iteration_origins[local_index] = (!ambiguous[local_index])
+                                        .then_some(joined_origins[local_index])
+                                        .flatten();
+                                }
+                                iteration_projected_origins = joined_projected_origins;
                             }
                             _ => return None,
                         }
@@ -15935,6 +16075,7 @@ fn runtime_reference_call_origin_parameter<const MAX_PARAMETERS: usize, const MA
                                 &mut block_mutability,
                                 &mut block_return_compatibility,
                                 &mut block_local_count,
+                                false,
                             )?;
                             if let Some(crate::ConditionalLoopTerminal::Return(value)) =
                                 block.terminal
@@ -15974,6 +16115,7 @@ fn runtime_reference_call_origin_parameter<const MAX_PARAMETERS: usize, const MA
                                         &mut arm_mutability,
                                         &mut arm_return_compatibility,
                                         &mut arm_local_count,
+                                        false,
                                     )?;
                                     if let Some(crate::ConditionalLoopTerminal::Return(value)) =
                                         arm.terminal
@@ -16015,6 +16157,7 @@ fn runtime_reference_call_origin_parameter<const MAX_PARAMETERS: usize, const MA
                                 &mut block_mutability,
                                 &mut block_return_compatibility,
                                 &mut block_local_count,
+                                false,
                             )?;
                             for control in block.unconditional_controls().iter().flatten() {
                                 if let crate::NestedLoopUnconditionalControl::Return(value) =
@@ -32243,6 +32386,32 @@ mod tests {
                         ),
                     })
                 }
+                ("loop_branch_fallthrough", 3) if MAX_PARAMETERS >= 4 => {
+                    parameters[0] = Some(RuntimeCallParameter {
+                        name: "value",
+                        ty: reference,
+                    });
+                    parameters[1] = Some(RuntimeCallParameter {
+                        name: "repeat",
+                        ty: ScalarType::Bool,
+                    });
+                    parameters[2] = Some(RuntimeCallParameter {
+                        name: "first",
+                        ty: ScalarType::Bool,
+                    });
+                    Some(RuntimeCallTarget {
+                        name: "loop_branch_fallthrough",
+                        parameters,
+                        parameter_count: 3,
+                        return_type: reference,
+                        return_type_name: "&mut u16",
+                        body_expression: concat!(
+                            "let mut alias: &mut u16 = value; while repeat { ",
+                            "if first { alias = &mut *alias; } ",
+                            "else { alias = &mut *alias; } } alias"
+                        ),
+                    })
+                }
                 ("touch", 1) => {
                     parameters[0] = Some(RuntimeCallParameter {
                         name: "value",
@@ -36484,6 +36653,7 @@ mod tests {
             "fn value(input: &mut u16, repeat: bool) -> u16 { let returned: &mut u16 = loop_local_forward(input, repeat); let competing: &mut u16 = &mut *input; *competing += 1; *returned }",
             "fn value(input: &mut u16, repeat: bool, first: bool) -> u16 { let returned: &mut u16 = loop_branch_local_return(input, repeat, first); let competing: &mut u16 = &mut *input; *competing += 1; *returned }",
             "fn value(input: &mut u16, repeat: bool, first: bool) -> u16 { let returned: &mut u16 = loop_branch_tuple_assign_return(input, repeat, first); let competing: &mut u16 = &mut *input; *competing += 1; *returned }",
+            "fn value(input: &mut u16, repeat: bool, first: bool) -> u16 { let returned: &mut u16 = loop_branch_fallthrough(input, repeat, first); let competing: &mut u16 = &mut *input; *competing += 1; *returned }",
             "fn value(first: &mut u16, second: &mut u16) -> u16 { let returned: &mut u16 = tuple_field_assign(first, second); let competing: &mut u16 = &mut *second; *competing += 1; *returned }",
             "fn value(first: &mut u16, second: &mut u16) -> u16 { let returned: &mut u16 = tuple_field_assign(first, second); let competing: &mut u16 = &mut *first; *competing += 1; *returned }",
             "fn value(input: &mut u16) -> u16 { let returned: &mut u16 = tuple_field_initialize(input); let competing: &mut u16 = &mut *input; *competing += 1; *returned }",
@@ -36522,6 +36692,7 @@ mod tests {
             "fn value(input: &mut u16, repeat: bool) -> u16 { let returned: &mut u16 = loop_local_forward(input, repeat); *returned += 1; let restored: &mut u16 = &mut *input; *restored }",
             "fn value(input: &mut u16, repeat: bool, first: bool) -> u16 { let returned: &mut u16 = loop_branch_local_return(input, repeat, first); *returned += 1; let restored: &mut u16 = &mut *input; *restored }",
             "fn value(input: &mut u16, repeat: bool, first: bool) -> u16 { let returned: &mut u16 = loop_branch_tuple_assign_return(input, repeat, first); *returned += 1; let restored: &mut u16 = &mut *input; *restored }",
+            "fn value(input: &mut u16, repeat: bool, first: bool) -> u16 { let returned: &mut u16 = loop_branch_fallthrough(input, repeat, first); *returned += 1; let restored: &mut u16 = &mut *input; *restored }",
             "fn value(first: &mut u16, second: &mut u16) -> u16 { let returned: &mut u16 = tuple_field_assign(first, second); *returned += 1; let restored: &mut u16 = &mut *second; *restored }",
             "fn value(first: &mut u16, second: &mut u16) -> u16 { let mut local = *first; let returned: &mut u16 = tuple_field_assign(&mut local, second); let copied = *returned; local += 1; copied + local }",
             "fn value(input: &mut u16) -> u16 { let returned: &mut u16 = tuple_field_initialize(input); *returned += 1; let restored: &mut u16 = &mut *input; *restored }",
@@ -36819,6 +36990,23 @@ mod tests {
         assert_eq!(
             runtime_reference_call_origin_parameter::<3, 48>(loop_branch_tuple_assign_return),
             Some(0)
+        );
+        let loop_branch_fallthrough = MutableReferenceCallResolver
+            .resolve_runtime_call::<4>("loop_branch_fallthrough", 3)
+            .unwrap();
+        assert_eq!(
+            runtime_reference_call_origin_parameter::<4, 32>(loop_branch_fallthrough),
+            Some(0)
+        );
+        assert_eq!(
+            runtime_reference_call_origin_parameter::<4, 40>(RuntimeCallTarget {
+                body_expression: concat!(
+                    "let mut local: u16 = 1; let mut alias: &mut u16 = value; ",
+                    "while repeat { if first { alias = &mut local; } } alias"
+                ),
+                ..loop_branch_fallthrough
+            }),
+            None
         );
         assert_eq!(
             runtime_reference_call_origin_parameter::<3, 48>(RuntimeCallTarget {
