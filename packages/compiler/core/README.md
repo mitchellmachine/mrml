@@ -4151,6 +4151,13 @@ unconditional loop has only the break outcome. Loop-local facts are discarded.
 The pinned oracle accepts an unconditional parameter overwrite and rejects the
 equivalent `while` zero-iteration/local path with E0515. Both hosts remain at
 989 compiler tests; conditional break/continue transfer remains conservative.
+Conditional breaks now feed a bounded exit accumulator without contaminating
+the false path's later operations or backedge. Multiple break outcomes
+intersect; `while` adds its natural/zero exit and an unconditional loop does not.
+The pinned oracle accepts a parameter-backed break with local state only on the
+continuing path and rejects a local-backed break with E0515. Both hosts remain
+at 989 compiler tests. Conditional continue and block-terminal breaks remain
+conservative.
 
 Exact typed tuple literals now seed the same projected state when a local is
 declared. Every reference field is checked against the declared tuple element

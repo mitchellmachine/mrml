@@ -511,6 +511,15 @@ storage. Windows and Arch each pass 643 library tests, one component-interface
 probe, 10 conformance tests, and 335 replacement tests: 989 compiler tests per
 host. Conditional break/continue joins remain unsupported.
 
+Conditional break paths now accumulate separately from the continuing/backedge
+state. Multiple breaks intersect; condition-headed loops also join their
+natural and zero-iteration exit, while unconditional loops expose only break
+outcomes. ORACLE-0002 accepts a parameter-backed break with a local-backed
+non-break path and rejects the reversed local-backed break with E0515. Windows
+and Arch each pass 643 library tests, one component-interface probe, 10
+conformance tests, and 335 replacement tests: 989 compiler tests per host.
+Conditional continue and branch-block break transfer remain unsupported.
+
 The conditional callee-local reassignment milestone evaluates supported direct
 assignments from a copy of the incoming fixed local-origin state for every
 conditional outcome, then joins each local independently. A missing `else`

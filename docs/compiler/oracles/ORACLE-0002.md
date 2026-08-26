@@ -135,6 +135,13 @@ evidence for that exact conditional exit after local-origin transfer, not a
 general loop fixed point, region inference, or complete Polonius semantics.
 Temporary sources and metadata were removed.
 
+An independently authored Rust 2024 metadata-only conditional-break pair
+against this exact toolchain and commit accepted a parameter-backed break even
+though the continuing path changed the alias to local storage. Reversing those
+states failed at the post-loop tail with E0515. This is black-box evidence for
+those exact separated break/backedge outcomes, not general loop or region
+inference. Temporary sources and metadata were removed.
+
 An independently authored Rust 2024 metadata-only break pair against this exact
 toolchain and commit accepted a local-initialized mutable alias overwritten by a
 parameter before breaking from an unconditional loop. The equivalent condition-

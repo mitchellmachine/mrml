@@ -1281,6 +1281,12 @@ at the exit. ORACLE-0002 accepts a local-initialized alias overwritten by the
 parameter before an unconditional break and rejects the equivalent `while`
 because its zero-iteration path remains local-backed with E0515. Conditional
 break and continue joins remain incomplete.
+Conditional `break` now contributes the current state to a bounded loop-exit
+accumulator while its false path continues independently toward later operations
+and the backedge. Multiple break outcomes intersect. A `while` additionally
+joins its natural/zero-iteration exit; an unconditional loop exposes only break
+outcomes. ORACLE-0002 accepts a parameter-backed break despite a local-backed
+non-break path and rejects the reversed local-backed break with E0515.
 
 The first modern trait-solver foundation is an explicit bounded implemented-
 goal representation. Stable trait/type/inference/placeholder identities remain
