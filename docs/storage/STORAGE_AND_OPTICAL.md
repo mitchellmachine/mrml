@@ -92,6 +92,15 @@ candidate. Invalid headers and close uncertainty publish nothing. Windows and
 Arch Linux each pass 33 UEFI-library tests and cross-build the target; this is
 mocked protocol evidence, not a real installed-volume scan.
 
+Complete-set expected-volume selection is now **PARTIALLY IMPLEMENTED** above
+that probe. Every bounded handle is considered; unsupported/non-MRML media may
+be skipped, while protocol, read, replacement, or close uncertainty aborts the
+scan. Candidate handle/local-ID substitution, duplicate stable platform
+identity, zero expected matches, and multiple expected matches fail distinctly.
+Reversing firmware enumeration order selects the same stable identity. Windows
+and Arch Linux each pass 34 UEFI-library tests and cross-build the target; real
+loader invocation and root reads remain **PLANNED**.
+
 The `mrml` frontend may expose structured `disk`, `filesystem`, `optical`, and
 `media` operations. The PowerShell-inspired shell projects the same backend as
 typed `Get-*`, `Test-*`, `Initialize-*`, `New-*`, `Format-*`, `Write-*`, and

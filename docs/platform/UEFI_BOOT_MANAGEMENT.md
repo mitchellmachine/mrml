@@ -124,6 +124,12 @@ zero, exact-matches the canonical volume geometry, erases temporary bytes, and
 closes both relationships before returning a candidate. The real loader has not
 yet applied it to the complete enumerated set.
 
+Complete-set matching is now **PARTIALLY IMPLEMENTED** in the library. It probes
+every bounded handle, rejects duplicated stable identity or substituted probe
+results, and requires exactly one canonical header for the expected volume.
+Reordering firmware handles does not alter stable selection. The production
+loader still does not invoke this path or read redundant roots.
+
 The conventional fallback `\EFI\BOOT\BOOTX64.EFI` may be installed only under
 policy that proves ownership/non-conflict and previews backup/recovery or exact
 replacement. A shared ESP's existing fallback is never casually overwritten.

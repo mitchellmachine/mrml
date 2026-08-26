@@ -88,6 +88,13 @@ canonical header, erases scratch, and closes both before returning. Windows and
 Arch Linux each pass 33 focused tests and cross-build the UEFI target. Scanning
 the complete enumerated set for exactly one expected volume is the next gate.
 
+Set-wide expected-volume selection is now **PARTIALLY IMPLEMENTED** and
+order-independent. Duplicate stable identity, candidate substitution, missing
+or ambiguous expected volume, and any uncertain probe fail closed. Windows and
+Arch Linux each pass 34 focused tests and cross-build the UEFI target. Exact
+reopening for redundant-root recovery and real-loader ownership transfer are
+the next gate.
+
 Installed recovery ownership now crosses the Total-admission boundary in the
 controlled backend-parity path. `RecoveredInstalledTotalAdmission` retains the
 exact serviced device selection and recovered volume/root identity beside the

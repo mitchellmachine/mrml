@@ -1,5 +1,16 @@
 # Patent review log
 
+## 2026-08-26 — Order-independent UEFI expected-volume selection
+
+Patent review: **NOT_TRIGGERED** for this bounded selection integration. It uses
+conventional complete enumeration, exact equality/uniqueness checks, stable
+identity deduplication, and explicit missing/ambiguous outcomes over the already
+reviewed header probe. It adds no ranking or optimization heuristic, new storage
+layout, driver scheduling, cryptography, placement policy, native fallback,
+queue/DMA mechanism, or hardware isolation method. Broader storage/device,
+firmware, adaptive-isolation, and Total-MicroVM reviews remain `TRIGGERED`; no
+patent-clearance or non-infringement conclusion is made.
+
 ## 2026-08-26 — Atomic UEFI recovery-header probe
 
 Patent review: **NOT_TRIGGERED** for this integration increment. It composes the
@@ -7468,3 +7479,16 @@ inference, alias analysis, optimization, or code-generation algorithm. General
 loop-region fixed points remain absent. Broader compiler completion remains
 partial; this technical screen is not a clearance or infringement conclusion
 and does not replace independent human dual review.
+
+# 2026-08-26 — Mutable loop call-loan generation evidence
+
+**Result: NOT_TRIGGERED after the mutable loop call-loan evidence review.**
+This increment adds independently authored regression evidence that the existing
+bounded generation-sensitive reachability applies to a mutable/exclusive call
+loan: mutation before a later same-iteration result use fails, while copying
+first permits mutation and the loop backedge. It introduces no new solver,
+dataflow framework, interprocedural inference, alias analysis, optimization, or
+code-generation mechanism. A general loop-region fixed point remains absent.
+Broader compiler completion remains partial; this technical screen is not a
+clearance or infringement conclusion and does not replace independent human
+dual review.

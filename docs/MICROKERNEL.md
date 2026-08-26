@@ -3278,6 +3278,13 @@ erased, and no candidate escapes before both protocol closes succeed. Windows
 and Arch Linux each pass 33 library tests and cross-build the UEFI artifact.
 Complete-set uniqueness and real firmware remain untested.
 
+The complete bounded handle set now selects exactly one expected `VolumeId`
+without relying on handle order. Every candidate rebinds its current handle and
+ephemeral local ID; duplicate stable identity, substitution, missing/ambiguous
+matches, or uncertain probes fail closed. Reversed-order tests retain the same
+stable identity. Windows and Arch Linux each pass 34 library tests and
+cross-build the UEFI artifact. Root reads and loader execution remain absent.
+
 The bounded discovery result now remains owned through the complete serviced
 recovery read. `RecoveredInstalledStableSystemSelection` retains the exact
 installed selection beside the `BlockVolume` and reachable graph produced from

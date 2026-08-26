@@ -7,6 +7,7 @@ use mrml_crypto::Sha3_256;
 use mrml_storage::{
     BlockDeviceDescriptor, BlockDeviceId, PlatformBlockDeviceDescriptor,
     PlatformBlockDeviceIdentity, PlatformBlockTransport, VOLUME_HEADER_BYTES, VolumeHeader,
+    VolumeId,
 };
 
 pub type Status = usize;
@@ -707,6 +708,16 @@ pub struct UefiRecoveryHeaderCandidate {
     header: VolumeHeader,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum UefiRecoveryVolumeScanError {
+    Probe(UefiBlockDescriptorError),
+    IdentityExhausted,
+    CandidateSubstitution,
+    DuplicatePlatformIdentity,
+    ExpectedVolumeMissing,
+    ExpectedVolumeAmbiguous,
+}
+
 impl UefiRecoveryHeaderCandidate {
     pub const fn handle(self) -> Handle {
         self.handle
@@ -772,6 +783,75 @@ pub unsafe fn probe_uefi_recovery_header(
             })
         })
     }
+}
+
+/// Probes the complete bounded Block I/O set and returns exactly one candidate
+/// for `expected_volume`. Firmware enumeration order affects only ephemeral
+/// service-local IDs; stable path/media identity and exact volume identity make
+/// the selection. Any uncertain probe aborts the scan rather than being hidden
+/// as an absent device.
+///
+/// # Safety
+///
+/// Every handle in `handles` must retain the firmware validity required by
+/// `probe_uefi_recovery_header` for the duration of this call.
+pub unsafe fn select_uefi_recovery_volume<const N: usize>(
+    services: &BootServices,
+    image: Handle,
+    handles: &UefiBlockHandleSet<N>,
+    expected_volume: VolumeId,
+    device_path_scratch: &mut [u8; MAX_UEFI_DEVICE_PATH_BYTES],
+    block: &mut UefiRecoveryBlock,
+) -> Result<UefiRecoveryHeaderCandidate, UefiRecoveryVolumeScanError> {
+    select_uefi_recovery_volume_with(handles, expected_volume, |handle, id| unsafe {
+        probe_uefi_recovery_header(services, image, handle, id, device_path_scratch, block)
+    })
+}
+
+fn select_uefi_recovery_volume_with<const N: usize>(
+    handles: &UefiBlockHandleSet<N>,
+    expected_volume: VolumeId,
+    mut probe: impl FnMut(
+        Handle,
+        BlockDeviceId,
+    ) -> Result<UefiRecoveryHeaderCandidate, UefiBlockDescriptorError>,
+) -> Result<UefiRecoveryHeaderCandidate, UefiRecoveryVolumeScanError> {
+    let mut identities = [None; N];
+    let mut identity_count = 0usize;
+    let mut selected = None;
+    for (index, handle) in handles.as_slice().iter().copied().enumerate() {
+        let id_value = u64::try_from(index)
+            .ok()
+            .and_then(|value| value.checked_add(1))
+            .ok_or(UefiRecoveryVolumeScanError::IdentityExhausted)?;
+        let id =
+            BlockDeviceId::new(id_value).ok_or(UefiRecoveryVolumeScanError::IdentityExhausted)?;
+        let candidate = match probe(handle, id) {
+            Ok(candidate) => candidate,
+            Err(
+                UefiBlockDescriptorError::InvalidVolumeHeader
+                | UefiBlockDescriptorError::UnsupportedRecoveryGeometry
+                | UefiBlockDescriptorError::MediaAbsent,
+            ) => continue,
+            Err(error) => return Err(UefiRecoveryVolumeScanError::Probe(error)),
+        };
+        if candidate.handle != handle || candidate.descriptor.block().id() != id {
+            return Err(UefiRecoveryVolumeScanError::CandidateSubstitution);
+        }
+        let identity = candidate.descriptor.identity();
+        if identities[..identity_count].contains(&Some(identity)) {
+            return Err(UefiRecoveryVolumeScanError::DuplicatePlatformIdentity);
+        }
+        identities[identity_count] = Some(identity);
+        identity_count += 1;
+        if candidate.header.volume() == expected_volume {
+            if selected.is_some() {
+                return Err(UefiRecoveryVolumeScanError::ExpectedVolumeAmbiguous);
+            }
+            selected = Some(candidate);
+        }
+    }
+    selected.ok_or(UefiRecoveryVolumeScanError::ExpectedVolumeMissing)
 }
 
 unsafe fn with_opened_uefi_block_protocols<R>(
@@ -1531,7 +1611,6 @@ fn hex(byte: u8) -> Option<u8> {
 mod tests {
     use super::*;
     use core::sync::atomic::{AtomicBool, AtomicPtr, AtomicUsize, Ordering};
-    use mrml_storage::VolumeId;
 
     static MOCK_FIRMWARE_LOCK: AtomicBool = AtomicBool::new(false);
 
@@ -1804,6 +1883,30 @@ mod tests {
             lowest_aligned_lba: 0,
             logical_blocks_per_physical_block: 1,
             optimal_transfer_length_granularity: 1,
+        }
+    }
+
+    fn scan_candidate(
+        handle: Handle,
+        id: BlockDeviceId,
+        volume: VolumeId,
+        path_tag: u8,
+    ) -> UefiRecoveryHeaderCandidate {
+        let media = UefiBlockMediaSnapshot {
+            media_id: u32::from(path_tag),
+            block_size: 4096,
+            block_count: 8,
+            io_align: 4096,
+            removable: false,
+            logical_partition: true,
+            read_only: false,
+        };
+        let path = [1, 1, 8, 0, path_tag, 0xbb, 0xcc, 0xdd, 0x7f, 0xff, 4, 0];
+        UefiRecoveryHeaderCandidate {
+            handle,
+            descriptor: uefi_platform_block_descriptor(id, media, &path).unwrap(),
+            media,
+            header: VolumeHeader::new(volume, 4096, 8, 1, 2).unwrap(),
         }
     }
 
@@ -2348,6 +2451,77 @@ mod tests {
         RECOVERY_READ_SOURCE.store(core::ptr::null_mut(), Ordering::SeqCst);
         MOCK_BLOCK_PROTOCOL.store(core::ptr::null_mut(), Ordering::SeqCst);
         MOCK_DEVICE_PATH.store(core::ptr::null_mut(), Ordering::SeqCst);
+    }
+
+    #[test]
+    fn recovery_volume_selection_is_complete_unique_and_order_independent() {
+        let first = core::ptr::without_provenance_mut::<c_void>(1);
+        let second = core::ptr::without_provenance_mut::<c_void>(2);
+        let expected = VolumeId::new([0x51; 16]).unwrap();
+        let other = VolumeId::new([0x62; 16]).unwrap();
+        let handles = UefiBlockHandleSet {
+            handles: [first, second],
+            count: 2,
+        };
+        let selected = select_uefi_recovery_volume_with(&handles, expected, |handle, id| {
+            if handle == first {
+                Ok(scan_candidate(handle, id, other, 1))
+            } else {
+                Ok(scan_candidate(handle, id, expected, 2))
+            }
+        })
+        .unwrap();
+        assert_eq!(selected.handle(), second);
+        let stable_id = selected.descriptor().identity().stable_id();
+
+        let reversed = UefiBlockHandleSet {
+            handles: [second, first],
+            count: 2,
+        };
+        let reordered = select_uefi_recovery_volume_with(&reversed, expected, |handle, id| {
+            if handle == first {
+                Ok(scan_candidate(handle, id, other, 1))
+            } else {
+                Ok(scan_candidate(handle, id, expected, 2))
+            }
+        })
+        .unwrap();
+        assert_eq!(reordered.handle(), second);
+        assert_eq!(reordered.descriptor().identity().stable_id(), stable_id);
+
+        assert_eq!(
+            select_uefi_recovery_volume_with(&handles, expected, |_, _| {
+                Err(UefiBlockDescriptorError::InvalidVolumeHeader)
+            }),
+            Err(UefiRecoveryVolumeScanError::ExpectedVolumeMissing)
+        );
+        assert_eq!(
+            select_uefi_recovery_volume_with(&handles, expected, |handle, id| {
+                Ok(scan_candidate(handle, id, expected, id.get() as u8))
+            }),
+            Err(UefiRecoveryVolumeScanError::ExpectedVolumeAmbiguous)
+        );
+        assert_eq!(
+            select_uefi_recovery_volume_with(&handles, expected, |handle, id| {
+                Ok(scan_candidate(handle, id, other, 7))
+            }),
+            Err(UefiRecoveryVolumeScanError::DuplicatePlatformIdentity)
+        );
+        assert_eq!(
+            select_uefi_recovery_volume_with(&handles, expected, |_, _| {
+                Err(UefiBlockDescriptorError::CloseProtocol(LOAD_ERROR))
+            }),
+            Err(UefiRecoveryVolumeScanError::Probe(
+                UefiBlockDescriptorError::CloseProtocol(LOAD_ERROR)
+            ))
+        );
+        assert_eq!(
+            select_uefi_recovery_volume_with(&handles, expected, |handle, id| {
+                let wrong_handle = if handle == first { second } else { first };
+                Ok(scan_candidate(wrong_handle, id, expected, 9))
+            }),
+            Err(UefiRecoveryVolumeScanError::CandidateSubstitution)
+        );
     }
 
     #[test]

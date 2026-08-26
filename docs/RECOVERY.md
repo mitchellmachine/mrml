@@ -1188,6 +1188,15 @@ or close failure publishes no candidate. Windows and Arch Linux each pass 33
 UEFI-library tests and cross-build the target. Set-wide expected-volume
 uniqueness and real-loader execution remain next.
 
+The complete bounded UEFI set now **PARTIALLY IMPLEMENTS** exact expected-volume
+selection. All handles are probed; only unsupported or non-MRML media is skipped,
+and any uncertain access aborts. Stable platform identity cannot duplicate,
+the returned handle and local ID must match the current probe, and exactly one
+canonical header must name the expected `VolumeId`. Selection is invariant under
+handle-order reversal. Windows and Arch Linux each pass 34 UEFI-library tests
+and cross-build the target. Reopening the selection for redundant roots and
+real-loader ownership transfer remain next.
+
 The recovered installed selection is now retained across the boot-policy to
 Total-admission boundary. `RecoveredInstalledTotalAdmission` binds its exact
 device descriptor, serviced session selection, volume header, active root,
