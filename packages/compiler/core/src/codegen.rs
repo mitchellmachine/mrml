@@ -36436,6 +36436,7 @@ mod tests {
             "fn value(input: &mut u16, repeat: bool, first: bool) -> u16 { let returned: &mut u16 = loop_branch_local_return(input, repeat, first); *returned += 1; let restored: &mut u16 = &mut *input; *restored }",
             "fn value(input: &mut u16, repeat: bool, first: bool) -> u16 { let returned: &mut u16 = loop_branch_tuple_assign_return(input, repeat, first); *returned += 1; let restored: &mut u16 = &mut *input; *restored }",
             "fn value(first: &mut u16, second: &mut u16) -> u16 { let returned: &mut u16 = tuple_field_assign(first, second); *returned += 1; let restored: &mut u16 = &mut *second; *restored }",
+            "fn value(first: &mut u16, second: &mut u16) -> u16 { let mut local = *first; let returned: &mut u16 = tuple_field_assign(&mut local, second); let copied = *returned; local += 1; copied + local }",
             "fn value(input: &mut u16) -> u16 { let returned: &mut u16 = tuple_field_initialize(input); *returned += 1; let restored: &mut u16 = &mut *input; *restored }",
             "fn value(input: &mut u16) -> u16 { let returned: &mut u16 = tuple_field_move(input); *returned += 1; let restored: &mut u16 = &mut *input; *restored }",
             "fn value(first: &mut u16, second: &mut u16) -> u16 { let returned: &mut u16 = tuple_field_assign_alias(first, second); *returned += 1; let restored: &mut u16 = &mut *second; *restored }",
