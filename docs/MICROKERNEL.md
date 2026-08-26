@@ -7887,9 +7887,15 @@ record to an already CPU/RAM-reserved route without rebuilding that route.
 Route domain, interface, provider, system/policy generations, placement, class,
 the complete canonical `SystemGeneration` SHA3-512 digest, fingerprint, and
 both artifact digests must remain exact. A reused generation number with
-different generation bytes fails before backend construction. The focused WHP/KVM
-runners use this shared package-format codec before attaching either verified
-image, after canonical activation-checkpoint recovery. The deployment service's
+different generation bytes fails before backend construction. The focused
+WHP/KVM runners now use a shared allocation-free `MRMLSG2` decoder and activated
+resolver before this codec: the complete canonical bytes must match the
+recovered `ActivatedSystemGeneration`, both packages must occur in that
+generation, and exactly one provider must match the interface object, ABI
+generation, fingerprint, and selected microVM form. The resolver derives both
+artifact digests and the immutable provider generation; the runners no longer
+assemble those fields directly. They apply the resulting shared handoff before
+attaching either verified image. The deployment service's
 focused Windows/Linux test also binds activation publication to one exact stable
 COW file-generation receipt and recovers only through the selected file
 generation and verified extent. An independent authenticated-state-store
@@ -7908,11 +7914,14 @@ the endpoint and ticket for an exact retry. A strict Total-mode test proves the
 native placement request is rejected by admission before any supervisor launch,
 with zero native fallback.
 
-Evidence is hosted unit/simulation evidence only. The standalone EFI service
-image did not execute in this path, and this does not prove resolver-to-launch
-integration, WHP/KVM host resistance, bare metal, or physical isolation. The
-existing WHP and nested-KVM signed component probes remain the separate microVM
-placement evidence.
+Evidence for this increment is hosted unit/build evidence. The standalone EFI
+service image did not execute freshly through this resolver, and this does not
+prove manifest-driven runtime declaration delivery, WHP/KVM host resistance,
+bare metal, or physical isolation. A retained-artifact WHP attempt exited
+without a terminal record; nested KVM reached the guest but reported the older
+retained kernel stage as `Halted`. Neither is counted as successful fresh live
+evidence. The prior signed component probes remain historical microVM-placement
+evidence only.
 
 Exact commands and outcomes:
 
@@ -7929,24 +7938,36 @@ target/debug/mrml.exe test org.mrml.system.kernel --target windows --release
 ./target/debug/mrml test org.mrml.system.kernel --target linux --release
 508 passed; 0 failed (Arch Linux under WSL)
 
-target/debug/mrml.exe test org.mrml.tool.vmm-whp-run --target windows --release
+target/debug/mrml.exe test org.mrml.library.package-format
+9 passed; 0 failed
+
+./target/debug/mrml test org.mrml.library.package-format
+9 passed; 0 failed (Arch Linux under WSL)
+
+target/debug/mrml.exe test org.mrml.service.deployment
+3 passed; 0 failed
+
+./target/debug/mrml test org.mrml.service.deployment
+3 passed; 0 failed (Arch Linux under WSL)
+
+target/debug/mrml.exe test org.mrml.system.kernel
+509 passed; 0 failed
+
+./target/debug/mrml test org.mrml.system.kernel
+509 passed; 0 failed (Arch Linux under WSL)
+
+target/debug/mrml.exe test org.mrml.tool.vmm-whp-run
 7 passed; 0 failed
 
-./target/debug/mrml test org.mrml.tool.vmm-kvm-run --target linux --release
+./target/debug/mrml test org.mrml.tool.vmm-kvm-run
 8 passed; 0 failed (Arch Linux under WSL; pre-existing CUDA PTX warnings)
 ```
 
-A retained-artifact WHP `component-service-probe` rerun produced no terminal
-event for more than 150 seconds and was interrupted; it is not counted as fresh
-live evidence. The KVM live probe was not rerun after that inconclusive result.
-The prior documented successful signed probes remain historical evidence only.
-
-Patent review: `NOT_TRIGGERED` — this integration reuses MRML's existing
-fixed-capacity task/service lifecycle, exact scalar generation checks,
-capability transfer, bounded IPC/shared-buffer transport, and retryable cleanup.
-It adds no scheduling, transport, codec, compression, virtualization,
-cryptographic, or hardware mechanism. The broader component/interface and Zstd
-reviews remain `TRIGGERED`; see [patents/REVIEW_LOG.md](patents/REVIEW_LOG.md).
+Patent review: `NOT_TRIGGERED` after the existing exact typed provider-
+resolution review — the runtime uses the same bounded exact-match-only scan and
+adds canonical active-generation equality plus existing handoff construction.
+The broader component/interface and Zstd reviews remain `TRIGGERED`; see
+[patents/REVIEW_LOG.md](patents/REVIEW_LOG.md).
 
 ## Milestones
 

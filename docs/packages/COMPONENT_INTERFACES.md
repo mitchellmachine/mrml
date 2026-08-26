@@ -101,7 +101,8 @@ suppresses the response. The adapter can now be constructed only by consuming a
 committed isolation route whose exact interface object, ABI generation,
 provider generation, and policy generation match the expected resolver/policy
 binding; the route also retains immutable domain, Total-mode class, and
-placement evidence. This does not connect the actual resolver to the launcher.
+placement evidence. The hosted native adapter does not yet consume the general
+resolver result.
 The same committed-route type now also feeds a hosted supervised native Zstd
 backend. It creates a distinct-address-space kernel task/service endpoint,
 opens the ABI data plane by issuing only the exact reply capability, completes the unchanged
@@ -128,8 +129,18 @@ runs. Existing running routes keep their original system generation; no update
 retargeting or executable patching is introduced. The focused runners now stage
 and commit their transient local generation through the bounded
 capability-authorized `DeploymentService` activation transaction before kernel
-admission. Authenticated persistent generation recovery and the general
-generation-to-launch handoff remain **PLANNED**.
+admission. The shared package-format runtime now decodes the complete canonical
+`MRMLSG2` bytes without allocation, verifies their SHA3-512 digest and numeric
+generation against the recovered `ActivatedSystemGeneration`, and selects one
+provider only when the consumer and provider are exact members of those bytes
+and interface object, ABI generation, fingerprint, and selected service form
+all match. Missing, ambiguous, out-of-generation, wrong-ABI, wrong-fingerprint,
+unsupported-placement, noncanonical, and digest-substituted inputs fail closed.
+It then emits the existing immutable component launch handoff; names and
+metadata still grant no capability. Both focused WHP/KVM component paths use
+this resolver instead of assembling the ZIM/Zstd tuple directly. General
+manifest/declaration delivery, persistent authenticated generation storage,
+and resolver-driven native-service dispatch remain **PLANNED**.
 The canonical build-tool-to-kernel representation is now **PARTIALLY
 IMPLEMENTED** as `ComponentServiceLaunchHandoff`: a fixed 280-byte little-
 endian record shared by the package-format library, `mrml`, kernel, WHP, and
@@ -140,7 +151,7 @@ against active system/policy admission and the exact resource-reserved route.
 The record also binds the SHA3-512 digest of the complete canonical
 `SystemGeneration`; matching numeric generations with different package bytes
 fail before backend invocation. Windows and Arch Linux package-format suites
-pass 6 tests, DeploymentService suites pass 2, build-tool suites pass 80,
+pass 9 tests, DeploymentService suites pass 3, build-tool suites pass 80,
 kernel suites pass 509, WHP passes 7, and KVM passes 8. The activation record
 also round-trips a canonical digest-bound checkpoint; focused deployment tests
 publish and recover it through one exact stable COW file-generation receipt,
@@ -148,7 +159,7 @@ and both hosted VMM paths re-decode it before admission. A separate abstract
 authenticated-store record now pins the accepted monotonic epoch and exact
 stable-file/object/checkpoint identity, rejecting an older valid file in
 Windows/Linux unit simulation. Concrete TPM/NVRAM/recovery-journal integration
-and general resolver-driven launching remain **PLANNED**.
+and general manifest-driven declaration delivery remain **PLANNED**.
 The canonical provider now builds its own `mrml-zstd-service.efi` artifact—never
 an alias of the generic configuration service—with an x86-64 architecture trap,
 one private 4 KiB scratch page, and exact launch-register endpoint/caller/

@@ -203,9 +203,13 @@ fingerprint and both authenticated image digests before invoking one selected
 backend, then projects the committed route into direct IPC without per-message
 resolution or policy lookup. Artifact mismatch invokes neither backend and
 returns the complete uncommitted transaction. This implements the bounded
-control-plane/shortest-safe-data-plane split for this hosted path only; active
-`SystemGeneration` validation and the general runtime resolver remain
-**PLANNED**.
+control-plane/shortest-safe-data-plane split for this hosted path only. The
+shared no-allocation runtime resolver now validates canonical `MRMLSG2` bytes
+against the recovered active generation and derives the WHP/KVM component
+handoff from one exact in-generation consumer/provider and interface ABI,
+fingerprint, and placement form. The focused runners no longer assemble their
+artifact tuple directly. Manifest-driven runtime declaration delivery and the
+same resolver-to-native-service dispatch remain **PLANNED**.
 The kernel-side dependency gate now records a nonzero active system generation
 alongside the policy generation in every isolation request and lifecycle
 record. Configuration-derived service specifications use that active value;
@@ -221,7 +225,7 @@ re-decode that checkpoint before admission. A separate fixed authenticated
 recovery-state contract now compare-and-stores a monotonic epoch and pins the
 exact volume/object/file generation plus activation/checkpoint identities;
 focused Windows/Linux tests reject replay of an older valid file. A concrete
-TPM/NVRAM/recovery-journal backend, physical durability, and general resolver-
+TPM/NVRAM/recovery-journal backend, physical durability, and general manifest-
 driven launch remain **PLANNED**. The canonical build-tool-to-
 kernel format itself is now **PARTIALLY IMPLEMENTED**: a shared fixed 280-byte
 record carries the resolved system/provider/interface generations,

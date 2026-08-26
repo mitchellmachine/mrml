@@ -3,68 +3,67 @@
 
 #[cfg(target_os = "linux")]
 use mrml_config::{
-    prepare_configured_isolation_service_route, AdmittedConfigurationGuestFactory,
-    ConfigTransaction, ConfigurationMicrovmEndpoint, ConfigurationService,
-    IsolationPolicyApplicationPlan, IsolationPolicySetting, IsolationServiceBounds,
-    IsolationServiceIdentity, MicrovmConfigurationServiceLauncher, OwnerIsolationSelection,
-    PreparedMicrovmConfigurationLauncher, SettingId,
+    AdmittedConfigurationGuestFactory, ConfigTransaction, ConfigurationMicrovmEndpoint,
+    ConfigurationService, IsolationPolicyApplicationPlan, IsolationPolicySetting,
+    IsolationServiceBounds, IsolationServiceIdentity, MicrovmConfigurationServiceLauncher,
+    OwnerIsolationSelection, PreparedMicrovmConfigurationLauncher, SettingId,
+    prepare_configured_isolation_service_route,
 };
 #[cfg(target_os = "linux")]
-use mrml_crypto::{Sha3_512, LAMPORT_PUBLIC_KEY_BYTES};
+use mrml_crypto::{LAMPORT_PUBLIC_KEY_BYTES, Sha3_512};
 #[cfg(target_os = "linux")]
-use mrml_deployment::{
-    DeploymentService, GenerationCandidate, encode_deployment_checkpoint,
-};
-use mrml_error::{anyhow, Result};
+use mrml_deployment::{DeploymentService, GenerationCandidate, encode_deployment_checkpoint};
+use mrml_error::{Result, anyhow};
 #[cfg(target_os = "linux")]
-use mrml_kernel::arch::x86_64::{Mapping, PagePermissions, VirtAddr, PRIVILEGE_STACK_ARENA_PAGES};
+use mrml_kernel::arch::x86_64::{Mapping, PRIVILEGE_STACK_ARENA_PAGES, PagePermissions, VirtAddr};
 #[cfg(target_os = "linux")]
 use mrml_kernel::{
-    component_image_page_plan, prepare_microvm_guest_ram, release_component_image,
-    release_microvm_guest_ram, reserve_component_image, reserve_isolation_vcpus,
-    reserve_microvm_guest_ram, reserve_microvm_page_projection, run_pci_configuration_once,
-    run_pci_configuration_once_with_backend_mapper, run_virtual_block_mmio_transaction_once,
-    run_virtual_block_transaction_once, verify_gpu_kernel_bundle, ArtifactKind, Capability,
-    CapabilitySpace, CpuBudgetId, CpuBudgetSpec, CpuBudgetTable, GpuCommandRing, GpuQueueIdentity,
-    GpuQueueReceiver, GpuResourceResponse, GpuResourceResponseSender, GpuSharedQueueLayout,
-    GpuVmmQueueBridge, GuestMemory, HypercallRouter, InterruptPolicy, IsolationAdmissionTable,
-    IsolationMode, IsolationPlacement, IsolationUnavailableReason, MemoryPoolTable,
-    bind_component_service_handoff, MicrovmPageProjectionKind, ObjectId,
-    PreparedIsolationServiceRoute, ResourceCommand, Rights, SignedArtifact, TotalMicrovmClass,
-    TrustRoot, VcpuReservationId, VerifiedExecutable, VerifiedGpuKernelBundle, VirtualBlockBackend,
-    VirtualBlockBackendAuthority, VirtualBlockCompletionStatus, VirtualBlockConfigurationPage,
-    VirtualBlockDevice, VirtualBlockDeviceState, VirtualBlockError, VirtualBlockMutationError,
-    VirtualBlockPciAttachment, VirtualBlockPciAttachmentState, VirtualBlockPciCleanupMode,
-    VirtualBlockPciCleanupRecord, VirtualBlockPciFunctionRevoker, VirtualBlockPciGuestMemoryMapper,
-    VirtualBlockPciGuestWindowBackend, VirtualBlockPciResourceRevoker, VirtualBlockProcessOutcome,
-    VirtualBlockQueueBridge, VirtualBlockQueueLayout, VirtualBlockRequest, VirtualBlockResumePage,
+    ArtifactKind, Capability, CapabilitySpace, CpuBudgetId, CpuBudgetSpec, CpuBudgetTable,
+    GPU_DOORBELL_PORT, GPU_QUEUE_MESSAGE_BYTES, GpuCommandRing, GpuQueueIdentity, GpuQueueReceiver,
+    GpuResourceResponse, GpuResourceResponseSender, GpuSharedQueueLayout, GpuVmmQueueBridge,
+    GuestMemory, HypercallRouter, InterruptPolicy, IsolationAdmissionTable, IsolationMode,
+    IsolationPlacement, IsolationUnavailableReason, MAX_COMPONENT_IMAGE_REGIONS, MemoryPoolTable,
+    MicrovmPageProjectionKind, ObjectId, PAGE_SIZE, PreparedIsolationServiceRoute, ResourceCommand,
+    Rights, SIGNED_ARTIFACT_OVERHEAD_BYTES, SignedArtifact, TotalMicrovmClass, TrustRoot,
+    VIRTUAL_BLOCK_FEATURE_FLUSH, VcpuReservationId, VerifiedExecutable, VerifiedGpuKernelBundle,
+    VirtualBlockBackend, VirtualBlockBackendAuthority, VirtualBlockCompletionStatus,
+    VirtualBlockConfigurationPage, VirtualBlockDevice, VirtualBlockDeviceState, VirtualBlockError,
+    VirtualBlockMutationError, VirtualBlockPciAttachment, VirtualBlockPciAttachmentState,
+    VirtualBlockPciCleanupMode, VirtualBlockPciCleanupRecord, VirtualBlockPciFunctionRevoker,
+    VirtualBlockPciGuestMemoryMapper, VirtualBlockPciGuestWindowBackend,
+    VirtualBlockPciResourceRevoker, VirtualBlockProcessOutcome, VirtualBlockQueueBridge,
+    VirtualBlockQueueLayout, VirtualBlockRequest, VirtualBlockResumePage,
     VirtualBlockTransactionOutcome, VirtualBlockTransport, VirtualBlockVmmMemory,
     VirtualPciAttachedResources, VirtualPciConfigurationMechanismOne,
     VirtualPciConfigurationRouter, VirtualPciIdentity, VirtualPciIoOutcome, VirtualPciLocation,
     VirtualPciMemoryBar, VirtualPciMmioWindow, VirtualPciNativeResourceError,
-    VirtualPciType0Function, VmBackend, VmExit, VmTable, GPU_DOORBELL_PORT,
-    GPU_QUEUE_MESSAGE_BYTES, MAX_COMPONENT_IMAGE_REGIONS, PAGE_SIZE,
-    SIGNED_ARTIFACT_OVERHEAD_BYTES, VIRTUAL_BLOCK_FEATURE_FLUSH,
+    VirtualPciType0Function, VmBackend, VmExit, VmTable, bind_component_service_handoff,
+    component_image_page_plan, prepare_microvm_guest_ram, release_component_image,
+    release_microvm_guest_ram, reserve_component_image, reserve_isolation_vcpus,
+    reserve_microvm_guest_ram, reserve_microvm_page_projection, run_pci_configuration_once,
+    run_pci_configuration_once_with_backend_mapper, run_virtual_block_mmio_transaction_once,
+    run_virtual_block_transaction_once, verify_gpu_kernel_bundle,
 };
 #[cfg(any(test, target_os = "linux"))]
 use mrml_kernel::{
-    encode_handoff, encode_handoff_with_recovery, encode_handoff_with_smp, FramebufferInfo,
-    MemoryKind, MemoryRegion, PhysAddr, PixelFormat, RecoveryStateMetadata,
+    FramebufferInfo, MemoryKind, MemoryRegion, PhysAddr, PixelFormat, RecoveryStateMetadata,
+    encode_handoff, encode_handoff_with_recovery, encode_handoff_with_smp,
 };
 #[cfg(target_os = "linux")]
 use mrml_kvm::{KvmLaunchLayout, KvmSystem, PreparedKvmGuest};
 #[cfg(target_os = "linux")]
 use mrml_package_format::{
-    admit_kernel_payload, ComponentServiceLaunchHandoff, ComponentServicePlacement,
-    system_generation_digest, SystemGenerationDigestRecord, MAX_BOOT_PACKAGE_BYTES,
-    MAX_BOOT_RELEASE_BYTES,
+    ComponentInterfaceProvider, ComponentInterfaceRequirement, ComponentProviderForms,
+    ComponentServicePlacement, MAX_BOOT_PACKAGE_BYTES, MAX_BOOT_RELEASE_BYTES,
+    SystemGenerationDigestRecord, SystemGenerationView, admit_kernel_payload,
+    encode_system_generation, resolve_activated_component_service,
 };
-#[cfg(target_os = "linux")]
-use mrml_runtime::mrml_println as println;
 #[cfg(target_os = "linux")]
 use mrml_runtime::Instant;
 #[cfg(target_os = "linux")]
 use mrml_runtime::Vector;
+#[cfg(target_os = "linux")]
+use mrml_runtime::mrml_println as println;
 
 #[cfg(target_os = "linux")]
 type KvmConfigurationLauncher =
@@ -1959,35 +1958,36 @@ fn application_main() -> Result<()> {
         mode,
         LaunchMode::ServiceProbe | LaunchMode::ComponentServiceProbe
     );
-    let component_generation_digest = if component_service_mode {
+    let component_generation = if component_service_mode {
         let consumer = service_executable
             .as_ref()
             .ok_or_else(|| anyhow!("missing verified ZIM consumer"))?;
         let provider = provider_executable
             .as_ref()
             .ok_or_else(|| anyhow!("missing verified Zstd provider"))?;
-        Some(
-            system_generation_digest(
-                1,
-                &[
-                    SystemGenerationDigestRecord {
-                        package_id: "org.mrml.zim",
-                        version: consumer.artifact().version(),
-                        artifact_digest: consumer.artifact().digest(),
-                    },
-                    SystemGenerationDigestRecord {
-                        package_id: "org.mrml.zstd",
-                        version: provider.artifact().version(),
-                        artifact_digest: provider.artifact().digest(),
-                    },
-                ],
-            )
-            .map_err(|error| anyhow!("KVM SystemGeneration digest failed: {:?}", error))?,
-        )
+        let records = [
+            SystemGenerationDigestRecord {
+                package_id: "org.mrml.zim",
+                version: consumer.artifact().version(),
+                artifact_digest: consumer.artifact().digest(),
+            },
+            SystemGenerationDigestRecord {
+                package_id: "org.mrml.zstd",
+                version: provider.artifact().version(),
+                artifact_digest: provider.artifact().digest(),
+            },
+        ];
+        let mut bytes = [0u8; 256];
+        let length = encode_system_generation(1, &records, &mut bytes)
+            .map_err(|error| anyhow!("KVM SystemGeneration encoding failed: {:?}", error))?;
+        let digest = SystemGenerationView::decode(&bytes[..length])
+            .map_err(|error| anyhow!("KVM SystemGeneration decoding failed: {:?}", error))?
+            .digest();
+        Some((bytes, length, digest))
     } else {
         None
     };
-    let active_component_generation = if let Some(digest) = component_generation_digest {
+    let active_component_generation = if let Some((_, _, digest)) = component_generation.as_ref() {
         let deployment_root = ObjectId(0x4445_504c_4f59);
         let mut capabilities = CapabilitySpace::<2>::new();
         let control = capabilities
@@ -2002,7 +2002,7 @@ fn application_main() -> Result<()> {
             .stage(
                 &capabilities,
                 control,
-                GenerationCandidate::new(1, digest, 0x5359_5347_454e, 1)
+                GenerationCandidate::new(1, *digest, 0x5359_5347_454e, 1)
                     .map_err(|error| anyhow!("KVM generation candidate failed: {:?}", error))?,
             )
             .map_err(|error| anyhow!("KVM candidate staging failed: {:?}", error))?;
@@ -2029,7 +2029,9 @@ fn application_main() -> Result<()> {
         Some(
             match active_component_generation {
                 Some(active) => IsolationAdmissionTable::<1>::new_activated(
-                    IsolationMode::TotalMicrovm, active, 1,
+                    IsolationMode::TotalMicrovm,
+                    active,
+                    1,
                 ),
                 None => IsolationAdmissionTable::<1>::new(IsolationMode::TotalMicrovm, 1, 1),
             }
@@ -2206,47 +2208,52 @@ fn application_main() -> Result<()> {
         let prepared = isolation_preparation
             .take()
             .ok_or_else(|| anyhow!("missing prepared component isolation route"))?;
-        let consumer = service_executable
+        let (generation_bytes, generation_length, _) = component_generation
             .as_ref()
-            .ok_or_else(|| anyhow!("missing verified ZIM consumer"))?;
-        let provider = provider_executable
-            .as_ref()
-            .ok_or_else(|| anyhow!("missing verified Zstd provider"))?;
-        let handoff = ComponentServiceLaunchHandoff::new(
-            1,
-            1,
-            0x5a49_4d5f_5a53_5444,
+            .ok_or_else(|| anyhow!("missing canonical component SystemGeneration"))?;
+        let requirement = ComponentInterfaceRequirement::exact(
+            "org.mrml.zim",
             0x5a53_5444_0000_0003,
             3,
-            provider.artifact().version(),
-            ComponentServicePlacement::Microvm,
+            ZSTD_INTERFACE_FINGERPRINT,
+        )
+        .map_err(|error| anyhow!("component interface requirement failed: {:?}", error))?;
+        let provider = ComponentInterfaceProvider::exact(
+            "org.mrml.zstd",
+            0x5a53_5444_0000_0003,
+            3,
+            ZSTD_INTERFACE_FINGERPRINT,
+            ComponentProviderForms::NATIVE_SERVICE_OR_MICROVM,
+        )
+        .map_err(|error| anyhow!("component interface provider failed: {:?}", error))?;
+        let handoff = resolve_activated_component_service(
             *active_component_generation
                 .as_ref()
-                .ok_or_else(|| anyhow!("missing active component SystemGeneration"))?
-                .generation_digest(),
-            ZSTD_INTERFACE_FINGERPRINT,
-            *consumer.artifact().digest(),
-            *provider.artifact().digest(),
+                .ok_or_else(|| anyhow!("missing active component SystemGeneration"))?,
+            &generation_bytes[..*generation_length],
+            requirement,
+            &[provider],
+            1,
+            0x5a49_4d5f_5a53_5444,
+            ComponentServicePlacement::Microvm,
         )
-        .map_err(|error| anyhow!("component launch handoff failed: {:?}", error))?;
-        Some(
-            match bind_component_service_handoff(prepared, handoff) {
-                Ok(launch) => launch,
-                Err((route, error)) => {
-                    route
-                        .unavailable(
-                            isolation_admission
-                                .as_mut()
-                                .ok_or_else(|| anyhow!("missing component isolation admission"))?,
-                            IsolationUnavailableReason::VmmResource,
-                        )
-                        .map_err(|failure| {
-                            anyhow!("component unavailability publication failed: {:?}", failure)
-                        })?;
-                    return Err(anyhow!("component launch binding failed: {:?}", error));
-                }
-            },
-        )
+        .map_err(|error| anyhow!("component interface resolution failed: {:?}", error))?;
+        Some(match bind_component_service_handoff(prepared, handoff) {
+            Ok(launch) => launch,
+            Err((route, error)) => {
+                route
+                    .unavailable(
+                        isolation_admission
+                            .as_mut()
+                            .ok_or_else(|| anyhow!("missing component isolation admission"))?,
+                        IsolationUnavailableReason::VmmResource,
+                    )
+                    .map_err(|failure| {
+                        anyhow!("component unavailability publication failed: {:?}", failure)
+                    })?;
+                return Err(anyhow!("component launch binding failed: {:?}", error));
+            }
+        })
     } else {
         None
     };

@@ -5060,3 +5060,24 @@ mechanism. Broader modern trait solving remains subject to its existing
 `TRIGGERED` review and later source-semantic increments require review of their
 concrete mechanisms. This agent review does not replace targeted independent
 human review.
+
+# 2026-08-25 — Activated exact-provider runtime handoff
+
+**Result: NOT_TRIGGERED after the existing exact typed provider-resolution
+review.** This increment moves the already reviewed bounded, canonical,
+exact-match-only provider scan into the allocation-free shared runtime format
+library. It first decodes the existing canonical `MRMLSG2` record and requires
+its generation and SHA3-512 digest to equal one already authenticated
+`ActivatedSystemGeneration`; it then requires the consumer and every declared
+provider to be exact members, rejects zero/missing/ambiguous/noncanonical and
+wrong-ABI/fingerprint/placement-form inputs, and copies the selected immutable
+version/digests into the existing fixed launch handoff. It adds no range or
+preference scoring, graph solving, network discovery, filename/path search,
+provider-side selection, update choice, loading technique, transport,
+virtualization mechanism, or cryptographic construction. The claim-focused
+worldwide screen and non-overlap analysis recorded under “Exact typed provider
+resolution inside SystemGeneration” remain directly applicable. Broader live
+binding, manifest delivery, update, retention, servicing, adaptive-placement,
+and microVM mechanisms remain `TRIGGERED`; this agent review establishes
+neither clearance nor infringement and does not replace independent human dual
+review.

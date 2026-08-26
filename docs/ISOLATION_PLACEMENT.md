@@ -130,8 +130,10 @@ exact endpoint, and explicitly retire the lifecycle on the successful terminal
 path. Unrelated launch modes cannot consume a configuration-owned guest. Both
 runner builds and focused unit suites pass with this identical ownership shape.
 The dual-placement milestone remains **PARTIALLY IMPLEMENTED** rather than
-complete because general resolution and cross-placement transport remain
-planned.
+complete. The focused WHP/KVM component path now resolves its exact microVM
+provider from canonical bytes matching the recovered active generation, but
+manifest-driven declaration delivery, resolver-driven native-service dispatch,
+and general cross-placement transport remain planned.
 An admitted-guest transfer factory now accepts one backend-constructed guest
 only when the complete `IsolationServiceSpec` matches, consumes it once, and
 permits trusted mutable guest access only through the matching generational
