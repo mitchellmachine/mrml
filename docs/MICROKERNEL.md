@@ -8019,6 +8019,14 @@ UEFI bootloader on both hosts. This is canonical codec and build evidence only;
 the bootloader does not yet populate or consume an application descriptor and
 no WHP/KVM application executed.
 
+The x86-64 kernel mapping layer now has a separate
+`ApplicationAddressSpace`. It accepts only a matching authenticated
+`ApplicationImage` handoff identity, then reuses the existing final W^X PE,
+lower guard, user stack, supervisor-only kernel-clone, and preallocated page-
+table mechanism. A service artifact cannot satisfy the application check. The
+Windows kernel suite passes 531 tests; this is mapping-plan unit evidence, not
+live CR3 installation, task execution, WHP/KVM parity, or physical evidence.
+
 Exact commands and outcomes:
 
 ```text

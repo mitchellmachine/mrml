@@ -68,7 +68,7 @@ pub use privilege_stack::{
     CpuPrivilegeStacks, EARLY_STACK_PAGES, MAX_X86_64_CPUS, PRIVILEGE_STACK_ARENA_PAGES,
     PerCpuPrivilegeStacks, PrivilegeStackError, PrivilegeStackLayout,
 };
-pub use service_space::{ServiceAddressSpace, ServiceSpaceError};
+pub use service_space::{ApplicationAddressSpace, ServiceAddressSpace, ServiceSpaceError};
 pub use topology::{
     ApStartupTable, ApStartupToken, ApState, TopologyError, X86Cpu, X86CpuTopology,
 };

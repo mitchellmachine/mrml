@@ -357,6 +357,10 @@ impl ApplicationLaunch {
     pub const fn measurement(self) -> [u8; 64] {
         self.0.measurement()
     }
+
+    pub(crate) const fn executable_layout(self) -> ServiceLaunch {
+        self.0
+    }
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]

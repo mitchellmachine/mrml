@@ -57,7 +57,11 @@ Three new persistent deltas are documented before implementation:
   reuses the bounded user-image layout validation without becoming a
   `ServiceLaunch`. Its canonical distinct-flag wire encoding, exact decode, and
   mutually disjoint reserved backing validation are **IMPLEMENTED**; boot
-  consumption remains **PLANNED**.
+  consumption remains **PLANNED**. A distinct x86-64
+  `ApplicationAddressSpace` now requires matching authenticated
+  `ApplicationImage` identity and derives the same reviewed W^X PE, guarded
+  stack, and private page-table plan without accepting service identity. Live
+  CR3 installation and task launch remain **PLANNED**.
   The distinct syscall-only `org.mrml.app.isolation-probe` is
   now a real Manifest V2 `system-application` supporting native-process and microVM forms;
   Windows and Arch Linux cross-build identical 3,072-byte PE output. It has not

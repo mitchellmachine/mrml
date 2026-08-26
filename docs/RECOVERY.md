@@ -1054,6 +1054,10 @@ and requires mutually disjoint reserved backing ranges. Recovery must decode
 the exact application descriptor, reject truncation/trailing data/overlap, and
 must not reconstruct it by relabeling a recovered service descriptor. Boot
 consumption of the decoded application remains planned.
+The x86-64 recovery path may reconstruct an `ApplicationAddressSpace` only from
+that exact descriptor plus a matching verified `ApplicationImage`. The adapter
+reuses the W^X/guarded-stack mapping mechanism but rejects service artifact
+identity; cached page-table roots or a prior service plan are not substitutes.
 
 The canonical workspace and lock now retain the syscall-only
 `org.mrml.app.isolation-probe` as a `system-application` with both supported

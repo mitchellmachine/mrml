@@ -4,8 +4,8 @@ use super::{
     UserBufferError, UserCopyError, UserMemory, VirtAddr, map_pe_image,
 };
 use crate::{
-    ArtifactKind, MAX_PE_SECTIONS, PAGE_SIZE, PeAllocatedRegion, PeAllocationError, PeError,
-    PeImage, PhysAddr, ServiceLaunch, VerifiedExecutable,
+    ApplicationLaunch, ArtifactKind, MAX_PE_SECTIONS, PAGE_SIZE, PeAllocatedRegion,
+    PeAllocationError, PeError, PeImage, PhysAddr, ServiceLaunch, VerifiedExecutable,
 };
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -30,6 +30,63 @@ pub struct ServiceAddressSpace<const MAPPINGS: usize> {
     entry: u64,
     stack_top: u64,
     lower_guard: u64,
+}
+
+/// W^X address-space plan for one authenticated ordinary application. It
+/// deliberately reuses the reviewed user-image mapping mechanism while keeping
+/// application artifact identity distinct from service identity.
+pub struct ApplicationAddressSpace<const MAPPINGS: usize>(ServiceAddressSpace<MAPPINGS>);
+
+impl<const MAPPINGS: usize> ApplicationAddressSpace<MAPPINGS> {
+    pub fn from_handoff(
+        application: ApplicationLaunch,
+        executable: &VerifiedExecutable<'_>,
+        kernel_mappings: &[Mapping],
+    ) -> Result<Self, ServiceSpaceError> {
+        if executable.artifact().kind() != ArtifactKind::ApplicationImage
+            || executable.artifact().version() != application.version()
+            || executable.artifact().digest() != &application.measurement()
+        {
+            return Err(ServiceSpaceError::HandoffMismatch);
+        }
+        Self::from_handoff_image(application, executable.image(), kernel_mappings)
+    }
+
+    fn from_handoff_image(
+        application: ApplicationLaunch,
+        image: &PeImage<'_>,
+        kernel_mappings: &[Mapping],
+    ) -> Result<Self, ServiceSpaceError> {
+        ServiceAddressSpace::from_handoff_image(
+            application.executable_layout(),
+            image,
+            kernel_mappings,
+        )
+        .map(Self)
+    }
+
+    pub const fn entry(&self) -> u64 {
+        self.0.entry()
+    }
+
+    pub const fn stack_top(&self) -> u64 {
+        self.0.stack_top()
+    }
+
+    pub const fn lower_guard(&self) -> u64 {
+        self.0.lower_guard()
+    }
+
+    pub fn mappings(&self) -> impl Iterator<Item = Mapping> + '_ {
+        self.0.mappings()
+    }
+
+    pub unsafe fn build_page_tables_with_current_kernel<S: PageTableStore>(
+        &self,
+        store: S,
+    ) -> Result<PageTableBuilder<S>, ServiceSpaceError> {
+        unsafe { self.0.build_page_tables_with_current_kernel(store) }
+    }
 }
 
 impl<const MAPPINGS: usize> ServiceAddressSpace<MAPPINGS> {
@@ -428,5 +485,38 @@ mod tests {
             ServiceAddressSpace::<8>::from_handoff_image(wrong_entry, &image, &[]).err(),
             Some(ServiceSpaceError::HandoffMismatch)
         );
+    }
+
+    #[test]
+    fn application_handoff_reuses_wx_mapping_without_service_identity() {
+        let encoded = minimal_pe();
+        let image = PeImage::parse(&encoded).unwrap();
+        let mut materialized = [0u8; 8192];
+        let entry = image.materialize(&mut materialized).unwrap();
+        let application = ApplicationLaunch::new(
+            PhysAddr::new(0x10_0000).unwrap(),
+            1024,
+            PhysAddr::new(0x20_0000).unwrap(),
+            2,
+            image.image_base(),
+            entry,
+            PhysAddr::new(0x30_0000).unwrap(),
+            2,
+            0x7000_2000,
+            PhysAddr::new(0x40_0000).unwrap(),
+            8,
+            3,
+            [3; 64],
+        )
+        .unwrap();
+        let plan =
+            ApplicationAddressSpace::<8>::from_handoff_image(application, &image, &[]).unwrap();
+        assert_eq!(plan.entry(), entry);
+        assert_eq!(plan.stack_top(), 0x7000_2000);
+        assert!(plan.mappings().any(|mapping| {
+            mapping.virtual_start().get() == image.image_base() + 0x1000
+                && mapping.physical_start().get() == 0x20_1000
+                && mapping.permissions() == PagePermissions::USER_READ_EXECUTE
+        }));
     }
 }

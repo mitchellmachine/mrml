@@ -84,6 +84,11 @@ The canonical handoff now encodes service and application under distinct flags
 and fixed descriptors, requires all backing ranges to be reserved and mutually
 disjoint, and rejects truncation, trailing bytes, or overlap before publication.
 Boot consumption of the application descriptor remains **PLANNED**.
+The x86-64 mapping layer now has a distinct `ApplicationAddressSpace` adapter:
+it requires an authenticated `ApplicationImage` whose version and measurement
+match the handoff, then reuses the same final W^X PE and guarded-stack mapping
+mechanism. It cannot accept a `ServiceImage` as application identity. Live CR3
+installation and task launch from this adapter remain **PLANNED**.
 No application loader or runtime consumes the verified bytes yet. A
 backend-neutral microVM owner now accepts one already constructed guest only
 after rechecking the complete immutable application route, consumes that guest
