@@ -1227,6 +1227,10 @@ Conditional shared-call origins now retain the same loop-generation boundary for
 both possible owners. Mutating either candidate before a later result use fails,
 while copying first permits mutation of both owners and the backedge. ORACLE-0002
 matches with E0506 and acceptance.
+Nested `while` control flow now retains that conditional shared-call generation
+boundary at the inner backedge. A live same-iteration result still protects the
+selected owner, while copying first permits both owner mutations across the
+inner and outer loop structure. ORACLE-0002 matches with E0506 and acceptance.
 
 The first modern trait-solver foundation is an explicit bounded implemented-
 goal representation. Stable trait/type/inference/placeholder identities remain

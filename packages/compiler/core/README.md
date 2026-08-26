@@ -4085,6 +4085,11 @@ generations for both possible owners. Either same-iteration owner mutation fails
 before a later result use; copying first releases both candidate loans before
 mutation and the backedge. Pinned rustc matches with E0506 and acceptance; both
 hosts remain at 989 compiler tests.
+Nested `while` control flow retains the same joined generation boundary at the
+inner backedge. A later same-iteration result use protects either possible owner;
+copying first releases both candidate loans before mutation across the nested
+loop structure. Pinned rustc matches with E0506 and acceptance; both hosts
+remain at 989 compiler tests. This remains bounded CFG evidence.
 
 Exact typed tuple literals now seed the same projected state when a local is
 declared. Every reference field is checked against the declared tuple element

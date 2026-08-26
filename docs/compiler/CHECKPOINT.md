@@ -881,6 +881,13 @@ result's later same-iteration use fails with `RuntimeBorrowConflict`, matching
 ORACLE-0002 E0506; copy-before-mutation permits both owner writes and the
 backedge. Windows and Arch remain at 989 compiler tests per host.
 
+Nested `while` control flow now exercises the conditional shared-reference
+generation boundary at the inner backedge. Same-iteration owner mutation before
+the later result use fails with `RuntimeBorrowConflict`, matching ORACLE-0002
+E0506; copying first permits both owner writes across the nested loop structure.
+Windows and Arch remain at 989 compiler tests per host. This is nested bounded
+CFG evidence, not a general loop-region fixed point.
+
 Direct and conditional return sites inside supported `loop` blocks now retain
 the projected callee summary's shared-child origin. Parameter-backed second
 arguments pass and matching loop-local second arguments fail closed. ORACLE-0002
