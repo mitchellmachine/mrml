@@ -1,5 +1,15 @@
 # Patent review log
 
+## 2026-08-26 — Indexed slice callee-origin evidence
+
+Patent review: **NOT_TRIGGERED**. This increment adds a distinct slice target,
+caller controls, and black-box oracle probes for the already reviewed exact
+indexed aggregate origin comparison. It introduces no new mechanism, alias-
+analysis rule, region solver, optimization, runtime enforcement, authority
+model, or dependency. Subslice and disjoint-index analysis remain absent. This
+technical screen establishes neither clearance nor infringement and does not
+replace independent human dual review.
+
 ## 2026-08-26 — Release-derived Total inventory in WHP/KVM component probes
 
 Patent review: **TRIGGERED** under the existing adaptive-isolation,

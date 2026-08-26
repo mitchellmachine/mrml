@@ -871,6 +871,9 @@ preceding explicit `Dereference`. The result retains the parameter origin for
 caller liveness. Identity, mismatched, shared-to-mutable, deeper, and unrelated
 projection shapes fail closed. This is the first non-tuple aggregate provenance
 slice, not general aggregate or index-sensitive alias analysis.
+Both the fixed-array-reference and slice-reference paths now have direct caller
+conflict, post-last-use, and exact dated-oracle evidence; slice evidence is not
+inferred from the array implementation.
 
 The first modern trait-solver foundation is an explicit bounded implemented-
 goal representation. Stable trait/type/inference/placeholder identities remain

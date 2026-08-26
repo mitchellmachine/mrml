@@ -210,6 +210,15 @@ remained live with E0499. This is black-box evidence for that exact indexed
 array-reference shape, not general aggregate or index-sensitive alias analysis.
 Temporary sources and metadata were removed.
 
+An independently authored Rust 2024 metadata-only probe against this exact
+toolchain and commit separately accepted a mutable scalar reference returned
+from index zero of a mutable slice-reference parameter, followed by owner reuse
+after the child's last use. A separate invocation rejected a live mutable borrow
+of the same indexed slice place with E0499 and E0503. This is direct black-box
+slice evidence rather than an inference from the fixed-array probe; it does not
+establish subslice or disjoint-index alias analysis. Temporary sources and
+metadata were removed.
+
 An independently authored Rust 2024 metadata-only probe against the same exact
 toolchain and commit compiled three explicit RAX forms whose output place was
 `*target` for `target: &mut u64`: `lateout`, same-place `inout`, and a distinct-

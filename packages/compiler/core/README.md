@@ -3879,6 +3879,13 @@ replacement tests: 986 compiler tests per host. This is the first non-tuple
 aggregate provenance slice, not general aggregate or index-sensitive alias
 analysis.
 
+The indexed slice evidence uses a distinct mutable-slice call target and caller,
+not the fixed-array target as a proxy. Both canonical hosts retain the same 986
+tests. The exact dated oracle accepted indexed slice owner reuse after the
+returned child's last use and rejected a live indexed competitor with E0499 and
+E0503. This adds direct evidence for the already bounded slice projection path;
+it does not add general subslice, disjoint-index, or aggregate alias analysis.
+
 The conditional projected-reassignment milestone extends the bounded tuple-field
 loan chain across a conditional shared-reference assignment. The exact dated
 oracle rejects mutation of either conditional owner and of the field's replaced

@@ -589,6 +589,14 @@ one component-interface probe, 10 conformance tests, and 335 replacement tests:
 986 compiler tests per host. General aggregate and index-sensitive alias
 analysis remain unsupported.
 
+The slice-reference half now has direct evidence through a distinct mutable-
+slice target and caller rather than inference from the array case. ORACLE-0002
+accepted post-last-use indexed slice reuse and rejected a live indexed competitor
+with E0499 and E0503. Both canonical hosts retain 640 library tests, one
+component-interface probe, 10 conformance tests, and 335 replacement tests: 986
+compiler tests per host. Subslice and disjoint-index alias analysis remain
+unsupported.
+
 This is an initial typed body-fact slice, not a complete typed body IR and not a
 borrow checker. Unsupported aggregate-leaf call arguments, other aggregate-
 argument and call-derived fat-reference initializers, unsupported compound array
