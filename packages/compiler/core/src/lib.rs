@@ -91,7 +91,7 @@ pub use trait_goals::{
     SourceTraitDeclaration, SourceTraitDeclarationError, SourceTraitDeclarationTable,
     SourceTraitImplementationError, SourceTraitImplementationErrorKind,
     SourceTraitImplementationTable, SourceTraitObligationError, SourceTraitObligationErrorKind,
-    SourceTraitType, SymbolicTraitGoalSubstitution, TraitAssociatedTypeDatabase,
+    SourceTraitSupertrait, SourceTraitType, SymbolicTraitGoalSubstitution, TraitAssociatedTypeDatabase,
     TraitAssociatedTypeId, TraitAssociatedTypeValue, TraitGenericParameterId, TraitGoalAnswer,
     TraitGoalError, TraitGoalSolution, TraitGoalSubstitution, TraitGoalTerm, TraitGoalTermArena,
     TraitGoalTermId, TraitGoalTermNormalizationAnswer, TraitGoalTermNormalizationSolution,

@@ -911,6 +911,18 @@ pub struct TraitAssociatedTypeDeclaration<'source> {
 pub struct TraitSupertrait<'source> {
     pub name: &'source str,
     pub span: Span,
+    arguments: [Option<TypeRef<'source>>; MAX_SOURCE_TRAIT_ARGUMENTS],
+    argument_count: usize,
+}
+
+impl<'source> TraitSupertrait<'source> {
+    pub fn arguments(&self) -> &[Option<TypeRef<'source>>] {
+        &self.arguments[..self.argument_count]
+    }
+
+    pub const fn argument_count(&self) -> usize {
+        self.argument_count
+    }
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -3380,9 +3392,17 @@ impl<'source> Parser<'source> {
                     return Err(self.error(ParseErrorKind::TooManySupertraits, token));
                 }
                 let supertrait = self.identifier()?;
+                let (arguments, argument_count, consumed_outer_close) =
+                    self.source_trait_arguments()?;
+                if consumed_outer_close {
+                    let token = self.peek()?;
+                    return Err(self.error(ParseErrorKind::ExpectedBody, token));
+                }
                 supertraits[supertrait_count] = Some(TraitSupertrait {
                     name: supertrait.text,
                     span: supertrait.span,
+                    arguments,
+                    argument_count,
                 });
                 supertrait_count += 1;
                 if self.take_text("+")?.is_none() {
@@ -3823,6 +3843,19 @@ mod tests {
         .parse_module::<2, 1>()
         .unwrap_err();
         assert_eq!(overflow.kind, ParseErrorKind::TooManySupertraits);
+    }
+
+    #[test]
+    fn parses_parameterized_supertrait_paths() {
+        let source = "trait Child<T, U>: Parent<T> + Pair<T, U> {}";
+        let module: TestModule<'_> = Parser::new(source).parse_module().unwrap();
+        let Some(Item::Trait(child)) = module.items()[0] else {
+            panic!("expected trait")
+        };
+        assert_eq!(child.supertraits()[0].unwrap().argument_count(), 1);
+        assert_eq!(child.supertraits()[0].unwrap().arguments()[0].unwrap().text, "T");
+        assert_eq!(child.supertraits()[1].unwrap().argument_count(), 2);
+        assert_eq!(child.supertraits()[1].unwrap().arguments()[1].unwrap().text, "U");
     }
 
     #[test]
