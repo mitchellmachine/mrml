@@ -1,5 +1,15 @@
 # Patent review log
 
+## 2026-08-26 — Mutable-to-shared projected origin attenuation
+
+Patent review: **NOT_TRIGGERED** for this bounded compiler-analysis increment.
+It applies the existing directional reference compatibility rule and
+conventionally attenuates a mutable borrow fact to a shared destination loan.
+It adds no alias-analysis algorithm, region solver, optimization, runtime
+enforcement, authority model, or external dependency. Broader compiler
+completion remains partial; this technical screen establishes neither clearance
+nor infringement and does not replace independent human dual review.
+
 ## 2026-08-26 — Release-derived Total classification assignments
 
 Patent review: **TRIGGERED** under the existing SystemRelease, runtime-
