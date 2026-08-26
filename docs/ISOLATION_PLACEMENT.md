@@ -734,6 +734,19 @@ runtime connection, and complete strict proof remain **PLANNED**; a decoded
 request, focused recovery simulation, or hosted injection is not a successful
 Total-mode boot or satisfaction claim.
 
+The common boot/recovery owner is now **PARTIALLY IMPLEMENTED** in both live
+runners. `BootTotalAdmission` binds an effective Total policy directly to the
+activated release, constructs an activated admission table retaining the exact
+generation and catalog digests, prepares the classified route through that
+same owner, retains it across vCPU/RAM/VMM construction, commits the microVM,
+and finalizes the release proof without a parallel table. Recovery wraps this
+same owner with committed recovery provenance. Fresh WHP and nested-KVM signed
+probes each report one eligible microVM and zero native fallback; WHP passes 9
+runner tests, KVM passes 10, and configuration passes 43 on both hosts. The
+runners still synthesize their focused configuration state rather than consume
+the committed stable-recovery object, so live recovered boot remains
+**PLANNED**.
+
 ## Resources, devices, security, and monitoring
 
 RAM, vCPU, `VirtualGPU`, VirtIO, device-projection, or VMM exhaustion in Total

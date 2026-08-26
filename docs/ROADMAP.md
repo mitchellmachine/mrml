@@ -320,6 +320,17 @@ Live WHP/KVM consumption of that recovered owner, early-boot orchestration,
 menu presentation, OVMF/EFI-Shell execution, complete installed-system
 inventory, and end-to-end runtime enforcement remain **PLANNED**.
 
+The shared live Total owner is now **PARTIALLY IMPLEMENTED**. WHP and nested
+KVM bind the effective boot policy and activated signed release into one
+`BootTotalAdmission`, preserve exact generation/catalog digests, prepare and
+commit the classified route through its owned table, and finalize from that
+same owner after vCPU/RAM/VMM construction. `RecoveredTotalAdmission` wraps the
+same object rather than creating a parallel table. Configuration passes 43
+tests on both hosts, WHP passes 9, KVM passes 10, and fresh signed probes report
+one eligible microVM with zero fallback. Replacing the runners' transient
+configuration fixture with the committed stable-recovery object is the next
+gate; live recovered boot remains **PLANNED**.
+
 The deployment lane is defined in [DEPLOYMENT.md](DEPLOYMENT.md) and must not
 displace the current foundational gate. Later work proceeds as separate bounded
 milestones: package/boot-safe formats; release/generation state; Store/catalog;

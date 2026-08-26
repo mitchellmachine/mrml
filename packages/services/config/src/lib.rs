@@ -2560,31 +2560,26 @@ impl RecoveredBootIsolationPolicy {
         self,
         release: ActivatedReleaseTotalMicrovmInventory<DOMAINS>,
     ) -> Result<RecoveredTotalAdmission<DOMAINS>, ConfigError> {
-        if self.effective.mode() != IsolationMode::TotalMicrovm
-            || release.policy_generation() != self.effective.policy_generation()
-        {
-            return Err(ConfigError::IsolationPolicyMismatch);
-        }
-        let admission = self.admission_table(release.system_generation())?;
+        let total = self.effective.bind_release_inventory(release)?;
         Ok(RecoveredTotalAdmission {
             policy: self,
-            release,
-            admission,
+            total,
         })
     }
 }
 
-/// One pre-launch control-plane state joining committed recovered policy,
+/// One pre-launch control-plane state joining an exact effective boot policy,
 /// authenticated complete release classification, and the only admission table
-/// allowed to account the resulting domains.
-pub struct RecoveredTotalAdmission<const DOMAINS: usize> {
-    policy: RecoveredBootIsolationPolicy,
+/// allowed to account the resulting domains. Recovery wraps this same owner
+/// with committed recovery provenance rather than constructing another table.
+pub struct BootTotalAdmission<const DOMAINS: usize> {
+    policy: EffectiveBootIsolationPolicy,
     release: ActivatedReleaseTotalMicrovmInventory<DOMAINS>,
     admission: IsolationAdmissionTable<DOMAINS>,
 }
 
-impl<const DOMAINS: usize> RecoveredTotalAdmission<DOMAINS> {
-    pub const fn policy(&self) -> RecoveredBootIsolationPolicy {
+impl<const DOMAINS: usize> BootTotalAdmission<DOMAINS> {
+    pub const fn policy(&self) -> EffectiveBootIsolationPolicy {
         self.policy
     }
 
@@ -2600,7 +2595,7 @@ impl<const DOMAINS: usize> RecoveredTotalAdmission<DOMAINS> {
         &mut self.admission
     }
 
-    /// Applies the recovered effective policy and reserves one exact service
+    /// Applies the effective boot policy and reserves one exact service
     /// route only when its domain/class is already present in the authenticated
     /// release inventory owned by this transaction. Package metadata and
     /// identity remain non-authorizing; the returned route is still
@@ -2622,7 +2617,6 @@ impl<const DOMAINS: usize> RecoveredTotalAdmission<DOMAINS> {
         }
         let admitted = self
             .policy
-            .effective
             .admit_service(bounds)
             .map_err(ConfiguredIsolationPreparationError::Configuration)?;
         let spec = admitted
@@ -2643,6 +2637,47 @@ impl<const DOMAINS: usize> RecoveredTotalAdmission<DOMAINS> {
         &self,
     ) -> Result<mrml_kernel::TotalMicrovmRuntimeProof, mrml_kernel::TotalMicrovmRuntimeError> {
         self.release.finalize(&self.admission)
+    }
+}
+
+/// The common boot Total owner plus the committed recovery identity that
+/// produced its effective policy. All route and proof operations delegate to
+/// the contained owner so recovery cannot accidentally construct a parallel
+/// admission table.
+pub struct RecoveredTotalAdmission<const DOMAINS: usize> {
+    policy: RecoveredBootIsolationPolicy,
+    total: BootTotalAdmission<DOMAINS>,
+}
+
+impl<const DOMAINS: usize> RecoveredTotalAdmission<DOMAINS> {
+    pub const fn policy(&self) -> RecoveredBootIsolationPolicy {
+        self.policy
+    }
+
+    pub const fn release(&self) -> &ActivatedReleaseTotalMicrovmInventory<DOMAINS> {
+        self.total.release()
+    }
+
+    pub const fn admission(&self) -> &IsolationAdmissionTable<DOMAINS> {
+        self.total.admission()
+    }
+
+    pub fn admission_mut(&mut self) -> &mut IsolationAdmissionTable<DOMAINS> {
+        self.total.admission_mut()
+    }
+
+    pub fn prepare_service(
+        &mut self,
+        bounds: IsolationServiceBounds,
+        identity: IsolationServiceIdentity,
+    ) -> Result<PreparedIsolationServiceRoute, ConfiguredIsolationPreparationError> {
+        self.total.prepare_service(bounds, identity)
+    }
+
+    pub fn finalize(
+        &self,
+    ) -> Result<mrml_kernel::TotalMicrovmRuntimeProof, mrml_kernel::TotalMicrovmRuntimeError> {
+        self.total.finalize()
     }
 }
 
@@ -2669,6 +2704,28 @@ impl EffectiveBootIsolationPolicy {
     ) -> Result<IsolationAdmissionTable<DOMAINS>, ConfigError> {
         IsolationAdmissionTable::new(self.mode, system_generation, self.policy_generation())
             .map_err(|_| ConfigError::InvalidValue)
+    }
+
+    pub fn bind_release_inventory<const DOMAINS: usize>(
+        self,
+        release: ActivatedReleaseTotalMicrovmInventory<DOMAINS>,
+    ) -> Result<BootTotalAdmission<DOMAINS>, ConfigError> {
+        if self.mode != IsolationMode::TotalMicrovm
+            || release.policy_generation() != self.policy_generation()
+        {
+            return Err(ConfigError::IsolationPolicyMismatch);
+        }
+        let admission = IsolationAdmissionTable::new_activated(
+            self.mode,
+            release.active_release().generation(),
+            self.policy_generation(),
+        )
+        .map_err(|_| ConfigError::InvalidValue)?;
+        Ok(BootTotalAdmission {
+            policy: self,
+            release,
+            admission,
+        })
     }
 
     pub fn admit_service(
@@ -2901,6 +2958,26 @@ impl IsolationServiceIdentity {
             provider_generation,
             class,
         })
+    }
+
+    pub const fn domain(self) -> ObjectId {
+        self.domain
+    }
+
+    pub const fn interface(self) -> ObjectId {
+        self.interface
+    }
+
+    pub const fn interface_generation(self) -> u32 {
+        self.interface_generation
+    }
+
+    pub const fn provider_generation(self) -> u64 {
+        self.provider_generation
+    }
+
+    pub const fn class(self) -> mrml_kernel::TotalMicrovmClass {
+        self.class
     }
 }
 
@@ -8969,6 +9046,15 @@ mod tests {
         let domain = ObjectId(0x434f_4e46_4947_0001);
         let release = activated_configuration_release(domain, 9);
         let mut total = policy.bind_release_inventory(release).unwrap();
+        let active_generation = total.release().active_release().generation();
+        assert_eq!(
+            total.admission().system_generation_digest(),
+            Some(active_generation.generation_digest())
+        );
+        assert_eq!(
+            total.admission().interface_catalog_digest(),
+            Some(active_generation.interface_catalog_digest())
+        );
         let bounds = IsolationServiceBounds::new(
             IsolationPlacement::NativeService,
             IsolationPlacement::NativeService,

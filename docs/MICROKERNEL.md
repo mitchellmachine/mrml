@@ -3077,6 +3077,17 @@ the wrapper. Windows and Arch Linux configuration suites pass 43 tests. This is
 hosted typed-state evidence; WHP/KVM live runner consumption of the committed
 stable-recovery object and real early-boot orchestration remain **PLANNED**.
 
+The common inner owner is now live on both hosted VMM backends.
+`BootTotalAdmission` binds the effective Total policy to the activated release,
+retains its exact generation/catalog digests in the admission table, prepares
+the classified component route, carries the same table through quantitative
+vCPU/RAM and VMM construction, commits the microVM, and finalizes the signed
+release inventory. `RecoveredTotalAdmission` delegates to this same owner while
+retaining recovery provenance. Fresh WHP and nested-KVM probes each report
+`eligible=1`, `microvm=1`, and `native_fallback=0`. The runners still use a
+focused transient configuration fixture, not the committed stable-recovery
+object; real recovered boot remains **PLANNED**.
+
 Patent review: `TRIGGERED` under the existing signed-release, adaptive
 isolation, Total-MicroVM, automated VMM placement, and device-projection reviews
 now that authenticated package classifications are joined to live domain

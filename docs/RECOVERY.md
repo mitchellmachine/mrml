@@ -1142,6 +1142,17 @@ recovered result in a hosted unit test; the live WHP/KVM runners do not yet
 consume the committed stable-recovery object, so live early-boot recovery and
 end-to-end Total finalization remain **PLANNED**.
 
+WHP and nested KVM now consume the common inner `BootTotalAdmission` owner from
+effective-policy/release binding through classified route preparation,
+vCPU/RAM/VMM construction, microVM commit, and final release proof. The owner
+creates an activated admission table from the retained release generation, so
+generation and interface-catalog digests survive instead of being reduced to a
+numeric generation. `RecoveredTotalAdmission` wraps this exact same owner; it
+does not build a second table. Fresh signed probes on both backends report one
+eligible microVM and zero fallback. This proves the shared live ownership path,
+not recovery: the runners still create focused transient configuration policy
+and do not consume the stable committed recovered system object.
+
 Application-launch recovery must retain the exact runtime domain, application
 object, immutable application generation and artifact digest, active system
 generation, and applied policy generation. The kernel application route accepts

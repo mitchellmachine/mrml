@@ -3,11 +3,11 @@
 
 #[cfg(target_os = "linux")]
 use mrml_config::{
-    AdmittedConfigurationGuestFactory, ConfigTransaction, ConfigurationMicrovmEndpoint,
-    ConfigurationService, IsolationPolicyApplicationPlan, IsolationPolicySetting,
-    IsolationServiceBounds, IsolationServiceIdentity, MicrovmConfigurationServiceLauncher,
-    OwnerIsolationSelection, PreparedMicrovmConfigurationLauncher, SettingId,
-    prepare_boot_configured_isolation_service_route,
+    AdmittedConfigurationGuestFactory, BootTotalAdmission, ConfigTransaction,
+    ConfigurationMicrovmEndpoint, ConfigurationService, EffectiveBootIsolationPolicy,
+    IsolationPolicyApplicationPlan, IsolationPolicySetting, IsolationServiceBounds,
+    IsolationServiceIdentity, MicrovmConfigurationServiceLauncher, OwnerIsolationSelection,
+    PreparedMicrovmConfigurationLauncher, SettingId,
 };
 #[cfg(target_os = "linux")]
 use mrml_crypto::{LAMPORT_PUBLIC_KEY_BYTES, Sha3_512};
@@ -30,12 +30,12 @@ use mrml_kernel::{
     IsolationPlacement, IsolationUnavailableReason, MAX_APPLICATION_IMAGE_BYTES,
     MAX_COMPONENT_IMAGE_REGIONS, MemoryPoolTable, MicrovmPageProjectionKind,
     MicrovmProjectionDescriptor, MicrovmProjectionKind, MicrovmProjectionPlan,
-    MicrovmProjectionRequirements, ObjectId, PAGE_SIZE, PreparedIsolationServiceRoute,
-    PreparedMicrovmApplicationBackend, ResourceCommand, Rights, RuntimeDomainAssignment,
-    RuntimeDomainAssignmentPlan, SIGNED_ARTIFACT_OVERHEAD_BYTES, ScheduledDeadlineVmBackend,
-    ScheduledSmpVmBackend, SignedArtifact, TotalMicrovmClass, TotalMicrovmInventory,
-    TotalMicrovmInventoryEntry, TrustRoot, VIRTUAL_BLOCK_FEATURE_FLUSH, VcpuReservationId,
-    VerifiedExecutable, VerifiedGpuKernelBundle, VirtualBlockBackend, VirtualBlockBackendAuthority,
+    MicrovmProjectionRequirements, ObjectId, PAGE_SIZE, PreparedMicrovmApplicationBackend,
+    ResourceCommand, Rights, RuntimeDomainAssignment, RuntimeDomainAssignmentPlan,
+    SIGNED_ARTIFACT_OVERHEAD_BYTES, ScheduledDeadlineVmBackend, ScheduledSmpVmBackend,
+    SignedArtifact, TotalMicrovmClass, TotalMicrovmInventory, TotalMicrovmInventoryEntry,
+    TrustRoot, VIRTUAL_BLOCK_FEATURE_FLUSH, VcpuReservationId, VerifiedExecutable,
+    VerifiedGpuKernelBundle, VirtualBlockBackend, VirtualBlockBackendAuthority,
     VirtualBlockCompletionStatus, VirtualBlockConfigurationPage, VirtualBlockDevice,
     VirtualBlockDeviceState, VirtualBlockError, VirtualBlockMutationError,
     VirtualBlockPciAttachment, VirtualBlockPciAttachmentState, VirtualBlockPciCleanupMode,
@@ -48,12 +48,12 @@ use mrml_kernel::{
     VirtualPciMemoryBar, VirtualPciMmioWindow, VirtualPciNativeResourceError,
     VirtualPciType0Function, VmBackend, VmDeadlineOutcome, VmExit, VmTable,
     admit_microvm_projection, bind_component_service_handoff, bind_verified_application_image,
-    component_image_page_plan, prepare_microvm_guest_ram, release_component_image,
-    release_microvm_guest_ram, reserve_component_image, reserve_isolation_vcpus,
-    reserve_microvm_guest_ram, reserve_microvm_page_projection, route_isolation_application,
-    run_pci_configuration_once, run_pci_configuration_once_with_backend_mapper,
-    run_virtual_block_mmio_transaction_once, run_virtual_block_transaction_once,
-    verify_gpu_kernel_bundle,
+    component_image_page_plan, prepare_isolation_service_route, prepare_microvm_guest_ram,
+    release_component_image, release_microvm_guest_ram, reserve_component_image,
+    reserve_isolation_vcpus, reserve_microvm_guest_ram, reserve_microvm_page_projection,
+    route_isolation_application, run_pci_configuration_once,
+    run_pci_configuration_once_with_backend_mapper, run_virtual_block_mmio_transaction_once,
+    run_virtual_block_transaction_once, verify_gpu_kernel_bundle,
 };
 #[cfg(any(test, target_os = "linux"))]
 use mrml_kernel::{
@@ -86,6 +86,41 @@ type KvmConfigurationLauncher =
 #[cfg(target_os = "linux")]
 type KvmApplicationLauncher =
     PreparedMicrovmApplicationBackend<AdmittedApplicationGuestFactory<PreparedKvmGuest<16>>>;
+
+#[cfg(target_os = "linux")]
+struct ConfiguredTotalServicePolicy {
+    effective: EffectiveBootIsolationPolicy,
+    bounds: IsolationServiceBounds,
+    identity: IsolationServiceIdentity,
+}
+
+#[cfg(target_os = "linux")]
+enum KvmTotalAdmission {
+    Standalone(IsolationAdmissionTable<2>),
+    Release(BootTotalAdmission<2>),
+}
+
+#[cfg(target_os = "linux")]
+impl core::ops::Deref for KvmTotalAdmission {
+    type Target = IsolationAdmissionTable<2>;
+
+    fn deref(&self) -> &Self::Target {
+        match self {
+            Self::Standalone(admission) => admission,
+            Self::Release(total) => total.admission(),
+        }
+    }
+}
+
+#[cfg(target_os = "linux")]
+impl core::ops::DerefMut for KvmTotalAdmission {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        match self {
+            Self::Standalone(admission) => admission,
+            Self::Release(total) => total.admission_mut(),
+        }
+    }
+}
 
 #[cfg(target_os = "linux")]
 const APPLICATION_MEMORY_NAMESPACE: u16 = 0x3a50;
@@ -557,13 +592,12 @@ where
 }
 
 #[cfg(target_os = "linux")]
-fn prepare_configured_total_service(
-    admission: &mut IsolationAdmissionTable<1>,
+fn configured_total_service_policy(
     domain: ObjectId,
     interface: ObjectId,
     interface_generation: u32,
     provider_generation: u64,
-) -> Result<PreparedIsolationServiceRoute> {
+) -> Result<ConfiguredTotalServicePolicy> {
     let root_object = ObjectId(0x4953_4f4c_4154_494f);
     let component_object = ObjectId(0x434f_4e46_504f_4c59);
     let system_object = ObjectId(0x5359_5354_504f_4c59);
@@ -643,21 +677,19 @@ fn prepare_configured_total_service(
         TotalMicrovmClass::MicrovmEligible,
     )
     .map_err(|error| anyhow!("KVM service identity failed: {:?}", error))?;
-    let prepared = prepare_boot_configured_isolation_service_route(
-        &configuration,
-        &capabilities,
-        plan,
-        BootIsolationOverride::TotalMicrovmOnce,
-        bounds,
-        identity,
-        admission,
-    )
-    .map_err(|error| anyhow!("KVM configured isolation preparation failed: {:?}", error))?;
+    let effective = plan
+        .apply(&configuration, &capabilities)
+        .map_err(|error| anyhow!("KVM configured isolation application failed: {:?}", error))?
+        .compose_boot_override(Some(BootIsolationOverride::TotalMicrovmOnce));
     println!(
         "isolation-boot-policy|status=PASS|backend=kvm|configured=balanced|component=native-service|override=total-microvm-once|effective=total-microvm|policy_generation={}",
-        admission.policy_generation()
+        effective.policy_generation()
     );
-    Ok(prepared)
+    Ok(ConfiguredTotalServicePolicy {
+        effective,
+        bounds,
+        identity,
+    })
 }
 
 #[cfg(target_os = "linux")]
@@ -2817,22 +2849,7 @@ fn application_main() -> Result<()> {
     } else {
         None
     };
-    let mut isolation_admission = if total_service_mode {
-        Some(
-            match active_component_generation {
-                Some(active) => IsolationAdmissionTable::<1>::new_activated(
-                    IsolationMode::TotalMicrovm,
-                    active.generation(),
-                    1,
-                ),
-                None => IsolationAdmissionTable::<1>::new(IsolationMode::TotalMicrovm, 1, 1),
-            }
-            .map_err(|error| anyhow!("KVM isolation admission failed: {:?}", error))?,
-        )
-    } else {
-        None
-    };
-    let mut isolation_preparation = if let Some(admission) = isolation_admission.as_mut() {
+    let configured_total_policy = if total_service_mode {
         let (domain, interface, interface_generation, provider_generation) =
             if component_service_mode {
                 (
@@ -2857,8 +2874,7 @@ fn application_main() -> Result<()> {
                         .version(),
                 )
             };
-        Some(prepare_configured_total_service(
-            admission,
+        Some(configured_total_service_policy(
             domain,
             interface,
             interface_generation,
@@ -2871,11 +2887,10 @@ fn application_main() -> Result<()> {
     // control-plane domain before CPU, RAM, or KVM guest construction begins.
     // The immutable inventory is retained across construction and finalized
     // only after the same domain has been committed as a running microVM.
-    let component_release_inventory = if component_service_mode {
-        let spec = isolation_preparation
+    let mut isolation_admission = if component_service_mode {
+        let configured = configured_total_policy
             .as_ref()
-            .ok_or_else(|| anyhow!("missing prepared KVM component isolation route"))?
-            .spec();
+            .ok_or_else(|| anyhow!("missing configured KVM component policy"))?;
         let (release_bytes, expected_release_key) = component_release_authority
             .as_ref()
             .ok_or_else(|| anyhow!("missing authenticated KVM component release"))?;
@@ -2884,19 +2899,65 @@ fn application_main() -> Result<()> {
             expected_release_key,
             active_component_generation
                 .ok_or_else(|| anyhow!("missing activated KVM component release"))?,
-            spec.policy_generation(),
+            configured.effective.policy_generation(),
         )
         .map_err(|error| anyhow!("KVM installed assignment plan failed: {:?}", error))?;
         plan.assign_from_policy(|record| {
-            RuntimeDomainAssignment::new(record.package_id, spec.domain())
+            RuntimeDomainAssignment::new(record.package_id, configured.identity.domain())
         })
         .map_err(|error| anyhow!("KVM runtime assignment policy failed: {:?}", error))?;
-        Some(
-            plan.seal()
-                .map_err(|error| anyhow!("KVM release inventory sealing failed: {:?}", error))?,
-        )
+        let release = plan
+            .seal()
+            .map_err(|error| anyhow!("KVM release inventory sealing failed: {:?}", error))?;
+        let total = configured
+            .effective
+            .bind_release_inventory(release)
+            .map_err(|error| anyhow!("KVM boot Total admission failed: {:?}", error))?;
+        Some(KvmTotalAdmission::Release(total))
+    } else if total_service_mode {
+        let configured = configured_total_policy
+            .as_ref()
+            .ok_or_else(|| anyhow!("missing configured KVM service policy"))?;
+        Some(KvmTotalAdmission::Standalone(
+            configured
+                .effective
+                .admission_table(1)
+                .map_err(|error| anyhow!("KVM isolation admission failed: {:?}", error))?,
+        ))
     } else {
         None
+    };
+    let mut isolation_preparation = match (
+        isolation_admission.as_mut(),
+        configured_total_policy.as_ref(),
+    ) {
+        (Some(KvmTotalAdmission::Release(total)), Some(configured)) => Some(
+            total
+                .prepare_service(configured.bounds, configured.identity)
+                .map_err(|error| anyhow!("KVM release-owned preparation failed: {:?}", error))?,
+        ),
+        (Some(KvmTotalAdmission::Standalone(admission)), Some(configured)) => {
+            let admitted = configured
+                .effective
+                .admit_service(configured.bounds)
+                .map_err(|error| anyhow!("KVM configured admission failed: {:?}", error))?;
+            let spec = admitted
+                .service_spec(
+                    admission.system_generation(),
+                    configured.identity.domain(),
+                    configured.identity.interface(),
+                    configured.identity.interface_generation(),
+                    configured.identity.provider_generation(),
+                    configured.identity.class(),
+                )
+                .map_err(|error| anyhow!("KVM configured service spec failed: {:?}", error))?;
+            Some(
+                prepare_isolation_service_route(admission, spec)
+                    .map_err(|error| anyhow!("KVM isolation preparation failed: {:?}", error))?,
+            )
+        }
+        (None, None) => None,
+        _ => return Err(anyhow!("KVM Total policy/admission ownership mismatch")),
     };
     let mut component_cpu = if component_service_mode {
         let mut capabilities = CapabilitySpace::<1>::new();
@@ -3425,12 +3486,14 @@ fn application_main() -> Result<()> {
             return Err(anyhow!("KVM Total MicroVM admission was not satisfied"));
         }
         if component_service_mode {
-            let inventory = component_release_inventory
-                .as_ref()
-                .ok_or_else(|| anyhow!("missing pre-construction KVM release inventory"))?;
-            let proof = inventory.finalize(admission).map_err(|error| {
-                anyhow!("KVM release inventory finalization failed: {:?}", error)
-            })?;
+            let proof = match admission {
+                KvmTotalAdmission::Release(total) => total.finalize().map_err(|error| {
+                    anyhow!("KVM release-owned finalization failed: {:?}", error)
+                })?,
+                KvmTotalAdmission::Standalone(_) => {
+                    return Err(anyhow!("KVM component route lost release-owned admission"));
+                }
+            };
             println!(
                 "component-total-inventory|status=PASS|backend=kvm|classified={}|eligible={}|microvm={}|native_fallback={}",
                 proof.classified_domains,

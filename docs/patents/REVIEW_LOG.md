@@ -1,5 +1,18 @@
 # Patent review log
 
+## 2026-08-26 — Common live release-owned Total admission
+
+Patent review: **TRIGGERED** under the existing SystemRelease, configuration
+recovery, adaptive-isolation, Total-MicroVM, WHP, and KVM reviews. This
+increment uses conventional typed composition to make effective boot and
+recovered policy share one release-owned admission table from preparation
+through final proof, retaining existing authenticated generation digests. It
+adds no placement or scheduling heuristic, parser or signature format,
+capability grant, native fallback, VM/device protocol, DMA mechanism, or
+hardware-specific isolation mechanism. Live committed-recovery consumption
+remains unimplemented. No patent-clearance or non-infringement conclusion is
+made; independent human review remains required.
+
 ## 2026-08-26 — Recovered release-owned route preparation
 
 Patent review: **TRIGGERED** under the existing SystemRelease, configuration
