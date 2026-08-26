@@ -360,6 +360,15 @@ removed. This is bounded move-chain evidence, not general alias or region
 inference.
 
 Another independently authored Rust 2024 metadata-only probe against the same
+exact toolchain and commit accepted creating a one-field mutable-reference tuple
+inside each exhaustive conditional arm and assigning that field into an outer
+alias before return. A separate invocation rejected a live competing borrow of
+the shared parameter owner with E0499. A third probe rejected with E0515 a later
+local-backed tuple return after those branch-local slots ended. Temporary sources
+and metadata were removed. This is exact scoped-origin evidence, not general
+lexical-region or alias inference.
+
+Another independently authored Rust 2024 metadata-only probe against the same
 exact toolchain and commit accepted assigning a parameter-backed tuple field
 into an existing mutable-reference local and returning that local. The same
 probe accepted an inferred alias initially moved from a local-backed tuple field,

@@ -4031,6 +4031,14 @@ origin. Focused tests and ORACLE-0002 cover both accepted forms, conservative
 controls, live E0499 conflict, and post-last-use restoration. Both hosts remain
 at 987 tests.
 
+Conditional action blocks now support a branch-local typed tuple whose exact
+field is assigned into an outer root alias. Projected entries are compacted to
+the pre-branch local-index prefix before fallthrough states intersect, so a
+later local reusing the same bounded slot cannot observe stale branch provenance.
+Focused state, direct, caller, and stale-slot tests plus ORACLE-0002 cover the
+accepted equal-origin transfer, E0499 live conflict, E0515 local-backed return,
+and post-last-use restoration. Both hosts remain at 987 tests.
+
 The conditional projected-reassignment milestone extends the bounded tuple-field
 loan chain across a conditional shared-reference assignment. The exact dated
 oracle rejects mutation of either conditional owner and of the field's replaced

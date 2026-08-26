@@ -1016,6 +1016,13 @@ alias fails closed. ORACLE-0002 accepts the equal-origin conditional and loop
 forms, permits owner reuse after last use, and rejects a live competing projected-
 owner borrow with E0499.
 
+Conditional action blocks may now create a branch-local typed tuple and assign
+its exact field into an outer root alias. Projected state is trimmed back to the
+pre-branch local-index prefix before fallthrough outcomes join, preventing a
+later local from inheriting stale provenance when it reuses a bounded slot.
+ORACLE-0002 accepts equal-origin branch-local transfers, rejects a live competing
+owner borrow with E0499, and rejects a later local-backed tuple return with E0515.
+
 The first modern trait-solver foundation is an explicit bounded implemented-
 goal representation. Stable trait/type/inference/placeholder identities remain
 distinct; canonicalization replaces inference identities with first-occurrence

@@ -708,6 +708,14 @@ rejects a differing incoming origin. ORACLE-0002 accepts both equal-origin forms
 accepts restoration after last use, and rejects a live projected-owner competitor
 with E0499. Windows and Arch remain at 987 tests per host.
 
+Branch-local tuple initialization now feeds exact field origins into an outer
+root alias in conditional action blocks. Before fallthrough joins, projected
+state retains only entries whose local index predates the branch; scoped entries
+cannot survive and collide with later slot reuse. ORACLE-0002 accepts equal-
+origin branch-local assignment, rejects a live competitor with E0499, and rejects
+return of a later local-backed tuple with E0515. A focused state test proves
+prefix retention, and Windows/Arch remain at 987 tests per host.
+
 Multi-field tuple literals retain a separate projected origin per field. A
 conditional reference element seeds its field only when both arms prove the
 same parameter; unequal first/second origins fail closed. Focused caller tests
