@@ -1023,6 +1023,14 @@ later local from inheriting stale provenance when it reuses a bounded slot.
 ORACLE-0002 accepts equal-origin branch-local transfers, rejects a live competing
 owner borrow with E0499, and rejects a later local-backed tuple return with E0515.
 
+A supported loop body may now create an iteration-local typed tuple from an
+outer alias reborrow and assign its field back into that alias. The one-iteration
+origin joins exactly with the zero-iteration incoming owner, while a local-backed
+iteration becomes unknown. Loop-local projected entries disappear through the
+existing incoming-state intersection. ORACLE-0002 accepts the stable form,
+rejects a live competing owner borrow with E0499, and rejects the local-backed
+iteration with E0515.
+
 The first modern trait-solver foundation is an explicit bounded implemented-
 goal representation. Stable trait/type/inference/placeholder identities remain
 distinct; canonicalization replaces inference identities with first-occurrence

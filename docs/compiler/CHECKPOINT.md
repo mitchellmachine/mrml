@@ -716,6 +716,14 @@ origin branch-local assignment, rejects a live competitor with E0499, and reject
 return of a later local-backed tuple with E0515. A focused state test proves
 prefix retention, and Windows/Arch remain at 987 tests per host.
 
+The loop-local projected-origin slice creates an iteration-local tuple from an
+outer alias identity reborrow, assigns its field back into the alias, and joins
+that one-iteration origin with the zero-iteration incoming state. A local-backed
+iteration clears the result; loop-local projected entries cannot survive the
+incoming-state intersection. ORACLE-0002 accepts the stable form, rejects a live
+competitor with E0499, and rejects local-backed escape with E0515. Windows and
+Arch remain at 987 tests per host.
+
 Multi-field tuple literals retain a separate projected origin per field. A
 conditional reference element seeds its field only when both arms prove the
 same parameter; unequal first/second origins fail closed. Focused caller tests

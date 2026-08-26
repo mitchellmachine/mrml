@@ -4039,6 +4039,14 @@ Focused state, direct, caller, and stale-slot tests plus ORACLE-0002 cover the
 accepted equal-origin transfer, E0499 live conflict, E0515 local-backed return,
 and post-last-use restoration. Both hosts remain at 987 tests.
 
+A supported loop may now form an iteration-local typed tuple from an identity
+reborrow of an outer alias and assign the field back into that alias. Its exact
+origin survives only when it equals the zero-iteration incoming origin; a local-
+backed tuple makes the result unavailable. The loop intersection also removes
+the scoped projected entry. Focused caller/control tests and ORACLE-0002 cover
+the accepted form, E0499 live conflict, E0515 local-backed escape, and restoration
+after last use. Both hosts remain at 987 tests.
+
 The conditional projected-reassignment milestone extends the bounded tuple-field
 loan chain across a conditional shared-reference assignment. The exact dated
 oracle rejects mutation of either conditional owner and of the field's replaced

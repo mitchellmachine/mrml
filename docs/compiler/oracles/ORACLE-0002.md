@@ -369,6 +369,15 @@ and metadata were removed. This is exact scoped-origin evidence, not general
 lexical-region or alias inference.
 
 Another independently authored Rust 2024 metadata-only probe against the same
+exact toolchain and commit accepted creating an iteration-local one-field tuple
+from an identity reborrow of an outer mutable-reference alias and assigning that
+field back into the alias in a `while`. The caller could reuse the owner after
+the returned child's last use. Separate invocations rejected a live competing
+owner borrow with E0499 and a loop-local tuple borrowing function-local storage
+with E0515. Temporary sources and metadata were removed. This is one stable
+zero/one-iteration origin join, not general loop or region inference.
+
+Another independently authored Rust 2024 metadata-only probe against the same
 exact toolchain and commit accepted assigning a parameter-backed tuple field
 into an existing mutable-reference local and returning that local. The same
 probe accepted an inferred alias initially moved from a local-backed tuple field,
