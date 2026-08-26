@@ -1424,23 +1424,25 @@ alone or together. Its distinct AT&T grammar parses `%` registers, `$`
 immediates, source-first moves, `disp(base,index,scale)` addresses including an
 omitted base, and indirect `*` jumps for the supported instruction set;
 cross-syntax inputs fail closed.
-The object layer now has a separate typed single-relocation primitive. It checks
-the four-byte patch range and undefined symbol, emits ELF64 `.rela.text` with
-`R_X86_64_PLT32` and addend `-4`, or emits COFF
-`IMAGE_REL_AMD64_REL32`, and leaves existing relocation-free objects unchanged.
-The naked compiler now returns one validated direct `jmp symbol` as code plus a
-typed external-branch record. Ordinary `MachineCode` compilation rejects that
-unresolved result; only the source-to-object pipeline consumes it immediately.
-Multiple external branches and invalid symbol identifiers fail closed in both
-Intel and AT&T modes.
+The object layer now has a typed single-relocation primitive. It checks the
+four-byte patch range and undefined symbol, distinguishes branch from data,
+emits ELF64 `.rela.text` with `R_X86_64_PLT32` or `R_X86_64_PC32` and addend
+`-4`, or emits COFF `IMAGE_REL_AMD64_REL32`, and leaves existing
+relocation-free objects unchanged. The naked compiler returns one validated
+direct `jmp symbol` or RIP-relative symbolic memory operand as code plus a typed
+external-relocation record. Intel `[rip + symbol]` and AT&T `symbol(%rip)` work
+across the supported loads, stores, indirect jumps, and system-memory forms.
+Ordinary `MachineCode` compilation rejects unresolved output; only the
+source-to-object pipeline consumes it immediately. Multiple unresolved
+references and invalid symbol identifiers fail closed in both syntax modes.
 Focused tests compare the complete machine-code slice to prove that no prologue
 or epilogue is inserted and reject unsupported safety, ABI, signature,
-instruction, register, immediate, label, and fallthrough cases. RIP-relative
-and symbolic memory operands,
-additional architectures, and general inline assembly remain fail-closed.
-Windows gnullvm and native Arch Linux WSL each pass 635 library tests,
+instruction, register, immediate, label, relocation, and fallthrough cases.
+Symbol addends, multiple relocations, additional architectures, and general
+inline assembly remain fail-closed.
+Windows gnullvm and native Arch Linux WSL each pass 636 library tests,
 one component-interface probe, 10 conformance tests, and 335 replacement tests:
-981 compiler tests per host.
+982 compiler tests per host.
 
 The premise-bearing rigid-normalization milestone proves the selected generic
 implementation's instantiated trait and projection predicates before exposing

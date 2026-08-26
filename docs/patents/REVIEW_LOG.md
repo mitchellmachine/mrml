@@ -5905,3 +5905,17 @@ RIP-relative and symbolic memory operands remain absent. Broader assembly
 support and compiler completion remain partial; this technical screen does not
 establish clearance or infringement and does not replace independent human dual
 review.
+
+# 2026-08-26 — Typed RIP-relative naked memory relocations
+
+**Result: NOT_TRIGGERED after the RIP-relative relocation review.** This
+increment applies the published x86-64 RIP-relative disp32 encoding to one
+validated external memory symbol and distinguishes the published ELF64
+`R_X86_64_PC32` data relocation from `R_X86_64_PLT32` branches; COFF uses its
+published `IMAGE_REL_AMD64_REL32` record for both. Fixed-capacity parsing,
+single-relocation admission, checked offsets, and exact object tests introduce
+no novel assembler, linker, relocation, optimization, instruction-selection,
+or code-generation algorithm. Symbol addends, multiple relocations, and linking
+remain absent. Broader assembly support and compiler completion remain partial;
+this technical screen does not establish clearance or infringement and does not
+replace independent human dual review.
