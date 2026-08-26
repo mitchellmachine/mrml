@@ -35310,6 +35310,36 @@ mod tests {
     }
 
     #[test]
+    fn runtime_function_return_outlives_follow_shared_call_arguments() {
+        fn analyze(source: &str) -> Result<usize, CodegenError> {
+            let module = Parser::new(source).parse_module::<1, 8>().unwrap();
+            let Some(Item::Function(function)) = module.items()[0] else {
+                panic!("expected function")
+            };
+            let body = function.parse_body::<8>().unwrap();
+            let mut facts = RuntimeBodyFacts::EMPTY;
+            preanalyze_runtime_body_declarations::<_, 8, 24>(
+                &function,
+                &MutableReferenceCallResolver,
+                &body,
+                "&u16",
+                function.body_expression_span.start,
+                &mut facts,
+            )
+        }
+
+        analyze("fn value(input: &u16) -> &u16 { shared_identity(input) }").unwrap();
+        assert_eq!(
+            analyze(
+                "fn value(input: &u16) -> &u16 { let local = *input; shared_identity(&local) }"
+            )
+            .unwrap_err()
+            .kind,
+            CodegenErrorKind::RuntimeReferenceOutlivesFunction
+        );
+    }
+
+    #[test]
     fn runtime_function_return_outlives_follow_shared_children_of_call_results() {
         fn analyze(source: &str) -> Result<usize, CodegenError> {
             let module = Parser::new(source).parse_module::<1, 8>().unwrap();
