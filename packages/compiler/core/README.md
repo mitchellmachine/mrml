@@ -3829,6 +3829,19 @@ library tests, one component-interface probe, 10 conformance tests, and 335
 replacement tests: 985 compiler tests per host. This is not general loop fixed-
 point, path-sensitive, alias, or region analysis.
 
+The loop-local callee-origin milestone extends that stable transfer with bounded
+local reference declarations before later direct assignments. Per-iteration
+names, origins, and mutability are discarded before the pre-loop locals join the
+zero-iteration state. Same-parameter origins remain exact, while local-backed or
+changed origins become conservative; mixed controls and unsupported operations
+still fail closed. The exact dated oracle accepted the loop-local alias and
+post-last-use owner reuse and rejected a live competing mutable owner borrow with
+E0499. Windows gnullvm and native Arch Linux WSL each pass 639 library tests,
+one component-interface probe, 10 conformance tests, and 335 replacement tests:
+985 compiler tests per host. One concurrent Arch run exited during replacements
+without a stable failure summary; an immediate complete rerun passed 985. This
+is not a general loop fixed point, path-sensitive analysis, or region solver.
+
 The conditional projected-reassignment milestone extends the bounded tuple-field
 loan chain across a conditional shared-reference assignment. The exact dated
 oracle rejects mutation of either conditional owner and of the field's replaced

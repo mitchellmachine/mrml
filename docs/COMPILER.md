@@ -840,6 +840,14 @@ assignments with control, returns, locals, expressions, nested loops, or other
 unsupported operations fail conservative. This exact stable-origin slice is not
 general loop fixed-point, path-sensitive, alias, or region analysis.
 
+That stable loop transfer now also permits fixed-capacity loop-local reference
+aliases before later direct assignments. Names, origins, and mutability are
+scoped to one modeled iteration and discarded before only the pre-loop locals
+are joined with the zero-iteration state. Same-parameter origins remain exact;
+local-backed or changed origins become unknown. Mixed controls and unsupported
+operations still fail conservative. This is scoped loop-local provenance, not a
+general loop fixed point or region solver.
+
 The first modern trait-solver foundation is an explicit bounded implemented-
 goal representation. Stable trait/type/inference/placeholder identities remain
 distinct; canonicalization replaces inference identities with first-occurrence

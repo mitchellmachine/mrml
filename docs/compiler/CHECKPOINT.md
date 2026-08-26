@@ -543,6 +543,19 @@ pass 639 library tests, one component-interface probe, 10 conformance tests, and
 335 replacement tests: 985 compiler tests per host. General loop fixed-point,
 path-sensitive, alias, and region analysis remain unsupported.
 
+The loop-local callee-origin milestone permits bounded local reference
+declarations in that assignment-only transfer. Per-iteration name/origin/
+mutability entries are discarded before joining only the pre-loop locals with
+the zero-iteration state. Same-parameter origins remain exact; local-backed or
+changed origins become unknown, and mixed controls remain conservative.
+ORACLE-0002 accepted the loop-local alias and post-last-use owner reuse and
+rejected a live competing mutable owner borrow with E0499. Windows gnullvm and
+native Arch Linux WSL each pass 639 library tests, one component-interface
+probe, 10 conformance tests, and 335 replacement tests: 985 compiler tests per
+host. One concurrent Arch invocation exited during replacement execution
+without a stable failing summary; the immediate full rerun passed 985. General
+loop fixed-point, path-sensitive, and region analysis remain unsupported.
+
 This is an initial typed body-fact slice, not a complete typed body IR and not a
 borrow checker. Unsupported aggregate-leaf call arguments, other aggregate-
 argument and call-derived fat-reference initializers, unsupported compound array

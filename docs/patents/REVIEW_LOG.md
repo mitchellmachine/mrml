@@ -1,5 +1,18 @@
 # Patent review log
 
+## 2026-08-26 — Loop-local callee reference-origin state
+
+Patent review: **NOT_TRIGGERED** for this bounded compiler-analysis increment.
+It conventionally appends checked-capacity local aliases to fixed arrays for one
+modeled loop iteration, applies existing direct assignment transfer, discards
+iteration-scoped entries, and equality-joins only existing pre-loop parameter
+origins with the zero-iteration state. Unsupported shapes fail conservative. It
+adds no novel fixed-point or alias-analysis algorithm, region solver,
+optimization, runtime enforcement, authority model, or external dependency.
+Broader compiler completion remains partial; this technical screen establishes
+neither clearance nor infringement and does not replace independent human dual
+review.
+
 ## 2026-08-26 — Branch-local callee return-origin merge
 
 Patent review: **NOT_TRIGGERED** for this bounded compiler-analysis increment.

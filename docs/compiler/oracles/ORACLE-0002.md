@@ -173,6 +173,15 @@ owner borrow while that child remained live with E0499. This is black-box
 evidence for that exact branch-local early-return shape, not general control-flow
 or region inference. Temporary sources and metadata were removed.
 
+An independently authored Rust 2024 metadata-only probe against this exact
+toolchain and commit accepted a mutable-reference forwarding callee whose
+`while` body created an iteration-local `&mut` alias and assigned it into the
+returned outer local. The caller could reuse the owner after the returned
+child's last use. A separate invocation rejected a competing mutable owner
+borrow while that child remained live with E0499. This is black-box evidence for
+that exact loop-local alias shape, not general loop fixed-point, path-sensitive,
+or region analysis. Temporary sources and metadata were removed.
+
 An independently authored Rust 2024 metadata-only probe against the same exact
 toolchain and commit compiled three explicit RAX forms whose output place was
 `*target` for `target: &mut u64`: `lateout`, same-place `inout`, and a distinct-
