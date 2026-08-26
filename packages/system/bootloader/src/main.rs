@@ -20,12 +20,14 @@ use mrml_kernel::KernelScheduler;
 #[cfg(all(feature = "smp-ipi-probe", not(feature = "smp-periodic-balance-probe")))]
 use mrml_kernel::PeriodicBalancer;
 #[cfg(any(
+    feature = "application-probe",
     feature = "user-probe",
     feature = "service-probe",
     feature = "smp-service-migration-probe"
 ))]
 use mrml_kernel::SyscallRequest;
 #[cfg(any(
+    feature = "application-probe",
     feature = "user-probe",
     feature = "service-probe",
     feature = "preemption-probe",
@@ -60,6 +62,7 @@ use mrml_kernel::arch::x86_64::TimerDivide;
 ))]
 use mrml_kernel::arch::x86_64::TrapDisposition;
 #[cfg(any(
+    feature = "application-probe",
     feature = "user-probe",
     feature = "service-probe",
     feature = "preemption-probe",
@@ -70,6 +73,7 @@ use mrml_kernel::arch::x86_64::UserContext;
 #[cfg(any(feature = "user-probe", feature = "preemption-probe"))]
 use mrml_kernel::arch::x86_64::enter_user_context;
 #[cfg(any(
+    feature = "application-probe",
     feature = "service-probe",
     feature = "service-preemption-probe",
     feature = "smp-service-migration-probe"
@@ -94,13 +98,23 @@ use mrml_kernel::arch::x86_64::{
     feature = "pci-configuration-probe"
 ))]
 use mrml_kernel::arch::x86_64::{NativeX86VirtualBlockPortIo, X86VirtualBlockGuestQueueTransport};
+#[cfg(any(
+    feature = "application-probe",
+    feature = "uefi-service-preemption-probe"
+))]
+use mrml_kernel::arch::x86_64::PreallocatedPageTableStore;
+#[cfg(feature = "application-probe")]
+use mrml_kernel::arch::x86_64::ApplicationAddressSpace;
 #[cfg(feature = "uefi-service-preemption-probe")]
-use mrml_kernel::arch::x86_64::{PreallocatedPageTableStore, ServiceAddressSpace};
+use mrml_kernel::arch::x86_64::ServiceAddressSpace;
 #[cfg(feature = "component-service-probe")]
 use mrml_kernel::{
     AccountedServiceSupervisor, AccountedTaskRuntime, MemoryPoolId, MemoryPoolTable,
 };
-#[cfg(feature = "uefi-service-preemption-probe")]
+#[cfg(any(
+    feature = "application-probe",
+    feature = "uefi-service-preemption-probe"
+))]
 use mrml_kernel::{ArtifactKind, SignedArtifact, TrustRoot};
 #[cfg(feature = "service-probe")]
 use mrml_kernel::{
@@ -122,6 +136,7 @@ use mrml_kernel::{
     not(feature = "timer-probe"),
     not(feature = "preemption-probe"),
     not(feature = "service-preemption-probe"),
+    not(feature = "application-probe"),
     not(feature = "user-probe"),
     not(feature = "service-probe")
 ))]
@@ -144,6 +159,7 @@ use mrml_kernel::{
 ))]
 use mrml_kernel::{PAGE_SIZE, VIRTUAL_BLOCK_CONFIGURATION_BYTES, VirtualBlockGuestDriver};
 #[cfg(any(
+    feature = "application-probe",
     feature = "timer-probe",
     feature = "preemption-probe",
     feature = "service-preemption-probe",
@@ -241,6 +257,8 @@ const RESCHEDULE_VECTOR: u8 = 33;
 const USER_PROBE_PORT: u16 = 0x4d56;
 #[cfg(feature = "user-probe")]
 const USER_CALL_PROBE_PORT: u16 = 0x4d57;
+#[cfg(feature = "application-probe")]
+const APPLICATION_PROBE_PORT: u16 = 0x4d65;
 #[cfg(feature = "service-probe")]
 const SERVICE_PROBE_PORT: u16 = 0x4d58;
 #[cfg(feature = "service-probe")]
@@ -417,6 +435,8 @@ static mut UEFI_SERVICE_RECOVERED: bool = false;
 static mut USER_RUNTIME: Option<TaskRuntime<2, 1>> = None;
 #[cfg(feature = "user-probe")]
 static mut USER_ENDPOINT: Option<Endpoint> = None;
+#[cfg(feature = "application-probe")]
+static mut APPLICATION_RUNTIME: Option<TaskRuntime<1, 0>> = None;
 #[cfg(all(feature = "service-probe", not(feature = "component-service-probe")))]
 static mut SERVICE_RUNTIME: Option<TaskRuntime<3, 9>> = None;
 #[cfg(feature = "component-service-probe")]
@@ -772,7 +792,11 @@ unsafe extern "C" {
     #[cfg(feature = "user-probe")]
     fn mrml_user_call() -> !;
     #[cfg(all(
-        any(feature = "service-probe", feature = "smp-service-migration-probe"),
+        any(
+            feature = "application-probe",
+            feature = "service-probe",
+            feature = "smp-service-migration-probe"
+        ),
         not(feature = "user-probe")
     ))]
     fn mrml_user_call() -> !;
@@ -781,6 +805,37 @@ unsafe extern "C" {
 
 #[unsafe(no_mangle)]
 unsafe extern "sysv64" fn mrml_user_call_dispatch(frame: *mut UserCallFrame) {
+    #[cfg(feature = "application-probe")]
+    unsafe {
+        let frame = frame.as_mut().unwrap_or_else(|| halt());
+        if frame.request().unwrap_or_else(|_| halt()) != SyscallRequest::Exit {
+            halt();
+        }
+        let runtime = (*core::ptr::addr_of_mut!(APPLICATION_RUNTIME))
+            .as_mut()
+            .unwrap_or_else(|| halt());
+        let current = runtime.current().unwrap_or_else(|| halt());
+        let root = runtime
+            .context(current)
+            .unwrap_or_else(|_| halt())
+            .page_table();
+        *runtime.context_mut(current).unwrap_or_else(|_| halt()) =
+            UserContext::from_user_call(root, frame).unwrap_or_else(|_| halt());
+        if ActivePageTables::current().unwrap_or_else(|_| halt()).root() != root {
+            halt();
+        }
+        let terminated = runtime.terminate_current().unwrap_or_else(|_| halt());
+        if terminated.task != current || terminated.next != ScheduleOutcome::Idle {
+            halt();
+        }
+        asm!(
+            "out dx, eax",
+            in("dx") APPLICATION_PROBE_PORT,
+            in("eax") 1u32,
+            options(nomem, nostack)
+        );
+        halt();
+    }
     #[cfg(feature = "user-probe")]
     unsafe {
         let frame = match frame.as_mut() {
@@ -1311,6 +1366,7 @@ unsafe extern "sysv64" fn mrml_user_call_dispatch(frame: *mut UserCallFrame) {
         halt()
     }
     #[cfg(not(any(
+        feature = "application-probe",
         feature = "user-probe",
         feature = "service-probe",
         feature = "smp-service-migration-probe"
@@ -3419,6 +3475,53 @@ unsafe fn run_kernel(bytes: *const u8, length: usize) -> ! {
         };
         enter_user_probe_context(&*context_pointer);
     }
+    #[cfg(feature = "application-probe")]
+    unsafe {
+        let application = handoff.application().unwrap_or_else(|| halt());
+        let artifact_length =
+            usize::try_from(application.artifact_length()).unwrap_or_else(|_| halt());
+        let artifact = core::slice::from_raw_parts(
+            application.artifact_physical().get() as *const u8,
+            artifact_length,
+        );
+        let signed = SignedArtifact::decode(artifact).unwrap_or_else(|_| halt());
+        let verified = signed
+            .verify_executable(
+                &TrustRoot::new(
+                    ArtifactKind::ApplicationImage,
+                    embedded_application_root().unwrap_or_else(|| halt()),
+                    embedded_application_minimum_version().unwrap_or_else(|| halt()),
+                ),
+                ArtifactKind::ApplicationImage,
+            )
+            .unwrap_or_else(|_| halt());
+        let plan = ApplicationAddressSpace::<40>::from_handoff(application, &verified, &[])
+            .unwrap_or_else(|_| halt());
+        let store = PreallocatedPageTableStore::new(
+            application.table_physical(),
+            application.table_pages(),
+        )
+        .unwrap_or_else(|_| halt());
+        let tables = plan
+            .build_page_tables_with_current_kernel(store)
+            .unwrap_or_else(|_| halt());
+        let context = UserContext::new(tables.root(), plan.entry(), plan.stack_top())
+            .unwrap_or_else(|_| halt());
+        let mut runtime = TaskRuntime::<1, 0>::new(1_000, 1).unwrap_or_else(|_| halt());
+        let task = runtime
+            .create(Priority::NORMAL, context)
+            .unwrap_or_else(|_| halt());
+        if !matches!(runtime.start(), ScheduleOutcome::Switch { from: None, to } if to == task) {
+            halt();
+        }
+        core::ptr::addr_of_mut!(APPLICATION_RUNTIME).write(Some(runtime));
+        let context = (*core::ptr::addr_of!(APPLICATION_RUNTIME))
+            .as_ref()
+            .and_then(|runtime| runtime.context(task).ok())
+            .map(|context| context as *const UserContext)
+            .unwrap_or_else(|| halt());
+        enter_application_probe_context(&*context);
+    }
     #[cfg(feature = "service-preemption-probe")]
     unsafe {
         asm!("cli", options(nomem, nostack));
@@ -3614,6 +3717,7 @@ unsafe fn run_kernel(bytes: *const u8, length: usize) -> ! {
         not(feature = "timer-probe"),
         not(feature = "preemption-probe"),
         not(feature = "service-preemption-probe"),
+        not(feature = "application-probe"),
         not(feature = "user-probe"),
         not(feature = "service-probe")
     ))]
@@ -3726,7 +3830,31 @@ fn embedded_service_root() -> Option<[u8; 64]> {
     Some(digest)
 }
 
-#[cfg(feature = "uefi-service-preemption-probe")]
+#[cfg(feature = "application-probe")]
+fn embedded_application_root() -> Option<[u8; 64]> {
+    decode_digest(option_env!("MRML_APPLICATION_ROOT_DIGEST_HEX")?.as_bytes())
+}
+
+#[cfg(feature = "application-probe")]
+fn decode_digest(encoded: &[u8]) -> Option<[u8; 64]> {
+    if encoded.len() != 128 {
+        return None;
+    }
+    let mut digest = [0u8; 64];
+    let mut index = 0usize;
+    while index < digest.len() {
+        digest[index] = hex_nibble(encoded[index * 2])?
+            .checked_mul(16)?
+            .checked_add(hex_nibble(encoded[index * 2 + 1])?)?;
+        index += 1;
+    }
+    Some(digest)
+}
+
+#[cfg(any(
+    feature = "application-probe",
+    feature = "uefi-service-preemption-probe"
+))]
 fn hex_nibble(byte: u8) -> Option<u8> {
     match byte {
         b'0'..=b'9' => Some(byte - b'0'),
@@ -3734,6 +3862,26 @@ fn hex_nibble(byte: u8) -> Option<u8> {
         b'A'..=b'F' => Some(byte - b'A' + 10),
         _ => None,
     }
+}
+
+#[cfg(feature = "application-probe")]
+fn embedded_application_minimum_version() -> Option<u64> {
+    parse_nonzero_version(option_env!("MRML_APPLICATION_MIN_VERSION")?.as_bytes())
+}
+
+#[cfg(feature = "application-probe")]
+fn parse_nonzero_version(bytes: &[u8]) -> Option<u64> {
+    if bytes.is_empty() || bytes.len() > 20 {
+        return None;
+    }
+    let mut value = 0u64;
+    for byte in bytes {
+        if !byte.is_ascii_digit() {
+            return None;
+        }
+        value = value.checked_mul(10)?.checked_add((byte - b'0') as u64)?;
+    }
+    (value != 0).then_some(value)
 }
 
 #[cfg(feature = "uefi-service-preemption-probe")]
@@ -3755,6 +3903,15 @@ fn embedded_service_minimum_version() -> Option<u64> {
 #[cfg(feature = "uefi-service-preemption-probe")]
 fn uefi_service_trace(stage: u8) {
     unsafe { asm!("out dx, al", in("dx") 0xe9u16, in("al") stage, options(nomem, nostack)) };
+}
+
+#[cfg(feature = "application-probe")]
+unsafe fn enter_application_probe_context(context: &UserContext) -> ! {
+    let transition_stack = unsafe {
+        CpuDescriptorState::entry_stack_top_from(core::ptr::addr_of!(CPU0_DESCRIPTORS))
+            .unwrap_or_else(|_| halt())
+    };
+    unsafe { enter_user_context_on_stack(context, transition_stack) }
 }
 
 #[cfg(feature = "user-probe")]
@@ -4650,6 +4807,7 @@ unsafe fn install_descriptor_state(
         halt();
     }
     #[cfg(any(
+        feature = "application-probe",
         feature = "user-probe",
         feature = "service-probe",
         feature = "smp-service-migration-probe"

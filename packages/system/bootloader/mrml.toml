@@ -17,6 +17,9 @@ environment = "uefi"
 name = "ap-startup-trace"
 
 [[feature]]
+name = "application-probe"
+
+[[feature]]
 name = "block-guest-driver-probe"
 
 [[feature]]
@@ -131,6 +134,11 @@ name = "vmx_root_probe"
 targets = ["UEFI"]
 
 [[feature_profile]]
+features = ["application-probe"]
+name = "application_probe"
+targets = ["UEFI"]
+
+[[feature_profile]]
 features = ["pci-configuration-probe"]
 name = "pci_configuration_probe"
 targets = ["UEFI"]
@@ -169,6 +177,12 @@ targets = ["UEFI"]
 name = "MRML_EMULATED_TSC_HZ"
 
 [[absent_compile_env]]
+name = "MRML_APPLICATION_MIN_VERSION"
+
+[[absent_compile_env]]
+name = "MRML_APPLICATION_ROOT_DIGEST_HEX"
+
+[[absent_compile_env]]
 name = "MRML_KERNEL_MIN_VERSION"
 
 [[absent_compile_env]]
@@ -180,6 +194,18 @@ name = "MRML_SERVICE_ROOT_DIGEST_HEX"
 [[build_input]]
 kind = "compile-env"
 line = 2372
+path = "packages/system/bootloader/src/main.rs"
+reason = "reviewed repository build input"
+
+[[build_input]]
+kind = "compile-env"
+line = 3775
+path = "packages/system/bootloader/src/main.rs"
+reason = "reviewed repository build input"
+
+[[build_input]]
+kind = "compile-env"
+line = 3804
 path = "packages/system/bootloader/src/main.rs"
 reason = "reviewed repository build input"
 
