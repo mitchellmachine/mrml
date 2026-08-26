@@ -663,8 +663,7 @@ capacity overflow fail closed. The first transfer integration now accepts one
 exact straight-line numeric tuple-field assignment on a mutable local. The RHS
 must match the projected field type; assignment replaces or clears the field
 generation, and return inference consults the exact projected state. Existing
-dereference/subslice local-origin behavior is unchanged. Conditional and loop
-projected writes still fail closed until their projected joins are connected.
+dereference/subslice local-origin behavior is unchanged.
 ORACLE-0002 accepts a field initialized from one mutable-reference parameter and
 replaced by a second, accepts owner reuse after the returned child's last use,
 and rejects a live competing borrow of the second owner with E0499. It rejects
@@ -690,6 +689,16 @@ Changed or unavailable origins disappear. ORACLE-0002 accepts the exact pre-loop
 replacement and loop self-reborrow, accepts second-owner reuse after last use,
 and rejects a live competitor with E0499. Windows and Arch remain at 987 tests
 per host; this is not general loop fixed-point or region inference.
+
+Exact typed tuple-literal locals now seed projected origins at declaration.
+Reference elements must match both their declared field type and the callee
+return type, and only parameter-backed elements record evidence. Scalar and
+local-backed fields remain non-origin state; invalid shapes and capacity
+exhaustion fail closed. Top-level, conditional-action, conditional-loop, and
+loop-body local paths share this transfer. ORACLE-0002 accepts direct initialized
+field return and a loop identity-reborrow from that field, accepts owner reuse
+after last use, and rejects a live competing borrow with E0499. Windows and Arch
+remain at 987 tests per host.
 
 Inferred locals now become reassignment-origin eligible only when their
 initializer already proved a compatible parameter origin. This preserves valid

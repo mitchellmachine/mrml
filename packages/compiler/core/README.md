@@ -3951,8 +3951,8 @@ replaces or clears that field's generation, and uses the exact field origin for
 return inference while preserving root-origin handling for dereferences and
 subslice paths. Focused tests cover replacement from the first parameter to the
 second, local-backed clearing, invalid fields, a live competing borrow, and
-post-last-use owner reuse. Conditional and loop projected writes remain fail-
-closed. The exact dated oracle accepts the two-parameter replacement and rejects
+post-last-use owner reuse. The exact dated oracle accepts the two-parameter
+replacement and rejects
 the live competitor with E0499; it rejects a local-backed initialization followed
 by parameter replacement with E0515, so that shape remains outside MRML's
 accepted subset. Windows and Arch each pass 641 library, 1 component, 10
@@ -3977,6 +3977,17 @@ live competing borrow and accept owner reuse after the returned child's last
 use. ORACLE-0002 accepts the same exact shape and rejects the competitor with
 E0499. Both hosts remain at 987 tests; arbitrary loop fixed points remain
 unsupported.
+
+Exact typed tuple literals now seed the same projected state when a local is
+declared. Every reference field is checked against the declared tuple element
+and return type; only a parameter-backed element records an origin. Scalar and
+local-backed fields remain without origin evidence, and invalid or over-capacity
+initializers fail closed. The transfer is shared by top-level, conditional-
+action, conditional-loop, and loop-body locals. Focused tests cover direct
+return, local-backed rejection, stable loop identity reborrow, caller conflict,
+and post-last-use restoration. The pinned oracle accepts those exact parameter-
+backed shapes and rejects the live competitor with E0499. Both hosts remain at
+987 tests.
 
 The conditional projected-reassignment milestone extends the bounded tuple-field
 loan chain across a conditional shared-reference assignment. The exact dated

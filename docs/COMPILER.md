@@ -933,16 +933,15 @@ projected local assignment transfer. Each entry keys a stable local index and
 validated nonempty projection, retains the canonical final type, parameter
 origin, and monotonic generation, and consumes fixed capacity. Branch
 intersection retains only identical typed origins and the maximum observed
-generation. The state is not yet wired into callee transfer, so projected local
-assignments remain unsupported rather than falling back to scalar state.
+generation. Assignment, conditional, stable-loop, and exact tuple-literal
+initializer transfers are connected only through the bounded rules below.
 
 The first transfer integration admits one exact straight-line numeric tuple-
 field assignment on a mutable local. It validates the assignment RHS against
 the field type, records or replaces the field's parameter origin, clears a
 previous field origin when the RHS is local-backed, and consults that exact
 field state on return. Non-tuple projections retain their established root-
-origin behavior. Conditional and loop projected writes remain unsupported
-until their bounded state joins are connected. ORACLE-0002 accepts replacing a
+origin behavior. ORACLE-0002 accepts replacing a
 field initialized from one mutable-reference parameter with a second parameter,
 accepts owner reuse after the returned child's last use, and rejects a competing
 borrow of the second parameter while the child remains live with E0499. It
@@ -966,6 +965,16 @@ unclassified iteration origin therefore fails closed. ORACLE-0002 accepts the
 exact pre-loop replacement plus loop-carried self-reborrow, accepts owner reuse
 after last use, and rejects a live competing borrow with E0499. This is not
 general loop fixed-point or region inference.
+
+Exact typed tuple-literal initialization now seeds projected origin state before
+the local becomes visible. Each reference field is checked against its declared
+tuple element type and the function return type, and only a parameter-backed
+initializer records an origin. Scalar fields and local-backed references do not
+manufacture evidence; mismatched or over-capacity state fails closed. The same
+rule is used for top-level, conditional-action, conditional-loop, and loop-body
+locals. ORACLE-0002 accepts direct field return and a loop-carried identity
+reborrow from an initialized parameter field, accepts owner reuse after last
+use, and rejects a live competing owner borrow with E0499.
 
 The first modern trait-solver foundation is an explicit bounded implemented-
 goal representation. Stable trait/type/inference/placeholder identities remain

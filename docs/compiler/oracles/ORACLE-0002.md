@@ -321,6 +321,16 @@ mutable borrow while that child remained live with E0499. Temporary probe
 sources and metadata were removed. This records only that stable zero/one-
 iteration origin shape, not a general loop fixed point or region inference.
 
+Another independently authored Rust 2024 metadata-only probe against the same
+exact toolchain and commit accepted direct return of a one-element tuple field
+initialized from a mutable-reference parameter. It also accepted initializing
+that field from the parameter before a `while`, identity-reborrowing the field
+in the loop, and reborrowing the owner after the returned child's last use. A
+separate invocation rejected a competing mutable owner borrow while the direct
+returned child remained live with E0499. Temporary sources and metadata were
+removed. This records only exact tuple-literal parameter origins, not general
+aggregate initialization, loop fixed points, or region inference.
+
 An independently authored Rust 2024 metadata-only probe against that same exact
 toolchain and commit compiled `asm!("cmp rcx, rcx", in("rcx") value,
 options(nomem, nostack))`. This records black-box acceptance of that exact
