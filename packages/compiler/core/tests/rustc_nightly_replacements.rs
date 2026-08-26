@@ -6165,3 +6165,19 @@ fn rustc_conditional_delayed_scalar_initialization_reaches_native_objects() {
     let partial = "#[unsafe(no_mangle)] pub extern \"C\" fn probe(select: bool) -> u64 { let value: u64; if select { value = 42; } value }";
     assert!(compile(partial, ObjectFormat::Elf64).is_err());
 }
+
+#[test]
+fn rustc_primitive_delayed_initialization_reaches_native_objects() {
+    for source in [
+        "#[unsafe(no_mangle)] pub extern \"C\" fn probe(select: bool) -> i8 { let value: i8; if select { value = -1; } else { value = 42; } value }",
+        "#[unsafe(no_mangle)] pub extern \"C\" fn probe(select: bool) -> u32 { let value: u32; if select { value = 41; } else { value = 42; } value }",
+        "#[unsafe(no_mangle)] pub extern \"C\" fn probe(select: bool) -> bool { let value: bool; if select { value = true; } else { value = false; } value }",
+        "#[unsafe(no_mangle)] pub extern \"C\" fn probe(select: bool) -> char { let value: char; if select { value = 'x'; } else { value = 'y'; } value }",
+    ] {
+        assert_eq!(compile(source, ObjectFormat::Elf64), Ok(()));
+        assert_eq!(compile(source, ObjectFormat::Coff), Ok(()));
+    }
+
+    let unsupported = "#[unsafe(no_mangle)] pub extern \"C\" fn probe() -> *const u8 { let value: *const u8; value = 0 as *const u8; value }";
+    assert!(compile(unsupported, ObjectFormat::Elf64).is_err());
+}

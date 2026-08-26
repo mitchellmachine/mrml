@@ -7937,7 +7937,7 @@ fn preanalyze_runtime_local_binding<
         let ty = local
             .ty
             .and_then(|ty| runtime_type_from_text(ty.text))
-            .filter(|ty| *ty == RuntimeExpressionType::Integer(Some(crate::IntegerType::U64)))
+            .filter(|ty| runtime_type_supports_uninitialized_scalar(*ty))
             .ok_or(CodegenError {
                 kind: CodegenErrorKind::UnsupportedRuntimeType,
                 span: translate_span(body_start, local.name_span),
@@ -19015,6 +19015,15 @@ fn runtime_type_is_array(ty: RuntimeExpressionType) -> bool {
 
 fn runtime_type_is_tuple(ty: RuntimeExpressionType) -> bool {
     matches!(ty, RuntimeExpressionType::Tuple { .. })
+}
+
+fn runtime_type_supports_uninitialized_scalar(ty: RuntimeExpressionType) -> bool {
+    matches!(
+        ty,
+        RuntimeExpressionType::Integer(Some(_))
+            | RuntimeExpressionType::Bool
+            | RuntimeExpressionType::Char
+    )
 }
 
 fn runtime_local_stack_slots(ty: RuntimeExpressionType) -> usize {
@@ -30469,7 +30478,7 @@ impl<
             let local_type = local
                 .ty
                 .and_then(|ty| runtime_type_from_text(ty.text))
-                .filter(|ty| *ty == RuntimeExpressionType::Integer(Some(crate::IntegerType::U64)))
+                .filter(|ty| runtime_type_supports_uninitialized_scalar(*ty))
                 .ok_or(CodegenError {
                     kind: CodegenErrorKind::UnsupportedRuntimeType,
                     span: translate_span(body_start, local.name_span),
