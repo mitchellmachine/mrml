@@ -50,7 +50,8 @@ const evaluation, control flow, and security metadata continue to fail closed.
 The implemented bootstrap grammar currently recognizes module-level `fn`, `const fn`,
 typed `const`, immutable typed `static`, marker `trait Name {}`, and empty exact
 `impl Trait for Type {}` items, optional `pub`, named typed parameters, optional return
-types, nested generic and tuple/array type syntax, balanced function bodies, and
+types, up to eight concrete `where Type: Trait` predicates, nested generic and
+tuple/array type syntax, balanced function bodies, and
 bounded constant initializers. Function bodies additionally parse a bounded
 prefix of typed or inferred `let` bindings, including `let mut`, followed by bounded simple
 or compound assignment statements, up to eight conditional-action
@@ -4323,6 +4324,19 @@ negative, unsafe, and default implementations, trait arguments, associated
 items, and use-site trait obligations remain unsupported. Windows gnullvm and
 native Arch Linux WSL each pass 555 library tests, one component probe, 10
 conformance tests, and 335 replacement tests: 901 compiler tests per host.
+
+The concrete source-obligation milestone retains up to eight
+`where Type: Trait` predicates on each function signature, including after an
+explicit return type. The module source environment interns their nominal type
+paths with implementation self types, resolves declared trait identities, and
+proves every function predicate through the exact implementation database
+before the production pipeline enters code generation. Unsatisfied or unknown
+traits, duplicate predicates, unsupported compound/generic bounds, unsupported
+self types, and capacity overflow fail explicitly with source spans. Generic
+parameters, inferred obligations from operations, trait arguments, associated
+items, and method dispatch remain unsupported. Windows gnullvm and native Arch
+Linux WSL each pass 560 library tests, one component probe, 10 conformance
+tests, and 335 replacement tests: 906 compiler tests per host.
 
 The projection-bearing term milestone uses a fixed 64-node arena for flat leaf
 terms and associated-type projections whose trait self/argument positions refer

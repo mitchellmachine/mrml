@@ -1137,6 +1137,18 @@ gnullvm and native Arch Linux WSL each pass 555 library tests, one component-
 interface probe, 10 conformance tests, and 335 replacement tests: 901 compiler
 tests per host.
 
+The concrete source-obligation milestone parses up to eight function-level
+`where Type: Trait` predicates and proves every predicate in the module before
+code generation. Predicate type paths share the source identity table with
+implementation self types; declared trait names resolve to stable IDs and the
+existing exact solver selects the implementation. Missing implementations,
+unknown traits, duplicate predicates, unsupported bound/type forms, and
+capacity exhaustion fail with focused source spans. Generic binders, inferred
+operation obligations, trait arguments, associated items, and dispatch remain
+unsupported. Windows gnullvm and native Arch Linux WSL each pass 560 library
+tests, one component-interface probe, 10 conformance tests, and 335 replacement
+tests: 906 compiler tests per host.
+
 The premise-bearing rigid-normalization milestone proves the selected generic
 implementation's instantiated trait and projection predicates before exposing
 its associated value. It shares the caller's 16-frame rigid proof stack and
