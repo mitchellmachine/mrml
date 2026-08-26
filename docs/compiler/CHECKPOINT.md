@@ -1554,6 +1554,16 @@ non-no-op clobber templates fail closed. Both canonical hosts pass 985 compiler
 tests. Other ABI clobber sets, explicit clobber outputs, and general clobber
 integration remain absent.
 
+Explicit RAX `lateout` now accepts one exact numeric field of a mutable tuple
+local when that field is `u64`. The compiler retains the tuple local as the
+public place identity, records the selected `TupleField` projection in the
+typed write fact, validates bounds and element type before emission, and uses
+checked stack-slot arithmetic for writeback. Immutable tuples, out-of-range
+fields, and non-`u64` fields fail closed. Windows gnullvm and native Arch Linux
+WSL each pass 639 library tests, one component-interface probe, 10 conformance
+tests, and 335 replacement tests: 985 compiler tests per host. Nested, indexed,
+and dereferenced output places and projected `inout` remain absent.
+
 The premise-bearing rigid-normalization milestone proves the selected generic
 implementation's instantiated trait and projection predicates before exposing
 its associated value. It shares the caller's 16-frame rigid proof stack and

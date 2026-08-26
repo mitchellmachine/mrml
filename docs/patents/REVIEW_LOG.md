@@ -6119,3 +6119,16 @@ discovery, layout, synchronization, rendering, presentation, migration, or
 resource-optimization mechanism. The broader surface/compositor/microVM work
 remains `TRIGGERED` as recorded above. This technical screen is not a legal
 opinion or clearance conclusion and does not replace independent human review.
+
+# 2026-08-26 — Projected inline-assembly output
+
+**Result: NOT_TRIGGERED after the projected-output review.** This increment
+extends the previously reviewed explicit RAX `lateout` path with conventional
+tuple-field selection and stack-slot writeback. Bounded numeric-field parsing,
+ordinary typed place projection, element bounds/type/mutability validation,
+checked offset arithmetic, and fail-closed rejection introduce no novel
+assembler, register-allocation, optimization, instruction-selection, or code-
+generation algorithm. Nested/indexed/dereferenced projections, projected
+`inout`, and general assembly remain absent. Broader compiler completion remains
+partial; this technical screen does not establish clearance or infringement and
+does not replace independent human dual review.
