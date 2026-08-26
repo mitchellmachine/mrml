@@ -16,6 +16,11 @@ Forwarding and redecoding the unchanged bounded envelope through the existing
 service IPC is part of the same **NOT_TRIGGERED** conventional data-transfer
 increment. It adds no new mechanism or authority.
 
+Routing the decoded envelope into the existing recovered-policy, installed-
+selection, release-binding, and admission transaction is likewise
+**NOT_TRIGGERED**. This is conventional typed composition and reuses the already
+reviewed checks without adding a placement algorithm or execution mechanism.
+
 ## 2026-08-26 — First-entry owner to installed Total admission
 
 Patent review: **NOT_TRIGGERED** for refactoring the existing recovered-policy

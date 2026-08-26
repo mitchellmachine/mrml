@@ -3169,3 +3169,12 @@ subset. Windows passes 566 kernel and 51
 configuration tests; service image, component UEFI profile, and WHP runner
 cross-build. KVM and full service-side installed Total construction are not yet
 claimed.
+
+The configuration service now has a production-shaped delivered-envelope entry
+to the existing installed Total transaction. Controlled stable recovery proves
+that the delivered record alone grants nothing: live installed selection,
+capability-authorized settings, committed recovery, authenticated release
+inventory, microVM route commitment, and strict finalization all remain required.
+Windows passes 51 configuration tests and 12 WHP runner tests; the service image
+builds. Real service invocation, full activated-release enumeration, and KVM
+parity for this increment remain **PLANNED**.

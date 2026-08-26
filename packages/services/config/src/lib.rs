@@ -17,7 +17,8 @@ use core::ops::{Deref, DerefMut};
 use mrml_crypto::Sha3_256;
 use mrml_kernel::arch::x86_64::UserContext;
 use mrml_kernel::{
-    ActivatedReleaseTotalMicrovmInventory, BootHandoff, BootIsolationOverride, Capability,
+    ActivatedReleaseTotalMicrovmInventory, BootHandoff, BootIsolationOverride,
+    BootRecoveryEnvelope, Capability,
     CapabilityError, CapabilitySpace, InstalledRecoveryBootIdentity, InstalledRecoverySataRoute,
     InstalledRecoverySource, IsolationAdmissionTable, IsolationBackendFailure, IsolationMode,
     IsolationPlacement, IsolationServiceBackend, IsolationServiceRouteError, IsolationServiceSpec,
@@ -2612,6 +2613,30 @@ impl<const GRANTS: usize, const SETTINGS: usize, const AUDIT: usize>
         )
     }
 
+    /// Service-side counterpart for the canonical record delivered exactly
+    /// once from first kernel entry. Decoding the envelope grants no authority;
+    /// all settings and recovered state are revalidated below.
+    #[allow(clippy::too_many_arguments)]
+    pub fn compose_delivered_boot_isolation_policy<A: CapabilityAuthorizer + ?Sized>(
+        &self,
+        capabilities: &A,
+        system: IsolationPolicySetting,
+        system_read: Capability,
+        component: IsolationPolicySetting,
+        component_read: Capability,
+        delivered: BootRecoveryEnvelope,
+    ) -> Result<RecoveredBootIsolationPolicy, ConfigError> {
+        self.compose_boot_isolation_policy_from_parts(
+            capabilities,
+            system,
+            system_read,
+            component,
+            component_read,
+            Some(delivered.recovery()),
+            delivered.isolation_override(),
+        )
+    }
+
     #[allow(clippy::too_many_arguments)]
     fn compose_boot_isolation_policy_from_parts<A: CapabilityAuthorizer + ?Sized>(
         &self,
@@ -2817,6 +2842,63 @@ impl<const GRANTS: usize, const SETTINGS: usize, const AUDIT: usize>
                 component,
                 component_read,
                 early,
+            )
+            .map_err(RecoveredInstalledTotalAdmissionBuildError::Policy)?;
+        let release = build_release(policy.effective().policy_generation())
+            .map_err(RecoveredInstalledTotalAdmissionBuildError::ReleaseBuilder)?;
+        let total = policy
+            .bind_release_inventory(release)
+            .map_err(RecoveredInstalledTotalAdmissionBuildError::Policy)?;
+        RecoveredInstalledTotalAdmission::bind_identity(
+            installed,
+            recovery_volume,
+            recovery_root_generation,
+            total,
+        )
+        .map_err(RecoveredInstalledTotalAdmissionBuildError::Installed)
+    }
+
+    /// Service-side installed Total join from the one-use canonical delivery.
+    /// Neither package metadata nor the envelope grants storage or placement
+    /// authority; the same live selection, capability, policy, release, and
+    /// admission checks remain mandatory.
+    #[allow(clippy::too_many_arguments)]
+    pub fn build_delivered_installed_total_boot_admission<
+        const DOMAINS: usize,
+        A: CapabilityAuthorizer + ?Sized,
+        F,
+        E,
+    >(
+        &self,
+        installed: InstalledRecoveryDeviceSelection,
+        capabilities: &A,
+        system: IsolationPolicySetting,
+        system_read: Capability,
+        component: IsolationPolicySetting,
+        component_read: Capability,
+        delivered: BootRecoveryEnvelope,
+        build_release: F,
+    ) -> Result<
+        RecoveredInstalledTotalAdmission<DOMAINS>,
+        RecoveredInstalledTotalAdmissionBuildError<E>,
+    >
+    where
+        F: FnOnce(u64) -> Result<ActivatedReleaseTotalMicrovmInventory<DOMAINS>, E>,
+    {
+        let (recovery_volume, recovery_root_generation) = validate_installed_selection_for_parts(
+            installed,
+            delivered.installed(),
+            delivered.sata_route(),
+        )
+        .map_err(RecoveredInstalledTotalAdmissionBuildError::Installed)?;
+        let policy = self
+            .compose_delivered_boot_isolation_policy(
+                capabilities,
+                system,
+                system_read,
+                component,
+                component_read,
+                delivered,
             )
             .map_err(RecoveredInstalledTotalAdmissionBuildError::Policy)?;
         let release = build_release(policy.effective().policy_generation())
@@ -10171,15 +10253,16 @@ mod tests {
                 incomplete.authorize_runtime(),
                 Err(mrml_kernel::TotalMicrovmRuntimeError::RequiredDomainMissing)
             ));
+            let delivered_envelope = mrml_kernel::BootRecoveryEnvelope::from_early(&early).unwrap();
             let mut total = recovered
-                .build_early_installed_total_boot_admission(
+                .build_delivered_installed_total_boot_admission(
                     installed_selection,
                     &capabilities,
                     system,
                     system_access,
                     component,
                     component_access,
-                    &early,
+                    delivered_envelope,
                     |policy_generation| {
                         Ok::<_, ()>(activated_configuration_release(domain, policy_generation))
                     },

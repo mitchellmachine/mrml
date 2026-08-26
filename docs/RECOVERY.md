@@ -1587,6 +1587,15 @@ dropped at the IPC boundary. Kernel passes 566 tests and the service/UEFI
 images cross-build on Windows. Complete service-side installed Total admission
 remains **PLANNED**.
 
+Recovered configuration now accepts the decoded envelope through a dedicated
+service-side installed Total builder. The record remains data: the builder still
+requires live installed selection, setting capabilities, committed authority
+epoch/root, and authenticated activated release before it can return the sole
+admission owner. The focused stable-recovery test commits its microVM route and
+seals the immutable runtime through this delivered-record path. Configuration
+passes 51 tests and WHP passes 12 focused runner tests on Windows. Real service
+invocation and installed-media evidence remain **PLANNED**.
+
 `RecoveredSystemState` now provides an atomic
 `bind_total_boot_admission` transition. It joins the committed recovered
 authorities and configuration service, exact decoded handoff epoch/override,

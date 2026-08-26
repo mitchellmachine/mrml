@@ -930,6 +930,17 @@ service image, component-profile UEFI image, and WHP runner cross-build on
 Windows. Service-side consumption of the installed/Total subsections and KVM execution for this
 increment remain **PLANNED**.
 
+The configuration service API now **PARTIALLY IMPLEMENTS** that consumption
+boundary. A delivered `BootRecoveryEnvelope` can enter the same private
+recovered-policy and installed-selection transaction used by the first-entry
+owner; it revalidates capabilities and monotonic recovery, exact installed
+identity/route, authenticated release inventory, route commitment, and final
+runtime authorization. The stable-recovery test exercises that complete
+controlled join. Configuration passes 51 tests, service image builds, and the
+WHP runner passes 12 focused tests on Windows. Invocation by the real service
+executable with installed media, complete domain enumeration, and KVM parity for
+this increment remain **PLANNED**.
+
 Committed recovery now exposes one atomic release-binding operation rather than
 requiring callers to retain an intermediate effective policy.
 `bind_total_boot_admission` revalidates both capabilities and settings, checks
