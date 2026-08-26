@@ -4896,6 +4896,22 @@ unchanged. It adds no new unification, candidate search, cache, parser, runtime
 mechanism, allocation, synchronization, protocol, cryptography, or hardware
 behavior.
 
+# 2026-08-25 — Resolved-inference coinductive cycles
+
+**Result: NOT_TRIGGERED.** This compiler-only increment reapplies an existing
+fixed substitution to bounded stored proof goals and permits the existing
+classified cycle result only after every inference variable has resolved. It
+adds no new unification, candidate search, cache, parser, runtime mechanism,
+allocation, synchronization, protocol, cryptography, or hardware behavior.
+
+# 2026-08-25 — Projection-resolved inference coinduction
+
+**Result: NOT_TRIGGERED.** This compiler-only increment lets the existing fixed
+predicate scheduler defer an unresolved classified cycle while an existing
+projection equality may refine the same bounded state. It adds no candidate
+search, new unification, cache, parser, runtime mechanism, allocation,
+synchronization, protocol, cryptography, or hardware behavior.
+
 # 2026-08-25 — Hosted supervised native Zstd service lifecycle
 
 **Result: NOT_TRIGGERED after the existing component-interface review.** This
