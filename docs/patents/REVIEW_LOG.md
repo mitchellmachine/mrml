@@ -7597,3 +7597,15 @@ terminal direct assignment, nested-loop transfer, and unstable origins remain
 fail closed. Broader compiler completion remains partial; this technical screen
 is not a clearance or infringement conclusion and does not replace independent
 human dual review.
+
+# 2026-08-26 — Terminal loop-arm alias assignment transfer
+
+**Result: NOT_TRIGGERED after the terminal loop-assignment review.** This
+increment reuses the existing bounded local-origin assignment transfer before
+resolving an already modeled terminal return. It introduces no new fixed-point
+solver, region or alias analysis, path-sensitive inference, optimization, or
+code-generation algorithm. Local-backed replacements fail closed; break,
+continue, expressions, nested-loop transfer, unstable origins, and general loop
+dataflow remain unsupported. Broader compiler completion remains partial; this
+technical screen is not a clearance or infringement conclusion and does not
+replace independent human dual review.
