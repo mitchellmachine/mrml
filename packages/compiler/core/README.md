@@ -4410,6 +4410,19 @@ gnullvm and native Arch Linux WSL each pass 581 library tests, one component
 probe, 10 conformance tests, and 335 replacement tests: 927 compiler tests per
 host.
 
+The generic source projection-premise milestone admits concrete or parameter-
+bearing equalities such as `where <T as Parent<T>>::Output = u8` after flat
+generic implementation heads. Source lowering resolves the projected trait,
+arguments, associated identity, and expected bound type, then stores the equality
+on the existing generic clause. Concrete source obligations now use the existing
+projection-aware proof environment, so selected implementations must satisfy
+both implemented-trait and projection premises before code generation. Unknown,
+duplicate, mismatched, cyclic, and over-depth premises fail closed. Nested
+projection terms and compound generic type constructors remain unsupported.
+Windows gnullvm and native Arch Linux WSL each pass 583 library tests, one
+component probe, 10 conformance tests, and 335 replacement tests: 929 compiler
+tests per host.
+
 The projection-bearing term milestone uses a fixed 64-node arena for flat leaf
 terms and associated-type projections whose trait self/argument positions refer
 only to earlier nodes. Identical nodes intern to one stable identity; invalid

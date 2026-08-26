@@ -1216,6 +1216,17 @@ unsupported. Windows gnullvm and native Arch Linux WSL each pass 581 library
 tests, one component-interface probe, 10 conformance tests, and 335 replacement
 tests: 927 compiler tests per host.
 
+The generic source projection-premise milestone parses equalities such as
+`where <T as Parent<T>>::Output = u8` after flat generic implementation heads.
+It resolves projected trait arguments, associated identity, and expected bound
+type, stores the equality on the existing generic clause, and proves selected
+implementations through the existing projection-aware environment before code
+generation. Unknown, duplicate, mismatched, cyclic, and over-depth premises fail
+closed. Nested projections and compound generic constructors remain
+unsupported. Windows gnullvm and native Arch Linux WSL each pass 583 library
+tests, one component-interface probe, 10 conformance tests, and 335 replacement
+tests: 929 compiler tests per host.
+
 The premise-bearing rigid-normalization milestone proves the selected generic
 implementation's instantiated trait and projection predicates before exposing
 its associated value. It shares the caller's 16-frame rigid proof stack and

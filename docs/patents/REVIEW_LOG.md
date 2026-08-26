@@ -5150,6 +5150,17 @@ mechanism. Broader modern trait solving retains its existing `TRIGGERED` review;
 projection premises and nested generic source heads require review when
 concrete. This agent review does not replace targeted independent human review.
 
+# 2026-08-25 — Generic source projection-premise lowering
+
+**Result: NOT_TRIGGERED after the existing trait-solver review.** This compiler
+increment parses bounded projection equalities and attaches them to the existing
+generic clause and projection-aware proof environment. It adds no new solver or
+normalization algorithm, coherence rule, specialization, dispatch, runtime,
+cryptographic, storage, transport, codec, virtualization, or hardware mechanism.
+Broader modern trait solving retains its existing `TRIGGERED` review; nested
+generic source terms require review when concrete. This agent review does not
+replace targeted independent human review.
+
 # 2026-08-25 — Exact source associated-type lowering
 
 **Result: NOT_TRIGGERED after the existing trait-solver review.** This compiler
