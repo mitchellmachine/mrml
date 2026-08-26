@@ -258,6 +258,17 @@ Broader alias and compiler completion remain partial; this technical screen
 establishes neither clearance nor infringement and does not replace independent
 human dual review.
 
+## 2026-08-26 — Projected call-assignment ancestry evidence
+
+Patent review: **NOT_TRIGGERED**. This compiler evidence increment exercises the
+existing exact and conditional call-result origin, projected shared-call
+invalidation, and bounded tuple-field ancestry mechanisms in combination. It
+adds no new interprocedural analysis, alias algorithm, fixed-point, region
+solver, optimization, runtime, authority, or dependency mechanism.
+Broader compiler completion remains partial; this technical screen establishes
+neither clearance nor infringement and does not replace independent human dual
+review.
+
 ## 2026-08-26 — Activated-generation binding for Total inventory
 
 Patent review: **TRIGGERED** under the existing SystemRelease, deployment,
