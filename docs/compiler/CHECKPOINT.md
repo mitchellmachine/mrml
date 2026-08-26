@@ -1349,11 +1349,13 @@ tests per host.
 The associated-type-default milestone parses flat declaration defaults and
 substitutes `Self`, a complete declaration parameter, or a concrete nominal
 type through each exact or generic implementation head when no explicit value
-is present. Explicit values override defaults, while missing non-defaulted
-values and projection/compound defaults remain fail-closed. Windows gnullvm and
-native Arch Linux WSL each pass 613 library tests, one component-interface
-probe, 10 conformance tests, and 335 replacement tests: 959 compiler tests per
-host.
+is present. Explicit values override defaults. Projection-valued defaults with
+flat `Self`/parameter/concrete projection positions resolve after the forward
+identity phase and reuse bounded generic normalization; missing projected
+implementations remain unavailable, while compound defaults remain fail-
+closed. Windows gnullvm and native Arch Linux WSL each pass 617 library tests,
+one component-interface probe, 10 conformance tests, and 335 replacement tests:
+963 compiler tests per host.
 
 The forward associated-identity milestone registers every bounded associated
 identity after trait identities but before supertrait and declaration-

@@ -4552,9 +4552,13 @@ The associated-type-default milestone admits flat defaults such as
 type. Missing implementation values substitute the default through the exact
 or generic implementation head; explicit implementation values override it,
 and projection obligations observe the resulting stable associated value.
-Projection-valued and compound defaults remain fail-closed. Windows gnullvm and
-native Arch Linux WSL each pass 613 library tests, one component probe, 10
-conformance tests, and 335 replacement tests: 959 compiler tests per host.
+Projection-valued defaults with flat `Self`/parameter/concrete projection
+positions now resolve their trait and associated identities after the forward
+identity phase and reuse generic projection normalization. Missing projected
+implementations remain unavailable; compound defaults remain fail-closed.
+Windows gnullvm and native Arch Linux WSL each pass 617 library tests, one
+component probe, 10 conformance tests, and 335 replacement tests: 963 compiler
+tests per host.
 
 The forward associated-identity milestone separates declaration admission into
 trait-identity, associated-identity, and relational-validation phases. A
