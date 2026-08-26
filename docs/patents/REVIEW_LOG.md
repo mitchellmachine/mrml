@@ -1,5 +1,24 @@
 # Patent review log
 
+## 2026-08-26 — Shared canonical UEFI block stable-ID digest
+
+Patent review: **NOT_TRIGGERED** for extracting the repository's existing
+bounded domain-separated SHA3-256 device-path digest into the storage interface
+and making UEFI call it. This refactor adds no device-path reconstruction,
+transport protocol, discovery algorithm, queue, DMA, or hardware behavior.
+
+The future native VirtIO implementation remains `TRIGGERED`. Initial grant
+screening confirms that the OASIS VIRTIO Technical Committee declares
+Non-Assertion Mode, whose covenant is worldwide and covers compliant products
+implementing an OASIS Standards Final Deliverable, subject to the policy's
+Essential-Claim, contribution/participation, conformance, defensive-suspension,
+and termination limits. See the authoritative
+[VIRTIO TC IPR page](https://www.oasis-open.org/committees/virtio/ipr.php) and
+[OASIS IPR Policy](https://www.oasis-open.org/policies-guidelines/ipr). That
+commitment does not cover non-participant rights or MRML extensions and is not
+a worldwide family/status search or legal clearance. AHCI, USB, native route
+reconstruction, and physical storage retain their existing `TRIGGERED` reviews.
+
 ## 2026-08-26 — Exact native block correlation verifier
 
 Patent review: **NOT_TRIGGERED** for this equality-only verifier. It compares an

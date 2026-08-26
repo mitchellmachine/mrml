@@ -3022,3 +3022,12 @@ later reads use the existing capability-bound block session. Focused tests
 reject route/generation and transport substitution. Storage passes 127 tests on
 Windows and Arch Linux. Deriving those inputs from actual native enumeration is
 still **PLANNED** and is not implied by this verifier.
+
+The boot/native identity algorithm is now shared rather than UEFI-local.
+`canonical_uefi_block_stable_id` bounds an already validated canonical device
+path and applies the one existing domain-separated digest used by firmware
+discovery; UEFI now consumes that storage-interface function. A future native
+driver can therefore reconstruct the same route without inventing a second
+identity scheme. Storage passes 128 tests and UEFI 37 tests on Windows and Arch
+Linux, with UEFI cross-builds on both. Native path reconstruction, protocol
+enumeration, driver attachment, OVMF, and physical evidence remain **PLANNED**.

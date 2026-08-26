@@ -1,5 +1,26 @@
 use crate::{SUPERBLOCK_BYTES, StorageBlockDevice, StoragePrincipal};
+use mrml_crypto::Sha3_256;
 use mrml_kernel::{InstalledRecoveryBootIdentity, InstalledRecoverySource};
+
+pub const MAX_CANONICAL_UEFI_BLOCK_DEVICE_PATH_BYTES: usize = 4096;
+const UEFI_BLOCK_STABLE_ID_DOMAIN: &[u8] = b"MRML-UEFI-BLOCK-ID-v1\0";
+
+/// Derives the one canonical boot-stable identifier from an already validated
+/// single-instance UEFI device path.
+///
+/// This is shared by firmware discovery and future native route reconstruction
+/// so correlation cannot silently use different identity algorithms. The bytes
+/// identify only; callers must validate or independently reconstruct the path,
+/// and a successful digest grants no device or I/O authority.
+pub fn canonical_uefi_block_stable_id(device_path: &[u8]) -> Option<[u8; 32]> {
+    if device_path.len() < 4 || device_path.len() > MAX_CANONICAL_UEFI_BLOCK_DEVICE_PATH_BYTES {
+        return None;
+    }
+    let mut hash = Sha3_256::new();
+    hash.update(UEFI_BLOCK_STABLE_ID_DOMAIN);
+    hash.update(device_path);
+    Some(hash.finalize())
+}
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct BlockDeviceId(u64);
@@ -1715,6 +1736,23 @@ mod tests {
         assert_eq!(
             verifier.verify(usb_boot, changed_route),
             Err(ExactNativeBlockCorrelationError::IdentityMismatch)
+        );
+    }
+
+    #[test]
+    fn canonical_uefi_stable_id_is_bounded_domain_separated_and_non_authorizing() {
+        let path = [1u8, 1, 4, 0, 0x7f, 0xff, 4, 0];
+        let stable = canonical_uefi_block_stable_id(&path).unwrap();
+        assert_ne!(stable, [0; 32]);
+        assert_eq!(canonical_uefi_block_stable_id(&path), Some(stable));
+
+        let mut changed = path;
+        changed[1] = 2;
+        assert_ne!(canonical_uefi_block_stable_id(&changed), Some(stable));
+        assert_eq!(canonical_uefi_block_stable_id(&path[..3]), None);
+        assert_eq!(
+            canonical_uefi_block_stable_id(&[0; MAX_CANONICAL_UEFI_BLOCK_DEVICE_PATH_BYTES + 1]),
+            None
         );
     }
 

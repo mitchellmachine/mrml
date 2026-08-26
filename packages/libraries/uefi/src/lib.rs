@@ -3,12 +3,12 @@
 pub mod tpm;
 
 use core::ffi::c_void;
-use mrml_crypto::Sha3_256;
 use mrml_storage::{
     BlockDeviceDescriptor, BlockDeviceId, BlockVolume, BlockVolumeError,
-    PlatformBlockDeviceDescriptor, PlatformBlockDeviceIdentity, PlatformBlockTransport,
-    RecoveredReachableState, RecoveryError, SUPERBLOCK_BYTES, StorageBlockDevice,
-    VOLUME_HEADER_BYTES, VolumeHeader, VolumeId, recover_reachable_state,
+    MAX_CANONICAL_UEFI_BLOCK_DEVICE_PATH_BYTES, PlatformBlockDeviceDescriptor,
+    PlatformBlockDeviceIdentity, PlatformBlockTransport, RecoveredReachableState, RecoveryError,
+    SUPERBLOCK_BYTES, StorageBlockDevice, VOLUME_HEADER_BYTES, VolumeHeader, VolumeId,
+    canonical_uefi_block_stable_id, recover_reachable_state,
 };
 
 pub type Status = usize;
@@ -316,7 +316,7 @@ pub struct BlockIoProtocol {
     pub flush_blocks: BlockIoFlush,
 }
 
-pub const MAX_UEFI_DEVICE_PATH_BYTES: usize = 4096;
+pub const MAX_UEFI_DEVICE_PATH_BYTES: usize = MAX_CANONICAL_UEFI_BLOCK_DEVICE_PATH_BYTES;
 const DEVICE_PATH_END_TYPE: u8 = 0x7f;
 const DEVICE_PATH_END_ENTIRE_SUBTYPE: u8 = 0xff;
 const DEVICE_PATH_HEADER_BYTES: usize = 4;
@@ -631,10 +631,8 @@ pub fn uefi_platform_block_descriptor(
         uefi_recovery_block_count(media)?,
     )
     .ok_or(UefiBlockDescriptorError::InvalidGeometry)?;
-    let mut hash = Sha3_256::new();
-    hash.update(b"MRML-UEFI-BLOCK-ID-v1\0");
-    hash.update(device_path);
-    let stable_id = hash.finalize();
+    let stable_id = canonical_uefi_block_stable_id(device_path)
+        .ok_or(UefiBlockDescriptorError::InvalidDevicePathNode)?;
     let media_generation = u64::from(media.media_id) + 1;
     let identity = PlatformBlockDeviceIdentity::new(
         PlatformBlockTransport::Uefi,

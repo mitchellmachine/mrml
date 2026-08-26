@@ -208,6 +208,15 @@ data path under the exact issued session. Storage passes 127 tests on Windows
 and Arch Linux. No native route parser, controller enumerator, or physical
 device has been implemented or exercised by this increment.
 
+The boot/native stable-ID algorithm is now **PARTIALLY IMPLEMENTED** as one
+shared storage contract rather than duplicated firmware knowledge.
+`canonical_uefi_block_stable_id` bounds an already validated canonical UEFI
+device path and applies the existing domain-separated SHA3-256 digest; the UEFI
+library now calls it directly. This enables a future native driver to compare
+an independently reconstructed route using exactly the boot algorithm, but it
+does not reconstruct that route or grant device authority. Storage passes 128
+tests and UEFI 37 tests on Windows and Arch Linux; UEFI cross-builds on both.
+
 The `mrml` frontend may expose structured `disk`, `filesystem`, `optical`, and
 `media` operations. The PowerShell-inspired shell projects the same backend as
 typed `Get-*`, `Test-*`, `Initialize-*`, `New-*`, `Format-*`, `Write-*`, and
