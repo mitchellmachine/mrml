@@ -1277,6 +1277,16 @@ and native Arch Linux WSL each pass 593 library tests, one component-interface
 probe, 10 conformance tests, and 335 replacement tests: 939 compiler tests per
 host.
 
+The parameterized source-supertrait milestone admits paths such as
+`trait Child<T>: Parent<T>` when every parent argument is a complete child
+declaration parameter. Stable parent identity and arity resolve during
+declaration admission; parameter indexes instantiate from exact, generic, or
+conditional implementation heads and propagate through transitive parents.
+Concrete and compound parent argument positions remain fail-closed. Windows
+gnullvm and native Arch Linux WSL each pass 596 library tests, one component-
+interface probe, 10 conformance tests, and 335 replacement tests: 942 compiler
+tests per host.
+
 The premise-bearing rigid-normalization milestone proves the selected generic
 implementation's instantiated trait and projection predicates before exposing
 its associated value. It shares the caller's 16-frame rigid proof stack and

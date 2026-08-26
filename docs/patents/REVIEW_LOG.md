@@ -5345,3 +5345,14 @@ selection, coherence, proof-search, caching, or code-generation mechanism.
 Broader trait solving and Rust conformance remain partial; this agent review
 does not establish clearance or infringement and does not replace independent
 human dual review.
+
+# 2026-08-26 — Parameterized source-supertrait instantiation
+
+**Result: NOT_TRIGGERED after the bounded trait-solver and inherited-supertrait
+reviews.** This increment conventionally maps complete child declaration
+parameters to parent trait arguments by bounded index and instantiates those
+indexes through existing exact and generic proof paths. It adds no new
+unification, selection, coherence, proof-search, caching, or code-generation
+mechanism. Broader trait solving and Rust conformance remain partial; this agent
+review does not establish clearance or infringement and does not replace
+independent human dual review.

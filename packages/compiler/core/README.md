@@ -4473,6 +4473,16 @@ closed. Windows gnullvm and native Arch Linux WSL each pass 593 library tests,
 one component probe, 10 conformance tests, and 335 replacement tests: 939
 compiler tests per host.
 
+The parameterized source-supertrait milestone admits paths such as
+`trait Child<T>: Parent<T>` when every parent argument is a complete parameter
+of the child declaration. Declaration admission resolves stable parent identity,
+checks arity, records parameter indexes, and rejects concrete or compound
+positions. Exact validation and generic/conditional inherited premises
+instantiate those indexes from the implementation head, including transitive
+parents. Windows gnullvm and native Arch Linux WSL each pass 596 library tests,
+one component probe, 10 conformance tests, and 335 replacement tests: 942
+compiler tests per host.
+
 The projection-bearing term milestone uses a fixed 64-node arena for flat leaf
 terms and associated-type projections whose trait self/argument positions refer
 only to earlier nodes. Identical nodes intern to one stable identity; invalid
