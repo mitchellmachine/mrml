@@ -29,12 +29,13 @@ use mrml_kernel::{
     TaskRuntimeError, PAGE_SIZE,
 };
 use mrml_storage::{
-    AuthorityRecoveryValidator, BlockFileSession, BlockVolume, BlockVolumeError,
-    CommittedRecoveredStorageAuthorities, ExtentMap, FileMetadata, FileReadBackend, FileReadError,
-    FileState, FileWriteBackend, FileWriteError, MetadataPointer, PreparedFileWrite,
-    ReachableFileSelection, RecoveredStorageAuthorities, StorageAuthorityTable, StorageBlockDevice,
-    StorageHandle, StoragePrincipal, StorageTransaction, TransactionError, TransactionReceipt,
-    VolumeId,
+    recover_reachable_state, AuthorityRecoveryValidator, BlockFileSession, BlockVolume,
+    BlockVolumeError, CommittedRecoveredStorageAuthorities, ExtentMap, FileMetadata,
+    FileReadBackend, FileReadError, FileState, FileWriteBackend, FileWriteError, MetadataPointer,
+    PreparedFileWrite, ReachableFileSelection, RecoveredReachableState,
+    RecoveredStorageAuthorities, RecoveryError, RecoveryMetadataBackend, StorageAuthorityTable,
+    StorageBlockDevice, StorageHandle, StorageObjectId, StoragePrincipal, StorageTransaction,
+    TransactionError, TransactionReceipt, VolumeHeader, VolumeId,
 };
 
 #[cfg(any(test, target_os = "windows", target_os = "linux"))]
@@ -1455,6 +1456,83 @@ pub enum StableConfigurationRecoveryError<E> {
 pub enum SelectedStableSystemRecoveryError {
     RootMismatch,
     DuplicateObject,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum StableSystemSelectionError<E> {
+    Recovery(RecoveryError<E>),
+    MissingConfiguration,
+    MissingAuthorityCheckpoint,
+    InvalidPair(SelectedStableSystemRecoveryError),
+}
+
+/// Owns the exact reachable graph selected from redundant stable-storage roots
+/// and the two object identities required for system recovery. File selections
+/// borrow this owner, preventing them from outliving or detaching from the
+/// integrity-validated graph that established their identity.
+pub struct RecoveredStableSystemSelection<const EXTENTS: usize, const OBJECTS: usize> {
+    reachable: RecoveredReachableState<EXTENTS, OBJECTS>,
+    configuration: StorageObjectId,
+    authority_checkpoint: StorageObjectId,
+}
+
+impl<const EXTENTS: usize, const OBJECTS: usize> RecoveredStableSystemSelection<EXTENTS, OBJECTS> {
+    pub fn selected(&self) -> SelectedStableSystemRecovery<'_, EXTENTS, EXTENTS> {
+        let configuration = self
+            .reachable
+            .select_file(self.configuration)
+            .expect("validated stable-system configuration remains reachable");
+        let authority_checkpoint = self
+            .reachable
+            .select_file(self.authority_checkpoint)
+            .expect("validated stable-system authority checkpoint remains reachable");
+        SelectedStableSystemRecovery::new(configuration, authority_checkpoint)
+            .expect("validated stable-system pair remains exact")
+    }
+
+    pub const fn reachable(&self) -> &RecoveredReachableState<EXTENTS, OBJECTS> {
+        &self.reachable
+    }
+}
+
+/// Selects one complete redundant-root graph through the supplied hostile
+/// metadata backend, then admits the exact configuration/authority pair. This
+/// is non-authorizing and does not perform rollback, owner-approval, or file-
+/// capability checks.
+#[allow(clippy::too_many_arguments)]
+pub fn recover_stable_system_selection<
+    B: RecoveryMetadataBackend,
+    const ALLOCATIONS: usize,
+    const DIRECTORIES: usize,
+    const EXTENTS: usize,
+    const OBJECTS: usize,
+>(
+    header: VolumeHeader,
+    primary: &[u8],
+    secondary: &[u8],
+    backend: B,
+    scratch: &mut [u8],
+    configuration: StorageObjectId,
+    authority_checkpoint: StorageObjectId,
+) -> Result<RecoveredStableSystemSelection<EXTENTS, OBJECTS>, StableSystemSelectionError<B::Error>>
+{
+    let reachable = recover_reachable_state::<_, ALLOCATIONS, DIRECTORIES, EXTENTS, OBJECTS>(
+        header, primary, secondary, backend, scratch,
+    )
+    .map_err(StableSystemSelectionError::Recovery)?;
+    let configuration_selection = reachable
+        .select_file(configuration)
+        .ok_or(StableSystemSelectionError::MissingConfiguration)?;
+    let authority_selection = reachable
+        .select_file(authority_checkpoint)
+        .ok_or(StableSystemSelectionError::MissingAuthorityCheckpoint)?;
+    SelectedStableSystemRecovery::new(configuration_selection, authority_selection)
+        .map_err(StableSystemSelectionError::InvalidPair)?;
+    Ok(RecoveredStableSystemSelection {
+        reachable,
+        configuration,
+        authority_checkpoint,
+    })
 }
 
 /// Exact configuration and authority-checkpoint selections from one already

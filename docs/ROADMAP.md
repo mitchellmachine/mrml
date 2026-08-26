@@ -340,6 +340,15 @@ passes 11, and KVM passes 12. The hosted adapter is its only caller so far;
 real block-device selection, installed early-boot construction, and complete
 system enumeration remain the next gates.
 
+The next storage connection is now **PARTIALLY IMPLEMENTED** without claiming
+media evidence. `recover_stable_system_selection` accepts the existing hostile
+metadata backend implemented by `BlockVolume`, selects one complete redundant-
+root graph, verifies both required objects, and returns an owning
+`RecoveredStableSystemSelection`; borrowed selections cannot detach from that
+graph. The hosted adapter uses this same API. Reading real redundant
+superblocks from an installed device, early-boot construction, and complete
+system enumeration remain the next gates.
+
 The shared live Total owner is now **PARTIALLY IMPLEMENTED**. WHP and nested
 KVM bind the effective boot policy and activated signed release into one
 `BootTotalAdmission`, preserve exact generation/catalog digests, prepare and

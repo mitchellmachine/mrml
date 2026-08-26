@@ -771,6 +771,15 @@ from an older root before the recovery transaction. The hosted source now uses
 this boundary; real block-device selection and installed boot remain
 **PLANNED**.
 
+The selection owner now **PARTIALLY IMPLEMENTS** the production-shaped metadata
+connection. `recover_stable_system_selection` accepts the existing hostile
+`RecoveryMetadataBackend` (including `BlockVolume`), selects one complete
+redundant-root graph, verifies both required object identities, and returns a
+`RecoveredStableSystemSelection` that owns the graph. Borrowed file selections
+cannot outlive that owner. The hosted adapter uses this same entry point. No
+real block device or installed boot was exercised, so those claims remain
+**PLANNED**.
+
 The runner-side boot overlay is no longer injected as an independent enum
 literal. Both hosted backends encode neutral accepted recovery state and the
 one-boot request into the same canonical handoff installed for the guest, decode

@@ -831,6 +831,10 @@ Grouping the two already-selected files in a typed non-authorizing pair and
 rejecting duplicate objects or cross-root pairs is likewise conventional input
 validation; it does not add a filesystem, recovery, isolation, or scheduling
 algorithm.
+Retaining the existing redundant-root recovery result in an owning wrapper and
+lending its already-validated file selections is ordinary lifetime-safe API
+composition over the existing `RecoveryMetadataBackend`; it adds no recovery
+selection or storage algorithm.
 Because the
 broader combination of
 signed release classification, automated placement, isolation, recovery, and

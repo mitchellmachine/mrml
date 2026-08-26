@@ -1165,6 +1165,14 @@ and prior-root substitution. The current caller is still the controlled hosted
 adapter; durable block-device selection and installed early boot remain
 **PLANNED**.
 
+`recover_stable_system_selection` now accepts the storage service's existing
+hostile metadata-backend contract, which `BlockVolume` already implements. It
+selects and retains one complete redundant-root graph in
+`RecoveredStableSystemSelection`, verifies that both required file identities
+exist, and lends the paired selections only from that owner. The hosted adapter
+uses this production-shaped entry point, but no durable block device, firmware,
+or installed system was tested; those remain **PLANNED**.
+
 WHP and nested KVM now consume the common inner `BootTotalAdmission` owner from
 effective-policy/release binding through classified route preparation,
 vCPU/RAM/VMM construction, microVM commit, and final release proof. The owner

@@ -3148,6 +3148,13 @@ consumes it before authority recovery, while real media selection and installed
 boot orchestration remain **PLANNED**. Configuration passes 45 tests on both
 Windows and Arch Linux; WHP remains 11/11 and KVM 12/12.
 
+The owning selector now **PARTIALLY IMPLEMENTS** the next storage connection.
+`recover_stable_system_selection` consumes any conforming hostile metadata
+backend, including the existing `BlockVolume`, retains the chosen complete
+graph in `RecoveredStableSystemSelection`, and exposes paired file selections
+only while that owner lives. The controlled hosted adapter uses the same path;
+durable-device and installed-boot evidence remain **PLANNED**.
+
 Patent review: `TRIGGERED` under the existing signed-release, adaptive
 isolation, Total-MicroVM, automated VMM placement, and device-projection reviews
 now that authenticated package classifications are joined to live domain
