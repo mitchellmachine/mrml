@@ -6784,7 +6784,8 @@ impl<'source> RuntimeBodyFacts<'source> {
             return Err(CodegenErrorKind::TooManyRuntimePlaceAccessFacts);
         }
         let exact_path = self.find_move_path(fact.base, fact.projections);
-        let reference_root = (fact.projections.count != 0)
+        let reference_root = (fact.projections.count != 0
+            || context == RuntimeReadEffectContext::Unclassified)
             .then(|| self.find_move_path(fact.base, RuntimePlaceProjections::EMPTY))
             .flatten()
             .filter(|path| {
@@ -14628,6 +14629,11 @@ fn runtime_reference_call_origin_parameter<const MAX_PARAMETERS: usize, const MA
                     || (projections.count == 2
                         && projections.items[0] == Some(RuntimePlaceProjection::Dereference)
                         && projections.items[1] == Some(RuntimePlaceProjection::Index));
+                let subslice_projection = (projections.count == 1
+                    && projections.items[0] == Some(RuntimePlaceProjection::Subslice))
+                    || (projections.count == 2
+                        && projections.items[0] == Some(RuntimePlaceProjection::Dereference)
+                        && projections.items[1] == Some(RuntimePlaceProjection::Subslice));
                 let compatible = (identity_projection && parameter_target == result_target)
                     || (indexed_projection
                         && matches!(
@@ -14639,6 +14645,18 @@ fn runtime_reference_call_origin_parameter<const MAX_PARAMETERS: usize, const MA
                                 }
                                     | RuntimeReferenceTarget::Slice(parameter_element),
                                 RuntimeReferenceTarget::Scalar(result_element),
+                            ) if parameter_element == result_element
+                        ))
+                    || (subslice_projection
+                        && matches!(
+                            (parameter_target, result_target),
+                            (
+                                RuntimeReferenceTarget::Array {
+                                    element: parameter_element,
+                                    ..
+                                }
+                                    | RuntimeReferenceTarget::Slice(parameter_element),
+                                RuntimeReferenceTarget::Slice(result_element),
                             ) if parameter_element == result_element
                         ));
                 compatible.then_some(index)
@@ -30861,6 +30879,34 @@ mod tests {
                         body_expression: "&mut values[0]",
                     })
                 }
+                ("array_subslice", 1) => {
+                    parameters[0] = Some(RuntimeCallParameter {
+                        name: "values",
+                        ty: array_reference,
+                    });
+                    Some(RuntimeCallTarget {
+                        name: "array_subslice",
+                        parameters,
+                        parameter_count: 1,
+                        return_type: slice_reference,
+                        return_type_name: "&mut [u16]",
+                        body_expression: "&mut values[1..]",
+                    })
+                }
+                ("slice_subslice", 1) => {
+                    parameters[0] = Some(RuntimeCallParameter {
+                        name: "values",
+                        ty: slice_reference,
+                    });
+                    Some(RuntimeCallTarget {
+                        name: "slice_subslice",
+                        parameters,
+                        parameter_count: 1,
+                        return_type: slice_reference,
+                        return_type_name: "&mut [u16]",
+                        body_expression: "&mut values[1..]",
+                    })
+                }
                 ("identity", 1) => {
                     parameters[0] = Some(RuntimeCallParameter {
                         name: "value",
@@ -35216,6 +35262,39 @@ mod tests {
             "let restored: &mut u16 = &mut input[0]; *restored }"
         ))
         .unwrap();
+        for rejected in [
+            concat!(
+                "fn value(input: &mut [u16; 2]) -> u16 { ",
+                "let returned: &mut [u16] = array_subslice(input); ",
+                "let competing: &mut u16 = &mut input[1]; ",
+                "*competing += 1; returned[0] }"
+            ),
+            concat!(
+                "fn value(input: &mut [u16]) -> u16 { ",
+                "let returned: &mut [u16] = slice_subslice(input); ",
+                "let competing: &mut u16 = &mut input[1]; ",
+                "*competing += 1; returned[0] }"
+            ),
+        ] {
+            assert_eq!(
+                analyze(rejected).unwrap_err().kind,
+                CodegenErrorKind::RuntimeBorrowConflict
+            );
+        }
+        for accepted in [
+            concat!(
+                "fn value(input: &mut [u16; 2]) -> u16 { ",
+                "let returned: &mut [u16] = array_subslice(input); returned[0] += 1; ",
+                "let restored: &mut u16 = &mut input[1]; *restored }"
+            ),
+            concat!(
+                "fn value(input: &mut [u16]) -> u16 { ",
+                "let returned: &mut [u16] = slice_subslice(input); returned[0] += 1; ",
+                "let restored: &mut u16 = &mut input[1]; *restored }"
+            ),
+        ] {
+            analyze(accepted).unwrap();
+        }
 
         let target = MutableReferenceCallResolver
             .resolve_runtime_call::<2>("array_element", 1)
@@ -35230,6 +35309,27 @@ mod tests {
         assert_eq!(
             runtime_reference_call_origin_parameter::<2, 16>(slice_target),
             Some(0)
+        );
+        let array_subslice = MutableReferenceCallResolver
+            .resolve_runtime_call::<2>("array_subslice", 1)
+            .unwrap();
+        let slice_subslice = MutableReferenceCallResolver
+            .resolve_runtime_call::<2>("slice_subslice", 1)
+            .unwrap();
+        assert_eq!(
+            runtime_reference_call_origin_parameter::<2, 16>(array_subslice),
+            Some(0)
+        );
+        assert_eq!(
+            runtime_reference_call_origin_parameter::<2, 16>(slice_subslice),
+            Some(0)
+        );
+        assert_eq!(
+            runtime_reference_call_origin_parameter::<2, 16>(RuntimeCallTarget {
+                body_expression: "&mut values[0]",
+                ..array_subslice
+            }),
+            None
         );
         assert_eq!(
             runtime_reference_call_origin_parameter::<2, 16>(RuntimeCallTarget {
