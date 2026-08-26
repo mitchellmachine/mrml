@@ -4,10 +4,10 @@ version = 2
 toolchain = "nightly-2026-08-24"
 
 [graphs]
-compile_edges = 146
+compile_edges = 148
 build_tool_edges = 0
 runtime_interface_edges = 1
-package_edges = 139
+package_edges = 141
 system_release_edges = 3
 
 [[package]]
@@ -390,10 +390,10 @@ system_release_bound = []
 [[package]]
 id = "org.mrml.library.uefi"
 path = "packages/libraries/uefi"
-isolation_default = "in-process"
-isolation_minimum = "in-process"
-isolation_maximum = "in-process"
-isolation_supported = ["in-process"]
+isolation_default = "platform"
+isolation_minimum = "platform"
+isolation_maximum = "platform"
+isolation_supported = ["platform"]
 compile_dependencies = ["org.mrml.library.crypto", "org.mrml.library.package-format", "org.mrml.service.storage", "org.mrml.system.kernel"]
 
 static_runtime = []
@@ -446,9 +446,9 @@ isolation_default = "native-service"
 isolation_minimum = "native-service"
 isolation_maximum = "microvm"
 isolation_supported = ["native-service", "microvm"]
-compile_dependencies = ["org.mrml.library.crypto", "org.mrml.service.storage", "org.mrml.system.kernel"]
+compile_dependencies = ["org.mrml.library.crypto", "org.mrml.library.package-format", "org.mrml.service.deployment", "org.mrml.service.storage", "org.mrml.system.kernel"]
 
-static_runtime = ["org.mrml.library.crypto", "org.mrml.service.storage", "org.mrml.system.kernel"]
+static_runtime = ["org.mrml.library.crypto", "org.mrml.library.package-format", "org.mrml.service.deployment", "org.mrml.service.storage", "org.mrml.system.kernel"]
 boot_bound = []
 system_release_bound = []
 
@@ -652,8 +652,8 @@ id = "org.mrml.zim"
 path = "packages/libraries/zim"
 isolation_default = "in-process"
 isolation_minimum = "in-process"
-isolation_maximum = "in-process"
-isolation_supported = ["in-process"]
+isolation_maximum = "microvm"
+isolation_supported = ["in-process", "native-service", "microvm"]
 compile_dependencies = ["org.mrml.interface.compression.zstd", "org.mrml.library.runtime", "org.mrml.system.kernel"]
 
 static_runtime = ["org.mrml.library.runtime", "org.mrml.system.kernel"]

@@ -1812,6 +1812,14 @@ prepared set empty. The Windows configuration suite passes 52 tests. No service
 image or backend endpoint participates in this test, so it establishes recovery
 transaction cleanup only, not production invocation or multi-domain execution.
 
+The existing service-image recovery path now has canonical MRML build profiles:
+`block_service_loop` for the userspace service image and
+`block_service_probe` for its UEFI kernel/bootloader counterpart. Both release
+builds pass through `mrml`, as do manifest validation and lock regeneration.
+This proves reproducible selection and ABI compilation only. The live loop
+still recovers its controlled configuration/authority pair and does not yet
+consume the four-file deployment/SystemRelease owner required for Total mode.
+
 Before any profile-specific kernel probe runs, the kernel now constructs its
 early context from the exact decoded handoff and retains the one-boot isolation
 request only as non-authorizing evidence. This closes the first-kernel-entry

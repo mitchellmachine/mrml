@@ -1,5 +1,15 @@
 # Patent review log
 
+## 2026-08-26 — Canonical block-recovery build profiles
+
+Patent review: **NOT_TRIGGERED** for declaring existing Rust feature sets as
+target-scoped MRML build profiles, regenerating dependency metadata, and
+removing an unused local copy of already retained recovery data. This is
+conventional build configuration and bookkeeping; it adds no recovery,
+placement, VM, storage-protocol, scheduling, DMA, queue, interrupt, or hardware
+mechanism. The broader adaptive/Total MicroVM mechanism remains **TRIGGERED**;
+this technical screen is not patent clearance.
+
 ## 2026-08-26 — Complete recovered service-set preparation
 
 Patent review: **NOT_TRIGGERED** for exact bounded set membership/class checks,

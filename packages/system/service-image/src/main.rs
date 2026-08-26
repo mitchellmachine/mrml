@@ -396,7 +396,6 @@ unsafe extern "sysv64" fn mrml_configuration_receiver(
         halt();
     }
     let recovery_envelope = unsafe { verify_recovery_envelope(recovery_capability) };
-    let recovery = recovery_envelope.recovery();
     let device = BlockDeviceId::new(1).unwrap_or_else(|| halt());
     let principal = StoragePrincipal::new(1).unwrap_or_else(|_| halt());
     let mut service = BlockService::<1, 1>::new();

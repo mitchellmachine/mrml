@@ -403,6 +403,15 @@ WHP AP handshake. Both keep emulated timing and startup tracing explicit and
 receipt-bound; neither permits compiler fallback or changes package/interface
 identity.
 
+The production-shaped recovery-loop images now also have explicit canonical
+profiles. `block_service_loop` selects only `block-service-loop` for
+`org.mrml.system.service-image` on `MRML_NATIVE`, while
+`block_service_probe` selects `service-probe` plus `block-service-probe` for
+`org.mrml.system.bootloader` on UEFI. The default images remain unchanged.
+`mrml manifest check`, the profile-specific release builds, and regenerated
+`mrml.lock` must agree before these images are used as evidence; an undeclared
+raw Rust feature invocation is not a reproducible MRML build profile.
+
 The authenticated package-derived positive path has executed under QEMU/EDK2
 with the raw trace `c8 b0 b2 b0 b2 c9 b0 b2 b2 a1 a2 a3 a4 a5 a6 a7 a8 b1
 b2 b3`: the release, bootloader/configuration packages, exact kernel package,

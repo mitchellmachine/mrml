@@ -656,6 +656,15 @@ canceling both exact routes leaves it empty. Configuration passes 52 tests on
 Windows. No backend endpoint was constructed, so service-loop invocation and
 multi-domain backend construction/cleanup remain **PLANNED**.
 
+The existing userspace block recovery loop is now reproducibly selectable
+through the canonical build frontend. The service image's
+`block_service_loop` profile and bootloader/kernel image's
+`block_service_probe` profile both pass release builds through `mrml`; manifest
+validation passes and `mrml.lock` records the current 51-package graph. This is
+build/ABI evidence for the already implemented configuration/authority loop.
+It does not add the deployment checkpoint or SystemRelease to that service
+image, so four-file Total-owner consumption remains the next gate.
+
 The production-shaped stable-selection API is now **PARTIALLY IMPLEMENTED**.
 `SelectedStableSystemRecovery` admits only distinct configuration and authority
 checkpoint files selected from the same integrity-validated volume/root

@@ -68,6 +68,11 @@ source = "packages/system/service-image/src/main.rs"
 features = []
 targets = ["MRML_NATIVE"]
 
+[[feature_profile]]
+features = ["block-service-loop"]
+name = "block_service_loop"
+targets = ["MRML_NATIVE"]
+
 [[target_triple]]
 target = "MRML_NATIVE"
 triple = "x86_64-unknown-uefi"
