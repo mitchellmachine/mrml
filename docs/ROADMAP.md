@@ -347,6 +347,18 @@ lifecycle/data path. This is **PARTIALLY IMPLEMENTED** live hosted handoff
 parity, not recovered boot or complete Total satisfaction. Committed
 stable-recovery consumption remains the next gate.
 
+The committed-recovery API now **PARTIALLY IMPLEMENTS** that join as one atomic
+operation. `RecoveredSystemState::bind_total_boot_admission` capability-
+revalidates the persistent system/component settings, checks that the decoded
+handoff's accepted epoch is the predecessor of the committed authority epoch,
+composes the one-boot overlay, and binds the authenticated activated release
+without returning a detached effective policy. The full stable-storage test now
+continues through classified microVM route commit and
+`TotalMicrovmRuntimeProof`; Windows and Arch Linux each pass all 43
+configuration tests. This remains hosted typed-state evidence. The WHP/KVM
+runners do not yet construct this committed recovered owner, so live recovered
+boot remains **PLANNED**.
+
 The deployment lane is defined in [DEPLOYMENT.md](DEPLOYMENT.md) and must not
 displace the current foundational gate. Later work proceeds as separate bounded
 milestones: package/boot-safe formats; release/generation state; Store/catalog;

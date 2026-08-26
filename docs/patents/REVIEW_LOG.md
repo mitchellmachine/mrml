@@ -1,5 +1,18 @@
 # Patent review log
 
+## 2026-08-26 — Atomic committed-recovery Total admission join
+
+Patent review: **TRIGGERED** under the existing stable-storage recovery,
+SystemRelease, adaptive-isolation, and Total-MicroVM reviews. This increment
+uses conventional typed composition to join the already committed recovered
+authority/configuration object, decoded handoff, capability-revalidated policy,
+and activated signed release before returning the existing single admission
+owner. It adds no parser or persistent format, signature scheme, placement or
+scheduling heuristic, capability grant, native fallback, VMM/device protocol,
+DMA mechanism, or hardware-specific isolation mechanism. Live runner recovery
+construction remains unimplemented. No patent-clearance or non-infringement
+conclusion is made; independent human review remains required.
+
 ## 2026-08-26 — Canonical decoded Total boot-handoff consumption
 
 Patent review: **TRIGGERED** under the existing recovery,

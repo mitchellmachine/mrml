@@ -1690,6 +1690,33 @@ impl<const GRANTS: usize, const SETTINGS: usize, const AUDIT: usize>
         })
     }
 
+    /// Atomically joins committed recovery, the exact decoded boot handoff,
+    /// capability-revalidated persistent policy, and one authenticated active
+    /// release. Callers never receive a detached effective policy from this
+    /// path; all subsequent preparation and finalization use the single
+    /// release-owned admission table retained by the returned owner.
+    #[allow(clippy::too_many_arguments)]
+    pub fn bind_total_boot_admission<const DOMAINS: usize, A: CapabilityAuthorizer + ?Sized>(
+        &self,
+        capabilities: &A,
+        system: IsolationPolicySetting,
+        system_read: Capability,
+        component: IsolationPolicySetting,
+        component_read: Capability,
+        handoff: &BootHandoff,
+        release: ActivatedReleaseTotalMicrovmInventory<DOMAINS>,
+    ) -> Result<RecoveredTotalAdmission<DOMAINS>, ConfigError> {
+        self.compose_boot_isolation_policy(
+            capabilities,
+            system,
+            system_read,
+            component,
+            component_read,
+            handoff,
+        )?
+        .bind_release_inventory(release)
+    }
+
     pub fn into_parts(
         self,
     ) -> (
@@ -7755,6 +7782,47 @@ mod tests {
             let admission = boot_policy.admission_table::<1>(33).unwrap();
             assert_eq!(admission.mode(), IsolationMode::TotalMicrovm);
             assert_eq!(admission.policy_generation(), 1);
+
+            let domain = ObjectId(0x434f_4e46_4947_0001);
+            let release = activated_configuration_release(domain, 1);
+            let mut total = recovered
+                .bind_total_boot_admission(
+                    &capabilities,
+                    system,
+                    system_access,
+                    component,
+                    component_access,
+                    &handoff,
+                    release,
+                )
+                .unwrap();
+            assert_eq!(total.policy().authority_epoch(), 9);
+            assert_eq!(total.policy().boot_accepted_epoch(), 8);
+            let bounds = IsolationServiceBounds::new(
+                IsolationPlacement::NativeService,
+                IsolationPlacement::NativeService,
+                IsolationPlacement::Microvm,
+                true,
+                true,
+            )
+            .unwrap();
+            let identity = IsolationServiceIdentity::new(
+                domain,
+                ObjectId(0x434f_4e46_0000_0001),
+                1,
+                5,
+                TotalMicrovmClass::MicrovmEligible,
+            )
+            .unwrap();
+            let prepared = total.prepare_service(bounds, identity).unwrap();
+            assert_eq!(prepared.spec().placement(), IsolationPlacement::Microvm);
+            let routed = prepared.commit(total.admission_mut(), 0x51u64).unwrap();
+            assert_eq!(routed.domain(), domain);
+            assert_eq!(routed.into_endpoint(), 0x51);
+            let proof = total.finalize().unwrap();
+            assert_eq!(proof.classified_domains, 1);
+            assert_eq!(proof.running_microvm_eligible, 1);
+            assert_eq!(proof.running_in_microvm, 1);
 
             let stale_recovery = mrml_kernel::RecoveryStateMetadata::new(7, 1, None, 0).unwrap();
             mrml_kernel::encode_handoff_with_smp_service_recovery_and_isolation(

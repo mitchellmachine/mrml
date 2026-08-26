@@ -1167,6 +1167,17 @@ handoff and zero-fallback guest path on both backends. That proves hosted live
 handoff parity, not recovered boot, because neither runner yet obtains its
 effective policy from the committed recovered system object.
 
+`RecoveredSystemState` now provides an atomic
+`bind_total_boot_admission` transition. It joins the committed recovered
+authorities and configuration service, exact decoded handoff epoch/override,
+capability-revalidated policy settings, and authenticated activated release
+before returning any launch owner. The full block-backed stable recovery test
+then prepares and commits a classified microVM route and obtains the final
+generation-bound Total proof from that same owner. Windows and Arch Linux each
+pass 43 configuration tests. This closes the detached-policy API gap, but the
+hosted runners still need a real recovered-state source before it is live boot
+evidence.
+
 Application-launch recovery must retain the exact runtime domain, application
 object, immutable application generation and artifact digest, active system
 generation, and applied policy generation. The kernel application route accepts

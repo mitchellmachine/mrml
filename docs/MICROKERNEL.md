@@ -3110,6 +3110,17 @@ epoch 8, `eligible=1`, `microvm=1`, and `native_fallback=0`. This is hosted live
 handoff parity, not the committed `RecoveredSystemState` join, host resistance,
 bare metal, or complete Total readiness.
 
+The committed recovery path now atomically joins those same inputs through
+`RecoveredSystemState::bind_total_boot_admission`. It performs the existing
+capability/settings revalidation and exact predecessor-epoch check, then binds
+the activated signed release without exposing a detached effective policy. The
+full hosted stable-storage test advances authority epoch 8 to 9, commits the
+recovered configuration service, consumes a decoded Total handoff, prepares and
+commits one classified microVM route, and finalizes the generation-bound Total
+proof through the single recovered owner. Configuration passes 43 tests on both
+Windows and Arch Linux. The live runners do not yet source this committed state,
+so this is typed recovery evidence rather than live recovered boot.
+
 Patent review: `TRIGGERED` under the existing signed-release, adaptive
 isolation, Total-MicroVM, automated VMM placement, and device-projection reviews
 now that authenticated package classifications are joined to live domain

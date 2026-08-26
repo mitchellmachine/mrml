@@ -759,6 +759,15 @@ kernel packages then completed the identical decoded-policy, zero-fallback, and
 guest lifecycle/data path on WHP and nested KVM. Stable recovered-state binding
 is still required before claiming live recovered Total mode.
 
+Committed recovery now exposes one atomic release-binding operation rather than
+requiring callers to retain an intermediate effective policy.
+`bind_total_boot_admission` revalidates both capabilities and settings, checks
+the decoded handoff epoch against the committed authority epoch, and returns the
+same `RecoveredTotalAdmission` owner used for route preparation and final proof.
+The stable recovery test commits one eligible microVM route and finalizes its
+signed release inventory through that owner on Windows and Arch Linux. Hosted
+runner construction of the recovered state remains **PLANNED**.
+
 ## Resources, devices, security, and monitoring
 
 RAM, vCPU, `VirtualGPU`, VirtIO, device-projection, or VMM exhaustion in Total
