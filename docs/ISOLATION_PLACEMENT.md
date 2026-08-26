@@ -789,6 +789,15 @@ Total admission. Storage passes 121 tests and configuration 45 on Windows and
 Arch Linux; WHP passes 11 and KVM 12. The device remains an in-memory controlled
 backend, so installed media and physical-device evidence remain **PLANNED**.
 
+Capability-bound device admission is now **PARTIALLY IMPLEMENTED** as
+`recover_serviced_stable_system_selection`. It validates the exact generational
+`BlockService` session and principal before constructing `ServicedBlockDevice`
+or issuing either root read. Wrong-principal and revoked-session tests observe
+zero backend reads. Configuration passes 46 tests on Windows and Arch Linux;
+WHP remains 11/11 and KVM 12/12. The controlled runner has not yet adopted this
+entry point, so positive end-to-end serviced recovery and installed discovery
+remain next.
+
 The runner-side boot overlay is no longer injected as an independent enum
 literal. Both hosted backends encode neutral accepted recovery state and the
 one-boot request into the same canonical handoff installed for the guest, decode

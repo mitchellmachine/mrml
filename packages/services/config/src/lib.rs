@@ -28,13 +28,14 @@ use mrml_kernel::{
     TaskRuntimeError, prepare_isolation_service_route, route_isolation_service,
 };
 use mrml_storage::{
-    AuthorityRecoveryValidator, BlockFileSession, BlockVolume, BlockVolumeError,
+    AuthorityRecoveryValidator, BlockFileSession, BlockService, BlockServiceBackend,
+    BlockServiceError, BlockSessionHandle, BlockVolume, BlockVolumeError,
     CommittedRecoveredStorageAuthorities, ExtentMap, FileMetadata, FileReadBackend, FileReadError,
     FileState, FileWriteBackend, FileWriteError, MetadataPointer, PreparedFileWrite,
     ReachableFileSelection, RecoveredReachableState, RecoveredStorageAuthorities, RecoveryError,
-    RecoveryMetadataBackend, SUPERBLOCK_BYTES, StorageAuthorityTable, StorageBlockDevice,
-    StorageHandle, StorageObjectId, StoragePrincipal, StorageTransaction, TransactionError,
-    TransactionReceipt, VolumeHeader, VolumeId, recover_reachable_state,
+    RecoveryMetadataBackend, SUPERBLOCK_BYTES, ServicedBlockDevice, StorageAuthorityTable,
+    StorageBlockDevice, StorageHandle, StorageObjectId, StoragePrincipal, StorageTransaction,
+    TransactionError, TransactionReceipt, VolumeHeader, VolumeId, recover_reachable_state,
 };
 
 #[cfg(any(test, target_os = "windows", target_os = "linux"))]
@@ -1529,6 +1530,63 @@ impl<'a, D: StorageBlockDevice, const EXTENTS: usize, const OBJECTS: usize>
 pub enum BlockStableSystemSelectionError<E> {
     Volume(BlockVolumeError<E>),
     Selection(StableSystemSelectionError<BlockVolumeError<E>>),
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum ServicedStableSystemSelectionError<E> {
+    Session(BlockServiceError<core::convert::Infallible>),
+    Selection(BlockStableSystemSelectionError<BlockServiceError<E>>),
+}
+
+/// Establishes exact block-device authority through `BlockService` before any
+/// redundant-root or metadata read. Names and device identity do not authorize;
+/// the generational session and exact principal must validate first.
+#[allow(clippy::too_many_arguments)]
+pub fn recover_serviced_stable_system_selection<
+    'a,
+    B: BlockServiceBackend,
+    const DEVICES: usize,
+    const SESSIONS: usize,
+    const ALLOCATIONS: usize,
+    const DIRECTORIES: usize,
+    const EXTENTS: usize,
+    const OBJECTS: usize,
+>(
+    service: &'a BlockService<DEVICES, SESSIONS>,
+    backend: &'a mut B,
+    session: BlockSessionHandle,
+    principal: StoragePrincipal,
+    header: VolumeHeader,
+    active_superblock: u64,
+    volume_scratch: &'a mut [u8],
+    primary_block: &mut [u8],
+    secondary_block: &mut [u8],
+    metadata_scratch: &mut [u8],
+    configuration: StorageObjectId,
+    authority_checkpoint: StorageObjectId,
+) -> Result<
+    RecoveredBlockStableSystemSelection<
+        'a,
+        ServicedBlockDevice<'a, B, DEVICES, SESSIONS>,
+        EXTENTS,
+        OBJECTS,
+    >,
+    ServicedStableSystemSelectionError<B::Error>,
+> {
+    let device = ServicedBlockDevice::new(service, backend, session, principal)
+        .map_err(ServicedStableSystemSelectionError::Session)?;
+    recover_block_stable_system_selection::<_, ALLOCATIONS, DIRECTORIES, EXTENTS, OBJECTS>(
+        header,
+        active_superblock,
+        device,
+        volume_scratch,
+        primary_block,
+        secondary_block,
+        metadata_scratch,
+        configuration,
+        authority_checkpoint,
+    )
+    .map_err(ServicedStableSystemSelectionError::Selection)
 }
 
 /// Reads both redundant roots and validates the complete selected graph through
@@ -7449,6 +7507,70 @@ mod tests {
             self.replacements += 1;
             Ok(())
         }
+    }
+
+    #[test]
+    fn serviced_stable_selection_rejects_wrong_or_stale_session_before_device_io() {
+        let device = BlockDeviceId::new(7).unwrap();
+        let descriptor = BlockDeviceDescriptor::new(
+            device,
+            STABLE_BLOCK_BYTES as u32,
+            STABLE_BLOCK_COUNT as u64,
+        )
+        .unwrap();
+        let mut service = BlockService::<1, 1>::new();
+        service.register_device(descriptor).unwrap();
+        let session = service
+            .grant(device, stable_principal(), BlockRights::READ)
+            .unwrap();
+        let mut backend = StableBlockBackend::new(device);
+        let mut volume_scratch = [0; STABLE_BLOCK_BYTES];
+        let mut primary = [0; STABLE_BLOCK_BYTES];
+        let mut secondary = [0; STABLE_BLOCK_BYTES];
+        let mut metadata = [0; STABLE_BLOCK_BYTES];
+        let wrong_principal = StoragePrincipal::new(8).unwrap();
+        assert!(matches!(
+            recover_serviced_stable_system_selection::<_, 1, 1, 10, 2, 1, 3>(
+                &service,
+                &mut backend,
+                session,
+                wrong_principal,
+                stable_header(),
+                stable_header().primary_superblock(),
+                &mut volume_scratch,
+                &mut primary,
+                &mut secondary,
+                &mut metadata,
+                stable_object(9),
+                stable_object(10),
+            ),
+            Err(ServicedStableSystemSelectionError::Session(
+                BlockServiceError::Denied
+            ))
+        ));
+        assert_eq!(backend.reads, 0);
+
+        service.revoke(session, stable_principal()).unwrap();
+        assert!(matches!(
+            recover_serviced_stable_system_selection::<_, 1, 1, 10, 2, 1, 3>(
+                &service,
+                &mut backend,
+                session,
+                stable_principal(),
+                stable_header(),
+                stable_header().primary_superblock(),
+                &mut volume_scratch,
+                &mut primary,
+                &mut secondary,
+                &mut metadata,
+                stable_object(9),
+                stable_object(10),
+            ),
+            Err(ServicedStableSystemSelectionError::Session(
+                BlockServiceError::StaleHandle
+            ))
+        ));
+        assert_eq!(backend.reads, 0);
     }
 
     fn stable_layout(

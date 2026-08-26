@@ -1182,6 +1182,14 @@ Total admission. Windows and Arch Linux each pass 121 storage and 45
 configuration tests; WHP remains 11/11 and KVM 12/12. This is controlled
 in-memory device evidence, not installed or physical storage evidence.
 
+The authority half of device selection is now **PARTIALLY IMPLEMENTED**.
+`recover_serviced_stable_system_selection` requires an exact live
+`BlockService` session owned by the supplied principal before it can create the
+serviced device or read storage. A wrong principal and a revoked generation
+both fail with zero backend reads. Windows and Arch Linux each pass 46
+configuration tests; WHP remains 11 and KVM 12. Positive adoption by the hosted
+recovery source, device discovery, and installed early boot remain next.
+
 WHP and nested KVM now consume the common inner `BootTotalAdmission` owner from
 effective-policy/release binding through classified route preparation,
 vCPU/RAM/VMM construction, microVM commit, and final release proof. The owner

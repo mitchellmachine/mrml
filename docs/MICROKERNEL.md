@@ -3163,6 +3163,14 @@ root-read failure yields no selection or admission. Storage passes 121 tests
 and configuration 45 on both development hosts; WHP passes 11 and KVM 12. The
 backend is still in-memory, so installed-media claims remain **PLANNED**.
 
+The next control-plane gate is **PARTIALLY IMPLEMENTED** through
+`recover_serviced_stable_system_selection`. Exact `BlockService` session
+generation and principal validation precede `ServicedBlockDevice` construction
+and all root I/O; wrong-owner and revoked-session cases perform zero backend
+reads. Configuration passes 46 tests on both development hosts, WHP passes 11,
+and KVM 12. Positive runner adoption and installed-device discovery remain
+**PLANNED**.
+
 Patent review: `TRIGGERED` under the existing signed-release, adaptive
 isolation, Total-MicroVM, automated VMM placement, and device-projection reviews
 now that authenticated package classifications are joined to live domain

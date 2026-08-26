@@ -349,6 +349,15 @@ and Arch Linux each pass 121 storage and 45 configuration tests; WHP passes 11
 and KVM 12. The exercised device is an in-memory controlled backend. Installed
 media, early-boot device discovery, and complete system enumeration remain next.
 
+Capability-bound stable-device admission is now **PARTIALLY IMPLEMENTED**.
+`recover_serviced_stable_system_selection` validates an exact generational
+`BlockService` session and principal before constructing the serviced device or
+issuing root reads. Wrong-principal and revoked-session tests cause zero backend
+I/O. Windows and Arch Linux each pass 46 configuration tests; WHP passes 11 and
+KVM 12. The hosted positive path still uses the raw controlled device adapter;
+adopting the serviced path, installed discovery, and early-boot orchestration
+remain next.
+
 The next storage connection is now **PARTIALLY IMPLEMENTED** without claiming
 media evidence. `recover_stable_system_selection` accepts the existing hostile
 metadata backend implemented by `BlockVolume`, selects one complete redundant-

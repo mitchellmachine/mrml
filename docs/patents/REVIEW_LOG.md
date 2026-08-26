@@ -840,6 +840,10 @@ exclusive `BlockVolume`/`StorageBlockDevice` abstraction and retaining that
 device generation during validation is conventional block I/O and fail-closed
 state ownership. It adds no new on-disk format, recovery-selection algorithm,
 placement rule, or VMM mechanism.
+Checking an existing generational `BlockService` session and exact principal
+before wrapping the existing serviced-device adapter is conventional capability
+validation and API composition. It adds no storage, recovery, placement,
+scheduling, or virtualization algorithm.
 Because the
 broader combination of
 signed release classification, automated placement, isolation, recovery, and
