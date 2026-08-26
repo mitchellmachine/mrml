@@ -14724,7 +14724,14 @@ fn runtime_reference_call_origin_parameter<const MAX_PARAMETERS: usize, const MA
                 {
                     return local_origins[index];
                 }
-                let projected = projected_origins.get(index, place.projections)?;
+                let mut origin_projections = place.projections;
+                if origin_projections.items[origin_projections.count.checked_sub(1)?]
+                    == Some(RuntimePlaceProjection::Dereference)
+                {
+                    origin_projections.count -= 1;
+                    origin_projections.items[origin_projections.count] = None;
+                }
+                let projected = projected_origins.get(index, origin_projections)?;
                 return runtime_types_compatible(
                     projected.ty,
                     runtime_type_from_scalar(target.return_type),
@@ -15569,6 +15576,7 @@ fn runtime_reference_call_origin_parameter<const MAX_PARAMETERS: usize, const MA
                         });
                 if has_local_state_operation {
                     let incoming_origins = local_origins;
+                    let incoming_projected_origins = projected_origins;
                     let mut iteration_names = local_names;
                     let mut iteration_origins = incoming_origins;
                     let mut iteration_projected_origins = projected_origins;
@@ -15618,7 +15626,7 @@ fn runtime_reference_call_origin_parameter<const MAX_PARAMETERS: usize, const MA
                                     &iteration_mutability,
                                     &iteration_return_compatibility,
                                     iteration_local_count,
-                                    false,
+                                    true,
                                 )?;
                             }
                             _ => return None,
@@ -15630,6 +15638,8 @@ fn runtime_reference_call_origin_parameter<const MAX_PARAMETERS: usize, const MA
                             .then_some(incoming_origins[local_index])
                             .flatten();
                     }
+                    projected_origins =
+                        incoming_projected_origins.intersect(iteration_projected_origins);
                     continue;
                 }
                 for operation in loop_statement.operations().iter().flatten() {
@@ -31614,6 +31624,32 @@ mod tests {
                         ),
                     })
                 }
+                ("loop_tuple_field_assign", 3) if MAX_PARAMETERS >= 4 => {
+                    parameters[0] = Some(RuntimeCallParameter {
+                        name: "first",
+                        ty: reference,
+                    });
+                    parameters[1] = Some(RuntimeCallParameter {
+                        name: "second",
+                        ty: reference,
+                    });
+                    parameters[2] = Some(RuntimeCallParameter {
+                        name: "repeat",
+                        ty: ScalarType::Bool,
+                    });
+                    Some(RuntimeCallTarget {
+                        name: "loop_tuple_field_assign",
+                        parameters,
+                        parameter_count: 3,
+                        return_type: reference,
+                        return_type_name: "&mut u16",
+                        body_expression: concat!(
+                            "let mut pair: (&mut u16,) = (first,); ",
+                            "pair.0 = second; ",
+                            "while repeat { pair.0 = &mut *pair.0; } pair.0"
+                        ),
+                    })
+                }
                 ("branch_forward", 2) if MAX_PARAMETERS >= 2 => {
                     parameters[0] = Some(RuntimeCallParameter {
                         name: "value",
@@ -35712,6 +35748,7 @@ mod tests {
             "fn value(input: &mut u16, repeat: bool, first: bool) -> u16 { let returned: &mut u16 = loop_branch_local_return(input, repeat, first); let competing: &mut u16 = &mut *input; *competing += 1; *returned }",
             "fn value(first: &mut u16, second: &mut u16) -> u16 { let returned: &mut u16 = tuple_field_assign(first, second); let competing: &mut u16 = &mut *second; *competing += 1; *returned }",
             "fn value(first: &mut u16, second: &mut u16, choose: bool) -> u16 { let returned: &mut u16 = branch_tuple_field_assign(first, second, choose); let competing: &mut u16 = &mut *second; *competing += 1; *returned }",
+            "fn value(first: &mut u16, second: &mut u16, repeat: bool) -> u16 { let returned: &mut u16 = loop_tuple_field_assign(first, second, repeat); let competing: &mut u16 = &mut *second; *competing += 1; *returned }",
         ] {
             assert_eq!(
                 analyze(source).unwrap_err().kind,
@@ -35731,6 +35768,7 @@ mod tests {
             "fn value(input: &mut u16, repeat: bool, first: bool) -> u16 { let returned: &mut u16 = loop_branch_local_return(input, repeat, first); *returned += 1; let restored: &mut u16 = &mut *input; *restored }",
             "fn value(first: &mut u16, second: &mut u16) -> u16 { let returned: &mut u16 = tuple_field_assign(first, second); *returned += 1; let restored: &mut u16 = &mut *second; *restored }",
             "fn value(first: &mut u16, second: &mut u16, choose: bool) -> u16 { let returned: &mut u16 = branch_tuple_field_assign(first, second, choose); *returned += 1; let restored: &mut u16 = &mut *second; *restored }",
+            "fn value(first: &mut u16, second: &mut u16, repeat: bool) -> u16 { let returned: &mut u16 = loop_tuple_field_assign(first, second, repeat); *returned += 1; let restored: &mut u16 = &mut *second; *restored }",
         ] {
             analyze(source).unwrap();
         }
@@ -35781,6 +35819,23 @@ mod tests {
                     "if choose { pair.0 = second; } pair.0"
                 ),
                 ..branch_tuple_field_assign
+            }),
+            None
+        );
+        let loop_tuple_field_assign = MutableReferenceCallResolver
+            .resolve_runtime_call::<4>("loop_tuple_field_assign", 3)
+            .unwrap();
+        assert_eq!(
+            runtime_reference_call_origin_parameter::<4, 32>(loop_tuple_field_assign),
+            Some(1)
+        );
+        assert_eq!(
+            runtime_reference_call_origin_parameter::<4, 32>(RuntimeCallTarget {
+                body_expression: concat!(
+                    "let mut pair: (&mut u16,) = (first,); ",
+                    "while repeat { pair.0 = &mut *pair.0; } pair.0"
+                ),
+                ..loop_tuple_field_assign
             }),
             None
         );
