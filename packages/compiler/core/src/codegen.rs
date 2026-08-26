@@ -1982,8 +1982,8 @@ fn encode_x86_64_naked_instruction(instruction: &str) -> Option<([u8; 10], usize
                     ))
                 }
             } else {
-                let base = x86_64_naked_memory_base(operands)?;
-                encode_x86_64_naked_memory(None, 0xff, false, 4, base, true)
+                let address = x86_64_naked_memory_address(operands)?;
+                encode_x86_64_naked_memory(None, 0xff, false, 4, address, true)
             }
         }
         "mov" => {
@@ -1995,8 +1995,8 @@ fn encode_x86_64_naked_instruction(instruction: &str) -> Option<([u8; 10], usize
                     let rex = 0x48 | ((source >> 3) << 2) | (destination >> 3);
                     let modrm = 0xc0 | ((source & 7) << 3) | (destination & 7);
                     Some(([rex, 0x89, modrm, 0, 0, 0, 0, 0, 0, 0], 3, false))
-                } else if let Some(base) = x86_64_naked_memory_base(source) {
-                    encode_x86_64_naked_memory(None, 0x8b, true, destination, base, false)
+                } else if let Some(address) = x86_64_naked_memory_address(source) {
+                    encode_x86_64_naked_memory(None, 0x8b, true, destination, address, false)
                 } else {
                     let immediate = x86_64_naked_immediate(source)?;
                     let mut encoding = [0u8; 10];
@@ -2006,19 +2006,19 @@ fn encode_x86_64_naked_instruction(instruction: &str) -> Option<([u8; 10], usize
                     Some((encoding, 10, false))
                 }
             } else {
-                let base = x86_64_naked_memory_base(destination)?;
+                let address = x86_64_naked_memory_address(destination)?;
                 let source = x86_64_naked_register(source)?;
-                encode_x86_64_naked_memory(None, 0x89, true, source, base, false)
+                encode_x86_64_naked_memory(None, 0x89, true, source, address, false)
             }
         }
         "lgdt" | "lidt" | "invlpg" => {
-            let base = x86_64_naked_memory_base(operands)?;
+            let address = x86_64_naked_memory_address(operands)?;
             let extension = match mnemonic {
                 "lgdt" => 2,
                 "lidt" => 3,
                 _ => 7,
             };
-            encode_x86_64_naked_memory(Some(0x0f), 0x01, false, extension, base, false)
+            encode_x86_64_naked_memory(Some(0x0f), 0x01, false, extension, address, false)
         }
         _ => None,
     }
@@ -2029,15 +2029,19 @@ fn encode_x86_64_naked_memory(
     opcode: u8,
     wide: bool,
     register: u8,
-    base: u8,
+    address: X86_64NakedMemoryAddress,
     terminating: bool,
 ) -> Option<([u8; 10], usize, bool)> {
-    if register >= 16 || base >= 16 {
+    if register >= 16 || address.base >= 16 || address.index.is_some_and(|index| index >= 16) {
         return None;
     }
     let mut encoding = [0u8; 10];
     let mut length = 0usize;
-    let rex = 0x40 | ((wide as u8) << 3) | ((register >> 3) << 2) | (base >> 3);
+    let rex = 0x40
+        | ((wide as u8) << 3)
+        | ((register >> 3) << 2)
+        | (address.index.map_or(0, |index| index >> 3) << 1)
+        | (address.base >> 3);
     if rex != 0x40 {
         encoding[length] = rex;
         length += 1;
@@ -2049,28 +2053,98 @@ fn encode_x86_64_naked_memory(
     encoding[length] = opcode;
     length += 1;
     let register = (register & 7) << 3;
-    match base & 7 {
-        4 => {
-            encoding[length] = register | 4;
-            encoding[length + 1] = 0x24;
-            length += 2;
-        }
-        5 => {
-            encoding[length] = 0x40 | register | 5;
-            encoding[length + 1] = 0;
-            length += 2;
-        }
-        base => {
-            encoding[length] = register | base;
+    let displacement_size = if address.displacement == 0 && address.base & 7 != 5 {
+        0
+    } else if i8::try_from(address.displacement).is_ok() {
+        1
+    } else {
+        4
+    };
+    let mode = match displacement_size {
+        0 => 0,
+        1 => 0x40,
+        _ => 0x80,
+    };
+    let uses_sib = address.index.is_some() || address.base & 7 == 4;
+    encoding[length] = mode | register | if uses_sib { 4 } else { address.base & 7 };
+    length += 1;
+    if uses_sib {
+        let index = address.index.map_or(4, |index| index & 7);
+        encoding[length] = (address.scale << 6) | (index << 3) | (address.base & 7);
+        length += 1;
+    }
+    match displacement_size {
+        0 => {}
+        1 => {
+            encoding[length] = address.displacement as i8 as u8;
             length += 1;
+        }
+        _ => {
+            encoding[length..length + 4].copy_from_slice(&address.displacement.to_le_bytes());
+            length += 4;
         }
     }
     Some((encoding, length, terminating))
 }
 
-fn x86_64_naked_memory_base(operand: &str) -> Option<u8> {
-    let register = operand.strip_prefix('[')?.strip_suffix(']')?.trim();
-    x86_64_naked_register(register)
+#[derive(Clone, Copy)]
+struct X86_64NakedMemoryAddress {
+    base: u8,
+    index: Option<u8>,
+    scale: u8,
+    displacement: i32,
+}
+
+fn x86_64_naked_memory_address(operand: &str) -> Option<X86_64NakedMemoryAddress> {
+    let expression = operand.strip_prefix('[')?.strip_suffix(']')?.trim();
+    let mut tokens = expression.split_whitespace();
+    let base = x86_64_naked_register(tokens.next()?)?;
+    let mut address = X86_64NakedMemoryAddress {
+        base,
+        index: None,
+        scale: 0,
+        displacement: 0,
+    };
+    let Some(operator) = tokens.next() else {
+        return Some(address);
+    };
+    if operator != "+" && operator != "-" {
+        return None;
+    }
+    let next = tokens.next()?;
+    if let Some(index) = x86_64_naked_register(next) {
+        if operator != "+" || index == 4 || tokens.next()? != "*" {
+            return None;
+        }
+        address.index = Some(index);
+        address.scale = match tokens.next()? {
+            "1" => 0,
+            "2" => 1,
+            "4" => 2,
+            "8" => 3,
+            _ => return None,
+        };
+        let Some(displacement_operator) = tokens.next() else {
+            return Some(address);
+        };
+        if displacement_operator != "+" && displacement_operator != "-" {
+            return None;
+        }
+        address.displacement = x86_64_naked_displacement(tokens.next()?, displacement_operator)?;
+    } else {
+        address.displacement = x86_64_naked_displacement(next, operator)?;
+    }
+    tokens.next().is_none().then_some(address)
+}
+
+fn x86_64_naked_displacement(value: &str, operator: &str) -> Option<i32> {
+    let magnitude = x86_64_naked_immediate(value)?;
+    if operator == "+" {
+        i32::try_from(magnitude).ok()
+    } else {
+        let magnitude = i64::try_from(magnitude).ok()?;
+        i32::try_from(-magnitude).ok()
+    }
 }
 
 fn x86_64_naked_immediate(source: &str) -> Option<u64> {
@@ -28507,8 +28581,9 @@ mod tests {
     fn emits_restricted_naked_functions_without_a_prologue_or_epilogue() {
         let module = Parser::new(concat!(
             "#[unsafe(naked)] pub unsafe extern \"C\" fn entry() ",
-            "{ naked_asm!(\"mov r11, [r12]\", \"mov [rbp], r11\", ",
-            "\"mov r10, 0x1234\", \"lgdt [r13]\", \"swapgs\", \"jmp [rax]\"); }"
+            "{ naked_asm!(\"mov r11, [r12 + r9 * 4 - 16]\", ",
+            "\"mov [rbp + rcx * 2 + 0x1234], r11\", \"lgdt [r13 - 128]\", ",
+            "\"swapgs\", \"jmp [rax + r12 * 8]\"); }"
         ))
         .parse_module::<1, 1>()
         .unwrap();
@@ -28521,8 +28596,8 @@ mod tests {
         assert_eq!(
             code.bytes(),
             &[
-                0x4d, 0x8b, 0x1c, 0x24, 0x4c, 0x89, 0x5d, 0x00, 0x49, 0xba, 0x34, 0x12, 0, 0, 0, 0,
-                0, 0, 0x41, 0x0f, 0x01, 0x55, 0x00, 0x0f, 0x01, 0xf8, 0xff, 0x20,
+                0x4f, 0x8b, 0x5c, 0x8c, 0xf0, 0x4c, 0x89, 0x9c, 0x4d, 0x34, 0x12, 0, 0, 0x41, 0x0f,
+                0x01, 0x55, 0x80, 0x0f, 0x01, 0xf8, 0x42, 0xff, 0x24, 0xe0,
             ]
         );
 
@@ -28564,7 +28639,15 @@ mod tests {
                 CodegenErrorKind::InvalidNakedAssembly,
             ),
             (
-                "#[unsafe(naked)] unsafe extern \"C\" fn f() { naked_asm!(\"mov [rax + 8], rbx\", \"ret\"); }",
+                "#[unsafe(naked)] unsafe extern \"C\" fn f() { naked_asm!(\"mov [rax + rsp * 2], rbx\", \"ret\"); }",
+                CodegenErrorKind::InvalidNakedAssembly,
+            ),
+            (
+                "#[unsafe(naked)] unsafe extern \"C\" fn f() { naked_asm!(\"mov [rax + rcx * 3], rbx\", \"ret\"); }",
+                CodegenErrorKind::InvalidNakedAssembly,
+            ),
+            (
+                "#[unsafe(naked)] unsafe extern \"C\" fn f() { naked_asm!(\"mov [rax + 0x80000000], rbx\", \"ret\"); }",
                 CodegenErrorKind::InvalidNakedAssembly,
             ),
             (
