@@ -45,6 +45,7 @@ pub struct SourceTraitDeclaration<'source> {
     pub name: &'source str,
     pub name_span: Span,
     pub public: bool,
+    pub generic_parameter_count: usize,
     supertraits: [Option<TraitId>; MAX_TRAIT_SUPERTRAITS],
     supertrait_count: usize,
     associated_types: [Option<TraitAssociatedTypeId>; MAX_TRAIT_ASSOCIATED_TYPES],
@@ -86,6 +87,7 @@ pub enum SourceTraitDeclarationError {
     CyclicSupertrait,
     TooManyAssociatedTypes,
     DuplicateAssociatedType,
+    DuplicateGenericParameter,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -125,6 +127,7 @@ impl<'source> SourceTraitDeclarationTable<'source> {
                 name: declaration.name,
                 name_span: declaration.name_span,
                 public: declaration.public,
+                generic_parameter_count: declaration.generic_parameter_count(),
                 supertraits: [None; MAX_TRAIT_SUPERTRAITS],
                 supertrait_count: 0,
                 associated_types: [None; MAX_TRAIT_ASSOCIATED_TYPES],
@@ -137,6 +140,17 @@ impl<'source> SourceTraitDeclarationTable<'source> {
                 continue;
             };
             let index = table.get(declaration.name).unwrap().id.get() as usize;
+            for (parameter_index, parameter) in
+                declaration.generic_parameters().iter().flatten().enumerate()
+            {
+                if declaration.generic_parameters()[..parameter_index]
+                    .iter()
+                    .flatten()
+                    .any(|known| known == parameter)
+                {
+                    return Err(SourceTraitDeclarationError::DuplicateGenericParameter);
+                }
+            }
             let mut supertraits = [None; MAX_TRAIT_SUPERTRAITS];
             let mut supertrait_count = 0usize;
             for source_supertrait in declaration.supertraits().iter().flatten() {
@@ -268,6 +282,7 @@ pub enum SourceTraitImplementationErrorKind {
     UnknownAssociatedType,
     DuplicateAssociatedTypeValue,
     MissingAssociatedTypeValue,
+    WrongTraitArgumentCount,
     Goal(TraitGoalError),
 }
 
@@ -318,6 +333,9 @@ impl<'source> SourceTraitImplementationTable<'source> {
             match item {
                 Item::TraitImplementation(implementation) => {
                     table.intern_type(implementation.self_type)?;
+                    for argument in implementation.trait_arguments().iter().flatten() {
+                        table.intern_type(*argument)?;
+                    }
                     for associated in implementation.associated_types().iter().flatten() {
                         table.intern_type(associated.value)?;
                     }
@@ -337,6 +355,15 @@ impl<'source> SourceTraitImplementationTable<'source> {
                                 table.intern_type(*expected_type)?;
                             }
                         }
+                        let arguments = match predicate {
+                            FunctionWherePredicate::Implemented { trait_arguments, .. }
+                            | FunctionWherePredicate::ProjectionEquality {
+                                trait_arguments, ..
+                            } => trait_arguments,
+                        };
+                        for argument in arguments.iter().flatten() {
+                            table.intern_type(*argument)?;
+                        }
                     }
                 }
                 Item::Const(_) | Item::Static(_) | Item::Trait(_) => {}
@@ -347,21 +374,36 @@ impl<'source> SourceTraitImplementationTable<'source> {
             let Item::TraitImplementation(implementation) = item else {
                 continue;
             };
-            let trait_id = traits
+            let declaration = traits
                 .get(implementation.trait_name)
                 .ok_or(SourceTraitImplementationError {
                     kind: SourceTraitImplementationErrorKind::UnknownTrait,
                     span: implementation.trait_name_span,
-                })?
-                .id;
+                })?;
+            if declaration.generic_parameter_count != implementation.trait_argument_count() {
+                return Err(SourceTraitImplementationError {
+                    kind: SourceTraitImplementationErrorKind::WrongTraitArgumentCount,
+                    span: implementation.trait_name_span,
+                });
+            }
+            let trait_id = declaration.id;
             let self_type = table.get_type(implementation.self_type.text).unwrap().id;
+            let mut header = TraitImplementationHeader::new(
+                TraitImplementationId::new(implementation_count),
+                trait_id,
+                self_type,
+            );
+            for argument in implementation.trait_arguments().iter().flatten() {
+                header
+                    .push_argument(table.get_type(argument.text).unwrap().id)
+                    .map_err(|kind| SourceTraitImplementationError {
+                        kind: SourceTraitImplementationErrorKind::Goal(kind),
+                        span: argument.span,
+                    })?;
+            }
             table
                 .implementations
-                .insert(TraitImplementationHeader::new(
-                    TraitImplementationId::new(implementation_count),
-                    trait_id,
-                    self_type,
-                ))
+                .insert(header)
                 .map_err(|kind| SourceTraitImplementationError {
                     kind: SourceTraitImplementationErrorKind::Goal(kind),
                     span: implementation.trait_name_span,
@@ -466,18 +508,34 @@ impl<'source> SourceTraitImplementationTable<'source> {
                         FunctionWherePredicate::Implemented {
                             self_type: left_self,
                             trait_name: left_trait,
+                            trait_arguments: left_arguments,
+                            trait_argument_count: left_count,
                             ..
                         },
                         FunctionWherePredicate::Implemented {
                             self_type: right_self,
                             trait_name: right_trait,
+                            trait_arguments: right_arguments,
+                            trait_argument_count: right_count,
                             ..
                         },
-                    ) => left_self.text == right_self.text && left_trait == right_trait,
+                    ) => {
+                        left_self.text == right_self.text
+                            && left_trait == right_trait
+                            && left_count == right_count
+                            && left_arguments[..*left_count]
+                                .iter()
+                                .zip(&right_arguments[..*right_count])
+                                .all(|(left, right)| {
+                                    left.unwrap().text == right.unwrap().text
+                                })
+                    }
                     (
                         FunctionWherePredicate::ProjectionEquality {
                             self_type: left_self,
                             trait_name: left_trait,
+                            trait_arguments: left_arguments,
+                            trait_argument_count: left_count,
                             associated_type: left_associated,
                             expected_type: left_expected,
                             ..
@@ -485,6 +543,8 @@ impl<'source> SourceTraitImplementationTable<'source> {
                         FunctionWherePredicate::ProjectionEquality {
                             self_type: right_self,
                             trait_name: right_trait,
+                            trait_arguments: right_arguments,
+                            trait_argument_count: right_count,
                             associated_type: right_associated,
                             expected_type: right_expected,
                             ..
@@ -492,6 +552,13 @@ impl<'source> SourceTraitImplementationTable<'source> {
                     ) => {
                         left_self.text == right_self.text
                             && left_trait == right_trait
+                            && left_count == right_count
+                            && left_arguments[..*left_count]
+                                .iter()
+                                .zip(&right_arguments[..*right_count])
+                                .all(|(left, right)| {
+                                    left.unwrap().text == right.unwrap().text
+                                })
                             && left_associated == right_associated
                             && left_expected.text == right_expected.text
                     }
@@ -512,17 +579,30 @@ impl<'source> SourceTraitImplementationTable<'source> {
                 self_type_ref,
                 trait_name,
                 trait_name_span,
+                trait_arguments,
+                trait_argument_count,
                 projection,
             ) = match predicate {
                 FunctionWherePredicate::Implemented {
                     self_type,
                     trait_name,
                     trait_name_span,
-                } => (*self_type, *trait_name, *trait_name_span, None),
+                    trait_arguments,
+                    trait_argument_count,
+                } => (
+                    *self_type,
+                    *trait_name,
+                    *trait_name_span,
+                    trait_arguments,
+                    *trait_argument_count,
+                    None,
+                ),
                 FunctionWherePredicate::ProjectionEquality {
                     self_type,
                     trait_name,
                     trait_name_span,
+                    trait_arguments,
+                    trait_argument_count,
                     associated_type,
                     associated_type_span,
                     expected_type,
@@ -530,16 +610,26 @@ impl<'source> SourceTraitImplementationTable<'source> {
                     *self_type,
                     *trait_name,
                     *trait_name_span,
+                    trait_arguments,
+                    *trait_argument_count,
                     Some((*associated_type, *associated_type_span, *expected_type)),
                 ),
             };
-            let trait_id = traits
+            let declaration = traits
                 .get(trait_name)
                 .ok_or(SourceTraitObligationError {
                     kind: SourceTraitObligationErrorKind::UnknownTrait,
                     span: trait_name_span,
-                })?
-                .id;
+                })?;
+            if declaration.generic_parameter_count != trait_argument_count {
+                return Err(SourceTraitObligationError {
+                    kind: SourceTraitObligationErrorKind::Goal(
+                        TraitGoalError::WrongGenericArgumentCount,
+                    ),
+                    span: trait_name_span,
+                });
+            }
+            let trait_id = declaration.id;
             let self_type = self
                 .get_type(self_type_ref.text)
                 .ok_or(SourceTraitObligationError {
@@ -547,10 +637,23 @@ impl<'source> SourceTraitImplementationTable<'source> {
                     span: self_type_ref.span,
                 })?
                 .id;
-            let goal = canonicalize_implemented_trait_goal(ImplementedTraitGoal::new(
-                trait_id,
-                TraitGoalType::Concrete(self_type),
-            ))
+            let mut source_goal =
+                ImplementedTraitGoal::new(trait_id, TraitGoalType::Concrete(self_type));
+            for argument in trait_arguments[..trait_argument_count].iter().flatten() {
+                let argument_type = self.get_type(argument.text).ok_or(
+                    SourceTraitObligationError {
+                        kind: SourceTraitObligationErrorKind::UnknownType,
+                        span: argument.span,
+                    },
+                )?;
+                source_goal
+                    .push_argument(TraitGoalType::Concrete(argument_type.id))
+                    .map_err(|kind| SourceTraitObligationError {
+                        kind: SourceTraitObligationErrorKind::Goal(kind),
+                        span: argument.span,
+                    })?;
+            }
+            let goal = canonicalize_implemented_trait_goal(source_goal)
             .map_err(|kind| SourceTraitObligationError {
                 kind: SourceTraitObligationErrorKind::Goal(kind),
                 span: trait_name_span,
@@ -7831,6 +7934,40 @@ mod tests {
             implementations.implementations().solve(goal),
             TraitGoalSolution::Unique(_)
         ));
+    }
+
+    #[test]
+    fn lowers_bounded_concrete_source_trait_arguments() {
+        let source = concat!(
+            "trait Convert<Input> { type Output; } ",
+            "impl Convert<u8> for u32 { type Output = u16; } ",
+            "impl Convert<u16> for u32 { type Output = u32; } ",
+            "fn check() where u32: Convert<u8>, <u32 as Convert<u8>>::Output = u16 {}"
+        );
+        let module = Parser::new(source).parse_module::<8, 1>().unwrap();
+        let traits = SourceTraitDeclarationTable::from_module(&module).unwrap();
+        let implementations =
+            SourceTraitImplementationTable::from_module(&module, &traits).unwrap();
+        implementations.prove_module(&module, &traits).unwrap();
+
+        let wrong_arity = Parser::new("trait Convert<T> {} impl Convert for u32 {}")
+            .parse_module::<4, 1>()
+            .unwrap();
+        let traits = SourceTraitDeclarationTable::from_module(&wrong_arity).unwrap();
+        assert_eq!(
+            SourceTraitImplementationTable::from_module(&wrong_arity, &traits)
+                .unwrap_err()
+                .kind,
+            SourceTraitImplementationErrorKind::WrongTraitArgumentCount
+        );
+
+        let duplicate = Parser::new("trait Convert<T, T> {}")
+            .parse_module::<2, 1>()
+            .unwrap();
+        assert_eq!(
+            SourceTraitDeclarationTable::from_module(&duplicate),
+            Err(SourceTraitDeclarationError::DuplicateGenericParameter)
+        );
     }
 
     #[test]

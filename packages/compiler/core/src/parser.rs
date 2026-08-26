@@ -21,6 +21,7 @@ pub const MAX_BODY_CONDITIONAL_ASSIGNMENTS: usize = 8;
 pub const MAX_FUNCTION_WHERE_PREDICATES: usize = 8;
 pub const MAX_TRAIT_SUPERTRAITS: usize = 8;
 pub const MAX_TRAIT_ASSOCIATED_TYPES: usize = 8;
+pub const MAX_SOURCE_TRAIT_ARGUMENTS: usize = 8;
 pub const MAX_CONDITIONAL_ASSIGNMENT_BRANCHES: usize = 4;
 pub const MAX_CONDITIONAL_BRANCH_ACTIONS: usize = 4;
 const MAX_BODY_TAIL_EXPRESSION_NODES: usize = 128;
@@ -44,11 +45,15 @@ pub enum FunctionWherePredicate<'source> {
         self_type: TypeRef<'source>,
         trait_name: &'source str,
         trait_name_span: Span,
+        trait_arguments: [Option<TypeRef<'source>>; MAX_SOURCE_TRAIT_ARGUMENTS],
+        trait_argument_count: usize,
     },
     ProjectionEquality {
         self_type: TypeRef<'source>,
         trait_name: &'source str,
         trait_name_span: Span,
+        trait_arguments: [Option<TypeRef<'source>>; MAX_SOURCE_TRAIT_ARGUMENTS],
+        trait_argument_count: usize,
         associated_type: &'source str,
         associated_type_span: Span,
         expected_type: TypeRef<'source>,
@@ -777,6 +782,8 @@ pub struct TraitDeclaration<'source> {
     pub public: bool,
     pub name: &'source str,
     pub name_span: Span,
+    generic_parameters: [Option<&'source str>; MAX_SOURCE_TRAIT_ARGUMENTS],
+    generic_parameter_count: usize,
     supertraits: [Option<TraitSupertrait<'source>>; MAX_TRAIT_SUPERTRAITS],
     supertrait_count: usize,
     associated_types: [Option<TraitAssociatedTypeDeclaration<'source>>; MAX_TRAIT_ASSOCIATED_TYPES],
@@ -785,6 +792,13 @@ pub struct TraitDeclaration<'source> {
 }
 
 impl<'source> TraitDeclaration<'source> {
+    pub fn generic_parameters(&self) -> &[Option<&'source str>] {
+        &self.generic_parameters[..self.generic_parameter_count]
+    }
+
+    pub const fn generic_parameter_count(&self) -> usize {
+        self.generic_parameter_count
+    }
     pub fn supertraits(&self) -> &[Option<TraitSupertrait<'source>>] {
         &self.supertraits[..self.supertrait_count]
     }
@@ -818,6 +832,8 @@ pub struct TraitSupertrait<'source> {
 pub struct TraitImplementation<'source> {
     pub trait_name: &'source str,
     pub trait_name_span: Span,
+    trait_arguments: [Option<TypeRef<'source>>; MAX_SOURCE_TRAIT_ARGUMENTS],
+    trait_argument_count: usize,
     pub self_type: TypeRef<'source>,
     associated_types:
         [Option<TraitAssociatedTypeImplementation<'source>>; MAX_TRAIT_ASSOCIATED_TYPES],
@@ -826,6 +842,13 @@ pub struct TraitImplementation<'source> {
 }
 
 impl<'source> TraitImplementation<'source> {
+    pub fn trait_arguments(&self) -> &[Option<TypeRef<'source>>] {
+        &self.trait_arguments[..self.trait_argument_count]
+    }
+
+    pub const fn trait_argument_count(&self) -> usize {
+        self.trait_argument_count
+    }
     pub fn associated_types(&self) -> &[Option<TraitAssociatedTypeImplementation<'source>>] {
         &self.associated_types[..self.associated_type_count]
     }
@@ -905,6 +928,7 @@ pub enum ParseErrorKind {
     TooManyWherePredicates,
     TooManySupertraits,
     TooManyAssociatedTypes,
+    TooManyGenericArguments,
     TooManyLocals,
     TooManyLoopAssignments,
     TooManyLoopOperations,
@@ -2768,6 +2792,71 @@ impl<'source> Parser<'source> {
         })
     }
 
+    fn source_trait_arguments(
+        &mut self,
+    ) -> Result<
+        (
+            [Option<TypeRef<'source>>; MAX_SOURCE_TRAIT_ARGUMENTS],
+            usize,
+            bool,
+        ),
+        ParseError,
+    > {
+        let mut arguments = [None; MAX_SOURCE_TRAIT_ARGUMENTS];
+        let mut count = 0usize;
+        if self.take_text("<")?.is_none() {
+            return Ok((arguments, count, false));
+        }
+        loop {
+            if count == MAX_SOURCE_TRAIT_ARGUMENTS {
+                let token = self.peek()?;
+                return Err(self.error(ParseErrorKind::TooManyGenericArguments, token));
+            }
+            let Some(first) = self.peek()? else {
+                return Err(self.error(ParseErrorKind::UnterminatedDelimiter, None));
+            };
+            let start = first.span.start;
+            let mut end = start;
+            let mut nested = 0usize;
+            loop {
+                let token = self
+                    .peek()?
+                    .ok_or_else(|| self.error(ParseErrorKind::UnterminatedDelimiter, None))?;
+                if nested == 0 && (token.text == "," || token.text == ">" || token.text == ">>") {
+                    break;
+                }
+                match token.text {
+                    "<" => nested += 1,
+                    ">" if nested != 0 => nested -= 1,
+                    _ => {}
+                }
+                end = token.span.end;
+                self.take()?;
+            }
+            if end == start {
+                let token = self.peek()?;
+                return Err(self.error(ParseErrorKind::ExpectedType, token));
+            }
+            let text = self.source[start..end].trim_end();
+            arguments[count] = Some(TypeRef {
+                text,
+                span: Span {
+                    start,
+                    end: start + text.len(),
+                },
+            });
+            count += 1;
+            if self.take_text(",")?.is_some() {
+                continue;
+            }
+            let close = self.take()?;
+            if !close.is_some_and(|token| token.text == ">" || token.text == ">>") {
+                return Err(self.error(ParseErrorKind::UnterminatedDelimiter, close));
+            }
+            return Ok((arguments, count, close.unwrap().text == ">>"));
+        }
+    }
+
     fn initializer(&mut self) -> Result<(&'source str, Span), ParseError> {
         let Some(first) = self.peek()? else {
             return Err(self.error(ParseErrorKind::ExpectedInitializer, None));
@@ -2937,9 +3026,13 @@ impl<'source> Parser<'source> {
                         return Err(self.error(ParseErrorKind::ExpectedIdentifier, as_token));
                     }
                     let trait_name = self.identifier()?;
-                    let close = self.take()?;
-                    if !close.is_some_and(|token| token.text == ">") {
-                        return Err(self.error(ParseErrorKind::ExpectedType, close));
+                    let (trait_arguments, trait_argument_count, consumed_projection_close) =
+                        self.source_trait_arguments()?;
+                    if !consumed_projection_close {
+                        let close = self.take()?;
+                        if !close.is_some_and(|token| token.text == ">") {
+                            return Err(self.error(ParseErrorKind::ExpectedType, close));
+                        }
                     }
                     let separator = self.take()?;
                     if !separator.is_some_and(|token| token.text == "::") {
@@ -2956,6 +3049,8 @@ impl<'source> Parser<'source> {
                         self_type,
                         trait_name: trait_name.text,
                         trait_name_span: trait_name.span,
+                        trait_arguments,
+                        trait_argument_count,
                         associated_type: associated_type.text,
                         associated_type_span: associated_type.span,
                         expected_type,
@@ -2964,10 +3059,18 @@ impl<'source> Parser<'source> {
                     let self_type = self.type_until(&[TokenKind::Colon])?;
                     self.expect_kind(TokenKind::Colon, ParseErrorKind::ExpectedColon)?;
                     let trait_name = self.identifier()?;
+                    let (trait_arguments, trait_argument_count, consumed_outer_close) =
+                        self.source_trait_arguments()?;
+                    if consumed_outer_close {
+                        let token = self.peek()?;
+                        return Err(self.error(ParseErrorKind::ExpectedBody, token));
+                    }
                     FunctionWherePredicate::Implemented {
                         self_type,
                         trait_name: trait_name.text,
                         trait_name_span: trait_name.span,
+                        trait_arguments,
+                        trait_argument_count,
                     }
                 };
                 where_predicates[where_predicate_count] = Some(predicate);
@@ -3062,6 +3165,27 @@ impl<'source> Parser<'source> {
 
     fn trait_declaration(&mut self, public: bool) -> Result<TraitDeclaration<'source>, ParseError> {
         let name = self.identifier()?;
+        let mut generic_parameters = [None; MAX_SOURCE_TRAIT_ARGUMENTS];
+        let mut generic_parameter_count = 0usize;
+        if self.take_text("<")?.is_some() {
+            loop {
+                if generic_parameter_count == MAX_SOURCE_TRAIT_ARGUMENTS {
+                    let token = self.peek()?;
+                    return Err(self.error(ParseErrorKind::TooManyGenericArguments, token));
+                }
+                let parameter = self.identifier()?;
+                generic_parameters[generic_parameter_count] = Some(parameter.text);
+                generic_parameter_count += 1;
+                if self.take_text(",")?.is_some() {
+                    continue;
+                }
+                let close = self.take()?;
+                if !close.is_some_and(|token| token.text == ">") {
+                    return Err(self.error(ParseErrorKind::UnterminatedDelimiter, close));
+                }
+                break;
+            }
+        }
         let mut supertraits = [None; MAX_TRAIT_SUPERTRAITS];
         let mut supertrait_count = 0usize;
         if self.take_text(":")?.is_some() {
@@ -3111,6 +3235,8 @@ impl<'source> Parser<'source> {
             public,
             name: name.text,
             name_span: name.span,
+            generic_parameters,
+            generic_parameter_count,
             supertraits,
             supertrait_count,
             associated_types,
@@ -3124,6 +3250,12 @@ impl<'source> Parser<'source> {
 
     fn trait_implementation(&mut self) -> Result<TraitImplementation<'source>, ParseError> {
         let trait_name = self.identifier()?;
+        let (trait_arguments, trait_argument_count, consumed_outer_close) =
+            self.source_trait_arguments()?;
+        if consumed_outer_close {
+            let token = self.peek()?;
+            return Err(self.error(ParseErrorKind::ExpectedFor, token));
+        }
         let for_keyword = self.take()?;
         if !for_keyword.is_some_and(|token| token.text == "for") {
             return Err(self.error(ParseErrorKind::ExpectedFor, for_keyword));
@@ -3164,6 +3296,8 @@ impl<'source> Parser<'source> {
         Ok(TraitImplementation {
             trait_name: trait_name.text,
             trait_name_span: trait_name.span,
+            trait_arguments,
+            trait_argument_count,
             self_type,
             associated_types,
             associated_type_count,
@@ -3458,11 +3592,6 @@ mod tests {
             .unwrap_err();
         assert_eq!(body.kind, ParseErrorKind::UnsupportedTraitBody);
 
-        let generic = Parser::new("trait Value<T> {}")
-            .parse_module::<2, 2>()
-            .unwrap_err();
-        assert_eq!(generic.kind, ParseErrorKind::ExpectedBody);
-
         let attributed = Parser::new("#[unsafe(no_mangle)] trait Value {}")
             .parse_module::<2, 2>()
             .unwrap_err();
@@ -3482,6 +3611,25 @@ mod tests {
             &source[implementation.self_type.span.start..implementation.self_type.span.end],
             implementation.self_type.text
         );
+    }
+
+    #[test]
+    fn parses_bounded_trait_parameters_and_concrete_arguments() {
+        let source = concat!(
+            "trait Convert<Input, Output> {} ",
+            "impl Convert<u8, core::primitive::u16> for u32 {} ",
+            "fn check() where u32: Convert<u8, u16> {}"
+        );
+        let module: TestModule<'_> = Parser::new(source).parse_module().unwrap();
+        let Some(Item::Trait(declaration)) = module.items()[0] else {
+            panic!("expected trait")
+        };
+        assert_eq!(declaration.generic_parameters(), &[Some("Input"), Some("Output")]);
+        let Some(Item::TraitImplementation(implementation)) = module.items()[1] else {
+            panic!("expected implementation")
+        };
+        assert_eq!(implementation.trait_argument_count(), 2);
+        assert_eq!(implementation.trait_arguments()[1].unwrap().text, "core::primitive::u16");
     }
 
     #[test]

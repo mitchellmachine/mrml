@@ -411,6 +411,27 @@ mod tests {
     }
 
     #[test]
+    fn proves_concrete_source_trait_arguments_before_codegen() {
+        let source = concat!(
+            "trait Convert<Input> { type Output; } ",
+            "impl Convert<u8> for u32 { type Output = u16; } ",
+            "#[unsafe(no_mangle)] pub extern \"C\" fn answer() -> u64 ",
+            "where u32: Convert<u8>, <u32 as Convert<u8>>::Output = u16 { 42 }"
+        );
+        compile(source, "answer", ObjectFormat::Coff).unwrap();
+
+        let missing = source.replace("u32: Convert<u8>", "u32: Convert<u16>");
+        let error = compile(&missing, "answer", ObjectFormat::Coff).unwrap_err();
+        assert!(matches!(
+            error.kind,
+            CompileErrorKind::TraitObligation(SourceTraitObligationError {
+                kind: crate::SourceTraitObligationErrorKind::Unsatisfied,
+                ..
+            })
+        ));
+    }
+
+    #[test]
     fn reports_each_pipeline_boundary() {
         let parse = compile("fn broken(", "broken", ObjectFormat::Elf64).unwrap_err();
         assert!(matches!(parse.kind, CompileErrorKind::Parse(_)));
