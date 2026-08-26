@@ -647,6 +647,15 @@ had substitutable executable identity. KVM execution was not rerun, and
 production service-loop invocation, complete distinct-domain construction, and
 end-to-end Total satisfaction remain **PLANNED**.
 
+Focused distinct-domain rollback evidence now covers an authenticated
+two-package release. Domain A prepares, domain B then fails its Total-mode
+placement bounds, and the same admission owner immediately prepares both
+domains successfully afterward, proving the earlier route was canceled rather
+than stranded. Extracting routes also decrements the prepared set's live count;
+canceling both exact routes leaves it empty. Configuration passes 52 tests on
+Windows. No backend endpoint was constructed, so service-loop invocation and
+multi-domain backend construction/cleanup remain **PLANNED**.
+
 The production-shaped stable-selection API is now **PARTIALLY IMPLEMENTED**.
 `SelectedStableSystemRecovery` admits only distinct configuration and authority
 checkpoint files selected from the same integrity-validated volume/root

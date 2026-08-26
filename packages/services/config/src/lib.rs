@@ -4830,10 +4830,15 @@ impl<const DOMAINS: usize> PreparedTotalServiceSet<DOMAINS> {
     }
 
     pub fn take(&mut self, domain: ObjectId) -> Option<PreparedIsolationServiceRoute> {
-        self.routes
+        let route = self
+            .routes
             .iter_mut()
             .find(|route| route.as_ref().is_some_and(|route| route.spec().domain() == domain))
-            .and_then(Option::take)
+            .and_then(Option::take);
+        if route.is_some() {
+            self.count -= 1;
+        }
+        route
     }
 
     pub fn into_routes(self) -> [Option<PreparedIsolationServiceRoute>; DOMAINS] {
@@ -7630,6 +7635,141 @@ mod tests {
         .unwrap();
         plan.assign_from_policy(|record| RuntimeDomainAssignment::new(record.package_id, domain))
             .unwrap();
+        plan.seal().unwrap()
+    }
+
+    fn activated_two_domain_release(
+        first_domain: ObjectId,
+        second_domain: ObjectId,
+        policy_generation: u64,
+    ) -> ActivatedReleaseTotalMicrovmInventory<2> {
+        let first_digest = [0x44; 64];
+        let second_digest = [0x45; 64];
+        let generation_records = [
+            SystemGenerationDigestRecord {
+                package_id: "org.mrml.service.config",
+                version: 5,
+                artifact_digest: &first_digest,
+            },
+            SystemGenerationDigestRecord {
+                package_id: "org.mrml.service.deployment",
+                version: 6,
+                artifact_digest: &second_digest,
+            },
+        ];
+        let mut generation = [0; 320];
+        let generation_length =
+            encode_system_generation(33, &generation_records, &mut generation).unwrap();
+        let providers = [
+            ComponentInterfaceProvider::exact(
+                "org.mrml.service.config",
+                "org.mrml.interface.config",
+                1,
+                [0x52; 32],
+                ComponentProviderForms::MICROVM,
+            )
+            .unwrap(),
+            ComponentInterfaceProvider::exact(
+                "org.mrml.service.deployment",
+                "org.mrml.interface.deployment",
+                1,
+                [0x53; 32],
+                ComponentProviderForms::MICROVM,
+            )
+            .unwrap(),
+        ];
+        let requirements = [
+            ComponentInterfaceRequirement::exact(
+                "org.mrml.service.config",
+                "org.mrml.interface.config",
+                1,
+                [0x52; 32],
+            )
+            .unwrap(),
+            ComponentInterfaceRequirement::exact(
+                "org.mrml.service.deployment",
+                "org.mrml.interface.deployment",
+                1,
+                [0x53; 32],
+            )
+            .unwrap(),
+        ];
+        let mut catalog = [0; 512];
+        let catalog_length =
+            encode_interface_catalog(33, &requirements, &providers, &mut catalog).unwrap();
+        let runtime_records = [
+            RuntimeInventoryRecord {
+                package_id: "org.mrml.service.config",
+                version: 5,
+                artifact_digest: &first_digest,
+                class: RuntimeIsolationClass::MicrovmEligible,
+                must_run: true,
+                preferred: RuntimeIsolationPlacement::NativeService,
+                minimum: RuntimeIsolationPlacement::NativeService,
+                maximum: RuntimeIsolationPlacement::Microvm,
+                supported: RuntimeIsolationPlacement::NativeService.bit()
+                    | RuntimeIsolationPlacement::Microvm.bit(),
+                reason: "",
+            },
+            RuntimeInventoryRecord {
+                package_id: "org.mrml.service.deployment",
+                version: 6,
+                artifact_digest: &second_digest,
+                class: RuntimeIsolationClass::MicrovmEligible,
+                must_run: true,
+                preferred: RuntimeIsolationPlacement::NativeService,
+                minimum: RuntimeIsolationPlacement::NativeService,
+                maximum: RuntimeIsolationPlacement::Microvm,
+                supported: RuntimeIsolationPlacement::NativeService.bit()
+                    | RuntimeIsolationPlacement::Microvm.bit(),
+                reason: "",
+            },
+        ];
+        let mut runtime = [0; 512];
+        let runtime_length =
+            encode_runtime_inventory(33, &runtime_records, &mut runtime).unwrap();
+        let private = [0x68; LAMPORT_PRIVATE_KEY_BYTES];
+        let mut public = [0; LAMPORT_PUBLIC_KEY_BYTES];
+        lamport_public_key(&private, &mut public).unwrap();
+        let key_id = Sha3_512::digest(&public);
+        let mut release = vec![0; MAX_SYSTEM_RELEASE_BYTES];
+        let release_length = encode_system_release_with_runtime_inventory(
+            &generation[..generation_length],
+            &catalog[..catalog_length],
+            &runtime[..runtime_length],
+            &private,
+            &mut release,
+        )
+        .unwrap();
+        let parsed = parse_system_release(&release[..release_length]).unwrap();
+        let active_generation = ActivatedSystemGeneration::new(
+            33,
+            parsed.generation().digest(),
+            parsed.interface_catalog().digest(),
+            8,
+            0x5156,
+            3,
+        )
+        .unwrap();
+        let active = ActivatedSystemRelease::new(active_generation, parsed.identity());
+        let mut plan = RuntimeDomainAssignmentPlan::<2>::new(
+            &release[..release_length],
+            &key_id,
+            active,
+            policy_generation,
+        )
+        .unwrap();
+        plan.assign_from_policy(|record| {
+            RuntimeDomainAssignment::new(
+                record.package_id,
+                if record.package_id == "org.mrml.service.config" {
+                    first_domain
+                } else {
+                    second_domain
+                },
+            )
+        })
+        .unwrap();
         plan.seal().unwrap()
     }
 
@@ -12954,6 +13094,92 @@ mod tests {
             policy.bind_release_inventory(release),
             Err(ConfigError::IsolationPolicyMismatch)
         ));
+    }
+
+    #[test]
+    fn complete_service_set_rolls_back_an_earlier_distinct_domain() {
+        let policy = AppliedIsolationPolicy {
+            mode: IsolationMode::Balanced,
+            component_request: Some(IsolationPlacement::NativeService),
+            system_selection: OwnerIsolationSelection::Balanced,
+            component_selection: OwnerIsolationSelection::Native,
+            policy_generation: 19,
+        }
+        .compose_boot_override(Some(BootIsolationOverride::TotalMicrovmOnce));
+        let first_domain = ObjectId(0x434f_4e46_4947_0011);
+        let second_domain = ObjectId(0x4445_504c_4f59_0012);
+        let valid_bounds = IsolationServiceBounds::new(
+            IsolationPlacement::NativeService,
+            IsolationPlacement::NativeService,
+            IsolationPlacement::Microvm,
+            true,
+            true,
+        )
+        .unwrap();
+        let native_only_bounds = IsolationServiceBounds::new(
+            IsolationPlacement::NativeService,
+            IsolationPlacement::NativeService,
+            IsolationPlacement::NativeService,
+            true,
+            false,
+        )
+        .unwrap();
+        let first = IsolationServiceIdentity::new(
+            first_domain,
+            ObjectId(0x434f_4e46_0000_0011),
+            1,
+            5,
+            TotalMicrovmClass::MicrovmEligible,
+        )
+        .unwrap();
+        let second = IsolationServiceIdentity::new(
+            second_domain,
+            ObjectId(0x4445_504c_0000_0012),
+            1,
+            6,
+            TotalMicrovmClass::MicrovmEligible,
+        )
+        .unwrap();
+
+        let release = activated_two_domain_release(first_domain, second_domain, 19);
+        let mut rejected = policy.bind_release_inventory(release).unwrap();
+        assert_eq!(
+            rejected
+                .prepare_complete_service_set(&[
+                    TotalServicePreparationBinding::new(valid_bounds, first),
+                    TotalServicePreparationBinding::new(native_only_bounds, second),
+                ])
+                .err(),
+            Some(CompleteTotalServicePreparationError::Preparation(
+                ConfiguredIsolationPreparationError::Configuration(ConfigError::SchemaViolation)
+            ))
+        );
+        assert_eq!(rejected.admission().running().count(), 0);
+        assert_eq!(rejected.admission().unavailable_domains().count(), 0);
+
+        // Reusing the same admission owner proves the failed transaction left
+        // neither distinct domain occupying a prepared slot.
+        let mut prepared = rejected
+            .prepare_complete_service_set(&[
+                TotalServicePreparationBinding::new(valid_bounds, first),
+                TotalServicePreparationBinding::new(valid_bounds, second),
+            ])
+            .unwrap();
+        assert_eq!(prepared.len(), 2);
+        prepared
+            .take(second_domain)
+            .unwrap()
+            .cancel(rejected.admission_mut())
+            .unwrap();
+        prepared
+            .take(first_domain)
+            .unwrap()
+            .cancel(rejected.admission_mut())
+            .unwrap();
+        assert!(prepared.is_empty());
+        assert_eq!(prepared.len(), 0);
+        assert!(prepared.into_routes().iter().all(Option::is_none));
+        assert_eq!(rejected.admission().running().count(), 0);
     }
 
     #[test]

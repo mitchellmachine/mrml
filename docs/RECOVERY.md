@@ -1804,6 +1804,14 @@ the later component handoff. KVM execution, native-media recovery, complete
 distinct-domain construction, and end-to-end Total satisfaction were not
 established.
 
+Focused configuration evidence now uses an authenticated two-package release
+with distinct domains. A Total-inadmissible second binding causes reverse
+cancellation of the first prepared route; reusing the same admission owner then
+prepares both exact domains, and extracting/canceling both routes leaves the
+prepared set empty. The Windows configuration suite passes 52 tests. No service
+image or backend endpoint participates in this test, so it establishes recovery
+transaction cleanup only, not production invocation or multi-domain execution.
+
 Before any profile-specific kernel probe runs, the kernel now constructs its
 early context from the exact decoded handoff and retains the one-boot isolation
 request only as non-authorizing evidence. This closes the first-kernel-entry

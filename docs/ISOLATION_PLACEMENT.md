@@ -747,6 +747,14 @@ consumer/provider executable identities then failed closed as
 `ArtifactSubstitution`; this is not complete component execution, KVM parity,
 live boot, or Total satisfaction evidence.
 
+The complete-set rollback path now has focused two-domain evidence. With an
+authenticated two-package release, a policy-inadmissible second domain cancels
+the already prepared first domain; the same sole admission owner can then
+prepare both domains, and exact extraction/cancellation returns the set to a
+live count of zero. Windows configuration tests pass 52/52. This constructs no
+backend endpoint and does not promote service-loop or multi-domain execution
+from **PLANNED**.
+
 The common boot/recovery owner is now **PARTIALLY IMPLEMENTED** in both live
 runners. `BootTotalAdmission` binds an effective Total policy directly to the
 activated release, constructs an activated admission table retaining the exact
