@@ -2476,10 +2476,24 @@ fn x86_64_inline_output_array_element<'source, const MAX_PARAMETERS: usize>(
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 struct X86_64InlineOutputPlace<'source> {
-    local_index: usize,
-    local: RuntimeLocal<'source>,
+    base: RuntimePlaceIdentity,
+    ty: RuntimeExpressionType,
     projections: RuntimePlaceProjections,
-    stack_offset: usize,
+    storage: X86_64InlineOutputStorage,
+    marker: core::marker::PhantomData<&'source ()>,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum X86_64InlineOutputStorage {
+    LocalStack { local_index: usize, offset: usize },
+    LocalPointer { local_index: usize },
+    ParameterPointer { parameter_index: usize },
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum X86_64InlineResolvedOutputStorage {
+    StackSlot(usize),
+    PointerSlot(usize),
 }
 
 fn x86_64_inline_output_place<'source, const MAX_PARAMETERS: usize>(
@@ -2491,30 +2505,100 @@ fn x86_64_inline_output_place<'source, const MAX_PARAMETERS: usize>(
         x86_64_inline_output_tuple_field(function, locals, output)?
     {
         return Ok(X86_64InlineOutputPlace {
-            local_index,
-            local,
+            base: RuntimePlaceIdentity::Local(local.id),
+            ty: local.ty,
             projections: RuntimePlaceProjections::single(RuntimePlaceProjection::TupleField(field)),
-            stack_offset: field,
+            storage: X86_64InlineOutputStorage::LocalStack {
+                local_index,
+                offset: field,
+            },
+            marker: core::marker::PhantomData,
         });
     }
     if let Some((local_index, local, element)) =
         x86_64_inline_output_array_element(function, locals, output)?
     {
         return Ok(X86_64InlineOutputPlace {
-            local_index,
-            local,
+            base: RuntimePlaceIdentity::Local(local.id),
+            ty: local.ty,
             projections: RuntimePlaceProjections::single(RuntimePlaceProjection::ArrayElement(
                 element,
             )),
-            stack_offset: element,
+            storage: X86_64InlineOutputStorage::LocalStack {
+                local_index,
+                offset: element,
+            },
+            marker: core::marker::PhantomData,
         });
+    }
+    if let Some(name) = output.strip_prefix('*') {
+        if name.is_empty() || x86_64_naked_external_symbol(name) != Some(name) {
+            return Err(CodegenErrorKind::InvalidInlineAssembly);
+        }
+        let mutable_u64_pointee = |ty| {
+            matches!(
+                ty,
+                RuntimeExpressionType::Reference {
+                    target: RuntimeReferenceTarget::Scalar(RuntimeArrayElementType::Integer(Some(
+                        crate::IntegerType::U64
+                    ))),
+                    mutable: true,
+                } | RuntimeExpressionType::RawPointer {
+                    pointee: RuntimeArrayElementType::Integer(Some(crate::IntegerType::U64)),
+                    mutable: true,
+                }
+            )
+        };
+        if let Some((local_index, local)) =
+            locals.iter().enumerate().rev().find_map(|(index, local)| {
+                local
+                    .filter(|local| local.name == name)
+                    .map(|local| (index, local))
+            })
+        {
+            if !mutable_u64_pointee(local.ty) {
+                return Err(CodegenErrorKind::RuntimeTypeMismatch);
+            }
+            return Ok(X86_64InlineOutputPlace {
+                base: RuntimePlaceIdentity::Local(local.id),
+                ty: local.ty,
+                projections: RuntimePlaceProjections::single(RuntimePlaceProjection::Dereference),
+                storage: X86_64InlineOutputStorage::LocalPointer { local_index },
+                marker: core::marker::PhantomData,
+            });
+        }
+        if let Some((parameter_index, parameter)) = function
+            .parameters()
+            .iter()
+            .flatten()
+            .enumerate()
+            .find(|(_, parameter)| parameter.name == name)
+        {
+            let ty = runtime_type_from_text(parameter.ty.text)
+                .ok_or(CodegenErrorKind::RuntimeTypeMismatch)?;
+            if !mutable_u64_pointee(ty) {
+                return Err(CodegenErrorKind::RuntimeTypeMismatch);
+            }
+            return Ok(X86_64InlineOutputPlace {
+                base: RuntimePlaceIdentity::Parameter(parameter_index),
+                ty,
+                projections: RuntimePlaceProjections::single(RuntimePlaceProjection::Dereference),
+                storage: X86_64InlineOutputStorage::ParameterPointer { parameter_index },
+                marker: core::marker::PhantomData,
+            });
+        }
+        return Err(CodegenErrorKind::UnknownRuntimeName);
     }
     let (local_index, local) = x86_64_inline_output_local(function, locals, output)?;
     Ok(X86_64InlineOutputPlace {
-        local_index,
-        local,
+        base: RuntimePlaceIdentity::Local(local.id),
+        ty: local.ty,
         projections: RuntimePlaceProjections::EMPTY,
-        stack_offset: 0,
+        storage: X86_64InlineOutputStorage::LocalStack {
+            local_index,
+            offset: 0,
+        },
+        marker: core::marker::PhantomData,
     })
 }
 
@@ -8702,7 +8786,8 @@ fn preanalyze_x86_64_inline_local_access(
 ) -> Result<(), CodegenError> {
     preanalyze_x86_64_inline_place_access(
         facts,
-        local,
+        RuntimePlaceIdentity::Local(local.id),
+        local.ty,
         RuntimePlaceProjections::EMPTY,
         access,
         span,
@@ -8712,18 +8797,18 @@ fn preanalyze_x86_64_inline_local_access(
 
 fn preanalyze_x86_64_inline_place_access(
     facts: &mut RuntimeBodyFacts<'_>,
-    local: RuntimeLocal<'_>,
+    base: RuntimePlaceIdentity,
+    ty: RuntimeExpressionType,
     projections: RuntimePlaceProjections,
     access: RuntimePlaceAccess,
     span: Span,
     body_start: usize,
 ) -> Result<(), CodegenError> {
-    let base = RuntimePlaceIdentity::Local(local.id);
     facts
         .push_assignment_access(RuntimePlaceAccessFact {
             base,
             projections,
-            ty: local.ty,
+            ty,
             access,
             span,
         })
@@ -8826,7 +8911,8 @@ fn preanalyze_runtime_expression_statement_reads<
             })?;
             return preanalyze_x86_64_inline_place_access(
                 facts,
-                place.local,
+                place.base,
+                place.ty,
                 place.projections,
                 RuntimePlaceAccess::Write,
                 statement.span,
@@ -8876,7 +8962,8 @@ fn preanalyze_runtime_expression_statement_reads<
                     })?;
                 return preanalyze_x86_64_inline_place_access(
                     facts,
-                    place.local,
+                    place.base,
+                    place.ty,
                     place.projections,
                     RuntimePlaceAccess::Write,
                     statement.span,
@@ -8891,7 +8978,8 @@ fn preanalyze_runtime_expression_statement_reads<
             })?;
             return preanalyze_x86_64_inline_place_access(
                 facts,
-                place.local,
+                place.base,
+                place.ty,
                 place.projections,
                 RuntimePlaceAccess::ReadModifyWrite,
                 statement.span,
@@ -19363,11 +19451,11 @@ impl<
         place: X86_64InlineOutputPlace<'tree>,
         access: RuntimePlaceAccess,
         span: Span,
-    ) -> Result<usize, CodegenError> {
+    ) -> Result<X86_64InlineResolvedOutputStorage, CodegenError> {
         let fact = RuntimePlaceAccessFact {
-            base: RuntimePlaceIdentity::Local(place.local.id),
+            base: place.base,
             projections: place.projections,
-            ty: place.local.ty,
+            ty: place.ty,
             access,
             span,
         };
@@ -19384,9 +19472,53 @@ impl<
             fact.access,
             fact.span,
         )?;
-        self.local_stack_slots_from(place.local_index + 1)?
-            .checked_add(place.stack_offset)
-            .ok_or(self.error(CodegenErrorKind::OutputTooSmall))
+        match place.storage {
+            X86_64InlineOutputStorage::LocalStack {
+                local_index,
+                offset,
+            } => self
+                .local_stack_slots_from(local_index + 1)?
+                .checked_add(offset)
+                .map(X86_64InlineResolvedOutputStorage::StackSlot)
+                .ok_or(self.error(CodegenErrorKind::OutputTooSmall)),
+            X86_64InlineOutputStorage::LocalPointer { local_index } => {
+                Ok(X86_64InlineResolvedOutputStorage::PointerSlot(
+                    self.local_stack_slots_from(local_index + 1)?,
+                ))
+            }
+            X86_64InlineOutputStorage::ParameterPointer { parameter_index } => {
+                Ok(X86_64InlineResolvedOutputStorage::PointerSlot(
+                    self.parameter_stack_slots_from(parameter_index + 1)?,
+                ))
+            }
+        }
+    }
+
+    fn emit_x86_64_inline_output_load(
+        &mut self,
+        storage: X86_64InlineResolvedOutputStorage,
+    ) -> Result<(), CodegenError> {
+        match storage {
+            X86_64InlineResolvedOutputStorage::StackSlot(slot) => self.emit_stack_slot(slot),
+            X86_64InlineResolvedOutputStorage::PointerSlot(slot) => {
+                self.emit_stack_slot(slot)?;
+                self.emit(&[0x48, 0x8b, 0x00])
+            }
+        }
+    }
+
+    fn emit_x86_64_inline_output_store(
+        &mut self,
+        storage: X86_64InlineResolvedOutputStorage,
+    ) -> Result<(), CodegenError> {
+        match storage {
+            X86_64InlineResolvedOutputStorage::StackSlot(slot) => self.emit_store_stack_slot(slot),
+            X86_64InlineResolvedOutputStorage::PointerSlot(slot) => {
+                self.emit(&[0x48, 0x89, 0xc1])?;
+                self.emit_stack_slot(slot)?;
+                self.emit(&[0x48, 0x89, 0x08])
+            }
+        }
     }
 
     fn record_identifier_read(
@@ -26123,7 +26255,7 @@ impl<
                     statement.span,
                 )?;
                 self.emit(&[0x48, 0xc7, 0xc0, 0x07, 0x00, 0x00, 0x00])?;
-                return self.emit_store_stack_slot(destination);
+                return self.emit_x86_64_inline_output_store(destination);
             }
             Ok(Some(X86_64InlineAssembly::IncrementRax { input, output })) => {
                 if let Some(output) = output {
@@ -26160,7 +26292,7 @@ impl<
                         kind,
                         span: translate_span(body_start, statement.span),
                     })?;
-                    let stack_slot = self.record_x86_64_inline_output_place(
+                    let destination = self.record_x86_64_inline_output_place(
                         place,
                         RuntimePlaceAccess::Write,
                         statement.span,
@@ -26172,7 +26304,7 @@ impl<
                     self.width = previous_width;
                     emission?;
                     self.emit(&[0x48, 0xff, 0xc0])?;
-                    return self.emit_store_stack_slot(stack_slot);
+                    return self.emit_x86_64_inline_output_store(destination);
                 }
                 let place = x86_64_inline_output_place(
                     self.function,
@@ -26183,14 +26315,14 @@ impl<
                     kind,
                     span: translate_span(body_start, statement.span),
                 })?;
-                let stack_slot = self.record_x86_64_inline_output_place(
+                let destination = self.record_x86_64_inline_output_place(
                     place,
                     RuntimePlaceAccess::ReadModifyWrite,
                     statement.span,
                 )?;
-                self.emit_stack_slot(stack_slot)?;
+                self.emit_x86_64_inline_output_load(destination)?;
                 self.emit(&[0x48, 0xff, 0xc0])?;
-                return self.emit_store_stack_slot(stack_slot);
+                return self.emit_x86_64_inline_output_store(destination);
             }
             Ok(Some(X86_64InlineAssembly::AddRaxRcx { left, right })) => {
                 let (index, local) = x86_64_inline_output_local(
@@ -30237,6 +30369,27 @@ mod tests {
         }
         for source in [
             concat!(
+                "#[unsafe(no_mangle)] pub unsafe extern \"C\" fn answer(target: &mut u64) { ",
+                "asm!(\"mov rax, 7\", lateout(\"rax\") *target); }"
+            ),
+            concat!(
+                "#[unsafe(no_mangle)] pub unsafe extern \"C\" fn answer(target: &mut u64) { ",
+                "asm!(\"inc rax\", inout(\"rax\") *target); }"
+            ),
+            concat!(
+                "#[unsafe(no_mangle)] pub unsafe extern \"C\" fn answer(target: &mut u64) { ",
+                "asm!(\"inc rax\", inout(\"rax\") 6u64 => *target); }"
+            ),
+        ] {
+            let code = compile(source).unwrap();
+            assert!(
+                code.bytes()
+                    .windows(3)
+                    .any(|bytes| bytes == [0x48, 0x89, 0x08])
+            );
+        }
+        for source in [
+            concat!(
                 "#[unsafe(no_mangle)] pub unsafe extern \"C\" fn answer() -> u64 { ",
                 "let mut value: u64 = 6; asm!(\"inc {value}\", value = inout(reg) value); value }"
             ),
@@ -30410,6 +30563,14 @@ mod tests {
             ),
             (
                 "#[unsafe(no_mangle)] pub unsafe extern \"C\" fn answer() -> bool { let mut values: [bool; 2] = [false, true]; asm!(\"inc rax\", inout(\"rax\") values[1]); values[1] }",
+                CodegenErrorKind::RuntimeTypeMismatch,
+            ),
+            (
+                "#[unsafe(no_mangle)] pub unsafe extern \"C\" fn answer(target: &u64) { asm!(\"mov rax, 7\", lateout(\"rax\") *target); }",
+                CodegenErrorKind::RuntimeTypeMismatch,
+            ),
+            (
+                "#[unsafe(no_mangle)] pub unsafe extern \"C\" fn answer(target: &mut bool) { asm!(\"inc rax\", inout(\"rax\") *target); }",
                 CodegenErrorKind::RuntimeTypeMismatch,
             ),
             (
