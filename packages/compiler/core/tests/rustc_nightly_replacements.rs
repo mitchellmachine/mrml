@@ -632,12 +632,15 @@ fn rustc_nested_loop_actions_have_an_executable_replacement() {
 #[test]
 fn rustc_nested_branch_actions_reach_native_objects() {
     // Independently authored bounded scalar branch-action probe. The nested
-    // branches exercise action prefixes before return, continue, and break;
-    // this does not claim reference-carrying branch admission.
+    // branches exercise action prefixes before return, continue, and break,
+    // including direct and inlined scalar else arms; this does not claim
+    // reference-carrying else-arm admission.
     for source in [
         "#[unsafe(no_mangle)] pub extern \"C\" fn probe(stop: u32) -> u32 { loop { loop { if stop != 0 { let result: u32 = stop + 40; result + 1; return result; } } } }",
         "#[unsafe(no_mangle)] pub extern \"C\" fn probe(limit: u32) -> u32 { let mut inner: u32 = 0; loop { while inner < limit { inner += 1; if inner < limit { inner += 0; continue; } } return inner; } }",
         "#[unsafe(no_mangle)] pub extern \"C\" fn probe(mode: u32) -> u32 { let mut inner: u32 = 0; loop { loop { inner += 1; if mode != 0 { inner += 4; break; } break; } return inner; } }",
+        "#[unsafe(no_mangle)] pub extern \"C\" fn probe(stop: bool, input: u32) -> u32 { loop { loop { if stop { let selected: u32 = input + 1; return selected; } else { let fallback: u32 = input + 2; return fallback; } } } }",
+        "fn select(stop: bool, input: u32) -> u32 { loop { loop { if stop { let selected: u32 = input + 3; return selected; } else { let fallback: u32 = input + 4; return fallback; } } } } #[unsafe(no_mangle)] pub extern \"C\" fn probe(stop: bool, input: u32) -> u32 { select(stop, input) }",
     ] {
         for format in [ObjectFormat::Elf64, ObjectFormat::Coff] {
             compile_source_function::<2048, 1536, 4, 4, 4, 64>(
