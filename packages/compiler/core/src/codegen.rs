@@ -4051,6 +4051,18 @@ impl<const MAX_ORIGINS: usize> RuntimeCalleeProjectedOrigins<MAX_ORIGINS> {
         }
         joined
     }
+
+    fn retain_local_prefix(self, local_count: usize) -> Self {
+        let mut retained = Self::EMPTY;
+        for entry in self.entries[..self.count].iter().flatten() {
+            if entry.local >= local_count {
+                continue;
+            }
+            retained.entries[retained.count] = Some(*entry);
+            retained.count += 1;
+        }
+        retained
+    }
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -15630,7 +15642,10 @@ fn runtime_reference_call_origin_parameter<const MAX_PARAMETERS: usize, const MA
                     )?;
                     match outcome {
                         ConditionalActionOutcome::FallsThrough => {
-                            merge_outcome(branch_origins, branch_projected_origins)?;
+                            merge_outcome(
+                                branch_origins,
+                                branch_projected_origins.retain_local_prefix(local_count),
+                            )?;
                         }
                         ConditionalActionOutcome::Returns(candidate) => merge(candidate)?,
                     }
@@ -15657,9 +15672,10 @@ fn runtime_reference_call_origin_parameter<const MAX_PARAMETERS: usize, const MA
                         &mut else_local_count,
                     )?;
                     match outcome {
-                        ConditionalActionOutcome::FallsThrough => {
-                            merge_outcome(else_origins, else_projected_origins)?
-                        }
+                        ConditionalActionOutcome::FallsThrough => merge_outcome(
+                            else_origins,
+                            else_projected_origins.retain_local_prefix(local_count),
+                        )?,
                         ConditionalActionOutcome::Returns(candidate) => merge(candidate)?,
                     }
                 }
@@ -31802,6 +31818,32 @@ mod tests {
                         ),
                     })
                 }
+                ("branch_local_tuple_assign_alias", 3) if MAX_PARAMETERS >= 4 => {
+                    parameters[0] = Some(RuntimeCallParameter {
+                        name: "first",
+                        ty: reference,
+                    });
+                    parameters[1] = Some(RuntimeCallParameter {
+                        name: "second",
+                        ty: reference,
+                    });
+                    parameters[2] = Some(RuntimeCallParameter {
+                        name: "choose",
+                        ty: ScalarType::Bool,
+                    });
+                    Some(RuntimeCallTarget {
+                        name: "branch_local_tuple_assign_alias",
+                        parameters,
+                        parameter_count: 3,
+                        return_type: reference,
+                        return_type_name: "&mut u16",
+                        body_expression: concat!(
+                            "let mut alias: &mut u16 = first; ",
+                            "if choose { let pair: (&mut u16,) = (second,); alias = pair.0; } ",
+                            "else { let pair: (&mut u16,) = (second,); alias = pair.0; } alias"
+                        ),
+                    })
+                }
                 ("loop_tuple_field_assign_alias", 3) if MAX_PARAMETERS >= 4 => {
                     parameters[0] = Some(RuntimeCallParameter {
                         name: "first",
@@ -36008,6 +36050,7 @@ mod tests {
             "fn value(input: &mut u16) -> u16 { let returned: &mut u16 = tuple_field_move(input); let competing: &mut u16 = &mut *input; *competing += 1; *returned }",
             "fn value(first: &mut u16, second: &mut u16) -> u16 { let returned: &mut u16 = tuple_field_assign_alias(first, second); let competing: &mut u16 = &mut *second; *competing += 1; *returned }",
             "fn value(first: &mut u16, second: &mut u16, choose: bool) -> u16 { let returned: &mut u16 = branch_tuple_field_assign_alias(first, second, choose); let competing: &mut u16 = &mut *second; *competing += 1; *returned }",
+            "fn value(first: &mut u16, second: &mut u16, choose: bool) -> u16 { let returned: &mut u16 = branch_local_tuple_assign_alias(first, second, choose); let competing: &mut u16 = &mut *second; *competing += 1; *returned }",
             "fn value(first: &mut u16, second: &mut u16, repeat: bool) -> u16 { let returned: &mut u16 = loop_tuple_field_assign_alias(first, second, repeat); let competing: &mut u16 = &mut *second; *competing += 1; *returned }",
             "fn value(first: &mut u16, second: &mut u16, choose: bool) -> u16 { let returned: &mut u16 = tuple_field_initialize_conditional(first, second, choose); let competing: &mut u16 = &mut *second; *competing += 1; *returned }",
             "fn value(first: &mut u16, second: &mut u16, choose: bool) -> u16 { let returned: &mut u16 = branch_tuple_field_assign(first, second, choose); let competing: &mut u16 = &mut *second; *competing += 1; *returned }",
@@ -36034,6 +36077,7 @@ mod tests {
             "fn value(input: &mut u16) -> u16 { let returned: &mut u16 = tuple_field_move(input); *returned += 1; let restored: &mut u16 = &mut *input; *restored }",
             "fn value(first: &mut u16, second: &mut u16) -> u16 { let returned: &mut u16 = tuple_field_assign_alias(first, second); *returned += 1; let restored: &mut u16 = &mut *second; *restored }",
             "fn value(first: &mut u16, second: &mut u16, choose: bool) -> u16 { let returned: &mut u16 = branch_tuple_field_assign_alias(first, second, choose); *returned += 1; let restored: &mut u16 = &mut *second; *restored }",
+            "fn value(first: &mut u16, second: &mut u16, choose: bool) -> u16 { let returned: &mut u16 = branch_local_tuple_assign_alias(first, second, choose); *returned += 1; let restored: &mut u16 = &mut *second; *restored }",
             "fn value(first: &mut u16, second: &mut u16, repeat: bool) -> u16 { let returned: &mut u16 = loop_tuple_field_assign_alias(first, second, repeat); *returned += 1; let restored: &mut u16 = &mut *second; *restored }",
             "fn value(first: &mut u16, second: &mut u16, choose: bool) -> u16 { let returned: &mut u16 = tuple_field_initialize_conditional(first, second, choose); *returned += 1; let restored: &mut u16 = &mut *second; *restored }",
             "fn value(first: &mut u16, second: &mut u16, choose: bool) -> u16 { let returned: &mut u16 = branch_tuple_field_assign(first, second, choose); *returned += 1; let restored: &mut u16 = &mut *second; *restored }",
@@ -36133,6 +36177,26 @@ mod tests {
                     "if choose { alias = pair.0; } alias"
                 ),
                 ..branch_tuple_field_assign_alias
+            }),
+            None
+        );
+        let branch_local_tuple_assign_alias = MutableReferenceCallResolver
+            .resolve_runtime_call::<4>("branch_local_tuple_assign_alias", 3)
+            .unwrap();
+        assert_eq!(
+            runtime_reference_call_origin_parameter::<4, 32>(branch_local_tuple_assign_alias),
+            Some(1)
+        );
+        assert_eq!(
+            runtime_reference_call_origin_parameter::<4, 48>(RuntimeCallTarget {
+                body_expression: concat!(
+                    "let mut local_value: u16 = 1; ",
+                    "let mut alias: &mut u16 = first; ",
+                    "if choose { let pair: (&mut u16,) = (second,); alias = pair.0; } ",
+                    "else { let pair: (&mut u16,) = (second,); alias = pair.0; } ",
+                    "let replacement: (&mut u16,) = (&mut local_value,); replacement.0"
+                ),
+                ..branch_local_tuple_assign_alias
             }),
             None
         );
@@ -40909,6 +40973,14 @@ mod tests {
         let mut different = RuntimeCalleeProjectedOrigins::<1>::EMPTY;
         different.set(0, tuple, first, 4).unwrap();
         assert_eq!(state.intersect(different).count, 0);
+
+        let mut scoped = RuntimeCalleeProjectedOrigins::<2>::EMPTY;
+        scoped.set(0, tuple, first, 2).unwrap();
+        scoped.set(1, tuple, second, 3).unwrap();
+        let retained = scoped.retain_local_prefix(1);
+        assert_eq!(retained.count, 1);
+        assert_eq!(retained.get(0, first).unwrap().origin, 2);
+        assert_eq!(retained.get(1, second), None);
     }
 
     #[test]
