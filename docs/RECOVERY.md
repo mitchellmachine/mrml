@@ -1140,9 +1140,15 @@ substitution fails before launch state changes. Windows and Arch Linux each
 pass 44 configuration-service tests. A shared hosted-only source now
 reconstructs this owner through the existing exact-file, authenticated
 authority-checkpoint, boot-bound monotonic-state, dependent-validation, and
-recovered-service publication transaction. Its independently fixed accepted
+recovered-service publication transaction. It now selects both checkpoint files
+from one integrity-validated redundant-root graph and binds that selection to
+the same volume/root carried by handoff state, monotonic state, and owner
+approval. Its independently fixed accepted
 epoch is 8 and successor authority epoch is 9; a handoff carrying epoch 7 fails
-rather than redefining the source. Live WHP and nested-KVM component probes now
+rather than redefining the source, and root-generation substitution also fails.
+The recovered policy retains this exact volume/root provenance through the
+control-plane join instead of reducing it to an epoch before runtime admission.
+Live WHP and nested-KVM component probes now
 consume this recovered owner through route commit and final proof. This is
 controlled in-memory recovery evidence, not production stable media,
 owner-presence, TPM, firmware, or installed early-boot recovery, which remain

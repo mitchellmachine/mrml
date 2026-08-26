@@ -743,10 +743,17 @@ and finalizes the release proof without a parallel table. Recovery wraps this
 same owner with committed recovery provenance. A shared hosted-only source now
 exercises the normal exact-generation configuration-file read, owner-approved
 authority checkpoint, boot-bound monotonic state comparison, dependent policy
-validation, recovered service publication, and atomic release binding. Its
+validation, recovered service publication, and atomic release binding. Both the
+authority-checkpoint file and configuration file must now come from the same
+integrity-validated redundant-root graph. The handoff, authenticated monotonic
+store, owner approval, reachable selections, and dependent validator exact-match
+volume `51...51` and root generation 14. The resulting recovered policy retains
+that exact volume/root provenance, and the runtime data plane opens only after
+the generic recovery join rechecks it. Its
 authenticated fixture state is independent of the handoff: accepted epoch 8
 advances to authority epoch 9, while a decoded epoch-7 handoff fails before
-authority reconstruction. Fresh WHP and nested-KVM signed probes consume the
+authority reconstruction; root-generation substitution likewise fails. Fresh
+WHP and nested-KVM signed probes consume the
 resulting `RecoveredTotalAdmission`, each report one eligible microVM and zero
 native fallback, and complete the same exact-generation component path. WHP
 passes 11 runner tests, KVM passes 12, and configuration passes 44 on both

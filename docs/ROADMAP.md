@@ -318,9 +318,14 @@ same table; unclassified-domain and policy-generation substitutions leave no
 launch state. Configuration suites pass 44 tests on Windows and Arch Linux.
 Live WHP and nested KVM now consume that recovered owner from a shared
 hosted-only exact-file and authenticated-authority recovery source through
-route commit and final proof. The source independently fixes accepted epoch 8
-and successor authority epoch 9, and rejects a stale epoch-7 handoff. Production
-stable-media recovery, early-boot orchestration, menu presentation,
+route commit and final proof. Both checkpoint files are now selected from one
+integrity-validated redundant-root graph whose exact volume/root is also bound
+by handoff state, monotonic state, and owner approval. The source independently
+fixes accepted epoch 8 and successor authority epoch 9, and rejects stale epoch
+7 or a substituted root generation. The committed volume/root provenance now
+remains in recovered policy through
+the control-plane join and is reported before the runtime data plane opens.
+Production stable-media recovery, early-boot orchestration, menu presentation,
 OVMF/EFI-Shell execution, complete installed-system inventory, and end-to-end
 runtime enforcement remain **PLANNED**.
 

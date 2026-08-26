@@ -3120,9 +3120,16 @@ commits one classified microVM route, and finalizes the generation-bound Total
 proof through the single recovered owner. Configuration passes 44 tests on both
 Windows and Arch Linux. A shared hosted-only recovery source now uses the
 existing exact-file and authenticated-authority recovery transaction to produce
-that same committed owner. Its authenticated accepted epoch 8 is independent
-of the decoded handoff and advances to authority epoch 9; a stale epoch-7
-handoff fails before release. Fresh live WHP and nested-KVM probes retain the
+that same committed owner. The authority-checkpoint and configuration files now
+come from one integrity-validated redundant-root graph; handoff state, monotonic
+state, owner approval, both file selections, and the dependent validator bind
+the same exact volume and root generation. Its authenticated accepted epoch 8
+is independent of the decoded handoff and advances to authority epoch 9; a
+stale epoch-7 handoff or substituted root generation fails before release.
+The recovered policy retains the committed volume/root identity so admission
+cannot discard the control plane's exact recovery binding before opening the
+runtime data plane.
+Fresh live WHP and nested-KVM probes retain the
 recovered owner through route commit and final proof. WHP reported
 `cpu_runtime=1019us`, `verify=18399us`, `prepare=6871us`, `execute=2070us`, and
 `total=49892us`; KVM reported `component_runtime=1455us`, `verify=24924us`,

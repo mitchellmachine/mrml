@@ -3,39 +3,43 @@
 
 #[cfg(target_os = "linux")]
 use mrml_config::{
-    AdmittedConfigurationGuestFactory, ConfigTransaction, ConfigurationMicrovmEndpoint,
-    ConfigurationService, EffectiveBootIsolationPolicy, IsolationPolicyApplicationPlan,
-    IsolationPolicySetting, IsolationServiceBounds, IsolationServiceIdentity,
-    MicrovmConfigurationServiceLauncher, OwnerIsolationSelection,
-    PreparedMicrovmConfigurationLauncher, RecoveredTotalAdmission, SettingId,
-    hosted_recovery_probe::recover_total_admission_with,
+    hosted_recovery_probe::recover_total_admission_with, AdmittedConfigurationGuestFactory,
+    ConfigTransaction, ConfigurationMicrovmEndpoint, ConfigurationService,
+    EffectiveBootIsolationPolicy, IsolationPolicyApplicationPlan, IsolationPolicySetting,
+    IsolationServiceBounds, IsolationServiceIdentity, MicrovmConfigurationServiceLauncher,
+    OwnerIsolationSelection, PreparedMicrovmConfigurationLauncher, RecoveredTotalAdmission,
+    SettingId,
 };
 #[cfg(target_os = "linux")]
-use mrml_crypto::{LAMPORT_PUBLIC_KEY_BYTES, Sha3_512};
+use mrml_crypto::{Sha3_512, LAMPORT_PUBLIC_KEY_BYTES};
 #[cfg(target_os = "linux")]
 use mrml_deployment::{
-    DeploymentService, GenerationCandidate, encode_deployment_release_checkpoint,
+    encode_deployment_release_checkpoint, DeploymentService, GenerationCandidate,
 };
-use mrml_error::{Result, anyhow};
+use mrml_error::{anyhow, Result};
 #[cfg(target_os = "linux")]
-use mrml_kernel::arch::x86_64::{Mapping, PRIVILEGE_STACK_ARENA_PAGES, PagePermissions, VirtAddr};
+use mrml_kernel::arch::x86_64::{Mapping, PagePermissions, VirtAddr, PRIVILEGE_STACK_ARENA_PAGES};
 #[cfg(target_os = "linux")]
 use mrml_kernel::{
-    ActiveMicrovmProjectionPlan, AdmittedApplicationGuestFactory, AffinityDeadlineVmBackend,
-    ApplicationLaunch, ApplicationMicrovmEndpoint, ArtifactKind, BootIsolationOverride, Capability,
-    CapabilitySpace, CpuBudgetId, CpuBudgetSpec, CpuBudgetTable, CpuRuntimeSlice,
-    DeadlineVmBackend, GPU_DOORBELL_PORT, GPU_QUEUE_MESSAGE_BYTES, GpuCommandRing,
+    admit_microvm_projection, bind_component_service_handoff, bind_verified_application_image,
+    component_image_page_plan, prepare_isolation_service_route, prepare_microvm_guest_ram,
+    release_component_image, release_microvm_guest_ram, reserve_component_image,
+    reserve_isolation_vcpus, reserve_microvm_guest_ram, reserve_microvm_page_projection,
+    route_isolation_application, run_pci_configuration_once,
+    run_pci_configuration_once_with_backend_mapper, run_virtual_block_mmio_transaction_once,
+    run_virtual_block_transaction_once, verify_gpu_kernel_bundle, ActiveMicrovmProjectionPlan,
+    AdmittedApplicationGuestFactory, AffinityDeadlineVmBackend, ApplicationLaunch,
+    ApplicationMicrovmEndpoint, ArtifactKind, BootIsolationOverride, Capability, CapabilitySpace,
+    CpuBudgetId, CpuBudgetSpec, CpuBudgetTable, CpuRuntimeSlice, DeadlineVmBackend, GpuCommandRing,
     GpuQueueIdentity, GpuQueueReceiver, GpuResourceResponse, GpuResourceResponseSender,
     GpuSharedQueueLayout, GpuVmmQueueBridge, GuestMemory, HypercallRouter, InterruptPolicy,
     IsolationAdmissionTable, IsolationApplicationBackend, IsolationApplicationSpec, IsolationMode,
-    IsolationPlacement, IsolationUnavailableReason, MAX_APPLICATION_IMAGE_BYTES,
-    MAX_COMPONENT_IMAGE_REGIONS, MemoryPoolTable, MicrovmPageProjectionKind,
+    IsolationPlacement, IsolationUnavailableReason, MemoryPoolTable, MicrovmPageProjectionKind,
     MicrovmProjectionDescriptor, MicrovmProjectionKind, MicrovmProjectionPlan,
-    MicrovmProjectionRequirements, ObjectId, PAGE_SIZE, PreparedMicrovmApplicationBackend,
-    ResourceCommand, Rights, RuntimeDomainAssignment, RuntimeDomainAssignmentPlan,
-    SIGNED_ARTIFACT_OVERHEAD_BYTES, ScheduledDeadlineVmBackend, ScheduledSmpVmBackend,
-    SignedArtifact, TotalMicrovmClass, TotalMicrovmInventory, TotalMicrovmInventoryEntry,
-    TrustRoot, VIRTUAL_BLOCK_FEATURE_FLUSH, VcpuReservationId, VerifiedExecutable,
+    MicrovmProjectionRequirements, ObjectId, PreparedMicrovmApplicationBackend, ResourceCommand,
+    Rights, RuntimeDomainAssignment, RuntimeDomainAssignmentPlan, ScheduledDeadlineVmBackend,
+    ScheduledSmpVmBackend, SignedArtifact, TotalMicrovmClass, TotalMicrovmInventory,
+    TotalMicrovmInventoryEntry, TrustRoot, VcpuReservationId, VerifiedExecutable,
     VerifiedGpuKernelBundle, VirtualBlockBackend, VirtualBlockBackendAuthority,
     VirtualBlockCompletionStatus, VirtualBlockConfigurationPage, VirtualBlockDevice,
     VirtualBlockDeviceState, VirtualBlockError, VirtualBlockMutationError,
@@ -47,39 +51,34 @@ use mrml_kernel::{
     VirtualPciAttachedResources, VirtualPciConfigurationMechanismOne,
     VirtualPciConfigurationRouter, VirtualPciIdentity, VirtualPciIoOutcome, VirtualPciLocation,
     VirtualPciMemoryBar, VirtualPciMmioWindow, VirtualPciNativeResourceError,
-    VirtualPciType0Function, VmBackend, VmDeadlineOutcome, VmExit, VmTable,
-    admit_microvm_projection, bind_component_service_handoff, bind_verified_application_image,
-    component_image_page_plan, prepare_isolation_service_route, prepare_microvm_guest_ram,
-    release_component_image, release_microvm_guest_ram, reserve_component_image,
-    reserve_isolation_vcpus, reserve_microvm_guest_ram, reserve_microvm_page_projection,
-    route_isolation_application, run_pci_configuration_once,
-    run_pci_configuration_once_with_backend_mapper, run_virtual_block_mmio_transaction_once,
-    run_virtual_block_transaction_once, verify_gpu_kernel_bundle,
+    VirtualPciType0Function, VmBackend, VmDeadlineOutcome, VmExit, VmTable, GPU_DOORBELL_PORT,
+    GPU_QUEUE_MESSAGE_BYTES, MAX_APPLICATION_IMAGE_BYTES, MAX_COMPONENT_IMAGE_REGIONS, PAGE_SIZE,
+    SIGNED_ARTIFACT_OVERHEAD_BYTES, VIRTUAL_BLOCK_FEATURE_FLUSH,
 };
 #[cfg(any(test, target_os = "linux"))]
 use mrml_kernel::{
-    BootHandoff, FramebufferInfo, MemoryKind, MemoryRegion, PhysAddr, PixelFormat,
-    RecoveryStateMetadata, encode_handoff, encode_handoff_with_application,
-    encode_handoff_with_recovery, encode_handoff_with_recovery_and_isolation,
-    encode_handoff_with_smp, encode_handoff_with_smp_recovery_and_isolation,
+    encode_handoff, encode_handoff_with_application, encode_handoff_with_recovery,
+    encode_handoff_with_recovery_and_isolation, encode_handoff_with_smp,
+    encode_handoff_with_smp_recovery_and_isolation, BootHandoff, FramebufferInfo, MemoryKind,
+    MemoryRegion, PhysAddr, PixelFormat, RecoveryStateMetadata,
 };
 #[cfg(target_os = "linux")]
 use mrml_kvm::{KvmLaunchLayout, KvmSystem, PreparedKvmGuest};
 #[cfg(target_os = "linux")]
 use mrml_package_format::{
-    ComponentServicePlacement, InterfaceCatalogView, MAX_BOOT_PACKAGE_BYTES,
-    MAX_BOOT_RELEASE_BYTES, MAX_SYSTEM_RELEASE_BYTES, ManifestInterfaceDeclaration,
+    admit_kernel_payload, decode_canonical_manifest_interface, encode_interface_catalog,
+    encode_runtime_inventory, encode_system_generation, resolve_activated_interface_catalog,
+    ComponentServicePlacement, InterfaceCatalogView, ManifestInterfaceDeclaration,
     RuntimeInventoryRecord, RuntimeIsolationClass, RuntimeIsolationPlacement,
-    SystemGenerationDigestRecord, SystemGenerationView, admit_kernel_payload,
-    decode_canonical_manifest_interface, encode_interface_catalog, encode_runtime_inventory,
-    encode_system_generation, resolve_activated_interface_catalog,
+    SystemGenerationDigestRecord, SystemGenerationView, MAX_BOOT_PACKAGE_BYTES,
+    MAX_BOOT_RELEASE_BYTES, MAX_SYSTEM_RELEASE_BYTES,
 };
+#[cfg(target_os = "linux")]
+use mrml_runtime::mrml_println as println;
 #[cfg(target_os = "linux")]
 use mrml_runtime::Instant;
 #[cfg(target_os = "linux")]
 use mrml_runtime::Vector;
-#[cfg(target_os = "linux")]
-use mrml_runtime::mrml_println as println;
 
 #[cfg(target_os = "linux")]
 type KvmConfigurationLauncher =
@@ -601,12 +600,8 @@ fn configured_total_service_policy(
     provider_generation: u64,
     handoff: &BootHandoff,
 ) -> Result<ConfiguredTotalServicePolicy> {
-    let service = configured_isolation_service(
-        domain,
-        interface,
-        interface_generation,
-        provider_generation,
-    )?;
+    let service =
+        configured_isolation_service(domain, interface, interface_generation, provider_generation)?;
     let root_object = ObjectId(0x4953_4f4c_4154_494f);
     let component_object = ObjectId(0x434f_4e46_504f_4c59);
     let system_object = ObjectId(0x5359_5354_504f_4c59);
@@ -2470,7 +2465,7 @@ fn application_main() -> Result<()> {
             | LaunchMode::SmpPeriodicBalanceProbe
     );
     let total_recovery = total_service_mode.then(|| {
-        RecoveryStateMetadata::new(8, 1, None, 0)
+        RecoveryStateMetadata::new(8, 1, Some([0x51; 16]), 14)
             .expect("fixed Total recovery metadata")
     });
     let total_override = total_service_mode.then_some(BootIsolationOverride::TotalMicrovmOnce);
@@ -2975,9 +2970,10 @@ fn application_main() -> Result<()> {
         }
         .map_err(|error| anyhow!("KVM recovered boot Total admission failed: {:?}", error))?;
         println!(
-            "isolation-recovery|status=PASS|backend=kvm|authority_epoch={}|boot_accepted_epoch={}|configuration_revision={}",
+            "isolation-recovery|status=PASS|backend=kvm|authority_epoch={}|boot_accepted_epoch={}|recovery_root_generation={}|configuration_revision={}",
             total.policy().authority_epoch(),
             total.policy().boot_accepted_epoch(),
+            total.policy().recovery_root_generation(),
             total.policy().configuration_revision(),
         );
         Some(KvmTotalAdmission::Recovered(total))
@@ -5338,7 +5334,7 @@ mod tests {
 
     #[test]
     fn total_override_is_consumed_from_the_decoded_recovery_handoff() {
-        let recovery = RecoveryStateMetadata::new(8, 1, None, 0).unwrap();
+        let recovery = RecoveryStateMetadata::new(8, 1, Some([0x51; 16]), 14).unwrap();
         let encoded = boot_handoff(
             21,
             [0x38; 32],
@@ -5365,14 +5361,10 @@ mod tests {
             configured_isolation_service(ObjectId(1), ObjectId(2), 1, 1).unwrap();
         assert!(recovered_component.effective.is_none());
         let recovery = RecoveryStateMetadata::new(8, 1, None, 0).unwrap();
-        let encoded = boot_handoff(
-            21, [0x38; 32], [0xaa; 64], 1, Some(recovery), None, false,
-        )
-        .unwrap();
+        let encoded =
+            boot_handoff(21, [0x38; 32], [0xaa; 64], 1, Some(recovery), None, false).unwrap();
         let decoded = BootHandoff::decode(encoded.as_slice(), |_| {}).unwrap();
-        assert!(
-            configured_total_service_policy(ObjectId(1), ObjectId(2), 1, 1, &decoded).is_err()
-        );
+        assert!(configured_total_service_policy(ObjectId(1), ObjectId(2), 1, 1, &decoded).is_err());
     }
 
     #[cfg(target_os = "linux")]

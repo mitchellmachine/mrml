@@ -17,15 +17,16 @@ use core::ops::{Deref, DerefMut};
 use mrml_crypto::Sha3_256;
 use mrml_kernel::arch::x86_64::UserContext;
 use mrml_kernel::{
+    prepare_isolation_service_route, route_isolation_service,
     ActivatedReleaseTotalMicrovmInventory, BootHandoff, BootIsolationOverride, Capability,
     CapabilityError, CapabilitySpace, IsolationAdmissionTable, IsolationBackendFailure,
     IsolationMode, IsolationPlacement, IsolationServiceBackend, IsolationServiceRouteError,
     IsolationServiceSpec, IsolationStatusSnapshot, IsolationUnavailableReason, MemoryBackingKind,
     MemoryObjectId, MemoryPoolId, MemoryPoolTable, MemoryResourceError, Message, ObjectId,
-    PAGE_SIZE, PreparedIsolationServiceRoute, Priority, RestartPolicy, Rights,
-    RoutedIsolationService, ServiceAddressSpaceEraser, ServiceCleanupError, ServiceError,
-    ServiceId, ServiceRegistrationPlan, ServiceState, ServiceSupervisor, TaskId, TaskRuntime,
-    TaskRuntimeError, prepare_isolation_service_route, route_isolation_service,
+    PreparedIsolationServiceRoute, Priority, RestartPolicy, Rights, RoutedIsolationService,
+    ServiceAddressSpaceEraser, ServiceCleanupError, ServiceError, ServiceId,
+    ServiceRegistrationPlan, ServiceState, ServiceSupervisor, TaskId, TaskRuntime,
+    TaskRuntimeError, PAGE_SIZE,
 };
 use mrml_storage::{
     AuthorityRecoveryValidator, BlockFileSession, BlockVolume, BlockVolumeError,
@@ -452,13 +453,13 @@ pub struct SupervisedNativeConfigurationLauncher<
 }
 
 impl<
-    E,
-    const TASKS: usize,
-    const CAPS: usize,
-    const SERVICES: usize,
-    const SETTINGS: usize,
-    const AUDIT: usize,
-> SupervisedNativeConfigurationLauncher<E, TASKS, CAPS, SERVICES, SETTINGS, AUDIT>
+        E,
+        const TASKS: usize,
+        const CAPS: usize,
+        const SERVICES: usize,
+        const SETTINGS: usize,
+        const AUDIT: usize,
+    > SupervisedNativeConfigurationLauncher<E, TASKS, CAPS, SERVICES, SETTINGS, AUDIT>
 {
     pub const fn new(
         substrate: AccountedPolicyServiceSubstrate<TASKS, CAPS, SERVICES, SETTINGS, AUDIT>,
@@ -491,13 +492,13 @@ impl<
 }
 
 impl<
-    E: ServiceAddressSpaceEraser,
-    const TASKS: usize,
-    const CAPS: usize,
-    const SERVICES: usize,
-    const SETTINGS: usize,
-    const AUDIT: usize,
-> NativeConfigurationServiceLauncher
+        E: ServiceAddressSpaceEraser,
+        const TASKS: usize,
+        const CAPS: usize,
+        const SERVICES: usize,
+        const SETTINGS: usize,
+        const AUDIT: usize,
+    > NativeConfigurationServiceLauncher
     for SupervisedNativeConfigurationLauncher<E, TASKS, CAPS, SERVICES, SETTINGS, AUDIT>
 {
     type Endpoint = NativeConfigurationEndpoint;
@@ -1478,13 +1479,13 @@ pub struct StableConfigurationRecoveryValidator<
 }
 
 impl<
-    'a,
-    const SETTINGS: usize,
-    const AUDIT: usize,
-    const EXTENTS: usize,
-    A: CapabilityAuthorizer + ?Sized,
-    B: FileReadBackend,
-> StableConfigurationRecoveryValidator<'a, SETTINGS, AUDIT, EXTENTS, A, B>
+        'a,
+        const SETTINGS: usize,
+        const AUDIT: usize,
+        const EXTENTS: usize,
+        A: CapabilityAuthorizer + ?Sized,
+        B: FileReadBackend,
+    > StableConfigurationRecoveryValidator<'a, SETTINGS, AUDIT, EXTENTS, A, B>
 {
     #[allow(clippy::too_many_arguments)]
     pub fn new(
@@ -1552,13 +1553,13 @@ impl<
 // table and builds unpublished in-memory configuration/policy values. It
 // retains no storage handle or table reference and performs no mutation.
 unsafe impl<
-    const GRANTS: usize,
-    const SETTINGS: usize,
-    const AUDIT: usize,
-    const EXTENTS: usize,
-    A: CapabilityAuthorizer + ?Sized,
-    B: FileReadBackend,
-> AuthorityRecoveryValidator<GRANTS>
+        const GRANTS: usize,
+        const SETTINGS: usize,
+        const AUDIT: usize,
+        const EXTENTS: usize,
+        A: CapabilityAuthorizer + ?Sized,
+        B: FileReadBackend,
+    > AuthorityRecoveryValidator<GRANTS>
     for StableConfigurationRecoveryValidator<'_, SETTINGS, AUDIT, EXTENTS, A, B>
 {
     type Output = RecoveredStableConfiguration<SETTINGS, AUDIT>;
@@ -1670,7 +1671,10 @@ impl<const GRANTS: usize, const SETTINGS: usize, const AUDIT: usize>
         let recovery = handoff
             .recovery_state()
             .ok_or(ConfigError::RecoveryHandoffMismatch)?;
-        if recovery.accepted_epoch().checked_add(1) != Some(self.authorities.epoch()) {
+        if recovery.accepted_epoch().checked_add(1) != Some(self.authorities.epoch())
+            || recovery.accepted_volume() != Some(self.authorities.volume().bytes())
+            || recovery.accepted_root_generation() != self.authorities.root_generation()
+        {
             return Err(ConfigError::RecoveryHandoffMismatch);
         }
         let plan = IsolationPolicyApplicationPlan::load(
@@ -1690,6 +1694,8 @@ impl<const GRANTS: usize, const SETTINGS: usize, const AUDIT: usize>
             configuration_revision: self.configuration.revision(),
             configuration_service: self.service,
             boot_accepted_epoch: recovery.accepted_epoch(),
+            recovery_volume: self.authorities.volume(),
+            recovery_root_generation: self.authorities.root_generation(),
         })
     }
 
@@ -1819,14 +1825,14 @@ pub struct StableServiceRecoveryValidator<
 }
 
 impl<
-    'a,
-    const SETTINGS: usize,
-    const AUDIT: usize,
-    const EXTENTS: usize,
-    const SERVICES: usize,
-    A: CapabilityAuthorizer + ?Sized,
-    B: FileReadBackend,
-> StableServiceRecoveryValidator<'a, SETTINGS, AUDIT, EXTENTS, SERVICES, A, B>
+        'a,
+        const SETTINGS: usize,
+        const AUDIT: usize,
+        const EXTENTS: usize,
+        const SERVICES: usize,
+        A: CapabilityAuthorizer + ?Sized,
+        B: FileReadBackend,
+    > StableServiceRecoveryValidator<'a, SETTINGS, AUDIT, EXTENTS, SERVICES, A, B>
 {
     pub const fn new(
         configuration: StableConfigurationRecoveryValidator<'a, SETTINGS, AUDIT, EXTENTS, A, B>,
@@ -1845,14 +1851,14 @@ impl<
 // only planned against immutable supervisor state; no lifecycle mutation occurs
 // until a committed-authority wrapper later consumes the output.
 unsafe impl<
-    const GRANTS: usize,
-    const SETTINGS: usize,
-    const AUDIT: usize,
-    const EXTENTS: usize,
-    const SERVICES: usize,
-    A: CapabilityAuthorizer + ?Sized,
-    B: FileReadBackend,
-> AuthorityRecoveryValidator<GRANTS>
+        const GRANTS: usize,
+        const SETTINGS: usize,
+        const AUDIT: usize,
+        const EXTENTS: usize,
+        const SERVICES: usize,
+        A: CapabilityAuthorizer + ?Sized,
+        B: FileReadBackend,
+    > AuthorityRecoveryValidator<GRANTS>
     for StableServiceRecoveryValidator<'_, SETTINGS, AUDIT, EXTENTS, SERVICES, A, B>
 {
     type Output = PreparedRecoveredService<SETTINGS, AUDIT>;
@@ -2599,6 +2605,8 @@ pub struct RecoveredBootIsolationPolicy {
     configuration_revision: u64,
     configuration_service: ServiceId,
     boot_accepted_epoch: u64,
+    recovery_volume: VolumeId,
+    recovery_root_generation: u64,
 }
 
 impl RecoveredBootIsolationPolicy {
@@ -2620,6 +2628,14 @@ impl RecoveredBootIsolationPolicy {
 
     pub const fn boot_accepted_epoch(self) -> u64 {
         self.boot_accepted_epoch
+    }
+
+    pub const fn recovery_volume(self) -> VolumeId {
+        self.recovery_volume
+    }
+
+    pub const fn recovery_root_generation(self) -> u64 {
+        self.recovery_root_generation
     }
 
     pub fn admission_table<const DOMAINS: usize>(
@@ -3460,12 +3476,12 @@ pub struct AccountedPolicyServiceSubstrate<
 }
 
 impl<
-    const TASKS: usize,
-    const CAPS: usize,
-    const SERVICES: usize,
-    const SETTINGS: usize,
-    const AUDIT: usize,
-> AccountedPolicyServiceSubstrate<TASKS, CAPS, SERVICES, SETTINGS, AUDIT>
+        const TASKS: usize,
+        const CAPS: usize,
+        const SERVICES: usize,
+        const SETTINGS: usize,
+        const AUDIT: usize,
+    > AccountedPolicyServiceSubstrate<TASKS, CAPS, SERVICES, SETTINGS, AUDIT>
 {
     #[allow(clippy::too_many_arguments)]
     pub fn new<const POOLS: usize, const OBJECTS: usize, const AUTHORITIES: usize>(
@@ -5050,30 +5066,30 @@ mod tests {
 
     use super::*;
     use mrml_crypto::{
-        LAMPORT_PRIVATE_KEY_BYTES, LAMPORT_PUBLIC_KEY_BYTES, Sha3_512, lamport_public_key,
+        lamport_public_key, Sha3_512, LAMPORT_PRIVATE_KEY_BYTES, LAMPORT_PUBLIC_KEY_BYTES,
     };
     use mrml_kernel::{
-        HostSubstrateCounts, IsolationUnavailableCounts, RuntimeDomainAssignment,
-        RuntimeDomainAssignmentPlan, TotalMicrovmClass, TotalMicrovmState, route_isolation_service,
+        route_isolation_service, HostSubstrateCounts, IsolationUnavailableCounts,
+        RuntimeDomainAssignment, RuntimeDomainAssignmentPlan, TotalMicrovmClass, TotalMicrovmState,
     };
     use mrml_package_format::{
+        encode_interface_catalog, encode_runtime_inventory, encode_system_generation,
+        encode_system_release_with_runtime_inventory, parse_system_release,
         ActivatedSystemGeneration, ActivatedSystemRelease, ComponentInterfaceProvider,
-        ComponentInterfaceRequirement, ComponentProviderForms, MAX_SYSTEM_RELEASE_BYTES,
-        RuntimeInventoryRecord, RuntimeIsolationClass, RuntimeIsolationPlacement,
-        SystemGenerationDigestRecord, encode_interface_catalog, encode_runtime_inventory,
-        encode_system_generation, encode_system_release_with_runtime_inventory,
-        parse_system_release,
+        ComponentInterfaceRequirement, ComponentProviderForms, RuntimeInventoryRecord,
+        RuntimeIsolationClass, RuntimeIsolationPlacement, SystemGenerationDigestRecord,
+        MAX_SYSTEM_RELEASE_BYTES,
     };
     use mrml_storage::{
-        AUTHORITY_RECOVERY_STATE_BYTES, AuthenticatedAuthorityRecoveryState,
+        authority_checkpoint_digest, encode_authority_checkpoint,
+        recover_validate_and_commit_stable_authorities, AuthenticatedAuthorityRecoveryState,
         AuthorityCheckpointProofIssuer, AuthorityRecoveryGuard, AuthorityRecoveryStateStore,
         BlockDeviceDescriptor, BlockDeviceId, BlockRights, BlockService, BlockServiceBackend,
         BlockServiceError, BlockVolume, BootRecoveryAdmission, CowMetadataImage, CowMetadataWrite,
         CowPublicationBackend, CowPublicationPlan, ExtentRecord, FileReadBackend, FileWriteBackend,
         OwnerApprovedAuthorityCheckpoint, ServicedBlockDevice, StorageObjectId, StorageObjectKind,
         StorageRecoveryGrant, StorageRights, StorageTransactionId, Superblock, VolumeHeader,
-        VolumeId, authority_checkpoint_digest, encode_authority_checkpoint,
-        recover_validate_and_commit_stable_authorities,
+        VolumeId, AUTHORITY_RECOVERY_STATE_BYTES,
     };
     use std::vec;
 
@@ -5161,7 +5177,11 @@ mod tests {
         plan.seal().unwrap()
     }
 
-    fn hosted_total_handoff(accepted_epoch: u64) -> ([u8; 512], usize) {
+    fn hosted_total_handoff(
+        accepted_epoch: u64,
+        accepted_volume: Option<[u8; 16]>,
+        accepted_root_generation: u64,
+    ) -> ([u8; 512], usize) {
         let framebuffer = mrml_kernel::FramebufferInfo::new(
             0xa0000,
             0x1000,
@@ -5185,7 +5205,13 @@ mod tests {
             )
             .unwrap(),
         ];
-        let recovery = mrml_kernel::RecoveryStateMetadata::new(accepted_epoch, 1, None, 0).unwrap();
+        let recovery = mrml_kernel::RecoveryStateMetadata::new(
+            accepted_epoch,
+            1,
+            accepted_volume,
+            accepted_root_generation,
+        )
+        .unwrap();
         let mut bytes = [0; 512];
         let length = mrml_kernel::encode_handoff_with_recovery_and_isolation(
             7,
@@ -5209,7 +5235,7 @@ mod tests {
     #[test]
     fn hosted_recovery_source_is_independent_of_the_decoded_handoff_epoch() {
         let domain = ObjectId(0x434f_4e46_4947_0001);
-        let (current_bytes, current_length) = hosted_total_handoff(8);
+        let (current_bytes, current_length) = hosted_total_handoff(8, Some([0x51; 16]), 14);
         let current = BootHandoff::decode(&current_bytes[..current_length], |_| {}).unwrap();
         // SAFETY: this is the controlled hosted fixture named by the helper's
         // contract; it does not represent owner presence or durable hardware.
@@ -5237,18 +5263,33 @@ mod tests {
             Err(hosted_recovery_probe::HostedRecoveryProbeBuildError::ReleaseBuilder(7))
         ));
 
-        let (stale_bytes, stale_length) = hosted_total_handoff(7);
+        let (stale_bytes, stale_length) = hosted_total_handoff(7, Some([0x51; 16]), 14);
         let stale = BootHandoff::decode(&stale_bytes[..stale_length], |_| {}).unwrap();
         // SAFETY: same controlled hosted fixture; the stale handoff must not
         // redefine its independently fixed authenticated recovery state.
-        assert!(
+        assert!(unsafe {
+            hosted_recovery_probe::recover_total_admission_with(&stale, |policy_generation| {
+                Ok::<_, ()>(activated_configuration_release(domain, policy_generation))
+            })
+        }
+        .is_err());
+
+        let (wrong_root_bytes, wrong_root_length) = hosted_total_handoff(8, Some([0x51; 16]), 13);
+        let wrong_root =
+            BootHandoff::decode(&wrong_root_bytes[..wrong_root_length], |_| {}).unwrap();
+        assert!(matches!(
             unsafe {
-                hosted_recovery_probe::recover_total_admission_with(&stale, |policy_generation| {
-                    Ok::<_, ()>(activated_configuration_release(domain, policy_generation))
-                })
-            }
-            .is_err()
-        );
+                hosted_recovery_probe::recover_total_admission_with::<1, _, _>(
+                    &wrong_root,
+                    |policy_generation| {
+                        Ok::<_, ()>(activated_configuration_release(domain, policy_generation))
+                    },
+                )
+            },
+            Err(hosted_recovery_probe::HostedRecoveryProbeBuildError::Probe(
+                hosted_recovery_probe::HostedRecoveryProbeError::RecoveryRootMismatch
+            ))
+        ));
     }
     const SYSTEM_GENERATION: u64 = 108;
 
@@ -7012,11 +7053,13 @@ mod tests {
     }
 
     impl RecoveryStateStore {
-        fn new(epoch: u64, generation: u32) -> Self {
+        fn new(epoch: u64, generation: u32, volume: VolumeId, root_generation: u64) -> Self {
             let mut bytes = [0; AUTHORITY_RECOVERY_STATE_BYTES];
             bytes[..16].copy_from_slice(b"MRML-AUTHSTATE1\0");
             bytes[16..24].copy_from_slice(&epoch.to_le_bytes());
             bytes[24..28].copy_from_slice(&generation.to_le_bytes());
+            bytes[32..48].copy_from_slice(&volume.bytes());
+            bytes[48..56].copy_from_slice(&root_generation.to_le_bytes());
             Self { bytes }
         }
     }
@@ -7646,25 +7689,23 @@ mod tests {
             .unwrap();
             let mut denied_file_scratch = [0; STABLE_BLOCK_BYTES];
             let mut denied_export = [0; 512];
-            assert!(
-                prepare_block_stable_configuration(
-                    &configuration,
-                    &capabilities,
-                    root,
-                    &current,
-                    &storage_authority,
-                    file,
-                    stable_principal(),
-                    denied_next,
-                    denied_metadata,
-                    MetadataPointer::new(5, 1).unwrap(),
-                    &[],
-                    &mut denied_export,
-                    &mut denied_volume,
-                    &mut denied_file_scratch,
-                )
-                .is_err()
-            );
+            assert!(prepare_block_stable_configuration(
+                &configuration,
+                &capabilities,
+                root,
+                &current,
+                &storage_authority,
+                file,
+                stable_principal(),
+                denied_next,
+                denied_metadata,
+                MetadataPointer::new(5, 1).unwrap(),
+                &[],
+                &mut denied_export,
+                &mut denied_volume,
+                &mut denied_file_scratch,
+            )
+            .is_err());
         }
         assert_eq!(backend.writes, 0);
 
@@ -7745,7 +7786,7 @@ mod tests {
                     stable_principal(),
                 )
                 .unwrap();
-            let mut state_store = RecoveryStateStore::new(8, 1);
+            let mut state_store = RecoveryStateStore::new(8, 1, stable_volume(), 14);
             let mut runtime = TaskRuntime::<1, 1>::new(1_000, 1).unwrap();
             let task = runtime
                 .create(
@@ -7764,7 +7805,9 @@ mod tests {
                 .unwrap()
                 .insert(recovery_object, Rights::READ)
                 .unwrap();
-            let recovery_metadata = mrml_kernel::RecoveryStateMetadata::new(8, 1, None, 0).unwrap();
+            let recovery_metadata =
+                mrml_kernel::RecoveryStateMetadata::new(8, 1, Some(stable_volume().bytes()), 14)
+                    .unwrap();
             let mut delivery =
                 mrml_kernel::BootRecoveryDelivery::new(task, recovery_object, recovery_metadata)
                     .unwrap();
@@ -7810,11 +7853,9 @@ mod tests {
                 )
                 .unwrap();
             drop(boot_store);
-            assert!(
-                supervisor
-                    .plan_registration(ObjectId(82), task, RestartPolicy::ONCE_IMMEDIATE)
-                    .is_ok()
-            );
+            assert!(supervisor
+                .plan_registration(ObjectId(82), task, RestartPolicy::ONCE_IMMEDIATE)
+                .is_ok());
             let recovered = prepared_service
                 .commit(authorities, &mut supervisor)
                 .unwrap();
@@ -7907,6 +7948,8 @@ mod tests {
                 .unwrap();
             assert_eq!(boot_policy.authority_epoch(), 9);
             assert_eq!(boot_policy.boot_accepted_epoch(), 8);
+            assert_eq!(boot_policy.recovery_volume(), stable_volume());
+            assert_eq!(boot_policy.recovery_root_generation(), 14);
             assert_eq!(boot_policy.configuration_revision(), 1);
             assert_eq!(boot_policy.configuration_service(), recovered.service());
             assert_eq!(
@@ -9221,16 +9264,14 @@ mod tests {
             .admit_service(microvm_required),
             Err(ConfigError::SchemaViolation)
         );
-        assert!(
-            IsolationServiceBounds::new(
-                IsolationPlacement::NativeService,
-                IsolationPlacement::Microvm,
-                IsolationPlacement::Microvm,
-                true,
-                true,
-            )
-            .is_err()
-        );
+        assert!(IsolationServiceBounds::new(
+            IsolationPlacement::NativeService,
+            IsolationPlacement::Microvm,
+            IsolationPlacement::Microvm,
+            true,
+            true,
+        )
+        .is_err());
     }
 
     #[test]
@@ -9249,6 +9290,8 @@ mod tests {
             configuration_revision: 9,
             configuration_service: ServiceId::from_token((3u64 << 32) | 1),
             boot_accepted_epoch: 11,
+            recovery_volume: stable_volume(),
+            recovery_root_generation: 14,
         };
         let domain = ObjectId(0x434f_4e46_4947_0001);
         let release = activated_configuration_release(domain, 9);

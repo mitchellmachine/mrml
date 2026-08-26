@@ -802,7 +802,11 @@ handoff data so stale epochs fail closed. The one-use release-builder callback
 is conventional control-flow sequencing and receives only the recovered policy
 generation; failure publishes no admission or detached policy. The component
 runner now retains only non-authorizing bounds and identity before
-the recovered join, removing rather than adding a policy mechanism. Because the
+the recovered join, removing rather than adding a policy mechanism. Selecting
+two exact files from the already implemented redundant-root graph and comparing
+the same volume/root generation across existing recovery records is conventional
+integrity and rollback validation, not a new storage or placement algorithm.
+Because the
 broader combination of
 signed release classification, automated placement, isolation, recovery, and
 device projection is already under targeted worldwide review, that status
