@@ -7272,3 +7272,15 @@ calling convention, or code-generation mechanism. General call coercion and
 region inference remain absent. Broader compiler completion remains partial;
 this technical screen is not a clearance or infringement conclusion and does
 not replace independent human dual review.
+
+# 2026-08-26 — Non-origin local call-loan escape evidence
+
+**Result: NOT_TRIGGERED after the non-origin escape evidence review.** This
+increment adds independently authored regression evidence that the existing
+bounded call-reborrow liveness check rejects an escaping result while any tied
+reference argument loan remains local-backed, independently of returned-pointer
+origin. It introduces no new region solver, interprocedural inference, alias-
+analysis, optimization, or code-generation algorithm. General call coercion and
+region inference remain absent. Broader compiler completion remains partial;
+this technical screen is not a clearance or infringement conclusion and does
+not replace independent human dual review.
