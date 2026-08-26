@@ -1395,6 +1395,20 @@ Default-equivalent predicate admission compares recursively materialized
 argument tuples: an omitted default chain and the same explicitly written types are one semantic
 requirement and duplicate declaration/implementation premises are rejected.
 
+The restricted naked-function milestone parses repeated unsafe attributes and
+admits `#[unsafe(naked)]` only on unsafe, zero-parameter C-ABI functions with no
+where predicates and a unit or never return. Its bounded `naked_asm!` body
+accepts at most eight zero-operand x86-64 instructions from `nop`, `ret`,
+`int3`, `ud2`, `cli`, `sti`, and `hlt`, requires an explicit terminating
+instruction, and emits those exact bytes without ordinary function lowering.
+Focused tests compare the complete machine-code slice to prove that no prologue
+or epilogue is inserted and reject unsupported safety, ABI, signature,
+instruction, and fallthrough cases. Operands, labels, symbols, options,
+registers, additional architectures, and general inline assembly remain fail-
+closed. Windows gnullvm and native Arch Linux WSL each pass 633 library tests,
+one component-interface probe, 10 conformance tests, and 335 replacement tests:
+979 compiler tests per host.
+
 The premise-bearing rigid-normalization milestone proves the selected generic
 implementation's instantiated trait and projection predicates before exposing
 its associated value. It shares the caller's 16-frame rigid proof stack and
