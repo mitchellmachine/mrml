@@ -160,6 +160,14 @@ return with E0515. This is black-box evidence for that exact normalized cycle
 and early-exit distinction, not iterative fixed-point or general region
 inference. Temporary source and metadata were removed.
 
+An independently authored Rust 2024 metadata-only conditional-continue pair
+against this exact toolchain and commit accepted an initially local-backed alias
+when a parameter overwrite preceded both the conditional inner continue and
+conditional inner break. Moving both controls before the overwrite failed at
+the enclosing return with E0515. This is black-box evidence for that exact
+normalized continue/backedge ordering, not general fixed-point or region
+inference. Temporary source and metadata were removed.
+
 An independently authored Rust 2024 metadata-only composed-loop pair against
 this exact toolchain and commit accepted an outer-loop same-origin mutable
 reassignment followed by an inner-loop conditional return. Replacing that outer

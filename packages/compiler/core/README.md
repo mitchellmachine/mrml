@@ -4202,6 +4202,10 @@ headers, preventing an early exit from inheriting a later overwrite. The pinned
 oracle accepts normalization before every exit and rejects the reversed order
 with E0515. Both hosts remain at 989 compiler tests; multi-step and branching
 fixed points remain incomplete.
+Conditional inner continues now share that normalized candidate proof. A
+continue after the parameter overwrite is accepted when all control prefixes
+agree across both headers; controls before normalization still fail closed and
+match pinned-oracle E0515. Both hosts remain at 989 compiler tests.
 Nested-loop ordered-return and stable-edge analysis is now factored over an
 explicit incoming state and composes after outer-loop declarations, assignments,
 and branch joins. Stable nested edges preserve that state for later outer

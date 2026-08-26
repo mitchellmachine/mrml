@@ -593,6 +593,16 @@ each pass 643 library tests, one component-interface probe, 10 conformance
 tests, and 335 replacement tests: 989 compiler tests per host. Multi-step,
 branching, and general nested-loop fixed points remain incomplete.
 
+Conditional inner-continue backedges now reuse the same bounded normalization
+proof instead of requiring equality with the original header. The complete
+transfer remains exactly idempotent, and every stored control prefix must agree
+between initial and normalized headers. ORACLE-0002 accepts a parameter
+overwrite before both continue and break controls and rejects controls that can
+observe the earlier local-backed state with E0515. Windows and Arch each pass
+643 library tests, one component-interface probe, 10 conformance tests, and 335
+replacement tests: 989 compiler tests per host. Unconditional normalized
+continues and general fixed points remain incomplete.
+
 The conditional callee-local reassignment milestone evaluates supported direct
 assignments from a copy of the incoming fixed local-origin state for every
 conditional outcome, then joins each local independently. A missing `else`

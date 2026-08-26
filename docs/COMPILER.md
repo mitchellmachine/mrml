@@ -1333,6 +1333,11 @@ break, and continue prefix must expose the same retained origins from both the
 incoming and normalized headers; otherwise analysis fails closed. ORACLE-0002
 accepts an overwrite that precedes every exit and rejects an exit that can run
 before that overwrite with E0515. This is not iterative fixed-point solving.
+Conditional inner continues may use that same normalized-state proof. A
+continue after the normalizing overwrite is admitted only when the complete
+transfer is idempotent and every other stored control prefix agrees; a continue
+or break before normalization remains fail-closed. ORACLE-0002 accepts the
+former and rejects the latter with E0515.
 
 The first modern trait-solver foundation is an explicit bounded implemented-
 goal representation. Stable trait/type/inference/placeholder identities remain
