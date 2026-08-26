@@ -1,6 +1,7 @@
 use core::array;
 use mrml_package_format::{
-    ComponentServiceLaunchHandoff, ComponentServiceLaunchHandoffError, ComponentServicePlacement,
+    ActivatedSystemGeneration, ComponentServiceLaunchHandoff, ComponentServiceLaunchHandoffError,
+    ComponentServicePlacement,
 };
 
 use crate::{
@@ -912,6 +913,21 @@ impl<const DOMAINS: usize> IsolationAdmissionTable<DOMAINS> {
         let mut table = Self::new(mode, system_generation, policy_generation)?;
         table.system_generation_digest = Some(system_generation_digest);
         Ok(table)
+    }
+
+    /// Consumes the exact active generation identity published by the
+    /// capability-authorized DeploymentService activation transaction.
+    pub fn new_activated(
+        mode: IsolationMode,
+        active: ActivatedSystemGeneration,
+        policy_generation: u64,
+    ) -> Result<Self, IsolationLaunchError> {
+        Self::new_generation_bound(
+            mode,
+            active.generation(),
+            *active.generation_digest(),
+            policy_generation,
+        )
     }
 
     pub const fn mode(&self) -> IsolationMode {

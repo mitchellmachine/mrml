@@ -11,6 +11,8 @@ use mrml_config::{
 };
 #[cfg(target_os = "linux")]
 use mrml_crypto::{Sha3_512, LAMPORT_PUBLIC_KEY_BYTES};
+#[cfg(target_os = "linux")]
+use mrml_deployment::{DeploymentService, GenerationCandidate};
 use mrml_error::{anyhow, Result};
 #[cfg(target_os = "linux")]
 use mrml_kernel::arch::x86_64::{Mapping, PagePermissions, VirtAddr, PRIVILEGE_STACK_ARENA_PAGES};
@@ -1983,14 +1985,38 @@ fn application_main() -> Result<()> {
     } else {
         None
     };
+    let active_component_generation = if let Some(digest) = component_generation_digest {
+        let deployment_root = ObjectId(0x4445_504c_4f59);
+        let mut capabilities = CapabilitySpace::<1>::new();
+        let control = capabilities
+            .insert(deployment_root, Rights::CONTROL)
+            .map_err(|error| anyhow!("KVM deployment authority failed: {:?}", error))?;
+        let mut deployment = DeploymentService::<1>::new(deployment_root)
+            .map_err(|error| anyhow!("KVM DeploymentService failed: {:?}", error))?;
+        let candidate = deployment
+            .stage(
+                &capabilities,
+                control,
+                GenerationCandidate::new(1, digest, 0x5359_5347_454e, 1)
+                    .map_err(|error| anyhow!("KVM generation candidate failed: {:?}", error))?,
+            )
+            .map_err(|error| anyhow!("KVM candidate staging failed: {:?}", error))?;
+        let prepared = deployment
+            .prepare_activation(&capabilities, control, candidate, None)
+            .map_err(|error| anyhow!("KVM generation preparation failed: {:?}", error))?;
+        Some(
+            deployment
+                .commit_activation(prepared)
+                .map_err(|error| anyhow!("KVM generation activation failed: {:?}", error))?,
+        )
+    } else {
+        None
+    };
     let mut isolation_admission = if total_service_mode {
         Some(
-            match component_generation_digest {
-                Some(digest) => IsolationAdmissionTable::<1>::new_generation_bound(
-                    IsolationMode::TotalMicrovm,
-                    1,
-                    digest,
-                    1,
+            match active_component_generation {
+                Some(active) => IsolationAdmissionTable::<1>::new_activated(
+                    IsolationMode::TotalMicrovm, active, 1,
                 ),
                 None => IsolationAdmissionTable::<1>::new(IsolationMode::TotalMicrovm, 1, 1),
             }
@@ -2181,8 +2207,10 @@ fn application_main() -> Result<()> {
             3,
             provider.artifact().version(),
             ComponentServicePlacement::Microvm,
-            component_generation_digest
-                .ok_or_else(|| anyhow!("missing active component SystemGeneration digest"))?,
+            *active_component_generation
+                .as_ref()
+                .ok_or_else(|| anyhow!("missing active component SystemGeneration"))?
+                .generation_digest(),
             ZSTD_INTERFACE_FINGERPRINT,
             *consumer.artifact().digest(),
             *provider.artifact().digest(),

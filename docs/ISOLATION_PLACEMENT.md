@@ -49,10 +49,12 @@ before backend construction, separately from a stale policy generation, and
 the committed native IPC or microVM route retains both identities. The
 configuration service derives service specifications from the admission
 table's active system generation rather than package metadata. The focused
-WHP/KVM component probe uses one explicit local generation alongside its
-transient policy generation and verifies that identity again at commit. This is
-kernel/runtime identity evidence; decoding and activating a persisted canonical
-`SystemGeneration` through `DeploymentService` remains **PLANNED**.
+WHP/KVM component probe stages and commits one explicit local generation through
+the bounded capability-authorized `DeploymentService` activation transaction,
+then passes its immutable typed activation record into kernel admission. This is
+hosted in-memory activation and kernel/runtime identity evidence; authenticated
+storage, crash-safe persistence/recovery, and general runtime delivery remain
+**PLANNED**.
 The build/kernel boundary now has a canonical fixed 280-byte, pointer-free
 component-service launch handoff in the shared package-format library. The
 build tool derives system generation, provider generation, interface
@@ -64,8 +66,9 @@ rejects bad magic/length, reserved bytes, unknown placement, zero identities,
 zero or substituted artifacts, stale active generations, a reused generation
 number with different canonical bytes, and any mismatch with an already
 resource-reserved route before backend invocation. Both focused WHP/KVM
-runners now use this codec instead of the raw binder. Persisted
-generation selection and delivery by `DeploymentService` remain **PLANNED**.
+runners now use this codec instead of the raw binder and derive its active
+generation input from the same `DeploymentService` transaction. Persisted
+generation selection and recovery remain **PLANNED**.
 
 The canonical `org.mrml.zstd`/`org.mrml.zim` manifests now select the
 `isolated-service` interface form, and Zstd permits native-service or microVM

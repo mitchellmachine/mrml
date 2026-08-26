@@ -1,0 +1,51 @@
+[manifest]
+format = "mrml"
+version = 2
+
+[package]
+default = true
+id = "org.mrml.service.deployment"
+kind = "service"
+name = "mrml-deployment"
+profile = "system-service"
+
+[isolation]
+default = "native-service"
+minimum = "native-service"
+supported = ["native-service", "microvm"]
+
+[[target]]
+arch = "x86_64"
+environment = "mrml"
+
+[[target]]
+arch = "x86_64"
+environment = "windows"
+
+[[target]]
+arch = "x86_64"
+environment = "linux"
+
+[[artifact]]
+kind = "lib"
+name = "mrml_deployment"
+
+[rust]
+crate_name = "mrml_deployment"
+crate_type = "lib"
+source = "packages/services/deployment/src/lib.rs"
+
+[[dependency]]
+alias = "mrml_kernel"
+compile_name = "mrml-kernel"
+package = "org.mrml.system.kernel"
+scope = "compile"
+
+[[dependency]]
+alias = "mrml_package_format"
+compile_name = "mrml-package-format"
+package = "org.mrml.library.package-format"
+scope = "compile"
+
+[[host_test]]
+targets = ["WINDOWS", "LINUX"]

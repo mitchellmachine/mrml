@@ -44,6 +44,13 @@ scope = "compile"
 targets = ["WINDOWS"]
 
 [[dependency]]
+alias = "mrml_deployment"
+compile_name = "mrml-deployment"
+package = "org.mrml.service.deployment"
+scope = "compile"
+targets = ["WINDOWS"]
+
+[[dependency]]
 alias = "mrml_error"
 compile_name = "mrml-error"
 package = "org.mrml.library.error"

@@ -17,7 +17,9 @@ boot plumbing, release/recovery journals, rollback policy, native storage
 objects, and configuration generations retain the exact implementation statuses
 and evidence recorded elsewhere. This document does not claim a package manager,
 Store, `SystemImage`, installer, deployment service, shell, or physical-disk
-workflow is implemented.
+workflow is implemented. A bounded in-memory `DeploymentService` activation
+foundation is described below; this does not implement the complete deployment
+service claimed by this document.
 
 **PARTIALLY IMPLEMENTED foundation:** `packages/tools/mrml` now exposes an
 immutable bounded `SystemGeneration` record containing a nonzero local
@@ -50,6 +52,24 @@ isolation-policy generation. Stale generation requests fail before native or
 microVM backend construction, and committed/unavailable records preserve the
 original value. This does not authenticate, persist, select, activate, or
 recover a canonical `SystemGeneration`; those `DeploymentService` mechanisms
+remain **PLANNED**.
+
+The first `DeploymentService` control-plane slice is now **PARTIALLY
+IMPLEMENTED** in `packages/services/deployment`. Exact root `CONTROL` authority
+is required to stage and prepare a bounded candidate; exact root `READ`
+authority is required to inspect the active record. Candidate handles carry
+slot generations, activation is two-phase and one-use, stale expected-active
+state and replay fail closed, and ordinary forward activation refuses implicit
+rollback. Commit publishes an immutable `ActivatedSystemGeneration` containing
+the generation number, complete canonical-generation SHA3-512 digest,
+activation sequence, and source object/generation identity. Kernel isolation
+admission consumes that typed record, and both focused WHP/KVM component paths
+now construct admission only after this activation transaction. Windows and
+Arch Linux deployment-service suites pass 2 tests; package-format suites pass
+6, kernel suites pass 509, WHP passes 7, and KVM passes 8. The current hosted
+probe stages an already verified transient local generation; authenticated
+storage reads, crash-safe persistence/recovery, SystemRelease admission,
+rollback authorization, retained-root integration, and general runtime delivery
 remain **PLANNED**.
 
 > Installation, updating, offline servicing, recovery, system imaging, and

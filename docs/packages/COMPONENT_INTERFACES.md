@@ -125,10 +125,11 @@ generation. `ZstdResolvedServiceBinding` rejects a route from any other system
 generation even when interface, provider, and policy generations match, and
 the kernel returns a typed stale-system failure before either placement backend
 runs. Existing running routes keep their original system generation; no update
-retargeting or executable patching is introduced. The focused runners still
-construct a transient local generation rather than consuming persisted
-`DeploymentService` activation state, so the general generation-to-launch
-handoff remains **PLANNED**.
+retargeting or executable patching is introduced. The focused runners now stage
+and commit their transient local generation through the bounded
+capability-authorized `DeploymentService` activation transaction before kernel
+admission. Authenticated persistent generation recovery and the general
+generation-to-launch handoff remain **PLANNED**.
 The canonical build-tool-to-kernel representation is now **PARTIALLY
 IMPLEMENTED** as `ComponentServiceLaunchHandoff`: a fixed 280-byte little-
 endian record shared by the package-format library, `mrml`, kernel, WHP, and
@@ -139,10 +140,10 @@ against active system/policy admission and the exact resource-reserved route.
 The record also binds the SHA3-512 digest of the complete canonical
 `SystemGeneration`; matching numeric generations with different package bytes
 fail before backend invocation. Windows and Arch Linux package-format suites
-pass 5 tests, build-tool suites pass 80, kernel suites pass 509, WHP passes 7,
-and KVM passes 8. Persistent
-activation, authenticated delivery from `DeploymentService`, and general
-resolver-driven launching remain **PLANNED**.
+pass 6 tests, DeploymentService suites pass 2, build-tool suites pass 80,
+kernel suites pass 509, WHP passes 7, and KVM passes 8. Persistent activation
+recovery, authenticated storage delivery, and general resolver-driven launching
+remain **PLANNED**.
 The canonical provider now builds its own `mrml-zstd-service.efi` artifact—never
 an alias of the generic configuration service—with an x86-64 architecture trap,
 one private 4 KiB scratch page, and exact launch-register endpoint/caller/

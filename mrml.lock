@@ -4,10 +4,10 @@ version = 2
 toolchain = "nightly-2026-08-24"
 
 [graphs]
-compile_edges = 135
+compile_edges = 140
 build_tool_edges = 0
 runtime_interface_edges = 1
-package_edges = 131
+package_edges = 136
 system_release_edges = 3
 
 [[package]]
@@ -401,6 +401,19 @@ boot_bound = []
 system_release_bound = []
 
 [[package]]
+id = "org.mrml.service.deployment"
+path = "packages/services/deployment"
+isolation_default = "native-service"
+isolation_minimum = "native-service"
+isolation_maximum = "microvm"
+isolation_supported = ["native-service", "microvm"]
+compile_dependencies = ["org.mrml.library.package-format", "org.mrml.system.kernel"]
+
+static_runtime = ["org.mrml.library.package-format", "org.mrml.system.kernel"]
+boot_bound = []
+system_release_bound = []
+
+[[package]]
 id = "org.mrml.service.storage"
 path = "packages/services/storage"
 isolation_default = "native-service"
@@ -433,9 +446,9 @@ isolation_default = "platform"
 isolation_minimum = "platform"
 isolation_maximum = "platform"
 isolation_supported = ["platform"]
-compile_dependencies = ["org.mrml.library.crypto"]
+compile_dependencies = ["org.mrml.library.crypto", "org.mrml.library.package-format"]
 
-static_runtime = ["org.mrml.library.crypto"]
+static_runtime = ["org.mrml.library.crypto", "org.mrml.library.package-format"]
 boot_bound = []
 system_release_bound = []
 
@@ -563,9 +576,9 @@ isolation_default = "native-process"
 isolation_minimum = "native-process"
 isolation_maximum = "native-process"
 isolation_supported = ["native-process"]
-compile_dependencies = ["org.mrml.library.crypto", "org.mrml.library.error", "org.mrml.library.package-format", "org.mrml.library.runtime", "org.mrml.library.tensor", "org.mrml.service.config", "org.mrml.system.kernel", "org.mrml.system.vmm-kvm"]
+compile_dependencies = ["org.mrml.library.crypto", "org.mrml.library.error", "org.mrml.library.package-format", "org.mrml.library.runtime", "org.mrml.library.tensor", "org.mrml.service.config", "org.mrml.service.deployment", "org.mrml.system.kernel", "org.mrml.system.vmm-kvm"]
 
-static_runtime = ["org.mrml.library.crypto", "org.mrml.library.error", "org.mrml.library.package-format", "org.mrml.library.runtime", "org.mrml.library.tensor", "org.mrml.service.config", "org.mrml.system.kernel", "org.mrml.system.vmm-kvm"]
+static_runtime = ["org.mrml.library.crypto", "org.mrml.library.error", "org.mrml.library.package-format", "org.mrml.library.runtime", "org.mrml.library.tensor", "org.mrml.service.config", "org.mrml.service.deployment", "org.mrml.system.kernel", "org.mrml.system.vmm-kvm"]
 boot_bound = []
 system_release_bound = []
 
@@ -576,9 +589,9 @@ isolation_default = "native-process"
 isolation_minimum = "native-process"
 isolation_maximum = "native-process"
 isolation_supported = ["native-process"]
-compile_dependencies = ["org.mrml.library.crypto", "org.mrml.library.error", "org.mrml.library.package-format", "org.mrml.library.runtime", "org.mrml.library.tensor", "org.mrml.service.config", "org.mrml.system.kernel", "org.mrml.system.vmm-whp"]
+compile_dependencies = ["org.mrml.library.crypto", "org.mrml.library.error", "org.mrml.library.package-format", "org.mrml.library.runtime", "org.mrml.library.tensor", "org.mrml.service.config", "org.mrml.service.deployment", "org.mrml.system.kernel", "org.mrml.system.vmm-whp"]
 
-static_runtime = ["org.mrml.library.crypto", "org.mrml.library.error", "org.mrml.library.package-format", "org.mrml.library.runtime", "org.mrml.library.tensor", "org.mrml.service.config", "org.mrml.system.kernel", "org.mrml.system.vmm-whp"]
+static_runtime = ["org.mrml.library.crypto", "org.mrml.library.error", "org.mrml.library.package-format", "org.mrml.library.runtime", "org.mrml.library.tensor", "org.mrml.service.config", "org.mrml.service.deployment", "org.mrml.system.kernel", "org.mrml.system.vmm-whp"]
 boot_bound = []
 system_release_bound = []
 

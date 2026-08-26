@@ -7876,8 +7876,10 @@ and committed service route retains both. A stale system generation and stale
 policy generation fail with distinct typed errors before backend invocation.
 The supervised Zstd endpoint and data-plane adapter recheck and retain the
 system generation as well as the exact provider and policy generations. The
-focused WHP and KVM runners currently designate transient local generation 1;
-this does not prove persistent generation activation or recovery.
+focused WHP and KVM runners stage transient local generation 1 through the
+bounded capability-authorized `DeploymentService` two-phase activation path,
+then create kernel admission from its immutable `ActivatedSystemGeneration`.
+This does not prove authenticated persistent generation storage or recovery.
 The kernel can now decode a canonical 280-byte component-service launch
 handoff emitted from the build tool's resolved launch model. It validates the
 complete record before reserving admission, or binds the identical decoded
@@ -7887,8 +7889,8 @@ the complete canonical `SystemGeneration` SHA3-512 digest, fingerprint, and
 both artifact digests must remain exact. A reused generation number with
 different generation bytes fails before backend construction. The focused WHP/KVM
 runners use this shared package-format codec before attaching either verified
-image. This is hosted canonical-codec and parity evidence, not persistent
-`DeploymentService` activation or physical isolation.
+image. This is hosted canonical-codec, in-memory activation, and parity
+evidence, not persistent activation recovery or physical isolation.
 
 The focused test sends the generated 104-byte request and one attenuated shared-
 buffer capability from the caller to the launched provider task, executes the
