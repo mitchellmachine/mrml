@@ -15872,6 +15872,7 @@ fn runtime_reference_call_origin_parameter<const MAX_PARAMETERS: usize, const MA
                     let mut iteration_return_compatibility = local_return_compatibility;
                     let mut iteration_local_count = local_count;
                     let mut iteration_reaches_backedge = true;
+                    let mut iteration_breaks = false;
                     for operation in loop_statement.operations().iter().flatten() {
                         match *operation {
                             crate::LoopOperation::Local(local) => {
@@ -15954,6 +15955,11 @@ fn runtime_reference_call_origin_parameter<const MAX_PARAMETERS: usize, const MA
                                     iteration_local_count,
                                 )?)?;
                                 iteration_reaches_backedge = false;
+                                break;
+                            }
+                            crate::LoopOperation::Break => {
+                                iteration_reaches_backedge = false;
+                                iteration_breaks = true;
                                 break;
                             }
                             crate::LoopOperation::ConditionalBlock(block_index) => {
@@ -16090,6 +16096,23 @@ fn runtime_reference_call_origin_parameter<const MAX_PARAMETERS: usize, const MA
                         }
                         projected_origins =
                             incoming_projected_origins.intersect(iteration_projected_origins);
+                    } else if iteration_breaks {
+                        let break_projected_origins =
+                            iteration_projected_origins.retain_local_prefix(local_count);
+                        if loop_statement.condition.is_some() {
+                            for local_index in 0..local_count {
+                                local_origins[local_index] = (incoming_origins[local_index]
+                                    == iteration_origins[local_index])
+                                    .then_some(incoming_origins[local_index])
+                                    .flatten();
+                            }
+                            projected_origins =
+                                incoming_projected_origins.intersect(break_projected_origins);
+                        } else {
+                            local_origins[..local_count]
+                                .copy_from_slice(&iteration_origins[..local_count]);
+                            projected_origins = break_projected_origins;
+                        }
                     } else {
                         local_origins = incoming_origins;
                         projected_origins = incoming_projected_origins;
@@ -37727,6 +37750,26 @@ mod tests {
                 ..loop_choose
             }),
             None
+        );
+        assert_eq!(
+            runtime_reference_call_origin_parameter::<2, 32>(RuntimeCallTarget {
+                body_expression: concat!(
+                    "let mut local: u16 = 1; let mut changed: &mut u16 = &mut local; ",
+                    "while first { changed = value; break; } changed"
+                ),
+                ..loop_choose
+            }),
+            None
+        );
+        assert_eq!(
+            runtime_reference_call_origin_parameter::<2, 32>(RuntimeCallTarget {
+                body_expression: concat!(
+                    "let mut local: u16 = 1; let mut changed: &mut u16 = &mut local; ",
+                    "loop { changed = value; break; } changed"
+                ),
+                ..loop_choose
+            }),
+            Some(0)
         );
     }
 
