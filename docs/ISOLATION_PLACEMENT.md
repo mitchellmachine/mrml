@@ -830,6 +830,16 @@ session/device substitution fail closed. The shared hosted source exercises a
 single controlled candidate. Configuration passes 47 tests on Windows and Arch
 Linux, with WHP 11 and KVM 12; real platform enumeration remains **PLANNED**.
 
+The controlled recovery source no longer constructs that candidate directly.
+A fixed-capacity serviced inventory scans only caller-supplied live block
+sessions, reauthenticates the principal and `READ` right, reads the canonical
+volume header from block zero, and then feeds the unchanged unique-volume join.
+Candidate bytes still grant no session or placement authority. Invalid headers
+are ignored, while session, scratch, capacity, and transport uncertainty fail
+the complete scan closed. Configuration passes 48 tests on Windows and Arch
+Linux; WHP remains 11 and KVM 12. Hardware enumeration and installed boot remain
+**PLANNED**.
+
 The discovery-to-recovery lifetime is now one **PARTIALLY IMPLEMENTED** owning
 operation. `discover_and_recover_serviced_stable_system_selection` selects and
 authenticates the bounded candidate, performs both redundant-root and reachable-

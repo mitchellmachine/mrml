@@ -1,5 +1,16 @@
 # Patent review log
 
+## 2026-08-26 — Capability-backed recovery-device inventory
+
+Patent review: **NOT_TRIGGERED** for this bounded integration increment. It uses
+a conventional fixed-capacity sequential scan over explicitly authorized block
+sessions, canonical header decoding, and exact equality/uniqueness checks. It
+adds no hardware enumeration, storage layout, persistent or wire format,
+cryptography, placement heuristic, capability grant, native fallback, VMM/device
+protocol, DMA mechanism, or hardware-specific isolation technique. The broader
+stable-storage recovery, device, adaptive-isolation, and Total-MicroVM reviews
+remain `TRIGGERED`; no patent-clearance or non-infringement conclusion is made.
+
 ## 2026-08-26 — Retained installed-recovery Total owner
 
 Patent review: **NOT_TRIGGERED** for this ownership-only increment. It uses

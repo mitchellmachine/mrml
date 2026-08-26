@@ -3204,6 +3204,18 @@ in-memory candidate. Windows and Arch Linux configuration suites pass 47 tests,
 WHP 11, and KVM 12. Native platform enumeration and installed early-boot
 ownership remain **PLANNED**.
 
+The controlled source now obtains those candidates from a
+**PARTIALLY IMPLEMENTED** capability-backed service scan.
+`enumerate_serviced_recovery_devices` bounds the supplied live-session list,
+authenticates each session owner, performs the block-zero read through its exact
+`READ` authority, validates canonical volume-header geometry, and emits only
+non-authorizing candidate metadata. Invalid/non-MRML headers are skipped;
+session, scratch, capacity, and backend uncertainty fail closed. Both hosted
+runners exercise this scan before the same recovery and Total admission path.
+Configuration passes 48 tests on Windows and Arch Linux, WHP passes 11, and KVM
+passes 12. This does not prove AHCI, VirtIO, firmware, physical-media, or
+installed early-boot enumeration.
+
 The bounded discovery result now remains owned through the complete serviced
 recovery read. `RecoveredInstalledStableSystemSelection` retains the exact
 installed selection beside the `BlockVolume` and reachable graph produced from

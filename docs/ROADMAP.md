@@ -16,6 +16,16 @@ remain independently attributable.
 
 ## Current priority
 
+Recovery discovery now has a capability-backed service source. The bounded
+`enumerate_serviced_recovery_devices` scan accepts only explicit live block
+sessions, repeats principal and `READ` authorization, reads and validates block
+zero, and emits non-authorizing candidates for the existing exact unique-volume
+join. The hosted WHP/KVM path consumes this scan rather than a fabricated
+candidate. Configuration passes 48 tests on Windows and Arch Linux, WHP passes
+11, and KVM passes 12. This is **PARTIALLY IMPLEMENTED** platform-neutral service
+enumeration; native AHCI/VirtIO discovery and installed early boot remain the
+next hardware/boot connection.
+
 Installed recovery ownership now crosses the Total-admission boundary in the
 controlled backend-parity path. `RecoveredInstalledTotalAdmission` retains the
 exact serviced device selection and recovered volume/root identity beside the

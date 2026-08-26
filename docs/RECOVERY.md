@@ -1225,6 +1225,19 @@ the existing session/device substitutions. Configuration passes 47 tests on
 Windows and Arch Linux; WHP passes 11 and KVM 12. The hosted source supplies one
 in-memory candidate, not PCI/AHCI/VirtIO, installed-media, or physical evidence.
 
+The discovery source is now **PARTIALLY IMPLEMENTED** through the normal block
+service rather than only through preassembled candidate records.
+`enumerate_serviced_recovery_devices` accepts a bounded list of explicit live
+sessions, authenticates the same principal for each descriptor, reads block zero
+only through that session's `READ` authority, and decodes canonical MRML volume
+headers into an authority-free fixed-capacity inventory. Invalid/non-MRML
+headers are skipped; insufficient scratch, stale/wrong-owner sessions, capacity
+overflow, and transport uncertainty fail closed. The hosted WHP/KVM recovery
+source now uses this scan before the existing unique-volume join. Configuration
+passes 48 tests on Windows and Arch Linux; WHP passes 11 and KVM 12. Native
+AHCI/VirtIO/firmware enumeration, physical media, and installed early boot remain
+**PLANNED**.
+
 Discovery, authorization, and recovery now compose into one **PARTIALLY
 IMPLEMENTED** owning transition. The combined operation returns
 `RecoveredInstalledStableSystemSelection`, which keeps the exact installed

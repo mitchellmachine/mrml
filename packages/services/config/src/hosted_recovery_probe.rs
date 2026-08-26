@@ -8,13 +8,12 @@
 //! rollback evidence.
 
 use super::{
-    ConfigTransaction, ConfigUpdate, ConfigValue, ConfigurationService, DiscoveredRecoveryDevice,
-    InstalledRecoveryDeviceDiscovery, IsolationPolicySetting, OwnerIsolationSelection,
-    PERSISTED_RESTART_POLICY_BYTES, PersistedRestartPolicy,
+    ConfigTransaction, ConfigUpdate, ConfigValue, ConfigurationService, IsolationPolicySetting,
+    OwnerIsolationSelection, PERSISTED_RESTART_POLICY_BYTES, PersistedRestartPolicy,
     RecoveredInstalledStableSystemSelection, RecoveredInstalledTotalAdmission,
     RecoveredTotalAdmissionBuildError, SettingId, SettingSchema,
     StableConfigurationRecoveryValidator, StableServiceRecoveryValidator,
-    discover_and_recover_serviced_stable_system_selection,
+    discover_and_recover_serviced_stable_system_selection, enumerate_serviced_recovery_devices,
 };
 use mrml_crypto::Sha3_256;
 use mrml_kernel::arch::x86_64::UserContext;
@@ -96,6 +95,7 @@ unsafe impl FileReadBackend for CheckpointBackend {
 
 struct ReachableMetadataBackend {
     fail_block: Option<u64>,
+    header: [u8; BLOCK_BYTES],
     primary: [u8; BLOCK_BYTES],
     secondary: [u8; BLOCK_BYTES],
     root: [u8; BLOCK_BYTES],
@@ -121,6 +121,7 @@ unsafe impl BlockServiceBackend for ReachableMetadataBackend {
             return Err(());
         }
         let source = match block {
+            0 => &self.header,
             1 => &self.primary,
             2 => &self.secondary,
             10 => &self.root,
@@ -237,18 +238,6 @@ fn recovery_block_service()
         .grant(recovery_device(), principal(), BlockRights::READ)
         .map_err(|_| HostedRecoveryProbeError::StorageLayout)?;
     Ok((service, session))
-}
-
-struct ControlledRecoveryDiscovery {
-    candidate: Option<DiscoveredRecoveryDevice>,
-}
-
-impl InstalledRecoveryDeviceDiscovery for ControlledRecoveryDiscovery {
-    type Error = core::convert::Infallible;
-
-    fn next_candidate(&mut self) -> Result<Option<DiscoveredRecoveryDevice>, Self::Error> {
-        Ok(self.candidate.take())
-    }
 }
 
 fn object(local: u64) -> StorageObjectId {
@@ -485,8 +474,13 @@ fn build_reachable_device(
             .try_into()
             .expect("canonical superblock prefix"),
     );
+    let mut header_block = [0; BLOCK_BYTES];
+    let mut encoded_header = [0; mrml_storage::VOLUME_HEADER_BYTES];
+    header().encode(&mut encoded_header);
+    header_block[..encoded_header.len()].copy_from_slice(&encoded_header);
     Ok(ReachableMetadataBackend {
         fail_block,
+        header: header_block,
         primary,
         secondary: [0; BLOCK_BYTES],
         root: root_bytes,
@@ -509,20 +503,14 @@ fn recover_reachable_files<'a>(
     RecoveredInstalledStableSystemSelection<'a, ReachableMetadataBackend, 1, 1, 1, 3>,
     HostedRecoveryProbeError,
 > {
-    let candidate = DiscoveredRecoveryDevice::new(
-        BlockDeviceDescriptor::new(
-            recovery_device(),
-            BLOCK_BYTES as u32,
-            header().block_count(),
-        )
-        .ok_or(HostedRecoveryProbeError::StorageLayout)?,
-        header(),
-        header().primary_superblock(),
+    let mut discovery = enumerate_serviced_recovery_devices::<_, 1, 1, 1>(
+        service,
+        backend,
+        &[session],
+        principal(),
+        volume_scratch,
     )
     .map_err(|_| HostedRecoveryProbeError::StorageLayout)?;
-    let mut discovery = ControlledRecoveryDiscovery {
-        candidate: Some(candidate),
-    };
     let mut primary_read = [0; BLOCK_BYTES];
     let mut secondary_read = [0; BLOCK_BYTES];
     let mut metadata_scratch = [0; BLOCK_BYTES];

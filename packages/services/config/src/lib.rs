@@ -35,8 +35,8 @@ use mrml_storage::{
     PreparedFileWrite, ReachableFileSelection, RecoveredReachableState,
     RecoveredStorageAuthorities, RecoveryError, RecoveryMetadataBackend, SUPERBLOCK_BYTES,
     ServicedBlockDevice, StorageAuthorityTable, StorageBlockDevice, StorageHandle, StorageObjectId,
-    StoragePrincipal, StorageTransaction, TransactionError, TransactionReceipt, VolumeHeader,
-    VolumeId, recover_reachable_state,
+    StoragePrincipal, StorageTransaction, TransactionError, TransactionReceipt,
+    VOLUME_HEADER_BYTES, VolumeHeader, VolumeId, recover_reachable_state,
 };
 
 #[cfg(any(test, target_os = "windows", target_os = "linux"))]
@@ -1598,6 +1598,94 @@ pub trait InstalledRecoveryDeviceDiscovery {
     type Error;
 
     fn next_candidate(&mut self) -> Result<Option<DiscoveredRecoveryDevice>, Self::Error>;
+}
+
+/// Fixed-capacity candidates read through explicitly supplied live block
+/// sessions. The inventory retains metadata only; it cannot perform I/O or
+/// grant a session after construction.
+pub struct ServicedRecoveryDeviceInventory<const CANDIDATES: usize> {
+    candidates: [Option<DiscoveredRecoveryDevice>; CANDIDATES],
+    count: usize,
+    next: usize,
+}
+
+impl<const CANDIDATES: usize> ServicedRecoveryDeviceInventory<CANDIDATES> {
+    pub const fn count(&self) -> usize {
+        self.count
+    }
+}
+
+impl<const CANDIDATES: usize> InstalledRecoveryDeviceDiscovery
+    for ServicedRecoveryDeviceInventory<CANDIDATES>
+{
+    type Error = core::convert::Infallible;
+
+    fn next_candidate(&mut self) -> Result<Option<DiscoveredRecoveryDevice>, Self::Error> {
+        let candidate = self.candidates.get(self.next).copied().flatten();
+        self.next = self.next.saturating_add(1);
+        Ok(candidate)
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum ServicedRecoveryDeviceInventoryError<E> {
+    Capacity,
+    Scratch,
+    Session(BlockServiceError<core::convert::Infallible>),
+    Read(BlockServiceError<E>),
+    Candidate(InstalledRecoveryDeviceSelectionError),
+}
+
+/// Enumerates only devices for which the caller already holds an explicit live
+/// block session. Each header read repeats that session's owner and `READ`
+/// checks. Invalid or non-MRML headers are not candidates; transport
+/// uncertainty fails the complete inventory rather than silently hiding a
+/// potentially matching or duplicate installed volume.
+pub fn enumerate_serviced_recovery_devices<
+    B: BlockServiceBackend,
+    const DEVICES: usize,
+    const SESSIONS: usize,
+    const CANDIDATES: usize,
+>(
+    service: &BlockService<DEVICES, SESSIONS>,
+    backend: &mut B,
+    sessions: &[BlockSessionHandle],
+    principal: StoragePrincipal,
+    scratch: &mut [u8],
+) -> Result<
+    ServicedRecoveryDeviceInventory<CANDIDATES>,
+    ServicedRecoveryDeviceInventoryError<B::Error>,
+> {
+    if CANDIDATES == 0 || sessions.len() > CANDIDATES {
+        return Err(ServicedRecoveryDeviceInventoryError::Capacity);
+    }
+    let mut inventory = ServicedRecoveryDeviceInventory {
+        candidates: [None; CANDIDATES],
+        count: 0,
+        next: 0,
+    };
+    for session in sessions.iter().copied() {
+        let descriptor = service
+            .session_descriptor(session, principal)
+            .map_err(ServicedRecoveryDeviceInventoryError::Session)?;
+        let block_size = usize::try_from(descriptor.block_size())
+            .map_err(|_| ServicedRecoveryDeviceInventoryError::Scratch)?;
+        let block = scratch
+            .get_mut(..block_size)
+            .ok_or(ServicedRecoveryDeviceInventoryError::Scratch)?;
+        service
+            .read_blocks(backend, session, principal, 0, block)
+            .map_err(ServicedRecoveryDeviceInventoryError::Read)?;
+        let Ok(header) = VolumeHeader::decode(&block[..VOLUME_HEADER_BYTES]) else {
+            continue;
+        };
+        let candidate =
+            DiscoveredRecoveryDevice::new(descriptor, header, header.primary_superblock())
+                .map_err(ServicedRecoveryDeviceInventoryError::Candidate)?;
+        inventory.candidates[inventory.count] = Some(candidate);
+        inventory.count += 1;
+    }
+    Ok(inventory)
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -8083,6 +8171,100 @@ mod tests {
                 &mut no_capacity,
             ),
             Err(InstalledRecoveryDeviceDiscoveryError::Capacity)
+        );
+    }
+
+    #[test]
+    fn serviced_recovery_enumeration_reads_only_authorized_bounded_sessions() {
+        let device = BlockDeviceId::new(7).unwrap();
+        let header = stable_header();
+        let descriptor =
+            BlockDeviceDescriptor::new(device, STABLE_BLOCK_BYTES as u32, header.block_count())
+                .unwrap();
+        let mut service = BlockService::<1, 1>::new();
+        service.register_device(descriptor).unwrap();
+        let session = service
+            .grant(device, stable_principal(), BlockRights::READ)
+            .unwrap();
+        let mut backend = StableBlockBackend::new(device);
+        let mut encoded_header = [0; mrml_storage::VOLUME_HEADER_BYTES];
+        header.encode(&mut encoded_header);
+        let mut header_block = [0; STABLE_BLOCK_BYTES];
+        header_block[..encoded_header.len()].copy_from_slice(&encoded_header);
+        backend.install_block(0, &header_block);
+        let mut scratch = [0; STABLE_BLOCK_BYTES];
+        let mut inventory = enumerate_serviced_recovery_devices::<_, 1, 1, 1>(
+            &service,
+            &mut backend,
+            &[session],
+            stable_principal(),
+            &mut scratch,
+        )
+        .unwrap();
+        assert_eq!(inventory.count(), 1);
+        assert_eq!(backend.reads, 1);
+        let selected = discover_installed_recovery_device::<_, 1, 1, 1>(
+            &service,
+            session,
+            stable_principal(),
+            stable_volume(),
+            &mut inventory,
+        )
+        .unwrap();
+        assert_eq!(selected.descriptor(), descriptor);
+        assert_eq!(selected.header(), header);
+
+        let mut denied_backend = StableBlockBackend::new(device);
+        denied_backend.install_block(0, &header_block);
+        let denied = enumerate_serviced_recovery_devices::<_, 1, 1, 1>(
+            &service,
+            &mut denied_backend,
+            &[session],
+            StoragePrincipal::new(8).unwrap(),
+            &mut scratch,
+        );
+        assert!(matches!(
+            denied,
+            Err(ServicedRecoveryDeviceInventoryError::Session(
+                BlockServiceError::Denied
+            ))
+        ));
+        assert_eq!(denied_backend.reads, 0);
+
+        let mut short_backend = StableBlockBackend::new(device);
+        let mut short = [0; STABLE_BLOCK_BYTES - 1];
+        assert!(matches!(
+            enumerate_serviced_recovery_devices::<_, 1, 1, 1>(
+                &service,
+                &mut short_backend,
+                &[session],
+                stable_principal(),
+                &mut short,
+            ),
+            Err(ServicedRecoveryDeviceInventoryError::Scratch)
+        ));
+        assert_eq!(short_backend.reads, 0);
+
+        let mut corrupt_backend = StableBlockBackend::new(device);
+        let mut corrupt = enumerate_serviced_recovery_devices::<_, 1, 1, 1>(
+            &service,
+            &mut corrupt_backend,
+            &[session],
+            stable_principal(),
+            &mut scratch,
+        )
+        .unwrap();
+        assert_eq!(corrupt.count(), 0);
+        assert_eq!(corrupt_backend.reads, 1);
+        assert_eq!(
+            discover_installed_recovery_device::<_, 1, 1, 1>(
+                &service,
+                session,
+                stable_principal(),
+                stable_volume(),
+                &mut corrupt,
+            ),
+            Err(InstalledRecoveryDeviceDiscoveryError::Missing)
         );
     }
 
