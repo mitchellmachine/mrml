@@ -1472,6 +1472,19 @@ options remain rejected. Windows gnullvm and native Arch Linux WSL each pass
 register classes, allocation, clobbers, arbitrary effects, and general inline
 assembly remain unimplemented.
 
+The explicit-output increment admits the single oracle-compatible form
+`asm!("mov rax, 7", lateout("rax") value)` for a mutable `u64` local. The
+bounded validator resolves the destination as an exact local identity, records
+a write in ownership preanalysis and emission, emits the published immediate
+move, and stores RAX into the destination's checked stack slot. `nomem`,
+`nostack`, and `preserves_flags` are accepted uniquely because this fixed move
+preserves flags. Immutable locals, parameters, unknown names, wrong types,
+other registers/templates, and malformed operands fail closed. Windows gnullvm
+and native Arch Linux WSL each pass 639 library tests, one component-interface
+probe, 10 conformance tests, and 335 replacement tests: 985 compiler tests per
+host. Inout operands, register classes/allocation, output projections,
+clobbers, arbitrary effects, and general inline assembly remain unimplemented.
+
 The premise-bearing rigid-normalization milestone proves the selected generic
 implementation's instantiated trait and projection predicates before exposing
 its associated value. It shares the caller's 16-frame rigid proof stack and

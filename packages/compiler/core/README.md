@@ -4660,6 +4660,17 @@ suites pass 985 compiler tests per host. Outputs, inout operands, register
 classes/allocation, clobbers, arbitrary effects, and general inline assembly
 remain absent.
 
+The next bounded output form is
+`asm!("mov rax, 7", lateout("rax") value)` for a mutable `u64` local in an
+unsafe x86-64 function. It resolves one exact destination identity, records the
+write in ownership facts, emits the fixed immediate move, and stores RAX into
+the checked local stack slot. The fixed move admits unique `nomem`, `nostack`,
+and `preserves_flags` options. Immutable locals, parameters, unknown names,
+wrong types, other registers/templates, and malformed operands fail closed.
+Windows gnullvm and native Arch Linux WSL each pass 985 compiler tests. This is
+**PARTIAL** output-operand evidence, not an inout, register-allocation, output-
+projection, clobber, arbitrary-effect, or general assembly claim.
+
 The projection-bearing term milestone uses a fixed 64-node arena for flat leaf
 terms and associated-type projections whose trait self/argument positions refer
 only to earlier nodes. Identical nodes intern to one stable identity; invalid
