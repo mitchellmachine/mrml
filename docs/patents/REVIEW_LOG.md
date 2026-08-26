@@ -5956,3 +5956,16 @@ instruction-selection, relocation, or code-generation algorithm. Operands,
 clobbers, general effects, and general assembly remain absent. Broader compiler
 completion remains partial; this technical screen does not establish clearance
 or infringement and does not replace independent human dual review.
+
+# 2026-08-26 — Explicit typed inline-assembly input
+
+**Result: NOT_TRIGGERED after the typed-input review.** This increment applies
+the published x86-64 register-to-register `cmp` encoding after conventional
+typed expression lowering into an explicitly selected RAX input register.
+Bounded parsing, ordinary ownership-read bookkeeping, type checking, effect-
+option validation, and fail-closed rejection introduce no novel assembler,
+register-allocation, optimization, instruction-selection, or code-generation
+algorithm. Output/inout operands, register classes, allocation, general
+clobbers/effects, and general assembly remain absent. Broader compiler
+completion remains partial; this technical screen does not establish clearance
+or infringement and does not replace independent human dual review.

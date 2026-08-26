@@ -1459,6 +1459,19 @@ unimplemented. Windows gnullvm and native Arch Linux WSL each pass 639 library
 tests, one component-interface probe, 10 conformance tests, and 335 replacement
 tests: 985 compiler tests per host.
 
+The next bounded inline-assembly increment adds one explicit typed input form:
+`asm!("cmp rax, rax", in("rax") value)` accepts only a checked `u64`
+expression, evaluates it through ordinary lowering into RAX, records its reads
+in the ownership preanalysis, and emits the published 64-bit register compare.
+Unique `nomem` and `nostack` options remain available, while
+`preserves_flags` fails closed because this instruction modifies flags. Safe
+functions, missing inputs, wrong types, other registers/templates, and invalid
+options remain rejected. Windows gnullvm and native Arch Linux WSL each pass
+639 library tests, one component-interface probe, 10 conformance tests, and
+335 replacement tests: 985 compiler tests per host. Output/inout operands,
+register classes, allocation, clobbers, arbitrary effects, and general inline
+assembly remain unimplemented.
+
 The premise-bearing rigid-normalization milestone proves the selected generic
 implementation's instantiated trait and projection predicates before exposing
 its associated value. It shares the caller's 16-frame rigid proof stack and

@@ -4650,6 +4650,16 @@ tests: 985 compiler tests per host. This is **PARTIAL** inline-assembly evidence
 not a clobber, register-allocation, memory-effect, control-flow, or general
 assembly claim.
 
+One exact explicit-input form is also admitted in unsafe x86-64 functions:
+`asm!("cmp rax, rax", in("rax") value)` requires a typed `u64` expression,
+evaluates it through ordinary lowering into RAX, includes its reads in the
+ownership facts, and then emits the fixed compare encoding. Unique `nomem` and
+`nostack` options are accepted; `preserves_flags`, wrong types, missing inputs,
+other registers/templates, and safe use fail closed. The same Windows and Arch
+suites pass 985 compiler tests per host. Outputs, inout operands, register
+classes/allocation, clobbers, arbitrary effects, and general inline assembly
+remain absent.
+
 The projection-bearing term milestone uses a fixed 64-node arena for flat leaf
 terms and associated-type projections whose trait self/argument positions refer
 only to earlier nodes. Identical nodes intern to one stable identity; invalid
