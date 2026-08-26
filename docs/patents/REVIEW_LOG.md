@@ -7411,3 +7411,15 @@ optimization, or code-generation mechanism. General shared-reference call and
 region inference remain absent. Broader compiler completion remains partial;
 this technical screen is not a clearance or infringement conclusion and does
 not replace independent human dual review.
+
+# 2026-08-26 — Conditional shared-reference call-escape evidence
+
+**Result: NOT_TRIGGERED after the conditional shared-escape evidence review.**
+This increment adds independently authored regression evidence that the existing
+bounded conditional origin join accepts all-parameter and rejects local-backed
+shared call results at a function return. It introduces no new region solver,
+interprocedural inference, alias analysis, optimization, or code-generation
+algorithm. General shared-reference call and region inference remain absent.
+Broader compiler completion remains partial; this technical screen is not a
+clearance or infringement conclusion and does not replace independent human
+dual review.
