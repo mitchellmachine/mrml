@@ -15166,9 +15166,18 @@ fn runtime_reference_call_origin_parameter<const MAX_PARAMETERS: usize, const MA
                                 .nested_blocks()
                                 .get(block_index)
                                 .and_then(|value| *value)?;
-                            if block.action_count() != 0 {
-                                return None;
-                            }
+                            let mut block_names = local_names;
+                            let mut block_origins = local_origins;
+                            let mut block_mutability = local_mutability;
+                            let mut block_local_count = local_count;
+                            apply_conditional_loop_locals::<MAX_PARAMETERS, MAX_NODES>(
+                                target,
+                                block.actions(),
+                                &mut block_names,
+                                &mut block_origins,
+                                &mut block_mutability,
+                                &mut block_local_count,
+                            )?;
                             for control in block.unconditional_controls().iter().flatten() {
                                 if let crate::NestedLoopUnconditionalControl::Return(value) =
                                     *control
@@ -15179,9 +15188,9 @@ fn runtime_reference_call_origin_parameter<const MAX_PARAMETERS: usize, const MA
                                         &tree,
                                         tree.root(),
                                         0,
-                                        &local_names,
-                                        &local_origins,
-                                        local_count,
+                                        &block_names,
+                                        &block_origins,
+                                        block_local_count,
                                     )?)?;
                                 }
                             }
@@ -15192,9 +15201,9 @@ fn runtime_reference_call_origin_parameter<const MAX_PARAMETERS: usize, const MA
                                     &tree,
                                     tree.root(),
                                     0,
-                                    &local_names,
-                                    &local_origins,
-                                    local_count,
+                                    &block_names,
+                                    &block_origins,
+                                    block_local_count,
                                 )?)?;
                             }
                         }
@@ -31067,7 +31076,10 @@ mod tests {
                         parameter_count: 2,
                         return_type: reference,
                         return_type_name: "&mut u16",
-                        body_expression: "loop { loop { if first { return value; } } }",
+                        body_expression: concat!(
+                            "loop { loop { let branch: &mut u16 = &mut *value; ",
+                            "if first { return branch; } } }"
+                        ),
                     })
                 }
                 _ => None,
@@ -35252,6 +35264,26 @@ mod tests {
         assert_eq!(
             runtime_reference_call_origin_parameter::<2, 24>(RuntimeCallTarget {
                 body_expression: "loop { loop { let changed: &mut u16 = value; if first { return changed; } } }",
+                ..nested_loop
+            }),
+            Some(0)
+        );
+        assert_eq!(
+            runtime_reference_call_origin_parameter::<2, 24>(RuntimeCallTarget {
+                body_expression: concat!(
+                    "loop { loop { let mut changed: &mut u16 = value; ",
+                    "changed = &mut *changed; if first { return changed; } } }"
+                ),
+                ..nested_loop
+            }),
+            None
+        );
+        assert_eq!(
+            runtime_reference_call_origin_parameter::<2, 24>(RuntimeCallTarget {
+                body_expression: concat!(
+                    "loop { loop { let mut local: u16 = 1; ",
+                    "let changed: &mut u16 = &mut local; if first { return changed; } } }"
+                ),
                 ..nested_loop
             }),
             None
