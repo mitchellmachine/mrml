@@ -89,6 +89,7 @@ impl<'source> SourceTraitSupertrait<'source> {
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum SourceTraitSupertraitArgument<'source> {
+    SelfType,
     Parameter(u8),
     Concrete(TypeRef<'source>),
 }
@@ -204,7 +205,9 @@ impl<'source> SourceTraitDeclarationTable<'source> {
                         .generic_parameters()
                         .iter()
                         .position(|parameter| *parameter == Some(argument.text));
-                    arguments[argument_index] = Some(if let Some(parameter_index) = parameter_index {
+                    arguments[argument_index] = Some(if argument.text == "Self" {
+                        SourceTraitSupertraitArgument::SelfType
+                    } else if let Some(parameter_index) = parameter_index {
                         SourceTraitSupertraitArgument::Parameter(parameter_index as u8)
                     } else if supported_source_trait_type(argument.text) {
                         SourceTraitSupertraitArgument::Concrete(*argument)
@@ -499,7 +502,7 @@ impl<'source> SourceTraitImplementationTable<'source> {
                 Item::Trait(declaration) => {
                     for supertrait in declaration.supertraits().iter().flatten() {
                         for argument in supertrait.arguments().iter().flatten() {
-                            if !declaration
+                            if argument.text != "Self" && !declaration
                                 .generic_parameters()
                                 .contains(&Some(argument.text))
                             {
@@ -700,6 +703,7 @@ impl<'source> SourceTraitImplementationTable<'source> {
                 );
                 for source_argument in supertrait.arguments().iter().flatten() {
                     let argument = match source_argument {
+                        SourceTraitSupertraitArgument::SelfType => consequence.self_type,
                         SourceTraitSupertraitArgument::Parameter(parameter_index) => {
                             consequence.arguments()[*parameter_index as usize].unwrap()
                         }
@@ -1267,6 +1271,7 @@ impl<'source> SourceTraitImplementationTable<'source> {
                 supertrait.arguments().iter().flatten().enumerate()
             {
                 let argument = match source_argument {
+                    SourceTraitSupertraitArgument::SelfType => self_type,
                     SourceTraitSupertraitArgument::Parameter(parameter_index) => {
                         trait_arguments[*parameter_index as usize]
                     }
@@ -8512,6 +8517,15 @@ mod tests {
             Some(SourceTraitSupertraitArgument::Concrete(TypeRef { text: "u8", .. }))
         ));
 
+        let self_argument = Parser::new("trait Child: Parent<Self> {} trait Parent<T> {}")
+            .parse_module::<3, 1>()
+            .unwrap();
+        let traits = SourceTraitDeclarationTable::from_module(&self_argument).unwrap();
+        assert_eq!(
+            traits.get("Child").unwrap().supertraits()[0].unwrap().arguments(),
+            &[Some(SourceTraitSupertraitArgument::SelfType)]
+        );
+
         let compound = Parser::new("trait Child<T>: Parent<Vec<T>> {} trait Parent<T> {}")
             .parse_module::<3, 1>()
             .unwrap();
@@ -8999,6 +9013,15 @@ mod tests {
         implementations
             .prove_module(&generic_concrete, &traits)
             .unwrap();
+
+        let self_argument = Parser::new(concat!(
+            "trait Root<T> {} trait Parent<T>: Root<Self> {} trait Child: Parent<Self> {} ",
+            "impl<T> Root<T> for T {} impl<T> Parent<T> for T {} impl Child for u32 {}"
+        ))
+        .parse_module::<10, 1>()
+        .unwrap();
+        let traits = SourceTraitDeclarationTable::from_module(&self_argument).unwrap();
+        SourceTraitImplementationTable::from_module(&self_argument, &traits).unwrap();
     }
 
     #[test]

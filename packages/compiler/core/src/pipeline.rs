@@ -603,6 +603,26 @@ mod tests {
     }
 
     #[test]
+    fn proves_self_source_supertrait_arguments_before_codegen() {
+        let source = concat!(
+            "trait Parent<T> {} trait Child: Parent<Self> {} ",
+            "impl<T> Parent<T> for T {} impl Child for u32 {} ",
+            "#[unsafe(no_mangle)] pub extern \"C\" fn answer() -> u64 { 42 }"
+        );
+        compile(source, "answer", ObjectFormat::Coff).unwrap();
+
+        let missing = source.replace("impl<T> Parent<T> for T {} ", "");
+        let error = compile(&missing, "answer", ObjectFormat::Coff).unwrap_err();
+        assert!(matches!(
+            error.kind,
+            CompileErrorKind::TraitImplementation(SourceTraitImplementationError {
+                kind: crate::SourceTraitImplementationErrorKind::MissingSupertraitImplementation,
+                ..
+            })
+        ));
+    }
+
+    #[test]
     fn proves_generic_source_projection_premises_before_codegen() {
         let source = concat!(
             "trait Parent<Input> { type Output; } trait Child<Input> {} ",
