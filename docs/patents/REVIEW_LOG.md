@@ -1,5 +1,16 @@
 # Patent review log
 
+## 2026-08-26 — Bounded UEFI Block I/O descriptor source
+
+Patent review: **NOT_TRIGGERED** for this firmware-parsing increment. It models
+published UEFI ABI records, performs conventional bounds/canonicality/overflow
+checks, and applies the existing SHA3-256 implementation with an explicit
+domain separator to canonical device-path bytes. It adds no discovery or driver
+algorithm, block scheduling, storage layout, new cryptography, placement
+heuristic, native fallback, queue/DMA mechanism, or hardware isolation method.
+Broader storage/device, firmware, adaptive-isolation, and Total-MicroVM reviews
+remain `TRIGGERED`; no patent-clearance or non-infringement conclusion is made.
+
 ## 2026-08-26 — Platform media-generation recovery binding
 
 Patent review: **NOT_TRIGGERED** for this typed identity/lifetime increment. It
@@ -7365,3 +7376,15 @@ optimization, or code-generation algorithm. General shared-reference call and
 region inference remain absent. Broader compiler completion remains partial;
 this technical screen is not a clearance or infringement conclusion and does
 not replace independent human dual review.
+
+# 2026-08-26 — Scalar shared-reference call-escape evidence
+
+**Result: NOT_TRIGGERED after the shared-call escape evidence review.** This
+increment adds independently authored regression evidence that the existing
+bounded return-outlives analysis accepts parameter-backed and rejects local-
+backed scalar shared-reference identity results. It introduces no new region
+solver, interprocedural inference, alias analysis, optimization, or code-
+generation algorithm. General shared-reference call and region inference remain
+absent. Broader compiler completion remains partial; this technical screen is
+not a clearance or infringement conclusion and does not replace independent
+human dual review.
