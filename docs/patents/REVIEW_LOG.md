@@ -1,5 +1,15 @@
 # Patent review log
 
+## 2026-08-26 — Hosted installed-recovery owner chain
+
+Patent review: **NOT_TRIGGERED** for this integration increment. It reuses the
+existing canonical fixed-record handoff, exact session grant, volume/root
+equality checks, existing reachable-graph validator, and existing Total-owner
+wrapper. It introduces no new recovery algorithm, storage format, device
+protocol, virtualization primitive, or hardware mechanism. Native transport
+correlation, durable storage, and adaptive/Total MicroVM mechanisms retain their
+existing `TRIGGERED` reviews.
+
 ## 2026-08-26 — Handoff-selected recovery session composition
 
 Patent review: **NOT_TRIGGERED** for this increment. It composes existing exact

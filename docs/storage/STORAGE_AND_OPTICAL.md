@@ -178,6 +178,15 @@ Windows and Arch Linux; WHP/KVM runner parity remains 11/12. Native driver
 correlation, complete graph/Total-owner composition, and physical media remain
 **PLANNED**.
 
+Complete graph/Total-owner composition is now **PARTIALLY IMPLEMENTED** in the
+controlled hosted path. Recovery-only handoffs carry the installed identity;
+the recovery source refuses absence, reacquires its exact read session, validates
+the selected root and reachable graph, and retains the installed selection
+through Total admission. Windows and Arch Linux pass 561 kernel and 49
+configuration tests; WHP/KVM runner parity passes 11/12. Native transport
+enumeration/correlation, durable storage, OVMF, and physical media remain
+**PLANNED**.
+
 The `mrml` frontend may expose structured `disk`, `filesystem`, `optical`, and
 `media` operations. The PowerShell-inspired shell projects the same backend as
 typed `Get-*`, `Test-*`, `Initialize-*`, `New-*`, `Format-*`, `Write-*`, and

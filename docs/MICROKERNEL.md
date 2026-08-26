@@ -3147,6 +3147,15 @@ the successful `InstalledRecoveryDeviceSelection` retains the ordinary
 principal/session checks for later graph reads. Configuration passes 49 tests
 on Windows and Arch Linux, with WHP/KVM runner parity at 11/12. Full native
 driver and recovered-graph integration remains **PLANNED**.
+
+The hosted backend-parity path now carries the same installed owner through the
+complete reachable-graph and Total-admission composition. Its recovery-only
+handoff includes the canonical identity, absence fails closed, service
+reacquisition creates the fresh read authority, and the resulting graph/device
+selection remains owned by `RecoveredInstalledTotalAdmission`. Windows and Arch
+Linux pass 561 kernel and 49 configuration tests; WHP/KVM runners pass 11/12.
+Status remains **PARTIALLY IMPLEMENTED** because the device and storage are
+controlled hosted fixtures rather than native or physical evidence.
 The controlled path now retains the installed side of that binding as well.
 `RecoveredInstalledTotalAdmission` owns the exact serviced device selection,
 volume header, active root, recovered volume/root generation, activated release,

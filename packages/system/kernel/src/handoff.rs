@@ -831,6 +831,55 @@ pub fn encode_handoff_with_recovery_and_isolation(
     Ok(length)
 }
 
+/// Encodes the recovery metadata, its exact non-authorizing installed-device
+/// identity, and an optional one-boot isolation request without requiring an
+/// unrelated service or SMP payload. The installed record must agree with the
+/// authenticated volume/root metadata and is placed at the canonical tail.
+#[allow(clippy::too_many_arguments)]
+pub fn encode_handoff_with_recovery_isolation_and_installed(
+    image_version: u64,
+    entropy: [u8; 32],
+    image_measurement: [u8; 64],
+    secure_boot: bool,
+    measured_boot: bool,
+    rollback_protected: bool,
+    coherent_release: bool,
+    acpi_root: u64,
+    framebuffer: FramebufferInfo,
+    regions: &[MemoryRegion],
+    recovery_state: RecoveryStateMetadata,
+    installed_recovery: InstalledRecoveryBootIdentity,
+    isolation_override: Option<BootIsolationOverride>,
+    output: &mut [u8],
+) -> Result<usize, HandoffError> {
+    validate_installed_recovery(recovery_state, installed_recovery)?;
+    let length = encode_handoff_with_recovery_and_isolation(
+        image_version,
+        entropy,
+        image_measurement,
+        secure_boot,
+        measured_boot,
+        rollback_protected,
+        coherent_release,
+        acpi_root,
+        framebuffer,
+        regions,
+        recovery_state,
+        isolation_override,
+        output,
+    )?;
+    let installed_offset = HANDOFF_HEADER_BYTES
+        .checked_add(
+            regions
+                .len()
+                .checked_mul(HANDOFF_REGION_BYTES)
+                .ok_or(HandoffError::NonCanonical)?,
+        )
+        .and_then(|offset| offset.checked_add(HANDOFF_RECOVERY_STATE_BYTES))
+        .ok_or(HandoffError::NonCanonical)?;
+    append_installed_recovery(length, installed_offset, installed_recovery, output)
+}
+
 #[allow(clippy::too_many_arguments)]
 pub fn encode_handoff_with_madt(
     image_version: u64,
@@ -1235,13 +1284,8 @@ pub fn encode_handoff_with_smp_service_recovery_isolation_and_installed(
     madt: &[u8],
     output: &mut [u8],
 ) -> Result<usize, HandoffError> {
-    if installed_recovery.is_some_and(|installed| {
-        recovery_state.is_none_or(|recovery| {
-            recovery.accepted_volume() != Some(installed.volume())
-                || recovery.accepted_root_generation() != installed.root_generation()
-        })
-    }) {
-        return Err(HandoffError::NonCanonical);
+    if let Some(installed) = installed_recovery {
+        validate_installed_recovery(recovery_state.ok_or(HandoffError::NonCanonical)?, installed)?;
     }
     let length = encode_handoff_with_smp_service_recovery_and_isolation(
         image_version,
@@ -1277,6 +1321,28 @@ pub fn encode_handoff_with_smp_service_recovery_isolation_and_installed(
             offset.checked_add(usize::from(recovery_state.is_some()) * HANDOFF_RECOVERY_STATE_BYTES)
         })
         .ok_or(HandoffError::NonCanonical)?;
+    append_installed_recovery(length, installed_offset, installed_recovery, output)
+}
+
+fn validate_installed_recovery(
+    recovery_state: RecoveryStateMetadata,
+    installed: InstalledRecoveryBootIdentity,
+) -> Result<(), HandoffError> {
+    if recovery_state.accepted_volume() != Some(installed.volume())
+        || recovery_state.accepted_root_generation() != installed.root_generation()
+    {
+        Err(HandoffError::NonCanonical)
+    } else {
+        Ok(())
+    }
+}
+
+fn append_installed_recovery(
+    length: usize,
+    installed_offset: usize,
+    installed_recovery: InstalledRecoveryBootIdentity,
+    output: &mut [u8],
+) -> Result<usize, HandoffError> {
     let extended_length = length
         .checked_add(INSTALLED_RECOVERY_BOOT_IDENTITY_BYTES)
         .ok_or(HandoffError::NonCanonical)?;
@@ -2286,6 +2352,37 @@ mod tests {
             decoded.isolation_override(),
             Some(BootIsolationOverride::TotalMicrovmOnce)
         );
+
+        const RECOVERY_ONLY_INSTALLED_LENGTH: usize = HANDOFF_HEADER_BYTES
+            + 2 * HANDOFF_REGION_BYTES
+            + HANDOFF_RECOVERY_STATE_BYTES
+            + INSTALLED_RECOVERY_BOOT_IDENTITY_BYTES;
+        let mut recovery_only = [0; RECOVERY_ONLY_INSTALLED_LENGTH];
+        assert_eq!(
+            encode_handoff_with_recovery_isolation_and_installed(
+                7,
+                [1; 32],
+                [2; 64],
+                true,
+                true,
+                false,
+                true,
+                0x9000,
+                framebuffer,
+                &regions,
+                recovery,
+                installed,
+                Some(BootIsolationOverride::TotalMicrovmOnce),
+                &mut recovery_only,
+            ),
+            Ok(RECOVERY_ONLY_INSTALLED_LENGTH)
+        );
+        let decoded = BootHandoff::decode(&recovery_only, |_| {}).unwrap();
+        assert_eq!(decoded.service(), None);
+        assert_eq!(decoded.ap_trampoline(), None);
+        assert_eq!(decoded.recovery_state(), Some(recovery));
+        assert_eq!(decoded.installed_recovery(), Some(installed));
+        assert_eq!(decoded.madt(&recovery_only), None);
 
         let installed_offset = HANDOFF_HEADER_BYTES
             + 2 * HANDOFF_REGION_BYTES

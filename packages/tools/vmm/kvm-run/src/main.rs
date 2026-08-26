@@ -58,10 +58,12 @@ use mrml_kernel::{
 };
 #[cfg(any(test, target_os = "linux"))]
 use mrml_kernel::{
-    BootHandoff, FramebufferInfo, MemoryKind, MemoryRegion, PhysAddr, PixelFormat,
-    RecoveryStateMetadata, encode_handoff, encode_handoff_with_application,
-    encode_handoff_with_recovery, encode_handoff_with_recovery_and_isolation,
-    encode_handoff_with_smp, encode_handoff_with_smp_recovery_and_isolation,
+    BootHandoff, FramebufferInfo, InstalledRecoveryBootIdentity, InstalledRecoverySource,
+    MemoryKind, MemoryRegion, PhysAddr, PixelFormat, RecoveryStateMetadata, encode_handoff,
+    encode_handoff_with_application, encode_handoff_with_recovery,
+    encode_handoff_with_recovery_and_isolation,
+    encode_handoff_with_recovery_isolation_and_installed, encode_handoff_with_smp,
+    encode_handoff_with_smp_recovery_and_isolation,
 };
 #[cfg(target_os = "linux")]
 use mrml_kvm::{KvmLaunchLayout, KvmSystem, PreparedKvmGuest};
@@ -5072,8 +5074,43 @@ fn boot_handoff(
         region(FRAMEBUFFER, framebuffer_pages, MemoryKind::Mmio)?,
     ];
     let mut encoded = [0u8; 512];
-    let length = match (recovery_state, isolation_override) {
-        (Some(recovery_state), Some(isolation_override)) => {
+    let installed_recovery = recovery_state
+        .and_then(|state| state.accepted_volume().map(|volume| (state, volume)))
+        .map(|(state, volume)| {
+            InstalledRecoveryBootIdentity::new(
+                InstalledRecoverySource::Hosted,
+                [0x42; 32],
+                1,
+                1,
+                4096,
+                100,
+                volume,
+                1,
+                state.accepted_root_generation(),
+            )
+            .map_err(|_| anyhow!("invalid installed recovery identity"))
+        })
+        .transpose()?;
+    let length = match (recovery_state, isolation_override, installed_recovery) {
+        (Some(recovery_state), isolation_override, Some(installed_recovery)) => {
+            encode_handoff_with_recovery_isolation_and_installed(
+                version,
+                entropy,
+                measurement,
+                true,
+                false,
+                false,
+                coherent_release,
+                0x9000,
+                framebuffer,
+                &regions,
+                recovery_state,
+                installed_recovery,
+                isolation_override,
+                &mut encoded,
+            )
+        }
+        (Some(recovery_state), Some(isolation_override), None) => {
             encode_handoff_with_recovery_and_isolation(
                 version,
                 entropy,
@@ -5090,7 +5127,7 @@ fn boot_handoff(
                 &mut encoded,
             )
         }
-        (Some(recovery_state), None) => encode_handoff_with_recovery(
+        (Some(recovery_state), None, None) => encode_handoff_with_recovery(
             version,
             entropy,
             measurement,
@@ -5103,7 +5140,7 @@ fn boot_handoff(
             recovery_state,
             &mut encoded,
         ),
-        (None, None) => encode_handoff(
+        (None, None, None) => encode_handoff(
             version,
             entropy,
             measurement,
@@ -5115,10 +5152,17 @@ fn boot_handoff(
             &regions,
             &mut encoded,
         ),
-        (None, Some(_)) => return Err(anyhow!("isolation override requires recovery metadata")),
+        (None, Some(_), None) => {
+            return Err(anyhow!("isolation override requires recovery metadata"));
+        }
+        (None, _, Some(_)) => unreachable!("installed recovery derives from recovery metadata"),
     }
     .map_err(|_| anyhow!("canonical boot handoff construction failed"))?;
-    if length != 240 + usize::from(recovery_state.is_some()) * 40 {
+    if length
+        != 240
+            + usize::from(recovery_state.is_some()) * 40
+            + usize::from(installed_recovery.is_some()) * 104
+    {
         return Err(anyhow!("unexpected canonical boot handoff length"));
     }
     Ok(EncodedHandoff {
@@ -5331,6 +5375,10 @@ mod tests {
             boot_handoff(21, [0x38; 32], [0xaa; 64], 1, Some(recovery), None, false).unwrap();
         let decoded = BootHandoff::decode(encoded.as_slice(), |_| {}).unwrap();
         assert_eq!(decoded.recovery_state(), Some(recovery));
+        let installed = decoded.installed_recovery().unwrap();
+        assert_eq!(installed.source(), InstalledRecoverySource::Hosted);
+        assert_eq!(installed.volume(), [0x51; 16]);
+        assert_eq!(installed.root_generation(), 1);
     }
 
     #[test]

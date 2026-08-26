@@ -1277,6 +1277,17 @@ Windows and Arch Linux; the existing WHP/KVM runner parity suites pass 11/12.
 This does not yet prove native enumeration, full recovered-graph composition,
 installed Total admission, or physical execution.
 
+The existing hosted WHP/KVM recovery source now **PARTIALLY IMPLEMENTS** the
+complete owner chain from that handoff record. A new recovery-only canonical
+encoder carries the installed identity without unrelated launch payloads. The
+hosted source requires it, reacquires the exact registered read session, binds
+block zero and the selected root, validates the complete reachable graph, and
+retains the installed selection in `RecoveredInstalledTotalAdmission` through
+route commit/final proof. Windows and Arch Linux pass 561 kernel and 49
+configuration tests; WHP/KVM runners pass 11/12. These are controlled in-memory
+and hosted parity results, not durable, native-driver, OVMF, physical-media, or
+host-resistant evidence.
+
 The recovered installed selection is now retained across the boot-policy to
 Total-admission boundary. `RecoveredInstalledTotalAdmission` binds its exact
 device descriptor, serviced session selection, volume header, active root,

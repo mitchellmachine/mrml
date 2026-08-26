@@ -159,6 +159,17 @@ passes 11 and KVM runner parity passes 12. WHP/KVM backend suites pass 24/25 and
 tests ignored. Native transport enumeration/correlation and complete recovered
 graph-to-Total-owner integration remain next.
 
+The controlled hosted graph-to-Total owner path now **PARTIALLY IMPLEMENTS**
+that integration. Recovery-only handoffs can canonically carry the installed
+identity without fabricating service/SMP payloads. Both runners include that
+identity; the hosted source refuses its absence, reacquires the exact registered
+device/session, validates block zero and the handed root, traverses the complete
+reachable graph, and retains the resulting installed selection through
+`RecoveredInstalledTotalAdmission`. Kernel passes 561 and configuration 49
+tests on Windows and Arch Linux; WHP/KVM runner parity passes 11/12. This remains
+synthetic hosted evidence. Native driver enumeration/correlation, durable
+storage, installed kernel orchestration, and physical execution remain next.
+
 Selected-device reopening and redundant-root reads are now **PARTIALLY
 IMPLEMENTED**. Exact path/media/geometry and block-zero header revalidation
 precedes both root reads; any mismatch, second-read failure, or protocol-close

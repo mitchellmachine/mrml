@@ -6136,21 +6136,52 @@ mod tests {
         )
         .unwrap();
         let mut bytes = [0; 512];
-        let length = mrml_kernel::encode_handoff_with_recovery_and_isolation(
-            7,
-            [1; 32],
-            [2; 64],
-            true,
-            true,
-            false,
-            true,
-            0x9000,
-            framebuffer,
-            &regions,
-            recovery,
-            Some(BootIsolationOverride::TotalMicrovmOnce),
-            &mut bytes,
-        )
+        let length = if let Some(volume) = accepted_volume {
+            let installed = InstalledRecoveryBootIdentity::new(
+                InstalledRecoverySource::Hosted,
+                [0x42; 32],
+                1,
+                1,
+                4096,
+                100,
+                volume,
+                1,
+                accepted_root_generation,
+            )
+            .unwrap();
+            mrml_kernel::encode_handoff_with_recovery_isolation_and_installed(
+                7,
+                [1; 32],
+                [2; 64],
+                true,
+                true,
+                false,
+                true,
+                0x9000,
+                framebuffer,
+                &regions,
+                recovery,
+                installed,
+                Some(BootIsolationOverride::TotalMicrovmOnce),
+                &mut bytes,
+            )
+        } else {
+            mrml_kernel::encode_handoff_with_recovery_and_isolation(
+                7,
+                [1; 32],
+                [2; 64],
+                true,
+                true,
+                false,
+                true,
+                0x9000,
+                framebuffer,
+                &regions,
+                recovery,
+                Some(BootIsolationOverride::TotalMicrovmOnce),
+                &mut bytes,
+            )
+        }
         .unwrap();
         (bytes, length)
     }

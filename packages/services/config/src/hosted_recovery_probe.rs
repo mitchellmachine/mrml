@@ -13,25 +13,27 @@ use super::{
     RecoveredInstalledStableSystemSelection, RecoveredInstalledTotalAdmission,
     RecoveredTotalAdmissionBuildError, SettingId, SettingSchema,
     StableConfigurationRecoveryValidator, StableServiceRecoveryValidator,
-    discover_and_recover_serviced_stable_system_selection, enumerate_serviced_recovery_devices,
+    reacquire_handoff_installed_recovery_device, recover_serviced_stable_system_selection,
 };
 use mrml_crypto::Sha3_256;
+#[cfg(test)]
+use mrml_kernel::InstalledRecoverySource;
 use mrml_kernel::arch::x86_64::UserContext;
 use mrml_kernel::{
-    ActivatedReleaseTotalMicrovmInventory, BootHandoff, CapabilitySpace, ObjectId, Priority,
-    Rights, ServiceSupervisor, TaskRuntime,
+    ActivatedReleaseTotalMicrovmInventory, BootHandoff, CapabilitySpace,
+    InstalledRecoveryBootIdentity, ObjectId, Priority, Rights, ServiceSupervisor, TaskRuntime,
 };
 use mrml_storage::{
     AUTHORITY_RECOVERY_STATE_BYTES, AllocationImage, AllocationKind, AllocationRecord,
     AuthorityCheckpointProofIssuer, AuthorityRecoveryStateStore, BlockDeviceDescriptor,
-    BlockDeviceId, BlockRights, BlockService, BlockServiceBackend, BlockSessionGrant,
-    BlockSessionHandle, BootRecoveryAdmission, DirectoryEntry, DirectoryImage, DirectoryMetadata,
-    ExtentImage, ExtentRecord, FileMetadata, FileReadBackend, MetadataPointer,
-    ObjectIdAllocatorImage, OwnerApprovedAuthorityCheckpoint, PlatformBlockDeviceDescriptor,
-    PlatformBlockDeviceIdentity, PlatformBlockTransport, SUPERBLOCK_BYTES, StorageAuthorityTable,
-    StorageName, StorageObjectId, StorageObjectKind, StoragePrincipal, StorageRecoveryGrant,
-    StorageRights, Superblock, VolumeHeader, VolumeId, authority_checkpoint_digest,
-    encode_authority_checkpoint, recover_selected_validate_and_commit_stable_authorities,
+    BlockDeviceId, BlockService, BlockServiceBackend, BootRecoveryAdmission, DirectoryEntry,
+    DirectoryImage, DirectoryMetadata, ExtentImage, ExtentRecord, FileMetadata, FileReadBackend,
+    MetadataPointer, ObjectIdAllocatorImage, OwnerApprovedAuthorityCheckpoint,
+    PlatformBlockDeviceDescriptor, PlatformBlockDeviceIdentity, PlatformBlockTransport,
+    SUPERBLOCK_BYTES, StorageAuthorityTable, StorageName, StorageObjectId, StorageObjectKind,
+    StoragePrincipal, StorageRecoveryGrant, StorageRights, Superblock, VolumeHeader, VolumeId,
+    authority_checkpoint_digest, encode_authority_checkpoint,
+    recover_selected_validate_and_commit_stable_authorities,
 };
 
 const BLOCK_BYTES: usize = 4096;
@@ -46,6 +48,7 @@ const CHECKPOINT_HANDLE_GENERATION: u32 = 2;
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum HostedRecoveryProbeError {
     MissingRecoveryState,
+    MissingInstalledIdentity,
     RecoveryRootMismatch,
     Configuration,
     StorageLayout,
@@ -222,8 +225,7 @@ fn recovery_device() -> BlockDeviceId {
     BlockDeviceId::new(1).unwrap()
 }
 
-fn recovery_block_service()
--> Result<(BlockService<1, 1>, BlockSessionHandle), HostedRecoveryProbeError> {
+fn recovery_block_service() -> Result<BlockService<1, 1>, HostedRecoveryProbeError> {
     let mut service = BlockService::<1, 1>::new();
     let descriptors = [BlockDeviceDescriptor::new(
         recovery_device(),
@@ -239,14 +241,25 @@ fn recovery_block_service()
     service
         .register_platform_devices_atomic(&platform)
         .map_err(|_| HostedRecoveryProbeError::StorageLayout)?;
-    let [session] = service
-        .grant_sessions_atomic([BlockSessionGrant::new(
-            recovery_device(),
-            principal(),
-            BlockRights::READ,
-        )])
-        .map_err(|_| HostedRecoveryProbeError::StorageLayout)?;
-    Ok((service, session))
+    Ok(service)
+}
+
+#[cfg(test)]
+fn installed_boot_identity(
+    root_generation: u64,
+) -> Result<InstalledRecoveryBootIdentity, HostedRecoveryProbeError> {
+    InstalledRecoveryBootIdentity::new(
+        InstalledRecoverySource::Hosted,
+        [0x42; 32],
+        1,
+        1,
+        BLOCK_BYTES as u32,
+        header().block_count(),
+        volume().bytes(),
+        header().primary_superblock(),
+        root_generation,
+    )
+    .map_err(|_| HostedRecoveryProbeError::StorageLayout)
 }
 
 fn object(local: u64) -> StorageObjectId {
@@ -504,18 +517,18 @@ fn build_reachable_device(
 }
 
 fn recover_reachable_files<'a>(
-    service: &'a BlockService<1, 1>,
+    service: &'a mut BlockService<1, 1>,
     backend: &'a mut ReachableMetadataBackend,
-    session: BlockSessionHandle,
+    boot: InstalledRecoveryBootIdentity,
     volume_scratch: &'a mut [u8],
 ) -> Result<
     RecoveredInstalledStableSystemSelection<'a, ReachableMetadataBackend, 1, 1, 1, 3>,
     HostedRecoveryProbeError,
 > {
-    let mut discovery = enumerate_serviced_recovery_devices::<_, 1, 1, 1>(
+    let installed = reacquire_handoff_installed_recovery_device(
         service,
         backend,
-        &[session],
+        boot,
         principal(),
         volume_scratch,
     )
@@ -523,13 +536,10 @@ fn recover_reachable_files<'a>(
     let mut primary_read = [0; BLOCK_BYTES];
     let mut secondary_read = [0; BLOCK_BYTES];
     let mut metadata_scratch = [0; BLOCK_BYTES];
-    discover_and_recover_serviced_stable_system_selection::<_, _, 1, 1, 1, 10, 2, 1, 3>(
+    let recovered = recover_serviced_stable_system_selection::<_, 1, 1, 10, 2, 1, 3>(
         service,
         backend,
-        session,
-        principal(),
-        volume(),
-        &mut discovery,
+        installed,
         volume_scratch,
         &mut primary_read,
         &mut secondary_read,
@@ -537,7 +547,16 @@ fn recover_reachable_files<'a>(
         object(9),
         object(10),
     )
-    .map_err(|_| HostedRecoveryProbeError::StorageLayout)
+    .map_err(|_| HostedRecoveryProbeError::StorageLayout)?;
+    if recovered.selected().volume() != VolumeId::new(boot.volume()).unwrap()
+        || recovered.selected().root_generation() != boot.root_generation()
+    {
+        return Err(HostedRecoveryProbeError::RecoveryRootMismatch);
+    }
+    Ok(RecoveredInstalledStableSystemSelection {
+        installed,
+        recovered,
+    })
 }
 
 /// Builds one hosted, authenticated recovery transaction and atomically binds
@@ -562,6 +581,15 @@ where
     if recovery.accepted_volume() != Some(volume().bytes())
         || recovery.accepted_root_generation() != ROOT_GENERATION
     {
+        return Err(HostedRecoveryProbeBuildError::Probe(
+            HostedRecoveryProbeError::RecoveryRootMismatch,
+        ));
+    }
+    let installed = handoff
+        .installed_recovery()
+        .ok_or(HostedRecoveryProbeError::MissingInstalledIdentity)
+        .map_err(HostedRecoveryProbeBuildError::Probe)?;
+    if installed.volume() != volume().bytes() || installed.root_generation() != ROOT_GENERATION {
         return Err(HostedRecoveryProbeBuildError::Probe(
             HostedRecoveryProbeError::RecoveryRootMismatch,
         ));
@@ -693,12 +721,12 @@ where
         &authority_backend.bytes,
         None,
     )?;
-    let (recovery_block_service, recovery_session) = recovery_block_service()?;
+    let mut recovery_block_service = recovery_block_service()?;
     let mut volume_scratch = [0; BLOCK_BYTES];
     let reachable = recover_reachable_files(
-        &recovery_block_service,
+        &mut recovery_block_service,
         &mut recovery_device_backend,
-        recovery_session,
+        installed,
         &mut volume_scratch,
     )?;
     let selected = reachable.selected();
@@ -807,12 +835,12 @@ mod tests {
             build_reachable_device(14, 1, &configuration, 1, &authority, None).unwrap();
         let mut previous_backend =
             build_reachable_device(13, 1, &configuration, 1, &authority, None).unwrap();
-        let (current_service, current_session) = recovery_block_service().unwrap();
-        let (previous_service, previous_session) = recovery_block_service().unwrap();
+        let mut current_service = recovery_block_service().unwrap();
+        let mut previous_service = recovery_block_service().unwrap();
         let current = recover_reachable_files(
-            &current_service,
+            &mut current_service,
             &mut current_backend,
-            current_session,
+            installed_boot_identity(14).unwrap(),
             &mut current_scratch,
         )
         .unwrap();
@@ -827,9 +855,9 @@ mod tests {
             header().primary_superblock()
         );
         let previous = recover_reachable_files(
-            &previous_service,
+            &mut previous_service,
             &mut previous_backend,
-            previous_session,
+            installed_boot_identity(13).unwrap(),
             &mut previous_scratch,
         )
         .unwrap();
@@ -858,12 +886,12 @@ mod tests {
             Some(header().secondary_superblock()),
         )
         .unwrap();
-        let (failed_service, failed_session) = recovery_block_service().unwrap();
+        let mut failed_service = recovery_block_service().unwrap();
         assert!(
             recover_reachable_files(
-                &failed_service,
+                &mut failed_service,
                 &mut failed_backend,
-                failed_session,
+                installed_boot_identity(14).unwrap(),
                 &mut failed_scratch,
             )
             .is_err()
