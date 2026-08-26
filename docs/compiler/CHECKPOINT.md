@@ -603,6 +603,16 @@ observe the earlier local-backed state with E0515. Windows and Arch each pass
 replacement tests: 989 compiler tests per host. Unconditional normalized
 continues and general fixed points remain incomplete.
 
+Unconditional inner continues now normalize only their exact reachable action
+prefix. The prefix candidate must be idempotent on replay, and every stored
+control at or before that action index must retain identical origins; operations
+after the unconditional continue are excluded. ORACLE-0002 accepts a parameter
+overwrite before a conditional return and continue, reports the retained suffix
+as unreachable, and rejects a return before normalization with E0515. Windows
+and Arch each pass 643 library tests, one component-interface probe, 10
+conformance tests, and 335 replacement tests: 989 compiler tests per host.
+Multi-backedge fixed-point iteration remains incomplete.
+
 The conditional callee-local reassignment milestone evaluates supported direct
 assignments from a copy of the incoming fixed local-origin state for every
 conditional outcome, then joins each local independently. A missing `else`

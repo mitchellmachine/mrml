@@ -4206,6 +4206,12 @@ Conditional inner continues now share that normalized candidate proof. A
 continue after the parameter overwrite is accepted when all control prefixes
 agree across both headers; controls before normalization still fail closed and
 match pinned-oracle E0515. Both hosts remain at 989 compiler tests.
+Unconditional inner continues use a prefix-bounded candidate ending at the
+control's exact action index. Exact replay and all earlier control prefixes must
+agree, while unreachable suffix actions are ignored. The pinned oracle accepts
+normalization before return/continue and rejects a return before normalization
+with E0515. Both hosts remain at 989 compiler tests; iterative multi-backedge
+fixed points remain incomplete.
 Nested-loop ordered-return and stable-edge analysis is now factored over an
 explicit incoming state and composes after outer-loop declarations, assignments,
 and branch joins. Stable nested edges preserve that state for later outer

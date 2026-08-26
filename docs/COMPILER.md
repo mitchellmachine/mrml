@@ -1338,6 +1338,11 @@ continue after the normalizing overwrite is admitted only when the complete
 transfer is idempotent and every other stored control prefix agrees; a continue
 or break before normalization remains fail-closed. ORACLE-0002 accepts the
 former and rejects the latter with E0515.
+Unconditional inner continues use a prefix-bounded variant: the candidate and
+second replay stop at the continue's exact action index, so unreachable suffix
+assignments cannot affect the proof. Earlier stored controls must still expose
+the same origins from both headers. ORACLE-0002 accepts a parameter overwrite
+before a return/continue and rejects a return before normalization with E0515.
 
 The first modern trait-solver foundation is an explicit bounded implemented-
 goal representation. Stable trait/type/inference/placeholder identities remain

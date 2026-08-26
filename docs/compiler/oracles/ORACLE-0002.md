@@ -168,6 +168,14 @@ the enclosing return with E0515. This is black-box evidence for that exact
 normalized continue/backedge ordering, not general fixed-point or region
 inference. Temporary source and metadata were removed.
 
+An independently authored Rust 2024 metadata-only unconditional-continue pair
+against this exact toolchain and commit accepted a parameter overwrite followed
+by a conditional return and unconditional inner continue, and reported a later
+local assignment as unreachable. Moving the conditional return before the
+overwrite failed with E0515. This is black-box evidence for that exact prefix-
+bounded normalization and terminating suffix, not general fixed-point or region
+inference. Temporary source and metadata were removed.
+
 An independently authored Rust 2024 metadata-only composed-loop pair against
 this exact toolchain and commit accepted an outer-loop same-origin mutable
 reassignment followed by an inner-loop conditional return. Replacing that outer
