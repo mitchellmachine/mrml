@@ -6242,3 +6242,17 @@ generation algorithm. Nested/indexed/dereferenced projections and general
 assembly remain absent. Broader compiler completion remains
 partial; this technical screen does not establish clearance or infringement and
 does not replace independent human dual review.
+
+# 2026-08-26 — Expression-indexed inline-assembly outputs
+
+**Result: NOT_TRIGGERED after the expression-index review.** This increment
+reuses MRML's existing bounded runtime-expression parser, type checker, read
+preanalysis, and emitter to compute a `usize` array index exactly once before the
+previously reviewed bounds check and explicit RAX output load/writeback path.
+It introduces no new expression algorithm, assembler, register allocator,
+optimization, instruction selection, alias analysis, or code-generation
+technique. Expressions outside the existing bounded subset, nested projections,
+reference-array outputs, general memory effects, and general assembly remain
+absent. Broader compiler completion remains partial; this technical screen is
+not a clearance or infringement conclusion and does not replace independent
+human dual review.
