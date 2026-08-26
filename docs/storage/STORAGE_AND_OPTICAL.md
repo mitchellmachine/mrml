@@ -187,6 +187,17 @@ configuration tests; WHP/KVM runner parity passes 11/12. Native transport
 enumeration/correlation, durable storage, OVMF, and physical media remain
 **PLANNED**.
 
+The transport-neutral correlation control plane is now **PARTIALLY
+IMPLEMENTED**. `NativeBlockCorrelationVerifier` is an unsafe trusted-driver
+contract: success must prove that an independently discovered physical route
+and medium are the exact firmware-selected device, and may not be implemented
+by copying IDs or matching presentation paths/names/order. `BlockService`
+preflights native transport, geometry, capacity, local/native identity, and
+existing boot correlations, calls the verifier, then atomically stores the
+native descriptor plus exact boot correlation without granting I/O. Storage
+passes 126 tests on Windows and Arch Linux. AHCI, USB, and native VirtIO
+verifiers and hardware execution remain **PLANNED**.
+
 The `mrml` frontend may expose structured `disk`, `filesystem`, `optical`, and
 `media` operations. The PowerShell-inspired shell projects the same backend as
 typed `Get-*`, `Test-*`, `Initialize-*`, `New-*`, `Format-*`, `Write-*`, and

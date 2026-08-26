@@ -1288,6 +1288,16 @@ configuration tests; WHP/KVM runners pass 11/12. These are controlled in-memory
 and hosted parity results, not durable, native-driver, OVMF, physical-media, or
 host-resistant evidence.
 
+The storage service now **PARTIALLY IMPLEMENTS** the common native-correlation
+control-plane contract. A trusted transport verifier must independently prove
+that one AHCI, USB, or VirtIO descriptor is the firmware-selected installed
+device before registration retains the exact boot identity beside the native
+descriptor. Names, paths, device numbers, enumeration order, or copied identity
+bytes are explicitly insufficient. Unsupported source/transport, geometry,
+verifier, duplicate, and capacity failures publish neither descriptor nor
+session. Storage passes 126 tests on Windows and Arch Linux; WHP/KVM runners
+remain 11/12. No native transport verifier or physical device was exercised.
+
 The recovered installed selection is now retained across the boot-policy to
 Total-admission boundary. `RecoveredInstalledTotalAdmission` binds its exact
 device descriptor, serviced session selection, volume header, active root,

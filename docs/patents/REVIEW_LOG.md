@@ -1,5 +1,15 @@
 # Patent review log
 
+## 2026-08-26 — Verifier-backed firmware/native block correlation boundary
+
+Patent review: **NOT_TRIGGERED** for this interface/control-plane increment. It
+adds a conventional trusted verification callback, fixed equality/geometry
+preflight, atomic table publication, and existing session separation. It does
+not define the AHCI, USB, VirtIO, physical-route correlation, or hardware media
+mechanisms that verifier implementations will use. Those transport-specific
+mechanisms and broader storage/Total-MicroVM work retain their existing
+`TRIGGERED` reviews and require targeted review before implementation.
+
 ## 2026-08-26 — Hosted installed-recovery owner chain
 
 Patent review: **NOT_TRIGGERED** for this integration increment. It reuses the

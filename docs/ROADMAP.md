@@ -170,6 +170,17 @@ tests on Windows and Arch Linux; WHP/KVM runner parity passes 11/12. This remain
 synthetic hosted evidence. Native driver enumeration/correlation, durable
 storage, installed kernel orchestration, and physical execution remain next.
 
+The shared firmware-to-native correlation boundary is now **PARTIALLY
+IMPLEMENTED**. A trusted native driver verifier must prove one exact relation
+between the handed installed identity and an independently discovered AHCI,
+USB, or VirtIO descriptor before atomic registration retains that correlation.
+Hosted sources/transports, geometry mismatch, verifier failure, duplicate
+identity, and capacity failure publish nothing. Correlation remains
+non-authorizing; the later exact handoff reacquisition creates only a read
+session. Storage passes 126 tests on Windows and Arch Linux; WHP/KVM runner
+regression parity passes 11/12. Actual AHCI, USB mass-storage, and native VirtIO
+verifier implementations and hardware evidence remain **PLANNED**.
+
 Selected-device reopening and redundant-root reads are now **PARTIALLY
 IMPLEMENTED**. Exact path/media/geometry and block-zero header revalidation
 precedes both root reads; any mismatch, second-read failure, or protocol-close

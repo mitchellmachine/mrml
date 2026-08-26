@@ -148,6 +148,34 @@ pub struct PlatformBlockDeviceDescriptor {
     identity: PlatformBlockDeviceIdentity,
 }
 
+/// Transport-specific verifier for one firmware-to-native block correlation.
+///
+/// # Safety
+///
+/// Implementations are part of the trusted native driver control plane. `Ok`
+/// must mean that the candidate's independently discovered physical route and
+/// media are the exact device described by `boot`; copying identity bytes,
+/// matching a user-visible path/name, or trusting enumeration order is not a
+/// valid implementation.
+pub unsafe trait NativeBlockCorrelationVerifier {
+    type Error;
+
+    fn verify(
+        &mut self,
+        boot: InstalledRecoveryBootIdentity,
+        candidate: PlatformBlockDeviceDescriptor,
+    ) -> Result<(), Self::Error>;
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum NativeBlockCorrelationError<E> {
+    UnsupportedSource,
+    UnsupportedTransport,
+    GeometryMismatch,
+    Correlation(E),
+    Registration(BlockServiceError<core::convert::Infallible>),
+}
+
 /// Capability-bearing result of correlating one non-authorizing boot identity
 /// with one exact live platform registration. The identity still identifies;
 /// only the independently created principal-bound session authorizes reads.
@@ -314,6 +342,7 @@ impl Session {
 pub struct BlockService<const DEVICES: usize, const SESSIONS: usize> {
     devices: [Option<BlockDeviceDescriptor>; DEVICES],
     platform_identities: [Option<PlatformBlockDeviceIdentity>; DEVICES],
+    boot_correlations: [Option<InstalledRecoveryBootIdentity>; DEVICES],
     sessions: [Session; SESSIONS],
 }
 
@@ -328,6 +357,7 @@ impl<const DEVICES: usize, const SESSIONS: usize> BlockService<DEVICES, SESSIONS
         Self {
             devices: [None; DEVICES],
             platform_identities: [None; DEVICES],
+            boot_correlations: [None; DEVICES],
             sessions: [Session::EMPTY; SESSIONS],
         }
     }
@@ -392,8 +422,79 @@ impl<const DEVICES: usize, const SESSIONS: usize> BlockService<DEVICES, SESSIONS
                 .expect("platform registration capacity was completely preflighted");
             self.devices[index] = Some(descriptor.block);
             self.platform_identities[index] = Some(descriptor.identity);
+            self.boot_correlations[index] = None;
         }
         Ok(descriptors.len())
+    }
+
+    /// Registers one native descriptor only after a trusted transport verifier
+    /// proves its exact relation to the firmware-selected installed identity.
+    /// The retained correlation identifies the device for later reacquisition;
+    /// registration and verifier success grant no I/O session.
+    pub fn register_correlated_installed_device<V: NativeBlockCorrelationVerifier>(
+        &mut self,
+        verifier: &mut V,
+        boot: InstalledRecoveryBootIdentity,
+        candidate: PlatformBlockDeviceDescriptor,
+    ) -> Result<(), NativeBlockCorrelationError<V::Error>> {
+        if boot.source() == InstalledRecoverySource::Hosted {
+            return Err(NativeBlockCorrelationError::UnsupportedSource);
+        }
+        if !matches!(
+            candidate.identity().transport(),
+            PlatformBlockTransport::Ahci
+                | PlatformBlockTransport::Usb
+                | PlatformBlockTransport::Virtio
+        ) {
+            return Err(NativeBlockCorrelationError::UnsupportedTransport);
+        }
+        if candidate.block().block_size() != boot.block_size()
+            || candidate.block().block_count() != boot.block_count()
+        {
+            return Err(NativeBlockCorrelationError::GeometryMismatch);
+        }
+        if self
+            .boot_correlations
+            .iter()
+            .flatten()
+            .any(|live| *live == boot)
+        {
+            return Err(NativeBlockCorrelationError::Registration(
+                BlockServiceError::DuplicateDevice,
+            ));
+        }
+        if self.devices.iter().all(Option::is_some) {
+            return Err(NativeBlockCorrelationError::Registration(
+                BlockServiceError::Capacity,
+            ));
+        }
+        if self
+            .devices
+            .iter()
+            .flatten()
+            .any(|current| current.id == candidate.block().id)
+            || self
+                .platform_identities
+                .iter()
+                .flatten()
+                .any(|current| current.same_device(candidate.identity()))
+        {
+            return Err(NativeBlockCorrelationError::Registration(
+                BlockServiceError::DuplicateDevice,
+            ));
+        }
+        verifier
+            .verify(boot, candidate)
+            .map_err(NativeBlockCorrelationError::Correlation)?;
+        let index = self
+            .devices
+            .iter()
+            .position(Option::is_none)
+            .expect("correlated registration capacity was preflighted");
+        self.devices[index] = Some(candidate.block());
+        self.platform_identities[index] = Some(candidate.identity());
+        self.boot_correlations[index] = Some(boot);
+        Ok(())
     }
 
     /// Supervisor-only initial grant. Device identity alone cannot call this operation.
@@ -476,16 +577,19 @@ impl<const DEVICES: usize, const SESSIONS: usize> BlockService<DEVICES, SESSIONS
         principal: StoragePrincipal,
     ) -> Result<InstalledRecoveryBlockSession, InstalledRecoverySessionError> {
         let mut matched = None;
-        for (block, identity) in self
+        for ((block, identity), correlation) in self
             .devices
             .iter()
             .copied()
             .zip(self.platform_identities.iter().copied())
+            .zip(self.boot_correlations.iter().copied())
         {
             let (Some(block), Some(identity)) = (block, identity) else {
                 continue;
             };
-            if platform_identity_matches_boot(identity, block, boot) {
+            if platform_identity_matches_boot(identity, block, boot)
+                || correlation.is_some_and(|correlated| correlated == boot)
+            {
                 if matched
                     .replace(PlatformBlockDeviceDescriptor::new(block, identity))
                     .is_some()
@@ -546,6 +650,7 @@ impl<const DEVICES: usize, const SESSIONS: usize> BlockService<DEVICES, SESSIONS
             .ok_or(BlockServiceError::UnknownDevice)?;
         self.devices[index] = None;
         self.platform_identities[index] = None;
+        self.boot_correlations[index] = None;
         let mut revoked = 0;
         for session in &mut self.sessions {
             if session.occupied && session.device == device {
@@ -601,6 +706,7 @@ impl<const DEVICES: usize, const SESSIONS: usize> BlockService<DEVICES, SESSIONS
                 .expect("registration capacity was completely preflighted");
             self.devices[index] = Some(descriptor);
             self.platform_identities[index] = None;
+            self.boot_correlations[index] = None;
         }
         Ok(descriptors.len())
     }
@@ -1093,6 +1199,39 @@ mod tests {
         .unwrap()
     }
 
+    #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+    enum CorrelationError {
+        Rejected,
+        WrongInput,
+    }
+
+    struct CorrelationVerifier {
+        expected_boot: InstalledRecoveryBootIdentity,
+        expected_candidate: PlatformBlockDeviceDescriptor,
+        calls: usize,
+        reject: bool,
+    }
+
+    unsafe impl NativeBlockCorrelationVerifier for CorrelationVerifier {
+        type Error = CorrelationError;
+
+        fn verify(
+            &mut self,
+            boot: InstalledRecoveryBootIdentity,
+            candidate: PlatformBlockDeviceDescriptor,
+        ) -> Result<(), Self::Error> {
+            self.calls += 1;
+            if boot != self.expected_boot || candidate != self.expected_candidate {
+                return Err(CorrelationError::WrongInput);
+            }
+            if self.reject {
+                Err(CorrelationError::Rejected)
+            } else {
+                Ok(())
+            }
+        }
+    }
+
     fn owner(value: u64) -> StoragePrincipal {
         StoragePrincipal::new(value).unwrap()
     }
@@ -1339,6 +1478,122 @@ mod tests {
             Err(InstalledRecoverySessionError::Session(
                 BlockServiceError::Capacity
             ))
+        );
+    }
+
+    #[test]
+    fn verified_native_correlation_is_retained_but_never_grants_io() {
+        let boot = installed_boot_identity(
+            InstalledRecoverySource::Uefi,
+            [0x51; 32],
+            7,
+            9,
+            BLOCK_SIZE as u32,
+            BLOCKS as u64,
+        );
+        let native_identity =
+            PlatformBlockDeviceIdentity::new(PlatformBlockTransport::Ahci, [0x71; 32], 11, 13)
+                .unwrap();
+        let native = PlatformBlockDeviceDescriptor::new(descriptor(), native_identity);
+        let mut verifier = CorrelationVerifier {
+            expected_boot: boot,
+            expected_candidate: native,
+            calls: 0,
+            reject: false,
+        };
+        let mut service = BlockService::<2, 2>::new();
+        let hosted_boot = installed_boot_identity(
+            InstalledRecoverySource::Hosted,
+            [0x51; 32],
+            7,
+            9,
+            BLOCK_SIZE as u32,
+            BLOCKS as u64,
+        );
+        assert_eq!(
+            service.register_correlated_installed_device(&mut verifier, hosted_boot, native),
+            Err(NativeBlockCorrelationError::UnsupportedSource)
+        );
+        let hosted = PlatformBlockDeviceDescriptor::new(
+            descriptor(),
+            PlatformBlockDeviceIdentity::new(PlatformBlockTransport::Hosted, [0x72; 32], 11, 13)
+                .unwrap(),
+        );
+        assert_eq!(
+            service.register_correlated_installed_device(&mut verifier, boot, hosted),
+            Err(NativeBlockCorrelationError::UnsupportedTransport)
+        );
+        let wrong_geometry = PlatformBlockDeviceDescriptor::new(
+            BlockDeviceDescriptor::new(device(), BLOCK_SIZE as u32, (BLOCKS / 2) as u64).unwrap(),
+            native_identity,
+        );
+        assert_eq!(
+            service.register_correlated_installed_device(&mut verifier, boot, wrong_geometry),
+            Err(NativeBlockCorrelationError::GeometryMismatch)
+        );
+        assert_eq!(verifier.calls, 0);
+        service
+            .register_correlated_installed_device(&mut verifier, boot, native)
+            .unwrap();
+        assert_eq!(verifier.calls, 1);
+        assert_eq!(
+            service.session_platform_descriptor(
+                BlockSessionHandle::from_token(1u64 << 32).unwrap(),
+                owner(7)
+            ),
+            Err(BlockServiceError::StaleHandle)
+        );
+
+        let bound = service
+            .grant_installed_recovery_read_session(boot, owner(7))
+            .unwrap();
+        assert_eq!(bound.boot_identity(), boot);
+        assert_eq!(bound.platform_descriptor(), native);
+        let mut backend = Backend::new(device());
+        let mut block = [0; BLOCK_SIZE];
+        service
+            .read_blocks(&mut backend, bound.session(), owner(7), 0, &mut block)
+            .unwrap();
+        assert_eq!(
+            service.write_blocks(&mut backend, bound.session(), owner(7), 0, &block),
+            Err(BlockServiceError::Denied)
+        );
+
+        let other = BlockDeviceDescriptor::new(
+            BlockDeviceId::new(8).unwrap(),
+            BLOCK_SIZE as u32,
+            BLOCKS as u64,
+        )
+        .unwrap();
+        let rejected = PlatformBlockDeviceDescriptor::new(
+            other,
+            PlatformBlockDeviceIdentity::new(PlatformBlockTransport::Usb, [0x81; 32], 17, 19)
+                .unwrap(),
+        );
+        let other_boot = installed_boot_identity(
+            InstalledRecoverySource::Uefi,
+            [0x52; 32],
+            21,
+            23,
+            BLOCK_SIZE as u32,
+            BLOCKS as u64,
+        );
+        let mut rejecting = CorrelationVerifier {
+            expected_boot: other_boot,
+            expected_candidate: rejected,
+            calls: 0,
+            reject: true,
+        };
+        assert_eq!(
+            service.register_correlated_installed_device(&mut rejecting, other_boot, rejected),
+            Err(NativeBlockCorrelationError::Correlation(
+                CorrelationError::Rejected
+            ))
+        );
+        assert_eq!(rejecting.calls, 1);
+        assert_eq!(
+            service.grant(other.id(), owner(8), BlockRights::READ),
+            Err(BlockServiceError::UnknownDevice)
         );
     }
 

@@ -3156,6 +3156,15 @@ selection remains owned by `RecoveredInstalledTotalAdmission`. Windows and Arch
 Linux pass 561 kernel and 49 configuration tests; WHP/KVM runners pass 11/12.
 Status remains **PARTIALLY IMPLEMENTED** because the device and storage are
 controlled hosted fixtures rather than native or physical evidence.
+
+The post-firmware device boundary now has a **PARTIALLY IMPLEMENTED** verifier-
+backed registration contract. The trusted native driver must prove the exact
+firmware-to-native relation before `BlockService` atomically stores a boot
+correlation beside an AHCI/USB/VirtIO descriptor. The correlation is data, not
+authority; no session exists until the established installed-recovery grant
+path runs. Focused tests reject unsupported classes, geometry changes, verifier
+failure, and unpublished-device use. Storage passes 126 tests on Windows and
+Arch Linux; real driver verifiers and physical evidence remain **PLANNED**.
 The controlled path now retains the installed side of that binding as well.
 `RecoveredInstalledTotalAdmission` owns the exact serviced device selection,
 volume header, active root, recovered volume/root generation, activated release,
