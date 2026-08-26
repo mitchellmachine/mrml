@@ -298,6 +298,14 @@ compiled successfully. These are black-box observations for those exact
 straight-line and conditional shapes, not evidence of general region behavior.
 Temporary probe sources and metadata were removed.
 
+Another independently authored Rust 2024 metadata-only probe against this exact
+toolchain and commit formed two successive mutable local reborrows from an
+incoming mutable-reference parameter and then a shared grandchild. Directly
+mutating the incoming owner while that grandchild was used later failed with
+E0503; moving the grandchild's last use before the mutation compiled. This is
+black-box evidence for that exact three-level chain, not general region
+inference. Temporary probe sources and metadata were removed.
+
 ## Straight-line tuple-field callee-origin follow-up
 
 On 2026-08-26, an independently authored Rust 2024 metadata-only probe against

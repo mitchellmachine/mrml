@@ -1111,6 +1111,13 @@ conditional projected case with E0503, and accepts the post-last-use control.
 This is parameter-root invalidation for the existing bounded place model, not
 general region inference.
 
+The same parameter-root invalidation is now proven through two successive
+mutable local reborrows followed by a shared grandchild. Direct owner mutation
+while the grandchild remains live fails, and the owner is restored after the
+grandchild's last use. ORACLE-0002 rejects the live case with E0503 and accepts
+the restoration control. This adds exact multi-level evidence to the existing
+bounded ancestry walk; it does not make the walk an unbounded region solver.
+
 The first modern trait-solver foundation is an explicit bounded implemented-
 goal representation. Stable trait/type/inference/placeholder identities remain
 distinct; canonicalization replaces inference identities with first-occurrence

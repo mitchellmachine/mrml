@@ -804,6 +804,12 @@ accepted. ORACLE-0002 rejected the direct form with E0506 and the conditional
 projected form with E0503, and accepted the direct last-use control. Windows and
 Arch each pass 987 compiler tests.
 
+Nested parameter-owner invalidation now has focused coverage through a mutable
+parent, mutable child, and shared grandchild. A direct incoming-owner write is
+rejected while the grandchild remains live and accepted after its last use.
+ORACLE-0002 reports E0503 for the live case and accepts the control. Windows and
+Arch each pass 987 compiler tests; general indirect regions remain unsupported.
+
 Multi-field tuple literals retain a separate projected origin per field. A
 conditional reference element seeds its field only when both arms prove the
 same parameter; unequal first/second origins fail closed. Focused caller tests

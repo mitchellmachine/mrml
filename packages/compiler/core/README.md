@@ -4132,6 +4132,13 @@ library tests, one component-interface probe, 10 conformance tests, and 335
 replacement tests: 987 compiler tests per host. This does not establish general
 regions or arbitrary projected-place invalidation.
 
+Focused nested-owner coverage now carries that same invalidation through two
+successive mutable local reborrows and a final shared grandchild. The incoming
+owner cannot be written while the grandchild remains live and becomes writable
+after its last use. The pinned oracle rejects the overlap with E0503 and accepts
+the restoration control. Both hosts remain at 987 compiler tests; this is exact
+bounded ancestry evidence, not general region inference.
+
 The projected conditional-return outlives milestone validates every retained
 origin of the latest reference assignment when an exact tuple field is returned.
 The exact dated oracle rejects a conditional local/parameter generation with
