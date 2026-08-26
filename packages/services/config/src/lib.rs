@@ -3345,6 +3345,109 @@ pub struct RecoveredTotalAdmission<const DOMAINS: usize> {
     total: BootTotalAdmission<DOMAINS>,
 }
 
+/// Installed recovery provenance retained for the complete lifetime of the
+/// Total-mode admission that it authorized. This prevents early boot from
+/// reducing the serviced device/session selection and recovered stable root to
+/// detached scalar diagnostics before the admitted domains have completed.
+pub struct RecoveredInstalledTotalAdmission<const DOMAINS: usize> {
+    installed: InstalledRecoveryDeviceSelection,
+    recovery_volume: VolumeId,
+    recovery_root_generation: u64,
+    total: RecoveredTotalAdmission<DOMAINS>,
+}
+
+impl<const DOMAINS: usize> RecoveredInstalledTotalAdmission<DOMAINS> {
+    fn bind<
+        B: BlockServiceBackend,
+        const DEVICES: usize,
+        const SESSIONS: usize,
+        const EXTENTS: usize,
+        const OBJECTS: usize,
+    >(
+        recovered: &RecoveredInstalledStableSystemSelection<
+            '_,
+            B,
+            DEVICES,
+            SESSIONS,
+            EXTENTS,
+            OBJECTS,
+        >,
+        total: RecoveredTotalAdmission<DOMAINS>,
+    ) -> Result<Self, ConfigError> {
+        let installed = recovered.installed();
+        let selected = recovered.selected();
+        Self::bind_identity(
+            installed,
+            selected.volume(),
+            selected.root_generation(),
+            total,
+        )
+    }
+
+    fn bind_identity(
+        installed: InstalledRecoveryDeviceSelection,
+        recovery_volume: VolumeId,
+        recovery_root_generation: u64,
+        total: RecoveredTotalAdmission<DOMAINS>,
+    ) -> Result<Self, ConfigError> {
+        let policy = total.policy();
+        if installed.header().volume() != recovery_volume
+            || recovery_volume != policy.recovery_volume()
+            || recovery_root_generation != policy.recovery_root_generation()
+        {
+            return Err(ConfigError::RecoveryHandoffMismatch);
+        }
+        Ok(Self {
+            installed,
+            recovery_volume,
+            recovery_root_generation,
+            total,
+        })
+    }
+
+    pub const fn installed(&self) -> InstalledRecoveryDeviceSelection {
+        self.installed
+    }
+
+    pub const fn recovery_volume(&self) -> VolumeId {
+        self.recovery_volume
+    }
+
+    pub const fn recovery_root_generation(&self) -> u64 {
+        self.recovery_root_generation
+    }
+
+    pub const fn policy(&self) -> RecoveredBootIsolationPolicy {
+        self.total.policy()
+    }
+
+    pub const fn release(&self) -> &ActivatedReleaseTotalMicrovmInventory<DOMAINS> {
+        self.total.release()
+    }
+
+    pub const fn admission(&self) -> &IsolationAdmissionTable<DOMAINS> {
+        self.total.admission()
+    }
+
+    pub fn admission_mut(&mut self) -> &mut IsolationAdmissionTable<DOMAINS> {
+        self.total.admission_mut()
+    }
+
+    pub fn prepare_service(
+        &mut self,
+        bounds: IsolationServiceBounds,
+        identity: IsolationServiceIdentity,
+    ) -> Result<PreparedIsolationServiceRoute, ConfiguredIsolationPreparationError> {
+        self.total.prepare_service(bounds, identity)
+    }
+
+    pub fn finalize(
+        &self,
+    ) -> Result<mrml_kernel::TotalMicrovmRuntimeProof, mrml_kernel::TotalMicrovmRuntimeError> {
+        self.total.finalize()
+    }
+}
+
 impl<const DOMAINS: usize> RecoveredTotalAdmission<DOMAINS> {
     pub const fn policy(&self) -> RecoveredBootIsolationPolicy {
         self.policy
@@ -5849,8 +5952,26 @@ mod tests {
             })
         }
         .unwrap();
+        assert_eq!(total.installed().descriptor().block_size(), 4096);
+        assert_eq!(total.installed().header().volume(), total.recovery_volume());
+        assert_eq!(
+            total.installed().active_superblock(),
+            total.installed().header().primary_superblock()
+        );
+        assert_eq!(total.recovery_root_generation(), 14);
         assert_eq!(total.policy().authority_epoch(), 9);
         assert_eq!(total.policy().boot_accepted_epoch(), 8);
+
+        let substituted_root = total.recovery_root_generation() - 1;
+        assert!(matches!(
+            RecoveredInstalledTotalAdmission::bind_identity(
+                total.installed,
+                total.recovery_volume,
+                substituted_root,
+                total.total,
+            ),
+            Err(ConfigError::RecoveryHandoffMismatch)
+        ));
 
         // The inventory builder sees only the recovered policy generation;
         // failure returns no detached policy or admission owner.

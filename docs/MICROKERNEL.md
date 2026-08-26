@@ -3129,6 +3129,16 @@ stale epoch-7 handoff or substituted root generation fails before release.
 The recovered policy retains the committed volume/root identity so admission
 cannot discard the control plane's exact recovery binding before opening the
 runtime data plane.
+The controlled path now retains the installed side of that binding as well.
+`RecoveredInstalledTotalAdmission` owns the exact serviced device selection,
+volume header, active root, recovered volume/root generation, activated release,
+and the one Total admission table through route commit and final proof. Its
+constructor rejects header/graph/policy substitution. The WHP and KVM runners
+hold this owner rather than dropping installed provenance and retaining only
+detached policy scalars. Configuration passes 47 tests on Windows and Arch
+Linux; WHP passes 11 and KVM passes 12. This is hosted ownership and parity
+evidence, not native enumeration, durable hardware-backed rollback state,
+physical-media evidence, or installed early boot.
 Fresh live WHP and nested-KVM probes retain the
 recovered owner through route commit and final proof. WHP reported
 `cpu_runtime=1019us`, `verify=18399us`, `prepare=6871us`, `execute=2070us`, and

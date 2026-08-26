@@ -16,6 +16,17 @@ remain independently attributable.
 
 ## Current priority
 
+Installed recovery ownership now crosses the Total-admission boundary in the
+controlled backend-parity path. `RecoveredInstalledTotalAdmission` retains the
+exact serviced device selection and recovered volume/root identity beside the
+activated release and its single admission table; WHP and KVM keep that owner
+through route commit and final proof. Construction rejects a mismatch among the
+installed header, recovered stable graph, and committed policy. Configuration
+passes 47 tests on Windows and Arch Linux, WHP passes 11, and KVM passes 12.
+This is **PARTIALLY IMPLEMENTED** ownership evidence; native device enumeration,
+durable hardware-backed recovery state, and installed early boot remain the next
+dependency gate.
+
 The VirtualGPU queue foundation now makes the control/data-plane rule concrete:
 one consumed control-plane binding retains the exact domain, policy/device
 generations, byte/dispatch budgets, authenticated queue identity, and disjoint

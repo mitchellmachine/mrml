@@ -1130,6 +1130,16 @@ list. It still does not persist or recover the binding and therefore does not
 advance recovery status. Recovered end-to-end Total finalization remains
 **PLANNED**.
 
+The recovered installed selection is now retained across the boot-policy to
+Total-admission boundary. `RecoveredInstalledTotalAdmission` binds its exact
+device descriptor, serviced session selection, volume header, active root,
+recovered volume/root generation, activated release, and only admission table.
+The hosted WHP/KVM path no longer returns detached Total admission after dropping
+the installed selection. Header/graph/policy volume or root substitution fails
+before the owner is constructed. This remains **PARTIALLY IMPLEMENTED** hosted
+ownership evidence, not native enumeration, durable rollback state, physical
+media, or installed early-boot evidence.
+
 The recovered-policy/release ownership boundary is now **PARTIALLY
 IMPLEMENTED**. `RecoveredTotalAdmission` owns the exact activated release and
 the admission table derived from the same recovered effective policy. Its

@@ -8,7 +8,7 @@ use mrml_config::{
     ConfigurationService, EffectiveBootIsolationPolicy, IsolationPolicyApplicationPlan,
     IsolationPolicySetting, IsolationServiceBounds, IsolationServiceIdentity,
     MicrovmConfigurationServiceLauncher, OwnerIsolationSelection,
-    PreparedMicrovmConfigurationLauncher, RecoveredTotalAdmission, SettingId,
+    PreparedMicrovmConfigurationLauncher, RecoveredInstalledTotalAdmission, SettingId,
     hosted_recovery_probe::recover_total_admission_with,
 };
 #[cfg(target_os = "windows")]
@@ -99,7 +99,7 @@ struct ConfiguredTotalServicePolicy {
 #[cfg(target_os = "windows")]
 enum WhpTotalAdmission {
     Standalone(IsolationAdmissionTable<2>),
-    Recovered(RecoveredTotalAdmission<2>),
+    Recovered(RecoveredInstalledTotalAdmission<2>),
 }
 
 #[cfg(target_os = "windows")]

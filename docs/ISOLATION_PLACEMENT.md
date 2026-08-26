@@ -761,6 +761,17 @@ hosts. The in-memory source is controlled hosted evidence, not durable media,
 owner-presence, TPM, firmware, physical rollback, or installed early-boot
 orchestration; live recovered boot remains **PLANNED**.
 
+That hosted transition now returns a `RecoveredInstalledTotalAdmission` rather
+than discarding the installed-device selection after policy reconstruction. The
+owner retains the exact serviced session/device descriptor, volume header,
+active redundant-root slot, recovered volume/root generation, release, and
+single admission table through route preparation and final proof. Construction
+rechecks that the installed header, recovered graph, and committed policy name
+the same volume and root generation. WHP and KVM retain this owner for the full
+admission lifetime. This is **PARTIALLY IMPLEMENTED** controlled ownership
+evidence; platform enumeration, durable hardware-backed recovery state, and
+installed early-boot orchestration remain **PLANNED**.
+
 Stable-system selection is now a reusable **PARTIALLY IMPLEMENTED** boundary.
 `SelectedStableSystemRecovery` accepts the configuration checkpoint and
 authority checkpoint only when both are distinct objects selected from the

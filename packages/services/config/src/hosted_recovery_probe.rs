@@ -11,7 +11,7 @@ use super::{
     ConfigTransaction, ConfigUpdate, ConfigValue, ConfigurationService, DiscoveredRecoveryDevice,
     InstalledRecoveryDeviceDiscovery, IsolationPolicySetting, OwnerIsolationSelection,
     PERSISTED_RESTART_POLICY_BYTES, PersistedRestartPolicy,
-    RecoveredInstalledStableSystemSelection, RecoveredTotalAdmission,
+    RecoveredInstalledStableSystemSelection, RecoveredInstalledTotalAdmission,
     RecoveredTotalAdmissionBuildError, SettingId, SettingSchema,
     StableConfigurationRecoveryValidator, StableServiceRecoveryValidator,
     discover_and_recover_serviced_stable_system_selection,
@@ -554,7 +554,7 @@ fn recover_reachable_files<'a>(
 pub unsafe fn recover_total_admission_with<const DOMAINS: usize, F, E>(
     handoff: &BootHandoff,
     build_release: F,
-) -> Result<RecoveredTotalAdmission<DOMAINS>, HostedRecoveryProbeBuildError<E>>
+) -> Result<RecoveredInstalledTotalAdmission<DOMAINS>, HostedRecoveryProbeBuildError<E>>
 where
     F: FnOnce(u64) -> Result<ActivatedReleaseTotalMicrovmInventory<DOMAINS>, E>,
 {
@@ -784,7 +784,8 @@ where
         handoff,
         build_release,
     ) {
-        Ok(total) => Ok(total),
+        Ok(total) => RecoveredInstalledTotalAdmission::bind(&reachable, total)
+            .map_err(|_| HostedRecoveryProbeError::Admission.into()),
         Err(RecoveredTotalAdmissionBuildError::Policy(_)) => {
             Err(HostedRecoveryProbeError::Admission.into())
         }
