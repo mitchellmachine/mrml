@@ -7707,3 +7707,15 @@ local-backed joins fail closed, and conditional break/continue transfer remains
 unsupported. Broader compiler completion remains partial; this technical screen
 is not a clearance or infringement conclusion and does not replace independent
 human dual review.
+
+# 2026-08-26 — Conditional loop-break origin accumulation
+
+**Result: NOT_TRIGGERED after the conditional-break origin review.** This
+increment uses conventional fixed-capacity meet accumulation to keep break
+outcomes separate from a continuing loop path before joining documented loop
+exits. It adds no novel fixed-point solver, region or alias analysis, path-
+sensitive inference, optimization, or code-generation algorithm. Ambiguous and
+local-backed exits fail closed; conditional continue and block-terminal control
+remain unsupported. Broader compiler completion remains partial; this technical
+screen is not a clearance or infringement conclusion and does not replace
+independent human dual review.
