@@ -3792,6 +3792,19 @@ rerun was blocked before compiler execution by concurrent invalid isolation
 metadata in `org.mrml.library.uefi`; it is not passing evidence for this
 increment. This is not general interprocedural CFG, alias, or region analysis.
 
+The branch-local callee-origin milestone gives each conditional action block a
+fixed-capacity copy of the incoming name/origin/mutability state. Supported local
+reference declarations can feed later direct assignments in the same branch;
+newest-first shadowing stays branch-scoped, and those entries are discarded
+before joining only the pre-existing locals. A local-backed branch alias makes
+the result conservative. Returns, expressions, projected or compound writes,
+and other unsupported actions still fail closed. The exact dated oracle accepted
+same-origin branch-local aliases and post-last-use owner reuse and rejected a
+live competing mutable owner borrow with E0499. Windows gnullvm and native Arch
+Linux WSL each pass 639 library tests, one component-interface probe, 10
+conformance tests, and 335 replacement tests: 985 compiler tests per host. This
+is not arbitrary branch dataflow, nested projections, or general regions.
+
 The loop callee-local reassignment milestone handles a `while` body made only of
 supported direct assignments. It applies one bounded transfer from the incoming
 local-origin state and joins the result with that same zero-iteration state.

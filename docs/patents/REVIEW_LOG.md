@@ -1,5 +1,17 @@
 # Patent review log
 
+## 2026-08-26 — Branch-local callee reference-origin state
+
+Patent review: **NOT_TRIGGERED** for this bounded compiler-analysis increment.
+It conventionally copies fixed local name/origin/mutability arrays for each
+parsed branch, appends scoped local aliases with checked capacity, and joins only
+pre-existing origin identifiers. Local-backed and unsupported shapes fail
+conservative. It adds no novel alias-analysis algorithm, region solver,
+optimization, runtime enforcement, authority model, or external dependency.
+Broader compiler completion remains partial; this technical screen establishes
+neither clearance nor infringement and does not replace independent human dual
+review.
+
 ## 2026-08-26 — Manifest-derived runtime inventory
 
 Patent review: **TRIGGERED** under the existing adaptive-isolation,

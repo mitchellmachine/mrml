@@ -508,6 +508,19 @@ metadata failed build-graph validation; that run is recorded as blocked, not
 passing evidence. General interprocedural CFG, alias, and region analysis remain
 unsupported.
 
+The branch-local callee-origin milestone copies the fixed name/origin/mutability
+state for each conditional action block. Supported local reference declarations
+may feed later direct assignments in that branch; newest-first shadowing remains
+scoped, and branch-local entries are discarded before joining the pre-existing
+locals. Local-backed aliases make the affected result unknown, while returns,
+expressions, projected or compound writes, and unsupported actions fail closed.
+ORACLE-0002 accepted same-origin branch-local aliases and post-last-use owner
+reuse and rejected a live competing mutable owner borrow with E0499. Windows
+gnullvm and native Arch Linux WSL each pass 639 library tests, one component-
+interface probe, 10 conformance tests, and 335 replacement tests: 985 compiler
+tests per host. Arbitrary branch dataflow, nested projections, and general
+regions remain unsupported.
+
 The loop callee-local reassignment milestone applies one bounded transfer when a
 `while` body contains only supported direct assignments, then joins it with the
 incoming zero-iteration state. Same-origin reborrows remain exact; a changed

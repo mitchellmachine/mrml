@@ -813,9 +813,17 @@ assignments independently for each `if`/`else if`/`else` outcome and joins the
 resulting fixed local-origin states per local. A missing `else` contributes the
 unchanged incoming state. Outcomes that retain the same parameter origin keep
 that exact origin; differing origins make only the affected local unknown.
-Branch-local declarations, returns, expressions, projected or compound writes,
-and other unsupported branch actions fail the proof closed. This is an exact
+Returns, expressions, projected or compound writes, and other unsupported
+branch actions fail the proof closed. This is an exact
 conditional-assignment join, not general interprocedural CFG or region analysis.
+
+Supported conditional action blocks may now add fixed-capacity branch-local
+reference aliases and use those aliases in later direct assignments. Each branch
+has its own name/origin/mutability state, shadowing is newest-first within that
+branch, and branch-local entries are discarded before only the pre-existing
+locals are joined. A local-backed alias makes the affected result unknown rather
+than fabricating a parameter origin. This is scoped indirect-alias provenance,
+not arbitrary branch expressions, nested projections, or general regions.
 
 For a `while` body consisting only of supported direct assignments, callee
 return-origin inference now performs one bounded transfer and joins it with the

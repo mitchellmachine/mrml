@@ -154,6 +154,16 @@ live with E0499. This is black-box evidence for that exact stable-origin loop
 shape, not general loop dataflow, alias analysis, or region inference. Temporary
 sources and metadata were removed.
 
+An independently authored Rust 2024 metadata-only probe against this exact
+toolchain and commit accepted a mutable-reference forwarding callee that created
+an `&mut` alias inside each conditional branch and assigned that branch-local
+alias into the returned outer local. The caller could reuse the owner after the
+returned child's last use. A separate invocation rejected a competing mutable
+owner borrow while that child remained live with E0499. This is black-box
+evidence for that exact branch-local alias shape, not arbitrary branch dataflow,
+nested projections, or region inference. Temporary sources and metadata were
+removed.
+
 An independently authored Rust 2024 metadata-only probe against the same exact
 toolchain and commit compiled three explicit RAX forms whose output place was
 `*target` for `target: &mut u64`: `lateout`, same-place `inout`, and a distinct-
