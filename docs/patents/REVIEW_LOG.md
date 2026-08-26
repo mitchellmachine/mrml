@@ -8501,3 +8501,13 @@ and rejected tests to the existing exact return-outlives classifier and native
 object pipeline; it introduces no new compiler or runtime mechanism. Broader
 compiler completion remains partial; this technical screen is not a clearance
 or infringement conclusion and does not replace independent human dual review.
+
+# 2026-08-26 — Fixed ordinary x86-64 PAUSE lowering
+
+**Result: NOT_TRIGGERED.** This increment validates one conventional published
+x86-64 instruction template and emits its fixed architectural `F3 90` encoding
+through the existing bounded ordinary-inline-assembly path. It adds no new
+instruction-selection, optimization, synchronization, scheduling, or runtime
+algorithm. Broader compiler completion remains partial; this technical screen
+is not a clearance or infringement conclusion and does not replace independent
+human dual review.

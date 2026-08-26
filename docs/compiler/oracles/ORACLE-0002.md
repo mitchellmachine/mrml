@@ -999,3 +999,11 @@ backedges that both restored the same parameter origin. A condition-headed
 variant whose fallthrough backedge remained local-backed failed at the tail with
 E0515. This is black-box evidence for those exact backedge joins, not general
 loop or region inference. Temporary sources and metadata were removed.
+
+An independently authored Rust 2024 metadata-only inline-assembly probe against
+this exact toolchain and commit compiled
+`asm!("pause", options(nomem, nostack, preserves_flags))` in an unsafe
+function. This records black-box acceptance of that exact fixed x86-64 template
+and option set only; it does not establish other templates, operands, effects,
+register allocation, architectures, or general inline-assembly semantics.
+Temporary source and metadata were removed.
