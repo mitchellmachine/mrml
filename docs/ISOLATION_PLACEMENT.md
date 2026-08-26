@@ -630,7 +630,19 @@ that sequence into one route which revalidates policy, bounds, kernel mode and
 policy generation, and exact interface/provider generations before calling only
 the selected native-service or microVM backend. Stale policy and mismatched
 admission tables reach neither launcher. This is not a general package-policy
-resolver, Settings, shell, broad interface transport, or Total-mode completion.
+resolver, broad interface transport, or Total-mode completion.
+
+Settings and the object shell now have a shared **PARTIALLY IMPLEMENTED**
+frontend contract rather than separate policy paths. One canonical 32-byte
+`IsolationPolicyEdit` binds the exact setting ID, policy object, component/system
+scope, native class, owner selection, and expected configuration revision. The
+record carries no capability. Committing it still requires live configuration-
+root `CONTROL` and exact setting-object `WRITE`; wrong-object authority, stale
+revision, scope substitution, hidden bytes, and malformed native class fail
+before mutation. The resulting revision is the policy generation consumed by
+the existing application plan. Actual Settings widgets, object-shell text
+parsing/rendering, semantic accessibility projections, and restart/reboot UI
+remain **PLANNED**.
 
 The planned Settings application and object shell project that one typed policy
 service. They distinguish configured default, requested boot mode, effective
@@ -641,12 +653,13 @@ transactional, auditable, recoverable, capability-controlled, and semantically
 available through keyboard, Braille, speech, automation, and authorized AI.
 Configuration expresses desired policy; it does not prove current placement.
 
-Focused Windows and Arch Linux runs each pass all 40 configuration-service
+Focused Windows and Arch Linux runs each pass all 41 configuration-service
 tests, including typed persistence, exact capability enforcement, canonical
 decoding, scope separation, authenticated checkpoint recovery, reauthorization,
 stale-plan rejection, native-class substitution denial, package-bound floor and
 supported-form checks, no-fallback Total rejection, policy-generation handoff,
-stale route rejection, and proof that control-plane mismatches call no backend.
+stale route rejection, shared Settings/shell edit round-trip, wrong-object and
+stale-edit rejection, and proof that control-plane mismatches call no backend.
 These are unit tests on hosted build targets, not boot, VMM, or physical-
 hardware evidence.
 

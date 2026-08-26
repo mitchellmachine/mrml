@@ -1032,6 +1032,15 @@ is uncertain, those resources must remain retained for exact retry; recovery
 must never release them merely because the application endpoint is no longer
 visible. Device-specific and general service teardown remain **PLANNED**.
 
+Persistent isolation-policy recovery now has one canonical authority-free edit
+record shared with planned Settings and shell frontends. It binds the exact
+setting/object/scope/native class/selection and expected revision, but recovery
+cannot apply it from those bytes alone: live configuration-root `CONTROL` and
+exact setting `WRITE` are still required, and a recovered stale revision fails
+without mutation. Recovery must not rewrite the expected revision, substitute a
+policy object, or treat frontend provenance as authority. GUI, shell, and
+semantic accessibility frontends remain **PLANNED**.
+
 Application-launch recovery must retain the exact runtime domain, application
 object, immutable application generation and artifact digest, active system
 generation, and applied policy generation. The kernel application route accepts

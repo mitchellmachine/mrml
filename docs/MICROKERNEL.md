@@ -2956,6 +2956,23 @@ failure is not retried through the other form. Windows and Arch Linux each pass
 all 40 focused configuration tests. This remains unit/simulation evidence and
 not the complete general package resolver or broad cross-placement runtime.
 
+The next persistent-policy frontend boundary now uses one canonical 32-byte
+`IsolationPolicyEdit` for both planned Settings and object-shell projections.
+It binds the exact setting ID, policy object, component/system scope, native
+class, owner selection, and expected configuration revision, with zero embedded
+authority. Commit independently requires configuration-root `CONTROL` and exact
+setting-object `WRITE`, then returns the committed policy generation. Wrong
+object, stale revision, scope/native-class substitution, malformed length, and
+nonzero reserved bytes fail before mutation. Windows and Arch Linux each pass
+41 focused configuration tests. This is typed service/unit evidence only, not a
+GUI, shell parser, semantic accessibility projection, boot selector, or Total
+runtime completion.
+
+Patent review: `NOT_TRIGGERED` for this conventional fixed-record
+encode/decode and optimistic revision-bound transaction composition. The
+broader adaptive placement and automated VMM/resource selection reviews remain
+`TRIGGERED` in [patents/REVIEW_LOG.md](patents/REVIEW_LOG.md).
+
 The hosted WHP and nested-KVM service runners now exercise the configured
 preparation path before real guest construction. Both build component and system
 policy records under separate setting capabilities, atomically commit revision

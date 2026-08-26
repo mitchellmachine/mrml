@@ -1803,6 +1803,8 @@ pub struct ConfigTransaction<const UPDATES: usize> {
 
 pub const ISOLATION_POLICY_VALUE_BYTES: usize = 16;
 const ISOLATION_POLICY_VALUE_MAGIC: [u8; 8] = *b"MRMLISO1";
+pub const ISOLATION_POLICY_EDIT_BYTES: usize = 32;
+const ISOLATION_POLICY_EDIT_MAGIC: [u8; 8] = *b"MRMLIFE1";
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum IsolationPolicyScope {
@@ -1939,6 +1941,20 @@ impl IsolationPolicySetting {
         }
     }
 
+    const fn component_from_token(
+        setting: SettingId,
+        object: ObjectId,
+        token: u8,
+    ) -> Result<Self, ConfigError> {
+        let placement = match token {
+            1 => IsolationPlacement::InProcess,
+            2 => IsolationPlacement::NativeProcess,
+            3 => IsolationPlacement::NativeService,
+            _ => return Err(ConfigError::InvalidProtocol),
+        };
+        Self::component(setting, object, placement)
+    }
+
     pub const fn schema(self) -> Result<SettingSchema, ConfigError> {
         SettingSchema::bytes(
             self.setting,
@@ -2005,6 +2021,133 @@ impl IsolationPolicySetting {
             selection,
             revision: record.revision,
         })
+    }
+}
+
+/// Canonical authority-free edit shared by Settings, the object shell, recovery,
+/// accessibility projections, and tests. It identifies the exact typed policy
+/// record and expected configuration revision, but commit still requires live
+/// root CONTROL and setting WRITE capabilities.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct IsolationPolicyEdit {
+    setting: IsolationPolicySetting,
+    selection: OwnerIsolationSelection,
+    expected_revision: u64,
+}
+
+impl IsolationPolicyEdit {
+    pub fn new(
+        setting: IsolationPolicySetting,
+        selection: OwnerIsolationSelection,
+        expected_revision: u64,
+    ) -> Result<Self, ConfigError> {
+        if selection.scope() != setting.scope() {
+            return Err(ConfigError::SchemaViolation);
+        }
+        Ok(Self {
+            setting,
+            selection,
+            expected_revision,
+        })
+    }
+
+    pub const fn setting(self) -> IsolationPolicySetting {
+        self.setting
+    }
+
+    pub const fn selection(self) -> OwnerIsolationSelection {
+        self.selection
+    }
+
+    pub const fn expected_revision(self) -> u64 {
+        self.expected_revision
+    }
+
+    pub fn encode(self) -> [u8; ISOLATION_POLICY_EDIT_BYTES] {
+        let mut output = [0; ISOLATION_POLICY_EDIT_BYTES];
+        output[..8].copy_from_slice(&ISOLATION_POLICY_EDIT_MAGIC);
+        output[8..12].copy_from_slice(&self.setting.setting().get().to_le_bytes());
+        output[12] = match self.setting.scope() {
+            IsolationPolicyScope::Component => 1,
+            IsolationPolicyScope::System => 2,
+        };
+        output[13] = self.selection.token();
+        output[14] = self.setting.native_token();
+        output[16..24].copy_from_slice(&self.setting.object().0.to_le_bytes());
+        output[24..32].copy_from_slice(&self.expected_revision.to_le_bytes());
+        output
+    }
+
+    pub fn decode(input: &[u8]) -> Result<Self, ConfigError> {
+        if input.len() != ISOLATION_POLICY_EDIT_BYTES
+            || input[..8] != ISOLATION_POLICY_EDIT_MAGIC
+            || input[15] != 0
+        {
+            return Err(ConfigError::InvalidProtocol);
+        }
+        let setting = SettingId::new(u32::from_le_bytes(
+            input[8..12]
+                .try_into()
+                .map_err(|_| ConfigError::InvalidProtocol)?,
+        ))?;
+        let object = ObjectId(u64::from_le_bytes(
+            input[16..24]
+                .try_into()
+                .map_err(|_| ConfigError::InvalidProtocol)?,
+        ));
+        let descriptor = match input[12] {
+            1 => IsolationPolicySetting::component_from_token(setting, object, input[14])?,
+            2 if input[14] == 0 => IsolationPolicySetting::system(setting, object)?,
+            _ => return Err(ConfigError::InvalidProtocol),
+        };
+        Self::new(
+            descriptor,
+            OwnerIsolationSelection::decode(input[13])?,
+            u64::from_le_bytes(
+                input[24..32]
+                    .try_into()
+                    .map_err(|_| ConfigError::InvalidProtocol)?,
+            ),
+        )
+    }
+
+    pub fn commit<const SETTINGS: usize, const AUDIT: usize, A: CapabilityAuthorizer + ?Sized>(
+        self,
+        configuration: &mut ConfigurationService<SETTINGS, AUDIT>,
+        capabilities: &A,
+        root_control: Capability,
+        setting_write: Capability,
+    ) -> Result<CommittedIsolationPolicyEdit, ConfigError> {
+        let mut transaction = ConfigTransaction::<1>::new(self.expected_revision);
+        self.setting
+            .stage(&mut transaction, setting_write, self.selection)?;
+        let policy_generation = configuration.commit(capabilities, root_control, &transaction)?;
+        Ok(CommittedIsolationPolicyEdit {
+            setting: self.setting,
+            selection: self.selection,
+            policy_generation,
+        })
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct CommittedIsolationPolicyEdit {
+    setting: IsolationPolicySetting,
+    selection: OwnerIsolationSelection,
+    policy_generation: u64,
+}
+
+impl CommittedIsolationPolicyEdit {
+    pub const fn setting(self) -> IsolationPolicySetting {
+        self.setting
+    }
+
+    pub const fn selection(self) -> OwnerIsolationSelection {
+        self.selection
+    }
+
+    pub const fn policy_generation(self) -> u64 {
+        self.policy_generation
     }
 }
 
@@ -7735,6 +7878,76 @@ mod tests {
         assert_eq!(
             stale_plan.apply(&configuration, &capabilities),
             Err(ConfigError::RevisionConflict { current: 2 })
+        );
+    }
+
+    #[test]
+    fn settings_and_shell_share_one_capability_checked_isolation_edit() {
+        let root_object = ObjectId(0x4953_4f45_4449_5452);
+        let component_object = ObjectId(0x4953_4f45_4449_5443);
+        let setting = IsolationPolicySetting::component(
+            SettingId::new(73).unwrap(),
+            component_object,
+            IsolationPlacement::NativeProcess,
+        )
+        .unwrap();
+        let mut configuration =
+            ConfigurationService::<1, 4>::new(root_object, &[setting.schema().unwrap()]).unwrap();
+        let mut capabilities = CapabilitySpace::<4>::new();
+        let root_control = capabilities.insert(root_object, Rights::CONTROL).unwrap();
+        let setting_access = capabilities
+            .insert(component_object, Rights::READ.union(Rights::WRITE))
+            .unwrap();
+        let wrong_write = capabilities.insert(ObjectId(99), Rights::WRITE).unwrap();
+
+        let settings_edit =
+            IsolationPolicyEdit::new(setting, OwnerIsolationSelection::Microvm, 0).unwrap();
+        let wire = settings_edit.encode();
+        let shell_edit = IsolationPolicyEdit::decode(&wire).unwrap();
+        assert_eq!(shell_edit, settings_edit);
+        assert_eq!(
+            shell_edit.commit(&mut configuration, &capabilities, root_control, wrong_write,),
+            Err(ConfigError::WrongObject)
+        );
+        let committed = shell_edit
+            .commit(
+                &mut configuration,
+                &capabilities,
+                root_control,
+                setting_access,
+            )
+            .unwrap();
+        assert_eq!(committed.setting(), setting);
+        assert_eq!(committed.selection(), OwnerIsolationSelection::Microvm);
+        assert_eq!(committed.policy_generation(), 1);
+        assert_eq!(
+            setting
+                .read(&configuration, &capabilities, setting_access)
+                .unwrap()
+                .selection(),
+            OwnerIsolationSelection::Microvm
+        );
+
+        assert_eq!(
+            settings_edit.commit(
+                &mut configuration,
+                &capabilities,
+                root_control,
+                setting_access,
+            ),
+            Err(ConfigError::RevisionConflict { current: 1 })
+        );
+        let mut tampered = wire;
+        tampered[15] = 1;
+        assert_eq!(
+            IsolationPolicyEdit::decode(&tampered),
+            Err(ConfigError::InvalidProtocol)
+        );
+        tampered = wire;
+        tampered[12] = 2;
+        assert_eq!(
+            IsolationPolicyEdit::decode(&tampered),
+            Err(ConfigError::InvalidProtocol)
         );
     }
 

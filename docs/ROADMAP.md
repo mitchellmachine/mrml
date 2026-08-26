@@ -192,7 +192,13 @@ path and teardown on WHP and nested KVM. Windows and Arch Linux each pass 545
 kernel tests; WHP passes 9 runner tests and KVM passes 10. Device-specific
 projection, reset/revocation, broader application/service integration, and
 physical evidence remain **PLANNED**. Persistent Settings and shell policy is
-the next dependency gate.
+now **PARTIALLY IMPLEMENTED** at its shared service boundary: a canonical
+authority-free edit binds exact scope/object/setting/native-class/selection and
+expected revision, while commit separately requires root `CONTROL` and setting
+`WRITE`. Windows and Arch Linux each pass 41 configuration tests. Actual GUI,
+shell parsing/rendering, semantic accessibility, and restart/reboot presentation
+remain **PLANNED**; that common semantic projection is the next gate before
+strict Total runtime enforcement.
 
 The deployment lane is defined in [DEPLOYMENT.md](DEPLOYMENT.md) and must not
 displace the current foundational gate. Later work proceeds as separate bounded

@@ -30,6 +30,10 @@ Implemented boundaries:
   rechecks setting READ and service CONTROL; and
 - bounded dynamic policy replacement that preserves consumed restart budget
   and existing deadlines and invalidates pre-replacement restart plans.
+- one canonical authority-free isolation-policy edit shared by planned Settings,
+  object-shell, recovery, accessibility, automation, and test projections; the
+  bytes bind exact setting/object/scope/native class/selection/revision while
+  commit still requires root CONTROL and setting WRITE.
 
 Setting IDs and service tokens identify records but never grant authority.
 Secrets are intentionally outside this value model. The adapters are
