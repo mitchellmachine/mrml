@@ -15762,7 +15762,8 @@ fn runtime_reference_call_origin_parameter<const MAX_PARAMETERS: usize, const MA
             }
             match *target_kind {
                 crate::NestedLoopControlTarget::Inner => {
-                    if !prefix_preserves_state(*action_index)? {
+                    if !prefix_preserves_state(*action_index)? && !normalized_backedge_is_stable()?
+                    {
                         return None;
                     }
                 }
@@ -38355,6 +38356,21 @@ mod tests {
         let nested_loop = MutableReferenceCallResolver
             .resolve_runtime_call::<2>("nested_loop", 2)
             .unwrap();
+        let nested_continue = RuntimeCallTarget {
+            name: nested_loop.name,
+            parameters: [
+                nested_loop.parameters[0],
+                nested_loop.parameters[1],
+                Some(RuntimeCallParameter {
+                    name: "second",
+                    ty: ScalarType::Bool,
+                }),
+            ],
+            parameter_count: 3,
+            return_type: nested_loop.return_type,
+            return_type_name: nested_loop.return_type_name,
+            body_expression: "",
+        };
         assert_eq!(
             runtime_reference_call_origin_parameter::<2, 24>(nested_loop),
             Some(0)
@@ -38585,6 +38601,28 @@ mod tests {
                     "return changed; }"
                 ),
                 ..nested_loop
+            }),
+            None
+        );
+        assert_eq!(
+            runtime_reference_call_origin_parameter::<3, 48>(RuntimeCallTarget {
+                body_expression: concat!(
+                    "let mut local: u16 = 1; let mut changed: &mut u16 = &mut local; ",
+                    "loop { loop { changed = value; if first { continue; } ",
+                    "if second { break; } } return changed; }"
+                ),
+                ..nested_continue
+            }),
+            Some(0)
+        );
+        assert_eq!(
+            runtime_reference_call_origin_parameter::<3, 48>(RuntimeCallTarget {
+                body_expression: concat!(
+                    "let mut local: u16 = 1; let mut changed: &mut u16 = &mut local; ",
+                    "loop { loop { if first { continue; } if second { break; } ",
+                    "changed = value; } return changed; }"
+                ),
+                ..nested_continue
             }),
             None
         );
