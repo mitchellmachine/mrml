@@ -1379,6 +1379,16 @@ gnullvm and native Arch Linux WSL each pass 627 library tests, one component-
 interface probe, 10 conformance tests, and 335 replacement tests: 973 compiler
 tests per host.
 
+The trailing concrete trait-default milestone parses defaults such as
+`trait Convert<Input = u8>` and materializes omitted arguments in exact and
+generic implementation heads, supertraits, declaration/implementation
+premises, projection values/defaults, and function obligations. Defaults must
+form a trailing run of complete concrete nominal types; parameter-dependent,
+`Self`, lifetime/const, and compound defaults fail closed. Windows gnullvm and
+native Arch Linux WSL each pass 630 library tests, one component-interface
+probe, 10 conformance tests, and 335 replacement tests: 976 compiler tests per
+host.
+
 The premise-bearing rigid-normalization milestone proves the selected generic
 implementation's instantiated trait and projection predicates before exposing
 its associated value. It shares the caller's 16-frame rigid proof stack and
