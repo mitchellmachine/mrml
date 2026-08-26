@@ -340,6 +340,15 @@ mutable borrow while the child remained live with E0499. Temporary sources and
 metadata were removed. This is exact equal-origin conditional initializer
 evidence, not arbitrary aggregate or path-sensitive origin inference.
 
+Another independently authored Rust 2024 metadata-only probe against the same
+exact toolchain and commit accepted consuming a parameter-initialized tuple
+field into an explicitly typed mutable-reference local before return. It also
+accepted the corresponding moved alias from an equal-origin conditional second
+field and allowed owner reuse after the returned child's last use. A separate
+invocation rejected a live competing mutable owner borrow with E0499. Temporary
+sources and metadata were removed. This is exact one-move projected-origin
+evidence, not general aggregate moves, aliases, or region inference.
+
 An independently authored Rust 2024 metadata-only probe against that same exact
 toolchain and commit compiled `asm!("cmp rcx, rcx", in("rcx") value,
 options(nomem, nostack))`. This records black-box acceptance of that exact

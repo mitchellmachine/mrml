@@ -983,6 +983,14 @@ borrowing authority from a sibling field. ORACLE-0002 accepts the equal-second-
 parameter conditional element, permits reuse after last use, and rejects a live
 competing borrow of that second owner with E0499.
 
+An initialized tuple-field origin now survives one consuming move into an
+explicitly typed reference local before return. This includes the equal-origin
+conditional multi-field initializer. The projected-initializer hook is neutral
+for non-tuple or unavailable local types, so it cannot invalidate an otherwise
+proved direct alias; malformed tuple initialization still fails closed.
+ORACLE-0002 accepts the direct and conditional moved-alias forms, permits owner
+reuse after last use, and rejects a live competing borrow with E0499.
+
 The first modern trait-solver foundation is an explicit bounded implemented-
 goal representation. Stable trait/type/inference/placeholder identities remain
 distinct; canonicalization replaces inference identities with first-occurrence

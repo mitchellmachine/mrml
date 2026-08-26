@@ -3996,6 +3996,15 @@ direct and caller tests cover the equal-origin result, ambiguity, live conflict,
 and post-last-use restoration. The pinned oracle accepts the equal-second-
 parameter conditional element and rejects its live competing borrow with E0499.
 
+An exact initialized field may be consumed into one explicitly typed reference
+local and returned without losing its parameter origin. The equal-origin
+conditional multi-field path uses the same transfer. The initializer hook now
+treats non-tuple or unavailable local types as neutral, preventing unrelated
+reference locals from aborting a valid callee proof, while malformed tuple
+initializers still fail closed. Focused direct/caller tests and ORACLE-0002 cover
+the moved alias, live E0499 conflict, and post-last-use owner restoration. Both
+hosts remain at 987 tests.
+
 The conditional projected-reassignment milestone extends the bounded tuple-field
 loan chain across a conditional shared-reference assignment. The exact dated
 oracle rejects mutation of either conditional owner and of the field's replaced

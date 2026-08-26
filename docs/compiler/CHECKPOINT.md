@@ -707,6 +707,15 @@ retain the second owner's loan, reject a live competitor, and accept restoration
 after last use. ORACLE-0002 accepts the exact equal-origin conditional element
 and rejects the competitor with E0499. Both hosts remain at 987 tests.
 
+One consuming move from an initialized tuple field into an explicitly typed
+reference local now retains the field's parameter origin through return. The
+same transfer covers an equal-origin conditional field. Non-tuple or unavailable
+local types make the projected-initializer hook a no-op rather than aborting an
+already valid alias proof; malformed tuple initialization remains conservative.
+ORACLE-0002 accepts both moved-alias forms, accepts owner restoration after last
+use, and rejects a live competitor with E0499. Windows and Arch remain at 987
+tests per host.
+
 Inferred locals now become reassignment-origin eligible only when their
 initializer already proved a compatible parameter origin. This preserves valid
 indexed scalar alias replacement while preventing an inferred slice alias from
