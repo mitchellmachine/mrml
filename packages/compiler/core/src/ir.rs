@@ -268,7 +268,7 @@ impl<'source, const MAX_NODES: usize, const MAX_INSTRUCTIONS: usize>
             ExprKind::Unit | ExprKind::DefaultValue => {
                 self.push(Instruction::PushInteger(0), expression.span)?;
             }
-            ExprKind::String(_) | ExprKind::ByteString(_) => {
+            ExprKind::String(_) | ExprKind::ByteString(_) | ExprKind::CString(_) => {
                 return Err(IrError {
                     kind: IrErrorKind::InvalidExpressionTree,
                     span: expression.span,

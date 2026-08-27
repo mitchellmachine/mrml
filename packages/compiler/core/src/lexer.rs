@@ -11,6 +11,7 @@ pub enum TokenKind {
     Integer,
     String,
     ByteString,
+    CString,
     Character,
     ByteCharacter,
     OpenParen,
@@ -256,6 +257,12 @@ impl<'source> Lexer<'source> {
         {
             return Ok(Some(token));
         }
+        if byte == b'c'
+            && self.bytes().get(start + 1) == Some(&b'r')
+            && let Some(token) = self.raw_string(start, 2, TokenKind::CString)?
+        {
+            return Ok(Some(token));
+        }
         if byte == b'r'
             && let Some(token) = self.raw_string(start, 1, TokenKind::String)?
         {
@@ -264,6 +271,10 @@ impl<'source> Lexer<'source> {
         if byte == b'b' && self.bytes().get(start + 1) == Some(&b'"') {
             self.position += 1;
             return self.quoted(start, b'"', TokenKind::ByteString).map(Some);
+        }
+        if byte == b'c' && self.bytes().get(start + 1) == Some(&b'"') {
+            self.position += 1;
+            return self.quoted(start, b'"', TokenKind::CString).map(Some);
         }
         if byte == b'b' && self.bytes().get(start + 1) == Some(&b'\'') {
             self.position += 1;
@@ -465,6 +476,17 @@ mod tests {
             &[
                 (TokenKind::ByteString, "b\"A\\xFF\""),
                 (TokenKind::ByteString, "br##\"raw\\n\"#text\"##"),
+            ],
+        );
+    }
+
+    #[test]
+    fn distinguishes_cooked_and_raw_c_strings() {
+        assert_tokens(
+            "c\"hello\\n\" cr##\"raw\\n\"#text\"##",
+            &[
+                (TokenKind::CString, "c\"hello\\n\""),
+                (TokenKind::CString, "cr##\"raw\\n\"#text\"##"),
             ],
         );
     }

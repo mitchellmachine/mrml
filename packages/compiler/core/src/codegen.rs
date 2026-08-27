@@ -170,6 +170,7 @@ pub enum CodegenErrorKind {
     InvalidRuntimePlaceFacts,
     InvalidRuntimeControlFlowFacts,
     UnsupportedRuntimeControlFlow,
+    UnsupportedCStringLiteral,
     RuntimeUseAfterMove,
     RuntimeBorrowConflict,
     RuntimeReferenceOutlivesFunction,
@@ -19972,6 +19973,7 @@ fn validate_runtime_inline_const<
         | ExprKind::ByteChar(_)
         | ExprKind::String(_)
         | ExprKind::ByteString(_)
+        | ExprKind::CString(_)
         | ExprKind::ClosureParameter { .. } => {}
     }
     Ok(())
@@ -22924,6 +22926,7 @@ fn runtime_expression_type_with_locals<
             ))),
             mutable: false,
         }),
+        ExprKind::CString(_) => Err(CodegenErrorKind::UnsupportedCStringLiteral),
         ExprKind::Closure { .. } => Err(CodegenErrorKind::RuntimeExpressionUnsupported),
         ExprKind::ClosureParameter {
             target: Some(crate::expression::ClosureParameterTarget::Integer(target)),
@@ -28944,6 +28947,9 @@ impl<
             }
             ExprKind::String(_) | ExprKind::ByteString(_) => {
                 return Err(self.error(CodegenErrorKind::RuntimeExpressionUnsupported));
+            }
+            ExprKind::CString(_) => {
+                return Err(self.error(CodegenErrorKind::UnsupportedCStringLiteral));
             }
             ExprKind::Closure { .. } => {
                 return Err(self.error(CodegenErrorKind::RuntimeExpressionUnsupported));

@@ -838,6 +838,7 @@ pub enum ExprKind<'source> {
     ByteChar(u8),
     String(&'source str),
     ByteString(&'source str),
+    CString(&'source str),
     Closure {
         parameter: Option<ExprId>,
         body: ExprId,
@@ -1242,6 +1243,7 @@ impl<'source, const MAX_NODES: usize> ExpressionTree<'source, MAX_NODES> {
             | ExprKind::ByteChar(_)
             | ExprKind::String(_)
             | ExprKind::ByteString(_)
+            | ExprKind::CString(_)
             | ExprKind::Closure { .. }
             | ExprKind::ClosureParameter { .. }
             | ExprKind::Identifier(_)
@@ -1561,7 +1563,7 @@ impl<'source, const MAX_NODES: usize> ExpressionTree<'source, MAX_NODES> {
             ExprKind::Bool(value) => Ok(u128::from(value)),
             ExprKind::Char(value) => Ok(u128::from(value)),
             ExprKind::ByteChar(value) => Ok(u128::from(value)),
-            ExprKind::String(_) | ExprKind::ByteString(_) => {
+            ExprKind::String(_) | ExprKind::ByteString(_) | ExprKind::CString(_) => {
                 Err(ConstEvalError::InvalidExpressionTree)
             }
             ExprKind::Closure { .. } => Err(ConstEvalError::InvalidExpressionTree),
@@ -2269,6 +2271,10 @@ impl<'source, const MAX_NODES: usize> ExpressionParser<'source, MAX_NODES> {
             }),
             Some(token) if token.kind == TokenKind::ByteString => self.push(Expr {
                 kind: ExprKind::ByteString(token.text),
+                span: token.span,
+            }),
+            Some(token) if token.kind == TokenKind::CString => self.push(Expr {
+                kind: ExprKind::CString(token.text),
                 span: token.span,
             }),
             Some(token) if token.kind == TokenKind::Operator && token.text == "||" => {
@@ -3455,6 +3461,7 @@ impl<'source, const MAX_NODES: usize> ExpressionParser<'source, MAX_NODES> {
             | ExprKind::ByteChar(_)
             | ExprKind::String(_)
             | ExprKind::ByteString(_)
+            | ExprKind::CString(_)
             | ExprKind::ClosureParameter { .. }
             | ExprKind::Identifier(_) => {}
         }
@@ -6557,6 +6564,21 @@ mod tests {
             .parse()
             .unwrap()
             .evaluate(&NoConstants)
+    }
+
+    #[test]
+    fn preserves_c_string_literal_identity_without_constant_aliasing() {
+        for source in ["c\"hello\\n\"", "cr##\"raw\\n\"#text\"##"] {
+            let tree = ExpressionParser::<2>::new(source).parse().unwrap();
+            assert!(matches!(
+                tree.expression(tree.root()).map(|expression| expression.kind),
+                Some(ExprKind::CString(literal)) if literal == source
+            ));
+            assert_eq!(
+                tree.evaluate(&NoConstants),
+                Err(ConstEvalError::InvalidExpressionTree)
+            );
+        }
     }
 
     #[test]

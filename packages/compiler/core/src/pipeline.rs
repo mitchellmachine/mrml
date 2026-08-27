@@ -679,6 +679,22 @@ mod tests {
     }
 
     #[test]
+    fn rejects_distinct_c_string_literals_before_object_emission() {
+        for source in [
+            "#[unsafe(no_mangle)] pub extern \"C\" fn probe() -> u8 { c\"hello\"; 1 }",
+            r####"#[unsafe(no_mangle)] pub extern "C" fn probe() -> u8 { cr##"raw\n"#text"##; 1 }"####,
+        ] {
+            for format in [ObjectFormat::Elf64, ObjectFormat::Coff] {
+                let error = compile_wide(source, "probe", format).unwrap_err();
+                assert!(matches!(
+                    error.kind,
+                    CompileErrorKind::Codegen(CodegenErrorKind::UnsupportedCStringLiteral)
+                ));
+            }
+        }
+    }
+
+    #[test]
     fn enforces_concrete_source_trait_obligations_before_codegen() {
         let satisfied = concat!(
             "trait Visible {} impl Visible for u32 {} ",
