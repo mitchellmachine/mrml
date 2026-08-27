@@ -79,12 +79,12 @@ impl KvCacheRow {
             Self::Q8(row) => {
                 let bytes = q.len() / 32 * 34;
                 let offset = head_offset / 32 * 34;
-                vec_dot_q8_0_q8_0(&row[offset..offset + bytes], q8, q.len())
+                vec_dot_q8_0_q8_0(&row[offset..offset + bytes], q8, q.len()).unwrap_or(0.0)
             }
             Self::Q4(row) => {
                 let bytes = q.len() / 32 * 18;
                 let offset = head_offset / 32 * 18;
-                vec_dot_q4_0_q8_0(&row[offset..offset + bytes], q8, q.len())
+                vec_dot_q4_0_q8_0(&row[offset..offset + bytes], q8, q.len()).unwrap_or(0.0)
             }
             Self::Empty => 0.0,
         }

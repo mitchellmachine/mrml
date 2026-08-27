@@ -2849,7 +2849,8 @@ impl MrmlModel {
                     return None;
                 }
 
-                let dot = crate::quant::vec_dot_q8_0_q8_0(row, &hidden_q8, dim);
+                let dot = crate::quant::vec_dot_q8_0_q8_0(row, &hidden_q8, dim)
+                    .unwrap_or(f32::NEG_INFINITY);
                 let mut score = 30.0 * float_tanh(dot / 30.0);
                 if recent_tokens.contains(&(tid as i32)) {
                     score -= 3.5;

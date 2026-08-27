@@ -52,7 +52,7 @@ fn test_vec_dot_q4_q8() {
     let mut q8_block = vec![0u8; 34];
     quantize_f32_to_q8_0(&activations, &mut q8_block);
 
-    let dot = vec_dot_q4_0_q8_0(&q4_block, &q8_block, 32);
+    let dot = vec_dot_q4_0_q8_0(&q4_block, &q8_block, 32).unwrap();
     assert!((dot - 32.0).abs() < 0.5, "Expected ~32.0, got {}", dot);
 }
 
@@ -70,7 +70,66 @@ fn test_vec_dot_q8_q8_matches_dequantized_reference() {
     dequantize_q8_0(&qx, &mut dx);
     dequantize_q8_0(&qy, &mut dy);
     let expected: f32 = dx.iter().zip(&dy).map(|(a, b)| a * b).sum();
-    let actual = vec_dot_q8_0_q8_0(&qx, &qy, 96);
+    let actual = vec_dot_q8_0_q8_0(&qx, &qy, 96).unwrap();
 
     assert!((actual - expected).abs() < 1e-3, "{actual} != {expected}");
+}
+
+#[test]
+fn quantized_dot_accepts_empty_inputs() {
+    assert_eq!(vec_dot_q4_0_q8_0(&[], &[], 0), Ok(0.0));
+    assert_eq!(vec_dot_q8_0_q8_0(&[], &[], 0), Ok(0.0));
+}
+
+#[test]
+fn quantized_dot_rejects_partial_element_blocks() {
+    assert_eq!(
+        vec_dot_q4_0_q8_0(&[0; 18], &[0; 34], 31),
+        Err(QuantDotError::ElementCountNotBlockAligned { elements: 31 })
+    );
+    assert_eq!(
+        vec_dot_q8_0_q8_0(&[0; 34], &[0; 34], 33),
+        Err(QuantDotError::ElementCountNotBlockAligned { elements: 33 })
+    );
+}
+
+#[test]
+fn quantized_dot_rejects_every_undersized_input() {
+    assert!(matches!(
+        vec_dot_q4_0_q8_0(&[0; 17], &[0; 34], 32),
+        Err(QuantDotError::InputTooShort {
+            input: QuantDotInput::LeftQ4,
+            ..
+        })
+    ));
+    assert!(matches!(
+        vec_dot_q4_0_q8_0(&[0; 18], &[0; 33], 32),
+        Err(QuantDotError::InputTooShort {
+            input: QuantDotInput::RightQ8,
+            ..
+        })
+    ));
+    assert!(matches!(
+        vec_dot_q8_0_q8_0(&[0; 33], &[0; 34], 32),
+        Err(QuantDotError::InputTooShort {
+            input: QuantDotInput::LeftQ8,
+            ..
+        })
+    ));
+    assert!(matches!(
+        vec_dot_q8_0_q8_0(&[0; 34], &[0; 33], 32),
+        Err(QuantDotError::InputTooShort {
+            input: QuantDotInput::RightQ8,
+            ..
+        })
+    ));
+}
+
+#[test]
+fn quantized_dot_rejects_encoded_length_overflow() {
+    let overflowing_elements = usize::MAX - (usize::MAX % 32);
+    assert_eq!(
+        vec_dot_q8_0_q8_0(&[], &[], overflowing_elements),
+        Err(QuantDotError::EncodedLengthOverflow)
+    );
 }

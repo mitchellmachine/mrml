@@ -145,7 +145,7 @@ fn application_main() -> Result<(), &'static str> {
         || {
             let sum: f32 = q8_table
                 .chunks_exact(q8_row_bytes)
-                .map(|row| vec_dot_q8_0_q8_0(row, &input_q8, cols))
+                .map(|row| vec_dot_q8_0_q8_0(row, &input_q8, cols).unwrap_or(0.0))
                 .sum();
             black_box(sum);
         },

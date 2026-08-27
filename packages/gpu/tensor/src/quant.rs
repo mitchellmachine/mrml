@@ -3,6 +3,82 @@
 #[cfg(target_arch = "x86_64")]
 use core::sync::atomic::{AtomicU8, Ordering};
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum QuantDotError {
+    ElementCountNotBlockAligned {
+        elements: usize,
+    },
+    EncodedLengthOverflow,
+    InputTooShort {
+        input: QuantDotInput,
+        required: usize,
+        actual: usize,
+    },
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum QuantDotInput {
+    LeftQ4,
+    LeftQ8,
+    RightQ8,
+}
+
+impl core::fmt::Display for QuantDotError {
+    fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        match self {
+            Self::ElementCountNotBlockAligned { elements } => {
+                write!(
+                    formatter,
+                    "quantized dot element count {elements} is not divisible by 32"
+                )
+            }
+            Self::EncodedLengthOverflow => {
+                formatter.write_str("quantized dot encoded length overflow")
+            }
+            Self::InputTooShort {
+                input,
+                required,
+                actual,
+            } => write!(
+                formatter,
+                "quantized dot {input:?} input requires {required} bytes but has {actual}",
+            ),
+        }
+    }
+}
+
+impl core::error::Error for QuantDotError {}
+
+#[inline]
+fn validate_dot_input(
+    input: QuantDotInput,
+    actual: usize,
+    blocks: usize,
+    bytes_per_block: usize,
+) -> Result<(), QuantDotError> {
+    let required = blocks
+        .checked_mul(bytes_per_block)
+        .ok_or(QuantDotError::EncodedLengthOverflow)?;
+    if actual < required {
+        return Err(QuantDotError::InputTooShort {
+            input,
+            required,
+            actual,
+        });
+    }
+    Ok(())
+}
+
+#[inline]
+fn validated_block_count(n_elements: usize) -> Result<usize, QuantDotError> {
+    if n_elements % 32 != 0 {
+        return Err(QuantDotError::ElementCountNotBlockAligned {
+            elements: n_elements,
+        });
+    }
+    Ok(n_elements / 32)
+}
+
 #[inline]
 fn round(value: f32) -> f32 {
     mrml_math::round(value)
@@ -249,28 +325,34 @@ unsafe fn avx_vnni_dpwssd(acc: __m256i, lhs: __m256i, rhs: __m256i) -> __m256i {
 
 /// Fast dot product between Q4_0 row (weights) and Q8_0 column (activations) with AVX2 SIMD
 #[inline]
-pub fn vec_dot_q4_0_q8_0(w_q4: &[u8], a_q8: &[u8], n_elements: usize) -> f32 {
+pub fn vec_dot_q4_0_q8_0(
+    w_q4: &[u8],
+    a_q8: &[u8],
+    n_elements: usize,
+) -> Result<f32, QuantDotError> {
+    let n_blocks = validated_block_count(n_elements)?;
+    validate_dot_input(QuantDotInput::LeftQ4, w_q4.len(), n_blocks, 18)?;
+    validate_dot_input(QuantDotInput::RightQ8, a_q8.len(), n_blocks, 34)?;
     #[cfg(target_arch = "x86_64")]
     {
         if avx_vnni_enabled() {
             unsafe {
-                return vec_dot_q4_0_q8_0_avx_vnni(w_q4, a_q8, n_elements);
+                return Ok(vec_dot_q4_0_q8_0_avx_vnni(w_q4, a_q8, n_blocks));
             }
         }
         if avx2_enabled() {
             unsafe {
-                return vec_dot_q4_0_q8_0_avx2(w_q4, a_q8, n_elements);
+                return Ok(vec_dot_q4_0_q8_0_avx2(w_q4, a_q8, n_blocks));
             }
         }
     }
 
-    vec_dot_q4_0_q8_0_scalar(w_q4, a_q8, n_elements)
+    Ok(vec_dot_q4_0_q8_0_scalar(w_q4, a_q8, n_blocks))
 }
 
 #[cfg(target_arch = "x86_64")]
 #[target_feature(enable = "avx2")]
-unsafe fn vec_dot_q4_0_q8_0_avx2(w_q4: &[u8], a_q8: &[u8], n_elements: usize) -> f32 {
-    let n_blocks = n_elements / 32;
+unsafe fn vec_dot_q4_0_q8_0_avx2(w_q4: &[u8], a_q8: &[u8], n_blocks: usize) -> f32 {
     let mut sum = 0.0f32;
 
     let mask_low = _mm_set1_epi8(0x0F);
@@ -332,8 +414,7 @@ unsafe fn vec_dot_q4_0_q8_0_avx2(w_q4: &[u8], a_q8: &[u8], n_elements: usize) ->
 }
 
 #[inline]
-fn vec_dot_q4_0_q8_0_scalar(w_q4: &[u8], a_q8: &[u8], n_elements: usize) -> f32 {
-    let n_blocks = n_elements / 32;
+fn vec_dot_q4_0_q8_0_scalar(w_q4: &[u8], a_q8: &[u8], n_blocks: usize) -> f32 {
     let mut sum = 0.0f32;
 
     for b in 0..n_blocks {
@@ -425,10 +506,11 @@ mod simd_tests {
         quantize_f32_to_q4_0(&values, &mut q4);
         quantize_f32_to_q8_0(&values, &mut q8_a);
         quantize_f32_to_q8_0(&other, &mut q8_b);
-        let q4_scalar = vec_dot_q4_0_q8_0_scalar(&q4, &q8_b, values.len());
-        let q8_scalar = vec_dot_q8_0_q8_0_scalar(&q8_a, &q8_b, values.len());
-        assert!((vec_dot_q4_0_q8_0(&q4, &q8_b, values.len()) - q4_scalar).abs() < 1e-3);
-        assert!((vec_dot_q8_0_q8_0(&q8_a, &q8_b, values.len()) - q8_scalar).abs() < 1e-3);
+        let blocks = values.len() / 32;
+        let q4_scalar = vec_dot_q4_0_q8_0_scalar(&q4, &q8_b, blocks);
+        let q8_scalar = vec_dot_q8_0_q8_0_scalar(&q8_a, &q8_b, blocks);
+        assert!((vec_dot_q4_0_q8_0(&q4, &q8_b, values.len()).unwrap() - q4_scalar).abs() < 1e-3);
+        assert!((vec_dot_q8_0_q8_0(&q8_a, &q8_b, values.len()).unwrap() - q8_scalar).abs() < 1e-3);
     }
 
     #[test]
@@ -440,10 +522,10 @@ mod simd_tests {
 
 #[cfg(target_arch = "x86_64")]
 #[target_feature(enable = "avx2,avxvnni")]
-unsafe fn vec_dot_q4_0_q8_0_avx_vnni(w_q4: &[u8], a_q8: &[u8], n_elements: usize) -> f32 {
+unsafe fn vec_dot_q4_0_q8_0_avx_vnni(w_q4: &[u8], a_q8: &[u8], n_blocks: usize) -> f32 {
     let mut sum = 0.0f32;
     let mask = _mm_set1_epi8(0x0f);
-    for block in 0..n_elements / 32 {
+    for block in 0..n_blocks {
         let w_off = block * 18;
         let a_off = block * 34;
         let scale = f16_to_f32(u16::from_le_bytes([
@@ -481,24 +563,27 @@ unsafe fn vec_dot_q4_0_q8_0_avx_vnni(w_q4: &[u8], a_q8: &[u8], n_elements: usize
 /// Dot product between two Q8_0 vectors. This is used by the tied Q8_0 token
 /// embedding/output matrix and mirrors llama.cpp's Q8_0 x Q8_0 decode path.
 #[inline]
-pub fn vec_dot_q8_0_q8_0(x: &[u8], y: &[u8], n_elements: usize) -> f32 {
+pub fn vec_dot_q8_0_q8_0(x: &[u8], y: &[u8], n_elements: usize) -> Result<f32, QuantDotError> {
+    let n_blocks = validated_block_count(n_elements)?;
+    validate_dot_input(QuantDotInput::LeftQ8, x.len(), n_blocks, 34)?;
+    validate_dot_input(QuantDotInput::RightQ8, y.len(), n_blocks, 34)?;
     #[cfg(target_arch = "x86_64")]
     if avx_vnni_enabled() {
-        return unsafe { vec_dot_q8_0_q8_0_avx_vnni(x, y, n_elements) };
+        return Ok(unsafe { vec_dot_q8_0_q8_0_avx_vnni(x, y, n_blocks) });
     }
     #[cfg(target_arch = "x86_64")]
     if avx2_enabled() {
-        return unsafe { vec_dot_q8_0_q8_0_avx2(x, y, n_elements) };
+        return Ok(unsafe { vec_dot_q8_0_q8_0_avx2(x, y, n_blocks) });
     }
 
-    vec_dot_q8_0_q8_0_scalar(x, y, n_elements)
+    Ok(vec_dot_q8_0_q8_0_scalar(x, y, n_blocks))
 }
 
 #[cfg(target_arch = "x86_64")]
 #[target_feature(enable = "avx2,avxvnni")]
-unsafe fn vec_dot_q8_0_q8_0_avx_vnni(x: &[u8], y: &[u8], n_elements: usize) -> f32 {
+unsafe fn vec_dot_q8_0_q8_0_avx_vnni(x: &[u8], y: &[u8], n_blocks: usize) -> f32 {
     let mut sum = 0.0f32;
-    for block in 0..n_elements / 32 {
+    for block in 0..n_blocks {
         let x_off = block * 34;
         let y_off = block * 34;
         let scale = f16_to_f32(u16::from_le_bytes([
@@ -531,9 +616,9 @@ unsafe fn vec_dot_q8_0_q8_0_avx_vnni(x: &[u8], y: &[u8], n_elements: usize) -> f
 
 #[cfg(target_arch = "x86_64")]
 #[target_feature(enable = "avx2")]
-unsafe fn vec_dot_q8_0_q8_0_avx2(x: &[u8], y: &[u8], n_elements: usize) -> f32 {
+unsafe fn vec_dot_q8_0_q8_0_avx2(x: &[u8], y: &[u8], n_blocks: usize) -> f32 {
     let mut accum = _mm256_setzero_ps();
-    for block in 0..n_elements / 32 {
+    for block in 0..n_blocks {
         let off = block * 34;
         let dx = f16_to_f32(u16::from_le_bytes([
             *x.get_unchecked(off),
@@ -561,9 +646,9 @@ unsafe fn vec_dot_q8_0_q8_0_avx2(x: &[u8], y: &[u8], n_elements: usize) -> f32 {
 }
 
 #[inline]
-fn vec_dot_q8_0_q8_0_scalar(x: &[u8], y: &[u8], n_elements: usize) -> f32 {
+fn vec_dot_q8_0_q8_0_scalar(x: &[u8], y: &[u8], n_blocks: usize) -> f32 {
     let mut sum = 0.0f32;
-    for block in 0..n_elements / 32 {
+    for block in 0..n_blocks {
         let off = block * 34;
         let dx = f16_to_f32(u16::from_le_bytes([x[off], x[off + 1]]));
         let dy = f16_to_f32(u16::from_le_bytes([y[off], y[off + 1]]));

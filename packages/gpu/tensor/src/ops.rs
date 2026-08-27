@@ -238,7 +238,7 @@ pub fn mat_vec_mul_q4_0_q8_0(
             let row_start = r * row_bytes;
             if row_start + row_bytes <= w_q4_bytes.len() {
                 let row_slice = &w_q4_bytes[row_start..row_start + row_bytes];
-                *y = vec_dot_q4_0_q8_0(row_slice, &x_q8, n_cols);
+                *y = vec_dot_q4_0_q8_0(row_slice, &x_q8, n_cols).unwrap_or(0.0);
             }
         }
     } else {
@@ -251,7 +251,7 @@ pub fn mat_vec_mul_q4_0_q8_0(
                     // SAFETY: each worker owns a disjoint row range.
                     unsafe {
                         *(output_address as *mut f32).add(r) =
-                            vec_dot_q4_0_q8_0(row_slice, &x_q8, n_cols);
+                            vec_dot_q4_0_q8_0(row_slice, &x_q8, n_cols).unwrap_or(0.0);
                     }
                 }
             }
