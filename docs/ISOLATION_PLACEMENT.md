@@ -1367,6 +1367,14 @@ Total treats placement as unavailable and never reuses one partition for both
 domains. WHP source/API parity is not two-partition evidence. Guest page-table
 projection, queue protocol, and component execution remain **PLANNED**.
 
+A one-page generation-bound request/response wire is now **PARTIALLY
+IMPLEMENTED** over the exact peer projection. It binds interface/provider/system/
+policy/binding generations, exact projection authority, operation, length, and
+monotonic sequence while transferring no capabilities. Nested KVM proves a
+bounded request and response across two live VM mappings. Guest notification,
+concurrent acquire/release publication, and signed component execution remain
+**PLANNED**.
+
 The exact guest page-table leaf is now **PARTIALLY IMPLEMENTED** on both
 backends. The retained owner installs one supervisor RW/NX leaf in each stopped
 guest, verifies the exact physical translation, and reloads each exact root.

@@ -597,6 +597,19 @@ foundations, stable ABI primitives, and quantitative memory accounting, proceed:
    and real isolation evidence remain);
 10. selective migration of further high-value components.
 
+The cross-microVM call wire is now **PARTIALLY IMPLEMENTED** as one fixed 4 KiB
+request/response slot bound to the exact two-peer memory projection. Its retained
+kernel endpoints revalidate both capability generations and exact object,
+mapping, target, and virtual-page identities on every transition. The wire binds
+the interface fingerprint, ABI generation, provider generation,
+SystemGeneration, policy generation, binding generation, operation, payload
+length, and monotonic request sequence. It carries no capabilities, pointers, or
+path names. Invalid state, identity substitution, stale authority, replay,
+oversized payload, undersized output, and sequence exhaustion fail before
+publication. Nested KVM transports one bounded ZIM-like request and Zstd-like
+response across two live VM mappings. Guest-side acquire/release notification,
+signed component execution, and recovery integration remain **PLANNED**.
+
 The end-to-end Zstd gate proves equal corpus decoding by old and new providers,
 no ZIM rebuild, old-generation retention while referenced, later safe GC, ABI-4
 non-substitution, and prohibited-generation denial for new bindings. Performance

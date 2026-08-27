@@ -196,6 +196,15 @@ the same source/API path, subject to the recorded second-partition host limit.
 No new intermediate page-table allocation is permitted during this leaf-only
 operation; the launch layout must already contain the required hierarchy.
 
+The shared page now has a **PARTIALLY IMPLEMENTED** bounded interface-queue wire.
+One fixed slot uses the already-accounted page and exact projection authority;
+queue metadata does not grant authority. Every state transition revalidates the
+projection and both target capability generations. The payload is bounded by
+the remaining page bytes, sequence exhaustion rejects before publication, and
+invalid or stale state cannot reset the queue. Nested KVM proves one complete
+request/response byte exchange across two live VM mappings. Atomic guest-side
+publication/notification and component execution remain **PLANNED**.
+
 Two-peer policy retirement is now **PARTIALLY IMPLEMENTED** as one atomic
 ledger operation. After a backend proves both native mappings and translations
 absent, the kernel preflights the exact shared object, both mapping generations,

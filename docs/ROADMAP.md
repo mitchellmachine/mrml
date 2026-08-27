@@ -755,6 +755,14 @@ retirement. Nested KVM proves conflict rollback, immediate retry, shared-byte
 visibility, and complete translation/GPA removal across two live VMs. The
 bounded interface queue is now the next dependency gate.
 
+The bounded interface queue wire is now **PARTIALLY IMPLEMENTED**. Kernel tests
+cover exact projection/capability binding, identity tampering, replay, wrong
+response sequence, bounded output, stale authority, and terminal sequence
+exhaustion without mutation. Nested KVM carries a complete generation-bound
+request/response across two distinct live VMs before exact teardown. WHP retains
+source/API parity but this host still cannot supply two-partition evidence.
+Guest-side notification and signed ZIM/Zstd execution are the next gates.
+
 The paired retirement ledger is now **PARTIALLY IMPLEMENTED**. A backend may
 release the shared page only after proving both native mappings and translations
 absent. Kernel preflight exact-matches the object, two mapping generations,

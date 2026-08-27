@@ -325,6 +325,20 @@ impl<'guest, const FIRST: usize, const SECOND: usize>
         VmBackend::read_guest(self.second, self.second_physical, output)
     }
 
+    pub fn write_second(&mut self, input: &[u8]) -> Result<(), KvmError> {
+        if !self.second_live || input.len() > PAGE_SIZE as usize {
+            return Err(KvmError::InvalidMapping);
+        }
+        VmBackend::write_guest(self.second, self.second_physical, input)
+    }
+
+    pub fn read_first(&self, output: &mut [u8]) -> Result<(), KvmError> {
+        if !self.first_live || output.len() > PAGE_SIZE as usize {
+            return Err(KvmError::InvalidMapping);
+        }
+        VmBackend::read_guest(self.first, self.first_physical, output)
+    }
+
     pub fn first_translation(&mut self) -> Result<Option<u64>, KvmError> {
         Ok(self
             .first
@@ -3002,6 +3016,16 @@ mod tests {
             Err(KvmError::UnmappedMemory)
         );
         first.withdraw_peer_page(peer_virtual, 0x20_0000).unwrap();
+        let queue_pair = mrml_kernel::MicrovmInterfaceQueuePair::bind(
+            mrml_kernel::MicrovmInterfaceQueueIdentity::new([0x5a; 32], 3, 14, 9, 7, 11)
+                .unwrap(),
+            &projection,
+            first_target,
+            second_target,
+            &capabilities,
+        )
+        .unwrap();
+        let (mut consumer_queue, mut provider_queue) = queue_pair.split();
         let mut peer = PreparedKvmPeerPage::prepare(
             &mut first,
             &mut second,
@@ -3015,10 +3039,50 @@ mod tests {
         .unwrap_or_else(|failure| panic!("KVM peer mapping failed: {:?}", failure.error()));
         assert_eq!(peer.first_translation().unwrap(), Some(0x70_0000));
         assert_eq!(peer.second_translation().unwrap(), Some(0x80_0000));
-        peer.write_first(&[0x61, 0x82, 0xa3, 0xc4]).unwrap();
+        let mut consumer_page = [0_u8; PAGE_SIZE as usize];
+        consumer_queue
+            .initialize(&mut consumer_page, &projection, &capabilities)
+            .unwrap();
+        consumer_queue
+            .submit(&mut consumer_page, &projection, &capabilities, 1, b"zim")
+            .unwrap();
+        peer.write_first(&consumer_page).unwrap();
+        let mut provider_page = [0_u8; PAGE_SIZE as usize];
+        peer.read_second(&mut provider_page).unwrap();
+        let mut request = [0_u8; 8];
+        assert_eq!(
+            provider_queue
+                .receive_request(&provider_page, &projection, &capabilities, &mut request)
+                .unwrap(),
+            (1, 1, 3)
+        );
+        assert_eq!(&request[..3], b"zim");
+        provider_queue
+            .respond(
+                &mut provider_page,
+                &projection,
+                &capabilities,
+                1,
+                1,
+                b"zstd",
+            )
+            .unwrap();
+        peer.write_second(&provider_page).unwrap();
+        peer.read_first(&mut consumer_page).unwrap();
+        let mut response = [0_u8; 8];
+        assert_eq!(
+            consumer_queue
+                .consume_response(
+                    &mut consumer_page,
+                    &projection,
+                    &capabilities,
+                    &mut response,
+                )
+                .unwrap(),
+            (1, 4)
+        );
+        assert_eq!(&response[..4], b"zstd");
         let mut observed = [0; 4];
-        peer.read_second(&mut observed).unwrap();
-        assert_eq!(observed, [0x61, 0x82, 0xa3, 0xc4]);
         peer.retire().unwrap_or_else(|(error, _)| panic!("KVM peer retirement failed: {error:?}"));
         assert_eq!(
             first

@@ -1879,6 +1879,13 @@ before native GPA teardown; a leaf conflict rolls provisional mappings back and
 allows immediate retry. Nested KVM exercises this across two live guests. This
 is translation lifecycle evidence, not recovered component queue execution.
 
+The retained peer page now also admits one bounded generation-bound interface
+request/response slot. Recovery cannot infer authority from its bytes: every
+transition revalidates both exact target capabilities and the retained projection
+identity. Nested KVM proves the wire across two live mappings, including response
+return before leaf/GPA/ledger retirement. Recovery has not yet launched signed
+ZIM and Zstd guests to execute this queue, and no notification claim is made.
+
 Once that future native teardown succeeds, recovery can now retire the policy
 ledger without a half-removed peer. The kernel exact-matches both retained
 mapping generations and target capability generations, rejects extra aliases,

@@ -16,6 +16,7 @@ mod boot_recovery_syscall;
 mod build_receipt;
 mod capability;
 mod component_memory;
+mod component_queue;
 mod cpu_resource;
 mod early;
 mod framebuffer;
@@ -96,6 +97,11 @@ pub use component_memory::{
     reserve_component_executable_mapping, reserve_component_image, reserve_microvm_control_memory,
     reserve_microvm_guest_ram, reserve_microvm_page_projection,
     reserve_microvm_peer_page_projection,
+};
+pub use component_queue::{
+    MICROVM_INTERFACE_QUEUE_MAX_PAYLOAD, MicrovmInterfaceQueueConsumer,
+    MicrovmInterfaceQueueError, MicrovmInterfaceQueueIdentity, MicrovmInterfaceQueuePair,
+    MicrovmInterfaceQueueProvider,
 };
 pub use cpu_resource::{
     CpuBudgetId, CpuBudgetSpec, CpuBudgetTable, CpuBudgetUsage, CpuResourceError,
