@@ -205,6 +205,7 @@ unsafe extern "system" {
     fn VirtualAlloc(a: *mut c_void, n: usize, kind: u32, protection: u32) -> *mut c_void;
     fn VirtualProtect(a: *mut c_void, n: usize, protection: u32, old: *mut u32) -> i32;
     fn VirtualFree(a: *mut c_void, n: usize, kind: u32) -> i32;
+    fn SetErrorMode(mode: u32) -> u32;
 }
 #[cfg(target_os = "windows")]
 fn allocate(n: usize) -> *mut u8 {
@@ -326,6 +327,26 @@ fn nested_reference_mutations_and_return_origins_match_oracle() {
 }
 
 #[test]
+fn subslice_then_index_reference_mutation_executes() {
+    let code = compile(
+        "fn select(input: &mut [u32; 4], start: usize, index: usize) -> &mut u32 { &mut input[start..][index] } #[unsafe(no_mangle)] pub extern \"C\" fn probe(input: &mut [u32; 4], start: usize, index: usize) -> u32 { let selected: &mut u32 = select(input, start, index); *selected += 7; *selected }",
+    );
+    let probe: unsafe extern "C" fn(*mut [u32; 4], usize, usize) -> u32 =
+        unsafe { std::mem::transmute(code.pointer) };
+    for (start, index, target) in [(0, 2, 2), (1, 0, 1), (2, 1, 3)] {
+        let mut values = [10, 20, 30, 40];
+        let expected = values[target] + 7;
+        assert_eq!(unsafe { probe(&mut values, start, index) }, expected);
+        assert_eq!(values[target], expected);
+        for (position, value) in values.into_iter().enumerate() {
+            if position != target {
+                assert_eq!(value, [10, 20, 30, 40][position]);
+            }
+        }
+    }
+}
+
+#[test]
 fn nested_branch_initializedness_matches_oracle() {
     let code = compile(
         "#[unsafe(no_mangle)] pub extern \"C\" fn probe(input: u32, choose: bool) -> u32 { let mut value: u32 = input; 'outer: loop { loop { if choose { value += 1; break 'outer; } else { value += 2; break 'outer; } } } value }",
@@ -351,9 +372,8 @@ fn supported_inline_assembly_register_output_executes() {
 fn checked_overflow_reports_an_isolated_trap_exit() {
     #[cfg(target_os = "windows")]
     const CHILD: &str = "MRML_SEMANTIC_OVERFLOW_CHILD";
-    let code = compile(
-        "#[unsafe(no_mangle)] pub extern \"C\" fn probe(input: u32) -> u32 { input + 1 }",
-    );
+    let code =
+        compile("#[unsafe(no_mangle)] pub extern \"C\" fn probe(input: u32) -> u32 { input + 1 }");
     let probe: unsafe extern "C" fn(u32) -> u32 = unsafe { std::mem::transmute(code.pointer) };
 
     #[cfg(not(target_os = "windows"))]
@@ -365,13 +385,18 @@ fn checked_overflow_reports_an_isolated_trap_exit() {
             unsafe { _exit(120) }
         }
         let mut status = 0;
-        assert_eq!(unsafe { waitpid(pid, &mut status, 0) }, pid, "waitpid failed");
+        assert_eq!(
+            unsafe { waitpid(pid, &mut status, 0) },
+            pid,
+            "waitpid failed"
+        );
         assert_eq!(status & 0x7f, 4, "unexpected Unix wait status: {status:#x}");
         return;
     }
 
     #[cfg(target_os = "windows")]
     if std::env::var_os(CHILD).is_some() {
+        unsafe { SetErrorMode(0x0001 | 0x0002) };
         let _ = unsafe { probe(u32::MAX) };
         panic!("checked overflow unexpectedly returned");
     }
@@ -389,10 +414,17 @@ fn checked_overflow_reports_an_isolated_trap_exit() {
     #[cfg(target_os = "windows")]
     let status = output.status;
     #[cfg(target_os = "windows")]
-    assert!(!status.success(), "generated overflow trap unexpectedly returned");
+    assert!(
+        !status.success(),
+        "generated overflow trap unexpectedly returned"
+    );
     #[cfg(target_os = "windows")]
     {
-        assert_eq!(status.code(), Some(101), "unexpected Windows test status: {status}");
+        assert_eq!(
+            status.code(),
+            Some(101),
+            "unexpected Windows test status: {status}"
+        );
         let stdout = String::from_utf8(output.stdout).expect("UTF-8 child test stdout");
         let stderr = String::from_utf8(output.stderr).expect("UTF-8 child test stderr");
         assert!(
@@ -472,6 +504,21 @@ fn unsupported_constructs_produce_typed_diagnostics_not_objects() {
         matches!(
             error.kind,
             CompileErrorKind::Codegen(CodegenErrorKind::InvalidInlineAssembly)
+        ),
+        "unexpected diagnostic: {error:?}"
+    );
+    let direct_nested_place = "#[unsafe(no_mangle)] pub extern \"C\" fn probe(input: &mut [u32; 4], start: usize, index: usize) -> u32 { let selected: &mut u32 = &mut input[start..][index]; *selected }";
+    let error = compile_source_function::<2048, 1024, 4, 4, 4, 64>(
+        direct_nested_place,
+        "probe",
+        FORMAT,
+        TargetLayout::X86_64,
+    )
+    .unwrap_err();
+    assert!(
+        matches!(
+            error.kind,
+            CompileErrorKind::Codegen(CodegenErrorKind::InvalidRuntimePlaceFacts)
         ),
         "unexpected diagnostic: {error:?}"
     );

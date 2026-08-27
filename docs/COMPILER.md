@@ -890,6 +890,21 @@ unclassified read of a loan-backed fat-reference local as `LoanUse`, so later
 indexing keeps the call-result loan live. Scalar `Index` and `Subslice` remain
 distinct; mismatched, deeper, and unsupported shapes fail closed.
 
+The exact composed `Subslice` then `Index` place now retains the same parameter
+origin when returning a compatible scalar reference. One typed projection
+classifier is shared by identity, index, subslice, and composed-subslice-index
+callee-origin decisions; at most one leading explicit dereference is accepted.
+Native lowering materializes the bounded slice pointer and length once, checks
+the range and subsequent index independently, and derives the final element
+address without collapsing the two ownership projections. A helper-call
+semantic probe mutates three distinct selected elements and verifies every
+unselected element remains unchanged. Direct nested-place locals still fail
+closed as `InvalidRuntimePlaceFacts`; repeated subslices and other deeper shapes
+remain unsupported. This is one exact nested non-tuple projection, not general
+place typing, index-sensitive aliasing, or region inference. Windows and Arch
+each passed 657 unit, 1 component-interface, 10 conformance, 351 replacement,
+and 10 semantic-execution tests (1,029 total).
+
 Projected array-element and slice-subslice origins now survive one direct local
 alias in the callee. An explicit alias annotation must independently equal the
 declared return type before the alias receives an origin; inferred aliases keep

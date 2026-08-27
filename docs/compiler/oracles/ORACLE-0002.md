@@ -1236,3 +1236,15 @@ Compilation and execution succeeded. This is black-box evidence for that exact
 conditional literal/view behavior only; it does not establish MRML object
 relocations, `CStr` ABI transport, or an implementation strategy. The temporary
 source and executable were removed.
+
+An independently authored Rust 2024 nested-projection probe against this exact
+toolchain and commit returned `&mut values[start..][index]`, mutated the selected
+element, observed the exact result, and reused the owner after the returned
+reference's last use. It passed Windows gnullvm metadata compilation; that host
+lacked its configured external linker, so no Windows oracle execution is
+claimed. The exact Arch build executed successfully. A separate live competing-
+mutation probe failed with E0503 on both hosts. This is black-box evidence for
+that exact `Subslice`-then-`Index` return and liveness shape only; it does not
+establish general nested projections, index-sensitive disjointness, or an
+implementation strategy. Temporary sources, metadata, and executables were
+removed.

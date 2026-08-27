@@ -16413,6 +16413,41 @@ fn runtime_call_arguments_preanalysis_supported<
 fn runtime_reference_call_origin_parameter<const MAX_PARAMETERS: usize, const MAX_NODES: usize>(
     target: crate::RuntimeCallTarget<'_, MAX_PARAMETERS>,
 ) -> Option<usize> {
+    #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+    enum ParameterProjection {
+        Identity,
+        Index,
+        Subslice,
+        SubsliceIndex,
+    }
+
+    fn parameter_projection(projections: RuntimePlaceProjections) -> Option<ParameterProjection> {
+        let items = &projections.items[..projections.count];
+        match items {
+            [] | [Some(RuntimePlaceProjection::Dereference)] => Some(ParameterProjection::Identity),
+            [Some(RuntimePlaceProjection::Index)]
+            | [
+                Some(RuntimePlaceProjection::Dereference),
+                Some(RuntimePlaceProjection::Index),
+            ] => Some(ParameterProjection::Index),
+            [Some(RuntimePlaceProjection::Subslice)]
+            | [
+                Some(RuntimePlaceProjection::Dereference),
+                Some(RuntimePlaceProjection::Subslice),
+            ] => Some(ParameterProjection::Subslice),
+            [
+                Some(RuntimePlaceProjection::Subslice),
+                Some(RuntimePlaceProjection::Index),
+            ]
+            | [
+                Some(RuntimePlaceProjection::Dereference),
+                Some(RuntimePlaceProjection::Subslice),
+                Some(RuntimePlaceProjection::Index),
+            ] => Some(ParameterProjection::SubsliceIndex),
+            _ => None,
+        }
+    }
+
     fn compatible_place<const MAX_PARAMETERS: usize>(
         target: crate::RuntimeCallTarget<'_, MAX_PARAMETERS>,
         place: RuntimeReadPlace<'_>,
@@ -16471,34 +16506,24 @@ fn runtime_reference_call_origin_parameter<const MAX_PARAMETERS: usize, const MA
                 if parameter.name != place.name || (result_mutable && !parameter_mutable) {
                     return None;
                 }
-                let projections = &place.projections;
-                let identity_projection = projections.count == 0
-                    || (projections.count == 1
-                        && projections.items[0] == Some(RuntimePlaceProjection::Dereference));
-                let indexed_projection = (projections.count == 1
-                    && projections.items[0] == Some(RuntimePlaceProjection::Index))
-                    || (projections.count == 2
-                        && projections.items[0] == Some(RuntimePlaceProjection::Dereference)
-                        && projections.items[1] == Some(RuntimePlaceProjection::Index));
-                let subslice_projection = (projections.count == 1
-                    && projections.items[0] == Some(RuntimePlaceProjection::Subslice))
-                    || (projections.count == 2
-                        && projections.items[0] == Some(RuntimePlaceProjection::Dereference)
-                        && projections.items[1] == Some(RuntimePlaceProjection::Subslice));
-                let compatible = (identity_projection && parameter_target == result_target)
-                    || (indexed_projection
-                        && matches!(
-                            (parameter_target, result_target),
-                            (
-                                RuntimeReferenceTarget::Array {
-                                    element: parameter_element,
-                                    ..
-                                }
-                                    | RuntimeReferenceTarget::Slice(parameter_element),
-                                RuntimeReferenceTarget::Scalar(result_element),
-                            ) if parameter_element == result_element
-                        ))
-                    || (subslice_projection
+                let projection = parameter_projection(place.projections);
+                let compatible = (projection == Some(ParameterProjection::Identity)
+                    && parameter_target == result_target)
+                    || (matches!(
+                        projection,
+                        Some(ParameterProjection::Index | ParameterProjection::SubsliceIndex)
+                    ) && matches!(
+                        (parameter_target, result_target),
+                        (
+                            RuntimeReferenceTarget::Array {
+                                element: parameter_element,
+                                ..
+                            }
+                                | RuntimeReferenceTarget::Slice(parameter_element),
+                            RuntimeReferenceTarget::Scalar(result_element),
+                        ) if parameter_element == result_element
+                    ))
+                    || (projection == Some(ParameterProjection::Subslice)
                         && matches!(
                             (parameter_target, result_target),
                             (
@@ -20580,7 +20605,45 @@ fn runtime_expression_type_with_locals<
             };
             Ok(runtime_type_from_array_element(element))
         }
-        ExprKind::RangeIndex { .. } => Err(CodegenErrorKind::RuntimeExpressionUnsupported),
+        ExprKind::RangeIndex {
+            base, start, end, ..
+        } => {
+            for bound in [start, end].into_iter().flatten() {
+                if !matches!(
+                    runtime_expression_type_with_locals(
+                        function,
+                        resolver,
+                        locals,
+                        tree,
+                        bound,
+                        depth + 1,
+                    )?,
+                    RuntimeExpressionType::Integer(None)
+                        | RuntimeExpressionType::Integer(Some(crate::IntegerType::Usize))
+                ) {
+                    return Err(CodegenErrorKind::RuntimeTypeMismatch);
+                }
+            }
+            match runtime_expression_type_with_locals(
+                function,
+                resolver,
+                locals,
+                tree,
+                base,
+                depth + 1,
+            )? {
+                RuntimeExpressionType::Reference {
+                    target:
+                        RuntimeReferenceTarget::Array { element, .. }
+                        | RuntimeReferenceTarget::Slice(element),
+                    mutable,
+                } => Ok(RuntimeExpressionType::Reference {
+                    target: RuntimeReferenceTarget::Slice(element),
+                    mutable,
+                }),
+                _ => Err(CodegenErrorKind::RuntimeExpressionUnsupported),
+            }
+        }
         ExprKind::SliceLen { base } => {
             let base_type = runtime_expression_type_with_locals(
                 function,
@@ -29928,39 +29991,62 @@ impl<
         index: crate::ExprId,
         depth: usize,
     ) -> Result<(), CodegenError> {
+        let range_source = match tree.expression(base).map(|expression| expression.kind) {
+            Some(ExprKind::RangeIndex { base, .. }) => Some(base),
+            _ => None,
+        };
         let base_type = runtime_expression_type_with_locals(
             self.function,
             self.resolver,
             &self.locals[..self.saved_locals],
             tree,
-            base,
+            range_source.unwrap_or(base),
             depth + 1,
         )
         .map_err(|kind| self.error(kind))?;
-        let (element, count, slice_source, materialize_slice, local_name) = match base_type {
-            RuntimeExpressionType::Reference {
-                target: RuntimeReferenceTarget::Array { element, count, .. },
-                ..
-            } => (element, Some(count), None, false, None),
-            RuntimeExpressionType::Reference {
-                target: RuntimeReferenceTarget::Slice(element),
-                ..
-            } => {
-                let source = reference_source_name(tree, base);
-                (element, None, source, source.is_none(), None)
-            }
-            RuntimeExpressionType::Array { element, count } => {
-                let Some(ExprKind::Identifier(name)) =
-                    tree.expression(base).map(|expression| expression.kind)
-                else {
-                    return Err(self.error(CodegenErrorKind::RuntimeTypeMismatch));
+        let (element, count, slice_source, materialize_slice, local_name) =
+            if range_source.is_some() {
+                let element = match base_type {
+                    RuntimeExpressionType::Reference {
+                        target:
+                            RuntimeReferenceTarget::Array { element, .. }
+                            | RuntimeReferenceTarget::Slice(element),
+                        ..
+                    }
+                    | RuntimeExpressionType::Array { element, .. } => element,
+                    _ => return Err(self.error(CodegenErrorKind::RuntimeTypeMismatch)),
                 };
-                (element, Some(count), None, false, Some(name))
-            }
-            _ => return Err(self.error(CodegenErrorKind::RuntimeTypeMismatch)),
-        };
+                (element, None, None, true, None)
+            } else {
+                match base_type {
+                    RuntimeExpressionType::Reference {
+                        target: RuntimeReferenceTarget::Array { element, count, .. },
+                        ..
+                    } => (element, Some(count), None, false, None),
+                    RuntimeExpressionType::Reference {
+                        target: RuntimeReferenceTarget::Slice(element),
+                        ..
+                    } => {
+                        let source = reference_source_name(tree, base);
+                        (element, None, source, source.is_none(), None)
+                    }
+                    RuntimeExpressionType::Array { element, count } => {
+                        let Some(ExprKind::Identifier(name)) =
+                            tree.expression(base).map(|expression| expression.kind)
+                        else {
+                            return Err(self.error(CodegenErrorKind::RuntimeTypeMismatch));
+                        };
+                        (element, Some(count), None, false, Some(name))
+                    }
+                    _ => return Err(self.error(CodegenErrorKind::RuntimeTypeMismatch)),
+                }
+            };
         if materialize_slice {
-            self.emit_slice_value_to_stack(tree, base, depth + 1)?;
+            if range_source.is_some() {
+                self.emit_range_index_value_to_stack(tree, base, depth + 1)?;
+            } else {
+                self.emit_slice_value_to_stack(tree, base, depth + 1)?;
+            }
             self.evaluation_depth += 2;
         } else if let Some(name) = local_name {
             self.record_expression_place_read(tree, base, Some(RuntimePlaceProjection::Index))?;
@@ -30403,14 +30489,29 @@ impl<
         else {
             return Ok(false);
         };
+        let Some(ExprKind::RangeIndex { .. }) =
+            tree.expression(operand).map(|expression| expression.kind)
+        else {
+            return Ok(false);
+        };
+        self.emit_range_index_value_to_stack(tree, operand, depth)?;
+        Ok(true)
+    }
+
+    fn emit_range_index_value_to_stack<const MAX_NODES: usize>(
+        &mut self,
+        tree: &crate::ExpressionTree<'_, MAX_NODES>,
+        range: crate::ExprId,
+        depth: usize,
+    ) -> Result<(), CodegenError> {
         let Some(ExprKind::RangeIndex {
             base,
             start,
             end,
             inclusive,
-        }) = tree.expression(operand).map(|expression| expression.kind)
+        }) = tree.expression(range).map(|expression| expression.kind)
         else {
-            return Ok(false);
+            return Err(self.error(CodegenErrorKind::RuntimeExpressionUnsupported));
         };
         let base_type = runtime_expression_type_with_locals(
             self.function,
@@ -30532,7 +30633,7 @@ impl<
             0x48, 0x01, 0xc8, 0x48, 0x89, 0xc2, 0x59, 0x48, 0x83, 0xc4, 0x08, 0x52, 0x51,
         ])?;
         self.evaluation_depth -= 2;
-        Ok(true)
+        Ok(())
     }
 
     fn emit_string_range_boundary_checks(&mut self, source: &str) -> Result<(), CodegenError> {
@@ -35254,6 +35355,34 @@ mod tests {
                         return_type: reference,
                         return_type_name: "&mut u16",
                         body_expression: "&mut values[0]",
+                    })
+                }
+                ("array_subslice_element", 1) => {
+                    parameters[0] = Some(RuntimeCallParameter {
+                        name: "values",
+                        ty: array_reference,
+                    });
+                    Some(RuntimeCallTarget {
+                        name: "array_subslice_element",
+                        parameters,
+                        parameter_count: 1,
+                        return_type: reference,
+                        return_type_name: "&mut u16",
+                        body_expression: "&mut values[1..][0]",
+                    })
+                }
+                ("slice_subslice_element", 1) => {
+                    parameters[0] = Some(RuntimeCallParameter {
+                        name: "values",
+                        ty: slice_reference,
+                    });
+                    Some(RuntimeCallTarget {
+                        name: "slice_subslice_element",
+                        parameters,
+                        parameter_count: 1,
+                        return_type: reference,
+                        return_type_name: "&mut u16",
+                        body_expression: "&mut values[1..][0]",
                     })
                 }
                 ("array_subslice", 1) => {
@@ -40870,6 +40999,21 @@ mod tests {
         ))
         .unwrap();
         for rejected in [
+            "fn value(input: &mut [u16; 2]) -> u16 { let returned: &mut u16 = array_subslice_element(input); let competing: &mut u16 = &mut input[1]; *competing += 1; *returned }",
+            "fn value(input: &mut [u16]) -> u16 { let returned: &mut u16 = slice_subslice_element(input); let competing: &mut u16 = &mut input[1]; *competing += 1; *returned }",
+        ] {
+            assert_eq!(
+                analyze(rejected).unwrap_err().kind,
+                CodegenErrorKind::RuntimeBorrowConflict
+            );
+        }
+        for accepted in [
+            "fn value(input: &mut [u16; 2]) -> u16 { let returned: &mut u16 = array_subslice_element(input); *returned += 1; let restored: &mut u16 = &mut input[1]; *restored }",
+            "fn value(input: &mut [u16]) -> u16 { let returned: &mut u16 = slice_subslice_element(input); *returned += 1; let restored: &mut u16 = &mut input[1]; *restored }",
+        ] {
+            analyze(accepted).unwrap();
+        }
+        for rejected in [
             concat!(
                 "fn value(input: &mut [u16; 2]) -> u16 { ",
                 "let returned: &mut [u16] = array_subslice(input); ",
@@ -40939,6 +41083,27 @@ mod tests {
         assert_eq!(
             runtime_reference_call_origin_parameter::<2, 16>(slice_target),
             Some(0)
+        );
+        let array_subslice_element = MutableReferenceCallResolver
+            .resolve_runtime_call::<2>("array_subslice_element", 1)
+            .unwrap();
+        let slice_subslice_element = MutableReferenceCallResolver
+            .resolve_runtime_call::<2>("slice_subslice_element", 1)
+            .unwrap();
+        assert_eq!(
+            runtime_reference_call_origin_parameter::<2, 16>(array_subslice_element),
+            Some(0)
+        );
+        assert_eq!(
+            runtime_reference_call_origin_parameter::<2, 16>(slice_subslice_element),
+            Some(0)
+        );
+        assert_eq!(
+            runtime_reference_call_origin_parameter::<2, 16>(RuntimeCallTarget {
+                body_expression: "&mut values[0..][0..][0]",
+                ..slice_subslice_element
+            }),
+            None
         );
         let array_subslice = MutableReferenceCallResolver
             .resolve_runtime_call::<2>("array_subslice", 1)
