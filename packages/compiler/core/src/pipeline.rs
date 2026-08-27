@@ -719,6 +719,40 @@ mod tests {
     }
 
     #[test]
+    fn emits_bounded_c_string_byte_views_with_exact_lengths() {
+        for (source, expected_length) in [
+            (
+                "#[unsafe(no_mangle)] pub extern \"C\" fn probe() -> &'static [u8] { c\"hello\".to_bytes() }",
+                5u64,
+            ),
+            (
+                "#[unsafe(no_mangle)] pub extern \"C\" fn probe() -> &'static [u8] { c\"hello\".to_bytes_with_nul() }",
+                6u64,
+            ),
+        ] {
+            let length_encoding = expected_length.to_le_bytes();
+            for format in [ObjectFormat::Elf64, ObjectFormat::Coff] {
+                let object = compile_wide(source, "probe", format).unwrap();
+                assert!(object.bytes().windows(6).any(|bytes| bytes == b"hello\0"));
+                assert!(
+                    object.bytes().windows(10).any(|bytes| {
+                        bytes[..2] == [0x48, 0xb8] && bytes[2..] == length_encoding
+                    })
+                );
+            }
+        }
+
+        let source = "#[unsafe(no_mangle)] pub extern \"C\" fn probe() -> &'static [u8] { c\"bad\\0value\".to_bytes() }";
+        for format in [ObjectFormat::Elf64, ObjectFormat::Coff] {
+            let error = compile_wide(source, "probe", format).unwrap_err();
+            assert!(matches!(
+                error.kind,
+                CompileErrorKind::Codegen(CodegenErrorKind::UnsupportedCStringLiteral)
+            ));
+        }
+    }
+
+    #[test]
     fn enforces_concrete_source_trait_obligations_before_codegen() {
         let satisfied = concat!(
             "trait Visible {} impl Visible for u32 {} ",

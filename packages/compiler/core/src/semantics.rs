@@ -2183,6 +2183,7 @@ fn inline_const_has_invalid_capture<const MAX_NODES: usize>(
         ExprKind::SliceLen { base }
         | ExprKind::SliceIsEmpty { base }
         | ExprKind::StrAsBytes { base }
+        | ExprKind::CStrToBytes { base, .. }
         | ExprKind::ReferenceAsPointer { base, .. } => recurse(base, inside_inline_const),
         ExprKind::RawPointerIsNull { base } | ExprKind::RawPointerIsAligned { base } => {
             recurse(base, inside_inline_const)
@@ -2457,6 +2458,7 @@ fn expression_contains_call<const MAX_NODES: usize>(
         ExprKind::SliceLen { base }
         | ExprKind::SliceIsEmpty { base }
         | ExprKind::StrAsBytes { base }
+        | ExprKind::CStrToBytes { base, .. }
         | ExprKind::ReferenceAsPointer { base, .. } => recurse(base),
         ExprKind::RawPointerIsNull { base } | ExprKind::RawPointerIsAligned { base } => {
             recurse(base)

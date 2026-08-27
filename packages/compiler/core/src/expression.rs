@@ -554,6 +554,10 @@ pub enum ExprKind<'source> {
     StrAsBytes {
         base: ExprId,
     },
+    CStrToBytes {
+        base: ExprId,
+        with_nul: bool,
+    },
     StrIsCharBoundary {
         base: ExprId,
         index: ExprId,
@@ -1182,6 +1186,7 @@ impl<'source, const MAX_NODES: usize> ExpressionTree<'source, MAX_NODES> {
             | ExprKind::RangeIndex { .. }
             | ExprKind::SliceLen { .. }
             | ExprKind::StrAsBytes { .. }
+            | ExprKind::CStrToBytes { .. }
             | ExprKind::StrIsCharBoundary { .. }
             | ExprKind::ReferenceAsPointer { .. }
             | ExprKind::RawPointerIsNull { .. }
@@ -1471,6 +1476,7 @@ impl<'source, const MAX_NODES: usize> ExpressionTree<'source, MAX_NODES> {
             ExprKind::SliceLen { .. } => Err(ConstEvalError::InvalidExpressionTree),
             ExprKind::SliceIsEmpty { .. } => Err(ConstEvalError::InvalidExpressionTree),
             ExprKind::StrAsBytes { .. } => Err(ConstEvalError::InvalidExpressionTree),
+            ExprKind::CStrToBytes { .. } => Err(ConstEvalError::InvalidExpressionTree),
             ExprKind::StrIsCharBoundary { .. } => Err(ConstEvalError::InvalidExpressionTree),
             ExprKind::ReferenceAsPointer { .. } => Err(ConstEvalError::InvalidExpressionTree),
             ExprKind::RawPointerIsNull { .. } => Err(ConstEvalError::InvalidExpressionTree),
@@ -3150,6 +3156,7 @@ impl<'source, const MAX_NODES: usize> ExpressionParser<'source, MAX_NODES> {
             ExprKind::SliceLen { base }
             | ExprKind::SliceIsEmpty { base }
             | ExprKind::StrAsBytes { base }
+            | ExprKind::CStrToBytes { base, .. }
             | ExprKind::ReferenceAsPointer { base, .. } => {
                 self.substitute_identifier(base, name, replacement, depth + 1)?;
             }
@@ -5099,6 +5106,8 @@ impl<'source, const MAX_NODES: usize> ExpressionParser<'source, MAX_NODES> {
                     "len"
                         | "is_empty"
                         | "as_bytes"
+                        | "to_bytes"
+                        | "to_bytes_with_nul"
                         | "is_char_boundary"
                         | "as_ptr"
                         | "as_mut_ptr"
@@ -5498,6 +5507,14 @@ impl<'source, const MAX_NODES: usize> ExpressionParser<'source, MAX_NODES> {
                 "len" => ExprKind::SliceLen { base },
                 "is_empty" => ExprKind::SliceIsEmpty { base },
                 "as_bytes" => ExprKind::StrAsBytes { base },
+                "to_bytes" => ExprKind::CStrToBytes {
+                    base,
+                    with_nul: false,
+                },
+                "to_bytes_with_nul" => ExprKind::CStrToBytes {
+                    base,
+                    with_nul: true,
+                },
                 "as_ptr" => ExprKind::ReferenceAsPointer {
                     base,
                     mutable: false,

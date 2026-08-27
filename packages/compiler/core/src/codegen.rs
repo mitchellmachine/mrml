@@ -16168,6 +16168,10 @@ fn runtime_fat_reference_preanalysis_supported<const MAX_NODES: usize>(
     }
     match tree.expression(id).map(|expression| expression.kind) {
         Some(ExprKind::Identifier(_) | ExprKind::String(_) | ExprKind::ByteString(_)) => true,
+        Some(ExprKind::CStrToBytes { base, .. }) => matches!(
+            tree.expression(base).map(|expression| expression.kind),
+            Some(ExprKind::CString(_))
+        ),
         Some(ExprKind::Unary {
             operator: crate::UnaryOperator::AddressOf | crate::UnaryOperator::AddressOfMut,
             operand,
@@ -19180,6 +19184,10 @@ fn runtime_fat_reference_return_preanalysis_supported<const MAX_NODES: usize>(
     }
     match tree.expression(id).map(|expression| expression.kind) {
         Some(ExprKind::Identifier(_) | ExprKind::String(_) | ExprKind::ByteString(_)) => true,
+        Some(ExprKind::CStrToBytes { base, .. }) => matches!(
+            tree.expression(base).map(|expression| expression.kind),
+            Some(ExprKind::CString(_))
+        ),
         Some(ExprKind::Unary {
             operator: crate::UnaryOperator::AddressOf | crate::UnaryOperator::AddressOfMut,
             operand,
@@ -19682,6 +19690,7 @@ fn validate_runtime_inline_const<
         ExprKind::SliceLen { base } => recurse(base)?,
         ExprKind::SliceIsEmpty { base } => recurse(base)?,
         ExprKind::StrAsBytes { base } => recurse(base)?,
+        ExprKind::CStrToBytes { base, .. } => recurse(base)?,
         ExprKind::StrIsCharBoundary { base, index } => {
             recurse(base)?;
             recurse(index)?;
@@ -20697,6 +20706,20 @@ fn runtime_expression_type_with_locals<
             else {
                 return Err(CodegenErrorKind::RuntimeTypeMismatch);
             };
+            Ok(RuntimeExpressionType::Reference {
+                target: RuntimeReferenceTarget::Slice(RuntimeArrayElementType::Integer(Some(
+                    crate::IntegerType::U8,
+                ))),
+                mutable: false,
+            })
+        }
+        ExprKind::CStrToBytes { base, .. } => {
+            if !matches!(
+                tree.expression(base).map(|expression| expression.kind),
+                Some(ExprKind::CString(_))
+            ) {
+                return Err(CodegenErrorKind::UnsupportedCStringLiteral);
+            }
             Ok(RuntimeExpressionType::Reference {
                 target: RuntimeReferenceTarget::Slice(RuntimeArrayElementType::Integer(Some(
                     crate::IntegerType::U8,
@@ -26741,6 +26764,9 @@ impl<
             ExprKind::StrAsBytes { base } => {
                 self.emit_expression(tree, base, depth + 1)?;
             }
+            ExprKind::CStrToBytes { .. } => {
+                return Err(self.error(CodegenErrorKind::RuntimeExpressionUnsupported));
+            }
             ExprKind::StrIsCharBoundary { base, index } => {
                 self.emit_string_is_char_boundary(tree, base, index, depth + 1)?;
             }
@@ -30774,6 +30800,41 @@ impl<
         id: crate::ExprId,
         depth: usize,
     ) -> Result<(), CodegenError> {
+        if let Some(ExprKind::CStrToBytes { base, with_nul }) =
+            tree.expression(id).map(|expression| expression.kind)
+        {
+            let Some(ExprKind::CString(literal)) =
+                tree.expression(base).map(|expression| expression.kind)
+            else {
+                return Err(self.error(CodegenErrorKind::UnsupportedCStringLiteral));
+            };
+            let (data_offset, c_string_length) =
+                self.append_readonly_string_literal(literal, ReadonlyStringLiteralKind::C)?;
+            let literal_length = if with_nul {
+                c_string_length
+            } else {
+                c_string_length
+                    .checked_sub(1)
+                    .ok_or(self.error(CodegenErrorKind::UnsupportedCStringLiteral))?
+            };
+            let capacity_error = self.error(CodegenErrorKind::OutputTooSmall);
+            let relocation_offset = self
+                .length
+                .checked_add(3)
+                .ok_or(self.error(CodegenErrorKind::OutputTooSmall))?;
+            let relocation = self
+                .readonly_relocations
+                .get_mut(self.readonly_relocation_count)
+                .ok_or(capacity_error)?;
+            *relocation = X86_64ReadonlyDataRelocation {
+                offset: relocation_offset,
+                data_offset,
+            };
+            self.readonly_relocation_count += 1;
+            self.emit(&[0x48, 0x8d, 0x05, 0, 0, 0, 0, 0x50, 0x48, 0xb8])?;
+            self.emit(&(literal_length as u64).to_le_bytes())?;
+            return self.emit(&[0x50]);
+        }
         if let Some(ExprKind::String(literal) | ExprKind::ByteString(literal)) =
             tree.expression(id).map(|expression| expression.kind)
         {
@@ -33162,7 +33223,7 @@ impl<
         }
         let stacked = if matches!(
             tree.expression(root).map(|expression| expression.kind),
-            Some(ExprKind::String(_) | ExprKind::ByteString(_))
+            Some(ExprKind::String(_) | ExprKind::ByteString(_) | ExprKind::CStrToBytes { .. })
         ) {
             self.emit_slice_value_to_stack(tree, root, depth + 1)?;
             true

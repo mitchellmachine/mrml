@@ -329,6 +329,7 @@ impl<'source, const MAX_NODES: usize, const MAX_INSTRUCTIONS: usize>
             | ExprKind::SliceLen { .. }
             | ExprKind::SliceIsEmpty { .. }
             | ExprKind::StrAsBytes { .. }
+            | ExprKind::CStrToBytes { .. }
             | ExprKind::StrIsCharBoundary { .. }
             | ExprKind::ReferenceAsPointer { .. }
             | ExprKind::RawPointerIsNull { .. }
