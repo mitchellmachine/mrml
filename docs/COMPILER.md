@@ -960,6 +960,16 @@ replacement, and 13 semantic-execution tests (1,034 total). This does not add
 general repeated range values, callee-origin inference for repeated projections,
 arbitrary projection depth, or index-sensitive alias reasoning.
 
+The exact repeated-subslice scalar origin now crosses one direct helper return.
+The closed classifier accepts only `Subslice`/`Subslice`/`Index`, with an
+optional leading dereference, when mutable slice and scalar-reference types are
+compatible. Caller analysis therefore keeps a competing mutable borrow rejected
+while the returned reference remains live and restores access after its last
+use. Direct and helper-return native probes produce the same mutations on
+Windows gnullvm and Arch Linux WSL. A third subslice remains unclassified and
+fails closed; this does not add general projection inference or index-sensitive
+alias reasoning.
+
 The repeated-subslice semantic harness now isolates all three checked failure
 layers. An inner start beyond the runtime owner length, an outer start beyond
 the saved inner length, and a final index exactly equal to the twice-reduced
@@ -970,8 +980,9 @@ Linux WSL each passed 659 unit, 1 component-interface, 10 conformance, 351
 replacement, and 14 semantic-execution tests (1,035 total). This is hosted trap
 evidence, not panic-unwind, kernel/VMM, or physical-machine evidence.
 
-Patent review: `NOT_TRIGGERED`; these increments add execution coverage for an
-already implemented bounded place, range, and ABI contract plus fixed-capacity
+Patent review: `NOT_TRIGGERED`; these increments add execution coverage and a
+bounded provenance classifier for an already implemented bounded place, range,
+and ABI contract plus fixed-capacity
 read ordering and stack materialization for one exact compiler lowering, rather
 than a novel mechanism.
 See [`patents/REVIEW_LOG.md`](patents/REVIEW_LOG.md).

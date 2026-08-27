@@ -12326,6 +12326,7 @@ fn runtime_reference_call_origin_parameter<const MAX_PARAMETERS: usize, const MA
         Index,
         Subslice,
         SubsliceIndex,
+        RepeatedSubsliceIndex,
     }
 
     fn parameter_projection(projections: RuntimePlaceProjections) -> Option<ParameterProjection> {
@@ -12351,6 +12352,17 @@ fn runtime_reference_call_origin_parameter<const MAX_PARAMETERS: usize, const MA
                 Some(RuntimePlaceProjection::Subslice),
                 Some(RuntimePlaceProjection::Index),
             ] => Some(ParameterProjection::SubsliceIndex),
+            [
+                Some(RuntimePlaceProjection::Subslice),
+                Some(RuntimePlaceProjection::Subslice),
+                Some(RuntimePlaceProjection::Index),
+            ]
+            | [
+                Some(RuntimePlaceProjection::Dereference),
+                Some(RuntimePlaceProjection::Subslice),
+                Some(RuntimePlaceProjection::Subslice),
+                Some(RuntimePlaceProjection::Index),
+            ] => Some(ParameterProjection::RepeatedSubsliceIndex),
             _ => None,
         }
     }
@@ -12418,7 +12430,11 @@ fn runtime_reference_call_origin_parameter<const MAX_PARAMETERS: usize, const MA
                     && parameter_target == result_target)
                     || (matches!(
                         projection,
-                        Some(ParameterProjection::Index | ParameterProjection::SubsliceIndex)
+                        Some(
+                            ParameterProjection::Index
+                                | ParameterProjection::SubsliceIndex
+                                | ParameterProjection::RepeatedSubsliceIndex
+                        )
                     ) && matches!(
                         (parameter_target, result_target),
                         (
