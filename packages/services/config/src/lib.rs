@@ -4879,7 +4879,14 @@ impl TotalServicePreparationBinding {
 
 pub struct PreparedTotalServiceSet<const DOMAINS: usize> {
     routes: [Option<PreparedIsolationServiceRoute>; DOMAINS],
+    expected_domains: [Option<ObjectId>; DOMAINS],
     count: usize,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum CompleteTotalServiceRestoreError {
+    UnexpectedDomain,
+    AlreadyPresent,
 }
 
 #[derive(Debug, Eq, PartialEq)]
@@ -4927,6 +4934,15 @@ impl<E, const DOMAINS: usize> RoutedTotalServiceSet<E, DOMAINS> {
         }
         route
     }
+
+    pub fn into_endpoints(self) -> [Option<TotalServiceEndpointBinding<E>>; DOMAINS] {
+        self.routes.map(|route| {
+            route.map(|route| {
+                let domain = route.domain();
+                TotalServiceEndpointBinding::new(domain, route.into_endpoint())
+            })
+        })
+    }
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -4963,6 +4979,14 @@ impl<const DOMAINS: usize> PreparedTotalServiceSet<DOMAINS> {
         self.count == 0
     }
 
+    pub fn spec(&self, domain: ObjectId) -> Option<mrml_kernel::IsolationServiceSpec> {
+        self.routes
+            .iter()
+            .flatten()
+            .find(|route| route.spec().domain() == domain)
+            .map(PreparedIsolationServiceRoute::spec)
+    }
+
     pub fn take(&mut self, domain: ObjectId) -> Option<PreparedIsolationServiceRoute> {
         let route = self
             .routes
@@ -4973,6 +4997,48 @@ impl<const DOMAINS: usize> PreparedTotalServiceSet<DOMAINS> {
             self.count -= 1;
         }
         route
+    }
+
+    /// Restores the same still-prepared domain after an artifact- or
+    /// backend-binding transformation. The expected complete membership is
+    /// retained independently of the temporarily empty route slot, preventing
+    /// callers from substituting or silently dropping a domain before atomic
+    /// publication.
+    pub fn restore(
+        &mut self,
+        route: PreparedIsolationServiceRoute,
+    ) -> Result<
+        (),
+        (
+            CompleteTotalServiceRestoreError,
+            PreparedIsolationServiceRoute,
+        ),
+    > {
+        let domain = route.spec().domain();
+        if !self.expected_domains.contains(&Some(domain)) {
+            return Err((CompleteTotalServiceRestoreError::UnexpectedDomain, route));
+        }
+        if self
+            .routes
+            .iter()
+            .flatten()
+            .any(|present| present.spec().domain() == domain)
+        {
+            return Err((CompleteTotalServiceRestoreError::AlreadyPresent, route));
+        }
+        let Some(slot) = self
+            .expected_domains
+            .iter()
+            .position(|expected| *expected == Some(domain))
+        else {
+            unreachable!("expected domain membership checked above");
+        };
+        if self.routes[slot].is_some() {
+            return Err((CompleteTotalServiceRestoreError::AlreadyPresent, route));
+        }
+        self.routes[slot] = Some(route);
+        self.count += 1;
+        Ok(())
     }
 
     pub fn into_routes(self) -> [Option<PreparedIsolationServiceRoute>; DOMAINS] {
@@ -5227,7 +5293,15 @@ impl<const DOMAINS: usize> BootTotalAdmission<DOMAINS> {
                 }
             }
         }
-        Ok(PreparedTotalServiceSet { routes, count })
+        let mut expected_domains = [None; DOMAINS];
+        for (index, binding) in bindings.iter().enumerate() {
+            expected_domains[index] = Some(binding.domain());
+        }
+        Ok(PreparedTotalServiceSet {
+            routes,
+            expected_domains,
+            count,
+        })
     }
 
     pub fn finalize(
@@ -13485,12 +13559,16 @@ mod tests {
         assert!(prepared.into_routes().iter().all(Option::is_none));
         assert_eq!(rejected.admission().running().count(), 0);
 
-        let prepared = rejected
+        let mut prepared = rejected
             .prepare_complete_service_set(&[
                 TotalServicePreparationBinding::new(valid_bounds, first),
                 TotalServicePreparationBinding::new(valid_bounds, second),
             ])
             .unwrap();
+        let transformed = prepared.take(first_domain).unwrap();
+        assert_eq!(prepared.len(), 1);
+        prepared.restore(transformed).unwrap();
+        assert_eq!(prepared.len(), 2);
         let mut routed = prepared
             .commit_complete(
                 rejected.admission_mut(),

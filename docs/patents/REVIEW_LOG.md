@@ -8857,3 +8857,18 @@ scheduling algorithm, interface transport, device protocol, cryptographic
 primitive, or data-plane mechanism. The broader adaptive-placement and Total
 MicroVM review remains **TRIGGERED**, including live WHP/KVM endpoint lifecycle
 integration. This technical screen is not legal advice or patent clearance.
+
+# 2026-08-26 — Atomic recovered endpoint integration
+
+Patent review: **NOT_TRIGGERED** for restoring an existing prepared route to its
+exact retained membership, committing an already-constructed opaque endpoint
+through the existing fixed-capacity atomic transaction, authorizing runtime
+after that commit, and transferring the same endpoint into the existing
+launcher. Selecting the provider's already-defined secondary entry from its own
+verified PE image is conventional checked address arithmetic. This increment
+adds no VM construction algorithm, placement decision, scheduler, interface
+transport, device protocol, cryptographic primitive, compression, or data-plane
+mechanism. The broader adaptive-placement and Total-MicroVM architecture remains
+**TRIGGERED**, including the unresolved live guest regression and complete
+two-domain WHP/KVM lifecycle. This technical screen is not legal advice or
+patent clearance.

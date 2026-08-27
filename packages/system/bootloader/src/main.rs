@@ -3081,7 +3081,15 @@ unsafe fn run_kernel(bytes: *const u8, length: usize) -> ! {
             )
             .unwrap_or_else(|_| halt());
             #[cfg(feature = "component-service-probe")]
-            let service_b_entry = hosted_provider_entry();
+            let service_b_entry = hosted_provider_entry()
+                .checked_add(0x200)
+                .filter(|entry| {
+                    *entry
+                        < 0x0000_0001_4000_0000u64
+                            .checked_add(u64::from(mrml_kernel::MAX_SERVICE_IMAGE_BYTES))
+                            .unwrap_or_else(|| halt())
+                })
+                .unwrap_or_else(|| halt());
             #[cfg(not(feature = "component-service-probe"))]
             let service_b_entry = service_entry + 0x200;
             let mut context_b = UserContext::new(

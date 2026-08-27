@@ -1303,6 +1303,23 @@ strict finalization and duplicate-binding rollback on Windows and Arch Linux.
 WHP/KVM endpoint construction and live use of this transaction remain
 **PLANNED**.
 
+The existing single-domain component runner now **PARTIALLY IMPLEMENTS** that
+live transaction on both backends. After artifact verification and guest
+construction, the transformed prepared route is restored only into its retained
+complete membership slot; the runner atomically exact-matches and publishes the
+constructed endpoint, authorizes runtime only after commit, and then recovers
+the same endpoint into the configuration launcher. Provider execution uses the
+secondary entry of the provider's own verified image rather than an offset from
+the consumer image, so distinct executable layouts are not conflated. Focused
+configuration tests pass 53 on Windows and Arch Linux, WHP passes 12 tests and
+KVM 13, and both runner release builds pass. A freshly signed WHP probe reached
+authenticated recovery and emitted `classified=1`, `eligible=1`, `microvm=1`,
+`native_fallback=0` only after atomic endpoint publication. The first subsequent
+guest exit exposed a kernel double-fault regression before any component stage
+was accepted, so component execution/cleanup, KVM live execution, and the
+separate two-domain complete-system path remain **PLANNED**; this evidence does
+not establish end-to-end Total satisfaction.
+
 The installed production prerequisite now has a **PARTIALLY IMPLEMENTED**
 four-file stable-root selection. Configuration, authority checkpoint,
 deployment checkpoint, and activated SystemRelease must be distinct reachable

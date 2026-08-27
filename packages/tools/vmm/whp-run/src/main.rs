@@ -8,8 +8,10 @@ use mrml_config::{
     ConfigurationService, EffectiveBootIsolationPolicy, IsolationPolicyApplicationPlan,
     IsolationPolicySetting, IsolationServiceBounds, IsolationServiceIdentity,
     MicrovmConfigurationServiceLauncher, OwnerIsolationSelection,
-    PreparedMicrovmConfigurationLauncher, RecoveredDeploymentTotalControlPlane,
+    PreparedMicrovmConfigurationLauncher, PreparedTotalServiceSet,
+    RecoveredDeploymentTotalControlPlane,
     RecoveredDeploymentTotalRuntime, SettingId, TotalServicePreparationBinding,
+    TotalServiceEndpointBinding,
     hosted_recovery_probe::{HOSTED_TOTAL_COMPONENT_DOMAIN, recover_total_control_plane},
 };
 #[cfg(target_os = "windows")]
@@ -2908,6 +2910,7 @@ fn application_main() -> Result<()> {
     } else {
         None
     };
+    let mut complete_isolation_preparation: Option<PreparedTotalServiceSet<2>> = None;
     let mut isolation_preparation = match (
         isolation_admission.as_mut(),
         configured_total_policy.as_ref(),
@@ -2921,9 +2924,11 @@ fn application_main() -> Result<()> {
                 .map_err(|error| {
                     anyhow!("WHP recovered complete preparation failed: {:?}", error)
                 })?;
-            Some(prepared.take(configured.identity.domain()).ok_or_else(|| {
+            let route = prepared.take(configured.identity.domain()).ok_or_else(|| {
                 anyhow!("WHP complete preparation omitted the recovered component domain")
-            })?)
+            })?;
+            complete_isolation_preparation = Some(prepared);
+            Some(route)
         }
         (Some(WhpTotalAdmission::Standalone(admission)), Some(configured)) => {
             let admitted = configured
@@ -3373,7 +3378,14 @@ fn application_main() -> Result<()> {
         }
     }
     if let Some(launch) = component_launch.take() {
-        isolation_preparation = Some(launch.into_route());
+        let route = launch.into_route();
+        if let Some(prepared) = complete_isolation_preparation.as_mut() {
+            prepared.restore(route).map_err(|(error, _)| {
+                anyhow!("WHP transformed complete route restore failed: {:?}", error)
+            })?;
+        } else {
+            isolation_preparation = Some(route);
+        }
     }
     let mut guest = if application_executable.is_some() {
         let spec = application_spec
@@ -3411,6 +3423,71 @@ fn application_main() -> Result<()> {
                 .take()
                 .ok_or_else(|| anyhow!("missing active WHP application projection"))?,
         }
+    } else if component_service_mode && complete_isolation_preparation.is_some() {
+        let configured = configured_total_policy
+            .as_ref()
+            .ok_or_else(|| anyhow!("missing WHP recovered component policy"))?;
+        let total = match isolation_admission.as_mut() {
+            Some(WhpTotalAdmission::Recovered(total)) => total,
+            _ => {
+                return Err(anyhow!(
+                    "WHP complete component set lost recovered admission"
+                ));
+            }
+        };
+        let prepared = complete_isolation_preparation
+            .take()
+            .ok_or_else(|| anyhow!("missing WHP complete component preparation"))?;
+        let spec = prepared
+            .spec(configured.identity.domain())
+            .ok_or_else(|| anyhow!("WHP complete component preparation lost its route"))?;
+        let routed = prepared
+            .commit_complete(
+                total.admission_mut(),
+                [
+                    Some(TotalServiceEndpointBinding::new(
+                        configured.identity.domain(),
+                        guest,
+                    )),
+                    None,
+                ],
+            )
+            .map_err(|failure| {
+                anyhow!("WHP complete component publication failed: {:?}", failure.error())
+            })?;
+        let mut endpoints = routed.into_endpoints().into_iter().flatten();
+        let admitted_guest = endpoints
+            .next()
+            .filter(|binding| binding.domain() == configured.identity.domain())
+            .ok_or_else(|| anyhow!("WHP complete publication omitted component endpoint"))?
+            .into_endpoint();
+        if endpoints.next().is_some() {
+            return Err(anyhow!("WHP complete publication returned an excess endpoint"));
+        }
+        let runtime = match isolation_admission.take() {
+            Some(WhpTotalAdmission::Recovered(total)) => {
+                total.authorize_runtime().map_err(|error| {
+                    anyhow!("WHP recovered runtime authorization failed: {:?}", error)
+                })?
+            }
+            _ => return Err(anyhow!("WHP component route lost installed Total owner")),
+        };
+        let proof = runtime.proof();
+        println!(
+            "component-total-inventory|status=PASS|backend=whp|classified={}|eligible={}|microvm={}|native_fallback={}",
+            proof.classified_domains(),
+            proof.running_microvm_eligible(),
+            proof.running_in_microvm(),
+            runtime.admission().total_microvm_report().native_fallback
+        );
+        installed_total_runtime = Some(runtime);
+        let mut launcher = PreparedMicrovmConfigurationLauncher::new(
+            AdmittedConfigurationGuestFactory::new(spec, admitted_guest),
+        );
+        let endpoint = launcher
+            .launch_microvm(spec)
+            .map_err(|(_, error)| anyhow!("WHP configuration lifecycle failed: {:?}", error))?;
+        WhpGuestOwner::Configuration { launcher, endpoint }
     } else if let (Some(admission), Some(prepared)) =
         (isolation_admission.as_mut(), isolation_preparation)
     {
@@ -3872,7 +3949,7 @@ fn application_main() -> Result<()> {
         let mut exit = exit;
         let cleanup_stages = [0x21, 0x20, 0x40];
         let mut cleanup_stage = 0;
-        for _ in 0..64 {
+        for accepted_exits in 0..64 {
             match exit {
                 VmExit::Io {
                     port: SERVICE_CALL_PORT,
@@ -4131,7 +4208,13 @@ fn application_main() -> Result<()> {
                         return Ok(());
                     }
                 }
-                _ => return Err(anyhow!("WHP component service stage mismatch: {:?}", exit)),
+                _ => {
+                    return Err(anyhow!(
+                        "WHP component service stage mismatch after {} accepted exits: {:?}",
+                        accepted_exits,
+                        exit
+                    ));
+                }
             }
             exit = run_component_vcpu(&mut component_cpu, |slice| {
                 match ScheduledDeadlineVmBackend::run_with_scheduling_deadline(

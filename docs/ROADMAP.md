@@ -698,6 +698,21 @@ two-domain test proves successful Total finalization and duplicate-binding
 rollback on Windows and Arch Linux. Live WHP/KVM endpoint construction and use
 of this transaction remain **PLANNED**.
 
+The co-located ZIM/Zstd runner path now **PARTIALLY IMPLEMENTS** live atomic
+endpoint publication on both WHP and KVM. A route temporarily consumed by
+artifact/backend construction can be restored only to its original complete-set
+membership; after guest construction the complete transaction exact-matches and
+commits the endpoint, authorizes runtime, and transfers that same endpoint into
+the launcher. The provider context is derived from the provider image's own
+verified secondary entry. Configuration passes 53 tests on Windows and Arch
+Linux, WHP 12, KVM 13, and both runner release builds pass. Fresh signed WHP
+evidence proves authenticated recovery and post-publication inventory of one
+eligible domain in one microVM with zero native fallback. It then fails on the
+first guest exit with a kernel-reported double fault, before any component stage
+is accepted. Fixing that regression, completing live KVM execution/cleanup, and
+constructing/retiring both distinct recovered domains remain the next gates;
+end-to-end Total mode remains **PLANNED**.
+
 The existing userspace block recovery loop is now reproducibly selectable
 through the canonical build frontend. The service image's
 `block_service_loop` profile and bootloader/kernel image's
