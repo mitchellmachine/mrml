@@ -1137,3 +1137,11 @@ evidence for that exact conditional two-word reference and origin only; it does
 not establish static string-literal emission, distinct-origin fat-reference
 joins, slices, mutable `str`, or general fat-pointer semantics. The temporary
 source and metadata were removed.
+
+An independently authored Rust 2024 metadata-only string-literal pair against
+this exact toolchain and commit accepted conditional `&str` values whose static
+arm was either plain `"fallback"` or escaped `"line\nbreak"`, with the other arm
+parameter-backed. This is black-box evidence for those exact literal coercion,
+static lifetime, and conditional return forms only; it does not establish an
+implementation strategy, object format, literal pooling, or MRML escape
+decoding. The temporary source and metadata were removed.

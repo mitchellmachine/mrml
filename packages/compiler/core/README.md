@@ -2550,9 +2550,9 @@ compiler's shared invalid-operation trap when the checked operation produces
 evaluates a runtime message after the checked receiver, and uses the same
 bounded trap because this compiler does not embed diagnostic formatting in
 generated freestanding objects. String literals now have their own expression
-node and type as immutable `&str`; other runtime uses remain rejected until
-ordinary code generation consumes the bounded internal read-only-data
-relocation contract.
+node and type as immutable `&str`. Conditional delayed initialization may now
+select a simple unescaped UTF-8 literal through bounded internal read-only-data
+relocations; other runtime literal uses and escapes remain fail-closed.
 Unsafe `Option::unwrap_unchecked` returns the producer's candidate directly
 without testing its validity flag; safe functions reject the call, and callers
 must uphold Rust's `Some` precondition. These consumers share one
@@ -5842,3 +5842,17 @@ exact bytes in both formats. Windows and native Arch Linux WSL each passed 648
 library tests, 1 component probe, 10 conformance tests, and 349 replacement
 tests: 1,008 compiler tests per host. The language pipeline does not consume
 this contract yet, so runtime string literals remain fail-closed.
+
+The runtime string-literal object milestone at `52b1a941` introduces a separate
+bounded runtime-code result containing machine code, at most 1,024 read-only
+bytes, and at most eight internal relocations. Simple unescaped UTF-8 literals
+copy their exact interior bytes, emit a RIP-relative pointer plus exact byte
+length, and flow through conditional delayed `&str` initialization. The object
+pipeline consumes the data in ELF64 `.rodata` or COFF `.rdata`; bare
+`MachineCode` callers reject data-bearing output. End-to-end tests find the
+exact `fallback` bytes and section name in both formats. The exact ORACLE-0002
+nightly accepted both plain and escaped companions; MRML rejects escapes until
+it can decode their runtime bytes exactly. Windows and native Arch Linux WSL
+each passed 649 library tests, 1 component probe, 10 conformance tests, and 349
+replacement tests: 1,009 compiler tests per host. Raw/byte strings, escape
+decoding, pooling, larger capacities, and general static data are not claimed.

@@ -2030,6 +2030,27 @@ fat-reference assignment remains fail-closed pending its distinct branch value-
 materialization/origin path; slices, mutable `str`, aggregates, and general fat-
 pointer semantics are not claimed.
 
+### Runtime string-literal object checkpoint
+
+Ordinary x86-64 code generation now has a distinct bounded relocatable result
+that carries machine code, at most 1,024 read-only bytes, and at most eight typed
+internal relocations. A simple unescaped UTF-8 string literal copies its exact
+interior bytes, emits a RIP-relative address and exact byte length, and flows
+through conditional `&str` assignment into the existing initializedness and
+return-outlives paths. The object pipeline maps it to the proven ELF64 `.rodata`
+or COFF `.rdata` contract. Callers requesting bare `MachineCode` still reject
+data-bearing output rather than discarding relocation state.
+
+The exact ORACLE-0002 Rust 2024 toolchain accepted independently authored plain
+and escaped string-literal arms paired with a parameter-backed `&str`. MRML's
+ELF64 and COFF objects contain the exact `fallback` bytes and correct section
+names; the replacement covers both formats. Escapes remain fail-closed until a
+bounded decoder implements their runtime byte semantics exactly. Windows and
+Arch each passed 649 unit, 1 component, 10 conformance, and 349 replacement
+tests (1,009 total). Raw/byte strings, escape decoding, literal deduplication,
+more than eight literals, more than 1,024 literal bytes, and general static data
+remain outside this checkpoint.
+
 ### Bounded internal read-only object-data checkpoint
 
 The ELF64 and COFF object emitters now accept typed internal relocations that

@@ -58,7 +58,20 @@ oracle upgrade receives a new immutable record and differential classification
 against all prior accepted probes. Keep Cargo on edition 2024 until a newer
 named edition can be adopted through a pinned, workspace-wide migration.
 
-## Latest bounded read-only object-data milestone
+## Latest runtime string-literal object milestone
+
+Commit `52b1a941` splits bare code from a bounded relocatable runtime result,
+copies simple unescaped UTF-8 string literal bytes into the proven internal
+read-only-data contract, and emits a typed RIP-relative address plus exact byte
+length. The object pipeline consumes those bytes for ELF64 `.rodata` and COFF
+`.rdata`; the bare `MachineCode` API continues to reject data-bearing output.
+The exact ORACLE-0002 nightly accepts both the plain and escaped independently
+authored conditional forms; MRML accepts the plain form and rejects escapes
+pending exact decoding. Windows and native Arch Linux WSL each passed 649
+library tests, 1 component probe, 10 conformance tests, and 349 replacement
+tests: 1,009 compiler tests per host.
+
+### Preceding bounded read-only object-data milestone
 
 Commit `93b3a998` adds typed, bounded internal read-only-data relocations to the
 ELF64 and COFF emitters. ELF uses `.rodata`, a local section symbol, and checked
