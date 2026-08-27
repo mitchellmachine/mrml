@@ -23,20 +23,6 @@ fn contains_ascii_case_insensitive(haystack: &str, needle: &str) -> bool {
 
 pub async fn fetch_http_text(url: &str) -> Result<String> {
     validate_public_https_url(url)?;
-    // 1. Try headless Chromium if browser controller is available
-    if let Ok(browser_ctrl) = crate::browser::get_browser_controller().await {
-        let mut guard = browser_ctrl.lock();
-        if let Ok(page) = guard.get_or_create_page(Some(url)) {
-            crate::platform::sleep_millis(1200);
-            if let Ok(html) = page.content() {
-                if !html.is_empty() {
-                    return Ok(html);
-                }
-            }
-        }
-    }
-
-    // 2. Original, authenticated HTTPS fallback.
     if let Ok(mut response) = mrml_http::Client::new()
         .user_agent("Mozilla/5.0 (compatible; MRML/0.4)")
         .get_follow(url, &[], 8)
@@ -52,7 +38,7 @@ pub async fn fetch_http_text(url: &str) -> Result<String> {
     }
 
     Err(anyhow!(
-        "Failed to fetch web content from '{}' via the browser or authenticated HTTPS client.",
+        "Failed to fetch web content from '{}' via the authenticated HTTPS client.",
         url
     ))
 }
@@ -256,7 +242,7 @@ impl Tool for WebSearchTool {
 
         if results.is_empty() {
             Ok(format!(
-                "Web search executed for '{}', but no public search results were returned. Try searching with more specific keywords or use browser_open.",
+                "Web search executed for '{}', but no public search results were returned. Try searching with more specific keywords or use web_fetch on a known URL.",
                 query
             ))
         } else {

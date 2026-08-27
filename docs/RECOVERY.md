@@ -194,8 +194,8 @@ explicitly and downgrade the status rather than guessing.
   Read `docs/COMPILER.md` and every record under `docs/compiler/oracles/` before
   selecting compiler work. Recover the future-Rust direction, not an assumed
   obligation to reproduce old editions or arbitrary historical rustc behavior.
-- Host browser automation: `packages/tools/host/src/browser.rs` and `web.rs`; this
-  is not an MRML browser engine, compositor, or OS application implementation.
+- Host web retrieval: `packages/tools/host/src/web.rs`; this is not an MRML
+  browser engine, compositor, OS application, or interactive browser controller.
 - Future browser work must read `docs/BROWSER_SEMANTICS.md`: blind humans,
   Braille, speech, keyboard, and text-only AI share one sanitized generational
   tree; there is no AI-only DOM/control path; JavaScript/Wasm remain no-JIT/W^X;

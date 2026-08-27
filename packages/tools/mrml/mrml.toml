@@ -113,6 +113,14 @@ path = "packages/tools/mrml/src/main.rs"
 reason = "Invoke the declared tool process boundary from tool_version for org.mrml.tool.build; arguments remain bounded by that reviewed call site."
 
 [[build_input]]
+fingerprint = "fnv1a64:6d5be316d005069d"
+id = "external-command.linux-address-sanitizer-links-the-unwind-runtime.rustc"
+kind = "external-command"
+line = 5393
+path = "packages/tools/mrml/src/main.rs"
+reason = "Construct the inert rustc command fixture used to verify exact Linux AddressSanitizer linker arguments; the test does not spawn the command."
+
+[[build_input]]
 fingerprint = "fnv1a64:b84a51d7903d7857"
 id = "external-command.run-qemu-child.qemu"
 kind = "external-command"

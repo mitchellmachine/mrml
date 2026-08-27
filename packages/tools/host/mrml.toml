@@ -99,14 +99,6 @@ name = "CARGO_MANIFEST_DIR"
 value = "packages/tools/host"
 
 [[build_input]]
-fingerprint = "fnv1a64:a72da6228620a73e"
-id = "external-command.launch.exe"
-kind = "external-command"
-line = 200
-path = "packages/tools/host/src/browser.rs"
-reason = "Invoke the declared exe process boundary from launch for org.mrml.tool.host; arguments remain bounded by that reviewed call site."
-
-[[build_input]]
 fingerprint = "fnv1a64:67d9111ce55f2f07"
 id = "external-command.execute.spectacle"
 kind = "external-command"

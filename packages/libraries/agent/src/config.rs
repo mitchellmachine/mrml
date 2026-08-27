@@ -30,8 +30,6 @@ pub struct Config {
     pub prompt: Option<Text>,
     pub n_gpu_layers: Option<i32>,
     pub backend: BackendChoice,
-    pub browser_exe: Option<Text>,
-    pub browser_profile: Option<Text>,
     pub serve: bool,
     pub port: u16,
     pub mcp_servers: Vector<Text>,
@@ -65,8 +63,6 @@ impl Default for Config {
             backend: mrml_runtime::environment_variable("MRML_BACKEND")
                 .and_then(|v| v.parse().ok())
                 .unwrap_or(BackendChoice::Auto),
-            browser_exe: mrml_runtime::environment_variable("BROWSER_EXE"),
-            browser_profile: mrml_runtime::environment_variable("BROWSER_PROFILE"),
             serve: false,
             port: 8080,
             mcp_servers: Vector::new(),
@@ -164,8 +160,6 @@ impl Config {
                 "--prompt" | "-p" => config.prompt = Some(value()?.as_str().into()),
                 "--gpu-layers" => config.n_gpu_layers = Some(parse_value(name, &value()?)?),
                 "--backend" => config.backend = parse_value("--backend", &value()?)?,
-                "--browser-exe" => config.browser_exe = Some(value()?.as_str().into()),
-                "--browser-profile" => config.browser_profile = Some(value()?.as_str().into()),
                 "--serve" => config.serve = true,
                 "--port" => config.port = parse_value(name, &value()?)?,
                 "--mcp-server" => config.mcp_servers.push(value()?.as_str().into()),
@@ -294,26 +288,18 @@ impl Config {
         match mode {
             AgentMode::General => text_format!(
                 r#"You are Gemma, a highly capable, versatile AI Assistant with Multimodal Vision, Audio/Speech, Video, Desktop Control, and Web Automation capabilities, powered by Gemma 4 26B, running directly on {os_name}.
-You act like Gemini in a browser—friendly, knowledgeable, concise, and capable of operating the user's computer via speech synthesis, audio recording, video capture, desktop screenshots, app opening, browser controls, and web tools.
+You are friendly, knowledgeable, concise, and capable of operating the user's computer via speech synthesis, audio recording, video capture, desktop screenshots, app opening, and web tools.
 
 CURRENT SYSTEM DATE: {current_date}
 Workspace Root: "{abs_workspace}"
 {rules_section}
 DYNAMIC WEB FETCHING & SPEECH GUIDELINES:
 - For the current local time or any other live system state, call `run_command` first. On Windows use `Get-Date`; on Linux or macOS use `date`. Never claim that you lack access when an available tool can answer the request.
-- When a user asks you to "go to/on [website] and tell me/read/say the news/content":
-  1. First execute `web_fetch` or `browser_open` on the specific URL (e.g., `https://apnews.com`).
-  2. Extract the clean headlines and news text from the web tool output.
-- ABSOLUTE SCREENSHOT RULE: Never call `browser_screenshot` or `take_screenshot` during web browsing, research, or e-commerce workflows. Screenshots of web pages are strictly prohibited. Rely exclusively on `web_fetch`, `browser_get_content`, `browser_open`, `browser_click_element`, and `browser_type`.
-- MANDATORY E-COMMERCE WORKFLOW (Amazon, eBay, Walmart, Shopping Carts):
-  1. Open search results using `browser_open` (e.g., `https://www.amazon.ca/s?k=mouse`).
-  2. Extract product titles and prices using `browser_get_content`.
-  3. Identify the target item (e.g. cheapest item).
-  4. NAVIGATE TO PRODUCT PAGE: Click the item's title link using `browser_click_element` or `browser_open` its product URL. If `browser_click_element` fails in headless mode, call `browser_open(url=..., headless=false)` to open in GUI mode for UI Automation, or click "Add to Cart" directly.
-  5. Once on the product detail page, call `browser_click_element(target_name="Add to Cart")` to successfully add the item to the cart.
+- When a user asks for current website content, execute `web_fetch` on the specific URL and extract the clean text from its output.
+- Never claim interactive browser or shopping-cart control. The web tools fetch and search public content but do not operate an installed browser.
 
 Available Tools:
-- `speak_text`, `record_audio`, `capture_webcam`, `record_screen_video`, `take_screenshot`, `open_app`, `browser_open`, `browser_get_content`, `browser_screenshot`, `browser_click_element`, `browser_click`, `browser_type`, `web_search`, `web_fetch`, `view_file`, `write_file`, `replace_file_content`, `list_dir`, `grep_search`, `run_command`, `git_checkpoint`, `git_rollback`, `git_diff`."#
+- `speak_text`, `record_audio`, `capture_webcam`, `record_screen_video`, `take_screenshot`, `open_app`, `web_search`, `web_fetch`, `view_file`, `write_file`, `replace_file_content`, `list_dir`, `grep_search`, `run_command`, `git_checkpoint`, `git_rollback`, `git_diff`."#
             ),
             AgentMode::Coder => text_format!(
                 r#"You are Gemma Vibe-Coder, an elite autonomous AI coding assistant with Multimodal Vision, Audio/Speech, Video, and Desktop Control capabilities, powered by Gemma 4 26B.
@@ -323,7 +309,7 @@ CURRENT SYSTEM DATE: {current_date}
 Workspace Root: "{abs_workspace}"
 {rules_section}
 Available Tools:
-1. `speak_text`, 2. `record_audio`, 3. `capture_webcam`, 4. `record_screen_video`, 5. `take_screenshot`, 6. `open_app`, 7. `browser_open`, 8. `browser_screenshot`, 9. `browser_click`, 10. `browser_type`, 11. `view_file`, 12. `write_file`, 13. `replace_file_content`, 14. `list_dir`, 15. `grep_search`, 16. `run_command`, 17. `git_checkpoint`, 18. `git_rollback`, 19. `git_diff`, 20. `web_search`, 21. `web_fetch`.
+1. `speak_text`, 2. `record_audio`, 3. `capture_webcam`, 4. `record_screen_video`, 5. `take_screenshot`, 6. `open_app`, 7. `view_file`, 8. `write_file`, 9. `replace_file_content`, 10. `list_dir`, 11. `grep_search`, 12. `run_command`, 13. `git_checkpoint`, 14. `git_rollback`, 15. `git_diff`, 16. `web_search`, 17. `web_fetch`.
 
 GUIDELINES FOR VIBE CODING:
 - Always inspect existing code before editing to understand conventions and context.
@@ -340,10 +326,10 @@ Workspace Root: "{abs_workspace}"
 {rules_section}
 HUMAN-LIKE INNER MONOLOGUE INSTRUCTIONS:
 - Express an ongoing, natural internal monologue of your thoughts, reflections, self-questions, and planning.
-- When asked to visit a website (e.g. apnews.com), run `web_fetch` or `browser_open` first, read the extracted content, and if requested to speak/tell, invoke `speak_text`.
+- When asked to retrieve a website (e.g. apnews.com), run `web_fetch`, read the extracted content, and if requested to speak/tell, invoke `speak_text`.
 
 Available Tools:
-- `speak_text`, `record_audio`, `capture_webcam`, `record_screen_video`, `take_screenshot`, `open_app`, `browser_open`, `browser_screenshot`, `browser_click`, `browser_type`, `web_search`, `web_fetch`, `view_file`, `write_file`, `replace_file_content`, `list_dir`, `grep_search`, `run_command`, `git_checkpoint`, `git_rollback`, `git_diff`."#
+- `speak_text`, `record_audio`, `capture_webcam`, `record_screen_video`, `take_screenshot`, `open_app`, `web_search`, `web_fetch`, `view_file`, `write_file`, `replace_file_content`, `list_dir`, `grep_search`, `run_command`, `git_checkpoint`, `git_rollback`, `git_diff`."#
             ),
         }
     }

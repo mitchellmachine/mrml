@@ -3,8 +3,6 @@
 pub mod fixed_encoding;
 
 #[cfg(feature = "runtime")]
-pub mod browser;
-#[cfg(feature = "runtime")]
 pub mod desktop;
 #[cfg(feature = "runtime")]
 pub mod diff;
@@ -63,12 +61,6 @@ mod tests {
             "web_fetch",
             "take_screenshot",
             "open_app",
-            "browser_open",
-            "browser_get_content",
-            "browser_screenshot",
-            "browser_click_element",
-            "browser_click",
-            "browser_type",
             "speak_text",
             "record_audio",
             "capture_webcam",

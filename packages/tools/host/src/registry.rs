@@ -1,4 +1,4 @@
-use crate::{browser, desktop, editor, git, media, web};
+use crate::{desktop, editor, git, media, web};
 use core::future::Future;
 use core::pin::Pin;
 use mrml_error::Result;
@@ -96,12 +96,6 @@ impl ToolRegistry {
         registry.register(Shared::new(web::WebFetchTool));
         registry.register(Shared::new(desktop::TakeScreenshotTool));
         registry.register(Shared::new(desktop::OpenAppTool));
-        registry.register(Shared::new(browser::BrowserOpenTool));
-        registry.register(Shared::new(browser::BrowserGetContentTool));
-        registry.register(Shared::new(browser::BrowserScreenshotTool));
-        registry.register(Shared::new(browser::BrowserClickElementTool));
-        registry.register(Shared::new(browser::BrowserClickTool));
-        registry.register(Shared::new(browser::BrowserTypeTool));
         registry.register(Shared::new(media::SpeakTextTool));
         registry.register(Shared::new(media::RecordAudioTool));
         registry.register(Shared::new(media::CaptureWebcamTool));
