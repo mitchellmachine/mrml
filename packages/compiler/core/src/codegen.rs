@@ -150,6 +150,7 @@ pub enum CodegenErrorKind {
     MissingReturnType,
     UnsupportedReturnType,
     UnsupportedLifetimeElision,
+    UnsupportedLifetimeRelation,
     Expression(ExpressionErrorKind),
     Body(ParseErrorKind),
     Lowering(IrErrorKind),
@@ -782,17 +783,26 @@ pub fn compile_x86_64_runtime_function_with_options<
     let return_array = runtime_array_type(return_type_text);
     let return_reference = runtime_reference_type(return_type_text);
     let return_pointer = runtime_raw_pointer_type(return_type_text);
-    if return_reference.is_some()
-        && !function
-            .parameters()
-            .iter()
-            .flatten()
-            .any(|parameter| runtime_reference_type(parameter.ty.text).is_some())
-    {
-        return Err(CodegenError {
-            kind: CodegenErrorKind::UnsupportedLifetimeElision,
-            span: return_type_span,
-        });
+    if return_reference.is_some() {
+        let returns_static = runtime_reference_has_static_lifetime(return_type_text);
+        let mut has_reference_parameter = false;
+        for parameter in function.parameters().iter().flatten() {
+            if runtime_reference_type(parameter.ty.text).is_some() {
+                has_reference_parameter = true;
+                if returns_static && !runtime_reference_has_static_lifetime(parameter.ty.text) {
+                    return Err(CodegenError {
+                        kind: CodegenErrorKind::UnsupportedLifetimeRelation,
+                        span: parameter.ty.span,
+                    });
+                }
+            }
+        }
+        if !returns_static && !has_reference_parameter {
+            return Err(CodegenError {
+                kind: CodegenErrorKind::UnsupportedLifetimeElision,
+                span: return_type_span,
+            });
+        }
     }
     let returns_zero_sized_array = return_array
         .and_then(runtime_array_abi_layout)
@@ -7901,6 +7911,7 @@ fn runtime_tuple_type(text: &str) -> Option<RuntimeExpressionType> {
 
 fn runtime_reference_type(text: &str) -> Option<RuntimeExpressionType> {
     let target = text.trim().strip_prefix('&')?.trim();
+    let target = target.strip_prefix("'static ").map_or(target, str::trim);
     let (target, mutable) = target
         .strip_prefix("mut ")
         .map_or((target, false), |target| (target.trim(), true));
@@ -7929,6 +7940,12 @@ fn runtime_reference_type(text: &str) -> Option<RuntimeExpressionType> {
         }),
     };
     Some(RuntimeExpressionType::Reference { target, mutable })
+}
+
+fn runtime_reference_has_static_lifetime(text: &str) -> bool {
+    text.trim()
+        .strip_prefix('&')
+        .is_some_and(|target| target.trim().starts_with("'static "))
 }
 
 fn runtime_raw_pointer_type(text: &str) -> Option<RuntimeExpressionType> {
