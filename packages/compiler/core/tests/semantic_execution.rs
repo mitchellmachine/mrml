@@ -3,7 +3,7 @@ extern crate std;
 use mrml_rustc::{
     CodegenErrorKind, CompileErrorKind, ObjectFormat, TargetLayout, compile_source_function,
 };
-use std::{ffi::c_void, process::Command, sync::Once};
+use std::{ffi::c_void, process::Command, sync::Once, vec::Vec};
 
 #[cfg(target_os = "windows")]
 const FORMAT: ObjectFormat = ObjectFormat::Coff;
@@ -32,47 +32,127 @@ fn u16_at(b: &[u8], o: usize) -> u16 {
 fn u32_at(b: &[u8], o: usize) -> u32 {
     u32::from_le_bytes(b[o..o + 4].try_into().unwrap())
 }
+#[cfg(target_os = "windows")]
+fn i32_at(b: &[u8], o: usize) -> i32 {
+    i32::from_le_bytes(b[o..o + 4].try_into().unwrap())
+}
 #[cfg(not(target_os = "windows"))]
 fn u64_at(b: &[u8], o: usize) -> u64 {
     u64::from_le_bytes(b[o..o + 8].try_into().unwrap())
 }
+#[cfg(not(target_os = "windows"))]
+fn i64_at(b: &[u8], o: usize) -> i64 {
+    i64::from_le_bytes(b[o..o + 8].try_into().unwrap())
+}
+
+struct ObjectImage {
+    code: Vec<u8>,
+    data: Vec<u8>,
+    relocations: Vec<(usize, usize)>,
+}
 
 #[cfg(target_os = "windows")]
-fn text_section(object: &[u8]) -> &[u8] {
+fn object_image(object: &[u8]) -> ObjectImage {
     let table = 20 + usize::from(u16_at(object, 16));
+    let mut text = None;
+    let mut data = None;
     for index in 0..usize::from(u16_at(object, 2)) {
         let h = table + index * 40;
         if object.get(h..h + 5) == Some(b".text") {
-            assert_eq!(u16_at(object, h + 32), 0, "probe must be relocation-free");
-            let (size, offset) = (
-                u32_at(object, h + 16) as usize,
+            text = Some((
                 u32_at(object, h + 20) as usize,
-            );
-            return &object[offset..offset + size];
+                u32_at(object, h + 16) as usize,
+                u32_at(object, h + 24) as usize,
+                usize::from(u16_at(object, h + 32)),
+            ));
+        } else if object.get(h..h + 7) == Some(b".rdata\0") {
+            data = Some((
+                u32_at(object, h + 20) as usize,
+                u32_at(object, h + 16) as usize,
+            ));
         }
     }
-    panic!("COFF object has no .text")
+    let (text_offset, text_size, relocation_offset, relocation_count) =
+        text.expect("COFF object has no .text");
+    let mut code = object[text_offset..text_offset + text_size].to_vec();
+    let data = data.map_or_else(Vec::new, |(offset, size)| {
+        object[offset..offset + size].to_vec()
+    });
+    let mut relocations = Vec::new();
+    for index in 0..relocation_count {
+        let offset = relocation_offset + index * 10;
+        let patch = u32_at(object, offset) as usize;
+        assert_eq!(u32_at(object, offset + 4), 1, "unexpected COFF symbol");
+        assert_eq!(u16_at(object, offset + 8), 4, "unexpected COFF relocation");
+        let addend = i32_at(&code, patch);
+        assert!(addend >= 0, "negative COFF read-only addend");
+        relocations.push((patch, addend as usize));
+        code[patch..patch + 4].fill(0);
+    }
+    ObjectImage {
+        code,
+        data,
+        relocations,
+    }
 }
 #[cfg(not(target_os = "windows"))]
-fn text_section(object: &[u8]) -> &[u8] {
+fn object_image(object: &[u8]) -> ObjectImage {
     let (table, stride) = (u64_at(object, 40) as usize, usize::from(u16_at(object, 58)));
     let names_h = table + usize::from(u16_at(object, 62)) * stride;
     let names =
         &object[u64_at(object, names_h + 24) as usize..][..u64_at(object, names_h + 32) as usize];
+    let mut text = None;
+    let mut data = None;
+    let mut relocation_section = None;
     for index in 0..usize::from(u16_at(object, 60)) {
         let h = table + index * stride;
         let name = u32_at(object, h) as usize;
         if names.get(name..name + 6) == Some(b".text\0") {
             assert_eq!(u32_at(object, h + 4), 1, ".text is not PROGBITS");
             assert_ne!(u64_at(object, h + 8) & 4, 0, ".text is not executable");
-            let (offset, size) = (
+            text = Some((
                 u64_at(object, h + 24) as usize,
                 u64_at(object, h + 32) as usize,
-            );
-            return &object[offset..offset + size];
+            ));
+        } else if names.get(name..name + 8) == Some(b".rodata\0") {
+            assert_eq!(u32_at(object, h + 4), 1, ".rodata is not PROGBITS");
+            data = Some((
+                u64_at(object, h + 24) as usize,
+                u64_at(object, h + 32) as usize,
+            ));
+        } else if names.get(name..name + 11) == Some(b".rela.text\0") {
+            assert_eq!(u32_at(object, h + 4), 4, ".rela.text is not RELA");
+            relocation_section = Some((
+                u64_at(object, h + 24) as usize,
+                u64_at(object, h + 32) as usize,
+            ));
         }
     }
-    panic!("ELF object has no .text")
+    let (text_offset, text_size) = text.expect("ELF object has no .text");
+    let mut code = object[text_offset..text_offset + text_size].to_vec();
+    let data = data.map_or_else(Vec::new, |(offset, size)| {
+        object[offset..offset + size].to_vec()
+    });
+    let mut relocations = Vec::new();
+    if let Some((offset, size)) = relocation_section {
+        assert_eq!(size % 24, 0, "invalid ELF RELA size");
+        for index in 0..size / 24 {
+            let relocation = offset + index * 24;
+            let patch = u64_at(object, relocation) as usize;
+            assert_eq!(u64_at(object, relocation + 8), (1u64 << 32) | 2);
+            let addend = i64_at(object, relocation + 16)
+                .checked_add(4)
+                .expect("ELF addend overflow");
+            assert!(addend >= 0, "negative ELF read-only addend");
+            relocations.push((patch, addend as usize));
+            code[patch..patch + 4].fill(0);
+        }
+    }
+    ObjectImage {
+        code,
+        data,
+        relocations,
+    }
 }
 
 struct Executable {
@@ -80,15 +160,38 @@ struct Executable {
     length: usize,
 }
 impl Executable {
-    fn load(code: &[u8]) -> Self {
-        assert!(!code.is_empty());
-        let pointer = allocate(code.len());
-        unsafe { std::ptr::copy_nonoverlapping(code.as_ptr(), pointer, code.len()) };
-        protect(pointer, code.len());
-        Self {
-            pointer,
-            length: code.len(),
+    fn load(image: ObjectImage) -> Self {
+        assert!(!image.code.is_empty());
+        let data_offset = image.code.len().checked_add(15).unwrap() & !15;
+        let length = data_offset.checked_add(image.data.len()).unwrap();
+        let pointer = allocate(length);
+        unsafe {
+            std::ptr::copy_nonoverlapping(image.code.as_ptr(), pointer, image.code.len());
+            std::ptr::copy_nonoverlapping(
+                image.data.as_ptr(),
+                pointer.add(data_offset),
+                image.data.len(),
+            );
         }
+        for (patch, data_addend) in image.relocations {
+            assert!(
+                patch
+                    .checked_add(4)
+                    .is_some_and(|end| end <= image.code.len())
+            );
+            assert!(data_addend <= image.data.len());
+            let target = unsafe { pointer.add(data_offset + data_addend) } as isize;
+            let next = unsafe { pointer.add(patch + 4) } as isize;
+            let displacement = i32::try_from(target - next).expect("relocation out of range");
+            unsafe {
+                pointer
+                    .add(patch)
+                    .cast::<i32>()
+                    .write_unaligned(displacement)
+            };
+        }
+        protect(pointer, length);
+        Self { pointer, length }
     }
 }
 impl Drop for Executable {
@@ -156,7 +259,7 @@ fn compile(source: &str) -> Executable {
         TargetLayout::X86_64,
     )
     .unwrap();
-    Executable::load(text_section(object.bytes()))
+    Executable::load(object_image(object.bytes()))
 }
 
 #[test]
@@ -257,6 +360,17 @@ fn c_string_byte_view_lengths_and_emptiness_execute() {
     let probe: unsafe extern "C" fn(bool) -> bool = unsafe { std::mem::transmute(empty.pointer) };
     assert!(unsafe { probe(false) });
     assert!(!unsafe { probe(true) });
+}
+
+#[test]
+fn relocated_c_string_byte_views_execute_with_exact_contents() {
+    let code = compile(
+        r####"#[unsafe(no_mangle)] pub extern "C" fn probe(raw: bool) -> &'static [u8] { if raw { cr##"raw\n"#text"##.to_bytes_with_nul() } else { c"hello\n".to_bytes() } }"####,
+    );
+    let probe: unsafe extern "C" fn(bool) -> &'static [u8] =
+        unsafe { std::mem::transmute(code.pointer) };
+    assert_eq!(unsafe { probe(false) }, b"hello\n");
+    assert_eq!(unsafe { probe(true) }, b"raw\\n\"#text\0");
 }
 
 #[test]
