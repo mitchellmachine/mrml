@@ -20735,6 +20735,18 @@ fn runtime_expression_type_with_locals<
             Ok(RuntimeExpressionType::Bool)
         }
         ExprKind::ReferenceAsPointer { base, mutable } => {
+            if matches!(
+                tree.expression(base).map(|expression| expression.kind),
+                Some(ExprKind::CString(_))
+            ) {
+                if mutable {
+                    return Err(CodegenErrorKind::ImmutableAssignment);
+                }
+                return Ok(RuntimeExpressionType::RawPointer {
+                    pointee: RuntimeArrayElementType::Integer(Some(crate::IntegerType::I8)),
+                    mutable: false,
+                });
+            }
             let base_type = runtime_expression_type_with_locals(
                 function,
                 resolver,
@@ -23572,6 +23584,13 @@ struct RuntimeEmitter<'tree, 'source, R, const MAX_BYTES: usize, const MAX_PARAM
     runtime_call_depth: usize,
     runtime_call_names: [Option<&'tree str>; 8],
     runtime_call_local_floor: Option<usize>,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum ReadonlyStringLiteralKind {
+    Utf8,
+    Bytes,
+    C,
 }
 
 impl<
@@ -26726,7 +26745,29 @@ impl<
                 self.emit_string_is_char_boundary(tree, base, index, depth + 1)?;
             }
             ExprKind::ReferenceAsPointer { base, .. } => {
-                self.emit_expression(tree, base, depth + 1)?;
+                if let Some(ExprKind::CString(literal)) =
+                    tree.expression(base).map(|expression| expression.kind)
+                {
+                    let (data_offset, _) =
+                        self.append_readonly_string_literal(literal, ReadonlyStringLiteralKind::C)?;
+                    let capacity_error = self.error(CodegenErrorKind::OutputTooSmall);
+                    let relocation_offset = self
+                        .length
+                        .checked_add(3)
+                        .ok_or(self.error(CodegenErrorKind::OutputTooSmall))?;
+                    let relocation = self
+                        .readonly_relocations
+                        .get_mut(self.readonly_relocation_count)
+                        .ok_or(capacity_error)?;
+                    *relocation = X86_64ReadonlyDataRelocation {
+                        offset: relocation_offset,
+                        data_offset,
+                    };
+                    self.readonly_relocation_count += 1;
+                    self.emit(&[0x48, 0x8d, 0x05, 0, 0, 0, 0])?;
+                } else {
+                    self.emit_expression(tree, base, depth + 1)?;
+                }
             }
             ExprKind::RawPointerIsNull { base } => {
                 self.emit_expression(tree, base, depth + 1)?;
@@ -30535,7 +30576,7 @@ impl<
     fn append_readonly_string_literal(
         &mut self,
         literal: &str,
-        byte_string: bool,
+        kind: ReadonlyStringLiteralKind,
     ) -> Result<(usize, usize), CodegenError> {
         fn hex(byte: u8) -> Option<u32> {
             match byte {
@@ -30555,8 +30596,14 @@ impl<
             decoded_length += 1;
             Ok::<(), CodegenError>(())
         };
-        let raw_prefix_length = if byte_string { 2 } else { 1 };
-        let raw_prefix = if byte_string { "br" } else { "r" };
+        let byte_string = kind == ReadonlyStringLiteralKind::Bytes;
+        let c_string = kind == ReadonlyStringLiteralKind::C;
+        let raw_prefix_length = if byte_string || c_string { 2 } else { 1 };
+        let raw_prefix = match kind {
+            ReadonlyStringLiteralKind::Utf8 => "r",
+            ReadonlyStringLiteralKind::Bytes => "br",
+            ReadonlyStringLiteralKind::C => "cr",
+        };
         if literal.starts_with(raw_prefix) {
             let bytes = literal.as_bytes();
             let mut quote = raw_prefix_length;
@@ -30592,9 +30639,23 @@ impl<
                 push(*byte)?;
             }
             drop(push);
+            if c_string {
+                if decoded[..decoded_length].contains(&0) {
+                    return Err(self.error(CodegenErrorKind::UnsupportedCStringLiteral));
+                }
+                let output = decoded
+                    .get_mut(decoded_length)
+                    .ok_or(self.error(CodegenErrorKind::OutputTooSmall))?;
+                *output = 0;
+                decoded_length += 1;
+            }
             return self.intern_readonly_string_bytes(&decoded[..decoded_length]);
         }
-        let cooked_prefix = if byte_string { "b\"" } else { "\"" };
+        let cooked_prefix = match kind {
+            ReadonlyStringLiteralKind::Utf8 => "\"",
+            ReadonlyStringLiteralKind::Bytes => "b\"",
+            ReadonlyStringLiteralKind::C => "c\"",
+        };
         let literal = literal
             .strip_prefix(cooked_prefix)
             .and_then(|literal| literal.strip_suffix('"'))
@@ -30694,6 +30755,16 @@ impl<
             }
         }
         drop(push);
+        if c_string {
+            if decoded[..decoded_length].contains(&0) {
+                return Err(self.error(CodegenErrorKind::UnsupportedCStringLiteral));
+            }
+            let output = decoded
+                .get_mut(decoded_length)
+                .ok_or(self.error(CodegenErrorKind::OutputTooSmall))?;
+            *output = 0;
+            decoded_length += 1;
+        }
         self.intern_readonly_string_bytes(&decoded[..decoded_length])
     }
 
@@ -30706,12 +30777,16 @@ impl<
         if let Some(ExprKind::String(literal) | ExprKind::ByteString(literal)) =
             tree.expression(id).map(|expression| expression.kind)
         {
-            let byte_string = matches!(
+            let kind = if matches!(
                 tree.expression(id).map(|expression| expression.kind),
                 Some(ExprKind::ByteString(_))
-            );
+            ) {
+                ReadonlyStringLiteralKind::Bytes
+            } else {
+                ReadonlyStringLiteralKind::Utf8
+            };
             let (data_offset, literal_length) =
-                self.append_readonly_string_literal(literal, byte_string)?;
+                self.append_readonly_string_literal(literal, kind)?;
             let capacity_error = self.error(CodegenErrorKind::OutputTooSmall);
             let relocation_offset = self
                 .length

@@ -679,10 +679,34 @@ mod tests {
     }
 
     #[test]
-    fn rejects_distinct_c_string_literals_before_object_emission() {
+    fn emits_bounded_c_string_literal_pointers_and_rejects_unsupported_values() {
+        for (source, expected) in [
+            (
+                "#[unsafe(no_mangle)] pub extern \"C\" fn probe() -> *const i8 { c\"hello\\n\".as_ptr() }",
+                b"hello\n".as_slice(),
+            ),
+            (
+                r####"#[unsafe(no_mangle)] pub extern "C" fn probe() -> *const i8 { cr##"raw\n"#text"##.as_ptr() }"####,
+                br###"raw\n"#text"###.as_slice(),
+            ),
+        ] {
+            for format in [ObjectFormat::Elf64, ObjectFormat::Coff] {
+                let object = compile_wide(source, "probe", format).unwrap();
+                assert!(
+                    object
+                        .bytes()
+                        .windows(expected.len())
+                        .any(|bytes| bytes == expected)
+                );
+                assert!(object.bytes().windows(expected.len() + 1).any(|bytes| {
+                    bytes[..expected.len()] == *expected && bytes[expected.len()] == 0
+                }));
+            }
+        }
+
         for source in [
             "#[unsafe(no_mangle)] pub extern \"C\" fn probe() -> u8 { c\"hello\"; 1 }",
-            r####"#[unsafe(no_mangle)] pub extern "C" fn probe() -> u8 { cr##"raw\n"#text"##; 1 }"####,
+            "#[unsafe(no_mangle)] pub extern \"C\" fn probe() -> *const i8 { c\"bad\\0value\".as_ptr() }",
         ] {
             for format in [ObjectFormat::Elf64, ObjectFormat::Coff] {
                 let error = compile_wide(source, "probe", format).unwrap_err();
