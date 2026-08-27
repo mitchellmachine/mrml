@@ -21,7 +21,7 @@ jobs:
     timeout-minutes: 20
     steps:
       - name: Check out repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
       - name: Install pinned Rust toolchain
         run: rustup toolchain install nightly-2026-08-24 --profile minimal --component rustfmt,rust-src --target nvptx64-nvidia-cuda,x86_64-unknown-none,x86_64-unknown-uefi
       - name: Build locked stage-zero frontend
@@ -43,7 +43,7 @@ jobs:
     timeout-minutes: 60
     steps:
       - name: Check out repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
       - name: Install pinned Rust toolchain
         run: rustup toolchain install nightly-2026-08-24 --profile minimal --component rustfmt,rust-src --target nvptx64-nvidia-cuda,x86_64-unknown-none,x86_64-unknown-uefi
       - name: Build locked stage-zero frontend
@@ -68,7 +68,7 @@ jobs:
     timeout-minutes: 60
     steps:
       - name: Check out repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
       - name: Install pinned gnullvm Rust toolchain
         shell: pwsh
         run: |
