@@ -939,6 +939,15 @@ Windows passed 658 unit, 1 component-interface, 10 conformance, 351 replacement,
 and 12 semantic-execution tests (1,032 total); Arch has not yet run this
 inclusive-trap extension.
 
+The same four inclusive failure edges now execute independently with a
+runtime-slice owner. Windows supplies the compiler's indirect pointer/length
+descriptor and every child again terminates with `STATUS_ILLEGAL_INSTRUCTION`,
+including the end-beyond-owner case that reads the fat reference's runtime
+length. This is direct evidence for the slice lowering rather than inference
+from the fixed-array path. Windows passed 658 unit, 1 component-interface, 10
+conformance, 351 replacement, and 13 semantic-execution tests (1,033 total);
+Arch has not yet run this runtime-slice trap extension.
+
 Patent review: `NOT_TRIGGERED`; these increments add execution coverage for an
 already implemented bounded place, range, and ABI contract rather than a new
 mechanism.

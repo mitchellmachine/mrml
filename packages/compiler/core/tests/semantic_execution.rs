@@ -629,6 +629,100 @@ fn inclusive_subslice_then_index_bounds_report_isolated_traps() {
 }
 
 #[test]
+fn inclusive_slice_subslice_then_index_bounds_report_isolated_traps() {
+    #[cfg(target_os = "windows")]
+    const CHILD: &str = "MRML_SEMANTIC_INCLUSIVE_SLICE_INDEX_TRAP_CHILD";
+    let code = compile(
+        "#[unsafe(no_mangle)] pub extern \"C\" fn probe(input: &mut [u32], start: usize, end: usize, index: usize) -> u32 { let selected: &mut u32 = &mut input[start..=end][index]; *selected }",
+    );
+    #[cfg(not(target_os = "windows"))]
+    let probe: unsafe extern "C" fn(*mut u32, usize, usize, usize, usize) -> u32 =
+        unsafe { std::mem::transmute(code.pointer) };
+    #[cfg(target_os = "windows")]
+    let probe: unsafe extern "C" fn(*const usize, usize, usize, usize) -> u32 =
+        unsafe { std::mem::transmute(code.pointer) };
+
+    #[cfg(not(target_os = "windows"))]
+    {
+        for (start, end, index) in [
+            (0, usize::MAX, 0),
+            (3, 1, 0),
+            (0, 4, 0),
+            (1, 3, 3),
+        ] {
+            let pid = unsafe { fork() };
+            assert!(pid >= 0, "fork failed");
+            if pid == 0 {
+                let mut values = [10, 20, 30, 40];
+                let _ = unsafe {
+                    probe(
+                        values.as_mut_ptr(),
+                        values.len(),
+                        start,
+                        end,
+                        index,
+                    )
+                };
+                unsafe { _exit(120) }
+            }
+            let mut status = 0;
+            assert_eq!(
+                unsafe { waitpid(pid, &mut status, 0) },
+                pid,
+                "waitpid failed"
+            );
+            assert_eq!(
+                status & 0x7f,
+                4,
+                "unexpected Unix wait status for ({start}, {end}, {index}): {status:#x}"
+            );
+        }
+        return;
+    }
+
+    #[cfg(target_os = "windows")]
+    if let Some(case) = std::env::var_os(CHILD) {
+        unsafe { SetErrorMode(0x0001 | 0x0002) };
+        let (start, end, index) = match case.to_str() {
+            Some("inclusive-overflow") => (0, usize::MAX, 0),
+            Some("reversed") => (3, 1, 0),
+            Some("end") => (0, 4, 0),
+            _ => (1, 3, 3),
+        };
+        let mut values = [10, 20, 30, 40];
+        let slice = [values.as_mut_ptr() as usize, values.len()];
+        let _ = unsafe { probe(slice.as_ptr(), start, end, index) };
+        panic!("inclusive slice bounds trap unexpectedly returned");
+    }
+
+    #[cfg(target_os = "windows")]
+    for case in ["inclusive-overflow", "reversed", "end", "index"] {
+        let output = Command::new(std::env::current_exe().expect("locate semantic test binary"))
+            .args([
+                "--exact",
+                "inclusive_slice_subslice_then_index_bounds_report_isolated_traps",
+                "--nocapture",
+            ])
+            .env(CHILD, case)
+            .output()
+            .expect("launch isolated inclusive slice-bounds probe");
+        assert_eq!(
+            output.status.code(),
+            Some(101),
+            "unexpected Windows {case} test status: {}",
+            output.status
+        );
+        let stdout = String::from_utf8(output.stdout).expect("UTF-8 child test stdout");
+        let stderr = String::from_utf8(output.stderr).expect("UTF-8 child test stderr");
+        assert!(
+            stdout.contains("unexpected return code -1073741795")
+                || stderr.contains("unexpected return code -1073741795"),
+            "missing Windows {case} illegal-instruction status; stdout: {stdout}; stderr: {stderr}"
+        );
+    }
+}
+
+#[test]
 fn nested_branch_initializedness_matches_oracle() {
     let code = compile(
         "#[unsafe(no_mangle)] pub extern \"C\" fn probe(input: u32, choose: bool) -> u32 { let mut value: u32 = input; 'outer: loop { loop { if choose { value += 1; break 'outer; } else { value += 2; break 'outer; } } } value }",
