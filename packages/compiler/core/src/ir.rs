@@ -418,6 +418,9 @@ impl<'source, const MAX_NODES: usize, const MAX_INSTRUCTIONS: usize>
             ExprKind::Char(value) => {
                 self.push(Instruction::PushInteger(u128::from(value)), expression.span)?;
             }
+            ExprKind::ByteChar(value) => {
+                self.push(Instruction::PushInteger(u128::from(value)), expression.span)?;
+            }
             ExprKind::Identifier(name) => {
                 self.push(Instruction::LoadConstant(name), expression.span)?;
             }

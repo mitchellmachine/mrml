@@ -12,6 +12,7 @@ pub enum TokenKind {
     String,
     ByteString,
     Character,
+    ByteCharacter,
     OpenParen,
     CloseParen,
     OpenBrace,
@@ -264,6 +265,12 @@ impl<'source> Lexer<'source> {
             self.position += 1;
             return self.quoted(start, b'"', TokenKind::ByteString).map(Some);
         }
+        if byte == b'b' && self.bytes().get(start + 1) == Some(&b'\'') {
+            self.position += 1;
+            return self
+                .quoted(start, b'\'', TokenKind::ByteCharacter)
+                .map(Some);
+        }
         if byte.is_ascii_alphabetic() || byte == b'_' {
             self.position += 1;
             while self
@@ -397,13 +404,14 @@ mod tests {
     #[test]
     fn separates_lifetimes_from_character_literals() {
         assert_tokens(
-            "&'input str 'x' '\\n'",
+            "&'input str 'x' '\\n' b'\\xFF'",
             &[
                 (TokenKind::Operator, "&"),
                 (TokenKind::Lifetime, "'input"),
                 (TokenKind::Identifier, "str"),
                 (TokenKind::Character, "'x'"),
                 (TokenKind::Character, "'\\n'"),
+                (TokenKind::ByteCharacter, "b'\\xFF'"),
             ],
         );
     }

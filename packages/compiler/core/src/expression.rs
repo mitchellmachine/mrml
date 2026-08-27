@@ -835,6 +835,7 @@ pub enum ExprKind<'source> {
     Integer(IntegerLiteral<'source>),
     Bool(bool),
     Char(u32),
+    ByteChar(u8),
     String(&'source str),
     ByteString(&'source str),
     Closure {
@@ -1238,6 +1239,7 @@ impl<'source, const MAX_NODES: usize> ExpressionTree<'source, MAX_NODES> {
             | ExprKind::IntegerLogarithm { .. }
             | ExprKind::Integer(_)
             | ExprKind::Char(_)
+            | ExprKind::ByteChar(_)
             | ExprKind::String(_)
             | ExprKind::ByteString(_)
             | ExprKind::Closure { .. }
@@ -1558,6 +1560,7 @@ impl<'source, const MAX_NODES: usize> ExpressionTree<'source, MAX_NODES> {
             ExprKind::Integer(literal) => Ok(literal.value),
             ExprKind::Bool(value) => Ok(u128::from(value)),
             ExprKind::Char(value) => Ok(u128::from(value)),
+            ExprKind::ByteChar(value) => Ok(u128::from(value)),
             ExprKind::String(_) | ExprKind::ByteString(_) => {
                 Err(ConstEvalError::InvalidExpressionTree)
             }
@@ -2254,6 +2257,10 @@ impl<'source, const MAX_NODES: usize> ExpressionParser<'source, MAX_NODES> {
             }
             Some(token) if token.kind == TokenKind::Character => self.push(Expr {
                 kind: ExprKind::Char(decode_character(token)?),
+                span: token.span,
+            }),
+            Some(token) if token.kind == TokenKind::ByteCharacter => self.push(Expr {
+                kind: ExprKind::ByteChar(decode_byte_character(token)?),
                 span: token.span,
             }),
             Some(token) if token.kind == TokenKind::String => self.push(Expr {
@@ -3445,6 +3452,7 @@ impl<'source, const MAX_NODES: usize> ExpressionParser<'source, MAX_NODES> {
             | ExprKind::Integer(_)
             | ExprKind::Bool(_)
             | ExprKind::Char(_)
+            | ExprKind::ByteChar(_)
             | ExprKind::String(_)
             | ExprKind::ByteString(_)
             | ExprKind::ClosureParameter { .. }
@@ -3520,6 +3528,10 @@ impl<'source, const MAX_NODES: usize> ExpressionParser<'source, MAX_NODES> {
             }),
             Some(token) if token.kind == TokenKind::Character => self.push(Expr {
                 kind: ExprKind::Char(decode_character(token)?),
+                span: token.span,
+            }),
+            Some(token) if token.kind == TokenKind::ByteCharacter => self.push(Expr {
+                kind: ExprKind::ByteChar(decode_byte_character(token)?),
                 span: token.span,
             }),
             Some(token) if matches!(token.text, "true" | "false") => self.push(Expr {
@@ -6501,6 +6513,39 @@ fn decode_character(token: Token<'_>) -> Result<u32, ExpressionError> {
         return Err(invalid());
     }
     Ok(u32::from(character))
+}
+
+fn decode_byte_character(token: Token<'_>) -> Result<u8, ExpressionError> {
+    let invalid = || ExpressionError {
+        kind: ExpressionErrorKind::InvalidCharacter,
+        span: token.span,
+    };
+    let inner = token
+        .text
+        .strip_prefix("b'")
+        .and_then(|value| value.strip_suffix('\''))
+        .ok_or_else(invalid)?;
+    if let Some(escaped) = inner.strip_prefix('\\') {
+        return match escaped {
+            "0" => Ok(0),
+            "t" => Ok(b'\t'),
+            "n" => Ok(b'\n'),
+            "r" => Ok(b'\r'),
+            "\\" => Ok(b'\\'),
+            "'" => Ok(b'\''),
+            "\"" => Ok(b'\"'),
+            value if value.starts_with('x') && value.len() == 3 => {
+                u8::from_str_radix(&value[1..], 16).map_err(|_| invalid())
+            }
+            _ => Err(invalid()),
+        };
+    }
+    let bytes = inner.as_bytes();
+    if bytes.len() == 1 && bytes[0].is_ascii() {
+        Ok(bytes[0])
+    } else {
+        Err(invalid())
+    }
 }
 
 #[cfg(test)]

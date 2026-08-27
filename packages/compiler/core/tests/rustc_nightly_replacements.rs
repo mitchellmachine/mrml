@@ -6270,3 +6270,23 @@ fn rustc_byte_string_references_reach_native_objects() {
         assert!(compile(invalid, ObjectFormat::Coff).is_err());
     }
 }
+
+#[test]
+fn rustc_byte_character_literals_reach_native_objects() {
+    for source in [
+        r##"#[unsafe(no_mangle)] pub extern "C" fn probe() -> u8 { b'A' }"##,
+        r##"#[unsafe(no_mangle)] pub extern "C" fn probe() -> u8 { b'\xFF' }"##,
+        r##"#[unsafe(no_mangle)] pub extern "C" fn probe() -> u8 { b'\n' }"##,
+    ] {
+        assert_eq!(compile(source, ObjectFormat::Elf64), Ok(()));
+        assert_eq!(compile(source, ObjectFormat::Coff), Ok(()));
+    }
+
+    for invalid in [
+        r##"#[unsafe(no_mangle)] pub extern "C" fn probe() -> u8 { b'é' }"##,
+        r##"#[unsafe(no_mangle)] pub extern "C" fn probe() -> u8 { b'\u{41}' }"##,
+    ] {
+        assert!(compile(invalid, ObjectFormat::Elf64).is_err());
+        assert!(compile(invalid, ObjectFormat::Coff).is_err());
+    }
+}

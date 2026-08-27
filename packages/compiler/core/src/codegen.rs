@@ -19856,6 +19856,7 @@ fn validate_runtime_inline_const<
         | ExprKind::Integer(_)
         | ExprKind::Bool(_)
         | ExprKind::Char(_)
+        | ExprKind::ByteChar(_)
         | ExprKind::String(_)
         | ExprKind::ByteString(_)
         | ExprKind::ClosureParameter { .. } => {}
@@ -22799,6 +22800,7 @@ fn runtime_expression_type_with_locals<
         )),
         ExprKind::Bool(_) => Ok(RuntimeExpressionType::Bool),
         ExprKind::Char(_) => Ok(RuntimeExpressionType::Char),
+        ExprKind::ByteChar(_) => Ok(RuntimeExpressionType::Integer(Some(crate::IntegerType::U8))),
         ExprKind::String(_) => Ok(RuntimeExpressionType::Reference {
             target: RuntimeReferenceTarget::Str,
             mutable: false,
@@ -28820,6 +28822,10 @@ impl<
                 self.emit(&u64::from(value).to_le_bytes())?;
             }
             ExprKind::Char(value) => {
+                self.emit(&[0x48, 0xb8])?;
+                self.emit(&u64::from(value).to_le_bytes())?;
+            }
+            ExprKind::ByteChar(value) => {
                 self.emit(&[0x48, 0xb8])?;
                 self.emit(&u64::from(value).to_le_bytes())?;
             }
