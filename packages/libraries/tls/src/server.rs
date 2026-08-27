@@ -314,6 +314,11 @@ pub struct TlsServerStream {
 }
 impl TlsServerStream {
     pub fn accept(mut stream: TcpStream, config: &TlsServerConfig) -> Result<Self, TlsError> {
+        if !crate::experimental_feature_enabled("MRML_TLS_EXPERIMENTAL_SERVER")
+            || !crate::experimental_feature_enabled("MRML_TLS_EXPERIMENTAL_HYBRID")
+        {
+            return Err(TlsError::Handshake);
+        }
         stream
             .set_read_timeout_millis(30_000)
             .map_err(|_| TlsError::Io)?;
@@ -518,6 +523,11 @@ mod tests {
 
     #[test]
     fn authenticated_hybrid_client_server_interoperate_when_configured() {
+        if !crate::experimental_feature_enabled("MRML_TLS_EXPERIMENTAL_SERVER")
+            || !crate::experimental_feature_enabled("MRML_TLS_EXPERIMENTAL_HYBRID")
+        {
+            return;
+        }
         let Some(cert_path) = environment_variable("MRML_TLS_SERVER_TEST_CERT") else {
             return;
         };

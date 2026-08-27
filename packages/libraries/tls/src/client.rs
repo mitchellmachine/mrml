@@ -26,11 +26,19 @@ fn extension(out: &mut Vector<u8>, kind: u16, value: &[u8]) -> Result<(), TlsErr
         .map_err(|_| TlsError::AllocationFailed)
 }
 
-fn client_hello(host: &str) -> Result<(Vector<u8>, HybridClientSecret, [u8; 32]), TlsError> {
+fn client_hello(
+    host: &str,
+) -> Result<(Vector<u8>, Option<HybridClientSecret>, [u8; 32]), TlsError> {
     if host.is_empty() || host.len() > 253 || !host.is_ascii() {
         return Err(TlsError::Handshake);
     }
-    let (share, secret) = hybrid_client_share()?;
+    let hybrid_enabled = crate::experimental_feature_enabled("MRML_TLS_EXPERIMENTAL_HYBRID");
+    let (share, secret) = if hybrid_enabled {
+        let (share, secret) = hybrid_client_share()?;
+        (share, Some(secret))
+    } else {
+        (Vector::new(), None)
+    };
     let mut fallback = [0u8; 32];
     mrml_runtime::fill_random(&mut fallback).map_err(|_| TlsError::AuthenticationFailed)?;
     let fallback_public = x25519_public(fallback);
@@ -48,14 +56,28 @@ fn client_hello(host: &str) -> Result<(Vector<u8>, HybridClientSecret, [u8; 32])
     extension(&mut extensions, 0, &sni)?;
     extension(&mut extensions, 43, &[2, 3, 4])?;
     extension(&mut extensions, 13, &[0, 4, 8, 4, 4, 1])?;
-    extension(&mut extensions, 10, &[0, 4, 0x11, 0xec, 0, 0x1d])?;
+    if hybrid_enabled {
+        extension(&mut extensions, 10, &[0, 4, 0x11, 0xec, 0, 0x1d])?;
+    } else {
+        extension(&mut extensions, 10, &[0, 2, 0, 0x1d])?;
+    }
     let mut key_share = Vector::new();
-    push_u16(&mut key_share, 4 + share.len() + 4 + fallback_public.len())?;
-    push_u16(&mut key_share, X25519_MLKEM768 as usize)?;
-    push_u16(&mut key_share, share.len())?;
-    key_share
-        .try_extend_from_slice(&share)
-        .map_err(|_| TlsError::AllocationFailed)?;
+    let key_share_bytes = if hybrid_enabled {
+        4usize
+            .checked_add(share.len())
+            .and_then(|length| length.checked_add(4 + fallback_public.len()))
+            .ok_or(TlsError::Handshake)?
+    } else {
+        4 + fallback_public.len()
+    };
+    push_u16(&mut key_share, key_share_bytes)?;
+    if hybrid_enabled {
+        push_u16(&mut key_share, X25519_MLKEM768 as usize)?;
+        push_u16(&mut key_share, share.len())?;
+        key_share
+            .try_extend_from_slice(&share)
+            .map_err(|_| TlsError::AllocationFailed)?;
+    }
     push_u16(&mut key_share, 0x1d)?;
     push_u16(&mut key_share, 32)?;
     key_share
@@ -322,8 +344,11 @@ impl TlsClientStream {
         let (group, server_key) = server_share(&server_hello)?;
         let mut shared = Vector::new();
         if group == X25519_MLKEM768 {
+            if !crate::experimental_feature_enabled("MRML_TLS_EXPERIMENTAL_HYBRID") {
+                return Err(TlsError::Handshake);
+            }
             shared
-                .try_extend_from_slice(&hybrid.complete(server_key)?)
+                .try_extend_from_slice(&hybrid.ok_or(TlsError::Handshake)?.complete(server_key)?)
                 .map_err(|_| TlsError::AllocationFailed)?;
         } else {
             let peer: [u8; 32] = server_key.try_into().map_err(|_| TlsError::Handshake)?;
@@ -520,6 +545,16 @@ impl TlsClientStream {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn hybrid_share_is_not_advertised_without_experimental_gate() {
+        if crate::experimental_feature_enabled("MRML_TLS_EXPERIMENTAL_HYBRID") {
+            return;
+        }
+        let (hello, hybrid, _) = client_hello("example.com").unwrap();
+        assert!(hybrid.is_none());
+        assert!(hello.len() > 32);
+    }
+
     #[test]
     fn live_authenticated_handshake_when_configured() {
         let Some(host) = mrml_runtime::environment_variable("MRML_TLS_LIVE_HOST") else {
