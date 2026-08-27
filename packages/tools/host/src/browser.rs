@@ -200,6 +200,8 @@ impl EdgeController {
         let child = Command::new(exe.as_str())
             .args([
                 "--headless=new",
+                "--disable-gpu",
+                "--disable-dev-shm-usage",
                 "--no-first-run",
                 "--no-default-browser-check",
             ])
