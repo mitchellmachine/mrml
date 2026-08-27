@@ -11,6 +11,7 @@ mod allocation;
 mod ahci_controller;
 mod ahci_discovery;
 mod ahci_mapping;
+mod ahci_port;
 mod authority;
 mod authority_checkpoint;
 mod block;
@@ -49,6 +50,15 @@ pub use ahci_discovery::{
 pub use ahci_mapping::{
     AHCI_MMIO_PAGE_BYTES, AhciAbarMapping, AhciAbarMappingBackend, AhciAbarMappingError,
     map_ahci_abar,
+};
+pub use ahci_port::{
+    AHCI_ATAPI_SIGNATURE, AHCI_ENCLOSURE_MANAGEMENT_SIGNATURE, AHCI_MAX_PORTS,
+    AHCI_PORT_BASE_OFFSET, AHCI_PORT_COMMAND_ISSUE_OFFSET, AHCI_PORT_COMMAND_OFFSET,
+    AHCI_PORT_INTERRUPT_ENABLE_OFFSET, AHCI_PORT_MULTIPLIER_SIGNATURE,
+    AHCI_PORT_SATA_ACTIVE_OFFSET, AHCI_PORT_SATA_STATUS_OFFSET, AHCI_PORT_SIGNATURE_OFFSET,
+    AHCI_PORT_STRIDE_BYTES, AHCI_SATA_SIGNATURE, AhciPortDeviceKind,
+    AhciPortDiscoveryError, AhciPortError, AhciPortLinkSpeed, AhciPortLinkState,
+    AhciPortPowerState, AhciPortSnapshot, AhciPortSnapshotSet, discover_ahci_ports,
 };
 pub use authority::{
     StorageAuthorityError, StorageAuthorityReservation, StorageAuthorityTable, StorageHandle,

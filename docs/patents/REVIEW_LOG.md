@@ -9134,3 +9134,13 @@ TCP connection, and TLS continues to authenticate the original hostname. It
 introduces no new network protocol, cryptographic primitive, compression
 mechanism, browser engine, or authority model. This technical screen is not
 legal advice or patent clearance.
+
+# 2026-08-27 — Read-only generation-bound AHCI port discovery
+
+Patent review: **NOT_TRIGGERED**. This increment applies conventional AHCI
+register layout, duplicate bounded MMIO sampling, exact generation comparison,
+fixed-capacity port indexing, and standard SATA signature classification. It
+introduces no device protocol, command-queue algorithm, DMA mechanism,
+interrupt-delivery design, cryptographic primitive, compression mechanism, or
+new authority model. This technical screen is not legal advice or patent
+clearance.

@@ -1196,9 +1196,20 @@ generation. Initialization disables interrupts, enables AHCI mode, requests
 reset, fails closed on a fixed poll limit or access uncertainty, re-verifies
 AHCI mode, and publishes the controller capability/version/implemented-port
 snapshot only after all bounds agree. Storage passes 143 tests on Windows and
-Arch Linux using a hostile register model. This does not prove a physical reset,
-port discovery, DMA, interrupts, block I/O, installed-device reacquisition,
-OVMF, or hardware behavior.
+Arch Linux using a hostile register model for this global-register boundary.
+
+Read-only generation-bound port/signature discovery is now **PARTIALLY
+IMPLEMENTED IN SOURCE**. It scans only the implemented-port bitmap, compares two
+complete bounded observations, requires stable controller state around the
+scan, and publishes no partial set when any port is changing, active, malformed,
+or unreadable. Only a stable ordinary SATA signature is marked as an installed-
+recovery candidate; ATAPI, enclosure management, port multipliers, and unknown
+signatures remain descriptive and non-authorizing. The focused Windows gnullvm
+storage suite passes 156 tests, including thirteen hostile-model tests for this
+boundary. Linux execution was not available in this workspace, so no Linux pass
+count is claimed. This does not prove a physical reset or link, DMA,
+interrupts, block I/O, installed-device reacquisition, OVMF, or hardware
+behavior.
 
 The typed native route and installed recovery are now composed atomically as a
 **PARTIALLY IMPLEMENTED** configuration control plane. One bounded operation

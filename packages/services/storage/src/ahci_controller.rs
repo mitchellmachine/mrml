@@ -14,9 +14,9 @@ pub const AHCI_PI_OFFSET: u32 = 0x0c;
 pub const AHCI_VERSION_OFFSET: u32 = 0x10;
 pub const AHCI_RESET_POLL_LIMIT: u32 = 1_000_000;
 
-const GHC_HBA_RESET: u32 = 1 << 0;
-const GHC_INTERRUPT_ENABLE: u32 = 1 << 1;
-const GHC_AHCI_ENABLE: u32 = 1 << 31;
+pub(crate) const GHC_HBA_RESET: u32 = 1 << 0;
+pub(crate) const GHC_INTERRUPT_ENABLE: u32 = 1 << 1;
+pub(crate) const GHC_AHCI_ENABLE: u32 = 1 << 31;
 const CAP_PORT_COUNT_MASK: u32 = 0x1f;
 const CAP_COMMAND_SLOT_COUNT_MASK: u32 = 0x1f << 8;
 const CAP_COMMAND_SLOT_COUNT_SHIFT: u32 = 8;
@@ -33,6 +33,52 @@ pub struct AhciControllerSnapshot {
     pub port_count: u8,
     pub command_slot_count: u8,
     pub native_command_queuing: bool,
+}
+
+impl AhciControllerSnapshot {
+    pub(crate) fn matches_mapping(self, mapping: AhciAbarMapping) -> bool {
+        self.device_object == mapping.device_object
+            && self.configuration_generation == mapping.configuration_generation
+            && self.mapping_generation == mapping.mapping_generation
+    }
+
+    pub(crate) fn is_structurally_valid(self) -> bool {
+        self.configuration_generation != 0
+            && self.mapping_generation != 0
+            && self.matches_registers(
+                self.capabilities,
+                self.version,
+                self.implemented_ports,
+            )
+    }
+
+    pub(crate) fn matches_registers(
+        self,
+        capabilities: u32,
+        version: u32,
+        implemented_ports: u32,
+    ) -> bool {
+        if version == 0 || version == u32::MAX || implemented_ports == 0 {
+            return false;
+        }
+        let port_count = ((capabilities & CAP_PORT_COUNT_MASK) + 1) as u8;
+        let valid_port_mask = if port_count == 32 {
+            u32::MAX
+        } else {
+            (1_u32 << port_count) - 1
+        };
+        let command_slot_count = (((capabilities & CAP_COMMAND_SLOT_COUNT_MASK)
+            >> CAP_COMMAND_SLOT_COUNT_SHIFT)
+            + 1) as u8;
+        self.capabilities == capabilities
+            && self.version == version
+            && self.implemented_ports == implemented_ports
+            && self.port_count == port_count
+            && implemented_ports & !valid_port_mask == 0
+            && self.command_slot_count == command_slot_count
+            && self.native_command_queuing
+                == (capabilities & CAP_NATIVE_COMMAND_QUEUING != 0)
+    }
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]

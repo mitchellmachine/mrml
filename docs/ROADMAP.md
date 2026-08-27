@@ -203,10 +203,23 @@ access to that range. The controller transaction keeps interrupts disabled,
 requests the standard HBA reset, applies a fixed poll limit, verifies AHCI mode,
 and validates version, port count, command-slot count, implemented ports, and
 the NCQ capability bit before publishing a generation-bound snapshot. Storage
-passes 143 host-modeled tests on Windows and Arch Linux. Port/signature
-discovery, command-list/FIS/table allocation, DMA/IOMMU composition, interrupts,
-ATA/ATAPI, NCQ operation, native PCI enumeration, and physical evidence remain
-**PLANNED**.
+passes 143 host-modeled tests on Windows and Arch Linux for this global-register
+boundary.
+
+The read-only port/signature gate is now **PARTIALLY IMPLEMENTED IN SOURCE**.
+`discover_ahci_ports` exact-matches the retained mapping and controller
+generations, requires stable global controller observations before and after the
+scan, reads only implemented ports, compares two complete fixed-capacity port
+observations, and publishes nothing when register access, link state, interrupt
+state, command/FIS engines, or outstanding commands are uncertain. SATA,
+ATAPI, enclosure-management, and port-multiplier signatures are classified;
+stable unknown signatures remain descriptive and are not installed-recovery
+candidates. The focused Windows gnullvm storage suite passes 156 tests,
+including thirteen hostile-model tests for this boundary. Linux execution was
+not available in this workspace, so no Linux pass count is claimed for this
+increment. Command-list/FIS/table allocation, DMA/IOMMU
+composition, interrupts, ATA/ATAPI command execution, NCQ operation, native PCI
+enumeration, and physical evidence remain **PLANNED**.
 
 Selected-device reopening and redundant-root reads are now **PARTIALLY
 IMPLEMENTED**. Exact path/media/geometry and block-zero header revalidation

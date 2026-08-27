@@ -287,9 +287,26 @@ snapshot only after validating version, capability-derived port/command-slot
 bounds, and the implemented-port bitmap. Timeout, access uncertainty, malformed
 mapping state, unavailable AHCI mode, invalid version, no ports, or a port bit
 outside the advertised bound publishes nothing. Storage passes 143 tests on
-Windows and Arch Linux. Tests use a hostile register model; no physical HBA,
-reset timing, PCI enumerator, port engine, DMA, interrupt, ATA/ATAPI command,
-NCQ, link rate, or media behavior is claimed.
+Windows and Arch Linux for this global-register boundary.
+
+The next port/signature boundary is **PARTIALLY IMPLEMENTED IN SOURCE** as a
+read-only atomic scan. `discover_ahci_ports` requires the exact retained object,
+configuration generation, and mapping generation; stabilizes the controller's
+capability/version/implemented-port state before and after discovery; reads no
+unimplemented port; and compares two complete bounded observations before
+publishing indexed snapshots. Per-port interrupts, command/FIS engines, SATA
+active bits, and command-issue bits must all be inactive. Link detection, speed,
+power state, and SATA/ATAPI/enclosure-management/port-multiplier signatures are
+classified; a stable unknown signature remains descriptive and cannot qualify
+for installed recovery. Thirteen static hostile-model tests cover stale
+mapping/controller state, offset bounds, unimplemented ports, read uncertainty,
+state substitution, controller substitution, active engines/commands, malformed
+link state, and unavailable signatures. The focused Windows gnullvm storage
+suite passes 156 tests, including the thirteen tests for this boundary. Linux
+execution was not available in this workspace, so no Linux pass count is
+claimed for the increment. No physical HBA, link, DMA, interrupt delivery,
+ATA/ATAPI command, NCQ, media, OVMF, or installed-device reacquisition evidence
+is claimed.
 
 The configuration service now **PARTIALLY IMPLEMENTS** an atomic
 correlate/register/reacquire operation for this route. It admits the descriptor
