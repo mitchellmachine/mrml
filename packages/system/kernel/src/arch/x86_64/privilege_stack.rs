@@ -1,8 +1,8 @@
 use crate::PAGE_SIZE;
 
-pub const PRIVILEGE_STACK_ARENA_PAGES: u64 = 48;
+pub const PRIVILEGE_STACK_ARENA_PAGES: u64 = 64;
 pub const MAX_X86_64_CPUS: usize = 256;
-pub const EARLY_STACK_PAGES: u64 = 16;
+pub const EARLY_STACK_PAGES: u64 = 32;
 const ENTRY_STACK_PAGES: u64 = 16;
 const DOUBLE_FAULT_STACK_PAGES: u64 = 8;
 const ENTRY_GUARD_PAGE: u64 = EARLY_STACK_PAGES;
@@ -203,13 +203,13 @@ mod tests {
     #[test]
     fn layout_has_two_absent_guards_and_disjoint_stacks() {
         let layout = PrivilegeStackLayout::new(0x40_0000, PRIVILEGE_STACK_ARENA_PAGES).unwrap();
-        assert_eq!(layout.early_top(), Ok(0x40_fff8));
-        assert_eq!(layout.entry_guard(), Ok(0x41_0000));
-        assert_eq!(layout.entry_base(), Ok(0x41_1000));
-        assert_eq!(layout.entry_top(), Ok(0x42_1000));
-        assert_eq!(layout.double_fault_guard(), Ok(0x42_1000));
-        assert_eq!(layout.double_fault_base(), Ok(0x42_2000));
-        assert_eq!(layout.double_fault_top(), Ok(0x42_a000));
+        assert_eq!(layout.early_top(), Ok(0x41_fff8));
+        assert_eq!(layout.entry_guard(), Ok(0x42_0000));
+        assert_eq!(layout.entry_base(), Ok(0x42_1000));
+        assert_eq!(layout.entry_top(), Ok(0x43_1000));
+        assert_eq!(layout.double_fault_guard(), Ok(0x43_1000));
+        assert_eq!(layout.double_fault_base(), Ok(0x43_2000));
+        assert_eq!(layout.double_fault_top(), Ok(0x43_a000));
     }
 
     #[test]

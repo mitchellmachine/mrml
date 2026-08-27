@@ -616,7 +616,7 @@ mod tests {
             }
         }
         let image =
-            super::super::ApTrampolineImage::new(0x8000, 0x20_0000, 0x1000, 0x10ff8, 1, 1).unwrap();
+            super::super::ApTrampolineImage::new(0x8000, 0x20_0000, 0x1000, 0x20ff8, 1, 1).unwrap();
         let mut page = Page(false);
         let installed = image.install(&mut page).unwrap();
         assert_eq!(

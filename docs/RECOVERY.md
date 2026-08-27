@@ -1833,17 +1833,18 @@ image or backend endpoint participates in this test, so it establishes recovery
 transaction cleanup only, not production invocation or multi-domain execution.
 
 The live co-located component recovery path now **PARTIALLY IMPLEMENTS** the
-same atomic endpoint transaction on WHP and KVM. Artifact/backend transformation
-may temporarily take one prepared route, but restoration requires its exact
-retained membership; runtime authorization occurs only after the constructed
-endpoint set commits, and the launcher receives that same endpoint back. A
-distinct provider is entered through the secondary entry of its own verified
-image. Configuration passes 53 tests on Windows and Arch Linux, WHP 12, KVM 13,
-and both runner release builds pass. A fresh signed WHP run authenticated the
-recovered owner and reported one classified/eligible/microVM domain with zero
-native fallback after publication, then exposed a first-exit kernel double fault
-before component IPC. Consequently no new execution, cleanup, KVM-live, or
-complete two-domain recovery claim is made.
+same atomic endpoint transaction and complete service lifecycle on WHP and KVM.
+Artifact/backend transformation may temporarily take one prepared route, but
+restoration requires its exact retained membership; runtime authorization
+occurs only after the constructed endpoint set commits, and the launcher
+receives that same endpoint back. KVM register evidence localized the former
+double fault to an early-stack underflow below the mapped arena. The shared
+layout now reserves 32 early pages inside a 64-page guarded privilege arena, and
+the distinct provider enters at its own exact verified PE entry rather than a
+legacy combined-image offset. One identical fresh signed artifact set completed
+the ZIM/Zstd request, Total proof, peer cleanup, and terminal halt on WHP and KVM
+with one eligible microVM domain and zero native fallback. Complete two-domain
+recovered construction remains **PLANNED**.
 
 The existing service-image recovery path now has canonical MRML build profiles:
 `block_service_loop` for the userspace service image and

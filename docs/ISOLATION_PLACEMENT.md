@@ -1181,6 +1181,19 @@ before construction. Complete installed-system enumeration and live boot
 consumption remain **PLANNED**, so this focused component evidence does not
 promote Total mode itself.
 
+Fresh controlled runtime evidence on 2026-08-26 now completes the co-located
+component path on both WHP and KVM using one identical signed kernel,
+consumer/provider pair, and SystemRelease. Register diagnostics proved the
+former first-exit double fault was a 296-byte early-stack underflow. The shared
+loader/kernel/backend layout now supplies 32 early pages within a 64-page
+guarded privilege arena, while retaining the independent entry and double-fault
+stacks. The Zstd provider enters at its own exact verified PE entry; no filename,
+path search, or combined-image offset selects it. Both backends reported one
+eligible domain in one microVM, zero native fallback, exact-generation ZIM/Zstd
+completion, lifecycle cleanup, and terminal halt. This is hosted controlled
+single-domain evidence, not complete required-system enumeration or physical
+host-resistant isolation.
+
 The focused runners now provide only complete policy-selected package-to-domain
 assignments. The authenticated release supplies each package's runtime class
 and descriptive exception reason; omission, identity substitution, duplicate

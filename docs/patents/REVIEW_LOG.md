@@ -1,5 +1,17 @@
 # Patent review log
 
+## 2026-08-26 — Guarded early-stack capacity and exact provider entry
+
+Patent review: **NOT_TRIGGERED** for enlarging the existing guarded x86-64
+kernel stack allocation after measured underflow, keeping loader and VMM layout
+constants identical, adding failure-state register diagnostics, and entering an
+independently verified PE image at its authenticated entry rather than an
+incorrect fixed offset. This changes bounded resource sizing and validation of
+existing mechanisms; it introduces no new scheduling, virtualization,
+compression, ABI, or hardware algorithm. The broader component-interface and
+Total MicroVM reviews remain **TRIGGERED**. This technical screen is not patent
+clearance.
+
 ## 2026-08-26 — Capability-generation retirement and exact AHCI mapping rights
 
 Patent review: **NOT_TRIGGERED** for replacing integer wraparound with checked

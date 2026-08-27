@@ -4058,10 +4058,21 @@ fn application_main() -> Result<()> {
                     }
                 }
                 _ => {
+                    let state = guest.snapshot().map_err(|error| {
+                        anyhow!(
+                            "KVM component service stage mismatch ({:?}) and state capture failed: {:?}",
+                            exit,
+                            error
+                        )
+                    })?;
                     return Err(anyhow!(
-                        "KVM component service stage mismatch after {} accepted exits: {:?}",
+                        "KVM component service stage mismatch after {} accepted exits: {:?}; rip={:#x} rsp={:#x} cr3={:#x} cr2={:#x}",
                         accepted_exits,
-                        exit
+                        exit,
+                        state.instruction_pointer(),
+                        state.stack_pointer(),
+                        state.page_table_root(),
+                        state.fault_address()
                     ));
                 }
             }

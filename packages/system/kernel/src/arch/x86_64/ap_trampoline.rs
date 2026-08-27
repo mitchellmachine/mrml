@@ -445,7 +445,7 @@ mod tests {
             0x8000,
             0x20_0000,
             0xffff_8000_0010_0000,
-            0xffff_8000_0020_fff8,
+            0xffff_8000_0021_fff8,
             7,
             9,
         )
@@ -458,7 +458,7 @@ mod tests {
         );
         assert_eq!(
             &image.bytes()[92..100],
-            &0xffff_8000_0020_fff8u64.to_le_bytes()
+            &0xffff_8000_0021_fff8u64.to_le_bytes()
         );
         assert_eq!(&image.bytes()[102..110], &7u64.to_le_bytes());
         assert_eq!(&image.bytes()[112..120], &9u64.to_le_bytes());
@@ -499,11 +499,11 @@ mod tests {
             Some(ApTrampolineError::InvalidStack)
         );
         assert_eq!(
-            ApTrampolineImage::new(0x8000, 0x2000, 0x1000, 0x10ff8, 256, 1).err(),
+            ApTrampolineImage::new(0x8000, 0x2000, 0x1000, 0x20ff8, 256, 1).err(),
             Some(ApTrampolineError::InvalidCpu)
         );
         assert_eq!(
-            ApTrampolineImage::new(0x8000, 0x2000, 0x1000, 0x10ff8, 1, 0).err(),
+            ApTrampolineImage::new(0x8000, 0x2000, 0x1000, 0x20ff8, 1, 0).err(),
             Some(ApTrampolineError::InvalidGeneration)
         );
     }
@@ -576,7 +576,7 @@ mod tests {
 
     #[test]
     fn installation_is_write_xor_execute_and_failure_revokes() {
-        let image = ApTrampolineImage::new(0x8000, 0x20_0000, 0x1000, 0x10ff8, 1, 1).unwrap();
+        let image = ApTrampolineImage::new(0x8000, 0x20_0000, 0x1000, 0x20ff8, 1, 1).unwrap();
         let mut page = Page::writable();
         let installed = image.install(&mut page).unwrap();
         assert_eq!(installed.physical(), 0x8000);
