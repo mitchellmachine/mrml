@@ -9070,3 +9070,15 @@ delivery algorithm, scheduler, cryptographic primitive, compression mechanism,
 or device protocol. Backend interrupt/event delivery and complete signed
 component execution remain within the broader triggered worldwide mechanism
 review. This technical screen is not legal advice or patent clearance.
+
+# 2026-08-27 — Ordered interface queue publication
+
+Patent review: **TRIGGERED** under the existing cross-microVM interface and
+Total MicroVM review. This increment applies conventional release fences before
+publishing fixed-slot request, response, and idle states and matching acquire
+fences after observing those states. It introduces no scheduling algorithm,
+native event transport, cryptographic primitive, compression mechanism, or
+device protocol. Atomic shared-state representation, backend notification, and
+complete signed component execution remain within the broader triggered
+worldwide mechanism review. This technical screen is not legal advice or patent
+clearance.

@@ -3484,6 +3484,8 @@ identity, operation, and monotonic sequence. Neither endpoint consumes payload
 without its matching notification; cross-binding, stale, and wrong-operation
 notifications fail closed. Windows and Linux kernel suites pass 576 tests, WHP
 passes 27 with one manual test ignored, and nested KVM passes 23 with one manual
-test ignored. Native interrupt/event delivery, acquire/release synchronization,
+test ignored. The queue now also performs release-before-state and
+acquire-after-state fences for request, response, and idle handback. Native
+interrupt/event delivery, a race-tested atomic shared-state representation,
 recovered two-domain runner ownership, and guest-executed signed ZIM/Zstd calls
 remain **PLANNED**.

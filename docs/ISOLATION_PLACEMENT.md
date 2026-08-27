@@ -1376,8 +1376,10 @@ now returns a typed notification bound to the same complete identity, operation,
 and sequence; the provider must consume that exact notification before reading,
 and its response produces the corresponding typed notification required by the
 consumer. Cross-binding, stale-sequence, and wrong-operation notifications fail
-before payload consumption. Native interrupt/event delivery, concurrent
-acquire/release publication, and signed component execution remain **PLANNED**.
+before payload consumption. Release fences precede request, response, and idle
+state publication; matching acquire fences follow observation before metadata or
+payload consumption. Native interrupt/event delivery, a race-tested atomic
+shared-state representation, and signed component execution remain **PLANNED**.
 
 The exact guest page-table leaf is now **PARTIALLY IMPLEMENTED** on both
 backends. The retained owner installs one supervisor RW/NX leaf in each stopped

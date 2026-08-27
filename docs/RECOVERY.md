@@ -2031,6 +2031,8 @@ notification beside the exact shared-page owner. The notification binds the
 complete interface and placement generations, operation, and sequence; page
 state alone is insufficient to authorize consumption. Lost notifications make
 the exchange unavailable or restartable under the owning lifecycle and must
-never be reconstructed from mutable page fields. Native event delivery and
-concurrent ordering remain pending, so this checkpoint is not proof of
+never be reconstructed from mutable page fields. Recovery must preserve the
+release-before-state and acquire-after-state transition contract; it cannot
+resume a partially published exchange. Native event delivery and race-tested
+atomic shared-state access remain pending, so this checkpoint is not proof of
 guest-executed component traffic.

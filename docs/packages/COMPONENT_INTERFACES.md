@@ -610,8 +610,10 @@ publication. Request and response publication now each produce a non-forgeable
 typed notification carrying the exact binding identity, operation, and sequence;
 the opposite endpoint must present it before consuming payload bytes. Nested KVM
 transports that bounded ZIM-like request and Zstd-like response across two live
-VM mappings. Backend interrupt/event delivery, guest-side acquire/release
-ordering, signed component execution, and recovery integration remain
+VM mappings. Release fences precede request, response, and idle publication;
+matching acquire fences follow state observation before consuming metadata or
+payload. Backend interrupt/event delivery, a race-tested atomic shared-state
+representation, signed component execution, and recovery integration remain
 **PLANNED**.
 
 The end-to-end Zstd gate proves equal corpus decoding by old and new providers,

@@ -1,3 +1,5 @@
+use core::sync::atomic::{Ordering, fence};
+
 use crate::{
     Capability, CapabilitySpace, MemoryMappingId, MemoryObjectId, MemoryResourceError,
     MicrovmPeerPageProjection, ObjectId, PAGE_SIZE,
@@ -208,11 +210,11 @@ impl MicrovmInterfaceQueueConsumer {
         self.next_sequence
             .checked_add(1)
             .ok_or(MicrovmInterfaceQueueError::SequenceExhausted)?;
-        if read_u16(page, 10)? != STATE_IDLE
-            || read_u64(page, 88)? != 0
-            || read_u32(page, 96)? != 0
-            || read_u32(page, 100)? != 0
-        {
+        if read_u16(page, 10)? != STATE_IDLE {
+            return Err(MicrovmInterfaceQueueError::InvalidState);
+        }
+        fence(Ordering::Acquire);
+        if read_u64(page, 88)? != 0 || read_u32(page, 96)? != 0 || read_u32(page, 100)? != 0 {
             return Err(MicrovmInterfaceQueueError::InvalidState);
         }
         page[HEADER_BYTES..].fill(0);
@@ -220,8 +222,9 @@ impl MicrovmInterfaceQueueConsumer {
         write_u64(page, 88, self.next_sequence);
         write_u32(page, 96, operation);
         write_u32(page, 100, payload.len() as u32);
-        // State is published last. Native shared-memory users must pair this
-        // wire format with the backend's acquire/release notification path.
+        // State is published last. The matching receiver observes it before
+        // its acquire fence and then validates the exact notification token.
+        fence(Ordering::Release);
         write_u16(page, 10, STATE_REQUEST);
         Ok(MicrovmInterfaceRequestNotification {
             identity: self.identity,
@@ -249,6 +252,7 @@ impl MicrovmInterfaceQueueConsumer {
         if read_u16(page, 10)? != STATE_RESPONSE {
             return Err(MicrovmInterfaceQueueError::InvalidState);
         }
+        fence(Ordering::Acquire);
         if read_u64(page, 88)? != self.next_sequence {
             return Err(MicrovmInterfaceQueueError::InvalidSequence);
         }
@@ -269,6 +273,7 @@ impl MicrovmInterfaceQueueConsumer {
         write_u64(page, 88, 0);
         write_u32(page, 96, 0);
         write_u32(page, 100, 0);
+        fence(Ordering::Release);
         write_u16(page, 10, STATE_IDLE);
         self.next_sequence = next_sequence;
         Ok((operation, length))
@@ -303,6 +308,7 @@ impl MicrovmInterfaceQueueProvider {
         if self.accepted_sequence.is_some() || read_u16(page, 10)? != STATE_REQUEST {
             return Err(MicrovmInterfaceQueueError::InvalidState);
         }
+        fence(Ordering::Acquire);
         let sequence = read_u64(page, 88)?;
         if sequence != self.next_sequence {
             return Err(MicrovmInterfaceQueueError::InvalidSequence);
@@ -349,6 +355,7 @@ impl MicrovmInterfaceQueueProvider {
         page[HEADER_BYTES..].fill(0);
         page[HEADER_BYTES..HEADER_BYTES + payload.len()].copy_from_slice(payload);
         write_u32(page, 100, payload.len() as u32);
+        fence(Ordering::Release);
         write_u16(page, 10, STATE_RESPONSE);
         self.accepted_sequence = None;
         self.next_sequence = next_sequence;
