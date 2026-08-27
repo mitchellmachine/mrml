@@ -41,73 +41,97 @@ scope = "compile"
 targets = ["WINDOWS"]
 
 [[build_input]]
+fingerprint = "fnv1a64:2425f542010a8e6b"
+id = "external-command.captured-processes-enforce-output-and-time-limits.powershell-exe"
 kind = "external-command"
 line = 499
 path = "packages/libraries/runtime/src/process.rs"
-reason = "reviewed repository build input"
+reason = "Invoke the declared powershell-exe process boundary from captured_processes_enforce_output_and_time_limits for org.mrml.library.runtime; arguments remain bounded by that reviewed call site."
 
 [[build_input]]
+fingerprint = "fnv1a64:d277aa0f4912884b"
+id = "external-command.captured-processes-enforce-output-and-time-limits.sh"
 kind = "external-command"
 line = 510
 path = "packages/libraries/runtime/src/process.rs"
-reason = "reviewed repository build input"
+reason = "Invoke the declared sh process boundary from captured_processes_enforce_output_and_time_limits for org.mrml.library.runtime; arguments remain bounded by that reviewed call site."
 
 [[build_input]]
+fingerprint = "fnv1a64:2425f442010a8cb8"
+id = "external-command.captured-processes-enforce-output-and-time-limits.powershell-exe.2"
 kind = "external-command"
 line = 521
 path = "packages/libraries/runtime/src/process.rs"
-reason = "reviewed repository build input"
+reason = "Invoke the declared powershell-exe process boundary from captured_processes_enforce_output_and_time_limits for org.mrml.library.runtime; arguments remain bounded by that reviewed call site."
 
 [[build_input]]
+fingerprint = "fnv1a64:d277a90f49128698"
+id = "external-command.captured-processes-enforce-output-and-time-limits.sh.2"
 kind = "external-command"
 line = 532
 path = "packages/libraries/runtime/src/process.rs"
-reason = "reviewed repository build input"
+reason = "Invoke the declared sh process boundary from captured_processes_enforce_output_and_time_limits for org.mrml.library.runtime; arguments remain bounded by that reviewed call site."
 
 [[build_input]]
+fingerprint = "fnv1a64:4c4f39c2d9e8c079"
+id = "external-command.captures-stdout-stderr-exit-status-and-working-directory.powershell-exe"
 kind = "external-command"
 line = 552
 path = "packages/libraries/runtime/src/process.rs"
-reason = "reviewed repository build input"
+reason = "Invoke the declared powershell-exe process boundary from captures_stdout_stderr_exit_status_and_working_directory for org.mrml.library.runtime; arguments remain bounded by that reviewed call site."
 
 [[build_input]]
+fingerprint = "fnv1a64:ef0952c8298bb261"
+id = "external-command.captures-stdout-stderr-exit-status-and-working-directory.sh"
 kind = "external-command"
 line = 562
 path = "packages/libraries/runtime/src/process.rs"
-reason = "reviewed repository build input"
+reason = "Invoke the declared sh process boundary from captures_stdout_stderr_exit_status_and_working_directory for org.mrml.library.runtime; arguments remain bounded by that reviewed call site."
 
 [[build_input]]
+fingerprint = "fnv1a64:d72af3581bf1b057"
+id = "external-command.detached-process-runs-to-completion.powershell-exe"
 kind = "external-command"
 line = 583
 path = "packages/libraries/runtime/src/process.rs"
-reason = "reviewed repository build input"
+reason = "Invoke the declared powershell-exe process boundary from detached_process_runs_to_completion for org.mrml.library.runtime; arguments remain bounded by that reviewed call site."
 
 [[build_input]]
+fingerprint = "fnv1a64:c72e67aaa38c78af"
+id = "external-command.detached-process-runs-to-completion.sh"
 kind = "external-command"
 line = 595
 path = "packages/libraries/runtime/src/process.rs"
-reason = "reviewed repository build input"
+reason = "Invoke the declared sh process boundary from detached_process_runs_to_completion for org.mrml.library.runtime; arguments remain bounded by that reviewed call site."
 
 [[build_input]]
+fingerprint = "fnv1a64:7ed012f6d4b3a556"
+id = "external-command.silent-child-can-be-polled-killed-and-waited.powershell-exe"
 kind = "external-command"
 line = 618
 path = "packages/libraries/runtime/src/process.rs"
-reason = "reviewed repository build input"
+reason = "Invoke the declared powershell-exe process boundary from silent_child_can_be_polled_killed_and_waited for org.mrml.library.runtime; arguments remain bounded by that reviewed call site."
 
 [[build_input]]
+fingerprint = "fnv1a64:8ed9328e430e9176"
+id = "external-command.silent-child-can-be-polled-killed-and-waited.sh"
 kind = "external-command"
 line = 624
 path = "packages/libraries/runtime/src/process.rs"
-reason = "reviewed repository build input"
+reason = "Invoke the declared sh process boundary from silent_child_can_be_polled_killed_and_waited for org.mrml.library.runtime; arguments remain bounded by that reviewed call site."
 
 [[build_input]]
+fingerprint = "fnv1a64:447562c9c651e38b"
+id = "external-command.piped-child-round-trips-a-utf8-line.powershell-exe"
 kind = "external-command"
 line = 640
 path = "packages/libraries/runtime/src/process.rs"
-reason = "reviewed repository build input"
+reason = "Invoke the declared powershell-exe process boundary from piped_child_round_trips_a_utf8_line for org.mrml.library.runtime; arguments remain bounded by that reviewed call site."
 
 [[build_input]]
+fingerprint = "fnv1a64:bb37bb9798563aeb"
+id = "external-command.piped-child-round-trips-a-utf8-line.sh"
 kind = "external-command"
 line = 650
 path = "packages/libraries/runtime/src/process.rs"
-reason = "reviewed repository build input"
+reason = "Invoke the declared sh process boundary from piped_child_round_trips_a_utf8_line for org.mrml.library.runtime; arguments remain bounded by that reviewed call site."

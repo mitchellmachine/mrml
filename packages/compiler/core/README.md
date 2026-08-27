@@ -18,13 +18,13 @@ diagnostic wording, or unstable Rust ABI/symbol compatibility. It remains a
 Rust compiler and must not deliberately break modern Rust merely to diverge.
 The normative feature classifications, Polonius and trait-solver prerequisites,
 security profiles, gap matrix, and priority rules are in
-[`docs/COMPILER.md`](../../docs/COMPILER.md).
+[`docs/COMPILER.md`](../../../docs/COMPILER.md).
 
 The initial reference compiler is `rustc 1.100.0-nightly`, commit
 `f7d782a3be46d6bb4b9792fe69a61db389ba1769` (2026-08-19). The rustup `rust-src`
 component does not contain the rustc compiler suites, so the matching official
 `rust-lang/rust` commit is the test source of truth. Its durable generation
-record is [`ORACLE-0001`](../../docs/compiler/oracles/ORACLE-0001.md).
+record is [`ORACLE-0001`](../../../docs/compiler/oracles/ORACLE-0001.md).
 Consequently:
 
 - `tests/conformance.rs` records original black-box language observations used

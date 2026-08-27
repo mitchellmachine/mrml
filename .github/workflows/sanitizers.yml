@@ -13,8 +13,8 @@ permissions:
   contents: read
 
 jobs:
-  address-sanitizer:
-    name: Linux stage-zero ASan tests
+  stage-zero-address-sanitizer:
+    name: Linux stage-zero AddressSanitizer tests
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
@@ -22,8 +22,25 @@ jobs:
         uses: actions/checkout@v6
       - name: Install pinned Rust toolchain
         run: rustup toolchain install nightly-2026-08-24 --profile minimal --component rust-src
-      - name: Run locked native tests under AddressSanitizer
+      - name: Run locked frontend tests under AddressSanitizer
         env:
-          CARGO_TARGET_DIR: target/asan
-          RUSTFLAGS: -Zsanitizer=address
+          CARGO_TARGET_DIR: target/asan-stage-zero
+          RUSTFLAGS: -Zsanitizer=address -Cforce-frame-pointers=yes
+          ASAN_OPTIONS: abort_on_error=1:detect_leaks=0
         run: cargo test --locked --target x86_64-unknown-linux-gnu
+
+  native-address-sanitizer:
+    name: Linux full native AddressSanitizer tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v6
+      - name: Install pinned Rust toolchain
+        run: rustup toolchain install nightly-2026-08-24 --profile minimal --component rust-src --target x86_64-unknown-none,x86_64-unknown-uefi
+      - name: Build locked stage-zero frontend
+        run: cargo build --locked
+      - name: Run every Linux-compatible native test under AddressSanitizer
+        env:
+          ASAN_OPTIONS: abort_on_error=1:detect_leaks=0
+        run: ./target/debug/mrml test --all --target linux --sanitizer address

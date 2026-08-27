@@ -32,9 +32,8 @@ const MICROVM_PAGE_PROJECTION_RIGHTS: Rights = Rights::READ
 
 const MICROVM_PEER_PAGE_RIGHTS: Rights = MICROVM_PAGE_PROJECTION_RIGHTS.union(Rights::SHARE);
 
-const MICROVM_PEER_TARGET_RIGHTS: Rights = Rights::MAP
-    .union(Rights::INSPECT)
-    .union(Rights::CONTROL);
+const MICROVM_PEER_TARGET_RIGHTS: Rights =
+    Rights::MAP.union(Rights::INSPECT).union(Rights::CONTROL);
 
 pub const MAX_COMPONENT_IMAGE_REGIONS: usize = MAX_PE_SECTIONS + 1;
 
@@ -505,14 +504,10 @@ pub fn reserve_microvm_peer_page_projection<
     second_virtual_page: u64,
     capabilities: &mut CapabilitySpace<C>,
 ) -> Result<(MicrovmPeerPageProjection, Capability), MemoryResourceError> {
-    let first_target = capabilities.authorize_exact(
-        first_target_capability,
-        MICROVM_PEER_TARGET_RIGHTS,
-    )?;
-    let second_target = capabilities.authorize_exact(
-        second_target_capability,
-        MICROVM_PEER_TARGET_RIGHTS,
-    )?;
+    let first_target =
+        capabilities.authorize_exact(first_target_capability, MICROVM_PEER_TARGET_RIGHTS)?;
+    let second_target =
+        capabilities.authorize_exact(second_target_capability, MICROVM_PEER_TARGET_RIGHTS)?;
     if first_target == second_target {
         return Err(MemoryResourceError::InvalidMapping);
     }
@@ -1541,7 +1536,9 @@ mod tests {
                 2,
                 &mut capabilities,
             ),
-            Err(MemoryResourceError::Capability(CapabilityError::PermissionDenied))
+            Err(MemoryResourceError::Capability(
+                CapabilityError::PermissionDenied
+            ))
         ));
         assert!(matches!(
             reserve_microvm_peer_page_projection(
@@ -1554,7 +1551,9 @@ mod tests {
                 2,
                 &mut capabilities,
             ),
-            Err(MemoryResourceError::Capability(CapabilityError::PermissionDenied))
+            Err(MemoryResourceError::Capability(
+                CapabilityError::PermissionDenied
+            ))
         ));
         assert_eq!(
             reserve_microvm_peer_page_projection(

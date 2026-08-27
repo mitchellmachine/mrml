@@ -197,37 +197,49 @@ name = "MRML_SERVICE_MIN_VERSION"
 name = "MRML_SERVICE_ROOT_DIGEST_HEX"
 
 [[build_input]]
+fingerprint = "fnv1a64:7c548c315cc61881"
+id = "compile-env.ap-startup-timing.mrml-emulated-tsc-hz"
 kind = "compile-env"
-line = 2372
+line = 2486
 path = "packages/system/bootloader/src/main.rs"
-reason = "reviewed repository build input"
+reason = "Read the declared compile-time setting mrml-emulated-tsc-hz for ap_startup_timing in org.mrml.system.bootloader; absence and defaults are handled explicitly at that site."
 
 [[build_input]]
+fingerprint = "fnv1a64:a293b20661bcbb6b"
+id = "compile-env.main.mrml-service-root-digest-hex"
 kind = "compile-env"
-line = 3775
+line = 3836
 path = "packages/system/bootloader/src/main.rs"
-reason = "reviewed repository build input"
+reason = "Read the declared compile-time setting mrml-service-root-digest-hex for main in org.mrml.system.bootloader; absence and defaults are handled explicitly at that site."
 
 [[build_input]]
+fingerprint = "fnv1a64:4b95ff0ed2c74100"
+id = "compile-env.main.mrml-application-root-digest-hex"
 kind = "compile-env"
-line = 3804
+line = 3853
 path = "packages/system/bootloader/src/main.rs"
-reason = "reviewed repository build input"
+reason = "Read the declared compile-time setting mrml-application-root-digest-hex for main in org.mrml.system.bootloader; absence and defaults are handled explicitly at that site."
 
 [[build_input]]
+fingerprint = "fnv1a64:bf179b9ed80518b1"
+id = "compile-env.embedded-application-minimum-version.mrml-application-min-version"
 kind = "compile-env"
-line = 3549
+line = 3887
 path = "packages/system/bootloader/src/main.rs"
-reason = "reviewed repository build input"
+reason = "Read the declared compile-time setting mrml-application-min-version for embedded_application_minimum_version in org.mrml.system.bootloader; absence and defaults are handled explicitly at that site."
 
 [[build_input]]
+fingerprint = "fnv1a64:1494b564e151a017"
+id = "compile-env.embedded-service-minimum-version.mrml-service-min-version"
 kind = "compile-env"
-line = 3576
+line = 3907
 path = "packages/system/bootloader/src/main.rs"
-reason = "reviewed repository build input"
+reason = "Read the declared compile-time setting mrml-service-min-version for embedded_service_minimum_version in org.mrml.system.bootloader; absence and defaults are handled explicitly at that site."
 
 [[build_input]]
+fingerprint = "fnv1a64:db10432d55e8f575"
+id = "compile-env.embedded-minimum-version.mrml-kernel-min-version"
 kind = "compile-env"
-line = 4397
+line = 4806
 path = "packages/system/bootloader/src/main.rs"
-reason = "reviewed repository build input"
+reason = "Read the declared compile-time setting mrml-kernel-min-version for embedded_minimum_version in org.mrml.system.bootloader; absence and defaults are handled explicitly at that site."

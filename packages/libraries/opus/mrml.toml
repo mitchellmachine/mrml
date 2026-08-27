@@ -75,7 +75,9 @@ name = "rfc8251_audit"
 source = "packages/libraries/opus/examples/rfc8251_audit.rs"
 
 [[build_input]]
+fingerprint = "fnv1a64:3c8b982241004dca"
+id = "native-link.opus-range-diff.opus"
 kind = "native-link"
 line = 15
 path = "packages/libraries/opus/examples/opus_range_diff.rs"
-reason = "reviewed repository build input"
+reason = "Bind the declared native library opus for the reviewed opus_range_diff FFI boundary in org.mrml.library.opus."

@@ -124,7 +124,8 @@ unsafe impl HostResourceMemory for DirectHostResourceMemory {
     }
 
     unsafe fn retire(&mut self, resource: u64, bytes: u64) -> Result<(), Self::Error> {
-        let length = usize::try_from(bytes).map_err(|_| DirectHostResourceError::AddressOverflow)?;
+        let length =
+            usize::try_from(bytes).map_err(|_| DirectHostResourceError::AddressOverflow)?;
         let address = Self::address(resource, 0, length)?;
         // SAFETY: required by the trait caller; the complete registered range
         // remains exclusively live until this retirement operation succeeds.

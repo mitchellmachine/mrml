@@ -43,7 +43,9 @@ package = "org.mrml.library.runtime"
 scope = "compile"
 
 [[build_input]]
+fingerprint = "fnv1a64:75d8d5a0ba5e6f33"
+id = "native-link.native.kernel32"
 kind = "native-link"
-line = 70
+line = 80
 path = "packages/system/vmm/whp/src/native.rs"
-reason = "reviewed repository build input"
+reason = "Bind the declared native library kernel32 for the reviewed native FFI boundary in org.mrml.system.vmm-whp."

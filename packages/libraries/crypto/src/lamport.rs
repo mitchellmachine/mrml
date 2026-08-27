@@ -6,9 +6,9 @@ pub const LAMPORT_PUBLIC_KEY_BYTES: usize = LAMPORT_PRIVATE_KEY_BYTES;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum LamportError {
-    InvalidPrivateKey,
-    InvalidPublicKey,
-    InvalidSignature,
+    PrivateKey,
+    PublicKey,
+    Signature,
 }
 
 /// Derives a Lamport public key from 1,024 independent 512-bit secret values.
@@ -17,7 +17,7 @@ pub fn lamport_public_key(private_key: &[u8], public_key: &mut [u8]) -> Result<(
     if private_key.len() != LAMPORT_PRIVATE_KEY_BYTES
         || public_key.len() != LAMPORT_PUBLIC_KEY_BYTES
     {
-        return Err(LamportError::InvalidPrivateKey);
+        return Err(LamportError::PrivateKey);
     }
     let (secrets, _) = private_key.as_chunks::<64>();
     let (public_values, _) = public_key.as_chunks_mut::<64>();
@@ -34,7 +34,7 @@ pub fn lamport_sign(
 ) -> Result<(), LamportError> {
     if private_key.len() != LAMPORT_PRIVATE_KEY_BYTES || signature.len() != LAMPORT_SIGNATURE_BYTES
     {
-        return Err(LamportError::InvalidPrivateKey);
+        return Err(LamportError::PrivateKey);
     }
     let digest = artifact_digest(message);
     for bit in 0..512 {
@@ -51,10 +51,10 @@ pub fn lamport_verify(
     signature: &[u8],
 ) -> Result<(), LamportError> {
     if public_key.len() != LAMPORT_PUBLIC_KEY_BYTES {
-        return Err(LamportError::InvalidPublicKey);
+        return Err(LamportError::PublicKey);
     }
     if signature.len() != LAMPORT_SIGNATURE_BYTES {
-        return Err(LamportError::InvalidSignature);
+        return Err(LamportError::Signature);
     }
     let digest = artifact_digest(message);
     let mut difference = 0u8;
@@ -69,7 +69,7 @@ pub fn lamport_verify(
     if difference == 0 {
         Ok(())
     } else {
-        Err(LamportError::InvalidSignature)
+        Err(LamportError::Signature)
     }
 }
 
@@ -98,12 +98,12 @@ mod tests {
         assert_eq!(lamport_verify(&public, b"kernel image", &signature), Ok(()));
         assert_eq!(
             lamport_verify(&public, b"modified image", &signature),
-            Err(LamportError::InvalidSignature)
+            Err(LamportError::Signature)
         );
         signature[10] ^= 1;
         assert_eq!(
             lamport_verify(&public, b"kernel image", &signature),
-            Err(LamportError::InvalidSignature)
+            Err(LamportError::Signature)
         );
     }
 }

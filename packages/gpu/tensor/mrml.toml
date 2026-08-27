@@ -218,13 +218,17 @@ output = "rust_cuda_kernels.ptx"
 source = "packages/gpu/tensor/cuda_ptx/kernels.rs"
 
 [[build_input]]
-kind = "compile-env"
-line = 36
-path = "packages/gpu/tensor/src/cuda.rs"
-reason = "reviewed repository build input"
-
-[[build_input]]
+fingerprint = "fnv1a64:82c1eba80533b575"
+id = "included-file.cuda.out-dir"
 kind = "included-file"
 line = 36
 path = "packages/gpu/tensor/src/cuda.rs"
-reason = "reviewed repository build input"
+reason = "Embed the declared file input out-dir for cuda in org.mrml.library.tensor; the path is fixed by the reviewed source expression."
+
+[[build_input]]
+fingerprint = "fnv1a64:8e2c4d5c4873e7d9"
+id = "compile-env.cuda.out-dir"
+kind = "compile-env"
+line = 36
+path = "packages/gpu/tensor/src/cuda.rs"
+reason = "Read the declared compile-time setting out-dir for cuda in org.mrml.library.tensor; absence and defaults are handled explicitly at that site."

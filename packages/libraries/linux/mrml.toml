@@ -23,7 +23,9 @@ crate_type = "lib"
 source = "packages/libraries/linux/src/lib.rs"
 
 [[build_input]]
+fingerprint = "fnv1a64:07cfb9d8b9ec012a"
+id = "native-link.lib.c"
 kind = "native-link"
-line = 47
+line = 76
 path = "packages/libraries/linux/src/lib.rs"
-reason = "reviewed repository build input"
+reason = "Bind the declared native library c for the reviewed lib FFI boundary in org.mrml.library.linux."

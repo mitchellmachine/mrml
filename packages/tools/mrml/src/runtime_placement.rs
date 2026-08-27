@@ -359,17 +359,19 @@ impl PreparedGenerationBoundServiceLaunch {
         self,
         bindings: &mut InterfaceBindingTable<N>,
         endpoint: AbiOpaqueHandle,
-    ) -> Result<(InterfaceBindingId, GenerationBoundServiceLaunch), PreparedServicePublicationError>
-    {
+    ) -> Result<
+        (InterfaceBindingId, GenerationBoundServiceLaunch),
+        Box<PreparedServicePublicationError>,
+    > {
         let binding_id =
             match bindings.bind(&self.resolved, ProviderTarget::IsolatedService { endpoint }) {
                 Ok(binding_id) => binding_id,
                 Err(error) => {
-                    return Err(PreparedServicePublicationError {
+                    return Err(Box::new(PreparedServicePublicationError {
                         prepared: self,
                         endpoint,
                         error,
-                    });
+                    }));
                 }
             };
         let placement = GenerationBoundServicePlacement {
@@ -775,7 +777,7 @@ mod tests {
         let failure = prepared.publish(&mut bindings, endpoint).unwrap_err();
         assert_eq!(failure.endpoint(), endpoint);
         assert_eq!(failure.error(), BindingError::CapacityExhausted);
-        let (prepared, returned_endpoint, error) = failure.into_parts();
+        let (prepared, returned_endpoint, error) = (*failure).into_parts();
         assert_eq!(prepared.system_generation(), 108);
         assert_eq!(prepared.resolved().provider().version(), 15);
         assert_eq!(returned_endpoint, endpoint);

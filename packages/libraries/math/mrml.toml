@@ -36,13 +36,17 @@ crate_type = "lib"
 source = "packages/libraries/math/src/lib.rs"
 
 [[build_input]]
+fingerprint = "fnv1a64:2db1617fa7d1f480"
+id = "native-link.lib.m"
 kind = "native-link"
 line = 3
 path = "packages/libraries/math/src/lib.rs"
-reason = "reviewed repository build input"
+reason = "Bind the declared native library m for the reviewed lib FFI boundary in org.mrml.library.math."
 
 [[build_input]]
+fingerprint = "fnv1a64:1fc1a598aa2d2a58"
+id = "native-link.lib.msvcrt"
 kind = "native-link"
 line = 4
 path = "packages/libraries/math/src/lib.rs"
-reason = "reviewed repository build input"
+reason = "Bind the declared native library msvcrt for the reviewed lib FFI boundary in org.mrml.library.math."

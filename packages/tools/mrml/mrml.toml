@@ -33,79 +33,105 @@ self_extern = false
 source = "packages/tools/mrml/src/main.rs"
 
 [[build_input]]
+fingerprint = "fnv1a64:ef78ccc80a786d32"
+id = "external-command.compile-declared-ptx.rustc"
 kind = "external-command"
-line = 3249
+line = 3662
 path = "packages/tools/mrml/src/main.rs"
-reason = "reviewed repository build input"
+reason = "Invoke the declared rustc process boundary from compile_declared_ptx for org.mrml.tool.build; arguments remain bounded by that reviewed call site."
 
 [[build_input]]
+fingerprint = "fnv1a64:71cc8b4fce3667e1"
+id = "external-command.compile-rust-component.rustc"
 kind = "external-command"
-line = 3413
+line = 3828
 path = "packages/tools/mrml/src/main.rs"
-reason = "reviewed repository build input"
+reason = "Invoke the declared rustc process boundary from compile_rust_component for org.mrml.tool.build; arguments remain bounded by that reviewed call site."
 
 [[build_input]]
+fingerprint = "fnv1a64:68db7585d0e82be4"
+id = "external-command.run-declared-test.rustc"
 kind = "external-command"
-line = 3517
+line = 3934
 path = "packages/tools/mrml/src/main.rs"
-reason = "reviewed repository build input"
+reason = "Invoke the declared rustc process boundary from run_declared_test for org.mrml.tool.build; arguments remain bounded by that reviewed call site."
 
 [[build_input]]
+fingerprint = "fnv1a64:9022eb29f92392e8"
+id = "external-command.compile-declared-example.rustc"
 kind = "external-command"
-line = 3604
+line = 4023
 path = "packages/tools/mrml/src/main.rs"
-reason = "reviewed repository build input"
+reason = "Invoke the declared rustc process boundary from compile_declared_example for org.mrml.tool.build; arguments remain bounded by that reviewed call site."
 
 [[build_input]]
+fingerprint = "fnv1a64:88312b8eba255275"
+id = "external-command.compile-declared-benchmark.rustc"
 kind = "external-command"
-line = 3701
+line = 4122
 path = "packages/tools/mrml/src/main.rs"
-reason = "reviewed repository build input"
+reason = "Invoke the declared rustc process boundary from compile_declared_benchmark for org.mrml.tool.build; arguments remain bounded by that reviewed call site."
 
 [[build_input]]
+fingerprint = "fnv1a64:75f1726e5326c1d1"
+id = "external-command.compile-declared-binary.rustc"
 kind = "external-command"
-line = 3811
+line = 4234
 path = "packages/tools/mrml/src/main.rs"
-reason = "reviewed repository build input"
+reason = "Invoke the declared rustc process boundary from compile_declared_binary for org.mrml.tool.build; arguments remain bounded by that reviewed call site."
 
 [[build_input]]
+fingerprint = "fnv1a64:470c233799e11b47"
+id = "external-command.execute-test.output"
 kind = "external-command"
-line = 3914
+line = 4338
 path = "packages/tools/mrml/src/main.rs"
-reason = "reviewed repository build input"
+reason = "Invoke the declared output process boundary from execute_test for org.mrml.tool.build; arguments remain bounded by that reviewed call site."
 
 [[build_input]]
+fingerprint = "fnv1a64:ed2861343135c593"
+id = "external-command.check-cuda.rustc"
 kind = "external-command"
-line = 4152
+line = 4595
 path = "packages/tools/mrml/src/main.rs"
-reason = "reviewed repository build input"
+reason = "Invoke the declared rustc process boundary from check_cuda for org.mrml.tool.build; arguments remain bounded by that reviewed call site."
 
 [[build_input]]
+fingerprint = "fnv1a64:b953daaaa45d9dd8"
+id = "external-command.pinned-tool.rustup"
 kind = "external-command"
-line = 4625
+line = 4978
 path = "packages/tools/mrml/src/main.rs"
-reason = "reviewed repository build input"
+reason = "Resolve the pinned rustup executable used by the repository build frontend."
 
 [[build_input]]
+fingerprint = "fnv1a64:2da0b6ed8a8e0f7f"
+id = "external-command.tool-version.tool"
 kind = "external-command"
-line = 4650
+line = 5003
 path = "packages/tools/mrml/src/main.rs"
-reason = "reviewed repository build input"
+reason = "Invoke the declared tool process boundary from tool_version for org.mrml.tool.build; arguments remain bounded by that reviewed call site."
 
 [[build_input]]
+fingerprint = "fnv1a64:b84a51d7903d7857"
+id = "external-command.run-qemu-child.qemu"
 kind = "external-command"
 line = 166
 path = "packages/tools/mrml/src/qemu_boot.rs"
 reason = "launch the explicitly selected QEMU executable for the package-derived UEFI boot gate"
 
 [[build_input]]
+fingerprint = "fnv1a64:f34ffb761fab535b"
+id = "external-command.run.program"
 kind = "external-command"
-line = 244
+line = 252
 path = "packages/tools/mrml/src/qemu_boot.rs"
 reason = "invoke explicit GPT and FAT media tools through the bounded package-boot media action"
 
 [[build_input]]
+fingerprint = "fnv1a64:0872d363ebcc69df"
+id = "external-command.run-with-input.program"
 kind = "external-command"
-line = 266
+line = 274
 path = "packages/tools/mrml/src/qemu_boot.rs"
 reason = "invoke sfdisk with a fixed partition description through the bounded media action"

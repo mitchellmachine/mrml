@@ -64,3 +64,27 @@ source = "packages/compiler/core/tests/semantic_execution.rs"
 
 [test_policy]
 stack_bytes = 33554432
+
+[[build_input]]
+fingerprint = "fnv1a64:119cf59b03a62643"
+id = "external-command.verify-oracle.rustup"
+kind = "external-command"
+line = 21
+path = "packages/compiler/core/tests/semantic_execution.rs"
+reason = "Resolve the pinned reference rustc executable used by the compiler semantic differential test harness."
+
+[[build_input]]
+fingerprint = "fnv1a64:e2365a97a0d780f8"
+id = "external-command.subslice-then-index-bounds-report-isolated-traps.current-exe"
+kind = "external-command"
+line = 401
+path = "packages/compiler/core/tests/semantic_execution.rs"
+reason = "Launch the current semantic test binary in a child process so generated bounds traps cannot terminate the parent test harness."
+
+[[build_input]]
+fingerprint = "fnv1a64:19837a24a9fd678c"
+id = "external-command.checked-overflow-reports-an-isolated-trap-exit.current-exe"
+kind = "external-command"
+line = 482
+path = "packages/compiler/core/tests/semantic_execution.rs"
+reason = "Launch the current semantic test binary in a child process so generated overflow traps cannot terminate the parent test harness."

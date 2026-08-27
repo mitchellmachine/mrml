@@ -267,13 +267,11 @@ fn render(package: &LegacyPackage, packages: &[LegacyPackage]) -> Result<String,
     ));
     render_dependencies(&mut out, package, packages, &action.fields[5])?;
     render_records(&mut out, package)?;
-    for (kind, count) in &package.input_counts {
-        for _ in 0..*count {
-            out.push_str(&format!(
-                "\n[[build_input]]\nkind = {}\nreason = \"migrated v1 declared input\"\n",
-                quote(kind)?
-            ));
-        }
+    if package.input_counts.values().any(|count| *count != 0) {
+        return Err(format!(
+            "LegacyBuildInputIdentityRequired {{ package: {} }}",
+            package.id
+        ));
     }
     Ok(out)
 }
@@ -431,7 +429,7 @@ mod tests {
 
     const FIXTURE: &str = r#"version|3
 component|org.mrml.library.base|packages/base|mrml-base|SHARED|WINDOWS,LINUX|false|||mrml_base:lib|build-script:0,proc-macro:0,native-link:0,compile-env:0,included-file:0,external-command:0
-component|org.mrml.app.demo|packages/demo|mrml-demo|HOST_WINDOWS_LINUX|WINDOWS,LINUX|true|mrml-base|fast|mrml-demo:bin,demo_test:test,demo_example:example,demo_bench:bench|build-script:0,proc-macro:0,native-link:0,compile-env:0,included-file:0,external-command:1
+component|org.mrml.app.demo|packages/demo|mrml-demo|HOST_WINDOWS_LINUX|WINDOWS,LINUX|true|mrml-base|fast|mrml-demo:bin,demo_test:test,demo_example:example,demo_bench:bench|build-script:0,proc-macro:0,native-link:0,compile-env:0,included-file:0,external-command:0
 rust-action|org.mrml.library.base|mrml_base|lib|packages/base/src/lib.rs|
 rust-action|org.mrml.app.demo|mrml_demo|lib|packages/demo/src/lib.rs|mrml-base=mrml_base@*
 rust-test|org.mrml.app.demo|demo_test|packages/demo/tests/demo.rs|true
@@ -463,7 +461,22 @@ rust-feature-set|org.mrml.app.demo|WINDOWS,LINUX|fast
         assert_eq!(document.array_sections("feature").count(), 1);
         assert_eq!(document.array_sections("artifact").count(), 4);
         assert_eq!(document.array_sections("target").count(), 2);
-        assert_eq!(document.array_sections("build_input").count(), 1);
+        assert_eq!(document.array_sections("build_input").count(), 0);
+    }
+
+    #[test]
+    fn v1_migration_requires_manual_identity_for_sensitive_inputs() {
+        let fixture = FIXTURE.replacen(
+            "mrml-demo:bin,demo_test:test,demo_example:example,demo_bench:bench|build-script:0,proc-macro:0,native-link:0,compile-env:0,included-file:0,external-command:0",
+            "mrml-demo:bin,demo_test:test,demo_example:example,demo_bench:bench|build-script:0,proc-macro:0,native-link:0,compile-env:0,included-file:0,external-command:1",
+            1,
+        );
+        let packages = parse(&fixture).expect("parse v1 input-policy fixture");
+        assert!(
+            render(&packages[1], &packages)
+                .unwrap_err()
+                .starts_with("LegacyBuildInputIdentityRequired")
+        );
     }
 
     #[test]

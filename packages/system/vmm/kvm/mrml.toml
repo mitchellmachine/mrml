@@ -43,7 +43,9 @@ package = "org.mrml.library.runtime"
 scope = "compile"
 
 [[build_input]]
+fingerprint = "fnv1a64:07cfb9d8b9ec012a"
+id = "native-link.native.c"
 kind = "native-link"
-line = 95
+line = 110
 path = "packages/system/vmm/kvm/src/native.rs"
-reason = "reviewed repository build input"
+reason = "Bind the declared native library c for the reviewed native FFI boundary in org.mrml.system.vmm-kvm."

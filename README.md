@@ -274,294 +274,72 @@ remain unfinished.
 
 ## Build and run
 
-The planned first-party `mrml` build/package frontend and mandatory pinned-
-upstream-rustc bootstrap policy are specified in
-[docs/build/BUILD_SYSTEM.md](docs/build/BUILD_SYSTEM.md). Bootstrap once with the
-repository-pinned Windows/Linux Rust toolchain:
+The canonical current package, graph, source, unsafe-boundary, and CI inventory
+is generated in [docs/STATUS.md](docs/STATUS.md). Historical migration counts
+are retained only in explicitly labeled ledgers under `docs/build/` and in the
+roadmap chronology; they are not current workspace facts.
+
+Bootstrap the repository-owned frontend once with the pinned toolchain:
 
 ```text
 cargo build --locked
 ```
 
-Then use `mrml doctor`, `mrml audit`, `mrml build`, `mrml test`, and target/
-component selectors for repository work. `doctor` verifies the native dependency
-graph without Cargo metadata; `audit` inventories native declarations and
-unusual build inputs. All 46 components have exact native actions and `mrml`
-contains no Cargo fallback. Cargo is confined to the locked clean-source
-bootstrap above. Canonical package creation/verification and the fixed boot
-`SystemRelease` are implemented; general Store release/image/publication remain
-planned.
+Then use the generated frontend rather than Cargo for workspace components:
 
-`mrml-math`, `mrml-windows`, and `mrml-linux` were the first native compiler
-nodes. Every component now invokes pinned upstream rustc through an exact native
-action and is reported as `builder=native-rustc`; a missing action makes workspace
-loading fail closed.
+```text
+mrml doctor
+mrml manifest check
+mrml manifest fmt --check
+mrml manifest lock --check
+mrml audit --all --target native --output structured
+mrml assurance check
 
-`mrml-runtime` is the first dependent native node. Its Windows and Linux externs
-are target-scoped; `mrml` builds the active platform leaf first and supplies its
-exact rlib path directly to rustc.
+# Full host suites
+mrml test --all --target linux --release
+mrml test --all --target windows --release
 
-The featureless percent-encoding, tokenizer, Zstandard, ZIM, JSON, Wikipedia,
-error, and terminal-style libraries have also migrated to dependency-first
-native rustc actions. Together with the platform/runtime nodes, they form the
-twelve-node native library layer.
+# Linux host-testable graph under AddressSanitizer
+mrml test --all --target linux --sanitizer address
 
-The `mrml-rustc` core is also native, including both integration-test targets
-and an explicit bounded test stack. Thirteen components are now native and 29
-remain transitional.
-
-`mrml-opus` adds exact native example compilation: all 179 library tests and its
-three declared example binaries pass on Windows and Arch Linux WSL2. Fourteen
-components are native and 28 remain transitional.
-
-`mrml-av1` adds exact empty-default feature selection and feature-gated platform
-externs. Its library and `decode_ivf` example build natively on Windows and Arch
-Linux WSL2. A declared 32 MiB executable stack removes sixteen harness-only
-overflows; both native hosts reproduce the Cargo baseline's two remaining AV1
-source-test failures at 273 passed and 2 failed. Fifteen components are native
-and 27 remain transitional; this is build parity, not AV1 conformance evidence.
-
-`mrml-crypto` records the resolved default feature set as `runtime`, activates
-only that optional native extern, and passes all 27 direct tests on Windows and
-Arch Linux WSL2. Sixteen components are native and 26 remain transitional.
-
-`mrml-tls` now builds after those exact crypto/runtime artifacts and passes all
-11 direct tests on both hosts. No live peer, external certificate fixture, or
-independent protocol validation was implied. Seventeen components are native
-and 25 remain transitional.
-
-`mrml-http` directly consumes the native runtime/TLS artifacts and passes all
-three tests on both hosts. Live URL/range paths were not configured, so this is
-not network-interoperability evidence. Eighteen components are native and 24
-remain transitional.
-
-`mrml-ssh` directly consumes native crypto/runtime artifacts and passes all 23
-tests on both hosts, including loopback transport. No live remote or external
-signing operation was exercised. Nineteen components are native and 23 remain
-transitional.
-
-Native actions now cover exact library-plus-binary outputs and explicit
-compile-time environment values. `mrml-git` builds both outputs and passes 51
-library tests plus its binary test on Windows and Arch Linux WSL2. No live
-remote operation was exercised. Twenty components are native and 22 remain
-transitional.
-
-`mrml-tools` now records its resolved `runtime` feature, stable manifest path,
-six universal externs, and one host-selected platform extern. Linux passes all
-32 direct tests; Windows reproduces the Cargo baseline at 31 passed and one
-installed-Edge DevTools failure. Twenty-one components are native and 21 remain
-transitional; no physical browser or accessibility hardware coverage is claimed.
-
-Bin-only actions now omit a fabricated primary library while retaining exact
-binary output and test declarations. `mrml-rustc-driver` builds the real
-`mrml-rustc` executable and passes both driver tests on Windows and Arch Linux
-WSL2. Twenty-two components are native and 20 remain transitional.
-
-Feature sets are target-specific: every featureful native action covers each
-declared target exactly once. `mrml-crypto` selects `runtime` for Windows/Linux
-host tests but selects no features or runtime extern for its `MRML_NATIVE`
-`x86_64-unknown-none` rlib. Both hosts cross-build that profile successfully.
-
-Named provider profiles keep a dependency's nondefault feature resolution
-distinct from its ordinary target default, including in cache keys and artifact
-names. `mrml-kernel` binds `mrml-crypto`'s empty `core` profile for both its
-`x86_64-unknown-none` build and separately declared 64 MiB host harness, rather
-than silently acquiring the host-default `runtime` feature. Windows and Arch
-Linux WSL2 cross-build the kernel and pass all 474 host tests. Twenty-three
-components are native and 19 remain transitional; no target execution or
-physical-hardware verification is implied.
-
-Explicit host-build projections allow a target-only dependency to be rebuilt
-for an approved host without widening the component's public target families.
-`mrml-storage` now directly binds crypto's empty `core` profile and the kernel,
-cross-builds for `x86_64-unknown-none`, and passes all 121 tests in its declared
-64 MiB host harness on Windows and Arch Linux WSL2. Twenty-four components are
-native and 18 remain transitional; this is cross-build and hosted-test evidence,
-not native-storage or physical-device execution.
-
-`mrml-config` now directly consumes the native crypto-core, kernel, and storage
-artifacts. Windows and Arch Linux WSL2 cross-build it for
-`x86_64-unknown-none` and pass all 31 tests in its approved host projection.
-Twenty-five components are native and 17 remain transitional; no signed service
-runtime, target execution, or physical-hardware verification is implied.
-
-Native actions may declare an allowlisted compiler-target variant distinct from
-their semantic target family. The variant propagates through the complete rlib
-graph and has a separate artifact directory, preventing ABI/cache collisions.
-`mrml-service-image` uses this to remain `MRML_NATIVE` while producing its
-`x86_64-unknown-uefi` PE32+ EFI application. Debug and release builds pass on
-Windows and Arch Linux WSL2 and repeat deterministically per host; cross-host
-hashes differ and are not claimed reproducible. Twenty-six components are native
-and 16 remain transitional. No UEFI runtime or signed-service execution occurred.
-
-`mrml-kernel-bench` now compiles directly against native kernel and runtime
-artifacts on both hosts. Its harness discovers 14 Windows and 13 Linux tests;
-all remain deliberately ignored manual performance gates, so this verifies
-compilation and ignore policy but records no benchmark result. Twenty-seven
-components are native and 15 remain transitional.
-
-Non-host dependency projections and absent compile-environment inputs are now
-explicit and fail closed. `mrml-kernel-image` selects only `kernel-image`,
-rebuilds kernel and crypto-core for `x86_64-unknown-uefi`, and emits a PE32+ EFI
-application on Windows and Arch Linux WSL2. Poisoning all four inherited
-`MRML_*` option variables leaves each host's artifact hash unchanged. Twenty-
-eight components are native and 14 remain transitional; no firmware or hardware
-execution is implied.
-
-Binary outputs can now be gated by exact target family and selected feature.
-`mrml-uefi` builds its library on hosts but emits `mrml-loader.efi` only for
-UEFI with `uefi-image`; exact UEFI selectors are no longer overwritten by the
-default kernel-image choice. Both hosts emit a PE32+ EFI loader and pass all 24
-host-projected library/TPM simulation tests. A Windows poisoned-environment
-probe confirms all 21 absent inputs leave the loader hash unchanged. Twenty-nine
-components are native and 13 remain transitional; no TPM, firmware, or physical
-hardware ran.
-
-Feature-profile identity now reaches rustc metadata as well as filenames and
-cache keys, allowing one graph to contain crypto-core through kernel and
-host-default crypto directly without crate ambiguity. `mrml-sign` uses that
-mixed graph, builds on both hosts, and passes all eight temporary-file tests.
-Thirty components are native and 12 remain transitional. No live signing key,
-Secure Boot enrollment, firmware, or hardware was used.
-
-Extern edges can now be test-only: KVM's direct crypto-core dev dependency is
-absent from its production extern set while remaining available to its harness
-(crypto-core is still transitively required by kernel). `mrml-kvm` builds on
-Arch Linux WSL2 and passes 18 tests with one manual mapping-performance test
-ignored. `/dev/kvm` was usable, so conditional API and signed-guest probes ran.
-Thirty-one components are native and 11 remain transitional; this is nested WSL2
-KVM evidence, not bare-metal or physical-hardware verification.
-
-The Windows WHP library now uses the same exact native graph: kernel and runtime
-are production externs, while its direct crypto-core dev dependency exists only
-in the test harness. The pinned Windows gnullvm native and Cargo baselines each
-pass 22 tests with one manual mapping-performance gate ignored. Running that gate
-separately completed 10,000 live WHP map/revoke iterations, so WHP API and hosted
-hypervisor mapping execution are directly evidenced on this host. Thirty-two
-components are native and 10 remain transitional; this is hosted WHP evidence,
-not a VTL1, TPM, IOMMU, bare-metal, or physical-hardware claim.
-
-Tensor's former Cargo-only PTX step is now a bounded native action. The required
-`--gpu-arch` drives pinned rustc directly against the declared kernel source,
-the generated `OUT_DIR` and PTX filename are explicit, CUDA artifacts are
-separated by host ABI triple, and every test, example, and benchmark output is
-declared. Windows gnullvm and Arch Linux WSL2 each match Cargo at 43 passing
-CUDA-enabled tests; both execute the focused prefill CUDA probe. Their `sm_120`
-PTX hashes are identical. Thirty-three components are native and nine remain
-transitional. This proves the exercised CUDA driver/device paths, not physical
-GPU topology, passthrough isolation, or native MRML GPU execution.
-
-The default `runtime` model profile now directly binds native JSON, runtime, and
-tensor artifacts on both hosts. Windows gnullvm and Arch Linux WSL2 each build
-the library and match Cargo's seven passing chat/error/portable tests. Thirty-
-four components are native and eight remain transitional. No production model,
-remote service, CUDA profile, or inference workload was exercised by this step.
-
-Compile-environment declarations now carry a bounded audited use count, allowing
-agent's single `CARGO_PKG_VERSION=0.0.1` value to account for both source read
-sites without duplicate or invented inputs. The default `runtime` agent graph
-builds natively and matches Cargo at 20 passing tests on Windows and Linux.
-Thirty-five components are native and seven remain transitional. No configured
-live Hugging Face query, remote inference, model workload, or CUDA agent profile
-was exercised.
-
-The trainer binary now binds its five semantic library providers directly and
-builds without the Cargo bridge. Windows gnullvm and Arch Linux WSL2 each match
-Cargo at four passing unit tests. Thirty-six components are native and six
-remain transitional. The tests use bounded generated data; no production
-corpus, long-running training, CUDA path, or physical hardware was exercised.
-
-The WHP runner now directly binds its core-only crypto profile and its exact
-Windows launcher dependencies under the bridge's intentional empty feature
-set. Its native and Cargo `--no-default-features` suites both pass seven tests.
-Thirty-seven components are native and five remain transitional. No CUDA
-runner feature, VM launch, VBS/VTL1, IOMMU, or physical hardware was exercised.
-
-Default `auto` feature forwarding is now explicit from CLI/machine through
-agent and model to tensor's host `cuda` profile. The native resolver generates
-tensor's declared `sm_120` PTX transitively rather than relying on a prior Cargo
-build. Both exact hosts match Cargo at zero CLI tests and four machine tests,
-and emit PTX hash `83ad662cd1f6cb6f7736ddb817da1d12fa022394fa0bf415152c302e8e09c920`.
-Thirty-nine components are native and three remain transitional. No CUDA device,
-model inference, live provider, or production workload ran.
-
-Server now binds the same `auto` model artifact directly and through agent, so
-its shared API types retain one native crate identity. Both exact hosts match
-Cargo at four library tests and the zero-test self-linked binary harness. Forty
-components are native and two remain transitional. No listening service, TLS
-endpoint, remote model, CUDA device, or production traffic ran.
-
-The Linux KVM runner now binds core crypto, kernel/KVM, runtime, and tensor's
-host `cuda` profile directly. Arch Linux WSL2 matches Cargo at eight passing
-tests. Forty-one components are native and only the `mrml` clean-source
-bootstrap remains transitional. No VM, bare metal, IOMMU, physical GPU, or
-physical hardware ran.
-
-Finally, `mrml` has an exact native self-build/self-test action and the internal
-Cargo transition branch has been deleted. Fresh locked Cargo bootstrap followed
-by doctor/audit, native self-build, and all 12 self-tests passes on Windows
-gnullvm and Arch Linux WSL2. The admitted graph now contains 46 native
-components; Cargo is used only to obtain the first `mrml` binary from a clean
-checkout. Canonical package and boot `SystemRelease` construction are
-implemented, while general Store release/image/publication remain separate and
-incomplete.
-
-MRML uses Rust 2024 and the exact `nightly-2026-08-24` build toolchain pinned in
-`rust-toolchain.toml`. It is also the current `mrml-rustc` behavioral reference
-recorded as [ORACLE-0002](docs/compiler/oracles/ORACLE-0002.md); a floating
-installed nightly is never oracle evidence.
-
-Windows requires the self-contained GNU/LLVM toolchain:
-
-```powershell
-winget install Rustlang.Rustup
-rustup toolchain install nightly-2026-08-24-x86_64-pc-windows-gnullvm --profile minimal `
-  --component rust-src --component rustfmt --component clippy `
-  --component rust-mingw --target nvptx64-nvidia-cuda `
-  --target x86_64-unknown-uefi --target x86_64-unknown-none
-rustup default nightly-2026-08-24-x86_64-pc-windows-gnullvm
-rustc -vV
+# CUDA compile evidence only; this grants no device authority
+mrml build org.mrml.library.tensor --target cuda-nvidia --gpu-arch sm_80
 ```
 
-Linux uses its native GNU host with the same Rust components and targets. CUDA
-builds use Rust PTX plus the NVIDIA driver API and do not require the CUDA
-Toolkit or `libcudart`.
-
-```powershell
-# Build CPU inference application
-mrml build org.mrml.app.cli --target native --release
-
-# Build the declared CUDA profile
-mrml build org.mrml.app.cli --target cuda-nvidia --release
-
-# Build the native Git client
-mrml build org.mrml.tool.git --target native --release
-
-# Build the experimental compiler driver
-mrml build org.mrml.compiler.driver --target native --release
-```
-
-Run a binary with `--help` for its supported interface. Do not infer complete
-compatibility from familiar command names.
+On a clean checkout the executable is `./target/debug/mrml` on Linux and
+`.\target\debug\mrml.exe` on Windows. `doctor` validates the dependency graph;
+`audit` verifies exact exceptional build-input identities and the source-size
+ceiling; `assurance` checks generated status, unsafe-growth policy, local
+documentation links, and required workflow gates. Package creation and the
+fixed boot `SystemRelease` exist, while general Store publication, installation
+media, and production deployment remain incomplete.
 
 ## Verification
 
 The minimum repository gates are:
 
-```powershell
+```text
+cargo test --locked
+cargo fmt --all -- --check
+cargo clippy --locked --all-targets -- -D warnings
+mrml doctor
 mrml manifest check
 mrml manifest fmt --check
 mrml manifest lock --check
 mrml audit --all --target native --output structured
-mrml test --all --target native --release
+mrml assurance check
+mrml test --all --target linux --release
+mrml test --all --target windows --release
 ```
 
-Run feature- and hardware-specific suites for CUDA, KVM, WHP, UEFI, codecs,
-network protocols, and the compiler whenever those areas change. Performance
-results must identify the exact artifact, backend, hardware, configuration,
-warm-up policy, measurement boundary, and variation across runs. Codec and
-compiler compatibility require independent conformance/differential evidence,
-not only self-round-trip tests.
+Run AddressSanitizer on the full Linux-compatible native graph and run
+feature- or hardware-specific suites for CUDA, KVM, WHP, UEFI, codecs, network
+protocols, and the compiler whenever those areas change. A workflow definition
+is not proof that a revision passed; retain the exact CI result and artifacts.
+Performance results must identify the artifact, backend, hardware,
+configuration, warm-up policy, measurement boundary, and variation across
+runs. Codec and compiler compatibility require independent conformance or
+differential evidence, not only self-round-trip tests.
 
 ## Context for ChatGPT and Codex sessions
 

@@ -114,13 +114,17 @@ self_extern = false
 source = "packages/tools/vmm/whp-run/src/main.rs"
 
 [[build_input]]
+fingerprint = "fnv1a64:d053f7516269b781"
+id = "included-file.application-main.mrml-toml"
 kind = "included-file"
-line = 1909
+line = 2649
 path = "packages/tools/vmm/whp-run/src/main.rs"
 reason = "canonical ZIM Manifest V2 interface declaration"
 
 [[build_input]]
+fingerprint = "fnv1a64:ce8b18dffee258e4"
+id = "included-file.application-main.mrml-toml.2"
 kind = "included-file"
-line = 1919
+line = 2659
 path = "packages/tools/vmm/whp-run/src/main.rs"
 reason = "canonical Zstd Manifest V2 interface declaration"

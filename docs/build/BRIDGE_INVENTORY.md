@@ -1,6 +1,12 @@
 # Cargo bridge inventory
 
-**Status: IMPLEMENTED NATIVE GRAPH / CLEAN-SOURCE BOOTSTRAP ONLY.** The
+> **Historical migration ledger.** Counts and host results below describe the
+> dated migration steps recorded at the time. They are intentionally frozen and
+> are not current workspace totals. See the generated
+> [workspace status](../STATUS.md) for current machine-readable facts.
+
+**Recorded status on 2026-08-25: IMPLEMENTED NATIVE GRAPH / CLEAN-SOURCE
+BOOTSTRAP ONLY.** The
 dependency-free `mrml` frontend resolves version-3 declarations from root and
 package-local `mrml.toml` manifests
 without invoking Cargo metadata. It rejects duplicate MRML/path/Cargo-stage

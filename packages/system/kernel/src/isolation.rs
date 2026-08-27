@@ -2224,21 +2224,12 @@ mod tests {
             [0x2f; 64],
         )
         .unwrap();
-        let active = ActivatedSystemGeneration::new(
-            SYSTEM_GENERATION,
-            [0x51; 64],
-            [0x61; 64],
-            1,
-            0x500,
-            1,
-        )
-        .unwrap();
-        let mut table = IsolationAdmissionTable::<1>::new_activated(
-            IsolationMode::TotalMicrovm,
-            active,
-            7,
-        )
-        .unwrap();
+        let active =
+            ActivatedSystemGeneration::new(SYSTEM_GENERATION, [0x51; 64], [0x61; 64], 1, 0x500, 1)
+                .unwrap();
+        let mut table =
+            IsolationAdmissionTable::<1>::new_activated(IsolationMode::TotalMicrovm, active, 7)
+                .unwrap();
         let launch = prepare_component_service_handoff(&mut table, &handoff.encode()).unwrap();
         let mut backend = backend();
         let routed = launch_prepared_component_service(

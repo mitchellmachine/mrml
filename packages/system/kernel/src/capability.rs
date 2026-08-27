@@ -350,4 +350,92 @@ mod tests {
             Err(CapabilityError::GenerationExhausted)
         );
     }
+
+    #[test]
+    fn stateful_adversarial_sequences_preserve_attenuation_and_stale_handle_rejection() {
+        const OPERATIONS: usize = 20_000;
+        let rights = [
+            Rights::READ,
+            Rights::WRITE,
+            Rights::READ.union(Rights::DELEGATE),
+            Rights::READ.union(Rights::WRITE).union(Rights::DELEGATE),
+        ];
+        let mut source = CapabilitySpace::<8>::new();
+        let mut child = CapabilitySpace::<8>::new();
+        let mut live = [None; 16];
+        let mut stale = [None; 16];
+        let mut next_stale = 0_usize;
+        let mut state = 0x4d52_4d4c_cafe_babe_u64;
+
+        for operation in 0..OPERATIONS {
+            state ^= state << 13;
+            state ^= state >> 7;
+            state ^= state << 17;
+            let index = state as usize % live.len();
+            match (state >> 8) & 3 {
+                0 => {
+                    let object = ObjectId((operation as u64).wrapping_add(1));
+                    let granted = rights[(state >> 16) as usize % rights.len()];
+                    if let Ok(handle) = source.insert(object, granted) {
+                        assert_eq!(source.authorize_exact(handle, granted), Ok(object));
+                        let slot = live
+                            .iter()
+                            .position(Option::is_none)
+                            .expect("every live capability must have a model slot");
+                        live[slot] = Some((handle, object, granted));
+                    }
+                }
+                1 => {
+                    if let Some((handle, object, granted)) = live[index] {
+                        assert_eq!(source.authorize_exact(handle, granted), Ok(object));
+                        for requested in rights {
+                            let result = source.authorize(handle, requested);
+                            assert_eq!(result.is_ok(), granted.contains(requested));
+                        }
+                    }
+                }
+                2 => {
+                    if let Some((handle, object, granted)) = live[index] {
+                        let requested = Rights::READ;
+                        match source.derive(handle, requested, &mut child) {
+                            Ok(derived) => {
+                                assert!(granted.contains(Rights::DELEGATE));
+                                assert!(granted.contains(requested));
+                                assert_eq!(child.authorize_exact(derived, requested), Ok(object));
+                                child.revoke(derived).unwrap();
+                                assert_eq!(
+                                    child.authorize(derived, requested),
+                                    Err(CapabilityError::Invalid)
+                                );
+                            }
+                            Err(CapabilityError::DelegationDenied) => {
+                                assert!(!granted.contains(Rights::DELEGATE));
+                            }
+                            Err(CapabilityError::SpaceFull) => {}
+                            Err(other) => panic!("unexpected derive result: {other:?}"),
+                        }
+                    }
+                }
+                _ => {
+                    if let Some((handle, _, granted)) = live[index].take() {
+                        source.revoke(handle).unwrap();
+                        assert_eq!(
+                            source.authorize(handle, granted),
+                            Err(CapabilityError::Invalid)
+                        );
+                        let stale_slot = next_stale % stale.len();
+                        stale[stale_slot] = Some((handle, granted));
+                        next_stale += 1;
+                    }
+                }
+            }
+            for (handle, granted) in stale.iter().flatten().copied() {
+                assert_eq!(
+                    source.authorize(handle, granted),
+                    Err(CapabilityError::Invalid)
+                );
+            }
+        }
+    }
+
 }

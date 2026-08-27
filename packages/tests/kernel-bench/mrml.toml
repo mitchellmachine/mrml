@@ -39,7 +39,9 @@ package = "org.mrml.library.runtime"
 scope = "compile"
 
 [[build_input]]
+fingerprint = "fnv1a64:75d8d5a0ba5e6f33"
+id = "native-link.lib.kernel32"
 kind = "native-link"
 line = 153
 path = "packages/tests/kernel-bench/src/lib.rs"
-reason = "reviewed repository build input"
+reason = "Bind the declared native library kernel32 for the reviewed lib FFI boundary in org.mrml.system.kernel-bench."

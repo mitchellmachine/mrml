@@ -23,13 +23,17 @@ crate_type = "lib"
 source = "packages/libraries/windows/src/lib.rs"
 
 [[build_input]]
+fingerprint = "fnv1a64:75d8d5a0ba5e6f33"
+id = "native-link.lib.kernel32"
 kind = "native-link"
-line = 462
+line = 477
 path = "packages/libraries/windows/src/lib.rs"
-reason = "reviewed repository build input"
+reason = "Bind the declared native library kernel32 for the reviewed lib FFI boundary in org.mrml.library.windows."
 
 [[build_input]]
+fingerprint = "fnv1a64:b754b884c36dea8f"
+id = "native-link.lib.ws2-32"
 kind = "native-link"
-line = 642
+line = 662
 path = "packages/libraries/windows/src/lib.rs"
-reason = "reviewed repository build input"
+reason = "Bind the declared native library ws2-32 for the reviewed lib FFI boundary in org.mrml.library.windows."

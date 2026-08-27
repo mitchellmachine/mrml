@@ -36,19 +36,25 @@ package = "org.mrml.system.kernel"
 scope = "compile"
 
 [[build_input]]
+fingerprint = "fnv1a64:079091813663d93c"
+id = "native-link.lib.vertdll"
 kind = "native-link"
 line = 56
 path = "packages/experiments/mrml-vbs-enclave/src/lib.rs"
-reason = "reviewed repository build input"
+reason = "Bind the declared native library vertdll for the reviewed lib FFI boundary in org.mrml.experiment.vbs-enclave."
 
 [[build_input]]
+fingerprint = "fnv1a64:11bd8e17df9e56ed"
+id = "native-link.lib.bcrypt"
 kind = "native-link"
 line = 105
 path = "packages/experiments/mrml-vbs-enclave/src/lib.rs"
-reason = "reviewed repository build input"
+reason = "Bind the declared native library bcrypt for the reviewed lib FFI boundary in org.mrml.experiment.vbs-enclave."
 
 [[build_input]]
+fingerprint = "fnv1a64:079092813663daef"
+id = "native-link.lib.vertdll.2"
 kind = "native-link"
 line = 111
 path = "packages/experiments/mrml-vbs-enclave/src/lib.rs"
-reason = "reviewed repository build input"
+reason = "Bind the declared native library vertdll for the reviewed lib FFI boundary in org.mrml.experiment.vbs-enclave."

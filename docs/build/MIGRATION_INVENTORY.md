@@ -1,17 +1,20 @@
 # Universal build migration inventory
 
-**Status: NATIVE GRAPH IMPLEMENTED; PACKAGING PARTIAL.** The authoritative
-machine-readable inventory is the root [`../../mrml.toml`](../../mrml.toml) plus
-all 46 package-local `mrml.toml` manifests. All current components are
-classified and live in semantic `apps/`, `compiler/`, `packages/`, `services/`,
-`system/`, `tests/`, or `tools/` homes; no tracked component remains under generic
-`crates/`. The native resolver validates all 131 declared compile dependency edges
-without Cargo metadata, every component has an exact native action, and the
-internal Cargo bridge is removed. Cargo remains only for clean-source bootstrap
-of `mrml`. Canonical package and fixed boot `SystemRelease` construction are
-implemented; general Store release/image/publication work is not complete.
+> **Historical migration ledger.** This file preserves dated migration
+> evidence and therefore contains earlier package and edge counts. It is not a
+> current inventory. See the generated [workspace status](../STATUS.md) and the
+> root/package manifests for current facts.
 
-## Current Manifest V2 completion state
+**Recorded status: NATIVE GRAPH IMPLEMENTED; PACKAGING PARTIAL.** At this
+migration checkpoint the workspace contained 46 package-local manifests and
+131 declared compile edges. Those figures are intentionally retained as dated
+evidence. Current authoritative facts come from the root and package manifests,
+`mrml.lock`, and the generated [workspace status](../STATUS.md). Canonical
+package and fixed boot `SystemRelease` construction were implemented at this
+checkpoint; general Store release, image, and publication work remained
+incomplete.
+
+## Recorded Manifest V2 completion state
 
 - Manifest V2 is the sole active representation; no active loader serializes
   structured manifests back into the former declaration grammar.
@@ -23,16 +26,15 @@ implemented; general Store release/image/publication work is not complete.
   discovered manifests, and resolves 131 compile edges plus the one declared
   runtime interface requirement.
 - `mrml.lock` V2 keeps compile, build-tool, runtime-interface, package, and
-  SystemRelease graphs distinct. The current declared counts are 131, 0, 1,
+  SystemRelease graphs distinct. The recorded declared counts were 131, 0, 1,
   127, and 3 respectively. Package edges are explicitly classified as static
   runtime, boot-bound, or SystemRelease-bound; test-only and interface-schema
   compile edges are excluded from that package graph.
 - The only remaining `Cargo.toml` and `Cargo.lock` are the clean-source
   stage-zero bootstrap for `mrml`; package-local Cargo manifests are gone.
-- `.github/workflows/manifest-v2.yml` repeats the exact stage-zero bootstrap on
-  Linux and Windows GNU/LLVM, then gates V2 check/format, lock parity, audit,
-  package/interface/migration unit tests, and a representative direct `mrml`
-  native build.
+- The current `.github/workflows/ci.yml` owns stage-zero, manifest, lock,
+  exact-input audit, assurance, and full host-test gates. The earlier proposed
+  standalone `manifest-v2.yml` file was not retained as a current workflow.
 - On Windows GNU/LLVM, 20 warm process invocations of `mrml manifest check`
   averaged 16.69 ms (minimum 15.70 ms, maximum 26.84 ms) on 2026-08-25. This is
   end-to-end process plus V2 parse/validation/graph overhead on this host, not a

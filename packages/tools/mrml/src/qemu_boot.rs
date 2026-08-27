@@ -136,32 +136,45 @@ pub fn run_qemu(args: &[String]) -> Result<(), String> {
     }
     fs::copy(&args[2], &vars)
         .map_err(|error| format!("PackageQemuVarsCopyError {{ detail: {error} }}"))?;
-    let result = run_qemu_child(
-        &args[3],
-        &args[0],
-        &args[1],
-        &vars,
+    let result = run_qemu_child(QemuChildOptions {
+        qemu: &args[3],
+        image: &args[0],
+        code: &args[1],
+        vars: &vars,
         trace,
-        &expected,
-        rejection.as_deref(),
+        expected: &expected,
+        rejection: rejection.as_deref(),
         timeout,
         accelerator,
-    );
+    });
     let _ = fs::remove_file(vars);
     result
 }
 
-fn run_qemu_child(
-    qemu: &str,
-    image: &str,
-    code: &str,
-    vars: &Path,
-    trace: &Path,
-    expected: &[u8],
-    rejection: Option<&[u8]>,
+struct QemuChildOptions<'a> {
+    qemu: &'a str,
+    image: &'a str,
+    code: &'a str,
+    vars: &'a Path,
+    trace: &'a Path,
+    expected: &'a [u8],
+    rejection: Option<&'a [u8]>,
     timeout: u64,
-    accelerator: &str,
-) -> Result<(), String> {
+    accelerator: &'a str,
+}
+
+fn run_qemu_child(options: QemuChildOptions<'_>) -> Result<(), String> {
+    let QemuChildOptions {
+        qemu,
+        image,
+        code,
+        vars,
+        trace,
+        expected,
+        rejection,
+        timeout,
+        accelerator,
+    } = options;
     let machine = format!("q35,accel={accelerator}");
     let mut child = Command::new(qemu)
         .args(["-machine", &machine, "-m", "512M", "-display", "none"])
@@ -329,12 +342,14 @@ fn option<'a>(args: &'a [String], name: &str) -> Result<Option<&'a str>, String>
 }
 
 fn parse_hex(value: &str) -> Result<Vec<u8>, String> {
-    if value.len() % 2 != 0 || !value.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+    if !value.len().is_multiple_of(2) || !value.bytes().all(|byte| byte.is_ascii_hexdigit()) {
         return Err("PackageQemuExpectedTraceInvalid".into());
     }
     value
         .as_bytes()
-        .chunks_exact(2)
+        .as_chunks::<2>()
+        .0
+        .iter()
         .map(|pair| {
             let text = core::str::from_utf8(pair)
                 .map_err(|_| "PackageQemuExpectedTraceInvalid".to_owned())?;

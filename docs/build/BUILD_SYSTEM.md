@@ -1,16 +1,17 @@
 # MRML bootstrap build and packaging toolchain
 
-**Status: PARTIALLY IMPLEMENTED.** `packages/tools/mrml` now parses versioned
-root and package-local `mrml.toml` manifests, emits typed list/doctor/audit/build/test results, resolves and
-validates the complete declared dependency graph natively, inventories unusual
-build inputs, directly invokes pinned upstream rustc for all 46 actions, selects current-
-host WHP/KVM VMM adapters, builds an
-x86-64 UEFI artifact, recognizes the CUDA target with explicit architecture and
-toolchain checks, creates and verifies the canonical signed package format, and
-creates/verifies the fixed boot `SystemRelease`. All tracked components have
-semantic homes outside generic `crates/`. General Store release/image builders,
-sandboxing, and publication remain planned. See
-[MIGRATION_INVENTORY.md](MIGRATION_INVENTORY.md).
+Current machine-derived package, graph, source, unsafe-boundary, and CI facts
+are in the generated [workspace status](../STATUS.md). This document defines
+architecture and policy rather than maintaining duplicate package counts.
+
+**Status: PARTIALLY IMPLEMENTED.** `packages/tools/mrml` parses versioned root
+and package-local manifests, validates the declared graph, audits exact unusual
+build inputs, invokes the pinned upstream compiler through native actions,
+selects host VMM adapters, supports UEFI and CUDA build routing, and creates and
+verifies the canonical signed package and fixed boot `SystemRelease` formats.
+General Store publication, complete image/install workflows, sandboxed build
+workers, and production deployment remain incomplete. See the historical
+[MIGRATION_INVENTORY.md](MIGRATION_INVENTORY.md) for dated migration evidence.
 
 > Until `mrml-rustc` satisfies the defined production-readiness gate, the MRML
 > build tool MUST use upstream Rust tooling for production MRML artifacts.

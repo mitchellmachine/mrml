@@ -99,163 +99,217 @@ name = "CARGO_MANIFEST_DIR"
 value = "packages/tools/host"
 
 [[build_input]]
+fingerprint = "fnv1a64:a72da6228620a73e"
+id = "external-command.launch.exe"
 kind = "external-command"
 line = 200
 path = "packages/tools/host/src/browser.rs"
-reason = "reviewed repository build input"
+reason = "Invoke the declared exe process boundary from launch for org.mrml.tool.host; arguments remain bounded by that reviewed call site."
 
 [[build_input]]
+fingerprint = "fnv1a64:67d9111ce55f2f07"
+id = "external-command.execute.spectacle"
 kind = "external-command"
 line = 59
 path = "packages/tools/host/src/desktop.rs"
-reason = "reviewed repository build input"
+reason = "Invoke the declared spectacle process boundary from execute for org.mrml.tool.host; arguments remain bounded by that reviewed call site."
 
 [[build_input]]
+fingerprint = "fnv1a64:41e41da06ed2dd3a"
+id = "external-command.execute.grim"
 kind = "external-command"
 line = 70
 path = "packages/tools/host/src/desktop.rs"
-reason = "reviewed repository build input"
+reason = "Invoke the declared grim process boundary from execute for org.mrml.tool.host; arguments remain bounded by that reviewed call site."
 
 [[build_input]]
+fingerprint = "fnv1a64:1dfacad6b31596ac"
+id = "external-command.execute.scrot"
 kind = "external-command"
 line = 79
 path = "packages/tools/host/src/desktop.rs"
-reason = "reviewed repository build input"
+reason = "Invoke the declared scrot process boundary from execute for org.mrml.tool.host; arguments remain bounded by that reviewed call site."
 
 [[build_input]]
+fingerprint = "fnv1a64:d5f622994960f7b3"
+id = "external-command.execute.maim"
 kind = "external-command"
 line = 88
 path = "packages/tools/host/src/desktop.rs"
-reason = "reviewed repository build input"
+reason = "Invoke the declared maim process boundary from execute for org.mrml.tool.host; arguments remain bounded by that reviewed call site."
 
 [[build_input]]
+fingerprint = "fnv1a64:66bd0c8c0ba9209c"
+id = "external-command.execute.import"
 kind = "external-command"
 line = 97
 path = "packages/tools/host/src/desktop.rs"
-reason = "reviewed repository build input"
+reason = "Invoke the declared import process boundary from execute for org.mrml.tool.host; arguments remain bounded by that reviewed call site."
 
 [[build_input]]
+fingerprint = "fnv1a64:94529bb9db71cd8c"
+id = "external-command.execute.ffmpeg"
 kind = "external-command"
 line = 114
 path = "packages/tools/host/src/desktop.rs"
-reason = "reviewed repository build input"
+reason = "Invoke the declared ffmpeg process boundary from execute for org.mrml.tool.host; arguments remain bounded by that reviewed call site."
 
 [[build_input]]
+fingerprint = "fnv1a64:24162f5b0b1270b2"
+id = "external-command.execute.flatpak"
 kind = "external-command"
 line = 178
 path = "packages/tools/host/src/desktop.rs"
-reason = "reviewed repository build input"
+reason = "Invoke the declared flatpak process boundary from execute for org.mrml.tool.host; arguments remain bounded by that reviewed call site."
 
 [[build_input]]
+fingerprint = "fnv1a64:2b163fb57afa01d4"
+id = "external-command.execute.app-name"
 kind = "external-command"
 line = 186
 path = "packages/tools/host/src/desktop.rs"
-reason = "reviewed repository build input"
+reason = "Invoke the declared app-name process boundary from execute for org.mrml.tool.host; arguments remain bounded by that reviewed call site."
 
 [[build_input]]
+fingerprint = "fnv1a64:a4dda2e4de405407"
+id = "external-command.execute.xdg-open"
 kind = "external-command"
 line = 191
 path = "packages/tools/host/src/desktop.rs"
-reason = "reviewed repository build input"
+reason = "Invoke the declared xdg-open process boundary from execute for org.mrml.tool.host; arguments remain bounded by that reviewed call site."
 
 [[build_input]]
+fingerprint = "fnv1a64:2b1640b57afa0387"
+id = "external-command.execute.app-name.2"
 kind = "external-command"
 line = 197
 path = "packages/tools/host/src/desktop.rs"
-reason = "reviewed repository build input"
+reason = "Invoke the declared app-name process boundary from execute for org.mrml.tool.host; arguments remain bounded by that reviewed call site."
 
 [[build_input]]
+fingerprint = "fnv1a64:1871e27039b25d66"
+id = "external-command.execute.powershell-exe"
 kind = "external-command"
 line = 444
 path = "packages/tools/host/src/editor.rs"
-reason = "reviewed repository build input"
+reason = "Invoke the declared powershell-exe process boundary from execute for org.mrml.tool.host; arguments remain bounded by that reviewed call site."
 
 [[build_input]]
+fingerprint = "fnv1a64:1ea9898810b3afc6"
+id = "external-command.execute.sh"
 kind = "external-command"
 line = 456
 path = "packages/tools/host/src/editor.rs"
-reason = "reviewed repository build input"
+reason = "Invoke the declared sh process boundary from execute for org.mrml.tool.host; arguments remain bounded by that reviewed call site."
 
 [[build_input]]
+fingerprint = "fnv1a64:dd5e14203e9083d1"
+id = "external-command.execute.git"
 kind = "external-command"
 line = 32
 path = "packages/tools/host/src/git.rs"
-reason = "reviewed repository build input"
+reason = "Invoke the declared git process boundary from execute for org.mrml.tool.host; arguments remain bounded by that reviewed call site."
 
 [[build_input]]
+fingerprint = "fnv1a64:dd5e13203e90821e"
+id = "external-command.execute.git.2"
 kind = "external-command"
 line = 41
 path = "packages/tools/host/src/git.rs"
-reason = "reviewed repository build input"
+reason = "Invoke the declared git process boundary from execute for org.mrml.tool.host; arguments remain bounded by that reviewed call site."
 
 [[build_input]]
+fingerprint = "fnv1a64:dd5e12203e90806b"
+id = "external-command.execute.git.3"
 kind = "external-command"
 line = 49
 path = "packages/tools/host/src/git.rs"
-reason = "reviewed repository build input"
+reason = "Invoke the declared git process boundary from execute for org.mrml.tool.host; arguments remain bounded by that reviewed call site."
 
 [[build_input]]
+fingerprint = "fnv1a64:dd5e11203e907eb8"
+id = "external-command.execute.git.4"
 kind = "external-command"
 line = 93
 path = "packages/tools/host/src/git.rs"
-reason = "reviewed repository build input"
+reason = "Invoke the declared git process boundary from execute for org.mrml.tool.host; arguments remain bounded by that reviewed call site."
 
 [[build_input]]
+fingerprint = "fnv1a64:dd5e18203e908a9d"
+id = "external-command.execute.git.5"
 kind = "external-command"
 line = 108
 path = "packages/tools/host/src/git.rs"
-reason = "reviewed repository build input"
+reason = "Invoke the declared git process boundary from execute for org.mrml.tool.host; arguments remain bounded by that reviewed call site."
 
 [[build_input]]
+fingerprint = "fnv1a64:dd5e17203e9088ea"
+id = "external-command.execute.git.6"
 kind = "external-command"
 line = 143
 path = "packages/tools/host/src/git.rs"
-reason = "reviewed repository build input"
+reason = "Invoke the declared git process boundary from execute for org.mrml.tool.host; arguments remain bounded by that reviewed call site."
 
 [[build_input]]
+fingerprint = "fnv1a64:dd5e16203e908737"
+id = "external-command.execute.git.7"
 kind = "external-command"
 line = 149
 path = "packages/tools/host/src/git.rs"
-reason = "reviewed repository build input"
+reason = "Invoke the declared git process boundary from execute for org.mrml.tool.host; arguments remain bounded by that reviewed call site."
 
 [[build_input]]
+fingerprint = "fnv1a64:b01914da592baf3d"
+id = "compile-env.git-diff-runs-through-native-process-capture.cargo-manifest-dir"
 kind = "compile-env"
 line = 173
 path = "packages/tools/host/src/git.rs"
-reason = "reviewed repository build input"
+reason = "Read the declared compile-time setting cargo-manifest-dir for git_diff_runs_through_native_process_capture in org.mrml.tool.host; absence and defaults are handled explicitly at that site."
 
 [[build_input]]
+fingerprint = "fnv1a64:908eae715fe216e4"
+id = "external-command.spawn.command"
 kind = "external-command"
 line = 15
 path = "packages/tools/host/src/mcp.rs"
-reason = "reviewed repository build input"
+reason = "Invoke the declared command process boundary from spawn for org.mrml.tool.host; arguments remain bounded by that reviewed call site."
 
 [[build_input]]
+fingerprint = "fnv1a64:e23d77bd2a4ca8f0"
+id = "external-command.execute.spd-say"
 kind = "external-command"
 line = 54
 path = "packages/tools/host/src/media.rs"
-reason = "reviewed repository build input"
+reason = "Invoke the declared spd-say process boundary from execute for org.mrml.tool.host; arguments remain bounded by that reviewed call site."
 
 [[build_input]]
+fingerprint = "fnv1a64:34bd555d53ff1ede"
+id = "external-command.execute.espeak-ng"
 kind = "external-command"
 line = 58
 path = "packages/tools/host/src/media.rs"
-reason = "reviewed repository build input"
+reason = "Invoke the declared espeak-ng process boundary from execute for org.mrml.tool.host; arguments remain bounded by that reviewed call site."
 
 [[build_input]]
+fingerprint = "fnv1a64:09cc5d7a290cb98a"
+id = "external-command.execute.espeak"
 kind = "external-command"
 line = 62
 path = "packages/tools/host/src/media.rs"
-reason = "reviewed repository build input"
+reason = "Invoke the declared espeak process boundary from execute for org.mrml.tool.host; arguments remain bounded by that reviewed call site."
 
 [[build_input]]
+fingerprint = "fnv1a64:94529bb9db71cd8c"
+id = "external-command.execute.ffmpeg.2"
 kind = "external-command"
 line = 105
 path = "packages/tools/host/src/media.rs"
-reason = "reviewed repository build input"
+reason = "Invoke the declared ffmpeg process boundary from execute for org.mrml.tool.host; arguments remain bounded by that reviewed call site."
 
 [[build_input]]
+fingerprint = "fnv1a64:377a963f0d55f3a7"
+id = "external-command.execute.arecord"
 kind = "external-command"
 line = 129
 path = "packages/tools/host/src/media.rs"
-reason = "reviewed repository build input"
+reason = "Invoke the declared arecord process boundary from execute for org.mrml.tool.host; arguments remain bounded by that reviewed call site."

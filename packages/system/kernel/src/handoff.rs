@@ -2334,11 +2334,8 @@ mod tests {
         assert_eq!(decoded.service(), Some(service));
         assert_eq!(decoded.application(), Some(application));
 
-        const APPLICATION_ONLY_LENGTH: usize = HANDOFF_HEADER_BYTES
-            + 2 * HANDOFF_REGION_BYTES
-            + HANDOFF_APPLICATION_BYTES
-            + 16
-            + 52;
+        const APPLICATION_ONLY_LENGTH: usize =
+            HANDOFF_HEADER_BYTES + 2 * HANDOFF_REGION_BYTES + HANDOFF_APPLICATION_BYTES + 16 + 52;
         let mut application_only = [0; APPLICATION_ONLY_LENGTH];
         assert_eq!(
             encode_handoff_with_smp_and_application(
@@ -2359,8 +2356,7 @@ mod tests {
             ),
             Ok(APPLICATION_ONLY_LENGTH)
         );
-        let decoded_application_only =
-            BootHandoff::decode(&application_only, |_| {}).unwrap();
+        let decoded_application_only = BootHandoff::decode(&application_only, |_| {}).unwrap();
         assert_eq!(decoded_application_only.service(), None);
         assert_eq!(decoded_application_only.application(), Some(application));
 

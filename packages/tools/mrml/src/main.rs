@@ -1,12 +1,14 @@
 pub mod abi;
 #[path = "../../../libraries/package-format/src/activation.rs"]
 pub mod activation;
+mod assurance;
 pub mod binding;
 #[path = "../../../libraries/package-format/src/component_launch.rs"]
 pub mod component_launch;
 #[path = "../../../libraries/package-format/src/component_resolution.rs"]
 pub mod component_resolution;
 pub mod generation;
+mod input_audit;
 #[path = "../../../libraries/package-format/src/interface_catalog.rs"]
 pub mod interface_catalog;
 pub mod isolation;
@@ -84,6 +86,7 @@ struct Component {
     features: Vec<String>,
     outputs: Vec<String>,
     input_policy: InputCounts,
+    input_sites: Vec<input_audit::DeclaredInputSite>,
     isolation: IsolationPolicy,
     rust_action: Option<RustAction>,
 }
@@ -196,6 +199,18 @@ struct RustCompileMode<'a> {
     test: bool,
     gpu_arch: Option<&'a str>,
     compile_env: &'a BTreeMap<String, String>,
+    sanitizer: Option<&'a str>,
+}
+
+#[derive(Clone, Copy, Debug)]
+struct RustActionRequest<'a> {
+    operation: &'a str,
+    target: &'a str,
+    release: bool,
+    gpu_arch: Option<&'a str>,
+    feature_profile: &'a str,
+    compile_env: &'a BTreeMap<String, String>,
+    sanitizer: Option<&'a str>,
 }
 
 #[derive(Debug)]
@@ -220,6 +235,7 @@ struct ManifestDeclarations {
     records: Vec<Vec<String>>,
     interface_bindings: Vec<InterfaceBindingLock>,
     isolation_policies: BTreeMap<String, IsolationPolicy>,
+    build_inputs: BTreeMap<String, Vec<input_audit::DeclaredInputSite>>,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -250,6 +266,7 @@ fn run() -> Result<(), String> {
         "build" | "test" => build_or_test(&workspace, &args),
         "doctor" => doctor(&workspace, &args[1..]),
         "audit" => audit(&workspace, &args[1..]),
+        "assurance" => assurance::command(&workspace, &args[1..]),
         "manifest" => manifest_command(&workspace, &args[1..]),
         "interface" => interface_command(&args[1..]),
         "package" => package_command(&workspace, &args[1..]),
@@ -264,9 +281,10 @@ fn run() -> Result<(), String> {
 fn print_help() {
     println!("mrml - canonical MRML repository build frontend (native migration stage)");
     println!(
-        "usage: mrml <list|doctor|audit|build|test|manifest|interface|package|release> [component] [options]"
+        "usage: mrml <list|doctor|audit|assurance|build|test|manifest|interface|package|release> [component] [options]"
     );
     println!("       mrml manifest <check|fmt|lock> [--check]");
+    println!("       mrml assurance <check|generate>");
     println!("       mrml manifest migrate LEGACY_WORKSPACE NEW_ROOT");
     println!(
         "       mrml package create ID CLASS VERSION ARCH PURPOSE INPUT [OUTPUT] [--compress] [--private-key KEY]"
@@ -300,6 +318,7 @@ fn print_help() {
     println!("  --release             use release profile");
     println!("  --feature-profile P   select a declared Rust feature profile");
     println!("  --compile-env N=V     set an allowlisted manifest compile input");
+    println!("  --sanitizer address   instrument Linux native tests with AddressSanitizer");
     println!("  --output structured   emit stable key=value records");
 }
 
@@ -1176,6 +1195,7 @@ fn load_manifest_declarations(root: &Path) -> Result<ManifestDeclarations, Strin
     let mut providers = Vec::new();
     let mut requirements = Vec::new();
     let mut isolation_policies = BTreeMap::new();
+    let mut build_inputs = BTreeMap::new();
     for member in members {
         if !safe_relative_path(member) || !seen.insert(member.clone()) {
             return Err(format!("InvalidWorkspaceMember {{ path: {member} }}"));
@@ -1200,6 +1220,15 @@ fn load_manifest_declarations(root: &Path) -> Result<ManifestDeclarations, Strin
         {
             return Err(format!(
                 "DuplicateIsolationPolicy {{ package: {package_id} }}"
+            ));
+        }
+        let package_inputs = declared_build_inputs(&document, package_id, member, root, &relative)?;
+        if build_inputs
+            .insert(package_id.to_owned(), package_inputs)
+            .is_some()
+        {
+            return Err(format!(
+                "DuplicateBuildInputPolicy {{ package: {package_id} }}"
             ));
         }
         let target_families: Vec<_> = document
@@ -1368,6 +1397,7 @@ fn load_manifest_declarations(root: &Path) -> Result<ManifestDeclarations, Strin
         records: declarations,
         interface_bindings,
         isolation_policies,
+        build_inputs,
     })
 }
 
@@ -1412,6 +1442,58 @@ fn validate_dynamic_requirement(package_kind: &str, package_id: &str) -> Result<
 
 fn manifest_error(file: &str, error: manifest::Error) -> String {
     format!("ManifestV2Error {{ file: {file}, detail: {error:?} }}")
+}
+
+fn declared_build_inputs(
+    document: &ManifestDocument,
+    package: &str,
+    member: &str,
+    root: &Path,
+    file: &str,
+) -> Result<Vec<input_audit::DeclaredInputSite>, String> {
+    let mut declarations = Vec::new();
+    for section in document.array_sections("build_input") {
+        let kind_text = section
+            .string("kind")
+            .map_err(|error| manifest_error(file, error))?;
+        // Build-script and proc-macro authority is already identified by the
+        // manifest artifact declaration. Exact source-site identity applies to
+        // ambient inputs discovered in Rust source.
+        if matches!(kind_text, "build-script" | "proc-macro") {
+            continue;
+        }
+        let kind = input_audit::BuildInputKind::parse(kind_text).map_err(|_| {
+            format!("ManifestBuildInputInvalid {{ package: {package}, kind: {kind_text} }}")
+        })?;
+        let raw_line = section
+            .integer("line")
+            .map_err(|error| manifest_error(file, error))?;
+        let line = usize::try_from(raw_line).map_err(|_| {
+            format!("ManifestBuildInputLineInvalid {{ package: {package}, line: {raw_line} }}")
+        })?;
+        declarations.push(input_audit::DeclaredInputSite {
+            id: section
+                .string("id")
+                .map_err(|error| manifest_error(file, error))?
+                .to_owned(),
+            kind,
+            path: section
+                .string("path")
+                .map_err(|error| manifest_error(file, error))?
+                .to_owned(),
+            line,
+            fingerprint: section
+                .string("fingerprint")
+                .map_err(|error| manifest_error(file, error))?
+                .to_owned(),
+            reason: section
+                .string("reason")
+                .map_err(|error| manifest_error(file, error))?
+                .to_owned(),
+        });
+    }
+    input_audit::validate_declarations(package, member, root, &declarations)?;
+    Ok(declarations)
 }
 
 fn v2_target_family(section: &manifest::Section) -> Result<&'static str, String> {
@@ -1920,6 +2002,11 @@ fn load_workspace() -> Result<Workspace, String> {
                     features: split_declaration(features),
                     outputs: split_declaration(outputs),
                     input_policy: parse_input_policy(input_policy, index + 1)?,
+                    input_sites: declarations
+                        .build_inputs
+                        .get(*id)
+                        .cloned()
+                        .ok_or_else(|| format!("BuildInputPolicyMissing {{ package: {id} }}"))?,
                     isolation: declarations
                         .isolation_policies
                         .get(*id)
@@ -3283,6 +3370,14 @@ fn build_or_test(workspace: &Workspace, args: &[String]) -> Result<(), String> {
     let release = args.iter().any(|arg| arg == "--release");
     let feature_profile = requested_option(args, "--feature-profile")?.unwrap_or("default");
     let compile_env = requested_compile_env(args)?;
+    let sanitizer = requested_option(args, "--sanitizer")?;
+    if let Some(value) = sanitizer
+        && (value != "address" || operation != "test" || target != "LINUX")
+    {
+        return Err(format!(
+            "UnsupportedSanitizer {{ sanitizer: {value}, operation: {operation}, target: {target}, supported: address-on-linux-test }}"
+        ));
+    }
     let mut components: Vec<&Component> = workspace
         .components
         .iter()
@@ -3342,12 +3437,15 @@ fn build_or_test(workspace: &Workspace, args: &[String]) -> Result<(), String> {
         run_rust_action(
             workspace,
             component,
-            operation,
-            &target,
-            release,
-            gpu_arch,
-            feature_profile,
-            &compile_env,
+            RustActionRequest {
+                operation,
+                target: &target,
+                release,
+                gpu_arch,
+                feature_profile,
+                compile_env: &compile_env,
+                sanitizer,
+            },
         )?;
         emit(mode, operation, component, &target, builder, "PASS");
     }
@@ -3357,13 +3455,17 @@ fn build_or_test(workspace: &Workspace, args: &[String]) -> Result<(), String> {
 fn run_rust_action(
     workspace: &Workspace,
     component: &Component,
-    operation: &str,
-    target: &str,
-    release: bool,
-    gpu_arch: Option<&str>,
-    feature_profile: &str,
-    compile_env: &BTreeMap<String, String>,
+    request: RustActionRequest<'_>,
 ) -> Result<(), String> {
+    let RustActionRequest {
+        operation,
+        target,
+        release,
+        gpu_arch,
+        feature_profile,
+        compile_env,
+        sanitizer,
+    } = request;
     let compile_target = rust_compile_target(
         component
             .rust_action
@@ -3406,6 +3508,7 @@ fn run_rust_action(
             test: false,
             gpu_arch,
             compile_env,
+            sanitizer,
         },
         feature_profile,
         &mut built,
@@ -3427,6 +3530,7 @@ fn run_rust_action(
                 test: false,
                 gpu_arch,
                 compile_env,
+                sanitizer,
             },
             feature_profile,
         )?;
@@ -3456,12 +3560,21 @@ fn run_rust_action(
                 test: true,
                 gpu_arch,
                 compile_env,
+                sanitizer,
             },
             "default",
             &mut test_built,
         )?;
         for test in &action.tests {
-            run_declared_test(workspace, component, action, test, test_target, release)?;
+            run_declared_test(
+                workspace,
+                component,
+                action,
+                test,
+                test_target,
+                release,
+                sanitizer,
+            )?;
         }
         for binary in action
             .binaries
@@ -3480,6 +3593,7 @@ fn run_rust_action(
                     test: true,
                     gpu_arch,
                     compile_env,
+                    sanitizer,
                 },
                 "default",
             )?;
@@ -3489,7 +3603,15 @@ fn run_rust_action(
             .iter()
             .filter(|example| rust_example_active(example, action, test_target))
         {
-            compile_declared_example(workspace, component, action, example, test_target, release)?;
+            compile_declared_example(
+                workspace,
+                component,
+                action,
+                example,
+                test_target,
+                release,
+                sanitizer,
+            )?;
         }
         for benchmark in &action.benchmarks {
             compile_declared_benchmark(
@@ -3499,6 +3621,7 @@ fn run_rust_action(
                 benchmark,
                 test_target,
                 release,
+                sanitizer,
             )?;
         }
     }
@@ -3576,10 +3699,12 @@ fn compile_rust_component(
         test,
         gpu_arch,
         compile_env,
+        sanitizer,
     } = *mode;
     let build_key = format!(
-        "{}#{target}#{compile_target}#{feature_profile}",
-        component.id
+        "{}#{target}#{compile_target}#{feature_profile}#{}",
+        component.id,
+        sanitizer.unwrap_or("none")
     );
     if !test && built.contains(&build_key) {
         return Ok(());
@@ -3748,6 +3873,7 @@ fn compile_rust_component(
         apply_test_stack(&mut command, action, compile_target);
     }
     apply_rust_compile_target(&mut command, compile_target)?;
+    apply_rust_sanitizer(&mut command, sanitizer, compile_target)?;
     if release {
         command.args([
             "-C",
@@ -3787,6 +3913,7 @@ fn run_declared_test(
     test: &RustTest,
     target: &str,
     release: bool,
+    sanitizer: Option<&str>,
 ) -> Result<(), String> {
     let compile_target = default_rust_target(target)?;
     let output_dir = native_output_dir(workspace, target, compile_target, release)?;
@@ -3853,6 +3980,7 @@ fn run_declared_test(
         ));
     }
     apply_rust_compile_target(&mut command, compile_target)?;
+    apply_rust_sanitizer(&mut command, sanitizer, compile_target)?;
     let status = command
         .status()
         .map_err(|error| format!("TestCompileUnavailable {{ detail: {error} }}"))?;
@@ -3874,6 +4002,7 @@ fn compile_declared_example(
     example: &RustExample,
     target: &str,
     release: bool,
+    sanitizer: Option<&str>,
 ) -> Result<(), String> {
     let compile_target = default_rust_target(target)?;
     let output_dir = native_output_dir(workspace, target, compile_target, release)?;
@@ -3937,6 +4066,7 @@ fn compile_declared_example(
         ));
     }
     apply_rust_compile_target(&mut command, compile_target)?;
+    apply_rust_sanitizer(&mut command, sanitizer, compile_target)?;
     if release {
         command.args([
             "-C",
@@ -3971,6 +4101,7 @@ fn compile_declared_benchmark(
     benchmark: &RustBenchmark,
     target: &str,
     release: bool,
+    sanitizer: Option<&str>,
 ) -> Result<(), String> {
     let compile_target = default_rust_target(target)?;
     let output_dir = native_output_dir(workspace, target, compile_target, release)?;
@@ -4035,6 +4166,7 @@ fn compile_declared_benchmark(
         ));
     }
     apply_rust_compile_target(&mut command, compile_target)?;
+    apply_rust_sanitizer(&mut command, sanitizer, compile_target)?;
     if release {
         command.args([
             "-C",
@@ -4077,6 +4209,7 @@ fn compile_declared_binary(
         test,
         gpu_arch: _,
         compile_env,
+        sanitizer,
     } = *mode;
     let output_dir = native_output_dir(workspace, target, compile_target, release)?;
     ensure_artifact_directory(&output_dir)?;
@@ -4157,6 +4290,7 @@ fn compile_declared_binary(
         ));
     }
     apply_rust_compile_target(&mut command, compile_target)?;
+    apply_rust_sanitizer(&mut command, sanitizer, compile_target)?;
     if release {
         command.args([
             "-C",
@@ -4297,6 +4431,25 @@ fn rust_compile_target(action: &RustAction, target: &str) -> Result<String, Stri
         .find(|declaration| declaration.target == target)
         .map(|declaration| declaration.triple.clone())
         .unwrap_or(default_rust_target(target)?.to_owned()))
+}
+
+fn apply_rust_sanitizer(
+    command: &mut Command,
+    sanitizer: Option<&str>,
+    compile_target: &str,
+) -> Result<(), String> {
+    match sanitizer {
+        None => Ok(()),
+        Some("address") if compile_target == "x86_64-unknown-linux-gnu" => {
+            command
+                .arg("-Zsanitizer=address")
+                .args(["-C", "force-frame-pointers=yes"]);
+            Ok(())
+        }
+        Some(value) => Err(format!(
+            "UnsupportedSanitizerTarget {{ sanitizer: {value}, compile_target: {compile_target} }}"
+        )),
+    }
 }
 
 fn apply_rust_compile_target(command: &mut Command, compile_target: &str) -> Result<(), String> {
@@ -4718,7 +4871,57 @@ fn audit(workspace: &Workspace, args: &[String]) -> Result<(), String> {
                 .count(),
             ..InputCounts::default()
         };
-        scan_component(workspace, component, mode, &mut component_counts)?;
+        let observed = input_audit::scan_package(&workspace.root, &component.path)?;
+        input_audit::verify_declarations(&component.id, &component.input_sites, &observed)?;
+        for site in &observed {
+            match site.kind {
+                input_audit::BuildInputKind::NativeLink => {
+                    component_counts.native_links = component_counts
+                        .native_links
+                        .checked_add(1)
+                        .ok_or("AuditCountOverflow")?;
+                }
+                input_audit::BuildInputKind::CompileEnv => {
+                    component_counts.compile_env = component_counts
+                        .compile_env
+                        .checked_add(1)
+                        .ok_or("AuditCountOverflow")?;
+                }
+                input_audit::BuildInputKind::IncludedFile => {
+                    component_counts.included_files = component_counts
+                        .included_files
+                        .checked_add(1)
+                        .ok_or("AuditCountOverflow")?;
+                }
+                input_audit::BuildInputKind::ExternalCommand => {
+                    component_counts.external_commands = component_counts
+                        .external_commands
+                        .checked_add(1)
+                        .ok_or("AuditCountOverflow")?;
+                }
+            }
+            if mode == OutputMode::Structured {
+                let declaration = component
+                    .input_sites
+                    .iter()
+                    .find(|declaration| {
+                        declaration.kind == site.kind
+                            && declaration.path == site.path
+                            && declaration.fingerprint == site.fingerprint
+                    })
+                    .ok_or("InputSiteVerificationInvariant")?;
+                println!(
+                    "input|component={}|id={}|kind={}|path={}|line={}|declared_line={}|fingerprint={}",
+                    clean(&component.id),
+                    clean(&declaration.id),
+                    site.kind.token(),
+                    clean(&site.path),
+                    site.line,
+                    declaration.line,
+                    site.fingerprint
+                );
+            }
+        }
         if component.input_policy != component_counts {
             return Err(format!(
                 "InputPolicyDrift {{ component: {}, declared: {}, actual: {} }}",
@@ -4731,7 +4934,7 @@ fn audit(workspace: &Workspace, args: &[String]) -> Result<(), String> {
     }
     if mode == OutputMode::Structured {
         println!(
-            "audit|status=PASS|resolver=native|components={}|dependencies={dependency_count}|features={feature_count}|outputs={target_count}|build_scripts={}|proc_macros={}|native_links={}|compile_env={}|included_files={}|external_commands={}",
+            "audit|status=PASS|resolver=native|components={}|dependencies={dependency_count}|features={feature_count}|outputs={target_count}|build_scripts={}|proc_macros={}|native_links={}|compile_env={}|included_files={}|external_commands={}|input_identity=fingerprint-v1",
             workspace.components.len(),
             counts.build_scripts,
             counts.proc_macros,
@@ -4742,7 +4945,7 @@ fn audit(workspace: &Workspace, args: &[String]) -> Result<(), String> {
         );
     } else {
         println!(
-            "audit PASS (native resolver): {} components, {dependency_count} dependency records, {feature_count} features, {target_count} outputs\ninputs: {} build scripts, {} proc macros, {} native links, {} compile-time environment reads, {} included files, {} external command sites",
+            "audit PASS (native resolver): {} components, {dependency_count} dependency records, {feature_count} features, {target_count} outputs\ninputs: {} build scripts, {} proc macros, {} native links, {} compile-time environment reads, {} included files, {} external command sites; source inputs matched by stable ID and token fingerprint",
             workspace.components.len(),
             counts.build_scripts,
             counts.proc_macros,
@@ -4750,146 +4953,6 @@ fn audit(workspace: &Workspace, args: &[String]) -> Result<(), String> {
             counts.compile_env,
             counts.included_files,
             counts.external_commands
-        );
-    }
-    Ok(())
-}
-
-fn scan_component(
-    workspace: &Workspace,
-    component: &Component,
-    mode: OutputMode,
-    counts: &mut InputCounts,
-) -> Result<(), String> {
-    let mut pending = vec![workspace.root.join(&component.path)];
-    let mut visited = 0_usize;
-    while let Some(path) = pending.pop() {
-        visited = visited.checked_add(1).ok_or("AuditPathCountOverflow")?;
-        if visited > 20_000 {
-            return Err(format!("AuditPathLimit {{ component: {} }}", component.id));
-        }
-        let mut entries: Vec<_> = fs::read_dir(&path)
-            .map_err(|error| {
-                format!(
-                    "AuditReadDirectory {{ path: {}, detail: {error} }}",
-                    clean(&path.display().to_string())
-                )
-            })?
-            .collect::<Result<_, _>>()
-            .map_err(|error| {
-                format!(
-                    "AuditReadDirectory {{ path: {}, detail: {error} }}",
-                    clean(&path.display().to_string())
-                )
-            })?;
-        entries.sort_by_key(std::fs::DirEntry::file_name);
-        for entry in entries {
-            let entry_path = entry.path();
-            let file_type = entry
-                .file_type()
-                .map_err(|error| format!("AuditFileType {{ detail: {error} }}"))?;
-            if file_type.is_symlink() {
-                return Err(format!(
-                    "AuditSymlinkRejected {{ path: {} }}",
-                    clean(&entry_path.display().to_string())
-                ));
-            }
-            if file_type.is_dir() {
-                pending.push(entry_path);
-            } else if entry_path.extension().and_then(|value| value.to_str()) == Some("rs") {
-                scan_rust_file(workspace, component, &entry_path, mode, counts)?;
-            }
-        }
-    }
-    Ok(())
-}
-
-fn scan_rust_file(
-    workspace: &Workspace,
-    component: &Component,
-    path: &std::path::Path,
-    mode: OutputMode,
-    counts: &mut InputCounts,
-) -> Result<(), String> {
-    let metadata =
-        fs::metadata(path).map_err(|error| format!("AuditFileMetadata {{ detail: {error} }}"))?;
-    if metadata.len() > 2 * 1024 * 1024 {
-        return Err(format!(
-            "AuditSourceTooLarge {{ path: {}, bytes: {} }}",
-            clean(&path.display().to_string()),
-            metadata.len()
-        ));
-    }
-    let text = fs::read_to_string(path)
-        .map_err(|error| format!("AuditSourceRead {{ detail: {error} }}"))?;
-    let relative = path
-        .strip_prefix(&workspace.root)
-        .map_err(|_| "AuditPathOutsideWorkspace")?
-        .display()
-        .to_string()
-        .replace('\\', "/");
-    for (index, line) in text.lines().enumerate() {
-        let line_number = index + 1;
-        if line.contains(concat!("#[", "link(")) || line.contains(concat!("link", "(name")) {
-            record_input(
-                mode,
-                component,
-                &relative,
-                line_number,
-                "native-link",
-                &mut counts.native_links,
-            )?;
-        }
-        if line.contains(concat!("env", "!(")) {
-            record_input(
-                mode,
-                component,
-                &relative,
-                line_number,
-                "compile-env",
-                &mut counts.compile_env,
-            )?;
-        }
-        if line.contains(concat!("include_", "bytes!("))
-            || line.contains(concat!("include_", "str!("))
-        {
-            record_input(
-                mode,
-                component,
-                &relative,
-                line_number,
-                "included-file",
-                &mut counts.included_files,
-            )?;
-        }
-        if line.contains(concat!("Command", "::new(")) {
-            record_input(
-                mode,
-                component,
-                &relative,
-                line_number,
-                "external-command",
-                &mut counts.external_commands,
-            )?;
-        }
-    }
-    Ok(())
-}
-
-fn record_input(
-    mode: OutputMode,
-    component: &Component,
-    relative: &str,
-    line: usize,
-    kind: &str,
-    count: &mut usize,
-) -> Result<(), String> {
-    *count = count.checked_add(1).ok_or("AuditCountOverflow")?;
-    if mode == OutputMode::Structured {
-        println!(
-            "input|component={}|kind={kind}|path={}|line={line}",
-            component.id,
-            clean(relative)
         );
     }
     Ok(())
@@ -4956,6 +5019,7 @@ mod tests {
             features: Vec::new(),
             outputs: vec![format!("{package}:lib")],
             input_policy: InputCounts::default(),
+            input_sites: Vec::new(),
             isolation: IsolationPolicy::default_for_kind("test"),
             rust_action: None,
         }
