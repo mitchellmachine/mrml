@@ -1227,3 +1227,12 @@ execution succeeded. This extends the black-box evidence only to exact literal
 `.len()` and `.is_empty()` observation; it does not establish general `CStr`
 transport or implementation strategy. The temporary source and executable were
 removed.
+
+An independently authored Rust 2024 executable against the exact Arch
+toolchain selected between cooked `c"hello\n".to_bytes()` and raw
+`cr##"raw\n"#text"##.to_bytes_with_nul()`. It observed `b"hello\n"` in the
+first arm and the raw content plus exactly one trailing NUL in the second arm.
+Compilation and execution succeeded. This is black-box evidence for that exact
+conditional literal/view behavior only; it does not establish MRML object
+relocations, `CStr` ABI transport, or an implementation strategy. The temporary
+source and executable were removed.

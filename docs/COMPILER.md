@@ -2100,6 +2100,17 @@ Windows and Arch each passed 657 unit, 1 component, 10 conformance, 351
 replacement, and 7 semantic-execution tests (1,026 total). General `CStr`
 values remain fail-closed.
 
+The semantic-execution harness now loads the exact MRML internal read-only
+relocation contract rather than limiting data-bearing probes to structural
+inspection. It recognizes only COFF `.text`/`.rdata`
+`IMAGE_REL_AMD64_REL32` and ELF64 `.rela.text`/`.rodata` `R_X86_64_PC32`,
+checks section, symbol, type, addend, and patch bounds, and rejects other shapes.
+A conditional cooked/raw byte-view return executes from both formats and
+observes exact bytes and terminator policy; exact ORACLE-0002 Arch execution
+agrees. Both hosts passed 1,027 compiler tests, including 8 semantic-execution
+tests. This is a bounded test loader, not external-symbol linking or a production
+runtime loader.
+
 ### Bounded explicit-static reference checkpoint
 
 Exact `&'static` reference spelling is now recognized for the existing bounded
@@ -2130,7 +2141,9 @@ reference mutations/origins, and supported inline assembly after verifying the
 exact ORACLE-0002 rustc commit. Windows and Arch each passed 653 unit, 1
 component, 10 conformance, 351 replacement, and 6 semantic-execution tests
 (1,021 total). General CFG lowering, relocating runtime loading, trap isolation,
-and complete region inference remain outside this checkpoint.
+external relocation linking, trap isolation, and complete region inference
+remain outside this checkpoint. Internal read-only relocations are now executed
+by the later bounded semantic-loader checkpoint.
 
 ### Bounded byte character-literal checkpoint
 

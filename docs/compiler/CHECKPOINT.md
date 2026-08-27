@@ -93,6 +93,18 @@ ORACLE-0002 Arch executable agrees. Windows and Arch each passed 657 library,
 semantic-execution tests: 1,026 per host. General `&CStr` transport, locals,
 arguments, and conditionals remain unsupported.
 
+Commit `8a172ed2` extends the test-only semantic loader from relocation-free
+`.text` to MRML's exact internal read-only object contract. It accepts only COFF
+`IMAGE_REL_AMD64_REL32` references from `.text` to `.rdata` and ELF64
+`R_X86_64_PC32` entries from `.rela.text` to `.rodata`, then applies checked
+in-range displacements inside one bounded allocation. A conditional cooked/raw
+C-string byte-view probe executes from both object formats and verifies exact
+contents, length, ordering, and terminator inclusion. Exact ORACLE-0002 Arch
+execution agrees. Windows and Arch each passed 657 library, 1
+component-interface, 10 conformance, 351 replacement, and 8 semantic-execution
+tests: 1,027 per host. External relocation linking and a production loader are
+not claimed.
+
 Patent review: **NOT_TRIGGERED**; see `docs/patents/REVIEW_LOG.md`.
 
 ### Preceding bounded explicit-static reference milestone

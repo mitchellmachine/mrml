@@ -6014,3 +6014,15 @@ truth with/without the terminator on both hosts; exact ORACLE-0002 agrees on
 Arch. Windows and Arch each passed 657 library, 1 component-interface, 10
 conformance, 351 replacement, and 7 semantic-execution tests: 1,026 per host.
 General `&CStr` transport, locals, arguments, and conditionals remain unsupported.
+
+The relocation-aware semantic-loader milestone at `8a172ed2` parses only the
+object shapes produced by MRML for internal read-only data: COFF
+`.text`/`.rdata` `IMAGE_REL_AMD64_REL32` and ELF64
+`.rela.text`/`.rodata` `R_X86_64_PC32`. It checks the exact symbol/type/addend
+contract and patch/data bounds before constructing one test-only executable
+image. A conditional cooked/raw C-string byte-view return now executes on both
+hosts and proves exact contents plus terminator policy, matching exact
+ORACLE-0002 Arch execution. Windows and Arch each passed 657 library, 1
+component-interface, 10 conformance, 351 replacement, and 8 semantic-execution
+tests: 1,027 per host. External relocations and production loading remain
+outside the claim.
