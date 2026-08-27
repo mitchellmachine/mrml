@@ -4,9 +4,10 @@ use crate::{
     ObjectFile, ParseErrorKind, Parser, SemanticErrorKind, SourceTraitDeclarationError,
     SourceTraitDeclarationTable, SourceTraitImplementationError, SourceTraitImplementationTable,
     SourceTraitObligationError, Span, TargetLayout, X86_64Abi, X86_64PcRelativeRelocation,
-    X86_64PcRelativeRelocationKind, analyze_constants, compile_x86_64_function_with_options,
-    compile_x86_64_naked_relocatable, emit_elf64_x86_64, emit_elf64_x86_64_with_relocations,
-    emit_x86_64_coff, emit_x86_64_coff_with_relocations,
+    X86_64PcRelativeRelocationKind, X86_64ReadonlyRelocation, analyze_constants,
+    compile_x86_64_naked_relocatable, compile_x86_64_runtime_function_with_options,
+    emit_elf64_x86_64, emit_elf64_x86_64_with_readonly_data, emit_elf64_x86_64_with_relocations,
+    emit_x86_64_coff, emit_x86_64_coff_with_readonly_data, emit_x86_64_coff_with_relocations,
 };
 
 struct PipelineResolver<
@@ -271,13 +272,13 @@ pub fn compile_source_function_with_options<
         constants: &constants,
         target,
     };
-    let mut relocations = [X86_64PcRelativeRelocation {
-        offset: 0,
-        symbol: "",
-        kind: X86_64PcRelativeRelocationKind::Branch,
-    }; crate::MAX_X86_64_EXTERNAL_RELOCATIONS];
-    let mut relocation_count = 0usize;
-    let code = if function.naked {
+    let object = if function.naked {
+        let mut relocations = [X86_64PcRelativeRelocation {
+            offset: 0,
+            symbol: "",
+            kind: X86_64PcRelativeRelocationKind::Branch,
+        }; crate::MAX_X86_64_EXTERNAL_RELOCATIONS];
+        let mut relocation_count = 0usize;
         let output = compile_x86_64_naked_relocatable::<MAX_CODE_BYTES, MAX_PARAMETERS>(function)
             .map_err(|error| CompileError {
             kind: CompileErrorKind::Codegen(error.kind),
@@ -298,9 +299,22 @@ pub fn compile_source_function_with_options<
             };
             relocation_count += 1;
         }
-        output.code
+        match (format, relocation_count) {
+            (ObjectFormat::Elf64, 0) => emit_elf64_x86_64(function.name, &output.code),
+            (ObjectFormat::Coff, 0) => emit_x86_64_coff(function.name, &output.code),
+            (ObjectFormat::Elf64, count) => emit_elf64_x86_64_with_relocations(
+                function.name,
+                &output.code,
+                &relocations[..count],
+            ),
+            (ObjectFormat::Coff, count) => emit_x86_64_coff_with_relocations(
+                function.name,
+                &output.code,
+                &relocations[..count],
+            ),
+        }
     } else {
-        let code = compile_x86_64_function_with_options::<
+        let output = compile_x86_64_runtime_function_with_options::<
             _,
             MAX_CODE_BYTES,
             MAX_PARAMETERS,
@@ -310,19 +324,35 @@ pub fn compile_source_function_with_options<
             kind: CompileErrorKind::Codegen(error.kind),
             span: Some(error.span),
         })?;
-        code
+        let mut relocations = [X86_64ReadonlyRelocation {
+            offset: 0,
+            data_offset: 0,
+        }; crate::MAX_X86_64_READONLY_RELOCATIONS];
+        for (destination, source) in relocations.iter_mut().zip(output.readonly_relocations()) {
+            *destination = X86_64ReadonlyRelocation {
+                offset: source.offset,
+                data_offset: source.data_offset,
+            };
+        }
+        let relocation_count = output.readonly_relocations().len();
+        match (format, relocation_count) {
+            (ObjectFormat::Elf64, 0) => emit_elf64_x86_64(function.name, &output.code),
+            (ObjectFormat::Coff, 0) => emit_x86_64_coff(function.name, &output.code),
+            (ObjectFormat::Elf64, count) => emit_elf64_x86_64_with_readonly_data(
+                function.name,
+                &output.code,
+                output.readonly_data(),
+                &relocations[..count],
+            ),
+            (ObjectFormat::Coff, count) => emit_x86_64_coff_with_readonly_data(
+                function.name,
+                &output.code,
+                output.readonly_data(),
+                &relocations[..count],
+            ),
+        }
     };
-    match (format, relocation_count) {
-        (ObjectFormat::Elf64, 0) => emit_elf64_x86_64(function.name, &code),
-        (ObjectFormat::Coff, 0) => emit_x86_64_coff(function.name, &code),
-        (ObjectFormat::Elf64, count) => {
-            emit_elf64_x86_64_with_relocations(function.name, &code, &relocations[..count])
-        }
-        (ObjectFormat::Coff, count) => {
-            emit_x86_64_coff_with_relocations(function.name, &code, &relocations[..count])
-        }
-    }
-    .map_err(|error| CompileError {
+    object.map_err(|error| CompileError {
         kind: CompileErrorKind::Object(error),
         span: Some(function.name_span),
     })
@@ -483,6 +513,18 @@ mod tests {
             u32::from_le_bytes(coff.bytes()[12..16].try_into().unwrap()),
             4
         );
+    }
+
+    #[test]
+    fn emits_runtime_string_literals_as_internal_readonly_data() {
+        let source = "#[unsafe(no_mangle)] pub extern \"C\" fn probe(input: &str, choose: bool) -> &str { let value: &str; if choose { value = input; } else { value = \"fallback\"; } value }";
+        let elf = compile_wide(source, "probe", ObjectFormat::Elf64).unwrap();
+        assert!(elf.bytes().windows(8).any(|bytes| bytes == b"fallback"));
+        assert!(elf.bytes().windows(8).any(|bytes| bytes == b".rodata\0"));
+
+        let coff = compile_wide(source, "probe", ObjectFormat::Coff).unwrap();
+        assert!(coff.bytes().windows(8).any(|bytes| bytes == b"fallback"));
+        assert!(coff.bytes().windows(8).any(|bytes| bytes == b".rdata\0\0"));
     }
 
     #[test]

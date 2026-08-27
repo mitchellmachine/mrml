@@ -18,10 +18,12 @@ pub mod semantics;
 pub mod trait_goals;
 
 pub use codegen::{
-    CodegenError, CodegenErrorKind, CodegenOptions, MAX_X86_64_EXTERNAL_RELOCATIONS, MachineCode,
-    X86_64Abi, X86_64ExternalRelocation, X86_64ExternalRelocationKind,
-    X86_64RelocatableMachineCode, compile_x86_64_constant_function, compile_x86_64_function,
-    compile_x86_64_function_with_options, compile_x86_64_naked_relocatable,
+    CodegenError, CodegenErrorKind, CodegenOptions, MAX_X86_64_EXTERNAL_RELOCATIONS,
+    MAX_X86_64_READONLY_DATA_BYTES, MAX_X86_64_READONLY_RELOCATIONS, MachineCode, X86_64Abi,
+    X86_64ExternalRelocation, X86_64ExternalRelocationKind, X86_64ReadonlyDataRelocation,
+    X86_64RelocatableMachineCode, X86_64RuntimeMachineCode, compile_x86_64_constant_function,
+    compile_x86_64_function, compile_x86_64_function_with_options,
+    compile_x86_64_naked_relocatable, compile_x86_64_runtime_function_with_options,
 };
 pub use expression::{
     BinaryOperator, CallArrayElement, CastType, ConstEvalError, ConstantResolver, Expr, ExprId,

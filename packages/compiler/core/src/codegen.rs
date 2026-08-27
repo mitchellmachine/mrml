@@ -92,6 +92,33 @@ pub enum X86_64ExternalRelocationKind {
 }
 
 pub const MAX_X86_64_EXTERNAL_RELOCATIONS: usize = 8;
+pub const MAX_X86_64_READONLY_DATA_BYTES: usize = 1024;
+pub const MAX_X86_64_READONLY_RELOCATIONS: usize = 8;
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct X86_64ReadonlyDataRelocation {
+    pub offset: usize,
+    pub data_offset: usize,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct X86_64RuntimeMachineCode<const MAX_BYTES: usize> {
+    pub code: MachineCode<MAX_BYTES>,
+    readonly_data: [u8; MAX_X86_64_READONLY_DATA_BYTES],
+    readonly_data_length: usize,
+    readonly_relocations: [X86_64ReadonlyDataRelocation; MAX_X86_64_READONLY_RELOCATIONS],
+    readonly_relocation_count: usize,
+}
+
+impl<const MAX_BYTES: usize> X86_64RuntimeMachineCode<MAX_BYTES> {
+    pub fn readonly_data(&self) -> &[u8] {
+        &self.readonly_data[..self.readonly_data_length]
+    }
+
+    pub fn readonly_relocations(&self) -> &[X86_64ReadonlyDataRelocation] {
+        &self.readonly_relocations[..self.readonly_relocation_count]
+    }
+}
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct X86_64RelocatableMachineCode<'symbol, const MAX_BYTES: usize> {
@@ -619,6 +646,33 @@ pub fn compile_x86_64_function_with_options<
     abi: X86_64Abi,
     options: CodegenOptions,
 ) -> Result<MachineCode<MAX_BYTES>, CodegenError> {
+    let output = compile_x86_64_runtime_function_with_options::<
+        R,
+        MAX_BYTES,
+        MAX_PARAMETERS,
+        MAX_EXPRESSION_NODES,
+    >(function, resolver, abi, options)?;
+    if !output.readonly_data().is_empty() || !output.readonly_relocations().is_empty() {
+        return Err(CodegenError {
+            kind: CodegenErrorKind::RuntimeExpressionUnsupported,
+            span: function.body_expression_span,
+        });
+    }
+    Ok(output.code)
+}
+
+pub fn compile_x86_64_runtime_function_with_options<
+    'source,
+    R: ConstantResolver,
+    const MAX_BYTES: usize,
+    const MAX_PARAMETERS: usize,
+    const MAX_EXPRESSION_NODES: usize,
+>(
+    function: &Function<'source, MAX_PARAMETERS>,
+    resolver: &R,
+    abi: X86_64Abi,
+    options: CodegenOptions,
+) -> Result<X86_64RuntimeMachineCode<MAX_BYTES>, CodegenError> {
     if function.naked {
         let output = compile_x86_64_naked_relocatable(function)?;
         if !output.relocations().is_empty() {
@@ -627,7 +681,16 @@ pub fn compile_x86_64_function_with_options<
                 span: function.body_expression_span,
             });
         }
-        return Ok(output.code);
+        return Ok(X86_64RuntimeMachineCode {
+            code: output.code,
+            readonly_data: [0; MAX_X86_64_READONLY_DATA_BYTES],
+            readonly_data_length: 0,
+            readonly_relocations: [X86_64ReadonlyDataRelocation {
+                offset: 0,
+                data_offset: 0,
+            }; MAX_X86_64_READONLY_RELOCATIONS],
+            readonly_relocation_count: 0,
+        });
     }
     let parsed_body = function
         .parse_body::<MAX_PARAMETERS>()
@@ -684,12 +747,20 @@ pub fn compile_x86_64_function_with_options<
             .and_then(|return_type| runtime_width(return_type.text))
             .is_some()
     {
-        return compile_x86_64_constant_function::<
-            R,
-            MAX_BYTES,
-            MAX_PARAMETERS,
-            MAX_EXPRESSION_NODES,
-        >(function, resolver);
+        let code =
+            compile_x86_64_constant_function::<R, MAX_BYTES, MAX_PARAMETERS, MAX_EXPRESSION_NODES>(
+                function, resolver,
+            )?;
+        return Ok(X86_64RuntimeMachineCode {
+            code,
+            readonly_data: [0; MAX_X86_64_READONLY_DATA_BYTES],
+            readonly_data_length: 0,
+            readonly_relocations: [X86_64ReadonlyDataRelocation {
+                offset: 0,
+                data_offset: 0,
+            }; MAX_X86_64_READONLY_RELOCATIONS],
+            readonly_relocation_count: 0,
+        });
     }
     validate_stable_export(function)?;
     if function.parameter_count() > MAX_X86_64_ABI_PARAMETERS {
@@ -934,6 +1005,13 @@ pub fn compile_x86_64_function_with_options<
     let mut emitter = RuntimeEmitter::<_, MAX_BYTES, MAX_PARAMETERS> {
         bytes: [0; MAX_BYTES],
         length: 0,
+        readonly_data: [0; MAX_X86_64_READONLY_DATA_BYTES],
+        readonly_data_length: 0,
+        readonly_relocations: [X86_64ReadonlyDataRelocation {
+            offset: 0,
+            data_offset: 0,
+        }; MAX_X86_64_READONLY_RELOCATIONS],
+        readonly_relocation_count: 0,
         trap_patches: [0; MAX_BYTES],
         trap_count: 0,
         function,
@@ -23332,6 +23410,10 @@ fn runtime_expression_type_with_locals<
 struct RuntimeEmitter<'tree, 'source, R, const MAX_BYTES: usize, const MAX_PARAMETERS: usize> {
     bytes: [u8; MAX_BYTES],
     length: usize,
+    readonly_data: [u8; MAX_X86_64_READONLY_DATA_BYTES],
+    readonly_data_length: usize,
+    readonly_relocations: [X86_64ReadonlyDataRelocation; MAX_X86_64_READONLY_RELOCATIONS],
+    readonly_relocation_count: usize,
     trap_patches: [usize; MAX_BYTES],
     trap_count: usize,
     function: &'tree Function<'source, MAX_PARAMETERS>,
@@ -24863,7 +24945,7 @@ impl<
         Ok(())
     }
 
-    fn finish(mut self) -> Result<MachineCode<MAX_BYTES>, CodegenError> {
+    fn finish(mut self) -> Result<X86_64RuntimeMachineCode<MAX_BYTES>, CodegenError> {
         self.validate_runtime_place_facts()?;
         if self.trap_count != 0 {
             let trap = self.length;
@@ -24876,9 +24958,15 @@ impl<
                 self.bytes[patch..patch + 4].copy_from_slice(&displacement.to_le_bytes());
             }
         }
-        Ok(MachineCode {
-            bytes: self.bytes,
-            length: self.length,
+        Ok(X86_64RuntimeMachineCode {
+            code: MachineCode {
+                bytes: self.bytes,
+                length: self.length,
+            },
+            readonly_data: self.readonly_data,
+            readonly_data_length: self.readonly_data_length,
+            readonly_relocations: self.readonly_relocations,
+            readonly_relocation_count: self.readonly_relocation_count,
         })
     }
 
@@ -30276,6 +30364,42 @@ impl<
         id: crate::ExprId,
         depth: usize,
     ) -> Result<(), CodegenError> {
+        if let Some(ExprKind::String(literal)) =
+            tree.expression(id).map(|expression| expression.kind)
+        {
+            let literal = literal
+                .strip_prefix('"')
+                .and_then(|literal| literal.strip_suffix('"'))
+                .filter(|literal| !literal.as_bytes().contains(&b'\\'))
+                .ok_or(self.error(CodegenErrorKind::RuntimeExpressionUnsupported))?;
+            let data_offset = self.readonly_data_length;
+            let data_end = data_offset
+                .checked_add(literal.len())
+                .ok_or(self.error(CodegenErrorKind::OutputTooSmall))?;
+            let capacity_error = self.error(CodegenErrorKind::OutputTooSmall);
+            let output = self
+                .readonly_data
+                .get_mut(data_offset..data_end)
+                .ok_or(capacity_error)?;
+            output.copy_from_slice(literal.as_bytes());
+            self.readonly_data_length = data_end;
+            let relocation_offset = self
+                .length
+                .checked_add(3)
+                .ok_or(self.error(CodegenErrorKind::OutputTooSmall))?;
+            let relocation = self
+                .readonly_relocations
+                .get_mut(self.readonly_relocation_count)
+                .ok_or(capacity_error)?;
+            *relocation = X86_64ReadonlyDataRelocation {
+                offset: relocation_offset,
+                data_offset,
+            };
+            self.readonly_relocation_count += 1;
+            self.emit(&[0x48, 0x8d, 0x05, 0, 0, 0, 0, 0x50, 0x48, 0xb8])?;
+            self.emit(&(literal.len() as u64).to_le_bytes())?;
+            return self.emit(&[0x50]);
+        }
         if matches!(
             tree.expression(id).map(|expression| expression.kind),
             Some(ExprKind::Call { .. })
@@ -36769,6 +36893,13 @@ mod tests {
         let mut emitter = RuntimeEmitter::<_, 64, 4> {
             bytes: [0; 64],
             length: 0,
+            readonly_data: [0; MAX_X86_64_READONLY_DATA_BYTES],
+            readonly_data_length: 0,
+            readonly_relocations: [X86_64ReadonlyDataRelocation {
+                offset: 0,
+                data_offset: 0,
+            }; MAX_X86_64_READONLY_RELOCATIONS],
+            readonly_relocation_count: 0,
             trap_patches: [0; 64],
             trap_count: 0,
             function: &function,
@@ -37196,6 +37327,13 @@ mod tests {
         let mut emitter = RuntimeEmitter::<_, 64, 4> {
             bytes: [0; 64],
             length: 0,
+            readonly_data: [0; MAX_X86_64_READONLY_DATA_BYTES],
+            readonly_data_length: 0,
+            readonly_relocations: [X86_64ReadonlyDataRelocation {
+                offset: 0,
+                data_offset: 0,
+            }; MAX_X86_64_READONLY_RELOCATIONS],
+            readonly_relocation_count: 0,
             trap_patches: [0; 64],
             trap_count: 0,
             function: &function,
@@ -37270,6 +37408,13 @@ mod tests {
         let emitter = RuntimeEmitter::<_, 64, 1> {
             bytes: [0; 64],
             length: 0,
+            readonly_data: [0; MAX_X86_64_READONLY_DATA_BYTES],
+            readonly_data_length: 0,
+            readonly_relocations: [X86_64ReadonlyDataRelocation {
+                offset: 0,
+                data_offset: 0,
+            }; MAX_X86_64_READONLY_RELOCATIONS],
+            readonly_relocation_count: 0,
             trap_patches: [0; 64],
             trap_count: 0,
             function: &function,
@@ -37393,6 +37538,13 @@ mod tests {
         let emitter = RuntimeEmitter::<_, 64, 4> {
             bytes: [0; 64],
             length: 0,
+            readonly_data: [0; MAX_X86_64_READONLY_DATA_BYTES],
+            readonly_data_length: 0,
+            readonly_relocations: [X86_64ReadonlyDataRelocation {
+                offset: 0,
+                data_offset: 0,
+            }; MAX_X86_64_READONLY_RELOCATIONS],
+            readonly_relocation_count: 0,
             trap_patches: [0; 64],
             trap_count: 0,
             function: &function,
@@ -37506,6 +37658,13 @@ mod tests {
         let emitter = RuntimeEmitter::<_, 64, 4> {
             bytes: [0; 64],
             length: 0,
+            readonly_data: [0; MAX_X86_64_READONLY_DATA_BYTES],
+            readonly_data_length: 0,
+            readonly_relocations: [X86_64ReadonlyDataRelocation {
+                offset: 0,
+                data_offset: 0,
+            }; MAX_X86_64_READONLY_RELOCATIONS],
+            readonly_relocation_count: 0,
             trap_patches: [0; 64],
             trap_count: 0,
             function: &function,
@@ -37676,6 +37835,13 @@ mod tests {
         let emitter = RuntimeEmitter::<_, 128, 8> {
             bytes: [0; 128],
             length: 0,
+            readonly_data: [0; MAX_X86_64_READONLY_DATA_BYTES],
+            readonly_data_length: 0,
+            readonly_relocations: [X86_64ReadonlyDataRelocation {
+                offset: 0,
+                data_offset: 0,
+            }; MAX_X86_64_READONLY_RELOCATIONS],
+            readonly_relocation_count: 0,
             trap_patches: [0; 128],
             trap_count: 0,
             function: &function,
@@ -39423,6 +39589,13 @@ mod tests {
         let emitter = RuntimeEmitter::<_, 64, 4> {
             bytes: [0; 64],
             length: 0,
+            readonly_data: [0; MAX_X86_64_READONLY_DATA_BYTES],
+            readonly_data_length: 0,
+            readonly_relocations: [X86_64ReadonlyDataRelocation {
+                offset: 0,
+                data_offset: 0,
+            }; MAX_X86_64_READONLY_RELOCATIONS],
+            readonly_relocation_count: 0,
             trap_patches: [0; 64],
             trap_count: 0,
             function: &function,
@@ -41737,6 +41910,13 @@ mod tests {
         let emitter = RuntimeEmitter::<_, 64, 4> {
             bytes: [0; 64],
             length: 0,
+            readonly_data: [0; MAX_X86_64_READONLY_DATA_BYTES],
+            readonly_data_length: 0,
+            readonly_relocations: [X86_64ReadonlyDataRelocation {
+                offset: 0,
+                data_offset: 0,
+            }; MAX_X86_64_READONLY_RELOCATIONS],
+            readonly_relocation_count: 0,
             trap_patches: [0; 64],
             trap_count: 0,
             function: &function,
@@ -42086,6 +42266,13 @@ mod tests {
         let emitter = RuntimeEmitter::<_, 64, 4> {
             bytes: [0; 64],
             length: 0,
+            readonly_data: [0; MAX_X86_64_READONLY_DATA_BYTES],
+            readonly_data_length: 0,
+            readonly_relocations: [X86_64ReadonlyDataRelocation {
+                offset: 0,
+                data_offset: 0,
+            }; MAX_X86_64_READONLY_RELOCATIONS],
+            readonly_relocation_count: 0,
             trap_patches: [0; 64],
             trap_count: 0,
             function: &function,
@@ -45451,6 +45638,13 @@ mod tests {
         let mut emitter = RuntimeEmitter::<_, 64, 2> {
             bytes: [0; 64],
             length: 0,
+            readonly_data: [0; MAX_X86_64_READONLY_DATA_BYTES],
+            readonly_data_length: 0,
+            readonly_relocations: [X86_64ReadonlyDataRelocation {
+                offset: 0,
+                data_offset: 0,
+            }; MAX_X86_64_READONLY_RELOCATIONS],
+            readonly_relocation_count: 0,
             trap_patches: [0; 64],
             trap_count: 0,
             function: &function,
