@@ -750,6 +750,17 @@ mod tests {
                 CompileErrorKind::Codegen(CodegenErrorKind::UnsupportedCStringLiteral)
             ));
         }
+
+        for source in [
+            "#[unsafe(no_mangle)] pub extern \"C\" fn probe() -> usize { c\"hello\".to_bytes().len() }",
+            "#[unsafe(no_mangle)] pub extern \"C\" fn probe() -> usize { c\"hello\".to_bytes_with_nul().len() }",
+            "#[unsafe(no_mangle)] pub extern \"C\" fn probe() -> bool { c\"\".to_bytes().is_empty() }",
+            "#[unsafe(no_mangle)] pub extern \"C\" fn probe() -> bool { c\"\".to_bytes_with_nul().is_empty() }",
+        ] {
+            for format in [ObjectFormat::Elf64, ObjectFormat::Coff] {
+                compile_wide(source, "probe", format).unwrap();
+            }
+        }
     }
 
     #[test]

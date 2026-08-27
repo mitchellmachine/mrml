@@ -736,7 +736,25 @@ pub fn compile_x86_64_runtime_function_with_options<
             break;
         }
     }
+    let tail_requires_runtime = if parsed_body.tail_span.start == parsed_body.tail_span.end {
+        false
+    } else {
+        parsed_body
+            .parse_tail::<MAX_EXPRESSION_NODES>()
+            .map_err(|error| CodegenError {
+                kind: CodegenErrorKind::Expression(error.kind),
+                span: translate_span(
+                    function.body_expression_span.start + parsed_body.tail_span.start,
+                    error.span,
+                ),
+            })?
+            .nodes()
+            .iter()
+            .flatten()
+            .any(|expression| matches!(expression.kind, ExprKind::CStrToBytes { .. }))
+    };
     let body_requires_runtime = body_has_aggregate_local
+        || tail_requires_runtime
         || parsed_body.assignment_count() != 0
         || parsed_body.conditional_return_count() != 0
         || parsed_body.conditional_return_else_count() != 0
@@ -26733,6 +26751,11 @@ impl<
                 ) {
                     return Err(self.error(CodegenErrorKind::RuntimeTypeMismatch));
                 }
+                if let Some((_, length)) = self.append_c_string_byte_view(tree, base)? {
+                    self.emit(&[0x48, 0xb8])?;
+                    self.emit(&(length as u64).to_le_bytes())?;
+                    return Ok(());
+                }
                 let source = reference_source_name(tree, base)
                     .ok_or(self.error(CodegenErrorKind::RuntimeExpressionUnsupported))?;
                 self.emit_slice_length(source)?;
@@ -26755,6 +26778,10 @@ impl<
                     }
                 ) {
                     return Err(self.error(CodegenErrorKind::RuntimeTypeMismatch));
+                }
+                if let Some((_, length)) = self.append_c_string_byte_view(tree, base)? {
+                    self.emit(&[0xb8, u8::from(length == 0), 0, 0, 0])?;
+                    return Ok(());
                 }
                 let source = reference_source_name(tree, base)
                     .ok_or(self.error(CodegenErrorKind::RuntimeExpressionUnsupported))?;
@@ -30794,29 +30821,40 @@ impl<
         self.intern_readonly_string_bytes(&decoded[..decoded_length])
     }
 
+    fn append_c_string_byte_view<const MAX_NODES: usize>(
+        &mut self,
+        tree: &crate::ExpressionTree<'_, MAX_NODES>,
+        id: crate::ExprId,
+    ) -> Result<Option<(usize, usize)>, CodegenError> {
+        let Some(ExprKind::CStrToBytes { base, with_nul }) =
+            tree.expression(id).map(|expression| expression.kind)
+        else {
+            return Ok(None);
+        };
+        let Some(ExprKind::CString(literal)) =
+            tree.expression(base).map(|expression| expression.kind)
+        else {
+            return Err(self.error(CodegenErrorKind::UnsupportedCStringLiteral));
+        };
+        let (data_offset, c_string_length) =
+            self.append_readonly_string_literal(literal, ReadonlyStringLiteralKind::C)?;
+        let literal_length = if with_nul {
+            c_string_length
+        } else {
+            c_string_length
+                .checked_sub(1)
+                .ok_or(self.error(CodegenErrorKind::UnsupportedCStringLiteral))?
+        };
+        Ok(Some((data_offset, literal_length)))
+    }
+
     fn emit_slice_value_to_stack<const MAX_NODES: usize>(
         &mut self,
         tree: &crate::ExpressionTree<'_, MAX_NODES>,
         id: crate::ExprId,
         depth: usize,
     ) -> Result<(), CodegenError> {
-        if let Some(ExprKind::CStrToBytes { base, with_nul }) =
-            tree.expression(id).map(|expression| expression.kind)
-        {
-            let Some(ExprKind::CString(literal)) =
-                tree.expression(base).map(|expression| expression.kind)
-            else {
-                return Err(self.error(CodegenErrorKind::UnsupportedCStringLiteral));
-            };
-            let (data_offset, c_string_length) =
-                self.append_readonly_string_literal(literal, ReadonlyStringLiteralKind::C)?;
-            let literal_length = if with_nul {
-                c_string_length
-            } else {
-                c_string_length
-                    .checked_sub(1)
-                    .ok_or(self.error(CodegenErrorKind::UnsupportedCStringLiteral))?
-            };
+        if let Some((data_offset, literal_length)) = self.append_c_string_byte_view(tree, id)? {
             let capacity_error = self.error(CodegenErrorKind::OutputTooSmall);
             let relocation_offset = self
                 .length

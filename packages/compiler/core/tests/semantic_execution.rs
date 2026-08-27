@@ -242,6 +242,24 @@ fn supported_inline_assembly_register_output_executes() {
 }
 
 #[test]
+fn c_string_byte_view_lengths_and_emptiness_execute() {
+    let lengths = compile(
+        "#[unsafe(no_mangle)] pub extern \"C\" fn probe(with_nul: bool) -> usize { if with_nul { c\"hello\".to_bytes_with_nul().len() } else { c\"hello\".to_bytes().len() } }",
+    );
+    let probe: unsafe extern "C" fn(bool) -> usize =
+        unsafe { std::mem::transmute(lengths.pointer) };
+    assert_eq!(unsafe { probe(false) }, 5);
+    assert_eq!(unsafe { probe(true) }, 6);
+
+    let empty = compile(
+        "#[unsafe(no_mangle)] pub extern \"C\" fn probe(with_nul: bool) -> bool { if with_nul { c\"\".to_bytes_with_nul().is_empty() } else { c\"\".to_bytes().is_empty() } }",
+    );
+    let probe: unsafe extern "C" fn(bool) -> bool = unsafe { std::mem::transmute(empty.pointer) };
+    assert!(unsafe { probe(false) });
+    assert!(!unsafe { probe(true) });
+}
+
+#[test]
 fn unsupported_constructs_produce_typed_diagnostics_not_objects() {
     for source in [
         "#[unsafe(no_mangle)] pub extern \"C\" fn probe(stop: bool) -> u64 { loop { loop { if stop { let value: u64 = 1; } } } }",
