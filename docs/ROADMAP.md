@@ -714,6 +714,18 @@ and halt on WHP and KVM with `eligible=1`, `microvm=1`, and
 `native_fallback=0`. Constructing and retiring both distinct recovered domains
 remains the next gate; whole-system Total mode remains **PLANNED**.
 
+The complete-set control plane now also **PARTIALLY IMPLEMENTS** transactional
+backend construction. Endpoints are constructed in exact retained-domain order
+before any route is published. Failure while constructing the second domain
+returns the first opaque endpoint for explicit backend teardown, cancels every
+route still owned by the set in reverse, leaves zero running domains, and allows
+the same owner to retry immediately. The focused two-domain configuration test
+then constructs both endpoints, atomically commits them, finalizes with two
+eligible microVM domains and zero native fallback, returns both endpoints, and
+retires both domains. Configuration passes 53 tests on Windows and Arch Linux.
+Live construction/execution of two distinct WHP/KVM guests remains the next
+gate; whole-system Total mode remains **PLANNED**.
+
 The existing userspace block recovery loop is now reproducibly selectable
 through the canonical build frontend. The service image's
 `block_service_loop` profile and bootloader/kernel image's

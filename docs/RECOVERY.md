@@ -1846,6 +1846,16 @@ the ZIM/Zstd request, Total proof, peer cleanup, and terminal halt on WHP and KV
 with one eligible microVM domain and zero native fallback. Complete two-domain
 recovered construction remains **PLANNED**.
 
+Recovered complete-set construction now has a **PARTIALLY IMPLEMENTED**
+failure-safe boundary before publication. It constructs endpoints only for the
+exact retained domain membership. Failure on a later domain returns every
+earlier opaque endpoint for explicit backend teardown and cancels all prepared
+routes still owned by the set in reverse; no running route is published. A
+focused two-domain configuration test proves zero running domains after the
+second constructor fails and immediate same-owner retry through construction,
+atomic commit, strict Total finalization, endpoint recovery, and retirement.
+This is in-memory control-plane evidence, not two-guest WHP/KVM execution.
+
 The existing service-image recovery path now has canonical MRML build profiles:
 `block_service_loop` for the userspace service image and
 `block_service_probe` for its UEFI kernel/bootloader counterpart. Both release

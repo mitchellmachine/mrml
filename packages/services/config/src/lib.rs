@@ -4960,6 +4960,29 @@ pub struct CompleteTotalServiceCommitFailure<E, const DOMAINS: usize> {
     endpoints: [Option<TotalServiceEndpointBinding<E>>; DOMAINS],
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum CompleteTotalServiceConstructionError<E> {
+    IncompleteSet,
+    Construction(E),
+    Rollback(mrml_kernel::IsolationLaunchError),
+}
+
+#[derive(Debug)]
+pub struct CompleteTotalServiceConstructionFailure<E, X, const DOMAINS: usize> {
+    error: CompleteTotalServiceConstructionError<E>,
+    endpoints: [Option<TotalServiceEndpointBinding<X>>; DOMAINS],
+}
+
+impl<E, X, const DOMAINS: usize> CompleteTotalServiceConstructionFailure<E, X, DOMAINS> {
+    pub const fn error(&self) -> &CompleteTotalServiceConstructionError<E> {
+        &self.error
+    }
+
+    pub fn into_endpoints(self) -> [Option<TotalServiceEndpointBinding<X>>; DOMAINS] {
+        self.endpoints
+    }
+}
+
 impl<E, const DOMAINS: usize> CompleteTotalServiceCommitFailure<E, DOMAINS> {
     pub const fn error(&self) -> CompleteTotalServiceCommitError {
         self.error
@@ -5043,6 +5066,67 @@ impl<const DOMAINS: usize> PreparedTotalServiceSet<DOMAINS> {
 
     pub fn into_routes(self) -> [Option<PreparedIsolationServiceRoute>; DOMAINS] {
         self.routes
+    }
+
+    /// Constructs one backend endpoint for every exact prepared domain before
+    /// any route is published. A late construction failure returns all earlier
+    /// endpoints to the caller for backend teardown and cancels every prepared
+    /// route still owned by the set, so no running domain or stranded admission
+    /// slot remains.
+    pub fn construct_complete_endpoints<E, X, F>(
+        self,
+        admission: &mut IsolationAdmissionTable<DOMAINS>,
+        mut construct: F,
+    ) -> Result<
+        (Self, [Option<TotalServiceEndpointBinding<X>>; DOMAINS]),
+        CompleteTotalServiceConstructionFailure<E, X, DOMAINS>,
+    >
+    where
+        F: FnMut(mrml_kernel::IsolationServiceSpec) -> Result<X, E>,
+    {
+        let mut endpoints: [Option<TotalServiceEndpointBinding<X>>; DOMAINS] =
+            [const { None }; DOMAINS];
+        if self.count != self.expected_domains.iter().flatten().count()
+            || self
+                .expected_domains
+                .iter()
+                .zip(&self.routes)
+                .any(|(expected, route)| expected.is_some() != route.is_some())
+        {
+            let mut error = CompleteTotalServiceConstructionError::IncompleteSet;
+            for route in self.routes.into_iter().rev().flatten() {
+                if let Err(rollback) = route.cancel(admission) {
+                    error = CompleteTotalServiceConstructionError::Rollback(rollback);
+                }
+            }
+            return Err(CompleteTotalServiceConstructionFailure { error, endpoints });
+        }
+        for (index, route) in self.routes.iter().enumerate() {
+            let Some(route) = route.as_ref() else {
+                continue;
+            };
+            let spec = route.spec();
+            match construct(spec) {
+                Ok(endpoint) => {
+                    endpoints[index] =
+                        Some(TotalServiceEndpointBinding::new(spec.domain(), endpoint));
+                }
+                Err(construction) => {
+                    let mut error =
+                        CompleteTotalServiceConstructionError::Construction(construction);
+                    for route in self.routes.into_iter().rev().flatten() {
+                        if let Err(rollback) = route.cancel(admission) {
+                            if !matches!(error, CompleteTotalServiceConstructionError::Rollback(_))
+                            {
+                                error = CompleteTotalServiceConstructionError::Rollback(rollback);
+                            }
+                        }
+                    }
+                    return Err(CompleteTotalServiceConstructionFailure { error, endpoints });
+                }
+            }
+        }
+        Ok((self, endpoints))
     }
 
     /// Publishes one already-constructed endpoint for every prepared unique
@@ -13622,6 +13706,58 @@ mod tests {
         for route in prepared.into_routes().into_iter().rev().flatten() {
             route.cancel(invalid.admission_mut()).unwrap();
         }
+
+        let release = activated_two_domain_release(first_domain, second_domain, 19);
+        let mut construction = policy.bind_release_inventory(release).unwrap();
+        let prepared = construction
+            .prepare_complete_service_set(&[
+                TotalServicePreparationBinding::new(valid_bounds, first),
+                TotalServicePreparationBinding::new(valid_bounds, second),
+            ])
+            .unwrap();
+        let failure = prepared
+            .construct_complete_endpoints(construction.admission_mut(), |spec| {
+                if spec.domain() == second_domain {
+                    Err(0xdead_u32)
+                } else {
+                    Ok(spec.provider_generation())
+                }
+            })
+            .err()
+            .unwrap();
+        assert_eq!(
+            failure.error(),
+            &CompleteTotalServiceConstructionError::Construction(0xdead)
+        );
+        let returned = failure.into_endpoints();
+        assert_eq!(returned.iter().flatten().count(), 1);
+        assert_eq!(
+            returned.iter().flatten().next().unwrap().domain(),
+            first_domain
+        );
+        assert_eq!(construction.admission().running().count(), 0);
+
+        // The same exact owner can immediately prepare, construct and publish
+        // both domains after tearing down the returned provisional endpoint.
+        let prepared = construction
+            .prepare_complete_service_set(&[
+                TotalServicePreparationBinding::new(valid_bounds, first),
+                TotalServicePreparationBinding::new(valid_bounds, second),
+            ])
+            .unwrap();
+        let (prepared, endpoints) = prepared
+            .construct_complete_endpoints(construction.admission_mut(), |spec| {
+                Ok::<_, u32>(spec.provider_generation())
+            })
+            .unwrap();
+        let routed = prepared
+            .commit_complete(construction.admission_mut(), endpoints)
+            .unwrap();
+        assert_eq!(routed.len(), 2);
+        assert_eq!(construction.finalize().unwrap().running_in_microvm(), 2);
+        assert_eq!(routed.into_endpoints().iter().flatten().count(), 2);
+        construction.admission_mut().retire(second_domain).unwrap();
+        construction.admission_mut().retire(first_domain).unwrap();
     }
 
     #[test]
