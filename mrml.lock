@@ -4,10 +4,10 @@ version = 2
 toolchain = "nightly-2026-08-24"
 
 [graphs]
-compile_edges = 150
+compile_edges = 154
 build_tool_edges = 0
 runtime_interface_edges = 1
-package_edges = 143
+package_edges = 147
 system_release_edges = 3
 
 [[package]]
@@ -553,6 +553,19 @@ isolation_supported = ["platform"]
 compile_dependencies = ["org.mrml.library.crypto", "org.mrml.library.runtime", "org.mrml.system.kernel"]
 
 static_runtime = ["org.mrml.library.runtime", "org.mrml.system.kernel"]
+boot_bound = []
+system_release_bound = []
+
+[[package]]
+id = "org.mrml.test.security-fuzz"
+path = "packages/tests/security-fuzz"
+isolation_default = "native-process"
+isolation_minimum = "native-process"
+isolation_maximum = "native-process"
+isolation_supported = ["native-process"]
+compile_dependencies = ["org.mrml.library.runtime", "org.mrml.library.tensor", "org.mrml.library.tls", "org.mrml.zim"]
+
+static_runtime = ["org.mrml.library.runtime", "org.mrml.library.tensor", "org.mrml.library.tls", "org.mrml.zim"]
 boot_bound = []
 system_release_bound = []
 
