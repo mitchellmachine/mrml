@@ -8901,6 +8901,18 @@ decision. The broader cross-microVM interface and Total MicroVM review remains
 and recovered component execution. This technical screen is not legal advice or
 patent clearance.
 
+# 2026-08-27 — Exact two-peer guest leaf projection
+
+Patent review: **NOT_TRIGGERED** for this bounded translation-lifecycle
+increment. It uses the existing conventional x86-64 four-level page-table leaf
+format, exact map/verify and unmap/verify operations, stopped-vCPU root reload,
+RW/NX permissions, and transactional rollback after an injected conflict. It
+adds no queue protocol, notification algorithm, scheduler, device transport,
+compression, cryptographic primitive, or placement decision. The broader
+cross-microVM interface and Total MicroVM review remains **TRIGGERED**, including
+bounded queue semantics and recovered component execution. This technical
+screen is not legal advice or patent clearance.
+
 # 2026-08-26 — Atomic complete-domain endpoint publication
 
 Patent review: **NOT_TRIGGERED** for this bounded control-plane transaction. It

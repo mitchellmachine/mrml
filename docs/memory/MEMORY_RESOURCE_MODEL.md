@@ -185,6 +185,17 @@ bytes. This nested WHP host rejects a second simultaneous partition with a typed
 VID collision, so WHP has API/source parity but no two-partition execution claim.
 Guest page-table projection, peer queues, and execution remain **PLANNED**.
 
+Exact guest translation is now **PARTIALLY IMPLEMENTED** by the same retained
+peer-page owner. Each policy virtual page becomes one supervisor-only,
+read/write, non-executable leaf to its exact guest-physical backing; both leaves
+are verified and each stopped vCPU reloads its exact page-table root before the
+owner is usable. Teardown verifies both leaves absent before native GPA removal.
+A deliberate first-guest leaf conflict proves late rollback removes both native
+GPA mappings and permits an immediate exact retry on live nested KVM. WHP has
+the same source/API path, subject to the recorded second-partition host limit.
+No new intermediate page-table allocation is permitted during this leaf-only
+operation; the launch layout must already contain the required hierarchy.
+
 Two-peer policy retirement is now **PARTIALLY IMPLEMENTED** as one atomic
 ledger operation. After a backend proves both native mappings and translations
 absent, the kernel preflights the exact shared object, both mapping generations,

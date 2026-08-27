@@ -748,6 +748,13 @@ host rejects its second partition with the typed VID collision, so strict Total
 records unavailability rather than using one VM twice. Guest page-table
 projection, the bounded queue, and component execution remain the next gates.
 
+Exact guest leaf projection is now **PARTIALLY IMPLEMENTED**. WHP and KVM use
+the existing leaf-only page-table mutator to install verified supervisor RW/NX
+translations, reload exact stopped-vCPU roots, and remove both leaves before GPA
+retirement. Nested KVM proves conflict rollback, immediate retry, shared-byte
+visibility, and complete translation/GPA removal across two live VMs. The
+bounded interface queue is now the next dependency gate.
+
 The paired retirement ledger is now **PARTIALLY IMPLEMENTED**. A backend may
 release the shared page only after proving both native mappings and translations
 absent. Kernel preflight exact-matches the object, two mapping generations,

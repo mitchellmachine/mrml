@@ -208,6 +208,10 @@ pub struct PreparedWhpPeerPage<'guest, 'system> {
     backing: Option<WhpPeerHostPage>,
     first_physical: u64,
     second_physical: u64,
+    first_virtual: u64,
+    second_virtual: u64,
+    first_virtual_live: bool,
+    second_virtual_live: bool,
     first_live: bool,
     second_live: bool,
 }
@@ -268,6 +272,20 @@ impl<'guest, 'system> PreparedWhpPeerPage<'guest, 'system> {
             error: WhpPeerPageError::Backend(error),
             retained: None,
         })?;
+        let first_virtual = projection
+            .first_virtual_page()
+            .checked_mul(PAGE_SIZE)
+            .ok_or(WhpPeerPagePrepareFailure {
+                error: WhpPeerPageError::Backend(WhpError::InvalidMapping),
+                retained: None,
+            })?;
+        let second_virtual = projection
+            .second_virtual_page()
+            .checked_mul(PAGE_SIZE)
+            .ok_or(WhpPeerPagePrepareFailure {
+                error: WhpPeerPageError::Backend(WhpError::InvalidMapping),
+                retained: None,
+            })?;
         let backing = WhpPeerHostPage::allocate().map_err(|error| WhpPeerPagePrepareFailure {
             error: WhpPeerPageError::Backend(error),
             retained: None,
@@ -296,6 +314,10 @@ impl<'guest, 'system> PreparedWhpPeerPage<'guest, 'system> {
                         backing: Some(backing),
                         first_physical,
                         second_physical,
+                        first_virtual,
+                        second_virtual,
+                        first_virtual_live: false,
+                        second_virtual_live: false,
                         first_live: true,
                         second_live: false,
                     }),
@@ -306,12 +328,72 @@ impl<'guest, 'system> PreparedWhpPeerPage<'guest, 'system> {
                 retained: None,
             });
         }
+        if let Err(error) = first.install_peer_page(first_virtual, first_physical) {
+            let first_virtual_live = first
+                .peer_page_matches(first_virtual, first_physical)
+                .unwrap_or(true);
+            let mut retained = Self {
+                first,
+                second,
+                backing: Some(backing),
+                first_physical,
+                second_physical,
+                first_virtual,
+                second_virtual,
+                first_virtual_live,
+                second_virtual_live: false,
+                first_live: true,
+                second_live: true,
+            };
+            if retained.withdraw_virtual().is_ok() && retained.retire_native().is_ok() {
+                return Err(WhpPeerPagePrepareFailure {
+                    error: WhpPeerPageError::Backend(error),
+                    retained: None,
+                });
+            }
+            return Err(WhpPeerPagePrepareFailure {
+                error: WhpPeerPageError::Backend(error),
+                retained: Some(retained),
+            });
+        }
+        if let Err(error) = second.install_peer_page(second_virtual, second_physical) {
+            let second_virtual_live = second
+                .peer_page_matches(second_virtual, second_physical)
+                .unwrap_or(true);
+            let mut retained = Self {
+                first,
+                second,
+                backing: Some(backing),
+                first_physical,
+                second_physical,
+                first_virtual,
+                second_virtual,
+                first_virtual_live: true,
+                second_virtual_live,
+                first_live: true,
+                second_live: true,
+            };
+            if retained.withdraw_virtual().is_ok() && retained.retire_native().is_ok() {
+                return Err(WhpPeerPagePrepareFailure {
+                    error: WhpPeerPageError::Backend(error),
+                    retained: None,
+                });
+            }
+            return Err(WhpPeerPagePrepareFailure {
+                error: WhpPeerPageError::Backend(error),
+                retained: Some(retained),
+            });
+        }
         Ok(Self {
             first,
             second,
             backing: Some(backing),
             first_physical,
             second_physical,
+            first_virtual,
+            second_virtual,
+            first_virtual_live: true,
+            second_virtual_live: true,
             first_live: true,
             second_live: true,
         })
@@ -331,9 +413,48 @@ impl<'guest, 'system> PreparedWhpPeerPage<'guest, 'system> {
         VmBackend::read_guest(self.second, self.second_physical, output)
     }
 
+    pub fn first_translation(&mut self) -> Result<Option<u64>, WhpError> {
+        Ok(self
+            .first
+            .page_walk(self.first_virtual)?
+            .physical_address(self.first_virtual))
+    }
+
+    pub fn second_translation(&mut self) -> Result<Option<u64>, WhpError> {
+        Ok(self
+            .second
+            .page_walk(self.second_virtual)?
+            .physical_address(self.second_virtual))
+    }
+
     pub fn retire(mut self) -> Result<(), (WhpError, Self)> {
+        if let Err(error) = self.withdraw_virtual() {
+            return Err((error, self));
+        }
+        if let Err(error) = self.retire_native() {
+            return Err((error, self));
+        }
+        let _ = self.backing.take();
+        Ok(())
+    }
+
+    fn withdraw_virtual(&mut self) -> Result<(), WhpError> {
+        if self.second_virtual_live {
+            self.second
+                .withdraw_peer_page(self.second_virtual, self.second_physical)?;
+            self.second_virtual_live = false;
+        }
+        if self.first_virtual_live {
+            self.first
+                .withdraw_peer_page(self.first_virtual, self.first_physical)?;
+            self.first_virtual_live = false;
+        }
+        Ok(())
+    }
+
+    fn retire_native(&mut self) -> Result<(), WhpError> {
         let Some(backing) = self.backing.as_ref() else {
-            return Err((WhpError::InvalidMapping, self));
+            return Err(WhpError::InvalidMapping);
         };
         let address = backing.address();
         if self.second_live {
@@ -342,7 +463,7 @@ impl<'guest, 'system> PreparedWhpPeerPage<'guest, 'system> {
                 .partition
                 .unmap_external_peer_page(self.second_physical, address)
             {
-                return Err((error, self));
+                return Err(error);
             }
             self.second_live = false;
         }
@@ -352,17 +473,22 @@ impl<'guest, 'system> PreparedWhpPeerPage<'guest, 'system> {
                 .partition
                 .unmap_external_peer_page(self.first_physical, address)
             {
-                return Err((error, self));
+                return Err(error);
             }
             self.first_live = false;
         }
-        let _ = self.backing.take();
         Ok(())
     }
 }
 
 impl Drop for PreparedWhpPeerPage<'_, '_> {
     fn drop(&mut self) {
+        if self.withdraw_virtual().is_err() {
+            if let Some(backing) = self.backing.take() {
+                core::mem::forget(backing);
+            }
+            return;
+        }
         let Some(backing) = self.backing.as_ref() else {
             return;
         };
@@ -566,6 +692,59 @@ impl<'system> PreparedWhpGuest<'system> {
     }
     pub const fn page_table_root(&self) -> PhysAddr {
         self.root
+    }
+
+    fn install_peer_page(&mut self, virtual_address: u64, physical: u64) -> Result<(), WhpError> {
+        let mapping = Mapping::new(
+            VirtAddr::new(virtual_address).map_err(|_| WhpError::InvalidMapping)?,
+            PhysAddr::new(physical).map_err(|_| WhpError::InvalidMapping)?,
+            1,
+            PagePermissions::KERNEL_READ_WRITE,
+        )
+        .map_err(|_| WhpError::InvalidMapping)?;
+        {
+            let store = WhpPageTableStore::open_existing(
+                &mut self.partition,
+                self.table_physical,
+                self.table_pages,
+            )?;
+            let mut tables = PageTableBuilder::from_existing_root(store, self.root);
+            tables
+                .map(mapping)
+                .and_then(|()| tables.verify_mapped(mapping))
+                .map_err(|_| WhpError::PageTable)?;
+        }
+        self.partition.reload_exact_page_table_root(self.root.get())
+    }
+
+    fn withdraw_peer_page(&mut self, virtual_address: u64, physical: u64) -> Result<(), WhpError> {
+        let mapping = Mapping::new(
+            VirtAddr::new(virtual_address).map_err(|_| WhpError::InvalidMapping)?,
+            PhysAddr::new(physical).map_err(|_| WhpError::InvalidMapping)?,
+            1,
+            PagePermissions::KERNEL_READ_WRITE,
+        )
+        .map_err(|_| WhpError::InvalidMapping)?;
+        {
+            let store = WhpPageTableStore::open_existing(
+                &mut self.partition,
+                self.table_physical,
+                self.table_pages,
+            )?;
+            let mut tables = PageTableBuilder::from_existing_root(store, self.root);
+            tables
+                .unmap_exact(mapping)
+                .and_then(|()| tables.verify_unmapped(mapping))
+                .map_err(|_| WhpError::PageTable)?;
+        }
+        self.partition.reload_exact_page_table_root(self.root.get())
+    }
+
+    fn peer_page_matches(&self, virtual_address: u64, physical: u64) -> Result<bool, WhpError> {
+        Ok(self
+            .page_walk(virtual_address)?
+            .physical_address(virtual_address)
+            == Some(physical))
     }
 
     /// Irreversibly removes the exact first-level trap leaf from this stopped
@@ -3583,11 +3762,37 @@ mod tests {
             pool_capability,
             first_target,
             second_target,
-            0x700,
-            0x800,
+            0xffff_8001_400f_0000 / PAGE_SIZE,
+            0xffff_8001_400f_0000 / PAGE_SIZE,
             &mut capabilities,
         )
         .unwrap();
+        let peer_virtual = 0xffff_8001_400f_0000;
+        first.install_peer_page(peer_virtual, 0x20_0000).unwrap();
+        let failure = PreparedWhpPeerPage::prepare(
+            &mut first,
+            &mut second,
+            &projection,
+            first_target,
+            second_target,
+            &capabilities,
+            0x70_0000,
+            0x80_0000,
+        )
+        .err()
+        .expect("conflicting exact leaf must reject");
+        assert_eq!(failure.error(), WhpPeerPageError::Backend(WhpError::PageTable));
+        assert!(failure.into_retained().is_none());
+        let mut absent = [0; 1];
+        assert_eq!(
+            VmBackend::read_guest(&first, 0x70_0000, &mut absent),
+            Err(WhpError::UnmappedMemory)
+        );
+        assert_eq!(
+            VmBackend::read_guest(&second, 0x80_0000, &mut absent),
+            Err(WhpError::UnmappedMemory)
+        );
+        first.withdraw_peer_page(peer_virtual, 0x20_0000).unwrap();
         let mut peer = PreparedWhpPeerPage::prepare(
             &mut first,
             &mut second,
@@ -3599,11 +3804,27 @@ mod tests {
             0x80_0000,
         )
         .unwrap_or_else(|failure| panic!("WHP peer mapping failed: {:?}", failure.error()));
+        assert_eq!(peer.first_translation().unwrap(), Some(0x70_0000));
+        assert_eq!(peer.second_translation().unwrap(), Some(0x80_0000));
         peer.write_first(&[0x51, 0x72, 0x93, 0xb4]).unwrap();
         let mut observed = [0; 4];
         peer.read_second(&mut observed).unwrap();
         assert_eq!(observed, [0x51, 0x72, 0x93, 0xb4]);
         peer.retire().unwrap_or_else(|(error, _)| panic!("WHP peer retirement failed: {error:?}"));
+        assert_eq!(
+            first
+                .page_walk(0xffff_8001_400f_0000)
+                .unwrap()
+                .physical_address(0xffff_8001_400f_0000),
+            None
+        );
+        assert_eq!(
+            second
+                .page_walk(0xffff_8001_400f_0000)
+                .unwrap()
+                .physical_address(0xffff_8001_400f_0000),
+            None
+        );
         assert_eq!(
             VmBackend::read_guest(&first, 0x70_0000, &mut observed),
             Err(WhpError::UnmappedMemory)

@@ -1367,6 +1367,13 @@ Total treats placement as unavailable and never reuses one partition for both
 domains. WHP source/API parity is not two-partition evidence. Guest page-table
 projection, queue protocol, and component execution remain **PLANNED**.
 
+The exact guest page-table leaf is now **PARTIALLY IMPLEMENTED** on both
+backends. The retained owner installs one supervisor RW/NX leaf in each stopped
+guest, verifies the exact physical translation, and reloads each exact root.
+Retirement removes and verifies both leaves before either GPA mapping. A late
+leaf conflict rolls back both provisional native mappings and supports immediate
+retry. This does not yet provide the bounded queue or component execution.
+
 The matching policy-ledger teardown is now **PARTIALLY IMPLEMENTED**. It accepts
 the retained two-peer projection only after native teardown, revalidates both
 exact target capability generations and mapping shapes, refuses unexpected

@@ -1873,6 +1873,12 @@ partition with a typed VID collision; recovery must report Total placement
 unavailable and never reuse one partition. Guest page-table projection,
 translation invalidation, queue activation, and recovered execution remain.
 
+Recovery's retained peer owner now also installs and verifies the two exact
+supervisor RW/NX guest leaves before use. It removes and verifies both leaves
+before native GPA teardown; a leaf conflict rolls provisional mappings back and
+allows immediate retry. Nested KVM exercises this across two live guests. This
+is translation lifecycle evidence, not recovered component queue execution.
+
 Once that future native teardown succeeds, recovery can now retire the policy
 ledger without a half-removed peer. The kernel exact-matches both retained
 mapping generations and target capability generations, rejects extra aliases,
