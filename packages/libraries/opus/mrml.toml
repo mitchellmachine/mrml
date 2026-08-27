@@ -21,6 +21,9 @@ environment = "windows"
 arch = "x86_64"
 environment = "linux"
 
+[[feature]]
+name = "libopus_oracle"
+
 [[artifact]]
 kind = "example"
 name = "inspect_range"
@@ -48,13 +51,24 @@ compile_name = "mrml-math"
 package = "org.mrml.library.math"
 scope = "compile"
 
+[[feature_set]]
+features = []
+targets = ["MRML_NATIVE", "WINDOWS", "LINUX"]
+
+[[feature_profile]]
+features = ["libopus_oracle"]
+name = "libopus_oracle"
+targets = ["LINUX"]
+
 [[example]]
 name = "inspect_range"
 source = "packages/libraries/opus/examples/inspect_range.rs"
 
 [[example]]
+feature = "libopus_oracle"
 name = "opus_range_diff"
 source = "packages/libraries/opus/examples/opus_range_diff.rs"
+targets = ["LINUX"]
 
 [[example]]
 name = "rfc8251_audit"
