@@ -162,7 +162,9 @@ pub fn path_is_file(path: &str) -> bool {
     }
     #[cfg(unix)]
     {
-        !path_is_directory(path) && File::open(path).is_ok()
+        encode_unix_path(path).is_some_and(|path| {
+            core::ffi::CStr::from_bytes_with_nul(&path).is_ok_and(mrml_linux::path_is_file)
+        })
     }
 }
 
@@ -563,6 +565,21 @@ mod tests {
         assert_eq!(&suffix, b"file");
         drop(file);
         remove_file(&path).unwrap();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn file_classification_requires_a_regular_file() {
+        let root = test_path("mrml-file-kind");
+        create_dir_all(&root).unwrap();
+        let file = join_path(&root, "regular.bin");
+        write_file(&file, b"regular").unwrap();
+
+        assert!(path_is_file(&file));
+        assert!(!path_is_file(&root));
+        assert!(!path_is_file("/dev/null"));
+
+        remove_dir_all(&root).unwrap();
     }
     #[test]
     fn writes_truncates_and_reads_utf8_text_through_native_file() {

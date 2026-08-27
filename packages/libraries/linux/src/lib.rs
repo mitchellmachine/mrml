@@ -891,6 +891,11 @@ pub fn path_is_directory(path: &CStr) -> bool {
 }
 
 #[cfg(unix)]
+pub fn path_is_file(path: &CStr) -> bool {
+    NativeFile::open_read(path).is_some_and(|file| file.is_regular())
+}
+
+#[cfg(unix)]
 pub fn canonical_path<'a>(path: &CStr, output: &'a mut [u8; 4096]) -> Option<&'a [u8]> {
     NonNull::new(unsafe { realpath(path.as_ptr(), output.as_mut_ptr().cast()) })?;
     let length = output.iter().position(|byte| *byte == 0)?;
