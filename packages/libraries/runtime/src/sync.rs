@@ -225,6 +225,9 @@ mod tests {
 
     struct DynamicOwner(usize);
 
+    #[repr(align(4096))]
+    struct Aligned4096(usize);
+
     impl DynamicValue for DynamicOwner {
         fn value(&self) -> usize {
             self.0
@@ -264,5 +267,12 @@ mod tests {
         assert_eq!(DYNAMIC_DROPS.load(Ordering::Relaxed), 0);
         drop(clone);
         assert_eq!(DYNAMIC_DROPS.load(Ordering::Relaxed), 1);
+    }
+
+    #[test]
+    fn shared_honors_overaligned_values() {
+        let shared = Shared::new(Aligned4096(41));
+        assert_eq!((&*shared as *const Aligned4096 as usize) % 4096, 0);
+        assert_eq!(shared.0, 41);
     }
 }

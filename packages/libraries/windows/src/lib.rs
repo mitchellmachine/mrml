@@ -497,8 +497,6 @@ unsafe extern "system" {
     fn GetExitCodeProcess(process: *mut c_void, code: *mut u32) -> i32;
     fn TerminateProcess(process: *mut c_void, exit_code: u32) -> i32;
     fn HeapAlloc(heap: *mut c_void, flags: u32, bytes: usize) -> *mut c_void;
-    fn HeapReAlloc(heap: *mut c_void, flags: u32, memory: *mut c_void, bytes: usize)
-    -> *mut c_void;
     fn HeapFree(heap: *mut c_void, flags: u32, memory: *mut c_void) -> i32;
     fn QueryPerformanceCounter(value: *mut i64) -> i32;
     fn QueryPerformanceFrequency(value: *mut i64) -> i32;
@@ -1992,20 +1990,54 @@ pub struct SystemAllocator;
 #[cfg(windows)]
 unsafe impl GlobalAlloc for SystemAllocator {
     unsafe fn alloc(&self, layout: Layout) -> *mut u8 {
+        let prefix = core::mem::size_of::<*mut u8>();
+        let Some(bytes) = layout
+            .size()
+            .max(1)
+            .checked_add(layout.align() - 1)
+            .and_then(|bytes| bytes.checked_add(prefix))
+        else {
+            return core::ptr::null_mut();
+        };
         let heap = unsafe { GetProcessHeap() };
-        unsafe { HeapAlloc(heap, 0, layout.size().max(1)) }.cast()
+        let allocation = unsafe { HeapAlloc(heap, 0, bytes) }.cast::<u8>();
+        if allocation.is_null() {
+            return allocation;
+        }
+        let start = unsafe { allocation.add(prefix) } as usize;
+        let aligned = (start + layout.align() - 1) & !(layout.align() - 1);
+        let pointer = aligned as *mut u8;
+        unsafe {
+            pointer
+                .sub(prefix)
+                .cast::<*mut u8>()
+                .write_unaligned(allocation)
+        };
+        pointer
     }
 
     unsafe fn dealloc(&self, pointer: *mut u8, _: Layout) {
         if !pointer.is_null() {
             let heap = unsafe { GetProcessHeap() };
-            let _ = unsafe { HeapFree(heap, 0, pointer.cast()) };
+            let prefix = core::mem::size_of::<*mut u8>();
+            let allocation = unsafe { pointer.sub(prefix).cast::<*mut u8>().read_unaligned() };
+            let _ = unsafe { HeapFree(heap, 0, allocation.cast()) };
         }
     }
 
-    unsafe fn realloc(&self, pointer: *mut u8, _: Layout, size: usize) -> *mut u8 {
-        let heap = unsafe { GetProcessHeap() };
-        unsafe { HeapReAlloc(heap, 0, pointer.cast(), size.max(1)) }.cast()
+    unsafe fn realloc(&self, pointer: *mut u8, layout: Layout, size: usize) -> *mut u8 {
+        let Ok(new_layout) = Layout::from_size_align(size, layout.align()) else {
+            return core::ptr::null_mut();
+        };
+        let replacement = unsafe { self.alloc(new_layout) };
+        if replacement.is_null() {
+            return replacement;
+        }
+        unsafe {
+            core::ptr::copy_nonoverlapping(pointer, replacement, layout.size().min(size));
+            self.dealloc(pointer, layout);
+        }
+        replacement
     }
 }
 
@@ -2168,6 +2200,36 @@ mod tests {
             assert_eq!(pointer.read(), 0x5a);
             GlobalAlloc::dealloc(&super::SystemAllocator, pointer, layout);
         }
+    }
+
+    #[test]
+    fn native_allocator_honors_alignment_and_preserves_reallocation() {
+        for alignment in [32, 64, 256, 4096] {
+            let layout = Layout::from_size_align(73, alignment).unwrap();
+            let pointer = unsafe { GlobalAlloc::alloc(&super::SystemAllocator, layout) };
+            assert!(!pointer.is_null());
+            assert_eq!(pointer as usize % alignment, 0);
+            unsafe { core::ptr::write_bytes(pointer, 0x5a, layout.size()) };
+            let replacement =
+                unsafe { GlobalAlloc::realloc(&super::SystemAllocator, pointer, layout, 211) };
+            assert!(!replacement.is_null());
+            assert_eq!(replacement as usize % alignment, 0);
+            assert!(
+                unsafe { core::slice::from_raw_parts(replacement, 73) }
+                    .iter()
+                    .all(|byte| *byte == 0x5a)
+            );
+            let replacement_layout = Layout::from_size_align(211, alignment).unwrap();
+            unsafe {
+                GlobalAlloc::dealloc(&super::SystemAllocator, replacement, replacement_layout)
+            };
+        }
+
+        let zero = Layout::from_size_align(0, 4096).unwrap();
+        let pointer = unsafe { GlobalAlloc::alloc(&super::SystemAllocator, zero) };
+        assert!(!pointer.is_null());
+        assert_eq!(pointer as usize % 4096, 0);
+        unsafe { GlobalAlloc::dealloc(&super::SystemAllocator, pointer, zero) };
     }
 
     #[test]

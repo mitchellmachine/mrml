@@ -417,6 +417,10 @@ mod tests {
     use super::*;
     use crate::Text as String;
 
+    #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+    #[repr(align(4096))]
+    struct Aligned4096(usize);
+
     #[test]
     fn grows_preserves_and_drops_values() {
         let mut values = Vector::with_capacity(1).unwrap();
@@ -454,5 +458,15 @@ mod tests {
         assert_eq!(iterator.next().as_deref(), Some("one"));
         assert_eq!(iterator.next_back().as_deref(), Some("three"));
         assert_eq!(iterator.len(), 1);
+    }
+
+    #[test]
+    fn vector_honors_overalignment_across_growth() {
+        let mut values = Vector::with_capacity(1).unwrap();
+        for value in 0..17 {
+            values.push(Aligned4096(value));
+            assert_eq!(values.as_ptr() as usize % 4096, 0);
+        }
+        assert_eq!(values.iter().map(|value| value.0).sum::<usize>(), 136);
     }
 }

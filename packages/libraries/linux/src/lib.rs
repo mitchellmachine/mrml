@@ -47,8 +47,7 @@ struct Tm {
 #[link(name = "c")]
 unsafe extern "C" {
     fn localtime_r(clock: *const c_long, result: *mut Tm) -> *mut Tm;
-    fn malloc(bytes: usize) -> *mut c_void;
-    fn realloc(memory: *mut c_void, bytes: usize) -> *mut c_void;
+    fn posix_memalign(memory: *mut *mut c_void, alignment: usize, bytes: usize) -> c_int;
     fn free(memory: *mut c_void);
     fn nanosleep(request: *const Timespec, remaining: *mut Timespec) -> c_int;
     fn clock_gettime(clock: c_int, time: *mut Timespec) -> c_int;
@@ -944,15 +943,31 @@ pub struct SystemAllocator;
 #[cfg(unix)]
 unsafe impl GlobalAlloc for SystemAllocator {
     unsafe fn alloc(&self, layout: Layout) -> *mut u8 {
-        unsafe { malloc(layout.size().max(1)) }.cast()
+        let alignment = layout.align().max(core::mem::size_of::<*mut c_void>());
+        let mut pointer = core::ptr::null_mut();
+        if unsafe { posix_memalign(&mut pointer, alignment, layout.size().max(1)) } != 0 {
+            return core::ptr::null_mut();
+        }
+        pointer.cast()
     }
 
     unsafe fn dealloc(&self, pointer: *mut u8, _: Layout) {
         unsafe { free(pointer.cast()) };
     }
 
-    unsafe fn realloc(&self, pointer: *mut u8, _: Layout, size: usize) -> *mut u8 {
-        unsafe { realloc(pointer.cast(), size.max(1)) }.cast()
+    unsafe fn realloc(&self, pointer: *mut u8, layout: Layout, size: usize) -> *mut u8 {
+        let Ok(new_layout) = Layout::from_size_align(size, layout.align()) else {
+            return core::ptr::null_mut();
+        };
+        let replacement = unsafe { self.alloc(new_layout) };
+        if replacement.is_null() {
+            return replacement;
+        }
+        unsafe {
+            core::ptr::copy_nonoverlapping(pointer, replacement, layout.size().min(size));
+            self.dealloc(pointer, layout);
+        }
+        replacement
     }
 }
 
@@ -1050,6 +1065,36 @@ mod tests {
         let before = super::monotonic_nanos();
         super::sleep_millis(2);
         assert!(super::monotonic_nanos() > before);
+    }
+
+    #[test]
+    fn native_allocator_honors_alignment_and_preserves_reallocation() {
+        for alignment in [32, 64, 256, 4096] {
+            let layout = Layout::from_size_align(73, alignment).unwrap();
+            let pointer = unsafe { GlobalAlloc::alloc(&super::SystemAllocator, layout) };
+            assert!(!pointer.is_null());
+            assert_eq!(pointer as usize % alignment, 0);
+            unsafe { core::ptr::write_bytes(pointer, 0x5a, layout.size()) };
+            let replacement =
+                unsafe { GlobalAlloc::realloc(&super::SystemAllocator, pointer, layout, 211) };
+            assert!(!replacement.is_null());
+            assert_eq!(replacement as usize % alignment, 0);
+            assert!(
+                unsafe { core::slice::from_raw_parts(replacement, 73) }
+                    .iter()
+                    .all(|byte| *byte == 0x5a)
+            );
+            let replacement_layout = Layout::from_size_align(211, alignment).unwrap();
+            unsafe {
+                GlobalAlloc::dealloc(&super::SystemAllocator, replacement, replacement_layout)
+            };
+        }
+
+        let zero = Layout::from_size_align(0, 4096).unwrap();
+        let pointer = unsafe { GlobalAlloc::alloc(&super::SystemAllocator, zero) };
+        assert!(!pointer.is_null());
+        assert_eq!(pointer as usize % 4096, 0);
+        unsafe { GlobalAlloc::dealloc(&super::SystemAllocator, pointer, zero) };
     }
 
     #[test]

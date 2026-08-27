@@ -76,6 +76,15 @@ mod tests {
 
     struct Value(usize);
 
+    #[repr(align(32))]
+    struct Aligned32(u8);
+    #[repr(align(64))]
+    struct Aligned64(u8);
+    #[repr(align(256))]
+    struct Aligned256(u8);
+    #[repr(align(4096))]
+    struct Aligned4096(u8);
+
     impl DynamicValue for Value {
         fn value(&self) -> usize {
             self.0
@@ -95,5 +104,18 @@ mod tests {
         assert_eq!(value.value(), 31);
         drop(value);
         assert_eq!(DROPS.load(Ordering::Relaxed), 1);
+    }
+
+    #[test]
+    fn owned_honors_overaligned_values() {
+        let a32 = Owned::new(Aligned32(1));
+        let a64 = Owned::new(Aligned64(2));
+        let a256 = Owned::new(Aligned256(3));
+        let a4096 = Owned::new(Aligned4096(4));
+        assert_eq!((&*a32 as *const Aligned32 as usize) % 32, 0);
+        assert_eq!((&*a64 as *const Aligned64 as usize) % 64, 0);
+        assert_eq!((&*a256 as *const Aligned256 as usize) % 256, 0);
+        assert_eq!((&*a4096 as *const Aligned4096 as usize) % 4096, 0);
+        assert_eq!((a32.0, a64.0, a256.0, a4096.0), (1, 2, 3, 4));
     }
 }
