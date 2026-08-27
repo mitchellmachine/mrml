@@ -335,6 +335,9 @@ fn subslice_then_index_reference_mutation_executes() {
         compile(
             "fn select(input: &mut [u32; 4], first: usize, second: usize, index: usize) -> &mut u32 { &mut input[first..][second..][index] } #[unsafe(no_mangle)] pub extern \"C\" fn probe(input: &mut [u32; 4], first: usize, second: usize, index: usize) -> u32 { let selected: &mut u32 = select(input, first, second, index); *selected += 13; *selected }",
         ),
+        compile(
+            "fn select(input: &mut [u32; 4], first: usize, second: usize, index: usize) -> &mut u32 { let alias: &mut u32 = &mut input[first..][second..][index]; alias } #[unsafe(no_mangle)] pub extern \"C\" fn probe(input: &mut [u32; 4], first: usize, second: usize, index: usize) -> u32 { let selected: &mut u32 = select(input, first, second, index); *selected += 13; *selected }",
+        ),
     ] {
         let probe: unsafe extern "C" fn(*mut [u32; 4], usize, usize, usize) -> u32 =
             unsafe { std::mem::transmute(code.pointer) };
@@ -509,6 +512,9 @@ fn subslice_then_index_reference_mutation_executes() {
         ),
         compile(
             "fn select(input: &mut [u32], first: usize, second: usize, index: usize) -> &mut u32 { &mut input[first..][second..][index] } #[unsafe(no_mangle)] pub extern \"C\" fn probe(input: &mut [u32], first: usize, second: usize, index: usize) -> u32 { let selected: &mut u32 = select(input, first, second, index); *selected += 13; *selected }",
+        ),
+        compile(
+            "fn select(input: &mut [u32], first: usize, second: usize, index: usize) -> &mut u32 { let alias: &mut u32 = &mut input[first..][second..][index]; alias } #[unsafe(no_mangle)] pub extern \"C\" fn probe(input: &mut [u32], first: usize, second: usize, index: usize) -> u32 { let selected: &mut u32 = select(input, first, second, index); *selected += 13; *selected }",
         ),
     ] {
         #[cfg(not(target_os = "windows"))]

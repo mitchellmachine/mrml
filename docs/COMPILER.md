@@ -973,6 +973,15 @@ inference or index-sensitive alias reasoning. Both hosts passed the same 659
 unit, 1 component-interface, 10 conformance, 351 replacement, and 14 semantic-
 execution tests (1,035 total).
 
+That repeated-subslice origin also survives one typed mutable-reference local in
+the callee before return. The bounded local-origin table maps the alias back to
+the aggregate parameter, so the caller preserves the same live-conflict and
+last-use behavior. Fixed-array and runtime-slice native probes execute the alias
+form on Windows gnullvm and Arch Linux WSL with the same selected-element result.
+This is one direct acyclic alias, not arbitrary local dataflow, branching alias
+joins, or index-sensitive disjointness. Both hosts again passed the same 1,035-
+test compiler gate.
+
 The repeated-subslice semantic harness now isolates all three checked failure
 layers. An inner start beyond the runtime owner length, an outer start beyond
 the saved inner length, and a final index exactly equal to the twice-reduced

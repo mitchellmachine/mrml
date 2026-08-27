@@ -148,6 +148,23 @@ mod tests {
                         body_expression: "&mut values[0..][1..][0]",
                     })
                 }
+                ("slice_repeated_subslice_element_alias", 1) => {
+                    parameters[0] = Some(RuntimeCallParameter {
+                        name: "values",
+                        ty: slice_reference,
+                    });
+                    Some(RuntimeCallTarget {
+                        name: "slice_repeated_subslice_element_alias",
+                        parameters,
+                        parameter_count: 1,
+                        return_type: reference,
+                        return_type_name: "&mut u16",
+                        body_expression: concat!(
+                            "let alias: &mut u16 = &mut values[0..][1..][0]; ",
+                            "alias"
+                        ),
+                    })
+                }
                 ("array_subslice", 1) => {
                     parameters[0] = Some(RuntimeCallParameter {
                         name: "values",
@@ -5766,6 +5783,7 @@ mod tests {
             "fn value(input: &mut [u16]) -> u16 { let returned: &mut u16 = slice_subslice_element(input); let competing: &mut u16 = &mut input[1]; *competing += 1; *returned }",
             "fn value(input: &mut [u16]) -> u16 { let returned: &mut u16 = slice_repeated_subslice_element(input); let competing: &mut u16 = &mut input[1]; *competing += 1; *returned }",
             "fn value(input: &mut [u16; 2]) -> u16 { let returned: &mut u16 = array_repeated_subslice_element(input); let competing: &mut u16 = &mut input[1]; *competing += 1; *returned }",
+            "fn value(input: &mut [u16]) -> u16 { let returned: &mut u16 = slice_repeated_subslice_element_alias(input); let competing: &mut u16 = &mut input[1]; *competing += 1; *returned }",
         ] {
             assert_eq!(
                 analyze(rejected).unwrap_err().kind,
@@ -5777,6 +5795,7 @@ mod tests {
             "fn value(input: &mut [u16]) -> u16 { let returned: &mut u16 = slice_subslice_element(input); *returned += 1; let restored: &mut u16 = &mut input[1]; *restored }",
             "fn value(input: &mut [u16]) -> u16 { let returned: &mut u16 = slice_repeated_subslice_element(input); *returned += 1; let restored: &mut u16 = &mut input[1]; *restored }",
             "fn value(input: &mut [u16; 2]) -> u16 { let returned: &mut u16 = array_repeated_subslice_element(input); *returned += 1; let restored: &mut u16 = &mut input[1]; *restored }",
+            "fn value(input: &mut [u16]) -> u16 { let returned: &mut u16 = slice_repeated_subslice_element_alias(input); *returned += 1; let restored: &mut u16 = &mut input[1]; *restored }",
         ] {
             analyze(accepted).unwrap();
         }
@@ -5877,6 +5896,15 @@ mod tests {
             .unwrap();
         assert_eq!(
             runtime_reference_call_origin_parameter::<2, 16>(array_repeated_subslice_element),
+            Some(0)
+        );
+        let slice_repeated_subslice_element_alias = MutableReferenceCallResolver
+            .resolve_runtime_call::<2>("slice_repeated_subslice_element_alias", 1)
+            .unwrap();
+        assert_eq!(
+            runtime_reference_call_origin_parameter::<2, 16>(
+                slice_repeated_subslice_element_alias
+            ),
             Some(0)
         );
         assert_eq!(
