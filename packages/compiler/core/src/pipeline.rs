@@ -517,6 +517,15 @@ mod tests {
 
     #[test]
     fn emits_runtime_string_literals_as_internal_readonly_data() {
+        let direct = "#[unsafe(no_mangle)] pub extern \"C\" fn probe(input: &str, choose: bool) -> &str { if choose { input } else { \"fallback\" } }";
+        let direct_elf = compile_wide(direct, "probe", ObjectFormat::Elf64).unwrap();
+        assert!(
+            direct_elf
+                .bytes()
+                .windows(8)
+                .any(|bytes| bytes == b"fallback")
+        );
+
         let source = "#[unsafe(no_mangle)] pub extern \"C\" fn probe(input: &str, choose: bool) -> &str { let value: &str; if choose { value = input; } else { value = \"fallback\"; } value }";
         let elf = compile_wide(source, "probe", ObjectFormat::Elf64).unwrap();
         assert!(elf.bytes().windows(8).any(|bytes| bytes == b"fallback"));

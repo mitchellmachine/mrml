@@ -6227,6 +6227,7 @@ fn rustc_string_reference_delayed_initialization_reaches_native_objects() {
         "#[unsafe(no_mangle)] pub extern \"C\" fn probe(input: &str) -> &str { let value: &str; value = input; value }",
         "#[unsafe(no_mangle)] pub extern \"C\" fn probe(input: &str, choose: bool) -> &str { let value: &str; if choose { value = input; } else { value = input; } value }",
         "#[unsafe(no_mangle)] pub extern \"C\" fn probe(input: &str, choose: bool) -> &str { let value: &str; if choose { value = input; } else { value = \"fallback\"; } value }",
+        "#[unsafe(no_mangle)] pub extern \"C\" fn probe(input: &str, choose: bool) -> &str { if choose { input } else { \"fallback\" } }",
     ] {
         assert_eq!(compile(source, ObjectFormat::Elf64), Ok(()));
         assert_eq!(compile(source, ObjectFormat::Coff), Ok(()));

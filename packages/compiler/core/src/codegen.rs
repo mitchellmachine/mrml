@@ -16040,7 +16040,7 @@ fn runtime_fat_reference_preanalysis_supported<const MAX_NODES: usize>(
         return false;
     }
     match tree.expression(id).map(|expression| expression.kind) {
-        Some(ExprKind::Identifier(_)) => true,
+        Some(ExprKind::Identifier(_) | ExprKind::String(_)) => true,
         Some(ExprKind::Unary {
             operator: crate::UnaryOperator::AddressOf | crate::UnaryOperator::AddressOfMut,
             operand,
@@ -19052,7 +19052,7 @@ fn runtime_fat_reference_return_preanalysis_supported<const MAX_NODES: usize>(
         return false;
     }
     match tree.expression(id).map(|expression| expression.kind) {
-        Some(ExprKind::Identifier(_)) => true,
+        Some(ExprKind::Identifier(_) | ExprKind::String(_)) => true,
         Some(ExprKind::Unary {
             operator: crate::UnaryOperator::AddressOf | crate::UnaryOperator::AddressOfMut,
             operand,
@@ -32861,7 +32861,15 @@ impl<
             self.emit_expression(tree, first, depth + 1)?;
             return self.emit_slice_return_at(tree, then, depth + 1);
         }
-        let stacked = self.emit_range_slice_to_stack(tree, root, depth + 1)?;
+        let stacked = if matches!(
+            tree.expression(root).map(|expression| expression.kind),
+            Some(ExprKind::String(_))
+        ) {
+            self.emit_slice_value_to_stack(tree, root, depth + 1)?;
+            true
+        } else {
+            self.emit_range_slice_to_stack(tree, root, depth + 1)?
+        };
         if stacked {
             self.emit_stack_slot(1)?;
             self.emit(&[0x48, 0x89, 0xc1])?;
