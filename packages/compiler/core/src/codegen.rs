@@ -30358,15 +30358,33 @@ impl<
         self.patch_forward_branch(at_end)
     }
 
-    fn push_readonly_string_byte(&mut self, byte: u8) -> Result<(), CodegenError> {
+    fn intern_readonly_string_bytes(
+        &mut self,
+        decoded: &[u8],
+    ) -> Result<(usize, usize), CodegenError> {
+        let existing = if decoded.is_empty() {
+            Some(0)
+        } else {
+            self.readonly_data[..self.readonly_data_length]
+                .windows(decoded.len())
+                .position(|candidate| candidate == decoded)
+        };
+        if let Some(offset) = existing {
+            return Ok((offset, decoded.len()));
+        }
+        let end = self
+            .readonly_data_length
+            .checked_add(decoded.len())
+            .ok_or(self.error(CodegenErrorKind::OutputTooSmall))?;
         let capacity_error = self.error(CodegenErrorKind::OutputTooSmall);
-        let output = self
+        let destination = self
             .readonly_data
-            .get_mut(self.readonly_data_length)
+            .get_mut(self.readonly_data_length..end)
             .ok_or(capacity_error)?;
-        *output = byte;
-        self.readonly_data_length += 1;
-        Ok(())
+        destination.copy_from_slice(decoded);
+        let start = self.readonly_data_length;
+        self.readonly_data_length = end;
+        Ok((start, decoded.len()))
     }
 
     fn append_readonly_string_literal(
@@ -30382,7 +30400,15 @@ impl<
             }
         }
 
-        let start = self.readonly_data_length;
+        let mut decoded = [0u8; MAX_X86_64_READONLY_DATA_BYTES];
+        let mut decoded_length = 0usize;
+        let capacity_error = self.error(CodegenErrorKind::OutputTooSmall);
+        let mut push = |byte| {
+            let output = decoded.get_mut(decoded_length).ok_or(capacity_error)?;
+            *output = byte;
+            decoded_length += 1;
+            Ok::<(), CodegenError>(())
+        };
         if literal.starts_with('r') {
             let bytes = literal.as_bytes();
             let mut quote = 1usize;
@@ -30412,9 +30438,10 @@ impl<
                 return Err(self.error(CodegenErrorKind::RuntimeExpressionUnsupported));
             }
             for byte in &bytes[content_start..content_end] {
-                self.push_readonly_string_byte(*byte)?;
+                push(*byte)?;
             }
-            return Ok((start, self.readonly_data_length - start));
+            drop(push);
+            return self.intern_readonly_string_bytes(&decoded[..decoded_length]);
         }
         let literal = literal
             .strip_prefix('"')
@@ -30424,7 +30451,7 @@ impl<
         let mut index = 0usize;
         while index < bytes.len() {
             if bytes[index] != b'\\' {
-                self.push_readonly_string_byte(bytes[index])?;
+                push(bytes[index])?;
                 index += 1;
                 continue;
             }
@@ -30434,13 +30461,13 @@ impl<
                 .ok_or(self.error(CodegenErrorKind::RuntimeExpressionUnsupported))?;
             index += 1;
             match escaped {
-                b'n' => self.push_readonly_string_byte(b'\n')?,
-                b'r' => self.push_readonly_string_byte(b'\r')?,
-                b't' => self.push_readonly_string_byte(b'\t')?,
-                b'\\' => self.push_readonly_string_byte(b'\\')?,
-                b'0' => self.push_readonly_string_byte(0)?,
-                b'\'' => self.push_readonly_string_byte(b'\'')?,
-                b'"' => self.push_readonly_string_byte(b'"')?,
+                b'n' => push(b'\n')?,
+                b'r' => push(b'\r')?,
+                b't' => push(b'\t')?,
+                b'\\' => push(b'\\')?,
+                b'0' => push(0)?,
+                b'\'' => push(b'\'')?,
+                b'"' => push(b'"')?,
                 b'x' => {
                     let high = bytes
                         .get(index)
@@ -30454,7 +30481,7 @@ impl<
                     if value > 0x7f {
                         return Err(self.error(CodegenErrorKind::RuntimeExpressionUnsupported));
                     }
-                    self.push_readonly_string_byte(value as u8)?;
+                    push(value as u8)?;
                     index += 2;
                 }
                 b'u' => {
@@ -30491,7 +30518,7 @@ impl<
                         .ok_or(self.error(CodegenErrorKind::RuntimeExpressionUnsupported))?;
                     let mut encoded = [0u8; 4];
                     for byte in value.encode_utf8(&mut encoded).as_bytes() {
-                        self.push_readonly_string_byte(*byte)?;
+                        push(*byte)?;
                     }
                 }
                 b'\n' => {
@@ -30508,7 +30535,8 @@ impl<
                 _ => return Err(self.error(CodegenErrorKind::RuntimeExpressionUnsupported)),
             }
         }
-        Ok((start, self.readonly_data_length - start))
+        drop(push);
+        self.intern_readonly_string_bytes(&decoded[..decoded_length])
     }
 
     fn emit_slice_value_to_stack<const MAX_NODES: usize>(
