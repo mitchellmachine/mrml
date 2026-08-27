@@ -898,12 +898,15 @@ Native lowering materializes the bounded slice pointer and length once, checks
 the range and subsequent index independently, and derives the final element
 address without collapsing the two ownership projections. A helper-call
 semantic probe mutates three distinct selected elements and verifies every
-unselected element remains unchanged. Direct nested-place locals still fail
-closed as `InvalidRuntimePlaceFacts`; repeated subslices and other deeper shapes
-remain unsupported. This is one exact nested non-tuple projection, not general
-place typing, index-sensitive aliasing, or region inference. Windows and Arch
-each passed 657 unit, 1 component-interface, 10 conformance, 351 replacement,
-and 10 semantic-execution tests (1,029 total).
+unselected element remains unchanged. Direct nested-place local initialization
+now records one canonical combined borrow fact after its ordered range-bound
+reads and before its final index read; emission consumes that same fact once.
+Direct and helper-inlined semantic probes produce identical mutations. Repeated
+subslice chains and other deeper shapes remain unsupported. This is one exact
+nested non-tuple projection, not general place typing, index-sensitive aliasing,
+or region inference. Windows and Arch each passed 658 unit, 1 component-
+interface, 10 conformance, 351 replacement, and 10 semantic-execution tests
+(1,030 total).
 
 Projected array-element and slice-subslice origins now survive one direct local
 alias in the callee. An explicit alias annotation must independently equal the

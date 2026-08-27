@@ -8933,6 +8933,42 @@ fn preanalyze_runtime_expression_at_reads_with_tuple<
                         )?;
                     }
                     Some(ExprKind::Index { base, index }) => {
+                        if let Some(ExprKind::RangeIndex { start, end, .. }) =
+                            tree.expression(base).map(|expression| expression.kind)
+                        {
+                            if let Some(start) = start {
+                                visit_value!(start)?;
+                            }
+                            if let Some(end) = end {
+                                visit_value!(end)?;
+                            }
+                            let mut place = discover_runtime_read_place(tree, base)
+                                .map_err(|kind| CodegenError {
+                                    kind,
+                                    span: assignment_span,
+                                })?
+                                .ok_or(CodegenError {
+                                    kind: CodegenErrorKind::RuntimeExpressionUnsupported,
+                                    span: assignment_span,
+                                })?;
+                            place
+                                .projections
+                                .push(RuntimePlaceProjection::Index)
+                                .map_err(|kind| CodegenError {
+                                    kind,
+                                    span: assignment_span,
+                                })?;
+                            push_read(
+                                facts,
+                                locals,
+                                function,
+                                place,
+                                borrow_context,
+                                assignment_span,
+                            )?;
+                            visit_value!(index)?;
+                            return Ok(());
+                        }
                         let base_type = runtime_expression_type_with_locals(
                             function,
                             resolver,
@@ -30043,7 +30079,7 @@ impl<
             };
         if materialize_slice {
             if range_source.is_some() {
-                self.emit_range_index_value_to_stack(tree, base, depth + 1)?;
+                self.emit_range_index_value_to_stack(tree, base, depth + 1, true)?;
             } else {
                 self.emit_slice_value_to_stack(tree, base, depth + 1)?;
             }
@@ -30494,7 +30530,7 @@ impl<
         else {
             return Ok(false);
         };
-        self.emit_range_index_value_to_stack(tree, operand, depth)?;
+        self.emit_range_index_value_to_stack(tree, operand, depth, false)?;
         Ok(true)
     }
 
@@ -30503,6 +30539,7 @@ impl<
         tree: &crate::ExpressionTree<'_, MAX_NODES>,
         range: crate::ExprId,
         depth: usize,
+        nested_index: bool,
     ) -> Result<(), CodegenError> {
         let Some(ExprKind::RangeIndex {
             base,
@@ -30608,7 +30645,12 @@ impl<
         self.emit_trap_branch(0x87)?;
         self.emit(&[0x48, 0x29, 0xc8, 0x50])?;
         self.evaluation_depth += 1;
-        if let Some(name) = local_name {
+        if nested_index {
+            self.record_expression_place_read(tree, range, Some(RuntimePlaceProjection::Index))?;
+            let source = reference_source_name(tree, base)
+                .ok_or(self.error(CodegenErrorKind::RuntimeExpressionUnsupported))?;
+            self.emit_identifier(source)?;
+        } else if let Some(name) = local_name {
             self.record_expression_place_read(tree, base, Some(RuntimePlaceProjection::Subslice))?;
             self.emit_identifier_address(name)?;
         } else {
@@ -46232,6 +46274,42 @@ mod tests {
 
         for abi in [X86_64Abi::Windows, X86_64Abi::SystemV] {
             compile_x86_64_function::<_, 4096, 8, 64>(&function, &resolver, abi).unwrap();
+        }
+    }
+
+    #[test]
+    fn runtime_body_facts_retain_direct_subslice_index_borrows() {
+        let source = "#[unsafe(no_mangle)] pub extern \"C\" fn value(input: &mut [u32; 4], start: usize, index: usize) -> u32 { let selected: &mut u32 = &mut input[start..][index]; *selected += 7; *selected }";
+        let module = Parser::new(source).parse_module::<1, 4>().unwrap();
+        let Some(Item::Function(function)) = module.items()[0] else {
+            panic!("expected function")
+        };
+        let body = function.parse_body::<4>().unwrap();
+        let resolver = NoConstants;
+        let mut facts = RuntimeBodyFacts::EMPTY;
+        preanalyze_runtime_body_declarations::<_, 4, 64>(
+            &function,
+            &resolver,
+            &body,
+            "u32",
+            function.body_expression_span.start,
+            &mut facts,
+        )
+        .unwrap();
+
+        let mut nested = RuntimePlaceProjections::single(RuntimePlaceProjection::Subslice);
+        nested.push(RuntimePlaceProjection::Index).unwrap();
+        let matching = facts.assignment_reads[..facts.assignment_read_count]
+            .iter()
+            .flatten()
+            .filter(|fact| {
+                fact.base == RuntimePlaceIdentity::Parameter(0) && fact.projections == nested
+            })
+            .count();
+        assert_eq!(matching, 1);
+
+        for abi in [X86_64Abi::Windows, X86_64Abi::SystemV] {
+            compile_x86_64_function::<_, 8192, 4, 64>(&function, &resolver, abi).unwrap();
         }
     }
 
