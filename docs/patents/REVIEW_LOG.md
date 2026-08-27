@@ -8995,3 +8995,13 @@ terminator append, byte-sequence interning, and existing checked PC-relative
 object relocations. It adds no novel encoding, compression, cryptographic
 mechanism, foreign-function protocol, or production loader. This technical
 screen is not legal advice or patent clearance.
+
+# 2026-08-27 — Bounded C-string byte views
+
+Patent review: **NOT_TRIGGERED**. The compiler uses conventional typed method
+representation and immutable pointer-plus-length slice lowering over the
+existing bounded C-string decoder and checked object relocation. Including or
+excluding an existing trailing terminator from a reported length introduces no
+novel encoding, compression, cryptographic mechanism, foreign-function
+protocol, or production loader. This technical screen is not legal advice or
+patent clearance.

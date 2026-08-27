@@ -2068,7 +2068,7 @@ tests (1,009 total). Raw/byte strings, escape decoding, literal deduplication,
 more than eight literals, more than 1,024 literal bytes, and general static data
 remain outside this checkpoint.
 
-### Bounded C-string pointer checkpoint
+### Bounded C-string byte-view checkpoint
 
 Cooked `c"..."` and raw `cr#"..."#` literals now have distinct token and
 expression identity and cannot enter scalar const evaluation or masquerade as
@@ -2082,6 +2082,17 @@ unit, 1 component, 10 conformance, 351 replacement, and 6 semantic-execution
 tests (1,024 total). General `&CStr` ABI transport, other methods, locals,
 arguments, conditionals, and platform-varying `c_char` targets remain outside
 this checkpoint.
+
+Exact literal `.to_bytes()` and `.to_bytes_with_nul()` now lower to immutable
+`&'static [u8]` returns without admitting general `&CStr` ABI transport. A
+distinct expression node preserves the method choice through validation and
+emission. Both forms share the checked C-string decoder and relocation; the
+first reports the content length and the second includes the one appended NUL.
+ELF64 and COFF tests inspect the exact `hello\0` data and encoded lengths 5 and
+6. The exact ORACLE-0002 Arch executable observed `b"hello"` and `b"hello\0"`.
+Windows and Arch each passed 657 unit, 1 component, 10 conformance, 351
+replacement, and 6 semantic-execution tests (1,025 total). Scalar method
+chaining and general `CStr` values remain fail-closed.
 
 ### Bounded explicit-static reference checkpoint
 

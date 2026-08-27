@@ -1209,3 +1209,13 @@ accept/reject results. This is black-box evidence for those exact literal and
 terminator rules only; it does not establish `CStr` ABI/layout, an implementation
 strategy, pointer emission, other methods, or foreign-platform `c_char`
 semantics. Temporary source and metadata files were removed.
+
+An independently authored Rust 2024 executable C-string byte-view probe against
+this exact Arch toolchain and commit asserted that `c"hello".to_bytes()` equals
+`b"hello"` and `c"hello".to_bytes_with_nul()` equals `b"hello\0"`; it compiled
+and exited successfully. The same source passed front-end compilation with the
+exact Windows gnullvm toolchain, but that host lacked its configured external
+linker, so no Windows execution is claimed. This is black-box evidence for
+those two exact literal methods and results only; it does not establish general
+`CStr` ABI/layout, locals, arguments, conditionals, or implementation strategy.
+The temporary source and executable were removed.

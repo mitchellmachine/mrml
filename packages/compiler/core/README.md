@@ -5994,3 +5994,14 @@ and rejected the interior-NUL control on both hosts. Windows and Arch each
 passed 656 library, 1 component-interface, 10 conformance, 351 replacement, and
 6 semantic-execution tests: 1,024 per host. General `&CStr` transport, methods,
 locals, arguments, conditionals, and non-x86 `c_char` targets remain unsupported.
+
+The bounded C-string byte-view milestone at `76f299f5` represents exact literal
+`.to_bytes()` and `.to_bytes_with_nul()` calls as `CStrToBytes`, preserving the
+terminator choice until fat-slice emission. The checked ELF64/COFF relocation
+returns the same literal address with length excluding or including the single
+terminator. Object tests verify `hello\0` and encoded lengths 5 and 6; the
+interior-NUL control still reports `UnsupportedCStringLiteral`. The exact
+ORACLE-0002 Arch executable observed `b"hello"` and `b"hello\0"`. Windows and
+Arch each passed 657 library, 1 component-interface, 10 conformance, 351
+replacement, and 6 semantic-execution tests: 1,025 per host. General `&CStr`
+transport and scalar byte-view chaining remain unsupported.

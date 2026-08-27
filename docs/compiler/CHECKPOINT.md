@@ -58,7 +58,7 @@ oracle upgrade receives a new immutable record and differential classification
 against all prior accepted probes. Keep Cargo on edition 2024 until a newer
 named edition can be adopted through a pinned, workspace-wide migration.
 
-## Latest bounded C-string pointer milestone
+## Latest bounded C-string byte-view milestone
 
 Commit `975b7041` introduces distinct cooked/raw C-string tokens and expressions
 and threads them exhaustively through constant, IR, semantic, analysis, and
@@ -70,6 +70,18 @@ accepted cooked/raw C strings and rejected an interior NUL on Windows and Arch.
 Both hosts passed 656 library, 1 component-interface, 10 conformance, 351
 replacement, and 6 semantic-execution tests: 1,024 per host. General `&CStr`
 transport and methods remain unsupported.
+
+Commit `76f299f5` adds distinct `CStrToBytes` expressions for exact literal
+`.to_bytes()` and `.to_bytes_with_nul()` calls. Only the typed fat-slice return
+path admits them: it reuses the checked read-only relocation, returns length
+excluding or including the single terminator respectively, and retains
+defensive scalar-emitter and IR rejection. ELF64 and COFF object tests verify
+the exact `hello\0` bytes and encoded lengths 5 and 6; an interior-NUL input
+still fails before object emission. The exact ORACLE-0002 Arch executable
+returned `b"hello"` and `b"hello\0"`. Windows and Arch each passed 657 library,
+1 component-interface, 10 conformance, 351 replacement, and 6
+semantic-execution tests: 1,025 per host. General `&CStr` transport, locals,
+arguments, conditionals, and scalar method chaining remain unsupported.
 
 Patent review: **NOT_TRIGGERED**; see `docs/patents/REVIEW_LOG.md`.
 
