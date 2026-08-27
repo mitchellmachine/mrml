@@ -741,9 +741,12 @@ retaining both exact target capability generations. Target rights must be
 exactly `MAP|INSPECT|CONTROL`; same-target aliasing, insufficient or excessive
 rights, stale generations, and second-mapping exhaustion fail closed. Late
 failure rolls back the first reservation and page charge. Kernel suites pass
-573 tests on Windows and Arch Linux. Native backing/mapping and invalidation on
-WHP/KVM, the bounded interface queue, and two-guest execution remain the next
-dependency gates.
+574 tests on Windows and Arch Linux. Native one-page backing and exact GPA
+map/unmap are now **PARTIALLY IMPLEMENTED** on WHP and KVM. Nested KVM proved one
+shared backing across two distinct live VMs and exact removal. This nested WHP
+host rejects its second partition with the typed VID collision, so strict Total
+records unavailability rather than using one VM twice. Guest page-table
+projection, the bounded queue, and component execution remain the next gates.
 
 The paired retirement ledger is now **PARTIALLY IMPLEMENTED**. A backend may
 release the shared page only after proving both native mappings and translations
@@ -751,8 +754,9 @@ absent. Kernel preflight exact-matches the object, two mapping generations,
 target capability generations, RW/NX shape, physical-backing absence, and an
 exactly-two mapping count before one atomic retirement commit. Wrong authority
 and an injected third alias retain all accounting unchanged for retry. Kernel
-suites pass 574 tests on Windows and Arch Linux. WHP/KVM native mapping and
-invalidation remain the active gate.
+suites pass 574 tests on Windows and Arch Linux. WHP/KVM native mapping
+retirement now precedes this ledger release and retains backing on uncertainty.
+Guest page-table invalidation and bounded queue activation remain the active gate.
 
 The existing userspace block recovery loop is now reproducibly selectable
 through the canonical build frontend. The service image's

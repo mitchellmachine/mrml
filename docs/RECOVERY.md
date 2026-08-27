@@ -1866,16 +1866,22 @@ Recovery cannot yet project the component data plane across two guests, but its
 memory prerequisite now reserves one exact shared page against two distinct
 target objects and exact target capability generations. A second-map failure
 rolls back the first reservation and object charge before recovery can publish
-either domain. This is in-memory accounting evidence only; native mapping,
-translation invalidation, queue activation, and retained cleanup authority are
-still required before recovered two-domain execution.
+either domain. WHP/KVM now retain one host page while mapping it into both exact
+GPAs and remove both mappings before ledger retirement. Nested KVM proved this
+across two live VMs. This nested WHP environment rejects a second simultaneous
+partition with a typed VID collision; recovery must report Total placement
+unavailable and never reuse one partition. Guest page-table projection,
+translation invalidation, queue activation, and recovered execution remain.
 
 Once that future native teardown succeeds, recovery can now retire the policy
 ledger without a half-removed peer. The kernel exact-matches both retained
 mapping generations and target capability generations, rejects extra aliases,
 and commits both mapping retirements, object retirement, capability revocation,
 and pool decrements together. Any preflight failure returns the complete retained
-projection for retry. No document claim treats this as native invalidation.
+projection for retry. Native GPA removal is now exact and fail-closed: failure
+poisons the backend and retains the owner for retry, while destructor uncertainty
+leaks rather than freeing possibly mapped backing. This is not yet guest
+page-table invalidation or complete queue teardown.
 
 The existing service-image recovery path now has canonical MRML build profiles:
 `block_service_loop` for the userspace service image and

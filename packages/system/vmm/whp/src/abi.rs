@@ -40,6 +40,7 @@ pub enum WhpError {
     UnsupportedExit(u32),
     PlatformUnavailable,
     MissingPlatformFunction,
+    PartitionAlreadyExists,
     SystemCall(i32),
 }
 

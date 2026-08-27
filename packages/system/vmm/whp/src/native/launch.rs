@@ -5,8 +5,9 @@ use mrml_kernel::arch::x86_64::{
     PerCpuPrivilegeStacks, PrivilegeStackLayout, VirtAddr,
 };
 use mrml_kernel::{
-    ApplicationLaunch, ArtifactKind, BootHandoff, DeadlineVmBackend, GpuSharedQueueLayout,
-    GpuVmmMemory, MAX_PE_SECTIONS, PAGE_SIZE, PeImage, PhysAddr,
+    ApplicationLaunch, ArtifactKind, BootHandoff, Capability, CapabilitySpace, DeadlineVmBackend,
+    GpuSharedQueueLayout, GpuVmmMemory, MAX_PE_SECTIONS, MemoryResourceError,
+    MicrovmPeerPageProjection, PAGE_SIZE, PeImage, PhysAddr,
     PreparedComponentServiceLaunch, RevocableVmBackend, ScheduledVcpuOutcome,
     ServiceAddressSpaceEraser, SignedArtifact, TaskId, VerifiedExecutable,
     VirtualBlockConfigurationPage, VirtualBlockQueueLayout, VirtualBlockResumePage,
@@ -16,7 +17,8 @@ use mrml_kernel::{
 use crate::{GuestRange, MapPermissions, WhpError};
 
 use super::{
-    PreparedWhpPartition, ThreadAffinityGuard, ThreadPriorityGuard, WhpSystem, WhpVcpuRunner,
+    PreparedWhpPartition, ThreadAffinityGuard, ThreadPriorityGuard, WhpPeerHostPage, WhpSystem,
+    WhpVcpuRunner,
 };
 
 const XAPIC_BASE: u64 = 0xfee0_0000;
@@ -192,6 +194,210 @@ pub struct PreparedWhpGuest<'system> {
     service_resource: [Option<Mapping>; 2],
     service_resource_live: [bool; 2],
     ap_trampoline: Option<u64>,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum WhpPeerPageError {
+    Policy(MemoryResourceError),
+    Backend(WhpError),
+}
+
+pub struct PreparedWhpPeerPage<'guest, 'system> {
+    first: &'guest mut PreparedWhpGuest<'system>,
+    second: &'guest mut PreparedWhpGuest<'system>,
+    backing: Option<WhpPeerHostPage>,
+    first_physical: u64,
+    second_physical: u64,
+    first_live: bool,
+    second_live: bool,
+}
+
+pub struct WhpPeerPagePrepareFailure<'guest, 'system> {
+    error: WhpPeerPageError,
+    retained: Option<PreparedWhpPeerPage<'guest, 'system>>,
+}
+
+impl WhpPeerPagePrepareFailure<'_, '_> {
+    pub const fn error(&self) -> WhpPeerPageError {
+        self.error
+    }
+}
+
+impl<'guest, 'system> WhpPeerPagePrepareFailure<'guest, 'system> {
+    pub fn into_retained(self) -> Option<PreparedWhpPeerPage<'guest, 'system>> {
+        self.retained
+    }
+}
+
+impl<'guest, 'system> PreparedWhpPeerPage<'guest, 'system> {
+    pub fn prepare<const C: usize>(
+        first: &'guest mut PreparedWhpGuest<'system>,
+        second: &'guest mut PreparedWhpGuest<'system>,
+        projection: &MicrovmPeerPageProjection,
+        first_target_capability: Capability,
+        second_target_capability: Capability,
+        capabilities: &CapabilitySpace<C>,
+        first_physical: u64,
+        second_physical: u64,
+    ) -> Result<Self, WhpPeerPagePrepareFailure<'guest, 'system>> {
+        projection
+            .validate_targets(
+                first_target_capability,
+                second_target_capability,
+                capabilities,
+            )
+            .map_err(|error| WhpPeerPagePrepareFailure {
+                error: WhpPeerPageError::Policy(error),
+                retained: None,
+            })?;
+        let first_range = GuestRange::new(
+            first_physical,
+            PAGE_SIZE,
+            MapPermissions::read_write(),
+        )
+        .map_err(|error| WhpPeerPagePrepareFailure {
+            error: WhpPeerPageError::Backend(error),
+            retained: None,
+        })?;
+        let second_range = GuestRange::new(
+            second_physical,
+            PAGE_SIZE,
+            MapPermissions::read_write(),
+        )
+        .map_err(|error| WhpPeerPagePrepareFailure {
+            error: WhpPeerPageError::Backend(error),
+            retained: None,
+        })?;
+        let backing = WhpPeerHostPage::allocate().map_err(|error| WhpPeerPagePrepareFailure {
+            error: WhpPeerPageError::Backend(error),
+            retained: None,
+        })?;
+        let address = backing.address();
+        first
+            .partition
+            .map_external_peer_page(first_range, address)
+            .map_err(|error| WhpPeerPagePrepareFailure {
+                error: WhpPeerPageError::Backend(error),
+                retained: None,
+            })?;
+        if let Err(error) = second
+            .partition
+            .map_external_peer_page(second_range, address)
+        {
+            if let Err(cleanup) = first
+                .partition
+                .unmap_external_peer_page(first_physical, address)
+            {
+                return Err(WhpPeerPagePrepareFailure {
+                    error: WhpPeerPageError::Backend(cleanup),
+                    retained: Some(Self {
+                        first,
+                        second,
+                        backing: Some(backing),
+                        first_physical,
+                        second_physical,
+                        first_live: true,
+                        second_live: false,
+                    }),
+                });
+            }
+            return Err(WhpPeerPagePrepareFailure {
+                error: WhpPeerPageError::Backend(error),
+                retained: None,
+            });
+        }
+        Ok(Self {
+            first,
+            second,
+            backing: Some(backing),
+            first_physical,
+            second_physical,
+            first_live: true,
+            second_live: true,
+        })
+    }
+
+    pub fn write_first(&mut self, input: &[u8]) -> Result<(), WhpError> {
+        if !self.first_live || input.len() > PAGE_SIZE as usize {
+            return Err(WhpError::InvalidMapping);
+        }
+        VmBackend::write_guest(self.first, self.first_physical, input)
+    }
+
+    pub fn read_second(&self, output: &mut [u8]) -> Result<(), WhpError> {
+        if !self.second_live || output.len() > PAGE_SIZE as usize {
+            return Err(WhpError::InvalidMapping);
+        }
+        VmBackend::read_guest(self.second, self.second_physical, output)
+    }
+
+    pub fn retire(mut self) -> Result<(), (WhpError, Self)> {
+        let Some(backing) = self.backing.as_ref() else {
+            return Err((WhpError::InvalidMapping, self));
+        };
+        let address = backing.address();
+        if self.second_live {
+            if let Err(error) = self
+                .second
+                .partition
+                .unmap_external_peer_page(self.second_physical, address)
+            {
+                return Err((error, self));
+            }
+            self.second_live = false;
+        }
+        if self.first_live {
+            if let Err(error) = self
+                .first
+                .partition
+                .unmap_external_peer_page(self.first_physical, address)
+            {
+                return Err((error, self));
+            }
+            self.first_live = false;
+        }
+        let _ = self.backing.take();
+        Ok(())
+    }
+}
+
+impl Drop for PreparedWhpPeerPage<'_, '_> {
+    fn drop(&mut self) {
+        let Some(backing) = self.backing.as_ref() else {
+            return;
+        };
+        let address = backing.address();
+        let mut uncertain = false;
+        if self.second_live {
+            if self
+                .second
+                .partition
+                .unmap_external_peer_page(self.second_physical, address)
+                .is_ok()
+            {
+                self.second_live = false;
+            } else {
+                uncertain = true;
+            }
+        }
+        if self.first_live {
+            if self
+                .first
+                .partition
+                .unmap_external_peer_page(self.first_physical, address)
+                .is_ok()
+            {
+                self.first_live = false;
+            } else {
+                uncertain = true;
+            }
+        }
+        if uncertain {
+            if let Some(backing) = self.backing.take() {
+                core::mem::forget(backing);
+            }
+        }
+    }
 }
 
 #[derive(Clone, Copy)]
@@ -2708,8 +2914,9 @@ mod tests {
     };
     use mrml_kernel::{
         ArtifactKind, CapabilitySpace, GuestMemory, HypercallRouter, InterruptPolicy, IoDirection,
-        IoPortPolicy, IoPortRule, ObjectId, Rights, SIGNED_ARTIFACT_HEADER_BYTES,
-        SIGNED_ARTIFACT_OVERHEAD_BYTES, SignedArtifact, TrustRoot,
+        IoPortPolicy, IoPortRule, MemoryPoolTable, ObjectId, Rights,
+        SIGNED_ARTIFACT_HEADER_BYTES, SIGNED_ARTIFACT_OVERHEAD_BYTES, SignedArtifact, TrustRoot,
+        release_microvm_peer_page_projection, reserve_microvm_peer_page_projection,
         VIRTUAL_BLOCK_COMPLETION_ACK_PORT, VIRTUAL_BLOCK_COMPLETION_BYTES,
         VIRTUAL_BLOCK_CONFIGURATION_BYTES, VIRTUAL_BLOCK_DOORBELL_PORT,
         VIRTUAL_BLOCK_RESUME_STATE_BYTES, VirtualBlockBackend, VirtualBlockCompletion,
@@ -3259,7 +3466,7 @@ mod tests {
                 .page_walk(double_fault_base)
                 .unwrap()
                 .physical_address(double_fault_base),
-            Some(0x42_2000)
+            Some(0x43_2000)
         );
         let command_walk = guest.page_walk(queue_layout.command_base()).unwrap();
         assert_eq!(command_walk.levels(), 4);
@@ -3315,6 +3522,112 @@ mod tests {
                 reason: (0x1002u64 << 32) | 3,
             })
         );
+    }
+
+    #[test]
+    fn live_two_partition_peer_page_shares_and_retires_exact_backing() {
+        let system = WhpSystem::open().unwrap();
+        if !system.hypervisor_present().unwrap() {
+            return;
+        }
+        let encoded = signed_pe();
+        let public_at = SIGNED_ARTIFACT_HEADER_BYTES;
+        let root = TrustRoot::new(
+            ArtifactKind::VmImage,
+            Sha3_512::digest(&encoded[public_at..public_at + LAMPORT_PUBLIC_KEY_BYTES]),
+            1,
+        );
+        let signed = SignedArtifact::decode(&encoded).unwrap();
+        let executable = signed
+            .verify_executable(&root, ArtifactKind::VmImage)
+            .unwrap();
+        let layout = WhpLaunchLayout::new(
+            0x10_0000,
+            16,
+            0x20_0000,
+            0x20_0000,
+            0x30_0000,
+            0x30_0000,
+            0x40_0000,
+            0xffff_8000_0040_0000,
+            PRIVILEGE_STACK_ARENA_PAGES,
+            true,
+        )
+        .unwrap();
+        let mut first = system
+            .prepare_boot_kernel(&executable, &valid_handoff(), layout)
+            .unwrap();
+        let mut second = match system.prepare_boot_kernel(&executable, &valid_handoff(), layout) {
+            Ok(second) => second,
+            // Some nested WHP hosts admit only one active partition and return
+            // the documented VID identity collision for a second. Total mode
+            // must classify that as unavailable rather than use one VM twice.
+            Err(WhpError::PartitionAlreadyExists) => return,
+            Err(error) => panic!("second WHP partition failed: {error:?}"),
+        };
+
+        let target_rights = Rights::MAP.union(Rights::INSPECT).union(Rights::CONTROL);
+        let pool_rights = Rights::ALLOCATE
+            .union(Rights::CONTROL)
+            .union(Rights::INSPECT);
+        let mut capabilities = CapabilitySpace::<8>::new();
+        let mut memory = MemoryPoolTable::<1, 1, 2>::new(0x771).unwrap();
+        let (pool, pool_capability) = memory
+            .create_root(1, 2, 0, pool_rights, &mut capabilities)
+            .unwrap();
+        let first_target = capabilities.insert(ObjectId(0x772), target_rights).unwrap();
+        let second_target = capabilities.insert(ObjectId(0x773), target_rights).unwrap();
+        let (projection, object_capability) = reserve_microvm_peer_page_projection(
+            &mut memory,
+            pool,
+            pool_capability,
+            first_target,
+            second_target,
+            0x700,
+            0x800,
+            &mut capabilities,
+        )
+        .unwrap();
+        let mut peer = PreparedWhpPeerPage::prepare(
+            &mut first,
+            &mut second,
+            &projection,
+            first_target,
+            second_target,
+            &capabilities,
+            0x70_0000,
+            0x80_0000,
+        )
+        .unwrap_or_else(|failure| panic!("WHP peer mapping failed: {:?}", failure.error()));
+        peer.write_first(&[0x51, 0x72, 0x93, 0xb4]).unwrap();
+        let mut observed = [0; 4];
+        peer.read_second(&mut observed).unwrap();
+        assert_eq!(observed, [0x51, 0x72, 0x93, 0xb4]);
+        peer.retire().unwrap_or_else(|(error, _)| panic!("WHP peer retirement failed: {error:?}"));
+        assert_eq!(
+            VmBackend::read_guest(&first, 0x70_0000, &mut observed),
+            Err(WhpError::UnmappedMemory)
+        );
+        assert_eq!(
+            VmBackend::read_guest(&second, 0x80_0000, &mut observed),
+            Err(WhpError::UnmappedMemory)
+        );
+        assert_eq!(
+            unsafe {
+                release_microvm_peer_page_projection(
+                    &mut memory,
+                    projection,
+                    object_capability,
+                    first_target,
+                    second_target,
+                    &mut capabilities,
+                )
+            },
+            Ok(1)
+        );
+        let usage = memory.usage(pool, pool_capability, &capabilities).unwrap();
+        assert_eq!(usage.object_pages(), 0);
+        assert_eq!(usage.active_mappings(), 0);
     }
 
     #[test]

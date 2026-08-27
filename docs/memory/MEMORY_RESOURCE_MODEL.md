@@ -177,8 +177,13 @@ exactly `MAP|INSPECT|CONTROL`; insufficient or excessive rights, one target used
 twice, stale capability generations, and second-mapping exhaustion reject. A
 late reservation failure releases the first mapping and provisional object, so
 the pool reports zero object pages and mappings. Windows and Arch Linux kernel
-suites pass 573 tests. Native WHP/KVM mapping, backing, invalidation, peer queue
-semantics, and complete teardown remain **PLANNED**.
+suites pass 574 tests. Native one-page backing and exact GPA map/unmap are now
+**PARTIALLY IMPLEMENTED** for WHP and KVM. The owner retains the backing until
+both mappings are removed and leaks rather than frees it if unmapping is
+uncertain. Nested KVM exercised two distinct live VMs and observed the same
+bytes. This nested WHP host rejects a second simultaneous partition with a typed
+VID collision, so WHP has API/source parity but no two-partition execution claim.
+Guest page-table projection, peer queues, and execution remain **PLANNED**.
 
 Two-peer policy retirement is now **PARTIALLY IMPLEMENTED** as one atomic
 ledger operation. After a backend proves both native mappings and translations
@@ -188,7 +193,10 @@ membership, generation advancement, and pool decrements before mutation. It
 then revokes the object capability and retires both mappings plus the object in
 one commit. Wrong target authority or an unexpected third mapping returns the
 complete projection for retry without changing usage. Windows and Arch Linux
-kernel suites pass 574 tests. Native teardown proof remains **PLANNED**.
+kernel suites pass 574 tests. Backend retirement now removes both exact native
+GPA mappings first; uncertainty poisons the backend and retains or deliberately
+leaks the backing to prevent use-after-free. Guest translation/page-table
+teardown and the queue lifecycle remain **PLANNED**.
 
 Pinning is separate scarce authority because it limits reclamation and may enable
 device visibility. Object ownership never implies DMA. DMA requires the exact

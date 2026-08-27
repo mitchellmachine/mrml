@@ -8888,6 +8888,19 @@ adaptive-placement and Total MicroVM review remains **TRIGGERED**, including the
 planned construction and lifecycle of both backend guests. This technical
 screen is not legal advice or patent clearance.
 
+# 2026-08-26 — Exact native two-peer GPA backing lifecycle
+
+Patent review: **NOT_TRIGGERED** for this bounded backend increment. It uses the
+documented WHP GPA map/unmap operations and KVM userspace-memory
+registration/removal to project one ordinary page into two exact guest-physical
+ranges, with checked alignment, overlap rejection, retained ownership, and
+fail-closed cleanup. It adds no queue protocol, notification algorithm,
+scheduler, device transport, compression, cryptographic primitive, or placement
+decision. The broader cross-microVM interface and Total MicroVM review remains
+**TRIGGERED**, including guest page-table projection, bounded queue semantics,
+and recovered component execution. This technical screen is not legal advice or
+patent clearance.
+
 # 2026-08-26 — Atomic complete-domain endpoint publication
 
 Patent review: **NOT_TRIGGERED** for this bounded control-plane transaction. It

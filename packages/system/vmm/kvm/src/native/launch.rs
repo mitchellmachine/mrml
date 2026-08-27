@@ -5,16 +5,17 @@ use mrml_kernel::arch::x86_64::{
     VirtAddr,
 };
 use mrml_kernel::{
-    ApplicationLaunch, ArtifactKind, BootHandoff, DeadlineVmBackend, GpuSharedQueueLayout,
-    GpuVmmMemory, PAGE_SIZE, PhysAddr, PreparedComponentServiceLaunch, RevocableVmBackend,
+    ApplicationLaunch, ArtifactKind, BootHandoff, Capability, CapabilitySpace, DeadlineVmBackend,
+    GpuSharedQueueLayout, GpuVmmMemory, MemoryResourceError, MicrovmPeerPageProjection, PAGE_SIZE,
+    PhysAddr, PreparedComponentServiceLaunch, RevocableVmBackend,
     ServiceAddressSpaceEraser, SignedArtifact, TaskId, VerifiedExecutable,
     VirtualBlockConfigurationPage, VirtualBlockQueueLayout, VirtualBlockResumePage,
     VirtualBlockVmmMemory, VmBackend, VmExit,
 };
 
 use super::{
-    KvmBackend, KvmError, KvmPageTableStore, KvmSystem, KvmVcpuSnapshot, map_loaded_handoff,
-    map_loaded_pe,
+    KvmBackend, KvmError, KvmPageTableStore, KvmPeerHostPage, KvmSystem, KvmVcpuSnapshot,
+    map_loaded_handoff, map_loaded_pe,
 };
 
 const XAPIC_BASE: u64 = 0xfee0_0000;
@@ -111,6 +112,206 @@ pub struct PreparedKvmGuest<const N: usize> {
     service_shared_live: [bool; 2],
     service_resource: [Option<Mapping>; 2],
     service_resource_live: [bool; 2],
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum KvmPeerPageError {
+    Policy(MemoryResourceError),
+    Backend(KvmError),
+}
+
+pub struct PreparedKvmPeerPage<'guest, const FIRST: usize, const SECOND: usize> {
+    first: &'guest mut PreparedKvmGuest<FIRST>,
+    second: &'guest mut PreparedKvmGuest<SECOND>,
+    backing: Option<KvmPeerHostPage>,
+    first_physical: u64,
+    second_physical: u64,
+    first_live: bool,
+    second_live: bool,
+}
+
+pub struct KvmPeerPagePrepareFailure<'guest, const FIRST: usize, const SECOND: usize> {
+    error: KvmPeerPageError,
+    retained: Option<PreparedKvmPeerPage<'guest, FIRST, SECOND>>,
+}
+
+impl<const FIRST: usize, const SECOND: usize> KvmPeerPagePrepareFailure<'_, FIRST, SECOND> {
+    pub const fn error(&self) -> KvmPeerPageError {
+        self.error
+    }
+}
+
+impl<'guest, const FIRST: usize, const SECOND: usize>
+    KvmPeerPagePrepareFailure<'guest, FIRST, SECOND>
+{
+    pub fn into_retained(self) -> Option<PreparedKvmPeerPage<'guest, FIRST, SECOND>> {
+        self.retained
+    }
+}
+
+impl<'guest, const FIRST: usize, const SECOND: usize>
+    PreparedKvmPeerPage<'guest, FIRST, SECOND>
+{
+    pub fn prepare<const C: usize>(
+        first: &'guest mut PreparedKvmGuest<FIRST>,
+        second: &'guest mut PreparedKvmGuest<SECOND>,
+        projection: &MicrovmPeerPageProjection,
+        first_target_capability: Capability,
+        second_target_capability: Capability,
+        capabilities: &CapabilitySpace<C>,
+        first_physical: u64,
+        second_physical: u64,
+    ) -> Result<Self, KvmPeerPagePrepareFailure<'guest, FIRST, SECOND>> {
+        projection
+            .validate_targets(
+                first_target_capability,
+                second_target_capability,
+                capabilities,
+            )
+            .map_err(|error| KvmPeerPagePrepareFailure {
+                error: KvmPeerPageError::Policy(error),
+                retained: None,
+            })?;
+        if !first_physical.is_multiple_of(PAGE_SIZE)
+            || !second_physical.is_multiple_of(PAGE_SIZE)
+        {
+            return Err(KvmPeerPagePrepareFailure {
+                error: KvmPeerPageError::Backend(KvmError::UnalignedMemory),
+                retained: None,
+            });
+        }
+        let backing = KvmPeerHostPage::allocate().map_err(|error| KvmPeerPagePrepareFailure {
+            error: KvmPeerPageError::Backend(error),
+            retained: None,
+        })?;
+        let host = backing.host();
+        first
+            .backend
+            .map_external_peer_page(first_physical, host)
+            .map_err(|error| KvmPeerPagePrepareFailure {
+                error: KvmPeerPageError::Backend(error),
+                retained: None,
+            })?;
+        if let Err(error) = second
+            .backend
+            .map_external_peer_page(second_physical, host)
+        {
+            if let Err(cleanup) = first
+                .backend
+                .unmap_external_peer_page(first_physical, host)
+            {
+                return Err(KvmPeerPagePrepareFailure {
+                    error: KvmPeerPageError::Backend(cleanup),
+                    retained: Some(Self {
+                        first,
+                        second,
+                        backing: Some(backing),
+                        first_physical,
+                        second_physical,
+                        first_live: true,
+                        second_live: false,
+                    }),
+                });
+            }
+            return Err(KvmPeerPagePrepareFailure {
+                error: KvmPeerPageError::Backend(error),
+                retained: None,
+            });
+        }
+        Ok(Self {
+            first,
+            second,
+            backing: Some(backing),
+            first_physical,
+            second_physical,
+            first_live: true,
+            second_live: true,
+        })
+    }
+
+    pub fn write_first(&mut self, input: &[u8]) -> Result<(), KvmError> {
+        if !self.first_live || input.len() > PAGE_SIZE as usize {
+            return Err(KvmError::InvalidMapping);
+        }
+        VmBackend::write_guest(self.first, self.first_physical, input)
+    }
+
+    pub fn read_second(&self, output: &mut [u8]) -> Result<(), KvmError> {
+        if !self.second_live || output.len() > PAGE_SIZE as usize {
+            return Err(KvmError::InvalidMapping);
+        }
+        VmBackend::read_guest(self.second, self.second_physical, output)
+    }
+
+    pub fn retire(mut self) -> Result<(), (KvmError, Self)> {
+        let Some(backing) = self.backing.as_ref() else {
+            return Err((KvmError::InvalidMapping, self));
+        };
+        let host = backing.host();
+        if self.second_live {
+            if let Err(error) = self
+                .second
+                .backend
+                .unmap_external_peer_page(self.second_physical, host)
+            {
+                return Err((error, self));
+            }
+            self.second_live = false;
+        }
+        if self.first_live {
+            if let Err(error) = self
+                .first
+                .backend
+                .unmap_external_peer_page(self.first_physical, host)
+            {
+                return Err((error, self));
+            }
+            self.first_live = false;
+        }
+        let _ = self.backing.take();
+        Ok(())
+    }
+}
+
+impl<const FIRST: usize, const SECOND: usize> Drop
+    for PreparedKvmPeerPage<'_, FIRST, SECOND>
+{
+    fn drop(&mut self) {
+        let Some(backing) = self.backing.as_ref() else {
+            return;
+        };
+        let host = backing.host();
+        let mut uncertain = false;
+        if self.second_live {
+            if self
+                .second
+                .backend
+                .unmap_external_peer_page(self.second_physical, host)
+                .is_ok()
+            {
+                self.second_live = false;
+            } else {
+                uncertain = true;
+            }
+        }
+        if self.first_live {
+            if self
+                .first
+                .backend
+                .unmap_external_peer_page(self.first_physical, host)
+                .is_ok()
+            {
+                self.first_live = false;
+            } else {
+                uncertain = true;
+            }
+        }
+        if uncertain {
+            if let Some(backing) = self.backing.take() {
+                core::mem::forget(backing);
+            }
+        }
+    }
 }
 
 #[derive(Clone, Copy)]
@@ -2041,8 +2242,9 @@ mod tests {
     };
     use mrml_kernel::{
         ArtifactKind, CapabilitySpace, GuestMemory, HypercallRouter, InterruptPolicy, IoDirection,
-        IoPortPolicy, IoPortRule, ObjectId, Rights, SIGNED_ARTIFACT_HEADER_BYTES,
-        SIGNED_ARTIFACT_OVERHEAD_BYTES, SignedArtifact, TrustRoot,
+        IoPortPolicy, IoPortRule, MemoryPoolTable, ObjectId, Rights,
+        SIGNED_ARTIFACT_HEADER_BYTES, SIGNED_ARTIFACT_OVERHEAD_BYTES, SignedArtifact, TrustRoot,
+        release_microvm_peer_page_projection, reserve_microvm_peer_page_projection,
         VIRTUAL_BLOCK_COMPLETION_ACK_PORT, VIRTUAL_BLOCK_COMPLETION_BYTES,
         VIRTUAL_BLOCK_CONFIGURATION_BYTES, VIRTUAL_BLOCK_DOORBELL_PORT,
         VIRTUAL_BLOCK_RESUME_STATE_BYTES, VirtualBlockBackend, VirtualBlockCompletion,
@@ -2479,7 +2681,7 @@ mod tests {
                 .page_walk(stack_layout.double_fault_base().unwrap())
                 .unwrap()
                 .physical_address(stack_layout.double_fault_base().unwrap()),
-            Some(0x42_2000)
+            Some(0x43_2000)
         );
         assert_eq!(
             guest.page_walk(0x0000_8000_0000_0000),
@@ -2530,6 +2732,108 @@ mod tests {
         let mut pixel = [0u8; 4];
         VmBackend::read_guest(&guest, 0xa0000, &mut pixel).unwrap();
         assert_eq!(pixel, [0x57, 0xc8, 0xff, 0x00]);
+    }
+
+    #[test]
+    fn live_two_vm_peer_page_shares_and_retires_exact_backing() {
+        let system = match KvmSystem::open() {
+            Ok(system) => system,
+            Err(KvmError::SystemCall) => return,
+            Err(error) => panic!("available KVM failed validation: {error:?}"),
+        };
+        let encoded = signed_pe();
+        let public_at = SIGNED_ARTIFACT_HEADER_BYTES;
+        let root = TrustRoot::new(
+            ArtifactKind::VmImage,
+            Sha3_512::digest(&encoded[public_at..public_at + LAMPORT_PUBLIC_KEY_BYTES]),
+            1,
+        );
+        let signed = SignedArtifact::decode(&encoded).unwrap();
+        let executable = signed
+            .verify_executable(&root, ArtifactKind::VmImage)
+            .unwrap();
+        let layout = KvmLaunchLayout::new(
+            0x10_0000,
+            16,
+            0x20_0000,
+            0xffff_8001_4000_0000,
+            0x30_0000,
+            0xffff_8001_5000_0000,
+            0x40_0000,
+            0xffff_8001_6000_0000,
+            PRIVILEGE_STACK_ARENA_PAGES,
+            false,
+        )
+        .unwrap();
+        let mut first = system
+            .prepare_guest::<8>(0, &executable, &valid_handoff(), layout)
+            .unwrap();
+        let mut second = system
+            .prepare_guest::<8>(0, &executable, &valid_handoff(), layout)
+            .unwrap();
+
+        let target_rights = Rights::MAP.union(Rights::INSPECT).union(Rights::CONTROL);
+        let pool_rights = Rights::ALLOCATE
+            .union(Rights::CONTROL)
+            .union(Rights::INSPECT);
+        let mut capabilities = CapabilitySpace::<8>::new();
+        let mut memory = MemoryPoolTable::<1, 1, 2>::new(0x781).unwrap();
+        let (pool, pool_capability) = memory
+            .create_root(1, 2, 0, pool_rights, &mut capabilities)
+            .unwrap();
+        let first_target = capabilities.insert(ObjectId(0x782), target_rights).unwrap();
+        let second_target = capabilities.insert(ObjectId(0x783), target_rights).unwrap();
+        let (projection, object_capability) = reserve_microvm_peer_page_projection(
+            &mut memory,
+            pool,
+            pool_capability,
+            first_target,
+            second_target,
+            0x700,
+            0x800,
+            &mut capabilities,
+        )
+        .unwrap();
+        let mut peer = PreparedKvmPeerPage::prepare(
+            &mut first,
+            &mut second,
+            &projection,
+            first_target,
+            second_target,
+            &capabilities,
+            0x70_0000,
+            0x80_0000,
+        )
+        .unwrap_or_else(|failure| panic!("KVM peer mapping failed: {:?}", failure.error()));
+        peer.write_first(&[0x61, 0x82, 0xa3, 0xc4]).unwrap();
+        let mut observed = [0; 4];
+        peer.read_second(&mut observed).unwrap();
+        assert_eq!(observed, [0x61, 0x82, 0xa3, 0xc4]);
+        peer.retire().unwrap_or_else(|(error, _)| panic!("KVM peer retirement failed: {error:?}"));
+        assert_eq!(
+            VmBackend::read_guest(&first, 0x70_0000, &mut observed),
+            Err(KvmError::UnmappedMemory)
+        );
+        assert_eq!(
+            VmBackend::read_guest(&second, 0x80_0000, &mut observed),
+            Err(KvmError::UnmappedMemory)
+        );
+        assert_eq!(
+            unsafe {
+                release_microvm_peer_page_projection(
+                    &mut memory,
+                    projection,
+                    object_capability,
+                    first_target,
+                    second_target,
+                    &mut capabilities,
+                )
+            },
+            Ok(1)
+        );
+        let usage = memory.usage(pool, pool_capability, &capabilities).unwrap();
+        assert_eq!(usage.object_pages(), 0);
+        assert_eq!(usage.active_mappings(), 0);
     }
 
     #[test]

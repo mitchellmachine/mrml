@@ -1359,8 +1359,13 @@ and exact target capability generations before either backend maps it. Both
 views are read/write and non-executable; target rights are exact and the shared
 object grants no placement, interface, or execution authority. Failure while
 reserving the second mapping rolls back the first reservation and object charge.
-This is policy/accounting evidence only: WHP/KVM native backing, queue protocol,
-revocation/invalidation, and two-guest execution remain **PLANNED**.
+WHP/KVM native one-page backing and exact GPA map/unmap are now **PARTIALLY
+IMPLEMENTED**. Nested KVM proved byte visibility through one backing page mapped
+into two distinct live VMs and exact native retirement. The current nested WHP
+host returns typed `PartitionAlreadyExists` for the second partition; strict
+Total treats placement as unavailable and never reuses one partition for both
+domains. WHP source/API parity is not two-partition evidence. Guest page-table
+projection, queue protocol, and component execution remain **PLANNED**.
 
 The matching policy-ledger teardown is now **PARTIALLY IMPLEMENTED**. It accepts
 the retained two-peer projection only after native teardown, revalidates both
@@ -1368,7 +1373,10 @@ exact target capability generations and mapping shapes, refuses unexpected
 additional aliases, and atomically retires both mapping generations, the shared
 object, its capability, and pool charges. Validation failure returns the whole
 retained projection for exact retry and makes no partial accounting mutation.
-The backend-native unmap/invalidation proof is still required.
+Both backends now exact-match and remove borrowed GPA mappings before permitting
+policy-ledger retirement. A failed native unmap poisons the backend and retains
+the owner for retry; destructor uncertainty leaks rather than freeing a possibly
+mapped page. Guest translation teardown and end-to-end queue retirement remain.
 
 The installed production prerequisite now has a **PARTIALLY IMPLEMENTED**
 four-file stable-root selection. Configuration, authority checkpoint,

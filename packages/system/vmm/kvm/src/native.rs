@@ -17,7 +17,10 @@ use mrml_kernel::{
 use crate::{KVM_API_VERSION, KvmError, KvmMemoryRegion, complete_io_read, decode_run_page};
 
 mod launch;
-pub use launch::{KvmLaunchLayout, KvmPageWalk, KvmServiceEraser, PreparedKvmGuest};
+pub use launch::{
+    KvmLaunchLayout, KvmPageWalk, KvmPeerPageError, KvmPeerPagePrepareFailure, KvmServiceEraser,
+    PreparedKvmGuest, PreparedKvmPeerPage,
+};
 
 const FIRMWARE_TOP: u64 = 0x1_0000_0000;
 const FIRMWARE_RAM_BYTES: usize = 64 * 1024 * 1024;
@@ -1176,6 +1179,7 @@ struct HostRegion {
     bytes: usize,
     host: NonNull<u8>,
     readonly: bool,
+    owned: bool,
 }
 
 impl HostRegion {
@@ -1206,6 +1210,27 @@ impl HostRegion {
             bytes,
             host: NonNull::new(host.cast()).ok_or(KvmError::SystemCall)?,
             readonly,
+            owned: true,
+        })
+    }
+
+    fn external(
+        slot: u32,
+        guest_address: u64,
+        host: NonNull<u8>,
+        readonly: bool,
+    ) -> Result<Self, KvmError> {
+        if !(host.as_ptr() as usize).is_multiple_of(PAGE_SIZE as usize) {
+            return Err(KvmError::UnalignedMemory);
+        }
+        KvmMemoryRegion::new(slot, guest_address, PAGE_SIZE, host.as_ptr() as u64, readonly)?;
+        Ok(Self {
+            slot,
+            guest_address,
+            bytes: PAGE_SIZE as usize,
+            host,
+            readonly,
+            owned: false,
         })
     }
 
@@ -1216,8 +1241,49 @@ impl HostRegion {
 
 impl Drop for HostRegion {
     fn drop(&mut self) {
+        if self.owned {
+            unsafe {
+                munmap(self.host.as_ptr().cast(), self.bytes);
+            }
+        }
+    }
+}
+
+pub(crate) struct KvmPeerHostPage {
+    host: NonNull<u8>,
+}
+
+impl KvmPeerHostPage {
+    pub(crate) fn allocate() -> Result<Self, KvmError> {
+        let host = unsafe {
+            mmap(
+                core::ptr::null_mut(),
+                PAGE_SIZE as usize,
+                PROT_READ | PROT_WRITE,
+                MAP_SHARED | MAP_ANONYMOUS,
+                -1,
+                0,
+            )
+        };
+        if host == MAP_FAILED {
+            return Err(KvmError::SystemCall);
+        }
+        let host = NonNull::new(host.cast()).ok_or(KvmError::SystemCall)?;
         unsafe {
-            munmap(self.host.as_ptr().cast(), self.bytes);
+            core::ptr::write_bytes(host.as_ptr(), 0, PAGE_SIZE as usize);
+        }
+        Ok(Self { host })
+    }
+
+    pub(crate) const fn host(&self) -> NonNull<u8> {
+        self.host
+    }
+}
+
+impl Drop for KvmPeerHostPage {
+    fn drop(&mut self) {
+        unsafe {
+            munmap(self.host.as_ptr().cast(), PAGE_SIZE as usize);
         }
     }
 }
@@ -1272,6 +1338,48 @@ impl<const N: usize> KvmGuestMemory<N> {
             .ok_or(KvmError::UnmappedMemory)?;
         self.count -= 1;
         Ok(region)
+    }
+
+    fn insert_external_peer_page(
+        &mut self,
+        guest_address: u64,
+        host: NonNull<u8>,
+    ) -> Result<u32, KvmError> {
+        if self.count == N || self.count >= crate::MAX_KVM_MEMORY_SLOTS as usize {
+            return Err(KvmError::MemoryTableFull);
+        }
+        let slot = self
+            .regions
+            .iter()
+            .position(Option::is_none)
+            .ok_or(KvmError::MemoryTableFull)?;
+        let region = HostRegion::external(slot as u32, guest_address, host, false)?;
+        if self.regions.iter().flatten().any(|existing| {
+            guest_address < existing.end() && existing.guest_address < region.end()
+        }) {
+            return Err(KvmError::MemoryOverlap);
+        }
+        self.regions[slot] = Some(region);
+        self.count += 1;
+        Ok(slot as u32)
+    }
+
+    fn exact_external_peer_slot(
+        &self,
+        guest_address: u64,
+        host: NonNull<u8>,
+    ) -> Result<u32, KvmError> {
+        self.regions
+            .iter()
+            .flatten()
+            .find(|region| {
+                !region.owned
+                    && region.guest_address == guest_address
+                    && region.bytes as u64 == PAGE_SIZE
+                    && region.host == host
+            })
+            .map(|region| region.slot)
+            .ok_or(KvmError::UnmappedMemory)
     }
 
     fn exact_slot(&self, guest_address: u64, bytes: u64) -> Result<u32, KvmError> {
@@ -1937,6 +2045,34 @@ impl<const N: usize> KvmBackend<N> {
             let _ = self.memory.remove_slot(slot);
             return Err(error);
         }
+        Ok(())
+    }
+
+    pub(crate) fn map_external_peer_page(
+        &mut self,
+        guest_address: u64,
+        host: NonNull<u8>,
+    ) -> Result<(), KvmError> {
+        let slot = self.memory.insert_external_peer_page(guest_address, host)?;
+        let region = KvmMemoryRegion::new(slot, guest_address, PAGE_SIZE, host.as_ptr() as u64, false)?;
+        if let Err(error) = self.vm.register_memory(region) {
+            let _ = self.memory.remove_slot(slot);
+            return Err(error);
+        }
+        Ok(())
+    }
+
+    pub(crate) fn unmap_external_peer_page(
+        &mut self,
+        guest_address: u64,
+        host: NonNull<u8>,
+    ) -> Result<(), KvmError> {
+        let slot = self.memory.exact_external_peer_slot(guest_address, host)?;
+        if let Err(error) = self.vm.register_memory(KvmMemoryRegion::removal(slot)?) {
+            self.mapping_poisoned = true;
+            return Err(error);
+        }
+        let _ = self.memory.remove_slot(slot)?;
         Ok(())
     }
 

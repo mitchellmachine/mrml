@@ -12,10 +12,14 @@ use mrml_kernel::{MAX_PE_SECTIONS, PAGE_SIZE, PeImage, VmDeadlineOutcome, VmExit
 use crate::{GuestRange, MapPermissions, WHP_EXIT_CONTEXT_BYTES, WhpError, decode_exit_context};
 
 mod launch;
-pub use launch::{PreparedWhpGuest, WhpLaunchLayout, WhpPageWalk, WhpServiceEraser};
+pub use launch::{
+    PreparedWhpGuest, PreparedWhpPeerPage, WhpLaunchLayout, WhpPageWalk, WhpPeerPageError,
+    WhpPeerPagePrepareFailure, WhpServiceEraser,
+};
 
 const FIRMWARE_TOP: u64 = 0x1_0000_0000;
 const FIRMWARE_RAM_BYTES: u64 = 64 * 1024 * 1024;
+const ERROR_VID_PARTITION_ALREADY_EXISTS: i32 = 0xc037_0008_u32 as i32;
 
 type Handle = *mut c_void;
 type Hresult = i32;
@@ -830,6 +834,7 @@ impl PreparedWhpPartition<'_> {
             address,
             range,
             subranges,
+            owned: true,
         };
         check(unsafe {
             (self.api.map_gpa_range)(
@@ -842,6 +847,79 @@ impl PreparedWhpPartition<'_> {
         })?;
         self.mappings[slot] = Some(mapping);
         Ok(slot)
+    }
+
+    pub(crate) fn map_external_peer_page(
+        &mut self,
+        range: GuestRange,
+        address: NonNull<c_void>,
+    ) -> Result<(), WhpError> {
+        if range.size() != PAGE_SIZE
+            || range.permissions() != MapPermissions::read_write()
+            || !(address.as_ptr() as usize).is_multiple_of(PAGE_SIZE as usize)
+        {
+            return Err(WhpError::InvalidMapping);
+        }
+        let slot = self
+            .mappings
+            .iter()
+            .position(Option::is_none)
+            .ok_or(WhpError::MemoryTableFull)?;
+        if self
+            .mappings
+            .iter()
+            .flatten()
+            .any(|entry| overlaps(entry.range, range))
+        {
+            return Err(WhpError::MemoryOverlap);
+        }
+        check(unsafe {
+            (self.api.map_gpa_range)(
+                self.partition.as_ptr(),
+                address.as_ptr(),
+                range.guest_address(),
+                PAGE_SIZE,
+                MapPermissions::read_write().bits(),
+            )
+        })?;
+        let mut subranges = [const { None }; MAX_SUBMAPPINGS];
+        subranges[0] = Some(range);
+        self.mappings[slot] = Some(OwnedMapping {
+            address,
+            range,
+            subranges,
+            owned: false,
+        });
+        Ok(())
+    }
+
+    pub(crate) fn unmap_external_peer_page(
+        &mut self,
+        guest_address: u64,
+        address: NonNull<c_void>,
+    ) -> Result<(), WhpError> {
+        let slot = self
+            .mappings
+            .iter()
+            .position(|mapping| {
+                mapping.as_ref().is_some_and(|mapping| {
+                    !mapping.owned
+                        && mapping.address == address
+                        && mapping.range.guest_address() == guest_address
+                        && mapping.range.size() == PAGE_SIZE
+                        && mapping.subranges[0] == Some(mapping.range)
+                        && mapping.subranges[1..].iter().all(Option::is_none)
+                })
+            })
+            .ok_or(WhpError::InvalidMapping)?;
+        if let Err(error) = check(unsafe {
+            (self.api.unmap_gpa_range)(self.partition.as_ptr(), guest_address, PAGE_SIZE)
+        }) {
+            self.mapping_poisoned = true;
+            return Err(error);
+        }
+        let _ = self.mappings[slot].take();
+        Ok(())
     }
 
     /// Replaces the temporary writable GPA view with the PE parser's final
@@ -1566,6 +1644,7 @@ struct OwnedMapping {
     address: NonNull<c_void>,
     range: GuestRange,
     subranges: [Option<GuestRange>; MAX_SUBMAPPINGS],
+    owned: bool,
 }
 
 impl OwnedMapping {
@@ -1677,6 +1756,40 @@ impl PreparedWhpFirmware<'_> {
 }
 impl Drop for OwnedMapping {
     fn drop(&mut self) {
+        if self.owned {
+            let _ = unsafe { VirtualFree(self.address.as_ptr(), 0, MEM_RELEASE) };
+        }
+    }
+}
+
+pub(crate) struct WhpPeerHostPage {
+    address: NonNull<c_void>,
+}
+
+impl WhpPeerHostPage {
+    pub(crate) fn allocate() -> Result<Self, WhpError> {
+        let address = NonNull::new(unsafe {
+            VirtualAlloc(
+                core::ptr::null_mut(),
+                PAGE_SIZE as usize,
+                MEM_COMMIT_RESERVE,
+                PAGE_READWRITE,
+            )
+        })
+        .ok_or(WhpError::PlatformUnavailable)?;
+        unsafe {
+            core::ptr::write_bytes(address.as_ptr(), 0, PAGE_SIZE as usize);
+        }
+        Ok(Self { address })
+    }
+
+    pub(crate) const fn address(&self) -> NonNull<c_void> {
+        self.address
+    }
+}
+
+impl Drop for WhpPeerHostPage {
+    fn drop(&mut self) {
         let _ = unsafe { VirtualFree(self.address.as_ptr(), 0, MEM_RELEASE) };
     }
 }
@@ -1696,7 +1809,9 @@ const fn canonical(address: u64) -> bool {
 }
 
 fn check(result: Hresult) -> Result<(), WhpError> {
-    if result < 0 {
+    if result == ERROR_VID_PARTITION_ALREADY_EXISTS {
+        Err(WhpError::PartitionAlreadyExists)
+    } else if result < 0 {
         Err(WhpError::SystemCall(result))
     } else {
         Ok(())
@@ -1725,6 +1840,16 @@ mod tests {
     use super::*;
     use crate::MapPermissions;
     use mrml_runtime::{Instant, mrml_println};
+
+    #[test]
+    fn vid_partition_collision_is_a_typed_fail_closed_error() {
+        assert_eq!(
+            check(ERROR_VID_PARTITION_ALREADY_EXISTS),
+            Err(WhpError::PartitionAlreadyExists)
+        );
+        assert_eq!(check(-1), Err(WhpError::SystemCall(-1)));
+        assert_eq!(check(0), Ok(()));
+    }
 
     #[test]
     fn register_values_match_whp_union_layout() {
