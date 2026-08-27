@@ -616,6 +616,14 @@ payload. Backend interrupt/event delivery, a race-tested atomic shared-state
 representation, signed component execution, and recovery integration remain
 **PLANNED**.
 
+Backend-neutral notification routing is now **PARTIALLY IMPLEMENTED** by
+binding each directional token to one exact VM/vCPU, allowlisted external
+vector, and `SIGNAL`-authorized interrupt object. The latch accepts only the
+next notification for its queue identity and clears only after confirmed
+injection; policy denial or backend uncertainty cannot manufacture an
+acknowledgement. Native WHP/KVM delivery to the signed consumer/provider guests
+and their interrupt handlers remain **PLANNED**.
+
 The end-to-end Zstd gate proves equal corpus decoding by old and new providers,
 no ZIM rebuild, old-generation retention while referenced, later safe GC, ABI-4
 non-substitution, and prohibited-generation denial for new bindings. Performance

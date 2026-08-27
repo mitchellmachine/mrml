@@ -1381,6 +1381,15 @@ state publication; matching acquire fences follow observation before metadata or
 payload consumption. Native interrupt/event delivery, a race-tested atomic
 shared-state representation, and signed component execution remain **PLANNED**.
 
+The backend-neutral queue notification route is now **PARTIALLY IMPLEMENTED**
+through the existing VM interrupt authority. Request and response directions
+retain separate one-token pending latches bound to the exact queue identity, VM,
+vCPU, allowlisted vector, and interrupt object. Publication requires the next
+sequence, replay and cross-binding fail closed, and only confirmed
+capability-authorized injection clears the token. Policy denial retains it;
+backend uncertainty retains it and fails the VM. Live delivery into the two
+component guests and guest interrupt handling remain **PLANNED**.
+
 The exact guest page-table leaf is now **PARTIALLY IMPLEMENTED** on both
 backends. The retained owner installs one supervisor RW/NX leaf in each stopped
 guest, verifies the exact physical translation, and reloads each exact root.

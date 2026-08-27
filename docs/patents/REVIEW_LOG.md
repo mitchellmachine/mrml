@@ -9082,3 +9082,24 @@ device protocol. Atomic shared-state representation, backend notification, and
 complete signed component execution remain within the broader triggered
 worldwide mechanism review. This technical screen is not legal advice or patent
 clearance.
+
+# 2026-08-27 — Capability-bound interface notification routing
+
+Patent review: **TRIGGERED** under the existing cross-microVM interface and
+Total MicroVM review. This increment reuses the existing VM interrupt boundary
+with conventional one-token pending latches, exact identity/sequence checks,
+allowlisted vectors, capability authorization, and clear-after-confirmed-
+delivery semantics. It adds no new interrupt-controller protocol, scheduler,
+cryptographic primitive, compression mechanism, or device transport. Live
+two-guest delivery and signed component interrupt handling remain within the
+broader triggered worldwide mechanism review. This technical screen is not
+legal advice or patent clearance.
+
+# 2026-08-27 — Bounded subslice-index compiler lowering
+
+Patent review: **NOT_TRIGGERED**. The compiler composes conventional checked
+slice-range and checked element-index address arithmetic through its existing
+typed place and reference-origin representations. It adds no novel data
+structure, encoding, compression, cryptographic mechanism, runtime security
+protocol, or production isolation mechanism. This technical screen is not legal
+advice or patent clearance.

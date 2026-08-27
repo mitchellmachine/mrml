@@ -93,6 +93,10 @@ pub struct MicrovmInterfaceRequestNotification {
 }
 
 impl MicrovmInterfaceRequestNotification {
+    pub(crate) const fn identity(self) -> MicrovmInterfaceQueueIdentity {
+        self.identity
+    }
+
     pub const fn sequence(self) -> u64 {
         self.sequence
     }
@@ -110,6 +114,10 @@ pub struct MicrovmInterfaceResponseNotification {
 }
 
 impl MicrovmInterfaceResponseNotification {
+    pub(crate) const fn identity(self) -> MicrovmInterfaceQueueIdentity {
+        self.identity
+    }
+
     pub const fn sequence(self) -> u64 {
         self.sequence
     }

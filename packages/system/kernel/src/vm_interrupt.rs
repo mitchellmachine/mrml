@@ -1,6 +1,7 @@
 use crate::{
-    Capability, CapabilitySpace, ObjectId, Rights, VirtualBlockDevice, VirtualBlockError,
-    VmBackend, VmError, VmId, VmRunError, VmState, VmTable,
+    Capability, CapabilitySpace, MicrovmInterfaceQueueIdentity,
+    MicrovmInterfaceRequestNotification, MicrovmInterfaceResponseNotification, ObjectId, Rights,
+    VirtualBlockDevice, VirtualBlockError, VmBackend, VmError, VmId, VmRunError, VmState, VmTable,
 };
 
 const FIRST_EXTERNAL_VECTOR: u8 = 32;
@@ -83,6 +84,164 @@ pub enum VirtualBlockInterruptError<E> {
     Injection(VmRunError<E>),
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum MicrovmInterfaceInterruptError<E> {
+    AlreadyPending,
+    InvalidNotification,
+    SequenceExhausted,
+    Injection(VmRunError<E>),
+}
+
+struct MicrovmInterfaceInterruptRoute<N> {
+    identity: MicrovmInterfaceQueueIdentity,
+    vm: VmId,
+    vcpu: u32,
+    vector: u8,
+    interrupt_object: ObjectId,
+    pending: Option<N>,
+    delivered_sequence: u64,
+}
+
+pub struct MicrovmInterfaceRequestInterrupt {
+    route: MicrovmInterfaceInterruptRoute<MicrovmInterfaceRequestNotification>,
+}
+
+pub struct MicrovmInterfaceResponseInterrupt {
+    route: MicrovmInterfaceInterruptRoute<MicrovmInterfaceResponseNotification>,
+}
+
+macro_rules! interface_interrupt_route {
+    ($name:ident, $notification:ty) => {
+        impl $name {
+            pub const fn new(
+                identity: MicrovmInterfaceQueueIdentity,
+                vm: VmId,
+                vcpu: u32,
+                vector: u8,
+                interrupt_object: ObjectId,
+            ) -> Self {
+                Self {
+                    route: MicrovmInterfaceInterruptRoute {
+                        identity,
+                        vm,
+                        vcpu,
+                        vector,
+                        interrupt_object,
+                        pending: None,
+                        delivered_sequence: 0,
+                    },
+                }
+            }
+
+            pub fn publish(
+                &mut self,
+                notification: $notification,
+            ) -> Result<(), MicrovmInterfaceInterruptError<core::convert::Infallible>> {
+                if self.route.pending.is_some() {
+                    return Err(MicrovmInterfaceInterruptError::AlreadyPending);
+                }
+                let expected = self
+                    .route
+                    .delivered_sequence
+                    .checked_add(1)
+                    .ok_or(MicrovmInterfaceInterruptError::SequenceExhausted)?;
+                if notification.identity() != self.route.identity
+                    || notification.sequence() != expected
+                {
+                    return Err(MicrovmInterfaceInterruptError::InvalidNotification);
+                }
+                self.route.pending = Some(notification);
+                Ok(())
+            }
+
+            pub const fn pending(&self) -> Option<$notification> {
+                self.route.pending
+            }
+        }
+    };
+}
+
+interface_interrupt_route!(
+    MicrovmInterfaceRequestInterrupt,
+    MicrovmInterfaceRequestNotification
+);
+interface_interrupt_route!(
+    MicrovmInterfaceResponseInterrupt,
+    MicrovmInterfaceResponseNotification
+);
+
+fn deliver_interface_interrupt<B: VmBackend, N: Copy, const V: usize, const C: usize>(
+    route: &mut MicrovmInterfaceInterruptRoute<N>,
+    sequence: impl FnOnce(N) -> u64,
+    backend: &mut B,
+    vms: &mut VmTable<V>,
+    policy: &InterruptPolicy,
+    capabilities: &CapabilitySpace<C>,
+    capability: Capability,
+) -> Result<Option<N>, MicrovmInterfaceInterruptError<B::Error>> {
+    let Some(notification) = route.pending else {
+        return Ok(None);
+    };
+    inject_vm_interrupt(
+        backend,
+        vms,
+        route.vm,
+        route.vcpu,
+        route.vector,
+        policy,
+        capabilities,
+        capability,
+        route.interrupt_object,
+    )
+    .map_err(MicrovmInterfaceInterruptError::Injection)?;
+    route.pending = None;
+    route.delivered_sequence = sequence(notification);
+    Ok(Some(notification))
+}
+
+pub fn deliver_microvm_interface_request_interrupt<B: VmBackend, const V: usize, const C: usize>(
+    route: &mut MicrovmInterfaceRequestInterrupt,
+    backend: &mut B,
+    vms: &mut VmTable<V>,
+    policy: &InterruptPolicy,
+    capabilities: &CapabilitySpace<C>,
+    capability: Capability,
+) -> Result<Option<MicrovmInterfaceRequestNotification>, MicrovmInterfaceInterruptError<B::Error>> {
+    deliver_interface_interrupt(
+        &mut route.route,
+        MicrovmInterfaceRequestNotification::sequence,
+        backend,
+        vms,
+        policy,
+        capabilities,
+        capability,
+    )
+}
+
+pub fn deliver_microvm_interface_response_interrupt<
+    B: VmBackend,
+    const V: usize,
+    const C: usize,
+>(
+    route: &mut MicrovmInterfaceResponseInterrupt,
+    backend: &mut B,
+    vms: &mut VmTable<V>,
+    policy: &InterruptPolicy,
+    capabilities: &CapabilitySpace<C>,
+    capability: Capability,
+) -> Result<Option<MicrovmInterfaceResponseNotification>, MicrovmInterfaceInterruptError<B::Error>>
+{
+    deliver_interface_interrupt(
+        &mut route.route,
+        MicrovmInterfaceResponseNotification::sequence,
+        backend,
+        vms,
+        policy,
+        capabilities,
+        capability,
+    )
+}
+
 /// Delivers one coalesced virtual-block completion notification through the
 /// ordinary capability-authorized VM interrupt boundary. Denied or uncertain
 /// injection leaves the device latch pending; only confirmed delivery clears
@@ -129,7 +288,10 @@ pub fn inject_virtual_block_interrupt<
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{VirtualBlockQueueLayout, VmExit};
+    use crate::{
+        MemoryPoolTable, MicrovmInterfaceQueuePair, VirtualBlockQueueLayout, VmExit,
+        reserve_microvm_peer_page_projection,
+    };
 
     struct Backend {
         injected: Option<(u32, u8)>,
@@ -172,6 +334,193 @@ mod tests {
             .unwrap();
         device.latch_completion_interrupt().unwrap();
         device
+    }
+
+    fn interface_notifications(
+        capabilities: &mut CapabilitySpace<12>,
+    ) -> (
+        MicrovmInterfaceQueueIdentity,
+        MicrovmInterfaceRequestNotification,
+        MicrovmInterfaceResponseNotification,
+    ) {
+        let identity = MicrovmInterfaceQueueIdentity::new([0x5a; 32], 3, 14, 9, 7, 11).unwrap();
+        let target_rights = Rights::MAP.union(Rights::INSPECT).union(Rights::CONTROL);
+        let pool_rights = Rights::ALLOCATE
+            .union(Rights::CONTROL)
+            .union(Rights::INSPECT);
+        let mut memory = MemoryPoolTable::<1, 1, 2>::new(0x981).unwrap();
+        let (pool, pool_capability) = memory
+            .create_root(1, 2, 0, pool_rights, capabilities)
+            .unwrap();
+        let first = capabilities.insert(ObjectId(0x982), target_rights).unwrap();
+        let second = capabilities.insert(ObjectId(0x983), target_rights).unwrap();
+        let (projection, _) = reserve_microvm_peer_page_projection(
+            &mut memory,
+            pool,
+            pool_capability,
+            first,
+            second,
+            0x700,
+            0x800,
+            capabilities,
+        )
+        .unwrap();
+        let (consumer, mut provider) =
+            MicrovmInterfaceQueuePair::bind(identity, &projection, first, second, capabilities)
+                .unwrap()
+                .split();
+        let mut page = [0; crate::PAGE_SIZE as usize];
+        consumer
+            .initialize(&mut page, &projection, capabilities)
+            .unwrap();
+        let request = consumer
+            .submit(&mut page, &projection, capabilities, 1, b"request")
+            .unwrap();
+        let mut scratch = [0; 8];
+        provider
+            .receive_request(&page, &projection, capabilities, request, &mut scratch)
+            .unwrap();
+        let response = provider
+            .respond(&mut page, &projection, capabilities, 1, 1, b"response")
+            .unwrap();
+        (identity, request, response)
+    }
+
+    #[test]
+    fn interface_notifications_are_exact_monotonic_and_clear_only_after_delivery() {
+        let interrupt_object = ObjectId(0x991);
+        let wrong_object = ObjectId(0x992);
+        let mut capabilities = CapabilitySpace::<12>::new();
+        let signal = capabilities
+            .insert(interrupt_object, Rights::SIGNAL)
+            .unwrap();
+        let wrong = capabilities.insert(wrong_object, Rights::SIGNAL).unwrap();
+        let (identity, request, response) = interface_notifications(&mut capabilities);
+        let (mut vms, vm) = running_vm();
+        let mut policy = InterruptPolicy::deny_all();
+        policy.allow(64).unwrap();
+        policy.allow(65).unwrap();
+        let mut backend = Backend {
+            injected: None,
+            fail: false,
+        };
+        let other_identity =
+            MicrovmInterfaceQueueIdentity::new([0x6b; 32], 3, 14, 9, 7, 11).unwrap();
+        let mut wrong_identity_route =
+            MicrovmInterfaceRequestInterrupt::new(other_identity, vm, 1, 64, interrupt_object);
+        assert_eq!(
+            wrong_identity_route.publish(request),
+            Err(MicrovmInterfaceInterruptError::InvalidNotification)
+        );
+        let mut request_route =
+            MicrovmInterfaceRequestInterrupt::new(identity, vm, 1, 64, interrupt_object);
+        request_route.publish(request).unwrap();
+        assert_eq!(
+            request_route.publish(request),
+            Err(MicrovmInterfaceInterruptError::AlreadyPending)
+        );
+        assert!(matches!(
+            deliver_microvm_interface_request_interrupt(
+                &mut request_route,
+                &mut backend,
+                &mut vms,
+                &policy,
+                &capabilities,
+                wrong,
+            ),
+            Err(MicrovmInterfaceInterruptError::Injection(
+                VmRunError::Policy(VmError::WrongObject)
+            ))
+        ));
+        assert_eq!(request_route.pending(), Some(request));
+        assert_eq!(
+            deliver_microvm_interface_request_interrupt(
+                &mut request_route,
+                &mut backend,
+                &mut vms,
+                &policy,
+                &capabilities,
+                signal,
+            ),
+            Ok(Some(request))
+        );
+        assert_eq!(backend.injected, Some((1, 64)));
+        assert_eq!(request_route.pending(), None);
+        assert_eq!(
+            request_route.publish(request),
+            Err(MicrovmInterfaceInterruptError::InvalidNotification)
+        );
+
+        backend.injected = None;
+        let mut response_route =
+            MicrovmInterfaceResponseInterrupt::new(identity, vm, 2, 65, interrupt_object);
+        response_route.publish(response).unwrap();
+        assert_eq!(
+            deliver_microvm_interface_response_interrupt(
+                &mut response_route,
+                &mut backend,
+                &mut vms,
+                &policy,
+                &capabilities,
+                signal,
+            ),
+            Ok(Some(response))
+        );
+        assert_eq!(backend.injected, Some((2, 65)));
+        assert_eq!(response_route.pending(), None);
+
+        let mut denied_route =
+            MicrovmInterfaceResponseInterrupt::new(identity, vm, 2, 66, interrupt_object);
+        denied_route.publish(response).unwrap();
+        assert!(matches!(
+            deliver_microvm_interface_response_interrupt(
+                &mut denied_route,
+                &mut backend,
+                &mut vms,
+                &policy,
+                &capabilities,
+                signal,
+            ),
+            Err(MicrovmInterfaceInterruptError::Injection(
+                VmRunError::Policy(VmError::InterruptDenied)
+            ))
+        ));
+        assert_eq!(denied_route.pending(), Some(response));
+    }
+
+    #[test]
+    fn uncertain_interface_notification_delivery_fails_vm_and_retains_pending_token() {
+        let interrupt_object = ObjectId(0x995);
+        let mut capabilities = CapabilitySpace::<12>::new();
+        let signal = capabilities
+            .insert(interrupt_object, Rights::SIGNAL)
+            .unwrap();
+        let (identity, request, _) = interface_notifications(&mut capabilities);
+        let (mut vms, vm) = running_vm();
+        let mut policy = InterruptPolicy::deny_all();
+        policy.allow(64).unwrap();
+        let mut backend = Backend {
+            injected: None,
+            fail: true,
+        };
+        let mut route =
+            MicrovmInterfaceRequestInterrupt::new(identity, vm, 0, 64, interrupt_object);
+        route.publish(request).unwrap();
+        assert_eq!(
+            deliver_microvm_interface_request_interrupt(
+                &mut route,
+                &mut backend,
+                &mut vms,
+                &policy,
+                &capabilities,
+                signal,
+            ),
+            Err(MicrovmInterfaceInterruptError::Injection(
+                VmRunError::Backend(())
+            ))
+        );
+        assert_eq!(vms.state(vm), Ok(VmState::Failed));
+        assert_eq!(route.pending(), Some(request));
     }
 
     #[test]

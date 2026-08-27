@@ -3489,3 +3489,13 @@ acquire-after-state fences for request, response, and idle handback. Native
 interrupt/event delivery, a race-tested atomic shared-state representation,
 recovered two-domain runner ownership, and guest-executed signed ZIM/Zstd calls
 remain **PLANNED**.
+
+The backend-neutral interface notification route is now **PARTIALLY
+IMPLEMENTED** on the existing capability-authorized VM interrupt boundary.
+Separate request/response latches exact-bind queue identity, next sequence, VM,
+vCPU, vector, and interrupt object; confirmed injection alone clears a token,
+while denial retains it and uncertain backend delivery both retains it and
+fails the VM. Adversarial kernel tests cover replay, cross-binding, duplicate
+pending publication, wrong object, denied vector, and uncertain injection.
+Windows passes 578 kernel tests. Live two-guest WHP/KVM delivery and guest
+interrupt handling remain **PLANNED**.

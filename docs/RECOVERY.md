@@ -2036,3 +2036,11 @@ release-before-state and acquire-after-state transition contract; it cannot
 resume a partially published exchange. Native event delivery and race-tested
 atomic shared-state access remain pending, so this checkpoint is not proof of
 guest-executed component traffic.
+
+Directional interface notification latches are recovered only as volatile
+guest-lifecycle state, never reconstructed from the shared page. Each retains
+the exact queue identity, next sequence, VM/vCPU, vector, and interrupt object.
+A denied or uncertain delivery remains pending; uncertain backend delivery also
+fails the VM, and recovery must destroy or explicitly reconcile that exact
+guest before retry. This is kernel control-plane evidence, not live WHP/KVM
+guest-interrupt evidence.

@@ -334,6 +334,8 @@ pub use vm_dispatch::{
     run_vm_once, run_vm_once_for_mmio,
 };
 pub use vm_interrupt::{
-    InterruptPolicy, VirtualBlockInterruptError, inject_virtual_block_interrupt,
-    inject_vm_interrupt,
+    InterruptPolicy, MicrovmInterfaceInterruptError, MicrovmInterfaceRequestInterrupt,
+    MicrovmInterfaceResponseInterrupt, VirtualBlockInterruptError,
+    deliver_microvm_interface_request_interrupt, deliver_microvm_interface_response_interrupt,
+    inject_virtual_block_interrupt, inject_vm_interrupt,
 };
