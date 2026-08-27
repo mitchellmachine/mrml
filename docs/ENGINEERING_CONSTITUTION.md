@@ -321,15 +321,9 @@ No claim—memory safety, complete revocation, CET/IBT, DMA isolation,
 fingerprint resistance, rollback protection, or prompt-injection containment—
 is promoted without corresponding evidence.
 
-## Precedence and inspiration
+## Precedence
 
 Future contributors and agents must consult this constitution before major
 architecture. If a proposal conflicts with it, identify the conflict, explain
 why the rule is insufficient, propose an explicit amendment, and do not bypass
 the rule silently. The constitution may evolve only deliberately.
-
-[EULOGY.md](../EULOGY.md) records Terry A. Davis and TempleOS as historical
-inspiration for whole-system coherence and understandability. It is not
-normative policy. TempleOS's conceptual directness does not override MRML's
-memory safety, capabilities, privilege separation, microkernel isolation,
-userspace services, VM compartments, or modern hardware protections.

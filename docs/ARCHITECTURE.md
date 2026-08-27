@@ -8,10 +8,7 @@ are normative in [SECURITY.md](SECURITY.md); dependency order is in
 [RECOVERY.md](RECOVERY.md); compiler direction is in
 [COMPILER.md](COMPILER.md). The normative cross-cutting engineering and
 complexity rules are in
-[ENGINEERING_CONSTITUTION.md](ENGINEERING_CONSTITUTION.md); historical
-inspiration in [EULOGY.md](../EULOGY.md) is not architecture policy. Relevant
-predecessors and deliberately bounded comparison claims are recorded in
-[HISTORY_AND_PRIOR_ART.md](HISTORY_AND_PRIOR_ART.md).
+[ENGINEERING_CONSTITUTION.md](ENGINEERING_CONSTITUTION.md).
 The native cross-vendor GPU object/security model, VirtualGPU priority, and
 physical-driver strategy are canonical under [gpu/](gpu/GPU_ARCHITECTURE.md).
 Quantitative RAM allocation, ownership, mapping, sharing, pinning, guest-memory,

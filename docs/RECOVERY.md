@@ -4,11 +4,9 @@ Use this procedure when prior conversations, agent memory, local notes, signing
 artifacts, or development context are unavailable. Git is authoritative.
 
 Read `docs/ENGINEERING_CONSTITUTION.md` before proposing major architecture. It
-is normative project policy. `EULOGY.md` records Terry A. Davis and TempleOS as
-historical inspiration for whole-system understandability, but it does not
-override MRML's security architecture. Preserve MRML's independent technical
-identity, memory safety, capabilities, isolation, userspace services, VM
-compartments, and modern hardware protection.
+is normative project policy. Preserve MRML's independent technical identity,
+memory safety, capabilities, isolation, userspace services, VM compartments,
+and modern hardware protection.
 
 Owner sovereignty is a hard constraint: security authenticates owner-selected
 policy and does not establish permanent vendor, publisher, provider, or verifier

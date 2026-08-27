@@ -21,8 +21,7 @@ IPC, device, or security code, read completely:
 Treat `docs/ENGINEERING_CONSTITUTION.md` as normative before introducing major
 architecture. Apply its lightweight complexity score to major subsystem
 proposals, not routine work. If a proposal conflicts, identify the conflict and
-propose an explicit amendment rather than bypassing the rule. `EULOGY.md` is
-historical inspiration only and never overrides MRML's security architecture.
+propose an explicit amendment rather than bypassing the rule.
 
 Owner sovereignty is a hard architectural constraint. Security authenticates
 and enforces owner-selected policy; it must not create superior permanent vendor,
