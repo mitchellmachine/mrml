@@ -2068,6 +2068,23 @@ tests (1,009 total). Raw/byte strings, escape decoding, literal deduplication,
 more than eight literals, more than 1,024 literal bytes, and general static data
 remain outside this checkpoint.
 
+### Zero-input return-lifetime elision checkpoint
+
+An elided reference return now requires at least one supported reference input
+from which Rust's lifetime-elision rules could derive the output lifetime. A
+function with only scalar inputs and `-> &str` fails closed as
+`UnsupportedLifetimeElision` before object emission, even when every returned
+value is a static string literal. Existing one-reference-input return forms
+remain supported by the bounded origin and outlives analysis.
+
+The exact ORACLE-0002 Rust 2024 toolchain rejected the independently authored
+zero-reference-input form with E0106 and accepted the parameter-backed controls.
+MRML rejects the invalid form for both ELF64 and COFF. Windows and Arch each
+passed 650 unit, 1 component, 10 conformance, and 349 replacement tests (1,010
+total). Multiple-reference-input elision, explicit named lifetimes, explicit
+`'static`, higher-ranked lifetimes, and general region solving remain outside
+this checkpoint and must fail closed where unsupported.
+
 ### Thirty-two-relocation object checkpoint
 
 The shared x86-64 object and runtime read-only-data contracts now admit at most

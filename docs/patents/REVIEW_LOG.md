@@ -8736,6 +8736,15 @@ provenance, storage, or runtime algorithm. Broader compiler completion remains
 partial; this technical screen is not a clearance or infringement conclusion
 and does not replace independent human dual review.
 
+# 2026-08-26 — Zero-input return-lifetime elision rejection
+
+**Result: NOT_TRIGGERED.** This increment adds a conventional signature
+validation check before the existing reference-origin and object paths. It
+introduces no new encoding, compression, optimization, ownership algorithm,
+provenance model, storage, or runtime mechanism. Broader compiler completion
+remains partial; this technical screen is not a clearance or infringement
+conclusion and does not replace independent human dual review.
+
 # 2026-08-26 — Thirty-two-entry x86-64 relocation bound
 
 **Result: NOT_TRIGGERED.** This increment increases an existing fixed array and

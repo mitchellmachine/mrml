@@ -58,7 +58,19 @@ oracle upgrade receives a new immutable record and differential classification
 against all prior accepted probes. Keep Cargo on edition 2024 until a newer
 named edition can be adopted through a pinned, workspace-wide migration.
 
-## Latest thirty-two-relocation object milestone
+## Latest zero-input return-lifetime elision milestone
+
+Commit `481281c7` rejects an elided reference return when no supported reference
+parameter can supply its output lifetime. The exact ORACLE-0002 nightly rejected
+the independently authored `fn(u8) -> &str` form with E0106; MRML now reports
+`UnsupportedLifetimeElision` before ELF64 or COFF emission. One-reference-input
+controls remain accepted. Windows and native Arch Linux WSL each passed 650
+library tests, 1 component probe, 10 conformance tests, and 349 replacement
+tests: 1,010 compiler tests per host. Multiple-input elision, named and
+`'static` lifetimes, higher-ranked lifetimes, and general regions remain outside
+this bounded checkpoint.
+
+### Preceding thirty-two-relocation object milestone
 
 Commit `78a7f771` raises both the runtime read-only relocation arena and shared
 x86-64 object validator from eight to 32 entries. A modern-Rust-compatible

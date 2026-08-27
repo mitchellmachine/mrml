@@ -5910,3 +5910,14 @@ authored source. Windows and native Arch Linux WSL each passed 650 library
 tests, 1 component probe, 10 conformance tests, and 349 replacement tests: 1,010
 compiler tests per host. Dynamic allocation, unbounded relocation growth,
 general static data, and complete linker semantics remain outside the claim.
+
+The zero-input return-lifetime elision milestone at `481281c7` rejects an
+elided reference return when the supported signature has no reference input to
+supply the output lifetime. The exact ORACLE-0002 nightly rejected the
+independently authored `fn(u8) -> &str` source with E0106. MRML reports
+`UnsupportedLifetimeElision` before either ELF64 or COFF emission, while its
+one-reference-input controls remain accepted. Windows and native Arch Linux WSL
+each passed 650 library tests, 1 component probe, 10 conformance tests, and 349
+replacement tests: 1,010 compiler tests per host. Multiple-input elision, named
+and `'static` lifetimes, higher-ranked lifetimes, and general regions remain
+outside the claim.

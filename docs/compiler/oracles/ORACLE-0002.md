@@ -1161,3 +1161,12 @@ black-box evidence for that exact modern lifetime-elided source shape only; it
 does not establish an object relocation count, implementation strategy, linker
 behavior, or unbounded literal support. The temporary source and metadata were
 removed.
+
+An independently authored Rust 2024 metadata-only control against this exact
+toolchain and commit rejected a function with only a `u8` input and an elided
+`&str` return with E0106, even though every returned value was a static string
+literal. Adding one `&str` input made the corresponding conditional forms
+eligible for lifetime elision. This is black-box evidence for those exact
+signature shapes only; it does not establish named, `'static`, higher-ranked,
+or general inferred lifetime semantics. Temporary sources and metadata were
+removed.
