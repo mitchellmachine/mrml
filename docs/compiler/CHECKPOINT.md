@@ -58,7 +58,19 @@ oracle upgrade receives a new immutable record and differential classification
 against all prior accepted probes. Keep Cargo on edition 2024 until a newer
 named edition can be adopted through a pinned, workspace-wide migration.
 
-## Latest runtime string-literal object milestone
+## Latest cooked string-escape decoding milestone
+
+Commit `ba637ea5` decodes ordinary cooked string literal escapes into their
+runtime UTF-8 bytes under the existing 1,024-byte bound. It covers simple
+escapes, ASCII `\\xNN`, Unicode `\\u{...}` scalar validation, and line
+continuations. Exact object tests cover newline, ASCII hex, and a four-byte
+Unicode scalar; unknown escapes, non-ASCII hex bytes, surrogates, malformed
+forms, capacity overflow, and excess relocations fail closed. The exact
+ORACLE-0002 nightly accepts the escaped conditional companion. Windows and
+native Arch Linux WSL each passed 649 library tests, 1 component probe, 10
+conformance tests, and 349 replacement tests: 1,009 compiler tests per host.
+
+### Preceding runtime string-literal object milestone
 
 Commit `52b1a941` splits bare code from a bounded relocatable runtime result,
 copies simple unescaped UTF-8 string literal bytes into the proven internal
@@ -69,7 +81,8 @@ The exact ORACLE-0002 nightly accepts both the plain and escaped independently
 authored conditional forms; MRML accepts the plain form and rejects escapes
 pending exact decoding. Windows and native Arch Linux WSL each passed 649
 library tests, 1 component probe, 10 conformance tests, and 349 replacement
-tests: 1,009 compiler tests per host.
+tests: 1,009 compiler tests per host. This preceding increment supported only
+unescaped literals; commit `ba637ea5` adds bounded cooked escape decoding.
 
 ### Preceding bounded read-only object-data milestone
 

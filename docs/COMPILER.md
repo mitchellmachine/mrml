@@ -2030,6 +2030,23 @@ fat-reference assignment remains fail-closed pending its distinct branch value-
 materialization/origin path; slices, mutable `str`, aggregates, and general fat-
 pointer semantics are not claimed.
 
+### Cooked string-literal escape checkpoint
+
+Ordinary cooked string literals now decode simple escapes (`\\n`, `\\r`,
+`\\t`, `\\\\`, `\\0`, escaped quotes), ASCII `\\xNN`, Unicode `\\u{...}`
+with underscore-tolerant one-to-six-digit scalar validation, and LF/CRLF line
+continuations. Direct UTF-8 source bytes remain unchanged. Decoded bytes enter
+the existing bounded read-only-data buffer, so expansion cannot exceed 1,024
+bytes and every emitted literal still consumes one of eight typed relocations.
+
+Exact ELF64/COFF probes cover a newline, `\\x42`, and `\\u{1F642}` producing
+the expected one-, two-, and four-byte results. Controls reject an unknown
+escape, non-ASCII `\\xFF`, and surrogate `\\u{D800}`. The exact ORACLE-0002
+nightly accepts the escaped conditional form. Windows and Arch each passed 649
+unit, 1 component, 10 conformance, and 349 replacement tests (1,009 total).
+Raw strings, byte strings, C strings, literal pooling, and general static data
+remain outside this checkpoint.
+
 ### Runtime string-literal object checkpoint
 
 Ordinary x86-64 code generation now has a distinct bounded relocatable result

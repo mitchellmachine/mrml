@@ -2551,8 +2551,9 @@ evaluates a runtime message after the checked receiver, and uses the same
 bounded trap because this compiler does not embed diagnostic formatting in
 generated freestanding objects. String literals now have their own expression
 node and type as immutable `&str`. Conditional delayed initialization may now
-select a simple unescaped UTF-8 literal through bounded internal read-only-data
-relocations; other runtime literal uses and escapes remain fail-closed.
+select a cooked UTF-8 literal through bounded internal read-only-data
+relocations, including validated simple, ASCII hex, Unicode scalar, and line-
+continuation escapes.
 Unsafe `Option::unwrap_unchecked` returns the producer's candidate directly
 without testing its validity flag; safe functions reject the call, and callers
 must uphold Rust's `Some` precondition. These consumers share one
@@ -5854,5 +5855,16 @@ exact `fallback` bytes and section name in both formats. The exact ORACLE-0002
 nightly accepted both plain and escaped companions; MRML rejects escapes until
 it can decode their runtime bytes exactly. Windows and native Arch Linux WSL
 each passed 649 library tests, 1 component probe, 10 conformance tests, and 349
-replacement tests: 1,009 compiler tests per host. Raw/byte strings, escape
-decoding, pooling, larger capacities, and general static data are not claimed.
+replacement tests: 1,009 compiler tests per host. That increment did not claim
+escape decoding, raw/byte strings, pooling, larger capacities, or general static
+data.
+
+The cooked string-escape milestone at `ba637ea5` replaces source-spelling copies
+with bounded runtime-byte decoding for simple escapes, ASCII `\\xNN`, Unicode
+`\\u{...}` scalars, and LF/CRLF continuations. Direct UTF-8 bytes pass through
+unchanged. Exact object probes cover newline, ASCII hex, and a four-byte Unicode
+scalar; unknown escapes, non-ASCII hex, and surrogate controls reject. Windows
+and native Arch Linux WSL each passed 649 library tests, 1 component probe, 10
+conformance tests, and 349 replacement tests: 1,009 compiler tests per host.
+Raw strings, byte/C strings, pooling, larger capacities, and general static data
+remain outside the claim.

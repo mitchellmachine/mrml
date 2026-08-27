@@ -8710,6 +8710,15 @@ runtime mechanism. Broader compiler completion remains partial; this technical
 screen is not a clearance or infringement conclusion and does not replace
 independent human dual review.
 
+# 2026-08-26 — Cooked Rust string-literal escape decoding
+
+**Result: NOT_TRIGGERED.** This increment implements conventional Rust source
+escape decoding and Unicode scalar-to-UTF-8 encoding with explicit bounds and
+validation. It introduces no new compression, optimization, ownership,
+provenance, storage, or runtime algorithm. Broader compiler completion remains
+partial; this technical screen is not a clearance or infringement conclusion
+and does not replace independent human dual review.
+
 # 2026-08-26 — Runtime string-literal object emission
 
 **Result: NOT_TRIGGERED.** This increment copies literal UTF-8 bytes into the
