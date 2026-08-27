@@ -10972,37 +10972,41 @@ mod tests {
 
     #[test]
     fn runtime_body_facts_retain_direct_subslice_index_borrows() {
-        let source = "#[unsafe(no_mangle)] pub extern \"C\" fn value(input: &mut [u32; 4], start: usize, index: usize) -> u32 { let selected: &mut u32 = &mut input[start..][index]; *selected += 7; *selected }";
-        let module = Parser::new(source).parse_module::<1, 4>().unwrap();
-        let Some(Item::Function(function)) = module.items()[0] else {
-            panic!("expected function")
-        };
-        let body = function.parse_body::<4>().unwrap();
-        let resolver = NoConstants;
-        let mut facts = RuntimeBodyFacts::EMPTY;
-        preanalyze_runtime_body_declarations::<_, 4, 64>(
-            &function,
-            &resolver,
-            &body,
-            "u32",
-            function.body_expression_span.start,
-            &mut facts,
-        )
-        .unwrap();
+        for source in [
+            "#[unsafe(no_mangle)] pub extern \"C\" fn value(input: &mut [u32; 4], start: usize, index: usize) -> u32 { let selected: &mut u32 = &mut input[start..][index]; *selected += 7; *selected }",
+            "#[unsafe(no_mangle)] pub extern \"C\" fn value(input: &mut [u32], start: usize, index: usize) -> u32 { let selected: &mut u32 = &mut input[start..][index]; *selected += 7; *selected }",
+        ] {
+            let module = Parser::new(source).parse_module::<1, 4>().unwrap();
+            let Some(Item::Function(function)) = module.items()[0] else {
+                panic!("expected function")
+            };
+            let body = function.parse_body::<4>().unwrap();
+            let resolver = NoConstants;
+            let mut facts = RuntimeBodyFacts::EMPTY;
+            preanalyze_runtime_body_declarations::<_, 4, 64>(
+                &function,
+                &resolver,
+                &body,
+                "u32",
+                function.body_expression_span.start,
+                &mut facts,
+            )
+            .unwrap();
 
-        let mut nested = RuntimePlaceProjections::single(RuntimePlaceProjection::Subslice);
-        nested.push(RuntimePlaceProjection::Index).unwrap();
-        let matching = facts.assignment_reads[..facts.assignment_read_count]
-            .iter()
-            .flatten()
-            .filter(|fact| {
-                fact.base == RuntimePlaceIdentity::Parameter(0) && fact.projections == nested
-            })
-            .count();
-        assert_eq!(matching, 1);
+            let mut nested = RuntimePlaceProjections::single(RuntimePlaceProjection::Subslice);
+            nested.push(RuntimePlaceProjection::Index).unwrap();
+            let matching = facts.assignment_reads[..facts.assignment_read_count]
+                .iter()
+                .flatten()
+                .filter(|fact| {
+                    fact.base == RuntimePlaceIdentity::Parameter(0) && fact.projections == nested
+                })
+                .count();
+            assert_eq!(matching, 1);
 
-        for abi in [X86_64Abi::Windows, X86_64Abi::SystemV] {
-            compile_x86_64_function::<_, 8192, 4, 64>(&function, &resolver, abi).unwrap();
+            for abi in [X86_64Abi::Windows, X86_64Abi::SystemV] {
+                compile_x86_64_function::<_, 8192, 4, 64>(&function, &resolver, abi).unwrap();
+            }
         }
     }
 

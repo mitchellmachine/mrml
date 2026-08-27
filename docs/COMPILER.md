@@ -901,12 +901,15 @@ semantic probe mutates three distinct selected elements and verifies every
 unselected element remains unchanged. Direct nested-place local initialization
 now records one canonical combined borrow fact after its ordered range-bound
 reads and before its final index read; emission consumes that same fact once.
-Direct and helper-inlined semantic probes produce identical mutations. Repeated
-subslice chains and other deeper shapes remain unsupported. This is one exact
-nested non-tuple projection, not general place typing, index-sensitive aliasing,
-or region inference. Windows and Arch each passed 658 unit, 1 component-
-interface, 10 conformance, 351 replacement, and 10 semantic-execution tests
-(1,030 total).
+Direct and helper-inlined semantic probes produce identical mutations. The
+direct probe independently covers both fixed-array and runtime-slice roots,
+including Windows' indirect two-word slice-parameter ABI and System V's direct
+two-word ABI. Repeated subslice chains and other deeper shapes remain
+unsupported. This is one exact nested non-tuple projection, not general place
+typing, index-sensitive aliasing, or region inference. Windows passed 658 unit,
+1 component-interface, 10 conformance, 351 replacement, and 11 semantic-
+execution tests (1,031 total); the runtime-slice extension has not yet been run
+on Arch.
 
 The semantic harness now isolates both failure edges of that composed place.
 One probe supplies a range start beyond the four-element owner; another creates
@@ -918,6 +921,10 @@ edges only; it is not panic-unwind, source-level panic diagnostic, kernel/VMM,
 or physical-machine evidence. Windows and Arch each passed 658 unit, 1
 component-interface, 10 conformance, 351 replacement, and 11 semantic-execution
 tests (1,031 total).
+
+Patent review: `NOT_TRIGGERED`; this increment adds execution coverage for an
+already implemented bounded place and ABI contract rather than a new mechanism.
+See [`patents/REVIEW_LOG.md`](patents/REVIEW_LOG.md).
 
 Projected array-element and slice-subslice origins now survive one direct local
 alias in the callee. An explicit alias annotation must independently equal the
