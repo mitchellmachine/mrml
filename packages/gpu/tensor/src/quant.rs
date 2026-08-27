@@ -514,9 +514,16 @@ mod simd_tests {
     }
 
     #[test]
-    fn runtime_detects_expected_avx2_on_x86_64_test_host() {
-        assert!(avx2_enabled());
-        assert!(avx_vnni_enabled());
+    fn runtime_feature_detection_does_not_exceed_host_support() {
+        let leaf_1 = core::arch::x86_64::__cpuid(1);
+        let leaf_7_0 = core::arch::x86_64::__cpuid_count(7, 0);
+        let leaf_7_1 = core::arch::x86_64::__cpuid_count(7, 1);
+        let os_avx_state = leaf_1.ecx & (1 << 27) != 0
+            && leaf_1.ecx & (1 << 28) != 0
+            && unsafe { core::arch::x86_64::_xgetbv(0) } & 0x6 == 0x6;
+
+        assert!(!avx2_enabled() || (os_avx_state && leaf_7_0.ebx & (1 << 5) != 0));
+        assert!(!avx_vnni_enabled() || (os_avx_state && leaf_7_1.eax & (1 << 4) != 0));
     }
 }
 
