@@ -666,6 +666,16 @@ canceling both exact routes leaves it empty. Configuration passes 52 tests on
 Windows. No backend endpoint was constructed, so service-loop invocation and
 multi-domain backend construction/cleanup remain **PLANNED**.
 
+The hosted recovered-control-plane prerequisite now exact-binds a two-package
+authenticated release to two independently capability-readable component
+policies and two distinct domain identities. It refuses to return the joined
+owner for shared or unexpected assignments, and runtime authorization remains
+unavailable while both routes are absent. Configuration passes 53 tests on
+Windows and Arch Linux; unchanged runner suites pass 12 on WHP and 13 on KVM.
+Backend construction, execution, and cleanup of both distinct guests remain
+**PLANNED**; the live single-guest path is deliberately unchanged and is not
+complete-system Total evidence.
+
 The existing userspace block recovery loop is now reproducibly selectable
 through the canonical build frontend. The service image's
 `block_service_loop` profile and bootloader/kernel image's

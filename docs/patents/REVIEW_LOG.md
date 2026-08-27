@@ -8771,3 +8771,15 @@ and idle completion in that exact order, so partial success fails closed. This a
 virtualization, placement, scheduling, cryptographic, or isolation algorithm.
 The broader adaptive-placement and Total MicroVM review remains `TRIGGERED`;
 this technical screen is not patent clearance and does not clear AHCI work.
+
+# 2026-08-26 — Recovered two-domain policy assignment prerequisite
+
+Patent review: **NOT_TRIGGERED** for this bounded control-plane increment. It
+uses existing authenticated release enumeration, capability-readable persisted
+settings, exact identity comparison, fixed-capacity assignment, and fail-closed
+runtime finalization to require two release members to name different domains.
+It adds no placement algorithm, VM construction, scheduler, interface transport,
+device protocol, cryptographic primitive, or data-plane mechanism. The broader
+adaptive-placement and Total MicroVM review remains **TRIGGERED**, including the
+planned construction and lifecycle of both backend guests. This technical
+screen is not legal advice or patent clearance.

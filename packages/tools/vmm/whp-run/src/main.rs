@@ -101,7 +101,7 @@ struct ConfiguredTotalServicePolicy {
 #[cfg(target_os = "windows")]
 enum WhpTotalAdmission {
     Standalone(IsolationAdmissionTable<2>),
-    Recovered(RecoveredDeploymentTotalControlPlane<1, 3, 2, 1, 2>),
+    Recovered(RecoveredDeploymentTotalControlPlane<1, 4, 2, 1, 2>),
 }
 
 #[cfg(target_os = "windows")]
@@ -2949,7 +2949,7 @@ fn application_main() -> Result<()> {
         (None, None) => None,
         _ => return Err(anyhow!("WHP Total policy/admission ownership mismatch")),
     };
-    let mut installed_total_runtime: Option<RecoveredDeploymentTotalRuntime<1, 3, 2, 1, 2>> = None;
+    let mut installed_total_runtime: Option<RecoveredDeploymentTotalRuntime<1, 4, 2, 1, 2>> = None;
     let mut component_cpu = if component_service_mode {
         let mut capabilities = CapabilitySpace::<1>::new();
         let mut budgets = CpuBudgetTable::<1, 1>::new(0x1a53)

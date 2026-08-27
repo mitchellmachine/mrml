@@ -7700,11 +7700,8 @@ mod tests {
         plan.seal().unwrap()
     }
 
-    fn activated_two_domain_release(
-        first_domain: ObjectId,
-        second_domain: ObjectId,
-        policy_generation: u64,
-    ) -> ActivatedReleaseTotalMicrovmInventory<2> {
+    fn two_domain_release_records() -> (std::vec::Vec<u8>, usize, [u8; 64], ActivatedSystemRelease)
+    {
         let first_digest = [0x44; 64];
         let second_digest = [0x45; 64];
         let generation_records = [
@@ -7814,6 +7811,15 @@ mod tests {
         )
         .unwrap();
         let active = ActivatedSystemRelease::new(active_generation, parsed.identity());
+        (release, release_length, key_id, active)
+    }
+
+    fn activated_two_domain_release(
+        first_domain: ObjectId,
+        second_domain: ObjectId,
+        policy_generation: u64,
+    ) -> ActivatedReleaseTotalMicrovmInventory<2> {
+        let (release, release_length, key_id, active) = two_domain_release_records();
         let mut plan = RuntimeDomainAssignmentPlan::<2>::new(
             &release[..release_length],
             &key_id,
@@ -8023,6 +8029,47 @@ mod tests {
             ))
         ));
     }
+
+    #[test]
+    fn hosted_recovery_distinct_policy_binds_every_release_member_to_its_own_domain() {
+        let (release, release_length, key_id, _) = two_domain_release_records();
+        let mut release_output = [0; mrml_package_format::MAX_SYSTEM_RELEASE_BYTES];
+        let (handoff_bytes, handoff_length) = hosted_total_handoff(8, Some([0x51; 16]), 14);
+        let handoff = BootHandoff::decode(&handoff_bytes[..handoff_length], |_| {}).unwrap();
+        // SAFETY: this is the helper's private controlled hosted fixture. It
+        // establishes no owner presence, durable recovery, or backend guest.
+        let total = unsafe {
+            hosted_recovery_probe::recover_distinct_total_control_plane(
+                &handoff,
+                &release[..release_length],
+                &key_id,
+                &mut release_output,
+            )
+        }
+        .unwrap();
+        let entries: std::vec::Vec<_> = total
+            .installed_admission()
+            .release()
+            .release()
+            .entries()
+            .collect();
+        assert_eq!(entries.len(), 2);
+        assert_eq!(
+            entries[0].domain(),
+            hosted_recovery_probe::HOSTED_TOTAL_COMPONENT_DOMAIN
+        );
+        assert_eq!(
+            entries[1].domain(),
+            hosted_recovery_probe::HOSTED_TOTAL_SECONDARY_DOMAIN
+        );
+        assert_ne!(entries[0].domain(), entries[1].domain());
+        assert_eq!(total.admission().running().count(), 0);
+        assert!(matches!(
+            total.authorize_runtime(),
+            Err(mrml_kernel::TotalMicrovmRuntimeError::RequiredDomainMissing)
+        ));
+    }
+
     const SYSTEM_GENERATION: u64 = 108;
 
     type TestPolicySubstrate = AccountedPolicyServiceSubstrate<2, 4, 2, 3, 2>;

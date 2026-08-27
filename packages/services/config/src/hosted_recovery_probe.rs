@@ -58,6 +58,7 @@ const CHECKPOINT_HANDLE_GENERATION: u32 = 2;
 /// component pair. Both runners consume this value rather than restating a
 /// detached launch identity.
 pub const HOSTED_TOTAL_COMPONENT_DOMAIN: ObjectId = ObjectId(0x5a49_4d5f_5a53_5444);
+pub const HOSTED_TOTAL_SECONDARY_DOMAIN: ObjectId = ObjectId(0x5a49_4d5f_4445_504c);
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum HostedRecoveryProbeError {
@@ -903,9 +904,60 @@ pub unsafe fn recover_total_control_plane<const DOMAINS: usize>(
     expected_release_key: &[u8; 64],
     release_output: &mut [u8],
 ) -> Result<
-    RecoveredDeploymentTotalControlPlane<1, 3, 2, 1, DOMAINS>,
+    RecoveredDeploymentTotalControlPlane<1, 4, 2, 1, DOMAINS>,
     HostedRecoveryProbeBuildError<()>,
 > {
+    unsafe {
+        recover_total_control_plane_with_domain_policy::<DOMAINS>(
+            handoff,
+            release_bytes,
+            expected_release_key,
+            release_output,
+            false,
+        )
+    }
+}
+
+/// Builds the same retained hosted recovery owner while requiring the two
+/// authenticated release members to bind to distinct policy-owned domains.
+/// This is a control-plane prerequisite only; callers must still construct,
+/// commit, execute, and retire both backend guests before claiming Total mode.
+///
+/// # Safety
+///
+/// The caller must obey the controlled-hosted-fixture restrictions documented
+/// by [`recover_total_control_plane`].
+pub unsafe fn recover_distinct_total_control_plane(
+    handoff: &BootHandoff,
+    release_bytes: &[u8],
+    expected_release_key: &[u8; 64],
+    release_output: &mut [u8],
+) -> Result<RecoveredDeploymentTotalControlPlane<1, 4, 2, 1, 2>, HostedRecoveryProbeBuildError<()>>
+{
+    unsafe {
+        recover_total_control_plane_with_domain_policy::<2>(
+            handoff,
+            release_bytes,
+            expected_release_key,
+            release_output,
+            true,
+        )
+    }
+}
+
+unsafe fn recover_total_control_plane_with_domain_policy<const DOMAINS: usize>(
+    handoff: &BootHandoff,
+    release_bytes: &[u8],
+    expected_release_key: &[u8; 64],
+    release_output: &mut [u8],
+    distinct_domains: bool,
+) -> Result<
+    RecoveredDeploymentTotalControlPlane<1, 4, 2, 1, DOMAINS>,
+    HostedRecoveryProbeBuildError<()>,
+> {
+    if DOMAINS == 0 || DOMAINS > 2 {
+        return Err(HostedRecoveryProbeError::Admission.into());
+    }
     let recovery = handoff
         .recovery_state()
         .ok_or(HostedRecoveryProbeError::MissingRecoveryState)
@@ -1009,16 +1061,23 @@ pub unsafe fn recover_total_control_plane<const DOMAINS: usize>(
         mrml_kernel::IsolationPlacement::NativeService,
     )
     .map_err(|_| HostedRecoveryProbeError::Configuration)?;
-    let mut configuration = ConfigurationService::<3, 2>::new(
+    let secondary_component = IsolationPolicySetting::component(
+        SettingId::new(4).unwrap(),
+        HOSTED_TOTAL_SECONDARY_DOMAIN,
+        mrml_kernel::IsolationPlacement::NativeService,
+    )
+    .map_err(|_| HostedRecoveryProbeError::Configuration)?;
+    let mut configuration = ConfigurationService::<4, 2>::new(
         root_object,
         &[
             restart_schema,
             system.schema().unwrap(),
             component.schema().unwrap(),
+            secondary_component.schema().unwrap(),
         ],
     )
     .map_err(|_| HostedRecoveryProbeError::Configuration)?;
-    let mut capabilities = CapabilitySpace::<4>::new();
+    let mut capabilities = CapabilitySpace::<5>::new();
     let root = capabilities
         .insert(root_object, Rights::CONTROL.union(Rights::READ))
         .map_err(|_| HostedRecoveryProbeError::Configuration)?;
@@ -1031,11 +1090,17 @@ pub unsafe fn recover_total_control_plane<const DOMAINS: usize>(
     let component_access = capabilities
         .insert(component.object(), Rights::READ.union(Rights::WRITE))
         .map_err(|_| HostedRecoveryProbeError::Configuration)?;
+    let secondary_component_access = capabilities
+        .insert(
+            secondary_component.object(),
+            Rights::READ.union(Rights::WRITE),
+        )
+        .map_err(|_| HostedRecoveryProbeError::Configuration)?;
     let restart = PersistedRestartPolicy::new(service_object, 3, 5, 20)
         .map_err(|_| HostedRecoveryProbeError::Configuration)?;
     let mut encoded_restart = [0; PERSISTED_RESTART_POLICY_BYTES];
     restart.encode(&mut encoded_restart);
-    let mut update = ConfigTransaction::<3>::new(0);
+    let mut update = ConfigTransaction::<4>::new(0);
     update
         .push(ConfigUpdate::new(
             restart_setting,
@@ -1055,6 +1120,13 @@ pub unsafe fn recover_total_control_plane<const DOMAINS: usize>(
         .stage(
             &mut update,
             component_access,
+            OwnerIsolationSelection::Native,
+        )
+        .map_err(|_| HostedRecoveryProbeError::Configuration)?;
+    secondary_component
+        .stage(
+            &mut update,
+            secondary_component_access,
             OwnerIsolationSelection::Native,
         )
         .map_err(|_| HostedRecoveryProbeError::Configuration)?;
@@ -1164,7 +1236,7 @@ pub unsafe fn recover_total_control_plane<const DOMAINS: usize>(
     let mut supervisor = ServiceSupervisor::<1>::new();
     let mut recovered_bytes = [0; BLOCK_BYTES];
     let configuration_validator =
-        StableConfigurationRecoveryValidator::<3, 2, _, _, _>::new_selected(
+        StableConfigurationRecoveryValidator::<4, 2, _, _, _>::new_selected(
             selected.configuration(),
             0,
             principal(),
@@ -1251,17 +1323,22 @@ pub unsafe fn recover_total_control_plane<const DOMAINS: usize>(
         return Err(HostedRecoveryProbeError::Deployment.into());
     }
     let bindings: [RuntimeDomainPolicyBinding<'_>; DOMAINS] = core::array::from_fn(|index| {
+        let (setting, access) = if distinct_domains && index == 1 {
+            (secondary_component, secondary_component_access)
+        } else {
+            (component, component_access)
+        };
         RuntimeDomainPolicyBinding::new(
             deployment
                 .assignment()
                 .package_at(index)
                 .expect("complete hosted runtime inventory"),
-            component,
-            component_access,
+            setting,
+            access,
         )
         .expect("validated hosted component binding")
     });
-    recovered
+    let total = recovered
         .build_recovered_deployment_total_control_plane(
             reachable.installed(),
             &capabilities,
@@ -1272,7 +1349,20 @@ pub unsafe fn recover_total_control_plane<const DOMAINS: usize>(
             deployment,
             &bindings,
         )
-        .map_err(|_| HostedRecoveryProbeError::Admission.into())
+        .map_err(|_| HostedRecoveryProbeError::Admission)?;
+    if distinct_domains {
+        let mut entries = total.installed_admission().release().release().entries();
+        let first = entries.next().ok_or(HostedRecoveryProbeError::Admission)?;
+        let second = entries.next().ok_or(HostedRecoveryProbeError::Admission)?;
+        if entries.next().is_some()
+            || first.domain() == second.domain()
+            || first.domain() != HOSTED_TOTAL_COMPONENT_DOMAIN
+            || second.domain() != HOSTED_TOTAL_SECONDARY_DOMAIN
+        {
+            return Err(HostedRecoveryProbeError::Admission.into());
+        }
+    }
+    Ok(total)
 }
 
 #[cfg(test)]

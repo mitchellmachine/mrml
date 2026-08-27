@@ -1279,6 +1279,18 @@ tests on Windows. KVM source uses the identical path, but its Linux build is
 unavailable here because `cross_host_rust_target` is absent. The probe remains
 controlled hosted evidence, not production service-loop or full-system proof.
 
+The hosted recovery prerequisite now also has a separate fail-closed
+distinct-domain path for an exact two-member authenticated release. Recovery
+persists two independently capability-readable component policies, assigns the
+configuration and deployment packages to different non-authorizing domain
+identities, and rejects shared or unexpected domain membership before returning
+the joined control-plane owner. With neither route committed, runtime
+authorization returns `RequiredDomainMissing`. Configuration passes 53 tests on
+Windows and Arch Linux; the unchanged live runners pass 12 WHP and 13 KVM tests.
+Neither runner invokes this distinct path yet: constructing, executing, and
+retiring both backend guests remains **PLANNED**, so prior single-guest evidence
+does not prove complete-system Total isolation.
+
 The installed production prerequisite now has a **PARTIALLY IMPLEMENTED**
 four-file stable-root selection. Configuration, authority checkpoint,
 deployment checkpoint, and activated SystemRelease must be distinct reachable
