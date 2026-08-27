@@ -5976,3 +5976,21 @@ this classifier: cooked/raw static byte slices use the two-word read-only-data
 path, while an explicitly static `&u32` uses the thin-reference path. An
 ordinary `&u32` cannot be narrowed to `&'static u32`. Exact ORACLE-0002 and
 MRML ELF64/COFF results agree on all three controls; host totals remain 1,021.
+
+The distinct C-string representation milestone at `975b7041` recognizes cooked
+`c"..."` and raw `cr#"..."#` as `CString` tokens and expression nodes rather
+than string or byte-string aliases. Exhaustive consumers either preserve that
+identity or reject it; constant evaluation, IR lowering, runtime typing, and
+emission cannot silently reinterpret the value. Bare values fail with
+`UnsupportedCStringLiteral` before object emission.
+
+The bounded C-string pointer milestone at `d06a8fe9` admits exact `.as_ptr()`
+without claiming general `&CStr` layout or ABI support. It decodes cooked/raw
+content in the fixed 1,024-byte scratch buffer, rejects interior NUL before
+interning, appends one terminator, and emits a typed `*const i8` via the existing
+checked read-only relocation path. ELF64 and COFF objects contain the exact
+content plus terminator. Exact ORACLE-0002 probes accepted cooked/raw C strings
+and rejected the interior-NUL control on both hosts. Windows and Arch each
+passed 656 library, 1 component-interface, 10 conformance, 351 replacement, and
+6 semantic-execution tests: 1,024 per host. General `&CStr` transport, methods,
+locals, arguments, conditionals, and non-x86 `c_char` targets remain unsupported.

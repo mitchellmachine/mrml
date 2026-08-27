@@ -1199,3 +1199,13 @@ This is black-box evidence for those exact signature and return forms only; it
 does not establish named lifetime inference, general lifetime subtyping,
 higher-ranked lifetimes, or an implementation strategy. Temporary source and
 metadata files were removed.
+
+An independently authored Rust 2024 metadata-only C-string set against this
+exact toolchain and commit accepted cooked `c"hello\n"` and raw
+`cr##"raw\n"#text"##` values returned as `&'static core::ffi::CStr`. A cooked
+literal containing `\0` failed because C string literals do not support interior
+null characters. Windows gnullvm and native Arch Linux produced the same
+accept/reject results. This is black-box evidence for those exact literal and
+terminator rules only; it does not establish `CStr` ABI/layout, an implementation
+strategy, pointer emission, other methods, or foreign-platform `c_char`
+semantics. Temporary source and metadata files were removed.

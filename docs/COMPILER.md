@@ -2068,6 +2068,21 @@ tests (1,009 total). Raw/byte strings, escape decoding, literal deduplication,
 more than eight literals, more than 1,024 literal bytes, and general static data
 remain outside this checkpoint.
 
+### Bounded C-string pointer checkpoint
+
+Cooked `c"..."` and raw `cr#"..."#` literals now have distinct token and
+expression identity and cannot enter scalar const evaluation or masquerade as
+`str`/byte slices. Bare C-string values fail as `UnsupportedCStringLiteral`.
+The exact `.as_ptr()` form decodes through the bounded read-only-data path,
+rejects an interior NUL before interning, appends exactly one terminator, and
+returns a typed `*const i8` through a checked ELF64/COFF relocation. The exact
+ORACLE-0002 toolchain accepted independently authored cooked/raw `&CStr` forms
+and rejected an interior NUL on both hosts. Windows and Arch each passed 656
+unit, 1 component, 10 conformance, 351 replacement, and 6 semantic-execution
+tests (1,024 total). General `&CStr` ABI transport, other methods, locals,
+arguments, conditionals, and platform-varying `c_char` targets remain outside
+this checkpoint.
+
 ### Bounded explicit-static reference checkpoint
 
 Exact `&'static` reference spelling is now recognized for the existing bounded

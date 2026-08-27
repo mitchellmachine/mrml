@@ -58,7 +58,22 @@ oracle upgrade receives a new immutable record and differential classification
 against all prior accepted probes. Keep Cargo on edition 2024 until a newer
 named edition can be adopted through a pinned, workspace-wide migration.
 
-## Latest bounded explicit-static reference milestone
+## Latest bounded C-string pointer milestone
+
+Commit `975b7041` introduces distinct cooked/raw C-string tokens and expressions
+and threads them exhaustively through constant, IR, semantic, analysis, and
+emission consumers with `UnsupportedCStringLiteral` as the fail-closed boundary.
+Commit `d06a8fe9` admits only exact `.as_ptr()`: bounded decoding rejects an
+interior NUL before object-data mutation, appends one terminator, and emits a
+checked ELF64/COFF relocation with type `*const i8`. Exact ORACLE-0002 probes
+accepted cooked/raw C strings and rejected an interior NUL on Windows and Arch.
+Both hosts passed 656 library, 1 component-interface, 10 conformance, 351
+replacement, and 6 semantic-execution tests: 1,024 per host. General `&CStr`
+transport and methods remain unsupported.
+
+Patent review: **NOT_TRIGGERED**; see `docs/patents/REVIEW_LOG.md`.
+
+### Preceding bounded explicit-static reference milestone
 
 Commit `d0983d5e` recognizes exact `&'static` spelling for the existing bounded
 reference targets. Static string literals and explicitly static parameters can

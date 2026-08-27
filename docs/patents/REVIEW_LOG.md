@@ -8973,3 +8973,12 @@ checking of explicit Rust lifetime spelling. They introduce no production
 loader, novel code-generation algorithm, cryptographic mechanism, compression,
 or new runtime security protocol. This technical screen is not legal advice or
 patent clearance.
+
+# 2026-08-26 — Bounded C-string representation and pointer emission
+
+Patent review: **NOT_TRIGGERED**. The compiler uses conventional distinct token
+and enum representation, bounded escape decoding, interior-NUL validation,
+terminator append, byte-sequence interning, and existing checked PC-relative
+object relocations. It adds no novel encoding, compression, cryptographic
+mechanism, foreign-function protocol, or production loader. This technical
+screen is not legal advice or patent clearance.
