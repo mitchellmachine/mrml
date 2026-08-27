@@ -2068,6 +2068,23 @@ tests (1,009 total). Raw/byte strings, escape decoding, literal deduplication,
 more than eight literals, more than 1,024 literal bytes, and general static data
 remain outside this checkpoint.
 
+### Bounded decoded string-literal pooling checkpoint
+
+Cooked and raw string literals now decode into a fixed 1,024-byte scratch
+buffer before the read-only arena changes. The emitter deterministically reuses
+the first existing byte sequence with identical runtime contents, including
+equivalent cooked and raw source spellings, while retaining a separate checked
+relocation for each use. New bytes still require checked capacity and
+unsupported decoding still fails before object state changes.
+
+An end-to-end capacity control selects between two differently spelled 640-byte
+literals. ELF64 and COFF both compile within the 1,024-byte arena only because
+the second decoded value reuses the first. Windows and Arch each passed 650
+unit, 1 component, 10 conformance, and 349 replacement tests (1,010 total).
+This is deterministic bounded byte-sequence reuse, not an address-identity
+guarantee, general constant merging, larger data or relocation capacities, or
+general static data.
+
 ### Bounded raw string-literal checkpoint
 
 Rust raw string literals with zero through 255 delimiter hashes now tokenize as

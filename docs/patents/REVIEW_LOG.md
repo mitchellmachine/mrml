@@ -8736,6 +8736,15 @@ provenance, storage, or runtime algorithm. Broader compiler completion remains
 partial; this technical screen is not a clearance or infringement conclusion
 and does not replace independent human dual review.
 
+# 2026-08-26 — Bounded decoded string-literal pooling
+
+**Result: NOT_TRIGGERED.** This increment uses a conventional fixed scratch
+buffer and linear exact-byte search to reuse already emitted read-only literal
+bytes. It introduces no new encoding, compression, optimization family,
+ownership, provenance, storage, or runtime algorithm. Broader compiler
+completion remains partial; this technical screen is not a clearance or
+infringement conclusion and does not replace independent human dual review.
+
 # 2026-08-26 — Bounded raw string literals
 
 **Result: NOT_TRIGGERED.** This increment performs conventional delimiter

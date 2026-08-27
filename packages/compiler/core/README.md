@@ -5889,3 +5889,13 @@ independently authored direct conditional form. Windows and native Arch Linux
 WSL each passed 650 library tests, 1 component probe, 10 conformance tests, and
 349 replacement tests: 1,010 compiler tests per host. Byte/raw-byte/C strings,
 pooling, larger capacities, and general static data remain outside the claim.
+
+The bounded decoded string-literal pooling milestone at `85bdd637` decodes
+cooked and raw literals into a fixed 1,024-byte scratch buffer before mutating
+the read-only arena. The first existing identical runtime byte sequence is
+reused deterministically while every use keeps a separate checked relocation.
+An end-to-end 640-byte cooked/raw pair fits in both ELF64 and COFF only through
+reuse. Windows and native Arch Linux WSL each passed 650 library tests, 1
+component probe, 10 conformance tests, and 349 replacement tests: 1,010 compiler
+tests per host. Literal address identity, general constant merging, larger
+capacities, and general static data remain outside the claim.

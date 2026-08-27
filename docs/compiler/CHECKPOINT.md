@@ -58,7 +58,19 @@ oracle upgrade receives a new immutable record and differential classification
 against all prior accepted probes. Keep Cargo on edition 2024 until a newer
 named edition can be adopted through a pinned, workspace-wide migration.
 
-## Latest bounded raw string-literal milestone
+## Latest bounded decoded string-literal pooling milestone
+
+Commit `85bdd637` decodes each cooked or raw string into a fixed 1,024-byte
+scratch buffer before mutating object data, then deterministically reuses the
+first existing identical runtime byte sequence. Each use retains its own
+checked relocation. A 640-byte cooked/raw pair proves the second value can fit
+only through reuse in both ELF64 and COFF. Windows and native Arch Linux WSL
+each passed 650 library tests, 1 component probe, 10 conformance tests, and 349
+replacement tests: 1,010 compiler tests per host. This does not guarantee
+literal address identity, merge general constants, enlarge fixed capacities,
+or add general static data.
+
+### Preceding bounded raw string-literal milestone
 
 Commit `be6da69d` recognizes Rust raw strings with at most 255 delimiter hashes,
 requires an exact closing delimiter, and copies the interior bytes verbatim
