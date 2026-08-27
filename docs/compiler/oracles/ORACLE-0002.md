@@ -1219,3 +1219,11 @@ linker, so no Windows execution is claimed. This is black-box evidence for
 those two exact literal methods and results only; it does not establish general
 `CStr` ABI/layout, locals, arguments, conditionals, or implementation strategy.
 The temporary source and executable were removed.
+
+A follow-up independently authored Rust 2024 executable against the exact Arch
+toolchain asserted lengths 5 and 6 for those views and asserted that the empty
+C-string view is empty only when its terminator is excluded. Compilation and
+execution succeeded. This extends the black-box evidence only to exact literal
+`.len()` and `.is_empty()` observation; it does not establish general `CStr`
+transport or implementation strategy. The temporary source and executable were
+removed.

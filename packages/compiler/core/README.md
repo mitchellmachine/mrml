@@ -6003,5 +6003,14 @@ terminator. Object tests verify `hello\0` and encoded lengths 5 and 6; the
 interior-NUL control still reports `UnsupportedCStringLiteral`. The exact
 ORACLE-0002 Arch executable observed `b"hello"` and `b"hello\0"`. Windows and
 Arch each passed 657 library, 1 component-interface, 10 conformance, 351
-replacement, and 6 semantic-execution tests: 1,025 per host. General `&CStr`
-transport and scalar byte-view chaining remain unsupported.
+replacement, and 6 semantic-execution tests: 1,025 per host.
+
+Follow-up `0c517e09` admits exact literal `.len()` and `.is_empty()` observations
+through the native scalar path. Direct slice return and scalar observation share
+one decoder/view-length helper, preventing terminator-policy drift. A typed tail
+scan selects native lowering for no-parameter probes without disturbing empty
+tails. Relocation-free semantic execution verifies lengths 5/6 and empty-view
+truth with/without the terminator on both hosts; exact ORACLE-0002 agrees on
+Arch. Windows and Arch each passed 657 library, 1 component-interface, 10
+conformance, 351 replacement, and 7 semantic-execution tests: 1,026 per host.
+General `&CStr` transport, locals, arguments, and conditionals remain unsupported.

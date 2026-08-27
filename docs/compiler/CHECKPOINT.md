@@ -80,8 +80,18 @@ the exact `hello\0` bytes and encoded lengths 5 and 6; an interior-NUL input
 still fails before object emission. The exact ORACLE-0002 Arch executable
 returned `b"hello"` and `b"hello\0"`. Windows and Arch each passed 657 library,
 1 component-interface, 10 conformance, 351 replacement, and 6
-semantic-execution tests: 1,025 per host. General `&CStr` transport, locals,
-arguments, conditionals, and scalar method chaining remain unsupported.
+semantic-execution tests: 1,025 per host.
+
+Commit `0c517e09` uses one canonical checked decoder/view-length helper for
+direct byte-slice returns and exact literal `.len()`/`.is_empty()` observation.
+A typed tail classifier routes otherwise constant-looking functions through
+native lowering, while preserving empty-tail functions. The relocation-free
+scalar results execute in the semantic loader: `hello` reports 5 or 6 and an
+empty literal reports empty only when the terminator is excluded. The exact
+ORACLE-0002 Arch executable agrees. Windows and Arch each passed 657 library,
+1 component-interface, 10 conformance, 351 replacement, and 7
+semantic-execution tests: 1,026 per host. General `&CStr` transport, locals,
+arguments, and conditionals remain unsupported.
 
 Patent review: **NOT_TRIGGERED**; see `docs/patents/REVIEW_LOG.md`.
 

@@ -2090,9 +2090,15 @@ emission. Both forms share the checked C-string decoder and relocation; the
 first reports the content length and the second includes the one appended NUL.
 ELF64 and COFF tests inspect the exact `hello\0` data and encoded lengths 5 and
 6. The exact ORACLE-0002 Arch executable observed `b"hello"` and `b"hello\0"`.
+Exact literal `.len()` and `.is_empty()` observations now reuse one canonical
+decoder/view-length helper rather than interpreting the C-string node again.
+The typed tail classifier prevents the constant IR path from seeing a runtime
+C-string view, while preserving explicitly empty tails. Relocation-free scalar
+code executes on both hosts and agrees with the exact ORACLE-0002 Arch
+executable for lengths 5/6 and empty-view truth with/without the terminator.
 Windows and Arch each passed 657 unit, 1 component, 10 conformance, 351
-replacement, and 6 semantic-execution tests (1,025 total). Scalar method
-chaining and general `CStr` values remain fail-closed.
+replacement, and 7 semantic-execution tests (1,026 total). General `CStr`
+values remain fail-closed.
 
 ### Bounded explicit-static reference checkpoint
 
