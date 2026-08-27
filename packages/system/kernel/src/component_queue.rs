@@ -19,6 +19,7 @@ pub enum MicrovmInterfaceQueueError {
     InvalidPage,
     InvalidState,
     InvalidSequence,
+    InvalidNotification,
     InvalidOperation,
     PayloadTooLarge,
     OutputTooSmall,
@@ -80,6 +81,40 @@ struct ProjectionIdentity {
 pub struct MicrovmInterfaceQueuePair {
     consumer: MicrovmInterfaceQueueConsumer,
     provider: MicrovmInterfaceQueueProvider,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct MicrovmInterfaceRequestNotification {
+    identity: MicrovmInterfaceQueueIdentity,
+    sequence: u64,
+    operation: u32,
+}
+
+impl MicrovmInterfaceRequestNotification {
+    pub const fn sequence(self) -> u64 {
+        self.sequence
+    }
+
+    pub const fn operation(self) -> u32 {
+        self.operation
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct MicrovmInterfaceResponseNotification {
+    identity: MicrovmInterfaceQueueIdentity,
+    sequence: u64,
+    operation: u32,
+}
+
+impl MicrovmInterfaceResponseNotification {
+    pub const fn sequence(self) -> u64 {
+        self.sequence
+    }
+
+    pub const fn operation(self) -> u32 {
+        self.operation
+    }
 }
 
 pub struct MicrovmInterfaceQueueConsumer {
@@ -161,7 +196,7 @@ impl MicrovmInterfaceQueueConsumer {
         capabilities: &CapabilitySpace<C>,
         operation: u32,
         payload: &[u8],
-    ) -> Result<u64, MicrovmInterfaceQueueError> {
+    ) -> Result<MicrovmInterfaceRequestNotification, MicrovmInterfaceQueueError> {
         self.authorize(projection, capabilities)?;
         validate_header(page, self.identity)?;
         if operation == 0 {
@@ -188,7 +223,11 @@ impl MicrovmInterfaceQueueConsumer {
         // State is published last. Native shared-memory users must pair this
         // wire format with the backend's acquire/release notification path.
         write_u16(page, 10, STATE_REQUEST);
-        Ok(self.next_sequence)
+        Ok(MicrovmInterfaceRequestNotification {
+            identity: self.identity,
+            sequence: self.next_sequence,
+            operation,
+        })
     }
 
     pub fn consume_response<const C: usize>(
@@ -196,10 +235,17 @@ impl MicrovmInterfaceQueueConsumer {
         page: &mut [u8],
         projection: &MicrovmPeerPageProjection,
         capabilities: &CapabilitySpace<C>,
+        notification: MicrovmInterfaceResponseNotification,
         output: &mut [u8],
     ) -> Result<(u32, usize), MicrovmInterfaceQueueError> {
         self.authorize(projection, capabilities)?;
         validate_header(page, self.identity)?;
+        if notification.identity != self.identity
+            || notification.sequence != self.next_sequence
+            || notification.operation == 0
+        {
+            return Err(MicrovmInterfaceQueueError::InvalidNotification);
+        }
         if read_u16(page, 10)? != STATE_RESPONSE {
             return Err(MicrovmInterfaceQueueError::InvalidState);
         }
@@ -207,8 +253,8 @@ impl MicrovmInterfaceQueueConsumer {
             return Err(MicrovmInterfaceQueueError::InvalidSequence);
         }
         let operation = read_u32(page, 96)?;
-        if operation == 0 {
-            return Err(MicrovmInterfaceQueueError::InvalidOperation);
+        if operation == 0 || operation != notification.operation {
+            return Err(MicrovmInterfaceQueueError::InvalidNotification);
         }
         let length = payload_length(page)?;
         if output.len() < length {
@@ -243,10 +289,17 @@ impl MicrovmInterfaceQueueProvider {
         page: &[u8],
         projection: &MicrovmPeerPageProjection,
         capabilities: &CapabilitySpace<C>,
+        notification: MicrovmInterfaceRequestNotification,
         output: &mut [u8],
     ) -> Result<(u64, u32, usize), MicrovmInterfaceQueueError> {
         self.authorize(projection, capabilities)?;
         validate_header(page, self.identity)?;
+        if notification.identity != self.identity
+            || notification.sequence != self.next_sequence
+            || notification.operation == 0
+        {
+            return Err(MicrovmInterfaceQueueError::InvalidNotification);
+        }
         if self.accepted_sequence.is_some() || read_u16(page, 10)? != STATE_REQUEST {
             return Err(MicrovmInterfaceQueueError::InvalidState);
         }
@@ -255,8 +308,8 @@ impl MicrovmInterfaceQueueProvider {
             return Err(MicrovmInterfaceQueueError::InvalidSequence);
         }
         let operation = read_u32(page, 96)?;
-        if operation == 0 {
-            return Err(MicrovmInterfaceQueueError::InvalidOperation);
+        if operation == 0 || operation != notification.operation {
+            return Err(MicrovmInterfaceQueueError::InvalidNotification);
         }
         let length = payload_length(page)?;
         if output.len() < length {
@@ -275,7 +328,7 @@ impl MicrovmInterfaceQueueProvider {
         sequence: u64,
         operation: u32,
         payload: &[u8],
-    ) -> Result<(), MicrovmInterfaceQueueError> {
+    ) -> Result<MicrovmInterfaceResponseNotification, MicrovmInterfaceQueueError> {
         self.authorize(projection, capabilities)?;
         validate_header(page, self.identity)?;
         if self.accepted_sequence != Some(sequence)
@@ -299,7 +352,11 @@ impl MicrovmInterfaceQueueProvider {
         write_u16(page, 10, STATE_RESPONSE);
         self.accepted_sequence = None;
         self.next_sequence = next_sequence;
-        Ok(())
+        Ok(MicrovmInterfaceResponseNotification {
+            identity: self.identity,
+            sequence,
+            operation,
+        })
     }
 
     fn authorize<const C: usize>(
@@ -462,13 +519,49 @@ mod tests {
         consumer
             .initialize(&mut page, &projection, &capabilities)
             .unwrap();
-        assert_eq!(
-            consumer.submit(&mut page, &projection, &capabilities, 1, b"request"),
-            Ok(1)
-        );
+        let request_notification = consumer
+            .submit(&mut page, &projection, &capabilities, 1, b"request")
+            .unwrap();
+        assert_eq!(request_notification.sequence(), 1);
+        assert_eq!(request_notification.operation(), 1);
         let mut request = [0_u8; 16];
+        let wrong_binding_notification = MicrovmInterfaceRequestNotification {
+            identity: MicrovmInterfaceQueueIdentity::new([0x6b; 32], 3, 14, 9, 7, 11).unwrap(),
+            sequence: 1,
+            operation: 1,
+        };
         assert_eq!(
-            provider.receive_request(&page, &projection, &capabilities, &mut request,),
+            provider.receive_request(
+                &page,
+                &projection,
+                &capabilities,
+                wrong_binding_notification,
+                &mut request,
+            ),
+            Err(MicrovmInterfaceQueueError::InvalidNotification)
+        );
+        let stale_notification = MicrovmInterfaceRequestNotification {
+            sequence: 2,
+            ..request_notification
+        };
+        assert_eq!(
+            provider.receive_request(
+                &page,
+                &projection,
+                &capabilities,
+                stale_notification,
+                &mut request,
+            ),
+            Err(MicrovmInterfaceQueueError::InvalidNotification)
+        );
+        assert_eq!(
+            provider.receive_request(
+                &page,
+                &projection,
+                &capabilities,
+                request_notification,
+                &mut request,
+            ),
             Ok((1, 1, 7))
         );
         assert_eq!(&request[..7], b"request");
@@ -476,17 +569,45 @@ mod tests {
             provider.respond(&mut page, &projection, &capabilities, 2, 1, b"response",),
             Err(MicrovmInterfaceQueueError::InvalidState)
         );
-        provider
+        let response_notification = provider
             .respond(&mut page, &projection, &capabilities, 1, 1, b"response")
             .unwrap();
+        assert_eq!(response_notification.sequence(), 1);
+        assert_eq!(response_notification.operation(), 1);
         let mut too_small = [0_u8; 1];
+        let wrong_response_notification = MicrovmInterfaceResponseNotification {
+            operation: 2,
+            ..response_notification
+        };
         assert_eq!(
-            consumer.consume_response(&mut page, &projection, &capabilities, &mut too_small,),
+            consumer.consume_response(
+                &mut page,
+                &projection,
+                &capabilities,
+                wrong_response_notification,
+                &mut too_small,
+            ),
+            Err(MicrovmInterfaceQueueError::InvalidNotification)
+        );
+        assert_eq!(
+            consumer.consume_response(
+                &mut page,
+                &projection,
+                &capabilities,
+                response_notification,
+                &mut too_small,
+            ),
             Err(MicrovmInterfaceQueueError::OutputTooSmall)
         );
         let mut response = [0_u8; 16];
         assert_eq!(
-            consumer.consume_response(&mut page, &projection, &capabilities, &mut response,),
+            consumer.consume_response(
+                &mut page,
+                &projection,
+                &capabilities,
+                response_notification,
+                &mut response,
+            ),
             Ok((1, 8))
         );
         assert_eq!(&response[..8], b"response");
@@ -501,7 +622,13 @@ mod tests {
         write_u16(&mut page, 10, STATE_REQUEST);
         write_u32(&mut page, 96, 1);
         assert_eq!(
-            provider.receive_request(&page, &projection, &capabilities, &mut request),
+            provider.receive_request(
+                &page,
+                &projection,
+                &capabilities,
+                stale_notification,
+                &mut request,
+            ),
             Err(MicrovmInterfaceQueueError::InvalidSequence)
         );
     }

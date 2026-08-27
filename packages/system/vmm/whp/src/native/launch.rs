@@ -3358,6 +3358,17 @@ mod tests {
         payload: [u8; 1024],
         kind: ArtifactKind,
     ) -> [u8; SIGNED_ARTIFACT_OVERHEAD_BYTES + 1024] {
+        let mut encoded = [0u8; SIGNED_ARTIFACT_OVERHEAD_BYTES + 1024];
+        write_signed_payload_kind(payload, kind, &mut encoded);
+        encoded
+    }
+
+    #[inline(never)]
+    fn write_signed_payload_kind(payload: [u8; 1024], kind: ArtifactKind, encoded: &mut [u8]) {
+        assert_eq!(
+            encoded.len(),
+            SIGNED_ARTIFACT_OVERHEAD_BYTES + payload.len()
+        );
         let mut private = [0u8; LAMPORT_PRIVATE_KEY_BYTES];
         for (index, byte) in private.iter_mut().enumerate() {
             *byte = (index as u64).wrapping_mul(73).wrapping_add(29) as u8;
@@ -3368,7 +3379,6 @@ mod tests {
         let statement = artifact_statement(kind, 1, payload.len() as u64, digest);
         let mut signature = [0u8; LAMPORT_SIGNATURE_BYTES];
         lamport_sign(&private, &statement, &mut signature).unwrap();
-        let mut encoded = [0u8; SIGNED_ARTIFACT_OVERHEAD_BYTES + 1024];
         encoded[..16].copy_from_slice(b"MRML-SIGNED-v1\0\0");
         encoded[16] = kind as u8;
         encoded[24..32].copy_from_slice(&1u64.to_le_bytes());
@@ -3379,7 +3389,6 @@ mod tests {
         encoded[SIGNED_ARTIFACT_HEADER_BYTES..signature_at].copy_from_slice(&public);
         encoded[signature_at..payload_at].copy_from_slice(&signature);
         encoded[payload_at..].copy_from_slice(&payload);
-        encoded
     }
 
     fn signed_payload(payload: [u8; 1024]) -> [u8; SIGNED_ARTIFACT_OVERHEAD_BYTES + 1024] {
@@ -3388,7 +3397,14 @@ mod tests {
 
     #[inline(never)]
     fn signed_payload_vector(payload: [u8; 1024], kind: ArtifactKind) -> mrml_runtime::Vector<u8> {
-        mrml_runtime::Vector::from(signed_payload_kind(payload, kind))
+        let mut encoded =
+            mrml_runtime::Vector::with_capacity(SIGNED_ARTIFACT_OVERHEAD_BYTES + payload.len())
+                .unwrap();
+        encoded
+            .try_resize(SIGNED_ARTIFACT_OVERHEAD_BYTES + payload.len(), 0)
+            .unwrap();
+        write_signed_payload_kind(payload, kind, &mut encoded);
+        encoded
     }
 
     fn signed_pe() -> [u8; SIGNED_ARTIFACT_OVERHEAD_BYTES + 1024] {
@@ -3932,7 +3948,7 @@ mod tests {
         consumer_queue
             .initialize(&mut consumer_page, &projection, &capabilities)
             .unwrap();
-        consumer_queue
+        let request_notification = consumer_queue
             .submit(&mut consumer_page, &projection, &capabilities, 1, b"zim")
             .unwrap();
         peer.write_first(&consumer_page).unwrap();
@@ -3941,11 +3957,17 @@ mod tests {
         let mut request = [0_u8; 8];
         assert_eq!(
             provider_queue
-                .receive_request(&provider_page, &projection, &capabilities, &mut request)
+                .receive_request(
+                    &provider_page,
+                    &projection,
+                    &capabilities,
+                    request_notification,
+                    &mut request,
+                )
                 .unwrap(),
             (1, 1, 3)
         );
-        provider_queue
+        let response_notification = provider_queue
             .respond(
                 &mut provider_page,
                 &projection,
@@ -3964,6 +3986,7 @@ mod tests {
                     &mut consumer_page,
                     &projection,
                     &capabilities,
+                    response_notification,
                     &mut response,
                 )
                 .unwrap(),

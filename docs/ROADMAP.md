@@ -3476,3 +3476,14 @@ backend reports the second simultaneous partition as the typed
 `PartitionAlreadyExists` limitation. Recovered two-domain admission, attachment
 of the generation-bound peer queue to these guests, and guest-executed
 consumer/provider traffic remain **PLANNED**.
+
+The cross-microVM queue notification prerequisite is now **PARTIALLY
+IMPLEMENTED**. Request and response publication return distinct typed
+notifications bound to the exact interface/provider/system/policy/binding
+identity, operation, and monotonic sequence. Neither endpoint consumes payload
+without its matching notification; cross-binding, stale, and wrong-operation
+notifications fail closed. Windows and Linux kernel suites pass 576 tests, WHP
+passes 27 with one manual test ignored, and nested KVM passes 23 with one manual
+test ignored. Native interrupt/event delivery, acquire/release synchronization,
+recovered two-domain runner ownership, and guest-executed signed ZIM/Zstd calls
+remain **PLANNED**.

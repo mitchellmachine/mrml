@@ -1371,9 +1371,13 @@ A one-page generation-bound request/response wire is now **PARTIALLY
 IMPLEMENTED** over the exact peer projection. It binds interface/provider/system/
 policy/binding generations, exact projection authority, operation, length, and
 monotonic sequence while transferring no capabilities. Nested KVM proves a
-bounded request and response across two live VM mappings. Guest notification,
-concurrent acquire/release publication, and signed component execution remain
-**PLANNED**.
+bounded request and response across two live VM mappings. Each published request
+now returns a typed notification bound to the same complete identity, operation,
+and sequence; the provider must consume that exact notification before reading,
+and its response produces the corresponding typed notification required by the
+consumer. Cross-binding, stale-sequence, and wrong-operation notifications fail
+before payload consumption. Native interrupt/event delivery, concurrent
+acquire/release publication, and signed component execution remain **PLANNED**.
 
 The exact guest page-table leaf is now **PARTIALLY IMPLEMENTED** on both
 backends. The retained owner installs one supervisor RW/NX leaf in each stopped

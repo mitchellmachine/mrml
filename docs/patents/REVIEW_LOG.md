@@ -9059,3 +9059,14 @@ Windows) to observe the existing x86-64 illegal-instruction overflow trap. It
 adds no code-generation mechanism, exception protocol, production sandbox,
 runtime security boundary, cryptographic primitive, or compression mechanism.
 This technical screen is not legal advice or patent clearance.
+
+# 2026-08-27 — Generation-bound interface queue notifications
+
+Patent review: **TRIGGERED** under the existing cross-microVM interface and
+Total MicroVM review. This increment adds typed request/response notification
+tokens that exact-match an existing fixed-slot identity, operation, and
+monotonic sequence before payload consumption. It does not add a native event
+delivery algorithm, scheduler, cryptographic primitive, compression mechanism,
+or device protocol. Backend interrupt/event delivery and complete signed
+component execution remain within the broader triggered worldwide mechanism
+review. This technical screen is not legal advice or patent clearance.

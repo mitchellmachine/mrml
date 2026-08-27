@@ -2025,3 +2025,12 @@ the other's provisioned slot fails closed. The WHP path is source- and
 test-parallel, while the current host exposes its existing typed
 second-partition limitation. Do not recover this checkpoint as proof of complete
 Total admission or guest-executed interface traffic; both remain pending.
+
+Cross-microVM queue recovery must retain the typed request or response
+notification beside the exact shared-page owner. The notification binds the
+complete interface and placement generations, operation, and sequence; page
+state alone is insufficient to authorize consumption. Lost notifications make
+the exchange unavailable or restartable under the owning lifecycle and must
+never be reconstructed from mutable page fields. Native event delivery and
+concurrent ordering remain pending, so this checkpoint is not proof of
+guest-executed component traffic.

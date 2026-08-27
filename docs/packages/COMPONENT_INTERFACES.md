@@ -606,9 +606,13 @@ SystemGeneration, policy generation, binding generation, operation, payload
 length, and monotonic request sequence. It carries no capabilities, pointers, or
 path names. Invalid state, identity substitution, stale authority, replay,
 oversized payload, undersized output, and sequence exhaustion fail before
-publication. Nested KVM transports one bounded ZIM-like request and Zstd-like
-response across two live VM mappings. Guest-side acquire/release notification,
-signed component execution, and recovery integration remain **PLANNED**.
+publication. Request and response publication now each produce a non-forgeable
+typed notification carrying the exact binding identity, operation, and sequence;
+the opposite endpoint must present it before consuming payload bytes. Nested KVM
+transports that bounded ZIM-like request and Zstd-like response across two live
+VM mappings. Backend interrupt/event delivery, guest-side acquire/release
+ordering, signed component execution, and recovery integration remain
+**PLANNED**.
 
 The end-to-end Zstd gate proves equal corpus decoding by old and new providers,
 no ZIM rebuild, old-generation retention while referenced, later safe GC, ABI-4

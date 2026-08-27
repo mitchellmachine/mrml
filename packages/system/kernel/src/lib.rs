@@ -90,18 +90,17 @@ pub use component_memory::{
     ComponentImageReleaseSummary, MAX_COMPONENT_IMAGE_REGIONS, MicrovmControlMemory,
     MicrovmGuestRam, MicrovmGuestRamError, MicrovmPageProjection, MicrovmPageProjectionKind,
     MicrovmPeerPageProjection, MicrovmPeerProjectionReleaseFailure, PreparedMicrovmGuestRam,
-    account_component_executable, component_image_page_plan,
-    prepare_microvm_guest_ram, prepare_microvm_guest_ram_recoverable, release_component_image,
-    release_microvm_control_memory, release_microvm_guest_ram,
-    release_microvm_peer_page_projection,
+    account_component_executable, component_image_page_plan, prepare_microvm_guest_ram,
+    prepare_microvm_guest_ram_recoverable, release_component_image, release_microvm_control_memory,
+    release_microvm_guest_ram, release_microvm_peer_page_projection,
     reserve_component_executable_mapping, reserve_component_image, reserve_microvm_control_memory,
     reserve_microvm_guest_ram, reserve_microvm_page_projection,
     reserve_microvm_peer_page_projection,
 };
 pub use component_queue::{
-    MICROVM_INTERFACE_QUEUE_MAX_PAYLOAD, MicrovmInterfaceQueueConsumer,
-    MicrovmInterfaceQueueError, MicrovmInterfaceQueueIdentity, MicrovmInterfaceQueuePair,
-    MicrovmInterfaceQueueProvider,
+    MICROVM_INTERFACE_QUEUE_MAX_PAYLOAD, MicrovmInterfaceQueueConsumer, MicrovmInterfaceQueueError,
+    MicrovmInterfaceQueueIdentity, MicrovmInterfaceQueuePair, MicrovmInterfaceQueueProvider,
+    MicrovmInterfaceRequestNotification, MicrovmInterfaceResponseNotification,
 };
 pub use cpu_resource::{
     CpuBudgetId, CpuBudgetSpec, CpuBudgetTable, CpuBudgetUsage, CpuResourceError,
