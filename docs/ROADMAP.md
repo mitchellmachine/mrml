@@ -745,6 +745,15 @@ failure rolls back the first reservation and page charge. Kernel suites pass
 WHP/KVM, the bounded interface queue, and two-guest execution remain the next
 dependency gates.
 
+The paired retirement ledger is now **PARTIALLY IMPLEMENTED**. A backend may
+release the shared page only after proving both native mappings and translations
+absent. Kernel preflight exact-matches the object, two mapping generations,
+target capability generations, RW/NX shape, physical-backing absence, and an
+exactly-two mapping count before one atomic retirement commit. Wrong authority
+and an injected third alias retain all accounting unchanged for retry. Kernel
+suites pass 574 tests on Windows and Arch Linux. WHP/KVM native mapping and
+invalidation remain the active gate.
+
 The existing userspace block recovery loop is now reproducibly selectable
 through the canonical build frontend. The service image's
 `block_service_loop` profile and bootloader/kernel image's

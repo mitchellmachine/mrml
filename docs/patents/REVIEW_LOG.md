@@ -8924,6 +8924,19 @@ technical screen is not legal advice or patent clearance.
 
 # 2026-08-26 — Atomic recovered endpoint integration
 
+# 2026-08-26 — Atomic two-peer projection ledger retirement
+
+Patent review: **NOT_TRIGGERED** for this bounded accounting/lifecycle change.
+It applies conventional exact-identity preflight, checked generation increments,
+fixed mapping-count validation, capability revocation, and one in-memory commit
+after an external native-teardown proof. It adds no native invalidation method,
+queue protocol, VM construction algorithm, scheduler, compression mechanism,
+cryptographic primitive, or device transport. The broader adaptive-placement,
+cross-microVM transport, and Total MicroVM reviews remain **TRIGGERED**. This
+technical screen is not legal advice or patent clearance.
+
+# 2026-08-26 — Atomic recovered endpoint integration
+
 # 2026-08-26 — Accounted two-peer microVM page reservation
 
 Patent review: **NOT_TRIGGERED** for this bounded memory-policy increment. It

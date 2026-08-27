@@ -1362,6 +1362,14 @@ reserving the second mapping rolls back the first reservation and object charge.
 This is policy/accounting evidence only: WHP/KVM native backing, queue protocol,
 revocation/invalidation, and two-guest execution remain **PLANNED**.
 
+The matching policy-ledger teardown is now **PARTIALLY IMPLEMENTED**. It accepts
+the retained two-peer projection only after native teardown, revalidates both
+exact target capability generations and mapping shapes, refuses unexpected
+additional aliases, and atomically retires both mapping generations, the shared
+object, its capability, and pool charges. Validation failure returns the whole
+retained projection for exact retry and makes no partial accounting mutation.
+The backend-native unmap/invalidation proof is still required.
+
 The installed production prerequisite now has a **PARTIALLY IMPLEMENTED**
 four-file stable-root selection. Configuration, authority checkpoint,
 deployment checkpoint, and activated SystemRelease must be distinct reachable

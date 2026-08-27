@@ -137,6 +137,23 @@ pub struct MicrovmPeerPageProjection {
     second_virtual_page: u64,
 }
 
+#[derive(Debug, Eq, PartialEq)]
+pub struct MicrovmPeerProjectionReleaseFailure {
+    error: MemoryResourceError,
+    projection: MicrovmPeerPageProjection,
+    object_capability: Capability,
+}
+
+impl MicrovmPeerProjectionReleaseFailure {
+    pub const fn error(&self) -> MemoryResourceError {
+        self.error
+    }
+
+    pub fn into_retained(self) -> (MicrovmPeerPageProjection, Capability) {
+        (self.projection, self.object_capability)
+    }
+}
+
 impl MicrovmPeerPageProjection {
     pub const fn object(&self) -> MemoryObjectId {
         self.object
@@ -560,6 +577,77 @@ pub fn reserve_microvm_peer_page_projection<
         },
         object_capability,
     ))
+}
+
+/// Retires both peer reservations and their shared object as one ledger commit
+/// after the VMM has removed both native mappings and invalidated translations.
+///
+/// # Safety
+///
+/// The caller must provide that native teardown proof. Failure returns the
+/// complete retained projection and object capability for exact retry.
+pub unsafe fn release_microvm_peer_page_projection<
+    const P: usize,
+    const O: usize,
+    const M: usize,
+    const C: usize,
+>(
+    table: &mut MemoryPoolTable<P, O, M>,
+    projection: MicrovmPeerPageProjection,
+    object_capability: Capability,
+    first_target_capability: Capability,
+    second_target_capability: Capability,
+    capabilities: &mut CapabilitySpace<C>,
+) -> Result<u64, MicrovmPeerProjectionReleaseFailure> {
+    let release = (|| {
+        projection.validate_targets(
+            first_target_capability,
+            second_target_capability,
+            capabilities,
+        )?;
+        let access = Rights::READ.union(Rights::WRITE);
+        let first = table.mapping_info(
+            projection.first_mapping,
+            first_target_capability,
+            capabilities,
+        )?;
+        let second = table.mapping_info(
+            projection.second_mapping,
+            second_target_capability,
+            capabilities,
+        )?;
+        if first.object() != projection.object
+            || second.object() != projection.object
+            || first.virtual_page() != projection.first_virtual_page
+            || second.virtual_page() != projection.second_virtual_page
+            || first.object_page() != 0
+            || second.object_page() != 0
+            || first.pages() != 1
+            || second.pages() != 1
+            || first.access() != access
+            || second.access() != access
+        {
+            return Err(MemoryResourceError::InvalidMapping);
+        }
+        // SAFETY: inherited from this function's native teardown contract. The
+        // table method preflights the complete atomic ledger mutation.
+        unsafe {
+            table.release_shared_object_mapping_pair(
+                projection.object,
+                object_capability,
+                projection.first_mapping,
+                first_target_capability,
+                projection.second_mapping,
+                second_target_capability,
+                capabilities,
+            )
+        }
+    })();
+    release.map_err(|error| MicrovmPeerProjectionReleaseFailure {
+        error,
+        projection,
+        object_capability,
+    })
 }
 
 fn add_component_image_region(
@@ -1498,6 +1586,108 @@ mod tests {
         let usage = table.usage(pool, pool_capability, &capabilities).unwrap();
         assert_eq!(usage.object_pages(), 0);
         assert_eq!(usage.active_mappings(), 0);
+    }
+
+    #[test]
+    fn peer_projection_retirement_is_atomic_recoverable_and_exact() {
+        let mut capabilities = CapabilitySpace::<8>::new();
+        let mut table = MemoryPoolTable::<1, 1, 3>::new(32).unwrap();
+        let (pool, pool_capability) = table
+            .create_root(1, 3, 0, POOL_RIGHTS, &mut capabilities)
+            .unwrap();
+        let first = capabilities
+            .insert(ObjectId(0x821), MICROVM_PEER_TARGET_RIGHTS)
+            .unwrap();
+        let second = capabilities
+            .insert(ObjectId(0x822), MICROVM_PEER_TARGET_RIGHTS)
+            .unwrap();
+        let wrong = capabilities
+            .insert(ObjectId(0x823), MICROVM_PEER_TARGET_RIGHTS)
+            .unwrap();
+        let (projection, object_capability) = reserve_microvm_peer_page_projection(
+            &mut table,
+            pool,
+            pool_capability,
+            first,
+            second,
+            0xb00,
+            0xc00,
+            &mut capabilities,
+        )
+        .unwrap();
+
+        let failure = unsafe {
+            release_microvm_peer_page_projection(
+                &mut table,
+                projection,
+                object_capability,
+                wrong,
+                second,
+                &mut capabilities,
+            )
+        }
+        .unwrap_err();
+        assert_eq!(failure.error(), MemoryResourceError::InvalidMapping);
+        let (projection, object_capability) = failure.into_retained();
+        let usage = table.usage(pool, pool_capability, &capabilities).unwrap();
+        assert_eq!(usage.object_pages(), 1);
+        assert_eq!(usage.active_mappings(), 2);
+
+        let third = table
+            .reserve_mapping(
+                projection.object(),
+                object_capability,
+                first,
+                0xd00,
+                0,
+                1,
+                Rights::READ.union(Rights::WRITE),
+                &capabilities,
+            )
+            .unwrap();
+        let failure = unsafe {
+            release_microvm_peer_page_projection(
+                &mut table,
+                projection,
+                object_capability,
+                first,
+                second,
+                &mut capabilities,
+            )
+        }
+        .unwrap_err();
+        assert_eq!(failure.error(), MemoryResourceError::MappingsActive);
+        let (projection, object_capability) = failure.into_retained();
+        let usage = table.usage(pool, pool_capability, &capabilities).unwrap();
+        assert_eq!(usage.object_pages(), 1);
+        assert_eq!(usage.active_mappings(), 3);
+
+        // SAFETY: the third reservation was never installed or published.
+        unsafe {
+            table.release_mapping(third, first, &capabilities).unwrap();
+        }
+        // SAFETY: this focused test has no native backend or translations; all
+        // represented reservations are known unused.
+        assert_eq!(
+            unsafe {
+                release_microvm_peer_page_projection(
+                    &mut table,
+                    projection,
+                    object_capability,
+                    first,
+                    second,
+                    &mut capabilities,
+                )
+            },
+            Ok(1)
+        );
+        let usage = table.usage(pool, pool_capability, &capabilities).unwrap();
+        assert_eq!(usage.object_pages(), 0);
+        assert_eq!(usage.active_mappings(), 0);
+        assert_eq!(
+            capabilities.authorize(object_capability, Rights::CONTROL),
+            Err(CapabilityError::Invalid)
+        );
     }
 
     #[test]

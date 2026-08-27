@@ -885,6 +885,105 @@ impl<const P: usize, const O: usize, const M: usize> MemoryPoolTable<P, O, M> {
         Ok(())
     }
 
+    /// Atomically retires the only two mapping reservations of one shared
+    /// object after both native mappings and translations are known absent.
+    ///
+    /// # Safety
+    ///
+    /// The caller must prove that no CPU, device, VMM backend, cached
+    /// translation, or peer can still use either represented mapping or the
+    /// object's physical backing. Every policy check is completed before the
+    /// capability or accounting ledger is mutated.
+    #[allow(clippy::too_many_arguments)]
+    pub unsafe fn release_shared_object_mapping_pair<const C: usize>(
+        &mut self,
+        object: MemoryObjectId,
+        object_capability: Capability,
+        first_mapping: MemoryMappingId,
+        first_target_capability: Capability,
+        second_mapping: MemoryMappingId,
+        second_target_capability: Capability,
+        capabilities: &mut CapabilitySpace<C>,
+    ) -> Result<u64, MemoryResourceError> {
+        if first_mapping == second_mapping {
+            return Err(MemoryResourceError::InvalidMapping);
+        }
+        let object_entry = *self.object(object)?;
+        if capabilities.authorize(object_capability, Rights::CONTROL)? != object_entry.authority {
+            return Err(MemoryResourceError::Capability(
+                CapabilityError::PermissionDenied,
+            ));
+        }
+        let next_object_generation = object_entry
+            .generation
+            .checked_add(1)
+            .ok_or(MemoryResourceError::GenerationExhausted)?;
+        if object_entry.physical.is_some() {
+            return Err(MemoryResourceError::PhysicalBackingActive);
+        }
+        let first = *self.mapping(first_mapping)?;
+        let second = *self.mapping(second_mapping)?;
+        if first.object != object || second.object != object {
+            return Err(MemoryResourceError::InvalidMapping);
+        }
+        if capabilities.authorize(first_target_capability, Rights::CONTROL)? != first.target
+            || capabilities.authorize(second_target_capability, Rights::CONTROL)? != second.target
+        {
+            return Err(MemoryResourceError::Capability(
+                CapabilityError::PermissionDenied,
+            ));
+        }
+        let next_first_generation = first
+            .generation
+            .checked_add(1)
+            .ok_or(MemoryResourceError::GenerationExhausted)?;
+        let next_second_generation = second
+            .generation
+            .checked_add(1)
+            .ok_or(MemoryResourceError::GenerationExhausted)?;
+        if self
+            .mappings
+            .iter()
+            .filter(|mapping| mapping.occupied && mapping.object == object)
+            .count()
+            != 2
+        {
+            return Err(MemoryResourceError::MappingsActive);
+        }
+        let pool = *self.pool(object_entry.pool)?;
+        let next_active_mappings = pool
+            .active_mappings
+            .checked_sub(2)
+            .ok_or(MemoryResourceError::Arithmetic)?;
+        let next_pages = pool
+            .object_pages
+            .checked_sub(object_entry.pages)
+            .ok_or(MemoryResourceError::Arithmetic)?;
+        let next_objects = pool
+            .live_objects
+            .checked_sub(1)
+            .ok_or(MemoryResourceError::Arithmetic)?;
+
+        capabilities.revoke(object_capability)?;
+        let pool = &mut self.pools[object_entry.pool.slot as usize];
+        pool.active_mappings = next_active_mappings;
+        pool.object_pages = next_pages;
+        pool.live_objects = next_objects;
+        self.mappings[first_mapping.slot as usize] = MappingEntry {
+            generation: next_first_generation,
+            ..MappingEntry::EMPTY
+        };
+        self.mappings[second_mapping.slot as usize] = MappingEntry {
+            generation: next_second_generation,
+            ..MappingEntry::EMPTY
+        };
+        self.objects[object.slot as usize] = ObjectEntry {
+            generation: next_object_generation,
+            ..ObjectEntry::EMPTY
+        };
+        Ok(object_entry.pages)
+    }
+
     pub fn remove_mapping<B: MemoryMappingBackend, const C: usize>(
         &mut self,
         mapping: MemoryMappingId,

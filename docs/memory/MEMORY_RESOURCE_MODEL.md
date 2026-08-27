@@ -180,6 +180,16 @@ the pool reports zero object pages and mappings. Windows and Arch Linux kernel
 suites pass 573 tests. Native WHP/KVM mapping, backing, invalidation, peer queue
 semantics, and complete teardown remain **PLANNED**.
 
+Two-peer policy retirement is now **PARTIALLY IMPLEMENTED** as one atomic
+ledger operation. After a backend proves both native mappings and translations
+absent, the kernel preflights the exact shared object, both mapping generations,
+both target capabilities, absence of physical backing, exactly-two mapping
+membership, generation advancement, and pool decrements before mutation. It
+then revokes the object capability and retires both mappings plus the object in
+one commit. Wrong target authority or an unexpected third mapping returns the
+complete projection for retry without changing usage. Windows and Arch Linux
+kernel suites pass 574 tests. Native teardown proof remains **PLANNED**.
+
 Pinning is separate scarce authority because it limits reclamation and may enable
 device visibility. Object ownership never implies DMA. DMA requires the exact
 object plus device/DMA authority and a valid IOMMU mapping; invalidation completes

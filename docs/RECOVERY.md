@@ -1870,6 +1870,13 @@ either domain. This is in-memory accounting evidence only; native mapping,
 translation invalidation, queue activation, and retained cleanup authority are
 still required before recovered two-domain execution.
 
+Once that future native teardown succeeds, recovery can now retire the policy
+ledger without a half-removed peer. The kernel exact-matches both retained
+mapping generations and target capability generations, rejects extra aliases,
+and commits both mapping retirements, object retirement, capability revocation,
+and pool decrements together. Any preflight failure returns the complete retained
+projection for retry. No document claim treats this as native invalidation.
+
 The existing service-image recovery path now has canonical MRML build profiles:
 `block_service_loop` for the userspace service image and
 `block_service_probe` for its UEFI kernel/bootloader counterpart. Both release
