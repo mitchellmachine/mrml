@@ -194,6 +194,18 @@ Arch Linux. This is not MMIO execution or hardware evidence. Controller reset,
 port/signature discovery, DMA, interrupts, ATA/ATAPI, NCQ, and physical
 validation remain **PLANNED**.
 
+The following native-storage dependency gate is now **PARTIALLY IMPLEMENTED**
+as bounded global AHCI register initialization. An unsafe native adapter is
+constructible only for one exact aligned mapped ABAR and limits volatile 32-bit
+access to that range. The controller transaction keeps interrupts disabled,
+requests the standard HBA reset, applies a fixed poll limit, verifies AHCI mode,
+and validates version, port count, command-slot count, implemented ports, and
+the NCQ capability bit before publishing a generation-bound snapshot. Storage
+passes 143 host-modeled tests on Windows and Arch Linux. Port/signature
+discovery, command-list/FIS/table allocation, DMA/IOMMU composition, interrupts,
+ATA/ATAPI, NCQ operation, native PCI enumeration, and physical evidence remain
+**PLANNED**.
+
 Selected-device reopening and redundant-root reads are now **PARTIALLY
 IMPLEMENTED**. Exact path/media/geometry and block-zero header revalidation
 precedes both root reads; any mismatch, second-read failure, or protocol-close

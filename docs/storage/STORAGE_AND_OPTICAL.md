@@ -277,6 +277,20 @@ publication. Storage passes 138 tests on Windows and Arch Linux. No ABAR
 register was accessed; HBA reset, port enumeration, DMA, interrupts, ATA/ATAPI,
 NCQ, native PCI enumeration, and physical evidence remain **PLANNED**.
 
+The global-register initialization gate is now **PARTIALLY IMPLEMENTED** for
+the bounded Canadian software-driver scope. `NativeAhciRegisterIo` admits only
+aligned volatile 32-bit accesses inside one already-authorized exact-generation
+ABAR mapping. `reset_ahci_controller` disables global interrupts, enables AHCI
+mode, requests the standard HBA reset, waits for a fixed maximum poll count,
+reasserts AHCI mode with interrupts still disabled, and publishes a controller
+snapshot only after validating version, capability-derived port/command-slot
+bounds, and the implemented-port bitmap. Timeout, access uncertainty, malformed
+mapping state, unavailable AHCI mode, invalid version, no ports, or a port bit
+outside the advertised bound publishes nothing. Storage passes 143 tests on
+Windows and Arch Linux. Tests use a hostile register model; no physical HBA,
+reset timing, PCI enumerator, port engine, DMA, interrupt, ATA/ATAPI command,
+NCQ, link rate, or media behavior is claimed.
+
 The configuration service now **PARTIALLY IMPLEMENTS** an atomic
 correlate/register/reacquire operation for this route. It admits the descriptor
 only through the typed verifier, creates the existing principal-bound read-only

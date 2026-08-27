@@ -1191,6 +1191,17 @@ publication. Storage passes 138 tests on Windows and Arch Linux. It performs no
 volatile MMIO and proves no reset, DMA, interrupt, block I/O, reacquisition,
 OVMF, or physical-hardware behavior.
 
+The next native gate is now **PARTIALLY IMPLEMENTED** through an exact mapped
+ABAR register window and bounded global HBA reset transaction. The native
+adapter permits aligned volatile 32-bit access only inside the retained mapping
+generation. Initialization disables interrupts, enables AHCI mode, requests
+reset, fails closed on a fixed poll limit or access uncertainty, re-verifies
+AHCI mode, and publishes the controller capability/version/implemented-port
+snapshot only after all bounds agree. Storage passes 143 tests on Windows and
+Arch Linux using a hostile register model. This does not prove a physical reset,
+port discovery, DMA, interrupts, block I/O, installed-device reacquisition,
+OVMF, or hardware behavior.
+
 The typed native route and installed recovery are now composed atomically as a
 **PARTIALLY IMPLEMENTED** configuration control plane. One bounded operation
 correlates and registers the descriptor, reacquires a read-only session, checks

@@ -8,6 +8,7 @@
 //! Physical device drivers and durability evidence remain later layers.
 
 mod allocation;
+mod ahci_controller;
 mod ahci_discovery;
 mod ahci_mapping;
 mod authority;
@@ -34,6 +35,11 @@ pub use allocation::{
     ALLOCATION_IMAGE_HEADER_BYTES, ALLOCATION_RECORD_BYTES, AllocationChange, AllocationError,
     AllocationImage, AllocationIndex, AllocationKind, AllocationRecord, AllocationUpdateError,
     AllocationWriteBackend, MAX_ALLOCATION_BLOCKS, PreparedAllocationUpdate,
+};
+pub use ahci_controller::{
+    AHCI_CAP_OFFSET, AHCI_GHC_OFFSET, AHCI_PI_OFFSET, AHCI_RESET_POLL_LIMIT,
+    AHCI_VERSION_OFFSET, AhciControllerError, AhciControllerSnapshot, AhciRegisterIo,
+    NativeAhciRegisterIo, reset_ahci_controller,
 };
 pub use ahci_discovery::{
     AHCI_ABAR_MINIMUM_BYTES, AHCI_PCI_CLASS, AHCI_PCI_PROGRAMMING_INTERFACE,

@@ -280,6 +280,23 @@ method. The Canadian scope and exclusions recorded above remain mandatory; this
 technical screen is not legal advice, patent clearance, or permission for use
 outside that reviewed jurisdiction.
 
+## 2026-08-26 — Conventional AHCI global-register initialization
+
+Patent review: **TRIGGERED**, governed by the Canadian AHCI software-driver
+re-evaluation above. This increment implements only exact-range volatile access
+to an already-authorized ABAR, standard global AHCI enable/reset with interrupts
+disabled, a bounded completion poll, and validation of the ordinary controller
+version, capability, command-slot, and implemented-port fields. It implements
+no SATA Transport/Link/PHY signaling, controller hardware, DMA engine, command
+list/table, received FIS, ATA/ATAPI command, NCQ operation, software-managed DMA
+context, proprietary scheduling/aggregation, RAID, emulation, or optical DRM.
+The reviewed NVIDIA US 7,620,747 software-context sequence, Intel US 7,805,543
+controller tag circuitry, Apple US 8,713,204 device-controller concurrency,
+Intel US 9,128,699 transfer aggregation, and CN 101840306 VxWorks method are
+therefore not implemented by this bounded mechanism. The Canadian scope and
+exclusions remain mandatory; this technical screen is not patent clearance or
+permission for use outside Canada.
+
 ## 2026-08-26 — AHCI licensing prerequisite and continuing native-driver hold
 
 Patent review: **TRIGGERED**. Intel's published AHCI page says implementation
