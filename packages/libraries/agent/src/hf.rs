@@ -56,6 +56,46 @@ fn path_file_name(path: &str) -> &str {
     path.rsplit(['/', '\\']).next().unwrap_or(path)
 }
 
+fn safe_relative_hf_filename(filename: &str) -> Result<&str> {
+    if filename.is_empty() || filename.len() > 1024 || filename.starts_with('/') {
+        return Err(anyhow!("unsafe Hugging Face filename"));
+    }
+    for segment in filename.split('/') {
+        if segment.is_empty()
+            || segment.len() > 255
+            || matches!(segment, "." | "..")
+            || segment.ends_with(['.', ' '])
+            || !segment
+                .bytes()
+                .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_' | b'.'))
+            || windows_reserved_name(segment)
+        {
+            return Err(anyhow!("unsafe Hugging Face filename"));
+        }
+    }
+    Ok(filename)
+}
+
+fn windows_reserved_name(segment: &str) -> bool {
+    let stem = segment.split('.').next().unwrap_or(segment);
+    stem.eq_ignore_ascii_case("con")
+        || stem.eq_ignore_ascii_case("prn")
+        || stem.eq_ignore_ascii_case("aux")
+        || stem.eq_ignore_ascii_case("nul")
+        || (stem.len() == 4
+            && (stem[..3].eq_ignore_ascii_case("com") || stem[..3].eq_ignore_ascii_case("lpt"))
+            && matches!(stem.as_bytes()[3], b'1'..=b'9'))
+}
+
+fn safe_repo_component(value: &str) -> bool {
+    !value.is_empty()
+        && value.len() <= 255
+        && !matches!(value, "." | "..")
+        && value
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_' | b'.'))
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct HfModelSpec {
     pub repo_id: Text,
@@ -95,6 +135,13 @@ impl HfModelSpec {
                 ));
             }
         };
+
+        if !safe_repo_component(user)
+            || !safe_repo_component(model)
+            || (!quant_part.is_empty() && !safe_repo_component(quant_part))
+        {
+            return Err(anyhow!("Invalid HuggingFace repository or quantization name"));
+        }
 
         let repo_id = format!("{}/{}", user, model);
         let quant = if quant_part.is_empty() {
@@ -229,7 +276,7 @@ pub async fn query_hf_api_siblings(spec: &HfModelSpec) -> Result<Vector<Text>> {
         for item in siblings {
             if let Some(rfilename) = item.get("rfilename").and_then(|r| r.as_str()) {
                 if rfilename.ends_with(".gguf") {
-                    filenames.push(rfilename.into());
+                    filenames.push(safe_relative_hf_filename(rfilename)?.into());
                 }
             }
         }
@@ -350,6 +397,7 @@ where
     let mut resolved_speedup_path = None;
 
     for (idx, filename) in download_queue.iter().enumerate() {
+        safe_relative_hf_filename(filename)?;
         let file_num = idx + 1;
         let dest_path = mrml_runtime::join_path(&model_dir, filename);
         let part_path = mrml_runtime::join_path(&model_dir, &format!("{}.part", filename));
@@ -601,6 +649,42 @@ mod tests {
         assert_eq!(bar_half, "[█████░░░░░]");
         let bar_full = render_progress_bar(1.0, 10);
         assert_eq!(bar_full, "[██████████]");
+    }
+
+    #[test]
+    fn accepts_only_contained_portable_hugging_face_filenames() {
+        assert_eq!(
+            safe_relative_hf_filename("weights/model-Q4_0-00001-of-00002.gguf").unwrap(),
+            "weights/model-Q4_0-00001-of-00002.gguf"
+        );
+        for hostile in [
+            "",
+            "/absolute.gguf",
+            "../escape.gguf",
+            "weights/../../escape.gguf",
+            "weights\\escape.gguf",
+            "C:escape.gguf",
+            "model.gguf?download=1",
+            "model.gguf#fragment",
+            "NUL.gguf",
+            "aux/model.gguf",
+            "trailing./model.gguf",
+            "double//model.gguf",
+        ] {
+            assert!(safe_relative_hf_filename(hostile).is_err(), "{hostile}");
+        }
+    }
+
+    #[test]
+    fn rejects_repository_components_that_can_change_urls_or_paths() {
+        for hostile in [
+            "../model:Q4_0",
+            "owner/../model:Q4_0",
+            "owner/model:../../Q4_0",
+            "owner/model:Q4_0?revision=evil",
+        ] {
+            assert!(HfModelSpec::parse(hostile).is_err(), "{hostile}");
+        }
     }
 
     #[test]
