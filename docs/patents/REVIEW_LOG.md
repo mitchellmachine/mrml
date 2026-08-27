@@ -8924,6 +8924,20 @@ technical screen is not legal advice or patent clearance.
 
 # 2026-08-26 — Atomic recovered endpoint integration
 
+# 2026-08-26 — Accounted two-peer microVM page reservation
+
+Patent review: **NOT_TRIGGERED** for this bounded memory-policy increment. It
+uses conventional shared-memory accounting, exact capability checks, two fixed
+mapping reservations, non-executable permissions, and rollback after a late
+reservation failure. It does not implement a queue protocol, notification
+mechanism, VM construction algorithm, scheduler, compression method,
+cryptographic primitive, or device transport. The broader adaptive-placement,
+cross-microVM interface transport, and Total MicroVM reviews remain
+**TRIGGERED**, including native mapping/invalidation and two-guest execution on
+WHP/KVM. This technical screen is not legal advice or patent clearance.
+
+# 2026-08-26 — Atomic recovered endpoint integration
+
 Patent review: **NOT_TRIGGERED** for restoring an existing prepared route to its
 exact retained membership, committing an already-constructed opaque endpoint
 through the existing fixed-capacity atomic transaction, authorizing runtime

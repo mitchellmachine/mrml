@@ -30,6 +30,12 @@ const MICROVM_PAGE_PROJECTION_RIGHTS: Rights = Rights::READ
     .union(Rights::INSPECT)
     .union(Rights::CONTROL);
 
+const MICROVM_PEER_PAGE_RIGHTS: Rights = MICROVM_PAGE_PROJECTION_RIGHTS.union(Rights::SHARE);
+
+const MICROVM_PEER_TARGET_RIGHTS: Rights = Rights::MAP
+    .union(Rights::INSPECT)
+    .union(Rights::CONTROL);
+
 pub const MAX_COMPONENT_IMAGE_REGIONS: usize = MAX_PE_SECTIONS + 1;
 
 /// Accounted immutable code pages for one independently serviced component.
@@ -109,6 +115,74 @@ impl MicrovmPageProjection {
 
     pub const fn virtual_page(&self) -> u64 {
         self.virtual_page
+    }
+}
+
+/// One exact shared page projected into two distinct microVM address spaces.
+///
+/// The retained target capabilities bind both object identity and capability
+/// generation. Domain names, guest addresses and payload bytes remain data and
+/// cannot substitute either target authority. Both mappings are writable and
+/// non-executable; interface policy must separately authorize what may be sent.
+#[derive(Debug, Eq, PartialEq)]
+pub struct MicrovmPeerPageProjection {
+    object: MemoryObjectId,
+    first_mapping: MemoryMappingId,
+    second_mapping: MemoryMappingId,
+    first_target: crate::ObjectId,
+    second_target: crate::ObjectId,
+    first_target_capability: Capability,
+    second_target_capability: Capability,
+    first_virtual_page: u64,
+    second_virtual_page: u64,
+}
+
+impl MicrovmPeerPageProjection {
+    pub const fn object(&self) -> MemoryObjectId {
+        self.object
+    }
+
+    pub const fn first_mapping(&self) -> MemoryMappingId {
+        self.first_mapping
+    }
+
+    pub const fn second_mapping(&self) -> MemoryMappingId {
+        self.second_mapping
+    }
+
+    pub const fn first_target(&self) -> crate::ObjectId {
+        self.first_target
+    }
+
+    pub const fn second_target(&self) -> crate::ObjectId {
+        self.second_target
+    }
+
+    pub const fn first_virtual_page(&self) -> u64 {
+        self.first_virtual_page
+    }
+
+    pub const fn second_virtual_page(&self) -> u64 {
+        self.second_virtual_page
+    }
+
+    /// Revalidates both exact target capability generations before a backend
+    /// installs, removes or otherwise acts on either native mapping.
+    pub fn validate_targets<const C: usize>(
+        &self,
+        first: Capability,
+        second: Capability,
+        capabilities: &CapabilitySpace<C>,
+    ) -> Result<(crate::ObjectId, crate::ObjectId), MemoryResourceError> {
+        if first != self.first_target_capability || second != self.second_target_capability {
+            return Err(MemoryResourceError::InvalidMapping);
+        }
+        let first_target = capabilities.authorize_exact(first, MICROVM_PEER_TARGET_RIGHTS)?;
+        let second_target = capabilities.authorize_exact(second, MICROVM_PEER_TARGET_RIGHTS)?;
+        if first_target != self.first_target || second_target != self.second_target {
+            return Err(MemoryResourceError::InvalidMapping);
+        }
+        Ok((first_target, second_target))
     }
 }
 
@@ -386,6 +460,103 @@ pub fn reserve_microvm_page_projection<
             mapping,
             kind,
             virtual_page,
+        },
+        object_capability,
+    ))
+}
+
+/// Atomically reserves one accounted shared page and exact read/write,
+/// non-executable mappings into two distinct microVM targets.
+///
+/// Target capabilities must carry exactly the bounded mapping lifecycle rights;
+/// an excessive capability is rejected rather than silently accepted. Failure
+/// after the first reservation rolls it back before returning, so a caller can
+/// never observe a half-published peer projection.
+#[allow(clippy::too_many_arguments)]
+pub fn reserve_microvm_peer_page_projection<
+    const P: usize,
+    const O: usize,
+    const M: usize,
+    const C: usize,
+>(
+    table: &mut MemoryPoolTable<P, O, M>,
+    pool: MemoryPoolId,
+    pool_capability: Capability,
+    first_target_capability: Capability,
+    second_target_capability: Capability,
+    first_virtual_page: u64,
+    second_virtual_page: u64,
+    capabilities: &mut CapabilitySpace<C>,
+) -> Result<(MicrovmPeerPageProjection, Capability), MemoryResourceError> {
+    let first_target = capabilities.authorize_exact(
+        first_target_capability,
+        MICROVM_PEER_TARGET_RIGHTS,
+    )?;
+    let second_target = capabilities.authorize_exact(
+        second_target_capability,
+        MICROVM_PEER_TARGET_RIGHTS,
+    )?;
+    if first_target == second_target {
+        return Err(MemoryResourceError::InvalidMapping);
+    }
+
+    let (object, object_capability) = table.allocate_object(
+        pool,
+        pool_capability,
+        1,
+        MemoryBackingKind::Shared,
+        MICROVM_PEER_PAGE_RIGHTS,
+        capabilities,
+    )?;
+    let access = Rights::READ.union(Rights::WRITE);
+    let first_mapping = match table.reserve_mapping(
+        object,
+        object_capability,
+        first_target_capability,
+        first_virtual_page,
+        0,
+        1,
+        access,
+        capabilities,
+    ) {
+        Ok(mapping) => mapping,
+        Err(error) => {
+            table.release_object(object, object_capability, capabilities)?;
+            return Err(error);
+        }
+    };
+    let second_mapping = match table.reserve_mapping(
+        object,
+        object_capability,
+        second_target_capability,
+        second_virtual_page,
+        0,
+        1,
+        access,
+        capabilities,
+    ) {
+        Ok(mapping) => mapping,
+        Err(error) => {
+            // SAFETY: this reservation has not been installed in a backend or
+            // published; no CPU, device, cached translation or peer can use it.
+            unsafe {
+                table.release_mapping(first_mapping, first_target_capability, capabilities)?;
+            }
+            table.release_object(object, object_capability, capabilities)?;
+            return Err(error);
+        }
+    };
+    Ok((
+        MicrovmPeerPageProjection {
+            object,
+            first_mapping,
+            second_mapping,
+            first_target,
+            second_target,
+            first_target_capability,
+            second_target_capability,
+            first_virtual_page,
+            second_virtual_page,
         },
         object_capability,
     ))
@@ -1185,6 +1356,144 @@ mod tests {
         assert_eq!(
             table.release_object(resource.object(), resource_capability, &mut capabilities),
             Ok(1)
+        );
+        let usage = table.usage(pool, pool_capability, &capabilities).unwrap();
+        assert_eq!(usage.object_pages(), 0);
+        assert_eq!(usage.active_mappings(), 0);
+    }
+
+    #[test]
+    fn peer_projection_binds_two_exact_capability_generations_and_never_executes() {
+        let mut capabilities = CapabilitySpace::<8>::new();
+        let mut table = MemoryPoolTable::<1, 1, 2>::new(30).unwrap();
+        let (pool, pool_capability) = table
+            .create_root(1, 2, 0, POOL_RIGHTS, &mut capabilities)
+            .unwrap();
+        let first_target = capabilities
+            .insert(ObjectId(0x801), MICROVM_PEER_TARGET_RIGHTS)
+            .unwrap();
+        let second_target = capabilities
+            .insert(ObjectId(0x802), MICROVM_PEER_TARGET_RIGHTS)
+            .unwrap();
+
+        let (projection, object_capability) = reserve_microvm_peer_page_projection(
+            &mut table,
+            pool,
+            pool_capability,
+            first_target,
+            second_target,
+            0x900,
+            0xa00,
+            &mut capabilities,
+        )
+        .unwrap();
+        assert_eq!(projection.first_target(), ObjectId(0x801));
+        assert_eq!(projection.second_target(), ObjectId(0x802));
+        assert_eq!(projection.first_virtual_page(), 0x900);
+        assert_eq!(projection.second_virtual_page(), 0xa00);
+        assert!(
+            capabilities
+                .authorize_exact(object_capability, MICROVM_PEER_PAGE_RIGHTS)
+                .is_ok()
+        );
+        assert_eq!(
+            projection.validate_targets(first_target, second_target, &capabilities),
+            Ok((ObjectId(0x801), ObjectId(0x802)))
+        );
+        for (mapping, target) in [
+            (projection.first_mapping(), first_target),
+            (projection.second_mapping(), second_target),
+        ] {
+            let info = table.mapping_info(mapping, target, &capabilities).unwrap();
+            assert_eq!(info.object(), projection.object());
+            assert_eq!(info.access(), Rights::READ.union(Rights::WRITE));
+            assert!(!info.access().contains(Rights::EXECUTE));
+        }
+
+        capabilities.revoke(first_target).unwrap();
+        let replacement = capabilities
+            .insert(ObjectId(0x801), MICROVM_PEER_TARGET_RIGHTS)
+            .unwrap();
+        assert_ne!(first_target, replacement);
+        assert_eq!(
+            projection.validate_targets(replacement, second_target, &capabilities),
+            Err(MemoryResourceError::InvalidMapping)
+        );
+    }
+
+    #[test]
+    fn peer_projection_rejects_wrong_rights_identity_and_rolls_back_second_mapping() {
+        let mut capabilities = CapabilitySpace::<10>::new();
+        let mut table = MemoryPoolTable::<1, 1, 1>::new(31).unwrap();
+        let (pool, pool_capability) = table
+            .create_root(1, 2, 0, POOL_RIGHTS, &mut capabilities)
+            .unwrap();
+        let first = capabilities
+            .insert(ObjectId(0x811), MICROVM_PEER_TARGET_RIGHTS)
+            .unwrap();
+        let second = capabilities
+            .insert(ObjectId(0x812), MICROVM_PEER_TARGET_RIGHTS)
+            .unwrap();
+        let insufficient = capabilities.insert(ObjectId(0x813), Rights::MAP).unwrap();
+        let excessive = capabilities
+            .insert(
+                ObjectId(0x814),
+                MICROVM_PEER_TARGET_RIGHTS.union(Rights::READ),
+            )
+            .unwrap();
+
+        assert!(matches!(
+            reserve_microvm_peer_page_projection(
+                &mut table,
+                pool,
+                pool_capability,
+                insufficient,
+                second,
+                1,
+                2,
+                &mut capabilities,
+            ),
+            Err(MemoryResourceError::Capability(CapabilityError::PermissionDenied))
+        ));
+        assert!(matches!(
+            reserve_microvm_peer_page_projection(
+                &mut table,
+                pool,
+                pool_capability,
+                excessive,
+                second,
+                1,
+                2,
+                &mut capabilities,
+            ),
+            Err(MemoryResourceError::Capability(CapabilityError::PermissionDenied))
+        ));
+        assert_eq!(
+            reserve_microvm_peer_page_projection(
+                &mut table,
+                pool,
+                pool_capability,
+                first,
+                first,
+                1,
+                2,
+                &mut capabilities,
+            ),
+            Err(MemoryResourceError::InvalidMapping)
+        );
+
+        assert_eq!(
+            reserve_microvm_peer_page_projection(
+                &mut table,
+                pool,
+                pool_capability,
+                first,
+                second,
+                1,
+                2,
+                &mut capabilities,
+            ),
+            Err(MemoryResourceError::CapacityExhausted)
         );
         let usage = table.usage(pool, pool_capability, &capabilities).unwrap();
         assert_eq!(usage.object_pages(), 0);

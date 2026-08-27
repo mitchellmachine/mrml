@@ -169,6 +169,17 @@ control object and pool reach zero. Windows and Linux kernel tests plus signed
 WHP/nested-KVM probes exercise this lifecycle. This does not implement a general
 VirtIO, VirtualGPU, device, DMA, or host-share projection budget.
 
+The cross-domain component prerequisite now has a **PARTIALLY IMPLEMENTED**
+two-peer reservation. One shared `MemoryObject` carries explicit `SHARE` but no
+`EXECUTE` authority and receives exactly two read/write, non-executable mapping
+reservations under distinct target objects. Each target capability must contain
+exactly `MAP|INSPECT|CONTROL`; insufficient or excessive rights, one target used
+twice, stale capability generations, and second-mapping exhaustion reject. A
+late reservation failure releases the first mapping and provisional object, so
+the pool reports zero object pages and mappings. Windows and Arch Linux kernel
+suites pass 573 tests. Native WHP/KVM mapping, backing, invalidation, peer queue
+semantics, and complete teardown remain **PLANNED**.
+
 Pinning is separate scarce authority because it limits reclamation and may enable
 device visibility. Object ownership never implies DMA. DMA requires the exact
 object plus device/DMA authority and a valid IOMMU mapping; invalidation completes

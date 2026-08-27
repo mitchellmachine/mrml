@@ -734,6 +734,17 @@ runner passes 12 tests on Windows and the KVM runner passes 13 on Arch Linux.
 This is backend/API integration evidence; two distinct live guests remain the
 next gate.
 
+The first cross-domain data-plane prerequisite is now **PARTIALLY IMPLEMENTED**
+in the kernel memory-resource model. A single shared `MemoryObject` can reserve
+exact read/write, non-executable mappings into two distinct target objects while
+retaining both exact target capability generations. Target rights must be
+exactly `MAP|INSPECT|CONTROL`; same-target aliasing, insufficient or excessive
+rights, stale generations, and second-mapping exhaustion fail closed. Late
+failure rolls back the first reservation and page charge. Kernel suites pass
+573 tests on Windows and Arch Linux. Native backing/mapping and invalidation on
+WHP/KVM, the bounded interface queue, and two-guest execution remain the next
+dependency gates.
+
 The existing userspace block recovery loop is now reproducibly selectable
 through the canonical build frontend. The service image's
 `block_service_loop` profile and bootloader/kernel image's

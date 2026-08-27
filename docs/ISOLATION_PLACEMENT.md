@@ -1353,6 +1353,15 @@ identity drift or a second construction request cancels the retained route and
 publishes nothing. This closes backend/control-plane API parity but is not
 evidence that two distinct guests were constructed.
 
+The next data-plane prerequisite now has a **PARTIALLY IMPLEMENTED** kernel
+reservation. One accounted shared page is bound to two distinct target objects
+and exact target capability generations before either backend maps it. Both
+views are read/write and non-executable; target rights are exact and the shared
+object grants no placement, interface, or execution authority. Failure while
+reserving the second mapping rolls back the first reservation and object charge.
+This is policy/accounting evidence only: WHP/KVM native backing, queue protocol,
+revocation/invalidation, and two-guest execution remain **PLANNED**.
+
 The installed production prerequisite now has a **PARTIALLY IMPLEMENTED**
 four-file stable-root selection. Configuration, authority checkpoint,
 deployment checkpoint, and activated SystemRelease must be distinct reachable

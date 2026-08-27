@@ -1862,6 +1862,14 @@ or repeated ownership transfer rejects before runtime authorization. Runner unit
 suites pass 12 tests on Windows WHP and 13 on Arch Linux KVM; the unchanged live
 single-domain artifact evidence remains the strongest execution result.
 
+Recovery cannot yet project the component data plane across two guests, but its
+memory prerequisite now reserves one exact shared page against two distinct
+target objects and exact target capability generations. A second-map failure
+rolls back the first reservation and object charge before recovery can publish
+either domain. This is in-memory accounting evidence only; native mapping,
+translation invalidation, queue activation, and retained cleanup authority are
+still required before recovered two-domain execution.
+
 The existing service-image recovery path now has canonical MRML build profiles:
 `block_service_loop` for the userspace service image and
 `block_service_probe` for its UEFI kernel/bootloader counterpart. Both release
