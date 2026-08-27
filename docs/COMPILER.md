@@ -908,6 +908,17 @@ or region inference. Windows and Arch each passed 658 unit, 1 component-
 interface, 10 conformance, 351 replacement, and 10 semantic-execution tests
 (1,030 total).
 
+The semantic harness now isolates both failure edges of that composed place.
+One probe supplies a range start beyond the four-element owner; another creates
+a valid three-element subslice and indexes exactly at its length. Windows
+observes `STATUS_ILLEGAL_INSTRUCTION` in noninteractive child processes and
+Linux observes raw `SIGILL` from forked children. Either check returning normally
+fails the test. This proves hosted execution of the two existing checked trap
+edges only; it is not panic-unwind, source-level panic diagnostic, kernel/VMM,
+or physical-machine evidence. Windows and Arch each passed 658 unit, 1
+component-interface, 10 conformance, 351 replacement, and 11 semantic-execution
+tests (1,031 total).
+
 Projected array-element and slice-subslice origins now survive one direct local
 alias in the callee. An explicit alias annotation must independently equal the
 declared return type before the alias receives an origin; inferred aliases keep
