@@ -9050,3 +9050,12 @@ The broader adaptive-placement, cross-microVM interface, and Total MicroVM
 reviews remain **TRIGGERED**, including recovered two-domain admission and
 guest-executed queue traffic. This technical screen is not legal advice or
 patent clearance.
+
+# 2026-08-27 — Test-only isolated checked-trap execution
+
+Patent review: **NOT_TRIGGERED**. The compiler test harness uses conventional
+host process isolation (`fork`/`waitpid` on Linux and a child test process on
+Windows) to observe the existing x86-64 illegal-instruction overflow trap. It
+adds no code-generation mechanism, exception protocol, production sandbox,
+runtime security boundary, cryptographic primitive, or compression mechanism.
+This technical screen is not legal advice or patent clearance.

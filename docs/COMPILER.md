@@ -2145,6 +2145,19 @@ external relocation linking, trap isolation, and complete region inference
 remain outside this checkpoint. Internal read-only relocations are now executed
 by the later bounded semantic-loader checkpoint.
 
+### Isolated checked-trap semantic checkpoint
+
+The semantic-execution harness now observes the existing checked unsigned-
+overflow trap without terminating its parent test suite. Windows executes the
+generated COFF function in an exact child-test process and verifies the
+`STATUS_ILLEGAL_INSTRUCTION` result retained by libtest. Linux executes the
+generated ELF64 function in a forked child and verifies the raw `SIGILL` wait
+status. A normal return is an explicit failure on both hosts. This is hosted
+process-isolation evidence for the existing `ud2` overflow path, not kernel,
+VMM, physical-machine, general signal/exception, terminal-assembly, or panic-
+unwind evidence. Windows and Arch each passed 657 unit, 1 component-interface,
+10 conformance, 351 replacement, and 9 semantic-execution tests (1,028 total).
+
 ### Bounded byte character-literal checkpoint
 
 Byte character literals now have distinct lexical and expression identity and
