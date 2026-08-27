@@ -5868,3 +5868,13 @@ and native Arch Linux WSL each passed 649 library tests, 1 component probe, 10
 conformance tests, and 349 replacement tests: 1,009 compiler tests per host.
 Raw strings, byte/C strings, pooling, larger capacities, and general static data
 remain outside the claim.
+
+The direct conditional string-return milestone at `5eeefa10` lets a tail `if`
+select a parameter-backed `&str` or a cooked static literal. Return preanalysis
+classifies the literal arm without inventing a runtime place, and both ABI paths
+reuse the bounded read-only data relocation and two-word return transport. The
+exact ORACLE-0002 nightly accepted the independently authored form. Windows and
+native Arch Linux WSL each passed 649 library tests, 1 component probe, 10
+conformance tests, and 349 replacement tests: 1,009 compiler tests per host.
+Raw/byte/C strings, pooling, larger capacities, general static data, and general
+lifetime inference remain outside the claim.

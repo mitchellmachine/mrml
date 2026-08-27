@@ -58,7 +58,19 @@ oracle upgrade receives a new immutable record and differential classification
 against all prior accepted probes. Keep Cargo on edition 2024 until a newer
 named edition can be adopted through a pinned, workspace-wide migration.
 
-## Latest cooked string-escape decoding milestone
+## Latest direct conditional string-return milestone
+
+Commit `5eeefa10` aligns return-specific fat-reference preanalysis and ABI
+emission with the existing bounded literal value path. A tail `if` may select a
+parameter-backed `&str` or a cooked static literal; the literal arm creates no
+place-read fact and uses the checked read-only bytes and internal relocation.
+The exact ORACLE-0002 nightly accepted the independently authored direct form.
+Windows and native Arch Linux WSL each passed 649 library tests, 1 component
+probe, 10 conformance tests, and 349 replacement tests: 1,009 compiler tests per
+host. Raw/byte/C strings, pooling, larger capacities, general static data, and
+general lifetime inference remain outside the claim.
+
+### Preceding cooked string-escape decoding milestone
 
 Commit `ba637ea5` decodes ordinary cooked string literal escapes into their
 runtime UTF-8 bytes under the existing 1,024-byte bound. It covers simple

@@ -8719,6 +8719,16 @@ provenance, storage, or runtime algorithm. Broader compiler completion remains
 partial; this technical screen is not a clearance or infringement conclusion
 and does not replace independent human dual review.
 
+# 2026-08-26 — Direct conditional string-literal returns
+
+**Result: NOT_TRIGGERED.** This increment routes a conventional conditional
+`&str` return through MRML's existing bounded control-flow, read-only object
+data, PC-relative relocation, and ABI return mechanisms. It introduces no new
+encoding, compression, optimization, ownership, provenance, storage, or runtime
+algorithm. Broader compiler completion remains partial; this technical screen
+is not a clearance or infringement conclusion and does not replace independent
+human dual review.
+
 # 2026-08-26 — Runtime string-literal object emission
 
 **Result: NOT_TRIGGERED.** This increment copies literal UTF-8 bytes into the

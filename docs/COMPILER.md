@@ -2068,6 +2068,22 @@ tests (1,009 total). Raw/byte strings, escape decoding, literal deduplication,
 more than eight literals, more than 1,024 literal bytes, and general static data
 remain outside this checkpoint.
 
+### Direct conditional string-literal return checkpoint
+
+Direct tail `if` expressions may now return either a parameter-backed `&str`
+or a cooked static string literal. Bounded fat-reference preanalysis treats the
+literal arm as a value with no runtime-place read, while the return emitter uses
+the existing checked read-only data and relocation path before applying the
+target ABI's two-word return transport. The existing 64-level expression bound,
+1,024-byte data capacity, and eight-relocation capacity remain unchanged.
+
+The exact ORACLE-0002 Rust 2024 toolchain accepted the independently authored
+direct conditional probe. MRML emits the exact `fallback` bytes through ELF64
+and accepts the same source for COFF replacement output. Windows and Arch each
+passed 649 unit, 1 component, 10 conformance, and 349 replacement tests (1,009
+total). This checkpoint does not add raw/byte/C strings, pooling, larger
+capacities, general static data, or general lifetime inference.
+
 ### Bounded internal read-only object-data checkpoint
 
 The ELF64 and COFF object emitters now accept typed internal relocations that
