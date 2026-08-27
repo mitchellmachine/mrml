@@ -1884,7 +1884,15 @@ request/response slot. Recovery cannot infer authority from its bytes: every
 transition revalidates both exact target capabilities and the retained projection
 identity. Nested KVM proves the wire across two live mappings, including response
 return before leaf/GPA/ledger retirement. Recovery has not yet launched signed
-ZIM and Zstd guests to execute this queue, and no notification claim is made.
+ZIM and Zstd guests to execute this queue.
+
+The retained peer owner now routes a published request notification to the
+exact provider guest and its response notification to the exact consumer guest
+through the existing capability-authorized interrupt boundary. Nested KVM
+exercises both directions across two live guests, and WHP carries the matching
+checked adapter. This is host-controlled delivery evidence only: recovery does
+not yet own the two domains, and no guest interrupt handler or signed ZIM/Zstd
+call is claimed.
 
 Once that future native teardown succeeds, recovery can now retire the policy
 ledger without a half-removed peer. The kernel exact-matches both retained

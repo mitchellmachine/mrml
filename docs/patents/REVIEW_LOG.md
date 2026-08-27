@@ -9103,3 +9103,15 @@ typed place and reference-origin representations. It adds no novel data
 structure, encoding, compression, cryptographic mechanism, runtime security
 protocol, or production isolation mechanism. This technical screen is not legal
 advice or patent clearance.
+
+# 2026-08-27 — Live two-peer interface interrupt delivery
+
+Patent review: **TRIGGERED** under the existing cross-microVM interface and
+Total MicroVM review. This increment connects the already reviewed exact
+request/response notification routes to the retained provider and consumer VMM
+guests and reuses the existing capability-authorized interrupt injection path.
+It adds no interrupt-controller protocol, scheduler, cryptographic primitive,
+compression mechanism, or device transport. Guest interrupt handling,
+recovered two-domain ownership, and signed component execution remain within
+the broader triggered worldwide mechanism review. This technical screen is not
+legal advice or patent clearance.

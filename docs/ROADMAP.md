@@ -3498,4 +3498,14 @@ while denial retains it and uncertain backend delivery both retains it and
 fails the VM. Adversarial kernel tests cover replay, cross-binding, duplicate
 pending publication, wrong object, denied vector, and uncertain injection.
 Windows passes 578 kernel tests. Live two-guest WHP/KVM delivery and guest
-interrupt handling remain **PLANNED**.
+execution were still pending at that checkpoint.
+
+The retained peer owner now **PARTIALLY IMPLEMENTS** live directional delivery.
+After exact queue publication, it injects the request token only into the
+provider guest and the response token only into the consumer guest through the
+existing capability-authorized VM interrupt route. Nested KVM exercises both
+directions across two live guests; WHP carries the same source and API path.
+Kernel passes 578 tests on Windows and Arch Linux, WHP passes 27 tests with one
+manual performance test ignored, and nested KVM passes 23 tests with one manual
+performance test ignored. Guest interrupt handlers, recovered two-domain runner
+ownership, and guest-executed signed ZIM/Zstd calls remain **PLANNED**.

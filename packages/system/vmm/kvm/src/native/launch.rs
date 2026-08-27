@@ -328,6 +328,48 @@ impl<'guest, const FIRST: usize, const SECOND: usize> PreparedKvmPeerPage<'guest
         VmBackend::read_guest(self.first, self.first_physical, output)
     }
 
+    pub fn deliver_request_interrupt<const V: usize, const C: usize>(
+        &mut self,
+        route: &mut mrml_kernel::MicrovmInterfaceRequestInterrupt,
+        vms: &mut mrml_kernel::VmTable<V>,
+        policy: &mrml_kernel::InterruptPolicy,
+        capabilities: &CapabilitySpace<C>,
+        capability: Capability,
+    ) -> Result<
+        Option<mrml_kernel::MicrovmInterfaceRequestNotification>,
+        mrml_kernel::MicrovmInterfaceInterruptError<KvmError>,
+    > {
+        mrml_kernel::deliver_microvm_interface_request_interrupt(
+            route,
+            self.second,
+            vms,
+            policy,
+            capabilities,
+            capability,
+        )
+    }
+
+    pub fn deliver_response_interrupt<const V: usize, const C: usize>(
+        &mut self,
+        route: &mut mrml_kernel::MicrovmInterfaceResponseInterrupt,
+        vms: &mut mrml_kernel::VmTable<V>,
+        policy: &mrml_kernel::InterruptPolicy,
+        capabilities: &CapabilitySpace<C>,
+        capability: Capability,
+    ) -> Result<
+        Option<mrml_kernel::MicrovmInterfaceResponseNotification>,
+        mrml_kernel::MicrovmInterfaceInterruptError<KvmError>,
+    > {
+        mrml_kernel::deliver_microvm_interface_response_interrupt(
+            route,
+            self.first,
+            vms,
+            policy,
+            capabilities,
+            capability,
+        )
+    }
+
     pub fn first_translation(&mut self) -> Result<Option<u64>, KvmError> {
         Ok(self
             .first
@@ -3110,8 +3152,10 @@ mod tests {
             Err(KvmError::UnmappedMemory)
         );
         first.withdraw_peer_page(peer_virtual, 0x20_0000).unwrap();
+        let queue_identity =
+            mrml_kernel::MicrovmInterfaceQueueIdentity::new([0x5a; 32], 3, 14, 9, 7, 11).unwrap();
         let queue_pair = mrml_kernel::MicrovmInterfaceQueuePair::bind(
-            mrml_kernel::MicrovmInterfaceQueueIdentity::new([0x5a; 32], 3, 14, 9, 7, 11).unwrap(),
+            queue_identity,
             &projection,
             first_target,
             second_target,
@@ -3119,6 +3163,38 @@ mod tests {
         )
         .unwrap();
         let (mut consumer_queue, mut provider_queue) = queue_pair.split();
+        let request_interrupt_object = ObjectId(0x784);
+        let response_interrupt_object = ObjectId(0x785);
+        let request_interrupt = capabilities
+            .insert(request_interrupt_object, Rights::SIGNAL)
+            .unwrap();
+        let response_interrupt = capabilities
+            .insert(response_interrupt_object, Rights::SIGNAL)
+            .unwrap();
+        let mut interrupt_policy = InterruptPolicy::deny_all();
+        interrupt_policy.allow(64).unwrap();
+        interrupt_policy.allow(65).unwrap();
+        let mut vms = VmTable::<2>::new();
+        let consumer_vm = vms.create(1).unwrap();
+        vms.mark_loaded(consumer_vm).unwrap();
+        vms.start(consumer_vm).unwrap();
+        let provider_vm = vms.create(1).unwrap();
+        vms.mark_loaded(provider_vm).unwrap();
+        vms.start(provider_vm).unwrap();
+        let mut request_route = mrml_kernel::MicrovmInterfaceRequestInterrupt::new(
+            queue_identity,
+            provider_vm,
+            0,
+            64,
+            request_interrupt_object,
+        );
+        let mut response_route = mrml_kernel::MicrovmInterfaceResponseInterrupt::new(
+            queue_identity,
+            consumer_vm,
+            0,
+            65,
+            response_interrupt_object,
+        );
         let mut peer = PreparedKvmPeerPage::prepare(
             &mut first,
             &mut second,
@@ -3139,7 +3215,18 @@ mod tests {
         let request_notification = consumer_queue
             .submit(&mut consumer_page, &projection, &capabilities, 1, b"zim")
             .unwrap();
+        request_route.publish(request_notification).unwrap();
         peer.write_first(&consumer_page).unwrap();
+        let request_notification = peer
+            .deliver_request_interrupt(
+                &mut request_route,
+                &mut vms,
+                &interrupt_policy,
+                &capabilities,
+                request_interrupt,
+            )
+            .unwrap()
+            .unwrap();
         let mut provider_page = [0_u8; PAGE_SIZE as usize];
         peer.read_second(&mut provider_page).unwrap();
         let mut request = [0_u8; 8];
@@ -3166,7 +3253,18 @@ mod tests {
                 b"zstd",
             )
             .unwrap();
+        response_route.publish(response_notification).unwrap();
         peer.write_second(&provider_page).unwrap();
+        let response_notification = peer
+            .deliver_response_interrupt(
+                &mut response_route,
+                &mut vms,
+                &interrupt_policy,
+                &capabilities,
+                response_interrupt,
+            )
+            .unwrap()
+            .unwrap();
         peer.read_first(&mut consumer_page).unwrap();
         let mut response = [0_u8; 8];
         assert_eq!(

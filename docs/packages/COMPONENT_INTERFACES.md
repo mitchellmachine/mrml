@@ -621,8 +621,13 @@ binding each directional token to one exact VM/vCPU, allowlisted external
 vector, and `SIGNAL`-authorized interrupt object. The latch accepts only the
 next notification for its queue identity and clears only after confirmed
 injection; policy denial or backend uncertainty cannot manufacture an
-acknowledgement. Native WHP/KVM delivery to the signed consumer/provider guests
-and their interrupt handlers remain **PLANNED**.
+acknowledgement. The retained two-peer WHP/KVM owner now selects the exact
+provider guest for request delivery and the exact consumer guest for response
+delivery, and injects each published token through that existing boundary.
+Nested KVM exercises both directions across two live guests; WHP carries the
+same checked adapter and test path. Guest interrupt handlers, recovered
+two-domain ownership, and signed consumer/provider execution remain
+**PLANNED**.
 
 The end-to-end Zstd gate proves equal corpus decoding by old and new providers,
 no ZIM rebuild, old-generation retention while referenced, later safe GC, ABI-4
