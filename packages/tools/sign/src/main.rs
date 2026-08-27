@@ -223,7 +223,7 @@ fn keygen(private_path: &str, public_path: &str) -> Result<()> {
     // Publish the non-secret half first. A failure can leave an unusable public
     // key behind, but never a private key without its corresponding public key.
     mrml_runtime::write_new_file(public_path, &public)?;
-    mrml_runtime::write_new_file(private_path, &private)?;
+    mrml_runtime::write_secret_file(private_path, &mut private)?;
     println!("generated one-time Lamport key; destroy PRIVATE after exactly one signature");
     Ok(())
 }
@@ -323,6 +323,9 @@ mod tests {
             &mrml_runtime::temporary_directory(),
             &mrml_runtime::mrml_format!("mrml-sign-exclusive-{}", mrml_runtime::process_id()),
         );
+        if mrml_runtime::path_exists(&root) {
+            mrml_runtime::remove_dir_all(&root).unwrap();
+        }
         mrml_runtime::create_dir_all(&root).unwrap();
         let artifact = mrml_runtime::join_path(&root, "artifact.bin");
         let private = mrml_runtime::join_path(&root, "release.private");

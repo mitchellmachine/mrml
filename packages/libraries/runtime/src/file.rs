@@ -73,6 +73,38 @@ pub fn write_new_file(path: &str, contents: &[u8]) -> Result<(), FileError> {
     result
 }
 
+/// Creates a new private file with platform owner-only policy, writes it
+/// durably, and erases the caller's secret buffer on every return path.
+pub fn write_secret_file(path: &str, contents: &mut [u8]) -> Result<(), FileError> {
+    let mut created = false;
+    let result = (|| {
+        #[cfg(windows)]
+        let inner = {
+            let encoded = encode_windows_path(path).ok_or(FileError::InvalidPath)?;
+            mrml_windows::NativeFile::create_secret(&encoded).ok_or(FileError::OpenFailed)?
+        };
+        #[cfg(unix)]
+        let inner = {
+            let encoded = encode_unix_path(path).ok_or(FileError::InvalidPath)?;
+            let path = core::ffi::CStr::from_bytes_with_nul(&encoded)
+                .map_err(|_| FileError::InvalidPath)?;
+            mrml_linux::NativeFile::create_secret(path).ok_or(FileError::OpenFailed)?
+        };
+        created = true;
+        let mut file = File { inner, position: 0 };
+        file.write_all(contents)?;
+        file.inner
+            .sync()
+            .then_some(())
+            .ok_or(FileError::WriteFailed)
+    })();
+    contents.fill(0);
+    if created && result.is_err() {
+        let _ = remove_file(path);
+    }
+    result
+}
+
 impl fmt::Display for FileError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter.write_str(match self {
@@ -547,6 +579,26 @@ mod tests {
         write_new_file(&path, b"first").unwrap();
         assert_eq!(write_new_file(&path, b"second"), Err(FileError::OpenFailed));
         assert_eq!(&*read_file(&path).unwrap(), b"first");
+        remove_file(&path).unwrap();
+    }
+
+    #[test]
+    fn secret_writes_are_exclusive_durable_and_erase_the_source() {
+        let path = test_path("mrml-secret.bin");
+        if path_exists(&path) {
+            remove_file(&path).unwrap();
+        }
+        let mut secret = [0x5au8; 64];
+        write_secret_file(&path, &mut secret).unwrap();
+        assert!(secret.iter().all(|byte| *byte == 0));
+        assert_eq!(&*read_file(&path).unwrap(), &[0x5a; 64]);
+        let mut replacement = [0x33u8; 64];
+        assert_eq!(
+            write_secret_file(&path, &mut replacement),
+            Err(FileError::OpenFailed)
+        );
+        assert!(replacement.iter().all(|byte| *byte == 0));
+        assert_eq!(&*read_file(&path).unwrap(), &[0x5a; 64]);
         remove_file(&path).unwrap();
     }
 

@@ -22,6 +22,29 @@ struct Timespec {
 #[cfg(unix)]
 struct PthreadAttr([u8; 56]);
 
+#[repr(C)]
+#[cfg(unix)]
+struct Stat {
+    device: u64,
+    inode: u64,
+    links: u64,
+    mode: u32,
+    uid: u32,
+    gid: u32,
+    pad: i32,
+    special_device: u64,
+    size: i64,
+    block_size: i64,
+    blocks: i64,
+    access_time: i64,
+    access_nanoseconds: i64,
+    modification_time: i64,
+    modification_nanoseconds: i64,
+    change_time: i64,
+    change_nanoseconds: i64,
+    reserved: [i64; 3],
+}
+
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub struct LocalTime {
     pub year: u16,
@@ -78,6 +101,8 @@ unsafe extern "C" {
     fn write(file: c_int, buffer: *const c_void, count: usize) -> isize;
     fn lseek(file: c_int, offset: isize, whence: c_int) -> isize;
     fn close(file: c_int) -> c_int;
+    fn fsync(file: c_int) -> c_int;
+    fn fstat(file: c_int, status: *mut Stat) -> c_int;
     fn mkdir(path: *const i8, mode: u32) -> c_int;
     fn unlink(path: *const i8) -> c_int;
     fn rmdir(path: *const i8) -> c_int;
@@ -713,6 +738,42 @@ impl NativeFile {
         (file >= 0).then_some(Self(file))
     }
 
+    pub fn create_secret(path: &CStr) -> Option<Self> {
+        const O_WRONLY: c_int = 1;
+        const O_CREAT: c_int = 64;
+        const O_EXCL: c_int = 128;
+        const O_NOFOLLOW: c_int = 0x2_0000;
+        const O_CLOEXEC: c_int = 0x8_0000;
+        let file = unsafe {
+            open(
+                path.as_ptr(),
+                O_WRONLY | O_CREAT | O_EXCL | O_NOFOLLOW | O_CLOEXEC,
+                0o600,
+            )
+        };
+        let file = (file >= 0).then_some(Self(file))?;
+        if !file.is_regular() || !file.has_owner_only_permissions() {
+            return None;
+        }
+        Some(file)
+    }
+
+    pub fn sync(&self) -> bool {
+        (unsafe { fsync(self.0) }) == 0
+    }
+
+    pub fn is_regular(&self) -> bool {
+        let mut status = core::mem::MaybeUninit::<Stat>::uninit();
+        (unsafe { fstat(self.0, status.as_mut_ptr()) }) == 0
+            && (unsafe { status.assume_init() }.mode & 0o170000) == 0o100000
+    }
+
+    pub fn has_owner_only_permissions(&self) -> bool {
+        let mut status = core::mem::MaybeUninit::<Stat>::uninit();
+        (unsafe { fstat(self.0, status.as_mut_ptr()) }) == 0
+            && (unsafe { status.assume_init() }.mode & 0o777) == 0o600
+    }
+
     pub fn open_write(path: &CStr) -> Option<Self> {
         const O_WRONLY: c_int = 1;
         let file = unsafe { open(path.as_ptr(), O_WRONLY) };
@@ -1146,6 +1207,18 @@ mod tests {
             b"native mapping"
         );
         assert!(unsafe { super::unmap_file(mapping, 14) });
+        drop(file);
+        assert!(super::delete_file(path));
+    }
+
+    #[test]
+    fn creates_owner_only_regular_secret_file() {
+        let path = c"/tmp/mrml-linux-secret-test.bin";
+        let _ = super::delete_file(path);
+        let file = super::NativeFile::create_secret(path).unwrap();
+        assert!(file.is_regular());
+        assert!(file.has_owner_only_permissions());
+        assert!(file.sync());
         drop(file);
         assert!(super::delete_file(path));
     }

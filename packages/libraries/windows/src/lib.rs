@@ -466,6 +466,7 @@ unsafe extern "system" {
     fn GetSystemTimeAsFileTime(time: *mut FileTime);
     fn GetProcessHeap() -> *mut c_void;
     fn GetCurrentProcessId() -> u32;
+    fn GetCurrentProcess() -> *mut c_void;
     fn CreatePipe(
         read: *mut *mut c_void,
         write: *mut *mut c_void,
@@ -541,6 +542,8 @@ unsafe extern "system" {
     ) -> *mut c_void;
     fn UnmapViewOfFile(address: *const c_void) -> i32;
     fn CloseHandle(handle: *mut c_void) -> i32;
+    fn FlushFileBuffers(handle: *mut c_void) -> i32;
+    fn GetFileType(handle: *mut c_void) -> u32;
     fn CreateFileW(
         name: *const u16,
         access: u32,
@@ -1642,6 +1645,105 @@ impl NativeFile {
         (handle as isize != -1).then_some(Self(handle))
     }
 
+    pub fn create_secret(path: &[u16]) -> Option<Self> {
+        type OpenProcessToken =
+            unsafe extern "system" fn(*mut c_void, u32, *mut *mut c_void) -> i32;
+        type GetTokenInformation =
+            unsafe extern "system" fn(*mut c_void, u32, *mut c_void, u32, *mut u32) -> i32;
+        type InitializeSecurityDescriptor = unsafe extern "system" fn(*mut c_void, u32) -> i32;
+        type InitializeAcl = unsafe extern "system" fn(*mut c_void, u32, u32) -> i32;
+        type AddAccessAllowedAce =
+            unsafe extern "system" fn(*mut c_void, u32, u32, *mut c_void) -> i32;
+        type SetSecurityDescriptorDacl =
+            unsafe extern "system" fn(*mut c_void, i32, *mut c_void, i32) -> i32;
+        const GENERIC_WRITE: u32 = 0x4000_0000;
+        const CREATE_NEW: u32 = 1;
+        const FILE_ATTRIBUTE_NORMAL: u32 = 0x80;
+        const FILE_FLAG_OPEN_REPARSE_POINT: u32 = 0x0020_0000;
+        let library = DynamicLibrary::open(c"advapi32.dll")?;
+        macro_rules! resolve {
+            ($name:expr, $kind:ty) => {{ unsafe { core::mem::transmute::<*mut c_void, $kind>(library.symbol($name)?) } }};
+        }
+        let open_token = resolve!(c"OpenProcessToken", OpenProcessToken);
+        let get_token = resolve!(c"GetTokenInformation", GetTokenInformation);
+        let initialize_descriptor = resolve!(
+            c"InitializeSecurityDescriptor",
+            InitializeSecurityDescriptor
+        );
+        let initialize_acl = resolve!(c"InitializeAcl", InitializeAcl);
+        let add_ace = resolve!(c"AddAccessAllowedAce", AddAccessAllowedAce);
+        let set_dacl = resolve!(c"SetSecurityDescriptorDacl", SetSecurityDescriptorDacl);
+        let mut token = core::ptr::null_mut();
+        if unsafe { open_token(GetCurrentProcess(), 0x0008, &mut token) } == 0 {
+            return None;
+        }
+        let mut token_user = [0u8; 128];
+        let mut needed = 0;
+        let token_ok = unsafe {
+            get_token(
+                token,
+                1,
+                token_user.as_mut_ptr().cast(),
+                token_user.len() as u32,
+                &mut needed,
+            )
+        } != 0;
+        let _ = unsafe { CloseHandle(token) };
+        if !token_ok || needed as usize > token_user.len() {
+            return None;
+        }
+        let sid = unsafe { token_user.as_ptr().cast::<*mut c_void>().read_unaligned() };
+        if sid.is_null() {
+            return None;
+        }
+        // Absolute SECURITY_DESCRIPTOR: 4-byte header followed by four native
+        // pointers (40 bytes on the supported Windows x86-64 target).
+        let mut descriptor = [0usize; 5];
+        let mut acl = [0u32; 32];
+        if unsafe { initialize_descriptor(descriptor.as_mut_ptr().cast(), 1) } == 0
+            || unsafe { initialize_acl(acl.as_mut_ptr().cast(), 128, 2) } == 0
+            || unsafe { add_ace(acl.as_mut_ptr().cast(), 2, 0x001f_01ff, sid) } == 0
+            || unsafe {
+                set_dacl(
+                    descriptor.as_mut_ptr().cast(),
+                    1,
+                    acl.as_mut_ptr().cast(),
+                    0,
+                )
+            } == 0
+        {
+            return None;
+        }
+        let attributes = SecurityAttributes {
+            length: core::mem::size_of::<SecurityAttributes>() as u32,
+            security_descriptor: descriptor.as_mut_ptr().cast(),
+            inherit_handle: 0,
+        };
+        let handle = unsafe {
+            CreateFileW(
+                path.as_ptr(),
+                GENERIC_WRITE,
+                0,
+                core::ptr::from_ref(&attributes).cast(),
+                CREATE_NEW,
+                FILE_ATTRIBUTE_NORMAL | FILE_FLAG_OPEN_REPARSE_POINT,
+                core::ptr::null_mut(),
+            )
+        };
+        if handle as isize == -1 {
+            return None;
+        }
+        if unsafe { GetFileType(handle) } != 1 {
+            let _ = unsafe { CloseHandle(handle) };
+            return None;
+        }
+        Some(Self(handle))
+    }
+
+    pub fn sync(&self) -> bool {
+        (unsafe { FlushFileBuffers(self.0) }) != 0
+    }
+
     pub fn open_write(path: &[u16]) -> Option<Self> {
         const GENERIC_WRITE: u32 = 0x4000_0000;
         const FILE_SHARE_READ: u32 = 1;
@@ -2200,6 +2302,25 @@ mod tests {
             assert_eq!(pointer.read(), 0x5a);
             GlobalAlloc::dealloc(&super::SystemAllocator, pointer, layout);
         }
+    }
+
+    #[test]
+    fn creates_owner_only_secret_file() {
+        let mut path = [0u16; 64];
+        let name = b"mrml-windows-secret-test.bin";
+        for (output, input) in path.iter_mut().zip(name) {
+            *output = *input as u16;
+        }
+        let path = &path[..name.len() + 1];
+        let _ = super::delete_file_wide(path);
+        let file = super::NativeFile::create_secret(path).unwrap_or_else(|| {
+            panic!("secret creation failed with {}", unsafe {
+                super::GetLastError()
+            })
+        });
+        assert!(file.sync());
+        drop(file);
+        assert!(super::delete_file_wide(path));
     }
 
     #[test]
