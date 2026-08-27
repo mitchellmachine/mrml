@@ -168,6 +168,7 @@ pub enum CodegenErrorKind {
     TooManyRuntimePlaceProjections,
     InvalidRuntimePlaceFacts,
     InvalidRuntimeControlFlowFacts,
+    UnsupportedRuntimeControlFlow,
     RuntimeUseAfterMove,
     RuntimeBorrowConflict,
     RuntimeReferenceOutlivesFunction,
@@ -1015,6 +1016,11 @@ pub fn compile_x86_64_runtime_function_with_options<
             function.body_expression_span.start,
             &mut body_facts,
         )?;
+    let validated_body =
+        validate_runtime_body_for_emission(&body, &body_facts).map_err(|kind| CodegenError {
+            kind,
+            span: function.body_expression_span,
+        })?;
     let mut emitter = RuntimeEmitter::<_, MAX_BYTES, MAX_PARAMETERS> {
         bytes: [0; MAX_BYTES],
         length: 0,
@@ -1046,7 +1052,7 @@ pub fn compile_x86_64_runtime_function_with_options<
         runtime_call_names: [None; 8],
         runtime_call_local_floor: None,
     };
-    emitter.emit_prologue()?;
+    emitter.emit_prologue(validated_body)?;
     for statement in body.statements().iter().flatten() {
         match statement {
             crate::BodyStatement::Loop(_) => break,
@@ -12864,19 +12870,31 @@ fn nested_loop_control_count(
         .ok_or(CodegenErrorKind::InvalidRuntimeControlFlowFacts)
 }
 
+fn validate_nested_loop_conditional_branch(
+    branch: crate::parser::NestedLoopConditionalBlock<'_>,
+) -> Result<(), CodegenErrorKind> {
+    for action in branch.actions() {
+        action.ok_or(CodegenErrorKind::InvalidRuntimeControlFlowFacts)?;
+    }
+    let alternatives = branch.else_arms();
+    for (index, alternative) in alternatives.iter().copied().enumerate() {
+        let alternative = alternative.ok_or(CodegenErrorKind::InvalidRuntimeControlFlowFacts)?;
+        if alternative.condition().is_none() && index + 1 != alternatives.len() {
+            return Err(CodegenErrorKind::InvalidRuntimeControlFlowFacts);
+        }
+        for action in alternative.actions() {
+            action.ok_or(CodegenErrorKind::InvalidRuntimeControlFlowFacts)?;
+        }
+    }
+    Ok(())
+}
+
 fn nested_loop_has_supported_control_flow(
     block: &crate::NestedLoopBlock<'_>,
 ) -> Result<bool, CodegenErrorKind> {
     for branch in block.conditional_blocks() {
         let branch = branch.ok_or(CodegenErrorKind::InvalidRuntimeControlFlowFacts)?;
-        for action in branch.actions() {
-            action.ok_or(CodegenErrorKind::InvalidRuntimeControlFlowFacts)?;
-        }
-        if let Some(else_arm) = branch.else_arm() {
-            for action in else_arm.actions() {
-                action.ok_or(CodegenErrorKind::InvalidRuntimeControlFlowFacts)?;
-            }
-        }
+        validate_nested_loop_conditional_branch(branch)?;
     }
     for action in block.actions() {
         action.ok_or(CodegenErrorKind::InvalidRuntimeControlFlowFacts)?;
@@ -12920,7 +12938,7 @@ fn nested_loop_has_inner_exit(block: &crate::NestedLoopBlock<'_>) -> bool {
             matches!(
                 branch.terminal,
                 crate::NestedLoopUnconditionalControl::Break(crate::NestedLoopControlTarget::Inner)
-            ) || branch.else_arm().is_some_and(|arm| {
+            ) || branch.else_arms().iter().flatten().any(|arm| {
                 matches!(
                     arm.terminal,
                     crate::NestedLoopUnconditionalControl::Break(
@@ -12949,7 +12967,7 @@ fn nested_loop_has_outer_break(block: &crate::NestedLoopBlock<'_>) -> bool {
             matches!(
                 branch.terminal,
                 crate::NestedLoopUnconditionalControl::Break(crate::NestedLoopControlTarget::Outer)
-            ) || branch.else_arm().is_some_and(|arm| {
+            ) || branch.else_arms().iter().flatten().any(|arm| {
                 matches!(
                     arm.terminal,
                     crate::NestedLoopUnconditionalControl::Break(
@@ -13529,7 +13547,7 @@ fn preanalyze_runtime_body_control_flow<'source, const MAX_PARAMETERS: usize>(
                     .and_then(|loop_statement| *loop_statement)
                     .ok_or(CodegenErrorKind::InvalidRuntimeControlFlowFacts)?;
                 if !loop_has_supported_initial_control_flow(&loop_statement)? {
-                    return Ok(());
+                    return Err(CodegenErrorKind::UnsupportedRuntimeControlFlow);
                 }
             }
             _ => {}
@@ -13931,6 +13949,84 @@ fn preanalyze_runtime_body_control_flow<'source, const MAX_PARAMETERS: usize>(
     }
     facts.control_flow_complete = true;
     Ok(())
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct ValidatedRuntimeBody;
+
+fn validate_runtime_body_for_emission<'source, const MAX_PARAMETERS: usize>(
+    body: &crate::FunctionBody<'source, MAX_PARAMETERS>,
+    facts: &RuntimeBodyFacts<'source>,
+) -> Result<ValidatedRuntimeBody, CodegenErrorKind> {
+    if !facts.control_flow_complete || facts.basic_block_count == 0 {
+        return Err(CodegenErrorKind::UnsupportedRuntimeControlFlow);
+    }
+    for statement in body.statements().iter().copied() {
+        let statement = statement.ok_or(CodegenErrorKind::InvalidRuntimeControlFlowFacts)?;
+        match statement {
+            crate::BodyStatement::Local(index) => {
+                body.locals()
+                    .get(index)
+                    .copied()
+                    .flatten()
+                    .ok_or(CodegenErrorKind::InvalidRuntimeControlFlowFacts)?;
+            }
+            crate::BodyStatement::Assignment(index) => {
+                body.assignments()
+                    .get(index)
+                    .copied()
+                    .flatten()
+                    .ok_or(CodegenErrorKind::InvalidRuntimeControlFlowFacts)?;
+            }
+            crate::BodyStatement::ConditionalReturn(index) => {
+                body.conditional_returns()
+                    .get(index)
+                    .copied()
+                    .flatten()
+                    .ok_or(CodegenErrorKind::InvalidRuntimeControlFlowFacts)?;
+            }
+            crate::BodyStatement::ConditionalReturnElse(index) => {
+                body.conditional_return_elses()
+                    .get(index)
+                    .copied()
+                    .flatten()
+                    .ok_or(CodegenErrorKind::InvalidRuntimeControlFlowFacts)?;
+            }
+            crate::BodyStatement::ConditionalAssignment(index) => {
+                body.conditional_assignments()
+                    .get(index)
+                    .copied()
+                    .flatten()
+                    .ok_or(CodegenErrorKind::InvalidRuntimeControlFlowFacts)?;
+            }
+            crate::BodyStatement::Expression(index) => {
+                body.expression_statements()
+                    .get(index)
+                    .copied()
+                    .flatten()
+                    .ok_or(CodegenErrorKind::InvalidRuntimeControlFlowFacts)?;
+            }
+            crate::BodyStatement::Return(index) => {
+                body.returns()
+                    .get(index)
+                    .copied()
+                    .flatten()
+                    .ok_or(CodegenErrorKind::InvalidRuntimeControlFlowFacts)?;
+            }
+            crate::BodyStatement::Loop(index) => {
+                let loop_statement = body
+                    .while_loops()
+                    .get(index)
+                    .copied()
+                    .flatten()
+                    .ok_or(CodegenErrorKind::InvalidRuntimeControlFlowFacts)?;
+                if !loop_has_supported_initial_control_flow(&loop_statement)? {
+                    return Err(CodegenErrorKind::UnsupportedRuntimeControlFlow);
+                }
+            }
+        }
+    }
+    Ok(ValidatedRuntimeBody)
 }
 
 fn runtime_expression_initializedness_is_supported(facts: &RuntimeBodyFacts<'_>) -> bool {
@@ -24037,7 +24133,7 @@ impl<
         }
     }
 
-    fn emit_prologue(&mut self) -> Result<(), CodegenError> {
+    fn emit_prologue(&mut self, _validated_body: ValidatedRuntimeBody) -> Result<(), CodegenError> {
         match self.abi {
             X86_64Abi::Windows => {
                 let mut pushed_slots = usize::from(self.uses_sret);
@@ -43483,6 +43579,58 @@ mod tests {
                 .kind,
             CodegenErrorKind::RuntimeReferenceOutlivesFunction,
         );
+    }
+
+    #[test]
+    fn runtime_nested_loop_validation_covers_every_alternative_and_requires_complete_cfg() {
+        let source = "#[unsafe(no_mangle)] pub extern \"C\" fn value(primary: bool, first: bool, second: bool) -> u64 { loop { loop { if primary { return 40; } else if first { let selected: u64 = 50; return selected; } else if second { let selected: u64 = 60; return selected; } else { return 70; } } } }";
+        let module = Parser::new(source).parse_module::<2, 4>().unwrap();
+        let Some(Item::Function(function)) = module.items()[0] else {
+            panic!("expected function")
+        };
+        let body = function.parse_body::<4>().unwrap();
+        let outer = body.while_loops()[0].unwrap();
+        let Some(crate::LoopOperation::NestedBlock(index)) = outer.operations()[0] else {
+            panic!("expected nested loop block")
+        };
+        let inner = outer.nested_blocks()[index].unwrap();
+        let branch = inner.conditional_blocks()[0].unwrap();
+        assert_eq!(branch.else_arm_count(), 3);
+        validate_nested_loop_conditional_branch(branch).unwrap();
+        assert!(nested_loop_has_supported_control_flow(&inner).unwrap());
+        assert_eq!(
+            validate_runtime_body_for_emission(&body, &RuntimeBodyFacts::EMPTY),
+            Err(CodegenErrorKind::UnsupportedRuntimeControlFlow)
+        );
+
+        let mut facts = RuntimeBodyFacts::EMPTY;
+        preanalyze_runtime_body_declarations::<_, 4, 32>(
+            &function,
+            &NoConstants,
+            &body,
+            "u64",
+            function.body_expression_span.start,
+            &mut facts,
+        )
+        .unwrap();
+        assert_eq!(
+            validate_runtime_body_for_emission(&body, &facts),
+            Ok(ValidatedRuntimeBody)
+        );
+        for alternative_index in 0..3 {
+            assert!(
+                facts
+                    .block_with_source(RuntimeBasicBlockSource::NestedLoopBranchElseActions {
+                        statement_index: 0,
+                        operation_index: 0,
+                        branch_index: 0,
+                        alternative_index,
+                        action_count: usize::from(alternative_index < 2),
+                    })
+                    .is_some(),
+                "missing alternative {alternative_index}"
+            );
+        }
     }
 
     #[test]
