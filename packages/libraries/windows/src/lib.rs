@@ -399,6 +399,21 @@ struct FindDataW {
 
 #[repr(C)]
 #[cfg(windows)]
+struct ByHandleFileInformation {
+    attributes: u32,
+    creation_time: FileTime,
+    access_time: FileTime,
+    write_time: FileTime,
+    volume_serial_number: u32,
+    size_high: u32,
+    size_low: u32,
+    number_of_links: u32,
+    file_index_high: u32,
+    file_index_low: u32,
+}
+
+#[repr(C)]
+#[cfg(windows)]
 struct SecurityAttributes {
     length: u32,
     security_descriptor: *mut c_void,
@@ -544,6 +559,10 @@ unsafe extern "system" {
     fn CloseHandle(handle: *mut c_void) -> i32;
     fn FlushFileBuffers(handle: *mut c_void) -> i32;
     fn GetFileType(handle: *mut c_void) -> u32;
+    fn GetFileInformationByHandle(
+        handle: *mut c_void,
+        information: *mut ByHandleFileInformation,
+    ) -> i32;
     fn CreateFileW(
         name: *const u16,
         access: u32,
@@ -1584,6 +1603,18 @@ unsafe impl Send for NativeFile {}
 
 #[cfg(windows)]
 impl NativeFile {
+    fn handle_is_regular_file(handle: *mut c_void) -> bool {
+        const FILE_TYPE_DISK: u32 = 1;
+        const FILE_ATTRIBUTE_DIRECTORY: u32 = 0x10;
+        const FILE_ATTRIBUTE_REPARSE_POINT: u32 = 0x400;
+        let mut information = core::mem::MaybeUninit::<ByHandleFileInformation>::uninit();
+        (unsafe { GetFileType(handle) }) == FILE_TYPE_DISK
+            && (unsafe { GetFileInformationByHandle(handle, information.as_mut_ptr()) }) != 0
+            && unsafe { information.assume_init() }.attributes
+                & (FILE_ATTRIBUTE_DIRECTORY | FILE_ATTRIBUTE_REPARSE_POINT)
+                == 0
+    }
+
     pub fn open_read(path: &[u16]) -> Option<Self> {
         const GENERIC_READ: u32 = 0x8000_0000;
         const FILE_SHARE_READ: u32 = 1;
@@ -1631,6 +1662,7 @@ impl NativeFile {
         const FILE_SHARE_READ: u32 = 1;
         const CREATE_NEW: u32 = 1;
         const FILE_ATTRIBUTE_NORMAL: u32 = 0x80;
+        const FILE_FLAG_OPEN_REPARSE_POINT: u32 = 0x0020_0000;
         let handle = unsafe {
             CreateFileW(
                 path.as_ptr(),
@@ -1638,11 +1670,44 @@ impl NativeFile {
                 FILE_SHARE_READ,
                 core::ptr::null(),
                 CREATE_NEW,
-                FILE_ATTRIBUTE_NORMAL,
+                FILE_ATTRIBUTE_NORMAL | FILE_FLAG_OPEN_REPARSE_POINT,
                 core::ptr::null_mut(),
             )
         };
-        (handle as isize != -1).then_some(Self(handle))
+        if handle as isize == -1 {
+            return None;
+        }
+        if !Self::handle_is_regular_file(handle) {
+            let _ = unsafe { CloseHandle(handle) };
+            return None;
+        }
+        Some(Self(handle))
+    }
+
+    pub fn open_regular_read(path: &[u16]) -> Option<Self> {
+        const GENERIC_READ: u32 = 0x8000_0000;
+        const FILE_SHARE_READ: u32 = 1;
+        const OPEN_EXISTING: u32 = 3;
+        const FILE_FLAG_OPEN_REPARSE_POINT: u32 = 0x0020_0000;
+        let handle = unsafe {
+            CreateFileW(
+                path.as_ptr(),
+                GENERIC_READ,
+                FILE_SHARE_READ,
+                core::ptr::null(),
+                OPEN_EXISTING,
+                FILE_FLAG_OPEN_REPARSE_POINT,
+                core::ptr::null_mut(),
+            )
+        };
+        if handle as isize == -1 {
+            return None;
+        }
+        if !Self::handle_is_regular_file(handle) {
+            let _ = unsafe { CloseHandle(handle) };
+            return None;
+        }
+        Some(Self(handle))
     }
 
     pub fn create_secret(path: &[u16]) -> Option<Self> {

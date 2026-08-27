@@ -407,6 +407,23 @@ impl File {
         }
     }
 
+    /// Opens an existing regular file without following a final path link.
+    pub fn open_regular(path: &str) -> Result<Self, FileError> {
+        #[cfg(windows)]
+        let inner = {
+            let encoded = encode_windows_path(path).ok_or(FileError::InvalidPath)?;
+            mrml_windows::NativeFile::open_regular_read(&encoded).ok_or(FileError::OpenFailed)?
+        };
+        #[cfg(unix)]
+        let inner = {
+            let encoded = encode_unix_path(path).ok_or(FileError::InvalidPath)?;
+            let path = core::ffi::CStr::from_bytes_with_nul(&encoded)
+                .map_err(|_| FileError::InvalidPath)?;
+            mrml_linux::NativeFile::open_regular_read(path).ok_or(FileError::OpenFailed)?
+        };
+        Ok(Self { inner, position: 0 })
+    }
+
     pub fn create(path: &str) -> Result<Self, FileError> {
         #[cfg(windows)]
         {
@@ -527,6 +544,13 @@ impl File {
         self.inner.len().ok_or(FileError::MetadataFailed)
     }
 
+    pub fn sync(&self) -> Result<(), FileError> {
+        self.inner
+            .sync()
+            .then_some(())
+            .ok_or(FileError::WriteFailed)
+    }
+
     pub const fn position(&self) -> u64 {
         self.position
     }
@@ -544,6 +568,7 @@ impl File {
 #[cfg(test)]
 mod tests {
     use super::*;
+    extern crate std;
 
     fn test_path(name: &str) -> Text {
         crate::join_path(
@@ -564,6 +589,28 @@ mod tests {
         file.read_exact(&mut suffix).unwrap();
         assert_eq!(&suffix, b"file");
         drop(file);
+        remove_file(&path).unwrap();
+    }
+
+    #[test]
+    fn regular_file_open_rejects_non_files() {
+        let path = test_path("mrml-regular-open.bin");
+        let link = test_path("mrml-regular-open-link.bin");
+        write_file(&path, b"regular").unwrap();
+        assert!(File::open_regular(&path).is_ok());
+        assert!(File::open_regular(&crate::temporary_directory()).is_err());
+        #[cfg(unix)]
+        {
+            assert!(File::open_regular("/dev/null").is_err());
+            std::os::unix::fs::symlink(path.as_str(), link.as_str()).unwrap();
+            assert!(File::open_regular(&link).is_err());
+            remove_file(&link).unwrap();
+        }
+        #[cfg(windows)]
+        if std::os::windows::fs::symlink_file(path.as_str(), link.as_str()).is_ok() {
+            assert!(File::open_regular(&link).is_err());
+            remove_file(&link).unwrap();
+        }
         remove_file(&path).unwrap();
     }
 

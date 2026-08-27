@@ -1,6 +1,20 @@
+//! Hugging Face cache acquisition.
+//!
+//! Relative-name validation prevents server-selected traversal, and staging
+//! files reject final-component links. Until the runtime exposes fully
+//! descriptor-relative directory traversal on both hosts, the cache root and
+//! its existing intermediate directories must remain owner-controlled; a
+//! writable shared cache is not a supported security boundary.
+
 use mrml_crypto::Sha3_512;
 use mrml_error::{Result, anyhow};
-use mrml_runtime::{Text, Vector, mrml_format as format, mrml_println as println, rename_file};
+use mrml_runtime::{
+    Text, Vector, mrml_format as format, mrml_println as println, parent_path, rename_file,
+};
+
+const MAX_MODEL_FILES: usize = 256;
+const MAX_MODEL_FILE_BYTES: u64 = 64 * 1024 * 1024 * 1024;
+const MAX_MODEL_TOTAL_BYTES: u64 = 256 * 1024 * 1024 * 1024;
 
 fn digest_hex(digest: &[u8; 64]) -> Text {
     const HEX: &[u8; 16] = b"0123456789abcdef";
@@ -13,7 +27,7 @@ fn digest_hex(digest: &[u8; 64]) -> Text {
 }
 
 fn hash_file_state(path: &str) -> Result<(Sha3_512, u64)> {
-    let mut file = mrml_runtime::File::open(path)?;
+    let mut file = mrml_runtime::File::open_regular(path)?;
     let mut hash = Sha3_512::new();
     let mut length = 0u64;
     let mut buffer = [0u8; 64 * 1024];
@@ -23,7 +37,10 @@ fn hash_file_state(path: &str) -> Result<(Sha3_512, u64)> {
             break;
         }
         hash.update(&buffer[..read]);
-        length = length.saturating_add(read as u64);
+        length = length
+            .checked_add(read as u64)
+            .filter(|length| *length <= MAX_MODEL_FILE_BYTES)
+            .ok_or_else(|| anyhow!("model file exceeds the per-file byte limit"))?;
     }
     Ok((hash, length))
 }
@@ -33,7 +50,22 @@ fn hash_file(path: &str) -> Result<([u8; 64], u64)> {
 }
 
 fn digest_matches(path: &str, sidecar: &str) -> bool {
-    let Ok(expected) = mrml_runtime::read_file_text(sidecar) else {
+    let Ok(mut file) = mrml_runtime::File::open_regular(sidecar) else {
+        return false;
+    };
+    let Ok(length) = file.len().and_then(|length| {
+        usize::try_from(length).map_err(|_| mrml_runtime::FileError::ReadFailed)
+    }) else {
+        return false;
+    };
+    if length > 129 {
+        return false;
+    }
+    let mut bytes = [0u8; 129];
+    if file.read_exact(&mut bytes[..length]).is_err() {
+        return false;
+    }
+    let Ok(expected) = core::str::from_utf8(&bytes[..length]) else {
         return false;
     };
     let expected = expected.trim();
@@ -44,12 +76,50 @@ fn digest_matches(path: &str, sidecar: &str) -> bool {
 }
 
 fn write_digest(path: &str, digest: &[u8; 64]) -> Result<()> {
-    mrml_runtime::write_file(path, digest_hex(digest).as_bytes())?;
+    if mrml_runtime::path_exists(path) {
+        mrml_runtime::remove_file(path)?;
+    }
+    mrml_runtime::write_new_file(path, digest_hex(digest).as_bytes())?;
     Ok(())
 }
 
 fn native_file_len(path: &str) -> Option<u64> {
-    mrml_runtime::File::open(path).ok()?.len().ok()
+    mrml_runtime::File::open_regular(path).ok()?.len().ok()
+}
+
+#[derive(Default)]
+struct DownloadBudget {
+    total: u64,
+}
+
+impl DownloadBudget {
+    fn add_file(&mut self, bytes: u64) -> Result<()> {
+        if bytes > MAX_MODEL_FILE_BYTES {
+            return Err(anyhow!("model file exceeds the per-file byte limit"));
+        }
+        self.total = self
+            .total
+            .checked_add(bytes)
+            .filter(|total| *total <= MAX_MODEL_TOTAL_BYTES)
+            .ok_or_else(|| anyhow!("model download exceeds the total byte limit"))?;
+        Ok(())
+    }
+
+    fn add_chunk(&mut self, file_bytes: &mut u64, bytes: usize) -> Result<()> {
+        let bytes = u64::try_from(bytes).map_err(|_| anyhow!("download byte count overflow"))?;
+        let next_file = file_bytes
+            .checked_add(bytes)
+            .filter(|total| *total <= MAX_MODEL_FILE_BYTES)
+            .ok_or_else(|| anyhow!("model file exceeds the per-file byte limit"))?;
+        let next_total = self
+            .total
+            .checked_add(bytes)
+            .filter(|total| *total <= MAX_MODEL_TOTAL_BYTES)
+            .ok_or_else(|| anyhow!("model download exceeds the total byte limit"))?;
+        *file_bytes = next_file;
+        self.total = next_total;
+        Ok(())
+    }
 }
 
 fn path_file_name(path: &str) -> &str {
@@ -140,7 +210,9 @@ impl HfModelSpec {
             || !safe_repo_component(model)
             || (!quant_part.is_empty() && !safe_repo_component(quant_part))
         {
-            return Err(anyhow!("Invalid HuggingFace repository or quantization name"));
+            return Err(anyhow!(
+                "Invalid HuggingFace repository or quantization name"
+            ));
         }
 
         let repo_id = format!("{}/{}", user, model);
@@ -276,6 +348,9 @@ pub async fn query_hf_api_siblings(spec: &HfModelSpec) -> Result<Vector<Text>> {
         for item in siblings {
             if let Some(rfilename) = item.get("rfilename").and_then(|r| r.as_str()) {
                 if rfilename.ends_with(".gguf") {
+                    if filenames.len() == MAX_MODEL_FILES {
+                        return Err(anyhow!("Hugging Face model file count exceeds the limit"));
+                    }
                     filenames.push(safe_relative_hf_filename(rfilename)?.into());
                 }
             }
@@ -392,6 +467,10 @@ where
     }
 
     let total_files = download_queue.len();
+    if total_files == 0 || total_files > MAX_MODEL_FILES {
+        return Err(anyhow!("Hugging Face model file count exceeds the limit"));
+    }
+    let mut budget = DownloadBudget::default();
     let mut downloaded_shard_paths = Vector::new();
     let mut resolved_mmproj_path = None;
     let mut resolved_speedup_path = None;
@@ -400,18 +479,26 @@ where
         safe_relative_hf_filename(filename)?;
         let file_num = idx + 1;
         let dest_path = mrml_runtime::join_path(&model_dir, filename);
+        let destination_directory =
+            parent_path(&dest_path).ok_or_else(|| anyhow!("model destination has no parent"))?;
+        mrml_runtime::create_dir_all(destination_directory)?;
         let part_path = mrml_runtime::join_path(&model_dir, &format!("{}.part", filename));
         let digest_path = format!("{}.sha3-512", dest_path);
         let part_digest_path = format!("{}.sha3-512", part_path);
 
-        if native_file_len(&dest_path).is_some_and(|length| length > 10 * 1024 * 1024) {
+        if let Some(cached_length) =
+            native_file_len(&dest_path).filter(|length| *length > 10 * 1024 * 1024)
+        {
+            if cached_length > MAX_MODEL_FILE_BYTES {
+                return Err(anyhow!("cached model file exceeds the per-file byte limit"));
+            }
             if mrml_runtime::path_is_file(&digest_path) {
                 if !digest_matches(&dest_path, &digest_path) {
                     mrml_runtime::remove_file(&dest_path)?;
                     mrml_runtime::remove_file(&digest_path)?;
                 } else {
                     let msg = format!(
-                        "✓ [File {}/{}] {} (Cached, SHA3-512 verified)",
+                        "✓ [File {}/{}] {} (cached; local SHA3-512 integrity matched, not publisher-authenticated)",
                         file_num, total_files, filename
                     );
                     println!("{}", msg);
@@ -421,6 +508,7 @@ where
                         file_num,
                         total_files,
                     );
+                    budget.add_file(cached_length)?;
                     if filename.contains("mmproj") {
                         resolved_mmproj_path = Some(dest_path);
                     } else if filename.contains("mtp") || filename.contains("dflash") {
@@ -436,7 +524,7 @@ where
             }
             if mrml_runtime::path_is_file(&dest_path) {
                 let msg = format!(
-                    "✓ [File {}/{}] {} (Cached, SHA3-512 recorded)",
+                    "✓ [File {}/{}] {} (cached; local SHA3-512 recorded, not publisher-authenticated)",
                     file_num, total_files, filename
                 );
                 println!("{}", msg);
@@ -447,6 +535,7 @@ where
                     total_files,
                 );
 
+                budget.add_file(cached_length)?;
                 if filename.contains("mmproj") {
                     resolved_mmproj_path = Some(dest_path);
                 } else if filename.contains("mtp") || filename.contains("dflash") {
@@ -463,78 +552,48 @@ where
             spec.user, spec.model, filename
         );
 
-        let mut initial_resume_bytes = native_file_len(&part_path).unwrap_or(0);
-        if initial_resume_bytes > 0 && !digest_matches(&part_path, &part_digest_path) {
+        if mrml_runtime::path_exists(&part_path) {
             mrml_runtime::remove_file(&part_path)?;
-            if mrml_runtime::path_is_file(&part_digest_path) {
-                mrml_runtime::remove_file(&part_digest_path)?;
-            }
-            initial_resume_bytes = 0;
         }
-
-        if initial_resume_bytes > 0 {
-            let mb = initial_resume_bytes as f64 / (1024.0 * 1024.0);
-            println!(
-                "🔄 [File {}/{}] Resuming {} from {:.1} MB...",
-                file_num, total_files, filename, mb
-            );
-        } else {
-            println!(
-                "⬇️ [File {}/{}] Downloading {}...",
-                file_num, total_files, filename
-            );
+        if mrml_runtime::path_exists(&part_digest_path) {
+            mrml_runtime::remove_file(&part_digest_path)?;
         }
+        println!(
+            "⬇️ [File {}/{}] Downloading {}...",
+            file_num, total_files, filename
+        );
 
         let client = mrml_http::Client::new();
         let authorization =
             mrml_runtime::environment_variable("HF_TOKEN").map(|value| format!("Bearer {}", value));
-        let range = format!("bytes={}-", initial_resume_bytes);
-        let mut response = match (authorization.as_ref(), initial_resume_bytes > 0) {
-            (Some(auth), true) => client.get_follow(
-                &download_url,
-                &[("Authorization", auth), ("Range", &range)],
-                8,
-            ),
-            (Some(auth), false) => client.get_follow(&download_url, &[("Authorization", auth)], 8),
-            (None, true) => client.get_follow(&download_url, &[("Range", &range)], 8),
-            (None, false) => client.get_follow(&download_url, &[], 8),
+        let mut response = match authorization.as_ref() {
+            Some(auth) => client.get_follow(&download_url, &[("Authorization", auth)], 8),
+            None => client.get_follow(&download_url, &[], 8),
         }
         .map_err(|error| anyhow!("HTTPS download failed for {}: {}", filename, error))?;
-        if initial_resume_bytes > 0 {
-            let prefix = format!("bytes {}-", initial_resume_bytes);
-            if response.status != 206
-                || !response
-                    .header("content-range")
-                    .is_some_and(|value| value.starts_with(prefix.as_str()))
-            {
-                initial_resume_bytes = 0;
-                response = if let Some(ref auth) = authorization {
-                    client.get_follow(&download_url, &[("Authorization", auth)], 8)
-                } else {
-                    client.get_follow(&download_url, &[], 8)
-                }
-                .map_err(|error| anyhow!("HTTPS restart failed for {}: {}", filename, error))?;
-            }
-        }
-        if response.status != if initial_resume_bytes > 0 { 206 } else { 200 } {
+        if response.status != 200 {
             return Err(anyhow!(
                 "Download of {} returned HTTP {}",
                 filename,
                 response.status
             ));
         }
-        let (mut hash, mut downloaded) = if initial_resume_bytes > 0 {
-            hash_file_state(&part_path)?
-        } else {
-            (Sha3_512::new(), 0)
-        };
-        let mut output = if initial_resume_bytes > 0 {
-            let mut file = mrml_runtime::File::open_write(&part_path)?;
-            file.seek(initial_resume_bytes)?;
-            file
-        } else {
-            mrml_runtime::File::create(&part_path)?
-        };
+        if let Some(content_length) = response.header("content-length") {
+            let content_length = content_length
+                .parse::<u64>()
+                .map_err(|_| anyhow!("invalid model Content-Length"))?;
+            if content_length > MAX_MODEL_FILE_BYTES
+                || budget
+                    .total
+                    .checked_add(content_length)
+                    .is_none_or(|total| total > MAX_MODEL_TOTAL_BYTES)
+            {
+                return Err(anyhow!("model download Content-Length exceeds byte limits"));
+            }
+        }
+        let mut hash = Sha3_512::new();
+        let mut downloaded = 0u64;
+        let mut output = mrml_runtime::File::create_new(&part_path)?;
         let mut buffer = [0u8; 64 * 1024];
         let mut next_checkpoint = downloaded.saturating_add(64 * 1024 * 1024);
         loop {
@@ -546,7 +605,7 @@ where
             }
             output.write_all(&buffer[..read])?;
             hash.update(&buffer[..read]);
-            downloaded = downloaded.saturating_add(read as u64);
+            budget.add_chunk(&mut downloaded, read)?;
             if downloaded >= next_checkpoint {
                 write_digest(&part_digest_path, &hash.clone().finalize())?;
                 next_checkpoint = downloaded.saturating_add(64 * 1024 * 1024);
@@ -565,9 +624,12 @@ where
             }
         }
         let digest = hash.finalize();
+        output.sync()?;
+        drop(output);
         write_digest(&part_digest_path, &digest)?;
 
-        // Successfully downloaded: promote .part to final .gguf
+        // The staging file was exclusively created without following a final
+        // link, fully written, and synchronized before its atomic promotion.
         if mrml_runtime::path_is_file(&part_path) {
             rename_file(&part_path, &dest_path)?;
             write_digest(&digest_path, &digest)?;
@@ -577,7 +639,7 @@ where
         }
 
         let done_msg = format!(
-            "✓ [File {}/{}] {} (Downloaded securely, SHA3-512 recorded)",
+            "✓ [File {}/{}] {} (downloaded over TLS; local SHA3-512 recorded, not publisher-authenticated)",
             file_num, total_files, filename
         );
         println!("{}", done_msg);
@@ -685,6 +747,21 @@ mod tests {
         ] {
             assert!(HfModelSpec::parse(hostile).is_err(), "{hostile}");
         }
+    }
+
+    #[test]
+    fn model_download_budget_rejects_file_total_and_arithmetic_overflow() {
+        let mut budget = DownloadBudget::default();
+        budget.add_file(MAX_MODEL_FILE_BYTES).unwrap();
+        assert!(budget.add_file(MAX_MODEL_TOTAL_BYTES).is_err());
+
+        let mut file_bytes = MAX_MODEL_FILE_BYTES;
+        assert!(budget.add_chunk(&mut file_bytes, 1).is_err());
+        assert_eq!(file_bytes, MAX_MODEL_FILE_BYTES);
+
+        let mut overflow = DownloadBudget { total: u64::MAX };
+        let mut empty_file = 0;
+        assert!(overflow.add_chunk(&mut empty_file, 1).is_err());
     }
 
     #[test]

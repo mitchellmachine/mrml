@@ -734,8 +734,26 @@ impl NativeFile {
         const O_WRONLY: c_int = 1;
         const O_CREAT: c_int = 64;
         const O_EXCL: c_int = 128;
-        let file = unsafe { open(path.as_ptr(), O_WRONLY | O_CREAT | O_EXCL, 0o666) };
-        (file >= 0).then_some(Self(file))
+        const O_NOFOLLOW: c_int = 0x2_0000;
+        const O_CLOEXEC: c_int = 0x8_0000;
+        let file = unsafe {
+            open(
+                path.as_ptr(),
+                O_WRONLY | O_CREAT | O_EXCL | O_NOFOLLOW | O_CLOEXEC,
+                0o666,
+            )
+        };
+        let file = (file >= 0).then_some(Self(file))?;
+        file.is_regular().then_some(file)
+    }
+
+    pub fn open_regular_read(path: &CStr) -> Option<Self> {
+        const O_RDONLY: c_int = 0;
+        const O_NOFOLLOW: c_int = 0x2_0000;
+        const O_CLOEXEC: c_int = 0x8_0000;
+        let file = unsafe { open(path.as_ptr(), O_RDONLY | O_NOFOLLOW | O_CLOEXEC) };
+        let file = (file >= 0).then_some(Self(file))?;
+        file.is_regular().then_some(file)
     }
 
     pub fn create_secret(path: &CStr) -> Option<Self> {
