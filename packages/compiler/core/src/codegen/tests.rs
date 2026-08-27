@@ -11015,6 +11015,54 @@ mod tests {
     }
 
     #[test]
+    fn runtime_body_facts_retain_two_ordered_subslices_before_index() {
+        let source = "#[unsafe(no_mangle)] pub extern \"C\" fn value(input: &mut [u32], first: usize, second: usize, index: usize) -> u32 { let selected: &mut u32 = &mut input[first..][second..][index]; 0 }";
+        let module = Parser::new(source).parse_module::<1, 5>().unwrap();
+        let Some(Item::Function(function)) = module.items()[0] else {
+            panic!("expected function")
+        };
+        let body = function.parse_body::<5>().unwrap();
+        let resolver = NoConstants;
+        let mut facts = RuntimeBodyFacts::EMPTY;
+        preanalyze_runtime_body_declarations::<_, 5, 64>(
+            &function,
+            &resolver,
+            &body,
+            "u32",
+            function.body_expression_span.start,
+            &mut facts,
+        )
+        .unwrap();
+
+        let mut nested = RuntimePlaceProjections::single(RuntimePlaceProjection::Subslice);
+        nested.push(RuntimePlaceProjection::Subslice).unwrap();
+        nested.push(RuntimePlaceProjection::Index).unwrap();
+        let expected = [
+            (
+                RuntimePlaceIdentity::Parameter(1),
+                RuntimePlaceProjections::EMPTY,
+            ),
+            (
+                RuntimePlaceIdentity::Parameter(2),
+                RuntimePlaceProjections::EMPTY,
+            ),
+            (RuntimePlaceIdentity::Parameter(0), nested),
+            (
+                RuntimePlaceIdentity::Parameter(3),
+                RuntimePlaceProjections::EMPTY,
+            ),
+        ];
+        assert_eq!(facts.assignment_read_count, expected.len());
+        for (fact, (base, projections)) in facts.assignment_reads[..expected.len()]
+            .iter()
+            .flatten()
+            .zip(expected)
+        {
+            assert_eq!((fact.base, fact.projections), (base, projections));
+        }
+    }
+
+    #[test]
     fn runtime_body_facts_preanalyze_fat_reference_explicit_and_tail_returns() {
         let source = "#[unsafe(no_mangle)] pub extern \"C\" fn value(input: &[usize], choose: bool, start: usize, end: usize, left: usize) -> &[usize] { if choose { return &input[start..end]; } &input[left..] }";
         let module = Parser::new(source).parse_module::<1, 8>().unwrap();
