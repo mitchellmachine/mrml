@@ -10,6 +10,7 @@ pub enum TokenKind {
     Lifetime,
     Integer,
     String,
+    ByteString,
     Character,
     OpenParen,
     CloseParen,
@@ -176,18 +177,27 @@ impl<'source> Lexer<'source> {
         })
     }
 
-    fn raw_string(&mut self, start: usize) -> Result<Option<Token<'source>>, LexError> {
-        if self.bytes().get(start) != Some(&b'r') {
+    fn raw_string(
+        &mut self,
+        start: usize,
+        prefix_length: usize,
+        kind: TokenKind,
+    ) -> Result<Option<Token<'source>>, LexError> {
+        let prefix_end = start.checked_add(prefix_length).ok_or(LexError {
+            kind: LexErrorKind::UnterminatedString,
+            span: Span { start, end: start },
+        })?;
+        if self.bytes().get(prefix_end - 1) != Some(&b'r') {
             return Ok(None);
         }
-        let mut quote = start + 1;
+        let mut quote = prefix_end;
         while self.bytes().get(quote) == Some(&b'#') {
             quote += 1;
         }
         if self.bytes().get(quote) != Some(&b'"') {
             return Ok(None);
         }
-        let hashes = quote - start - 1;
+        let hashes = quote - prefix_end;
         if hashes > 255 {
             self.position = quote;
             return Err(LexError {
@@ -215,10 +225,10 @@ impl<'source> Lexer<'source> {
                     },
                 })?;
             if self.bytes().get(closing_quote + 1..closing_end)
-                == Some(&self.bytes()[start + 1..quote])
+                == Some(&self.bytes()[prefix_end..quote])
             {
                 self.position = closing_end;
-                return Ok(Some(self.finish(start, TokenKind::String)));
+                return Ok(Some(self.finish(start, kind)));
             }
             self.position = closing_quote + 1;
         }
@@ -239,10 +249,20 @@ impl<'source> Lexer<'source> {
             return Ok(None);
         };
 
-        if byte == b'r'
-            && let Some(token) = self.raw_string(start)?
+        if byte == b'b'
+            && self.bytes().get(start + 1) == Some(&b'r')
+            && let Some(token) = self.raw_string(start, 2, TokenKind::ByteString)?
         {
             return Ok(Some(token));
+        }
+        if byte == b'r'
+            && let Some(token) = self.raw_string(start, 1, TokenKind::String)?
+        {
+            return Ok(Some(token));
+        }
+        if byte == b'b' && self.bytes().get(start + 1) == Some(&b'"') {
+            self.position += 1;
+            return self.quoted(start, b'"', TokenKind::ByteString).map(Some);
         }
         if byte.is_ascii_alphabetic() || byte == b'_' {
             self.position += 1;
@@ -426,6 +446,17 @@ mod tests {
                 (TokenKind::String, "r\"plain\\n\""),
                 (TokenKind::String, "r##\"embedded \"# and \\u{41}\"##"),
                 (TokenKind::Identifier, "rust"),
+            ],
+        );
+    }
+
+    #[test]
+    fn distinguishes_cooked_and_raw_byte_strings() {
+        assert_tokens(
+            "b\"A\\xFF\" br##\"raw\\n\"#text\"##",
+            &[
+                (TokenKind::ByteString, "b\"A\\xFF\""),
+                (TokenKind::ByteString, "br##\"raw\\n\"#text\"##"),
             ],
         );
     }

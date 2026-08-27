@@ -16053,7 +16053,7 @@ fn runtime_fat_reference_preanalysis_supported<const MAX_NODES: usize>(
         return false;
     }
     match tree.expression(id).map(|expression| expression.kind) {
-        Some(ExprKind::Identifier(_) | ExprKind::String(_)) => true,
+        Some(ExprKind::Identifier(_) | ExprKind::String(_) | ExprKind::ByteString(_)) => true,
         Some(ExprKind::Unary {
             operator: crate::UnaryOperator::AddressOf | crate::UnaryOperator::AddressOfMut,
             operand,
@@ -19065,7 +19065,7 @@ fn runtime_fat_reference_return_preanalysis_supported<const MAX_NODES: usize>(
         return false;
     }
     match tree.expression(id).map(|expression| expression.kind) {
-        Some(ExprKind::Identifier(_) | ExprKind::String(_)) => true,
+        Some(ExprKind::Identifier(_) | ExprKind::String(_) | ExprKind::ByteString(_)) => true,
         Some(ExprKind::Unary {
             operator: crate::UnaryOperator::AddressOf | crate::UnaryOperator::AddressOfMut,
             operand,
@@ -19857,6 +19857,7 @@ fn validate_runtime_inline_const<
         | ExprKind::Bool(_)
         | ExprKind::Char(_)
         | ExprKind::String(_)
+        | ExprKind::ByteString(_)
         | ExprKind::ClosureParameter { .. } => {}
     }
     Ok(())
@@ -22800,6 +22801,12 @@ fn runtime_expression_type_with_locals<
         ExprKind::Char(_) => Ok(RuntimeExpressionType::Char),
         ExprKind::String(_) => Ok(RuntimeExpressionType::Reference {
             target: RuntimeReferenceTarget::Str,
+            mutable: false,
+        }),
+        ExprKind::ByteString(_) => Ok(RuntimeExpressionType::Reference {
+            target: RuntimeReferenceTarget::Slice(RuntimeArrayElementType::Integer(Some(
+                crate::IntegerType::U8,
+            ))),
             mutable: false,
         }),
         ExprKind::Closure { .. } => Err(CodegenErrorKind::RuntimeExpressionUnsupported),
@@ -28816,7 +28823,7 @@ impl<
                 self.emit(&[0x48, 0xb8])?;
                 self.emit(&u64::from(value).to_le_bytes())?;
             }
-            ExprKind::String(_) => {
+            ExprKind::String(_) | ExprKind::ByteString(_) => {
                 return Err(self.error(CodegenErrorKind::RuntimeExpressionUnsupported));
             }
             ExprKind::Closure { .. } => {
@@ -30403,6 +30410,7 @@ impl<
     fn append_readonly_string_literal(
         &mut self,
         literal: &str,
+        byte_string: bool,
     ) -> Result<(usize, usize), CodegenError> {
         fn hex(byte: u8) -> Option<u32> {
             match byte {
@@ -30422,16 +30430,18 @@ impl<
             decoded_length += 1;
             Ok::<(), CodegenError>(())
         };
-        if literal.starts_with('r') {
+        let raw_prefix_length = if byte_string { 2 } else { 1 };
+        let raw_prefix = if byte_string { "br" } else { "r" };
+        if literal.starts_with(raw_prefix) {
             let bytes = literal.as_bytes();
-            let mut quote = 1usize;
+            let mut quote = raw_prefix_length;
             while bytes.get(quote) == Some(&b'#') {
                 quote += 1;
             }
-            if quote > 256 || bytes.get(quote) != Some(&b'"') {
+            if quote > raw_prefix_length + 255 || bytes.get(quote) != Some(&b'"') {
                 return Err(self.error(CodegenErrorKind::RuntimeExpressionUnsupported));
             }
-            let hashes = quote - 1;
+            let hashes = quote - raw_prefix_length;
             let content_start = quote + 1;
             let delimiter_length = hashes
                 .checked_add(1)
@@ -30446,24 +30456,31 @@ impl<
                     content_end
                         .checked_add(1)
                         .ok_or(self.error(CodegenErrorKind::RuntimeExpressionUnsupported))?..,
-                ) != bytes.get(1..quote)
+                ) != bytes.get(raw_prefix_length..quote)
             {
                 return Err(self.error(CodegenErrorKind::RuntimeExpressionUnsupported));
             }
             for byte in &bytes[content_start..content_end] {
+                if byte_string && !byte.is_ascii() {
+                    return Err(self.error(CodegenErrorKind::RuntimeExpressionUnsupported));
+                }
                 push(*byte)?;
             }
             drop(push);
             return self.intern_readonly_string_bytes(&decoded[..decoded_length]);
         }
+        let cooked_prefix = if byte_string { "b\"" } else { "\"" };
         let literal = literal
-            .strip_prefix('"')
+            .strip_prefix(cooked_prefix)
             .and_then(|literal| literal.strip_suffix('"'))
             .ok_or(self.error(CodegenErrorKind::RuntimeExpressionUnsupported))?;
         let bytes = literal.as_bytes();
         let mut index = 0usize;
         while index < bytes.len() {
             if bytes[index] != b'\\' {
+                if byte_string && !bytes[index].is_ascii() {
+                    return Err(self.error(CodegenErrorKind::RuntimeExpressionUnsupported));
+                }
                 push(bytes[index])?;
                 index += 1;
                 continue;
@@ -30491,13 +30508,16 @@ impl<
                         .and_then(|byte| hex(*byte))
                         .ok_or(self.error(CodegenErrorKind::RuntimeExpressionUnsupported))?;
                     let value = (high << 4) | low;
-                    if value > 0x7f {
+                    if !byte_string && value > 0x7f {
                         return Err(self.error(CodegenErrorKind::RuntimeExpressionUnsupported));
                     }
                     push(value as u8)?;
                     index += 2;
                 }
                 b'u' => {
+                    if byte_string {
+                        return Err(self.error(CodegenErrorKind::RuntimeExpressionUnsupported));
+                    }
                     if bytes.get(index) != Some(&b'{') {
                         return Err(self.error(CodegenErrorKind::RuntimeExpressionUnsupported));
                     }
@@ -30558,10 +30578,15 @@ impl<
         id: crate::ExprId,
         depth: usize,
     ) -> Result<(), CodegenError> {
-        if let Some(ExprKind::String(literal)) =
+        if let Some(ExprKind::String(literal) | ExprKind::ByteString(literal)) =
             tree.expression(id).map(|expression| expression.kind)
         {
-            let (data_offset, literal_length) = self.append_readonly_string_literal(literal)?;
+            let byte_string = matches!(
+                tree.expression(id).map(|expression| expression.kind),
+                Some(ExprKind::ByteString(_))
+            );
+            let (data_offset, literal_length) =
+                self.append_readonly_string_literal(literal, byte_string)?;
             let capacity_error = self.error(CodegenErrorKind::OutputTooSmall);
             let relocation_offset = self
                 .length
@@ -32937,7 +32962,7 @@ impl<
         }
         let stacked = if matches!(
             tree.expression(root).map(|expression| expression.kind),
-            Some(ExprKind::String(_))
+            Some(ExprKind::String(_) | ExprKind::ByteString(_))
         ) {
             self.emit_slice_value_to_stack(tree, root, depth + 1)?;
             true

@@ -616,6 +616,29 @@ mod tests {
     }
 
     #[test]
+    fn emits_runtime_byte_string_literals_as_internal_readonly_data() {
+        let cooked = r##"#[unsafe(no_mangle)] pub extern "C" fn probe(input: &[u8], choose: bool) -> &[u8] { if choose { input } else { b"A\xFF\n" } }"##;
+        for format in [ObjectFormat::Elf64, ObjectFormat::Coff] {
+            let object = compile_wide(cooked, "probe", format).unwrap();
+            assert!(object.bytes().windows(3).any(|bytes| bytes == b"A\xff\n"));
+        }
+
+        let raw = r####"#[unsafe(no_mangle)] pub extern "C" fn probe(input: &[u8], choose: bool) -> &[u8] { if choose { input } else { br##"raw\n"#text"## } }"####;
+        for format in [ObjectFormat::Elf64, ObjectFormat::Coff] {
+            let object = compile_wide(raw, "probe", format).unwrap();
+            assert!(
+                object
+                    .bytes()
+                    .windows(11)
+                    .any(|bytes| bytes == br###"raw\n"#text"###)
+            );
+        }
+
+        let mixed = r##"#[unsafe(no_mangle)] pub extern "C" fn probe(input: &str, choose: bool) -> &str { if choose { input } else { b"bytes" } }"##;
+        assert!(compile_wide(mixed, "probe", ObjectFormat::Elf64).is_err());
+    }
+
+    #[test]
     fn enforces_concrete_source_trait_obligations_before_codegen() {
         let satisfied = concat!(
             "trait Visible {} impl Visible for u32 {} ",

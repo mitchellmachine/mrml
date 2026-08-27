@@ -836,6 +836,7 @@ pub enum ExprKind<'source> {
     Bool(bool),
     Char(u32),
     String(&'source str),
+    ByteString(&'source str),
     Closure {
         parameter: Option<ExprId>,
         body: ExprId,
@@ -1238,6 +1239,7 @@ impl<'source, const MAX_NODES: usize> ExpressionTree<'source, MAX_NODES> {
             | ExprKind::Integer(_)
             | ExprKind::Char(_)
             | ExprKind::String(_)
+            | ExprKind::ByteString(_)
             | ExprKind::Closure { .. }
             | ExprKind::ClosureParameter { .. }
             | ExprKind::Identifier(_)
@@ -1556,7 +1558,9 @@ impl<'source, const MAX_NODES: usize> ExpressionTree<'source, MAX_NODES> {
             ExprKind::Integer(literal) => Ok(literal.value),
             ExprKind::Bool(value) => Ok(u128::from(value)),
             ExprKind::Char(value) => Ok(u128::from(value)),
-            ExprKind::String(_) => Err(ConstEvalError::InvalidExpressionTree),
+            ExprKind::String(_) | ExprKind::ByteString(_) => {
+                Err(ConstEvalError::InvalidExpressionTree)
+            }
             ExprKind::Closure { .. } => Err(ConstEvalError::InvalidExpressionTree),
             ExprKind::ClosureParameter { .. } => Err(ConstEvalError::InvalidExpressionTree),
             ExprKind::Identifier(name) => resolver
@@ -2254,6 +2258,10 @@ impl<'source, const MAX_NODES: usize> ExpressionParser<'source, MAX_NODES> {
             }),
             Some(token) if token.kind == TokenKind::String => self.push(Expr {
                 kind: ExprKind::String(token.text),
+                span: token.span,
+            }),
+            Some(token) if token.kind == TokenKind::ByteString => self.push(Expr {
+                kind: ExprKind::ByteString(token.text),
                 span: token.span,
             }),
             Some(token) if token.kind == TokenKind::Operator && token.text == "||" => {
@@ -3438,6 +3446,7 @@ impl<'source, const MAX_NODES: usize> ExpressionParser<'source, MAX_NODES> {
             | ExprKind::Bool(_)
             | ExprKind::Char(_)
             | ExprKind::String(_)
+            | ExprKind::ByteString(_)
             | ExprKind::ClosureParameter { .. }
             | ExprKind::Identifier(_) => {}
         }

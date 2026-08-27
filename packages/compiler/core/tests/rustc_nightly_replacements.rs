@@ -6249,3 +6249,24 @@ fn rustc_string_reference_delayed_initialization_reaches_native_objects() {
     assert!(compile(missing_lifetime, ObjectFormat::Elf64).is_err());
     assert!(compile(missing_lifetime, ObjectFormat::Coff).is_err());
 }
+
+#[test]
+fn rustc_byte_string_references_reach_native_objects() {
+    for source in [
+        r##"#[unsafe(no_mangle)] pub extern "C" fn probe(input: &[u8], choose: bool) -> &[u8] { if choose { input } else { b"A\xFF\n" } }"##,
+        r####"#[unsafe(no_mangle)] pub extern "C" fn probe(input: &[u8], choose: bool) -> &[u8] { if choose { input } else { br##"raw\n"#text"## } }"####,
+    ] {
+        assert_eq!(compile(source, ObjectFormat::Elf64), Ok(()));
+        assert_eq!(compile(source, ObjectFormat::Coff), Ok(()));
+    }
+
+    for invalid in [
+        r##"#[unsafe(no_mangle)] pub extern "C" fn probe(input: &[u8], choose: bool) -> &[u8] { if choose { input } else { b"\u{41}" } }"##,
+        r##"#[unsafe(no_mangle)] pub extern "C" fn probe(input: &[u8], choose: bool) -> &[u8] { if choose { input } else { b"é" } }"##,
+        r##"#[unsafe(no_mangle)] pub extern "C" fn probe(input: &[u8], choose: bool) -> &[u8] { if choose { input } else { br"é" } }"##,
+        r##"#[unsafe(no_mangle)] pub extern "C" fn probe(input: &str, choose: bool) -> &str { if choose { input } else { b"bytes" } }"##,
+    ] {
+        assert!(compile(invalid, ObjectFormat::Elf64).is_err());
+        assert!(compile(invalid, ObjectFormat::Coff).is_err());
+    }
+}
