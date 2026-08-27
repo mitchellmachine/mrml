@@ -3,18 +3,20 @@ use mrml_runtime::Vector;
 
 pub fn verify_server_chain(hostname: &str, chain: &[&[u8]]) -> Result<(), CertificateError> {
     let leaf_der = *chain.first().ok_or(CertificateError::Malformed)?;
+    let presented_last_der = *chain.last().ok_or(CertificateError::Malformed)?;
     let leaf = Certificate::parse(leaf_der)?;
     leaf.require_server_auth()?;
     leaf.verify_hostname(hostname)?;
     leaf.verify_time_now()?;
-    for pair in chain.windows(2) {
+    for (subordinate_ca_count, pair) in chain.windows(2).enumerate() {
         let child = Certificate::parse(pair[0])?;
         let issuer = Certificate::parse(pair[1])?;
         issuer.require_certificate_signing()?;
+        issuer.enforce_ca_path_length(subordinate_ca_count)?;
         issuer.verify_time_now()?;
         child.verify_signed_by(&issuer)?;
     }
-    let last = Certificate::parse(*chain.last().ok_or(CertificateError::Malformed)?)?;
+    let last = Certificate::parse(presented_last_der)?;
     let mut trusted = false;
     let mut store_available = false;
     if let Some(path) = mrml_runtime::environment_variable("MRML_CA_BUNDLE") {
@@ -23,7 +25,11 @@ pub fn verify_server_chain(hostname: &str, chain: &[&[u8]]) -> Result<(), Certif
         store_available = true;
         for_each_pem_certificate(&bundle, |der| {
             if let Ok(root) = Certificate::parse(der) {
+                let subordinate_ca_count = chain
+                    .len()
+                    .saturating_sub(if der == presented_last_der { 2 } else { 1 });
                 if root.require_certificate_signing().is_ok()
+                    && root.enforce_ca_path_length(subordinate_ca_count).is_ok()
                     && root.verify_time_now().is_ok()
                     && last.verify_signed_by(&root).is_ok()
                 {
@@ -38,7 +44,11 @@ pub fn verify_server_chain(hostname: &str, chain: &[&[u8]]) -> Result<(), Certif
     {
         if mrml_runtime::visit_root_certificates(|der| {
             if let Ok(root) = Certificate::parse(der) {
+                let subordinate_ca_count = chain
+                    .len()
+                    .saturating_sub(if der == presented_last_der { 2 } else { 1 });
                 if root.require_certificate_signing().is_ok()
+                    && root.enforce_ca_path_length(subordinate_ca_count).is_ok()
                     && root.verify_time_now().is_ok()
                     && last.verify_signed_by(&root).is_ok()
                 {
@@ -69,7 +79,11 @@ pub fn verify_server_chain(hostname: &str, chain: &[&[u8]]) -> Result<(), Certif
             store_available = true;
             for_each_pem_certificate(&bundle, |der| {
                 if let Ok(root) = Certificate::parse(der) {
+                    let subordinate_ca_count = chain
+                        .len()
+                        .saturating_sub(if der == presented_last_der { 2 } else { 1 });
                     if root.require_certificate_signing().is_ok()
+                        && root.enforce_ca_path_length(subordinate_ca_count).is_ok()
                         && root.verify_time_now().is_ok()
                         && last.verify_signed_by(&root).is_ok()
                     {

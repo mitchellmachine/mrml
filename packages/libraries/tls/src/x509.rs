@@ -13,6 +13,8 @@ pub enum CertificateError {
     ClockUnavailable,
     TrustStoreUnavailable,
     UntrustedIssuer,
+    UnsupportedCriticalExtension,
+    PathLengthExceeded,
 }
 
 #[derive(Clone, Copy)]
@@ -237,6 +239,7 @@ impl<'a> Certificate<'a> {
                 return Err(CertificateError::Malformed);
             }
         }
+        validate_extensions(extensions)?;
         Ok(Self {
             tbs: tbs.encoded,
             modulus,
@@ -276,6 +279,9 @@ impl<'a> Certificate<'a> {
             }
             let mut value = fields.next()?;
             if value.tag == 0x01 {
+                if value.value != [0xff] {
+                    return Err(CertificateError::Malformed);
+                }
                 value = fields.next()?;
             }
             fields.finish()?;
@@ -290,9 +296,20 @@ impl<'a> Certificate<'a> {
     }
 
     pub fn require_ca(&self) -> Result<(), CertificateError> {
-        let value = self
-            .extension(BASIC_CONSTRAINTS)?
+        let (ca, _) = self
+            .basic_constraints()?
             .ok_or(CertificateError::NotCertificateAuthority)?;
+        if ca {
+            Ok(())
+        } else {
+            Err(CertificateError::NotCertificateAuthority)
+        }
+    }
+
+    fn basic_constraints(&self) -> Result<Option<(bool, Option<u32>)>, CertificateError> {
+        let Some(value) = self.extension(BASIC_CONSTRAINTS)? else {
+            return Ok(None);
+        };
         let mut outer = Reader::new(value);
         let sequence = outer.next()?;
         outer.finish()?;
@@ -301,14 +318,38 @@ impl<'a> Certificate<'a> {
         }
         let mut fields = Reader::new(sequence.value);
         if fields.position == fields.bytes.len() {
-            return Err(CertificateError::NotCertificateAuthority);
+            return Ok(Some((false, None)));
         }
         let ca = fields.next()?;
-        if ca.tag == 0x01 && ca.value == [0xff] {
-            Ok(())
-        } else {
-            Err(CertificateError::NotCertificateAuthority)
+        if ca.tag != 0x01 || ca.value.len() != 1 || !matches!(ca.value[0], 0 | 0xff) {
+            return Err(CertificateError::Malformed);
         }
+        let path_length = if fields.position < fields.bytes.len() {
+            Some(nonnegative_u32(fields.next()?)?)
+        } else {
+            None
+        };
+        fields.finish()?;
+        if ca.value[0] == 0 && path_length.is_some() {
+            return Err(CertificateError::Malformed);
+        }
+        Ok(Some((ca.value[0] == 0xff, path_length)))
+    }
+
+    pub(crate) fn enforce_ca_path_length(
+        &self,
+        subordinate_ca_count: usize,
+    ) -> Result<(), CertificateError> {
+        let (ca, path_length) = self
+            .basic_constraints()?
+            .ok_or(CertificateError::NotCertificateAuthority)?;
+        if !ca {
+            return Err(CertificateError::NotCertificateAuthority);
+        }
+        if path_length.is_some_and(|limit| subordinate_ca_count > limit as usize) {
+            return Err(CertificateError::PathLengthExceeded);
+        }
+        Ok(())
     }
 
     fn require_usage_bit(&self, bit: usize) -> Result<(), CertificateError> {
@@ -401,6 +442,83 @@ impl<'a> Certificate<'a> {
     }
 }
 
+fn nonnegative_u32(element: Element<'_>) -> Result<u32, CertificateError> {
+    if element.tag != 0x02
+        || element.value.is_empty()
+        || element.value[0] & 0x80 != 0
+        || (element.value.len() > 1 && element.value[0] == 0 && element.value[1] & 0x80 == 0)
+        || element.value.len() > 5
+    {
+        return Err(CertificateError::Malformed);
+    }
+    let bytes = if element.value.first() == Some(&0) {
+        &element.value[1..]
+    } else {
+        element.value
+    };
+    let mut value = 0u32;
+    for byte in bytes {
+        value = value
+            .checked_mul(256)
+            .and_then(|value| value.checked_add(u32::from(*byte)))
+            .ok_or(CertificateError::Malformed)?;
+    }
+    Ok(value)
+}
+
+fn validate_extensions(extensions: &[u8]) -> Result<(), CertificateError> {
+    if extensions.is_empty() {
+        return Ok(());
+    }
+    let mut wrapper = Reader::new(extensions);
+    let sequence = wrapper.next()?;
+    wrapper.finish()?;
+    if sequence.tag != 0x30 {
+        return Err(CertificateError::Malformed);
+    }
+    let mut entries = Reader::new(sequence.value);
+    let mut seen = [&[][..]; 64];
+    let mut seen_count = 0usize;
+    while entries.position < entries.bytes.len() {
+        if seen_count == seen.len() {
+            return Err(CertificateError::Malformed);
+        }
+        let entry = entries.next()?;
+        if entry.tag != 0x30 {
+            return Err(CertificateError::Malformed);
+        }
+        let mut fields = Reader::new(entry.value);
+        let oid = fields.next()?;
+        if oid.tag != 0x06 || oid.value.is_empty() || seen[..seen_count].contains(&oid.value) {
+            return Err(CertificateError::Malformed);
+        }
+        seen[seen_count] = oid.value;
+        seen_count += 1;
+        let mut value = fields.next()?;
+        let critical = if value.tag == 0x01 {
+            if value.value != [0xff] {
+                return Err(CertificateError::Malformed);
+            }
+            value = fields.next()?;
+            true
+        } else {
+            false
+        };
+        fields.finish()?;
+        if value.tag != 0x04 {
+            return Err(CertificateError::Malformed);
+        }
+        let supported = oid.value == SUBJECT_ALT_NAME
+            || oid.value == BASIC_CONSTRAINTS
+            || oid.value == KEY_USAGE
+            || oid.value == EXTENDED_KEY_USAGE;
+        if critical && !supported {
+            return Err(CertificateError::UnsupportedCriticalExtension);
+        }
+    }
+    Ok(())
+}
+
 fn decimal(bytes: &[u8]) -> Result<u32, CertificateError> {
     let mut value = 0u32;
     for byte in bytes {
@@ -491,6 +609,18 @@ fn dns_matches(pattern: &[u8], hostname: &[u8]) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn certificate_with_extensions(extensions: &[u8]) -> Certificate<'_> {
+        Certificate {
+            tbs: &[],
+            modulus: &[],
+            exponent: &[],
+            signature: &[],
+            extensions,
+            not_before: 0,
+            not_after: 0,
+        }
+    }
     #[test]
     fn wildcard_matches_exactly_one_label() {
         assert!(dns_matches(b"*.example.com", b"api.example.com"));
@@ -501,6 +631,44 @@ mod tests {
     fn der_rejects_nonminimal_and_truncated_lengths() {
         assert!(Reader::new(&[0x30, 0x81, 0x01, 0]).next().is_err());
         assert!(Reader::new(&[0x30, 2, 0]).next().is_err());
+    }
+    #[test]
+    fn rejects_unknown_critical_and_duplicate_extensions() {
+        let unknown_critical = [
+            0x30, 0x0b, 0x30, 0x09, 0x06, 0x02, 0x2a, 0x03, 0x01, 0x01, 0xff, 0x04, 0x00,
+        ];
+        assert_eq!(
+            validate_extensions(&unknown_critical),
+            Err(CertificateError::UnsupportedCriticalExtension)
+        );
+        let unknown_noncritical = [0x30, 0x08, 0x30, 0x06, 0x06, 0x02, 0x2a, 0x03, 0x04, 0x00];
+        assert_eq!(validate_extensions(&unknown_noncritical), Ok(()));
+        let duplicate = [
+            0x30, 0x10, 0x30, 0x06, 0x06, 0x02, 0x2a, 0x03, 0x04, 0x00, 0x30, 0x06, 0x06, 0x02,
+            0x2a, 0x03, 0x04, 0x00,
+        ];
+        assert_eq!(
+            validate_extensions(&duplicate),
+            Err(CertificateError::Malformed)
+        );
+        let known_critical = [
+            0x30, 0x0c, 0x30, 0x0a, 0x06, 0x03, 0x55, 0x1d, 0x11, 0x01, 0x01, 0xff, 0x04, 0x00,
+        ];
+        assert_eq!(validate_extensions(&known_critical), Ok(()));
+    }
+
+    #[test]
+    fn enforces_basic_constraints_path_length() {
+        let path_zero = [
+            0x30, 0x11, 0x30, 0x0f, 0x06, 0x03, 0x55, 0x1d, 0x13, 0x04, 0x08, 0x30, 0x06, 0x01,
+            0x01, 0xff, 0x02, 0x01, 0x00,
+        ];
+        let certificate = certificate_with_extensions(&path_zero);
+        assert_eq!(certificate.enforce_ca_path_length(0), Ok(()));
+        assert_eq!(
+            certificate.enforce_ca_path_length(1),
+            Err(CertificateError::PathLengthExceeded)
+        );
     }
     #[test]
     fn external_public_chain_when_configured() {
