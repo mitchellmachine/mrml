@@ -1243,6 +1243,7 @@ unsafe fn cudaSetDevice(device: i32) -> i32 {
 pub struct CudaBuffer<T> {
     ptr: *mut T,
     len: usize,
+    bytes: usize,
     device_id: i32,
     allocation: CudaAllocation,
     _marker: PhantomData<T>,
@@ -1282,7 +1283,15 @@ pub struct CudaArena {
 
 impl CudaArena {
     pub fn new(device_id: i32, bytes: usize) -> Result<Self> {
-        unsafe { cudaSetDevice(device_id) };
+        if bytes == 0 {
+            return Err(anyhow!("CUDA arena size must be nonzero"));
+        }
+        let selected = unsafe { cudaSetDevice(device_id) };
+        if selected != 0 {
+            return Err(anyhow!(
+                "cudaSetDevice failed on GPU {device_id} with code {selected}"
+            ));
+        }
         let mut ptr = ptr::null_mut();
         let status = unsafe { cudaMalloc(&mut ptr, bytes) };
         if status != 0 || ptr.is_null() {
@@ -1304,19 +1313,34 @@ impl CudaArena {
         let bytes = len
             .checked_mul(mem::size_of::<T>())
             .ok_or_else(|| anyhow!("CUDA arena allocation size overflow"))?;
-        let aligned = (bytes + 255) & !255;
-        let offset = self.next.fetch_add(aligned, Ordering::Relaxed);
-        if offset + aligned > self.allocation.bytes {
-            self.next.fetch_sub(aligned, Ordering::Relaxed);
-            return Err(anyhow!(
-                "CUDA arena exhausted: requested {bytes} bytes, {} remain",
-                self.allocation.bytes.saturating_sub(offset)
-            ));
-        }
+        let aligned = bytes
+            .checked_add(255)
+            .map(|value| value & !255)
+            .ok_or_else(|| anyhow!("CUDA arena alignment overflow"))?;
+        let offset = loop {
+            let offset = self.next.load(Ordering::Relaxed);
+            let end = offset
+                .checked_add(aligned)
+                .ok_or_else(|| anyhow!("CUDA arena offset overflow"))?;
+            if end > self.allocation.bytes {
+                return Err(anyhow!(
+                    "CUDA arena exhausted: requested {bytes} bytes, {} remain",
+                    self.allocation.bytes.saturating_sub(offset)
+                ));
+            }
+            if self
+                .next
+                .compare_exchange_weak(offset, end, Ordering::Relaxed, Ordering::Relaxed)
+                .is_ok()
+            {
+                break offset;
+            }
+        };
         let ptr = unsafe { (self.allocation.ptr as *mut u8).add(offset) as *mut T };
         Ok(CudaBuffer {
             ptr,
             len,
+            bytes,
             device_id: self.allocation.device_id,
             allocation: CudaAllocation::Arena(self.allocation.clone()),
             _marker: PhantomData,
@@ -1336,8 +1360,8 @@ pub fn upload_if_full<T: Copy>(
     data: &[T],
     expected_len: usize,
 ) -> Option<CudaBuffer<T>> {
-    if device.is_some() && data.len() == expected_len {
-        CudaBuffer::from_host_on(0, data).ok()
+    if let Some(device) = device.filter(|_| data.len() == expected_len) {
+        CudaBuffer::from_host_on(device.device_id, data).ok()
     } else {
         None
     }
@@ -1348,9 +1372,19 @@ unsafe impl<T: Sync> Sync for CudaBuffer<T> {}
 
 impl<T> CudaBuffer<T> {
     pub fn alloc_on(device_id: i32, len: usize) -> Result<Self> {
-        unsafe { cudaSetDevice(device_id) };
+        let selected = unsafe { cudaSetDevice(device_id) };
+        if selected != 0 {
+            return Err(anyhow!(
+                "cudaSetDevice failed on GPU {device_id} with code {selected}"
+            ));
+        }
         let mut raw_ptr: *mut c_void = ptr::null_mut();
-        let bytes = len * mem::size_of::<T>();
+        let bytes = len
+            .checked_mul(mem::size_of::<T>())
+            .ok_or_else(|| anyhow!("CUDA allocation size overflow"))?;
+        if bytes == 0 {
+            return Err(anyhow!("CUDA allocation size must be nonzero"));
+        }
         let res = unsafe { cudaMalloc(&mut raw_ptr, bytes) };
         if res != 0 || raw_ptr.is_null() {
             return Err(anyhow!(
@@ -1363,6 +1397,7 @@ impl<T> CudaBuffer<T> {
         Ok(Self {
             ptr: raw_ptr as *mut T,
             len,
+            bytes,
             device_id,
             allocation: CudaAllocation::Owned,
             _marker: PhantomData,
@@ -1370,8 +1405,18 @@ impl<T> CudaBuffer<T> {
     }
 
     pub fn alloc_pooled_on(device_id: i32, len: usize) -> Result<Self> {
-        unsafe { cudaSetDevice(device_id) };
-        let bytes = len * mem::size_of::<T>();
+        let selected = unsafe { cudaSetDevice(device_id) };
+        if selected != 0 {
+            return Err(anyhow!(
+                "cudaSetDevice failed on GPU {device_id} with code {selected}"
+            ));
+        }
+        let bytes = len
+            .checked_mul(mem::size_of::<T>())
+            .ok_or_else(|| anyhow!("CUDA pooled allocation size overflow"))?;
+        if bytes == 0 {
+            return Err(anyhow!("CUDA pooled allocation size must be nonzero"));
+        }
         let (raw_ptr, res) = pooled_cuda_alloc(device_id, bytes);
         if res != 0 || raw_ptr.is_null() {
             return Err(anyhow!(
@@ -1383,6 +1428,7 @@ impl<T> CudaBuffer<T> {
         Ok(Self {
             ptr: raw_ptr as *mut T,
             len,
+            bytes,
             device_id,
             allocation: CudaAllocation::Pooled,
             _marker: PhantomData,
@@ -1404,9 +1450,17 @@ impl<T> CudaBuffer<T> {
     }
 
     pub fn copy_from_host(&mut self, slice: &[T]) -> Result<()> {
-        assert_eq!(self.len, slice.len());
-        unsafe { cudaSetDevice(self.device_id) };
-        let bytes = slice.len() * mem::size_of::<T>();
+        if self.len != slice.len() {
+            return Err(anyhow!("CUDA host-to-device copy length mismatch"));
+        }
+        let selected = unsafe { cudaSetDevice(self.device_id) };
+        if selected != 0 {
+            return Err(anyhow!("cudaSetDevice failed with code {selected}"));
+        }
+        let bytes = slice
+            .len()
+            .checked_mul(mem::size_of::<T>())
+            .ok_or_else(|| anyhow!("CUDA host-to-device copy size overflow"))?;
         let res = unsafe {
             cudaMemcpy(
                 self.ptr as *mut c_void,
@@ -1422,9 +1476,20 @@ impl<T> CudaBuffer<T> {
     }
 
     pub fn copy_from_host_at(&mut self, offset: usize, slice: &[T]) -> Result<()> {
-        assert!(offset + slice.len() <= self.len);
-        unsafe { cudaSetDevice(self.device_id) };
-        let bytes = mem::size_of_val(slice);
+        let end = offset
+            .checked_add(slice.len())
+            .ok_or_else(|| anyhow!("CUDA host-to-device range overflow"))?;
+        if end > self.len {
+            return Err(anyhow!("CUDA host-to-device range exceeds buffer"));
+        }
+        let selected = unsafe { cudaSetDevice(self.device_id) };
+        if selected != 0 {
+            return Err(anyhow!("cudaSetDevice failed with code {selected}"));
+        }
+        let bytes = slice
+            .len()
+            .checked_mul(mem::size_of::<T>())
+            .ok_or_else(|| anyhow!("CUDA host-to-device copy size overflow"))?;
         let dst = unsafe { self.ptr.add(offset) };
         let res = unsafe {
             cudaMemcpy(
@@ -1441,14 +1506,24 @@ impl<T> CudaBuffer<T> {
     }
 
     pub fn copy_to_host(&self, slice: &mut [T]) -> Result<()> {
-        assert_eq!(self.len, slice.len());
+        if self.len != slice.len() {
+            return Err(anyhow!("CUDA device-to-host copy length mismatch"));
+        }
         self.copy_prefix_to_host(slice)
     }
 
     pub fn copy_prefix_to_host(&self, slice: &mut [T]) -> Result<()> {
-        assert!(slice.len() <= self.len);
-        unsafe { cudaSetDevice(self.device_id) };
-        let bytes = slice.len() * mem::size_of::<T>();
+        if slice.len() > self.len {
+            return Err(anyhow!("CUDA device-to-host range exceeds buffer"));
+        }
+        let selected = unsafe { cudaSetDevice(self.device_id) };
+        if selected != 0 {
+            return Err(anyhow!("cudaSetDevice failed with code {selected}"));
+        }
+        let bytes = slice
+            .len()
+            .checked_mul(mem::size_of::<T>())
+            .ok_or_else(|| anyhow!("CUDA device-to-host copy size overflow"))?;
         let res = unsafe {
             cudaMemcpy(
                 slice.as_mut_ptr() as *mut c_void,
@@ -1495,11 +1570,9 @@ impl<T> Drop for CudaBuffer<T> {
             unsafe {
                 cudaSetDevice(self.device_id);
                 match &self.allocation {
-                    CudaAllocation::Pooled => pooled_cuda_release(
-                        self.device_id,
-                        self.ptr as *mut c_void,
-                        self.len * mem::size_of::<T>(),
-                    ),
+                    CudaAllocation::Pooled => {
+                        pooled_cuda_release(self.device_id, self.ptr as *mut c_void, self.bytes)
+                    }
                     CudaAllocation::Owned => {
                         cudaFree(self.ptr as *mut c_void);
                     }
@@ -2332,13 +2405,22 @@ impl CudaDevice {
     }
 
     pub fn copy_from_host_async<T>(&self, dst: &mut CudaBuffer<T>, src: &[T]) -> Result<()> {
-        assert_eq!(dst.len(), src.len());
-        unsafe { cudaSetDevice(self.device_id) };
+        if dst.device_id() != self.device_id || dst.len() != src.len() {
+            return Err(anyhow!("CUDA async host copy buffer mismatch"));
+        }
+        let selected = unsafe { cudaSetDevice(self.device_id) };
+        if selected != 0 {
+            return Err(anyhow!("cudaSetDevice failed with code {selected}"));
+        }
+        let bytes = src
+            .len()
+            .checked_mul(mem::size_of::<T>())
+            .ok_or_else(|| anyhow!("CUDA async host copy size overflow"))?;
         let res = unsafe {
             cudaMemcpyAsync(
                 dst.as_mut_ptr() as *mut c_void,
                 src.as_ptr() as *const c_void,
-                mem::size_of_val(src),
+                bytes,
                 CudaMemcpyKind::HostToDevice,
                 self.stream,
             )
@@ -2355,13 +2437,25 @@ impl CudaDevice {
         offset: usize,
         src: &[T],
     ) -> Result<()> {
-        assert!(offset + src.len() <= dst.len());
-        unsafe { cudaSetDevice(self.device_id) };
+        let end = offset
+            .checked_add(src.len())
+            .ok_or_else(|| anyhow!("CUDA async host copy range overflow"))?;
+        if dst.device_id() != self.device_id || end > dst.len() {
+            return Err(anyhow!("CUDA async host copy range exceeds buffer"));
+        }
+        let selected = unsafe { cudaSetDevice(self.device_id) };
+        if selected != 0 {
+            return Err(anyhow!("cudaSetDevice failed with code {selected}"));
+        }
+        let bytes = src
+            .len()
+            .checked_mul(mem::size_of::<T>())
+            .ok_or_else(|| anyhow!("CUDA async host copy size overflow"))?;
         let res = unsafe {
             cudaMemcpyAsync(
                 dst.as_mut_ptr().add(offset) as *mut c_void,
                 src.as_ptr() as *const c_void,
-                mem::size_of_val(src),
+                bytes,
                 CudaMemcpyKind::HostToDevice,
                 self.stream,
             )
