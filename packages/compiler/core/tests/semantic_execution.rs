@@ -330,6 +330,34 @@ fn nested_reference_mutations_and_return_origins_match_oracle() {
 fn subslice_then_index_reference_mutation_executes() {
     for code in [
         compile(
+            "#[unsafe(no_mangle)] pub extern \"C\" fn probe(input: &mut [u32; 4], first: usize, second: usize, index: usize) -> u32 { let selected: &mut u32 = &mut input[first..][second..][index]; *selected += 13; *selected }",
+        ),
+        compile(
+            "fn select(input: &mut [u32; 4], first: usize, second: usize, index: usize) -> &mut u32 { &mut input[first..][second..][index] } #[unsafe(no_mangle)] pub extern \"C\" fn probe(input: &mut [u32; 4], first: usize, second: usize, index: usize) -> u32 { let selected: &mut u32 = select(input, first, second, index); *selected += 13; *selected }",
+        ),
+    ] {
+        let probe: unsafe extern "C" fn(*mut [u32; 4], usize, usize, usize) -> u32 =
+            unsafe { std::mem::transmute(code.pointer) };
+        for (first, second, index, target) in
+            [(0, 1, 2, 3), (1, 1, 0, 2), (2, 0, 1, 3)]
+        {
+            let mut values = [10, 20, 30, 40];
+            let expected = values[target] + 13;
+            assert_eq!(
+                unsafe { probe(&mut values, first, second, index) },
+                expected
+            );
+            assert_eq!(values[target], expected);
+            for (position, value) in values.into_iter().enumerate() {
+                if position != target {
+                    assert_eq!(value, [10, 20, 30, 40][position]);
+                }
+            }
+        }
+    }
+
+    for code in [
+        compile(
             "fn select(input: &mut [u32; 4], start: usize, index: usize) -> &mut u32 { &mut input[start..][index] } #[unsafe(no_mangle)] pub extern \"C\" fn probe(input: &mut [u32; 4], start: usize, index: usize) -> u32 { let selected: &mut u32 = select(input, start, index); *selected += 7; *selected }",
         ),
         compile(

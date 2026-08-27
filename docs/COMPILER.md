@@ -960,15 +960,18 @@ replacement, and 13 semantic-execution tests (1,034 total). This does not add
 general repeated range values, callee-origin inference for repeated projections,
 arbitrary projection depth, or index-sensitive alias reasoning.
 
-The exact repeated-subslice scalar origin now crosses one direct helper return.
-The closed classifier accepts only `Subslice`/`Subslice`/`Index`, with an
-optional leading dereference, when mutable slice and scalar-reference types are
-compatible. Caller analysis therefore keeps a competing mutable borrow rejected
-while the returned reference remains live and restores access after its last
-use. Direct and helper-return native probes produce the same mutations on
-Windows gnullvm and Arch Linux WSL. A third subslice remains unclassified and
-fails closed; this does not add general projection inference or index-sensitive
-alias reasoning.
+The exact repeated-subslice scalar origin now crosses one direct helper return
+for both fixed-array and runtime-slice roots. The closed classifier accepts only
+`Subslice`/`Subslice`/`Index`, with an optional leading dereference, when the
+mutable aggregate and scalar-reference types are compatible. Caller analysis
+therefore keeps a competing mutable borrow rejected while the returned reference
+remains live and restores access after its last use. Direct and helper-return
+fixed-array probes and their runtime-slice counterparts produce the same
+single-element mutations on Windows gnullvm and Arch Linux WSL. A third subslice
+remains unclassified and fails closed; this does not add general projection
+inference or index-sensitive alias reasoning. Both hosts passed the same 659
+unit, 1 component-interface, 10 conformance, 351 replacement, and 14 semantic-
+execution tests (1,035 total).
 
 The repeated-subslice semantic harness now isolates all three checked failure
 layers. An inner start beyond the runtime owner length, an outer start beyond
