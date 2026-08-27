@@ -11,11 +11,11 @@ profile = "library"
 
 [isolation]
 default = "in-process"
-minimum = "in-process"
 maximum = "microvm"
-supported = ["in-process", "native-service", "microvm"]
-runtime_class = "microvm-eligible"
+minimum = "in-process"
 must_run = true
+runtime_class = "microvm-eligible"
+supported = ["in-process", "native-service", "microvm"]
 
 [[requires]]
 binding = "dynamic"
