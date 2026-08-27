@@ -6243,4 +6243,9 @@ fn rustc_string_reference_delayed_initialization_reaches_native_objects() {
 
     let invalid_escape = "#[unsafe(no_mangle)] pub extern \"C\" fn probe(input: &str, choose: bool) -> &str { let value: &str; if choose { value = input; } else { value = \"bad\\q\"; } value }";
     assert!(compile(invalid_escape, ObjectFormat::Elf64).is_err());
+
+    let missing_lifetime =
+        "#[unsafe(no_mangle)] pub extern \"C\" fn probe(index: u8) -> &str { \"fallback\" }";
+    assert!(compile(missing_lifetime, ObjectFormat::Elf64).is_err());
+    assert!(compile(missing_lifetime, ObjectFormat::Coff).is_err());
 }

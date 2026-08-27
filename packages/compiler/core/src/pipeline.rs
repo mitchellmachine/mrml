@@ -560,7 +560,7 @@ mod tests {
         );
 
         let pooled = concat!(
-            "#[unsafe(no_mangle)] pub extern \"C\" fn probe(choose: bool) -> &str { if choose { \"",
+            "#[unsafe(no_mangle)] pub extern \"C\" fn probe(input: &str, choose: bool) -> &str { if choose { \"",
             "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
             "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
             "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
@@ -597,6 +597,14 @@ mod tests {
         );
         compile_wide(nine_literals, "probe", ObjectFormat::Elf64).unwrap();
         assert!(compile_wide(nine_literals, "probe", ObjectFormat::Coff).is_ok());
+
+        let missing_lifetime =
+            "#[unsafe(no_mangle)] pub extern \"C\" fn probe(index: u8) -> &str { \"fallback\" }";
+        let error = compile_wide(missing_lifetime, "probe", ObjectFormat::Elf64).unwrap_err();
+        assert!(matches!(
+            error.kind,
+            CompileErrorKind::Codegen(CodegenErrorKind::UnsupportedLifetimeElision)
+        ));
 
         for invalid in [
             "#[unsafe(no_mangle)] pub extern \"C\" fn probe(input: &str, choose: bool) -> &str { let value: &str; if choose { value = input; } else { value = \"bad\\q\"; } value }",

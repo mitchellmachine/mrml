@@ -149,6 +149,7 @@ pub enum CodegenErrorKind {
     RuntimeExpressionUnsupported,
     MissingReturnType,
     UnsupportedReturnType,
+    UnsupportedLifetimeElision,
     Expression(ExpressionErrorKind),
     Body(ParseErrorKind),
     Lowering(IrErrorKind),
@@ -780,6 +781,18 @@ pub fn compile_x86_64_runtime_function_with_options<
     let return_array = runtime_array_type(return_type_text);
     let return_reference = runtime_reference_type(return_type_text);
     let return_pointer = runtime_raw_pointer_type(return_type_text);
+    if return_reference.is_some()
+        && !function
+            .parameters()
+            .iter()
+            .flatten()
+            .any(|parameter| runtime_reference_type(parameter.ty.text).is_some())
+    {
+        return Err(CodegenError {
+            kind: CodegenErrorKind::UnsupportedLifetimeElision,
+            span: return_type_span,
+        });
+    }
     let returns_zero_sized_array = return_array
         .and_then(runtime_array_abi_layout)
         .is_some_and(|(_, bytes, _)| bytes == 0);
