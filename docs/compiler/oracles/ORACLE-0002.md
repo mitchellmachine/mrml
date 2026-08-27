@@ -1153,3 +1153,11 @@ that the backslash and embedded non-closing quote/hash sequence are literal
 content under that exact delimiter; it does not establish an implementation
 strategy, object format, pooling, byte strings, C strings, or MRML decoding.
 The temporary source and metadata were removed.
+
+An independently authored Rust 2024 metadata-only conditional string probe
+against this exact toolchain and commit accepted a parameter-backed `&str`
+return with nine distinct static string arms and a final parameter arm. This is
+black-box evidence for that exact modern lifetime-elided source shape only; it
+does not establish an object relocation count, implementation strategy, linker
+behavior, or unbounded literal support. The temporary source and metadata were
+removed.

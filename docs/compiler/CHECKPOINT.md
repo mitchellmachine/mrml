@@ -58,7 +58,18 @@ oracle upgrade receives a new immutable record and differential classification
 against all prior accepted probes. Keep Cargo on edition 2024 until a newer
 named edition can be adopted through a pinned, workspace-wide migration.
 
-## Latest bounded decoded string-literal pooling milestone
+## Latest thirty-two-relocation object milestone
+
+Commit `78a7f771` raises both the runtime read-only relocation arena and shared
+x86-64 object validator from eight to 32 entries. A modern-Rust-compatible
+parameter-backed return with nine distinct static arms reaches both ELF64 and
+COFF; the existing thirty-third-entry object control remains fail-closed. The
+exact ORACLE-0002 nightly accepted the independently authored source. Windows
+and native Arch Linux WSL each passed 650 library tests, 1 component probe, 10
+conformance tests, and 349 replacement tests: 1,010 compiler tests per host.
+This remains a fixed bound, not dynamic allocation or complete linker support.
+
+### Preceding bounded decoded string-literal pooling milestone
 
 Commit `85bdd637` decodes each cooked or raw string into a fixed 1,024-byte
 scratch buffer before mutating object data, then deterministically reuses the

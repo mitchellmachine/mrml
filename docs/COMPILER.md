@@ -2068,6 +2068,21 @@ tests (1,009 total). Raw/byte strings, escape decoding, literal deduplication,
 more than eight literals, more than 1,024 literal bytes, and general static data
 remain outside this checkpoint.
 
+### Thirty-two-relocation object checkpoint
+
+The shared x86-64 object and runtime read-only-data contracts now admit at most
+32 checked relocations instead of eight. All existing offset, symbol, data,
+integer-conversion, serialization, and output-capacity validation remains in
+force, and the thirty-third relocation fails closed through the existing object
+capacity test.
+
+The exact ORACLE-0002 Rust 2024 toolchain accepted an independently authored
+parameter-backed conditional return containing nine distinct static string
+arms. MRML emits all nine literal relocations in both ELF64 and COFF. Windows
+and Arch each passed 650 unit, 1 component, 10 conformance, and 349 replacement
+tests (1,010 total). This is a fixed capacity increase, not unbounded object
+growth, dynamic allocation, general static data, or complete linker semantics.
+
 ### Bounded decoded string-literal pooling checkpoint
 
 Cooked and raw string literals now decode into a fixed 1,024-byte scratch

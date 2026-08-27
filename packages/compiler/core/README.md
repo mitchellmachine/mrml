@@ -5899,3 +5899,14 @@ reuse. Windows and native Arch Linux WSL each passed 650 library tests, 1
 component probe, 10 conformance tests, and 349 replacement tests: 1,010 compiler
 tests per host. Literal address identity, general constant merging, larger
 capacities, and general static data remain outside the claim.
+
+The thirty-two-relocation object milestone at `78a7f771` raises the shared
+x86-64 object validator and runtime read-only relocation arena from eight to 32
+entries without weakening any checked offset, symbol, data, serialization, or
+output bound. A parameter-backed conditional return with nine distinct static
+arms reaches both ELF64 and COFF, while the object layer's thirty-third-entry
+control rejects. The exact ORACLE-0002 nightly accepted the independently
+authored source. Windows and native Arch Linux WSL each passed 650 library
+tests, 1 component probe, 10 conformance tests, and 349 replacement tests: 1,010
+compiler tests per host. Dynamic allocation, unbounded relocation growth,
+general static data, and complete linker semantics remain outside the claim.
