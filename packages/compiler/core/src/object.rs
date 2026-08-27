@@ -8,7 +8,7 @@ const ELF_SECTION_NAMES: &[u8] = b"\0.text\0.symtab\0.strtab\0.shstrtab\0";
 
 const COFF_HEADER_BYTES: usize = 20;
 const COFF_SECTION_HEADER_BYTES: usize = 40;
-pub const MAX_X86_64_RELOCATIONS: usize = 8;
+pub const MAX_X86_64_RELOCATIONS: usize = 32;
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum ObjectError {
     EmptySymbol,

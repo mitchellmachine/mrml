@@ -587,6 +587,17 @@ mod tests {
         assert!(compile_wide(pooled, "probe", ObjectFormat::Elf64).is_ok());
         assert!(compile_wide(pooled, "probe", ObjectFormat::Coff).is_ok());
 
+        let nine_literals = concat!(
+            "#[unsafe(no_mangle)] pub extern \"C\" fn probe(input: &str, index: u8) -> &str { ",
+            "if index == 0 { \"zero\" } else if index == 1 { \"one\" } ",
+            "else if index == 2 { \"two\" } else if index == 3 { \"three\" } ",
+            "else if index == 4 { \"four\" } else if index == 5 { \"five\" } ",
+            "else if index == 6 { \"six\" } else if index == 7 { \"seven\" } ",
+            "else if index == 8 { \"eight\" } else { input } }"
+        );
+        compile_wide(nine_literals, "probe", ObjectFormat::Elf64).unwrap();
+        assert!(compile_wide(nine_literals, "probe", ObjectFormat::Coff).is_ok());
+
         for invalid in [
             "#[unsafe(no_mangle)] pub extern \"C\" fn probe(input: &str, choose: bool) -> &str { let value: &str; if choose { value = input; } else { value = \"bad\\q\"; } value }",
             "#[unsafe(no_mangle)] pub extern \"C\" fn probe(input: &str, choose: bool) -> &str { let value: &str; if choose { value = input; } else { value = \"bad\\xFF\"; } value }",

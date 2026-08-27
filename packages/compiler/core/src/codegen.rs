@@ -93,7 +93,7 @@ pub enum X86_64ExternalRelocationKind {
 
 pub const MAX_X86_64_EXTERNAL_RELOCATIONS: usize = 8;
 pub const MAX_X86_64_READONLY_DATA_BYTES: usize = 1024;
-pub const MAX_X86_64_READONLY_RELOCATIONS: usize = 8;
+pub const MAX_X86_64_READONLY_RELOCATIONS: usize = 32;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct X86_64ReadonlyDataRelocation {
