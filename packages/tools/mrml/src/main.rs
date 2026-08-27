@@ -4443,7 +4443,21 @@ fn apply_rust_sanitizer(
         Some("address") if compile_target == "x86_64-unknown-linux-gnu" => {
             command
                 .arg("-Zsanitizer=address")
-                .args(["-C", "force-frame-pointers=yes"]);
+                .args(["-C", "force-frame-pointers=yes"])
+                .args([
+                    "-C",
+                    "link-arg=-lgcc_s",
+                    "-C",
+                    "link-arg=-lutil",
+                    "-C",
+                    "link-arg=-lrt",
+                    "-C",
+                    "link-arg=-lpthread",
+                    "-C",
+                    "link-arg=-lm",
+                    "-C",
+                    "link-arg=-ldl",
+                ]);
             Ok(())
         }
         Some(value) => Err(format!(
@@ -5373,6 +5387,24 @@ mod tests {
         assert!(valid_gpu_architecture("compute_90"));
         assert!(!valid_gpu_architecture("sm_120;other"));
         assert!(!valid_gpu_architecture("sm_"));
+    }
+    #[test]
+    fn linux_address_sanitizer_links_the_unwind_runtime() {
+        let mut command = Command::new("rustc");
+        apply_rust_sanitizer(&mut command, Some("address"), "x86_64-unknown-linux-gnu").unwrap();
+        let arguments = command
+            .get_args()
+            .map(|argument| argument.to_string_lossy().into_owned())
+            .collect::<Vec<_>>();
+        for library in ["gcc_s", "util", "rt", "pthread", "m", "dl"] {
+            let link_argument = format!("link-arg=-l{library}");
+            assert!(
+                arguments
+                    .windows(2)
+                    .any(|pair| pair == ["-C", link_argument.as_str()]),
+                "missing Linux ASan runtime dependency {library}"
+            );
+        }
     }
     #[test]
     fn rust_externs_are_target_scoped_and_unique() {
