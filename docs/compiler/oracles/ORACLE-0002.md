@@ -1190,9 +1190,11 @@ semantics. The temporary source and metadata were removed.
 An independently authored Rust 2024 metadata-only explicit-static lifetime set
 against this exact toolchain and commit accepted a scalar-parameter function
 returning either a cooked or raw `&'static str` literal and accepted identity of
-an explicitly `&'static str` parameter. Returning an ordinary `&str` parameter
-as `&'static str` failed because the input lifetime does not outlive `'static`.
-Windows gnullvm and native Arch Linux produced the same accept/reject result.
+an explicitly `&'static str` parameter. A follow-up accepted cooked/raw
+`&'static [u8]` literals and identity of an explicitly `&'static u32` input.
+Returning an ordinary `&str` or `&u32` parameter with the corresponding static
+return failed because the input lifetime does not outlive `'static`. Windows
+gnullvm and native Arch Linux produced the same accept/reject results.
 This is black-box evidence for those exact signature and return forms only; it
 does not establish named lifetime inference, general lifetime subtyping,
 higher-ranked lifetimes, or an implementation strategy. Temporary source and

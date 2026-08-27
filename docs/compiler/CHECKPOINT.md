@@ -70,6 +70,10 @@ and Arch. Both hosts passed 653 library, 1 component-interface, 10 conformance,
 351 replacement, and 6 semantic-execution tests: 1,021 per host. Named and
 higher-ranked lifetimes, general subtyping, and regions remain unsupported.
 
+Follow-up commit `a5384c57` proves the same classification for cooked/raw
+`&'static [u8]` literals and explicitly static thin `&u32`, including a
+fail-closed ordinary-`&u32` narrowing control, in both object formats.
+
 Patent review: **NOT_TRIGGERED**; see `docs/patents/REVIEW_LOG.md`.
 
 ### Preceding exhaustive nested-control lowering milestone

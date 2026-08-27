@@ -5970,3 +5970,9 @@ and static-input forms and rejected narrowing `&str` to `&'static str` on both
 hosts. ELF64 and COFF object probes passed, and both hosts remained at 1,021
 compiler tests. Named/higher-ranked lifetimes, general lifetime subtyping, and
 general regions remain unsupported.
+
+Follow-up `a5384c57` covers the remaining representation classes exercised by
+this classifier: cooked/raw static byte slices use the two-word read-only-data
+path, while an explicitly static `&u32` uses the thin-reference path. An
+ordinary `&u32` cannot be narrowed to `&'static u32`. Exact ORACLE-0002 and
+MRML ELF64/COFF results agree on all three controls; host totals remain 1,021.

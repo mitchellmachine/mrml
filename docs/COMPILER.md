@@ -2077,8 +2077,9 @@ static parameter may be returned through the existing origin/outlives path. A
 non-static reference parameter in an explicit-static-return signature fails
 closed as `UnsupportedLifetimeRelation`; the existing missing-input elision
 case remains `UnsupportedLifetimeElision`. ELF64 and COFF probes cover cooked
-and raw literal arms plus a static parameter. The exact ORACLE-0002 toolchain
-accepted those independently authored forms and rejected `&str -> &'static str`.
+and raw string/byte-string literal arms plus static fat and thin parameters.
+The exact ORACLE-0002 toolchain accepted those independently authored forms and
+rejected both `&str -> &'static str` and `&u32 -> &'static u32`.
 Windows and Arch each passed 653 unit, 1 component, 10 conformance, 351
 replacement, and 6 semantic-execution tests (1,021 total). Named lifetimes,
 higher-ranked lifetimes, general subtyping, and general regions remain outside
