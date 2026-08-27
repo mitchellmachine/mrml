@@ -12,20 +12,11 @@ fn text_string(value: Text) -> String {
     value
 }
 
-fn contains_ascii_case_insensitive(haystack: &str, needle: &str) -> bool {
-    haystack.as_bytes().windows(needle.len()).any(|window| {
-        window
-            .iter()
-            .zip(needle.as_bytes())
-            .all(|(left, right)| left.eq_ignore_ascii_case(right))
-    })
-}
-
 pub async fn fetch_http_text(url: &str) -> Result<String> {
     validate_public_https_url(url)?;
     if let Ok(mut response) = mrml_http::Client::new()
         .user_agent("Mozilla/5.0 (compatible; MRML/0.4)")
-        .get_follow(url, &[], 8)
+        .get_follow_checked(url, &[], 8, is_public_https_endpoint)
     {
         if (200..300).contains(&response.status) {
             let body = response
@@ -47,32 +38,53 @@ pub(crate) fn validate_public_https_url(input: &str) -> Result<()> {
     let url =
         mrml_http::Url::parse(input).map_err(|_| anyhow!("Only valid HTTPS URLs are allowed"))?;
     let host = url.host.as_str();
-    if host == "localhost" || host.ends_with(".localhost") || is_non_public_ipv4(host) {
-        return Err(anyhow!("Local and private network URLs are not allowed"));
+    if is_local_hostname(host) || parse_ipv4(host).is_some_and(is_non_public_ipv4) {
+        return Err(anyhow!("Local, private, and special-use network URLs are not allowed"));
     }
     Ok(())
 }
 
-fn is_non_public_ipv4(host: &str) -> bool {
+fn is_public_https_endpoint(url: &mrml_http::Url, address: [u8; 4]) -> bool {
+    !is_local_hostname(url.host.as_str()) && !is_non_public_ipv4(address)
+}
+
+fn is_local_hostname(host: &str) -> bool {
+    host == "localhost"
+        || host.ends_with(".localhost")
+        || host == "local"
+        || host.ends_with(".local")
+}
+
+fn parse_ipv4(host: &str) -> Option<[u8; 4]> {
     let mut octets = [0u8; 4];
     let mut parts = host.split('.');
     for octet in &mut octets {
-        let Some(part) = parts.next() else {
-            return false;
-        };
-        let Ok(value) = part.parse::<u8>() else {
-            return false;
-        };
-        *octet = value;
+        *octet = parts.next()?.parse().ok()?;
     }
     if parts.next().is_some() {
-        return false;
+        return None;
     }
+    Some(octets)
+}
+
+// Reject addresses that are unsuitable as public web endpoints.
+fn is_non_public_ipv4(octets: [u8; 4]) -> bool {
     matches!(
         octets,
-        [0, ..] | [10, ..] | [127, ..] | [169, 254, ..] | [192, 168, ..]
-    ) || octets[0] == 100 && (64..=127).contains(&octets[1])
-        || octets[0] == 172 && (16..=31).contains(&octets[1])
+        [0, ..]
+            | [10, ..]
+            | [127, ..]
+            | [169, 254, ..]
+            | [192, 0, 0, ..]
+            | [192, 0, 2, ..]
+            | [192, 88, 99, ..]
+            | [192, 168, ..]
+            | [198, 18, ..]
+            | [198, 19, ..]
+            | [198, 51, 100, ..]
+            | [203, 0, 113, ..]
+    ) || matches!(octets, [100, second, ..] if (64..=127).contains(&second))
+        || matches!(octets, [172, second, ..] if (16..=31).contains(&second))
         || octets[0] >= 224
 }
 
@@ -105,10 +117,6 @@ impl Tool for WebSearchTool {
             .as_str()
             .ok_or_else(|| anyhow!("Missing query"))?;
         let mut results = Vector::new();
-
-        let _is_image_query = contains_ascii_case_insensitive(query, "image")
-            || contains_ascii_case_insensitive(query, "picture")
-            || contains_ascii_case_insensitive(query, "photo");
 
         // 1. First search Wikipedia directly
         let clean_query = Text::from(query)
@@ -266,7 +274,7 @@ impl Tool for WebFetchTool {
     }
 
     fn description(&self) -> &'static str {
-        "Fetch and dump clean, rendered DOM page text from a web URL using headless browser or HTTP fallback."
+        "Fetch a public HTTPS page with the authenticated HTTP client and return clean text extracted from its response body."
     }
 
     fn parameters(&self) -> serde_json::Value {
@@ -308,15 +316,37 @@ mod tests {
     use super::*;
 
     #[test]
-    fn web_tool_definitions_and_case_matching_are_stable() {
+    fn web_tool_definitions_and_public_url_policy_are_stable() {
         assert_eq!(WebSearchTool.name(), "web_search");
         assert_eq!(WebFetchTool.name(), "web_fetch");
-        assert!(contains_ascii_case_insensitive("Find an IMAGE", "image"));
-        assert!(!contains_ascii_case_insensitive("documentation", "photo"));
+        assert!(!WebFetchTool.description().contains("headless browser"));
+        assert!(WebFetchTool.description().contains("public HTTPS"));
         assert!(validate_public_https_url("https://example.com/path").is_ok());
         assert!(validate_public_https_url("http://example.com").is_err());
         assert!(validate_public_https_url("https://127.0.0.1/private").is_err());
         assert!(validate_public_https_url("https://192.168.1.2/private").is_err());
         assert!(validate_public_https_url("https://localhost/private").is_err());
+        assert!(validate_public_https_url("https://printer.local/private").is_err());
+
+        let public = mrml_http::Url::parse("https://example.com/").unwrap();
+        for address in [[1, 1, 1, 1], [8, 8, 8, 8], [100, 63, 255, 255], [223, 1, 1, 1]] {
+            assert!(is_public_https_endpoint(&public, address));
+        }
+        for address in [
+            [0, 0, 0, 0],
+            [10, 0, 0, 1],
+            [100, 64, 0, 1],
+            [127, 0, 0, 1],
+            [169, 254, 169, 254],
+            [172, 16, 0, 1],
+            [192, 0, 0, 1],
+            [192, 168, 0, 1],
+            [198, 18, 0, 1],
+            [203, 0, 113, 1],
+            [224, 0, 0, 1],
+            [255, 255, 255, 255],
+        ] {
+            assert!(!is_public_https_endpoint(&public, address));
+        }
     }
 }

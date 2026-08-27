@@ -20,8 +20,9 @@ application ABI, SDK, GUI, or complete application lifecycle.
 **EXPERIMENTAL:** `mrml-rustc` compiles a documented Rust subset and itself
 forbids unsafe code. It is not a complete Rust compiler, application admission
 system, or proof that arbitrary top-level Rust applications and dependencies
-are memory-safe. `mrml-tools` can automate installed host browsers; it is not an
-MRML browser engine or OS browser security boundary.
+are memory-safe. `mrml-tools` provides experimental public-HTTPS fetch and
+search tools; it does not automate an installed browser and is not an MRML
+browser engine or OS browser security boundary.
 
 **PLANNED:** safe native application admission and SDK, stable service
 protocols, application microVM projection, trusted compositor, semantic scene

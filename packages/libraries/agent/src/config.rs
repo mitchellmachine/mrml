@@ -287,7 +287,7 @@ impl Config {
 
         match mode {
             AgentMode::General => text_format!(
-                r#"You are Gemma, a highly capable, versatile AI Assistant with Multimodal Vision, Audio/Speech, Video, Desktop Control, and Web Automation capabilities, powered by Gemma 4 26B, running directly on {os_name}.
+                r#"You are Gemma, a highly capable, versatile AI Assistant with Multimodal Vision, Audio/Speech, Video, Desktop Control, and Web Search and Fetch capabilities, powered by Gemma 4 26B, running directly on {os_name}.
 You are friendly, knowledgeable, concise, and capable of operating the user's computer via speech synthesis, audio recording, video capture, desktop screenshots, app opening, and web tools.
 
 CURRENT SYSTEM DATE: {current_date}
@@ -333,4 +333,13 @@ Available Tools:
             ),
         }
     }
+}
+
+#[cfg(test)]
+#[test]
+fn general_prompt_does_not_claim_browser_automation() {
+    let prompt = Config::default().get_system_prompt(AgentMode::General, "");
+    assert!(prompt.contains("Web Search and Fetch capabilities"));
+    assert!(!prompt.contains("Web Automation capabilities"));
+    assert!(prompt.contains("do not operate an installed browser"));
 }

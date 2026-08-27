@@ -67,7 +67,8 @@ pub struct TcpStream {
 }
 
 impl TcpStream {
-    pub fn connect_host(host: &str, port: u16) -> Result<Self, NetError> {
+    /// Resolve a host once so callers can validate the exact IPv4 endpoint before connecting.
+    pub fn resolve_host(host: &str) -> Result<[u8; 4], NetError> {
         let mut name = crate::Vector::new();
         name.try_extend_from_slice(host.as_bytes())
             .map_err(|_| NetError::ResolveFailed)?;
@@ -76,7 +77,11 @@ impl TcpStream {
         let ip = mrml_windows::resolve_ipv4(&name);
         #[cfg(unix)]
         let ip = mrml_linux::resolve_ipv4(&name);
-        Self::connect(ip.ok_or(NetError::ResolveFailed)?, port)
+        ip.ok_or(NetError::ResolveFailed)
+    }
+
+    pub fn connect_host(host: &str, port: u16) -> Result<Self, NetError> {
+        Self::connect(Self::resolve_host(host)?, port)
     }
     pub fn connect(ip: [u8; 4], port: u16) -> Result<Self, NetError> {
         #[cfg(windows)]
@@ -158,19 +163,6 @@ mod tests {
 
     #[test]
     fn resolves_localhost() {
-        let ip = {
-            let mut name = crate::Vector::new();
-            name.try_extend_from_slice(b"localhost").unwrap();
-            name.push(0);
-            #[cfg(windows)]
-            {
-                mrml_windows::resolve_ipv4(&name)
-            }
-            #[cfg(unix)]
-            {
-                mrml_linux::resolve_ipv4(&name)
-            }
-        };
-        assert!(ip.is_some());
+        assert!(TcpStream::resolve_host("localhost").is_ok());
     }
 }

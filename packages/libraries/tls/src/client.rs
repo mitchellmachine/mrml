@@ -325,7 +325,13 @@ pub struct TlsClientStream {
 }
 impl TlsClientStream {
     pub fn connect(host: &str, port: u16) -> Result<Self, TlsError> {
-        let mut stream = TcpStream::connect_host(host, port).map_err(|_| TlsError::Io)?;
+        let address = TcpStream::resolve_host(host).map_err(|_| TlsError::Io)?;
+        Self::connect_resolved(host, address, port)
+    }
+
+    /// Connect to an exact IPv4 address while authenticating `host` with TLS.
+    pub fn connect_resolved(host: &str, address: [u8; 4], port: u16) -> Result<Self, TlsError> {
+        let mut stream = TcpStream::connect(address, port).map_err(|_| TlsError::Io)?;
         stream
             .set_read_timeout_millis(30_000)
             .map_err(|_| TlsError::Io)?;

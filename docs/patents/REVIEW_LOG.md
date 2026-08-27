@@ -9124,3 +9124,13 @@ compression mechanism, or device transport. Guest interrupt handling,
 recovered two-domain ownership, and signed component execution remain within
 the broader triggered worldwide mechanism review. This technical screen is not
 legal advice or patent clearance.
+
+# 2026-08-27 — Exact-endpoint public HTTPS fetch validation
+
+Patent review: **NOT_TRIGGERED**. This repair applies conventional SSRF
+hardening: each HTTPS redirect hop is resolved once, private and special-use
+IPv4 endpoints are rejected before I/O, the approved address is used for the
+TCP connection, and TLS continues to authenticate the original hostname. It
+introduces no new network protocol, cryptographic primitive, compression
+mechanism, browser engine, or authority model. This technical screen is not
+legal advice or patent clearance.

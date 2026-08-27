@@ -12,6 +12,10 @@ on:
 permissions:
   contents: read
 
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   stage-zero-address-sanitizer:
     name: Linux stage-zero AddressSanitizer tests
@@ -19,7 +23,9 @@ jobs:
     timeout-minutes: 30
     steps:
       - name: Check out repository
-        uses: actions/checkout@v6
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        with:
+          persist-credentials: false
       - name: Install pinned Rust toolchain
         run: rustup toolchain install nightly-2026-08-24 --profile minimal --component rust-src
       - name: Run locked frontend tests under AddressSanitizer
@@ -35,7 +41,9 @@ jobs:
     timeout-minutes: 120
     steps:
       - name: Check out repository
-        uses: actions/checkout@v6
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        with:
+          persist-credentials: false
       - name: Install pinned Rust toolchain
         run: rustup toolchain install nightly-2026-08-24 --profile minimal --component rust-src --target x86_64-unknown-none,x86_64-unknown-uefi
       - name: Build locked stage-zero frontend

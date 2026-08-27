@@ -327,12 +327,30 @@ impl Client {
         headers: &[(&str, &str)],
         redirects: usize,
     ) -> Result<Response, HttpError> {
+        self.get_follow_checked(url, headers, redirects, |_, _| true)
+    }
+    /// Resolve every redirect hop once and let the caller reject its exact endpoint before I/O.
+    pub fn get_follow_checked<F>(
+        &self,
+        url: &str,
+        headers: &[(&str, &str)],
+        redirects: usize,
+        mut allow_endpoint: F,
+    ) -> Result<Response, HttpError>
+    where
+        F: FnMut(&Url, [u8; 4]) -> bool,
+    {
         let mut current = Url::parse(url)?;
         let original_host = current.host.clone();
         let original_port = current.port;
         for _ in 0..=redirects {
+            let address = mrml_runtime::TcpStream::resolve_host(&current.host)
+                .map_err(|_| HttpError::Tls)?;
+            if !allow_endpoint(&current, address) {
+                return Err(HttpError::InvalidUrl);
+            }
             let same_origin = current.host == original_host && current.port == original_port;
-            let response = self.request(&current, "GET", headers, same_origin)?;
+            let response = self.request_resolved(&current, address, "GET", headers, same_origin)?;
             if matches!(response.status, 301 | 302 | 303 | 307 | 308) {
                 let location = Text::from(
                     response
@@ -353,11 +371,22 @@ impl Client {
         headers: &[(&str, &str)],
         allow_sensitive: bool,
     ) -> Result<Response, HttpError> {
+        let address = mrml_runtime::TcpStream::resolve_host(&url.host).map_err(|_| HttpError::Tls)?;
+        self.request_resolved(url, address, method, headers, allow_sensitive)
+    }
+    fn request_resolved(
+        &self,
+        url: &Url,
+        address: [u8; 4],
+        method: &str,
+        headers: &[(&str, &str)],
+        allow_sensitive: bool,
+    ) -> Result<Response, HttpError> {
         if !valid_value(&self.user_agent) || self.user_agent.len() > 1024 {
             return Err(HttpError::InvalidUrl);
         }
-        let mut stream =
-            TlsClientStream::connect(&url.host, url.port).map_err(|_| HttpError::Tls)?;
+        let mut stream = TlsClientStream::connect_resolved(&url.host, address, url.port)
+            .map_err(|_| HttpError::Tls)?;
         let mut request = mrml_runtime::mrml_format!(
             "{} {} HTTP/1.1\r\nHost: {}\r\nUser-Agent: {}\r\nAccept: */*\r\nConnection: close\r\n",
             method,
@@ -521,6 +550,23 @@ mod tests {
         assert!(Url::parse("https://example.com/a\r\nInjected: yes").is_err());
         assert!(Url::parse("https://bad_host.example/").is_err());
         assert!(Url::parse("https://-bad.example/").is_err());
+    }
+    #[test]
+    fn checked_follow_rejects_a_resolved_endpoint_before_connecting() {
+        let mut observed = None;
+        let result = Client::new().get_follow_checked(
+            "https://localhost/",
+            &[],
+            0,
+            |url, address| {
+                observed = Some((url.host.clone(), address));
+                false
+            },
+        );
+        assert!(matches!(result, Err(HttpError::InvalidUrl)));
+        let (host, address) = observed.unwrap();
+        assert_eq!(host, "localhost");
+        assert_eq!(address[0], 127);
     }
     #[test]
     fn live_get_when_configured() {
