@@ -9038,3 +9038,15 @@ semantic verification. It adds no object format, relocation type, production
 loader, dynamic linker, code-generation algorithm, cryptographic mechanism, or
 runtime security protocol. This technical screen is not legal advice or patent
 clearance.
+
+# 2026-08-27 — Distinct signed service-image guest construction
+
+Patent review: **NOT_TRIGGERED** for this focused verification increment. It
+uses the existing authenticated artifact loader, exact digest comparison,
+ordinary separate guest construction, and fail-closed rejection of artifact
+substitution. It introduces no new placement algorithm, scheduler, interface
+transport, device protocol, cryptographic primitive, or compression mechanism.
+The broader adaptive-placement, cross-microVM interface, and Total MicroVM
+reviews remain **TRIGGERED**, including recovered two-domain admission and
+guest-executed queue traffic. This technical screen is not legal advice or
+patent clearance.

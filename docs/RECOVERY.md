@@ -2017,3 +2017,11 @@ reads retain the existing shortest safe capability-bound block data plane.
 Storage passes 127 tests on Windows and Arch Linux. This is equality/type
 evidence only; native enumeration and physical route derivation remain
 **PLANNED**.
+
+The native VMM launch boundary now has focused evidence that independently
+signed consumer and provider `ServiceImage` artifacts retain distinct immutable
+digests when attached to separate KVM guests; substituting either artifact into
+the other's provisioned slot fails closed. The WHP path is source- and
+test-parallel, while the current host exposes its existing typed
+second-partition limitation. Do not recover this checkpoint as proof of complete
+Total admission or guest-executed interface traffic; both remain pending.

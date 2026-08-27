@@ -3467,3 +3467,12 @@ test no longer reconstructs a replacement envelope after delivery. Windows
 passes 566 kernel tests, 51 configuration tests, and 12 WHP runner tests; the
 service image builds. Real service invocation, full activated-release enumeration, and KVM
 parity for this increment remain **PLANNED**.
+
+Distinct signed service-image construction is now **PARTIALLY IMPLEMENTED** at
+the native VMM boundary. Nested KVM constructs two guests from independently
+verified `ServiceImage` artifacts, retains each exact artifact digest, and
+rejects cross-reprovisioning. WHP carries the same checked path, but this host's
+backend reports the second simultaneous partition as the typed
+`PartitionAlreadyExists` limitation. Recovered two-domain admission, attachment
+of the generation-bound peer queue to these guests, and guest-executed
+consumer/provider traffic remain **PLANNED**.

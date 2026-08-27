@@ -2692,7 +2692,10 @@ mod tests {
         encoded
     }
 
-    fn signed_payload(payload: [u8; 1024]) -> [u8; SIGNED_ARTIFACT_OVERHEAD_BYTES + 1024] {
+    fn signed_payload_kind(
+        payload: [u8; 1024],
+        kind: ArtifactKind,
+    ) -> [u8; SIGNED_ARTIFACT_OVERHEAD_BYTES + 1024] {
         let mut private = [0u8; LAMPORT_PRIVATE_KEY_BYTES];
         for (index, byte) in private.iter_mut().enumerate() {
             *byte = (index as u64).wrapping_mul(61).wrapping_add(17) as u8;
@@ -2700,12 +2703,12 @@ mod tests {
         let mut public = [0u8; LAMPORT_PUBLIC_KEY_BYTES];
         lamport_public_key(&private, &mut public).unwrap();
         let digest = Sha3_512::digest(&payload);
-        let statement = artifact_statement(ArtifactKind::VmImage, 1, payload.len() as u64, digest);
+        let statement = artifact_statement(kind, 1, payload.len() as u64, digest);
         let mut signature = [0u8; LAMPORT_SIGNATURE_BYTES];
         lamport_sign(&private, &statement, &mut signature).unwrap();
         let mut encoded = [0u8; SIGNED_ARTIFACT_OVERHEAD_BYTES + 1024];
         encoded[..16].copy_from_slice(b"MRML-SIGNED-v1\0\0");
-        encoded[16] = ArtifactKind::VmImage as u8;
+        encoded[16] = kind as u8;
         encoded[24..32].copy_from_slice(&1u64.to_le_bytes());
         encoded[32..40].copy_from_slice(&(payload.len() as u64).to_le_bytes());
         encoded[40..104].copy_from_slice(&digest);
@@ -2717,8 +2720,25 @@ mod tests {
         encoded
     }
 
+    fn signed_payload(payload: [u8; 1024]) -> [u8; SIGNED_ARTIFACT_OVERHEAD_BYTES + 1024] {
+        signed_payload_kind(payload, ArtifactKind::VmImage)
+    }
+
+    #[inline(never)]
+    fn signed_payload_vector(payload: [u8; 1024], kind: ArtifactKind) -> mrml_runtime::Vector<u8> {
+        mrml_runtime::Vector::from(signed_payload_kind(payload, kind))
+    }
+
     fn signed_pe() -> [u8; SIGNED_ARTIFACT_OVERHEAD_BYTES + 1024] {
         signed_payload(framebuffer_pe())
+    }
+
+    fn service_pe(marker: u8) -> [u8; 1024] {
+        let mut pe = framebuffer_pe();
+        let optional = 0x98;
+        pe[optional + 24..optional + 32].copy_from_slice(&0x40_0000u64.to_le_bytes());
+        pe[1023] = marker;
+        pe
     }
 
     struct ProbeBlock([u8; 4096]);
@@ -2912,6 +2932,77 @@ mod tests {
         let mut pixel = [0u8; 4];
         VmBackend::read_guest(&guest, 0xa0000, &mut pixel).unwrap();
         assert_eq!(pixel, [0x57, 0xc8, 0xff, 0x00]);
+    }
+
+    #[test]
+    fn live_two_vm_signed_services_retain_distinct_artifact_identity() {
+        let system = match KvmSystem::open() {
+            Ok(system) => system,
+            Err(KvmError::SystemCall) => return,
+            Err(error) => panic!("available KVM failed validation: {error:?}"),
+        };
+        let kernel_bytes = signed_payload_vector(framebuffer_pe(), ArtifactKind::Kernel);
+        let consumer_bytes = signed_payload_vector(service_pe(0x51), ArtifactKind::ServiceImage);
+        let provider_bytes = signed_payload_vector(service_pe(0xa2), ArtifactKind::ServiceImage);
+        let public_at = SIGNED_ARTIFACT_HEADER_BYTES;
+        let public_digest =
+            Sha3_512::digest(&kernel_bytes[public_at..public_at + LAMPORT_PUBLIC_KEY_BYTES]);
+        let kernel_root = TrustRoot::new(ArtifactKind::Kernel, public_digest, 1);
+        let service_root = TrustRoot::new(ArtifactKind::ServiceImage, public_digest, 1);
+        let kernel_signed = SignedArtifact::decode(&kernel_bytes).unwrap();
+        let consumer_signed = SignedArtifact::decode(&consumer_bytes).unwrap();
+        let provider_signed = SignedArtifact::decode(&provider_bytes).unwrap();
+        let kernel = kernel_signed
+            .verify_executable(&kernel_root, ArtifactKind::Kernel)
+            .unwrap();
+        let consumer = consumer_signed
+            .verify_executable(&service_root, ArtifactKind::ServiceImage)
+            .unwrap();
+        let provider = provider_signed
+            .verify_executable(&service_root, ArtifactKind::ServiceImage)
+            .unwrap();
+        assert_ne!(consumer.artifact().digest(), provider.artifact().digest());
+        let layout = KvmLaunchLayout::new(
+            0x10_0000,
+            16,
+            0x20_0000,
+            0xffff_8001_4000_0000,
+            0x30_0000,
+            0xffff_8001_5000_0000,
+            0x40_0000,
+            0xffff_8001_6000_0000,
+            PRIVILEGE_STACK_ARENA_PAGES,
+            false,
+        )
+        .unwrap();
+        let first = system
+            .prepare_isolated_service_kernel_guest::<16>(0, &kernel, &valid_handoff(), layout)
+            .unwrap();
+        let second = system
+            .prepare_isolated_service_kernel_guest::<16>(0, &kernel, &valid_handoff(), layout)
+            .unwrap();
+        let mut first = first
+            .attach_isolated_service(
+                &kernel, layout, &consumer, 0x90_0000, 0x40_0000, 0xa0_0000, 0x50_0000, 8,
+                0xb0_0000, 16,
+            )
+            .unwrap();
+        let mut second = second
+            .attach_isolated_service(
+                &kernel, layout, &provider, 0x90_0000, 0x40_0000, 0xa0_0000, 0x50_0000, 8,
+                0xb0_0000, 16,
+            )
+            .unwrap();
+        assert_eq!(first.service_entry(), Some(0x40_1000));
+        assert_eq!(second.service_entry(), Some(0x40_1000));
+        assert_eq!(
+            first.reprovision_isolated_service_at(0, &provider),
+            Err(KvmError::InvalidMapping)
+        );
+        assert_eq!(
+            second.reprovision_isolated_service_at(0, &consumer),
+            Err(KvmError::InvalidMapping)
+        );
     }
 
     #[test]
