@@ -953,9 +953,10 @@ borrow place, and visits the final index last. Native emission materializes the
 inner pointer and length once, checks the outer range against that saved length,
 consumes the temporary fat slice, and then checks and selects the final element.
 Three runtime-slice probes mutate only the element selected by both starts on
-Windows' indirect slice ABI and System V's direct pointer/length ABI. A third
-subslice remains fail closed and produces no object. Windows gnullvm and Arch
-Linux WSL each passed 659 unit, 1 component-interface, 10 conformance, 351
+Windows' indirect slice ABI and System V's direct pointer/length ABI. Repeated
+subslice values without a final scalar index remain fail closed and produce no
+object. Windows gnullvm and Arch Linux WSL each passed 659 unit, 1 component-
+interface, 10 conformance, 351
 replacement, and 13 semantic-execution tests (1,034 total). This does not add
 general repeated range values, callee-origin inference for repeated projections,
 arbitrary projection depth, or index-sensitive alias reasoning.
@@ -968,8 +969,9 @@ therefore keeps a competing mutable borrow rejected while the returned reference
 remains live and restores access after its last use. Direct and helper-return
 fixed-array probes and their runtime-slice counterparts produce the same
 single-element mutations on Windows gnullvm and Arch Linux WSL. A third subslice
-remains unclassified and fails closed; this does not add general projection
-inference or index-sensitive alias reasoning. Both hosts passed the same 659
+remains unclassified for helper-return origin inference and therefore fails that
+interprocedural proof closed; this does not add general projection inference or
+index-sensitive alias reasoning. Both hosts passed the same 659
 unit, 1 component-interface, 10 conformance, 351 replacement, and 14 semantic-
 execution tests (1,035 total).
 
@@ -981,6 +983,17 @@ form on Windows gnullvm and Arch Linux WSL with the same selected-element result
 This is one direct acyclic alias, not arbitrary local dataflow, branching alias
 joins, or index-sensitive disjointness. Both hosts again passed the same 1,035-
 test compiler gate.
+
+Direct scalar selection now recursively materializes a third bounded subslice
+using the same checked pointer/length pair as the two-subslice path. Each layer
+consumes its own temporary bounds state before returning one two-word slice to
+the next layer; the final index still records and consumes one canonical nested
+place. Fixed-array and runtime-slice probes exercise three different accumulated
+start combinations and mutate only the expected element on Windows gnullvm and
+Arch Linux WSL. The corresponding repeated-subslice value remains unsupported,
+and helper-return origin inference remains limited to two subslices. This is
+direct recursive lowering evidence at depth three, not unbounded-depth evidence
+or general slice-value support. Both hosts passed the same 1,035-test gate.
 
 The repeated-subslice semantic harness now isolates all three checked failure
 layers. An inner start beyond the runtime owner length, an outer start beyond

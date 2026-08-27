@@ -6915,7 +6915,7 @@ impl<
         };
 
         if materialized_base {
-            self.emit_range_index_value_to_stack(tree, base, depth + 1, false, false)?;
+            self.emit_range_index_value_to_stack(tree, base, depth + 1, true, false)?;
             self.evaluation_depth += 2;
         }
         if let Some(start) = start {
