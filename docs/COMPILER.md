@@ -912,10 +912,8 @@ array/slice execution evidence; selecting the inclusive last element confirms
 the checked end increment feeds the subsequent index bound. Repeated subslice
 chains and other deeper shapes remain unsupported. This is one exact nested
 non-tuple projection, not general place typing, index-sensitive aliasing, or
-region inference. Windows passed 658 unit, 1 component-interface, 10
-conformance, 351 replacement, and 11 semantic-execution tests (1,031 total);
-the runtime-slice, explicit-end, and inclusive-end extensions have not yet been
-run on Arch.
+region inference. The later 1,033-test Windows and Arch suites below execute
+the runtime-slice, explicit-end, and inclusive-end extensions on both ABIs.
 
 The semantic harness now isolates both failure edges of that composed place.
 One probe supplies a range start beyond the four-element owner; another creates
@@ -932,21 +930,20 @@ The inclusive composed-place harness now isolates four additional failure
 edges: `end == usize::MAX` before inclusive-end increment, a reversed range, an
 inclusive end beyond the four-element owner, and an index exactly equal to the
 three-element materialized subslice length. Windows child processes report
-`STATUS_ILLEGAL_INSTRUCTION` for every case; normal return, access violation,
-or an ordinary test failure is rejected. This is hosted execution of existing
-checked traps, not panic-unwind, kernel/VMM, or physical-machine evidence.
-Windows passed 658 unit, 1 component-interface, 10 conformance, 351 replacement,
-and 12 semantic-execution tests (1,032 total); Arch has not yet run this
-inclusive-trap extension.
+`STATUS_ILLEGAL_INSTRUCTION` and Arch forked children report raw `SIGILL` for
+every case; normal return or another failure status is rejected. This is hosted
+execution of existing checked traps, not panic-unwind, kernel/VMM, or physical-
+machine evidence.
 
 The same four inclusive failure edges now execute independently with a
 runtime-slice owner. Windows supplies the compiler's indirect pointer/length
-descriptor and every child again terminates with `STATUS_ILLEGAL_INSTRUCTION`,
-including the end-beyond-owner case that reads the fat reference's runtime
-length. This is direct evidence for the slice lowering rather than inference
-from the fixed-array path. Windows passed 658 unit, 1 component-interface, 10
-conformance, 351 replacement, and 13 semantic-execution tests (1,033 total);
-Arch has not yet run this runtime-slice trap extension.
+descriptor and every child again terminates with `STATUS_ILLEGAL_INSTRUCTION`;
+Arch supplies direct System V pointer/length words and every forked child
+terminates with raw `SIGILL`. This includes the end-beyond-owner case that reads
+the fat reference's runtime length. It is direct evidence for the slice lowering
+rather than inference from the fixed-array path. Windows gnullvm and Arch Linux
+WSL each passed 658 unit, 1 component-interface, 10 conformance, 351 replacement,
+and 13 semantic-execution tests (1,033 total).
 
 Patent review: `NOT_TRIGGERED`; these increments add execution coverage for an
 already implemented bounded place, range, and ABI contract rather than a new
