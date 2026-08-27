@@ -11060,6 +11060,10 @@ mod tests {
         {
             assert_eq!((fact.base, fact.projections), (base, projections));
         }
+
+        for abi in [X86_64Abi::Windows, X86_64Abi::SystemV] {
+            compile_x86_64_function::<_, 8192, 5, 64>(&function, &resolver, abi).unwrap();
+        }
     }
 
     #[test]

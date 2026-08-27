@@ -945,20 +945,25 @@ rather than inference from the fixed-array path. Windows gnullvm and Arch Linux
 WSL each passed 658 unit, 1 component-interface, 10 conformance, 351 replacement,
 and 13 semantic-execution tests (1,033 total).
 
-Repeated-subslice preanalysis now has a bounded foundation while emission
-remains fail closed. For an exact `input[first..][second..][index]` initializer,
-the analyzer walks at most 64 range nodes without allocation, visits inner then
-outer bounds in source evaluation order, records one canonical
-`Subslice`/`Subslice`/`Index` mutable-borrow place, and visits the final index
-last. The existing unsupported-source control still produces no object because
-recursive fat-slice materialization is not yet implemented. Windows gnullvm and
-Arch Linux WSL each passed 659 unit, 1 component-interface, 10 conformance, 351
-replacement, and 13 semantic-execution tests (1,034 total). This is an analysis
-prerequisite, not a repeated-subslice code-generation claim.
+One exact repeated-subslice form is now implemented for a direct
+`input[first..][second..][index]` reference initializer. The analyzer walks at
+most 64 range nodes without allocation, visits inner then outer bounds in source
+evaluation order, records one canonical `Subslice`/`Subslice`/`Index` mutable-
+borrow place, and visits the final index last. Native emission materializes the
+inner pointer and length once, checks the outer range against that saved length,
+consumes the temporary fat slice, and then checks and selects the final element.
+Three runtime-slice probes mutate only the element selected by both starts on
+Windows' indirect slice ABI and System V's direct pointer/length ABI. A third
+subslice remains fail closed and produces no object. Windows gnullvm and Arch
+Linux WSL each passed 659 unit, 1 component-interface, 10 conformance, 351
+replacement, and 13 semantic-execution tests (1,034 total). This does not add
+general repeated range values, callee-origin inference for repeated projections,
+arbitrary projection depth, or index-sensitive alias reasoning.
 
 Patent review: `NOT_TRIGGERED`; these increments add execution coverage for an
 already implemented bounded place, range, and ABI contract plus fixed-capacity
-read ordering for a future lowering slice, rather than a new mechanism.
+read ordering and stack materialization for one exact compiler lowering, rather
+than a novel mechanism.
 See [`patents/REVIEW_LOG.md`](patents/REVIEW_LOG.md).
 
 Projected array-element and slice-subslice origins now survive one direct local

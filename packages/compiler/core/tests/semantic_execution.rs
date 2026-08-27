@@ -474,6 +474,47 @@ fn subslice_then_index_reference_mutation_executes() {
             }
         }
     }
+
+    let code = compile(
+        "#[unsafe(no_mangle)] pub extern \"C\" fn probe(input: &mut [u32], first: usize, second: usize, index: usize) -> u32 { let selected: &mut u32 = &mut input[first..][second..][index]; *selected += 13; *selected }",
+    );
+    #[cfg(not(target_os = "windows"))]
+    let probe: unsafe extern "C" fn(*mut u32, usize, usize, usize, usize) -> u32 =
+        unsafe { std::mem::transmute(code.pointer) };
+    #[cfg(target_os = "windows")]
+    let probe: unsafe extern "C" fn(*const usize, usize, usize, usize) -> u32 =
+        unsafe { std::mem::transmute(code.pointer) };
+    for (first, second, index, target) in [(0, 1, 2, 3), (1, 1, 0, 2), (2, 0, 1, 3)] {
+        let mut values = [10, 20, 30, 40];
+        let expected = values[target] + 13;
+        #[cfg(not(target_os = "windows"))]
+        assert_eq!(
+            unsafe {
+                probe(
+                    values.as_mut_ptr(),
+                    values.len(),
+                    first,
+                    second,
+                    index,
+                )
+            },
+            expected
+        );
+        #[cfg(target_os = "windows")]
+        {
+            let slice = [values.as_mut_ptr() as usize, values.len()];
+            assert_eq!(
+                unsafe { probe(slice.as_ptr(), first, second, index) },
+                expected
+            );
+        }
+        assert_eq!(values[target], expected);
+        for (position, value) in values.into_iter().enumerate() {
+            if position != target {
+                assert_eq!(value, [10, 20, 30, 40][position]);
+            }
+        }
+    }
 }
 
 #[test]
@@ -845,7 +886,7 @@ fn unsupported_constructs_produce_typed_diagnostics_not_objects() {
     for source in [
         "#[unsafe(no_mangle)] pub extern \"C\" fn probe(stop: bool) -> u64 { loop { loop { if stop { let value: u64 = 1; } } } }",
         "#[unsafe(no_mangle)] pub extern \"C\" fn probe(stop: bool) -> u64 { loop { loop { if stop { return 1; 2; } } } }",
-        "#[unsafe(no_mangle)] pub extern \"C\" fn probe(input: &mut [u32; 4], start: usize, index: usize) -> u32 { let selected: &mut u32 = &mut input[start..][index..][0]; *selected }",
+        "#[unsafe(no_mangle)] pub extern \"C\" fn probe(input: &mut [u32; 4], first: usize, second: usize, third: usize) -> u32 { let selected: &mut u32 = &mut input[first..][second..][third..][0]; *selected }",
     ] {
         assert!(
             compile_source_function::<2048, 1024, 4, 4, 4, 64>(

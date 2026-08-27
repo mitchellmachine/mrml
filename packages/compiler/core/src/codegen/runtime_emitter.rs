@@ -6379,7 +6379,7 @@ impl<
             };
         if materialize_slice {
             if range_source.is_some() {
-                self.emit_range_index_value_to_stack(tree, base, depth + 1, true)?;
+                self.emit_range_index_value_to_stack(tree, base, depth + 1, true, true)?;
             } else {
                 self.emit_slice_value_to_stack(tree, base, depth + 1)?;
             }
@@ -6830,7 +6830,7 @@ impl<
         else {
             return Ok(false);
         };
-        self.emit_range_index_value_to_stack(tree, operand, depth, false)?;
+        self.emit_range_index_value_to_stack(tree, operand, depth, false, true)?;
         Ok(true)
     }
 
@@ -6840,6 +6840,7 @@ impl<
         range: crate::ExprId,
         depth: usize,
         nested_index: bool,
+        record_place: bool,
     ) -> Result<(), CodegenError> {
         let Some(ExprKind::RangeIndex {
             base,
@@ -6850,6 +6851,13 @@ impl<
         else {
             return Err(self.error(CodegenErrorKind::RuntimeExpressionUnsupported));
         };
+        let materialized_base = matches!(
+            tree.expression(base).map(|expression| expression.kind),
+            Some(ExprKind::RangeIndex { .. })
+        );
+        if materialized_base && !nested_index {
+            return Err(self.error(CodegenErrorKind::RuntimeExpressionUnsupported));
+        }
         let base_type = runtime_expression_type_with_locals(
             self.function,
             self.resolver,
@@ -6873,9 +6881,13 @@ impl<
                 target: RuntimeReferenceTarget::Slice(element),
                 ..
             } => {
-                let source = reference_source_name(tree, base)
-                    .ok_or(self.error(CodegenErrorKind::RuntimeExpressionUnsupported))?;
-                (element, None, None, Some(source), false)
+                if materialized_base {
+                    (element, None, None, None, false)
+                } else {
+                    let source = reference_source_name(tree, base)
+                        .ok_or(self.error(CodegenErrorKind::RuntimeExpressionUnsupported))?;
+                    (element, None, None, Some(source), false)
+                }
             }
             RuntimeExpressionType::Reference {
                 target: RuntimeReferenceTarget::Str,
@@ -6902,6 +6914,10 @@ impl<
             _ => return Err(self.error(CodegenErrorKind::RuntimeTypeMismatch)),
         };
 
+        if materialized_base {
+            self.emit_range_index_value_to_stack(tree, base, depth + 1, false, false)?;
+            self.evaluation_depth += 2;
+        }
         if let Some(start) = start {
             self.emit_expression(tree, start, depth + 1)?;
         } else {
@@ -6911,6 +6927,8 @@ impl<
         self.evaluation_depth += 1;
         if let Some(end) = end {
             self.emit_expression(tree, end, depth + 1)?;
+        } else if materialized_base {
+            self.emit_stack_slot(1)?;
         } else if let Some(source) = slice_name {
             self.emit_slice_length(source)?;
         } else {
@@ -6932,6 +6950,8 @@ impl<
                 u64::try_from(count).map_err(|_| self.error(CodegenErrorKind::ValueOutOfRange))?;
             self.emit(&[0x48, 0xba])?;
             self.emit(&count.to_le_bytes())?;
+        } else if materialized_base {
+            self.emit(&[0x48, 0x8b, 0x54, 0x24, 0x08])?;
         } else {
             self.emit(&[0x50])?;
             self.evaluation_depth += 1;
@@ -6945,13 +6965,34 @@ impl<
         self.emit_trap_branch(0x87)?;
         self.emit(&[0x48, 0x29, 0xc8, 0x50])?;
         self.evaluation_depth += 1;
-        if nested_index {
-            self.record_expression_place_read(tree, range, Some(RuntimePlaceProjection::Index))?;
+        if materialized_base {
+            if record_place {
+                self.record_expression_place_read(
+                    tree,
+                    range,
+                    Some(RuntimePlaceProjection::Index),
+                )?;
+            }
+            self.emit(&[0x48, 0x8b, 0x44, 0x24, 0x18])?;
+        } else if nested_index {
+            if record_place {
+                self.record_expression_place_read(
+                    tree,
+                    range,
+                    Some(RuntimePlaceProjection::Index),
+                )?;
+            }
             let source = reference_source_name(tree, base)
                 .ok_or(self.error(CodegenErrorKind::RuntimeExpressionUnsupported))?;
             self.emit_identifier(source)?;
         } else if let Some(name) = local_name {
-            self.record_expression_place_read(tree, base, Some(RuntimePlaceProjection::Subslice))?;
+            if record_place {
+                self.record_expression_place_read(
+                    tree,
+                    base,
+                    Some(RuntimePlaceProjection::Subslice),
+                )?;
+            }
             self.emit_identifier_address(name)?;
         } else {
             self.emit_expression(tree, base, depth + 1)?;
@@ -6971,10 +7012,15 @@ impl<
             8 => self.emit(&[0x48, 0xc1, 0xe1, 0x03])?,
             _ => return Err(self.error(CodegenErrorKind::UnsupportedRuntimeType)),
         }
-        self.emit(&[
-            0x48, 0x01, 0xc8, 0x48, 0x89, 0xc2, 0x59, 0x48, 0x83, 0xc4, 0x08, 0x52, 0x51,
-        ])?;
-        self.evaluation_depth -= 2;
+        self.emit(&[0x48, 0x01, 0xc8, 0x48, 0x89, 0xc2, 0x59])?;
+        if materialized_base {
+            self.emit(&[0x48, 0x83, 0xc4, 0x18])?;
+            self.evaluation_depth -= 4;
+        } else {
+            self.emit(&[0x48, 0x83, 0xc4, 0x08])?;
+            self.evaluation_depth -= 2;
+        }
+        self.emit(&[0x52, 0x51])?;
         Ok(())
     }
 
