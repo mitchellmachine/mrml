@@ -525,6 +525,30 @@ mod tests {
         let coff = compile_wide(source, "probe", ObjectFormat::Coff).unwrap();
         assert!(coff.bytes().windows(8).any(|bytes| bytes == b"fallback"));
         assert!(coff.bytes().windows(8).any(|bytes| bytes == b".rdata\0\0"));
+
+        let escaped = "#[unsafe(no_mangle)] pub extern \"C\" fn probe(input: &str, choose: bool) -> &str { let value: &str; if choose { value = input; } else { value = \"line\\nbreak\"; } value }";
+        let elf = compile_wide(escaped, "probe", ObjectFormat::Elf64).unwrap();
+        assert!(elf.bytes().windows(10).any(|bytes| bytes == b"line\nbreak"));
+
+        let unicode = "#[unsafe(no_mangle)] pub extern \"C\" fn probe(input: &str, choose: bool) -> &str { let value: &str; if choose { value = input; } else { value = \"smile:\\u{1F642}\"; } value }";
+        let coff = compile_wide(unicode, "probe", ObjectFormat::Coff).unwrap();
+        assert!(
+            coff.bytes()
+                .windows(10)
+                .any(|bytes| bytes == b"smile:\xf0\x9f\x99\x82")
+        );
+
+        let ascii = "#[unsafe(no_mangle)] pub extern \"C\" fn probe(input: &str, choose: bool) -> &str { let value: &str; if choose { value = input; } else { value = \"A\\x42\"; } value }";
+        let elf = compile_wide(ascii, "probe", ObjectFormat::Elf64).unwrap();
+        assert!(elf.bytes().windows(2).any(|bytes| bytes == b"AB"));
+
+        for invalid in [
+            "#[unsafe(no_mangle)] pub extern \"C\" fn probe(input: &str, choose: bool) -> &str { let value: &str; if choose { value = input; } else { value = \"bad\\q\"; } value }",
+            "#[unsafe(no_mangle)] pub extern \"C\" fn probe(input: &str, choose: bool) -> &str { let value: &str; if choose { value = input; } else { value = \"bad\\xFF\"; } value }",
+            "#[unsafe(no_mangle)] pub extern \"C\" fn probe(input: &str, choose: bool) -> &str { let value: &str; if choose { value = input; } else { value = \"bad\\u{D800}\"; } value }",
+        ] {
+            assert!(compile_wide(invalid, "probe", ObjectFormat::Elf64).is_err());
+        }
     }
 
     #[test]

@@ -30358,6 +30358,126 @@ impl<
         self.patch_forward_branch(at_end)
     }
 
+    fn push_readonly_string_byte(&mut self, byte: u8) -> Result<(), CodegenError> {
+        let capacity_error = self.error(CodegenErrorKind::OutputTooSmall);
+        let output = self
+            .readonly_data
+            .get_mut(self.readonly_data_length)
+            .ok_or(capacity_error)?;
+        *output = byte;
+        self.readonly_data_length += 1;
+        Ok(())
+    }
+
+    fn append_readonly_string_literal(
+        &mut self,
+        literal: &str,
+    ) -> Result<(usize, usize), CodegenError> {
+        fn hex(byte: u8) -> Option<u32> {
+            match byte {
+                b'0'..=b'9' => Some(u32::from(byte - b'0')),
+                b'a'..=b'f' => Some(u32::from(byte - b'a' + 10)),
+                b'A'..=b'F' => Some(u32::from(byte - b'A' + 10)),
+                _ => None,
+            }
+        }
+
+        let literal = literal
+            .strip_prefix('"')
+            .and_then(|literal| literal.strip_suffix('"'))
+            .ok_or(self.error(CodegenErrorKind::RuntimeExpressionUnsupported))?;
+        let start = self.readonly_data_length;
+        let bytes = literal.as_bytes();
+        let mut index = 0usize;
+        while index < bytes.len() {
+            if bytes[index] != b'\\' {
+                self.push_readonly_string_byte(bytes[index])?;
+                index += 1;
+                continue;
+            }
+            index += 1;
+            let escaped = *bytes
+                .get(index)
+                .ok_or(self.error(CodegenErrorKind::RuntimeExpressionUnsupported))?;
+            index += 1;
+            match escaped {
+                b'n' => self.push_readonly_string_byte(b'\n')?,
+                b'r' => self.push_readonly_string_byte(b'\r')?,
+                b't' => self.push_readonly_string_byte(b'\t')?,
+                b'\\' => self.push_readonly_string_byte(b'\\')?,
+                b'0' => self.push_readonly_string_byte(0)?,
+                b'\'' => self.push_readonly_string_byte(b'\'')?,
+                b'"' => self.push_readonly_string_byte(b'"')?,
+                b'x' => {
+                    let high = bytes
+                        .get(index)
+                        .and_then(|byte| hex(*byte))
+                        .ok_or(self.error(CodegenErrorKind::RuntimeExpressionUnsupported))?;
+                    let low = bytes
+                        .get(index + 1)
+                        .and_then(|byte| hex(*byte))
+                        .ok_or(self.error(CodegenErrorKind::RuntimeExpressionUnsupported))?;
+                    let value = (high << 4) | low;
+                    if value > 0x7f {
+                        return Err(self.error(CodegenErrorKind::RuntimeExpressionUnsupported));
+                    }
+                    self.push_readonly_string_byte(value as u8)?;
+                    index += 2;
+                }
+                b'u' => {
+                    if bytes.get(index) != Some(&b'{') {
+                        return Err(self.error(CodegenErrorKind::RuntimeExpressionUnsupported));
+                    }
+                    index += 1;
+                    let mut value = 0u32;
+                    let mut digits = 0usize;
+                    while let Some(&byte) = bytes.get(index) {
+                        if byte == b'}' {
+                            break;
+                        }
+                        index += 1;
+                        if byte == b'_' {
+                            continue;
+                        }
+                        let digit = hex(byte)
+                            .ok_or(self.error(CodegenErrorKind::RuntimeExpressionUnsupported))?;
+                        if digits == 6 {
+                            return Err(self.error(CodegenErrorKind::RuntimeExpressionUnsupported));
+                        }
+                        value = value
+                            .checked_mul(16)
+                            .and_then(|value| value.checked_add(digit))
+                            .ok_or(self.error(CodegenErrorKind::RuntimeExpressionUnsupported))?;
+                        digits += 1;
+                    }
+                    if digits == 0 || bytes.get(index) != Some(&b'}') {
+                        return Err(self.error(CodegenErrorKind::RuntimeExpressionUnsupported));
+                    }
+                    index += 1;
+                    let value = char::from_u32(value)
+                        .ok_or(self.error(CodegenErrorKind::RuntimeExpressionUnsupported))?;
+                    let mut encoded = [0u8; 4];
+                    for byte in value.encode_utf8(&mut encoded).as_bytes() {
+                        self.push_readonly_string_byte(*byte)?;
+                    }
+                }
+                b'\n' => {
+                    while bytes.get(index).is_some_and(u8::is_ascii_whitespace) {
+                        index += 1;
+                    }
+                }
+                b'\r' if bytes.get(index) == Some(&b'\n') => {
+                    index += 1;
+                    while bytes.get(index).is_some_and(u8::is_ascii_whitespace) {
+                        index += 1;
+                    }
+                }
+                _ => return Err(self.error(CodegenErrorKind::RuntimeExpressionUnsupported)),
+            }
+        }
+        Ok((start, self.readonly_data_length - start))
+    }
+
     fn emit_slice_value_to_stack<const MAX_NODES: usize>(
         &mut self,
         tree: &crate::ExpressionTree<'_, MAX_NODES>,
@@ -30367,22 +30487,8 @@ impl<
         if let Some(ExprKind::String(literal)) =
             tree.expression(id).map(|expression| expression.kind)
         {
-            let literal = literal
-                .strip_prefix('"')
-                .and_then(|literal| literal.strip_suffix('"'))
-                .filter(|literal| !literal.as_bytes().contains(&b'\\'))
-                .ok_or(self.error(CodegenErrorKind::RuntimeExpressionUnsupported))?;
-            let data_offset = self.readonly_data_length;
-            let data_end = data_offset
-                .checked_add(literal.len())
-                .ok_or(self.error(CodegenErrorKind::OutputTooSmall))?;
+            let (data_offset, literal_length) = self.append_readonly_string_literal(literal)?;
             let capacity_error = self.error(CodegenErrorKind::OutputTooSmall);
-            let output = self
-                .readonly_data
-                .get_mut(data_offset..data_end)
-                .ok_or(capacity_error)?;
-            output.copy_from_slice(literal.as_bytes());
-            self.readonly_data_length = data_end;
             let relocation_offset = self
                 .length
                 .checked_add(3)
@@ -30397,7 +30503,7 @@ impl<
             };
             self.readonly_relocation_count += 1;
             self.emit(&[0x48, 0x8d, 0x05, 0, 0, 0, 0, 0x50, 0x48, 0xb8])?;
-            self.emit(&(literal.len() as u64).to_le_bytes())?;
+            self.emit(&(literal_length as u64).to_le_bytes())?;
             return self.emit(&[0x50]);
         }
         if matches!(
