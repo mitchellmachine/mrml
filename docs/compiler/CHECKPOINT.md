@@ -58,7 +58,18 @@ oracle upgrade receives a new immutable record and differential classification
 against all prior accepted probes. Keep Cargo on edition 2024 until a newer
 named edition can be adopted through a pinned, workspace-wide migration.
 
-## Latest bounded byte string-literal milestone
+## Latest bounded byte character-literal milestone
+
+Commit `c21a70fc` gives byte characters distinct lexical/expression identity
+and a concrete `u8` runtime type. ASCII, conventional byte escapes, and the full
+`\x00` through `\xFF` range reach both native object formats; Unicode escapes,
+direct non-ASCII input, and malformed cardinality fail closed. The exact
+ORACLE-0002 nightly accepted ASCII, `b'\xFF'`, and escaped-newline controls.
+Windows and native Arch Linux WSL each passed 652 library tests, 1 component
+probe, 10 conformance tests, and 351 replacement tests: 1,014 compiler tests per
+host. Patent review: **NOT_TRIGGERED**; see `docs/patents/REVIEW_LOG.md`.
+
+### Preceding bounded byte string-literal milestone
 
 Commit `a2d1b000` gives cooked and raw byte strings distinct lexical and
 expression identity and immutable `&[u8]` runtime types. It decodes cooked

@@ -1,5 +1,13 @@
 # Patent review log
 
+## 2026-08-26 — Bounded byte character literals
+
+Patent review: **NOT_TRIGGERED** for conventionally decoding one ASCII byte or
+escape sequence, assigning Rust's ordinary `u8` type, and reusing the existing
+bounded scalar constant/native-emission paths. This adds no compression,
+cryptography, VM, scheduling, storage, transport, DMA, queue, interrupt, or
+hardware mechanism. This technical screen is not patent clearance.
+
 ## 2026-08-26 — Bounded byte string-literal emission
 
 Patent review: **NOT_TRIGGERED** for lexically distinguishing Rust cooked and

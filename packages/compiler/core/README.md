@@ -5934,3 +5934,14 @@ Windows and native Arch Linux WSL each passed 652 library tests, 1 component
 probe, 10 conformance tests, and 350 replacement tests: 1,013 compiler tests per
 host. Byte literals, suffixes, C strings, general static data, and general
 lifetime inference remain outside the claim.
+
+The bounded byte character-literal milestone at `c21a70fc` distinguishes byte
+characters from Unicode `char` values and assigns their concrete `u8` runtime
+type. ASCII, conventional byte escapes, and `\x00` through `\xFF` lower through
+the scalar constant and ELF64/COFF emission paths; Unicode escapes, direct
+non-ASCII input, and malformed cardinality reject. The exact ORACLE-0002
+nightly accepted independently authored ASCII, `b'\xFF'`, and escaped-newline
+controls. Windows and native Arch Linux WSL each passed 652 library tests, 1
+component probe, 10 conformance tests, and 351 replacement tests: 1,014 compiler
+tests per host. C literals and general suffix semantics remain outside the
+claim.

@@ -1179,3 +1179,10 @@ coercion, static-lifetime, and conditional-return forms only; it does not
 establish an implementation strategy, object format, pooling, C strings,
 general byte expressions, or general lifetime inference. The temporary source
 and metadata were removed.
+
+An independently authored Rust 2024 metadata-only byte-character set against
+this exact toolchain and commit accepted functions returning `b'A'`,
+`b'\xFF'`, and `b'\n'` as `u8`. This is black-box evidence for those exact
+literal and return forms only; it does not establish an implementation
+strategy, object format, C literals, suffixes, or general constant-expression
+semantics. The temporary source and metadata were removed.

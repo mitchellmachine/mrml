@@ -2068,6 +2068,18 @@ tests (1,009 total). Raw/byte strings, escape decoding, literal deduplication,
 more than eight literals, more than 1,024 literal bytes, and general static data
 remain outside this checkpoint.
 
+### Bounded byte character-literal checkpoint
+
+Byte character literals now have distinct lexical and expression identity and
+the concrete `u8` runtime type. Direct ASCII, conventional single-byte escapes,
+and `b'\x00'` through `b'\xFF'` lower through bounded scalar emission. Unicode
+escapes, direct non-ASCII characters, empty values, and multi-byte values fail
+closed. The exact ORACLE-0002 toolchain accepted independently authored ASCII,
+`b'\xFF'`, and escaped-newline controls. MRML accepts each for ELF64 and COFF.
+Windows and Arch each passed 652 unit, 1 component, 10 conformance, and 351
+replacement tests (1,014 total). C literals and general suffix semantics remain
+outside this checkpoint.
+
 ### Bounded byte string-literal checkpoint
 
 Cooked `b"..."` and raw `br#"..."#` literals now have a distinct token and
