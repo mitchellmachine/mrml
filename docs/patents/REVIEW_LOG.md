@@ -8749,3 +8749,16 @@ splitting, not a new codec, storage format, cryptographic primitive,
 virtualization mechanism, or isolation algorithm. The broader adaptive-
 placement and Total MicroVM review remains `TRIGGERED`; this entry does not
 clear that architecture or AHCI work.
+
+# 2026-08-26 — Exact block-service completion and lifecycle proof
+
+**Result: NOT_TRIGGERED.** This increment replaces a manually predicted request
+count with a conventional fixed-size zero-padded completion record carrying the
+number of responses actually consumed. The isolated server independently bounds
+and counts dispatched requests, requires exact equality, and retains the
+existing capability, replay, erasure, peer-death, and cleanup paths. The backend
+witness still requires sender retirement, peer-death wakeup, receiver retirement,
+and idle completion in that exact order, so partial success fails closed. This adds no storage,
+virtualization, placement, scheduling, cryptographic, or isolation algorithm.
+The broader adaptive-placement and Total MicroVM review remains `TRIGGERED`;
+this technical screen is not patent clearance and does not clear AHCI work.

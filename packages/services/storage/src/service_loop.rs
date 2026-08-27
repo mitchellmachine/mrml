@@ -101,11 +101,54 @@ impl<const SESSIONS: usize> BlockServiceLoop<SESSIONS> {
         capability_tokens.fill(0);
         scratch.fill(0);
         response_buffer.fill(0);
-        let result = self.serve_one_inner(
+        let envelope = match syscalls.receive(request_buffer, capability_tokens) {
+            Ok(envelope) => envelope,
+            Err(error) => {
+                request_buffer.fill(0);
+                capability_tokens.fill(0);
+                scratch.fill(0);
+                response_buffer.fill(0);
+                return Err(BlockServiceLoopError::Syscall(error));
+            }
+        };
+        self.serve_received(
             service,
             device_backend,
             syscalls,
             principal,
+            envelope,
+            request_buffer,
+            capability_tokens,
+            scratch,
+            response_buffer,
+        )
+    }
+
+    /// Executes one request already received by a caller that also recognizes
+    /// a separate launch-bound control record. This preserves the same replay,
+    /// capability-release, buffer-erasure, and response rules as `serve_one`;
+    /// it does not permit request bytes to select a principal or reply peer.
+    #[allow(clippy::too_many_arguments)]
+    pub fn serve_received<const DEVICES: usize, D: BlockServiceBackend, S: BlockServiceSyscalls>(
+        &mut self,
+        service: &BlockService<DEVICES, SESSIONS>,
+        device_backend: &mut D,
+        syscalls: &mut S,
+        principal: StoragePrincipal,
+        envelope: ReceivedBlockEnvelope,
+        request_buffer: &mut [u8; BLOCK_REQUEST_BYTES],
+        capability_tokens: &mut [u64; 1],
+        scratch: &mut [u8],
+        response_buffer: &mut [u8; BLOCK_RESPONSE_BYTES],
+    ) -> Result<(), BlockServiceLoopError<S::Error>> {
+        scratch.fill(0);
+        response_buffer.fill(0);
+        let result = self.serve_received_inner(
+            service,
+            device_backend,
+            syscalls,
+            principal,
+            envelope,
             request_buffer,
             capability_tokens,
             scratch,
@@ -124,20 +167,22 @@ impl<const SESSIONS: usize> BlockServiceLoop<SESSIONS> {
     }
 
     #[allow(clippy::too_many_arguments)]
-    fn serve_one_inner<const DEVICES: usize, D: BlockServiceBackend, S: BlockServiceSyscalls>(
+    fn serve_received_inner<
+        const DEVICES: usize,
+        D: BlockServiceBackend,
+        S: BlockServiceSyscalls,
+    >(
         &mut self,
         service: &BlockService<DEVICES, SESSIONS>,
         device_backend: &mut D,
         syscalls: &mut S,
         principal: StoragePrincipal,
+        envelope: ReceivedBlockEnvelope,
         request_buffer: &mut [u8; BLOCK_REQUEST_BYTES],
         capability_tokens: &mut [u64; 1],
         scratch: &mut [u8],
         response_buffer: &mut [u8; BLOCK_RESPONSE_BYTES],
     ) -> Result<(), BlockServiceLoopError<S::Error>> {
-        let envelope = syscalls
-            .receive(request_buffer, capability_tokens)
-            .map_err(BlockServiceLoopError::Syscall)?;
         if envelope.payload_length != BLOCK_REQUEST_BYTES || envelope.capability_count > 1 {
             return Err(BlockServiceLoopError::InvalidEnvelope);
         }
@@ -607,5 +652,51 @@ mod tests {
             .unwrap();
         assert_eq!(syscalls.response().status(), BlockStatus::ReplayRejected);
         assert_eq!((device.calls, syscalls.reads, syscalls.sends), (0, 1, 1));
+    }
+
+    #[test]
+    fn pre_received_request_preserves_dispatch_release_and_erasure_contract() {
+        let (service, session) = service();
+        let mut device = DeviceBackend {
+            bytes: [0; BLOCK_SIZE * BLOCKS],
+            calls: 0,
+        };
+        device.bytes[..BLOCK_SIZE].fill(0x6d);
+        let mut syscalls = Syscalls::request(
+            BlockRequest::Read {
+                request_id: 1,
+                session,
+                block: 0,
+                byte_length: BLOCK_SIZE as u32,
+            },
+            1,
+        );
+        let mut request = syscalls.request;
+        let mut capabilities = [BUFFER_TOKEN];
+        let mut scratch = [0xa5; BLOCK_SIZE];
+        let mut response = [0xa5; BLOCK_RESPONSE_BYTES];
+        let mut loop_state = BlockServiceLoop::<2>::new();
+        loop_state
+            .serve_received(
+                &service,
+                &mut device,
+                &mut syscalls,
+                principal(1),
+                ReceivedBlockEnvelope {
+                    payload_length: BLOCK_REQUEST_BYTES,
+                    capability_count: 1,
+                },
+                &mut request,
+                &mut capabilities,
+                &mut scratch,
+                &mut response,
+            )
+            .unwrap();
+        assert_eq!(syscalls.shared, [0x6d; BLOCK_SIZE]);
+        assert_eq!(syscalls.response().status(), BlockStatus::Ok);
+        assert!(request.iter().all(|byte| *byte == 0));
+        assert_eq!(capabilities, [0]);
+        assert!(scratch.iter().all(|byte| *byte == 0));
+        assert!(response.iter().all(|byte| *byte == 0));
     }
 }

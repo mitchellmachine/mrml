@@ -4009,7 +4009,7 @@ fn application_main() -> Result<()> {
     } else if mode == LaunchMode::BlockServiceProbe {
         let cleanup_stages = [0x21, 0x31, 0x20, 0x30];
         let mut cleanup_stage = 0;
-        for observed_stage in 0..512 {
+        for observed_stage in 0..1024 {
             if let VmExit::Io {
                 port: SERVICE_PROBE_PORT,
                 size: 4,

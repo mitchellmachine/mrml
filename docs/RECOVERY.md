@@ -1842,17 +1842,22 @@ and cleanup order. This is controlled volatile-device evidence. The deployment
 checkpoint and one-byte SystemRelease placeholders are selected but not decoded,
 signature-verified, assigned, or admitted; no Total runtime proof follows yet.
 
-The next controlled service-image increment replaces both placeholders with a
-canonical deployment checkpoint and a one-domain Lamport-signed SystemRelease.
-The release is stored as a bounded multi-block extent, reread a page at a time
-through the exact shared-transfer capability, signature-verified, joined to the
-recovered deployment owner, assigned from policy, and sealed as a generation-33
-runtime inventory before transient key and release storage are erased. The
-`block_service_loop` release build passes. A fresh WHP run reached the final
-two-service retirement boundary after requiring the block profile's explicit
-256-page stack and higher bounded exit count, but did not complete the existing
-sender-first cleanup sequence; live end-to-end evidence therefore remains
-**PARTIALLY IMPLEMENTED**, not complete. KVM was not run.
+The controlled service image now replaces both placeholders with a canonical
+deployment checkpoint and a one-domain Lamport-signed SystemRelease. The release
+is stored as a bounded multi-block extent, reread a page at a time through the
+exact shared-transfer capability, signature-verified, joined to the recovered
+deployment owner, assigned from policy, and sealed as a generation-33 runtime
+inventory before transient key and release storage are erased. The client no
+longer predicts the server's request count: after consuming every response and
+passing its final assertions it sends one canonical zero-padded completion
+record carrying the exact completed count. The server exits only when that
+count equals its independently bounded served count; early, malformed,
+capability-bearing, zero, excessive, or mismatched completion fails closed.
+Fresh independently signed artifacts completed the full sender-first peer-death
+and address-space cleanup sequence under WHP and nested KVM. Storage passes 139
+tests on Windows and Arch Linux, WHP-run 12, and KVM-run 13. This is controlled
+volatile-device and hosted-VMM evidence, not durable installed-media, host-
+resistant, bare-metal, or physical-hardware evidence.
 
 Before any profile-specific kernel probe runs, the kernel now constructs its
 early context from the exact decoded handoff and retains the one-boot isolation

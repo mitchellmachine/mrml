@@ -319,6 +319,8 @@ const PROBE_BLOCK_COUNT: usize = 64;
 #[cfg(all(not(feature = "preemption-probe"), feature = "block-service-loop"))]
 const PROBE_MAX_BLOCK_REQUESTS: usize = 128;
 #[cfg(all(not(feature = "preemption-probe"), feature = "block-service-loop"))]
+const PROBE_BLOCK_COMPLETION_MAGIC: [u8; 8] = *b"MRMLBC01";
+#[cfg(all(not(feature = "preemption-probe"), feature = "block-service-loop"))]
 const PROBE_RELEASE_CAPACITY: usize = 160 * 1024;
 #[cfg(all(not(feature = "preemption-probe"), feature = "block-service-loop"))]
 struct ProbeBlockBackend {
@@ -462,33 +464,43 @@ unsafe extern "sysv64" fn mrml_configuration_receiver(
     ready[8..].copy_from_slice(&recovery_envelope.encode());
     unsafe { send_buffer(endpoint, sender, &ready, &[]) };
     ready.fill(0);
-    let mut encoded_request_count = [0u8; 8];
-    let (length, count) = unsafe { receive_buffer(&mut encoded_request_count, &mut capability) };
-    let request_count = usize::try_from(u64::from_le_bytes(encoded_request_count))
-        .unwrap_or_else(|_| halt());
-    if length != encoded_request_count.len()
-        || count != 0
-        || request_count == 0
-        || request_count > PROBE_MAX_BLOCK_REQUESTS
-    {
-        halt();
-    }
-    for _ in 0..request_count {
+    let mut served = 0usize;
+    loop {
+        request.fill(0);
+        capability.fill(0);
+        let (payload_length, capability_count) =
+            unsafe { receive_buffer(&mut request, &mut capability) };
+        if capability_count == 0 {
+            if let Some(completed) = decode_probe_block_completion(&request) {
+                if payload_length != request.len() || completed != served || served == 0 {
+                    halt();
+                }
+                request.fill(0);
+                break;
+            }
+        }
+        if served == PROBE_MAX_BLOCK_REQUESTS {
+            halt();
+        }
         loop_state
-            .serve_one(
+            .serve_received(
                 &service,
                 backend,
                 &mut syscalls,
                 principal,
+                ReceivedBlockEnvelope {
+                    payload_length,
+                    capability_count,
+                },
                 &mut request,
                 &mut capability,
                 &mut scratch.0,
                 &mut response,
             )
             .unwrap_or_else(|_| halt());
+        served = served.checked_add(1).unwrap_or_else(|| halt());
     }
     scratch.0.fill(0);
-    unsafe { yield_now() };
     unsafe { terminate(3) }
 }
 
@@ -1652,13 +1664,6 @@ unsafe extern "sysv64" fn mrml_configuration_sender(
     release.fill(0);
     let (release_length, deployment_checkpoint, mut deployment_state_store) =
         build_probe_deployment_evidence(release);
-    let release_blocks = release_length.div_ceil(PROBE_BLOCK_BYTES);
-    let request_count = release_blocks
-        .checked_mul(2)
-        .and_then(|requests| requests.checked_add(51))
-        .filter(|count| *count <= PROBE_MAX_BLOCK_REQUESTS)
-        .unwrap_or_else(|| halt());
-    unsafe { send_buffer(endpoint, receiver, &(request_count as u64).to_le_bytes(), &[]) };
     let mut device = RemoteBlockDevice {
         endpoint,
         receiver,
@@ -2041,10 +2046,30 @@ unsafe extern "sysv64" fn mrml_configuration_sender(
     deployment_state_store.bytes.fill(0);
     release.fill(0);
     authority_backend.bytes.fill(0);
-    if device.next_request != request_count as u64 + 1 {
+    let completed = device.next_request.checked_sub(1).unwrap_or_else(|| halt());
+    if completed == 0 || completed > PROBE_MAX_BLOCK_REQUESTS as u64 {
         halt();
     }
+    let mut completion = encode_probe_block_completion(completed);
+    unsafe { send_buffer(endpoint, receiver, &completion, &[]) };
+    completion.fill(0);
     unsafe { terminate(3) }
+}
+
+#[cfg(all(not(feature = "preemption-probe"), feature = "block-service-loop"))]
+fn encode_probe_block_completion(completed: u64) -> [u8; BLOCK_REQUEST_BYTES] {
+    let mut encoded = [0u8; BLOCK_REQUEST_BYTES];
+    encoded[..8].copy_from_slice(&PROBE_BLOCK_COMPLETION_MAGIC);
+    encoded[8..16].copy_from_slice(&completed.to_le_bytes());
+    encoded
+}
+
+#[cfg(all(not(feature = "preemption-probe"), feature = "block-service-loop"))]
+fn decode_probe_block_completion(encoded: &[u8; BLOCK_REQUEST_BYTES]) -> Option<usize> {
+    if encoded[..8] != PROBE_BLOCK_COMPLETION_MAGIC || encoded[16..].iter().any(|byte| *byte != 0) {
+        return None;
+    }
+    usize::try_from(u64::from_le_bytes(encoded[8..16].try_into().ok()?)).ok()
 }
 
 #[cfg(not(feature = "preemption-probe"))]

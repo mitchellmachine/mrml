@@ -696,9 +696,14 @@ content instead of marker bytes. The service image builds a canonical signed
 one-domain release, publishes its multi-block extent, recovers both selected
 files through one shared volume with independent file capabilities, verifies
 and assigns the runtime inventory, and erases transient signing/output storage.
-The canonical release build passes. WHP execution reaches the final lifecycle
-ordering gate but does not yet satisfy the established sender-first cleanup
-trace; KVM execution and end-to-end Total runtime proof remain **PLANNED**.
+An explicit canonical completion record replaces the obsolete predicted request
+count: only the client that consumed every response can report its final count,
+and the server exact-matches that count against its bounded served total before
+retirement. Fresh independently signed artifacts completed authenticated
+release recovery plus sender, peer-death, receiver, and idle cleanup under WHP
+and nested KVM. Storage passes 139 tests on both hosts, WHP-run 12, and KVM-run
+13. Complete installed-generation enumeration and end-to-end required-system
+Total proof remain **PLANNED**.
 
 The production-shaped stable-selection API is now **PARTIALLY IMPLEMENTED**.
 `SelectedStableSystemRecovery` admits only distinct configuration and authority
