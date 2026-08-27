@@ -30382,11 +30382,44 @@ impl<
             }
         }
 
+        let start = self.readonly_data_length;
+        if literal.starts_with('r') {
+            let bytes = literal.as_bytes();
+            let mut quote = 1usize;
+            while bytes.get(quote) == Some(&b'#') {
+                quote += 1;
+            }
+            if quote > 256 || bytes.get(quote) != Some(&b'"') {
+                return Err(self.error(CodegenErrorKind::RuntimeExpressionUnsupported));
+            }
+            let hashes = quote - 1;
+            let content_start = quote + 1;
+            let delimiter_length = hashes
+                .checked_add(1)
+                .ok_or(self.error(CodegenErrorKind::RuntimeExpressionUnsupported))?;
+            let content_end = bytes
+                .len()
+                .checked_sub(delimiter_length)
+                .ok_or(self.error(CodegenErrorKind::RuntimeExpressionUnsupported))?;
+            if content_start > content_end
+                || bytes.get(content_end) != Some(&b'"')
+                || bytes.get(
+                    content_end
+                        .checked_add(1)
+                        .ok_or(self.error(CodegenErrorKind::RuntimeExpressionUnsupported))?..,
+                ) != bytes.get(1..quote)
+            {
+                return Err(self.error(CodegenErrorKind::RuntimeExpressionUnsupported));
+            }
+            for byte in &bytes[content_start..content_end] {
+                self.push_readonly_string_byte(*byte)?;
+            }
+            return Ok((start, self.readonly_data_length - start));
+        }
         let literal = literal
             .strip_prefix('"')
             .and_then(|literal| literal.strip_suffix('"'))
             .ok_or(self.error(CodegenErrorKind::RuntimeExpressionUnsupported))?;
-        let start = self.readonly_data_length;
         let bytes = literal.as_bytes();
         let mut index = 0usize;
         while index < bytes.len() {

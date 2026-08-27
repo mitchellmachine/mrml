@@ -551,6 +551,14 @@ mod tests {
         let elf = compile_wide(ascii, "probe", ObjectFormat::Elf64).unwrap();
         assert!(elf.bytes().windows(2).any(|bytes| bytes == b"AB"));
 
+        let raw = r####"#[unsafe(no_mangle)] pub extern "C" fn probe(input: &str, choose: bool) -> &str { if choose { input } else { r##"raw\n"#text"## } }"####;
+        let coff = compile_wide(raw, "probe", ObjectFormat::Coff).unwrap();
+        assert!(
+            coff.bytes()
+                .windows(11)
+                .any(|bytes| bytes == br###"raw\n"#text"###)
+        );
+
         for invalid in [
             "#[unsafe(no_mangle)] pub extern \"C\" fn probe(input: &str, choose: bool) -> &str { let value: &str; if choose { value = input; } else { value = \"bad\\q\"; } value }",
             "#[unsafe(no_mangle)] pub extern \"C\" fn probe(input: &str, choose: bool) -> &str { let value: &str; if choose { value = input; } else { value = \"bad\\xFF\"; } value }",

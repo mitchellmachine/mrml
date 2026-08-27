@@ -42,6 +42,7 @@ pub enum LexErrorKind {
     UnterminatedBlockComment,
     UnterminatedCharacter,
     UnterminatedString,
+    RawStringDelimiterTooLong,
     UnexpectedByte,
 }
 
@@ -175,6 +176,62 @@ impl<'source> Lexer<'source> {
         })
     }
 
+    fn raw_string(&mut self, start: usize) -> Result<Option<Token<'source>>, LexError> {
+        if self.bytes().get(start) != Some(&b'r') {
+            return Ok(None);
+        }
+        let mut quote = start + 1;
+        while self.bytes().get(quote) == Some(&b'#') {
+            quote += 1;
+        }
+        if self.bytes().get(quote) != Some(&b'"') {
+            return Ok(None);
+        }
+        let hashes = quote - start - 1;
+        if hashes > 255 {
+            self.position = quote;
+            return Err(LexError {
+                kind: LexErrorKind::RawStringDelimiterTooLong,
+                span: Span {
+                    start,
+                    end: self.position,
+                },
+            });
+        }
+        self.position = quote + 1;
+        while let Some(relative_quote) = self.bytes()[self.position..]
+            .iter()
+            .position(|byte| *byte == b'"')
+        {
+            let closing_quote = self.position + relative_quote;
+            let closing_end = closing_quote
+                .checked_add(1)
+                .and_then(|end| end.checked_add(hashes))
+                .ok_or(LexError {
+                    kind: LexErrorKind::UnterminatedString,
+                    span: Span {
+                        start,
+                        end: closing_quote,
+                    },
+                })?;
+            if self.bytes().get(closing_quote + 1..closing_end)
+                == Some(&self.bytes()[start + 1..quote])
+            {
+                self.position = closing_end;
+                return Ok(Some(self.finish(start, TokenKind::String)));
+            }
+            self.position = closing_quote + 1;
+        }
+        self.position = self.bytes().len();
+        Err(LexError {
+            kind: LexErrorKind::UnterminatedString,
+            span: Span {
+                start,
+                end: self.position,
+            },
+        })
+    }
+
     pub fn next_token(&mut self) -> Result<Option<Token<'source>>, LexError> {
         self.skip_trivia()?;
         let start = self.position;
@@ -182,6 +239,11 @@ impl<'source> Lexer<'source> {
             return Ok(None);
         };
 
+        if byte == b'r'
+            && let Some(token) = self.raw_string(start)?
+        {
+            return Ok(Some(token));
+        }
         if byte.is_ascii_alphabetic() || byte == b'_' {
             self.position += 1;
             while self
@@ -348,6 +410,23 @@ mod tests {
         assert_eq!(
             lexer.next_token().unwrap_err().kind,
             LexErrorKind::UnterminatedString
+        );
+        let mut lexer = Lexer::new("r##\"open\"#");
+        assert_eq!(
+            lexer.next_token().unwrap_err().kind,
+            LexErrorKind::UnterminatedString
+        );
+    }
+
+    #[test]
+    fn tokenizes_bounded_raw_strings_without_interpreting_contents() {
+        assert_tokens(
+            "r\"plain\\n\" r##\"embedded \"# and \\u{41}\"## rust",
+            &[
+                (TokenKind::String, "r\"plain\\n\""),
+                (TokenKind::String, "r##\"embedded \"# and \\u{41}\"##"),
+                (TokenKind::Identifier, "rust"),
+            ],
         );
     }
 
