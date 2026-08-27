@@ -589,6 +589,94 @@ fn subslice_then_index_bounds_report_isolated_traps() {
 }
 
 #[test]
+fn repeated_subslice_then_index_bounds_report_isolated_traps() {
+    #[cfg(target_os = "windows")]
+    const CHILD: &str = "MRML_SEMANTIC_REPEATED_SUBSLICE_INDEX_TRAP_CHILD";
+    let code = compile(
+        "#[unsafe(no_mangle)] pub extern \"C\" fn probe(input: &mut [u32], first: usize, second: usize, index: usize) -> u32 { let selected: &mut u32 = &mut input[first..][second..][index]; *selected }",
+    );
+    #[cfg(not(target_os = "windows"))]
+    let probe: unsafe extern "C" fn(*mut u32, usize, usize, usize, usize) -> u32 =
+        unsafe { std::mem::transmute(code.pointer) };
+    #[cfg(target_os = "windows")]
+    let probe: unsafe extern "C" fn(*const usize, usize, usize, usize) -> u32 =
+        unsafe { std::mem::transmute(code.pointer) };
+
+    #[cfg(not(target_os = "windows"))]
+    {
+        for (first, second, index) in [(5, 0, 0), (0, 5, 0), (1, 1, 2)] {
+            let pid = unsafe { fork() };
+            assert!(pid >= 0, "fork failed");
+            if pid == 0 {
+                let mut values = [10, 20, 30, 40];
+                let _ = unsafe {
+                    probe(
+                        values.as_mut_ptr(),
+                        values.len(),
+                        first,
+                        second,
+                        index,
+                    )
+                };
+                unsafe { _exit(120) }
+            }
+            let mut status = 0;
+            assert_eq!(
+                unsafe { waitpid(pid, &mut status, 0) },
+                pid,
+                "waitpid failed"
+            );
+            assert_eq!(
+                status & 0x7f,
+                4,
+                "unexpected Unix wait status for ({first}, {second}, {index}): {status:#x}"
+            );
+        }
+        return;
+    }
+
+    #[cfg(target_os = "windows")]
+    if let Some(case) = std::env::var_os(CHILD) {
+        unsafe { SetErrorMode(0x0001 | 0x0002) };
+        let (first, second, index) = match case.to_str() {
+            Some("inner") => (5, 0, 0),
+            Some("outer") => (0, 5, 0),
+            _ => (1, 1, 2),
+        };
+        let mut values = [10, 20, 30, 40];
+        let slice = [values.as_mut_ptr() as usize, values.len()];
+        let _ = unsafe { probe(slice.as_ptr(), first, second, index) };
+        panic!("repeated subslice bounds trap unexpectedly returned");
+    }
+
+    #[cfg(target_os = "windows")]
+    for case in ["inner", "outer", "index"] {
+        let output = Command::new(std::env::current_exe().expect("locate semantic test binary"))
+            .args([
+                "--exact",
+                "repeated_subslice_then_index_bounds_report_isolated_traps",
+                "--nocapture",
+            ])
+            .env(CHILD, case)
+            .output()
+            .expect("launch isolated repeated-subslice bounds probe");
+        assert_eq!(
+            output.status.code(),
+            Some(101),
+            "unexpected Windows {case} test status: {}",
+            output.status
+        );
+        let stdout = String::from_utf8(output.stdout).expect("UTF-8 child test stdout");
+        let stderr = String::from_utf8(output.stderr).expect("UTF-8 child test stderr");
+        assert!(
+            stdout.contains("unexpected return code -1073741795")
+                || stderr.contains("unexpected return code -1073741795"),
+            "missing Windows {case} illegal-instruction status; stdout: {stdout}; stderr: {stderr}"
+        );
+    }
+}
+
+#[test]
 fn inclusive_subslice_then_index_bounds_report_isolated_traps() {
     #[cfg(target_os = "windows")]
     const CHILD: &str = "MRML_SEMANTIC_INCLUSIVE_SUBSLICE_INDEX_TRAP_CHILD";
