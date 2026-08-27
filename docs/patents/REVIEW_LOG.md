@@ -8793,3 +8793,14 @@ device protocol, cryptographic primitive, or data-plane mechanism. The broader
 adaptive-placement and Total MicroVM review remains **TRIGGERED**, including the
 planned construction and lifecycle of both backend guests. This technical
 screen is not legal advice or patent clearance.
+
+# 2026-08-26 — Atomic complete-domain endpoint publication
+
+Patent review: **NOT_TRIGGERED** for this bounded control-plane transaction. It
+uses conventional fixed-capacity membership checks, exact identity comparison,
+ordered state commits, reverse rollback, and endpoint return to prevent a
+partially published domain set. It adds no VM construction, placement or
+scheduling algorithm, interface transport, device protocol, cryptographic
+primitive, or data-plane mechanism. The broader adaptive-placement and Total
+MicroVM review remains **TRIGGERED**, including live WHP/KVM endpoint lifecycle
+integration. This technical screen is not legal advice or patent clearance.

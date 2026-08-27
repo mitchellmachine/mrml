@@ -672,9 +672,19 @@ policies and two distinct domain identities. It refuses to return the joined
 owner for shared or unexpected assignments, and runtime authorization remains
 unavailable while both routes are absent. Configuration passes 53 tests on
 Windows and Arch Linux; unchanged runner suites pass 12 on WHP and 13 on KVM.
-Backend construction, execution, and cleanup of both distinct guests remain
-**PLANNED**; the live single-guest path is deliberately unchanged and is not
-complete-system Total evidence.
+Backend endpoint construction, atomic route commit, execution, and cleanup of
+both distinct domains remain **PLANNED**; the live single-domain path is
+deliberately unchanged and is not complete-system Total evidence.
+
+The complete-set control plane now has a **PARTIALLY IMPLEMENTED** atomic
+publication transaction. It exact-matches one already-constructed endpoint to
+every prepared microVM domain before mutating admission, commits the complete
+set, and returns a routed owner only after all commits succeed. Invalid endpoint
+membership cancels every prepared route; a later commit failure retires earlier
+running domains in reverse and returns every endpoint for teardown. The focused
+two-domain test proves successful Total finalization and duplicate-binding
+rollback on Windows and Arch Linux. Live WHP/KVM endpoint construction and use
+of this transaction remain **PLANNED**.
 
 The existing userspace block recovery loop is now reproducibly selectable
 through the canonical build frontend. The service image's

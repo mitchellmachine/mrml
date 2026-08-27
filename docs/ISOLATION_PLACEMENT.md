@@ -1287,9 +1287,21 @@ identities, and rejects shared or unexpected domain membership before returning
 the joined control-plane owner. With neither route committed, runtime
 authorization returns `RequiredDomainMissing`. Configuration passes 53 tests on
 Windows and Arch Linux; the unchanged live runners pass 12 WHP and 13 KVM tests.
-Neither runner invokes this distinct path yet: constructing, executing, and
-retiring both backend guests remains **PLANNED**, so prior single-guest evidence
+Neither runner invokes this distinct path yet: constructing endpoints for,
+atomically committing, executing, and retiring both domain routes through their
+admitted backend boundaries remains **PLANNED**, so prior single-domain evidence
 does not prove complete-system Total isolation.
+
+Complete unique-domain publication now has a **PARTIALLY IMPLEMENTED** generic
+control-plane transaction. Only after every backend endpoint exists does it
+exact-match the endpoint set to every prepared microVM domain, reject missing,
+additional, or duplicate bindings before publication, and commit the routes.
+If a later commit fails, earlier running domains retire in reverse and every
+endpoint is returned for backend teardown; validation failure cancels all
+prepared routes. Focused two-domain configuration evidence proves successful
+strict finalization and duplicate-binding rollback on Windows and Arch Linux.
+WHP/KVM endpoint construction and live use of this transaction remain
+**PLANNED**.
 
 The installed production prerequisite now has a **PARTIALLY IMPLEMENTED**
 four-file stable-root selection. Configuration, authority checkpoint,

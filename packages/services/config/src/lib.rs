@@ -4882,6 +4882,78 @@ pub struct PreparedTotalServiceSet<const DOMAINS: usize> {
     count: usize,
 }
 
+#[derive(Debug, Eq, PartialEq)]
+pub struct TotalServiceEndpointBinding<E> {
+    domain: ObjectId,
+    endpoint: E,
+}
+
+impl<E> TotalServiceEndpointBinding<E> {
+    pub const fn new(domain: ObjectId, endpoint: E) -> Self {
+        Self { domain, endpoint }
+    }
+
+    pub const fn domain(&self) -> ObjectId {
+        self.domain
+    }
+
+    pub fn into_endpoint(self) -> E {
+        self.endpoint
+    }
+}
+
+pub struct RoutedTotalServiceSet<E, const DOMAINS: usize> {
+    routes: [Option<RoutedIsolationService<E>>; DOMAINS],
+    count: usize,
+}
+
+impl<E, const DOMAINS: usize> RoutedTotalServiceSet<E, DOMAINS> {
+    pub const fn len(&self) -> usize {
+        self.count
+    }
+
+    pub const fn is_empty(&self) -> bool {
+        self.count == 0
+    }
+
+    pub fn take(&mut self, domain: ObjectId) -> Option<RoutedIsolationService<E>> {
+        let route = self
+            .routes
+            .iter_mut()
+            .find(|route| route.as_ref().is_some_and(|route| route.domain() == domain))
+            .and_then(Option::take);
+        if route.is_some() {
+            self.count -= 1;
+        }
+        route
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum CompleteTotalServiceCommitError {
+    BindingCount,
+    DuplicateDomain,
+    MissingDomain,
+    Admission(mrml_kernel::IsolationLaunchError),
+    Rollback(mrml_kernel::IsolationLaunchError),
+}
+
+#[derive(Debug)]
+pub struct CompleteTotalServiceCommitFailure<E, const DOMAINS: usize> {
+    error: CompleteTotalServiceCommitError,
+    endpoints: [Option<TotalServiceEndpointBinding<E>>; DOMAINS],
+}
+
+impl<E, const DOMAINS: usize> CompleteTotalServiceCommitFailure<E, DOMAINS> {
+    pub const fn error(&self) -> CompleteTotalServiceCommitError {
+        self.error
+    }
+
+    pub fn into_endpoints(self) -> [Option<TotalServiceEndpointBinding<E>>; DOMAINS] {
+        self.endpoints
+    }
+}
+
 impl<const DOMAINS: usize> PreparedTotalServiceSet<DOMAINS> {
     pub const fn len(&self) -> usize {
         self.count
@@ -4905,6 +4977,129 @@ impl<const DOMAINS: usize> PreparedTotalServiceSet<DOMAINS> {
 
     pub fn into_routes(self) -> [Option<PreparedIsolationServiceRoute>; DOMAINS] {
         self.routes
+    }
+
+    /// Publishes one already-constructed endpoint for every prepared unique
+    /// domain as a single fail-closed transaction. Endpoint identity remains
+    /// non-authorizing: the exact prepared route and its admission owner still
+    /// establish placement authority. Validation failure cancels every route;
+    /// a later commit failure retires every earlier running domain in reverse
+    /// order and returns all concrete endpoints for backend teardown.
+    pub fn commit_complete<E>(
+        mut self,
+        admission: &mut IsolationAdmissionTable<DOMAINS>,
+        mut endpoints: [Option<TotalServiceEndpointBinding<E>>; DOMAINS],
+    ) -> Result<RoutedTotalServiceSet<E, DOMAINS>, CompleteTotalServiceCommitFailure<E, DOMAINS>>
+    {
+        let endpoint_count = endpoints.iter().flatten().count();
+        let mut validation_error = if endpoint_count != self.count {
+            Some(CompleteTotalServiceCommitError::BindingCount)
+        } else {
+            None
+        };
+        for (index, binding) in endpoints.iter().enumerate() {
+            let Some(binding) = binding else { continue };
+            if endpoints[..index]
+                .iter()
+                .flatten()
+                .any(|present| present.domain == binding.domain)
+            {
+                validation_error = Some(CompleteTotalServiceCommitError::DuplicateDomain);
+                break;
+            }
+            if !self.routes.iter().flatten().any(|route| {
+                route.spec().domain() == binding.domain
+                    && route.spec().placement() == IsolationPlacement::Microvm
+            }) {
+                validation_error = Some(CompleteTotalServiceCommitError::MissingDomain);
+                break;
+            }
+        }
+        if validation_error.is_none()
+            && self.routes.iter().flatten().any(|route| {
+                !endpoints
+                    .iter()
+                    .flatten()
+                    .any(|binding| binding.domain == route.spec().domain())
+            })
+        {
+            validation_error = Some(CompleteTotalServiceCommitError::MissingDomain);
+        }
+        if let Some(mut error) = validation_error {
+            for route in self.routes.into_iter().rev().flatten() {
+                if let Err(rollback) = route.cancel(admission) {
+                    if !matches!(error, CompleteTotalServiceCommitError::Rollback(_)) {
+                        error = CompleteTotalServiceCommitError::Rollback(rollback);
+                    }
+                }
+            }
+            return Err(CompleteTotalServiceCommitFailure { error, endpoints });
+        }
+
+        let mut routed: [Option<RoutedIsolationService<E>>; DOMAINS] = [const { None }; DOMAINS];
+        let mut endpoint_slots: [Option<usize>; DOMAINS] = [None; DOMAINS];
+        let mut committed = 0usize;
+        for index in 0..DOMAINS {
+            let Some(route) = self.routes[index].take() else {
+                continue;
+            };
+            let domain = route.spec().domain();
+            let endpoint_index = endpoints
+                .iter()
+                .position(|binding| {
+                    binding
+                        .as_ref()
+                        .is_some_and(|binding| binding.domain == domain)
+                })
+                .expect("complete endpoint validation");
+            let endpoint = endpoints[endpoint_index]
+                .take()
+                .expect("located endpoint binding")
+                .endpoint;
+            endpoint_slots[index] = Some(endpoint_index);
+            match route.commit(admission, endpoint) {
+                Ok(active) => {
+                    routed[index] = Some(active);
+                    committed += 1;
+                }
+                Err((failed_route, admission_error, endpoint)) => {
+                    endpoints[endpoint_index] =
+                        Some(TotalServiceEndpointBinding::new(domain, endpoint));
+                    let mut error = CompleteTotalServiceCommitError::Admission(admission_error);
+                    if let Err(rollback) = failed_route.cancel(admission) {
+                        error = CompleteTotalServiceCommitError::Rollback(rollback);
+                    }
+                    for prior in (0..index).rev() {
+                        if let Some(active) = routed[prior].take() {
+                            let prior_domain = active.domain();
+                            let prior_endpoint = active.into_endpoint();
+                            let prior_endpoint_index = endpoint_slots[prior]
+                                .expect("committed endpoint retains its source slot");
+                            endpoints[prior_endpoint_index] = Some(
+                                TotalServiceEndpointBinding::new(prior_domain, prior_endpoint),
+                            );
+                            if let Err(rollback) = admission.retire(prior_domain) {
+                                if !matches!(error, CompleteTotalServiceCommitError::Rollback(_)) {
+                                    error = CompleteTotalServiceCommitError::Rollback(rollback);
+                                }
+                            }
+                        }
+                    }
+                    for remaining in self.routes.into_iter().skip(index + 1).flatten() {
+                        if let Err(rollback) = remaining.cancel(admission) {
+                            if !matches!(error, CompleteTotalServiceCommitError::Rollback(_)) {
+                                error = CompleteTotalServiceCommitError::Rollback(rollback);
+                            }
+                        }
+                    }
+                    return Err(CompleteTotalServiceCommitFailure { error, endpoints });
+                }
+            }
+        }
+        Ok(RoutedTotalServiceSet {
+            routes: routed,
+            count: committed,
+        })
     }
 }
 
@@ -13289,6 +13484,66 @@ mod tests {
         assert_eq!(prepared.len(), 0);
         assert!(prepared.into_routes().iter().all(Option::is_none));
         assert_eq!(rejected.admission().running().count(), 0);
+
+        let prepared = rejected
+            .prepare_complete_service_set(&[
+                TotalServicePreparationBinding::new(valid_bounds, first),
+                TotalServicePreparationBinding::new(valid_bounds, second),
+            ])
+            .unwrap();
+        let mut routed = prepared
+            .commit_complete(
+                rejected.admission_mut(),
+                [
+                    Some(TotalServiceEndpointBinding::new(second_domain, 0x62u64)),
+                    Some(TotalServiceEndpointBinding::new(first_domain, 0x51u64)),
+                ],
+            )
+            .unwrap();
+        assert_eq!(routed.len(), 2);
+        assert_eq!(routed.take(first_domain).unwrap().into_endpoint(), 0x51);
+        assert_eq!(routed.take(second_domain).unwrap().into_endpoint(), 0x62);
+        assert!(routed.is_empty());
+        assert_eq!(rejected.admission().running().count(), 2);
+        let proof = rejected.finalize().unwrap();
+        assert_eq!(proof.classified_domains(), 2);
+        assert_eq!(proof.running_in_microvm(), 2);
+        rejected.admission_mut().retire(second_domain).unwrap();
+        rejected.admission_mut().retire(first_domain).unwrap();
+
+        let release = activated_two_domain_release(first_domain, second_domain, 19);
+        let mut invalid = policy.bind_release_inventory(release).unwrap();
+        let prepared = invalid
+            .prepare_complete_service_set(&[
+                TotalServicePreparationBinding::new(valid_bounds, first),
+                TotalServicePreparationBinding::new(valid_bounds, second),
+            ])
+            .unwrap();
+        let failure = prepared
+            .commit_complete(
+                invalid.admission_mut(),
+                [
+                    Some(TotalServiceEndpointBinding::new(first_domain, 0x71u64)),
+                    Some(TotalServiceEndpointBinding::new(first_domain, 0x72u64)),
+                ],
+            )
+            .err()
+            .unwrap();
+        assert_eq!(
+            failure.error(),
+            CompleteTotalServiceCommitError::DuplicateDomain
+        );
+        assert_eq!(failure.into_endpoints().iter().flatten().count(), 2);
+        assert_eq!(invalid.admission().running().count(), 0);
+        let prepared = invalid
+            .prepare_complete_service_set(&[
+                TotalServicePreparationBinding::new(valid_bounds, first),
+                TotalServicePreparationBinding::new(valid_bounds, second),
+            ])
+            .unwrap();
+        for route in prepared.into_routes().into_iter().rev().flatten() {
+            route.cancel(invalid.admission_mut()).unwrap();
+        }
     }
 
     #[test]
