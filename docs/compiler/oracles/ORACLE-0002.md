@@ -1186,3 +1186,14 @@ this exact toolchain and commit accepted functions returning `b'A'`,
 literal and return forms only; it does not establish an implementation
 strategy, object format, C literals, suffixes, or general constant-expression
 semantics. The temporary source and metadata were removed.
+
+An independently authored Rust 2024 metadata-only explicit-static lifetime set
+against this exact toolchain and commit accepted a scalar-parameter function
+returning either a cooked or raw `&'static str` literal and accepted identity of
+an explicitly `&'static str` parameter. Returning an ordinary `&str` parameter
+as `&'static str` failed because the input lifetime does not outlive `'static`.
+Windows gnullvm and native Arch Linux produced the same accept/reject result.
+This is black-box evidence for those exact signature and return forms only; it
+does not establish named lifetime inference, general lifetime subtyping,
+higher-ranked lifetimes, or an implementation strategy. Temporary source and
+metadata files were removed.

@@ -58,7 +58,33 @@ oracle upgrade receives a new immutable record and differential classification
 against all prior accepted probes. Keep Cargo on edition 2024 until a newer
 named edition can be adopted through a pinned, workspace-wide migration.
 
-## Latest bounded byte character-literal milestone
+## Latest bounded explicit-static reference milestone
+
+Commit `d0983d5e` recognizes exact `&'static` spelling for the existing bounded
+reference targets. Static string literals and explicitly static parameters can
+supply explicit-static returns; an ordinary borrowed parameter cannot be
+narrowed and fails as `UnsupportedLifetimeRelation`. The original no-input
+elision control remains distinct. Exact ORACLE-0002 metadata probes accepted
+the literal/static-input forms and rejected `&str -> &'static str` on Windows
+and Arch. Both hosts passed 653 library, 1 component-interface, 10 conformance,
+351 replacement, and 6 semantic-execution tests: 1,021 per host. Named and
+higher-ranked lifetimes, general subtyping, and regions remain unsupported.
+
+Patent review: **NOT_TRIGGERED**; see `docs/patents/REVIEW_LOG.md`.
+
+### Preceding exhaustive nested-control lowering milestone
+
+Commit `183038f0` validates every supported nested conditional alternative,
+rejects incomplete CFG construction, and requires a `ValidatedRuntimeBody`
+before emission. Native relocation-free COFF/ELF execution probes distinguish
+omitted, duplicated, reordered, or mistargeted actions and controls and cover
+reference mutations, initializedness, and fixed-register assembly. Both hosts
+passed 1,021 compiler tests. General CFGs, relocating runtime loading, isolated
+trap capture, and complete regions remain unsupported.
+
+Patent review: **NOT_TRIGGERED**; see `docs/patents/REVIEW_LOG.md`.
+
+### Preceding bounded byte character-literal milestone
 
 Commit `c21a70fc` gives byte characters distinct lexical/expression identity
 and a concrete `u8` runtime type. ASCII, conventional byte escapes, and the full

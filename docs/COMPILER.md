@@ -2068,6 +2068,37 @@ tests (1,009 total). Raw/byte strings, escape decoding, literal deduplication,
 more than eight literals, more than 1,024 literal bytes, and general static data
 remain outside this checkpoint.
 
+### Bounded explicit-static reference checkpoint
+
+Exact `&'static` reference spelling is now recognized for the existing bounded
+reference targets. An explicit-static return may be supplied by compiler-owned
+string literals without inventing an elided input lifetime, and an explicitly
+static parameter may be returned through the existing origin/outlives path. A
+non-static reference parameter in an explicit-static-return signature fails
+closed as `UnsupportedLifetimeRelation`; the existing missing-input elision
+case remains `UnsupportedLifetimeElision`. ELF64 and COFF probes cover cooked
+and raw literal arms plus a static parameter. The exact ORACLE-0002 toolchain
+accepted those independently authored forms and rejected `&str -> &'static str`.
+Windows and Arch each passed 653 unit, 1 component, 10 conformance, 351
+replacement, and 6 semantic-execution tests (1,021 total). Named lifetimes,
+higher-ranked lifetimes, general subtyping, and general regions remain outside
+this checkpoint.
+
+### Exhaustive nested-control lowering checkpoint
+
+Every alternative of the supported nested-loop conditional representation is
+now validated and considered by inner/outer exit classification. Incomplete
+control-flow preanalysis reports `UnsupportedRuntimeControlFlow` instead of
+returning apparent success, and emission requires a `ValidatedRuntimeBody`
+marker produced by an exhaustive statement traversal over complete CFG facts.
+A bounded test loader executes relocation-free COFF or ELF64 `.text` and checks
+observable nested actions, `break`, `continue`, returns, initializedness,
+reference mutations/origins, and supported inline assembly after verifying the
+exact ORACLE-0002 rustc commit. Windows and Arch each passed 653 unit, 1
+component, 10 conformance, 351 replacement, and 6 semantic-execution tests
+(1,021 total). General CFG lowering, relocating runtime loading, trap isolation,
+and complete region inference remain outside this checkpoint.
+
 ### Bounded byte character-literal checkpoint
 
 Byte character literals now have distinct lexical and expression identity and

@@ -5945,3 +5945,28 @@ controls. Windows and native Arch Linux WSL each passed 652 library tests, 1
 component probe, 10 conformance tests, and 351 replacement tests: 1,014 compiler
 tests per host. C literals and general suffix semantics remain outside the
 claim.
+
+The exhaustive nested-control lowering milestone at `183038f0` removes a
+representation drift in which validation and exit classification considered
+the primary and final arms but skipped intermediate `else if` alternatives.
+Incomplete control-flow preanalysis now fails as
+`UnsupportedRuntimeControlFlow`, and machine-code emission requires an
+exhaustively produced `ValidatedRuntimeBody`. A test-only bounded loader maps
+relocation-free COFF/ELF `.text` with write-then-execute protection and observes
+branch actions, targeted breaks/continues, returns, initializedness, reference
+origins/mutations, and fixed-register assembly. Windows and Arch each passed
+653 library, 1 component-interface, 10 conformance, 351 replacement, and 6
+semantic-execution tests: 1,021 per host. Relocating runtime loading, subprocess
+trap capture, arbitrary CFGs, and complete regions remain separate work.
+
+The bounded explicit-static reference milestone at `d0983d5e` recognizes exact
+`&'static` spelling for the existing bounded reference targets. Compiler-owned
+cooked/raw string literals can supply a static return without a reference
+parameter, and an explicitly static input can flow through the existing
+origin/outlives path. A non-static input in an explicit-static-return signature
+fails as `UnsupportedLifetimeRelation`; missing lifetime-elision inputs retain
+their distinct diagnostic. Exact ORACLE-0002 probes accepted the static literal
+and static-input forms and rejected narrowing `&str` to `&'static str` on both
+hosts. ELF64 and COFF object probes passed, and both hosts remained at 1,021
+compiler tests. Named/higher-ranked lifetimes, general lifetime subtyping, and
+general regions remain unsupported.
