@@ -8913,6 +8913,17 @@ cross-microVM interface and Total MicroVM review remains **TRIGGERED**, includin
 bounded queue semantics and recovered component execution. This technical
 screen is not legal advice or patent clearance.
 
+# 2026-08-27 — Bounded generation-bound cross-microVM call slot
+
+Patent review: **TRIGGERED** under the existing cross-microVM interface and Total
+MicroVM review. This increment uses a conventional fixed-size shared-memory
+request/response state machine, explicit little-endian fields, exact generation
+tags, bounded copying, monotonic sequence checks, and fail-closed validation. No
+patent clearance is inferred from those conventional ingredients. Guest-side
+notification, concurrent acquire/release publication, and the complete signed
+component mechanism remain subject to the broader worldwide mechanism review.
+This technical screen is not legal advice or patent clearance.
+
 # 2026-08-26 — Atomic complete-domain endpoint publication
 
 Patent review: **NOT_TRIGGERED** for this bounded control-plane transaction. It
@@ -9017,3 +9028,13 @@ excluding an existing trailing terminator from a reported length introduces no
 novel encoding, compression, cryptographic mechanism, foreign-function
 protocol, or production loader. This technical screen is not legal advice or
 patent clearance.
+
+# 2026-08-27 — Test-only internal read-only relocation execution
+
+Patent review: **NOT_TRIGGERED**. The compiler test harness conventionally
+parses existing COFF and ELF64 section/relocation records, applies standard
+PC-relative displacement arithmetic, and maps one bounded test image for local
+semantic verification. It adds no object format, relocation type, production
+loader, dynamic linker, code-generation algorithm, cryptographic mechanism, or
+runtime security protocol. This technical screen is not legal advice or patent
+clearance.
