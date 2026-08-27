@@ -1856,6 +1856,12 @@ second constructor fails and immediate same-owner retry through construction,
 atomic commit, strict Total finalization, endpoint recovery, and retirement.
 This is in-memory control-plane evidence, not two-guest WHP/KVM execution.
 
+The live co-located WHP and KVM paths now pass their already-created provisional
+guest through this constructor before publication. Exact prepared-spec mismatch
+or repeated ownership transfer rejects before runtime authorization. Runner unit
+suites pass 12 tests on Windows WHP and 13 on Arch Linux KVM; the unchanged live
+single-domain artifact evidence remains the strongest execution result.
+
 The existing service-image recovery path now has canonical MRML build profiles:
 `block_service_loop` for the userspace service image and
 `block_service_probe` for its UEFI kernel/bootloader counterpart. Both release

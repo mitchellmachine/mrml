@@ -726,6 +726,14 @@ retires both domains. Configuration passes 53 tests on Windows and Arch Linux.
 Live construction/execution of two distinct WHP/KVM guests remains the next
 gate; whole-system Total mode remains **PLANNED**.
 
+WHP and KVM now route the live single-domain provisional guest through that same
+transactional constructor instead of assembling an endpoint array directly.
+The constructor exact-matches the retained service specification, permits one
+ownership transfer, and precedes atomic publication on both backends. The WHP
+runner passes 12 tests on Windows and the KVM runner passes 13 on Arch Linux.
+This is backend/API integration evidence; two distinct live guests remain the
+next gate.
+
 The existing userspace block recovery loop is now reproducibly selectable
 through the canonical build frontend. The service image's
 `block_service_loop` profile and bootloader/kernel image's

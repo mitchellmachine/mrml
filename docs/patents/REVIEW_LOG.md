@@ -8911,6 +8911,17 @@ and Total MicroVM review remains **TRIGGERED**, including live construction and
 execution of two distinct WHP/KVM guests. This technical screen is not legal
 advice or patent clearance.
 
+# 2026-08-26 — WHP/KVM transactional endpoint-constructor integration
+
+Patent review: **NOT_TRIGGERED**. This increment replaces direct fixed-array
+assembly with the already-reviewed bounded constructor transaction and checks
+the exact retained service specification before one-use ownership transfer. It
+adds no guest-construction algorithm, placement decision, scheduler, interface
+transport, device protocol, cryptographic primitive, or data-plane mechanism.
+The broader adaptive-placement and Total MicroVM review remains **TRIGGERED**,
+including live construction and execution of two distinct backend guests. This
+technical screen is not legal advice or patent clearance.
+
 # 2026-08-26 — Atomic recovered endpoint integration
 
 Patent review: **NOT_TRIGGERED** for restoring an existing prepared route to its

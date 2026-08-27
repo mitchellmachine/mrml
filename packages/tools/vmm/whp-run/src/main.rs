@@ -11,7 +11,6 @@ use mrml_config::{
     PreparedMicrovmConfigurationLauncher, PreparedTotalServiceSet,
     RecoveredDeploymentTotalControlPlane,
     RecoveredDeploymentTotalRuntime, SettingId, TotalServicePreparationBinding,
-    TotalServiceEndpointBinding,
     hosted_recovery_probe::{HOSTED_TOTAL_COMPONENT_DOMAIN, recover_total_control_plane},
 };
 #[cfg(target_os = "windows")]
@@ -3441,17 +3440,21 @@ fn application_main() -> Result<()> {
         let spec = prepared
             .spec(configured.identity.domain())
             .ok_or_else(|| anyhow!("WHP complete component preparation lost its route"))?;
+        let mut provisional_guest = Some(guest);
+        let (prepared, endpoints) = prepared
+            .construct_complete_endpoints(total.admission_mut(), |route_spec| {
+                if route_spec != spec {
+                    return Err("prepared WHP component identity changed");
+                }
+                provisional_guest
+                    .take()
+                    .ok_or("WHP component endpoint was constructed more than once")
+            })
+            .map_err(|failure| {
+                anyhow!("WHP complete component construction failed: {:?}", failure.error())
+            })?;
         let routed = prepared
-            .commit_complete(
-                total.admission_mut(),
-                [
-                    Some(TotalServiceEndpointBinding::new(
-                        configured.identity.domain(),
-                        guest,
-                    )),
-                    None,
-                ],
-            )
+            .commit_complete(total.admission_mut(), endpoints)
             .map_err(|failure| {
                 anyhow!("WHP complete component publication failed: {:?}", failure.error())
             })?;

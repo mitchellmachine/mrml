@@ -1346,6 +1346,13 @@ atomic commit, strict Total finalization with two microVMs, endpoint return, and
 retirement. Actual construction and execution of two distinct WHP/KVM guests
 remain **PLANNED**.
 
+Both live single-domain runners now transfer their already-created provisional
+guest through this same constructor transaction before atomic publication. The
+constructor rechecks the exact prepared service specification and is one-use;
+identity drift or a second construction request cancels the retained route and
+publishes nothing. This closes backend/control-plane API parity but is not
+evidence that two distinct guests were constructed.
+
 The installed production prerequisite now has a **PARTIALLY IMPLEMENTED**
 four-file stable-root selection. Configuration, authority checkpoint,
 deployment checkpoint, and activated SystemRelease must be distinct reachable
