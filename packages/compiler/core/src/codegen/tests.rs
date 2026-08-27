@@ -10977,6 +10977,8 @@ mod tests {
             "#[unsafe(no_mangle)] pub extern \"C\" fn value(input: &mut [u32], start: usize, index: usize) -> u32 { let selected: &mut u32 = &mut input[start..][index]; *selected += 7; *selected }",
             "#[unsafe(no_mangle)] pub extern \"C\" fn value(input: &mut [u32; 4], start: usize, end: usize, index: usize) -> u32 { let selected: &mut u32 = &mut input[start..end][index]; *selected += 7; *selected }",
             "#[unsafe(no_mangle)] pub extern \"C\" fn value(input: &mut [u32], start: usize, end: usize, index: usize) -> u32 { let selected: &mut u32 = &mut input[start..end][index]; *selected += 7; *selected }",
+            "#[unsafe(no_mangle)] pub extern \"C\" fn value(input: &mut [u32; 4], start: usize, end: usize, index: usize) -> u32 { let selected: &mut u32 = &mut input[start..=end][index]; *selected += 7; *selected }",
+            "#[unsafe(no_mangle)] pub extern \"C\" fn value(input: &mut [u32], start: usize, end: usize, index: usize) -> u32 { let selected: &mut u32 = &mut input[start..=end][index]; *selected += 7; *selected }",
         ] {
             let module = Parser::new(source).parse_module::<1, 5>().unwrap();
             let Some(Item::Function(function)) = module.items()[0] else {

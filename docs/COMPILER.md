@@ -907,11 +907,15 @@ including Windows' indirect two-word slice-parameter ABI and System V's direct
 two-word ABI. Exact `start..end` forms now have the same independent array and
 slice execution coverage as `start..`; three nonzero and zero-start selections
 verify the chosen element changes while every unselected element is preserved.
-Repeated subslice chains and other deeper shapes remain unsupported. This is
-one exact nested non-tuple projection, not general place typing, index-sensitive
-aliasing, or region inference. Windows passed 658 unit, 1 component-interface,
-10 conformance, 351 replacement, and 11 semantic-execution tests (1,031 total);
-the runtime-slice and explicit-end extensions have not yet been run on Arch.
+Inclusive `start..=end` forms have the same four-path structural coverage and
+array/slice execution evidence; selecting the inclusive last element confirms
+the checked end increment feeds the subsequent index bound. Repeated subslice
+chains and other deeper shapes remain unsupported. This is one exact nested
+non-tuple projection, not general place typing, index-sensitive aliasing, or
+region inference. Windows passed 658 unit, 1 component-interface, 10
+conformance, 351 replacement, and 11 semantic-execution tests (1,031 total);
+the runtime-slice, explicit-end, and inclusive-end extensions have not yet been
+run on Arch.
 
 The semantic harness now isolates both failure edges of that composed place.
 One probe supplies a range start beyond the four-element owner; another creates
@@ -925,7 +929,8 @@ component-interface, 10 conformance, 351 replacement, and 11 semantic-execution
 tests (1,031 total).
 
 Patent review: `NOT_TRIGGERED`; these increments add execution coverage for an
-already implemented bounded place, range, and ABI contract rather than a new mechanism.
+already implemented bounded place, range, and ABI contract rather than a new
+mechanism.
 See [`patents/REVIEW_LOG.md`](patents/REVIEW_LOG.md).
 
 Projected array-element and slice-subslice origins now survive one direct local
