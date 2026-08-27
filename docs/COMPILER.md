@@ -928,6 +928,17 @@ or physical-machine evidence. Windows and Arch each passed 658 unit, 1
 component-interface, 10 conformance, 351 replacement, and 11 semantic-execution
 tests (1,031 total).
 
+The inclusive composed-place harness now isolates four additional failure
+edges: `end == usize::MAX` before inclusive-end increment, a reversed range, an
+inclusive end beyond the four-element owner, and an index exactly equal to the
+three-element materialized subslice length. Windows child processes report
+`STATUS_ILLEGAL_INSTRUCTION` for every case; normal return, access violation,
+or an ordinary test failure is rejected. This is hosted execution of existing
+checked traps, not panic-unwind, kernel/VMM, or physical-machine evidence.
+Windows passed 658 unit, 1 component-interface, 10 conformance, 351 replacement,
+and 12 semantic-execution tests (1,032 total); Arch has not yet run this
+inclusive-trap extension.
+
 Patent review: `NOT_TRIGGERED`; these increments add execution coverage for an
 already implemented bounded place, range, and ABI contract rather than a new
 mechanism.
