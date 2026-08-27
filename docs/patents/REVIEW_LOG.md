@@ -1,5 +1,15 @@
 # Patent review log
 
+## 2026-08-26 — Bounded byte string-literal emission
+
+Patent review: **NOT_TRIGGERED** for lexically distinguishing Rust cooked and
+raw byte strings, conventionally decoding bounded escape sequences into the
+existing fixed read-only byte arena, assigning the ordinary immutable byte-slice
+type, and using the existing checked ELF64/COFF relocation path. This adds no
+compression, cryptography, VM, scheduling, storage, transport, DMA, queue,
+interrupt, or hardware mechanism. This technical screen is not patent
+clearance.
+
 ## 2026-08-26 — Service-image four-file stable-root selection
 
 Patent review: **NOT_TRIGGERED** for composing existing canonical directory,

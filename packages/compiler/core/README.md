@@ -5921,3 +5921,16 @@ each passed 650 library tests, 1 component probe, 10 conformance tests, and 349
 replacement tests: 1,010 compiler tests per host. Multiple-input elision, named
 and `'static` lifetimes, higher-ranked lifetimes, and general regions remain
 outside the claim.
+
+The bounded byte string-literal milestone at `a2d1b000` distinguishes cooked
+and raw byte strings from UTF-8 strings through lexing, expressions, and runtime
+typing. Immutable `&[u8]` literal values reuse the bounded decoded read-only
+object path: cooked `\x00` through `\xFF` is supported, Unicode escapes and
+direct non-ASCII input reject, and raw ASCII content is preserved verbatim.
+ELF64 and COFF object tests retain exact cooked `41 FF 0A` and raw 11-byte
+payloads, and byte/string conditional mixing fails closed. The exact
+ORACLE-0002 nightly accepted the independently authored cooked and raw controls.
+Windows and native Arch Linux WSL each passed 652 library tests, 1 component
+probe, 10 conformance tests, and 350 replacement tests: 1,013 compiler tests per
+host. Byte literals, suffixes, C strings, general static data, and general
+lifetime inference remain outside the claim.

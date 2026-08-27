@@ -58,7 +58,23 @@ oracle upgrade receives a new immutable record and differential classification
 against all prior accepted probes. Keep Cargo on edition 2024 until a newer
 named edition can be adopted through a pinned, workspace-wide migration.
 
-## Latest zero-input return-lifetime elision milestone
+## Latest bounded byte string-literal milestone
+
+Commit `a2d1b000` gives cooked and raw byte strings distinct lexical and
+expression identity and immutable `&[u8]` runtime types. It decodes cooked
+`\x00` through `\xFF`, rejects Unicode escapes and direct non-ASCII bytes,
+preserves ASCII raw content, and reuses the bounded read-only-data relocation
+path for ELF64 and COFF. Exact object tests retain `41 FF 0A` and the raw
+11-byte payload; byte/string mixing fails closed. The exact ORACLE-0002 nightly
+accepted the independently authored cooked and raw controls. Windows and native
+Arch Linux WSL each passed 652 library tests, 1 component probe, 10 conformance
+tests, and 350 replacement tests: 1,013 compiler tests per host. Byte literals,
+suffixes, C strings, general static data, and general lifetime inference remain
+outside this checkpoint.
+
+Patent review: **NOT_TRIGGERED**; see `docs/patents/REVIEW_LOG.md`.
+
+### Preceding zero-input return-lifetime elision milestone
 
 Commit `481281c7` rejects an elided reference return when no supported reference
 parameter can supply its output lifetime. The exact ORACLE-0002 nightly rejected

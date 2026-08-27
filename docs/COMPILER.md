@@ -2068,6 +2068,24 @@ tests (1,009 total). Raw/byte strings, escape decoding, literal deduplication,
 more than eight literals, more than 1,024 literal bytes, and general static data
 remain outside this checkpoint.
 
+### Bounded byte string-literal checkpoint
+
+Cooked `b"..."` and raw `br#"..."#` literals now have a distinct token and
+expression kind and type as immutable `&[u8]`, never `&str`. They reuse the
+bounded decoded read-only-data and checked relocation path. Cooked byte strings
+admit the full `\x00` through `\xFF` range, reject Unicode escapes and direct
+non-ASCII source characters, and raw byte strings preserve ASCII content
+verbatim while rejecting non-ASCII content. Conditional returns can select a
+parameter-backed byte slice or either literal form; mixing byte and UTF-8 string
+literals fails the existing runtime type check.
+
+The exact ORACLE-0002 Rust 2024 toolchain accepted independently authored
+cooked and raw parameter-backed conditional returns. MRML's ELF64 and COFF
+objects contain the exact cooked `41 FF 0A` and raw 11-byte payloads. Windows
+and Arch each passed 652 unit, 1 component, 10 conformance, and 350 replacement
+tests (1,013 total). Byte literals, byte-string suffixes, C strings, general
+static data, and general lifetime inference remain outside this checkpoint.
+
 ### Zero-input return-lifetime elision checkpoint
 
 An elided reference return now requires at least one supported reference input

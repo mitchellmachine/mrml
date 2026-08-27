@@ -1170,3 +1170,12 @@ eligible for lifetime elision. This is black-box evidence for those exact
 signature shapes only; it does not establish named, `'static`, higher-ranked,
 or general inferred lifetime semantics. Temporary sources and metadata were
 removed.
+
+An independently authored Rust 2024 metadata-only byte-string pair against this
+exact toolchain and commit accepted parameter-backed conditional `&[u8]`
+returns whose static arm was cooked `b"A\xFF\n"` or raw
+`br##"raw\n"#text"##`. This is black-box evidence for those exact literal,
+coercion, static-lifetime, and conditional-return forms only; it does not
+establish an implementation strategy, object format, pooling, C strings,
+general byte expressions, or general lifetime inference. The temporary source
+and metadata were removed.
