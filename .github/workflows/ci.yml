@@ -60,7 +60,7 @@ jobs:
       - name: Run malformed-input mutation corpus
         run: ./target/debug/mrml test org.mrml.test.security-fuzz --target linux
       - name: Build CUDA PTX without device authority
-        run: ./target/debug/mrml build org.mrml.library.tensor --target cuda-nvidia --gpu-arch sm_80 --feature-profile cuda
+        run: ./target/debug/mrml build org.mrml.library.tensor --target cuda-nvidia --gpu-arch sm_80
 
   windows:
     name: Windows gnullvm native build and tests
@@ -90,4 +90,4 @@ jobs:
       - name: Run malformed-input mutation corpus
         run: .\target\debug\mrml.exe test org.mrml.test.security-fuzz --target windows
       - name: Build CUDA PTX without device authority
-        run: .\target\debug\mrml.exe build org.mrml.library.tensor --target cuda-nvidia --gpu-arch sm_80 --feature-profile cuda
+        run: .\target\debug\mrml.exe build org.mrml.library.tensor --target cuda-nvidia --gpu-arch sm_80
