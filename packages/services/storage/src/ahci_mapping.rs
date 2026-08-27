@@ -47,7 +47,7 @@ pub fn map_ahci_abar<const N: usize, B: AhciAbarMappingBackend>(
 ) -> Result<AhciAbarMapping, AhciAbarMappingError> {
     let required = Rights::MAP.union(Rights::READ).union(Rights::WRITE);
     let authorized = capabilities
-        .authorize(capability, required)
+        .authorize_exact(capability, required)
         .map_err(AhciAbarMappingError::Capability)?;
     if authorized != device_object {
         return Err(AhciAbarMappingError::WrongDeviceObject);
@@ -166,6 +166,26 @@ mod tests {
                 ))
             );
         }
+
+        let excessive = Rights::MAP
+            .union(Rights::READ)
+            .union(Rights::WRITE)
+            .union(Rights::EXECUTE);
+        let (capabilities, capability, object) = authority(excessive);
+        assert_eq!(
+            map_ahci_abar(
+                &capabilities,
+                capability,
+                object,
+                descriptor(),
+                0x8000_0000,
+                1,
+                &mut RecordingBackend::default(),
+            ),
+            Err(AhciAbarMappingError::Capability(
+                CapabilityError::PermissionDenied
+            ))
+        );
 
         let rights = Rights::MAP.union(Rights::READ).union(Rights::WRITE);
         let (mut capabilities, stale, object) = authority(rights);

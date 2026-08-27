@@ -1,5 +1,16 @@
 # Patent review log
 
+## 2026-08-26 — Capability-generation retirement and exact AHCI mapping rights
+
+Patent review: **NOT_TRIGGERED** for replacing integer wraparound with checked
+generation advancement, permanently retiring exhausted fixed-array slots, and
+requiring an existing AHCI ABAR mapping capability to carry exactly the already
+documented `MAP|READ|WRITE` rights. These are bounded fail-closed security
+checks over existing mechanisms and add no storage protocol, register sequence,
+hardware algorithm, or interoperability mechanism. The broader AHCI driver
+review remains **TRIGGERED** under the existing Canadian/worldwide entries.
+This technical screen is not patent clearance.
+
 ## 2026-08-26 — Bounded byte character literals
 
 Patent review: **NOT_TRIGGERED** for conventionally decoding one ASCII byte or

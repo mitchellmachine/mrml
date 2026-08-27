@@ -109,6 +109,11 @@ access. The security/acceptance gate is canonical in
 - Capability derivation cannot increase authority.
 - Object and task identities are nonzero, bounded, and generational; stale
   identities cannot regain access after slot reuse.
+- Capability slot generation zero is invalid. Revocation advances generations
+  with checked arithmetic; a slot at the terminal generation is cleared and
+  permanently retired, and allocation reports explicit exhaustion rather than
+  wrapping to generation one. This kernel mechanism and focused adversarial
+  tests are **IMPLEMENTED**; it does not establish production assurance.
 - Revocation precedes reuse and covers all derived state in the operation's
   boundary. Uncertain device/DMA teardown quarantines or fails closed.
 - Boundary copies validate complete ranges, overlap, wrapping, alignment,
