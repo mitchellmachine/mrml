@@ -16,6 +16,12 @@ struct Timespec {
     nanoseconds: c_long,
 }
 
+// Linux x86-64 exposes pthread_attr_t as a 56-byte opaque object aligned to
+// eight bytes. Keep the platform ABI detail here rather than in runtime code.
+#[repr(C, align(8))]
+#[cfg(unix)]
+struct PthreadAttr([u8; 56]);
+
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub struct LocalTime {
     pub year: u16,
@@ -103,11 +109,13 @@ unsafe extern "C" {
     ) -> c_int;
     fn pthread_create(
         thread: *mut usize,
-        attributes: *const c_void,
+        attributes: *const PthreadAttr,
         start: unsafe extern "C" fn(*mut c_void) -> *mut c_void,
         argument: *mut c_void,
     ) -> c_int;
-    fn pthread_detach(thread: usize) -> c_int;
+    fn pthread_attr_init(attributes: *mut PthreadAttr) -> c_int;
+    fn pthread_attr_setdetachstate(attributes: *mut PthreadAttr, state: c_int) -> c_int;
+    fn pthread_attr_destroy(attributes: *mut PthreadAttr) -> c_int;
     fn sysconf(name: c_int) -> c_long;
     fn sched_yield() -> c_int;
     fn syscall(number: c_long, ...) -> c_long;
@@ -662,11 +670,20 @@ pub unsafe fn spawn_detached_thread(
     context: *mut c_void,
     start: unsafe extern "C" fn(*mut c_void) -> *mut c_void,
 ) -> bool {
-    let mut thread = 0usize;
-    if unsafe { pthread_create(&mut thread, core::ptr::null(), start, context) } != 0 {
+    const PTHREAD_CREATE_DETACHED: c_int = 1;
+    let mut attributes = core::mem::MaybeUninit::<PthreadAttr>::uninit();
+    if unsafe { pthread_attr_init(attributes.as_mut_ptr()) } != 0 {
         return false;
     }
-    unsafe { pthread_detach(thread) == 0 }
+    let attributes = unsafe { attributes.assume_init_mut() };
+    if unsafe { pthread_attr_setdetachstate(attributes, PTHREAD_CREATE_DETACHED) } != 0 {
+        let _ = unsafe { pthread_attr_destroy(attributes) };
+        return false;
+    }
+    let mut thread = 0usize;
+    let created = unsafe { pthread_create(&mut thread, attributes, start, context) } == 0;
+    let _ = unsafe { pthread_attr_destroy(attributes) };
+    created
 }
 
 #[derive(Debug)]
@@ -1049,6 +1066,12 @@ pub fn unix_time_millis() -> u64 {
 #[cfg(all(test, unix))]
 mod tests {
     use core::alloc::{GlobalAlloc, Layout};
+
+    #[test]
+    fn pthread_attribute_layout_matches_linux_x86_64_abi() {
+        assert_eq!(core::mem::size_of::<super::PthreadAttr>(), 56);
+        assert_eq!(core::mem::align_of::<super::PthreadAttr>(), 8);
+    }
 
     #[test]
     fn native_allocator_and_clock_work() {
