@@ -2068,6 +2068,23 @@ tests (1,009 total). Raw/byte strings, escape decoding, literal deduplication,
 more than eight literals, more than 1,024 literal bytes, and general static data
 remain outside this checkpoint.
 
+### Bounded raw string-literal checkpoint
+
+Rust raw string literals with zero through 255 delimiter hashes now tokenize as
+string values, close only on an exact quote-plus-hash delimiter, and copy their
+interior UTF-8 bytes verbatim into the existing bounded read-only object-data
+path. Backslashes, quotes, and would-be cooked escapes inside the content are
+not interpreted. Unterminated input and delimiters beyond 255 hashes fail
+closed; checked arithmetic protects delimiter and content bounds.
+
+The exact ORACLE-0002 Rust 2024 toolchain accepted an independently authored raw
+literal containing a backslash and an embedded non-closing quote/hash sequence.
+MRML's COFF object contains those exact 11 bytes, and ELF64/COFF replacement
+coverage accepts the same direct conditional return. Windows and Arch each
+passed 650 unit, 1 component, 10 conformance, and 349 replacement tests (1,010
+total). Byte/raw-byte/C strings, literal pooling, larger data or relocation
+capacities, and general static data remain outside this checkpoint.
+
 ### Direct conditional string-literal return checkpoint
 
 Direct tail `if` expressions may now return either a parameter-backed `&str`

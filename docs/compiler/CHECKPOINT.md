@@ -58,7 +58,20 @@ oracle upgrade receives a new immutable record and differential classification
 against all prior accepted probes. Keep Cargo on edition 2024 until a newer
 named edition can be adopted through a pinned, workspace-wide migration.
 
-## Latest direct conditional string-return milestone
+## Latest bounded raw string-literal milestone
+
+Commit `be6da69d` recognizes Rust raw strings with at most 255 delimiter hashes,
+requires an exact closing delimiter, and copies the interior bytes verbatim
+through the existing bounded read-only data path. Embedded backslashes and
+non-closing quote/hash sequences have exact lexer and COFF object coverage;
+unterminated strings and excess delimiter hashes fail closed. The exact
+ORACLE-0002 nightly accepted the independently authored direct conditional
+return. Windows and native Arch Linux WSL each passed 650 library tests, 1
+component probe, 10 conformance tests, and 349 replacement tests: 1,010 compiler
+tests per host. Byte/raw-byte/C strings, pooling, larger capacities, and general
+static data remain outside the claim.
+
+### Preceding direct conditional string-return milestone
 
 Commit `5eeefa10` aligns return-specific fat-reference preanalysis and ABI
 emission with the existing bounded literal value path. A tail `if` may select a

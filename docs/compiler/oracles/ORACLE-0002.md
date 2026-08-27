@@ -1145,3 +1145,11 @@ parameter-backed. This is black-box evidence for those exact literal coercion,
 static lifetime, and conditional return forms only; it does not establish an
 implementation strategy, object format, literal pooling, or MRML escape
 decoding. The temporary source and metadata were removed.
+
+An independently authored Rust 2024 metadata-only raw string-literal probe
+against this exact toolchain and commit accepted a direct conditional `&str`
+return whose static arm was `r##"raw\n"#text"##`. This is black-box evidence
+that the backslash and embedded non-closing quote/hash sequence are literal
+content under that exact delimiter; it does not establish an implementation
+strategy, object format, pooling, byte strings, C strings, or MRML decoding.
+The temporary source and metadata were removed.

@@ -5878,3 +5878,14 @@ native Arch Linux WSL each passed 649 library tests, 1 component probe, 10
 conformance tests, and 349 replacement tests: 1,009 compiler tests per host.
 Raw/byte/C strings, pooling, larger capacities, general static data, and general
 lifetime inference remain outside the claim.
+
+The bounded raw string-literal milestone at `be6da69d` recognizes zero through
+255 delimiter hashes, closes only on the exact quote-plus-hash delimiter, and
+copies interior UTF-8 bytes verbatim through the existing read-only object-data
+path. Exact lexer and COFF object tests retain a backslash and embedded
+non-closing quote/hash sequence without cooked decoding. Unterminated input and
+excess delimiter hashes fail closed. The exact ORACLE-0002 nightly accepted the
+independently authored direct conditional form. Windows and native Arch Linux
+WSL each passed 650 library tests, 1 component probe, 10 conformance tests, and
+349 replacement tests: 1,010 compiler tests per host. Byte/raw-byte/C strings,
+pooling, larger capacities, and general static data remain outside the claim.
