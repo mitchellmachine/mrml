@@ -1,0 +1,93 @@
+name: Native CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: native-ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  repository-policy:
+    name: Formatting, manifests, and lock
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+      - name: Install pinned Rust toolchain
+        run: rustup toolchain install nightly-2026-08-24 --profile minimal --component rustfmt,rust-src --target nvptx64-nvidia-cuda,x86_64-unknown-none,x86_64-unknown-uefi
+      - name: Build locked stage-zero frontend
+        run: cargo build --locked
+      - name: Check stage-zero Rust formatting
+        run: cargo fmt --all -- --check
+      - name: Check native workspace graph
+        run: ./target/debug/mrml doctor
+      - name: Check Manifest V2 syntax
+        run: ./target/debug/mrml manifest check
+      - name: Check canonical manifest formatting
+        run: ./target/debug/mrml manifest fmt --check
+      - name: Check native workspace lock
+        run: ./target/debug/mrml manifest lock --check
+
+  linux:
+    name: Linux native build and tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+      - name: Install pinned Rust toolchain
+        run: rustup toolchain install nightly-2026-08-24 --profile minimal --component rustfmt,rust-src --target nvptx64-nvidia-cuda,x86_64-unknown-none,x86_64-unknown-uefi
+      - name: Build locked stage-zero frontend
+        run: cargo build --locked
+      - name: Run all Linux native tests
+        run: ./target/debug/mrml test --all --target linux
+      - name: Run runtime, GPU, and parser regressions
+        run: |
+          ./target/debug/mrml test org.mrml.library.runtime --target linux
+          ./target/debug/mrml test org.mrml.library.tensor --target linux
+          ./target/debug/mrml test org.mrml.zim --target linux
+          ./target/debug/mrml test org.mrml.library.tls --target linux
+          ./target/debug/mrml test org.mrml.library.agent --target linux
+      - name: Run malformed-input mutation corpus
+        run: ./target/debug/mrml test org.mrml.test.security-fuzz --target linux
+      - name: Build CUDA PTX without device authority
+        run: ./target/debug/mrml build org.mrml.library.tensor --target cuda-nvidia --gpu-arch sm_80 --feature-profile cuda
+
+  windows:
+    name: Windows gnullvm native build and tests
+    runs-on: windows-latest
+    timeout-minutes: 60
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+      - name: Install pinned gnullvm Rust toolchain
+        shell: pwsh
+        run: |
+          rustup set default-host x86_64-pc-windows-gnullvm
+          rustup toolchain install nightly-2026-08-24-x86_64-pc-windows-gnullvm --profile minimal --component rustfmt,rust-src --target nvptx64-nvidia-cuda,x86_64-unknown-none,x86_64-unknown-uefi
+          rustup default nightly-2026-08-24-x86_64-pc-windows-gnullvm
+      - name: Build locked stage-zero frontend
+        run: cargo +nightly-2026-08-24-x86_64-pc-windows-gnullvm build --locked
+      - name: Run all Windows native tests
+        run: .\target\debug\mrml.exe test --all --target windows
+      - name: Run runtime, GPU, and parser regressions
+        shell: pwsh
+        run: |
+          .\target\debug\mrml.exe test org.mrml.library.runtime --target windows
+          .\target\debug\mrml.exe test org.mrml.library.tensor --target windows
+          .\target\debug\mrml.exe test org.mrml.zim --target windows
+          .\target\debug\mrml.exe test org.mrml.library.tls --target windows
+          .\target\debug\mrml.exe test org.mrml.library.agent --target windows
+      - name: Run malformed-input mutation corpus
+        run: .\target\debug\mrml.exe test org.mrml.test.security-fuzz --target windows
+      - name: Build CUDA PTX without device authority
+        run: .\target\debug\mrml.exe build org.mrml.library.tensor --target cuda-nvidia --gpu-arch sm_80 --feature-profile cuda

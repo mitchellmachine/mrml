@@ -1,0 +1,29 @@
+name: Sanitizers
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  schedule:
+    - cron: "41 5 * * 3"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  address-sanitizer:
+    name: Linux stage-zero ASan tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+      - name: Install pinned Rust toolchain
+        run: rustup toolchain install nightly-2026-08-24 --profile minimal --component rust-src
+      - name: Run locked native tests under AddressSanitizer
+        env:
+          CARGO_TARGET_DIR: target/asan
+          RUSTFLAGS: -Zsanitizer=address
+        run: cargo test --locked --target x86_64-unknown-linux-gnu
