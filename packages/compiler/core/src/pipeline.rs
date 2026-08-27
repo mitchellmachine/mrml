@@ -626,6 +626,26 @@ mod tests {
             compile_wide(static_parameter, "probe", format).unwrap();
         }
 
+        let static_bytes = r##"#[unsafe(no_mangle)] pub extern "C" fn probe(index: u8) -> &'static [u8] { if index == 0 { b"zero" } else { br"fallback" } }"##;
+        for format in [ObjectFormat::Elf64, ObjectFormat::Coff] {
+            let object = compile_wide(static_bytes, "probe", format).unwrap();
+            assert!(object.bytes().windows(4).any(|bytes| bytes == b"zero"));
+            assert!(object.bytes().windows(8).any(|bytes| bytes == b"fallback"));
+        }
+
+        let static_thin = "#[unsafe(no_mangle)] pub extern \"C\" fn probe(input: &'static u32) -> &'static u32 { input }";
+        for format in [ObjectFormat::Elf64, ObjectFormat::Coff] {
+            compile_wide(static_thin, "probe", format).unwrap();
+        }
+
+        let narrowed_thin =
+            "#[unsafe(no_mangle)] pub extern \"C\" fn probe(input: &u32) -> &'static u32 { input }";
+        let error = compile_wide(narrowed_thin, "probe", ObjectFormat::Coff).unwrap_err();
+        assert!(matches!(
+            error.kind,
+            CompileErrorKind::Codegen(CodegenErrorKind::UnsupportedLifetimeRelation)
+        ));
+
         for invalid in [
             "#[unsafe(no_mangle)] pub extern \"C\" fn probe(input: &str, choose: bool) -> &str { let value: &str; if choose { value = input; } else { value = \"bad\\q\"; } value }",
             "#[unsafe(no_mangle)] pub extern \"C\" fn probe(input: &str, choose: bool) -> &str { let value: &str; if choose { value = input; } else { value = \"bad\\xFF\"; } value }",
