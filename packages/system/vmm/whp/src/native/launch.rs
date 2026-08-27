@@ -7,11 +7,10 @@ use mrml_kernel::arch::x86_64::{
 use mrml_kernel::{
     ApplicationLaunch, ArtifactKind, BootHandoff, Capability, CapabilitySpace, DeadlineVmBackend,
     GpuSharedQueueLayout, GpuVmmMemory, MAX_PE_SECTIONS, MemoryResourceError,
-    MicrovmPeerPageProjection, PAGE_SIZE, PeImage, PhysAddr,
-    PreparedComponentServiceLaunch, RevocableVmBackend, ScheduledVcpuOutcome,
-    ServiceAddressSpaceEraser, SignedArtifact, TaskId, VerifiedExecutable,
-    VirtualBlockConfigurationPage, VirtualBlockQueueLayout, VirtualBlockResumePage,
-    VirtualBlockVmmMemory, VmBackend, VmExit,
+    MicrovmPeerPageProjection, PAGE_SIZE, PeImage, PhysAddr, PreparedComponentServiceLaunch,
+    RevocableVmBackend, ScheduledVcpuOutcome, ServiceAddressSpaceEraser, SignedArtifact, TaskId,
+    VerifiedExecutable, VirtualBlockConfigurationPage, VirtualBlockQueueLayout,
+    VirtualBlockResumePage, VirtualBlockVmmMemory, VmBackend, VmExit,
 };
 
 use crate::{GuestRange, MapPermissions, WhpError};
@@ -254,24 +253,18 @@ impl<'guest, 'system> PreparedWhpPeerPage<'guest, 'system> {
                 error: WhpPeerPageError::Policy(error),
                 retained: None,
             })?;
-        let first_range = GuestRange::new(
-            first_physical,
-            PAGE_SIZE,
-            MapPermissions::read_write(),
-        )
-        .map_err(|error| WhpPeerPagePrepareFailure {
-            error: WhpPeerPageError::Backend(error),
-            retained: None,
-        })?;
-        let second_range = GuestRange::new(
-            second_physical,
-            PAGE_SIZE,
-            MapPermissions::read_write(),
-        )
-        .map_err(|error| WhpPeerPagePrepareFailure {
-            error: WhpPeerPageError::Backend(error),
-            retained: None,
-        })?;
+        let first_range = GuestRange::new(first_physical, PAGE_SIZE, MapPermissions::read_write())
+            .map_err(|error| WhpPeerPagePrepareFailure {
+                error: WhpPeerPageError::Backend(error),
+                retained: None,
+            })?;
+        let second_range =
+            GuestRange::new(second_physical, PAGE_SIZE, MapPermissions::read_write()).map_err(
+                |error| WhpPeerPagePrepareFailure {
+                    error: WhpPeerPageError::Backend(error),
+                    retained: None,
+                },
+            )?;
         let first_virtual = projection
             .first_virtual_page()
             .checked_mul(PAGE_SIZE)
@@ -590,9 +583,8 @@ impl<'system> PreparedWhpGuest<'system> {
     ) -> Result<Self, WhpError> {
         let signed = SignedArtifact::decode(container).map_err(|_| WhpError::InvalidMapping)?;
         let image_bytes = page_bytes(u64::from(executable.image().image_size()))?;
-        let artifact_bytes = page_bytes(
-            u64::try_from(container.len()).map_err(|_| WhpError::MemoryOverflow)?,
-        )?;
+        let artifact_bytes =
+            page_bytes(u64::try_from(container.len()).map_err(|_| WhpError::MemoryOverflow)?)?;
         let stack_bytes = application
             .stack_pages()
             .checked_mul(PAGE_SIZE)
@@ -3107,15 +3099,15 @@ mod tests {
     };
     use mrml_kernel::{
         ArtifactKind, CapabilitySpace, GuestMemory, HypercallRouter, InterruptPolicy, IoDirection,
-        IoPortPolicy, IoPortRule, MemoryPoolTable, ObjectId, Rights,
-        SIGNED_ARTIFACT_HEADER_BYTES, SIGNED_ARTIFACT_OVERHEAD_BYTES, SignedArtifact, TrustRoot,
-        release_microvm_peer_page_projection, reserve_microvm_peer_page_projection,
+        IoPortPolicy, IoPortRule, MemoryPoolTable, ObjectId, Rights, SIGNED_ARTIFACT_HEADER_BYTES,
+        SIGNED_ARTIFACT_OVERHEAD_BYTES, SignedArtifact, TrustRoot,
         VIRTUAL_BLOCK_COMPLETION_ACK_PORT, VIRTUAL_BLOCK_COMPLETION_BYTES,
         VIRTUAL_BLOCK_CONFIGURATION_BYTES, VIRTUAL_BLOCK_DOORBELL_PORT,
         VIRTUAL_BLOCK_RESUME_STATE_BYTES, VirtualBlockBackend, VirtualBlockCompletion,
         VirtualBlockCompletionStatus, VirtualBlockConfiguration, VirtualBlockDevice,
         VirtualBlockMutationError, VirtualBlockProcessOutcome, VirtualBlockQueueBridge,
-        VirtualBlockRequest, VmTable, artifact_statement, run_virtual_block_completion_ack_once,
+        VirtualBlockRequest, VmTable, artifact_statement, release_microvm_peer_page_projection,
+        reserve_microvm_peer_page_projection, run_virtual_block_completion_ack_once,
         run_virtual_block_doorbell_once,
     };
 
@@ -3795,7 +3787,10 @@ mod tests {
         )
         .err()
         .expect("conflicting exact leaf must reject");
-        assert_eq!(failure.error(), WhpPeerPageError::Backend(WhpError::PageTable));
+        assert_eq!(
+            failure.error(),
+            WhpPeerPageError::Backend(WhpError::PageTable)
+        );
         assert!(failure.into_retained().is_none());
         let mut absent = [0; 1];
         assert_eq!(
@@ -3808,8 +3803,7 @@ mod tests {
         );
         first.withdraw_peer_page(peer_virtual, 0x20_0000).unwrap();
         let queue_pair = mrml_kernel::MicrovmInterfaceQueuePair::bind(
-            mrml_kernel::MicrovmInterfaceQueueIdentity::new([0x5a; 32], 3, 14, 9, 7, 11)
-                .unwrap(),
+            mrml_kernel::MicrovmInterfaceQueueIdentity::new([0x5a; 32], 3, 14, 9, 7, 11).unwrap(),
             &projection,
             first_target,
             second_target,
@@ -3873,7 +3867,8 @@ mod tests {
         );
         assert_eq!(&response[..4], b"zstd");
         let mut observed = [0; 4];
-        peer.retire().unwrap_or_else(|(error, _)| panic!("WHP peer retirement failed: {error:?}"));
+        peer.retire()
+            .unwrap_or_else(|(error, _)| panic!("WHP peer retirement failed: {error:?}"));
         assert_eq!(
             first
                 .page_walk(0xffff_8001_400f_0000)

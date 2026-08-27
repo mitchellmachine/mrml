@@ -7,10 +7,9 @@ use mrml_kernel::arch::x86_64::{
 use mrml_kernel::{
     ApplicationLaunch, ArtifactKind, BootHandoff, Capability, CapabilitySpace, DeadlineVmBackend,
     GpuSharedQueueLayout, GpuVmmMemory, MemoryResourceError, MicrovmPeerPageProjection, PAGE_SIZE,
-    PhysAddr, PreparedComponentServiceLaunch, RevocableVmBackend,
-    ServiceAddressSpaceEraser, SignedArtifact, TaskId, VerifiedExecutable,
-    VirtualBlockConfigurationPage, VirtualBlockQueueLayout, VirtualBlockResumePage,
-    VirtualBlockVmmMemory, VmBackend, VmExit,
+    PhysAddr, PreparedComponentServiceLaunch, RevocableVmBackend, ServiceAddressSpaceEraser,
+    SignedArtifact, TaskId, VerifiedExecutable, VirtualBlockConfigurationPage,
+    VirtualBlockQueueLayout, VirtualBlockResumePage, VirtualBlockVmmMemory, VmBackend, VmExit,
 };
 
 use super::{
@@ -153,9 +152,7 @@ impl<'guest, const FIRST: usize, const SECOND: usize>
     }
 }
 
-impl<'guest, const FIRST: usize, const SECOND: usize>
-    PreparedKvmPeerPage<'guest, FIRST, SECOND>
-{
+impl<'guest, const FIRST: usize, const SECOND: usize> PreparedKvmPeerPage<'guest, FIRST, SECOND> {
     pub fn prepare<const C: usize>(
         first: &'guest mut PreparedKvmGuest<FIRST>,
         second: &'guest mut PreparedKvmGuest<SECOND>,
@@ -176,9 +173,7 @@ impl<'guest, const FIRST: usize, const SECOND: usize>
                 error: KvmPeerPageError::Policy(error),
                 retained: None,
             })?;
-        if !first_physical.is_multiple_of(PAGE_SIZE)
-            || !second_physical.is_multiple_of(PAGE_SIZE)
-        {
+        if !first_physical.is_multiple_of(PAGE_SIZE) || !second_physical.is_multiple_of(PAGE_SIZE) {
             return Err(KvmPeerPagePrepareFailure {
                 error: KvmPeerPageError::Backend(KvmError::UnalignedMemory),
                 retained: None,
@@ -210,14 +205,8 @@ impl<'guest, const FIRST: usize, const SECOND: usize>
                 error: KvmPeerPageError::Backend(error),
                 retained: None,
             })?;
-        if let Err(error) = second
-            .backend
-            .map_external_peer_page(second_physical, host)
-        {
-            if let Err(cleanup) = first
-                .backend
-                .unmap_external_peer_page(first_physical, host)
-            {
+        if let Err(error) = second.backend.map_external_peer_page(second_physical, host) {
+            if let Err(cleanup) = first.backend.unmap_external_peer_page(first_physical, host) {
                 return Err(KvmPeerPagePrepareFailure {
                     error: KvmPeerPageError::Backend(cleanup),
                     retained: Some(Self {
@@ -407,9 +396,7 @@ impl<'guest, const FIRST: usize, const SECOND: usize>
     }
 }
 
-impl<const FIRST: usize, const SECOND: usize> Drop
-    for PreparedKvmPeerPage<'_, FIRST, SECOND>
-{
+impl<const FIRST: usize, const SECOND: usize> Drop for PreparedKvmPeerPage<'_, FIRST, SECOND> {
     fn drop(&mut self) {
         let mut uncertain = false;
         if self.withdraw_virtual().is_err() {
@@ -507,9 +494,8 @@ impl<const N: usize> PreparedKvmGuest<N> {
     ) -> Result<Self, KvmError> {
         let signed = SignedArtifact::decode(container).map_err(|_| KvmError::InvalidMapping)?;
         let image_bytes = page_bytes(u64::from(executable.image().image_size()))?;
-        let artifact_bytes = page_bytes(
-            u64::try_from(container.len()).map_err(|_| KvmError::MemoryOverflow)?,
-        )?;
+        let artifact_bytes =
+            page_bytes(u64::try_from(container.len()).map_err(|_| KvmError::MemoryOverflow)?)?;
         let stack_bytes = application
             .stack_pages()
             .checked_mul(PAGE_SIZE)
@@ -2146,10 +2132,8 @@ impl KvmSystem {
         tables
             .map(
                 Mapping::new(
-                    VirtAddr::new(layout.table_physical)
-                        .map_err(|_| KvmError::InvalidMapping)?,
-                    PhysAddr::new(layout.table_physical)
-                        .map_err(|_| KvmError::InvalidMapping)?,
+                    VirtAddr::new(layout.table_physical).map_err(|_| KvmError::InvalidMapping)?,
+                    PhysAddr::new(layout.table_physical).map_err(|_| KvmError::InvalidMapping)?,
                     layout.table_pages,
                     PagePermissions::KERNEL_LOW_READ_WRITE,
                 )
@@ -2438,15 +2422,15 @@ mod tests {
     };
     use mrml_kernel::{
         ArtifactKind, CapabilitySpace, GuestMemory, HypercallRouter, InterruptPolicy, IoDirection,
-        IoPortPolicy, IoPortRule, MemoryPoolTable, ObjectId, Rights,
-        SIGNED_ARTIFACT_HEADER_BYTES, SIGNED_ARTIFACT_OVERHEAD_BYTES, SignedArtifact, TrustRoot,
-        release_microvm_peer_page_projection, reserve_microvm_peer_page_projection,
+        IoPortPolicy, IoPortRule, MemoryPoolTable, ObjectId, Rights, SIGNED_ARTIFACT_HEADER_BYTES,
+        SIGNED_ARTIFACT_OVERHEAD_BYTES, SignedArtifact, TrustRoot,
         VIRTUAL_BLOCK_COMPLETION_ACK_PORT, VIRTUAL_BLOCK_COMPLETION_BYTES,
         VIRTUAL_BLOCK_CONFIGURATION_BYTES, VIRTUAL_BLOCK_DOORBELL_PORT,
         VIRTUAL_BLOCK_RESUME_STATE_BYTES, VirtualBlockBackend, VirtualBlockCompletion,
         VirtualBlockCompletionStatus, VirtualBlockConfiguration, VirtualBlockDevice,
         VirtualBlockMutationError, VirtualBlockProcessOutcome, VirtualBlockQueueBridge,
-        VirtualBlockRequest, VmTable, artifact_statement, run_virtual_block_completion_ack_once,
+        VirtualBlockRequest, VmTable, artifact_statement, release_microvm_peer_page_projection,
+        reserve_microvm_peer_page_projection, run_virtual_block_completion_ack_once,
         run_virtual_block_doorbell_once,
     };
 
@@ -3004,7 +2988,10 @@ mod tests {
         )
         .err()
         .expect("conflicting exact leaf must reject");
-        assert_eq!(failure.error(), KvmPeerPageError::Backend(KvmError::PageTable));
+        assert_eq!(
+            failure.error(),
+            KvmPeerPageError::Backend(KvmError::PageTable)
+        );
         assert!(failure.into_retained().is_none());
         let mut absent = [0; 1];
         assert_eq!(
@@ -3017,8 +3004,7 @@ mod tests {
         );
         first.withdraw_peer_page(peer_virtual, 0x20_0000).unwrap();
         let queue_pair = mrml_kernel::MicrovmInterfaceQueuePair::bind(
-            mrml_kernel::MicrovmInterfaceQueueIdentity::new([0x5a; 32], 3, 14, 9, 7, 11)
-                .unwrap(),
+            mrml_kernel::MicrovmInterfaceQueueIdentity::new([0x5a; 32], 3, 14, 9, 7, 11).unwrap(),
             &projection,
             first_target,
             second_target,
@@ -3083,7 +3069,8 @@ mod tests {
         );
         assert_eq!(&response[..4], b"zstd");
         let mut observed = [0; 4];
-        peer.retire().unwrap_or_else(|(error, _)| panic!("KVM peer retirement failed: {error:?}"));
+        peer.retire()
+            .unwrap_or_else(|(error, _)| panic!("KVM peer retirement failed: {error:?}"));
         assert_eq!(
             first
                 .page_walk(0xffff_8001_400f_0000)
