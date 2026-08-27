@@ -597,7 +597,11 @@ const fn wiener_coefficients(coefficients: [i16; 3]) -> [i16; 7] {
 }
 
 const fn round2(value: i64, shift: u32) -> i64 {
-    (value + (1 << (shift - 1))) >> shift
+    if shift == 0 {
+        value
+    } else {
+        (value + (1 << (shift - 1))) >> shift
+    }
 }
 
 fn count_units(unit_size: u16, frame_size: u32) -> u32 {

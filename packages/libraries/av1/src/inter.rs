@@ -2027,9 +2027,9 @@ mod tests {
                 );
             }
         }
-        assert!(core::ptr::eq(
+        assert_eq!(
             interpolation_filter_bank(InterpolationFilter::Sharp, 4),
             &SMALL_REGULAR_FILTER
-        ));
+        );
     }
 }
