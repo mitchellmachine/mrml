@@ -10975,15 +10975,17 @@ mod tests {
         for source in [
             "#[unsafe(no_mangle)] pub extern \"C\" fn value(input: &mut [u32; 4], start: usize, index: usize) -> u32 { let selected: &mut u32 = &mut input[start..][index]; *selected += 7; *selected }",
             "#[unsafe(no_mangle)] pub extern \"C\" fn value(input: &mut [u32], start: usize, index: usize) -> u32 { let selected: &mut u32 = &mut input[start..][index]; *selected += 7; *selected }",
+            "#[unsafe(no_mangle)] pub extern \"C\" fn value(input: &mut [u32; 4], start: usize, end: usize, index: usize) -> u32 { let selected: &mut u32 = &mut input[start..end][index]; *selected += 7; *selected }",
+            "#[unsafe(no_mangle)] pub extern \"C\" fn value(input: &mut [u32], start: usize, end: usize, index: usize) -> u32 { let selected: &mut u32 = &mut input[start..end][index]; *selected += 7; *selected }",
         ] {
-            let module = Parser::new(source).parse_module::<1, 4>().unwrap();
+            let module = Parser::new(source).parse_module::<1, 5>().unwrap();
             let Some(Item::Function(function)) = module.items()[0] else {
                 panic!("expected function")
             };
-            let body = function.parse_body::<4>().unwrap();
+            let body = function.parse_body::<5>().unwrap();
             let resolver = NoConstants;
             let mut facts = RuntimeBodyFacts::EMPTY;
-            preanalyze_runtime_body_declarations::<_, 4, 64>(
+            preanalyze_runtime_body_declarations::<_, 5, 64>(
                 &function,
                 &resolver,
                 &body,
@@ -11005,7 +11007,7 @@ mod tests {
             assert_eq!(matching, 1);
 
             for abi in [X86_64Abi::Windows, X86_64Abi::SystemV] {
-                compile_x86_64_function::<_, 8192, 4, 64>(&function, &resolver, abi).unwrap();
+                compile_x86_64_function::<_, 8192, 5, 64>(&function, &resolver, abi).unwrap();
             }
         }
     }
