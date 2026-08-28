@@ -322,12 +322,13 @@ pub use virtual_pci::{
     run_pci_configuration_once_with_backend_mapper, run_pci_configuration_once_with_mapper,
 };
 pub use vm::{
-    AffinityDeadlineVmBackend, DeadlineVmBackend, GuestAccess, GuestMappedRange, GuestMappingId,
-    GuestMappingRevoker, GuestMemory, GuestRegion, HYPERCALL_BYTES, Hypercall, HypercallOperation,
-    HypercallRouter, IoReadCompleter, MAX_GUEST_REGIONS, MappingRevocationError,
-    MmioWriteCompleter, RevocableVmBackend, RoutedHypercall, ScheduledDeadlineVmBackend,
-    ScheduledSmpVmBackend, ScheduledVcpuOutcome, VmBackend, VmDeadlineOutcome, VmError, VmExit,
-    VmId, VmRunError, VmState, VmTable, decode_hypercall_exit, revoke_mapping_before_resume,
+    AffinityDeadlineVmBackend, DeadlineVmBackend, ExecutionPoisonReason, GuestAccess,
+    GuestMappedRange, GuestMappingId, GuestMappingRevoker, GuestMemory, GuestRegion,
+    HYPERCALL_BYTES, Hypercall, HypercallOperation, HypercallRouter, IoReadCompleter,
+    MAX_GUEST_REGIONS, MappingRevocationError, MmioWriteCompleter, RevocableVmBackend,
+    RoutedHypercall, ScheduledDeadlineVmBackend, ScheduledSmpVmBackend, ScheduledVcpuOutcome,
+    VmBackend, VmDeadlineOutcome, VmError, VmExit, VmId, VmRunError, VmState, VmTable,
+    decode_hypercall_exit, revoke_mapping_before_resume,
 };
 pub use vm_dispatch::{
     ExitDisposition, IoDirection, IoPortPolicy, IoPortRule, MAX_IO_PORT_RULES, dispatch_vm_exit,

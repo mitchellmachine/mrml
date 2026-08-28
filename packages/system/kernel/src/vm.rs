@@ -30,6 +30,9 @@ pub enum VmError {
     UnhandledExit,
     InterruptDenied,
     StaleMapping,
+    ExecutionPoisoned,
+    LifecycleBusy,
+    ResourceCountOverflow,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -58,6 +61,17 @@ pub enum VmState {
     Running,
     Stopped,
     Failed,
+    Poisoned,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum ExecutionPoisonReason {
+    NativeUnmapUncertain,
+    PageTableRemovalUncertain,
+    TlbInvalidationUncertain,
+    PeerWithdrawalUncertain,
+    VcpuRetirementUncertain,
+    BackendStateMismatch,
 }
 
 #[derive(Clone, Copy)]
@@ -66,6 +80,12 @@ struct VmSlot {
     state: VmState,
     exits: u64,
     exit_budget: u64,
+    poison: Option<ExecutionPoisonReason>,
+    active_workers: u16,
+    live_mappings: u16,
+    live_aliases: u16,
+    pinned_ranges: u16,
+    poisoned_destruction_confirmed: bool,
 }
 
 /// Fixed-capacity VM lifecycle table. IDs include a nonzero generation so a
@@ -101,6 +121,12 @@ impl<const N: usize> VmTable<N> {
             state: VmState::Created,
             exits: 0,
             exit_budget,
+            poison: None,
+            active_workers: 0,
+            live_mappings: 0,
+            live_aliases: 0,
+            pinned_ranges: 0,
+            poisoned_destruction_confirmed: false,
         });
         Ok(VmId::new(index as u32, generation))
     }
@@ -115,6 +141,9 @@ impl<const N: usize> VmTable<N> {
 
     pub fn start(&mut self, id: VmId) -> Result<(), VmError> {
         let slot = self.slot_mut(id)?;
+        if slot.poison.is_some() {
+            return Err(VmError::ExecutionPoisoned);
+        }
         if !matches!(slot.state, VmState::Loaded | VmState::Stopped) {
             return Err(VmError::InvalidVmState);
         }
@@ -149,9 +178,73 @@ impl<const N: usize> VmTable<N> {
     }
 
     pub fn destroy(&mut self, id: VmId) -> Result<(), VmError> {
-        self.slot(id)?;
+        let slot = self.slot(id)?;
+        if !matches!(
+            slot.state,
+            VmState::Stopped | VmState::Failed | VmState::Poisoned
+        ) || slot.active_workers != 0
+            || slot.live_mappings != 0
+            || slot.live_aliases != 0
+            || slot.pinned_ranges != 0
+            || (slot.poison.is_some() && !slot.poisoned_destruction_confirmed)
+        {
+            return Err(VmError::LifecycleBusy);
+        }
         self.slots[id.index()] = None;
         Ok(())
+    }
+
+    pub fn poison(&mut self, id: VmId, reason: ExecutionPoisonReason) -> Result<(), VmError> {
+        let slot = self.slot_mut(id)?;
+        if slot.poison.is_none() {
+            slot.poison = Some(reason);
+        }
+        slot.state = VmState::Poisoned;
+        slot.poisoned_destruction_confirmed = false;
+        Ok(())
+    }
+
+    pub fn poison_reason(&self, id: VmId) -> Result<Option<ExecutionPoisonReason>, VmError> {
+        Ok(self.slot(id)?.poison)
+    }
+
+    pub fn confirm_poisoned_native_destruction(&mut self, id: VmId) -> Result<(), VmError> {
+        let slot = self.slot_mut(id)?;
+        if slot.poison.is_none()
+            || slot.active_workers != 0
+            || slot.live_mappings != 0
+            || slot.live_aliases != 0
+            || slot.pinned_ranges != 0
+        {
+            return Err(VmError::LifecycleBusy);
+        }
+        slot.poisoned_destruction_confirmed = true;
+        Ok(())
+    }
+
+    pub fn worker_started(&mut self, id: VmId) -> Result<(), VmError> {
+        increment(&mut self.slot_mut(id)?.active_workers)
+    }
+    pub fn worker_retired(&mut self, id: VmId) -> Result<(), VmError> {
+        decrement(&mut self.slot_mut(id)?.active_workers)
+    }
+    pub fn mapping_attached(&mut self, id: VmId) -> Result<(), VmError> {
+        increment(&mut self.slot_mut(id)?.live_mappings)
+    }
+    pub fn mapping_retired(&mut self, id: VmId) -> Result<(), VmError> {
+        decrement(&mut self.slot_mut(id)?.live_mappings)
+    }
+    pub fn alias_attached(&mut self, id: VmId) -> Result<(), VmError> {
+        increment(&mut self.slot_mut(id)?.live_aliases)
+    }
+    pub fn alias_retired(&mut self, id: VmId) -> Result<(), VmError> {
+        decrement(&mut self.slot_mut(id)?.live_aliases)
+    }
+    pub fn range_pinned(&mut self, id: VmId) -> Result<(), VmError> {
+        increment(&mut self.slot_mut(id)?.pinned_ranges)
+    }
+    pub fn range_unpinned(&mut self, id: VmId) -> Result<(), VmError> {
+        decrement(&mut self.slot_mut(id)?.pinned_ranges)
     }
 
     fn transition(&mut self, id: VmId, from: VmState, to: VmState) -> Result<(), VmError> {
@@ -190,6 +283,16 @@ impl<const N: usize> Default for VmTable<N> {
     fn default() -> Self {
         Self::new()
     }
+}
+
+fn increment(value: &mut u16) -> Result<(), VmError> {
+    *value = value.checked_add(1).ok_or(VmError::ResourceCountOverflow)?;
+    Ok(())
+}
+
+fn decrement(value: &mut u16) -> Result<(), VmError> {
+    *value = value.checked_sub(1).ok_or(VmError::LifecycleBusy)?;
+    Ok(())
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -1412,6 +1515,50 @@ mod tests {
         assert_eq!(table.account_exit(id), Err(VmError::ExitBudgetExceeded));
         assert_eq!(table.state(id), Ok(VmState::Failed));
         assert_eq!(table.start(id), Err(VmError::InvalidVmState));
+    }
+
+    #[test]
+    fn poison_is_irreversible_and_destruction_requires_retired_resources() {
+        let mut table = VmTable::<1>::new();
+        let id = table.create(2).unwrap();
+        table.mark_loaded(id).unwrap();
+        table.start(id).unwrap();
+        table.worker_started(id).unwrap();
+        table.mapping_attached(id).unwrap();
+        table.alias_attached(id).unwrap();
+        table.range_pinned(id).unwrap();
+        table
+            .poison(id, ExecutionPoisonReason::NativeUnmapUncertain)
+            .unwrap();
+        assert_eq!(table.start(id), Err(VmError::ExecutionPoisoned));
+        table
+            .poison(id, ExecutionPoisonReason::BackendStateMismatch)
+            .unwrap();
+        assert_eq!(
+            table.poison_reason(id),
+            Ok(Some(ExecutionPoisonReason::NativeUnmapUncertain))
+        );
+        assert_eq!(table.destroy(id), Err(VmError::LifecycleBusy));
+        table.range_unpinned(id).unwrap();
+        table.alias_retired(id).unwrap();
+        table.mapping_retired(id).unwrap();
+        table.worker_retired(id).unwrap();
+        assert_eq!(table.destroy(id), Err(VmError::LifecycleBusy));
+        table.confirm_poisoned_native_destruction(id).unwrap();
+        table.destroy(id).unwrap();
+        assert_eq!(table.state(id), Err(VmError::StaleVm));
+    }
+
+    #[test]
+    fn destruction_rejects_running_vm_and_counter_underflow() {
+        let mut table = VmTable::<1>::new();
+        let id = table.create(1).unwrap();
+        table.mark_loaded(id).unwrap();
+        table.start(id).unwrap();
+        assert_eq!(table.destroy(id), Err(VmError::LifecycleBusy));
+        assert_eq!(table.worker_retired(id), Err(VmError::LifecycleBusy));
+        table.stop(id).unwrap();
+        table.destroy(id).unwrap();
     }
 
     #[test]
