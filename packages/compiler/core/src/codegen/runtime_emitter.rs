@@ -9748,7 +9748,7 @@ impl<
         .is_ok_and(runtime_type_is_fat_reference)
         {
             self.emit_expression(tree, root, depth + 1)?;
-            if self.abi == X86_64Abi::Windows {
+            if self.abi == X86_64Abi::Windows && self.function.abi != FunctionAbi::MrmlV1 {
                 self.emit(&[0x49, 0x89, 0xd0, 0x48, 0x89, 0xc1])?;
                 let local_slots = self.local_stack_slots()?;
                 let hidden_pointer_slot = self
@@ -9816,11 +9816,11 @@ impl<
             self.emit(&[0x48, 0x89, 0xc1])?;
             self.emit_slice_length(source)?;
         }
-        match self.abi {
-            X86_64Abi::SystemV => {
+        match (self.function.abi, self.abi) {
+            (FunctionAbi::MrmlV1, _) | (_, X86_64Abi::SystemV) => {
                 self.emit(&[0x48, 0x89, 0xc2, 0x48, 0x89, 0xc8])?;
             }
-            X86_64Abi::Windows => {
+            (_, X86_64Abi::Windows) => {
                 self.emit(&[0x49, 0x89, 0xc0])?;
                 let local_slots = self.local_stack_slots()?;
                 let pointer_slot = usize::from(stacked)

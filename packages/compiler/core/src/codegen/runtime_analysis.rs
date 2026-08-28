@@ -60,7 +60,12 @@ fn validate_stable_export<const MAX_PARAMETERS: usize>(
             });
         }
     }
-    if plan.return_value.words().len() > 1 {
+    if plan.return_value.words().len() > 1
+        && !matches!(
+            signature.return_type,
+            crate::MrmlV1Type::Slice { .. } | crate::MrmlV1Type::Str { .. }
+        )
+    {
         return Err(CodegenError {
             kind: CodegenErrorKind::MrmlV1MultiwordValueUnsupported,
             span: function

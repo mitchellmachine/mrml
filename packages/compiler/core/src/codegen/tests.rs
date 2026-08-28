@@ -12093,9 +12093,8 @@ mod tests {
     }
 
     #[test]
-    fn mrml_v1_codegen_rejects_multiword_returns_at_the_type_span() {
-        let source =
-            "#[mrml_abi::export(version = 1)] pub fn view(input: &[u8]) -> &[u8] { input }";
+    fn mrml_v1_codegen_rejects_multiword_integer_returns_at_the_type_span() {
+        let source = "#[mrml_abi::export(version = 1)] pub fn value() -> u128 { 0 }";
         let module = Parser::new(source).parse_module::<2, 2>().unwrap();
         let Some(Item::Function(function)) = module.items()[0] else {
             panic!("expected function")
@@ -12107,7 +12106,7 @@ mod tests {
         )
         .unwrap_err();
         assert_eq!(error.kind, CodegenErrorKind::MrmlV1MultiwordValueUnsupported);
-        assert_eq!(&source[error.span.start..error.span.end], "&[u8]");
+        assert_eq!(&source[error.span.start..error.span.end], "u128");
     }
 
     #[test]

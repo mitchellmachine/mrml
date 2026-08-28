@@ -1013,7 +1013,9 @@ pub fn compile_x86_64_runtime_function_with_options<
             ..
         })
     );
-    let uses_sret = (abi == X86_64Abi::Windows && returns_fat_reference)
+    let uses_sret = (function.abi != FunctionAbi::MrmlV1
+        && abi == X86_64Abi::Windows
+        && returns_fat_reference)
         || return_array.and_then(runtime_array_abi_layout).is_some_and(
             |(_, bytes, words)| match abi {
                 X86_64Abi::Windows => bytes != 0 && !matches!(bytes, 1 | 2 | 4 | 8),

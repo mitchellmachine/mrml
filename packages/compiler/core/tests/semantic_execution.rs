@@ -35,6 +35,8 @@ const MRML_V1_SLICE_SOURCE: &str =
 const MRML_V1_SLICE_CONTENT_SOURCE: &str = "#[mrml_abi::export(version = 1)] pub fn probe(input: &[u8]) -> u64 { input[0] as u64 + input[input.len() - 1] as u64 * 2 + input.len() as u64 * 3 }";
 const MRML_V1_STR_SOURCE: &str = "#[mrml_abi::export(version = 1)] pub fn probe(input: &str) -> u64 { let bytes: &[u8] = input.as_bytes(); bytes[0] as u64 + bytes[bytes.len() - 1] as u64 * 2 + input.len() as u64 * 3 }";
 const MRML_V1_MUT_SLICE_SOURCE: &str = "#[mrml_abi::export(version = 1)] pub fn probe(input: &mut [u8]) -> u64 { input[0] += 3; let last: usize = input.len() - 1; input[last] += 5; input[0] as u64 + input[last] as u64 * 2 + input.len() as u64 * 3 }";
+const MRML_V1_SLICE_RETURN_SOURCE: &str =
+    "#[mrml_abi::export(version = 1)] pub fn probe(input: &[u8]) -> &[u8] { input }";
 #[cfg(target_os = "windows")]
 const MRML_V1_SPLIT_SLICE_SOURCE: &str = "#[mrml_abi::export(version = 1)] pub fn probe(a: u64, b: u64, c: u64, input: &[u8]) -> u64 { a + b * 2 + c * 3 + input.len() as u64 }";
 #[cfg(not(target_os = "windows"))]
@@ -535,6 +537,57 @@ fn mrml_v1_mutable_slice_facade_writes_through_the_data_word() {
         rustc_mrml_v1_observations(
             MRML_V1_MUT_SLICE_SOURCE,
             "let mut input = [10, 20, 30, 40]; println!(\"{}\", probe(&mut input)); for byte in input { println!(\"{}\", byte); }",
+        )
+    );
+}
+
+unsafe fn call_mrml_v1_slice_return(
+    function: *const u8,
+    input: &[u8],
+) -> (*const u8, u64) {
+    let returned_pointer: *const u8;
+    let returned_length: u64;
+    #[cfg(target_os = "windows")]
+    unsafe {
+        core::arch::asm!(
+            "sub rsp, 32",
+            "call {function}",
+            "add rsp, 32",
+            function = in(reg) function,
+            in("rcx") input.as_ptr(),
+            inlateout("rdx") input.len() as u64 => returned_length,
+            lateout("rax") returned_pointer,
+            clobber_abi("C"),
+        );
+    }
+    #[cfg(not(target_os = "windows"))]
+    unsafe {
+        core::arch::asm!(
+            "call {function}",
+            function = in(reg) function,
+            in("rdi") input.as_ptr(),
+            in("rsi") input.len() as u64,
+            lateout("rax") returned_pointer,
+            lateout("rdx") returned_length,
+            clobber_abi("C"),
+        );
+    }
+    (returned_pointer, returned_length)
+}
+
+#[test]
+fn mrml_v1_slice_facade_returns_pointer_and_length_words() {
+    let code = compile(MRML_V1_SLICE_RETURN_SOURCE);
+    let input = [10, 20, 30, 40, 50];
+    let (pointer, length) = unsafe { call_mrml_v1_slice_return(code.pointer, &input) };
+    assert_eq!(pointer, input.as_ptr());
+    let returned = unsafe { std::slice::from_raw_parts(pointer, length as usize) };
+    let actual = vec![length, u64::from(returned[0]), u64::from(returned[length as usize - 1])];
+    assert_eq!(
+        actual,
+        rustc_mrml_v1_observations(
+            MRML_V1_SLICE_RETURN_SOURCE,
+            "let input = [10, 20, 30, 40, 50]; let returned = probe(&input); println!(\"{}\", returned.len()); println!(\"{}\", returned[0]); println!(\"{}\", returned[returned.len() - 1]);",
         )
     );
 }
