@@ -8369,6 +8369,47 @@ runner thread so a concurrent `KVM_RUN` returns; the byte covers the documented
 pre-entry signal race and is cleared only after both run and worker retire. A
 conflicting process signal disposition fails before entry.
 
+The 2026-08-28 lifecycle hardening makes the SMP ownership rule structural for
+both hosted backends. Runtime threads now have joinable native handles whose
+drop path also waits for retirement. KVM and WHP SMP paths retain that handle,
+request cancellation on timeout or bootstrap failure, join the exact worker,
+and only then restore a secondary vCPU, change trampoline permissions, return,
+or permit native destruction. KVM cancellation combines the run page's
+`immediate_exit` byte with `pthread_kill`; its dedicated signal is installed
+through `sigaction`, conflicting dispositions are restored and rejected, and a
+blocked signal rejects entry. WHP uses `WHvCancelRunVirtualProcessor` for the
+exact VP. Cancellation or retirement uncertainty permanently poisons later
+execution through the backend's existing fail-stop mapping state.
+
+The common VM policy now has an inspectable irreversible poison reason and
+tracks live workers, mappings, shared aliases, and pinned ranges. Start rejects
+every poisoned generation. Destruction rejects running or resource-bearing VMs;
+a poisoned VM additionally requires confirmed native destruction after every
+tracked resource retires. Tool/GPU routing carries an exact mapping identity,
+offset, length, and access instead of a host address, so revoke-and-replace
+cannot silently rebind an outstanding request. Raw shared-alias construction is
+crate-private. `SharedMemoryBindings::share_alias` preflights source generation,
+controller and destination authority, attenuation, destination range, binding
+capacity, and binding generation before publishing the alias and binding as one
+transaction. Its existing resource-group identity keeps the host handle live
+until the final authorized endpoint is revoked.
+
+Windows evidence for this delta is 584 kernel tests, 44 runtime tests, and 27
+WHP tests passing with one manual WHP performance test ignored. The available
+live WHP tests exercised partition, reset-vector, trampoline, deadline, signed
+guest, signed service, peer-page, and virtual-block paths. KVM compilation and
+execution were not performed because this Windows environment cannot run the
+repository's Linux-host build target; the new dedicated CI workflow supplies
+the Linux kernel/KVM gate. This is unit, simulation, and hosted controlled-probe
+evidence, not a production-security, guest-escape, bare-metal, or physical-
+hardware claim.
+
+Patent review: `NOT_TRIGGERED` — joinable worker ownership, conventional native
+cancellation, generational state machines, range tokens, and transactional
+capability binding reuse established operating-system mechanisms and introduce
+no substantial new patent-sensitive algorithm. See
+[`docs/patents/REVIEW_LOG.md`](patents/REVIEW_LOG.md).
+
 Focused live signed infinite-loop guests expire on WHP and nested KVM. The
 authorized logical-CPU value now crosses a separate backend-neutral contract
 without another policy decision. WHP uses `SetThreadAffinityMask`; KVM uses
