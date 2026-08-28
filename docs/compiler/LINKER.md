@@ -339,9 +339,22 @@ static relocation and no-unwind profile, two independently compiled objects
 linked through `R_X86_64_PLT32`; a naked process entry called the later helper,
 issued Linux `exit`, and returned status 42 from the 4,118-byte ELF image under
 the exact ORACLE-0002 Arch WSL environment. Windows and Linux each passed 707
-core tests and four driver tests. Default PIC `R_X86_64_GOTPCREL`, multiple
-split text sections per ELF object, `.eh_frame`, and relocated debug sections
-remain fail-closed.
+core tests and four driver tests.
+
+The default-PIC external call/jump subset now admits `R_X86_64_GOTPCREL` only
+for the exact six-byte `ff /2` or `ff /4` RIP-relative indirect instruction and
+only when static selection resolves the symbol inside the final fixed image.
+The linker rewrites that checked shape to size-preserving `nop; call rel32` or
+`nop; jmp rel32`; other GOT uses, opcodes, defined-section targets, and dynamic
+interposition remain rejected. A focused test checks the exact bytes,
+displacement, symbol-driven selection, and malformed-opcode rejection. The
+pinned default-PIC Linux probe called a later-object helper and exited 42 from
+a 4,134-byte image. Over 50 same-input iterations after five warmups, MRML
+measured 5.467 ms median and 5.601 ms mean versus pinned rust-lld at 5.997 ms
+median and 5.947 ms mean; rust-lld emitted 1,376 bytes. This small WSL process-
+startup-heavy result is regression evidence only, not a general speed claim.
+Multiple split text sections per ELF object, `.eh_frame`, and relocated debug
+sections remain fail-closed.
 
 This increment does **not** emit PE imports/exports/base
 relocations/debug data, emit ELF dynamic metadata/interpreter/PIE/sections,

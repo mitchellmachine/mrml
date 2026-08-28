@@ -209,6 +209,9 @@ pub struct LinkRelocation<'a> {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum LinkRelocationTarget<'a> {
     Symbol(&'a str),
+    /// A validated indirect call/jump through a GOT slot that can be relaxed
+    /// only when the symbol resolves in this fixed static image.
+    GotPcRelativeSymbol(&'a str),
     /// A COFF section-scoped code target. It participates in relocation
     /// resolution but never makes an archive member eligible for selection.
     LocalSymbol(&'a str),
@@ -465,7 +468,12 @@ fn symbol_is_referenced(
     inputs.iter().enumerate().any(|(index, input)| {
         selected[index]
             && input.relocations.iter().any(|relocation| {
-                matches!(relocation.target, LinkRelocationTarget::Symbol(target) if target == symbol)
+                matches!(
+                    relocation.target,
+                    LinkRelocationTarget::Symbol(target)
+                        | LinkRelocationTarget::GotPcRelativeSymbol(target)
+                        if target == symbol
+                )
             })
     })
 }
@@ -1608,7 +1616,7 @@ pub fn decode_x86_64_elf_with_definitions<'data, 'relocations, 'definitions>(
             let info = read_u64_elf(record, 8)?;
             let relocation_type =
                 u32::try_from(info & 0xffff_ffff).map_err(|_| LinkerError::OffsetOverflow)?;
-            if relocation_type != 2 && relocation_type != 4 {
+            if relocation_type != 2 && relocation_type != 4 && relocation_type != 9 {
                 return Err(LinkerError::UnsupportedElf);
             }
             let target_index =
@@ -1620,21 +1628,37 @@ pub fn decode_x86_64_elf_with_definitions<'data, 'relocations, 'definitions>(
             let target_section = usize::from(read_u16_elf(symbols, target_offset + 6)?);
             let encoded_addend = read_i64_elf(record, 16)?;
             let (target, addend) = if target_section == 0 {
-                (
-                    LinkRelocationTarget::Symbol(elf_string(
-                        strings,
-                        usize::try_from(read_u32_elf(symbols, target_offset)?)
-                            .map_err(|_| LinkerError::OffsetOverflow)?,
-                    )?),
-                    encoded_addend,
-                )
+                let symbol = elf_string(
+                    strings,
+                    usize::try_from(read_u32_elf(symbols, target_offset)?)
+                        .map_err(|_| LinkerError::OffsetOverflow)?,
+                )?;
+                if relocation_type == 9 {
+                    if offset < 2
+                        || !matches!(text.get(offset - 2..offset), Some([0xff, 0x15 | 0x25]))
+                    {
+                        return Err(LinkerError::UnsupportedElf);
+                    }
+                    (
+                        LinkRelocationTarget::GotPcRelativeSymbol(symbol),
+                        encoded_addend,
+                    )
+                } else {
+                    (LinkRelocationTarget::Symbol(symbol), encoded_addend)
+                }
             } else if target_section == text_index {
+                if relocation_type == 9 {
+                    return Err(LinkerError::UnsupportedElf);
+                }
                 let text_offset = to_usize_elf(read_u64_elf(symbols, target_offset + 8)?)?;
                 if text_offset > text.len() {
                     return Err(LinkerError::InvalidRelocationOffset);
                 }
                 (LinkRelocationTarget::InputText(text_offset), encoded_addend)
             } else if Some(target_section) == readonly_index {
+                if relocation_type == 9 {
+                    return Err(LinkerError::UnsupportedElf);
+                }
                 let data_offset = usize::try_from(
                     encoded_addend
                         .checked_add(4)
@@ -2215,6 +2239,7 @@ fn link_x86_64_static_aligned<const MAX_BYTES: usize>(
         for relocation in input.relocations {
             match relocation.target {
                 LinkRelocationTarget::Symbol(symbol)
+                | LinkRelocationTarget::GotPcRelativeSymbol(symbol)
                 | LinkRelocationTarget::LocalSymbol(symbol) => validate_symbol(symbol)?,
                 LinkRelocationTarget::InputText(offset) if offset > input.text.len() => {
                     return Err(LinkerError::InvalidRelocationOffset);
@@ -2281,6 +2306,7 @@ fn link_x86_64_static_aligned<const MAX_BYTES: usize>(
                 .ok_or(LinkerError::OffsetOverflow)?;
             let target = match relocation.target {
                 LinkRelocationTarget::Symbol(symbol)
+                | LinkRelocationTarget::GotPcRelativeSymbol(symbol)
                 | LinkRelocationTarget::LocalSymbol(symbol) => {
                     resolve_symbol(inputs, &layouts, symbol)?
                 }
@@ -2300,6 +2326,23 @@ fn link_x86_64_static_aligned<const MAX_BYTES: usize>(
                 .ok_or(LinkerError::OffsetOverflow)?;
             let displacement =
                 i32::try_from(displacement).map_err(|_| LinkerError::RelocationOverflow)?;
+            if matches!(
+                relocation.target,
+                LinkRelocationTarget::GotPcRelativeSymbol(_)
+            ) {
+                let prefix = place
+                    .checked_sub(2)
+                    .ok_or(LinkerError::InvalidRelocationOffset)?;
+                let opcode = *output
+                    .get(prefix + 1)
+                    .ok_or(LinkerError::InvalidRelocationOffset)?;
+                output[prefix] = 0x90;
+                output[prefix + 1] = match opcode {
+                    0x15 => 0xe8,
+                    0x25 => 0xe9,
+                    _ => return Err(LinkerError::UnsupportedElf),
+                };
+            }
             output[place..place + 4].copy_from_slice(&displacement.to_le_bytes());
         }
     }
@@ -3127,6 +3170,40 @@ mod tests {
         assert_eq!(
             link_x86_64_static::<32>(&[invalid], "primary"),
             Err(LinkerError::InvalidRelocationOffset)
+        );
+    }
+
+    #[test]
+    fn relaxes_only_validated_static_gotpcrel_call_and_jump_shapes() {
+        let relocation = LinkRelocation {
+            offset: 2,
+            target: LinkRelocationTarget::GotPcRelativeSymbol("helper"),
+            addend: -4,
+        };
+        let entry = LinkInput {
+            symbol: "entry",
+            additional_definitions: &[],
+            text: &[0xff, 0x25, 0, 0, 0, 0],
+            readonly_data: &[],
+            relocations: &[relocation],
+        };
+        let helper = LinkInput {
+            symbol: "helper",
+            additional_definitions: &[],
+            text: &[0xb8, 42, 0, 0, 0, 0xc3],
+            readonly_data: &[],
+            relocations: &[],
+        };
+        let linked = link_x86_64_static::<64>(&[entry, helper], "entry").unwrap();
+        assert_eq!(&linked.bytes()[..6], &[0x90, 0xe9, 10, 0, 0, 0]);
+
+        let invalid = LinkInput {
+            text: &[0x48, 0x8b, 0, 0, 0, 0],
+            ..entry
+        };
+        assert_eq!(
+            link_x86_64_static::<64>(&[invalid, helper], "entry"),
+            Err(LinkerError::UnsupportedElf)
         );
     }
 

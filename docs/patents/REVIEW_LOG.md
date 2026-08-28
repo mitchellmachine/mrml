@@ -9441,3 +9441,12 @@ symbols, and the already supported `R_X86_64_PLT32` relocation. It introduces
 no GOT/PLT construction, dynamic linking, unwind encoding, optimization,
 compression, cryptographic, or loading algorithm. This technical screen is not
 legal advice or patent clearance.
+
+# 2026-08-28 — Checked static GOTPCREL call/jump relaxation
+
+Patent review: **NOT_TRIGGERED**. This increment applies the conventional
+size-preserving x86-64 static-link relaxation only to an exact indirect
+call/jump opcode and an internally resolved symbol, using documented
+`R_X86_64_GOTPCREL` arithmetic. It does not construct a GOT/PLT, perform
+dynamic interposition, introduce a new instruction sequence, or add a general
+optimizer. This technical screen is not legal advice or patent clearance.
