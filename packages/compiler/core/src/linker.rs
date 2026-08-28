@@ -905,7 +905,14 @@ pub fn decode_x86_64_coff_text_fragment<'data, 'relocations, 'definitions>(
                 );
             }
             text_ordinal += 1;
-        } else if name == ".rdata" {
+        } else if name == ".rdata" || name.starts_with(".rdata$") {
+            if contents.is_empty() {
+                ignored_empty_sections[section + 1] = true;
+                continue;
+            }
+            if readonly_section.is_some() {
+                return Err(LinkerError::UnsupportedCoff);
+            }
             readonly_data = contents;
             readonly_section = Some(section_number);
         } else if name.starts_with(".xdata$") || name.starts_with(".pdata$") {
@@ -2718,6 +2725,16 @@ mod tests {
             10
         );
         assert_eq!(&linked.bytes()[16..21], b"hello");
+
+        let mut comdat = object.bytes().to_vec();
+        comdat[60..68].copy_from_slice(b".rdata$x");
+        let mut comdat_storage = storage;
+        let decoded_comdat = decode_x86_64_coff(&comdat, &mut comdat_storage).unwrap();
+        assert_eq!(decoded_comdat.readonly_data, b"hello");
+        assert_eq!(
+            decoded_comdat.relocations[0].target,
+            LinkRelocationTarget::ReadonlyData(1)
+        );
     }
 
     #[test]

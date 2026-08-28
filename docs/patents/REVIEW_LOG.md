@@ -9362,3 +9362,11 @@ the existing PE exception serializer, using existing bounded origin and payload
 bookkeeping. It introduces no new unwind, exception-handling, relocation,
 compression, cryptographic, or loading algorithm. This technical screen is not
 legal advice or patent clearance.
+
+# 2026-08-28 — Read-only COFF COMDAT ingestion
+
+Patent review: **NOT_TRIGGERED**. This increment admits one conventional
+`.rdata$...` COFF COMDAT through the existing typed read-only data and checked
+REL32 relocation path. It introduces no COMDAT selection, writable-data,
+relocation, deduplication, compression, cryptographic, or loading algorithm.
+This technical screen is not legal advice or patent clearance.

@@ -189,6 +189,15 @@ covering RVA `0x1000..0x100f` with unwind data at RVA `0x2000`. This proves that
 one exact unwind-bearing rlib shape works on the hosted Windows environment,
 not general Rust library or exception-semantics coverage.
 
+The COFF fragment decoder also accepts one nonempty `.rdata$...` COMDAT as the
+input's typed read-only bytes. Existing same-object REL32 handling maps an
+external definition at offset zero to `ReadonlyData`, so long-name rustc static
+data does not become a global text symbol or executable content. Multiple
+nonempty read-only sections remain rejected. The pinned volatile-static probe
+also emitted a writable `.data$...` COMDAT with an `ADDR64` relocation; that
+section still fails closed pending an explicit writable layout and fixed-base
+relocation model, so the complete probe does not yet link.
+
 After this integration, the controlled 93-byte no-unwind object benchmark ran
 50 iterations after five warmups. MRML measured 10.081 ms median and 10.260 ms
 mean versus pinned gnullvm rust-lld at 27.632 ms median and 27.791 ms mean. Both
