@@ -9,9 +9,10 @@ use mrml_rustc::{
     ObjectFormat, PeRuntimeFunction, PeWritableData, PeWritableRelocation, TargetLayout,
     compile_source_function_with_options, decode_unix_archive,
     decode_x86_64_coff_runtime_functions, decode_x86_64_coff_text_fragment,
-    decode_x86_64_coff_writable_data, decode_x86_64_elf_with_definitions,
+    decode_x86_64_coff_writable_data_fragment, decode_x86_64_elf_with_definitions,
     link_x86_64_elf_executable, link_x86_64_pe_with_data_and_unwind,
     select_ordered_static_link_members, x86_64_coff_text_fragment_count,
+    x86_64_coff_writable_section_count,
 };
 
 #[cfg_attr(test, allow(dead_code))]
@@ -267,9 +268,8 @@ fn decode_link_inputs<'data, 'relocations, 'definitions>(
     let mut remaining_definitions = definition_arenas;
     for (object_index, object) in objects.iter().enumerate() {
         let fragment_count = match format {
-            ObjectFormat::Coff => {
-                x86_64_coff_text_fragment_count(object).map_err(mrml_error::message)?
-            }
+            ObjectFormat::Coff => x86_64_coff_text_fragment_count(object)
+                .map_err(|_| anyhow!("could not count COFF text fragments"))?,
             ObjectFormat::Elf64 => 1,
         };
         if inputs
@@ -295,7 +295,7 @@ fn decode_link_inputs<'data, 'relocations, 'definitions>(
                     decode_x86_64_elf_with_definitions(object, arena, definitions)
                 }
             }
-            .map_err(mrml_error::message)?;
+            .map_err(|_| anyhow!("could not decode link input"))?;
             inputs
                 .try_push(input)
                 .map_err(|_| anyhow!("could not allocate decoded link input list"))?;
@@ -357,9 +357,8 @@ fn expanded_fragment_count(objects: &[&[u8]], format: ObjectFormat) -> Result<us
     let mut count = 0usize;
     for object in objects {
         let object_fragments = match format {
-            ObjectFormat::Coff => {
-                x86_64_coff_text_fragment_count(object).map_err(mrml_error::message)?
-            }
+            ObjectFormat::Coff => x86_64_coff_text_fragment_count(object)
+                .map_err(|_| anyhow!("could not count expanded COFF text fragments"))?,
             ObjectFormat::Elf64 => 1,
         };
         count = count
@@ -380,7 +379,7 @@ fn selected_link_inputs<'data, 'relocations, 'definitions>(
 ) -> Result<SelectedLinkInputs<'data, 'relocations, 'definitions>> {
     let selection =
         select_ordered_static_link_members(inputs, archive_group, archive_member, entry)
-            .map_err(mrml_error::message)?;
+            .map_err(|_| anyhow!("could not select static link members"))?;
     let mut selected = Vector::with_capacity(selection.indices().len())
         .map_err(|_| anyhow!("could not allocate selected link input list"))?;
     let mut selected_group = Vector::with_capacity(selection.indices().len())
@@ -424,7 +423,7 @@ fn selected_runtime_functions<'data>(
             });
         if selected_object {
             for function in decode_x86_64_coff_runtime_functions(objects[object_index], arena)
-                .map_err(mrml_error::message)?
+                .map_err(|_| anyhow!("could not decode selected COFF unwind data"))?
             {
                 if runtime_functions.len() == MAX_PE_RUNTIME_FUNCTIONS {
                     return Err(anyhow!("selected PE runtime-function count exceeds 256"));
@@ -457,6 +456,22 @@ fn writable_relocation_arenas<'a>(
     Ok(arenas)
 }
 
+fn writable_fragment_count(objects: &[&[u8]]) -> Result<usize> {
+    let mut count = 0usize;
+    for object in objects {
+        count = count
+            .checked_add(
+                x86_64_coff_writable_section_count(object)
+                    .map_err(|_| anyhow!("could not count writable COFF fragments"))?,
+            )
+            .ok_or_else(|| anyhow!("writable fragment count overflow"))?;
+    }
+    if count > MAX_LINK_INPUTS {
+        return Err(anyhow!("too many writable COFF fragments: {count}"));
+    }
+    Ok(count)
+}
+
 fn selected_writable_data<'data, 'relocations>(
     objects: &[&'data [u8]],
     archive_group: &[u16],
@@ -464,7 +479,7 @@ fn selected_writable_data<'data, 'relocations>(
     selected: &SelectedLinkInputs<'data, '_, '_>,
     arenas: &'relocations mut [[PeWritableRelocation<'data>; MAX_LINK_RELOCATIONS]],
 ) -> Result<Vector<PeWritableData<'data, 'relocations>>> {
-    let mut output = Vector::with_capacity(objects.len())
+    let mut output = Vector::with_capacity(arenas.len())
         .map_err(|_| anyhow!("could not allocate selected writable data list"))?;
     let mut remaining = arenas;
     for object_index in 0..objects.len() {
@@ -483,20 +498,26 @@ fn selected_writable_data<'data, 'relocations>(
                 **selected_group == group && **selected_member == member
             })
             .map(|(input, _)| input.symbol);
-        let (arena, rest) = remaining
-            .split_first_mut()
-            .ok_or_else(|| anyhow!("writable relocation arena count mismatch"))?;
         if let Some(owner) = owner {
-            if let Some(data) =
-                decode_x86_64_coff_writable_data(objects[object_index], owner, arena)
-                    .map_err(mrml_error::message)?
-            {
+            let fragment_count = x86_64_coff_writable_section_count(objects[object_index])
+                .map_err(|_| anyhow!("could not count selected writable COFF data"))?;
+            for fragment_index in 0..fragment_count {
+                let (arena, rest) = remaining
+                    .split_first_mut()
+                    .ok_or_else(|| anyhow!("writable relocation arena count mismatch"))?;
+                let data = decode_x86_64_coff_writable_data_fragment(
+                    objects[object_index],
+                    fragment_index,
+                    owner,
+                    arena,
+                )
+                .map_err(|_| anyhow!("could not decode selected writable COFF data"))?;
                 output
                     .try_push(data)
                     .map_err(|_| anyhow!("could not allocate selected writable data list"))?;
+                remaining = rest;
             }
         }
-        remaining = rest;
     }
     Ok(output)
 }
@@ -539,7 +560,7 @@ fn write_linked_pe(
         &selected,
         &mut runtime_arena,
     )?;
-    let mut writable_arenas = writable_relocation_arenas(objects.len())?;
+    let mut writable_arenas = writable_relocation_arenas(writable_fragment_count(objects)?)?;
     let writable_data = selected_writable_data(
         objects,
         archive_group,
@@ -588,7 +609,7 @@ fn write_pe_image<const MAX_IMAGE: usize, const MAX_LINKED: usize>(
         runtime_functions,
         writable_data,
     )
-    .map_err(mrml_error::message)?;
+    .map_err(|_| anyhow!("could not serialize linked PE image"))?;
     mrml_runtime::write_file(output, executable.bytes())?;
     println!(
         "linked {} to {} deterministic PE bytes",

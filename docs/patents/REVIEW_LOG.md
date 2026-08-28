@@ -9396,3 +9396,13 @@ objects into the existing fixed-base PE serializer. It adds bounded origin and
 payload bookkeeping, not a new relocation, COMDAT-selection, packing,
 compression, cryptographic, or loading algorithm. This technical screen is not
 legal advice or patent clearance.
+
+# 2026-08-28 — Multiple COFF read-only and writable fragments
+
+Patent review: **NOT_TRIGGERED**. This increment indexes multiple conventional
+initialized `.data$...` fragments and maps their documented AMD64 `ADDR64`
+fields into one contiguous set of adjacent `.rdata$...` fragments. The driver
+retains the existing fixed 256-fragment and per-fragment relocation bounds. It
+introduces no new relocation, COMDAT-selection, deduplication, packing,
+compression, cryptographic, or loading algorithm. This technical screen is not
+legal advice or patent clearance.
