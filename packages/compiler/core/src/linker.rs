@@ -546,10 +546,138 @@ pub struct ElfSelectedDefinitions<'a> {
     length: usize,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct ElfSelectedObject<'data, 'view> {
+    pub sections: &'view ElfSelectedSections<'data>,
+    pub definitions: &'view ElfSelectedDefinitions<'data>,
+    pub relocations: &'view ElfSelectedRelocations<'data>,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct ElfSelectedSectionLayout {
+    pub input_index: u16,
+    pub section_index: u16,
+    pub offset: usize,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct ElfSelectedLayout {
+    sections: [ElfSelectedSectionLayout; MAX_LINK_INPUTS],
+    length: usize,
+    pub text_length: usize,
+    pub readonly_offset: usize,
+    pub readonly_length: usize,
+    pub writable_offset: usize,
+    pub file_length: usize,
+    pub memory_length: usize,
+}
+
+impl ElfSelectedLayout {
+    pub fn sections(&self) -> &[ElfSelectedSectionLayout] {
+        &self.sections[..self.length]
+    }
+}
+
 impl<'a> ElfSelectedDefinitions<'a> {
     pub fn definitions(&self) -> &[ElfSelectedDefinition<'a>] {
         &self.definitions[..self.length]
     }
+}
+
+/// Computes a deterministic permission-grouped layout for selected sections.
+/// Offsets are relative to the future executable payload; serialization adds
+/// its fixed image base and header reservation separately.
+pub fn layout_x86_64_elf_selected_sections(
+    inputs: &[ElfSelectedObject<'_, '_>],
+) -> Result<ElfSelectedLayout, LinkerError> {
+    const PAGE: usize = 0x1000;
+    if inputs.is_empty() {
+        return Err(LinkerError::EmptyInput);
+    }
+    if inputs.len() > MAX_LINK_INPUTS {
+        return Err(LinkerError::TooManyInputs);
+    }
+    let has_readonly = inputs.iter().any(|input| {
+        input.sections.sections().iter().any(|section| {
+            matches!(
+                section.kind,
+                ElfSectionKind::ReadonlyData | ElfSectionKind::Unwind
+            )
+        })
+    });
+    let has_writable = inputs.iter().any(|input| {
+        input.sections.sections().iter().any(|section| {
+            matches!(
+                section.kind,
+                ElfSectionKind::WritableData | ElfSectionKind::ZeroedData
+            )
+        })
+    });
+    let empty = ElfSelectedSectionLayout {
+        input_index: 0,
+        section_index: 0,
+        offset: 0,
+    };
+    let mut layout = ElfSelectedLayout {
+        sections: [empty; MAX_LINK_INPUTS],
+        length: 0,
+        text_length: 0,
+        readonly_offset: 0,
+        readonly_length: 0,
+        writable_offset: 0,
+        file_length: 0,
+        memory_length: 0,
+    };
+    let groups = [
+        ElfSectionKind::Text,
+        ElfSectionKind::ReadonlyData,
+        ElfSectionKind::Unwind,
+        ElfSectionKind::WritableData,
+        ElfSectionKind::ZeroedData,
+    ];
+    let mut cursor = 0usize;
+    for kind in groups {
+        if kind == ElfSectionKind::ReadonlyData {
+            layout.text_length = cursor;
+            if has_readonly {
+                cursor = align(cursor, PAGE)?;
+            }
+            layout.readonly_offset = cursor;
+        } else if kind == ElfSectionKind::WritableData {
+            layout.readonly_length = cursor
+                .checked_sub(layout.readonly_offset)
+                .ok_or(LinkerError::OffsetOverflow)?;
+            if has_writable {
+                cursor = align(cursor, PAGE)?;
+            }
+            layout.writable_offset = cursor;
+        } else if kind == ElfSectionKind::ZeroedData {
+            layout.file_length = cursor;
+        }
+        for (input_index, input) in inputs.iter().enumerate() {
+            for section in input.sections.sections() {
+                if section.kind != kind {
+                    continue;
+                }
+                if layout.length == layout.sections.len() {
+                    return Err(LinkerError::TooManyElfSections);
+                }
+                cursor = align(cursor, section.alignment)?;
+                layout.sections[layout.length] = ElfSelectedSectionLayout {
+                    input_index: u16::try_from(input_index)
+                        .map_err(|_| LinkerError::TooManyInputs)?,
+                    section_index: section.index,
+                    offset: cursor,
+                };
+                layout.length += 1;
+                cursor = cursor
+                    .checked_add(section.size)
+                    .ok_or(LinkerError::OffsetOverflow)?;
+            }
+        }
+    }
+    layout.memory_length = cursor;
+    Ok(layout)
 }
 
 impl<'a> ElfSelectedRelocations<'a> {
@@ -6446,6 +6574,69 @@ mod tests {
             select_x86_64_elf_sections(data.bytes(), &["missing"]),
             Err(LinkerError::UndefinedSymbol)
         );
+        let caller_definitions =
+            decode_x86_64_elf_selected_definitions(caller.bytes(), &caller_selection).unwrap();
+        let caller_relocations =
+            decode_x86_64_elf_selected_relocations(caller.bytes(), &caller_selection).unwrap();
+        let callee_sections =
+            decode_x86_64_elf_selected_sections(callee.bytes(), &callee_selection).unwrap();
+        let callee_definitions =
+            decode_x86_64_elf_selected_definitions(callee.bytes(), &callee_selection).unwrap();
+        let callee_relocations =
+            decode_x86_64_elf_selected_relocations(callee.bytes(), &callee_selection).unwrap();
+        let data_definitions =
+            decode_x86_64_elf_selected_definitions(data.bytes(), &data_selection).unwrap();
+        let data_relocations =
+            decode_x86_64_elf_selected_relocations(data.bytes(), &data_selection).unwrap();
+        let selected_layout = layout_x86_64_elf_selected_sections(&[
+            ElfSelectedObject {
+                sections: &caller_sections,
+                definitions: &caller_definitions,
+                relocations: &caller_relocations,
+            },
+            ElfSelectedObject {
+                sections: &callee_sections,
+                definitions: &callee_definitions,
+                relocations: &callee_relocations,
+            },
+            ElfSelectedObject {
+                sections: &data_sections,
+                definitions: &data_definitions,
+                relocations: &data_relocations,
+            },
+        ])
+        .unwrap();
+        assert_eq!(
+            selected_layout.sections(),
+            &[
+                ElfSelectedSectionLayout {
+                    input_index: 0,
+                    section_index: 1,
+                    offset: 0,
+                },
+                ElfSelectedSectionLayout {
+                    input_index: 1,
+                    section_index: 1,
+                    offset: 16,
+                },
+                ElfSelectedSectionLayout {
+                    input_index: 2,
+                    section_index: 1,
+                    offset: 32,
+                },
+                ElfSelectedSectionLayout {
+                    input_index: 2,
+                    section_index: 3,
+                    offset: 4096,
+                },
+            ]
+        );
+        assert_eq!(selected_layout.text_length, 40);
+        assert_eq!(selected_layout.readonly_offset, 4096);
+        assert_eq!(selected_layout.readonly_length, 5);
+        assert_eq!(selected_layout.writable_offset, 4101);
+        assert_eq!(selected_layout.file_length, 4101);
+        assert_eq!(selected_layout.memory_length, 4101);
         let empty = [LinkRelocation {
             offset: 0,
             target: LinkRelocationTarget::Symbol("unused"),

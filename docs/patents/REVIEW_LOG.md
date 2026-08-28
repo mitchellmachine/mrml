@@ -9649,3 +9649,13 @@ visibility, symbol-kind, size, and section-relative value metadata for later
 static resolution. It introduces no new symbol model, resolution algorithm,
 object encoding, compression, cryptographic mechanism, or loader behavior.
 This technical screen is not legal advice or patent clearance.
+
+# 2026-08-28 — Permission-grouped selected ELF layout
+
+Patent review: **NOT_TRIGGERED**. This increment lays out selected conventional
+ELF sections deterministically by executable, read-only, initialized writable,
+and zero-fill permissions, honoring declared power-of-two alignment and page
+separation while distinguishing file and memory extents. It introduces no new
+layout optimization, object format, relocation arithmetic, compression,
+cryptographic mechanism, or loader behavior. This technical screen is not
+legal advice or patent clearance.
