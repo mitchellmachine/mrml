@@ -9176,6 +9176,16 @@ adds a type distinction and adversarial bounds checks, not a new relocation,
 symbol-resolution, deduplication, compression, executable-format, or loading
 algorithm. This technical screen is not legal advice or patent clearance.
 
+# 2026-08-28 — Bounded COFF text-fragment decoding
+
+Patent review: **NOT_TRIGGERED**. This increment inventories conventional COFF
+sections and decodes one selected nonempty text fragment with existing checked
+REL32 symbol handling. It explicitly recognizes but does not interpret or drop
+Windows unwind sections. It introduces no new object format, relocation,
+resolution, deduplication, compression, executable-format, cryptographic, or
+loading algorithm. This technical screen is not legal advice or patent
+clearance.
+
 # 2026-08-28 — Deterministic import-free ELF64 executable output
 
 Patent review: **NOT_TRIGGERED**. This increment serializes existing linked code

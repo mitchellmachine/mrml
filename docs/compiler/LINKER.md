@@ -150,6 +150,15 @@ selection foundation required for gnullvm COFF objects whose `.text$...`,
 decoder still rejects that multi-section shape until fragment-relative symbols,
 relocations, and PE exception metadata are represented end to end.
 
+The core now inventories up to 16 COFF sections and can decode a requested
+nonempty `.text`/`.text$...` fragment by section order. Cross-fragment external
+REL32 targets remain named symbols, while same-fragment targets remain checked
+local offsets. The legacy one-input decoder explicitly rejects multiple text
+fragments and any nonempty `.pdata$...` or `.xdata$...` section, preventing
+metadata loss. A synthetic two-fragment object test resolves and links an entry
+call to its sibling helper. Driver expansion and unwind serialization remain
+the next gate, so ordinary multi-section gnullvm objects are not yet admitted.
+
 On 2026-08-28, the controlled Windows cold-process probe linked the same
 93-byte MRML COFF object 50 times after five interleaved warmups. MRML produced
 a 1,024-byte PE with a 10.196 ms median and 10.323 ms mean; pinned

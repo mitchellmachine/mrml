@@ -473,11 +473,141 @@ pub fn decode_x86_64_coff_with_definitions<'data, 'relocations, 'definitions>(
     relocation_storage: &'relocations mut [LinkRelocation<'data>; MAX_LINK_RELOCATIONS],
     definition_storage: &'definitions mut [LinkDefinition<'data>; MAX_LINK_DEFINITIONS],
 ) -> Result<LinkInput<'data, 'relocations, 'definitions>, LinkerError> {
+    if x86_64_coff_text_fragment_count(object)? != 1
+        || x86_64_coff_unwind_section_count(object)? != 0
+    {
+        return Err(LinkerError::UnsupportedCoff);
+    }
+    decode_x86_64_coff_text_fragment(object, 0, relocation_storage, definition_storage)
+}
+
+/// Counts nonempty `.text`/`.text$...` fragments in a bounded AMD64 COFF
+/// object. This is a structural query only; decoding a requested fragment still
+/// validates all admitted sections, symbols, and relocations.
+pub fn x86_64_coff_text_fragment_count(object: &[u8]) -> Result<usize, LinkerError> {
     if read_u16(object, 0)? != 0x8664 || read_u16(object, 16)? != 0 {
         return Err(LinkerError::UnsupportedCoff);
     }
     let section_count = usize::from(read_u16(object, 2)?);
-    if section_count == 0 || section_count > 6 {
+    if section_count == 0 || section_count > 16 {
+        return Err(LinkerError::UnsupportedCoff);
+    }
+    let mut fragments = 0usize;
+    let symbol_offset =
+        usize::try_from(read_u32(object, 8)?).map_err(|_| LinkerError::OffsetOverflow)?;
+    let symbol_count =
+        usize::try_from(read_u32(object, 12)?).map_err(|_| LinkerError::OffsetOverflow)?;
+    let symbols_end = symbol_offset
+        .checked_add(
+            symbol_count
+                .checked_mul(18)
+                .ok_or(LinkerError::OffsetOverflow)?,
+        )
+        .ok_or(LinkerError::OffsetOverflow)?;
+    let string_size =
+        usize::try_from(read_u32(object, symbols_end)?).map_err(|_| LinkerError::OffsetOverflow)?;
+    if string_size < 4 {
+        return Err(LinkerError::InvalidCoff);
+    }
+    object
+        .get(
+            symbols_end
+                ..symbols_end
+                    .checked_add(string_size)
+                    .ok_or(LinkerError::OffsetOverflow)?,
+        )
+        .ok_or(LinkerError::InvalidCoff)?;
+    for section in 0..section_count {
+        let header = 20usize
+            .checked_add(section.checked_mul(40).ok_or(LinkerError::OffsetOverflow)?)
+            .ok_or(LinkerError::OffsetOverflow)?;
+        let raw_name = object
+            .get(header..header + 8)
+            .ok_or(LinkerError::InvalidCoff)?;
+        let name = coff_section_name(raw_name, object, symbols_end, string_size)?;
+        let size = usize::try_from(read_u32(object, header + 16)?)
+            .map_err(|_| LinkerError::OffsetOverflow)?;
+        if (name == ".text" || name.starts_with(".text$")) && size != 0 {
+            fragments = fragments
+                .checked_add(1)
+                .ok_or(LinkerError::OffsetOverflow)?;
+        }
+    }
+    if fragments == 0 {
+        return Err(LinkerError::InvalidCoff);
+    }
+    Ok(fragments)
+}
+
+/// Counts nonempty `.pdata$...` and `.xdata$...` sections without interpreting
+/// their contents. Legacy single-fragment decoding uses this to reject objects
+/// whose unwind metadata would otherwise be lost.
+pub fn x86_64_coff_unwind_section_count(object: &[u8]) -> Result<usize, LinkerError> {
+    if read_u16(object, 0)? != 0x8664 || read_u16(object, 16)? != 0 {
+        return Err(LinkerError::UnsupportedCoff);
+    }
+    let section_count = usize::from(read_u16(object, 2)?);
+    if section_count == 0 || section_count > 16 {
+        return Err(LinkerError::UnsupportedCoff);
+    }
+    let symbol_offset =
+        usize::try_from(read_u32(object, 8)?).map_err(|_| LinkerError::OffsetOverflow)?;
+    let symbol_count =
+        usize::try_from(read_u32(object, 12)?).map_err(|_| LinkerError::OffsetOverflow)?;
+    let symbols_end = symbol_offset
+        .checked_add(
+            symbol_count
+                .checked_mul(18)
+                .ok_or(LinkerError::OffsetOverflow)?,
+        )
+        .ok_or(LinkerError::OffsetOverflow)?;
+    let string_size =
+        usize::try_from(read_u32(object, symbols_end)?).map_err(|_| LinkerError::OffsetOverflow)?;
+    if string_size < 4 {
+        return Err(LinkerError::InvalidCoff);
+    }
+    object
+        .get(
+            symbols_end
+                ..symbols_end
+                    .checked_add(string_size)
+                    .ok_or(LinkerError::OffsetOverflow)?,
+        )
+        .ok_or(LinkerError::InvalidCoff)?;
+    let mut unwind_sections = 0usize;
+    for section in 0..section_count {
+        let header = 20usize
+            .checked_add(section.checked_mul(40).ok_or(LinkerError::OffsetOverflow)?)
+            .ok_or(LinkerError::OffsetOverflow)?;
+        let raw_name = object
+            .get(header..header + 8)
+            .ok_or(LinkerError::InvalidCoff)?;
+        let name = coff_section_name(raw_name, object, symbols_end, string_size)?;
+        let size = usize::try_from(read_u32(object, header + 16)?)
+            .map_err(|_| LinkerError::OffsetOverflow)?;
+        if (name.starts_with(".pdata$") || name.starts_with(".xdata$")) && size != 0 {
+            unwind_sections = unwind_sections
+                .checked_add(1)
+                .ok_or(LinkerError::OffsetOverflow)?;
+        }
+    }
+    Ok(unwind_sections)
+}
+
+/// Decodes one nonempty COFF text fragment by section order. Unwind sections
+/// are validated and retained for the separate typed unwind decoder; they are
+/// never folded into executable bytes or silently treated as ordinary data.
+pub fn decode_x86_64_coff_text_fragment<'data, 'relocations, 'definitions>(
+    object: &'data [u8],
+    fragment_index: usize,
+    relocation_storage: &'relocations mut [LinkRelocation<'data>; MAX_LINK_RELOCATIONS],
+    definition_storage: &'definitions mut [LinkDefinition<'data>; MAX_LINK_DEFINITIONS],
+) -> Result<LinkInput<'data, 'relocations, 'definitions>, LinkerError> {
+    if read_u16(object, 0)? != 0x8664 || read_u16(object, 16)? != 0 {
+        return Err(LinkerError::UnsupportedCoff);
+    }
+    let section_count = usize::from(read_u16(object, 2)?);
+    if section_count == 0 || section_count > 16 {
         return Err(LinkerError::UnsupportedCoff);
     }
     let symbol_offset =
@@ -510,8 +640,11 @@ pub fn decode_x86_64_coff_with_definitions<'data, 'relocations, 'definitions>(
     let mut text_section = None;
     let mut readonly_data = &object[0..0];
     let mut readonly_section = None;
-    let mut ignored_empty_sections = [false; 7];
+    let mut ignored_empty_sections = [false; 17];
+    let mut other_text_sections = [false; 17];
+    let mut unwind_sections = [false; 17];
     let mut relocation_table = (0usize, 0usize);
+    let mut text_ordinal = 0usize;
     for section in 0..section_count {
         let header = 20usize
             .checked_add(section.checked_mul(40).ok_or(LinkerError::OffsetOverflow)?)
@@ -538,17 +671,22 @@ pub fn decode_x86_64_coff_with_definitions<'data, 'relocations, 'definitions>(
                 ignored_empty_sections[section + 1] = true;
                 continue;
             }
-            if text.replace(contents).is_some() || text_section.replace(section_number).is_some() {
-                return Err(LinkerError::InvalidCoff);
+            other_text_sections[section + 1] = true;
+            if text_ordinal == fragment_index {
+                text = Some(contents);
+                text_section = Some(section_number);
+                relocation_table = (
+                    usize::try_from(read_u32(object, header + 24)?)
+                        .map_err(|_| LinkerError::OffsetOverflow)?,
+                    usize::from(read_u16(object, header + 32)?),
+                );
             }
-            relocation_table = (
-                usize::try_from(read_u32(object, header + 24)?)
-                    .map_err(|_| LinkerError::OffsetOverflow)?,
-                usize::from(read_u16(object, header + 32)?),
-            );
+            text_ordinal += 1;
         } else if name == ".rdata" {
             readonly_data = contents;
             readonly_section = Some(section_number);
+        } else if name.starts_with(".xdata$") || name.starts_with(".pdata$") {
+            unwind_sections[section + 1] = true;
         } else if (name == ".data" || name == ".bss") && contents.is_empty() {
             ignored_empty_sections[section + 1] = true;
         } else {
@@ -597,6 +735,16 @@ pub fn decode_x86_64_coff_with_definitions<'data, 'relocations, 'definitions>(
                 .get(usize::try_from(section).map_err(|_| LinkerError::OffsetOverflow)?)
                 .copied()
                 .unwrap_or(false)
+        {
+        } else if section > 0
+            && (other_text_sections
+                .get(usize::try_from(section).map_err(|_| LinkerError::OffsetOverflow)?)
+                .copied()
+                .unwrap_or(false)
+                || unwind_sections
+                    .get(usize::try_from(section).map_err(|_| LinkerError::OffsetOverflow)?)
+                    .copied()
+                    .unwrap_or(false))
         {
         } else if section != 0 && Some(section) != readonly_section {
             return Err(LinkerError::UnsupportedCoff);
@@ -649,6 +797,25 @@ pub fn decode_x86_64_coff_with_definitions<'data, 'relocations, 'definitions>(
             }
             (
                 LinkRelocationTarget::InputText(text_offset),
+                i64::from(field_addend) - 4,
+            )
+        } else if target_section > 0
+            && other_text_sections
+                .get(usize::try_from(target_section).map_err(|_| LinkerError::OffsetOverflow)?)
+                .copied()
+                .unwrap_or(false)
+            && *object
+                .get(target_offset + 16)
+                .ok_or(LinkerError::InvalidCoff)?
+                == 2
+        {
+            (
+                LinkRelocationTarget::Symbol(coff_symbol_name(
+                    object,
+                    target_offset,
+                    symbols_end,
+                    string_size,
+                )?),
                 i64::from(field_addend) - 4,
             )
         } else if Some(target_section) == readonly_section
@@ -1672,6 +1839,38 @@ mod tests {
         }
     }
 
+    fn two_fragment_coff() -> std::vec::Vec<u8> {
+        let mut object = std::vec![0u8; 157];
+        object[0..2].copy_from_slice(&0x8664u16.to_le_bytes());
+        object[2..4].copy_from_slice(&2u16.to_le_bytes());
+        object[8..12].copy_from_slice(&117u32.to_le_bytes());
+        object[12..16].copy_from_slice(&2u32.to_le_bytes());
+
+        object[20..27].copy_from_slice(b".text$a");
+        object[36..40].copy_from_slice(&6u32.to_le_bytes());
+        object[40..44].copy_from_slice(&100u32.to_le_bytes());
+        object[44..48].copy_from_slice(&106u32.to_le_bytes());
+        object[52..54].copy_from_slice(&1u16.to_le_bytes());
+        object[60..67].copy_from_slice(b".text$b");
+        object[76..80].copy_from_slice(&1u32.to_le_bytes());
+        object[80..84].copy_from_slice(&116u32.to_le_bytes());
+
+        object[100..106].copy_from_slice(&[0xe8, 0, 0, 0, 0, 0xc3]);
+        object[106..110].copy_from_slice(&1u32.to_le_bytes());
+        object[110..114].copy_from_slice(&1u32.to_le_bytes());
+        object[114..116].copy_from_slice(&4u16.to_le_bytes());
+        object[116] = 0xc3;
+
+        object[117..122].copy_from_slice(b"entry");
+        object[129..131].copy_from_slice(&1i16.to_le_bytes());
+        object[133] = 2;
+        object[135..141].copy_from_slice(b"helper");
+        object[147..149].copy_from_slice(&2i16.to_le_bytes());
+        object[151] = 2;
+        object[153..157].copy_from_slice(&4u32.to_le_bytes());
+        object
+    }
+
     #[test]
     fn decodes_ordinary_gnu_and_bsd_archive_member_names() {
         let mut archive = b"!<arch>\n".to_vec();
@@ -2218,6 +2417,66 @@ mod tests {
         let mut legacy_relocations = relocations;
         assert_eq!(
             decode_x86_64_coff(&bytes, &mut legacy_relocations),
+            Err(LinkerError::UnsupportedCoff)
+        );
+    }
+
+    #[test]
+    fn decodes_bounded_coff_text_fragments_without_losing_object_identity() {
+        let object = two_fragment_coff();
+        assert_eq!(x86_64_coff_text_fragment_count(&object), Ok(2));
+        assert_eq!(x86_64_coff_unwind_section_count(&object), Ok(0));
+
+        let mut first_relocations = [LinkRelocation {
+            offset: 0,
+            target: LinkRelocationTarget::Symbol("unused"),
+            addend: 0,
+        }; MAX_LINK_RELOCATIONS];
+        let mut second_relocations = first_relocations;
+        let mut first_definitions = [LinkDefinition {
+            symbol: "unused",
+            text_offset: 0,
+        }; MAX_LINK_DEFINITIONS];
+        let mut second_definitions = first_definitions;
+        let first = decode_x86_64_coff_text_fragment(
+            &object,
+            0,
+            &mut first_relocations,
+            &mut first_definitions,
+        )
+        .unwrap();
+        let second = decode_x86_64_coff_text_fragment(
+            &object,
+            1,
+            &mut second_relocations,
+            &mut second_definitions,
+        )
+        .unwrap();
+        assert_eq!(first.symbol, "entry");
+        assert_eq!(second.symbol, "helper");
+        assert_eq!(
+            first.relocations,
+            &[LinkRelocation {
+                offset: 1,
+                target: LinkRelocationTarget::Symbol("helper"),
+                addend: -4,
+            }]
+        );
+        assert_eq!(
+            link_x86_64_static::<64>(&[first, second], "entry")
+                .unwrap()
+                .bytes()[16],
+            0xc3
+        );
+
+        let mut legacy_relocations = first_relocations;
+        let mut legacy_definitions = first_definitions;
+        assert_eq!(
+            decode_x86_64_coff_with_definitions(
+                &object,
+                &mut legacy_relocations,
+                &mut legacy_definitions,
+            ),
             Err(LinkerError::UnsupportedCoff)
         );
     }
