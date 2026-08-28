@@ -131,7 +131,8 @@ unsafe extern "C" {
         parameter: *mut SchedParam,
     ) -> c_int;
     fn pthread_setschedparam(thread: usize, policy: c_int, parameter: *const SchedParam) -> c_int;
-    fn signal(signal: c_int, handler: usize) -> usize;
+    fn pthread_sigmask(how: c_int, set: *const SigSet, previous: *mut SigSet) -> c_int;
+    fn sigaction(signal: c_int, action: *const SigAction, previous: *mut SigAction) -> c_int;
 }
 
 #[derive(Clone, Copy)]
@@ -144,6 +145,21 @@ struct CpuSet {
 #[repr(C)]
 struct SchedParam {
     sched_priority: c_int,
+}
+
+#[derive(Clone, Copy)]
+#[repr(C)]
+struct SigSet {
+    words: [u64; 16],
+}
+
+#[derive(Clone, Copy)]
+#[repr(C)]
+struct SigAction {
+    handler: usize,
+    mask: SigSet,
+    flags: c_int,
+    restorer: usize,
 }
 
 const SCHED_OTHER: c_int = 0;
@@ -283,6 +299,15 @@ impl Drop for ThreadAffinityGuard {
 
 unsafe extern "C" fn kvm_kick_signal_handler(_signal: c_int) {}
 
+fn kvm_kick_signal_unblocked() -> bool {
+    let mut current = SigSet { words: [0; 16] };
+    if unsafe { pthread_sigmask(0, core::ptr::null(), &mut current) } != 0 {
+        return false;
+    }
+    let bit = usize::try_from(KVM_KICK_SIGNAL - 1).unwrap_or(usize::MAX);
+    bit < current.words.len() * 64 && current.words[bit / 64] & (1_u64 << (bit % 64)) == 0
+}
+
 fn install_kvm_kick_signal() -> Result<(), KvmError> {
     loop {
         match KVM_KICK_SIGNAL_STATE.load(Ordering::Acquire) {
@@ -301,12 +326,24 @@ fn install_kvm_kick_signal() -> Result<(), KvmError> {
                     continue;
                 }
                 let handler = kvm_kick_signal_handler as *const () as usize;
-                let previous = unsafe { signal(KVM_KICK_SIGNAL, handler) };
-                if previous == usize::MAX || previous != 0 && previous != handler {
-                    if previous != usize::MAX {
-                        unsafe {
-                            signal(KVM_KICK_SIGNAL, previous);
-                        }
+                let action = SigAction {
+                    handler,
+                    mask: SigSet { words: [0; 16] },
+                    flags: 0,
+                    restorer: 0,
+                };
+                let mut previous = SigAction {
+                    handler: 0,
+                    mask: SigSet { words: [0; 16] },
+                    flags: 0,
+                    restorer: 0,
+                };
+                if unsafe { sigaction(KVM_KICK_SIGNAL, &action, &mut previous) } != 0
+                    || previous.handler != 0 && previous.handler != handler
+                {
+                    if previous.handler != 0 {
+                        let _ =
+                            unsafe { sigaction(KVM_KICK_SIGNAL, &previous, core::ptr::null_mut()) };
                     }
                     KVM_KICK_SIGNAL_STATE.store(SIGNAL_UNAVAILABLE, Ordering::Release);
                     return Err(KvmError::SystemCall);
@@ -711,6 +748,9 @@ impl KvmVcpu {
             return Err(KvmError::InvalidRegisterState);
         }
         install_kvm_kick_signal()?;
+        if !kvm_kick_signal_unblocked() {
+            return Err(KvmError::SystemCall);
+        }
         const ARMED: u8 = 0;
         const RETURNED: u8 = 1;
         const EXPIRED: u8 = 2;
@@ -2434,6 +2474,15 @@ mod tests {
         assert_eq!(core::mem::size_of::<KvmRegisters>(), 144);
         assert_eq!(core::mem::size_of::<KvmSegment>(), 24);
         assert_eq!(core::mem::size_of::<KvmSpecialRegisters>(), 312);
+        assert_eq!(core::mem::align_of::<KvmRegisters>(), 8);
+        assert_eq!(core::mem::offset_of!(KvmRegisters, rip), 128);
+        assert_eq!(core::mem::offset_of!(KvmSpecialRegisters, cr3), 256);
+        assert_eq!(core::mem::size_of::<SigSet>(), 128);
+        assert_eq!(core::mem::size_of::<SigAction>(), 152);
+        assert_eq!(core::mem::align_of::<SigAction>(), 8);
+        assert_eq!(core::mem::offset_of!(SigAction, mask), 8);
+        assert_eq!(core::mem::offset_of!(SigAction, flags), 136);
+        assert_eq!(core::mem::offset_of!(SigAction, restorer), 144);
     }
 
     #[test]

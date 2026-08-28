@@ -1860,10 +1860,19 @@ mod tests {
         assert_eq!(CR4_LONG_MODE_RUST, (1 << 5) | (1 << 9) | (1 << 10));
         assert_eq!(core::mem::size_of::<RegisterValue>(), 16);
         assert_eq!(core::mem::align_of::<RegisterValue>(), 16);
+        assert_eq!(core::mem::offset_of!(RegisterValue, low), 0);
+        assert_eq!(core::mem::offset_of!(RegisterValue, high), 8);
         let code = RegisterValue::segment(8, 0xa09b);
         assert_eq!(code.low, 0);
         assert_eq!(code.high, 0xa09b_0008_ffff_ffff);
         assert_eq!(core::mem::size_of::<InterruptControl>(), 16);
+        assert_eq!(core::mem::align_of::<InterruptControl>(), 8);
+        assert_eq!(core::mem::offset_of!(InterruptControl, options), 0);
+        assert_eq!(core::mem::offset_of!(InterruptControl, destination), 8);
+        assert_eq!(core::mem::offset_of!(InterruptControl, vector), 12);
+        assert_eq!(core::mem::size_of::<GroupAffinity>(), 16);
+        assert_eq!(core::mem::offset_of!(GroupAffinity, mask), 0);
+        assert_eq!(core::mem::offset_of!(GroupAffinity, group), 8);
     }
 
     #[test]
