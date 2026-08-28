@@ -1471,9 +1471,11 @@ pub fn decode_x86_64_elf_with_definitions<'data, 'relocations, 'definitions>(
     let section_names =
         elf_section_contents(object, section_offset, section_count, section_names_index)?;
 
-    let mut text_index = None;
+    let mut text_sections = [false; MAX_COFF_SECTIONS];
+    let mut text_span = None;
+    let mut text_owner = None;
     let mut readonly_index = None;
-    let mut relocations_index = None;
+    let mut relocation_sections = [false; MAX_COFF_SECTIONS];
     let mut symbols_index = None;
     let mut strings_index = None;
     let mut ignored_sections = [false; MAX_COFF_SECTIONS];
@@ -1487,11 +1489,33 @@ pub fn decode_x86_64_elf_with_definitions<'data, 'relocations, 'definitions>(
             name if (name == ".text" || name.starts_with(".text.")) && contents.is_empty() => {
                 ignored_sections[index] = true;
             }
-            name if (name == ".text" || name.starts_with(".text."))
-                && text_index.replace(index).is_none() => {}
+            name if name == ".text" || name.starts_with(".text.") => {
+                let start = to_usize_elf(read_u64_elf(object, header + 24)?)?;
+                let end = start
+                    .checked_add(contents.len())
+                    .ok_or(LinkerError::OffsetOverflow)?;
+                text_sections[index] = true;
+                if text_owner.is_none() {
+                    text_owner = Some(name);
+                }
+                text_span = Some(match text_span {
+                    None => (start, end),
+                    Some((first, previous_end))
+                        if previous_end <= start
+                            && object
+                                .get(previous_end..start)
+                                .map(|gap| gap.iter().all(|byte| *byte == 0))
+                                .unwrap_or(false) =>
+                    {
+                        (first, end)
+                    }
+                    Some(_) => return Err(LinkerError::UnsupportedElf),
+                });
+            }
             ".rodata" if readonly_index.replace(index).is_none() => {}
-            name if (name == ".rela.text" || name.starts_with(".rela.text."))
-                && relocations_index.replace(index).is_none() => {}
+            name if name == ".rela.text" || name.starts_with(".rela.text.") => {
+                relocation_sections[index] = true;
+            }
             ".symtab" if symbols_index.replace(index).is_none() => {}
             ".strtab" if strings_index.replace(index).is_none() => {}
             ".shstrtab" if index == section_names_index => {}
@@ -1523,10 +1547,12 @@ pub fn decode_x86_64_elf_with_definitions<'data, 'relocations, 'definitions>(
             _ => return Err(LinkerError::UnsupportedElf),
         }
     }
-    let text_index = text_index.ok_or(LinkerError::InvalidElf)?;
+    let (text_start, text_end) = text_span.ok_or(LinkerError::InvalidElf)?;
     let symbols_index = symbols_index.ok_or(LinkerError::InvalidElf)?;
     let strings_index = strings_index.ok_or(LinkerError::InvalidElf)?;
-    let text = elf_section_contents(object, section_offset, section_count, text_index)?;
+    let text = object
+        .get(text_start..text_end)
+        .ok_or(LinkerError::InvalidElf)?;
     let readonly_data = match readonly_index {
         Some(index) => elf_section_contents(object, section_offset, section_count, index)?,
         None => &object[0..0],
@@ -1553,8 +1579,15 @@ pub fn decode_x86_64_elf_with_definitions<'data, 'relocations, 'definitions>(
         let offset = index * 24;
         let section = usize::from(read_u16_elf(symbols, offset + 6)?);
         let binding = *symbols.get(offset + 4).ok_or(LinkerError::InvalidElf)? >> 4;
-        if section == text_index && binding == 1 {
-            let text_offset = to_usize_elf(read_u64_elf(symbols, offset + 8)?)?;
+        if text_sections.get(section).copied().unwrap_or(false) && binding == 1 {
+            let text_offset = elf_combined_text_offset(
+                object,
+                section_offset,
+                section_count,
+                section,
+                text_start,
+                read_u64_elf(symbols, offset + 8)?,
+            )?;
             if text_offset > text.len() {
                 return Err(LinkerError::InvalidElf);
             }
@@ -1575,40 +1608,74 @@ pub fn decode_x86_64_elf_with_definitions<'data, 'relocations, 'definitions>(
                 };
                 definition_count += 1;
             }
-        } else if section == text_index && binding == 0 {
-            let text_offset = to_usize_elf(read_u64_elf(symbols, offset + 8)?)?;
+        } else if text_sections.get(section).copied().unwrap_or(false) && binding == 0 {
+            let text_offset = elf_combined_text_offset(
+                object,
+                section_offset,
+                section_count,
+                section,
+                text_start,
+                read_u64_elf(symbols, offset + 8)?,
+            )?;
             if text_offset > text.len() {
                 return Err(LinkerError::InvalidElf);
             }
         } else if binding == 0 && section >= 0xff00 {
         } else if section != 0
             && Some(section) != readonly_index
+            && !text_sections.get(section).copied().unwrap_or(false)
+            && !relocation_sections.get(section).copied().unwrap_or(false)
             && !ignored_sections.get(section).copied().unwrap_or(false)
         {
             return Err(LinkerError::UnsupportedElf);
         }
     }
-    let symbol = defined_symbol.ok_or(LinkerError::InvalidElf)?;
+    let symbol = defined_symbol
+        .or(text_owner)
+        .ok_or(LinkerError::InvalidElf)?;
 
-    let relocation_count = if let Some(index) = relocations_index {
+    let mut relocation_count = 0usize;
+    for index in 1..section_count {
+        if !relocation_sections[index] {
+            continue;
+        }
         let header = elf_section_header(section_offset, section_count, index)?;
+        let relocated_section = usize::try_from(read_u32_elf(object, header + 44)?)
+            .map_err(|_| LinkerError::OffsetOverflow)?;
         if read_u32_elf(object, header + 4)? != 4
             || read_u64_elf(object, header + 56)? != 24
             || usize::try_from(read_u32_elf(object, header + 40)?)
                 .map_err(|_| LinkerError::OffsetOverflow)?
                 != symbols_index
-            || usize::try_from(read_u32_elf(object, header + 44)?)
-                .map_err(|_| LinkerError::OffsetOverflow)?
-                != text_index
+            || !text_sections
+                .get(relocated_section)
+                .copied()
+                .unwrap_or(false)
         {
             return Err(LinkerError::UnsupportedElf);
         }
+        let relocated_base = elf_combined_text_offset(
+            object,
+            section_offset,
+            section_count,
+            relocated_section,
+            text_start,
+            0,
+        )?;
         let records = elf_section_contents(object, section_offset, section_count, index)?;
-        if records.len() % 24 != 0 || records.len() / 24 > relocation_storage.len() {
+        let record_count = records.len() / 24;
+        if records.len() % 24 != 0
+            || relocation_count
+                .checked_add(record_count)
+                .filter(|count| *count <= relocation_storage.len())
+                .is_none()
+        {
             return Err(LinkerError::TooManyRelocations);
         }
         for (record_index, record) in records.chunks_exact(24).enumerate() {
-            let offset = to_usize_elf(read_u64_elf(record, 0)?)?;
+            let offset = relocated_base
+                .checked_add(to_usize_elf(read_u64_elf(record, 0)?)?)
+                .ok_or(LinkerError::OffsetOverflow)?;
             offset
                 .checked_add(4)
                 .filter(|end| *end <= text.len())
@@ -1646,11 +1713,18 @@ pub fn decode_x86_64_elf_with_definitions<'data, 'relocations, 'definitions>(
                 } else {
                     (LinkRelocationTarget::Symbol(symbol), encoded_addend)
                 }
-            } else if target_section == text_index {
+            } else if text_sections.get(target_section).copied().unwrap_or(false) {
                 if relocation_type == 9 {
                     return Err(LinkerError::UnsupportedElf);
                 }
-                let text_offset = to_usize_elf(read_u64_elf(symbols, target_offset + 8)?)?;
+                let text_offset = elf_combined_text_offset(
+                    object,
+                    section_offset,
+                    section_count,
+                    target_section,
+                    text_start,
+                    read_u64_elf(symbols, target_offset + 8)?,
+                )?;
                 if text_offset > text.len() {
                     return Err(LinkerError::InvalidRelocationOffset);
                 }
@@ -1672,16 +1746,16 @@ pub fn decode_x86_64_elf_with_definitions<'data, 'relocations, 'definitions>(
             } else {
                 return Err(LinkerError::UnsupportedElf);
             };
-            relocation_storage[record_index] = LinkRelocation {
+            relocation_storage[relocation_count + record_index] = LinkRelocation {
                 offset,
                 target,
                 addend,
             };
         }
-        records.len() / 24
-    } else {
-        0
-    };
+        relocation_count = relocation_count
+            .checked_add(record_count)
+            .ok_or(LinkerError::OffsetOverflow)?;
+    }
     Ok(LinkInput {
         symbol,
         additional_definitions: &definition_storage[..definition_count],
@@ -1689,6 +1763,26 @@ pub fn decode_x86_64_elf_with_definitions<'data, 'relocations, 'definitions>(
         readonly_data,
         relocations: &relocation_storage[..relocation_count],
     })
+}
+
+fn elf_combined_text_offset(
+    object: &[u8],
+    section_offset: usize,
+    section_count: usize,
+    section: usize,
+    text_start: usize,
+    value: u64,
+) -> Result<usize, LinkerError> {
+    let header = elf_section_header(section_offset, section_count, section)?;
+    let raw = to_usize_elf(read_u64_elf(object, header + 24)?)?;
+    let size = to_usize_elf(read_u64_elf(object, header + 32)?)?;
+    let value = to_usize_elf(value)?;
+    if value > size {
+        return Err(LinkerError::InvalidElf);
+    }
+    raw.checked_sub(text_start)
+        .and_then(|base| base.checked_add(value))
+        .ok_or(LinkerError::OffsetOverflow)
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]

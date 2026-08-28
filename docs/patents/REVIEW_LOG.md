@@ -9450,3 +9450,12 @@ call/jump opcode and an internally resolved symbol, using documented
 `R_X86_64_GOTPCREL` arithmetic. It does not construct a GOT/PLT, perform
 dynamic interposition, introduce a new instruction sequence, or add a general
 optimizer. This technical screen is not legal advice or patent clearance.
+
+# 2026-08-28 — Zero-copy split-text ELF coalescing
+
+Patent review: **NOT_TRIGGERED**. This increment validates ordered adjacent or
+zero-padded ELF text payloads and translates their conventional section-relative
+symbol and relocation offsets into one bounded view. It introduces no new
+relocation, compression, deduplication, section-GC, ICF, cryptographic, or
+loading algorithm. This technical screen is not legal advice or patent
+clearance.

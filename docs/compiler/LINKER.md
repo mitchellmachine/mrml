@@ -353,8 +353,26 @@ a 4,134-byte image. Over 50 same-input iterations after five warmups, MRML
 measured 5.467 ms median and 5.601 ms mean versus pinned rust-lld at 5.997 ms
 median and 5.947 ms mean; rust-lld emitted 1,376 bytes. This small WSL process-
 startup-heavy result is regression evidence only, not a general speed claim.
-Multiple split text sections per ELF object, `.eh_frame`, and relocated debug
-sections remain fail-closed.
+`.eh_frame` and relocated debug sections remain fail-closed at this point.
+
+The next ELF milestone combines multiple split `.text.*` payloads from one
+object into one zero-copy span when their file ranges are ordered and every
+alignment gap is present and all-zero. Symbols and relocation fields receive
+checked section-relative offsets into that span; every matching
+`.rela.text.*` table is validated and appended under the existing 256-record
+bound. A first local fragment uses its section name as internal ownership while
+later external definitions remain selectable archive symbols. Nonzero gaps and
+non-text relocation targets still fail closed.
+
+An exact ORACLE-0002 13,586-byte rlib containing eight static helpers, nine
+split text sections, and eight internal calls linked with a separate process-
+entry object to a 4,349-byte ELF image and exited 42 under Arch WSL. Windows and
+Linux each passed 708 core tests and four driver tests. Over 50 same-input
+iterations after five warmups, MRML measured 5.460 ms median and 5.480 ms mean
+versus pinned rust-lld at 6.079 ms median and 6.111 ms mean; rust-lld emitted
+2,072 bytes. This is small hosted regression evidence, not general superiority.
+`.eh_frame`, relocated debug sections, noncontiguous text payloads, and more
+than 256 combined relocations remain fail-closed.
 
 This increment does **not** emit PE imports/exports/base
 relocations/debug data, emit ELF dynamic metadata/interpreter/PIE/sections,
