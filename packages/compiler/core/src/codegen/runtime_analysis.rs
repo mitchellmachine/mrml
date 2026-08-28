@@ -4912,6 +4912,56 @@ fn preanalyze_runtime_expression_at_reads_with_tuple<
                             visit_as!(reference, borrow_context)?;
                         }
                     }
+                    Some(ExprKind::RangeIndex { base, .. }) if matches!(
+                        tree.expression(base).map(|expression| expression.kind),
+                        Some(ExprKind::RangeIndex { .. })
+                    ) => {
+                        let mut ranges = [None; 64];
+                        let mut range_count = 0usize;
+                        let mut current = operand;
+                        while let Some(ExprKind::RangeIndex {
+                            base: next,
+                            start,
+                            end,
+                            ..
+                        }) = tree.expression(current).map(|expression| expression.kind)
+                        {
+                            let slot = ranges.get_mut(range_count).ok_or(CodegenError {
+                                kind: CodegenErrorKind::Lowering(
+                                    IrErrorKind::NestingLimitExceeded,
+                                ),
+                                span: assignment_span,
+                            })?;
+                            *slot = Some((start, end));
+                            range_count += 1;
+                            current = next;
+                        }
+                        for (start, end) in ranges[..range_count].iter().rev().flatten() {
+                            if let Some(start) = start {
+                                visit_value!(*start)?;
+                            }
+                            if let Some(end) = end {
+                                visit_value!(*end)?;
+                            }
+                        }
+                        let place = discover_runtime_read_place(tree, operand)
+                            .map_err(|kind| CodegenError {
+                                kind,
+                                span: assignment_span,
+                            })?
+                            .ok_or(CodegenError {
+                                kind: CodegenErrorKind::RuntimeExpressionUnsupported,
+                                span: assignment_span,
+                            })?;
+                        push_read(
+                            facts,
+                            locals,
+                            function,
+                            place,
+                            borrow_context,
+                            assignment_span,
+                        )?;
+                    }
                     Some(ExprKind::RangeIndex {
                         base, start, end, ..
                     }) => {

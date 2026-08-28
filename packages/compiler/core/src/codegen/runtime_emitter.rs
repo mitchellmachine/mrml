@@ -6855,9 +6855,6 @@ impl<
             tree.expression(base).map(|expression| expression.kind),
             Some(ExprKind::RangeIndex { .. })
         );
-        if materialized_base && !nested_index {
-            return Err(self.error(CodegenErrorKind::RuntimeExpressionUnsupported));
-        }
         let base_type = runtime_expression_type_with_locals(
             self.function,
             self.resolver,
@@ -6970,7 +6967,7 @@ impl<
                 self.record_expression_place_read(
                     tree,
                     range,
-                    Some(RuntimePlaceProjection::Index),
+                    nested_index.then_some(RuntimePlaceProjection::Index),
                 )?;
             }
             self.emit(&[0x48, 0x8b, 0x44, 0x24, 0x18])?;

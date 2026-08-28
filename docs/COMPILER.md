@@ -953,9 +953,10 @@ borrow place, and visits the final index last. Native emission materializes the
 inner pointer and length once, checks the outer range against that saved length,
 consumes the temporary fat slice, and then checks and selects the final element.
 Three runtime-slice probes mutate only the element selected by both starts on
-Windows' indirect slice ABI and System V's direct pointer/length ABI. Repeated
-subslice values without a final scalar index remain fail closed and produce no
-object. Windows gnullvm and Arch Linux WSL each passed 659 unit, 1 component-
+Windows' indirect slice ABI and System V's direct pointer/length ABI. At that
+checkpoint, repeated subslice values without a final scalar index remained fail
+closed and produced no object. Windows gnullvm and Arch Linux WSL each passed
+659 unit, 1 component-
 interface, 10 conformance, 351
 replacement, and 13 semantic-execution tests (1,034 total). This does not add
 general repeated range values, callee-origin inference for repeated projections,
@@ -990,10 +991,10 @@ consumes its own temporary bounds state before returning one two-word slice to
 the next layer; the final index still records and consumes one canonical nested
 place. Fixed-array and runtime-slice probes exercise three different accumulated
 start combinations and mutate only the expected element on Windows gnullvm and
-Arch Linux WSL. The corresponding repeated-subslice value remains unsupported.
-This is direct recursive lowering evidence at depth three, not unbounded-depth
-evidence or general slice-value support. Both hosts passed the same 1,035-test
-gate.
+Arch Linux WSL. At that checkpoint, the corresponding repeated-subslice value
+remained unsupported. This was direct recursive lowering evidence at depth
+three, not unbounded-depth evidence or general slice-value support. Both hosts
+passed the same 1,035-test gate.
 
 Callee-return origin classification now recognizes the bounded structural form
 of an optional leading dereference, one or more contiguous `Subslice`
@@ -1008,6 +1009,19 @@ gnullvm and Arch Linux WSL; the fixed start keeps the call within the compiler's
 existing four-argument subset. This is bounded by the fixed-capacity place
 representation, not arbitrary projection inference or index-sensitive alias
 reasoning. Both hosts passed the same 1,035-test gate.
+
+A repeated-subslice value can now be materialized directly into a typed local.
+Only the repeated-range path receives new analysis: it evaluates every bound
+inner-to-outer, records one canonical place containing the complete subslice
+chain, and leaves established single-range root-loan facts unchanged. Emission
+recursively composes the checked pointer/length pair and records that same place
+without appending a scalar `Index`. Fixed-array and runtime-slice probes create
+the fat-reference local, index it afterward, and mutate only the expected one of
+five elements for three start/index combinations on Windows gnullvm and Arch
+Linux WSL. Returning a repeated-subslice value through a helper remains
+unclassified. This is direct/local depth-two slice-value evidence, not general
+fat-reference dataflow or arbitrary-depth execution evidence. Both hosts passed
+the same 1,035-test gate.
 
 The repeated-subslice semantic harness now isolates all four checked failure
 layers at depth three. An inner start beyond the runtime owner length, second-
