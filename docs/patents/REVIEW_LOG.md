@@ -9639,3 +9639,13 @@ for ordinary static symbol resolution. It introduces no new object format,
 relocation encoding or arithmetic, symbol-resolution algorithm, compression,
 cryptographic mechanism, or loader behavior. This technical screen is not
 legal advice or patent clearance.
+
+# 2026-08-28 — Reachability-bound ELF definitions
+
+Patent review: **NOT_TRIGGERED**. This increment decodes conventional ELF
+global and weak definitions only when their storage section was admitted by
+the existing bounded reachability selection. It retains ordinary binding,
+visibility, symbol-kind, size, and section-relative value metadata for later
+static resolution. It introduces no new symbol model, resolution algorithm,
+object encoding, compression, cryptographic mechanism, or loader behavior.
+This technical screen is not legal advice or patent clearance.

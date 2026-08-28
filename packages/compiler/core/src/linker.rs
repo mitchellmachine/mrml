@@ -510,6 +510,48 @@ pub struct ElfSelectedRelocations<'a> {
     length: usize,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum ElfSelectedSymbolBinding {
+    Global,
+    Weak,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum ElfSelectedSymbolVisibility {
+    Default,
+    Hidden,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum ElfSelectedSymbolKind {
+    Unspecified,
+    Object,
+    Function,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct ElfSelectedDefinition<'a> {
+    pub name: &'a str,
+    pub section_index: u16,
+    pub offset: usize,
+    pub size: usize,
+    pub binding: ElfSelectedSymbolBinding,
+    pub visibility: ElfSelectedSymbolVisibility,
+    pub kind: ElfSelectedSymbolKind,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct ElfSelectedDefinitions<'a> {
+    definitions: [ElfSelectedDefinition<'a>; MAX_LINK_DEFINITIONS],
+    length: usize,
+}
+
+impl<'a> ElfSelectedDefinitions<'a> {
+    pub fn definitions(&self) -> &[ElfSelectedDefinition<'a>] {
+        &self.definitions[..self.length]
+    }
+}
+
 impl<'a> ElfSelectedRelocations<'a> {
     pub fn relocations(&self) -> &[ElfSelectedRelocation<'a>] {
         &self.relocations[..self.length]
@@ -778,6 +820,112 @@ pub fn decode_x86_64_elf_selected_relocations<'a>(
             };
             decoded.length += 1;
         }
+    }
+    Ok(decoded)
+}
+
+/// Decodes externally resolvable definitions that reside in selected
+/// sections. Local symbols remain section-relative relocation targets and do
+/// not enter the cross-object namespace.
+pub fn decode_x86_64_elf_selected_definitions<'a>(
+    object: &'a [u8],
+    selection: &ElfSectionSelection,
+) -> Result<ElfSelectedDefinitions<'a>, LinkerError> {
+    let selected_sections = decode_x86_64_elf_selected_sections(object, selection)?;
+    let section_offset = to_usize_elf(read_u64_elf(object, 40)?)?;
+    let section_count = usize::from(read_u16_elf(object, 60)?);
+    let mut selected_sizes = [None; MAX_ELF_SECTIONS];
+    for section in selected_sections.sections() {
+        selected_sizes[usize::from(section.index)] = Some(section.size);
+    }
+    let mut symbols_index = None;
+    for index in 1..section_count {
+        let header = elf_section_header(section_offset, section_count, index)?;
+        if read_u32_elf(object, header + 4)? == 2 && symbols_index.replace(index).is_some() {
+            return Err(LinkerError::UnsupportedElf);
+        }
+    }
+    let symbols_index = symbols_index.ok_or(LinkerError::InvalidElf)?;
+    let symbols_header = elf_section_header(section_offset, section_count, symbols_index)?;
+    if read_u64_elf(object, symbols_header + 56)? != 24 {
+        return Err(LinkerError::UnsupportedElf);
+    }
+    let strings_index = usize::try_from(read_u32_elf(object, symbols_header + 40)?)
+        .map_err(|_| LinkerError::OffsetOverflow)?;
+    if strings_index >= section_count {
+        return Err(LinkerError::InvalidElf);
+    }
+    let strings_header = elf_section_header(section_offset, section_count, strings_index)?;
+    if read_u32_elf(object, strings_header + 4)? != 3 {
+        return Err(LinkerError::InvalidElf);
+    }
+    let symbols = elf_section_contents(object, section_offset, section_count, symbols_index)?;
+    let strings = elf_section_contents(object, section_offset, section_count, strings_index)?;
+    if symbols.len() % 24 != 0 {
+        return Err(LinkerError::InvalidElf);
+    }
+    let empty = ElfSelectedDefinition {
+        name: "",
+        section_index: 0,
+        offset: 0,
+        size: 0,
+        binding: ElfSelectedSymbolBinding::Global,
+        visibility: ElfSelectedSymbolVisibility::Default,
+        kind: ElfSelectedSymbolKind::Unspecified,
+    };
+    let mut decoded = ElfSelectedDefinitions {
+        definitions: [empty; MAX_LINK_DEFINITIONS],
+        length: 0,
+    };
+    for record in symbols[24..].chunks_exact(24) {
+        let section = usize::from(read_u16_elf(record, 6)?);
+        let Some(section_size) = selected_sizes.get(section).copied().flatten() else {
+            continue;
+        };
+        let info = *record.get(4).ok_or(LinkerError::InvalidElf)?;
+        let binding = match info >> 4 {
+            0 => continue,
+            1 => ElfSelectedSymbolBinding::Global,
+            2 => ElfSelectedSymbolBinding::Weak,
+            _ => return Err(LinkerError::UnsupportedElf),
+        };
+        let kind = match info & 0xf {
+            0 => ElfSelectedSymbolKind::Unspecified,
+            1 => ElfSelectedSymbolKind::Object,
+            2 => ElfSelectedSymbolKind::Function,
+            _ => return Err(LinkerError::UnsupportedElf),
+        };
+        let visibility = match *record.get(5).ok_or(LinkerError::InvalidElf)? & 0x3 {
+            0 => ElfSelectedSymbolVisibility::Default,
+            2 => ElfSelectedSymbolVisibility::Hidden,
+            _ => return Err(LinkerError::UnsupportedElf),
+        };
+        let name_offset =
+            usize::try_from(read_u32_elf(record, 0)?).map_err(|_| LinkerError::OffsetOverflow)?;
+        if name_offset == 0 {
+            return Err(LinkerError::EmptySymbol);
+        }
+        let name = elf_string(strings, name_offset)?;
+        validate_symbol(name)?;
+        let offset = to_usize_elf(read_u64_elf(record, 8)?)?;
+        let size = to_usize_elf(read_u64_elf(record, 16)?)?;
+        offset
+            .checked_add(size)
+            .filter(|end| *end <= section_size)
+            .ok_or(LinkerError::InvalidElf)?;
+        if decoded.length == decoded.definitions.len() {
+            return Err(LinkerError::TooManyDefinitions);
+        }
+        decoded.definitions[decoded.length] = ElfSelectedDefinition {
+            name,
+            section_index: u16::try_from(section).map_err(|_| LinkerError::TooManyElfSections)?,
+            offset,
+            size,
+            binding,
+            visibility,
+            kind,
+        };
+        decoded.length += 1;
     }
     Ok(decoded)
 }
@@ -6220,6 +6368,20 @@ mod tests {
         assert_eq!(caller_sections.sections()[0].bytes, caller_code.bytes());
         assert_eq!(caller_sections.sections()[0].size, caller_code.len());
         assert_eq!(
+            decode_x86_64_elf_selected_definitions(caller.bytes(), &caller_selection)
+                .unwrap()
+                .definitions(),
+            &[ElfSelectedDefinition {
+                name: "entry",
+                section_index: 1,
+                offset: 0,
+                size: caller_code.len(),
+                binding: ElfSelectedSymbolBinding::Global,
+                visibility: ElfSelectedSymbolVisibility::Default,
+                kind: ElfSelectedSymbolKind::Function,
+            }]
+        );
+        assert_eq!(
             decode_x86_64_elf_selected_relocations(caller.bytes(), &caller_selection)
                 .unwrap()
                 .relocations(),
@@ -6251,6 +6413,20 @@ mod tests {
             ElfSectionKind::ReadonlyData
         );
         assert_eq!(data_sections.sections()[1].bytes, b"hello");
+        assert_eq!(
+            decode_x86_64_elf_selected_definitions(data.bytes(), &data_selection)
+                .unwrap()
+                .definitions(),
+            &[ElfSelectedDefinition {
+                name: "literal",
+                section_index: 1,
+                offset: 0,
+                size: data_code.len(),
+                binding: ElfSelectedSymbolBinding::Global,
+                visibility: ElfSelectedSymbolVisibility::Default,
+                kind: ElfSelectedSymbolKind::Function,
+            }]
+        );
         assert_eq!(
             decode_x86_64_elf_selected_relocations(data.bytes(), &data_selection)
                 .unwrap()
