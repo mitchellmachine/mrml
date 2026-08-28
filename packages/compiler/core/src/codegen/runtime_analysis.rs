@@ -50,7 +50,11 @@ fn validate_stable_export<const MAX_PARAMETERS: usize>(
         if value.words().len() != 1
             && !matches!(
                 ty,
-                crate::MrmlV1Type::Slice { .. } | crate::MrmlV1Type::Str { .. }
+                crate::MrmlV1Type::Slice { .. }
+                    | crate::MrmlV1Type::Str { .. }
+                    | crate::MrmlV1Type::Integer(
+                        crate::MrmlV1Integer::U128 | crate::MrmlV1Integer::I128
+                    )
             )
         {
             return Err(CodegenError {

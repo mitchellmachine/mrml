@@ -969,7 +969,9 @@ pub fn compile_x86_64_runtime_function_with_options<
         if parameter.ty.text == "bool" {
             continue;
         }
-        if runtime_width(parameter.ty.text).is_none() {
+        let wide_mrml_integer = function.abi == FunctionAbi::MrmlV1
+            && runtime_integer_layout(parameter.ty.text).is_some_and(|layout| layout.words == 2);
+        if runtime_width(parameter.ty.text).is_none() && !wide_mrml_integer {
             return Err(CodegenError {
                 kind: CodegenErrorKind::UnsupportedParameterType,
                 span: parameter.ty.span,

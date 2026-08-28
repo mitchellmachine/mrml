@@ -121,10 +121,13 @@ returns. The emitter uses the planned target register or stack order for every
 parameter word, returns borrowed views directly in `rax` and `rdx` on both
 targets, and does not relabel the function as C ABI.
 
-Unsupported zero-word parameters and `u128` or `i128` parameters and returns
-fail with a distinct typed codegen reason at the exact type span. Ownership and
-borrowing rules beyond ordinary language checking, other multiword machine-code
-lowering, link compatibility, and external execution evidence remain required.
+Unsupported zero-word parameters and `u128` or `i128` returns fail with a
+distinct typed codegen reason at the exact type span. Two-word `u128` and `i128`
+parameters are admitted for direct Rust `as` narrowing to supported one-word
+integer types. Other wide expressions, locals, operations, calls, and returns
+remain unavailable and fail closed. Ownership and borrowing rules beyond
+ordinary language checking, other multiword machine-code lowering, link
+compatibility, and external execution evidence remain required.
 The typed runtime stack model reserves two ordered words for `u128` and `i128`
 values, and its logical integer-layout metadata preserves their exact signed or
 unsigned 128-bit bounds. The existing one-word instruction emitter rejects that
@@ -134,8 +137,10 @@ Range-endpoint analysis also uses the logical layout, so positive and negative
 128-bit literal magnitudes are checked exactly even while machine emission
 remains unavailable.
 Saved-parameter and relative parameter-offset accounting use the same complete
-runtime type classifier, so a future two-word integer reserves both stack words
-and cannot overlap a following parameter.
+runtime type classifier, so a two-word integer reserves both stack words and
+cannot overlap a following parameter. Direct narrowing reads the low word after
+recording the ordinary parameter-place access; both words still enter through
+the target call plan in source order.
 
 The admitted subset has controlled native execution evidence on the Windows and
 Linux test hosts: the public pipeline emits the host object, the test harness
@@ -144,7 +149,10 @@ relocations, changes the mapping from writable to executable, and calls facade
 scalar and slice functions through the host's matching word convention. Exact
 dated-rustc observations cover the same attributed sources, including a slice
 whose pointer and length straddle the register/stack boundary on each target
-and a returned slice captured directly from `rax` and `rdx`. This is not linker,
+and a returned slice captured directly from `rax` and `rdx`. Wide-parameter
+evidence passes independent `u128` and `i128` low/high words through four target
+argument registers and compares nested narrowing with the pinned rustc facade.
+This is not linker,
 dynamic-loader, cross-language, or physical-hardware evidence.
 
 Arrays, tuples, user aggregates, and indirect returns are not admitted. This

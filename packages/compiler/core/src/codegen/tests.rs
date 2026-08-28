@@ -12075,21 +12075,27 @@ mod tests {
     }
 
     #[test]
-    fn mrml_v1_codegen_rejects_multiword_integers_at_the_type_span() {
+    fn mrml_v1_codegen_narrows_two_word_integer_parameters() {
         let source =
             "#[mrml_abi::export(version = 1)] pub fn first(input: u128) -> u8 { input as u8 }";
         let module = Parser::new(source).parse_module::<2, 2>().unwrap();
         let Some(Item::Function(function)) = module.items()[0] else {
             panic!("expected function")
         };
-        let error = compile_x86_64_function::<_, 128, 2, 16>(
+        let system_v = compile_x86_64_function::<_, 128, 2, 16>(
             &function,
             &NoConstants,
             X86_64Abi::SystemV,
         )
-        .unwrap_err();
-        assert_eq!(error.kind, CodegenErrorKind::MrmlV1MultiwordValueUnsupported);
-        assert_eq!(&source[error.span.start..error.span.end], "u128");
+        .unwrap();
+        let windows = compile_x86_64_function::<_, 128, 2, 16>(
+            &function,
+            &NoConstants,
+            X86_64Abi::Windows,
+        )
+        .unwrap();
+        assert_eq!(&system_v.bytes()[..2], &[0x57, 0x56]);
+        assert_eq!(&windows.bytes()[..2], &[0x51, 0x52]);
     }
 
     #[test]
