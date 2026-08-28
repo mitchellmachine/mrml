@@ -9,8 +9,8 @@ the named commit and current source.
 ## Recoverable baseline
 
 - Branch: `main`
-- Compiler checkpoint commit: `c7ee96a5`
-  (`compiler: resolve ELF global readonly symbols`)
+- Compiler checkpoint commit: `8ac039f3`
+  (`compiler: link Rust zero-sized statics`)
 - Remote state when recorded: `origin/main` includes the bounded MRML-owned
   static-link core, exact MRML COFF and ELF64 ingestion, deterministic
   import-free PE32+/ELF64 executable serialization, explicit compiler-driver
@@ -60,6 +60,22 @@ against all prior accepted probes. Keep Cargo on edition 2024 until a newer
 named edition can be adopted through a pinned, workspace-wide migration.
 
 ## Latest bounded linker milestone
+
+Commit `8ac039f3` retains allocated zero-sized `.rodata.*` sections as typed
+local identities. A zero-valued relocation target maps to the owning input's
+read-only base only for conventional PROGBITS/A identity and power-of-two
+alignment at most 16; nonzero values and unrepresented stronger alignment fail
+closed. No payload bytes are invented.
+
+Under exact ORACLE-0002 Arch WSL, an independently authored optimized trait
+object emitted a zero-byte concrete static, a 32-byte `.data.rel.ro.*` vtable,
+an initialized fat pointer, three absolute relocations, two writable text
+references, and two FDEs. MRML's 12,344-byte ELF preserved separated loads and
+virtual dispatch exited 42. Windows and Linux each passed 717 compiler-core
+tests and four driver tests. A 50-iteration/five-warmup identical-input
+measurement recorded MRML at 5.092 ms median versus pinned rust-lld with
+`--eh-frame-hdr` at 5.241 ms; rust-lld emitted 2,128 bytes. This is narrow
+hosted regression evidence, not general trait/vtable, speed, or ABI coverage.
 
 Commit `c7ee96a5` makes global definitions explicitly typed as text or
 read-only-data locations. ELF decoding can therefore admit an object with empty
