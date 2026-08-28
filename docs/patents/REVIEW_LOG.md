@@ -9432,3 +9432,12 @@ capacity while retaining fixed arrays, checked section traversal, and all
 independent linker bounds. It introduces no section-selection, relocation,
 optimization, compression, cryptographic, or loading algorithm. This technical
 screen is not legal advice or patent clearance.
+
+# 2026-08-28 — Pinned rustc split-text ELF ingestion
+
+Patent review: **NOT_TRIGGERED**. This increment recognizes conventional ELF64
+split text/relocation names, non-allocating tool metadata, local absolute file
+symbols, and the already supported `R_X86_64_PLT32` relocation. It introduces
+no GOT/PLT construction, dynamic linking, unwind encoding, optimization,
+compression, cryptographic, or loading algorithm. This technical screen is not
+legal advice or patent clearance.

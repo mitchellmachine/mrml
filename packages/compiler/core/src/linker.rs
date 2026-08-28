@@ -1446,7 +1446,7 @@ pub fn decode_x86_64_elf_with_definitions<'data, 'relocations, 'definitions>(
     let section_offset = to_usize_elf(read_u64_elf(object, 40)?)?;
     let section_count = usize::from(read_u16_elf(object, 60)?);
     let section_names_index = usize::from(read_u16_elf(object, 62)?);
-    if !(5..=7).contains(&section_count) || section_names_index >= section_count {
+    if !(4..=MAX_COFF_SECTIONS).contains(&section_count) || section_names_index >= section_count {
         return Err(LinkerError::UnsupportedElf);
     }
     let section_bytes = section_count
@@ -1468,18 +1468,50 @@ pub fn decode_x86_64_elf_with_definitions<'data, 'relocations, 'definitions>(
     let mut relocations_index = None;
     let mut symbols_index = None;
     let mut strings_index = None;
+    let mut ignored_sections = [false; MAX_COFF_SECTIONS];
     for index in 1..section_count {
         let header = elf_section_header(section_offset, section_count, index)?;
         let name_offset = usize::try_from(read_u32_elf(object, header)?)
             .map_err(|_| LinkerError::OffsetOverflow)?;
         let name = elf_string(section_names, name_offset)?;
+        let contents = elf_section_contents(object, section_offset, section_count, index)?;
         match name {
-            ".text" if text_index.replace(index).is_none() => {}
+            name if (name == ".text" || name.starts_with(".text.")) && contents.is_empty() => {
+                ignored_sections[index] = true;
+            }
+            name if (name == ".text" || name.starts_with(".text."))
+                && text_index.replace(index).is_none() => {}
             ".rodata" if readonly_index.replace(index).is_none() => {}
-            ".rela.text" if relocations_index.replace(index).is_none() => {}
+            name if (name == ".rela.text" || name.starts_with(".rela.text."))
+                && relocations_index.replace(index).is_none() => {}
             ".symtab" if symbols_index.replace(index).is_none() => {}
             ".strtab" if strings_index.replace(index).is_none() => {}
             ".shstrtab" if index == section_names_index => {}
+            ".comment" => {
+                if read_u32_elf(object, header + 4)? != 1
+                    || read_u64_elf(object, header + 8)? & 2 != 0
+                {
+                    return Err(LinkerError::UnsupportedElf);
+                }
+                ignored_sections[index] = true;
+            }
+            ".note.GNU-stack" => {
+                if read_u32_elf(object, header + 4)? != 1
+                    || read_u64_elf(object, header + 8)? != 0
+                    || !contents.is_empty()
+                {
+                    return Err(LinkerError::UnsupportedElf);
+                }
+                ignored_sections[index] = true;
+            }
+            ".llvmbc" | ".llvmcmd" => {
+                if read_u32_elf(object, header + 4)? != 1
+                    || read_u64_elf(object, header + 8)? & 0x8000_0000 == 0
+                {
+                    return Err(LinkerError::UnsupportedElf);
+                }
+                ignored_sections[index] = true;
+            }
             _ => return Err(LinkerError::UnsupportedElf),
         }
     }
@@ -1540,7 +1572,11 @@ pub fn decode_x86_64_elf_with_definitions<'data, 'relocations, 'definitions>(
             if text_offset > text.len() {
                 return Err(LinkerError::InvalidElf);
             }
-        } else if section != 0 && Some(section) != readonly_index {
+        } else if binding == 0 && section >= 0xff00 {
+        } else if section != 0
+            && Some(section) != readonly_index
+            && !ignored_sections.get(section).copied().unwrap_or(false)
+        {
             return Err(LinkerError::UnsupportedElf);
         }
     }

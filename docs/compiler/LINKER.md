@@ -330,6 +330,19 @@ later use data-parallel loops. MRML does not copy mold source or claim mold
 compatibility or performance. The cited design note warns that its 2020 object
 preloading proposal is outdated, so MRML does not adopt that proposal.
 
+The bounded ELF decoder now also admits one nonempty pinned-rustc
+`.text.<symbol>` section and its exact `.rela.text.<symbol>` table, an empty
+base `.text`, local absolute file metadata symbols, non-allocating `.comment`,
+an empty `.note.GNU-stack`, and excluded `.llvmbc`/`.llvmcmd` metadata. These
+sections are validated but never copied into loadable output. With the explicit
+static relocation and no-unwind profile, two independently compiled objects
+linked through `R_X86_64_PLT32`; a naked process entry called the later helper,
+issued Linux `exit`, and returned status 42 from the 4,118-byte ELF image under
+the exact ORACLE-0002 Arch WSL environment. Windows and Linux each passed 707
+core tests and four driver tests. Default PIC `R_X86_64_GOTPCREL`, multiple
+split text sections per ELF object, `.eh_frame`, and relocated debug sections
+remain fail-closed.
+
 This increment does **not** emit PE imports/exports/base
 relocations/debug data, emit ELF dynamic metadata/interpreter/PIE/sections,
 accelerate archive extraction through symbol indexes, read thin archives or
