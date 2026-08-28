@@ -28,9 +28,15 @@ pub enum LinkerError {
 pub struct LinkRelocation<'a> {
     /// Offset of the four-byte x86-64 PC-relative field in this input's text.
     pub offset: usize,
-    pub symbol: &'a str,
+    pub target: LinkRelocationTarget<'a>,
     /// Explicit object-format addend. A call/jump rel32 normally uses `-4`.
     pub addend: i64,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum LinkRelocationTarget<'a> {
+    Symbol(&'a str),
+    ReadonlyData(usize),
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -162,14 +168,31 @@ pub fn decode_x86_64_coff<'a>(
                     .ok_or(LinkerError::OffsetOverflow)?,
             )
             .ok_or(LinkerError::OffsetOverflow)?;
-        if read_i16(object, target_offset + 12)? != 0 {
+        let target_section = read_i16(object, target_offset + 12)?;
+        let field_addend = read_i32(text, field_offset)?;
+        let (target, addend) = if target_section == 0 {
+            (
+                LinkRelocationTarget::Symbol(coff_symbol_name(
+                    object,
+                    target_offset,
+                    symbols_end,
+                    string_size,
+                )?),
+                i64::from(field_addend) - 4,
+            )
+        } else if target_section == 2 && read_u32(object, target_offset + 8)? == 0 {
+            let data_offset =
+                usize::try_from(field_addend).map_err(|_| LinkerError::InvalidRelocationOffset)?;
+            if data_offset > readonly_data.len() {
+                return Err(LinkerError::InvalidRelocationOffset);
+            }
+            (LinkRelocationTarget::ReadonlyData(data_offset), -4)
+        } else {
             return Err(LinkerError::UnsupportedCoff);
-        }
-        let target = coff_symbol_name(object, target_offset, symbols_end, string_size)?;
-        let addend = i64::from(read_i32(text, field_offset)?) - 4;
+        };
         relocation_storage[index] = LinkRelocation {
             offset: field_offset,
-            symbol: target,
+            target,
             addend,
         };
     }
@@ -240,7 +263,15 @@ pub fn link_x86_64_static<const MAX_BYTES: usize>(
             }
         }
         for relocation in input.relocations {
-            validate_symbol(relocation.symbol)?;
+            match relocation.target {
+                LinkRelocationTarget::Symbol(symbol) => validate_symbol(symbol)?,
+                LinkRelocationTarget::ReadonlyData(offset)
+                    if offset > input.readonly_data.len() =>
+                {
+                    return Err(LinkerError::InvalidRelocationOffset);
+                }
+                LinkRelocationTarget::ReadonlyData(_) => {}
+            }
             relocation
                 .offset
                 .checked_add(4)
@@ -292,7 +323,13 @@ pub fn link_x86_64_static<const MAX_BYTES: usize>(
                 .text
                 .checked_add(relocation.offset)
                 .ok_or(LinkerError::OffsetOverflow)?;
-            let target = resolve_symbol(inputs, &layouts, relocation.symbol)?;
+            let target = match relocation.target {
+                LinkRelocationTarget::Symbol(symbol) => resolve_symbol(inputs, &layouts, symbol)?,
+                LinkRelocationTarget::ReadonlyData(offset) => layout
+                    .readonly
+                    .checked_add(offset)
+                    .ok_or(LinkerError::OffsetOverflow)?,
+            };
             let displacement = i64::try_from(target)
                 .map_err(|_| LinkerError::OffsetOverflow)?
                 .checked_add(relocation.addend)
@@ -446,12 +483,12 @@ mod tests {
     fn links_forward_and_backward_calls_after_freezing_layout() {
         let to_helper = LinkRelocation {
             offset: 1,
-            symbol: "helper",
+            target: LinkRelocationTarget::Symbol("helper"),
             addend: -4,
         };
         let to_entry = LinkRelocation {
             offset: 1,
-            symbol: "entry",
+            target: LinkRelocationTarget::Symbol("entry"),
             addend: -4,
         };
         let inputs = [
@@ -502,7 +539,7 @@ mod tests {
         );
         let bad = LinkRelocation {
             offset: 0,
-            symbol: "same",
+            target: LinkRelocationTarget::Symbol("same"),
             addend: 0,
         };
         let invalid = LinkInput {
@@ -534,7 +571,7 @@ mod tests {
         let callee = emit_x86_64_coff::<192, 8>("answer_helper", &callee_code).unwrap();
         let mut caller_relocations = [LinkRelocation {
             offset: 0,
-            symbol: "unused",
+            target: LinkRelocationTarget::Symbol("unused"),
             addend: 0,
         }; MAX_LINK_RELOCATIONS];
         let mut callee_relocations = caller_relocations;
@@ -560,7 +597,7 @@ mod tests {
             emit_x86_64_coff_with_relocation::<256, 8>("entry", &code, relocation).unwrap();
         let empty_storage = [LinkRelocation {
             offset: 0,
-            symbol: "unused",
+            target: LinkRelocationTarget::Symbol("unused"),
             addend: 0,
         }; MAX_LINK_RELOCATIONS];
         let mut truncated_storage = empty_storage;
@@ -588,5 +625,43 @@ mod tests {
             decode_x86_64_coff(&wrong_relocation[..object.len()], &mut relocation_storage),
             Err(LinkerError::UnsupportedCoff)
         );
+    }
+
+    #[test]
+    fn decodes_and_links_coff_readonly_section_relocations() {
+        use crate::{X86_64ReadonlyRelocation, emit_x86_64_coff_with_readonly_data};
+
+        let code = MachineCode::<8>::from_bytes_for_test(&[0x48, 0x8d, 0x05, 0, 0, 0, 0, 0xc3]);
+        let object = emit_x86_64_coff_with_readonly_data::<256, 8>(
+            "literal",
+            &code,
+            b"hello",
+            &[X86_64ReadonlyRelocation {
+                offset: 3,
+                data_offset: 1,
+            }],
+        )
+        .unwrap();
+        let mut storage = [LinkRelocation {
+            offset: 0,
+            target: LinkRelocationTarget::Symbol("unused"),
+            addend: 0,
+        }; MAX_LINK_RELOCATIONS];
+        let decoded = decode_x86_64_coff(object.bytes(), &mut storage).unwrap();
+        assert_eq!(
+            decoded.relocations,
+            &[LinkRelocation {
+                offset: 3,
+                target: LinkRelocationTarget::ReadonlyData(1),
+                addend: -4,
+            }]
+        );
+        let linked = link_x86_64_static::<64>(&[decoded], "literal").unwrap();
+        assert_eq!(linked.readonly_offset(), 16);
+        assert_eq!(
+            i32::from_le_bytes(linked.bytes()[3..7].try_into().unwrap()),
+            10
+        );
+        assert_eq!(&linked.bytes()[16..21], b"hello");
     }
 }

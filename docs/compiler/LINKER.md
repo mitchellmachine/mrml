@@ -17,6 +17,11 @@ names, one defined function symbol, bounded undefined symbols, and
 range, relocation-type, and truncation checks precede linking. This is compiler
 object ingestion, not general COFF compatibility.
 
+Relocation targets are typed as either a named code symbol or a bounded offset
+within the originating input's read-only data. COFF `.rdata` section-symbol
+relocations therefore retain their exact local data identity without inventing
+a public symbol or entering the global name-resolution path.
+
 The pass structure is informed by mold's public design notes: establish output
 layout early, run a small sequence of understandable passes, and keep per-input
 validation, copying, and per-relocation work independent so a hosted driver can

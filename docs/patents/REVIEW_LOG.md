@@ -9166,3 +9166,12 @@ It adds adversarial range, type, capacity, truncation, and arithmetic checks,
 not a new object format, symbol-resolution algorithm, executable format,
 compression mechanism, cryptographic primitive, or dynamic-loading protocol.
 This technical screen is not legal advice or patent clearance.
+
+# 2026-08-28 — Typed COFF read-only relocation targets
+
+Patent review: **NOT_TRIGGERED**. This increment distinguishes conventional
+named code-symbol relocations from bounded offsets into an input object's
+`.rdata`, then applies the existing standard signed PC-relative arithmetic. It
+adds a type distinction and adversarial bounds checks, not a new relocation,
+symbol-resolution, deduplication, compression, executable-format, or loading
+algorithm. This technical screen is not legal advice or patent clearance.
