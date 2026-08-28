@@ -37,6 +37,7 @@ const MRML_V1_STR_SOURCE: &str = "#[mrml_abi::export(version = 1)] pub fn probe(
 const MRML_V1_MUT_SLICE_SOURCE: &str = "#[mrml_abi::export(version = 1)] pub fn probe(input: &mut [u8]) -> u64 { input[0] += 3; let last: usize = input.len() - 1; input[last] += 5; input[0] as u64 + input[last] as u64 * 2 + input.len() as u64 * 3 }";
 const MRML_V1_SLICE_RETURN_SOURCE: &str =
     "#[mrml_abi::export(version = 1)] pub fn probe(input: &[u8]) -> &[u8] { input }";
+const MRML_V1_STR_RETURN_SOURCE: &str = "#[mrml_abi::export(version = 1)] pub fn probe(input: &str, alternate: bool) -> &str { if alternate { \"MRML\" } else { input } }";
 #[cfg(target_os = "windows")]
 const MRML_V1_SPLIT_SLICE_SOURCE: &str = "#[mrml_abi::export(version = 1)] pub fn probe(a: u64, b: u64, c: u64, input: &[u8]) -> u64 { a + b * 2 + c * 3 + input.len() as u64 }";
 #[cfg(not(target_os = "windows"))]
@@ -296,13 +297,19 @@ struct OracleDirectory(PathBuf);
 
 impl OracleDirectory {
     fn create() -> Self {
-        let sequence = ORACLE_DIRECTORY.fetch_add(1, Ordering::Relaxed);
-        let path = std::env::temp_dir().join(format!(
-            "mrml-rustc-oracle-{}-{sequence}",
-            std::process::id()
-        ));
-        fs::create_dir(&path).expect("create isolated oracle directory");
-        Self(path)
+        for _ in 0..64 {
+            let sequence = ORACLE_DIRECTORY.fetch_add(1, Ordering::Relaxed);
+            let path = std::env::temp_dir().join(format!(
+                "mrml-rustc-oracle-{}-{sequence}",
+                std::process::id()
+            ));
+            match fs::create_dir(&path) {
+                Ok(()) => return Self(path),
+                Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => continue,
+                Err(error) => panic!("create isolated oracle directory: {error}"),
+            }
+        }
+        panic!("create isolated oracle directory: collision limit exceeded")
     }
 
     fn path(&self) -> &Path {
@@ -588,6 +595,65 @@ fn mrml_v1_slice_facade_returns_pointer_and_length_words() {
         rustc_mrml_v1_observations(
             MRML_V1_SLICE_RETURN_SOURCE,
             "let input = [10, 20, 30, 40, 50]; let returned = probe(&input); println!(\"{}\", returned.len()); println!(\"{}\", returned[0]); println!(\"{}\", returned[returned.len() - 1]);",
+        )
+    );
+}
+
+unsafe fn call_mrml_v1_str_return(
+    function: *const u8,
+    input: &str,
+    alternate: bool,
+) -> (*const u8, u64) {
+    let returned_pointer: *const u8;
+    let returned_length: u64;
+    #[cfg(target_os = "windows")]
+    unsafe {
+        core::arch::asm!(
+            "sub rsp, 32",
+            "call {function}",
+            "add rsp, 32",
+            function = in(reg) function,
+            in("rcx") input.as_ptr(),
+            inlateout("rdx") input.len() as u64 => returned_length,
+            in("r8") u64::from(alternate),
+            lateout("rax") returned_pointer,
+            clobber_abi("C"),
+        );
+    }
+    #[cfg(not(target_os = "windows"))]
+    unsafe {
+        core::arch::asm!(
+            "call {function}",
+            function = in(reg) function,
+            in("rdi") input.as_ptr(),
+            in("rsi") input.len() as u64,
+            inlateout("rdx") u64::from(alternate) => returned_length,
+            lateout("rax") returned_pointer,
+            clobber_abi("C"),
+        );
+    }
+    (returned_pointer, returned_length)
+}
+
+#[test]
+fn mrml_v1_string_facade_returns_input_or_readonly_literal_words() {
+    let code = compile(MRML_V1_STR_RETURN_SOURCE);
+    let input = "Möbius";
+    let mut actual = Vec::new();
+    for alternate in [false, true] {
+        let (pointer, length) = unsafe { call_mrml_v1_str_return(code.pointer, input, alternate) };
+        let returned = unsafe { std::slice::from_raw_parts(pointer, length as usize) };
+        actual.extend([
+            length,
+            u64::from(returned[0]),
+            u64::from(returned[length as usize - 1]),
+        ]);
+    }
+    assert_eq!(
+        actual,
+        rustc_mrml_v1_observations(
+            MRML_V1_STR_RETURN_SOURCE,
+            "for alternate in [false, true] { let returned = probe(\"Möbius\", alternate); println!(\"{}\", returned.len()); println!(\"{}\", returned.as_bytes()[0]); println!(\"{}\", returned.as_bytes()[returned.len() - 1]); }",
         )
     );
 }
