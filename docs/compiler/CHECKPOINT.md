@@ -9,8 +9,8 @@ the named commit and current source.
 ## Recoverable baseline
 
 - Branch: `main`
-- Compiler checkpoint commit: `39e43c02`
-  (`compiler: right-size linker output arenas`)
+- Compiler checkpoint commit: `565ae9f6`
+  (`compiler: preserve static archive ordering`)
 - Remote state when recorded: `origin/main` includes the bounded MRML-owned
   static-link core, exact MRML COFF and ELF64 ingestion, deterministic
   import-free PE32+/ELF64 executable serialization, explicit compiler-driver
@@ -145,6 +145,14 @@ objects (2,976 bytes total) and the same 50 iterations/five warmups. MRML
 measured 10.514 ms median; pinned gnullvm rust-lld measured 28.747 ms. Matching
 1,024-byte outputs returned 42. This is a scoped 2.73x result for that small
 import-free workload only.
+
+Commit `565ae9f6` gives each input archive a bounded identity and applies
+left-to-right static selection. Explicit objects are admitted when encountered;
+one archive rescans its own contiguous members to a fixed point and is not
+revisited for unresolved symbols introduced later. A focused test distinguishes
+an earlier archive from the same archive placed after the referring object. The
+full Windows suite passed with 694 core tests and 3 driver tests, and the release
+driver built. Explicit archive groups and thin archives remain unsupported.
 
 Patent review: **NOT_TRIGGERED** for these conventional bounded linker,
 serializer, command-routing, and benchmark increments; see
