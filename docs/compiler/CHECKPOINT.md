@@ -9,8 +9,8 @@ the named commit and current source.
 ## Recoverable baseline
 
 - Branch: `main`
-- Compiler checkpoint commit: `c227bd73`
-  (`compiler: reuse selected ELF views`)
+- Compiler checkpoint commit: `6d35c386`
+  (`compiler: link x86-64 absolute32 relocations`)
 - Remote state when recorded: `origin/main` includes the bounded MRML-owned
   static-link core, exact MRML COFF and ELF64 ingestion, deterministic
   import-free PE32+/ELF64 executable serialization, explicit compiler-driver
@@ -60,6 +60,16 @@ against all prior accepted probes. Keep Cargo on edition 2024 until a newer
 named edition can be adopted through a pinned, workspace-wide migration.
 
 ## Latest bounded linker milestone
+
+Commit `6d35c386` admits conventional x86-64 `R_X86_64_32` records in the
+selected-section path and applies checked unsigned `S + A` arithmetic, failing
+closed when the result does not fit four bytes. The exact pinned libcore archive
+contains 8,403 such relocations. An independently authored pinned-rustc object
+with an `R_X86_64_32` reference linked through the public driver and exited 42
+under Arch Linux WSL. Windows gnullvm and native Arch Linux WSL each passed 729
+core unit tests, the 2/10/351/36-test integration suites, and five driver tests.
+This is exact relocation and controlled hosted execution evidence, not general
+libcore conformance.
 
 Commit `c227bd73` caches each input's validated ELF symbol/string table view
 during cross-object reachability, reuses the already decoded selected-section

@@ -772,6 +772,15 @@ reachable pinned-libcore probe. All outputs exited 42. This preserves the
 workload-specific core advantage but does not make MRML faster on the tiny
 explicit-object probes; no broad superiority claim follows.
 
+The selected relocation path also admits conventional unsigned absolute-32
+`R_X86_64_32` records. It computes the ABI-defined `S + A` value only after
+resolving the exact selected target and rejects any result outside `u32` rather
+than truncating it. The exact pinned libcore archive contains 8,403 records of
+this type. An independently authored pinned-rustc object carrying one such
+reference linked through the public driver with the controlled process-entry
+wrapper and exited 42 under Arch Linux WSL. Signed absolute-32 and TLS
+relocations remain unsupported.
+
 This increment does **not** emit PE imports/exports/base
 relocations/debug data, emit ELF dynamic metadata/interpreter/PIE/sections,
 read thin archives or general `.rlib` contents, perform ICF, link dynamically,
