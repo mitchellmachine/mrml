@@ -12,6 +12,7 @@ pub mod codegen;
 pub mod expression;
 pub mod ir;
 pub mod lexer;
+pub mod linker;
 pub mod object;
 pub mod parser;
 pub mod pipeline;
@@ -44,6 +45,10 @@ pub use ir::{
     lower_expression_with_pointer_bits,
 };
 pub use lexer::{LexError, LexErrorKind, Lexer, Span, Token, TokenKind};
+pub use linker::{
+    LinkInput, LinkRelocation, LinkedImage, LinkerError, MAX_LINK_INPUTS, MAX_LINK_RELOCATIONS,
+    link_x86_64_static,
+};
 pub use object::{
     MAX_X86_64_RELOCATIONS, ObjectError, ObjectFile, X86_64PcRelativeRelocation,
     X86_64PcRelativeRelocationKind, X86_64ReadonlyRelocation, emit_elf64_x86_64,

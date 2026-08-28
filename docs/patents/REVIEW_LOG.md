@@ -9144,3 +9144,14 @@ introduces no device protocol, command-queue algorithm, DMA mechanism,
 interrupt-delivery design, cryptographic primitive, compression mechanism, or
 new authority model. This technical screen is not legal advice or patent
 clearance.
+
+# 2026-08-28 — Bounded deterministic static-link core
+
+Patent review: **NOT_TRIGGERED**. This increment uses conventional ordered
+section layout, exact symbol-name matching, bounded byte copying, and standard
+x86-64 signed PC-relative relocation arithmetic over already-decoded fragments.
+Its serial-pass/data-parallel-ready organization follows public performance
+research but introduces no new linking algorithm, object format, executable
+format, compression, cryptographic primitive, dynamic-loading mechanism, or
+runtime security protocol. This technical screen is not legal advice or patent
+clearance, and broader linker completion remains partial.
