@@ -9,8 +9,8 @@ the named commit and current source.
 ## Recoverable baseline
 
 - Branch: `main`
-- Compiler checkpoint commit: `3f9fbd13`
-  (`compiler: link bounded gnullvm rlib shape`)
+- Compiler checkpoint commit: `e390047f`
+  (`compiler: select archive object fragments atomically`)
 - Remote state when recorded: `origin/main` includes the bounded MRML-owned
   static-link core, exact MRML COFF and ELF64 ingestion, deterministic
   import-free PE32+/ELF64 executable serialization, explicit compiler-driver
@@ -164,6 +164,14 @@ PE and Windows returned 42. The full Windows compiler suite passed with 695
 core tests and 3 driver tests. This is one simple hosted `.rlib` shape only;
 multiple COMDATs, COMDAT selection, writable/BSS data, unwind data, bitcode
 sections, and representative Rust libraries remain unsupported.
+
+Commit `e390047f` adds a bounded object-member identity to left-to-right archive
+selection. Selecting any fragment with the same nonzero archive/member pair
+extracts every fragment of that object atomically; explicit inputs must retain
+member identity zero. The full Windows compiler suite passed with 697 core, 2
+component, 10 conformance, 351 replacement, and 23 semantic-execution tests.
+This is selection infrastructure for multi-section gnullvm objects, not yet
+multi-COMDAT or `.pdata`/`.xdata` decoding or PE exception serialization.
 
 Patent review: **NOT_TRIGGERED** for these conventional bounded linker,
 serializer, command-routing, and benchmark increments; see
