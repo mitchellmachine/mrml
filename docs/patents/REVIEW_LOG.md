@@ -9496,3 +9496,13 @@ a separate RW/NX load using checked alignment and zero-fill memory sizing. It
 introduces no new relocation, storage encoding, packing, compression,
 cryptographic mechanism, or loader algorithm. This technical screen is not
 legal advice or patent clearance.
+
+# 2026-08-28 — Bounded initialized-data absolute relocations
+
+Patent review: **NOT_TRIGGERED**. This increment applies the documented
+conventional ELF x86-64 `R_X86_64_64` relocation to an eight-byte initialized
+data field targeting local text or read-only storage, with fixed bounds and
+checked address arithmetic. It introduces no new relocation encoding, dynamic
+linking, position-independent loading, compression, cryptographic mechanism,
+or loader algorithm. This technical screen is not legal advice or patent
+clearance.

@@ -46,7 +46,8 @@ pub use ir::{
 };
 pub use lexer::{LexError, LexErrorKind, Lexer, Span, Token, TokenKind};
 pub use linker::{
-    ArchiveMember, ArchiveMembers, ElfImage, ElfUnwindData, ElfUnwindRelocation, ElfWritableData,
+    ArchiveMember, ArchiveMembers, ElfImage, ElfUnwindData, ElfUnwindRelocation,
+    ElfWritableAbsoluteRelocation, ElfWritableAbsoluteTarget, ElfWritableData,
     ElfWritableReference, ElfWritableTarget, LinkDefinition, LinkInput, LinkInputSelection,
     LinkRelocation, LinkRelocationTarget, LinkedImage, LinkerError, MAX_ARCHIVE_MEMBERS,
     MAX_LINK_DEFINITIONS, MAX_LINK_INPUTS, MAX_LINK_RELOCATIONS, MAX_PE_RUNTIME_FUNCTIONS, PeImage,

@@ -459,6 +459,31 @@ bytes. This is narrow hosted evidence only. ELF TLS, COMMON symbols,
 copy/dynamic relocations, constructors, and general writable Rust runtime state
 remain unsupported or unverified.
 
+Initialized ELF writable storage can now also carry bounded `R_X86_64_64`
+relocations to text or read-only data in the same selected input. The decoder
+requires a conventional allocated RELA table linked to the exact symbol table,
+an initialized `.data.*` target, a defined local text/read-only target, an
+eight-byte in-bounds field, and no more than 256 combined absolute relocations.
+The serializer writes the checked final virtual address only after RX, R/NX,
+and RW/NX layout is fixed. Unsupported relocation kinds and targets continue
+to fail closed; this is static absolute-address support, not dynamic relocation
+or position-independent loading.
+
+An independently authored optimized ORACLE-0002 object stored a `&[u8]` fat
+pointer in `.data.*`, with one `R_X86_64_64` relocation to a local
+`.rodata.*` string and two text-side references to the writable record. MRML
+emitted a 12,304-byte ELF whose writable pointer resolved to `0x402000`; the
+program exited 42 under Arch WSL and `readelf -lW` showed separate R, RX, R/NX,
+and RW/NX loads. Linux passed 714 compiler-core tests and four driver tests.
+Windows passed all four driver tests and 713 of 714 compiler-core tests; the
+remaining failure is in concurrently modified MRML ABI codegen and reports
+`UnsupportedRuntimeType`, outside the linker files. Over 50 identical-input
+iterations after five warmups, MRML measured 4.768 ms median and 4.853 ms mean
+versus pinned rust-lld with `--eh-frame-hdr` and the same entry at 5.003 ms
+median and 4.972 ms mean; rust-lld emitted 1,984 bytes. This is narrow hosted,
+process-startup-heavy regression evidence, not a general performance or
+compatibility claim.
+
 This increment does **not** emit PE imports/exports/base
 relocations/debug data, emit ELF dynamic metadata/interpreter/PIE/sections,
 accelerate archive extraction through symbol indexes, read thin archives or

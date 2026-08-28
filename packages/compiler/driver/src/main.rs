@@ -4,10 +4,11 @@
 use mrml_error::{Result, anyhow};
 use mrml_runtime::{Text, Vector, mrml_println as println};
 use mrml_rustc::{
-    CodegenOptions, ElfUnwindData, ElfUnwindRelocation, ElfWritableData, ElfWritableReference,
-    ElfWritableTarget, LinkDefinition, LinkInput, LinkRelocation, LinkRelocationTarget,
-    MAX_LINK_DEFINITIONS, MAX_LINK_INPUTS, MAX_LINK_RELOCATIONS, MAX_PE_RUNTIME_FUNCTIONS,
-    ObjectFormat, PeRuntimeFunction, PeWritableData, PeWritableRelocation, TargetLayout,
+    CodegenOptions, ElfUnwindData, ElfUnwindRelocation, ElfWritableAbsoluteRelocation,
+    ElfWritableAbsoluteTarget, ElfWritableData, ElfWritableReference, ElfWritableTarget,
+    LinkDefinition, LinkInput, LinkRelocation, LinkRelocationTarget, MAX_LINK_DEFINITIONS,
+    MAX_LINK_INPUTS, MAX_LINK_RELOCATIONS, MAX_PE_RUNTIME_FUNCTIONS, ObjectFormat,
+    PeRuntimeFunction, PeWritableData, PeWritableRelocation, TargetLayout,
     compile_source_function_with_options, decode_unix_archive,
     decode_x86_64_coff_runtime_functions, decode_x86_64_coff_text_fragment,
     decode_x86_64_coff_writable_data_fragment, decode_x86_64_elf_unwind,
@@ -668,7 +669,13 @@ fn write_linked_elf(
     let mut unwind_arenas = elf_unwind_relocation_arenas(selected.inputs.len())?;
     let unwind = selected_elf_unwind(objects, &selected, &mut unwind_arenas)?;
     let mut elf_writable_arenas = elf_writable_reference_arenas(selected.inputs.len())?;
-    let elf_writable = selected_elf_writable(objects, &selected, &mut elf_writable_arenas)?;
+    let mut elf_writable_absolute_arenas = elf_writable_absolute_arenas(selected.inputs.len())?;
+    let elf_writable = selected_elf_writable(
+        objects,
+        &selected,
+        &mut elf_writable_arenas,
+        &mut elf_writable_absolute_arenas,
+    )?;
     let mut payload = selected_payload_bound(&selected.inputs, &[], &[])?;
     for data in &unwind {
         payload = payload
@@ -798,26 +805,51 @@ fn selected_elf_writable<'data, 'references>(
     objects: &[&'data [u8]],
     selected: &SelectedLinkInputs<'_, '_, '_>,
     arenas: &'references mut [[ElfWritableReference; MAX_LINK_RELOCATIONS]],
+    absolute_arenas: &'references mut [[ElfWritableAbsoluteRelocation; MAX_LINK_RELOCATIONS]],
 ) -> Result<Vector<ElfWritableData<'data, 'references>>> {
     if selected.inputs.len() != selected.source_object.len()
         || selected.inputs.len() != arenas.len()
+        || selected.inputs.len() != absolute_arenas.len()
     {
         return Err(anyhow!("selected ELF writable input count mismatch"));
     }
     let mut writable = Vector::with_capacity(selected.inputs.len())
         .map_err(|_| anyhow!("could not allocate selected ELF writable list"))?;
-    for (index, arena) in arenas.iter_mut().enumerate() {
+    for (index, (arena, absolute_arena)) in arenas
+        .iter_mut()
+        .zip(absolute_arenas.iter_mut())
+        .enumerate()
+    {
         let object = objects
             .get(selected.source_object[index])
             .ok_or_else(|| anyhow!("selected ELF source-object index is invalid"))?;
         writable
             .try_push(
-                decode_x86_64_elf_writable(object, arena)
+                decode_x86_64_elf_writable(object, arena, absolute_arena)
                     .map_err(|_| anyhow!("could not decode selected ELF writable data"))?,
             )
             .map_err(|_| anyhow!("could not allocate selected ELF writable list"))?;
     }
     Ok(writable)
+}
+
+fn elf_writable_absolute_arenas(
+    count: usize,
+) -> Result<Vector<[ElfWritableAbsoluteRelocation; MAX_LINK_RELOCATIONS]>> {
+    let mut arenas = Vector::with_capacity(count)
+        .map_err(|_| anyhow!("could not allocate ELF writable absolute-relocation arenas"))?;
+    for _ in 0..count {
+        arenas
+            .try_push(
+                [ElfWritableAbsoluteRelocation {
+                    offset: 0,
+                    target: ElfWritableAbsoluteTarget::ReadonlyData(0),
+                    addend: 0,
+                }; MAX_LINK_RELOCATIONS],
+            )
+            .map_err(|_| anyhow!("could not allocate ELF writable absolute-relocation arenas"))?;
+    }
+    Ok(arenas)
 }
 
 fn selected_payload_bound(
