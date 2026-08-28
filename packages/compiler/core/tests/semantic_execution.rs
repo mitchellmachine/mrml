@@ -713,18 +713,20 @@ fn repeated_subslice_then_index_bounds_report_isolated_traps() {
     #[cfg(target_os = "windows")]
     const CHILD: &str = "MRML_SEMANTIC_REPEATED_SUBSLICE_INDEX_TRAP_CHILD";
     let code = compile(
-        "#[unsafe(no_mangle)] pub extern \"C\" fn probe(input: &mut [u32], first: usize, second: usize, index: usize) -> u32 { let selected: &mut u32 = &mut input[first..][second..][index]; *selected }",
+        "#[unsafe(no_mangle)] pub extern \"C\" fn probe(input: &mut [u32], first: usize, second: usize, third: usize, index: usize) -> u32 { let selected: &mut u32 = &mut input[first..][second..][third..][index]; *selected }",
     );
     #[cfg(not(target_os = "windows"))]
-    let probe: unsafe extern "C" fn(*mut u32, usize, usize, usize, usize) -> u32 =
+    let probe: unsafe extern "C" fn(*mut u32, usize, usize, usize, usize, usize) -> u32 =
         unsafe { std::mem::transmute(code.pointer) };
     #[cfg(target_os = "windows")]
-    let probe: unsafe extern "C" fn(*const usize, usize, usize, usize) -> u32 =
+    let probe: unsafe extern "C" fn(*const usize, usize, usize, usize, usize) -> u32 =
         unsafe { std::mem::transmute(code.pointer) };
 
     #[cfg(not(target_os = "windows"))]
     {
-        for (first, second, index) in [(5, 0, 0), (0, 5, 0), (1, 1, 2)] {
+        for (first, second, third, index) in
+            [(5, 0, 0, 0), (0, 5, 0, 0), (1, 1, 3, 0), (1, 1, 0, 2)]
+        {
             let pid = unsafe { fork() };
             assert!(pid >= 0, "fork failed");
             if pid == 0 {
@@ -735,6 +737,7 @@ fn repeated_subslice_then_index_bounds_report_isolated_traps() {
                         values.len(),
                         first,
                         second,
+                        third,
                         index,
                     )
                 };
@@ -749,7 +752,7 @@ fn repeated_subslice_then_index_bounds_report_isolated_traps() {
             assert_eq!(
                 status & 0x7f,
                 4,
-                "unexpected Unix wait status for ({first}, {second}, {index}): {status:#x}"
+                "unexpected Unix wait status for ({first}, {second}, {third}, {index}): {status:#x}"
             );
         }
         return;
@@ -758,19 +761,20 @@ fn repeated_subslice_then_index_bounds_report_isolated_traps() {
     #[cfg(target_os = "windows")]
     if let Some(case) = std::env::var_os(CHILD) {
         unsafe { SetErrorMode(0x0001 | 0x0002) };
-        let (first, second, index) = match case.to_str() {
-            Some("inner") => (5, 0, 0),
-            Some("outer") => (0, 5, 0),
-            _ => (1, 1, 2),
+        let (first, second, third, index) = match case.to_str() {
+            Some("inner") => (5, 0, 0, 0),
+            Some("middle") => (0, 5, 0, 0),
+            Some("outer") => (1, 1, 3, 0),
+            _ => (1, 1, 0, 2),
         };
         let mut values = [10, 20, 30, 40];
         let slice = [values.as_mut_ptr() as usize, values.len()];
-        let _ = unsafe { probe(slice.as_ptr(), first, second, index) };
+        let _ = unsafe { probe(slice.as_ptr(), first, second, third, index) };
         panic!("repeated subslice bounds trap unexpectedly returned");
     }
 
     #[cfg(target_os = "windows")]
-    for case in ["inner", "outer", "index"] {
+    for case in ["inner", "middle", "outer", "index"] {
         let output = Command::new(std::env::current_exe().expect("locate semantic test binary"))
             .args([
                 "--exact",

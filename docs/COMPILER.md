@@ -1009,15 +1009,17 @@ existing four-argument subset. This is bounded by the fixed-capacity place
 representation, not arbitrary projection inference or index-sensitive alias
 reasoning. Both hosts passed the same 1,035-test gate.
 
-The repeated-subslice semantic harness now isolates all three checked failure
-layers. An inner start beyond the runtime owner length, an outer start beyond
-the saved inner length, and a final index exactly equal to the twice-reduced
-length each terminate Windows child processes with
+The repeated-subslice semantic harness now isolates all four checked failure
+layers at depth three. An inner start beyond the runtime owner length, second-
+and third-layer starts beyond their independently saved input lengths, and a
+final index exactly equal to the three-times-reduced length each terminate
+Windows child processes with
 `STATUS_ILLEGAL_INSTRUCTION` and Arch forked children with raw `SIGILL`.
 Normal return and other failure statuses are rejected. Windows gnullvm and Arch
 Linux WSL each passed 659 unit, 1 component-interface, 10 conformance, 351
 replacement, and 14 semantic-execution tests (1,035 total). This is hosted trap
-evidence, not panic-unwind, kernel/VMM, or physical-machine evidence.
+evidence for the runtime-slice path, not panic-unwind, kernel/VMM, or physical-
+machine evidence.
 
 Patent review: `NOT_TRIGGERED`; these increments add execution coverage and a
 bounded provenance classifier for an already implemented bounded place, range,
