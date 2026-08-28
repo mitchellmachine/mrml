@@ -27,9 +27,9 @@ const MAX_CONSTANTS: usize = 64;
 #[cfg_attr(test, allow(dead_code))]
 const MAX_EXPRESSION_NODES: usize = 256;
 #[cfg_attr(test, allow(dead_code))]
-const MAX_LINKED_BYTES: usize = 256 * 1024;
+const MAX_LINKED_BYTES: usize = 2 * 1024 * 1024;
 #[cfg_attr(test, allow(dead_code))]
-const MAX_EXECUTABLE_BYTES: usize = 512 * 1024;
+const MAX_EXECUTABLE_BYTES: usize = 3 * 1024 * 1024;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum EmitKind {
@@ -160,7 +160,7 @@ fn application_main() -> Result<()> {
 
 fn read_link_objects(paths: &[Text]) -> Result<Vector<Vector<u8>>> {
     if paths.is_empty() || paths.len() > MAX_LINK_INPUTS {
-        return Err(anyhow!("link input count must be between 1 and 32"));
+        return Err(anyhow!("link input count must be between 1 and 256"));
     }
     let mut objects = Vector::with_capacity(paths.len())
         .map_err(|_| anyhow!("could not allocate link input list"))?;
@@ -182,7 +182,7 @@ fn link_object_refs(objects: &[Vector<u8>]) -> Result<LinkObjectRefs<'_>> {
             let archive = decode_unix_archive(object).map_err(mrml_error::message)?;
             for member in archive.members() {
                 if refs.len() == MAX_LINK_INPUTS {
-                    return Err(anyhow!("expanded link input count exceeds 32"));
+                    return Err(anyhow!("expanded link input count exceeds 256"));
                 }
                 refs.try_push(member.bytes)
                     .map_err(|_| anyhow!("could not allocate link input reference list"))?;

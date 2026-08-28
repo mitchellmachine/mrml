@@ -79,7 +79,7 @@ read-only data omits `.rdata` rather than emitting a loader-invalid zero-sized
 section.
 
 `mrml-rustc-driver --link-coff INPUT... --entry NAME -o OUTPUT` exposes the same
-bounded path without compilation. It accepts one through 32 ordered inputs,
+bounded path without compilation. It accepts one through 256 ordered inputs,
 loads every bounded object before decoding, gives each input independent
 relocation storage, and retains the input order through deterministic layout.
 Object-data and relocation-storage lifetimes are distinct in the core API, so
@@ -96,12 +96,12 @@ ELF64 object emission/decoding and the MRML ELF serializer without silently
 invoking a system linker.
 
 The linker also has an allocation-free Unix archive container decoder bounded
-to 32 object members. It validates the global magic, every fixed header,
+to 256 object members. It validates the global magic, every fixed header,
 decimal size arithmetic, member terminators, payload ranges, and even-byte
 padding. Ordinary names, GNU `//` long-name tables and `/offset` references,
 and BSD `#1/length` embedded names are decoded; conventional symbol-index
 members are treated as metadata. The driver decodes candidate members in order
-under the same total 32-input bound, always admits explicit objects, and admits
+under the same total 256-input bound, always admits explicit objects, and admits
 an archive member only when it defines the entry or a named relocation target
 from an already selected input. A stable fixed point follows transitive archive
 dependencies while the first selected definition suppresses later unused

@@ -4,9 +4,9 @@
 //! final copy/relocation pass. A hosted driver can therefore parallelize input
 //! validation and relocation scanning later without changing link semantics.
 
-pub const MAX_LINK_INPUTS: usize = 32;
+pub const MAX_LINK_INPUTS: usize = 256;
 pub const MAX_LINK_RELOCATIONS: usize = 256;
-pub const MAX_ARCHIVE_MEMBERS: usize = 32;
+pub const MAX_ARCHIVE_MEMBERS: usize = MAX_LINK_INPUTS;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum LinkerError {

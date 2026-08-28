@@ -9262,3 +9262,12 @@ object's unresolved named relocation, repeating to a fixed point for transitive
 dependencies. It uses no new archive index, resolution, deduplication,
 compression, executable-format, cryptographic, or loading algorithm. This
 technical screen is not legal advice or patent clearance.
+# 2026-08-28 — 256-input bounded linker scaling
+
+Patent review: **NOT_TRIGGERED**. This increment raises an existing fixed input
+and archive-member capacity from 32 to 256 and proportionally raises existing
+driver byte capacities while retaining the same validation, layout, selection,
+relocation, and serialization algorithms. It introduces no new parallel,
+indexing, resolution, deduplication, compression, executable-format,
+cryptographic, or loading mechanism. This technical screen is not legal advice
+or patent clearance.
