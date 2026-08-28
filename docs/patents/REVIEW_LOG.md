@@ -9210,6 +9210,17 @@ interrupt-delivery design, cryptographic primitive, compression mechanism, or
 new authority model. This technical screen is not legal advice or patent
 clearance.
 
+# 2026-08-28 — Reused ELF views and object-only linker fast path
+
+Patent review: **NOT_TRIGGERED**. This increment caches conventional ELF symbol
+and string table slices during bounded section reachability, reuses an already
+validated selected-section view while decoding its definitions and
+relocations, and bypasses archive work queues when every input is an explicit
+object. These are ordinary parsing and allocation-elision techniques. The
+increment introduces no new symbol-resolution algorithm, object or archive
+format, relocation mechanism, compression, cryptographic mechanism, or loader
+behavior. This technical screen is not legal advice or patent clearance.
+
 # 2026-08-28 — Bounded deterministic static-link core
 
 Patent review: **NOT_TRIGGERED**. This increment uses conventional ordered

@@ -1374,6 +1374,19 @@ pub fn decode_x86_64_elf_selected_relocations<'a>(
     selection: &ElfSectionSelection,
 ) -> Result<ElfSelectedRelocations<'a>, LinkerError> {
     let selected_sections = decode_x86_64_elf_selected_sections(object, selection)?;
+    decode_x86_64_elf_selected_relocations_from_sections(object, selection, &selected_sections)
+}
+
+pub fn decode_x86_64_elf_selected_relocations_from_sections<'a>(
+    object: &'a [u8],
+    selection: &ElfSectionSelection,
+    selected_sections: &ElfSelectedSections<'a>,
+) -> Result<ElfSelectedRelocations<'a>, LinkerError> {
+    if selection.object_address != object.as_ptr() as usize
+        || selection.object_length != object.len()
+    {
+        return Err(LinkerError::InvalidElf);
+    }
     let section_offset = to_usize_elf(read_u64_elf(object, 40)?)?;
     let section_count = usize::from(read_u16_elf(object, 60)?);
     let mut selected = [false; MAX_ELF_SECTIONS];
@@ -1515,6 +1528,19 @@ pub fn decode_x86_64_elf_selected_definitions<'a>(
     selection: &ElfSectionSelection,
 ) -> Result<ElfSelectedDefinitions<'a>, LinkerError> {
     let selected_sections = decode_x86_64_elf_selected_sections(object, selection)?;
+    decode_x86_64_elf_selected_definitions_from_sections(object, selection, &selected_sections)
+}
+
+pub fn decode_x86_64_elf_selected_definitions_from_sections<'a>(
+    object: &'a [u8],
+    selection: &ElfSectionSelection,
+    selected_sections: &ElfSelectedSections<'a>,
+) -> Result<ElfSelectedDefinitions<'a>, LinkerError> {
+    if selection.object_address != object.as_ptr() as usize
+        || selection.object_length != object.len()
+    {
+        return Err(LinkerError::InvalidElf);
+    }
     let section_offset = to_usize_elf(read_u64_elf(object, 40)?)?;
     let section_count = usize::from(read_u16_elf(object, 60)?);
     let mut selected_sizes = [None; MAX_ELF_SECTIONS];
@@ -2970,6 +2996,10 @@ pub fn select_x86_64_elf_link_sections<'a>(
             object_length: object.len(),
         };
     }
+    let mut symbol_tables = [None; MAX_LINK_INPUTS];
+    for (index, object) in objects.iter().enumerate() {
+        symbol_tables[index] = Some(elf_symbol_table_view(object)?);
+    }
     let mut unresolved = [None; MAX_ARCHIVE_SYMBOLS];
     unresolved[0] = Some(entry_symbol);
     let mut unresolved_length = 1usize;
@@ -2977,8 +3007,8 @@ pub fn select_x86_64_elf_link_sections<'a>(
     while cursor < unresolved_length {
         let symbol = unresolved[cursor].ok_or(LinkerError::InvalidElf)?;
         cursor += 1;
-        let object_index =
-            resolve_elf_object_definition(objects, symbol)?.ok_or(LinkerError::UndefinedSymbol)?;
+        let object_index = resolve_elf_object_definition(&symbol_tables[..objects.len()], symbol)?
+            .ok_or(LinkerError::UndefinedSymbol)?;
         let addition = select_x86_64_elf_sections(objects[object_index], &[symbol])?;
         let destination = &mut result.selections[object_index];
         for &section in addition.indices() {
@@ -3014,14 +3044,24 @@ pub fn select_x86_64_elf_link_sections<'a>(
     Ok(result)
 }
 
+#[derive(Clone, Copy)]
+struct ElfSymbolTableView<'a> {
+    section_count: usize,
+    symbols: &'a [u8],
+    strings: &'a [u8],
+}
+
 fn resolve_elf_object_definition(
-    objects: &[&[u8]],
+    symbol_tables: &[Option<ElfSymbolTableView<'_>>],
     symbol: &str,
 ) -> Result<Option<usize>, LinkerError> {
     let mut weak = None;
     let mut strong = None;
-    for (object_index, object) in objects.iter().enumerate() {
-        let Some(binding) = elf_object_definition_binding(object, symbol)? else {
+    for (object_index, symbol_table) in symbol_tables.iter().enumerate() {
+        let Some(symbol_table) = symbol_table else {
+            return Err(LinkerError::InvalidElf);
+        };
+        let Some(binding) = elf_object_definition_binding(*symbol_table, symbol)? else {
             continue;
         };
         match binding {
@@ -3037,9 +3077,39 @@ fn resolve_elf_object_definition(
 }
 
 fn elf_object_definition_binding(
-    object: &[u8],
+    symbol_table: ElfSymbolTableView<'_>,
     symbol_name: &str,
 ) -> Result<Option<ElfSelectedSymbolBinding>, LinkerError> {
+    let symbols = symbol_table.symbols;
+    let strings = symbol_table.strings;
+    let section_count = symbol_table.section_count;
+    let mut found = None;
+    for record in symbols[24..].chunks_exact(24) {
+        let name_offset =
+            usize::try_from(read_u32_elf(record, 0)?).map_err(|_| LinkerError::OffsetOverflow)?;
+        if name_offset == 0 || elf_string(strings, name_offset)? != symbol_name {
+            continue;
+        }
+        let section = usize::from(read_u16_elf(record, 6)?);
+        if section == 0 || section == 0xfff1 {
+            continue;
+        }
+        if section >= section_count {
+            return Err(LinkerError::InvalidElf);
+        }
+        let binding = match *record.get(4).ok_or(LinkerError::InvalidElf)? >> 4 {
+            1 => ElfSelectedSymbolBinding::Global,
+            2 => ElfSelectedSymbolBinding::Weak,
+            _ => continue,
+        };
+        if found.replace(binding).is_some() {
+            return Err(LinkerError::DuplicateSymbol);
+        }
+    }
+    Ok(found)
+}
+
+fn elf_symbol_table_view(object: &[u8]) -> Result<ElfSymbolTableView<'_>, LinkerError> {
     if object.get(..7) != Some(b"\x7fELF\x02\x01\x01") {
         return Err(LinkerError::UnsupportedElf);
     }
@@ -3067,30 +3137,11 @@ fn elf_object_definition_binding(
     if symbols.len() % 24 != 0 {
         return Err(LinkerError::InvalidElf);
     }
-    let mut found = None;
-    for record in symbols[24..].chunks_exact(24) {
-        let name_offset =
-            usize::try_from(read_u32_elf(record, 0)?).map_err(|_| LinkerError::OffsetOverflow)?;
-        if name_offset == 0 || elf_string(strings, name_offset)? != symbol_name {
-            continue;
-        }
-        let section = usize::from(read_u16_elf(record, 6)?);
-        if section == 0 || section == 0xfff1 {
-            continue;
-        }
-        if section >= section_count {
-            return Err(LinkerError::InvalidElf);
-        }
-        let binding = match *record.get(4).ok_or(LinkerError::InvalidElf)? >> 4 {
-            1 => ElfSelectedSymbolBinding::Global,
-            2 => ElfSelectedSymbolBinding::Weak,
-            _ => continue,
-        };
-        if found.replace(binding).is_some() {
-            return Err(LinkerError::DuplicateSymbol);
-        }
-    }
-    Ok(found)
+    Ok(ElfSymbolTableView {
+        section_count,
+        symbols,
+        strings,
+    })
 }
 
 /// Decodes the exact bounded ELF64 relocatable subset emitted by `mrml-rustc`.

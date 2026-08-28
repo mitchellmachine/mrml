@@ -14,8 +14,9 @@ use mrml_rustc::{
     PeRuntimeFunction, PeWritableData, PeWritableRelocation, TargetLayout,
     compile_source_function_with_options, decode_unix_archive,
     decode_x86_64_coff_runtime_functions, decode_x86_64_coff_text_fragment,
-    decode_x86_64_coff_writable_data_fragment, decode_x86_64_elf_selected_definitions,
-    decode_x86_64_elf_selected_relocations, decode_x86_64_elf_selected_sections,
+    decode_x86_64_coff_writable_data_fragment,
+    decode_x86_64_elf_selected_definitions_from_sections,
+    decode_x86_64_elf_selected_relocations_from_sections, decode_x86_64_elf_selected_sections,
     decode_x86_64_elf_with_definitions, inventory_x86_64_elf_symbols,
     link_x86_64_elf_selected_executable, link_x86_64_pe_with_data_and_unwind,
     select_ordered_static_link_members, select_x86_64_elf_link_sections,
@@ -219,6 +220,29 @@ fn link_object_refs<'a, T: AsRef<[u8]>>(
         .map_err(|_| anyhow!("could not allocate link input origin list"))?;
     let mut archive_member = Vector::with_capacity(MAX_LINK_INPUTS)
         .map_err(|_| anyhow!("could not allocate link member origin list"))?;
+    if !objects
+        .iter()
+        .any(|object| object.as_ref().get(..8) == Some(b"!<arch>\n"))
+    {
+        for object in objects {
+            refs.try_push(object.as_ref())
+                .map_err(|_| anyhow!("could not allocate link input reference list"))?;
+            archive_group
+                .try_push(0)
+                .map_err(|_| anyhow!("could not allocate link input origin list"))?;
+            archive_member
+                .try_push(0)
+                .map_err(|_| anyhow!("could not allocate link member origin list"))?;
+        }
+        if refs.is_empty() {
+            return Err(anyhow!("link input list contains no object members"));
+        }
+        return Ok(LinkObjectRefs {
+            bytes: refs,
+            archive_group,
+            archive_member,
+        });
+    }
     let mut referenced = Vector::with_capacity(MAX_ARCHIVE_SYMBOLS)
         .map_err(|_| anyhow!("could not allocate unresolved-symbol list"))?;
     let mut defined = Vector::with_capacity(MAX_ARCHIVE_SYMBOLS)
@@ -809,14 +833,28 @@ fn write_linked_elf(
             .map_err(|_| anyhow!("could not allocate selected ELF section views"))?;
         definitions
             .try_push(
-                decode_x86_64_elf_selected_definitions(object, selection).map_err(|error| {
+                decode_x86_64_elf_selected_definitions_from_sections(
+                    object,
+                    selection,
+                    sections
+                        .last()
+                        .ok_or_else(|| anyhow!("selected ELF section view is missing"))?,
+                )
+                .map_err(|error| {
                     anyhow!("could not decode reachable ELF definitions: {}", error)
                 })?,
             )
             .map_err(|_| anyhow!("could not allocate selected ELF definition views"))?;
         relocations
             .try_push(
-                decode_x86_64_elf_selected_relocations(object, selection).map_err(|error| {
+                decode_x86_64_elf_selected_relocations_from_sections(
+                    object,
+                    selection,
+                    sections
+                        .last()
+                        .ok_or_else(|| anyhow!("selected ELF section view is missing"))?,
+                )
+                .map_err(|error| {
                     anyhow!("could not decode reachable ELF relocations: {}", error)
                 })?,
             )
