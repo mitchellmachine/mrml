@@ -9353,3 +9353,12 @@ Patent review: **NOT_TRIGGERED**. This increment validates conventional
 input. It introduces no new unwind, exception-handling, relocation,
 compression, cryptographic, or loading algorithm. This technical screen is not
 legal advice or patent clearance.
+
+# 2026-08-28 — Selected-object PE unwind transport
+
+Patent review: **NOT_TRIGGERED**. This increment carries already decoded
+conventional AMD64 runtime-function records from selected archive objects into
+the existing PE exception serializer, using existing bounded origin and payload
+bookkeeping. It introduces no new unwind, exception-handling, relocation,
+compression, cryptographic, or loading algorithm. This technical screen is not
+legal advice or patent clearance.

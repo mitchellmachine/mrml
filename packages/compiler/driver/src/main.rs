@@ -5,11 +5,11 @@ use mrml_error::{Result, anyhow};
 use mrml_runtime::{Text, Vector, mrml_println as println};
 use mrml_rustc::{
     CodegenOptions, LinkDefinition, LinkInput, LinkRelocation, LinkRelocationTarget,
-    MAX_LINK_DEFINITIONS, MAX_LINK_INPUTS, MAX_LINK_RELOCATIONS, ObjectFormat, TargetLayout,
-    compile_source_function_with_options, decode_unix_archive, decode_x86_64_coff_text_fragment,
-    decode_x86_64_elf_with_definitions, link_x86_64_elf_executable, link_x86_64_pe,
+    MAX_LINK_DEFINITIONS, MAX_LINK_INPUTS, MAX_LINK_RELOCATIONS, MAX_PE_RUNTIME_FUNCTIONS,
+    ObjectFormat, PeRuntimeFunction, TargetLayout, compile_source_function_with_options,
+    decode_unix_archive, decode_x86_64_coff_runtime_functions, decode_x86_64_coff_text_fragment,
+    decode_x86_64_elf_with_definitions, link_x86_64_elf_executable, link_x86_64_pe_with_unwind,
     select_ordered_static_link_members, x86_64_coff_text_fragment_count,
-    x86_64_coff_unwind_section_count,
 };
 
 #[cfg_attr(test, allow(dead_code))]
@@ -47,6 +47,12 @@ struct LinkObjectRefs<'a> {
 }
 
 struct DecodedLinkInputs<'data, 'relocations, 'definitions> {
+    inputs: Vector<LinkInput<'data, 'relocations, 'definitions>>,
+    archive_group: Vector<u16>,
+    archive_member: Vector<u16>,
+}
+
+struct SelectedLinkInputs<'data, 'relocations, 'definitions> {
     inputs: Vector<LinkInput<'data, 'relocations, 'definitions>>,
     archive_group: Vector<u16>,
     archive_member: Vector<u16>,
@@ -260,11 +266,6 @@ fn decode_link_inputs<'data, 'relocations, 'definitions>(
     for (object_index, object) in objects.iter().enumerate() {
         let fragment_count = match format {
             ObjectFormat::Coff => {
-                if x86_64_coff_unwind_section_count(object).map_err(mrml_error::message)? != 0 {
-                    return Err(anyhow!(
-                        "COFF unwind sections require PE exception metadata support"
-                    ));
-                }
                 x86_64_coff_text_fragment_count(object).map_err(mrml_error::message)?
             }
             ObjectFormat::Elf64 => 1,
@@ -355,11 +356,6 @@ fn expanded_fragment_count(objects: &[&[u8]], format: ObjectFormat) -> Result<us
     for object in objects {
         let object_fragments = match format {
             ObjectFormat::Coff => {
-                if x86_64_coff_unwind_section_count(object).map_err(mrml_error::message)? != 0 {
-                    return Err(anyhow!(
-                        "COFF unwind sections require PE exception metadata support"
-                    ));
-                }
                 x86_64_coff_text_fragment_count(object).map_err(mrml_error::message)?
             }
             ObjectFormat::Elf64 => 1,
@@ -379,18 +375,65 @@ fn selected_link_inputs<'data, 'relocations, 'definitions>(
     archive_group: &[u16],
     archive_member: &[u16],
     entry: &str,
-) -> Result<Vector<LinkInput<'data, 'relocations, 'definitions>>> {
+) -> Result<SelectedLinkInputs<'data, 'relocations, 'definitions>> {
     let selection =
         select_ordered_static_link_members(inputs, archive_group, archive_member, entry)
             .map_err(mrml_error::message)?;
     let mut selected = Vector::with_capacity(selection.indices().len())
         .map_err(|_| anyhow!("could not allocate selected link input list"))?;
+    let mut selected_group = Vector::with_capacity(selection.indices().len())
+        .map_err(|_| anyhow!("could not allocate selected link origin list"))?;
+    let mut selected_member = Vector::with_capacity(selection.indices().len())
+        .map_err(|_| anyhow!("could not allocate selected link member list"))?;
     for index in selection.indices() {
         selected
             .try_push(inputs[*index])
             .map_err(|_| anyhow!("could not allocate selected link input list"))?;
+        selected_group
+            .try_push(archive_group[*index])
+            .map_err(|_| anyhow!("could not allocate selected link origin list"))?;
+        selected_member
+            .try_push(archive_member[*index])
+            .map_err(|_| anyhow!("could not allocate selected link member list"))?;
     }
-    Ok(selected)
+    Ok(SelectedLinkInputs {
+        inputs: selected,
+        archive_group: selected_group,
+        archive_member: selected_member,
+    })
+}
+
+fn selected_runtime_functions<'data>(
+    objects: &[&'data [u8]],
+    archive_group: &[u16],
+    archive_member: &[u16],
+    selected: &SelectedLinkInputs<'_, '_, '_>,
+    arena: &mut [PeRuntimeFunction<'data>; MAX_PE_RUNTIME_FUNCTIONS],
+) -> Result<Vector<PeRuntimeFunction<'data>>> {
+    let mut runtime_functions = Vector::with_capacity(MAX_PE_RUNTIME_FUNCTIONS)
+        .map_err(|_| anyhow!("could not allocate selected runtime-function list"))?;
+    for object_index in 0..objects.len() {
+        let selected_object = selected
+            .archive_group
+            .iter()
+            .zip(selected.archive_member.iter())
+            .any(|(group, member)| {
+                *group == archive_group[object_index] && *member == archive_member[object_index]
+            });
+        if selected_object {
+            for function in decode_x86_64_coff_runtime_functions(objects[object_index], arena)
+                .map_err(mrml_error::message)?
+            {
+                if runtime_functions.len() == MAX_PE_RUNTIME_FUNCTIONS {
+                    return Err(anyhow!("selected PE runtime-function count exceeds 256"));
+                }
+                runtime_functions
+                    .try_push(*function)
+                    .map_err(|_| anyhow!("could not allocate selected runtime-function list"))?;
+            }
+        }
+    }
+    Ok(runtime_functions)
 }
 
 fn write_linked_pe(
@@ -417,23 +460,54 @@ fn write_linked_pe(
         &decoded.archive_member,
         entry,
     )?;
-    let payload = selected_payload_bound(&selected)?;
+    let mut runtime_arena = [PeRuntimeFunction {
+        begin_symbol: "unused",
+        begin_offset: 0,
+        end_symbol: "unused",
+        end_offset: 0,
+        unwind_info: &[],
+    }; MAX_PE_RUNTIME_FUNCTIONS];
+    let runtime_functions = selected_runtime_functions(
+        objects,
+        archive_group,
+        archive_member,
+        &selected,
+        &mut runtime_arena,
+    )?;
+    let payload = selected_payload_bound(&selected.inputs, &runtime_functions)?;
     if payload <= 16 * 1024 {
-        return write_pe_image::<{ 32 * 1024 }, { 16 * 1024 }>(&selected, entry, output);
+        return write_pe_image::<{ 32 * 1024 }, { 16 * 1024 }>(
+            &selected.inputs,
+            &runtime_functions,
+            entry,
+            output,
+        );
     }
     if payload <= 256 * 1024 {
-        return write_pe_image::<{ 512 * 1024 }, { 256 * 1024 }>(&selected, entry, output);
+        return write_pe_image::<{ 512 * 1024 }, { 256 * 1024 }>(
+            &selected.inputs,
+            &runtime_functions,
+            entry,
+            output,
+        );
     }
-    write_pe_image::<MAX_EXECUTABLE_BYTES, MAX_LINKED_BYTES>(&selected, entry, output)
+    write_pe_image::<MAX_EXECUTABLE_BYTES, MAX_LINKED_BYTES>(
+        &selected.inputs,
+        &runtime_functions,
+        entry,
+        output,
+    )
 }
 
 fn write_pe_image<const MAX_IMAGE: usize, const MAX_LINKED: usize>(
     inputs: &[LinkInput<'_, '_, '_>],
+    runtime_functions: &[PeRuntimeFunction<'_>],
     entry: &str,
     output: &str,
 ) -> Result<()> {
     let executable =
-        link_x86_64_pe::<MAX_IMAGE, MAX_LINKED>(inputs, entry).map_err(mrml_error::message)?;
+        link_x86_64_pe_with_unwind::<MAX_IMAGE, MAX_LINKED>(inputs, entry, runtime_functions)
+            .map_err(mrml_error::message)?;
     mrml_runtime::write_file(output, executable.bytes())?;
     println!(
         "linked {} to {} deterministic PE bytes",
@@ -467,14 +541,14 @@ fn write_linked_elf(
         &decoded.archive_member,
         entry,
     )?;
-    let payload = selected_payload_bound(&selected)?;
+    let payload = selected_payload_bound(&selected.inputs, &[])?;
     if payload <= 16 * 1024 {
-        return write_elf_image::<{ 32 * 1024 }, { 16 * 1024 }>(&selected, entry, output);
+        return write_elf_image::<{ 32 * 1024 }, { 16 * 1024 }>(&selected.inputs, entry, output);
     }
     if payload <= 256 * 1024 {
-        return write_elf_image::<{ 512 * 1024 }, { 256 * 1024 }>(&selected, entry, output);
+        return write_elf_image::<{ 512 * 1024 }, { 256 * 1024 }>(&selected.inputs, entry, output);
     }
-    write_elf_image::<MAX_EXECUTABLE_BYTES, MAX_LINKED_BYTES>(&selected, entry, output)
+    write_elf_image::<MAX_EXECUTABLE_BYTES, MAX_LINKED_BYTES>(&selected.inputs, entry, output)
 }
 
 fn write_elf_image<const MAX_IMAGE: usize, const MAX_LINKED: usize>(
@@ -493,7 +567,10 @@ fn write_elf_image<const MAX_IMAGE: usize, const MAX_LINKED: usize>(
     Ok(())
 }
 
-fn selected_payload_bound(inputs: &[LinkInput<'_, '_, '_>]) -> Result<usize> {
+fn selected_payload_bound(
+    inputs: &[LinkInput<'_, '_, '_>],
+    runtime_functions: &[PeRuntimeFunction<'_>],
+) -> Result<usize> {
     let mut bytes = 4096usize;
     for input in inputs {
         bytes = bytes
@@ -501,6 +578,12 @@ fn selected_payload_bound(inputs: &[LinkInput<'_, '_, '_>]) -> Result<usize> {
             .and_then(|bytes| bytes.checked_add(input.readonly_data.len()))
             .and_then(|bytes| bytes.checked_add(32))
             .ok_or_else(|| anyhow!("selected link payload size overflow"))?;
+    }
+    for function in runtime_functions {
+        bytes = bytes
+            .checked_add(function.unwind_info.len())
+            .and_then(|bytes| bytes.checked_add(16))
+            .ok_or_else(|| anyhow!("selected unwind payload size overflow"))?;
     }
     Ok(bytes)
 }
@@ -596,7 +679,7 @@ mod tests {
             },
         ];
         assert_eq!(
-            selected_payload_bound(&inputs).unwrap(),
+            selected_payload_bound(&inputs, &[]).unwrap(),
             4096 + 3 + 5 + 7 + 64
         );
     }

@@ -176,9 +176,24 @@ Each 12-byte record must have exactly three `IMAGE_REL_AMD64_ADDR32NB`
 relocations at offsets 0, 4, and 8. Begin/end targets must resolve to one
 zero-offset external definition in a bounded text section; the third target
 must resolve at offset zero in a nonempty `.xdata$...` section. Section indices,
-symbol records, addends, payloads, and record capacity are checked. Driver
-selection/transport remains incomplete, so this decoder is not yet an
-end-to-end gnullvm admission claim.
+symbol records, addends, payloads, and record capacity are checked.
+
+The PE driver now transports unwind records only from source objects whose
+`(archive, member)` identity survived object-atomic selection. One reusable
+bounded scratch arena decodes each selected object, copied typed records retain
+only references to immutable object bytes, and payload-tier selection includes
+unwind bytes plus aligned runtime-function entries. The exact pinned
+`nightly-2026-08-24` gnullvm two-function no-std `.rlib` linked to a 1,536-byte
+PE; Windows returned 42. Its exception directory identified one 12-byte record
+covering RVA `0x1000..0x100f` with unwind data at RVA `0x2000`. This proves that
+one exact unwind-bearing rlib shape works on the hosted Windows environment,
+not general Rust library or exception-semantics coverage.
+
+After this integration, the controlled 93-byte no-unwind object benchmark ran
+50 iterations after five warmups. MRML measured 10.081 ms median and 10.260 ms
+mean versus pinned gnullvm rust-lld at 27.632 ms median and 27.791 ms mean. Both
+1,024-byte outputs returned 42. This is narrow regression evidence, not a
+general performance claim.
 
 After driver fragment expansion, the controlled one-object procedure measured
 MRML at 9.275 ms median and 9.361 ms mean versus pinned gnullvm rust-lld at
