@@ -269,6 +269,8 @@ pub struct ElfWritableReference {
 pub enum ElfWritableAbsoluteTarget {
     InputText(usize),
     ReadonlyData(usize),
+    Initialized(usize),
+    Zeroed(usize),
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -2459,6 +2461,27 @@ pub fn decode_x86_64_elf_writable<'data, 'relocations>(
                     text_start,
                     target_value,
                 )?)
+            } else if data_sections.get(target_section).copied().unwrap_or(false) {
+                ElfWritableAbsoluteTarget::Initialized(elf_combined_text_offset(
+                    object,
+                    section_offset,
+                    section_count,
+                    target_section,
+                    data_start,
+                    target_value,
+                )?)
+            } else if bss_sections.get(target_section).copied().unwrap_or(false) {
+                let value = to_usize_elf(target_value)?;
+                let section_header =
+                    elf_section_header(section_offset, section_count, target_section)?;
+                if value > to_usize_elf(read_u64_elf(object, section_header + 32)?)? {
+                    return Err(LinkerError::InvalidRelocationOffset);
+                }
+                ElfWritableAbsoluteTarget::Zeroed(
+                    bss_offsets[target_section]
+                        .checked_add(value)
+                        .ok_or(LinkerError::OffsetOverflow)?,
+                )
             } else {
                 return Err(LinkerError::UnsupportedElf);
             };
@@ -3092,8 +3115,18 @@ pub fn link_x86_64_elf_executable_with_unwind_and_writable<
                 {
                     return Err(LinkerError::InvalidRelocationOffset);
                 }
+                ElfWritableAbsoluteTarget::Initialized(offset)
+                    if offset > data.initialized.len() =>
+                {
+                    return Err(LinkerError::InvalidRelocationOffset);
+                }
+                ElfWritableAbsoluteTarget::Zeroed(offset) if offset > data.zeroed_size => {
+                    return Err(LinkerError::InvalidRelocationOffset);
+                }
                 ElfWritableAbsoluteTarget::InputText(_)
-                | ElfWritableAbsoluteTarget::ReadonlyData(_) => {}
+                | ElfWritableAbsoluteTarget::ReadonlyData(_)
+                | ElfWritableAbsoluteTarget::Initialized(_)
+                | ElfWritableAbsoluteTarget::Zeroed(_) => {}
             }
         }
     }
@@ -3331,19 +3364,25 @@ pub fn link_x86_64_elf_executable_with_unwind_and_writable<
                 .checked_add(relocation.offset)
                 .ok_or(LinkerError::OffsetOverflow)?;
             let target = match relocation.target {
-                ElfWritableAbsoluteTarget::InputText(offset) => linked.layouts[index]
-                    .text
+                ElfWritableAbsoluteTarget::InputText(offset) => TEXT_OFFSET
+                    .checked_add(linked.layouts[index].text)
+                    .and_then(|target| target.checked_add(offset))
+                    .ok_or(LinkerError::OffsetOverflow)?,
+                ElfWritableAbsoluteTarget::ReadonlyData(offset) => TEXT_OFFSET
+                    .checked_add(linked.layouts[index].readonly)
+                    .and_then(|target| target.checked_add(offset))
+                    .ok_or(LinkerError::OffsetOverflow)?,
+                ElfWritableAbsoluteTarget::Initialized(offset) => writable_initialized_layouts
+                    [index]
                     .checked_add(offset)
                     .ok_or(LinkerError::OffsetOverflow)?,
-                ElfWritableAbsoluteTarget::ReadonlyData(offset) => linked.layouts[index]
-                    .readonly
+                ElfWritableAbsoluteTarget::Zeroed(offset) => writable_zeroed_layouts[index]
                     .checked_add(offset)
                     .ok_or(LinkerError::OffsetOverflow)?,
             };
             let target = i64::try_from(
                 IMAGE_BASE
-                    .checked_add(TEXT_OFFSET)
-                    .and_then(|base| base.checked_add(target))
+                    .checked_add(target)
                     .ok_or(LinkerError::OffsetOverflow)?,
             )
             .map_err(|_| LinkerError::OffsetOverflow)?
@@ -5458,16 +5497,28 @@ mod tests {
             readonly_data: &[42],
             relocations: &[],
         };
-        let absolute_relocations = [ElfWritableAbsoluteRelocation {
-            offset: 0,
-            target: ElfWritableAbsoluteTarget::ReadonlyData(0),
-            addend: 0,
-        }];
+        let absolute_relocations = [
+            ElfWritableAbsoluteRelocation {
+                offset: 0,
+                target: ElfWritableAbsoluteTarget::ReadonlyData(0),
+                addend: 0,
+            },
+            ElfWritableAbsoluteRelocation {
+                offset: 8,
+                target: ElfWritableAbsoluteTarget::Initialized(16),
+                addend: 0,
+            },
+            ElfWritableAbsoluteRelocation {
+                offset: 16,
+                target: ElfWritableAbsoluteTarget::Zeroed(0),
+                addend: 0,
+            },
+        ];
         let writable = [ElfWritableData {
-            initialized: &[0; 8],
+            initialized: &[0; 24],
             initialized_alignment: 8,
-            zeroed_size: 0,
-            zeroed_alignment: 1,
+            zeroed_size: 8,
+            zeroed_alignment: 8,
             references: &[],
             absolute_relocations: &absolute_relocations,
         }];
@@ -5479,9 +5530,11 @@ mod tests {
         )
         .unwrap();
         assert_eq!(read_u64_elf(elf.bytes(), 0x3000).unwrap(), 0x402000);
+        assert_eq!(read_u64_elf(elf.bytes(), 0x3008).unwrap(), 0x403010);
+        assert_eq!(read_u64_elf(elf.bytes(), 0x3010).unwrap(), 0x403020);
 
         let invalid_relocations = [ElfWritableAbsoluteRelocation {
-            offset: 1,
+            offset: 17,
             ..absolute_relocations[0]
         }];
         let invalid = [ElfWritableData {

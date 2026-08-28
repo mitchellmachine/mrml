@@ -484,6 +484,24 @@ median and 4.972 ms mean; rust-lld emitted 1,984 bytes. This is narrow hosted,
 process-startup-heavy regression evidence, not a general performance or
 compatibility claim.
 
+The same bounded initialized-data relocation path now accepts typed targets in
+the selected input's initialized and zero-fill storage. Section-symbol values
+are translated through the existing checked data/BSS layouts; the serializer
+then patches absolute addresses from the exact per-input initialized or BSS
+base. Target offsets are revalidated against their distinct storage extents,
+so an initialized target cannot be confused with a zero-fill target.
+
+An independently authored optimized ORACLE-0002 object contained two
+initialized pointer records: one targeting an initialized `u64`, and one
+targeting a zero-fill `u64`. Its two `R_X86_64_64` records and two text-side
+references linked into a 12,312-byte MRML ELF and executed with exit 42 under
+Arch WSL. Windows and Linux each passed 714 compiler-core tests and four driver
+tests. Over 50 identical-input iterations after five warmups, MRML measured
+4.859 ms median and 4.912 ms mean versus pinned rust-lld with
+`--eh-frame-hdr` at 4.869 ms median and 4.909 ms mean; rust-lld emitted 2,200
+bytes. The 0.010 ms median difference is within ordinary process-startup noise
+and is retained only as narrow regression evidence, not a speed claim.
+
 This increment does **not** emit PE imports/exports/base
 relocations/debug data, emit ELF dynamic metadata/interpreter/PIE/sections,
 accelerate archive extraction through symbol indexes, read thin archives or

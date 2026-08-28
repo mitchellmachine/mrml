@@ -9506,3 +9506,12 @@ checked address arithmetic. It introduces no new relocation encoding, dynamic
 linking, position-independent loading, compression, cryptographic mechanism,
 or loader algorithm. This technical screen is not legal advice or patent
 clearance.
+
+# 2026-08-28 — Typed writable absolute-relocation targets
+
+Patent review: **NOT_TRIGGERED**. This increment applies the same conventional
+ELF x86-64 absolute relocation arithmetic to initialized and zero-fill storage
+in the selected object, using existing typed layouts and bounds checks. It
+introduces no new relocation encoding, pointer representation, dynamic-linking
+mechanism, compression, cryptographic mechanism, or loader algorithm. This
+technical screen is not legal advice or patent clearance.
