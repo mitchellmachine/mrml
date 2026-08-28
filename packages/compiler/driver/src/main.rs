@@ -351,7 +351,7 @@ fn scan_link_object_symbols<'a>(
                 decode_x86_64_elf_with_definitions(object, &mut relocations, &mut definitions)
             }
         }
-        .map_err(|_| anyhow!("could not decode archive selection symbols"))?;
+        .map_err(mrml_error::message)?;
         for symbol in core::iter::once(input.symbol).chain(
             input
                 .additional_definitions

@@ -12,6 +12,7 @@ pub const MAX_PE_RUNTIME_FUNCTIONS: usize = 256;
 pub const MAX_ARCHIVE_MEMBERS: usize = 1024;
 pub const MAX_ARCHIVE_SYMBOLS: usize = 4096;
 const MAX_COFF_SECTIONS: usize = 256;
+const MAX_ELF_SECTIONS: usize = 2048;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum LinkerError {
@@ -1645,7 +1646,7 @@ pub fn decode_x86_64_elf_with_definitions<'data, 'relocations, 'definitions>(
     let section_offset = to_usize_elf(read_u64_elf(object, 40)?)?;
     let section_count = usize::from(read_u16_elf(object, 60)?);
     let section_names_index = usize::from(read_u16_elf(object, 62)?);
-    if !(4..=MAX_COFF_SECTIONS).contains(&section_count) || section_names_index >= section_count {
+    if !(4..=MAX_ELF_SECTIONS).contains(&section_count) || section_names_index >= section_count {
         return Err(LinkerError::UnsupportedElf);
     }
     let section_bytes = section_count
@@ -1662,17 +1663,17 @@ pub fn decode_x86_64_elf_with_definitions<'data, 'relocations, 'definitions>(
     let section_names =
         elf_section_contents(object, section_offset, section_count, section_names_index)?;
 
-    let mut text_sections = [false; MAX_COFF_SECTIONS];
+    let mut text_sections = [false; MAX_ELF_SECTIONS];
     let mut text_span = None;
     let mut text_owner = None;
-    let mut readonly_sections = [false; MAX_COFF_SECTIONS];
+    let mut readonly_sections = [false; MAX_ELF_SECTIONS];
     let mut readonly_span = None;
-    let mut writable_sections = [false; MAX_COFF_SECTIONS];
-    let mut relocation_sections = [false; MAX_COFF_SECTIONS];
-    let mut data_relocation_sections = [false; MAX_COFF_SECTIONS];
+    let mut writable_sections = [false; MAX_ELF_SECTIONS];
+    let mut relocation_sections = [false; MAX_ELF_SECTIONS];
+    let mut data_relocation_sections = [false; MAX_ELF_SECTIONS];
     let mut symbols_index = None;
     let mut strings_index = None;
-    let mut ignored_sections = [false; MAX_COFF_SECTIONS];
+    let mut ignored_sections = [false; MAX_ELF_SECTIONS];
     for index in 1..section_count {
         let header = elf_section_header(section_offset, section_count, index)?;
         let name_offset = usize::try_from(read_u32_elf(object, header)?)
@@ -2212,12 +2213,12 @@ pub fn decode_x86_64_elf_unwind<'data, 'relocations>(
     let section_offset = to_usize_elf(read_u64_elf(object, 40)?)?;
     let section_count = usize::from(read_u16_elf(object, 60)?);
     let section_names_index = usize::from(read_u16_elf(object, 62)?);
-    if !(4..=MAX_COFF_SECTIONS).contains(&section_count) || section_names_index >= section_count {
+    if !(4..=MAX_ELF_SECTIONS).contains(&section_count) || section_names_index >= section_count {
         return Err(LinkerError::UnsupportedElf);
     }
     let section_names =
         elf_section_contents(object, section_offset, section_count, section_names_index)?;
-    let mut text_sections = [false; MAX_COFF_SECTIONS];
+    let mut text_sections = [false; MAX_ELF_SECTIONS];
     let mut text_span = None;
     let mut unwind_index = None;
     let mut unwind_relocations_index = None;
@@ -2416,18 +2417,18 @@ pub fn decode_x86_64_elf_writable<'data, 'relocations>(
     let section_offset = to_usize_elf(read_u64_elf(object, 40)?)?;
     let section_count = usize::from(read_u16_elf(object, 60)?);
     let section_names_index = usize::from(read_u16_elf(object, 62)?);
-    if !(4..=MAX_COFF_SECTIONS).contains(&section_count) || section_names_index >= section_count {
+    if !(4..=MAX_ELF_SECTIONS).contains(&section_count) || section_names_index >= section_count {
         return Err(LinkerError::UnsupportedElf);
     }
     let section_names =
         elf_section_contents(object, section_offset, section_count, section_names_index)?;
-    let mut text_sections = [false; MAX_COFF_SECTIONS];
-    let mut readonly_sections = [false; MAX_COFF_SECTIONS];
-    let mut data_sections = [false; MAX_COFF_SECTIONS];
-    let mut bss_sections = [false; MAX_COFF_SECTIONS];
-    let mut bss_offsets = [0usize; MAX_COFF_SECTIONS];
-    let mut relocation_sections = [false; MAX_COFF_SECTIONS];
-    let mut data_relocation_sections = [false; MAX_COFF_SECTIONS];
+    let mut text_sections = [false; MAX_ELF_SECTIONS];
+    let mut readonly_sections = [false; MAX_ELF_SECTIONS];
+    let mut data_sections = [false; MAX_ELF_SECTIONS];
+    let mut bss_sections = [false; MAX_ELF_SECTIONS];
+    let mut bss_offsets = [0usize; MAX_ELF_SECTIONS];
+    let mut relocation_sections = [false; MAX_ELF_SECTIONS];
+    let mut data_relocation_sections = [false; MAX_ELF_SECTIONS];
     let mut text_span = None;
     let mut readonly_span = None;
     let mut data_span = None;

@@ -1,5 +1,14 @@
 # Patent review log
 
+## 2026-08-28 — Separate bounded ELF section inventory
+
+Patent review: **NOT_TRIGGERED** for retaining the 256-section COFF bound while
+raising the independently validated ELF64 section-header inventory to 2,048
+and preserving exact decoder errors through the hosted driver. This is fixed-
+capacity format parsing and diagnostics, not a new section-GC, binary-rewriting,
+compression, hashing, scheduling, cryptographic, or hardware mechanism. This
+technical screen is not patent clearance.
+
 ## 2026-08-28 — Bounded read-only mapped linker inputs
 
 Patent review: **NOT_TRIGGERED** for using the repository's existing native

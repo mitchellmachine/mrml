@@ -695,6 +695,24 @@ its expected exit-42 behavior. Windows and Linux each passed 45 runtime tests
 and five driver tests. These three current hosted samples are positive
 regression evidence, not proof that MRML is generally faster than rust-lld.
 
+ELF and COFF section inventory limits are now distinct. COFF remains capped at
+256 sections, while ELF64 relocatables admit at most 2,048 section headers in
+the primary, unwind, and writable-data passes. This covers the exact pinned
+`libcore` object's 1,702-section table without broadening the PE/COFF surface or
+removing fixed-capacity validation. Archive-selection diagnostics now preserve
+the exact bounded linker error instead of collapsing every member failure into
+one generic driver message.
+
+An independently authored consumer with a retained pointer to exact exported
+core symbol `_RNvNtCs5erv4YX8a5g_4core3fmt17pointer_fmt_inner` causes the pinned
+core object to be selected. It now passes archive, file-size, index, and section-
+count gates before failing closed on the next unsupported ELF feature. Inspection
+shows the object contains relocated read-only section families among its 1,702
+sections; supporting it correctly requires section-level dependency/GC and
+read-only relocation modeling, not blindly copying the entire 3.10 MiB member.
+Windows and Linux each passed 722 core unit tests, all integration suites, and
+five driver tests. Actual core-symbol extraction remains incomplete.
+
 This increment does **not** emit PE imports/exports/base
 relocations/debug data, emit ELF dynamic metadata/interpreter/PIE/sections,
 read thin archives or general `.rlib` contents, perform section GC or ICF, link
