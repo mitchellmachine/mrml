@@ -461,10 +461,170 @@ pub struct ElfLinkSectionSelections {
     length: usize,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct ElfObjectSymbolDefinition<'a> {
+    pub symbol: &'a str,
+    pub binding: ElfSelectedSymbolBinding,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct ElfObjectSymbolInventory<'a> {
+    definitions: [ElfObjectSymbolDefinition<'a>; MAX_ARCHIVE_SYMBOLS],
+    definition_count: usize,
+    references: [&'a str; MAX_ARCHIVE_SYMBOLS],
+    reference_count: usize,
+}
+
+impl<'a> ElfObjectSymbolInventory<'a> {
+    pub fn definitions(&self) -> &[ElfObjectSymbolDefinition<'a>] {
+        &self.definitions[..self.definition_count]
+    }
+
+    pub fn references(&self) -> &[&'a str] {
+        &self.references[..self.reference_count]
+    }
+}
+
 impl ElfLinkSectionSelections {
     pub fn selections(&self) -> &[ElfSectionSelection] {
         &self.selections[..self.length]
     }
+}
+
+/// Inventories externally visible definitions and relocation-referenced
+/// undefined symbols without admitting or decoding unrelated content sections.
+pub fn inventory_x86_64_elf_symbols(
+    object: &[u8],
+) -> Result<ElfObjectSymbolInventory<'_>, LinkerError> {
+    if object.get(..7) != Some(b"\x7fELF\x02\x01\x01")
+        || read_u16_elf(object, 16)? != 1
+        || read_u16_elf(object, 18)? != 62
+        || read_u16_elf(object, 58)? != 64
+    {
+        return Err(LinkerError::UnsupportedElf);
+    }
+    let section_offset = to_usize_elf(read_u64_elf(object, 40)?)?;
+    let section_count = usize::from(read_u16_elf(object, 60)?);
+    if !(4..=MAX_ELF_SECTIONS).contains(&section_count) {
+        return Err(LinkerError::UnsupportedElf);
+    }
+    let mut symbols_index = None;
+    for index in 1..section_count {
+        let header = elf_section_header(section_offset, section_count, index)?;
+        if read_u32_elf(object, header + 4)? == 2 && symbols_index.replace(index).is_some() {
+            return Err(LinkerError::UnsupportedElf);
+        }
+    }
+    let symbols_index = symbols_index.ok_or(LinkerError::InvalidElf)?;
+    let symbols_header = elf_section_header(section_offset, section_count, symbols_index)?;
+    let strings_index = usize::try_from(read_u32_elf(object, symbols_header + 40)?)
+        .map_err(|_| LinkerError::OffsetOverflow)?;
+    if strings_index >= section_count || read_u64_elf(object, symbols_header + 56)? != 24 {
+        return Err(LinkerError::InvalidElf);
+    }
+    let strings_header = elf_section_header(section_offset, section_count, strings_index)?;
+    if read_u32_elf(object, strings_header + 4)? != 3 {
+        return Err(LinkerError::InvalidElf);
+    }
+    let symbols = elf_section_contents(object, section_offset, section_count, symbols_index)?;
+    let strings = elf_section_contents(object, section_offset, section_count, strings_index)?;
+    if symbols.len() % 24 != 0 {
+        return Err(LinkerError::InvalidElf);
+    }
+    let empty = ElfObjectSymbolDefinition {
+        symbol: "",
+        binding: ElfSelectedSymbolBinding::Global,
+    };
+    let mut inventory = ElfObjectSymbolInventory {
+        definitions: [empty; MAX_ARCHIVE_SYMBOLS],
+        definition_count: 0,
+        references: [""; MAX_ARCHIVE_SYMBOLS],
+        reference_count: 0,
+    };
+    for record in symbols[24..].chunks_exact(24) {
+        let binding = match *record.get(4).ok_or(LinkerError::InvalidElf)? >> 4 {
+            1 => ElfSelectedSymbolBinding::Global,
+            2 => ElfSelectedSymbolBinding::Weak,
+            _ => continue,
+        };
+        let section = usize::from(read_u16_elf(record, 6)?);
+        if section == 0 || section == 0xfff1 {
+            continue;
+        }
+        if section >= section_count {
+            return Err(LinkerError::InvalidElf);
+        }
+        let name_offset =
+            usize::try_from(read_u32_elf(record, 0)?).map_err(|_| LinkerError::OffsetOverflow)?;
+        if name_offset == 0 {
+            return Err(LinkerError::EmptySymbol);
+        }
+        let symbol = elf_string(strings, name_offset)?;
+        validate_symbol(symbol)?;
+        if inventory.definitions[..inventory.definition_count]
+            .iter()
+            .any(|definition| definition.symbol == symbol)
+        {
+            return Err(LinkerError::DuplicateSymbol);
+        }
+        if inventory.definition_count == inventory.definitions.len() {
+            return Err(LinkerError::TooManyArchiveSymbols);
+        }
+        inventory.definitions[inventory.definition_count] =
+            ElfObjectSymbolDefinition { symbol, binding };
+        inventory.definition_count += 1;
+    }
+    for index in 1..section_count {
+        let header = elf_section_header(section_offset, section_count, index)?;
+        if read_u32_elf(object, header + 4)? != 4 {
+            continue;
+        }
+        if usize::try_from(read_u32_elf(object, header + 40)?)
+            .map_err(|_| LinkerError::OffsetOverflow)?
+            != symbols_index
+            || read_u64_elf(object, header + 56)? != 24
+        {
+            return Err(LinkerError::UnsupportedElf);
+        }
+        let records = elf_section_contents(object, section_offset, section_count, index)?;
+        if records.len() % 24 != 0 {
+            return Err(LinkerError::InvalidElf);
+        }
+        for relocation in records.chunks_exact(24) {
+            let symbol_index = to_usize_elf(read_u64_elf(relocation, 8)? >> 32)?;
+            let symbol_offset = symbol_index
+                .checked_mul(24)
+                .ok_or(LinkerError::OffsetOverflow)?;
+            symbols
+                .get(symbol_offset..symbol_offset + 24)
+                .ok_or(LinkerError::InvalidElf)?;
+            if read_u16_elf(symbols, symbol_offset + 6)? != 0 {
+                continue;
+            }
+            let binding = *symbols
+                .get(symbol_offset + 4)
+                .ok_or(LinkerError::InvalidElf)?
+                >> 4;
+            if !matches!(binding, 1 | 2) {
+                continue;
+            }
+            let name_offset = usize::try_from(read_u32_elf(symbols, symbol_offset)?)
+                .map_err(|_| LinkerError::OffsetOverflow)?;
+            if name_offset == 0 {
+                return Err(LinkerError::EmptySymbol);
+            }
+            let symbol = elf_string(strings, name_offset)?;
+            if inventory.references[..inventory.reference_count].contains(&symbol) {
+                continue;
+            }
+            if inventory.reference_count == inventory.references.len() {
+                return Err(LinkerError::TooManyArchiveSymbols);
+            }
+            inventory.references[inventory.reference_count] = symbol;
+            inventory.reference_count += 1;
+        }
+    }
+    Ok(inventory)
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -7041,6 +7201,15 @@ mod tests {
         )
         .unwrap();
         let caller_selection = select_x86_64_elf_sections(caller.bytes(), &["entry"]).unwrap();
+        let caller_inventory = inventory_x86_64_elf_symbols(caller.bytes()).unwrap();
+        assert_eq!(
+            caller_inventory.definitions(),
+            &[ElfObjectSymbolDefinition {
+                symbol: "entry",
+                binding: ElfSelectedSymbolBinding::Global,
+            }]
+        );
+        assert_eq!(caller_inventory.references(), &["helper"]);
         assert_eq!(caller_selection.indices(), &[1]);
         let caller_sections =
             decode_x86_64_elf_selected_sections(caller.bytes(), &caller_selection).unwrap();

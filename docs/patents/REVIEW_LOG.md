@@ -9691,3 +9691,14 @@ ordinary graph traversal and static symbol rules and introduces no new archive
 or object format, graph algorithm, relocation mechanism, compression,
 cryptographic mechanism, or loader behavior. This technical screen is not
 legal advice or patent clearance.
+
+# 2026-08-28 — Bounded ELF symbol inventory for archives
+
+Patent review: **NOT_TRIGGERED**. This increment inventories conventional ELF
+global/weak definitions and relocation-referenced undefined names directly from
+validated symbol, string, and RELA tables, without decoding unrelated content
+sections. The GNU archive index remains an untrusted lookup hint and selected
+members are independently checked. It introduces no new archive index, symbol
+resolution algorithm, object format, compression, cryptographic mechanism, or
+loader behavior. This technical screen is not legal advice or patent
+clearance.

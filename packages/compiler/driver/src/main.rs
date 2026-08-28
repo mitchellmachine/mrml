@@ -16,10 +16,10 @@ use mrml_rustc::{
     decode_x86_64_coff_runtime_functions, decode_x86_64_coff_text_fragment,
     decode_x86_64_coff_writable_data_fragment, decode_x86_64_elf_selected_definitions,
     decode_x86_64_elf_selected_relocations, decode_x86_64_elf_selected_sections,
-    decode_x86_64_elf_with_definitions, link_x86_64_elf_selected_executable,
-    link_x86_64_pe_with_data_and_unwind, select_ordered_static_link_members,
-    select_x86_64_elf_link_sections, x86_64_coff_text_fragment_count,
-    x86_64_coff_writable_section_count,
+    decode_x86_64_elf_with_definitions, inventory_x86_64_elf_symbols,
+    link_x86_64_elf_selected_executable, link_x86_64_pe_with_data_and_unwind,
+    select_ordered_static_link_members, select_x86_64_elf_link_sections,
+    x86_64_coff_text_fragment_count, x86_64_coff_writable_section_count,
 };
 
 #[cfg_attr(test, allow(dead_code))]
@@ -325,6 +325,28 @@ fn scan_link_object_symbols<'a>(
     referenced: &mut Vector<&'a str>,
     defined: &mut Vector<&'a str>,
 ) -> Result<()> {
+    if format == ObjectFormat::Elf64 {
+        let inventory = inventory_x86_64_elf_symbols(object)
+            .map_err(|error| anyhow!("could not inventory ELF symbols: {}", error))?;
+        for definition in inventory.definitions() {
+            if !defined
+                .iter()
+                .any(|existing| *existing == definition.symbol)
+            {
+                defined
+                    .try_push(definition.symbol)
+                    .map_err(|_| anyhow!("defined-symbol capacity exceeded"))?;
+            }
+        }
+        for symbol in inventory.references() {
+            if !referenced.iter().any(|existing| existing == symbol) {
+                referenced
+                    .try_push(symbol)
+                    .map_err(|_| anyhow!("referenced-symbol capacity exceeded"))?;
+            }
+        }
+        return Ok(());
+    }
     let fragment_count = match format {
         ObjectFormat::Coff => x86_64_coff_text_fragment_count(object)
             .map_err(|_| anyhow!("could not count COFF archive member fragments"))?,
@@ -347,9 +369,7 @@ fn scan_link_object_symbols<'a>(
                 &mut relocations,
                 &mut definitions,
             ),
-            ObjectFormat::Elf64 => {
-                decode_x86_64_elf_with_definitions(object, &mut relocations, &mut definitions)
-            }
+            ObjectFormat::Elf64 => unreachable!(),
         }
         .map_err(mrml_error::message)?;
         for symbol in core::iter::once(input.symbol).chain(
@@ -771,8 +791,8 @@ fn write_linked_elf(
     entry: &str,
     output: &str,
 ) -> Result<()> {
-    let link_selection =
-        select_x86_64_elf_link_sections(objects, entry).map_err(mrml_error::message)?;
+    let link_selection = select_x86_64_elf_link_sections(objects, entry)
+        .map_err(|error| anyhow!("could not select reachable ELF sections: {}", error))?;
     let mut sections: Vector<ElfSelectedSections<'_>> = Vector::with_capacity(objects.len())
         .map_err(|_| anyhow!("could not allocate selected ELF section views"))?;
     let mut definitions: Vector<ElfSelectedDefinitions<'_>> = Vector::with_capacity(objects.len())
@@ -782,20 +802,23 @@ fn write_linked_elf(
     for (object, selection) in objects.iter().zip(link_selection.selections()) {
         sections
             .try_push(
-                decode_x86_64_elf_selected_sections(object, selection)
-                    .map_err(mrml_error::message)?,
+                decode_x86_64_elf_selected_sections(object, selection).map_err(|error| {
+                    anyhow!("could not decode reachable ELF sections: {}", error)
+                })?,
             )
             .map_err(|_| anyhow!("could not allocate selected ELF section views"))?;
         definitions
             .try_push(
-                decode_x86_64_elf_selected_definitions(object, selection)
-                    .map_err(mrml_error::message)?,
+                decode_x86_64_elf_selected_definitions(object, selection).map_err(|error| {
+                    anyhow!("could not decode reachable ELF definitions: {}", error)
+                })?,
             )
             .map_err(|_| anyhow!("could not allocate selected ELF definition views"))?;
         relocations
             .try_push(
-                decode_x86_64_elf_selected_relocations(object, selection)
-                    .map_err(mrml_error::message)?,
+                decode_x86_64_elf_selected_relocations(object, selection).map_err(|error| {
+                    anyhow!("could not decode reachable ELF relocations: {}", error)
+                })?,
             )
             .map_err(|_| anyhow!("could not allocate selected ELF relocation views"))?;
     }
