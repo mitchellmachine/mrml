@@ -9,8 +9,8 @@ the named commit and current source.
 ## Recoverable baseline
 
 - Branch: `main`
-- Compiler checkpoint commit: `c07d55ac`
-  (`compiler: decode writable COFF COMDAT data`)
+- Compiler checkpoint commit: `8b7e81c8`
+  (`compiler: link selected writable COFF data`)
 - Remote state when recorded: `origin/main` includes the bounded MRML-owned
   static-link core, exact MRML COFF and ELF64 ingestion, deterministic
   import-free PE32+/ELF64 executable serialization, explicit compiler-driver
@@ -236,6 +236,14 @@ the object's one admitted read-only section. Text decoding recognizes but does
 not absorb writable bytes; legacy decoding rejects them. The full Windows suite
 passed with 703 core, 2 component, 10 conformance, 351 replacement, and 24
 semantic-execution tests. Driver transport remains incomplete.
+
+Commit `8b7e81c8` transports writable data only from selected object identities
+into the fixed-base PE serializer. Four driver tests and the Windows release
+build passed. The exact pinned volatile-static object produced a 2,048-byte PE
+with `.data` RVA `0x3000`, RW/NX flags `0xc0000040`, pointer `0x140002000`, and
+Windows exit 42. The scoped no-data benchmark measured MRML at 9.577 ms median
+versus rust-lld at 26.952 ms; both outputs returned 42. This is one hosted
+static-data shape and narrow performance evidence only.
 
 Patent review: **NOT_TRIGGERED** for these conventional bounded linker,
 serializer, command-routing, and benchmark increments; see
