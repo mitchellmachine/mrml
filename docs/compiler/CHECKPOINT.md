@@ -9,8 +9,8 @@ the named commit and current source.
 ## Recoverable baseline
 
 - Branch: `main`
-- Compiler checkpoint commit: `7f1e2b83`
-  (`compiler: link selected COFF unwind records`)
+- Compiler checkpoint commit: `65f686b7`
+  (`compiler: decode read-only COFF COMDAT data`)
 - Remote state when recorded: `origin/main` includes the bounded MRML-owned
   static-link core, exact MRML COFF and ELF64 ingestion, deterministic
   import-free PE32+/ELF64 executable serialization, explicit compiler-driver
@@ -213,6 +213,14 @@ exception record covers RVA `0x1000..0x100f`; Windows returned 42. The scoped
 93-byte no-unwind benchmark measured MRML at 10.081 ms median versus rust-lld at
 27.632 ms, with matching 1,024-byte outputs and exit 42. These are narrow hosted
 results, not general Rust-library, exception-semantics, or performance claims.
+
+Commit `65f686b7` admits one nonempty `.rdata$...` COFF COMDAT through the
+existing typed read-only relocation path and rejects multiple nonempty
+read-only sections. The full Windows compiler suite passed with 700 core, 2
+component, 10 conformance, 351 replacement, and 24 semantic-execution tests.
+The exact pinned volatile-static probe remains rejected because it additionally
+contains a writable `.data$...` COMDAT with an `ADDR64` relocation; writable PE
+layout is the next gate.
 
 Patent review: **NOT_TRIGGERED** for these conventional bounded linker,
 serializer, command-routing, and benchmark increments; see
