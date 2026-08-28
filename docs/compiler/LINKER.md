@@ -26,6 +26,17 @@ rejects unknown sections, machines, relocation types, malformed links,
 truncation, and range or capacity violations. This is not general ELF input or
 an ELF executable claim.
 
+The linker serializes decoded inputs as a deterministic, fixed-address,
+import-free x86-64 ELF ET_EXEC image. It emits a read-only header load, a
+page-separated RX text load, and an optional page-separated R/NX read-only-data
+load; section headers and dynamic metadata are absent. An Arch Linux WSL
+controlled probe normalized an independently assembled syscall-only object to
+the bounded five-section input subset, linked it through
+`mrml-rustc-driver --link-elf`, and `readelf` observed entry `0x401000` plus
+separate R and RX loads. Linux executed the 4,112-byte result and returned exit
+code 42. This is hosted Arch WSL loader evidence, not the unavailable MRML Linux
+test target, KVM, boot, or physical-hardware evidence.
+
 Relocation targets are typed as either a named code symbol or a bounded offset
 within the originating input's read-only data. COFF `.rdata` section-symbol
 relocations therefore retain their exact local data identity without inventing
@@ -55,6 +66,11 @@ surface for identical-input cold-process measurements against the pinned
 gnullvm `rust-lld`; it does not accept arbitrary COFF extensions outside the
 documented MRML subset.
 
+The corresponding explicit Linux-family selections are
+`--emit elf-executable` and `--link-elf INPUT --entry NAME -o OUTPUT`. They use
+ELF64 object emission/decoding and the MRML ELF serializer without silently
+invoking a system linker.
+
 On 2026-08-28, the controlled Windows cold-process probe linked the same
 93-byte MRML COFF object 50 times after five interleaved warmups. MRML produced
 a 1,024-byte PE with a 10.196 ms median and 10.323 ms mean; pinned
@@ -72,12 +88,13 @@ later use data-parallel loops. MRML does not copy mold source or claim mold
 compatibility or performance. The cited design note warns that its 2020 object
 preloading proposal is outdated, so MRML does not adopt that proposal.
 
-This increment does **not** decode ELF input, write ELF executables, emit PE
-imports/exports/exception metadata/base relocations/debug data, read archives,
-perform section GC or ICF, link dynamically, run work in parallel, or integrate
-linker selection into the public `mrml` build frontend. Those are separate
-milestones and the current upstream linker remains the production linker for
-ordinary package builds as required by `docs/build/BUILD_SYSTEM.md`.
+This increment does **not** emit PE imports/exports/exception metadata/base
+relocations/debug data, emit ELF dynamic metadata/interpreter/PIE/sections,
+read archives, perform section GC or ICF, link dynamically, run work in
+parallel, or integrate linker selection into the public `mrml` build frontend.
+Those are separate milestones and the current upstream linker remains the
+production linker for ordinary package builds as required by
+`docs/build/BUILD_SYSTEM.md`.
 
 Research source:
 

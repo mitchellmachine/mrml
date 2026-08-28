@@ -5,7 +5,8 @@ use mrml_error::{Result, anyhow};
 use mrml_runtime::mrml_println as println;
 use mrml_rustc::{
     CodegenOptions, LinkRelocation, LinkRelocationTarget, MAX_LINK_RELOCATIONS, ObjectFormat,
-    TargetLayout, compile_source_function_with_options, decode_x86_64_coff, link_x86_64_pe,
+    TargetLayout, compile_source_function_with_options, decode_x86_64_coff, decode_x86_64_elf,
+    link_x86_64_elf_executable, link_x86_64_pe,
 };
 
 #[cfg_attr(test, allow(dead_code))]
@@ -31,6 +32,7 @@ const MAX_EXECUTABLE_BYTES: usize = 32 * 1024;
 enum EmitKind {
     Object(ObjectFormat),
     Pe,
+    ElfExecutable,
 }
 
 // The fixed-capacity parser intentionally keeps its arenas on the stack. The
@@ -55,9 +57,21 @@ fn application_main() -> Result<()> {
         let object = mrml_runtime::read_file_bounded(&arguments[2], MAX_OBJECT_BYTES)?;
         return write_linked_pe(&object, &arguments[4], output);
     }
+    if arguments.len() == 7
+        && arguments[1] == "--link-elf"
+        && arguments[3] == "--entry"
+        && arguments[5] == "-o"
+    {
+        let output = &arguments[6];
+        if mrml_runtime::path_exists(output) {
+            return Err(anyhow!("refusing to overwrite compiler output"));
+        }
+        let object = mrml_runtime::read_file_bounded(&arguments[2], MAX_OBJECT_BYTES)?;
+        return write_linked_elf(&object, &arguments[4], output);
+    }
     if arguments.len() < 8 || arguments[1] != "--emit" || arguments[3] != "--function" {
         return Err(anyhow!(
-            "usage: mrml-rustc --emit elf64|coff|pe --function NAME [-C overflow-checks=yes|no] INPUT -o OUTPUT; or mrml-rustc --link-coff INPUT --entry NAME -o OUTPUT"
+            "usage: mrml-rustc --emit elf64|coff|pe|elf-executable --function NAME [-C overflow-checks=yes|no] INPUT -o OUTPUT; or mrml-rustc --link-coff|--link-elf INPUT --entry NAME -o OUTPUT"
         ));
     }
     let emit = parse_emit_kind(&arguments[2])?;
@@ -77,7 +91,7 @@ fn application_main() -> Result<()> {
         ),
         _ => {
             return Err(anyhow!(
-                "usage: mrml-rustc --emit elf64|coff|pe --function NAME [-C overflow-checks=yes|no] INPUT -o OUTPUT; or mrml-rustc --link-coff INPUT --entry NAME -o OUTPUT"
+                "usage: mrml-rustc --emit elf64|coff|pe|elf-executable --function NAME [-C overflow-checks=yes|no] INPUT -o OUTPUT; or mrml-rustc --link-coff|--link-elf INPUT --entry NAME -o OUTPUT"
             ));
         }
     };
@@ -88,6 +102,7 @@ fn application_main() -> Result<()> {
     let object_format = match emit {
         EmitKind::Object(format) => format,
         EmitKind::Pe => ObjectFormat::Coff,
+        EmitKind::ElfExecutable => ObjectFormat::Elf64,
     };
     let object = compile_source_function_with_options::<
         MAX_OBJECT_BYTES,
@@ -116,6 +131,9 @@ fn application_main() -> Result<()> {
         EmitKind::Pe => {
             write_linked_pe(object.bytes(), function, output)?;
         }
+        EmitKind::ElfExecutable => {
+            write_linked_elf(object.bytes(), function, output)?;
+        }
     }
     Ok(())
 }
@@ -138,12 +156,34 @@ fn write_linked_pe(object: &[u8], entry: &str, output: &str) -> Result<()> {
     Ok(())
 }
 
+fn write_linked_elf(object: &[u8], entry: &str, output: &str) -> Result<()> {
+    let mut relocations = [LinkRelocation {
+        offset: 0,
+        target: LinkRelocationTarget::Symbol("unused"),
+        addend: 0,
+    }; MAX_LINK_RELOCATIONS];
+    let input = decode_x86_64_elf(object, &mut relocations).map_err(mrml_error::message)?;
+    let executable =
+        link_x86_64_elf_executable::<MAX_EXECUTABLE_BYTES, MAX_LINKED_BYTES>(&[input], entry)
+            .map_err(mrml_error::message)?;
+    mrml_runtime::write_file(output, executable.bytes())?;
+    println!(
+        "linked {} to {} deterministic ELF64 bytes",
+        entry,
+        executable.bytes().len()
+    );
+    Ok(())
+}
+
 fn parse_emit_kind(value: &str) -> Result<EmitKind> {
     match value {
         "elf64" => Ok(EmitKind::Object(ObjectFormat::Elf64)),
         "coff" => Ok(EmitKind::Object(ObjectFormat::Coff)),
         "pe" => Ok(EmitKind::Pe),
-        _ => Err(anyhow!("emit kind must be elf64, coff, or pe")),
+        "elf-executable" => Ok(EmitKind::ElfExecutable),
+        _ => Err(anyhow!(
+            "emit kind must be elf64, coff, pe, or elf-executable"
+        )),
     }
 }
 
@@ -172,6 +212,10 @@ mod tests {
             EmitKind::Object(ObjectFormat::Coff)
         );
         assert_eq!(parse_emit_kind("pe").unwrap(), EmitKind::Pe);
+        assert_eq!(
+            parse_emit_kind("elf-executable").unwrap(),
+            EmitKind::ElfExecutable
+        );
         assert!(parse_emit_kind("exe").is_err());
     }
 

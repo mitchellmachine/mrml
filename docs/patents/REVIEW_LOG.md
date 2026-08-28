@@ -9176,6 +9176,16 @@ adds a type distinction and adversarial bounds checks, not a new relocation,
 symbol-resolution, deduplication, compression, executable-format, or loading
 algorithm. This technical screen is not legal advice or patent clearance.
 
+# 2026-08-28 — Deterministic import-free ELF64 executable output
+
+Patent review: **NOT_TRIGGERED**. This increment serializes existing linked code
+and read-only data using conventional ELF64 ET_EXEC and PT_LOAD records with
+fixed addresses, page alignment, R/RX/R-NX permissions, and no dynamic metadata.
+The controlled Arch WSL probe executes a conventional syscall-only entry. It
+adds no executable packing, compression, loader, dynamic-linking, relocation,
+cryptographic, or code-generation algorithm. This technical screen is not
+legal advice or patent clearance.
+
 # 2026-08-28 — Bounded MRML ELF64 linker ingestion
 
 Patent review: **NOT_TRIGGERED**. This increment decodes conventional ELF64

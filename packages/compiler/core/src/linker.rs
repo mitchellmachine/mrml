@@ -424,6 +424,18 @@ pub struct PeImage<const MAX_BYTES: usize> {
     length: usize,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct ElfImage<const MAX_BYTES: usize> {
+    bytes: [u8; MAX_BYTES],
+    length: usize,
+}
+
+impl<const MAX_BYTES: usize> ElfImage<MAX_BYTES> {
+    pub fn bytes(&self) -> &[u8] {
+        &self.bytes[..self.length]
+    }
+}
+
 impl<const MAX_BYTES: usize> PeImage<MAX_BYTES> {
     pub fn bytes(&self) -> &[u8] {
         &self.bytes[..self.length]
@@ -573,6 +585,122 @@ pub fn link_x86_64_pe<const MAX_IMAGE_BYTES: usize, const MAX_LINKED_BYTES: usiz
         )?;
     }
     Ok(PeImage { bytes, length })
+}
+
+/// Links MRML fragments into a deterministic, fixed-address, import-free
+/// x86-64 ELF executable with page-separated load permissions.
+pub fn link_x86_64_elf_executable<const MAX_IMAGE_BYTES: usize, const MAX_LINKED_BYTES: usize>(
+    inputs: &[LinkInput<'_>],
+    entry_symbol: &str,
+) -> Result<ElfImage<MAX_IMAGE_BYTES>, LinkerError> {
+    const PAGE: usize = 0x1000;
+    const IMAGE_BASE: usize = 0x40_0000;
+    const TEXT_OFFSET: usize = 0x1000;
+
+    let linked = link_x86_64_static_aligned::<MAX_LINKED_BYTES>(inputs, entry_symbol, PAGE)?;
+    let readonly_size = linked.length - linked.readonly_offset;
+    let readonly_offset = TEXT_OFFSET
+        .checked_add(linked.readonly_offset)
+        .ok_or(LinkerError::OffsetOverflow)?;
+    let length = if readonly_size == 0 {
+        TEXT_OFFSET
+            .checked_add(linked.text_length)
+            .ok_or(LinkerError::OffsetOverflow)?
+    } else {
+        readonly_offset
+            .checked_add(readonly_size)
+            .ok_or(LinkerError::OffsetOverflow)?
+    };
+    if length > MAX_IMAGE_BYTES {
+        return Err(LinkerError::OutputTooSmall);
+    }
+    let program_count = if readonly_size == 0 { 2 } else { 3 };
+    let header_bytes = 64usize
+        .checked_add(program_count * 56)
+        .ok_or(LinkerError::OffsetOverflow)?;
+    let mut bytes = [0u8; MAX_IMAGE_BYTES];
+    bytes[..16].copy_from_slice(b"\x7fELF\x02\x01\x01\x00\x00\x00\x00\x00\x00\x00\x00\x00");
+    patch_u16(&mut bytes, 16, 2)?;
+    patch_u16(&mut bytes, 18, 62)?;
+    patch_u32(&mut bytes, 20, 1)?;
+    patch_u64(
+        &mut bytes,
+        24,
+        u64::try_from(
+            IMAGE_BASE
+                .checked_add(TEXT_OFFSET)
+                .and_then(|value| value.checked_add(linked.entry_offset))
+                .ok_or(LinkerError::OffsetOverflow)?,
+        )
+        .map_err(|_| LinkerError::OffsetOverflow)?,
+    )?;
+    patch_u64(&mut bytes, 32, 64)?;
+    patch_u16(&mut bytes, 52, 64)?;
+    patch_u16(&mut bytes, 54, 56)?;
+    patch_u16(&mut bytes, 56, program_count as u16)?;
+
+    write_elf_load_segment(&mut bytes, 64, 4, 0, IMAGE_BASE, header_bytes, header_bytes)?;
+    write_elf_load_segment(
+        &mut bytes,
+        120,
+        5,
+        TEXT_OFFSET,
+        IMAGE_BASE + TEXT_OFFSET,
+        linked.text_length,
+        linked.text_length,
+    )?;
+    if readonly_size != 0 {
+        write_elf_load_segment(
+            &mut bytes,
+            176,
+            4,
+            readonly_offset,
+            IMAGE_BASE + readonly_offset,
+            readonly_size,
+            readonly_size,
+        )?;
+    }
+    copy_at(&mut bytes, TEXT_OFFSET, &linked.bytes[..linked.text_length])?;
+    if readonly_size != 0 {
+        copy_at(
+            &mut bytes,
+            readonly_offset,
+            &linked.bytes[linked.readonly_offset..linked.length],
+        )?;
+    }
+    Ok(ElfImage { bytes, length })
+}
+
+fn write_elf_load_segment<const MAX_BYTES: usize>(
+    output: &mut [u8; MAX_BYTES],
+    offset: usize,
+    flags: u32,
+    file_offset: usize,
+    virtual_address: usize,
+    file_size: usize,
+    memory_size: usize,
+) -> Result<(), LinkerError> {
+    patch_u32(output, offset, 1)?;
+    patch_u32(output, offset + 4, flags)?;
+    patch_u64(
+        output,
+        offset + 8,
+        u64::try_from(file_offset).map_err(|_| LinkerError::OffsetOverflow)?,
+    )?;
+    let address = u64::try_from(virtual_address).map_err(|_| LinkerError::OffsetOverflow)?;
+    patch_u64(output, offset + 16, address)?;
+    patch_u64(output, offset + 24, address)?;
+    patch_u64(
+        output,
+        offset + 32,
+        u64::try_from(file_size).map_err(|_| LinkerError::OffsetOverflow)?,
+    )?;
+    patch_u64(
+        output,
+        offset + 40,
+        u64::try_from(memory_size).map_err(|_| LinkerError::OffsetOverflow)?,
+    )?;
+    patch_u64(output, offset + 48, 0x1000)
 }
 
 fn link_x86_64_static_aligned<const MAX_BYTES: usize>(
@@ -1298,5 +1426,60 @@ mod tests {
             decode_x86_64_elf(&wrong_machine[..object.len()], &mut machine_storage),
             Err(LinkerError::UnsupportedElf)
         );
+    }
+
+    #[test]
+    fn emits_deterministic_elf64_with_page_separated_load_permissions() {
+        let relocation = LinkRelocation {
+            offset: 3,
+            target: LinkRelocationTarget::ReadonlyData(0),
+            addend: -4,
+        };
+        let input = LinkInput {
+            symbol: "entry",
+            text: &[0x48, 0x8d, 0x05, 0, 0, 0, 0, 0xc3],
+            readonly_data: b"hello",
+            relocations: &[relocation],
+        };
+        let elf = link_x86_64_elf_executable::<16384, 8192>(&[input], "entry").unwrap();
+        assert_eq!(&elf.bytes()[..9], b"\x7fELF\x02\x01\x01\x00\x00");
+        assert_eq!(read_u16_elf(elf.bytes(), 16).unwrap(), 2);
+        assert_eq!(read_u16_elf(elf.bytes(), 18).unwrap(), 62);
+        assert_eq!(read_u64_elf(elf.bytes(), 24).unwrap(), 0x401000);
+        assert_eq!(read_u16_elf(elf.bytes(), 56).unwrap(), 3);
+        assert_eq!(read_u32_elf(elf.bytes(), 64 + 4).unwrap(), 4);
+        assert_eq!(read_u32_elf(elf.bytes(), 120 + 4).unwrap(), 5);
+        assert_eq!(read_u32_elf(elf.bytes(), 176 + 4).unwrap(), 4);
+        assert_eq!(read_u64_elf(elf.bytes(), 176 + 8).unwrap(), 0x2000);
+        assert_eq!(
+            i32::from_le_bytes(elf.bytes()[0x1003..0x1007].try_into().unwrap()),
+            0xff9
+        );
+        assert_eq!(&elf.bytes()[0x2000..0x2005], b"hello");
+        assert_eq!(
+            elf,
+            link_x86_64_elf_executable::<16384, 8192>(&[input], "entry").unwrap()
+        );
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn generated_elf_executes_on_the_controlled_linux_host() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let input = LinkInput {
+            symbol: "entry",
+            text: &[0xbf, 42, 0, 0, 0, 0xb8, 60, 0, 0, 0, 0x0f, 0x05],
+            readonly_data: &[],
+            relocations: &[],
+        };
+        let elf = link_x86_64_elf_executable::<8192, 8192>(&[input], "entry").unwrap();
+        let path =
+            std::env::temp_dir().join(std::format!("mrml-linker-elf-{}", std::process::id()));
+        std::fs::write(&path, elf.bytes()).unwrap();
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o700)).unwrap();
+        let status = std::process::Command::new(&path).status().unwrap();
+        std::fs::remove_file(path).unwrap();
+        assert_eq!(status.code(), Some(42));
     }
 }
