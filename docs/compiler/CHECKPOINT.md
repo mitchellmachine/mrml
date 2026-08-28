@@ -68,9 +68,14 @@ and 4,096 index symbols. A 301-member focused archive containing one valid
 indexed entry object and 300 unreferenced invalid payloads selected only the
 entry on both pinned platforms, proving that the larger inventory does not
 eagerly decode its irrelevant tail. Windows and Linux each retained 720
-compiler-core passes and five driver passes. This is bounded synthetic scaling
-evidence, not a representative `.rlib` throughput result; large real-library
-benchmarks and the remaining format/relocation gates are still required.
+compiler-core passes and five driver passes. A controlled 319,802-byte archive
+of one real provider and 300 copies of a real unused ELF object linked to a
+12,304-byte exit-42 executable. A 50-iteration/five-warmup measurement recorded
+MRML at 5.063 ms median versus pinned rust-lld with `--eh-frame-hdr` at 5.302
+ms; rust-lld emitted 2,080 bytes. This is bounded synthetic scaling evidence,
+not representative `.rlib` diversity or a general speed claim; large real-
+library benchmarks and the remaining format/relocation gates are still
+required.
 
 Commit `34b6c6ef` uses a validated GNU archive index to compute a bounded,
 left-to-right unresolved-symbol closure before admitting members to the full

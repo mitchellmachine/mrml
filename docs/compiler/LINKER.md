@@ -617,8 +617,15 @@ them as link inputs or weakening the existing output-work bound. A focused
 301-member archive containing one valid indexed entry object and 300
 unreferenced invalid payloads selected only the entry on both Windows and Linux;
 both platforms retained 720 compiler-core passes and five driver passes. This
-is bounded synthetic scaling evidence, not general `.rlib` compatibility or a
-throughput benchmark.
+is bounded synthetic scaling evidence, not general `.rlib` compatibility.
+
+A controlled 319,802-byte archive then combined one real provider object with
+300 copies of a real unreferenced ELF object. MRML selected the provider,
+emitted 12,304 bytes, and the result exited 42. Over 50 iterations after five
+warmups, MRML measured 5.063 ms median and 5.100 ms mean versus pinned rust-lld
+with `--eh-frame-hdr` at 5.302 ms median and 5.327 ms mean; rust-lld emitted
+2,080 bytes. Repeating one unused object is useful scaling regression evidence
+but is not representative Rust-library diversity or a general speed claim.
 
 This increment does **not** emit PE imports/exports/base
 relocations/debug data, emit ELF dynamic metadata/interpreter/PIE/sections,
