@@ -9659,3 +9659,14 @@ separation while distinguishing file and memory extents. It introduces no new
 layout optimization, object format, relocation arithmetic, compression,
 cryptographic mechanism, or loader behavior. This technical screen is not
 legal advice or patent clearance.
+
+# 2026-08-28 — Selected ELF static resolution and relocation
+
+Patent review: **NOT_TRIGGERED**. This increment applies conventional static
+ELF strong/weak symbol selection and standard x86-64 absolute, PC-relative,
+PLT-relative, and validated GOTPCREL relaxation arithmetic to the previously
+selected and frozen section layout. It reuses established instruction-shape
+validation and introduces no new resolution policy, relocation encoding,
+relaxation technique, object format, compression, cryptographic mechanism, or
+loader behavior. This technical screen is not legal advice or patent
+clearance.

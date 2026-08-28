@@ -572,6 +572,21 @@ pub struct ElfSelectedLayout {
     pub memory_length: usize,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct ElfSelectedLinkedImage<const MAX_BYTES: usize> {
+    bytes: [u8; MAX_BYTES],
+    pub length: usize,
+    pub memory_length: usize,
+    pub entry_offset: usize,
+    pub layout: ElfSelectedLayout,
+}
+
+impl<const MAX_BYTES: usize> ElfSelectedLinkedImage<MAX_BYTES> {
+    pub fn bytes(&self) -> &[u8] {
+        &self.bytes[..self.length]
+    }
+}
+
 impl ElfSelectedLayout {
     pub fn sections(&self) -> &[ElfSelectedSectionLayout] {
         &self.sections[..self.length]
@@ -596,6 +611,22 @@ pub fn layout_x86_64_elf_selected_sections(
     }
     if inputs.len() > MAX_LINK_INPUTS {
         return Err(LinkerError::TooManyInputs);
+    }
+    let mut definition_count = 0usize;
+    let mut relocation_count = 0usize;
+    for input in inputs {
+        definition_count = definition_count
+            .checked_add(input.definitions.definitions().len())
+            .ok_or(LinkerError::OffsetOverflow)?;
+        relocation_count = relocation_count
+            .checked_add(input.relocations.relocations().len())
+            .ok_or(LinkerError::OffsetOverflow)?;
+    }
+    if definition_count > MAX_LINK_DEFINITIONS {
+        return Err(LinkerError::TooManyDefinitions);
+    }
+    if relocation_count > MAX_LINK_RELOCATIONS {
+        return Err(LinkerError::TooManyRelocations);
     }
     let has_readonly = inputs.iter().any(|input| {
         input.sections.sections().iter().any(|section| {
@@ -678,6 +709,232 @@ pub fn layout_x86_64_elf_selected_sections(
     }
     layout.memory_length = cursor;
     Ok(layout)
+}
+
+/// Copies selected content into its frozen layout and applies static x86-64
+/// relocations after resolving global/weak definitions across objects.
+pub fn link_x86_64_elf_selected_sections<const MAX_BYTES: usize>(
+    inputs: &[ElfSelectedObject<'_, '_>],
+    entry_symbol: &str,
+    virtual_base: u64,
+) -> Result<ElfSelectedLinkedImage<MAX_BYTES>, LinkerError> {
+    validate_symbol(entry_symbol)?;
+    let layout = layout_x86_64_elf_selected_sections(inputs)?;
+    if layout.file_length > MAX_BYTES || layout.memory_length > MAX_BYTES {
+        return Err(LinkerError::OutputTooSmall);
+    }
+    validate_selected_definition_set(inputs)?;
+    let (entry_input, entry_definition) =
+        resolve_selected_definition(inputs, entry_symbol)?.ok_or(LinkerError::UndefinedSymbol)?;
+    let entry_section = inputs[entry_input]
+        .sections
+        .sections()
+        .iter()
+        .find(|section| section.index == entry_definition.section_index)
+        .ok_or(LinkerError::InvalidElf)?;
+    if entry_section.kind != ElfSectionKind::Text
+        || entry_definition.kind == ElfSelectedSymbolKind::Object
+    {
+        return Err(LinkerError::UnsupportedElf);
+    }
+    let entry_offset =
+        selected_section_layout_offset(&layout, entry_input, entry_definition.section_index)?
+            .checked_add(entry_definition.offset)
+            .ok_or(LinkerError::OffsetOverflow)?;
+    let mut bytes = [0u8; MAX_BYTES];
+    for section_layout in layout.sections() {
+        let input_index = usize::from(section_layout.input_index);
+        let section = inputs[input_index]
+            .sections
+            .sections()
+            .iter()
+            .find(|section| section.index == section_layout.section_index)
+            .ok_or(LinkerError::InvalidElf)?;
+        if !section.bytes.is_empty() {
+            copy_at(&mut bytes, section_layout.offset, section.bytes)?;
+        }
+    }
+    for (input_index, input) in inputs.iter().enumerate() {
+        for relocation in input.relocations.relocations() {
+            let section_base =
+                selected_section_layout_offset(&layout, input_index, relocation.section_index)?;
+            let place = section_base
+                .checked_add(relocation.offset)
+                .ok_or(LinkerError::OffsetOverflow)?;
+            let (target, target_is_absolute) = match relocation.target {
+                ElfSelectedRelocationTarget::Section { index, offset } => (
+                    selected_section_layout_offset(&layout, input_index, index)?
+                        .checked_add(offset)
+                        .ok_or(LinkerError::OffsetOverflow)?,
+                    false,
+                ),
+                ElfSelectedRelocationTarget::Symbol(symbol) => {
+                    let (target_input, definition) = resolve_selected_definition(inputs, symbol)?
+                        .ok_or(LinkerError::UndefinedSymbol)?;
+                    (
+                        selected_section_layout_offset(
+                            &layout,
+                            target_input,
+                            definition.section_index,
+                        )?
+                        .checked_add(definition.offset)
+                        .ok_or(LinkerError::OffsetOverflow)?,
+                        false,
+                    )
+                }
+                ElfSelectedRelocationTarget::Absolute(value) => (
+                    usize::try_from(value).map_err(|_| LinkerError::OffsetOverflow)?,
+                    true,
+                ),
+            };
+            match relocation.kind {
+                ElfSelectedRelocationKind::Absolute64 => {
+                    let address = if target_is_absolute {
+                        u64::try_from(target).map_err(|_| LinkerError::OffsetOverflow)?
+                    } else {
+                        virtual_base
+                            .checked_add(
+                                u64::try_from(target).map_err(|_| LinkerError::OffsetOverflow)?,
+                            )
+                            .ok_or(LinkerError::OffsetOverflow)?
+                    };
+                    let value = i128::from(address)
+                        .checked_add(i128::from(relocation.addend))
+                        .and_then(|value| u64::try_from(value).ok())
+                        .ok_or(LinkerError::RelocationOverflow)?;
+                    patch_u64(&mut bytes, place, value)?;
+                }
+                ElfSelectedRelocationKind::PcRelative32
+                | ElfSelectedRelocationKind::PltRelative32
+                | ElfSelectedRelocationKind::GotPcRelative32 => {
+                    let target_address = if target_is_absolute {
+                        i128::try_from(target).map_err(|_| LinkerError::OffsetOverflow)?
+                    } else {
+                        i128::from(virtual_base)
+                            + i128::try_from(target).map_err(|_| LinkerError::OffsetOverflow)?
+                    };
+                    let place_address = i128::from(virtual_base)
+                        + i128::try_from(place).map_err(|_| LinkerError::OffsetOverflow)?;
+                    let displacement = target_address
+                        .checked_add(i128::from(relocation.addend))
+                        .and_then(|value| value.checked_sub(place_address))
+                        .and_then(|value| i32::try_from(value).ok())
+                        .ok_or(LinkerError::RelocationOverflow)?;
+                    if relocation.kind == ElfSelectedRelocationKind::GotPcRelative32 {
+                        relax_selected_gotpcrel(&mut bytes, place)?;
+                    }
+                    patch_i32(&mut bytes, place, displacement)?;
+                }
+            }
+        }
+    }
+    Ok(ElfSelectedLinkedImage {
+        bytes,
+        length: layout.file_length,
+        memory_length: layout.memory_length,
+        entry_offset,
+        layout,
+    })
+}
+
+fn validate_selected_definition_set(
+    inputs: &[ElfSelectedObject<'_, '_>],
+) -> Result<(), LinkerError> {
+    for (input_index, input) in inputs.iter().enumerate() {
+        for (definition_index, definition) in input.definitions.definitions().iter().enumerate() {
+            if definition.binding != ElfSelectedSymbolBinding::Global {
+                continue;
+            }
+            for earlier in &inputs[..input_index] {
+                if earlier.definitions.definitions().iter().any(|candidate| {
+                    candidate.name == definition.name
+                        && candidate.binding == ElfSelectedSymbolBinding::Global
+                }) {
+                    return Err(LinkerError::DuplicateSymbol);
+                }
+            }
+            if input.definitions.definitions()[..definition_index]
+                .iter()
+                .any(|candidate| {
+                    candidate.name == definition.name
+                        && candidate.binding == ElfSelectedSymbolBinding::Global
+                })
+            {
+                return Err(LinkerError::DuplicateSymbol);
+            }
+        }
+    }
+    Ok(())
+}
+
+fn resolve_selected_definition<'data, 'view, 'inputs>(
+    inputs: &'inputs [ElfSelectedObject<'data, 'view>],
+    symbol: &str,
+) -> Result<Option<(usize, &'inputs ElfSelectedDefinition<'data>)>, LinkerError> {
+    let mut weak = None;
+    let mut strong = None;
+    for (input_index, input) in inputs.iter().enumerate() {
+        for definition in input.definitions.definitions() {
+            if definition.name != symbol {
+                continue;
+            }
+            match definition.binding {
+                ElfSelectedSymbolBinding::Global
+                    if strong.replace((input_index, definition)).is_some() =>
+                {
+                    return Err(LinkerError::DuplicateSymbol);
+                }
+                ElfSelectedSymbolBinding::Global => {}
+                ElfSelectedSymbolBinding::Weak if weak.is_none() => {
+                    weak = Some((input_index, definition))
+                }
+                ElfSelectedSymbolBinding::Weak => {}
+            }
+        }
+    }
+    Ok(strong.or(weak))
+}
+
+fn selected_section_layout_offset(
+    layout: &ElfSelectedLayout,
+    input_index: usize,
+    section_index: u16,
+) -> Result<usize, LinkerError> {
+    layout
+        .sections()
+        .iter()
+        .find(|section| {
+            usize::from(section.input_index) == input_index
+                && section.section_index == section_index
+        })
+        .map(|section| section.offset)
+        .ok_or(LinkerError::InvalidElf)
+}
+
+fn relax_selected_gotpcrel<const MAX_BYTES: usize>(
+    output: &mut [u8; MAX_BYTES],
+    place: usize,
+) -> Result<(), LinkerError> {
+    if place >= 2 && output.get(place - 2) == Some(&0xff) {
+        output[place - 2] = 0x90;
+        output[place - 1] = match output[place - 1] {
+            0x15 => 0xe8,
+            0x25 => 0xe9,
+            _ => return Err(LinkerError::UnsupportedElf),
+        };
+        return Ok(());
+    }
+    if place >= 3
+        && output.get(place - 3) == Some(&0x48)
+        && output.get(place - 2) == Some(&0x8b)
+        && output
+            .get(place - 1)
+            .is_some_and(|modrm| modrm & 0xc7 == 0x05)
+    {
+        output[place - 2] = 0x8d;
+        return Ok(());
+    }
+    Err(LinkerError::UnsupportedElf)
 }
 
 impl<'a> ElfSelectedRelocations<'a> {
@@ -6588,7 +6845,7 @@ mod tests {
             decode_x86_64_elf_selected_definitions(data.bytes(), &data_selection).unwrap();
         let data_relocations =
             decode_x86_64_elf_selected_relocations(data.bytes(), &data_selection).unwrap();
-        let selected_layout = layout_x86_64_elf_selected_sections(&[
+        let selected_objects = [
             ElfSelectedObject {
                 sections: &caller_sections,
                 definitions: &caller_definitions,
@@ -6604,8 +6861,8 @@ mod tests {
                 definitions: &data_definitions,
                 relocations: &data_relocations,
             },
-        ])
-        .unwrap();
+        ];
+        let selected_layout = layout_x86_64_elf_selected_sections(&selected_objects).unwrap();
         assert_eq!(
             selected_layout.sections(),
             &[
@@ -6637,6 +6894,21 @@ mod tests {
         assert_eq!(selected_layout.writable_offset, 4101);
         assert_eq!(selected_layout.file_length, 4101);
         assert_eq!(selected_layout.memory_length, 4101);
+        let selected_linked =
+            link_x86_64_elf_selected_sections::<8192>(&selected_objects, "entry", 0x401000)
+                .unwrap();
+        assert_eq!(selected_linked.entry_offset, 0);
+        assert_eq!(selected_linked.length, 4101);
+        assert_eq!(selected_linked.memory_length, 4101);
+        assert_eq!(
+            i32::from_le_bytes(selected_linked.bytes()[1..5].try_into().unwrap()),
+            11
+        );
+        assert_eq!(
+            i32::from_le_bytes(selected_linked.bytes()[35..39].try_into().unwrap()),
+            4058
+        );
+        assert_eq!(&selected_linked.bytes()[4096..4101], b"hello");
         let empty = [LinkRelocation {
             offset: 0,
             target: LinkRelocationTarget::Symbol("unused"),
