@@ -290,6 +290,29 @@ mod tests {
                         ),
                     })
                 }
+                ("shared_slice_conditional_repeated_subslice", 2)
+                    if MAX_PARAMETERS >= 2 =>
+                {
+                    parameters[0] = Some(RuntimeCallParameter {
+                        name: "values",
+                        ty: slice_reference,
+                    });
+                    parameters[1] = Some(RuntimeCallParameter {
+                        name: "first",
+                        ty: ScalarType::Bool,
+                    });
+                    Some(RuntimeCallTarget {
+                        name: "shared_slice_conditional_repeated_subslice",
+                        parameters,
+                        parameter_count: 2,
+                        return_type: shared_slice_reference,
+                        return_type_name: "&[u16]",
+                        body_expression: concat!(
+                            "if first { &values[0..][1..] } ",
+                            "else { &values[1..][1..] }"
+                        ),
+                    })
+                }
                 ("slice_explicit_repeated_subslice", 2) if MAX_PARAMETERS >= 2 => {
                     parameters[0] = Some(RuntimeCallParameter {
                         name: "values",
@@ -5995,6 +6018,12 @@ mod tests {
             ),
             concat!(
                 "fn value(input: &mut [u16]) -> u16 { ",
+                "let returned: &[u16] = shared_slice_conditional_repeated_subslice(input, true); ",
+                "let competing: &mut u16 = &mut input[1]; ",
+                "*competing += 1; returned[0] }"
+            ),
+            concat!(
+                "fn value(input: &mut [u16]) -> u16 { ",
                 "let returned: &mut [u16] = slice_explicit_repeated_subslice(input, true); ",
                 "let competing: &mut u16 = &mut input[1]; ",
                 "*competing += 1; returned[0] }"
@@ -6064,6 +6093,12 @@ mod tests {
                 "fn value(input: &mut [u16]) -> u16 { ",
                 "let returned: &mut [u16] = slice_conditional_repeated_subslice(input, true); returned[0] += 1; ",
                 "let restored: &mut u16 = &mut input[1]; *restored }"
+            ),
+            concat!(
+                "fn value(input: &mut [u16]) -> u16 { ",
+                "let returned: &[u16] = shared_slice_conditional_repeated_subslice(input, true); ",
+                "let value = returned[0]; ",
+                "let restored: &mut u16 = &mut input[1]; *restored += value; *restored }"
             ),
             concat!(
                 "fn value(input: &mut [u16]) -> u16 { ",
@@ -6212,6 +6247,15 @@ mod tests {
         assert_eq!(
             runtime_reference_call_origin_parameter::<2, 16>(
                 slice_conditional_repeated_subslice
+            ),
+            Some(0)
+        );
+        let shared_slice_conditional_repeated_subslice = MutableReferenceCallResolver
+            .resolve_runtime_call::<2>("shared_slice_conditional_repeated_subslice", 2)
+            .unwrap();
+        assert_eq!(
+            runtime_reference_call_origin_parameter::<2, 16>(
+                shared_slice_conditional_repeated_subslice
             ),
             Some(0)
         );

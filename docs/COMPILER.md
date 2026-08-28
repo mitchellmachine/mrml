@@ -1072,6 +1072,15 @@ rejected, and native probes read three selections without modifying the input on
 Windows gnullvm and Arch Linux WSL. This is one exact mutability-attenuating call
 boundary, not general variance, lifetime, or interprocedural region inference.
 
+That mutability attenuation composes with the existing exact two-arm same-origin
+conditional merge. A helper may return either of two shared repeated subslices
+of one mutable slice parameter; caller analysis retains one shared root loan,
+rejects a competing mutation while the result is live, and restores mutable
+access after its last read. Native probes cover both branches and boundary
+indexes without modifying the input on Windows gnullvm and Arch Linux WSL. This
+is bounded composition of two existing analyses, not path-sensitive borrowing,
+general coercion, or interprocedural region inference.
+
 An exact two-arm conditional helper may now return different repeated-subslice
 values rooted in the same compatible parameter while retaining that one origin.
 The existing bounded callee merge requires both arms to resolve to the same
