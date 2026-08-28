@@ -5,9 +5,9 @@ use mrml_error::{anyhow, Result};
 use mrml_runtime::{mrml_println as println, Text, Vector};
 use mrml_rustc::{
     compile_source_function_with_options, decode_unix_archive, decode_x86_64_coff,
-    decode_x86_64_elf, link_x86_64_elf_executable, link_x86_64_pe, CodegenOptions, LinkInput,
-    LinkRelocation, LinkRelocationTarget, ObjectFormat, TargetLayout, MAX_LINK_INPUTS,
-    MAX_LINK_RELOCATIONS,
+    decode_x86_64_elf, link_x86_64_elf_executable, link_x86_64_pe, select_static_link_inputs,
+    CodegenOptions, LinkInput, LinkRelocation, LinkRelocationTarget, ObjectFormat, TargetLayout,
+    MAX_LINK_INPUTS, MAX_LINK_RELOCATIONS,
 };
 
 #[cfg_attr(test, allow(dead_code))]
@@ -38,6 +38,11 @@ enum EmitKind {
     ElfExecutable,
 }
 
+struct LinkObjectRefs<'a> {
+    bytes: Vector<&'a [u8]>,
+    archive_member: Vector<bool>,
+}
+
 // The fixed-capacity parser intentionally keeps its arenas on the stack. The
 // Windows PE default is too small for debug builds at the public driver limits.
 #[cfg(windows)]
@@ -59,7 +64,12 @@ fn application_main() -> Result<()> {
         }
         let objects = read_link_objects(&arguments[2..arguments.len() - 4])?;
         let object_refs = link_object_refs(&objects)?;
-        return write_linked_pe(&object_refs, &arguments[arguments.len() - 3], output);
+        return write_linked_pe(
+            &object_refs.bytes,
+            &object_refs.archive_member,
+            &arguments[arguments.len() - 3],
+            output,
+        );
     }
     if arguments.len() >= 7
         && arguments[1] == "--link-elf"
@@ -72,7 +82,12 @@ fn application_main() -> Result<()> {
         }
         let objects = read_link_objects(&arguments[2..arguments.len() - 4])?;
         let object_refs = link_object_refs(&objects)?;
-        return write_linked_elf(&object_refs, &arguments[arguments.len() - 3], output);
+        return write_linked_elf(
+            &object_refs.bytes,
+            &object_refs.archive_member,
+            &arguments[arguments.len() - 3],
+            output,
+        );
     }
     if arguments.len() < 8 || arguments[1] != "--emit" || arguments[3] != "--function" {
         return Err(anyhow!(
@@ -134,10 +149,10 @@ fn application_main() -> Result<()> {
             );
         }
         EmitKind::Pe => {
-            write_linked_pe(&[object.bytes()], function, output)?;
+            write_linked_pe(&[object.bytes()], &[false], function, output)?;
         }
         EmitKind::ElfExecutable => {
-            write_linked_elf(&[object.bytes()], function, output)?;
+            write_linked_elf(&[object.bytes()], &[false], function, output)?;
         }
     }
     Ok(())
@@ -157,9 +172,11 @@ fn read_link_objects(paths: &[Text]) -> Result<Vector<Vector<u8>>> {
     Ok(objects)
 }
 
-fn link_object_refs(objects: &[Vector<u8>]) -> Result<Vector<&[u8]>> {
+fn link_object_refs(objects: &[Vector<u8>]) -> Result<LinkObjectRefs<'_>> {
     let mut refs = Vector::with_capacity(MAX_LINK_INPUTS)
         .map_err(|_| anyhow!("could not allocate link input reference list"))?;
+    let mut archive_member = Vector::with_capacity(MAX_LINK_INPUTS)
+        .map_err(|_| anyhow!("could not allocate link input origin list"))?;
     for object in objects {
         if object.get(..8) == Some(b"!<arch>\n") {
             let archive = decode_unix_archive(object).map_err(mrml_error::message)?;
@@ -169,16 +186,25 @@ fn link_object_refs(objects: &[Vector<u8>]) -> Result<Vector<&[u8]>> {
                 }
                 refs.try_push(member.bytes)
                     .map_err(|_| anyhow!("could not allocate link input reference list"))?;
+                archive_member
+                    .try_push(true)
+                    .map_err(|_| anyhow!("could not allocate link input origin list"))?;
             }
         } else {
             refs.try_push(&object[..])
                 .map_err(|_| anyhow!("could not allocate link input reference list"))?;
+            archive_member
+                .try_push(false)
+                .map_err(|_| anyhow!("could not allocate link input origin list"))?;
         }
     }
     if refs.is_empty() {
         return Err(anyhow!("link input list contains no object members"));
     }
-    Ok(refs)
+    Ok(LinkObjectRefs {
+        bytes: refs,
+        archive_member,
+    })
 }
 
 fn decode_link_inputs<'data, 'relocations>(
@@ -225,10 +251,33 @@ fn relocation_arenas<'a>(
     Ok(arenas)
 }
 
-fn write_linked_pe(objects: &[&[u8]], entry: &str, output: &str) -> Result<()> {
+fn selected_link_inputs<'data, 'relocations>(
+    inputs: &[LinkInput<'data, 'relocations>],
+    archive_member: &[bool],
+    entry: &str,
+) -> Result<Vector<LinkInput<'data, 'relocations>>> {
+    let selection =
+        select_static_link_inputs(inputs, archive_member, entry).map_err(mrml_error::message)?;
+    let mut selected = Vector::with_capacity(selection.indices().len())
+        .map_err(|_| anyhow!("could not allocate selected link input list"))?;
+    for index in selection.indices() {
+        selected
+            .try_push(inputs[*index])
+            .map_err(|_| anyhow!("could not allocate selected link input list"))?;
+    }
+    Ok(selected)
+}
+
+fn write_linked_pe(
+    objects: &[&[u8]],
+    archive_member: &[bool],
+    entry: &str,
+    output: &str,
+) -> Result<()> {
     let mut arenas = relocation_arenas(objects.len())?;
     let inputs = decode_link_inputs(objects, ObjectFormat::Coff, &mut arenas)?;
-    let executable = link_x86_64_pe::<MAX_EXECUTABLE_BYTES, MAX_LINKED_BYTES>(&inputs, entry)
+    let selected = selected_link_inputs(&inputs, archive_member, entry)?;
+    let executable = link_x86_64_pe::<MAX_EXECUTABLE_BYTES, MAX_LINKED_BYTES>(&selected, entry)
         .map_err(mrml_error::message)?;
     mrml_runtime::write_file(output, executable.bytes())?;
     println!(
@@ -239,11 +288,17 @@ fn write_linked_pe(objects: &[&[u8]], entry: &str, output: &str) -> Result<()> {
     Ok(())
 }
 
-fn write_linked_elf(objects: &[&[u8]], entry: &str, output: &str) -> Result<()> {
+fn write_linked_elf(
+    objects: &[&[u8]],
+    archive_member: &[bool],
+    entry: &str,
+    output: &str,
+) -> Result<()> {
     let mut arenas = relocation_arenas(objects.len())?;
     let inputs = decode_link_inputs(objects, ObjectFormat::Elf64, &mut arenas)?;
+    let selected = selected_link_inputs(&inputs, archive_member, entry)?;
     let executable =
-        link_x86_64_elf_executable::<MAX_EXECUTABLE_BYTES, MAX_LINKED_BYTES>(&inputs, entry)
+        link_x86_64_elf_executable::<MAX_EXECUTABLE_BYTES, MAX_LINKED_BYTES>(&selected, entry)
             .map_err(mrml_error::message)?;
     mrml_runtime::write_file(output, executable.bytes())?;
     println!(

@@ -9252,3 +9252,13 @@ the bounded object members in source order. It does not implement a new archive
 format, symbol-index, member-selection, compression, cryptographic, executable,
 or loading algorithm. This technical screen is not legal advice or patent
 clearance.
+
+# 2026-08-28 — Needed-symbol archive member selection
+
+Patent review: **NOT_TRIGGERED**. This increment performs conventional static
+archive extraction by retaining explicit objects and selecting an ordered
+member when its definition satisfies the entry or a currently selected
+object's unresolved named relocation, repeating to a fixed point for transitive
+dependencies. It uses no new archive index, resolution, deduplication,
+compression, executable-format, cryptographic, or loading algorithm. This
+technical screen is not legal advice or patent clearance.

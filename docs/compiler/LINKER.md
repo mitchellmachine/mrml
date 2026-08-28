@@ -2,6 +2,24 @@
 
 Status: **PARTIALLY IMPLEMENTED**.
 
+Engineering Constitution record:
+
+```text
+Complexity impact: MEDIUM
+TCB impact: NONE
+New parser boundary: YES
+New authority model: NO
+New persistent state: NO
+External dependency: NO
+Failure isolated: YES
+Existing-object reuse: HIGH
+```
+
+The linker adds adversarial object, archive, and executable-format parser
+boundaries, but remains an isolated build tool with bounded allocation and no
+runtime authority. It reuses the compiler's existing object contracts and the
+public platform formats rather than adding a package or loading architecture.
+
 The first MRML-owned linker increment is a dependency-free, bounded x86-64
 static-link core in `packages/compiler/core/src/linker.rs`. It accepts already
 decoded code and read-only-data fragments, resolves one defined symbol per
@@ -82,11 +100,15 @@ to 32 object members. It validates the global magic, every fixed header,
 decimal size arithmetic, member terminators, payload ranges, and even-byte
 padding. Ordinary names, GNU `//` long-name tables and `/offset` references,
 and BSD `#1/length` embedded names are decoded; conventional symbol-index
-members are treated as metadata. The driver expands such a container in member
-order under the same total 32-input bound. This is only an all-members archive
-path: symbol-index-driven lazy extraction, group rescanning, thin archives, and
-real `.rlib` admission remain unimplemented, so it is not yet the ordinary Rust
-static-library path.
+members are treated as metadata. The driver decodes candidate members in order
+under the same total 32-input bound, always admits explicit objects, and admits
+an archive member only when it defines the entry or a named relocation target
+from an already selected input. A stable fixed point follows transitive archive
+dependencies while the first selected definition suppresses later unused
+duplicates. The result does not depend on trusting archive index metadata.
+Index-accelerated extraction, exact traditional archive/group rescan ordering,
+thin archives, non-object metadata members, and real `.rlib` admission remain
+unimplemented, so this is not yet the ordinary Rust static-library path.
 
 On 2026-08-28, the controlled Windows cold-process probe linked the same
 93-byte MRML COFF object 50 times after five interleaved warmups. MRML produced
@@ -115,9 +137,10 @@ preloading proposal is outdated, so MRML does not adopt that proposal.
 
 This increment does **not** emit PE imports/exports/exception metadata/base
 relocations/debug data, emit ELF dynamic metadata/interpreter/PIE/sections,
-perform symbol-driven archive extraction, read thin archives, perform section
-GC or ICF, link dynamically, run work in parallel, or integrate linker
-selection into the public `mrml` build frontend.
+accelerate archive extraction through symbol indexes, read thin archives or
+general `.rlib` contents, perform section GC or ICF, link dynamically, run work
+in parallel, or integrate linker selection into the public `mrml` build
+frontend.
 Those are separate milestones and the current upstream linker remains the
 production linker for ordinary package builds as required by
 `docs/build/BUILD_SYSTEM.md`.

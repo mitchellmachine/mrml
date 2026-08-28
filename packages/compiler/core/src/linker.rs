@@ -208,6 +208,93 @@ pub struct LinkInput<'data, 'relocations> {
     pub relocations: &'relocations [LinkRelocation<'data>],
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct LinkInputSelection {
+    indices: [usize; MAX_LINK_INPUTS],
+    length: usize,
+}
+
+impl LinkInputSelection {
+    pub fn indices(&self) -> &[usize] {
+        &self.indices[..self.length]
+    }
+}
+
+/// Selects explicit objects and the archive members needed by the entry or by
+/// a selected input's named relocations. The stable fixed point is independent
+/// of archive symbol-index encoding and preserves candidate order.
+pub fn select_static_link_inputs(
+    inputs: &[LinkInput<'_, '_>],
+    archive_member: &[bool],
+    entry_symbol: &str,
+) -> Result<LinkInputSelection, LinkerError> {
+    if inputs.is_empty() {
+        return Err(LinkerError::EmptyInput);
+    }
+    if inputs.len() > MAX_LINK_INPUTS || inputs.len() != archive_member.len() {
+        return Err(LinkerError::TooManyInputs);
+    }
+    validate_symbol(entry_symbol)?;
+    let mut selected = [false; MAX_LINK_INPUTS];
+    for index in 0..inputs.len() {
+        selected[index] = !archive_member[index];
+    }
+    loop {
+        let mut changed = false;
+        for candidate in 0..inputs.len() {
+            if selected[candidate] || !archive_member[candidate] {
+                continue;
+            }
+            let symbol = inputs[candidate].symbol;
+            if symbol_is_defined(inputs, &selected, symbol) {
+                continue;
+            }
+            if symbol == entry_symbol || symbol_is_referenced(inputs, &selected, symbol) {
+                selected[candidate] = true;
+                changed = true;
+            }
+        }
+        if !changed {
+            break;
+        }
+    }
+    let mut selection = LinkInputSelection {
+        indices: [0; MAX_LINK_INPUTS],
+        length: 0,
+    };
+    for index in 0..inputs.len() {
+        if selected[index] {
+            selection.indices[selection.length] = index;
+            selection.length += 1;
+        }
+    }
+    Ok(selection)
+}
+
+fn symbol_is_defined(
+    inputs: &[LinkInput<'_, '_>],
+    selected: &[bool; MAX_LINK_INPUTS],
+    symbol: &str,
+) -> bool {
+    inputs
+        .iter()
+        .enumerate()
+        .any(|(index, input)| selected[index] && input.symbol == symbol)
+}
+
+fn symbol_is_referenced(
+    inputs: &[LinkInput<'_, '_>],
+    selected: &[bool; MAX_LINK_INPUTS],
+    symbol: &str,
+) -> bool {
+    inputs.iter().enumerate().any(|(index, input)| {
+        selected[index]
+            && input.relocations.iter().any(|relocation| {
+                matches!(relocation.target, LinkRelocationTarget::Symbol(target) if target == symbol)
+            })
+    })
+}
+
 /// Decodes the bounded x86-64 COFF subset emitted by `mrml-rustc` into the
 /// format-neutral static-link input. The caller owns relocation storage so the
 /// dependency-free compiler core never allocates.
@@ -1315,6 +1402,77 @@ mod tests {
             decode_unix_archive(&archive),
             Err(LinkerError::InvalidArchive)
         );
+    }
+
+    #[test]
+    fn selects_only_transitively_needed_archive_members() {
+        let entry_relocation = [LinkRelocation {
+            offset: 0,
+            target: LinkRelocationTarget::Symbol("middle"),
+            addend: -4,
+        }];
+        let middle_relocation = [LinkRelocation {
+            offset: 0,
+            target: LinkRelocationTarget::Symbol("leaf"),
+            addend: -4,
+        }];
+        let inputs = [
+            LinkInput {
+                symbol: "entry",
+                text: &[0; 4],
+                readonly_data: &[],
+                relocations: &entry_relocation,
+            },
+            LinkInput {
+                symbol: "unused",
+                text: &[0; 4],
+                readonly_data: &[],
+                relocations: &[],
+            },
+            LinkInput {
+                symbol: "middle",
+                text: &[0; 4],
+                readonly_data: &[],
+                relocations: &middle_relocation,
+            },
+            LinkInput {
+                symbol: "leaf",
+                text: &[0; 4],
+                readonly_data: &[],
+                relocations: &[],
+            },
+        ];
+
+        let selection =
+            select_static_link_inputs(&inputs, &[false, true, true, true], "entry").unwrap();
+        assert_eq!(selection.indices(), &[0, 2, 3]);
+    }
+
+    #[test]
+    fn selects_an_archive_entry_and_ignores_later_duplicate_members() {
+        let inputs = [
+            LinkInput {
+                symbol: "entry",
+                text: &[0xc3],
+                readonly_data: &[],
+                relocations: &[],
+            },
+            LinkInput {
+                symbol: "entry",
+                text: &[0xcc],
+                readonly_data: &[],
+                relocations: &[],
+            },
+            LinkInput {
+                symbol: "unused",
+                text: &[0xc3],
+                readonly_data: &[],
+                relocations: &[],
+            },
+        ];
+
+        let selection = select_static_link_inputs(&inputs, &[true, true, true], "entry").unwrap();
+        assert_eq!(selection.indices(), &[0]);
     }
 
     #[test]
