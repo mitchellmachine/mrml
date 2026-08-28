@@ -451,12 +451,158 @@ pub struct LinkInputSelection {
 pub struct ElfSectionSelection {
     indices: [u16; MAX_LINK_INPUTS],
     length: usize,
+    object_address: usize,
+    object_length: usize,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum ElfSectionKind {
+    Text,
+    ReadonlyData,
+    WritableData,
+    ZeroedData,
+    Unwind,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct ElfSelectedSection<'a> {
+    pub index: u16,
+    pub name: &'a str,
+    pub kind: ElfSectionKind,
+    pub bytes: &'a [u8],
+    pub size: usize,
+    pub alignment: usize,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct ElfSelectedSections<'a> {
+    sections: [ElfSelectedSection<'a>; MAX_LINK_INPUTS],
+    length: usize,
+}
+
+impl<'a> ElfSelectedSections<'a> {
+    pub fn sections(&self) -> &[ElfSelectedSection<'a>] {
+        &self.sections[..self.length]
+    }
 }
 
 impl ElfSectionSelection {
     pub fn indices(&self) -> &[u16] {
         &self.indices[..self.length]
     }
+}
+
+/// Decodes only the content sections admitted by a prior reachability pass.
+/// Section names classify representation; the selection remains the authority
+/// for which sections may enter later relocation and layout stages.
+pub fn decode_x86_64_elf_selected_sections<'a>(
+    object: &'a [u8],
+    selection: &ElfSectionSelection,
+) -> Result<ElfSelectedSections<'a>, LinkerError> {
+    if selection.object_address != object.as_ptr() as usize
+        || selection.object_length != object.len()
+    {
+        return Err(LinkerError::InvalidElf);
+    }
+    if object.get(..7) != Some(b"\x7fELF\x02\x01\x01")
+        || read_u16_elf(object, 18)? != 62
+        || read_u16_elf(object, 58)? != 64
+    {
+        return Err(LinkerError::UnsupportedElf);
+    }
+    let section_offset = to_usize_elf(read_u64_elf(object, 40)?)?;
+    let section_count = usize::from(read_u16_elf(object, 60)?);
+    let names_index = usize::from(read_u16_elf(object, 62)?);
+    if !(4..=MAX_ELF_SECTIONS).contains(&section_count) || names_index >= section_count {
+        return Err(LinkerError::UnsupportedElf);
+    }
+    let names_header = elf_section_header(section_offset, section_count, names_index)?;
+    if read_u32_elf(object, names_header + 4)? != 3 {
+        return Err(LinkerError::InvalidElf);
+    }
+    let names = elf_section_contents(object, section_offset, section_count, names_index)?;
+    let empty = ElfSelectedSection {
+        index: 0,
+        name: "",
+        kind: ElfSectionKind::Text,
+        bytes: &[],
+        size: 0,
+        alignment: 1,
+    };
+    let mut decoded = ElfSelectedSections {
+        sections: [empty; MAX_LINK_INPUTS],
+        length: 0,
+    };
+    let mut previous = 0usize;
+    for &raw_index in selection.indices() {
+        let index = usize::from(raw_index);
+        if index == 0 || index >= section_count || (decoded.length != 0 && index <= previous) {
+            return Err(LinkerError::InvalidElf);
+        }
+        previous = index;
+        let header = elf_section_header(section_offset, section_count, index)?;
+        let section_type = read_u32_elf(object, header + 4)?;
+        let flags = read_u64_elf(object, header + 8)?;
+        let name_offset = usize::try_from(read_u32_elf(object, header)?)
+            .map_err(|_| LinkerError::OffsetOverflow)?;
+        let name = elf_string(names, name_offset)?;
+        let size = to_usize_elf(read_u64_elf(object, header + 32)?)?;
+        let alignment = to_usize_elf(read_u64_elf(object, header + 48)?)?;
+        if alignment == 0 || !alignment.is_power_of_two() || alignment > 4096 {
+            return Err(LinkerError::UnsupportedElf);
+        }
+        let kind = if (name == ".text" || name.starts_with(".text."))
+            && section_type == 1
+            && flags & 0x6 == 0x6
+            && flags & 0x1 == 0
+        {
+            ElfSectionKind::Text
+        } else if (name == ".rodata"
+            || name.starts_with(".rodata.")
+            || name == ".gcc_except_table"
+            || name.starts_with(".gcc_except_table."))
+            && section_type == 1
+            && flags & 0x2 == 0x2
+            && flags & 0x5 == 0
+        {
+            ElfSectionKind::ReadonlyData
+        } else if (name == ".data" || name.starts_with(".data."))
+            && section_type == 1
+            && flags & 0x3 == 0x3
+            && flags & 0x4 == 0
+        {
+            ElfSectionKind::WritableData
+        } else if (name == ".bss" || name.starts_with(".bss."))
+            && section_type == 8
+            && flags & 0x3 == 0x3
+            && flags & 0x4 == 0
+        {
+            ElfSectionKind::ZeroedData
+        } else if name == ".eh_frame" && section_type == 0x7000_0001 && flags & 0x2 == 0x2 {
+            ElfSectionKind::Unwind
+        } else {
+            return Err(LinkerError::UnsupportedElf);
+        };
+        let bytes = if section_type == 8 {
+            &object[0..0]
+        } else {
+            let contents = elf_section_contents(object, section_offset, section_count, index)?;
+            if contents.len() != size {
+                return Err(LinkerError::InvalidElf);
+            }
+            contents
+        };
+        decoded.sections[decoded.length] = ElfSelectedSection {
+            index: raw_index,
+            name,
+            kind,
+            bytes,
+            size,
+            alignment,
+        };
+        decoded.length += 1;
+    }
+    Ok(decoded)
 }
 
 impl LinkInputSelection {
@@ -1763,6 +1909,8 @@ pub fn select_x86_64_elf_sections(
     let mut selection = ElfSectionSelection {
         indices: [0; MAX_LINK_INPUTS],
         length: 0,
+        object_address: object.as_ptr() as usize,
+        object_length: object.len(),
     };
     for (index, is_selected) in selected[..section_count].iter().enumerate() {
         if !is_selected {
@@ -5885,18 +6033,35 @@ mod tests {
             }],
         )
         .unwrap();
+        let caller_selection = select_x86_64_elf_sections(caller.bytes(), &["entry"]).unwrap();
+        assert_eq!(caller_selection.indices(), &[1]);
+        let caller_sections =
+            decode_x86_64_elf_selected_sections(caller.bytes(), &caller_selection).unwrap();
+        assert_eq!(caller_sections.sections().len(), 1);
+        assert_eq!(caller_sections.sections()[0].name, ".text");
+        assert_eq!(caller_sections.sections()[0].kind, ElfSectionKind::Text);
+        assert_eq!(caller_sections.sections()[0].bytes, caller_code.bytes());
+        assert_eq!(caller_sections.sections()[0].size, caller_code.len());
+        let callee_selection = select_x86_64_elf_sections(callee.bytes(), &["helper"]).unwrap();
         assert_eq!(
-            select_x86_64_elf_sections(caller.bytes(), &["entry"])
-                .unwrap()
-                .indices(),
-            &[1]
+            decode_x86_64_elf_selected_sections(caller.bytes(), &callee_selection),
+            Err(LinkerError::InvalidElf)
         );
+
+        let data_selection = select_x86_64_elf_sections(data.bytes(), &["literal"]).unwrap();
+        assert_eq!(data_selection.indices(), &[1, 3]);
+        let data_sections =
+            decode_x86_64_elf_selected_sections(data.bytes(), &data_selection).unwrap();
+        assert_eq!(data_sections.sections().len(), 2);
+        assert_eq!(data_sections.sections()[0].name, ".text");
+        assert_eq!(data_sections.sections()[0].kind, ElfSectionKind::Text);
+        assert_eq!(data_sections.sections()[0].bytes, data_code.bytes());
+        assert_eq!(data_sections.sections()[1].name, ".rodata");
         assert_eq!(
-            select_x86_64_elf_sections(data.bytes(), &["literal"])
-                .unwrap()
-                .indices(),
-            &[1, 3]
+            data_sections.sections()[1].kind,
+            ElfSectionKind::ReadonlyData
         );
+        assert_eq!(data_sections.sections()[1].bytes, b"hello");
         assert_eq!(
             select_x86_64_elf_sections(data.bytes(), &["missing"]),
             Err(LinkerError::UndefinedSymbol)

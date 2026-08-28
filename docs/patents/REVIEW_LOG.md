@@ -9617,3 +9617,14 @@ integer and NUL-name validation, then treats entries only as untrusted lookup
 hints to independently parsed members. It introduces no new archive or index
 format, search algorithm, compression, cryptographic mechanism, or loader
 behavior. This technical screen is not legal advice or patent clearance.
+
+# 2026-08-28 — Reachability-bound ELF section views
+
+Patent review: **NOT_TRIGGERED**. This increment classifies only sections
+selected by the existing bounded ELF relocation graph into conventional text,
+read-only, writable, zero-fill, and unwind representations. The selection is
+bound to the exact input slice and all names, flags, types, sizes, and
+alignments are validated before exposure. It introduces no new object format,
+section encoding, graph algorithm, relocation arithmetic, compression,
+cryptographic mechanism, or loader behavior. This technical screen is not
+legal advice or patent clearance.

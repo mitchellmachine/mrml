@@ -46,8 +46,9 @@ pub use ir::{
 };
 pub use lexer::{LexError, LexErrorKind, Lexer, Span, Token, TokenKind};
 pub use linker::{
-    ArchiveMember, ArchiveMembers, ArchiveSymbol, ElfImage, ElfSectionSelection, ElfUnwindData,
-    ElfUnwindRelocation, ElfWritableAbsoluteRelocation, ElfWritableAbsoluteTarget, ElfWritableData,
+    ArchiveMember, ArchiveMembers, ArchiveSymbol, ElfImage, ElfSectionKind, ElfSectionSelection,
+    ElfSelectedSection, ElfSelectedSections, ElfUnwindData, ElfUnwindRelocation,
+    ElfWritableAbsoluteRelocation, ElfWritableAbsoluteTarget, ElfWritableData,
     ElfWritableReference, ElfWritableTarget, LinkDefinition, LinkDefinitionTarget, LinkInput,
     LinkInputSelection, LinkRelocation, LinkRelocationTarget, LinkedImage, LinkerError,
     MAX_ARCHIVE_MEMBERS, MAX_ARCHIVE_SYMBOLS, MAX_LINK_DEFINITIONS, MAX_LINK_INPUTS,
@@ -55,7 +56,8 @@ pub use linker::{
     PeWritableRelocation, decode_unix_archive, decode_x86_64_coff,
     decode_x86_64_coff_runtime_functions, decode_x86_64_coff_text_fragment,
     decode_x86_64_coff_with_definitions, decode_x86_64_coff_writable_data,
-    decode_x86_64_coff_writable_data_fragment, decode_x86_64_elf, decode_x86_64_elf_unwind,
+    decode_x86_64_coff_writable_data_fragment, decode_x86_64_elf,
+    decode_x86_64_elf_selected_sections, decode_x86_64_elf_unwind,
     decode_x86_64_elf_with_definitions, decode_x86_64_elf_writable, link_x86_64_elf_executable,
     link_x86_64_elf_executable_with_unwind, link_x86_64_elf_executable_with_unwind_and_writable,
     link_x86_64_pe, link_x86_64_pe_with_data_and_unwind, link_x86_64_pe_with_unwind,
