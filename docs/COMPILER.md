@@ -1100,6 +1100,15 @@ exercise both the early-return and tail paths at two indexes on Windows gnullvm
 and Arch Linux WSL. This covers one same-origin early-return join; it is not
 general path-sensitive ownership or arbitrary interprocedural CFG analysis.
 
+The same exact early-return join now composes with mutability attenuation when
+both exits return shared repeated subslices of one mutable slice parameter. The
+caller retains one shared root loan across either result, rejects mutation while
+that result is live, and restores mutable access after its last read. Native
+probes exercise both the explicit-return and continuing-tail paths at boundary
+indexes without modifying the input on Windows gnullvm and Arch Linux WSL. This
+does not add general return coercion, path-sensitive borrowing, or lifetime
+inference.
+
 The repeated-subslice semantic harness now isolates all four checked failure
 layers at depth three. An inner start beyond the runtime owner length, second-
 and third-layer starts beyond their independently saved input lengths, and a
