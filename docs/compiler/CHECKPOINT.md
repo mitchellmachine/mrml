@@ -9,8 +9,8 @@ the named commit and current source.
 ## Recoverable baseline
 
 - Branch: `main`
-- Compiler checkpoint commit: `b97ef1bd`
-  (`compiler: decode bounded Unix archives`)
+- Compiler checkpoint commit: `88d54e05`
+  (`compiler: select needed archive members`)
 - Remote state when recorded: `origin/main` includes the bounded MRML-owned
   static-link core, exact MRML COFF and ELF64 ingestion, deterministic
   import-free PE32+/ELF64 executable serialization, explicit compiler-driver
@@ -96,6 +96,16 @@ member names; skips conventional symbol-index metadata; and lets the driver
 expand members in order under the existing total input bound. This is an
 all-members path only. Lazy symbol-index extraction, group rescanning, thin
 archives, and real `.rlib` admission remain unimplemented.
+
+Commit `88d54e05` adds deterministic needed-symbol archive selection. Explicit
+objects are always retained; an archive candidate is selected only when it
+defines the entry or a named relocation target from an already selected input.
+The bounded fixed point follows transitive dependencies and ignores later
+unused duplicate definitions. The full Windows compiler suite passed with 688
+core tests, 2 component tests, 10 conformance tests, 351 replacement tests, 21
+semantic-execution tests, and 2 driver tests. Index acceleration, exact
+traditional group ordering, thin archives, non-object members, and real `.rlib`
+admission remain unimplemented.
 
 Patent review: **NOT_TRIGGERED** for these conventional bounded linker,
 serializer, command-routing, and benchmark increments; see
