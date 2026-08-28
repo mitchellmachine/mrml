@@ -604,6 +604,219 @@ pub fn x86_64_coff_unwind_section_count(object: &[u8]) -> Result<usize, LinkerEr
     Ok(unwind_sections)
 }
 
+/// Decodes the bounded AMD64 `.pdata$...`/`.xdata$...` shape emitted by the
+/// pinned gnullvm oracle. Every 12-byte runtime-function record must carry
+/// three `IMAGE_REL_AMD64_ADDR32NB` relocations at its three fields.
+pub fn decode_x86_64_coff_runtime_functions<'data, 'records>(
+    object: &'data [u8],
+    record_storage: &'records mut [PeRuntimeFunction<'data>; MAX_PE_RUNTIME_FUNCTIONS],
+) -> Result<&'records [PeRuntimeFunction<'data>], LinkerError> {
+    if read_u16(object, 0)? != 0x8664 || read_u16(object, 16)? != 0 {
+        return Err(LinkerError::UnsupportedCoff);
+    }
+    let section_count = usize::from(read_u16(object, 2)?);
+    if section_count == 0 || section_count > 16 {
+        return Err(LinkerError::UnsupportedCoff);
+    }
+    let symbol_offset =
+        usize::try_from(read_u32(object, 8)?).map_err(|_| LinkerError::OffsetOverflow)?;
+    let symbol_count =
+        usize::try_from(read_u32(object, 12)?).map_err(|_| LinkerError::OffsetOverflow)?;
+    let symbols_end = symbol_offset
+        .checked_add(
+            symbol_count
+                .checked_mul(18)
+                .ok_or(LinkerError::OffsetOverflow)?,
+        )
+        .ok_or(LinkerError::OffsetOverflow)?;
+    object
+        .get(symbol_offset..symbols_end)
+        .ok_or(LinkerError::InvalidCoff)?;
+    let string_size =
+        usize::try_from(read_u32(object, symbols_end)?).map_err(|_| LinkerError::OffsetOverflow)?;
+    if string_size < 4 {
+        return Err(LinkerError::InvalidCoff);
+    }
+    object
+        .get(
+            symbols_end
+                ..symbols_end
+                    .checked_add(string_size)
+                    .ok_or(LinkerError::OffsetOverflow)?,
+        )
+        .ok_or(LinkerError::InvalidCoff)?;
+
+    let mut record_count = 0usize;
+    for section in 0..section_count {
+        let header = 20usize
+            .checked_add(section.checked_mul(40).ok_or(LinkerError::OffsetOverflow)?)
+            .ok_or(LinkerError::OffsetOverflow)?;
+        let name = coff_section_name(
+            object
+                .get(header..header + 8)
+                .ok_or(LinkerError::InvalidCoff)?,
+            object,
+            symbols_end,
+            string_size,
+        )?;
+        if !name.starts_with(".pdata$") {
+            continue;
+        }
+        let size = usize::try_from(read_u32(object, header + 16)?)
+            .map_err(|_| LinkerError::OffsetOverflow)?;
+        let raw_offset = usize::try_from(read_u32(object, header + 20)?)
+            .map_err(|_| LinkerError::OffsetOverflow)?;
+        let records = object
+            .get(
+                raw_offset
+                    ..raw_offset
+                        .checked_add(size)
+                        .ok_or(LinkerError::OffsetOverflow)?,
+            )
+            .ok_or(LinkerError::InvalidCoff)?;
+        if records.is_empty() || records.len() % 12 != 0 {
+            return Err(LinkerError::UnsupportedCoff);
+        }
+        let relocation_offset = usize::try_from(read_u32(object, header + 24)?)
+            .map_err(|_| LinkerError::OffsetOverflow)?;
+        let relocation_count = usize::from(read_u16(object, header + 32)?);
+        if relocation_count != records.len() / 4 {
+            return Err(LinkerError::UnsupportedCoff);
+        }
+        for record_index in 0..records.len() / 12 {
+            if record_count == record_storage.len() {
+                return Err(LinkerError::TooManyRelocations);
+            }
+            let mut text_targets = [("", 0usize); 2];
+            let mut unwind_info = None;
+            for field in 0..3 {
+                let relocation = relocation_offset
+                    .checked_add(
+                        (record_index * 3 + field)
+                            .checked_mul(10)
+                            .ok_or(LinkerError::OffsetOverflow)?,
+                    )
+                    .ok_or(LinkerError::OffsetOverflow)?;
+                let expected_field = record_index * 12 + field * 4;
+                if usize::try_from(read_u32(object, relocation)?)
+                    .map_err(|_| LinkerError::OffsetOverflow)?
+                    != expected_field
+                    || read_u16(object, relocation + 8)? != 3
+                {
+                    return Err(LinkerError::UnsupportedCoff);
+                }
+                let target_index = usize::try_from(read_u32(object, relocation + 4)?)
+                    .map_err(|_| LinkerError::OffsetOverflow)?;
+                if target_index >= symbol_count {
+                    return Err(LinkerError::InvalidCoff);
+                }
+                let target = symbol_offset + target_index * 18;
+                let target_section = read_i16(object, target + 12)?;
+                if target_section <= 0
+                    || usize::try_from(target_section).map_err(|_| LinkerError::OffsetOverflow)?
+                        > section_count
+                {
+                    return Err(LinkerError::UnsupportedCoff);
+                }
+                let target_value = usize::try_from(read_u32(object, target + 8)?)
+                    .map_err(|_| LinkerError::OffsetOverflow)?;
+                let addend = usize::try_from(read_u32(records, expected_field)?)
+                    .map_err(|_| LinkerError::OffsetOverflow)?
+                    .checked_add(target_value)
+                    .ok_or(LinkerError::OffsetOverflow)?;
+                let target_header = 20usize
+                    .checked_add(
+                        (usize::try_from(target_section)
+                            .map_err(|_| LinkerError::OffsetOverflow)?
+                            - 1)
+                            * 40,
+                    )
+                    .ok_or(LinkerError::OffsetOverflow)?;
+                let target_name = coff_section_name(
+                    object
+                        .get(target_header..target_header + 8)
+                        .ok_or(LinkerError::InvalidCoff)?,
+                    object,
+                    symbols_end,
+                    string_size,
+                )?;
+                if field < 2 {
+                    if target_name != ".text" && !target_name.starts_with(".text$") {
+                        return Err(LinkerError::UnsupportedCoff);
+                    }
+                    let symbol = coff_external_symbol_in_section(
+                        object,
+                        symbol_offset,
+                        symbol_count,
+                        symbols_end,
+                        string_size,
+                        target_section,
+                    )?;
+                    text_targets[field] = (symbol, addend);
+                } else {
+                    if !target_name.starts_with(".xdata$") || addend != 0 {
+                        return Err(LinkerError::UnsupportedCoff);
+                    }
+                    let target_size = usize::try_from(read_u32(object, target_header + 16)?)
+                        .map_err(|_| LinkerError::OffsetOverflow)?;
+                    let target_raw = usize::try_from(read_u32(object, target_header + 20)?)
+                        .map_err(|_| LinkerError::OffsetOverflow)?;
+                    let bytes = object
+                        .get(
+                            target_raw
+                                ..target_raw
+                                    .checked_add(target_size)
+                                    .ok_or(LinkerError::OffsetOverflow)?,
+                        )
+                        .ok_or(LinkerError::InvalidCoff)?;
+                    if bytes.is_empty() {
+                        return Err(LinkerError::UnsupportedCoff);
+                    }
+                    unwind_info = Some(bytes);
+                }
+            }
+            record_storage[record_count] = PeRuntimeFunction {
+                begin_symbol: text_targets[0].0,
+                begin_offset: text_targets[0].1,
+                end_symbol: text_targets[1].0,
+                end_offset: text_targets[1].1,
+                unwind_info: unwind_info.ok_or(LinkerError::UnsupportedCoff)?,
+            };
+            record_count += 1;
+        }
+    }
+    Ok(&record_storage[..record_count])
+}
+
+fn coff_external_symbol_in_section<'a>(
+    object: &'a [u8],
+    symbol_offset: usize,
+    symbol_count: usize,
+    strings_offset: usize,
+    string_size: usize,
+    section: i16,
+) -> Result<&'a str, LinkerError> {
+    let mut index = 0usize;
+    let mut found = None;
+    while index < symbol_count {
+        let offset = symbol_offset + index * 18;
+        let auxiliary = usize::from(*object.get(offset + 17).ok_or(LinkerError::InvalidCoff)?);
+        if read_i16(object, offset + 12)? == section
+            && *object.get(offset + 16).ok_or(LinkerError::InvalidCoff)? == 2
+            && read_u32(object, offset + 8)? == 0
+        {
+            let symbol = coff_symbol_name(object, offset, strings_offset, string_size)?;
+            if found.replace(symbol).is_some() {
+                return Err(LinkerError::UnsupportedCoff);
+            }
+        }
+        index = index
+            .checked_add(auxiliary + 1)
+            .ok_or(LinkerError::OffsetOverflow)?;
+    }
+    found.ok_or(LinkerError::UnsupportedCoff)
+}
+
 /// Decodes one nonempty COFF text fragment by section order. Unwind sections
 /// are validated and retained for the separate typed unwind decoder; they are
 /// never folded into executable bytes or silently treated as ordinary data.
@@ -1975,6 +2188,49 @@ mod tests {
         object
     }
 
+    fn coff_with_one_runtime_function() -> std::vec::Vec<u8> {
+        let mut object = std::vec![0u8; 245];
+        object[0..2].copy_from_slice(&0x8664u16.to_le_bytes());
+        object[2..4].copy_from_slice(&3u16.to_le_bytes());
+        object[8..12].copy_from_slice(&187u32.to_le_bytes());
+        object[12..16].copy_from_slice(&3u32.to_le_bytes());
+
+        object[20..27].copy_from_slice(b".text$a");
+        object[36..40].copy_from_slice(&1u32.to_le_bytes());
+        object[40..44].copy_from_slice(&140u32.to_le_bytes());
+        object[60..68].copy_from_slice(b".xdata$a");
+        object[76..80].copy_from_slice(&4u32.to_le_bytes());
+        object[80..84].copy_from_slice(&141u32.to_le_bytes());
+        object[100..108].copy_from_slice(b".pdata$a");
+        object[116..120].copy_from_slice(&12u32.to_le_bytes());
+        object[120..124].copy_from_slice(&145u32.to_le_bytes());
+        object[124..128].copy_from_slice(&157u32.to_le_bytes());
+        object[132..134].copy_from_slice(&3u16.to_le_bytes());
+
+        object[140] = 0xc3;
+        object[141..145].copy_from_slice(&[1, 2, 3, 4]);
+        object[149..153].copy_from_slice(&1u32.to_le_bytes());
+        for (record, field) in [0u32, 4, 8].into_iter().enumerate() {
+            let offset = 157 + record * 10;
+            object[offset..offset + 4].copy_from_slice(&field.to_le_bytes());
+            object[offset + 4..offset + 8]
+                .copy_from_slice(&(if record == 2 { 2u32 } else { 0u32 }).to_le_bytes());
+            object[offset + 8..offset + 10].copy_from_slice(&3u16.to_le_bytes());
+        }
+
+        object[187..194].copy_from_slice(b".text$a");
+        object[199..201].copy_from_slice(&1i16.to_le_bytes());
+        object[203] = 3;
+        object[205..210].copy_from_slice(b"entry");
+        object[217..219].copy_from_slice(&1i16.to_le_bytes());
+        object[221] = 2;
+        object[223..231].copy_from_slice(b".xdata$a");
+        object[235..237].copy_from_slice(&2i16.to_le_bytes());
+        object[239] = 3;
+        object[241..245].copy_from_slice(&4u32.to_le_bytes());
+        object
+    }
+
     #[test]
     fn decodes_ordinary_gnu_and_bsd_archive_member_names() {
         let mut archive = b"!<arch>\n".to_vec();
@@ -2581,6 +2837,45 @@ mod tests {
                 &mut legacy_relocations,
                 &mut legacy_definitions,
             ),
+            Err(LinkerError::UnsupportedCoff)
+        );
+    }
+
+    #[test]
+    fn decodes_typed_addr32nb_runtime_function_records() {
+        let object = coff_with_one_runtime_function();
+        assert_eq!(x86_64_coff_text_fragment_count(&object), Ok(1));
+        assert_eq!(x86_64_coff_unwind_section_count(&object), Ok(2));
+        let mut storage = [PeRuntimeFunction {
+            begin_symbol: "unused",
+            begin_offset: 0,
+            end_symbol: "unused",
+            end_offset: 0,
+            unwind_info: &[],
+        }; MAX_PE_RUNTIME_FUNCTIONS];
+        let records = decode_x86_64_coff_runtime_functions(&object, &mut storage).unwrap();
+        assert_eq!(
+            records,
+            &[PeRuntimeFunction {
+                begin_symbol: "entry",
+                begin_offset: 0,
+                end_symbol: "entry",
+                end_offset: 1,
+                unwind_info: &[1, 2, 3, 4],
+            }]
+        );
+
+        let mut invalid = object.clone();
+        invalid[157 + 8..157 + 10].copy_from_slice(&4u16.to_le_bytes());
+        let mut invalid_storage = [PeRuntimeFunction {
+            begin_symbol: "unused",
+            begin_offset: 0,
+            end_symbol: "unused",
+            end_offset: 0,
+            unwind_info: &[],
+        }; MAX_PE_RUNTIME_FUNCTIONS];
+        assert_eq!(
+            decode_x86_64_coff_runtime_functions(&invalid, &mut invalid_storage),
             Err(LinkerError::UnsupportedCoff)
         );
     }

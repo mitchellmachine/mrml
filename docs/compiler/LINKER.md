@@ -171,6 +171,15 @@ range through data-directory entry 3. The existing PE API delegates with an
 empty record set and remains byte-compatible. COFF `ADDR32NB` decoding and
 driver transport are still required before gnullvm unwind sections are admitted.
 
+The COFF core now decodes bounded `.pdata$...` records into that typed form.
+Each 12-byte record must have exactly three `IMAGE_REL_AMD64_ADDR32NB`
+relocations at offsets 0, 4, and 8. Begin/end targets must resolve to one
+zero-offset external definition in a bounded text section; the third target
+must resolve at offset zero in a nonempty `.xdata$...` section. Section indices,
+symbol records, addends, payloads, and record capacity are checked. Driver
+selection/transport remains incomplete, so this decoder is not yet an
+end-to-end gnullvm admission claim.
+
 After driver fragment expansion, the controlled one-object procedure measured
 MRML at 9.275 ms median and 9.361 ms mean versus pinned gnullvm rust-lld at
 26.598 ms median and 26.981 ms mean across 50 iterations after five warmups.

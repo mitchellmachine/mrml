@@ -9344,3 +9344,12 @@ unwind bytes in read-only output, and publishes the conventional exception data
 directory. It implements the documented PE format without a new unwind,
 exception-handling, relocation, compression, cryptographic, or loading
 algorithm. This technical screen is not legal advice or patent clearance.
+
+# 2026-08-28 — Bounded AMD64 COFF unwind decoding
+
+Patent review: **NOT_TRIGGERED**. This increment validates conventional
+12-byte AMD64 COFF runtime-function records and their three documented
+`ADDR32NB` RVA relocations, then maps them to the existing typed PE serializer
+input. It introduces no new unwind, exception-handling, relocation,
+compression, cryptographic, or loading algorithm. This technical screen is not
+legal advice or patent clearance.
