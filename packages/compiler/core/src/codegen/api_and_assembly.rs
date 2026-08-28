@@ -809,6 +809,8 @@ pub fn compile_x86_64_runtime_function_with_options<
     let return_array = runtime_array_type(return_type_text);
     let return_reference = runtime_reference_type(return_type_text);
     let return_pointer = runtime_raw_pointer_type(return_type_text);
+    let returns_wide_mrml_integer = function.abi == FunctionAbi::MrmlV1
+        && runtime_integer_layout(return_type_text).is_some_and(|layout| layout.words == 2);
     if return_reference.is_some() {
         let returns_static = runtime_reference_has_static_lifetime(return_type_text);
         let mut has_reference_parameter = false;
@@ -839,6 +841,7 @@ pub fn compile_x86_64_runtime_function_with_options<
         && !returns_bool
         && !returns_char
         && runtime_width(return_type_text).is_none()
+        && !returns_wide_mrml_integer
         && return_array.is_none()
         && return_reference.is_none()
         && return_pointer.is_none()
@@ -1004,10 +1007,12 @@ pub fn compile_x86_64_runtime_function_with_options<
     } else {
         RuntimeExpressionType::Integer(crate::IntegerType::from_name(return_type_text))
     };
-    let width = runtime_width(operand_type).ok_or(CodegenError {
-        kind: CodegenErrorKind::UnsupportedRuntimeType,
-        span: function.name_span,
-    })?;
+    let width = runtime_width(operand_type)
+        .or_else(|| returns_wide_mrml_integer.then(|| runtime_width("u64")).flatten())
+        .ok_or(CodegenError {
+            kind: CodegenErrorKind::UnsupportedRuntimeType,
+            span: function.name_span,
+        })?;
     let returns_fat_reference = matches!(
         return_reference,
         Some(RuntimeExpressionType::Reference {

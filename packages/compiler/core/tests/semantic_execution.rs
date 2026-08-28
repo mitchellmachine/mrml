@@ -40,6 +40,8 @@ const MRML_V1_SLICE_RETURN_SOURCE: &str =
 const MRML_V1_MUT_SLICE_RETURN_SOURCE: &str = "#[mrml_abi::export(version = 1)] pub fn probe(input: &mut [u8]) -> &mut [u8] { input[0] += 1; input }";
 const MRML_V1_STR_RETURN_SOURCE: &str = "#[mrml_abi::export(version = 1)] pub fn probe(input: &str, alternate: bool) -> &str { if alternate { \"MRML\" } else { input } }";
 const MRML_V1_WIDE_NARROW_SOURCE: &str = "#[mrml_abi::export(version = 1)] pub fn probe(unsigned: u128, signed: i128) -> u64 { (unsigned as u32 as u64) ^ (signed as i16 as u64) }";
+const MRML_V1_WIDE_RETURN_SOURCE: &str =
+    "#[mrml_abi::export(version = 1)] pub fn probe(input: u128) -> u128 { input }";
 #[cfg(target_os = "windows")]
 const MRML_V1_SPLIT_SLICE_SOURCE: &str = "#[mrml_abi::export(version = 1)] pub fn probe(a: u64, b: u64, c: u64, input: &[u8]) -> u64 { a + b * 2 + c * 3 + input.len() as u64 }";
 #[cfg(not(target_os = "windows"))]
@@ -714,6 +716,60 @@ fn mrml_v1_wide_integer_parameters_narrow_from_the_low_word() {
         rustc_mrml_v1_observations(
             MRML_V1_WIDE_NARROW_SOURCE,
             "for (unsigned, signed) in [(0x0123_4567_89ab_cdef_fedc_ba98_7654_3210u128, 0x1020_3040_5060_7080_90a0_b0c0_d0e0_f123u128 as i128), (0xfedc_ba98_7654_3210_0123_4567_89ab_cdefu128, -0x0102_0304_0506_0708_1112_1314_1516_1718i128)] { println!(\"{}\", probe(unsigned, signed)); }",
+        )
+    );
+}
+
+unsafe fn call_mrml_v1_wide_return(function: *const u8, input: u128) -> u128 {
+    let returned_low: u64;
+    let returned_high: u64;
+    #[cfg(target_os = "windows")]
+    unsafe {
+        core::arch::asm!(
+            "sub rsp, 32",
+            "call {function}",
+            "add rsp, 32",
+            function = in(reg) function,
+            in("rcx") input as u64,
+            inlateout("rdx") (input >> 64) as u64 => returned_high,
+            lateout("rax") returned_low,
+            clobber_abi("C"),
+        );
+    }
+    #[cfg(not(target_os = "windows"))]
+    unsafe {
+        core::arch::asm!(
+            "call {function}",
+            function = in(reg) function,
+            in("rdi") input as u64,
+            in("rsi") (input >> 64) as u64,
+            lateout("rax") returned_low,
+            lateout("rdx") returned_high,
+            clobber_abi("C"),
+        );
+    }
+    (u128::from(returned_high) << 64) | u128::from(returned_low)
+}
+
+#[test]
+fn mrml_v1_wide_integer_parameters_return_both_words() {
+    let code = compile(MRML_V1_WIDE_RETURN_SOURCE);
+    let inputs = [
+        0x0123_4567_89ab_cdef_fedc_ba98_7654_3210u128,
+        0xfedc_ba98_7654_3210_0123_4567_89ab_cdefu128,
+    ];
+    let actual = inputs
+        .into_iter()
+        .flat_map(|input| {
+            let returned = unsafe { call_mrml_v1_wide_return(code.pointer, input) };
+            [returned as u64, (returned >> 64) as u64]
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(
+        actual,
+        rustc_mrml_v1_observations(
+            MRML_V1_WIDE_RETURN_SOURCE,
+            "for input in [0x0123_4567_89ab_cdef_fedc_ba98_7654_3210u128, 0xfedc_ba98_7654_3210_0123_4567_89ab_cdefu128] { let returned = probe(input); println!(\"{}\", returned as u64); println!(\"{}\", (returned >> 64) as u64); }",
         )
     );
 }

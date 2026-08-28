@@ -12169,7 +12169,26 @@ mod tests {
     }
 
     #[test]
-    fn mrml_v1_codegen_rejects_multiword_integer_returns_at_the_type_span() {
+    fn mrml_v1_codegen_returns_two_word_integer_parameters() {
+        let source =
+            "#[mrml_abi::export(version = 1)] pub fn value(input: u128) -> u128 { input }";
+        let module = Parser::new(source).parse_module::<2, 2>().unwrap();
+        let Some(Item::Function(function)) = module.items()[0] else {
+            panic!("expected function")
+        };
+        for abi in [X86_64Abi::SystemV, X86_64Abi::Windows] {
+            let code = compile_x86_64_function::<_, 256, 2, 16>(
+                &function,
+                &NoConstants,
+                abi,
+            )
+            .unwrap();
+            assert!(code.bytes().windows(3).any(|bytes| bytes == [0x48, 0x89, 0xc2]));
+        }
+    }
+
+    #[test]
+    fn mrml_v1_codegen_rejects_non_parameter_wide_returns() {
         let source = "#[mrml_abi::export(version = 1)] pub fn value() -> u128 { 0 }";
         let module = Parser::new(source).parse_module::<2, 2>().unwrap();
         let Some(Item::Function(function)) = module.items()[0] else {
@@ -12181,8 +12200,7 @@ mod tests {
             X86_64Abi::SystemV,
         )
         .unwrap_err();
-        assert_eq!(error.kind, CodegenErrorKind::MrmlV1MultiwordValueUnsupported);
-        assert_eq!(&source[error.span.start..error.span.end], "u128");
+        assert_eq!(error.kind, CodegenErrorKind::RuntimeExpressionUnsupported);
     }
 
     #[test]

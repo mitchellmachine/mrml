@@ -121,13 +121,14 @@ returns. The emitter uses the planned target register or stack order for every
 parameter word, returns borrowed views directly in `rax` and `rdx` on both
 targets, and does not relabel the function as C ABI.
 
-Unsupported zero-word parameters and `u128` or `i128` returns fail with a
-distinct typed codegen reason at the exact type span. Two-word `u128` and `i128`
-parameters are admitted for direct Rust `as` narrowing to supported one-word
-integer types. Other wide expressions, locals, operations, calls, and returns
-remain unavailable and fail closed. Ownership and borrowing rules beyond
-ordinary language checking, other multiword machine-code lowering, link
-compatibility, and external execution evidence remain required.
+Unsupported zero-word parameters fail with a distinct typed codegen reason at
+the exact type span. Two-word `u128` and `i128` parameters are admitted for
+direct Rust `as` narrowing to supported one-word integer types and for returning
+that same parameter unchanged in `rax` and `rdx`. Other wide expressions,
+locals, operations, calls, and returns remain unavailable and fail closed.
+Ownership and borrowing rules beyond ordinary language checking, other
+multiword machine-code lowering, link compatibility, and external execution
+evidence remain required.
 The typed runtime stack model reserves two ordered words for `u128` and `i128`
 values, and its logical integer-layout metadata preserves their exact signed or
 unsigned 128-bit bounds. The existing one-word instruction emitter rejects that
@@ -152,7 +153,8 @@ whose pointer and length straddle the register/stack boundary on each target
 and a returned slice captured directly from `rax` and `rdx`. Wide-parameter
 evidence passes independent `u128` and `i128` low/high words through four target
 argument registers and compares nested narrowing with the pinned rustc facade.
-This is not linker,
+It also captures `rax` and `rdx` independently for a nontrivial `u128` identity
+round trip and compares both words with the same oracle. This is not linker,
 dynamic-loader, cross-language, or physical-hardware evidence.
 
 Arrays, tuples, user aggregates, and indirect returns are not admitted. This
