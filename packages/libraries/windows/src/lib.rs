@@ -1607,19 +1607,28 @@ impl NativeThread {
     }
 
     fn join_inner(&mut self) -> bool {
-        let Some(handle) = self.0.take() else {
+        let Some(handle) = self.0 else {
             return true;
         };
-        let waited = unsafe { WaitForSingleObject(handle, u32::MAX) } == 0;
-        let closed = unsafe { CloseHandle(handle) } != 0;
-        waited && closed
+        if unsafe { WaitForSingleObject(handle, u32::MAX) } != 0 {
+            return false;
+        }
+        if unsafe { CloseHandle(handle) } == 0 {
+            return false;
+        }
+        self.0 = None;
+        true
     }
 }
 
 #[cfg(windows)]
 impl Drop for NativeThread {
     fn drop(&mut self) {
-        let _ = self.join_inner();
+        // An unconfirmed worker may still be using resources borrowed by its
+        // closure. Fail-stop here instead of allowing those resources to drop.
+        while !self.join_inner() {
+            yield_now();
+        }
     }
 }
 

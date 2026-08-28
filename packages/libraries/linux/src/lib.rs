@@ -725,17 +725,25 @@ impl NativeThread {
     }
 
     fn join_inner(&mut self) -> bool {
-        let Some(thread) = self.0.take() else {
+        let Some(thread) = self.0 else {
             return true;
         };
-        unsafe { pthread_join(thread, core::ptr::null_mut()) == 0 }
+        if unsafe { pthread_join(thread, core::ptr::null_mut()) } != 0 {
+            return false;
+        }
+        self.0 = None;
+        true
     }
 }
 
 #[cfg(unix)]
 impl Drop for NativeThread {
     fn drop(&mut self) {
-        let _ = self.join_inner();
+        // An unconfirmed worker may still be using resources borrowed by its
+        // closure. Fail-stop here instead of allowing those resources to drop.
+        while !self.join_inner() {
+            yield_now();
+        }
     }
 }
 
