@@ -579,7 +579,7 @@ impl WhpVcpuRunner {
             api: self.api,
             index: self.index,
         };
-        mrml_runtime::spawn_detached(move || {
+        let watchdog = mrml_runtime::spawn_joinable(move || {
             let started = mrml_runtime::Instant::now();
             loop {
                 if worker_phase.load(Ordering::Acquire) != ARMED {
@@ -602,9 +602,10 @@ impl WhpVcpuRunner {
         .map_err(|_| WhpError::SystemCall(-1))?;
         let result = self.run();
         let _ = phase.compare_exchange(ARMED, RETURNED, Ordering::AcqRel, Ordering::Acquire);
-        while !retired.load(Ordering::Acquire) {
-            mrml_runtime::yield_now();
+        if !watchdog.join() {
+            return Err(WhpError::SystemCall(-1));
         }
+        debug_assert!(retired.load(Ordering::Acquire));
         match phase.load(Ordering::Acquire) {
             RETURNED => result.map(VmDeadlineOutcome::Exit),
             EXPIRED => Ok(VmDeadlineOutcome::Expired),
@@ -1222,7 +1223,7 @@ impl PreparedWhpPartition<'_> {
             api: self.api,
             index,
         };
-        mrml_runtime::spawn_detached(move || {
+        let watchdog = mrml_runtime::spawn_joinable(move || {
             let started = mrml_runtime::Instant::now();
             loop {
                 if worker_phase.load(Ordering::Acquire) != ARMED {
@@ -1246,9 +1247,11 @@ impl PreparedWhpPartition<'_> {
 
         let result = self.run_vp(index);
         let _ = phase.compare_exchange(ARMED, RETURNED, Ordering::AcqRel, Ordering::Acquire);
-        while !retired.load(Ordering::Acquire) {
-            mrml_runtime::yield_now();
+        if !watchdog.join() {
+            self.mapping_poisoned = true;
+            return Err(WhpError::SystemCall(-1));
         }
+        debug_assert!(retired.load(Ordering::Acquire));
         match phase.load(Ordering::Acquire) {
             RETURNED => result.map(VmDeadlineOutcome::Exit),
             EXPIRED => Ok(VmDeadlineOutcome::Expired),

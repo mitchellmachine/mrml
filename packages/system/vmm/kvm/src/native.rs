@@ -721,7 +721,7 @@ impl KvmVcpu {
         let worker_retired = retired.clone();
         let cancellation = self.cancellation();
         let runner_thread = unsafe { pthread_self() };
-        mrml_runtime::spawn_detached(move || {
+        let watchdog = mrml_runtime::spawn_joinable(move || {
             let started = mrml_runtime::Instant::now();
             loop {
                 if worker_phase.load(Ordering::Acquire) != ARMED {
@@ -745,9 +745,10 @@ impl KvmVcpu {
 
         let result = self.run();
         let _ = phase.compare_exchange(ARMED, RETURNED, Ordering::AcqRel, Ordering::Acquire);
-        while !retired.load(Ordering::Acquire) {
-            mrml_runtime::yield_now();
+        if !watchdog.join() {
+            return Err(KvmError::SystemCall);
         }
+        debug_assert!(retired.load(Ordering::Acquire));
         cancellation.clear();
         match phase.load(Ordering::Acquire) {
             RETURNED => result.map(VmDeadlineOutcome::Exit),
@@ -1223,7 +1224,13 @@ impl HostRegion {
         if !(host.as_ptr() as usize).is_multiple_of(PAGE_SIZE as usize) {
             return Err(KvmError::UnalignedMemory);
         }
-        KvmMemoryRegion::new(slot, guest_address, PAGE_SIZE, host.as_ptr() as u64, readonly)?;
+        KvmMemoryRegion::new(
+            slot,
+            guest_address,
+            PAGE_SIZE,
+            host.as_ptr() as u64,
+            readonly,
+        )?;
         Ok(Self {
             slot,
             guest_address,
@@ -1354,9 +1361,12 @@ impl<const N: usize> KvmGuestMemory<N> {
             .position(Option::is_none)
             .ok_or(KvmError::MemoryTableFull)?;
         let region = HostRegion::external(slot as u32, guest_address, host, false)?;
-        if self.regions.iter().flatten().any(|existing| {
-            guest_address < existing.end() && existing.guest_address < region.end()
-        }) {
+        if self
+            .regions
+            .iter()
+            .flatten()
+            .any(|existing| guest_address < existing.end() && existing.guest_address < region.end())
+        {
             return Err(KvmError::MemoryOverlap);
         }
         self.regions[slot] = Some(region);
@@ -1797,11 +1807,21 @@ impl<const N: usize> KvmBackend<N> {
         if self.mapping_poisoned {
             return Err(KvmError::MappingStateUncertain);
         }
-        let mut application = self.secondary.take().ok_or(KvmError::InvalidVcpu)?;
+        let application = self.secondary.take().ok_or(KvmError::InvalidVcpu)?;
         let cancellation = application.cancellation();
         let result = mrml_runtime::Shared::new(mrml_runtime::SpinMutex::new(None));
         let worker_result = result.clone();
-        mrml_runtime::spawn_detached(move || {
+        let application_owner =
+            mrml_runtime::Shared::new(mrml_runtime::SpinMutex::new(Some(application)));
+        let worker_application = application_owner.clone();
+        let worker_thread = mrml_runtime::Shared::new(AtomicUsize::new(0));
+        let published_thread = worker_thread.clone();
+        let worker = match mrml_runtime::spawn_joinable(move || {
+            let mut application = worker_application
+                .lock()
+                .take()
+                .expect("KVM secondary owner missing at worker start");
+            published_thread.store(unsafe { pthread_self() }, Ordering::Release);
             let deadline = mrml_runtime::Instant::now();
             let exit = loop {
                 match application.mp_state() {
@@ -1846,11 +1866,20 @@ impl<const N: usize> KvmBackend<N> {
                 }
             };
             *worker_result.lock() = Some(exit);
-        })
-        .map_err(|_| KvmError::SystemCall)?;
+            *worker_application.lock() = Some(application);
+        }) {
+            Ok(worker) => worker,
+            Err(_) => {
+                self.secondary = application_owner.lock().take();
+                return Err(KvmError::SystemCall);
+            }
+        };
 
         let bootstrap = loop {
-            let exit = self.vcpu.run()?;
+            let exit = match self.vcpu.run() {
+                Ok(exit) => exit,
+                Err(error) => break Err(error),
+            };
             if let VmExit::Io {
                 port: 0x00e9,
                 size: 1,
@@ -1867,15 +1896,31 @@ impl<const N: usize> KvmBackend<N> {
         while result.lock().is_none() && deadline.elapsed() < Duration::from_secs(2) {
             mrml_runtime::yield_now();
         }
-        if result.lock().is_none() {
-            cancellation.request();
-        }
-        let secondary = loop {
-            if let Some(exit) = result.lock().take() {
-                break exit;
+        let mut cancellation_error = None;
+        if result.lock().is_none() || bootstrap.is_err() {
+            let thread = worker_thread.load(Ordering::Acquire);
+            if thread == 0 || cancellation.request_and_kick(thread).is_err() {
+                self.mapping_poisoned = true;
+                cancellation_error = Some(KvmError::SystemCall);
             }
-            mrml_runtime::yield_now();
-        };
+        }
+        if !worker.join() {
+            self.mapping_poisoned = true;
+            return Err(KvmError::SystemCall);
+        }
+        cancellation.clear();
+        let secondary = result.lock().take().ok_or_else(|| {
+            self.mapping_poisoned = true;
+            KvmError::SystemCall
+        })?;
+        self.secondary = application_owner.lock().take();
+        if self.secondary.is_none() {
+            self.mapping_poisoned = true;
+            return Err(KvmError::SystemCall);
+        }
+        if let Some(error) = cancellation_error {
+            return Err(error);
+        }
         Ok((bootstrap?, secondary?))
     }
 
@@ -1900,20 +1945,41 @@ impl<const N: usize> KvmBackend<N> {
         if maximum_micros.contains(&0) {
             return Err(KvmError::InvalidDeadline);
         }
-        let mut application = self.secondary.take().ok_or(KvmError::InvalidVcpu)?;
-        let bootstrap_priority = ThreadPriorityGuard::bind(priorities[0])?;
+        let application = self.secondary.take().ok_or(KvmError::InvalidVcpu)?;
+        let application_cancellation = application.cancellation();
+        let application_owner =
+            mrml_runtime::Shared::new(mrml_runtime::SpinMutex::new(Some(application)));
+        let worker_application = application_owner.clone();
+        let worker_thread = mrml_runtime::Shared::new(AtomicUsize::new(0));
+        let published_thread = worker_thread.clone();
+        let bootstrap_priority = match ThreadPriorityGuard::bind(priorities[0]) {
+            Ok(guard) => guard,
+            Err(error) => {
+                self.secondary = application_owner.lock().take();
+                return Err(error);
+            }
+        };
         let bootstrap_affinity = match ThreadAffinityGuard::bind(logical_cpus[0]) {
             Ok(guard) => guard,
-            Err(error) => return bootstrap_priority.restore().and(Err(error)),
+            Err(error) => {
+                self.secondary = application_owner.lock().take();
+                return bootstrap_priority.restore().and(Err(error));
+            }
         };
         let bootstrap_started = mrml_runtime::Instant::now();
         let result = mrml_runtime::Shared::new(mrml_runtime::SpinMutex::new(None));
         let worker_result = result.clone();
-        if mrml_runtime::spawn_detached(move || {
+        let worker = match mrml_runtime::spawn_joinable(move || {
+            let mut application = worker_application
+                .lock()
+                .take()
+                .expect("KVM scheduled secondary owner missing at worker start");
+            published_thread.store(unsafe { pthread_self() }, Ordering::Release);
             let priority = match ThreadPriorityGuard::bind(priorities[1]) {
                 Ok(guard) => guard,
                 Err(error) => {
                     *worker_result.lock() = Some(Err(error));
+                    *worker_application.lock() = Some(application);
                     return;
                 }
             };
@@ -1921,6 +1987,7 @@ impl<const N: usize> KvmBackend<N> {
                 Ok(guard) => guard,
                 Err(error) => {
                     *worker_result.lock() = Some(priority.restore().and(Err(error)));
+                    *worker_application.lock() = Some(application);
                     return;
                 }
             };
@@ -1985,14 +2052,17 @@ impl<const N: usize> KvmBackend<N> {
                     .and(run)
                     .map(|outcome| ScheduledVcpuOutcome::new(outcome, elapsed)),
             );
-        })
-        .is_err()
-        {
-            let affinity_restored = bootstrap_affinity.restore();
-            let priority_restored = bootstrap_priority.restore();
-            affinity_restored.and(priority_restored)?;
-            return Err(KvmError::SystemCall);
-        }
+            *worker_application.lock() = Some(application);
+        }) {
+            Ok(worker) => worker,
+            Err(_) => {
+                self.secondary = application_owner.lock().take();
+                let affinity_restored = bootstrap_affinity.restore();
+                let priority_restored = bootstrap_priority.restore();
+                affinity_restored.and(priority_restored)?;
+                return Err(KvmError::SystemCall);
+            }
+        };
 
         let bootstrap_run = (|| {
             loop {
@@ -2022,12 +2092,22 @@ impl<const N: usize> KvmBackend<N> {
         let bootstrap_affinity_restored = bootstrap_affinity.restore();
         let bootstrap_priority_restored = bootstrap_priority.restore();
         let bootstrap_restored = bootstrap_affinity_restored.and(bootstrap_priority_restored);
-        let application_run = loop {
-            if let Some(outcome) = result.lock().take() {
-                break outcome;
+        if bootstrap_run.is_err() {
+            let thread = worker_thread.load(Ordering::Acquire);
+            if thread == 0 || application_cancellation.request_and_kick(thread).is_err() {
+                self.mapping_poisoned = true;
             }
-            mrml_runtime::yield_now();
-        };
+        }
+        if !worker.join() {
+            self.mapping_poisoned = true;
+            return Err(KvmError::SystemCall);
+        }
+        self.secondary = application_owner.lock().take();
+        if self.secondary.is_none() {
+            self.mapping_poisoned = true;
+            return Err(KvmError::SystemCall);
+        }
+        let application_run = result.lock().take().ok_or(KvmError::SystemCall)?;
         bootstrap_restored?;
         let bootstrap = ScheduledVcpuOutcome::new(bootstrap_run?, bootstrap_elapsed);
         let application = application_run?;
@@ -2054,7 +2134,8 @@ impl<const N: usize> KvmBackend<N> {
         host: NonNull<u8>,
     ) -> Result<(), KvmError> {
         let slot = self.memory.insert_external_peer_page(guest_address, host)?;
-        let region = KvmMemoryRegion::new(slot, guest_address, PAGE_SIZE, host.as_ptr() as u64, false)?;
+        let region =
+            KvmMemoryRegion::new(slot, guest_address, PAGE_SIZE, host.as_ptr() as u64, false)?;
         if let Err(error) = self.vm.register_memory(region) {
             let _ = self.memory.remove_slot(slot);
             return Err(error);

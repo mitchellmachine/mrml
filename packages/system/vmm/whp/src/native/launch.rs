@@ -6,11 +6,11 @@ use mrml_kernel::arch::x86_64::{
 };
 use mrml_kernel::{
     ApplicationLaunch, ArtifactKind, BootHandoff, Capability, CapabilitySpace, DeadlineVmBackend,
-    GpuSharedQueueLayout, GpuVmmMemory, MemoryResourceError, MicrovmPeerPageProjection, PeImage,
-    PhysAddr, PreparedComponentServiceLaunch, RevocableVmBackend, ScheduledVcpuOutcome,
-    ServiceAddressSpaceEraser, SignedArtifact, TaskId, VerifiedExecutable,
-    VirtualBlockConfigurationPage, VirtualBlockQueueLayout, VirtualBlockResumePage,
-    VirtualBlockVmmMemory, VmBackend, VmExit, MAX_PE_SECTIONS, PAGE_SIZE,
+    GpuSharedQueueLayout, GpuVmmMemory, MAX_PE_SECTIONS, MemoryResourceError,
+    MicrovmPeerPageProjection, PAGE_SIZE, PeImage, PhysAddr, PreparedComponentServiceLaunch,
+    RevocableVmBackend, ScheduledVcpuOutcome, ServiceAddressSpaceEraser, SignedArtifact, TaskId,
+    VerifiedExecutable, VirtualBlockConfigurationPage, VirtualBlockQueueLayout,
+    VirtualBlockResumePage, VirtualBlockVmmMemory, VmBackend, VmExit,
 };
 
 use crate::{GuestRange, MapPermissions, WhpError};
@@ -1201,10 +1201,15 @@ impl<'system> PreparedWhpGuest<'system> {
     pub fn run_smp(&mut self) -> Result<(VmExit, VmExit), WhpError> {
         self.partition.ensure_mapping_coherent()?;
         let trampoline = self.ap_trampoline.ok_or(WhpError::InvalidMapping)?;
-        let mut secondary = None;
+        let mut worker = None;
+        let mut cancellation = None;
+        let mut trampoline_protected = false;
         let result = mrml_runtime::Shared::new(mrml_runtime::SpinMutex::new(None));
         let bootstrap = loop {
-            let exit = self.partition.run()?;
+            let exit = match self.partition.run() {
+                Ok(exit) => exit,
+                Err(error) => break Err(error),
+            };
             if let VmExit::Io {
                 port: 0x00e9,
                 size: 1,
@@ -1221,14 +1226,24 @@ impl<'system> PreparedWhpGuest<'system> {
                 value: 0x21,
             } = exit
             {
-                if secondary.is_some() {
-                    return Err(WhpError::InvalidVcpu);
+                if worker.is_some() {
+                    break Err(WhpError::InvalidVcpu);
                 }
-                self.partition
-                    .protect_runtime_trampoline(trampoline, true)?;
-                let mut runner = self.partition.secondary_runner(trampoline)?;
+                if let Err(error) = self.partition.protect_runtime_trampoline(trampoline, true) {
+                    break Err(error);
+                }
+                trampoline_protected = true;
+                let mut runner = match self.partition.secondary_runner(trampoline) {
+                    Ok(runner) => runner,
+                    Err(error) => break Err(error),
+                };
+                cancellation = Some(super::WhpRunCancellation {
+                    partition: runner.partition,
+                    api: runner.api,
+                    index: runner.index,
+                });
                 let worker_result = result.clone();
-                mrml_runtime::spawn_detached(move || {
+                let started = mrml_runtime::spawn_joinable(move || {
                     let first = loop {
                         let exit = runner.run();
                         if let Ok(VmExit::Io {
@@ -1249,59 +1264,87 @@ impl<'system> PreparedWhpGuest<'system> {
                             size: 4,
                             write: true,
                             value: 0x0001_0001,
-                        }) => runner.restore_trampoline_rw().and_then(|()| loop {
-                            let exit = runner.run()?;
-                            if let VmExit::Io {
-                                port: 0x00e9,
-                                size: 1,
-                                write: true,
-                                value,
-                            } = exit
-                            {
-                                mrml_runtime::mrml_println!("WHP_SMP_TRACE stage={:#04x}", value);
-                                continue;
-                            }
-                            if matches!(
-                                exit,
-                                VmExit::Io {
-                                    port: 0x4d5e | 0x4d60,
-                                    size: 4,
+                        }) => runner.restore_trampoline_rw().and_then(|()| {
+                            loop {
+                                let exit = runner.run()?;
+                                if let VmExit::Io {
+                                    port: 0x00e9,
+                                    size: 1,
                                     write: true,
-                                    ..
+                                    value,
+                                } = exit
+                                {
+                                    mrml_runtime::mrml_println!(
+                                        "WHP_SMP_TRACE stage={:#04x}",
+                                        value
+                                    );
+                                    continue;
                                 }
-                            ) {
-                                continue;
+                                if matches!(
+                                    exit,
+                                    VmExit::Io {
+                                        port: 0x4d5e | 0x4d60,
+                                        size: 4,
+                                        write: true,
+                                        ..
+                                    }
+                                ) {
+                                    continue;
+                                }
+                                break Ok(exit);
                             }
-                            break Ok(exit);
                         }),
                         Ok(_) => Err(WhpError::MalformedExit),
                         Err(error) => Err(error),
                     };
                     *worker_result.lock() = Some(exit);
-                })
-                .map_err(|_| WhpError::PlatformUnavailable)?;
-                secondary = Some(());
+                });
+                worker = match started {
+                    Ok(worker) => Some(worker),
+                    Err(_) => break Err(WhpError::PlatformUnavailable),
+                };
                 continue;
             }
             if matches!(exit, VmExit::Io { port: 0x00e9, .. }) {
                 continue;
             }
-            break exit;
+            break Ok(exit);
         };
-        if secondary.is_none() {
-            return Err(WhpError::InvalidVcpu);
-        }
+        let Some(worker) = worker else {
+            if trampoline_protected {
+                self.partition
+                    .protect_runtime_trampoline(trampoline, false)?;
+            }
+            return Err(bootstrap.err().unwrap_or(WhpError::InvalidVcpu));
+        };
         let deadline = mrml_runtime::Instant::now();
         while result.lock().is_none() && deadline.elapsed() < core::time::Duration::from_secs(2) {
             mrml_runtime::yield_now();
+        }
+        let mut cancellation_error = None;
+        if result.lock().is_none() || bootstrap.is_err() {
+            if cancellation
+                .and_then(|cancel| cancel.request().err())
+                .is_some()
+            {
+                self.partition.mapping_poisoned = true;
+                cancellation_error = Some(WhpError::PlatformUnavailable);
+            }
+        }
+        if !worker.join() {
+            self.partition.mapping_poisoned = true;
+            return Err(WhpError::PlatformUnavailable);
+        }
+        self.partition
+            .protect_runtime_trampoline(trampoline, false)?;
+        if let Some(error) = cancellation_error {
+            return Err(error);
         }
         let application = result
             .lock()
             .take()
             .ok_or(WhpError::PlatformUnavailable)??;
-        self.partition
-            .protect_runtime_trampoline(trampoline, false)?;
-        Ok((bootstrap, application))
+        Ok((bootstrap?, application))
     }
 
     pub fn run_smp_with_scheduling_deadlines(
@@ -1332,6 +1375,8 @@ impl<'system> PreparedWhpGuest<'system> {
         let bootstrap_started = mrml_runtime::Instant::now();
         let result = mrml_runtime::Shared::new(mrml_runtime::SpinMutex::new(None));
         let mut secondary_started = false;
+        let mut secondary_worker = None;
+        let mut secondary_cancellation = None;
         let mut trampoline_protected = false;
         let bootstrap_run = (|| loop {
             let remaining = match remaining_smp_runtime(&bootstrap_started, maximum_micros[0]) {
@@ -1365,8 +1410,13 @@ impl<'system> PreparedWhpGuest<'system> {
                     .protect_runtime_trampoline(trampoline, true)?;
                 trampoline_protected = true;
                 let mut runner = self.partition.secondary_runner(trampoline)?;
+                secondary_cancellation = Some(super::WhpRunCancellation {
+                    partition: runner.partition,
+                    api: runner.api,
+                    index: runner.index,
+                });
                 let worker_result = result.clone();
-                if mrml_runtime::spawn_detached(move || {
+                let started = mrml_runtime::spawn_joinable(move || {
                     let priority = match ThreadPriorityGuard::bind(priorities[1]) {
                         Ok(guard) => guard,
                         Err(error) => {
@@ -1392,11 +1442,11 @@ impl<'system> PreparedWhpGuest<'system> {
                             .and(run)
                             .map(|outcome| ScheduledVcpuOutcome::new(outcome, elapsed)),
                     );
-                })
-                .is_err()
-                {
-                    break Err(WhpError::PlatformUnavailable);
-                }
+                });
+                secondary_worker = match started {
+                    Ok(worker) => Some(worker),
+                    Err(_) => break Err(WhpError::PlatformUnavailable),
+                };
                 secondary_started = true;
                 continue;
             }
@@ -1411,12 +1461,19 @@ impl<'system> PreparedWhpGuest<'system> {
         let priority_restored = bootstrap_priority.restore();
         let bootstrap_restored = affinity_restored.and(priority_restored);
         let application_run = if secondary_started {
-            loop {
-                if let Some(outcome) = result.lock().take() {
-                    break outcome;
-                }
-                mrml_runtime::yield_now();
+            let worker = secondary_worker.ok_or(WhpError::PlatformUnavailable)?;
+            if bootstrap_run.is_err()
+                && secondary_cancellation
+                    .and_then(|cancel| cancel.request().err())
+                    .is_some()
+            {
+                self.partition.mapping_poisoned = true;
             }
+            if !worker.join() {
+                self.partition.mapping_poisoned = true;
+                return Err(WhpError::PlatformUnavailable);
+            }
+            result.lock().take().ok_or(WhpError::PlatformUnavailable)?
         } else {
             Err(WhpError::InvalidVcpu)
         };
@@ -3128,21 +3185,21 @@ fn validate_ranges(ranges: &[(u64, u64)]) -> Result<(), WhpError> {
 mod tests {
     use super::*;
     use mrml_crypto::{
-        lamport_public_key, lamport_sign, Sha3_512, LAMPORT_PRIVATE_KEY_BYTES,
-        LAMPORT_PUBLIC_KEY_BYTES, LAMPORT_SIGNATURE_BYTES,
+        LAMPORT_PRIVATE_KEY_BYTES, LAMPORT_PUBLIC_KEY_BYTES, LAMPORT_SIGNATURE_BYTES, Sha3_512,
+        lamport_public_key, lamport_sign,
     };
     use mrml_kernel::{
-        artifact_statement, release_microvm_peer_page_projection,
-        reserve_microvm_peer_page_projection, run_virtual_block_completion_ack_once,
-        run_virtual_block_doorbell_once, ArtifactKind, CapabilitySpace, GuestMemory,
-        HypercallRouter, InterruptPolicy, IoDirection, IoPortPolicy, IoPortRule, MemoryPoolTable,
-        ObjectId, Rights, SignedArtifact, TrustRoot, VirtualBlockBackend, VirtualBlockCompletion,
-        VirtualBlockCompletionStatus, VirtualBlockConfiguration, VirtualBlockDevice,
-        VirtualBlockMutationError, VirtualBlockProcessOutcome, VirtualBlockQueueBridge,
-        VirtualBlockRequest, VmTable, SIGNED_ARTIFACT_HEADER_BYTES, SIGNED_ARTIFACT_OVERHEAD_BYTES,
+        ArtifactKind, CapabilitySpace, GuestMemory, HypercallRouter, InterruptPolicy, IoDirection,
+        IoPortPolicy, IoPortRule, MemoryPoolTable, ObjectId, Rights, SIGNED_ARTIFACT_HEADER_BYTES,
+        SIGNED_ARTIFACT_OVERHEAD_BYTES, SignedArtifact, TrustRoot,
         VIRTUAL_BLOCK_COMPLETION_ACK_PORT, VIRTUAL_BLOCK_COMPLETION_BYTES,
         VIRTUAL_BLOCK_CONFIGURATION_BYTES, VIRTUAL_BLOCK_DOORBELL_PORT,
-        VIRTUAL_BLOCK_RESUME_STATE_BYTES,
+        VIRTUAL_BLOCK_RESUME_STATE_BYTES, VirtualBlockBackend, VirtualBlockCompletion,
+        VirtualBlockCompletionStatus, VirtualBlockConfiguration, VirtualBlockDevice,
+        VirtualBlockMutationError, VirtualBlockProcessOutcome, VirtualBlockQueueBridge,
+        VirtualBlockRequest, VmTable, artifact_statement, release_microvm_peer_page_projection,
+        reserve_microvm_peer_page_projection, run_virtual_block_completion_ack_once,
+        run_virtual_block_doorbell_once,
     };
 
     fn block_configuration(layout: VirtualBlockQueueLayout) -> VirtualBlockConfiguration {
@@ -3547,19 +3604,21 @@ mod tests {
             validate_ranges(&[(0x1000, 0x2000), (0x2000, 0x1000)]),
             Err(WhpError::MemoryOverlap)
         );
-        assert!(WhpLaunchLayout::new(
-            0x1000,
-            8,
-            0x10000,
-            0x140000000,
-            0x20000,
-            0x200000,
-            0x30000,
-            0x300000,
-            PRIVILEGE_STACK_ARENA_PAGES,
-            false
-        )
-        .is_ok());
+        assert!(
+            WhpLaunchLayout::new(
+                0x1000,
+                8,
+                0x10000,
+                0x140000000,
+                0x20000,
+                0x200000,
+                0x30000,
+                0x300000,
+                PRIVILEGE_STACK_ARENA_PAGES,
+                false
+            )
+            .is_ok()
+        );
     }
 
     #[test]
