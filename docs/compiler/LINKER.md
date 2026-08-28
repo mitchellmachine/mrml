@@ -729,13 +729,46 @@ core unit tests and every integration suite. This establishes the graph pass
 needed for section GC; the existing decoder/layout path does not consume it
 yet, so it does not claim smaller output or pinned-core symbol execution.
 
+The driver now consumes that graph through typed selected content, definition,
+and RELA views. Cross-object reachability starts at the exact entry, expands
+local relocation edges, and resolves external definitions with conventional
+strong-over-weak rules. The frozen layout groups selected text, read-only plus
+unwind, initialized writable, and zero-fill sections under validated alignment
+and page-separated permissions. The relocation pass supports the currently
+admitted x86-64 absolute-64, PC-relative-32, PLT-relative-32, and
+instruction-shape-validated GOTPCREL forms, after which a fixed-address
+import-free ELF64 serializer emits only present load regions. A selected-section
+executable produced by the core path and a three-object ELF produced through
+the public driver both executed with exit code 42 under controlled Arch
+Linux/WSL.
+
+GNU archive inventory no longer invokes the legacy whole-object decoder. It
+reads at most 4,096 global/weak definitions and actual relocation-referenced
+undefined names from independently validated ELF symbol, string, and RELA
+tables. This admitted the exact pinned `libcore` object's 1,702-section table.
+The independently authored retained-pointer probe now reaches exported symbol
+`_RNvNtCs5erv4YX8a5g_4core3fmt17pointer_fmt_inner`, follows its transitive
+selected sections, emits an 8,674-byte ELF, and exits 42. Thus actual selected
+core-symbol extraction is implemented for this exact probe; it is not broad
+`libcore` or general `.rlib` conformance.
+
+On that reachable-core workload, a Linux release driver and the exact pinned
+gnullvm rust-lld each ran 50 measured links after five warmups. MRML measured
+5.692 ms median and 5.775 ms mean; rust-lld with equivalent `--gc-sections`
+measured 6.591 ms median and 6.604 ms mean. Both outputs exited 42. MRML emitted
+8,674 bytes while rust-lld emitted 638,392 bytes, but MRML currently omits
+unwind metadata retained by the conventional link, so output-size comparison
+is not equivalent evidence. This is a narrow hosted process-level regression
+measurement, not a general linker-speed or size-superiority claim.
+
 This increment does **not** emit PE imports/exports/base
 relocations/debug data, emit ELF dynamic metadata/interpreter/PIE/sections,
-read thin archives or general `.rlib` contents, perform section GC or ICF, link
-dynamically, run work in parallel, or integrate linker selection into the
-public `mrml` build frontend. Index-guided extraction remains bounded to 1,024
+read thin archives or general `.rlib` contents, perform ICF, link dynamically,
+run work in parallel, or integrate linker selection into the public `mrml`
+build frontend. Section GC and the driver path are implemented for the bounded
+ELF subset described above, not arbitrary inputs. Index-guided extraction remains bounded to 1,024
 ordinary archive members, 4,096 index symbols, and 256 admitted link inputs and
-has not yet been optimized against large representative Rust libraries.
+has not yet been optimized against broad representative Rust libraries.
 Those are separate milestones and the current upstream linker remains the
 production linker for ordinary package builds as required by
 `docs/build/BUILD_SYSTEM.md`.

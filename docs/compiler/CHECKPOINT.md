@@ -73,8 +73,12 @@ linking. A strengthened entry-retained pointer to
 and its transitive sections to be linked into an 8,674-byte ELF, which executed
 on controlled Arch Linux/WSL with exit code 42. Windows and Linux each passed
 726 core unit tests and every integration suite; both driver suites passed five
-tests. Broader rustc object-family conformance, driver benchmarks against the
-pinned rust-lld, and optimization remain active gates.
+tests. A 50-iteration/five-warmup release-driver measurement of this reachable
+core workload recorded MRML at 5.692 ms median and 5.775 ms mean versus exact
+pinned rust-lld with equivalent section GC at 6.591 ms median and 6.604 ms
+mean; both outputs exited 42. This is narrow hosted regression evidence, not a
+general speed claim. Broader rustc object-family conformance and optimization
+remain active gates.
 
 Commit `f74e0489` adds a bounded cross-object ELF reachability fixed point and
 cuts the Linux compiler-driver link path over to selected sections. Starting at
