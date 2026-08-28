@@ -9459,3 +9459,13 @@ symbol and relocation offsets into one bounded view. It introduces no new
 relocation, compression, deduplication, section-GC, ICF, cryptographic, or
 loading algorithm. This technical screen is not legal advice or patent
 clearance.
+
+# 2026-08-28 — Checked static GOTPCREL read-only load relaxation
+
+Patent review: **NOT_TRIGGERED**. This increment combines conventional ordered
+ELF read-only sections and applies the documented size-preserving x86-64 static
+link relaxation from an exact RIP-relative `mov` load to `lea` only for a
+resolved local read-only target. It constructs no GOT/PLT, performs no dynamic
+interposition, and introduces no new instruction sequence, compression,
+cryptographic, or loading algorithm. This technical screen is not legal advice
+or patent clearance.

@@ -374,6 +374,27 @@ versus pinned rust-lld at 6.079 ms median and 6.111 ms mean; rust-lld emitted
 `.eh_frame`, relocated debug sections, noncontiguous text payloads, and more
 than 256 combined relocations remain fail-closed.
 
+The bounded ELF decoder now also coalesces multiple ordered `.rodata.*`
+payloads through the same present-and-zero alignment-gap rule. Defined
+read-only symbols retain checked offsets within that combined view. For the
+exact pinned-rustc `R_X86_64_GOTPCREL` load shape (`REX.W; mov r64,
+[rip+disp32]`), a resolved local read-only target is relaxed in place to the
+corresponding `lea`; the ModRM register field is preserved, and every other
+opcode/addressing shape remains rejected. Both System V and GNU ELF OSABI tags
+are admitted with ABI version zero because the pinned LLVM emitter uses GNU
+OSABI when retained read-only sections are present. This still constructs no
+GOT and provides no dynamic interposition semantics.
+
+An exact ORACLE-0002 object with two retained static `u64` values produced two
+`.rodata.*` sections and two such relocations. Linked with the existing
+syscall-only process entry, MRML emitted an 8,208-byte ELF that exited 42 under
+Arch WSL; pinned rust-lld emitted 1,624 bytes and also exited 42. Windows and
+Linux each passed 709 compiler-core tests and four driver tests. Over 50
+same-input iterations after five warmups, MRML measured 5.609 ms median and
+5.607 ms mean versus pinned rust-lld at 5.954 ms median and 5.997 ms mean. This
+single hosted, process-startup-heavy probe is regression evidence only, not a
+general speed or compatibility claim.
+
 This increment does **not** emit PE imports/exports/base
 relocations/debug data, emit ELF dynamic metadata/interpreter/PIE/sections,
 accelerate archive extraction through symbol indexes, read thin archives or

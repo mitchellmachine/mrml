@@ -217,6 +217,9 @@ pub enum LinkRelocationTarget<'a> {
     LocalSymbol(&'a str),
     InputText(usize),
     ReadonlyData(usize),
+    /// A validated `mov reg, [rip + GOT]` whose fixed-image target is local
+    /// read-only data and can therefore become `lea reg, [rip + data]`.
+    GotPcRelativeReadonlyData(usize),
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -1441,7 +1444,9 @@ pub fn decode_x86_64_elf_with_definitions<'data, 'relocations, 'definitions>(
     relocation_storage: &'relocations mut [LinkRelocation<'data>; MAX_LINK_RELOCATIONS],
     definition_storage: &'definitions mut [LinkDefinition<'data>; MAX_LINK_DEFINITIONS],
 ) -> Result<LinkInput<'data, 'relocations, 'definitions>, LinkerError> {
-    if object.get(..9) != Some(b"\x7fELF\x02\x01\x01\x00\x00")
+    if object.get(..7) != Some(b"\x7fELF\x02\x01\x01")
+        || !matches!(object.get(7), Some(0 | 3))
+        || object.get(8) != Some(&0)
         || read_u16_elf(object, 16)? != 1
         || read_u16_elf(object, 18)? != 62
         || read_u32_elf(object, 20)? != 1
@@ -1474,7 +1479,8 @@ pub fn decode_x86_64_elf_with_definitions<'data, 'relocations, 'definitions>(
     let mut text_sections = [false; MAX_COFF_SECTIONS];
     let mut text_span = None;
     let mut text_owner = None;
-    let mut readonly_index = None;
+    let mut readonly_sections = [false; MAX_COFF_SECTIONS];
+    let mut readonly_span = None;
     let mut relocation_sections = [false; MAX_COFF_SECTIONS];
     let mut symbols_index = None;
     let mut strings_index = None;
@@ -1512,7 +1518,29 @@ pub fn decode_x86_64_elf_with_definitions<'data, 'relocations, 'definitions>(
                     Some(_) => return Err(LinkerError::UnsupportedElf),
                 });
             }
-            ".rodata" if readonly_index.replace(index).is_none() => {}
+            name if (name == ".rodata" || name.starts_with(".rodata.")) && contents.is_empty() => {
+                ignored_sections[index] = true;
+            }
+            name if name == ".rodata" || name.starts_with(".rodata.") => {
+                let start = to_usize_elf(read_u64_elf(object, header + 24)?)?;
+                let end = start
+                    .checked_add(contents.len())
+                    .ok_or(LinkerError::OffsetOverflow)?;
+                readonly_sections[index] = true;
+                readonly_span = Some(match readonly_span {
+                    None => (start, end),
+                    Some((first, previous_end))
+                        if previous_end <= start
+                            && object
+                                .get(previous_end..start)
+                                .map(|gap| gap.iter().all(|byte| *byte == 0))
+                                .unwrap_or(false) =>
+                    {
+                        (first, end)
+                    }
+                    Some(_) => return Err(LinkerError::UnsupportedElf),
+                });
+            }
             name if name == ".rela.text" || name.starts_with(".rela.text.") => {
                 relocation_sections[index] = true;
             }
@@ -1553,10 +1581,11 @@ pub fn decode_x86_64_elf_with_definitions<'data, 'relocations, 'definitions>(
     let text = object
         .get(text_start..text_end)
         .ok_or(LinkerError::InvalidElf)?;
-    let readonly_data = match readonly_index {
-        Some(index) => elf_section_contents(object, section_offset, section_count, index)?,
+    let readonly_data = match readonly_span {
+        Some((start, end)) => object.get(start..end).ok_or(LinkerError::InvalidElf)?,
         None => &object[0..0],
     };
+    let readonly_start = readonly_span.map(|(start, _)| start);
     let strings = elf_section_contents(object, section_offset, section_count, strings_index)?;
 
     let symbols_header = elf_section_header(section_offset, section_count, symbols_index)?;
@@ -1622,7 +1651,7 @@ pub fn decode_x86_64_elf_with_definitions<'data, 'relocations, 'definitions>(
             }
         } else if binding == 0 && section >= 0xff00 {
         } else if section != 0
-            && Some(section) != readonly_index
+            && !readonly_sections.get(section).copied().unwrap_or(false)
             && !text_sections.get(section).copied().unwrap_or(false)
             && !relocation_sections.get(section).copied().unwrap_or(false)
             && !ignored_sections.get(section).copied().unwrap_or(false)
@@ -1729,20 +1758,49 @@ pub fn decode_x86_64_elf_with_definitions<'data, 'relocations, 'definitions>(
                     return Err(LinkerError::InvalidRelocationOffset);
                 }
                 (LinkRelocationTarget::InputText(text_offset), encoded_addend)
-            } else if Some(target_section) == readonly_index {
+            } else if readonly_sections
+                .get(target_section)
+                .copied()
+                .unwrap_or(false)
+            {
+                let symbol_data_offset = elf_combined_text_offset(
+                    object,
+                    section_offset,
+                    section_count,
+                    target_section,
+                    readonly_start.ok_or(LinkerError::InvalidElf)?,
+                    read_u64_elf(symbols, target_offset + 8)?,
+                )?;
                 if relocation_type == 9 {
-                    return Err(LinkerError::UnsupportedElf);
+                    let prefix = offset.checked_sub(3).ok_or(LinkerError::UnsupportedElf)?;
+                    let instruction = text
+                        .get(prefix..offset)
+                        .ok_or(LinkerError::UnsupportedElf)?;
+                    if instruction[0] != 0x48
+                        || instruction[1] != 0x8b
+                        || instruction[2] & 0xc7 != 0x05
+                    {
+                        return Err(LinkerError::UnsupportedElf);
+                    }
+                    if symbol_data_offset > readonly_data.len() {
+                        return Err(LinkerError::InvalidRelocationOffset);
+                    }
+                    (
+                        LinkRelocationTarget::GotPcRelativeReadonlyData(symbol_data_offset),
+                        encoded_addend,
+                    )
+                } else {
+                    let data_offset = i64::try_from(symbol_data_offset)
+                        .map_err(|_| LinkerError::OffsetOverflow)?
+                        .checked_add(encoded_addend)
+                        .and_then(|value| value.checked_add(4))
+                        .and_then(|value| usize::try_from(value).ok())
+                        .ok_or(LinkerError::InvalidRelocationOffset)?;
+                    if data_offset > readonly_data.len() {
+                        return Err(LinkerError::InvalidRelocationOffset);
+                    }
+                    (LinkRelocationTarget::ReadonlyData(data_offset), -4)
                 }
-                let data_offset = usize::try_from(
-                    encoded_addend
-                        .checked_add(4)
-                        .ok_or(LinkerError::OffsetOverflow)?,
-                )
-                .map_err(|_| LinkerError::InvalidRelocationOffset)?;
-                if data_offset > readonly_data.len() {
-                    return Err(LinkerError::InvalidRelocationOffset);
-                }
-                (LinkRelocationTarget::ReadonlyData(data_offset), -4)
             } else {
                 return Err(LinkerError::UnsupportedElf);
             };
@@ -2340,11 +2398,13 @@ fn link_x86_64_static_aligned<const MAX_BYTES: usize>(
                 }
                 LinkRelocationTarget::InputText(_) => {}
                 LinkRelocationTarget::ReadonlyData(offset)
+                | LinkRelocationTarget::GotPcRelativeReadonlyData(offset)
                     if offset > input.readonly_data.len() =>
                 {
                     return Err(LinkerError::InvalidRelocationOffset);
                 }
-                LinkRelocationTarget::ReadonlyData(_) => {}
+                LinkRelocationTarget::ReadonlyData(_)
+                | LinkRelocationTarget::GotPcRelativeReadonlyData(_) => {}
             }
             relocation
                 .offset
@@ -2412,6 +2472,10 @@ fn link_x86_64_static_aligned<const MAX_BYTES: usize>(
                     .readonly
                     .checked_add(offset)
                     .ok_or(LinkerError::OffsetOverflow)?,
+                LinkRelocationTarget::GotPcRelativeReadonlyData(offset) => layout
+                    .readonly
+                    .checked_add(offset)
+                    .ok_or(LinkerError::OffsetOverflow)?,
             };
             let displacement = i64::try_from(target)
                 .map_err(|_| LinkerError::OffsetOverflow)?
@@ -2436,6 +2500,22 @@ fn link_x86_64_static_aligned<const MAX_BYTES: usize>(
                     0x25 => 0xe9,
                     _ => return Err(LinkerError::UnsupportedElf),
                 };
+            }
+            if matches!(
+                relocation.target,
+                LinkRelocationTarget::GotPcRelativeReadonlyData(_)
+            ) {
+                let prefix = place
+                    .checked_sub(3)
+                    .ok_or(LinkerError::InvalidRelocationOffset)?;
+                let instruction = output
+                    .get(prefix..place)
+                    .ok_or(LinkerError::InvalidRelocationOffset)?;
+                if instruction[0] != 0x48 || instruction[1] != 0x8b || instruction[2] & 0xc7 != 0x05
+                {
+                    return Err(LinkerError::UnsupportedElf);
+                }
+                output[prefix + 1] = 0x8d;
             }
             output[place..place + 4].copy_from_slice(&displacement.to_le_bytes());
         }
@@ -3297,6 +3377,34 @@ mod tests {
         };
         assert_eq!(
             link_x86_64_static::<64>(&[invalid, helper], "entry"),
+            Err(LinkerError::UnsupportedElf)
+        );
+    }
+
+    #[test]
+    fn relaxes_only_validated_static_gotpcrel_readonly_loads() {
+        let relocation = LinkRelocation {
+            offset: 3,
+            target: LinkRelocationTarget::GotPcRelativeReadonlyData(0),
+            addend: -4,
+        };
+        let input = LinkInput {
+            symbol: "entry",
+            additional_definitions: &[],
+            text: &[0x48, 0x8b, 0x0d, 0, 0, 0, 0, 0xc3],
+            readonly_data: &42u64.to_le_bytes(),
+            relocations: &[relocation],
+        };
+        let linked = link_x86_64_static::<64>(&[input], "entry").unwrap();
+        assert_eq!(&linked.bytes()[..7], &[0x48, 0x8d, 0x0d, 9, 0, 0, 0]);
+        assert_eq!(&linked.bytes()[16..24], &42u64.to_le_bytes());
+
+        let invalid = LinkInput {
+            text: &[0x48, 0x03, 0x05, 0, 0, 0, 0, 0xc3],
+            ..input
+        };
+        assert_eq!(
+            link_x86_64_static::<64>(&[invalid], "entry"),
             Err(LinkerError::UnsupportedElf)
         );
     }
