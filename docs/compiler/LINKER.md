@@ -108,7 +108,10 @@ dependencies while the first selected definition suppresses later unused
 duplicates. The result does not depend on trusting archive index metadata.
 Index-accelerated extraction, exact traditional archive/group rescan ordering,
 thin archives, non-object metadata members, and real `.rlib` admission remain
-unimplemented, so this is not yet the ordinary Rust static-library path.
+unimplemented, so this is not yet the ordinary Rust static-library path. Thin
+archive magic fails with an explicit unsupported-feature diagnostic rather
+than being misclassified as a malformed ordinary archive; BSD extended-name
+symbol indexes are skipped only after their embedded names are validated.
 
 On 2026-08-28, the controlled Windows cold-process probe linked the same
 93-byte MRML COFF object 50 times after five interleaved warmups. MRML produced

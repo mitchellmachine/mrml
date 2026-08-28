@@ -26,6 +26,7 @@ pub enum LinkerError {
     InvalidElf,
     UnsupportedElf,
     InvalidArchive,
+    UnsupportedArchive,
     TooManyArchiveMembers,
 }
 
@@ -48,6 +49,7 @@ impl core::fmt::Display for LinkerError {
             Self::InvalidElf => "invalid bounded ELF64 input",
             Self::UnsupportedElf => "unsupported ELF64 feature",
             Self::InvalidArchive => "invalid Unix archive input",
+            Self::UnsupportedArchive => "unsupported Unix archive feature",
             Self::TooManyArchiveMembers => "archive member capacity exceeded",
         };
         formatter.write_str(message)
@@ -76,6 +78,9 @@ impl<'a> ArchiveMembers<'a> {
 /// Archive symbol indexes are metadata and are skipped; member selection remains
 /// a separate linker pass.
 pub fn decode_unix_archive(archive: &[u8]) -> Result<ArchiveMembers<'_>, LinkerError> {
+    if archive.get(..8) == Some(b"!<thin>\n") {
+        return Err(LinkerError::UnsupportedArchive);
+    }
     if archive.get(..8) != Some(b"!<arch>\n") {
         return Err(LinkerError::InvalidArchive);
     }
@@ -111,11 +116,13 @@ pub fn decode_unix_archive(archive: &[u8]) -> Result<ArchiveMembers<'_>, LinkerE
             string_table = Some(stored);
         } else if raw_name != "/" && raw_name != "/SYM64/" && !raw_name.starts_with("__.SYMDEF") {
             let (name, bytes) = decode_archive_member(raw_name, stored, string_table)?;
-            if decoded.length == MAX_ARCHIVE_MEMBERS {
-                return Err(LinkerError::TooManyArchiveMembers);
+            if !name.starts_with("__.SYMDEF") {
+                if decoded.length == MAX_ARCHIVE_MEMBERS {
+                    return Err(LinkerError::TooManyArchiveMembers);
+                }
+                decoded.members[decoded.length] = ArchiveMember { name, bytes };
+                decoded.length += 1;
             }
-            decoded.members[decoded.length] = ArchiveMember { name, bytes };
-            decoded.length += 1;
         }
 
         cursor = stored_end
@@ -1377,6 +1384,9 @@ mod tests {
         let mut archive = b"!<arch>\n".to_vec();
         append_archive_member(&mut archive, "/", b"index");
         append_archive_member(&mut archive, "/SYM64/", b"wide");
+        let mut bsd_index = b"__.SYMDEF SORTED".to_vec();
+        bsd_index.extend_from_slice(b"bsd-index");
+        append_archive_member(&mut archive, "#1/16", &bsd_index);
         append_archive_member(&mut archive, "entry.o/", b"object");
 
         let members = decode_unix_archive(&archive).unwrap();
@@ -1392,6 +1402,10 @@ mod tests {
     #[test]
     fn rejects_truncated_and_unresolved_archive_members() {
         assert_eq!(
+            decode_unix_archive(b"!<thin>\n"),
+            Err(LinkerError::UnsupportedArchive)
+        );
+        assert_eq!(
             decode_unix_archive(b"!<arch>\nshort"),
             Err(LinkerError::InvalidArchive)
         );
@@ -1401,6 +1415,18 @@ mod tests {
         assert_eq!(
             decode_unix_archive(&archive),
             Err(LinkerError::InvalidArchive)
+        );
+    }
+
+    #[test]
+    fn bounds_archive_member_count() {
+        let mut archive = b"!<arch>\n".to_vec();
+        for _ in 0..=MAX_ARCHIVE_MEMBERS {
+            append_archive_member(&mut archive, "member.o/", b"");
+        }
+        assert_eq!(
+            decode_unix_archive(&archive),
+            Err(LinkerError::TooManyArchiveMembers)
         );
     }
 
