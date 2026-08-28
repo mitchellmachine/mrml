@@ -51,18 +51,40 @@ as unsupported. Validation reports whether failure belongs to the function,
 an exact parameter index, or the return type. This logical classification does
 not itself define a machine representation.
 
+## Initial x86-64 value representation
+
+The central layout model defines the same in-memory v1 value representation for
+the x86-64 System V and Windows targets. Fixed-width integers use their stated
+width and natural alignment. `bool` is one byte and `char` is a four-byte
+Unicode scalar value. Raw pointers and references are one eight-byte pointer.
+Slices and strings are 16-byte, eight-byte-aligned records with an eight-byte
+data pointer at offset zero and an unsigned 64-bit element or UTF-8 byte length
+at offset eight. Unit has size zero and alignment one. Integer representation is
+little-endian on these x86-64 targets.
+
+Valid v1 `bool` values are zero and one; valid v1 `char` values are Unicode
+scalar values. References are non-null and aligned for their pointee, while raw
+pointers may be null. A zero-length slice or string may use a non-dereferenceable
+aligned data pointer, but its pointer field is still present. These validity
+requirements are contract rules; this checkpoint does not yet claim that every
+call boundary dynamically validates them.
+
+This representation is distinct from parameter and return classification under
+either native calling convention. The later lowering must explicitly describe
+registers, stack slots, indirect values, and caller/callee obligations for each
+target rather than inheriting Rust or C aggregate rules.
+
 ## Current implementation boundary
 
-The central identity, bounded facade parser, and initial signature classifier
-are implemented at this checkpoint. Deterministic type layout,
-ownership/borrowing rules beyond ordinary language checking, System V and
-Windows lowering, link compatibility, and external execution evidence remain
-required before an attributed function can be emitted. Code generation
-therefore continues to reject `MrmlV1` rather than silently routing it through
-the C ABI.
+The central identity, bounded facade parser, initial signature classifier, and
+x86-64 in-memory value layout are implemented at this checkpoint.
+Ownership/borrowing rules beyond ordinary language checking, System V and
+Windows parameter/return lowering, link compatibility, and external execution
+evidence remain required before an attributed function can be emitted. Code
+generation therefore continues to reject `MrmlV1` rather than silently routing
+it through the C ABI.
 
-In particular, logical acceptance of slices, strings, or references does not
-yet define their representation. Arrays, tuples, aggregates, and indirect
-returns are not admitted. This checkpoint also does not establish that existing
+Arrays, tuples, user aggregates, and indirect returns are not admitted. This
+checkpoint also does not establish that existing
 `extern "C"` tests with Rust-specific types are C-compatible; those boundaries
 require a separate fail-closed validation and test migration.

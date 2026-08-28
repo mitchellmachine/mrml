@@ -19,8 +19,10 @@ pub mod semantics;
 pub mod trait_goals;
 
 pub use abi::{
-    MrmlV1Integer, MrmlV1Pointee, MrmlV1Signature, MrmlV1SignatureError, MrmlV1SignatureErrorKind,
-    MrmlV1SignatureLocation, MrmlV1Type, classify_mrml_v1_type, validate_mrml_v1_signature,
+    MrmlV1Integer, MrmlV1Layout, MrmlV1LayoutField, MrmlV1LayoutFieldKind, MrmlV1Pointee,
+    MrmlV1Signature, MrmlV1SignatureError, MrmlV1SignatureErrorKind, MrmlV1SignatureLocation,
+    MrmlV1Target, MrmlV1Type, classify_mrml_v1_type, layout_mrml_v1_type,
+    validate_mrml_v1_signature,
 };
 pub use codegen::{
     CodegenError, CodegenErrorKind, CodegenOptions, MAX_X86_64_EXTERNAL_RELOCATIONS,
