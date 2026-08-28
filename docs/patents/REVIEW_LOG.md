@@ -9487,3 +9487,12 @@ already validated FDE locations, using a bounded insertion sort. It introduces
 no new unwind encoding, CFI algorithm, compression, cryptographic mechanism, or
 loader behavior. This technical screen is not legal advice or patent
 clearance.
+
+# 2026-08-28 — Bounded initialized and zero-fill ELF storage
+
+Patent review: **NOT_TRIGGERED**. This increment maps conventional ELF
+`.data.*` and `.bss.*` storage plus documented `R_X86_64_PC32` references into
+a separate RW/NX load using checked alignment and zero-fill memory sizing. It
+introduces no new relocation, storage encoding, packing, compression,
+cryptographic mechanism, or loader algorithm. This technical screen is not
+legal advice or patent clearance.

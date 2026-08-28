@@ -435,6 +435,30 @@ mean and emitted 2,656 bytes. Windows and Linux each passed 710 compiler-core
 tests and four driver tests. Actual stack unwinding, panic propagation, and
 backtrace behavior remain unverified and are not claimed.
 
+The bounded ELF path now also separates selected writable storage from text,
+read-only data, and frame data. A dedicated decoder admits ordered initialized
+`.data.*` PROGBITS and `.bss.*` NOBITS sections with exact WA flags, bounded
+power-of-two alignment, checked symbol values, and text-side
+`R_X86_64_PC32` references. Initialized and zero-fill targets have distinct
+typed identities. The serializer lays every selected initialized fragment
+before all zero-fill memory, preserves each alignment, applies references only
+after final layout, and emits a page-separated RW/NX load whose file size
+excludes BSS while its memory size includes it. Writable records do not enter
+the global symbol namespace or archive-selection authority path.
+
+An independently authored volatile-static ORACLE-0002 object contained one
+8-byte `.data.*`, one 8-byte `.bss.*`, three writable PC-relative references,
+and one frame record. Linked with the syscall entry, MRML emitted a 12,296-byte
+ELF with distinct R, RX, R/NX, and RW/NX loads; `readelf -lW` reported an
+8-byte writable file payload and 24-byte writable memory extent, and execution
+exited 42 under Arch WSL. Windows and Linux each passed 712 compiler-core tests
+and four driver tests. Over 50 same-input iterations after five warmups, MRML
+measured 5.004 ms median and 5.016 ms mean versus pinned rust-lld with
+`--eh-frame-hdr` at 5.090 ms median and 5.137 ms mean; rust-lld emitted 2,040
+bytes. This is narrow hosted evidence only. ELF TLS, COMMON symbols,
+copy/dynamic relocations, constructors, and general writable Rust runtime state
+remain unsupported or unverified.
+
 This increment does **not** emit PE imports/exports/base
 relocations/debug data, emit ELF dynamic metadata/interpreter/PIE/sections,
 accelerate archive extraction through symbol indexes, read thin archives or
