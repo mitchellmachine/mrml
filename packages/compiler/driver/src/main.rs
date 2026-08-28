@@ -4,15 +4,15 @@
 use mrml_error::{Result, anyhow};
 use mrml_runtime::{Text, Vector, mrml_println as println};
 use mrml_rustc::{
-    CodegenOptions, LinkDefinition, LinkInput, LinkRelocation, LinkRelocationTarget,
-    MAX_LINK_DEFINITIONS, MAX_LINK_INPUTS, MAX_LINK_RELOCATIONS, MAX_PE_RUNTIME_FUNCTIONS,
-    ObjectFormat, PeRuntimeFunction, PeWritableData, PeWritableRelocation, TargetLayout,
-    compile_source_function_with_options, decode_unix_archive,
+    CodegenOptions, ElfUnwindData, ElfUnwindRelocation, LinkDefinition, LinkInput, LinkRelocation,
+    LinkRelocationTarget, MAX_LINK_DEFINITIONS, MAX_LINK_INPUTS, MAX_LINK_RELOCATIONS,
+    MAX_PE_RUNTIME_FUNCTIONS, ObjectFormat, PeRuntimeFunction, PeWritableData,
+    PeWritableRelocation, TargetLayout, compile_source_function_with_options, decode_unix_archive,
     decode_x86_64_coff_runtime_functions, decode_x86_64_coff_text_fragment,
-    decode_x86_64_coff_writable_data_fragment, decode_x86_64_elf_with_definitions,
-    link_x86_64_elf_executable, link_x86_64_pe_with_data_and_unwind,
-    select_ordered_static_link_members, x86_64_coff_text_fragment_count,
-    x86_64_coff_writable_section_count,
+    decode_x86_64_coff_writable_data_fragment, decode_x86_64_elf_unwind,
+    decode_x86_64_elf_with_definitions, link_x86_64_elf_executable_with_unwind,
+    link_x86_64_pe_with_data_and_unwind, select_ordered_static_link_members,
+    x86_64_coff_text_fragment_count, x86_64_coff_writable_section_count,
 };
 
 #[cfg_attr(test, allow(dead_code))]
@@ -53,12 +53,14 @@ struct DecodedLinkInputs<'data, 'relocations, 'definitions> {
     inputs: Vector<LinkInput<'data, 'relocations, 'definitions>>,
     archive_group: Vector<u16>,
     archive_member: Vector<u16>,
+    source_object: Vector<usize>,
 }
 
 struct SelectedLinkInputs<'data, 'relocations, 'definitions> {
     inputs: Vector<LinkInput<'data, 'relocations, 'definitions>>,
     archive_group: Vector<u16>,
     archive_member: Vector<u16>,
+    source_object: Vector<usize>,
 }
 
 // The fixed-capacity parser intentionally keeps its arenas on the stack. The
@@ -264,6 +266,8 @@ fn decode_link_inputs<'data, 'relocations, 'definitions>(
         .map_err(|_| anyhow!("could not allocate decoded link origin list"))?;
     let mut archive_member = Vector::with_capacity(MAX_LINK_INPUTS)
         .map_err(|_| anyhow!("could not allocate decoded link member list"))?;
+    let mut source_object = Vector::with_capacity(MAX_LINK_INPUTS)
+        .map_err(|_| anyhow!("could not allocate decoded source-object list"))?;
     let mut remaining_arenas = relocation_arenas;
     let mut remaining_definitions = definition_arenas;
     for (object_index, object) in objects.iter().enumerate() {
@@ -305,6 +309,9 @@ fn decode_link_inputs<'data, 'relocations, 'definitions>(
             archive_member
                 .try_push(object_archive_member[object_index])
                 .map_err(|_| anyhow!("could not allocate decoded link member list"))?;
+            source_object
+                .try_push(object_index)
+                .map_err(|_| anyhow!("could not allocate decoded source-object list"))?;
             remaining_arenas = rest;
             remaining_definitions = definition_rest;
         }
@@ -313,6 +320,7 @@ fn decode_link_inputs<'data, 'relocations, 'definitions>(
         inputs,
         archive_group,
         archive_member,
+        source_object,
     })
 }
 
@@ -375,8 +383,12 @@ fn selected_link_inputs<'data, 'relocations, 'definitions>(
     inputs: &[LinkInput<'data, 'relocations, 'definitions>],
     archive_group: &[u16],
     archive_member: &[u16],
+    source_object: &[usize],
     entry: &str,
 ) -> Result<SelectedLinkInputs<'data, 'relocations, 'definitions>> {
+    if inputs.len() != source_object.len() {
+        return Err(anyhow!("decoded source-object count mismatch"));
+    }
     let selection =
         select_ordered_static_link_members(inputs, archive_group, archive_member, entry)
             .map_err(|_| anyhow!("could not select static link members"))?;
@@ -386,6 +398,8 @@ fn selected_link_inputs<'data, 'relocations, 'definitions>(
         .map_err(|_| anyhow!("could not allocate selected link origin list"))?;
     let mut selected_member = Vector::with_capacity(selection.indices().len())
         .map_err(|_| anyhow!("could not allocate selected link member list"))?;
+    let mut selected_source = Vector::with_capacity(selection.indices().len())
+        .map_err(|_| anyhow!("could not allocate selected source-object list"))?;
     for index in selection.indices() {
         selected
             .try_push(inputs[*index])
@@ -396,11 +410,15 @@ fn selected_link_inputs<'data, 'relocations, 'definitions>(
         selected_member
             .try_push(archive_member[*index])
             .map_err(|_| anyhow!("could not allocate selected link member list"))?;
+        selected_source
+            .try_push(source_object[*index])
+            .map_err(|_| anyhow!("could not allocate selected source-object list"))?;
     }
     Ok(SelectedLinkInputs {
         inputs: selected,
         archive_group: selected_group,
         archive_member: selected_member,
+        source_object: selected_source,
     })
 }
 
@@ -544,6 +562,7 @@ fn write_linked_pe(
         &decoded.inputs,
         &decoded.archive_group,
         &decoded.archive_member,
+        &decoded.source_object,
         entry,
     )?;
     let mut runtime_arena = [PeRuntimeFunction {
@@ -641,25 +660,51 @@ fn write_linked_elf(
         &decoded.inputs,
         &decoded.archive_group,
         &decoded.archive_member,
+        &decoded.source_object,
         entry,
     )?;
-    let payload = selected_payload_bound(&selected.inputs, &[], &[])?;
+    let mut unwind_arenas = elf_unwind_relocation_arenas(selected.inputs.len())?;
+    let unwind = selected_elf_unwind(objects, &selected, &mut unwind_arenas)?;
+    let mut payload = selected_payload_bound(&selected.inputs, &[], &[])?;
+    for data in &unwind {
+        payload = payload
+            .checked_add(data.bytes.len())
+            .and_then(|bytes| bytes.checked_add(16))
+            .ok_or_else(|| anyhow!("selected ELF unwind payload size overflow"))?;
+    }
     if payload <= 16 * 1024 {
-        return write_elf_image::<{ 32 * 1024 }, { 16 * 1024 }>(&selected.inputs, entry, output);
+        return write_elf_image::<{ 32 * 1024 }, { 16 * 1024 }>(
+            &selected.inputs,
+            &unwind,
+            entry,
+            output,
+        );
     }
     if payload <= 256 * 1024 {
-        return write_elf_image::<{ 512 * 1024 }, { 256 * 1024 }>(&selected.inputs, entry, output);
+        return write_elf_image::<{ 512 * 1024 }, { 256 * 1024 }>(
+            &selected.inputs,
+            &unwind,
+            entry,
+            output,
+        );
     }
-    write_elf_image::<MAX_EXECUTABLE_BYTES, MAX_LINKED_BYTES>(&selected.inputs, entry, output)
+    write_elf_image::<MAX_EXECUTABLE_BYTES, MAX_LINKED_BYTES>(
+        &selected.inputs,
+        &unwind,
+        entry,
+        output,
+    )
 }
 
 fn write_elf_image<const MAX_IMAGE: usize, const MAX_LINKED: usize>(
     inputs: &[LinkInput<'_, '_, '_>],
+    unwind: &[ElfUnwindData<'_, '_>],
     entry: &str,
     output: &str,
 ) -> Result<()> {
-    let executable = link_x86_64_elf_executable::<MAX_IMAGE, MAX_LINKED>(inputs, entry)
-        .map_err(mrml_error::message)?;
+    let executable =
+        link_x86_64_elf_executable_with_unwind::<MAX_IMAGE, MAX_LINKED>(inputs, unwind, entry)
+            .map_err(mrml_error::message)?;
     mrml_runtime::write_file(output, executable.bytes())?;
     println!(
         "linked {} to {} deterministic ELF64 bytes",
@@ -667,6 +712,51 @@ fn write_elf_image<const MAX_IMAGE: usize, const MAX_LINKED: usize>(
         executable.bytes().len()
     );
     Ok(())
+}
+
+fn elf_unwind_relocation_arenas(
+    count: usize,
+) -> Result<Vector<[ElfUnwindRelocation; MAX_LINK_RELOCATIONS]>> {
+    let mut arenas = Vector::with_capacity(count)
+        .map_err(|_| anyhow!("could not allocate ELF unwind relocation arenas"))?;
+    for _ in 0..count {
+        arenas
+            .try_push(
+                [ElfUnwindRelocation {
+                    offset: 0,
+                    target_text_offset: 0,
+                    addend: 0,
+                }; MAX_LINK_RELOCATIONS],
+            )
+            .map_err(|_| anyhow!("could not allocate ELF unwind relocation arenas"))?;
+    }
+    Ok(arenas)
+}
+
+fn selected_elf_unwind<'data, 'relocations>(
+    objects: &[&'data [u8]],
+    selected: &SelectedLinkInputs<'_, '_, '_>,
+    arenas: &'relocations mut [[ElfUnwindRelocation; MAX_LINK_RELOCATIONS]],
+) -> Result<Vector<ElfUnwindData<'data, 'relocations>>> {
+    if selected.inputs.len() != selected.source_object.len()
+        || selected.inputs.len() != arenas.len()
+    {
+        return Err(anyhow!("selected ELF unwind input count mismatch"));
+    }
+    let mut unwind = Vector::with_capacity(selected.inputs.len())
+        .map_err(|_| anyhow!("could not allocate selected ELF unwind list"))?;
+    for (index, arena) in arenas.iter_mut().enumerate() {
+        let object = objects
+            .get(selected.source_object[index])
+            .ok_or_else(|| anyhow!("selected ELF source-object index is invalid"))?;
+        unwind
+            .try_push(
+                decode_x86_64_elf_unwind(object, arena)
+                    .map_err(|_| anyhow!("could not decode selected ELF unwind data"))?,
+            )
+            .map_err(|_| anyhow!("could not allocate selected ELF unwind list"))?;
+    }
+    Ok(unwind)
 }
 
 fn selected_payload_bound(

@@ -9469,3 +9469,12 @@ resolved local read-only target. It constructs no GOT/PLT, performs no dynamic
 interposition, and introduces no new instruction sequence, compression,
 cryptographic, or loading algorithm. This technical screen is not legal advice
 or patent clearance.
+
+# 2026-08-28 — Bounded ELF frame-data preservation
+
+Patent review: **NOT_TRIGGERED**. This increment validates, retains, and applies
+documented conventional ELF/DWARF `.eh_frame` `R_X86_64_PC32` relocations to
+selected static inputs under existing fixed bounds. It does not interpret CFI,
+generate a search table, introduce a new unwind encoding, compress records, or
+add a cryptographic or loading algorithm. This technical screen is not legal
+advice or patent clearance.

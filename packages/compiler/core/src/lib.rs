@@ -46,18 +46,18 @@ pub use ir::{
 };
 pub use lexer::{LexError, LexErrorKind, Lexer, Span, Token, TokenKind};
 pub use linker::{
-    ArchiveMember, ArchiveMembers, ElfImage, LinkDefinition, LinkInput, LinkInputSelection,
-    LinkRelocation, LinkRelocationTarget, LinkedImage, LinkerError, MAX_ARCHIVE_MEMBERS,
-    MAX_LINK_DEFINITIONS, MAX_LINK_INPUTS, MAX_LINK_RELOCATIONS, MAX_PE_RUNTIME_FUNCTIONS, PeImage,
-    PeRuntimeFunction, PeWritableData, PeWritableRelocation, decode_unix_archive,
-    decode_x86_64_coff, decode_x86_64_coff_runtime_functions, decode_x86_64_coff_text_fragment,
-    decode_x86_64_coff_with_definitions, decode_x86_64_coff_writable_data,
-    decode_x86_64_coff_writable_data_fragment, decode_x86_64_elf,
-    decode_x86_64_elf_with_definitions, link_x86_64_elf_executable, link_x86_64_pe,
-    link_x86_64_pe_with_data_and_unwind, link_x86_64_pe_with_unwind, link_x86_64_static,
-    select_ordered_static_link_inputs, select_ordered_static_link_members,
-    select_static_link_inputs, x86_64_coff_text_fragment_count, x86_64_coff_unwind_section_count,
-    x86_64_coff_writable_section_count,
+    ArchiveMember, ArchiveMembers, ElfImage, ElfUnwindData, ElfUnwindRelocation, LinkDefinition,
+    LinkInput, LinkInputSelection, LinkRelocation, LinkRelocationTarget, LinkedImage, LinkerError,
+    MAX_ARCHIVE_MEMBERS, MAX_LINK_DEFINITIONS, MAX_LINK_INPUTS, MAX_LINK_RELOCATIONS,
+    MAX_PE_RUNTIME_FUNCTIONS, PeImage, PeRuntimeFunction, PeWritableData, PeWritableRelocation,
+    decode_unix_archive, decode_x86_64_coff, decode_x86_64_coff_runtime_functions,
+    decode_x86_64_coff_text_fragment, decode_x86_64_coff_with_definitions,
+    decode_x86_64_coff_writable_data, decode_x86_64_coff_writable_data_fragment, decode_x86_64_elf,
+    decode_x86_64_elf_unwind, decode_x86_64_elf_with_definitions, link_x86_64_elf_executable,
+    link_x86_64_elf_executable_with_unwind, link_x86_64_pe, link_x86_64_pe_with_data_and_unwind,
+    link_x86_64_pe_with_unwind, link_x86_64_static, select_ordered_static_link_inputs,
+    select_ordered_static_link_members, select_static_link_inputs, x86_64_coff_text_fragment_count,
+    x86_64_coff_unwind_section_count, x86_64_coff_writable_section_count,
 };
 pub use object::{
     MAX_X86_64_RELOCATIONS, ObjectError, ObjectFile, X86_64PcRelativeRelocation,

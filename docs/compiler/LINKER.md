@@ -395,6 +395,28 @@ same-input iterations after five warmups, MRML measured 5.609 ms median and
 single hosted, process-startup-heavy probe is regression evidence only, not a
 general speed or compatibility claim.
 
+The driver no longer requires default pinned-rustc ELF inputs to suppress
+unwind-table emission. It separately decodes one conventional `.eh_frame` and
+its `.rela.eh_frame` table per selected object, validates the x86-64 unwind
+section type, allocation flags, alignment, RELA links, `R_X86_64_PC32` records,
+field bounds, symbol indices, and split-text targets, and retains at most 256
+combined unwind relocations. Selected inputs carry their exact source-object
+indices, so multiple explicit objects cannot alias through the archive-origin
+sentinel. The serializer copies each selected frame fragment into the R/NX
+load and applies checked function-relative displacements after final layout.
+
+An exact default ORACLE-0002 object with two retained statics linked and exited
+42 from an 8,256-byte ELF. A default 9,180-byte rlib with nine functions, a
+256-byte `.eh_frame`, and nine frame relocations linked to an 8,448-byte ELF
+and exited 42 under Arch WSL. Windows and Linux each passed 710 compiler-core
+tests and four driver tests. Over 50 same-input rlib iterations after five
+warmups, MRML measured 4.787 ms median and 4.813 ms mean versus pinned rust-lld
+at 5.149 ms median and 5.179 ms mean; rust-lld emitted 2,440 bytes. This remains
+narrow hosted regression evidence. MRML does not yet generate `.eh_frame_hdr`
+or `PT_GNU_EH_FRAME`, and no language-level panic/unwind or backtrace behavior
+is claimed; the current milestone preserves and relocates loadable frame data
+as the prerequisite for runtime discovery.
+
 This increment does **not** emit PE imports/exports/base
 relocations/debug data, emit ELF dynamic metadata/interpreter/PIE/sections,
 accelerate archive extraction through symbol indexes, read thin archives or

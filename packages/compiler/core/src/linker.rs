@@ -238,6 +238,21 @@ pub struct LinkInput<'data, 'relocations, 'definitions> {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct ElfUnwindRelocation {
+    /// Offset of the four-byte PC-relative field within `.eh_frame`.
+    pub offset: usize,
+    /// Checked offset of the described function within this input's combined text.
+    pub target_text_offset: usize,
+    pub addend: i64,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct ElfUnwindData<'data, 'relocations> {
+    pub bytes: &'data [u8],
+    pub relocations: &'relocations [ElfUnwindRelocation],
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct PeRuntimeFunction<'a> {
     pub begin_symbol: &'a str,
     pub begin_offset: usize,
@@ -1544,6 +1559,25 @@ pub fn decode_x86_64_elf_with_definitions<'data, 'relocations, 'definitions>(
             name if name == ".rela.text" || name.starts_with(".rela.text.") => {
                 relocation_sections[index] = true;
             }
+            ".eh_frame" => {
+                if read_u32_elf(object, header + 4)? != 0x7000_0001
+                    || read_u64_elf(object, header + 8)? != 2
+                    || read_u64_elf(object, header + 48)? != 8
+                {
+                    return Err(LinkerError::UnsupportedElf);
+                }
+                ignored_sections[index] = true;
+            }
+            ".rela.eh_frame" => {
+                if read_u32_elf(object, header + 4)? != 4
+                    || read_u64_elf(object, header + 8)? != 0x40
+                    || read_u64_elf(object, header + 48)? != 8
+                    || read_u64_elf(object, header + 56)? != 24
+                {
+                    return Err(LinkerError::UnsupportedElf);
+                }
+                ignored_sections[index] = true;
+            }
             ".symtab" if symbols_index.replace(index).is_none() => {}
             ".strtab" if strings_index.replace(index).is_none() => {}
             ".shstrtab" if index == section_names_index => {}
@@ -1841,6 +1875,170 @@ fn elf_combined_text_offset(
     raw.checked_sub(text_start)
         .and_then(|base| base.checked_add(value))
         .ok_or(LinkerError::OffsetOverflow)
+}
+
+/// Decodes the bounded `.eh_frame` subset emitted by the pinned x86-64
+/// gnullvm oracle. The caller owns relocation storage so archive inputs remain
+/// allocation-free and independently bounded.
+pub fn decode_x86_64_elf_unwind<'data, 'relocations>(
+    object: &'data [u8],
+    relocation_storage: &'relocations mut [ElfUnwindRelocation; MAX_LINK_RELOCATIONS],
+) -> Result<ElfUnwindData<'data, 'relocations>, LinkerError> {
+    if object.get(..7) != Some(b"\x7fELF\x02\x01\x01")
+        || !matches!(object.get(7), Some(0 | 3))
+        || object.get(8) != Some(&0)
+        || read_u16_elf(object, 16)? != 1
+        || read_u16_elf(object, 18)? != 62
+        || read_u32_elf(object, 20)? != 1
+        || read_u16_elf(object, 52)? != 64
+        || read_u16_elf(object, 58)? != 64
+    {
+        return Err(LinkerError::UnsupportedElf);
+    }
+    let section_offset = to_usize_elf(read_u64_elf(object, 40)?)?;
+    let section_count = usize::from(read_u16_elf(object, 60)?);
+    let section_names_index = usize::from(read_u16_elf(object, 62)?);
+    if !(4..=MAX_COFF_SECTIONS).contains(&section_count) || section_names_index >= section_count {
+        return Err(LinkerError::UnsupportedElf);
+    }
+    let section_names =
+        elf_section_contents(object, section_offset, section_count, section_names_index)?;
+    let mut text_sections = [false; MAX_COFF_SECTIONS];
+    let mut text_span = None;
+    let mut unwind_index = None;
+    let mut unwind_relocations_index = None;
+    let mut symbols_index = None;
+    for index in 1..section_count {
+        let header = elf_section_header(section_offset, section_count, index)?;
+        let name = elf_string(
+            section_names,
+            usize::try_from(read_u32_elf(object, header)?)
+                .map_err(|_| LinkerError::OffsetOverflow)?,
+        )?;
+        let contents = elf_section_contents(object, section_offset, section_count, index)?;
+        if (name == ".text" || name.starts_with(".text.")) && !contents.is_empty() {
+            let start = to_usize_elf(read_u64_elf(object, header + 24)?)?;
+            let end = start
+                .checked_add(contents.len())
+                .ok_or(LinkerError::OffsetOverflow)?;
+            text_sections[index] = true;
+            text_span = Some(match text_span {
+                None => (start, end),
+                Some((first, previous_end))
+                    if previous_end <= start
+                        && object
+                            .get(previous_end..start)
+                            .map(|gap| gap.iter().all(|byte| *byte == 0))
+                            .unwrap_or(false) =>
+                {
+                    (first, end)
+                }
+                Some(_) => return Err(LinkerError::UnsupportedElf),
+            });
+        } else if name == ".eh_frame" {
+            if unwind_index.replace(index).is_some()
+                || read_u32_elf(object, header + 4)? != 0x7000_0001
+                || read_u64_elf(object, header + 8)? != 2
+                || read_u64_elf(object, header + 48)? != 8
+            {
+                return Err(LinkerError::UnsupportedElf);
+            }
+        } else if name == ".rela.eh_frame" {
+            if unwind_relocations_index.replace(index).is_some() {
+                return Err(LinkerError::UnsupportedElf);
+            }
+        } else if name == ".symtab" && symbols_index.replace(index).is_some() {
+            return Err(LinkerError::UnsupportedElf);
+        }
+    }
+    let Some(unwind_index) = unwind_index else {
+        if unwind_relocations_index.is_some() {
+            return Err(LinkerError::UnsupportedElf);
+        }
+        return Ok(ElfUnwindData {
+            bytes: &object[0..0],
+            relocations: &relocation_storage[..0],
+        });
+    };
+    let unwind_relocations_index = unwind_relocations_index.ok_or(LinkerError::UnsupportedElf)?;
+    let symbols_index = symbols_index.ok_or(LinkerError::InvalidElf)?;
+    let (text_start, text_end) = text_span.ok_or(LinkerError::InvalidElf)?;
+    let text_length = text_end
+        .checked_sub(text_start)
+        .ok_or(LinkerError::OffsetOverflow)?;
+    let unwind = elf_section_contents(object, section_offset, section_count, unwind_index)?;
+    let symbols = elf_section_contents(object, section_offset, section_count, symbols_index)?;
+    if symbols.len() % 24 != 0 {
+        return Err(LinkerError::InvalidElf);
+    }
+    let relocation_header =
+        elf_section_header(section_offset, section_count, unwind_relocations_index)?;
+    if read_u32_elf(object, relocation_header + 4)? != 4
+        || read_u64_elf(object, relocation_header + 8)? != 0x40
+        || read_u64_elf(object, relocation_header + 48)? != 8
+        || read_u64_elf(object, relocation_header + 56)? != 24
+        || usize::try_from(read_u32_elf(object, relocation_header + 40)?)
+            .map_err(|_| LinkerError::OffsetOverflow)?
+            != symbols_index
+        || usize::try_from(read_u32_elf(object, relocation_header + 44)?)
+            .map_err(|_| LinkerError::OffsetOverflow)?
+            != unwind_index
+    {
+        return Err(LinkerError::UnsupportedElf);
+    }
+    let records = elf_section_contents(
+        object,
+        section_offset,
+        section_count,
+        unwind_relocations_index,
+    )?;
+    if records.len() % 24 != 0 || records.len() / 24 > relocation_storage.len() {
+        return Err(LinkerError::TooManyRelocations);
+    }
+    for (index, record) in records.chunks_exact(24).enumerate() {
+        let offset = to_usize_elf(read_u64_elf(record, 0)?)?;
+        offset
+            .checked_add(4)
+            .filter(|end| *end <= unwind.len())
+            .ok_or(LinkerError::InvalidRelocationOffset)?;
+        let info = read_u64_elf(record, 8)?;
+        if u32::try_from(info & 0xffff_ffff).map_err(|_| LinkerError::OffsetOverflow)? != 2 {
+            return Err(LinkerError::UnsupportedElf);
+        }
+        let symbol_index = usize::try_from(info >> 32).map_err(|_| LinkerError::OffsetOverflow)?;
+        let symbol_offset = symbol_index
+            .checked_mul(24)
+            .filter(|offset| {
+                offset
+                    .checked_add(24)
+                    .is_some_and(|end| end <= symbols.len())
+            })
+            .ok_or(LinkerError::InvalidElf)?;
+        let target_section = usize::from(read_u16_elf(symbols, symbol_offset + 6)?);
+        if !text_sections.get(target_section).copied().unwrap_or(false) {
+            return Err(LinkerError::UnsupportedElf);
+        }
+        let target_text_offset = elf_combined_text_offset(
+            object,
+            section_offset,
+            section_count,
+            target_section,
+            text_start,
+            read_u64_elf(symbols, symbol_offset + 8)?,
+        )?;
+        if target_text_offset > text_length {
+            return Err(LinkerError::InvalidRelocationOffset);
+        }
+        relocation_storage[index] = ElfUnwindRelocation {
+            offset,
+            target_text_offset,
+            addend: read_i64_elf(record, 16)?,
+        };
+    }
+    Ok(ElfUnwindData {
+        bytes: unwind,
+        relocations: &relocation_storage[..records.len() / 24],
+    })
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -2229,6 +2427,21 @@ pub fn link_x86_64_elf_executable<const MAX_IMAGE_BYTES: usize, const MAX_LINKED
     inputs: &[LinkInput<'_, '_, '_>],
     entry_symbol: &str,
 ) -> Result<ElfImage<MAX_IMAGE_BYTES>, LinkerError> {
+    link_x86_64_elf_executable_with_unwind::<MAX_IMAGE_BYTES, MAX_LINKED_BYTES>(
+        inputs,
+        &[],
+        entry_symbol,
+    )
+}
+
+pub fn link_x86_64_elf_executable_with_unwind<
+    const MAX_IMAGE_BYTES: usize,
+    const MAX_LINKED_BYTES: usize,
+>(
+    inputs: &[LinkInput<'_, '_, '_>],
+    unwind: &[ElfUnwindData<'_, '_>],
+    entry_symbol: &str,
+) -> Result<ElfImage<MAX_IMAGE_BYTES>, LinkerError> {
     const PAGE: usize = 0x1000;
     const IMAGE_BASE: usize = 0x40_0000;
     const TEXT_OFFSET: usize = 0x1000;
@@ -2238,7 +2451,10 @@ pub fn link_x86_64_elf_executable<const MAX_IMAGE_BYTES: usize, const MAX_LINKED
     let readonly_offset = TEXT_OFFSET
         .checked_add(linked.readonly_offset)
         .ok_or(LinkerError::OffsetOverflow)?;
-    let length = if readonly_size == 0 {
+    if !unwind.is_empty() && unwind.len() != inputs.len() {
+        return Err(LinkerError::InvalidElf);
+    }
+    let base_length = if readonly_size == 0 {
         TEXT_OFFSET
             .checked_add(linked.text_length)
             .ok_or(LinkerError::OffsetOverflow)?
@@ -2247,10 +2463,49 @@ pub fn link_x86_64_elf_executable<const MAX_IMAGE_BYTES: usize, const MAX_LINKED
             .checked_add(readonly_size)
             .ok_or(LinkerError::OffsetOverflow)?
     };
+    let has_unwind = unwind.iter().any(|data| !data.bytes.is_empty());
+    let mut unwind_layouts = [0usize; MAX_LINK_INPUTS];
+    let mut length = if has_unwind {
+        if readonly_size == 0 {
+            readonly_offset
+        } else {
+            align(base_length, 8)?
+        }
+    } else {
+        base_length
+    };
+    let mut unwind_relocation_count = 0usize;
+    for (index, data) in unwind.iter().enumerate() {
+        length = align(length, 8)?;
+        unwind_layouts[index] = length;
+        length = length
+            .checked_add(data.bytes.len())
+            .ok_or(LinkerError::OffsetOverflow)?;
+        unwind_relocation_count = unwind_relocation_count
+            .checked_add(data.relocations.len())
+            .ok_or(LinkerError::OffsetOverflow)?;
+        if unwind_relocation_count > MAX_LINK_RELOCATIONS {
+            return Err(LinkerError::TooManyRelocations);
+        }
+        for relocation in data.relocations {
+            relocation
+                .offset
+                .checked_add(4)
+                .filter(|end| *end <= data.bytes.len())
+                .ok_or(LinkerError::InvalidRelocationOffset)?;
+            if relocation.target_text_offset > inputs[index].text.len() {
+                return Err(LinkerError::InvalidRelocationOffset);
+            }
+        }
+    }
     if length > MAX_IMAGE_BYTES {
         return Err(LinkerError::OutputTooSmall);
     }
-    let program_count = if readonly_size == 0 { 2 } else { 3 };
+    let program_count = if readonly_size == 0 && !has_unwind {
+        2
+    } else {
+        3
+    };
     let header_bytes = 64usize
         .checked_add(program_count * 56)
         .ok_or(LinkerError::OffsetOverflow)?;
@@ -2285,15 +2540,19 @@ pub fn link_x86_64_elf_executable<const MAX_IMAGE_BYTES: usize, const MAX_LINKED
         linked.text_length,
         linked.text_length,
     )?;
-    if readonly_size != 0 {
+    if readonly_size != 0 || has_unwind {
         write_elf_load_segment(
             &mut bytes,
             176,
             4,
             readonly_offset,
             IMAGE_BASE + readonly_offset,
-            readonly_size,
-            readonly_size,
+            length
+                .checked_sub(readonly_offset)
+                .ok_or(LinkerError::OffsetOverflow)?,
+            length
+                .checked_sub(readonly_offset)
+                .ok_or(LinkerError::OffsetOverflow)?,
         )?;
     }
     copy_at(&mut bytes, TEXT_OFFSET, &linked.bytes[..linked.text_length])?;
@@ -2303,6 +2562,26 @@ pub fn link_x86_64_elf_executable<const MAX_IMAGE_BYTES: usize, const MAX_LINKED
             readonly_offset,
             &linked.bytes[linked.readonly_offset..linked.length],
         )?;
+    }
+    for (index, data) in unwind.iter().enumerate() {
+        copy_at(&mut bytes, unwind_layouts[index], data.bytes)?;
+        for relocation in data.relocations {
+            let place = unwind_layouts[index]
+                .checked_add(relocation.offset)
+                .ok_or(LinkerError::OffsetOverflow)?;
+            let target = TEXT_OFFSET
+                .checked_add(linked.layouts[index].text)
+                .and_then(|target| target.checked_add(relocation.target_text_offset))
+                .ok_or(LinkerError::OffsetOverflow)?;
+            let displacement = i64::try_from(target)
+                .map_err(|_| LinkerError::OffsetOverflow)?
+                .checked_add(relocation.addend)
+                .and_then(|target| target.checked_sub(i64::try_from(place).ok()?))
+                .ok_or(LinkerError::OffsetOverflow)?;
+            let displacement =
+                i32::try_from(displacement).map_err(|_| LinkerError::RelocationOverflow)?;
+            bytes[place..place + 4].copy_from_slice(&displacement.to_le_bytes());
+        }
     }
     Ok(ElfImage { bytes, length })
 }
@@ -4236,6 +4515,48 @@ mod tests {
         assert_eq!(
             elf,
             link_x86_64_elf_executable::<16384, 8192>(&[input], "entry").unwrap()
+        );
+    }
+
+    #[test]
+    fn emits_and_relocates_bounded_elf_unwind_data() {
+        let input = LinkInput {
+            symbol: "entry",
+            additional_definitions: &[],
+            text: &[0xc3],
+            readonly_data: &[],
+            relocations: &[],
+        };
+        let unwind_bytes = [0u8; 8];
+        let unwind_relocations = [ElfUnwindRelocation {
+            offset: 0,
+            target_text_offset: 0,
+            addend: 0,
+        }];
+        let unwind = [ElfUnwindData {
+            bytes: &unwind_bytes,
+            relocations: &unwind_relocations,
+        }];
+        let elf = link_x86_64_elf_executable_with_unwind::<16384, 8192>(&[input], &unwind, "entry")
+            .unwrap();
+        assert_eq!(read_u16_elf(elf.bytes(), 56).unwrap(), 3);
+        assert_eq!(elf.bytes().len(), 0x2008);
+        assert_eq!(
+            i32::from_le_bytes(elf.bytes()[0x2000..0x2004].try_into().unwrap()),
+            -0x1000
+        );
+
+        let invalid_relocations = [ElfUnwindRelocation {
+            offset: 5,
+            ..unwind_relocations[0]
+        }];
+        let invalid = [ElfUnwindData {
+            bytes: &unwind_bytes,
+            relocations: &invalid_relocations,
+        }];
+        assert_eq!(
+            link_x86_64_elf_executable_with_unwind::<16384, 8192>(&[input], &invalid, "entry"),
+            Err(LinkerError::InvalidRelocationOffset)
         );
     }
 
