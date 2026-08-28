@@ -569,6 +569,26 @@ and 5.097 ms mean versus pinned rust-lld with `--eh-frame-hdr` at 5.241 ms
 median and 5.218 ms mean; rust-lld emitted 2,128 bytes. This is one hosted
 trait-object regression probe, not general trait/vtable, speed, or ABI coverage.
 
+The archive decoder now validates and exposes conventional GNU `/` and
+`/SYM64/` symbol indexes under a separate 4,096-entry bound. Big-endian counts
+and member offsets, offset-table extent, UTF-8 NUL-terminated nonempty names,
+exact payload consumption, duplicate index members, and offset correspondence
+to independently parsed ordinary member headers are checked. An index entry is
+only a lookup hint: it neither defines a symbol nor makes its referenced member
+eligible without subsequent object decoding and definition validation. BSD
+indexes remain ignored metadata.
+
+An exact ORACLE-0002 `.rlib` containing `lib.rmeta`, `lib.rmeta-link`, a GNU
+index, and one data-only object linked with the external-data consumer to a
+12,304-byte ELF and exited 42 under Arch WSL. Windows passed 718 compiler-core
+tests and Linux passed 720; both passed four driver tests. Over 50
+identical-input iterations after five warmups, MRML measured 4.745 ms median
+and 4.746 ms mean versus pinned rust-lld with `--eh-frame-hdr` at 5.659 ms
+median and 5.617 ms mean; rust-lld emitted 2,080 bytes. This tiny indexed-rlib
+probe is narrow hosted evidence. The driver still eagerly expands candidate
+members, so index-guided lazy extraction and archives exceeding 256 ordinary
+members remain separate incomplete gates.
+
 This increment does **not** emit PE imports/exports/base
 relocations/debug data, emit ELF dynamic metadata/interpreter/PIE/sections,
 accelerate archive extraction through symbol indexes, read thin archives or

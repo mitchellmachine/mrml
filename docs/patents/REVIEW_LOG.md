@@ -9543,3 +9543,12 @@ ordinary static relocations can reference a Rust zero-sized value. It adds no
 payload representation, vtable algorithm, relocation encoding, compression,
 cryptographic mechanism, or loader algorithm. This technical screen is not
 legal advice or patent clearance.
+
+# 2026-08-28 — Validated GNU archive symbol indexes
+
+Patent review: **NOT_TRIGGERED**. This increment parses the conventional GNU
+32-bit and 64-bit Unix-archive symbol-index encodings with bounded big-endian
+integer and NUL-name validation, then treats entries only as untrusted lookup
+hints to independently parsed members. It introduces no new archive or index
+format, search algorithm, compression, cryptographic mechanism, or loader
+behavior. This technical screen is not legal advice or patent clearance.

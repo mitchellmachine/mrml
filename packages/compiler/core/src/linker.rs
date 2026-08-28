@@ -9,6 +9,7 @@ pub const MAX_LINK_RELOCATIONS: usize = 256;
 pub const MAX_LINK_DEFINITIONS: usize = 256;
 pub const MAX_PE_RUNTIME_FUNCTIONS: usize = 256;
 pub const MAX_ARCHIVE_MEMBERS: usize = MAX_LINK_INPUTS;
+pub const MAX_ARCHIVE_SYMBOLS: usize = 4096;
 const MAX_COFF_SECTIONS: usize = 256;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -32,6 +33,7 @@ pub enum LinkerError {
     InvalidArchive,
     UnsupportedArchive,
     TooManyArchiveMembers,
+    TooManyArchiveSymbols,
 }
 
 impl core::fmt::Display for LinkerError {
@@ -56,6 +58,7 @@ impl core::fmt::Display for LinkerError {
             Self::InvalidArchive => "invalid Unix archive input",
             Self::UnsupportedArchive => "unsupported Unix archive feature",
             Self::TooManyArchiveMembers => "archive member capacity exceeded",
+            Self::TooManyArchiveSymbols => "archive symbol-index capacity exceeded",
         };
         formatter.write_str(message)
     }
@@ -68,14 +71,35 @@ pub struct ArchiveMember<'a> {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct ArchiveSymbol<'a> {
+    pub symbol: &'a str,
+    pub member_index: usize,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct ArchiveMembers<'a> {
     members: [ArchiveMember<'a>; MAX_ARCHIVE_MEMBERS],
+    member_offsets: [usize; MAX_ARCHIVE_MEMBERS],
     length: usize,
+    symbols: [ArchiveSymbol<'a>; MAX_ARCHIVE_SYMBOLS],
+    symbol_length: usize,
 }
 
 impl<'a> ArchiveMembers<'a> {
     pub fn members(&self) -> &[ArchiveMember<'a>] {
         &self.members[..self.length]
+    }
+
+    pub fn symbols(&self) -> &[ArchiveSymbol<'a>] {
+        &self.symbols[..self.symbol_length]
+    }
+
+    pub fn member_for_symbol(&self, symbol: &str) -> Option<&ArchiveMember<'a>> {
+        self.symbols().iter().find_map(|entry| {
+            (entry.symbol == symbol)
+                .then(|| self.members.get(entry.member_index))
+                .flatten()
+        })
     }
 }
 
@@ -93,11 +117,19 @@ pub fn decode_unix_archive(archive: &[u8]) -> Result<ArchiveMembers<'_>, LinkerE
         name: "",
         bytes: &archive[0..0],
     };
+    let empty_symbol = ArchiveSymbol {
+        symbol: "",
+        member_index: 0,
+    };
     let mut decoded = ArchiveMembers {
         members: [empty; MAX_ARCHIVE_MEMBERS],
+        member_offsets: [0; MAX_ARCHIVE_MEMBERS],
         length: 0,
+        symbols: [empty_symbol; MAX_ARCHIVE_SYMBOLS],
+        symbol_length: 0,
     };
     let mut string_table = None;
+    let mut gnu_index = None;
     let mut cursor = 8usize;
     while cursor < archive.len() {
         let header_end = cursor.checked_add(60).ok_or(LinkerError::OffsetOverflow)?;
@@ -119,6 +151,10 @@ pub fn decode_unix_archive(archive: &[u8]) -> Result<ArchiveMembers<'_>, LinkerE
 
         if raw_name == "//" {
             string_table = Some(stored);
+        } else if raw_name == "/" || raw_name == "/SYM64/" {
+            if gnu_index.replace((stored, raw_name == "/SYM64/")).is_some() {
+                return Err(LinkerError::InvalidArchive);
+            }
         } else if raw_name != "/" && raw_name != "/SYM64/" && !raw_name.starts_with("__.SYMDEF") {
             let (name, bytes) = decode_archive_member(raw_name, stored, string_table)?;
             if !name.starts_with("__.SYMDEF") {
@@ -126,6 +162,7 @@ pub fn decode_unix_archive(archive: &[u8]) -> Result<ArchiveMembers<'_>, LinkerE
                     return Err(LinkerError::TooManyArchiveMembers);
                 }
                 decoded.members[decoded.length] = ArchiveMember { name, bytes };
+                decoded.member_offsets[decoded.length] = cursor;
                 decoded.length += 1;
             }
         }
@@ -136,6 +173,14 @@ pub fn decode_unix_archive(archive: &[u8]) -> Result<ArchiveMembers<'_>, LinkerE
         if cursor > archive.len() {
             return Err(LinkerError::InvalidArchive);
         }
+    }
+    if let Some((index, wide)) = gnu_index {
+        decoded.symbol_length = decode_gnu_archive_index(
+            index,
+            wide,
+            &decoded.member_offsets[..decoded.length],
+            &mut decoded.symbols,
+        )?;
     }
     Ok(decoded)
 }
@@ -165,6 +210,72 @@ fn decode_archive_member<'a>(
         return Ok((name, stored));
     }
     Ok((raw_name.strip_suffix('/').unwrap_or(raw_name), stored))
+}
+
+fn decode_gnu_archive_index<'a>(
+    index: &'a [u8],
+    wide: bool,
+    member_offsets: &[usize],
+    symbols: &mut [ArchiveSymbol<'a>; MAX_ARCHIVE_SYMBOLS],
+) -> Result<usize, LinkerError> {
+    let width = if wide { 8 } else { 4 };
+    let count = read_archive_be(index, 0, width)?;
+    if count > symbols.len() {
+        return Err(LinkerError::TooManyArchiveSymbols);
+    }
+    let offsets_end = width
+        .checked_add(
+            count
+                .checked_mul(width)
+                .ok_or(LinkerError::OffsetOverflow)?,
+        )
+        .ok_or(LinkerError::OffsetOverflow)?;
+    index
+        .get(..offsets_end)
+        .ok_or(LinkerError::InvalidArchive)?;
+    let mut name_cursor = offsets_end;
+    for symbol_index in 0..count {
+        let offset = read_archive_be(index, width + symbol_index * width, width)?;
+        let member_index = member_offsets
+            .iter()
+            .position(|candidate| *candidate == offset)
+            .ok_or(LinkerError::InvalidArchive)?;
+        let suffix = index
+            .get(name_cursor..)
+            .ok_or(LinkerError::InvalidArchive)?;
+        let length = suffix
+            .iter()
+            .position(|byte| *byte == 0)
+            .ok_or(LinkerError::InvalidArchive)?;
+        let name =
+            core::str::from_utf8(&suffix[..length]).map_err(|_| LinkerError::InvalidArchive)?;
+        validate_symbol(name).map_err(|_| LinkerError::InvalidArchive)?;
+        symbols[symbol_index] = ArchiveSymbol {
+            symbol: name,
+            member_index,
+        };
+        name_cursor = name_cursor
+            .checked_add(length + 1)
+            .ok_or(LinkerError::OffsetOverflow)?;
+    }
+    if name_cursor != index.len() {
+        return Err(LinkerError::InvalidArchive);
+    }
+    Ok(count)
+}
+
+fn read_archive_be(bytes: &[u8], offset: usize, width: usize) -> Result<usize, LinkerError> {
+    let field = bytes
+        .get(offset..offset + width)
+        .ok_or(LinkerError::InvalidArchive)?;
+    let mut value = 0usize;
+    for byte in field {
+        value = value
+            .checked_mul(256)
+            .and_then(|value| value.checked_add(usize::from(*byte)))
+            .ok_or(LinkerError::OffsetOverflow)?;
+    }
+    Ok(value)
 }
 
 fn trim_archive_field(field: &[u8]) -> Result<&str, LinkerError> {
@@ -4218,9 +4329,9 @@ mod tests {
 
     use super::*;
     use crate::{
-        emit_elf64_x86_64, emit_elf64_x86_64_with_readonly_data, emit_elf64_x86_64_with_relocation,
-        emit_x86_64_coff, emit_x86_64_coff_with_relocation, MachineCode,
-        X86_64PcRelativeRelocation, X86_64PcRelativeRelocationKind,
+        MachineCode, X86_64PcRelativeRelocation, X86_64PcRelativeRelocationKind, emit_elf64_x86_64,
+        emit_elf64_x86_64_with_readonly_data, emit_elf64_x86_64_with_relocation, emit_x86_64_coff,
+        emit_x86_64_coff_with_relocation,
     };
 
     fn append_archive_member(archive: &mut std::vec::Vec<u8>, name: &str, bytes: &[u8]) {
@@ -4400,14 +4511,15 @@ mod tests {
     }
 
     #[test]
-    fn skips_archive_symbol_index_metadata() {
+    fn decodes_validated_gnu_archive_symbol_indexes() {
         let mut archive = b"!<arch>\n".to_vec();
-        append_archive_member(&mut archive, "/", b"index");
-        append_archive_member(&mut archive, "/SYM64/", b"wide");
+        let mut index = std::vec![0, 0, 0, 1, 0, 0, 0, 82];
+        index.extend_from_slice(b"entry\0");
+        append_archive_member(&mut archive, "/", &index);
+        append_archive_member(&mut archive, "entry.o/", b"object");
         let mut bsd_index = b"__.SYMDEF SORTED".to_vec();
         bsd_index.extend_from_slice(b"bsd-index");
         append_archive_member(&mut archive, "#1/16", &bsd_index);
-        append_archive_member(&mut archive, "entry.o/", b"object");
 
         let members = decode_unix_archive(&archive).unwrap();
         assert_eq!(
@@ -4416,6 +4528,49 @@ mod tests {
                 name: "entry.o",
                 bytes: b"object"
             }]
+        );
+        assert_eq!(
+            members.symbols(),
+            &[ArchiveSymbol {
+                symbol: "entry",
+                member_index: 0
+            }]
+        );
+        assert_eq!(
+            members.member_for_symbol("entry"),
+            Some(&members.members()[0])
+        );
+        assert_eq!(members.member_for_symbol("missing"), None);
+
+        let mut wide_archive = b"!<arch>\n".to_vec();
+        let mut wide = std::vec![0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 90];
+        wide.extend_from_slice(b"entry\0");
+        append_archive_member(&mut wide_archive, "/SYM64/", &wide);
+        append_archive_member(&mut wide_archive, "entry.o/", b"object");
+        assert_eq!(
+            decode_unix_archive(&wide_archive).unwrap().symbols(),
+            members.symbols()
+        );
+    }
+
+    #[test]
+    fn rejects_untrusted_gnu_archive_index_offsets_and_names() {
+        let mut bad_offset = b"!<arch>\n".to_vec();
+        let mut index = std::vec![0, 0, 0, 1, 0, 0, 0, 81];
+        index.extend_from_slice(b"entry\0");
+        append_archive_member(&mut bad_offset, "/", &index);
+        append_archive_member(&mut bad_offset, "entry.o/", b"object");
+        assert_eq!(
+            decode_unix_archive(&bad_offset),
+            Err(LinkerError::InvalidArchive)
+        );
+
+        let mut missing_nul = b"!<arch>\n".to_vec();
+        append_archive_member(&mut missing_nul, "/", &[0, 0, 0, 1, 0, 0, 0, 78, b'e']);
+        append_archive_member(&mut missing_nul, "entry.o/", b"object");
+        assert_eq!(
+            decode_unix_archive(&missing_nul),
+            Err(LinkerError::InvalidArchive)
         );
     }
 
@@ -4979,7 +5134,7 @@ mod tests {
 
     #[test]
     fn decodes_and_links_coff_readonly_section_relocations() {
-        use crate::{emit_x86_64_coff_with_readonly_data, X86_64ReadonlyRelocation};
+        use crate::{X86_64ReadonlyRelocation, emit_x86_64_coff_with_readonly_data};
 
         let code = MachineCode::<8>::from_bytes_for_test(&[0x48, 0x8d, 0x05, 0, 0, 0, 0, 0xc3]);
         let object = emit_x86_64_coff_with_readonly_data::<256, 8>(
