@@ -1027,10 +1027,7 @@ pub fn compile_x86_64_runtime_function_with_options<
         .iter()
         .flatten()
         .try_fold(0usize, |total, parameter| {
-            let slots = runtime_array_type(parameter.ty.text)
-                .or_else(|| runtime_reference_type(parameter.ty.text))
-                .or_else(|| runtime_raw_pointer_type(parameter.ty.text))
-                .map_or(1, runtime_type_stack_slots);
+            let slots = runtime_parameter_stack_slots(parameter.ty.text);
             total.checked_add(slots)
         })
         .and_then(|slots| slots.checked_add(usize::from(uses_sret)))

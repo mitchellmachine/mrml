@@ -133,6 +133,9 @@ by themselves admit the types at the public call boundary.
 Range-endpoint analysis also uses the logical layout, so positive and negative
 128-bit literal magnitudes are checked exactly even while machine emission
 remains unavailable.
+Saved-parameter and relative parameter-offset accounting use the same complete
+runtime type classifier, so a future two-word integer reserves both stack words
+and cannot overlap a following parameter.
 
 The admitted subset has controlled native execution evidence on the Windows and
 Linux test hosts: the public pipeline emits the host object, the test harness

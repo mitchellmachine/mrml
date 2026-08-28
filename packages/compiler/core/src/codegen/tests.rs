@@ -12106,6 +12106,10 @@ mod tests {
                 1
             );
         }
+        assert_eq!(runtime_parameter_stack_slots("u128"), 2);
+        assert_eq!(runtime_parameter_stack_slots("i128"), 2);
+        assert_eq!(runtime_parameter_stack_slots("u64"), 1);
+        assert_eq!(runtime_parameter_stack_slots("&[u8]"), 2);
     }
 
     #[test]

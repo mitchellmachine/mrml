@@ -587,9 +587,7 @@ impl<
             .flatten()
             .skip(index)
             .try_fold(0usize, |total, parameter| {
-                let slots = runtime_array_type(parameter.ty.text)
-                    .or_else(|| runtime_reference_type(parameter.ty.text))
-                    .map_or(1, runtime_type_stack_slots);
+                let slots = runtime_parameter_stack_slots(parameter.ty.text);
                 total
                     .checked_add(slots)
                     .ok_or(self.error(CodegenErrorKind::TooManyAbiParameters))

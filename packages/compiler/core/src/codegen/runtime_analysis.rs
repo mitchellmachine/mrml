@@ -12185,6 +12185,10 @@ fn runtime_type_stack_slots(ty: RuntimeExpressionType) -> usize {
     }
 }
 
+fn runtime_parameter_stack_slots(text: &str) -> usize {
+    runtime_type_from_text(text).map_or(1, runtime_type_stack_slots)
+}
+
 fn runtime_type_is_copy(ty: RuntimeExpressionType) -> bool {
     match ty {
         RuntimeExpressionType::Reference { mutable: true, .. } => false,
