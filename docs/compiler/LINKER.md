@@ -207,6 +207,14 @@ relocation table. The existing PE APIs delegate with no writable inputs and
 retain their prior output. COFF writable-section decoding and driver transport
 remain separate gates.
 
+The COFF core now decodes one nonempty initialized RW/non-executable
+`.data$...` section into typed writable bytes. Every relocation must be an
+eight-byte AMD64 `ADDR64` field whose checked symbol and addend resolve inside
+the object's single admitted read-only section. Text-fragment decoding
+recognizes the section without folding it into code, while the legacy decoder
+explicitly rejects it to prevent silent data loss. Multiple writable sections,
+other target classes, and driver transport remain unsupported.
+
 After this integration, the controlled 93-byte no-unwind object benchmark ran
 50 iterations after five warmups. MRML measured 10.081 ms median and 10.260 ms
 mean versus pinned gnullvm rust-lld at 27.632 ms median and 27.791 ms mean. Both

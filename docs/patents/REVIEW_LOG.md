@@ -9379,3 +9379,11 @@ initialized data in a separate RW/NX section and applies documented AMD64
 image. It introduces no new relocation, packing, compression, cryptographic,
 or loading algorithm. This technical screen is not legal advice or patent
 clearance.
+
+# 2026-08-28 — Bounded writable COFF COMDAT decoding
+
+Patent review: **NOT_TRIGGERED**. This increment validates one conventional
+initialized RW/NX `.data$...` COFF section and its documented AMD64 `ADDR64`
+relocations into the existing typed writable PE input. It introduces no new
+relocation, COMDAT-selection, packing, compression, cryptographic, or loading
+algorithm. This technical screen is not legal advice or patent clearance.
