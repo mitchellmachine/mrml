@@ -9,13 +9,14 @@ the named commit and current source.
 ## Recoverable baseline
 
 - Branch: `main`
-- Compiler checkpoint commit: `0350249c`
-  (`build: move compiler driver`)
-- Remote state when recorded: `origin/main` includes the behavior-preserving
-  compiler core/driver relocation to `packages/compiler/core` and `packages/compiler/driver`,
-  exact recovery/review path updates, and Windows verification. The driver push
-  from `3ed363de` to `0350249c` was a verified fast-forward; no compiler or
-  driver semantics changed.
+- Compiler checkpoint commit: `00888d66`
+  (`compiler: link bounded ordered object lists`)
+- Remote state when recorded: `origin/main` includes the bounded MRML-owned
+  static-link core, exact MRML COFF and ELF64 ingestion, deterministic
+  import-free PE32+/ELF64 executable serialization, explicit compiler-driver
+  selection, identical-input gnullvm rust-lld comparison, and ordered linking
+  of one through 32 object inputs. The original compiler core/driver relocation
+  remains at `0350249c`.
 - Preceding compiler commits: `9a950ae9` (`build: move compiler core`),
   `885ba7b7` (`compiler: validate nested loop
   returns`), `5c53eb9` (`compiler: track mutable tuple field
@@ -57,6 +58,39 @@ Do not replace the exact oracle with the newest installed nightly. A future
 oracle upgrade receives a new immutable record and differential classification
 against all prior accepted probes. Keep Cargo on edition 2024 until a newer
 named edition can be adopted through a pinned, workspace-wide migration.
+
+## Latest bounded linker milestone
+
+Commits `5169d8ed` through `00888d66` establish the MRML-owned linker lane. The
+no-std core resolves one symbol per input across at most 32 inputs and 256
+checked PC-relative relocations, with typed named-code and local-read-only-data
+targets. It decodes the exact bounded COFF and ELF64 subsets emitted by
+`mrml-rustc`, and serializes deterministic fixed-address import-free PE32+ and
+ELF64 executables with page-separated permissions. Explicit `--emit pe`,
+`--emit elf-executable`, `--link-coff`, and `--link-elf` selections never fall
+back to a system linker.
+
+Commit `00888d66` separates object-data and relocation-arena lifetimes and lets
+the driver retain one through 32 ordered decoded objects without raw pointers
+or self-references. A Windows release-driver probe linked two independently
+compiled objects and returned 42. On the same host, an eight-object, 744-byte
+controlled workload ran 50 times after five warmups: MRML median 10.677 ms,
+pinned `nightly-2026-08-24` gnullvm rust-lld median 27.524 ms, with matching
+1,024-byte outputs and exit status 42. This is a 2.58x result for that small
+import-free workload only, not a general superiority claim. The single-object
+controlled result was 10.196 ms versus 26.870 ms. Arch WSL separately executed
+the generated bounded ELF64 image and returned 42; the ordinary MRML Linux test
+target remained unavailable, so this is hosted evidence only.
+
+Archives, PE imports/exports/exception/base-relocation/debug metadata, ELF
+dynamic metadata/interpreter/PIE/sections, section GC, ICF, parallel execution,
+and public `mrml` build-frontend selection remain unimplemented. Upstream rustc
+and its pinned linker remain the production path until the profile-specific
+gate in `docs/build/BUILD_SYSTEM.md` passes.
+
+Patent review: **NOT_TRIGGERED** for these conventional bounded linker,
+serializer, command-routing, and benchmark increments; see
+`docs/patents/REVIEW_LOG.md`.
 
 ## Latest bounded C-string byte-view milestone
 
