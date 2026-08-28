@@ -48,10 +48,12 @@ pub use lexer::{LexError, LexErrorKind, Lexer, Span, Token, TokenKind};
 pub use linker::{
     ArchiveMember, ArchiveMembers, ElfImage, LinkDefinition, LinkInput, LinkInputSelection,
     LinkRelocation, LinkRelocationTarget, LinkedImage, LinkerError, MAX_ARCHIVE_MEMBERS,
-    MAX_LINK_DEFINITIONS, MAX_LINK_INPUTS, MAX_LINK_RELOCATIONS, PeImage, decode_unix_archive,
+    MAX_LINK_DEFINITIONS, MAX_LINK_INPUTS, MAX_LINK_RELOCATIONS, MAX_PE_RUNTIME_FUNCTIONS, PeImage,
+    PeRuntimeFunction, decode_unix_archive,
     decode_x86_64_coff, decode_x86_64_coff_text_fragment, decode_x86_64_coff_with_definitions,
     decode_x86_64_elf, decode_x86_64_elf_with_definitions, link_x86_64_elf_executable,
-    link_x86_64_pe, link_x86_64_static, select_ordered_static_link_inputs,
+    link_x86_64_pe, link_x86_64_pe_with_unwind, link_x86_64_static,
+    select_ordered_static_link_inputs,
     select_ordered_static_link_members, select_static_link_inputs, x86_64_coff_text_fragment_count,
     x86_64_coff_unwind_section_count,
 };

@@ -163,6 +163,14 @@ every fragment before object-atomic selection. Objects with unwind sections
 still reject before expansion, so ordinary unwind-bearing gnullvm objects are
 not yet admitted.
 
+The PE serializer now accepts up to 256 typed AMD64 runtime-function records.
+It resolves checked begin/end symbols and offsets, rejects empty unwind data or
+non-increasing ranges, places unwind bytes in the read-only NX section, sorts
+12-byte function-table records by begin RVA, and publishes the exact `.pdata`
+range through data-directory entry 3. The existing PE API delegates with an
+empty record set and remains byte-compatible. COFF `ADDR32NB` decoding and
+driver transport are still required before gnullvm unwind sections are admitted.
+
 After driver fragment expansion, the controlled one-object procedure measured
 MRML at 9.275 ms median and 9.361 ms mean versus pinned gnullvm rust-lld at
 26.598 ms median and 26.981 ms mean across 50 iterations after five warmups.

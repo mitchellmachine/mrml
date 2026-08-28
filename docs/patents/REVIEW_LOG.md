@@ -9335,3 +9335,12 @@ expanded count. It introduces no new object/archive format, relocation,
 resolution, deduplication, compression, executable-format, cryptographic, or
 loading algorithm. This technical screen is not legal advice or patent
 clearance.
+
+# 2026-08-28 — Typed AMD64 PE exception serialization
+
+Patent review: **NOT_TRIGGERED**. This increment serializes conventional AMD64
+PE runtime-function records, sorts them by resolved begin RVA, places existing
+unwind bytes in read-only output, and publishes the conventional exception data
+directory. It implements the documented PE format without a new unwind,
+exception-handling, relocation, compression, cryptographic, or loading
+algorithm. This technical screen is not legal advice or patent clearance.
