@@ -12093,6 +12093,22 @@ mod tests {
     }
 
     #[test]
+    fn runtime_stack_model_reserves_two_words_for_128_bit_integers() {
+        for integer in [crate::IntegerType::U128, crate::IntegerType::I128] {
+            assert_eq!(
+                runtime_type_stack_slots(RuntimeExpressionType::Integer(Some(integer))),
+                2
+            );
+        }
+        for integer in [crate::IntegerType::U64, crate::IntegerType::I64] {
+            assert_eq!(
+                runtime_type_stack_slots(RuntimeExpressionType::Integer(Some(integer))),
+                1
+            );
+        }
+    }
+
+    #[test]
     fn mrml_v1_codegen_rejects_multiword_integer_returns_at_the_type_span() {
         let source = "#[mrml_abi::export(version = 1)] pub fn value() -> u128 { 0 }";
         let module = Parser::new(source).parse_module::<2, 2>().unwrap();
