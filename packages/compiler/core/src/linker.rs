@@ -13,6 +13,7 @@ pub const MAX_ARCHIVE_MEMBERS: usize = 1024;
 pub const MAX_ARCHIVE_SYMBOLS: usize = 4096;
 const MAX_COFF_SECTIONS: usize = 256;
 const MAX_ELF_SECTIONS: usize = 2048;
+const MAX_ELF_COMDAT_GROUPS: usize = 4096;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum LinkerError {
@@ -37,6 +38,7 @@ pub enum LinkerError {
     TooManyArchiveMembers,
     TooManyArchiveSymbols,
     TooManyElfSections,
+    TooManyElfComdatGroups,
 }
 
 impl core::fmt::Display for LinkerError {
@@ -63,6 +65,7 @@ impl core::fmt::Display for LinkerError {
             Self::TooManyArchiveMembers => "archive member capacity exceeded",
             Self::TooManyArchiveSymbols => "archive symbol-index capacity exceeded",
             Self::TooManyElfSections => "selected ELF section capacity exceeded",
+            Self::TooManyElfComdatGroups => "ELF COMDAT group capacity exceeded",
         };
         formatter.write_str(message)
     }
@@ -2859,13 +2862,15 @@ pub fn select_x86_64_elf_sections(
     root_symbols: &[&str],
 ) -> Result<ElfSectionSelection, LinkerError> {
     let symbol_table = elf_symbol_table_view(object)?;
-    select_x86_64_elf_sections_from_view(object, root_symbols, symbol_table)
+    select_x86_64_elf_sections_from_view(object, root_symbols, symbol_table, 0, &[])
 }
 
 fn select_x86_64_elf_sections_from_view(
     object: &[u8],
     root_symbols: &[&str],
     symbol_table: ElfSymbolTableView<'_>,
+    object_index: usize,
+    discarded: &[ElfDiscardedComdatGroup<'_>],
 ) -> Result<ElfSectionSelection, LinkerError> {
     if root_symbols.is_empty() {
         return Err(LinkerError::EmptySymbol);
@@ -2900,6 +2905,9 @@ fn select_x86_64_elf_sections_from_view(
             if section >= section_count || !matches!(binding, 1 | 2) {
                 return Err(LinkerError::UndefinedSymbol);
             }
+            if elf_section_is_discarded(discarded, object_index, section) {
+                continue;
+            }
             selected[section] = true;
             found = true;
             break;
@@ -2912,59 +2920,30 @@ fn select_x86_64_elf_sections_from_view(
     loop {
         let mut changed = false;
         for group_index in 1..section_count {
-            let group_header = elf_section_header(section_offset, section_count, group_index)?;
-            if read_u32_elf(object, group_header + 4)? != 17 {
+            let Some((_signature, members)) =
+                elf_comdat_group_view(object, symbol_table, group_index)?
+            else {
                 continue;
-            }
-            if usize::try_from(read_u32_elf(object, group_header + 40)?)
-                .map_err(|_| LinkerError::OffsetOverflow)?
-                != symbols_index
-                || read_u64_elf(object, group_header + 56)? != 4
-            {
-                return Err(LinkerError::UnsupportedElf);
-            }
-            let signature_index = usize::try_from(read_u32_elf(object, group_header + 44)?)
-                .map_err(|_| LinkerError::OffsetOverflow)?;
-            let signature_offset = signature_index
-                .checked_mul(24)
-                .ok_or(LinkerError::OffsetOverflow)?;
-            let signature = symbols
-                .get(signature_offset..signature_offset + 24)
-                .ok_or(LinkerError::InvalidElf)?;
-            let signature_name = usize::try_from(read_u32_elf(signature, 0)?)
-                .map_err(|_| LinkerError::OffsetOverflow)?;
-            let signature_binding = *signature.get(4).ok_or(LinkerError::InvalidElf)? >> 4;
-            if signature_name == 0 || !matches!(signature_binding, 1 | 2) {
-                return Err(LinkerError::UnsupportedElf);
-            }
-            validate_symbol(elf_string(strings, signature_name)?)?;
-            let group = elf_section_contents(object, section_offset, section_count, group_index)?;
-            if group.len() < 8 || group.len() % 4 != 0 || read_u32_elf(group, 0)? != 1 {
-                return Err(LinkerError::UnsupportedElf);
-            }
+            };
             let mut selected_member = false;
-            for member in group[4..].chunks_exact(4) {
+            for member in members.chunks_exact(4) {
                 let member_index = usize::try_from(read_u32_elf(member, 0)?)
                     .map_err(|_| LinkerError::OffsetOverflow)?;
-                if member_index == 0 || member_index >= section_count {
-                    return Err(LinkerError::InvalidElf);
-                }
-                let member_header =
-                    elf_section_header(section_offset, section_count, member_index)?;
-                if read_u64_elf(object, member_header + 8)? & 0x200 == 0 {
-                    return Err(LinkerError::InvalidElf);
-                }
-                selected_member |= selected[member_index];
+                selected_member |= !elf_section_is_discarded(discarded, object_index, member_index)
+                    && selected[member_index];
             }
             if !selected_member {
                 continue;
             }
-            for member in group[4..].chunks_exact(4) {
+            for member in members.chunks_exact(4) {
                 let member_index = usize::try_from(read_u32_elf(member, 0)?)
                     .map_err(|_| LinkerError::OffsetOverflow)?;
                 let member_header =
                     elf_section_header(section_offset, section_count, member_index)?;
-                if read_u64_elf(object, member_header + 8)? & 0x2 != 0 && !selected[member_index] {
+                if !elf_section_is_discarded(discarded, object_index, member_index)
+                    && read_u64_elf(object, member_header + 8)? & 0x2 != 0
+                    && !selected[member_index]
+                {
                     selected[member_index] = true;
                     changed = true;
                 }
@@ -3007,6 +2986,9 @@ fn select_x86_64_elf_sections_from_view(
                 }
                 if dependency >= section_count {
                     return Err(LinkerError::InvalidElf);
+                }
+                if elf_section_is_discarded(discarded, object_index, dependency) {
+                    continue;
                 }
                 if !selected[dependency] {
                     selected[dependency] = true;
@@ -3084,6 +3066,46 @@ pub fn select_x86_64_elf_link_sections_detailed<'a>(
     for (index, object) in objects.iter().enumerate() {
         symbol_tables[index] = Some(elf_symbol_table_view(object)?);
     }
+    let mut comdat_winners = [None; MAX_ELF_COMDAT_GROUPS];
+    let mut comdat_winner_count = 0usize;
+    let mut comdat_group_count = 0usize;
+    let empty_discarded = ElfDiscardedComdatGroup {
+        object_index: 0,
+        members: &[],
+    };
+    let mut discarded = [empty_discarded; MAX_ELF_COMDAT_GROUPS];
+    let mut discarded_count = 0usize;
+    for (object_index, object) in objects.iter().enumerate() {
+        let symbol_table = symbol_tables[object_index].ok_or(LinkerError::InvalidElf)?;
+        for group_index in 1..symbol_table.section_count {
+            let Some((signature, members)) =
+                elf_comdat_group_view(object, symbol_table, group_index)?
+            else {
+                continue;
+            };
+            if comdat_group_count == MAX_ELF_COMDAT_GROUPS {
+                return Err(LinkerError::TooManyElfComdatGroups.into());
+            }
+            comdat_group_count += 1;
+            if comdat_winners[..comdat_winner_count].contains(&Some(signature)) {
+                if discarded_count == discarded.len() {
+                    return Err(LinkerError::TooManyElfComdatGroups.into());
+                }
+                discarded[discarded_count] = ElfDiscardedComdatGroup {
+                    object_index: u16::try_from(object_index)
+                        .map_err(|_| LinkerError::TooManyInputs)?,
+                    members,
+                };
+                discarded_count += 1;
+                continue;
+            }
+            if comdat_winner_count == comdat_winners.len() {
+                return Err(LinkerError::TooManyElfComdatGroups.into());
+            }
+            comdat_winners[comdat_winner_count] = Some(signature);
+            comdat_winner_count += 1;
+        }
+    }
     let mut unresolved = [None; MAX_ARCHIVE_SYMBOLS];
     unresolved[0] = Some(entry_symbol);
     let mut unresolved_length = 1usize;
@@ -3091,8 +3113,11 @@ pub fn select_x86_64_elf_link_sections_detailed<'a>(
     while cursor < unresolved_length {
         let symbol = unresolved[cursor].ok_or(LinkerError::InvalidElf)?;
         cursor += 1;
-        let Some(object_index) =
-            resolve_elf_object_definition(&symbol_tables[..objects.len()], symbol)?
+        let Some(object_index) = resolve_elf_object_definition(
+            &symbol_tables[..objects.len()],
+            &discarded[..discarded_count],
+            symbol,
+        )?
         else {
             return Err(ElfLinkSelectionError {
                 kind: LinkerError::UndefinedSymbol,
@@ -3100,8 +3125,13 @@ pub fn select_x86_64_elf_link_sections_detailed<'a>(
             });
         };
         let symbol_table = symbol_tables[object_index].ok_or(LinkerError::InvalidElf)?;
-        let addition =
-            select_x86_64_elf_sections_from_view(objects[object_index], &[symbol], symbol_table)?;
+        let addition = select_x86_64_elf_sections_from_view(
+            objects[object_index],
+            &[symbol],
+            symbol_table,
+            object_index,
+            &discarded[..discarded_count],
+        )?;
         let destination = &mut result.selections[object_index];
         for &section in addition.indices() {
             if destination.indices().contains(&section) {
@@ -3145,8 +3175,100 @@ struct ElfSymbolTableView<'a> {
     strings: &'a [u8],
 }
 
+#[derive(Clone, Copy)]
+struct ElfDiscardedComdatGroup<'a> {
+    object_index: u16,
+    members: &'a [u8],
+}
+
+fn elf_section_is_discarded(
+    groups: &[ElfDiscardedComdatGroup<'_>],
+    object_index: usize,
+    section_index: usize,
+) -> bool {
+    let Ok(object_index) = u16::try_from(object_index) else {
+        return false;
+    };
+    groups.iter().any(|group| {
+        group.object_index == object_index
+            && group.members.chunks_exact(4).any(|member| {
+                <[u8; 4]>::try_from(member)
+                    .ok()
+                    .map(u32::from_le_bytes)
+                    .and_then(|member| usize::try_from(member).ok())
+                    == Some(section_index)
+            })
+    })
+}
+
+fn elf_comdat_group_view<'a>(
+    object: &'a [u8],
+    symbol_table: ElfSymbolTableView<'a>,
+    group_index: usize,
+) -> Result<Option<(&'a str, &'a [u8])>, LinkerError> {
+    let group_header = elf_section_header(
+        symbol_table.section_offset,
+        symbol_table.section_count,
+        group_index,
+    )?;
+    if read_u32_elf(object, group_header + 4)? != 17 {
+        return Ok(None);
+    }
+    if usize::try_from(read_u32_elf(object, group_header + 40)?)
+        .map_err(|_| LinkerError::OffsetOverflow)?
+        != symbol_table.symbols_index
+        || read_u64_elf(object, group_header + 56)? != 4
+    {
+        return Err(LinkerError::UnsupportedElf);
+    }
+    let signature_index = usize::try_from(read_u32_elf(object, group_header + 44)?)
+        .map_err(|_| LinkerError::OffsetOverflow)?;
+    let signature_offset = signature_index
+        .checked_mul(24)
+        .ok_or(LinkerError::OffsetOverflow)?;
+    let signature = symbol_table
+        .symbols
+        .get(signature_offset..signature_offset + 24)
+        .ok_or(LinkerError::InvalidElf)?;
+    let signature_name =
+        usize::try_from(read_u32_elf(signature, 0)?).map_err(|_| LinkerError::OffsetOverflow)?;
+    let signature_binding = *signature.get(4).ok_or(LinkerError::InvalidElf)? >> 4;
+    if signature_name == 0 || !matches!(signature_binding, 1 | 2) {
+        return Err(LinkerError::UnsupportedElf);
+    }
+    let signature_name = elf_string(symbol_table.strings, signature_name)?;
+    validate_symbol(signature_name)?;
+    let group = elf_section_contents(
+        object,
+        symbol_table.section_offset,
+        symbol_table.section_count,
+        group_index,
+    )?;
+    if group.len() < 8 || group.len() % 4 != 0 || read_u32_elf(group, 0)? != 1 {
+        return Err(LinkerError::UnsupportedElf);
+    }
+    let members = &group[4..];
+    for member in members.chunks_exact(4) {
+        let member_index =
+            usize::try_from(read_u32_elf(member, 0)?).map_err(|_| LinkerError::OffsetOverflow)?;
+        if member_index == 0 || member_index >= symbol_table.section_count {
+            return Err(LinkerError::InvalidElf);
+        }
+        let member_header = elf_section_header(
+            symbol_table.section_offset,
+            symbol_table.section_count,
+            member_index,
+        )?;
+        if read_u64_elf(object, member_header + 8)? & 0x200 == 0 {
+            return Err(LinkerError::InvalidElf);
+        }
+    }
+    Ok(Some((signature_name, members)))
+}
+
 fn resolve_elf_object_definition(
     symbol_tables: &[Option<ElfSymbolTableView<'_>>],
+    discarded: &[ElfDiscardedComdatGroup<'_>],
     symbol: &str,
 ) -> Result<Option<usize>, LinkerError> {
     let mut weak = None;
@@ -3155,7 +3277,9 @@ fn resolve_elf_object_definition(
         let Some(symbol_table) = symbol_table else {
             return Err(LinkerError::InvalidElf);
         };
-        let Some(binding) = elf_object_definition_binding(*symbol_table, symbol)? else {
+        let Some(binding) =
+            elf_object_definition_binding(*symbol_table, discarded, object_index, symbol)?
+        else {
             continue;
         };
         match binding {
@@ -3172,6 +3296,8 @@ fn resolve_elf_object_definition(
 
 fn elf_object_definition_binding(
     symbol_table: ElfSymbolTableView<'_>,
+    discarded: &[ElfDiscardedComdatGroup<'_>],
+    object_index: usize,
     symbol_name: &str,
 ) -> Result<Option<ElfSelectedSymbolBinding>, LinkerError> {
     let symbols = symbol_table.symbols;
@@ -3190,6 +3316,9 @@ fn elf_object_definition_binding(
         }
         if section >= section_count {
             return Err(LinkerError::InvalidElf);
+        }
+        if elf_section_is_discarded(discarded, object_index, section) {
+            continue;
         }
         let binding = match *record.get(4).ok_or(LinkerError::InvalidElf)? >> 4 {
             1 => ElfSelectedSymbolBinding::Global,
@@ -7458,6 +7587,22 @@ mod tests {
             select_x86_64_elf_sections(&grouped_data[..data.len()], &["literal"]),
             Err(LinkerError::InvalidElf)
         );
+        grouped_data[group_offset + 8..group_offset + 12]
+            .copy_from_slice(&u32::try_from(readonly_index).unwrap().to_le_bytes());
+        let duplicate_group = grouped_data;
+        let grouped_link_selection = select_x86_64_elf_link_sections(
+            &[&grouped_data[..data.len()], &duplicate_group[..data.len()]],
+            "literal",
+        )
+        .unwrap();
+        assert_eq!(
+            grouped_link_selection.selections()[0].indices(),
+            &[
+                u16::try_from(text_index).unwrap(),
+                u16::try_from(readonly_index).unwrap(),
+            ]
+        );
+        assert_eq!(grouped_link_selection.selections()[1].indices(), &[]);
         let caller_selection = select_x86_64_elf_sections(caller.bytes(), &["entry"]).unwrap();
         let caller_inventory = inventory_x86_64_elf_symbols(caller.bytes()).unwrap();
         assert_eq!(

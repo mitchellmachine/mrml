@@ -1,5 +1,14 @@
 # Patent review log
 
+## 2026-08-28 — Ordered cross-object ELF COMDAT selection
+
+Patent review: **NOT_TRIGGERED**. This increment applies conventional ELF
+COMDAT first-signature selection before symbol resolution and section
+reachability, with a fixed group bound and sparse borrowed loser records. It
+adds no novel deduplication criterion, identical-code folding, hashing,
+compression, scheduling, cryptographic, or loader mechanism. This technical
+screen is not legal advice or patent clearance.
+
 ## 2026-08-28 — Bounded ELF section-group closure
 
 Patent review: **NOT_TRIGGERED**. This increment validates conventional ELF

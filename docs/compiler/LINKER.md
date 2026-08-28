@@ -796,9 +796,22 @@ its target section. A synthetic two-alloc-member group proves atomic closure,
 and the exact pinned libcore object's real `DW.ref.rust_eh_personality` COMDAT
 group passes the public driver path. The reachable-core comparison emitted the
 same 8,674-byte exit-42 MRML executable and measured 6.072 ms median versus
-7.323 ms for pinned rust-lld in that run. Cross-object duplicate COMDAT winner
-selection remains unsupported, so this is group-integrity and reachability
-evidence rather than complete COMDAT support.
+7.323 ms for pinned rust-lld in that run.
+
+Cross-object selection now inventories at most 4,096 validated COMDAT groups
+in input order before symbol resolution. The first exact signature wins;
+definitions and relocation edges in later groups are invisible to roots and
+section GC, while sparse borrowed loser-group views avoid a 512 KiB bitmap on
+ordinary links. Two independently compiled strong `helper` definitions return
+42 and 7. MRML and pinned rust-lld both returned 42 in first/second order and 7
+in second/first order, proving deterministic winner parity rather than merely
+accepting duplicate weak definitions. A third losing group references an
+intentionally absent symbol; both linkers discard its text and RELA members
+before unresolved-symbol closure and still produce the first provider's
+exit-42 result. Current 50-iteration/five-warmup samples
+measured MRML versus rust-lld at 5.206 versus 4.640 ms for the group-free tiny
+trait-object link and 5.617 versus 6.076 ms for reachable pinned libcore. The
+tiny path remains slower; no broad speed-superiority claim follows.
 
 The selected relocation path also admits conventional unsigned absolute-32
 `R_X86_64_32` records. It computes the ABI-defined `S + A` value only after
