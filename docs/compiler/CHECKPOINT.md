@@ -9,8 +9,8 @@ the named commit and current source.
 ## Recoverable baseline
 
 - Branch: `main`
-- Compiler checkpoint commit: `c88448a4`
-  (`compiler: decode bounded COFF text fragments`)
+- Compiler checkpoint commit: `4fa140eb`
+  (`compiler: expand COFF fragments in linker driver`)
 - Remote state when recorded: `origin/main` includes the bounded MRML-owned
   static-link core, exact MRML COFF and ELF64 ingestion, deterministic
   import-free PE32+/ELF64 executable serialization, explicit compiler-driver
@@ -181,6 +181,14 @@ object decodes, resolves, and links in the focused test; the full Windows suite
 passed with 698 core, 2 component, 10 conformance, 351 replacement, and 23
 semantic-execution tests. Driver fragment expansion and typed `.pdata`/`.xdata`
 serialization remain incomplete.
+
+Commit `4fa140eb` expands each driver COFF object to its bounded text-fragment
+count, propagates archive/member identity to every fragment, and allocates
+relocation/definition arenas to the exact expanded count. Four driver tests and
+the Windows release build passed. The controlled 93-byte object benchmark
+measured MRML at 9.275 ms median versus pinned gnullvm rust-lld at 26.598 ms;
+both 1,024-byte outputs returned 42. This is narrow regression evidence only.
+Unwind-bearing objects still fail closed before expansion.
 
 Patent review: **NOT_TRIGGERED** for these conventional bounded linker,
 serializer, command-routing, and benchmark increments; see
