@@ -28,7 +28,23 @@ pub fn read_file(path: &str) -> Result<Vector<u8>, FileError> {
 
 pub fn read_file_bounded(path: &str, limit: usize) -> Result<Vector<u8>, FileError> {
     let mut file = File::open(path)?;
-    let mut bytes = Vector::new();
+    let (mut bytes, expected_length) = match file.len() {
+        Ok(length) => {
+            let length = usize::try_from(length).map_err(|_| FileError::ReadFailed)?;
+            if length > limit {
+                return Err(FileError::ReadFailed);
+            }
+            (
+                Vector::with_capacity(length).map_err(|_| FileError::ReadFailed)?,
+                Some(length),
+            )
+        }
+        Err(_) => (Vector::new(), None),
+    };
+    if let Some(length) = expected_length {
+        bytes.resize(length, 0);
+        file.read_exact(&mut bytes)?;
+    }
     let mut chunk = [0u8; 8192];
     loop {
         let read = file.read(&mut chunk)?;

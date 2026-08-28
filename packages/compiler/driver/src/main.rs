@@ -26,7 +26,7 @@ const MAX_SOURCE_BYTES: usize = 1024 * 1024;
 #[cfg_attr(test, allow(dead_code))]
 const MAX_OBJECT_BYTES: usize = 4096;
 #[cfg_attr(test, allow(dead_code))]
-const MAX_ARCHIVE_BYTES: usize = MAX_OBJECT_BYTES * MAX_LINK_INPUTS;
+const MAX_ARCHIVE_BYTES: usize = 64 * 1024 * 1024;
 #[cfg_attr(test, allow(dead_code))]
 const MAX_CODE_BYTES: usize = 4 * 1024;
 #[cfg_attr(test, allow(dead_code))]

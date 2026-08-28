@@ -259,7 +259,10 @@ fn decode_gnu_archive_index<'a>(
             .checked_add(length + 1)
             .ok_or(LinkerError::OffsetOverflow)?;
     }
-    if name_cursor != index.len() {
+    let aligned_padding = name_cursor & 1 == 1
+        && index.len() == name_cursor + 1
+        && index.get(name_cursor) == Some(&0);
+    if name_cursor != index.len() && !aligned_padding {
         return Err(LinkerError::InvalidArchive);
     }
     Ok(count)
@@ -4551,6 +4554,19 @@ mod tests {
         assert_eq!(
             decode_unix_archive(&wide_archive).unwrap().symbols(),
             members.symbols()
+        );
+
+        let mut padded_archive = b"!<arch>\n".to_vec();
+        let mut padded = std::vec![0, 0, 0, 1, 0, 0, 0, 82];
+        padded.extend_from_slice(b"even\0\0");
+        append_archive_member(&mut padded_archive, "/", &padded);
+        append_archive_member(&mut padded_archive, "even.o/", b"object");
+        assert_eq!(
+            decode_unix_archive(&padded_archive).unwrap().symbols(),
+            &[ArchiveSymbol {
+                symbol: "even",
+                member_index: 0
+            }]
         );
     }
 

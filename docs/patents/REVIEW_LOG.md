@@ -1,5 +1,15 @@
 # Patent review log
 
+## 2026-08-28 — Large LLVM archive admission and exact-length reads
+
+Patent review: **NOT_TRIGGERED** for raising an explicit bounded host-tool file
+limit, reserving a byte vector from validated file length, reading that known
+prefix directly, and accepting exactly one conventional GNU-index alignment
+NUL after an odd-length name area. These are ordinary bounded I/O allocation
+and archive-format validation rules; they add no compression, hashing,
+parallelization, binary rewriting, cryptography, or hardware mechanism. This
+technical screen is not patent clearance.
+
 ## 2026-08-28 — Unresolved-symbol archive work queue
 
 Patent review: **NOT_TRIGGERED** for replacing repeated full index/reference

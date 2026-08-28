@@ -655,6 +655,29 @@ measured 4.902 ms median versus rust-lld at 4.886 ms in the same run, so that
 case is a near tie and provides no superiority evidence. These are hosted
 regression measurements, not broad performance claims.
 
+Large ordinary linker inputs now have an explicit 64 MiB per-file read bound
+instead of inheriting the earlier 1 MiB small-object aggregate. The shared
+bounded reader uses validated file length to reject oversized inputs before
+allocation, reserve exactly once, and fill the known prefix directly before
+checking for concurrent growth. GNU index decoding also accepts LLVM's exact
+single NUL needed to align an otherwise odd-length name area; the padding is
+allowed only after every declared name, only when the consumed length is odd,
+and arbitrary trailing bytes remain invalid.
+
+Those changes admit the exact ORACLE-0002 `libcore` archive: 3,150,398 bytes,
+551 indexed symbols, metadata members, and one 3,104,472-byte rustc object.
+When appended to an independently authored entry that needs no core symbol,
+MRML skipped the object, emitted 8,264 bytes, and exited 42; rust-lld emitted
+1,664 bytes with the same behavior. A 50-iteration/five-warmup measurement
+recorded MRML at 6.769 ms median and 6.742 ms mean versus pinned rust-lld at
+5.634 ms median and 5.661 ms mean. MRML is slower on this metadata-dominated
+case, so faster large-file ingestion remains an explicit optimization gate.
+Windows passed 721 core unit tests, all integration suites, 44 runtime tests,
+and five driver tests. Linux passed the 721 core unit tests, 44 runtime tests,
+and five driver tests; one concurrently modified wide-integer semantic
+integration probe failed with `RuntimeExpressionUnsupported`, outside linker
+and runtime files, and was preserved untouched.
+
 This increment does **not** emit PE imports/exports/base
 relocations/debug data, emit ELF dynamic metadata/interpreter/PIE/sections,
 read thin archives or general `.rlib` contents, perform section GC or ICF, link
