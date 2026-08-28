@@ -9,8 +9,8 @@ the named commit and current source.
 ## Recoverable baseline
 
 - Branch: `main`
-- Compiler checkpoint commit: `923f70b0`
-  (`compiler: serialize typed PE unwind records`)
+- Compiler checkpoint commit: `325dc325`
+  (`compiler: decode bounded COFF unwind records`)
 - Remote state when recorded: `origin/main` includes the bounded MRML-owned
   static-link core, exact MRML COFF and ELF64 ingestion, deterministic
   import-free PE32+/ELF64 executable serialization, explicit compiler-driver
@@ -197,6 +197,13 @@ directory. The legacy API delegates with no records. The full Windows compiler
 suite passed with 699 core, 2 component, 10 conformance, 351 replacement, and
 24 semantic-execution tests. COFF `ADDR32NB` decoding and driver transport are
 still incomplete, so gnullvm unwind-bearing objects remain rejected.
+
+Commit `325dc325` decodes bounded 12-byte `.pdata$...` records only when all
+three fields carry exact AMD64 `ADDR32NB` relocations. It maps checked text
+section targets to external definitions and requires a nonempty zero-offset
+`.xdata$...` target. The full Windows suite passed with 700 core, 2 component,
+10 conformance, 351 replacement, and 24 semantic-execution tests. Driver
+selection and transport of decoded records remain incomplete.
 
 Patent review: **NOT_TRIGGERED** for these conventional bounded linker,
 serializer, command-routing, and benchmark increments; see
