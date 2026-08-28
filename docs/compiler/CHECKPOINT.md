@@ -9,8 +9,8 @@ the named commit and current source.
 ## Recoverable baseline
 
 - Branch: `main`
-- Compiler checkpoint commit: `34b6c6ef`
-  (`compiler: lazily extract indexed archive members`)
+- Compiler checkpoint commit: `42bc337b`
+  (`compiler: scale lazy archive inventories`)
 - Remote state when recorded: `origin/main` includes the bounded MRML-owned
   static-link core, exact MRML COFF and ELF64 ingestion, deterministic
   import-free PE32+/ELF64 executable serialization, explicit compiler-driver
@@ -60,6 +60,17 @@ against all prior accepted probes. Keep Cargo on edition 2024 until a newer
 named edition can be adopted through a pinned, workspace-wide migration.
 
 ## Latest bounded linker milestone
+
+Commit `42bc337b` separates indexed archive inventory from admitted linker
+work. The decoder can inventory at most 1,024 independently framed ordinary
+members while the existing final bound remains 256 selected objects/fragments
+and 4,096 index symbols. A 301-member focused archive containing one valid
+indexed entry object and 300 unreferenced invalid payloads selected only the
+entry on both pinned platforms, proving that the larger inventory does not
+eagerly decode its irrelevant tail. Windows and Linux each retained 720
+compiler-core passes and five driver passes. This is bounded synthetic scaling
+evidence, not a representative `.rlib` throughput result; large real-library
+benchmarks and the remaining format/relocation gates are still required.
 
 Commit `34b6c6ef` uses a validated GNU archive index to compute a bounded,
 left-to-right unresolved-symbol closure before admitting members to the full
