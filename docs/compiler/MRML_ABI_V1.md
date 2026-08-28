@@ -74,15 +74,37 @@ either native calling convention. The later lowering must explicitly describe
 registers, stack slots, indirect values, and caller/callee obligations for each
 target rather than inheriting Rust or C aggregate rules.
 
+## Initial x86-64 call classification
+
+V1 decomposes each admitted parameter into zero, one, or two ordered eight-byte
+words. A two-word value is the low-address word followed by the high-address
+word; for slices and strings this is the data pointer followed by the unsigned
+64-bit length. Words consume target argument locations in source order and may
+straddle the final argument register and the first stack slot.
+
+On x86-64 System V, the first six words use `rdi`, `rsi`, `rdx`, `rcx`, `r8`,
+and `r9`; later words start at callee-entry `[rsp + 8]`. On x86-64 Windows, the
+first four words use `rcx`, `rdx`, `r8`, and `r9`; later words start after the
+return address and required 32-byte home area at callee-entry `[rsp + 40]`.
+Each later word advances by eight bytes. Callers preserve each platform's
+ordinary stack-alignment and Windows home-area obligations.
+
+Zero-word unit returns use no register. One-word returns use `rax`. Two-word
+returns use `rax` for the low or first word and `rdx` for the high or second
+word. Sub-eight-byte unsigned integers, `bool`, `char`, pointers, and references
+are zero-extended in their word; signed integers are sign-extended. Unused bits
+are therefore deterministic. This is an MRML v1 convention, not a claim that
+native C or Rust aggregate classification uses these rules.
+
 ## Current implementation boundary
 
-The central identity, bounded facade parser, initial signature classifier, and
-x86-64 in-memory value layout are implemented at this checkpoint.
-Ownership/borrowing rules beyond ordinary language checking, System V and
-Windows parameter/return lowering, link compatibility, and external execution
-evidence remain required before an attributed function can be emitted. Code
-generation therefore continues to reject `MrmlV1` rather than silently routing
-it through the C ABI.
+The central identity, bounded facade parser, initial signature classifier,
+x86-64 in-memory value layout, and abstract call-location planner are implemented
+at this checkpoint. Ownership/borrowing rules beyond ordinary language
+checking, machine-code lowering from the plan, link compatibility, and external
+execution evidence remain required before an attributed function can be
+emitted. Code generation therefore continues to reject `MrmlV1` rather than
+silently routing it through the C ABI.
 
 Arrays, tuples, user aggregates, and indirect returns are not admitted. This
 checkpoint also does not establish that existing

@@ -73,6 +73,54 @@ pub struct MrmlV1Layout {
     field_count: usize,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum MrmlV1Register {
+    Rax,
+    Rcx,
+    Rdx,
+    Rdi,
+    Rsi,
+    R8,
+    R9,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum MrmlV1CallLocation {
+    Register(MrmlV1Register),
+    CalleeStack { offset: u32 },
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct MrmlV1CallValue {
+    words: [Option<MrmlV1CallLocation>; 2],
+    word_count: usize,
+}
+
+impl MrmlV1CallValue {
+    pub fn words(&self) -> &[Option<MrmlV1CallLocation>] {
+        &self.words[..self.word_count]
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct MrmlV1CallPlan<const MAX_PARAMETERS: usize> {
+    parameters: [Option<MrmlV1CallValue>; MAX_PARAMETERS],
+    parameter_count: usize,
+    pub return_value: MrmlV1CallValue,
+    pub stack_word_count: usize,
+}
+
+impl<const MAX_PARAMETERS: usize> MrmlV1CallPlan<MAX_PARAMETERS> {
+    pub fn parameters(&self) -> &[Option<MrmlV1CallValue>] {
+        &self.parameters[..self.parameter_count]
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct MrmlV1CallPlanError {
+    pub parameter: usize,
+}
+
 impl MrmlV1Layout {
     pub fn fields(&self) -> &[Option<MrmlV1LayoutField>] {
         &self.fields[..self.field_count]
@@ -205,6 +253,97 @@ pub const fn layout_mrml_v1_type(target: MrmlV1Target, ty: MrmlV1Type) -> MrmlV1
             field_count: 2,
         },
     }
+}
+
+const fn parameter_register(target: MrmlV1Target, word: usize) -> Option<MrmlV1Register> {
+    match (target, word) {
+        (MrmlV1Target::X86_64SystemV, 0) => Some(MrmlV1Register::Rdi),
+        (MrmlV1Target::X86_64SystemV, 1) => Some(MrmlV1Register::Rsi),
+        (MrmlV1Target::X86_64SystemV, 2) => Some(MrmlV1Register::Rdx),
+        (MrmlV1Target::X86_64SystemV, 3) => Some(MrmlV1Register::Rcx),
+        (MrmlV1Target::X86_64SystemV, 4) => Some(MrmlV1Register::R8),
+        (MrmlV1Target::X86_64SystemV, 5) => Some(MrmlV1Register::R9),
+        (MrmlV1Target::X86_64Windows, 0) => Some(MrmlV1Register::Rcx),
+        (MrmlV1Target::X86_64Windows, 1) => Some(MrmlV1Register::Rdx),
+        (MrmlV1Target::X86_64Windows, 2) => Some(MrmlV1Register::R8),
+        (MrmlV1Target::X86_64Windows, 3) => Some(MrmlV1Register::R9),
+        _ => None,
+    }
+}
+
+const fn register_word_count(target: MrmlV1Target) -> usize {
+    match target {
+        MrmlV1Target::X86_64SystemV => 6,
+        MrmlV1Target::X86_64Windows => 4,
+    }
+}
+
+const fn first_stack_offset(target: MrmlV1Target) -> u32 {
+    match target {
+        MrmlV1Target::X86_64SystemV => 8,
+        MrmlV1Target::X86_64Windows => 40,
+    }
+}
+
+fn parameter_word_location(
+    target: MrmlV1Target,
+    word: usize,
+    parameter: usize,
+) -> Result<MrmlV1CallLocation, MrmlV1CallPlanError> {
+    if let Some(register) = parameter_register(target, word) {
+        return Ok(MrmlV1CallLocation::Register(register));
+    }
+    let stack_word = word - register_word_count(target);
+    let byte_offset = stack_word
+        .checked_mul(8)
+        .and_then(|offset| {
+            usize::try_from(first_stack_offset(target))
+                .ok()?
+                .checked_add(offset)
+        })
+        .and_then(|offset| u32::try_from(offset).ok())
+        .ok_or(MrmlV1CallPlanError { parameter })?;
+    Ok(MrmlV1CallLocation::CalleeStack {
+        offset: byte_offset,
+    })
+}
+
+fn call_word_count(target: MrmlV1Target, ty: MrmlV1Type) -> usize {
+    usize::from(layout_mrml_v1_type(target, ty).size).div_ceil(8)
+}
+
+pub fn plan_mrml_v1_call<const MAX_PARAMETERS: usize>(
+    target: MrmlV1Target,
+    signature: &MrmlV1Signature<MAX_PARAMETERS>,
+) -> Result<MrmlV1CallPlan<MAX_PARAMETERS>, MrmlV1CallPlanError> {
+    let mut parameters = [None; MAX_PARAMETERS];
+    let mut next_word = 0usize;
+    for (index, ty) in signature.parameters().iter().flatten().enumerate() {
+        let word_count = call_word_count(target, *ty);
+        let mut words = [None; 2];
+        for word in &mut words[..word_count] {
+            *word = Some(parameter_word_location(target, next_word, index)?);
+            next_word += 1;
+        }
+        parameters[index] = Some(MrmlV1CallValue { words, word_count });
+    }
+    let return_word_count = call_word_count(target, signature.return_type);
+    let mut return_words = [None; 2];
+    if return_word_count >= 1 {
+        return_words[0] = Some(MrmlV1CallLocation::Register(MrmlV1Register::Rax));
+    }
+    if return_word_count == 2 {
+        return_words[1] = Some(MrmlV1CallLocation::Register(MrmlV1Register::Rdx));
+    }
+    Ok(MrmlV1CallPlan {
+        parameters,
+        parameter_count: signature.parameter_count,
+        return_value: MrmlV1CallValue {
+            words: return_words,
+            word_count: return_word_count,
+        },
+        stack_word_count: next_word.saturating_sub(register_word_count(target)),
+    })
 }
 
 pub fn classify_mrml_v1_type(text: &str) -> Result<MrmlV1Type, MrmlV1SignatureErrorKind> {
@@ -398,5 +537,49 @@ mod tests {
             assert_eq!(layout.alignment, size);
             assert_eq!(layout.fields().len(), 1);
         }
+    }
+
+    #[test]
+    fn plans_system_v_view_words_and_stack_offsets() {
+        let function = exported(concat!(
+            "#[mrml_abi::export(version = 1)] pub fn view(",
+            "a: u64, b: u64, c: u64, d: u64, e: u64, input: &[u8]) -> &[u8] { input }"
+        ));
+        let signature = validate_mrml_v1_signature(&function).unwrap();
+        let plan = plan_mrml_v1_call(MrmlV1Target::X86_64SystemV, &signature).unwrap();
+        assert_eq!(
+            plan.parameters()[5].unwrap().words(),
+            &[
+                Some(MrmlV1CallLocation::Register(MrmlV1Register::R9)),
+                Some(MrmlV1CallLocation::CalleeStack { offset: 8 }),
+            ]
+        );
+        assert_eq!(plan.stack_word_count, 1);
+        assert_eq!(
+            plan.return_value.words(),
+            &[
+                Some(MrmlV1CallLocation::Register(MrmlV1Register::Rax)),
+                Some(MrmlV1CallLocation::Register(MrmlV1Register::Rdx)),
+            ]
+        );
+    }
+
+    #[test]
+    fn plans_windows_shadow_space_and_ordered_view_words() {
+        let function = exported(concat!(
+            "#[mrml_abi::export(version = 1)] pub fn view(",
+            "a: u64, b: u64, c: u64, input: &str) { }"
+        ));
+        let signature = validate_mrml_v1_signature(&function).unwrap();
+        let plan = plan_mrml_v1_call(MrmlV1Target::X86_64Windows, &signature).unwrap();
+        assert_eq!(
+            plan.parameters()[3].unwrap().words(),
+            &[
+                Some(MrmlV1CallLocation::Register(MrmlV1Register::R9)),
+                Some(MrmlV1CallLocation::CalleeStack { offset: 40 }),
+            ]
+        );
+        assert_eq!(plan.stack_word_count, 1);
+        assert!(plan.return_value.words().is_empty());
     }
 }
