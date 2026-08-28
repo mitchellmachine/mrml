@@ -1,21 +1,24 @@
 #![no_std]
 #![cfg_attr(not(test), no_main)]
 
-use mrml_error::{anyhow, Result};
-use mrml_runtime::{mrml_println as println, Text, Vector};
+#[cfg(test)]
+extern crate std;
+
+use mrml_error::{Result, anyhow};
+use mrml_runtime::{Text, Vector, mrml_println as println};
 use mrml_rustc::{
-    compile_source_function_with_options, decode_unix_archive,
-    decode_x86_64_coff_runtime_functions, decode_x86_64_coff_text_fragment,
+    CodegenOptions, ElfUnwindData, ElfUnwindRelocation, ElfWritableAbsoluteRelocation,
+    ElfWritableAbsoluteTarget, ElfWritableData, ElfWritableReference, ElfWritableTarget,
+    LinkDefinition, LinkDefinitionTarget, LinkInput, LinkRelocation, LinkRelocationTarget,
+    MAX_ARCHIVE_MEMBERS, MAX_ARCHIVE_SYMBOLS, MAX_LINK_DEFINITIONS, MAX_LINK_INPUTS,
+    MAX_LINK_RELOCATIONS, MAX_PE_RUNTIME_FUNCTIONS, ObjectFormat, PeRuntimeFunction,
+    PeWritableData, PeWritableRelocation, TargetLayout, compile_source_function_with_options,
+    decode_unix_archive, decode_x86_64_coff_runtime_functions, decode_x86_64_coff_text_fragment,
     decode_x86_64_coff_writable_data_fragment, decode_x86_64_elf_unwind,
     decode_x86_64_elf_with_definitions, decode_x86_64_elf_writable,
     link_x86_64_elf_executable_with_unwind_and_writable, link_x86_64_pe_with_data_and_unwind,
     select_ordered_static_link_members, x86_64_coff_text_fragment_count,
-    x86_64_coff_writable_section_count, CodegenOptions, ElfUnwindData, ElfUnwindRelocation,
-    ElfWritableAbsoluteRelocation, ElfWritableAbsoluteTarget, ElfWritableData,
-    ElfWritableReference, ElfWritableTarget, LinkDefinition, LinkDefinitionTarget, LinkInput,
-    LinkRelocation, LinkRelocationTarget, ObjectFormat, PeRuntimeFunction, PeWritableData,
-    PeWritableRelocation, TargetLayout, MAX_LINK_DEFINITIONS, MAX_LINK_INPUTS,
-    MAX_LINK_RELOCATIONS, MAX_PE_RUNTIME_FUNCTIONS,
+    x86_64_coff_writable_section_count,
 };
 
 #[cfg_attr(test, allow(dead_code))]
@@ -86,7 +89,11 @@ fn application_main() -> Result<()> {
             return Err(anyhow!("refusing to overwrite compiler output"));
         }
         let objects = read_link_objects(&arguments[2..arguments.len() - 4])?;
-        let object_refs = link_object_refs(&objects)?;
+        let object_refs = link_object_refs(
+            &objects,
+            ObjectFormat::Coff,
+            &arguments[arguments.len() - 3],
+        )?;
         return write_linked_pe(
             &object_refs.bytes,
             &object_refs.archive_group,
@@ -105,7 +112,11 @@ fn application_main() -> Result<()> {
             return Err(anyhow!("refusing to overwrite compiler output"));
         }
         let objects = read_link_objects(&arguments[2..arguments.len() - 4])?;
-        let object_refs = link_object_refs(&objects)?;
+        let object_refs = link_object_refs(
+            &objects,
+            ObjectFormat::Elf64,
+            &arguments[arguments.len() - 3],
+        )?;
         return write_linked_elf(
             &object_refs.bytes,
             &object_refs.archive_group,
@@ -197,20 +208,69 @@ fn read_link_objects(paths: &[Text]) -> Result<Vector<Vector<u8>>> {
     Ok(objects)
 }
 
-fn link_object_refs(objects: &[Vector<u8>]) -> Result<LinkObjectRefs<'_>> {
-    let mut refs = Vector::with_capacity(MAX_LINK_INPUTS)
+fn link_object_refs<'a>(
+    objects: &'a [Vector<u8>],
+    format: ObjectFormat,
+    entry: &'a str,
+) -> Result<LinkObjectRefs<'a>> {
+    let mut refs: Vector<&'a [u8]> = Vector::with_capacity(MAX_LINK_INPUTS)
         .map_err(|_| anyhow!("could not allocate link input reference list"))?;
     let mut archive_group = Vector::with_capacity(MAX_LINK_INPUTS)
         .map_err(|_| anyhow!("could not allocate link input origin list"))?;
     let mut archive_member = Vector::with_capacity(MAX_LINK_INPUTS)
         .map_err(|_| anyhow!("could not allocate link member origin list"))?;
+    let mut referenced = Vector::with_capacity(MAX_ARCHIVE_SYMBOLS)
+        .map_err(|_| anyhow!("could not allocate unresolved-symbol list"))?;
+    let mut defined = Vector::with_capacity(MAX_ARCHIVE_SYMBOLS)
+        .map_err(|_| anyhow!("could not allocate defined-symbol list"))?;
+    referenced
+        .try_push(entry)
+        .map_err(|_| anyhow!("could not allocate unresolved-symbol list"))?;
     let mut next_archive_group = 1u16;
+    let mut indexed_selection_safe = true;
+    let mut indexed_selection_initialized = false;
     for object in objects {
         if object.get(..8) == Some(b"!<arch>\n") {
             let archive = decode_unix_archive(object).map_err(mrml_error::message)?;
-            let mut next_archive_member = 1u16;
-            for member in archive.members() {
+            let mut selected = [false; MAX_ARCHIVE_MEMBERS];
+            if archive.symbols().is_empty() || !indexed_selection_safe {
+                selected[..archive.members().len()].fill(true);
+                indexed_selection_safe = false;
+            } else {
+                if !indexed_selection_initialized {
+                    for prior in &refs {
+                        scan_link_object_symbols(prior, format, &mut referenced, &mut defined)?;
+                    }
+                    indexed_selection_initialized = true;
+                }
+                loop {
+                    let candidate = archive.symbols().iter().find(|candidate| {
+                        !selected[candidate.member_index]
+                            && referenced.iter().any(|symbol| *symbol == candidate.symbol)
+                            && !defined.iter().any(|symbol| *symbol == candidate.symbol)
+                    });
+                    let Some(candidate) = candidate else {
+                        break;
+                    };
+                    selected[candidate.member_index] = true;
+                    scan_link_object_symbols(
+                        archive.members()[candidate.member_index].bytes,
+                        format,
+                        &mut referenced,
+                        &mut defined,
+                    )?;
+                    if !defined.iter().any(|symbol| *symbol == candidate.symbol) {
+                        return Err(anyhow!(
+                            "archive symbol index does not match its object member"
+                        ));
+                    }
+                }
+            }
+            for (member_index, member) in archive.members().iter().enumerate() {
                 if member.name == "lib.rmeta" || member.name == "lib.rmeta-link" {
+                    continue;
+                }
+                if !selected[member_index] {
                     continue;
                 }
                 if refs.len() == MAX_LINK_INPUTS {
@@ -222,11 +282,11 @@ fn link_object_refs(objects: &[Vector<u8>]) -> Result<LinkObjectRefs<'_>> {
                     .try_push(next_archive_group)
                     .map_err(|_| anyhow!("could not allocate link input origin list"))?;
                 archive_member
-                    .try_push(next_archive_member)
+                    .try_push(
+                        u16::try_from(member_index + 1)
+                            .map_err(|_| anyhow!("archive member identity overflow"))?,
+                    )
                     .map_err(|_| anyhow!("could not allocate link member origin list"))?;
-                next_archive_member = next_archive_member
-                    .checked_add(1)
-                    .ok_or_else(|| anyhow!("archive member identity overflow"))?;
             }
             next_archive_group = next_archive_group
                 .checked_add(1)
@@ -240,6 +300,9 @@ fn link_object_refs(objects: &[Vector<u8>]) -> Result<LinkObjectRefs<'_>> {
             archive_member
                 .try_push(0)
                 .map_err(|_| anyhow!("could not allocate link member origin list"))?;
+            if indexed_selection_safe && indexed_selection_initialized {
+                scan_link_object_symbols(object, format, &mut referenced, &mut defined)?;
+            }
         }
     }
     if refs.is_empty() {
@@ -250,6 +313,68 @@ fn link_object_refs(objects: &[Vector<u8>]) -> Result<LinkObjectRefs<'_>> {
         archive_group,
         archive_member,
     })
+}
+
+fn scan_link_object_symbols<'a>(
+    object: &'a [u8],
+    format: ObjectFormat,
+    referenced: &mut Vector<&'a str>,
+    defined: &mut Vector<&'a str>,
+) -> Result<()> {
+    let fragment_count = match format {
+        ObjectFormat::Coff => x86_64_coff_text_fragment_count(object)
+            .map_err(|_| anyhow!("could not count COFF archive member fragments"))?,
+        ObjectFormat::Elf64 => 1,
+    };
+    for fragment_index in 0..fragment_count {
+        let mut relocations = [LinkRelocation {
+            offset: 0,
+            target: LinkRelocationTarget::Symbol("unused"),
+            addend: 0,
+        }; MAX_LINK_RELOCATIONS];
+        let mut definitions = [LinkDefinition {
+            symbol: "unused",
+            target: LinkDefinitionTarget::Text(0),
+        }; MAX_LINK_DEFINITIONS];
+        let input = match format {
+            ObjectFormat::Coff => decode_x86_64_coff_text_fragment(
+                object,
+                fragment_index,
+                &mut relocations,
+                &mut definitions,
+            ),
+            ObjectFormat::Elf64 => {
+                decode_x86_64_elf_with_definitions(object, &mut relocations, &mut definitions)
+            }
+        }
+        .map_err(|_| anyhow!("could not decode archive selection symbols"))?;
+        for symbol in core::iter::once(input.symbol).chain(
+            input
+                .additional_definitions
+                .iter()
+                .map(|definition| definition.symbol),
+        ) {
+            if !defined.iter().any(|existing| *existing == symbol) {
+                defined
+                    .try_push(symbol)
+                    .map_err(|_| anyhow!("defined-symbol capacity exceeded"))?;
+            }
+        }
+        for relocation in input.relocations {
+            let symbol = match relocation.target {
+                LinkRelocationTarget::Symbol(symbol)
+                | LinkRelocationTarget::GotPcRelativeSymbol(symbol)
+                | LinkRelocationTarget::RequiredSymbol(symbol) => symbol,
+                _ => continue,
+            };
+            if !referenced.iter().any(|existing| *existing == symbol) {
+                referenced
+                    .try_push(symbol)
+                    .map_err(|_| anyhow!("referenced-symbol capacity exceeded"))?;
+            }
+        }
+    }
+    Ok(())
 }
 
 fn decode_link_inputs<'data, 'relocations, 'definitions>(
@@ -907,12 +1032,33 @@ mrml_runtime::mrml_entrypoint!(application_main);
 mod tests {
     use super::*;
 
+    fn run_with_linker_stack(test: fn()) {
+        std::thread::Builder::new()
+            .stack_size(16 * 1024 * 1024)
+            .spawn(test)
+            .unwrap()
+            .join()
+            .unwrap();
+    }
+
     fn append_archive_member(archive: &mut Vector<u8>, name: &str, bytes: &[u8]) {
         let mut header = [b' '; 60];
         let name = name.as_bytes();
         header[..name.len()].copy_from_slice(name);
-        assert!(bytes.len() < 10);
-        header[48] = b'0' + u8::try_from(bytes.len()).unwrap();
+        let mut size = bytes.len();
+        let mut digits = [0u8; 10];
+        let mut count = 0usize;
+        loop {
+            digits[count] = b'0' + u8::try_from(size % 10).unwrap();
+            count += 1;
+            size /= 10;
+            if size == 0 {
+                break;
+            }
+        }
+        for index in 0..count {
+            header[48 + index] = digits[count - index - 1];
+        }
         header[58..60].copy_from_slice(b"`\n");
         for byte in header.into_iter().chain(bytes.iter().copied()) {
             archive.try_push(byte).unwrap();
@@ -981,15 +1127,78 @@ mod tests {
 
     #[test]
     fn preserves_archive_and_member_identity_before_fragment_expansion() {
-        let mut archive = Vector::with_capacity(256).unwrap();
+        run_with_linker_stack(preserves_archive_and_member_identity_on_linker_stack);
+    }
+
+    fn preserves_archive_and_member_identity_on_linker_stack() {
+        let first = compile_source_function_with_options::<4096, 4096, 8, 8, 8, 32>(
+            "#[unsafe(no_mangle)] pub extern \"C\" fn first() -> i32 { 1 }",
+            "first",
+            ObjectFormat::Elf64,
+            TargetLayout::X86_64,
+            CodegenOptions::CHECKED,
+        )
+        .unwrap();
+        let second = compile_source_function_with_options::<4096, 4096, 8, 8, 8, 32>(
+            "#[unsafe(no_mangle)] pub extern \"C\" fn second() -> i32 { 2 }",
+            "second",
+            ObjectFormat::Elf64,
+            TargetLayout::X86_64,
+            CodegenOptions::CHECKED,
+        )
+        .unwrap();
+        let explicit = compile_source_function_with_options::<4096, 4096, 8, 8, 8, 32>(
+            "#[unsafe(no_mangle)] pub extern \"C\" fn entry() -> i32 { 3 }",
+            "entry",
+            ObjectFormat::Elf64,
+            TargetLayout::X86_64,
+            CodegenOptions::CHECKED,
+        )
+        .unwrap();
+        let mut archive = Vector::with_capacity(16 * 1024).unwrap();
         for byte in b"!<arch>\n" {
             archive.try_push(*byte).unwrap();
         }
-        append_archive_member(&mut archive, "first.o/", b"one");
-        append_archive_member(&mut archive, "second.o/", b"two");
-        let objects = [archive, Vector::from(*b"explicit")];
-        let refs = link_object_refs(&objects).unwrap();
+        append_archive_member(&mut archive, "first.o/", first.bytes());
+        append_archive_member(&mut archive, "second.o/", second.bytes());
+        let mut explicit_bytes = Vector::with_capacity(explicit.bytes().len()).unwrap();
+        for byte in explicit.bytes() {
+            explicit_bytes.try_push(*byte).unwrap();
+        }
+        let objects = [archive, explicit_bytes];
+        let refs = link_object_refs(&objects, ObjectFormat::Elf64, "entry").unwrap();
         assert_eq!(&refs.archive_group[..], &[1, 1, 0]);
         assert_eq!(&refs.archive_member[..], &[1, 2, 0]);
+    }
+
+    #[test]
+    fn indexed_archive_skips_unreferenced_non_object_members() {
+        run_with_linker_stack(indexed_archive_skips_unreferenced_members_on_linker_stack);
+    }
+
+    fn indexed_archive_skips_unreferenced_members_on_linker_stack() {
+        let entry = compile_source_function_with_options::<4096, 4096, 8, 8, 8, 32>(
+            "#[unsafe(no_mangle)] pub extern \"C\" fn entry() -> i32 { 42 }",
+            "entry",
+            ObjectFormat::Elf64,
+            TargetLayout::X86_64,
+            CodegenOptions::CHECKED,
+        )
+        .unwrap();
+        let mut archive = Vector::with_capacity(16 * 1024).unwrap();
+        for byte in b"!<arch>\n" {
+            archive.try_push(*byte).unwrap();
+        }
+        let index = [0, 0, 0, 1, 0, 0, 0, 82, b'e', b'n', b't', b'r', b'y', 0];
+        append_archive_member(&mut archive, "/", &index);
+        append_archive_member(&mut archive, "entry.o/", entry.bytes());
+        append_archive_member(&mut archive, "unused.o/", b"not an object");
+
+        let objects = [archive];
+        let refs = link_object_refs(&objects, ObjectFormat::Elf64, "entry").unwrap();
+        assert_eq!(refs.bytes.len(), 1);
+        assert_eq!(&refs.archive_group[..], &[1]);
+        assert_eq!(&refs.archive_member[..], &[1]);
+        assert_eq!(refs.bytes[0], entry.bytes());
     }
 }

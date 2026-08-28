@@ -589,12 +589,33 @@ probe is narrow hosted evidence. The driver still eagerly expands candidate
 members, so index-guided lazy extraction and archives exceeding 256 ordinary
 members remain separate incomplete gates.
 
+The hosted driver now uses a validated GNU index to compute a bounded
+left-to-right unresolved-symbol closure before admitting archive members to the
+full decode and layout pipeline. Explicit objects and each admitted member are
+scanned for exact definitions and named relocations; a selected index mapping
+must be confirmed by the referenced object definition. Members are emitted in
+original archive order. An archive without a usable index disables later lazy
+pruning for that command, preserving the established eager selection semantics
+instead of inferring completeness from absent metadata. A focused test places
+an invalid unindexed member beside the indexed entry object and proves that the
+invalid member is never decoded.
+
+The exact ORACLE-0002 indexed data-provider `.rlib` continued to link and exit
+42 under Arch Linux WSL. Windows and Linux each passed 720 compiler-core tests
+and five driver tests. Over 50 identical-input iterations after five warmups,
+MRML measured 4.680 ms median and 4.720 ms mean versus pinned rust-lld with
+`--eh-frame-hdr` at 4.887 ms median and 4.899 ms mean; outputs remained 12,304
+and 2,080 bytes. This one-member archive does not demonstrate the intended
+scaling benefit and is only correctness/regression evidence; representative
+multi-member `.rlib` measurements remain required.
+
 This increment does **not** emit PE imports/exports/base
 relocations/debug data, emit ELF dynamic metadata/interpreter/PIE/sections,
-accelerate archive extraction through symbol indexes, read thin archives or
-general `.rlib` contents, perform section GC or ICF, link dynamically, run work
-in parallel, or integrate linker selection into the public `mrml` build
-frontend.
+read thin archives or general `.rlib` contents, perform section GC or ICF, link
+dynamically, run work in parallel, or integrate linker selection into the
+public `mrml` build frontend. Index-guided extraction remains bounded to 256
+ordinary archive members and 4,096 index symbols and has not yet been optimized
+for large representative Rust libraries.
 Those are separate milestones and the current upstream linker remains the
 production linker for ordinary package builds as required by
 `docs/build/BUILD_SYSTEM.md`.

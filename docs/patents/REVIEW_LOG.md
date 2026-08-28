@@ -1,5 +1,15 @@
 # Patent review log
 
+## 2026-08-28 — Index-guided lazy archive extraction
+
+Patent review: **NOT_TRIGGERED** for conventionally using a validated Unix
+archive symbol table to avoid decoding unreferenced object members, confirming
+selected mappings against independently decoded definitions, and retaining
+left-to-right static archive ordering with eager fallback. This is ordinary
+bounded symbol-table lookup and work avoidance, not a new compression,
+cryptographic, scheduling, parallel-linking, binary-rewriting, or hardware
+mechanism. This technical screen is not patent clearance.
+
 ## 2026-08-26 — Guarded early-stack capacity and exact provider entry
 
 Patent review: **NOT_TRIGGERED** for enlarging the existing guarded x86-64
