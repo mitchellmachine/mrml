@@ -1045,6 +1045,17 @@ one acyclic typed alias, not conditional alias joins, reassignment chains,
 arbitrary fat-reference dataflow, or general regions. Both hosts passed the same
 1,035-test compiler gate.
 
+An exact two-arm conditional helper may now return different repeated-subslice
+values rooted in the same compatible parameter while retaining that one origin.
+The existing bounded callee merge requires both arms to resolve to the same
+parameter; differing or unknown origins still make the result conservative.
+Caller analysis preserves the root loan through either returned fat reference
+and restores it after last use. Native probes select distinct branch offsets and
+exercise indexes zero and two, mutating four expected targets on Windows gnullvm
+and Arch Linux WSL. This is same-origin conditional exit merging, not path-
+sensitive ownership, arbitrary branch dataflow, or general interprocedural CFG
+regions. Both hosts passed the same 1,035-test compiler gate.
+
 The repeated-subslice semantic harness now isolates all four checked failure
 layers at depth three. An inner start beyond the runtime owner length, second-
 and third-layer starts beyond their independently saved input lengths, and a

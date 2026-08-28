@@ -359,6 +359,36 @@ fn subslice_then_index_reference_mutation_executes() {
         }
     }
 
+    let code = compile(
+        "fn select(input: &mut [u32], choose: bool) -> &mut [u32] { if choose { &mut input[0..][1..] } else { &mut input[1..][1..] } } #[unsafe(no_mangle)] pub extern \"C\" fn probe(input: &mut [u32], choose: bool, index: usize) -> u32 { let selected: &mut [u32] = select(input, choose); selected[index] += 23; selected[index] }",
+    );
+    #[cfg(not(target_os = "windows"))]
+    let probe: unsafe extern "C" fn(*mut u32, usize, bool, usize) -> u32 =
+        unsafe { std::mem::transmute(code.pointer) };
+    #[cfg(target_os = "windows")]
+    let probe: unsafe extern "C" fn(*const usize, bool, usize) -> u32 =
+        unsafe { std::mem::transmute(code.pointer) };
+    for (choose, index, target) in [(true, 2, 3), (false, 2, 4), (true, 0, 1), (false, 0, 2)] {
+        let mut values = [10, 20, 30, 40, 50];
+        let expected = values[target] + 23;
+        #[cfg(not(target_os = "windows"))]
+        assert_eq!(
+            unsafe { probe(values.as_mut_ptr(), values.len(), choose, index) },
+            expected
+        );
+        #[cfg(target_os = "windows")]
+        {
+            let slice = [values.as_mut_ptr() as usize, values.len()];
+            assert_eq!(unsafe { probe(slice.as_ptr(), choose, index) }, expected);
+        }
+        assert_eq!(values[target], expected);
+        for (position, value) in values.into_iter().enumerate() {
+            if position != target {
+                assert_eq!(value, [10, 20, 30, 40, 50][position]);
+            }
+        }
+    }
+
     for code in [
         compile(
             "fn select(input: &mut [u32; 4], start: usize, index: usize) -> &mut u32 { &mut input[start..][index] } #[unsafe(no_mangle)] pub extern \"C\" fn probe(input: &mut [u32; 4], start: usize, index: usize) -> u32 { let selected: &mut u32 = select(input, start, index); *selected += 7; *selected }",
