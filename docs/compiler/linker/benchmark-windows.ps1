@@ -1,7 +1,7 @@
 param(
     [Parameter(Mandatory = $true)][string]$Driver,
     [Parameter(Mandatory = $true)][string]$RustLld,
-    [Parameter(Mandatory = $true)][string]$Object,
+    [Parameter(Mandatory = $true)][string[]]$Object,
     [Parameter(Mandatory = $true)][string]$Entry,
     [int]$Warmups = 5,
     [int]$Iterations = 50
@@ -10,7 +10,7 @@ param(
 $ErrorActionPreference = "Stop"
 $driverPath = (Resolve-Path -LiteralPath $Driver).Path
 $lldPath = (Resolve-Path -LiteralPath $RustLld).Path
-$objectPath = (Resolve-Path -LiteralPath $Object).Path
+$objectPaths = @($Object | ForEach-Object { (Resolve-Path -LiteralPath $_).Path })
 $outputRoot = Join-Path ([IO.Path]::GetTempPath()) ("mrml-link-benchmark-" + [Guid]::NewGuid())
 [IO.Directory]::CreateDirectory($outputRoot) | Out-Null
 $mrmlOutput = Join-Path $outputRoot "mrml.exe"
@@ -18,13 +18,13 @@ $lldOutput = Join-Path $outputRoot "rust-lld.exe"
 
 function Invoke-MrmlLink {
     Remove-Item -LiteralPath $mrmlOutput -Force -ErrorAction SilentlyContinue
-    & $driverPath --link-coff $objectPath --entry $Entry -o $mrmlOutput *> $null
+    & $driverPath --link-coff @objectPaths --entry $Entry -o $mrmlOutput *> $null
     if ($LASTEXITCODE -ne 0) { throw "MRML linker failed" }
 }
 
 function Invoke-RustLldLink {
     Remove-Item -LiteralPath $lldOutput -Force -ErrorAction SilentlyContinue
-    & $lldPath -flavor link "/entry:$Entry" /subsystem:console /nodefaultlib /fixed "/out:$lldOutput" $objectPath *> $null
+    & $lldPath -flavor link "/entry:$Entry" /subsystem:console /nodefaultlib /fixed "/out:$lldOutput" @objectPaths *> $null
     if ($LASTEXITCODE -ne 0) { throw "rust-lld failed" }
 }
 
@@ -54,7 +54,8 @@ try {
     $lldSorted = $lldTimes | Sort-Object
     $middle = [Math]::Floor(($Iterations - 1) / 2)
     [pscustomobject]@{
-        object_bytes = (Get-Item -LiteralPath $objectPath).Length
+        input_count = $objectPaths.Count
+        object_bytes = ($objectPaths | ForEach-Object { (Get-Item -LiteralPath $_).Length } | Measure-Object -Sum).Sum
         iterations = $Iterations
         exit_code = $mrmlExit
         mrml_output_bytes = (Get-Item -LiteralPath $mrmlOutput).Length

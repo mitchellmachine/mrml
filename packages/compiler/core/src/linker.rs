@@ -65,20 +65,20 @@ pub enum LinkRelocationTarget<'a> {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub struct LinkInput<'a> {
-    pub symbol: &'a str,
-    pub text: &'a [u8],
-    pub readonly_data: &'a [u8],
-    pub relocations: &'a [LinkRelocation<'a>],
+pub struct LinkInput<'data, 'relocations> {
+    pub symbol: &'data str,
+    pub text: &'data [u8],
+    pub readonly_data: &'data [u8],
+    pub relocations: &'relocations [LinkRelocation<'data>],
 }
 
 /// Decodes the bounded x86-64 COFF subset emitted by `mrml-rustc` into the
 /// format-neutral static-link input. The caller owns relocation storage so the
 /// dependency-free compiler core never allocates.
-pub fn decode_x86_64_coff<'a>(
-    object: &'a [u8],
-    relocation_storage: &'a mut [LinkRelocation<'a>; MAX_LINK_RELOCATIONS],
-) -> Result<LinkInput<'a>, LinkerError> {
+pub fn decode_x86_64_coff<'data, 'relocations>(
+    object: &'data [u8],
+    relocation_storage: &'relocations mut [LinkRelocation<'data>; MAX_LINK_RELOCATIONS],
+) -> Result<LinkInput<'data, 'relocations>, LinkerError> {
     if read_u16(object, 0)? != 0x8664 || read_u16(object, 16)? != 0 {
         return Err(LinkerError::UnsupportedCoff);
     }
@@ -231,10 +231,10 @@ pub fn decode_x86_64_coff<'a>(
 }
 
 /// Decodes the exact bounded ELF64 relocatable subset emitted by `mrml-rustc`.
-pub fn decode_x86_64_elf<'a>(
-    object: &'a [u8],
-    relocation_storage: &'a mut [LinkRelocation<'a>; MAX_LINK_RELOCATIONS],
-) -> Result<LinkInput<'a>, LinkerError> {
+pub fn decode_x86_64_elf<'data, 'relocations>(
+    object: &'data [u8],
+    relocation_storage: &'relocations mut [LinkRelocation<'data>; MAX_LINK_RELOCATIONS],
+) -> Result<LinkInput<'data, 'relocations>, LinkerError> {
     if object.get(..9) != Some(b"\x7fELF\x02\x01\x01\x00\x00")
         || read_u16_elf(object, 16)? != 1
         || read_u16_elf(object, 18)? != 62
@@ -465,7 +465,7 @@ struct InputLayout {
 /// Links already-decoded MRML x86-64 fragments into one position-independent
 /// image. Input order is significant and makes the result reproducible.
 pub fn link_x86_64_static<const MAX_BYTES: usize>(
-    inputs: &[LinkInput<'_>],
+    inputs: &[LinkInput<'_, '_>],
     entry_symbol: &str,
 ) -> Result<LinkedImage<MAX_BYTES>, LinkerError> {
     link_x86_64_static_aligned(inputs, entry_symbol, 16)
@@ -474,7 +474,7 @@ pub fn link_x86_64_static<const MAX_BYTES: usize>(
 /// Links MRML COFF fragments and writes a deterministic, import-free PE32+
 /// executable with separate RX code and read-only NX data sections.
 pub fn link_x86_64_pe<const MAX_IMAGE_BYTES: usize, const MAX_LINKED_BYTES: usize>(
-    inputs: &[LinkInput<'_>],
+    inputs: &[LinkInput<'_, '_>],
     entry_symbol: &str,
 ) -> Result<PeImage<MAX_IMAGE_BYTES>, LinkerError> {
     const FILE_ALIGNMENT: usize = 0x200;
@@ -590,7 +590,7 @@ pub fn link_x86_64_pe<const MAX_IMAGE_BYTES: usize, const MAX_LINKED_BYTES: usiz
 /// Links MRML fragments into a deterministic, fixed-address, import-free
 /// x86-64 ELF executable with page-separated load permissions.
 pub fn link_x86_64_elf_executable<const MAX_IMAGE_BYTES: usize, const MAX_LINKED_BYTES: usize>(
-    inputs: &[LinkInput<'_>],
+    inputs: &[LinkInput<'_, '_>],
     entry_symbol: &str,
 ) -> Result<ElfImage<MAX_IMAGE_BYTES>, LinkerError> {
     const PAGE: usize = 0x1000;
@@ -704,7 +704,7 @@ fn write_elf_load_segment<const MAX_BYTES: usize>(
 }
 
 fn link_x86_64_static_aligned<const MAX_BYTES: usize>(
-    inputs: &[LinkInput<'_>],
+    inputs: &[LinkInput<'_, '_>],
     entry_symbol: &str,
     section_alignment: usize,
 ) -> Result<LinkedImage<MAX_BYTES>, LinkerError> {
@@ -892,7 +892,7 @@ fn validate_symbol(symbol: &str) -> Result<(), LinkerError> {
 }
 
 fn resolve_symbol(
-    inputs: &[LinkInput<'_>],
+    inputs: &[LinkInput<'_, '_>],
     layouts: &[InputLayout; MAX_LINK_INPUTS],
     symbol: &str,
 ) -> Result<usize, LinkerError> {
@@ -1096,9 +1096,9 @@ mod tests {
 
     use super::*;
     use crate::{
-        MachineCode, X86_64PcRelativeRelocation, X86_64PcRelativeRelocationKind, emit_elf64_x86_64,
-        emit_elf64_x86_64_with_readonly_data, emit_elf64_x86_64_with_relocation, emit_x86_64_coff,
-        emit_x86_64_coff_with_relocation,
+        emit_elf64_x86_64, emit_elf64_x86_64_with_readonly_data, emit_elf64_x86_64_with_relocation,
+        emit_x86_64_coff, emit_x86_64_coff_with_relocation, MachineCode,
+        X86_64PcRelativeRelocation, X86_64PcRelativeRelocationKind,
     };
 
     #[test]
@@ -1251,7 +1251,7 @@ mod tests {
 
     #[test]
     fn decodes_and_links_coff_readonly_section_relocations() {
-        use crate::{X86_64ReadonlyRelocation, emit_x86_64_coff_with_readonly_data};
+        use crate::{emit_x86_64_coff_with_readonly_data, X86_64ReadonlyRelocation};
 
         let code = MachineCode::<8>::from_bytes_for_test(&[0x48, 0x8d, 0x05, 0, 0, 0, 0, 0xc3]);
         let object = emit_x86_64_coff_with_readonly_data::<256, 8>(

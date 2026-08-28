@@ -1,12 +1,12 @@
 #![no_std]
 #![cfg_attr(not(test), no_main)]
 
-use mrml_error::{Result, anyhow};
-use mrml_runtime::mrml_println as println;
+use mrml_error::{anyhow, Result};
+use mrml_runtime::{mrml_println as println, Text, Vector};
 use mrml_rustc::{
-    CodegenOptions, LinkRelocation, LinkRelocationTarget, MAX_LINK_RELOCATIONS, ObjectFormat,
-    TargetLayout, compile_source_function_with_options, decode_x86_64_coff, decode_x86_64_elf,
-    link_x86_64_elf_executable, link_x86_64_pe,
+    compile_source_function_with_options, decode_x86_64_coff, decode_x86_64_elf,
+    link_x86_64_elf_executable, link_x86_64_pe, CodegenOptions, LinkInput, LinkRelocation,
+    LinkRelocationTarget, ObjectFormat, TargetLayout, MAX_LINK_INPUTS, MAX_LINK_RELOCATIONS,
 };
 
 #[cfg_attr(test, allow(dead_code))]
@@ -24,9 +24,9 @@ const MAX_CONSTANTS: usize = 64;
 #[cfg_attr(test, allow(dead_code))]
 const MAX_EXPRESSION_NODES: usize = 256;
 #[cfg_attr(test, allow(dead_code))]
-const MAX_LINKED_BYTES: usize = 16 * 1024;
+const MAX_LINKED_BYTES: usize = 256 * 1024;
 #[cfg_attr(test, allow(dead_code))]
-const MAX_EXECUTABLE_BYTES: usize = 32 * 1024;
+const MAX_EXECUTABLE_BYTES: usize = 512 * 1024;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum EmitKind {
@@ -45,33 +45,35 @@ static WINDOWS_STACK_RESERVE: [u8; 16] = *b"/STACK:16777216 ";
 #[cfg_attr(test, allow(dead_code))]
 fn application_main() -> Result<()> {
     let arguments = mrml_runtime::command_arguments();
-    if arguments.len() == 7
+    if arguments.len() >= 7
         && arguments[1] == "--link-coff"
-        && arguments[3] == "--entry"
-        && arguments[5] == "-o"
+        && arguments[arguments.len() - 4] == "--entry"
+        && arguments[arguments.len() - 2] == "-o"
     {
-        let output = &arguments[6];
+        let output = &arguments[arguments.len() - 1];
         if mrml_runtime::path_exists(output) {
             return Err(anyhow!("refusing to overwrite compiler output"));
         }
-        let object = mrml_runtime::read_file_bounded(&arguments[2], MAX_OBJECT_BYTES)?;
-        return write_linked_pe(&object, &arguments[4], output);
+        let objects = read_link_objects(&arguments[2..arguments.len() - 4])?;
+        let object_refs = link_object_refs(&objects)?;
+        return write_linked_pe(&object_refs, &arguments[arguments.len() - 3], output);
     }
-    if arguments.len() == 7
+    if arguments.len() >= 7
         && arguments[1] == "--link-elf"
-        && arguments[3] == "--entry"
-        && arguments[5] == "-o"
+        && arguments[arguments.len() - 4] == "--entry"
+        && arguments[arguments.len() - 2] == "-o"
     {
-        let output = &arguments[6];
+        let output = &arguments[arguments.len() - 1];
         if mrml_runtime::path_exists(output) {
             return Err(anyhow!("refusing to overwrite compiler output"));
         }
-        let object = mrml_runtime::read_file_bounded(&arguments[2], MAX_OBJECT_BYTES)?;
-        return write_linked_elf(&object, &arguments[4], output);
+        let objects = read_link_objects(&arguments[2..arguments.len() - 4])?;
+        let object_refs = link_object_refs(&objects)?;
+        return write_linked_elf(&object_refs, &arguments[arguments.len() - 3], output);
     }
     if arguments.len() < 8 || arguments[1] != "--emit" || arguments[3] != "--function" {
         return Err(anyhow!(
-            "usage: mrml-rustc --emit elf64|coff|pe|elf-executable --function NAME [-C overflow-checks=yes|no] INPUT -o OUTPUT; or mrml-rustc --link-coff|--link-elf INPUT --entry NAME -o OUTPUT"
+            "usage: mrml-rustc --emit elf64|coff|pe|elf-executable --function NAME [-C overflow-checks=yes|no] INPUT -o OUTPUT; or mrml-rustc --link-coff|--link-elf INPUT... --entry NAME -o OUTPUT"
         ));
     }
     let emit = parse_emit_kind(&arguments[2])?;
@@ -91,7 +93,7 @@ fn application_main() -> Result<()> {
         ),
         _ => {
             return Err(anyhow!(
-                "usage: mrml-rustc --emit elf64|coff|pe|elf-executable --function NAME [-C overflow-checks=yes|no] INPUT -o OUTPUT; or mrml-rustc --link-coff|--link-elf INPUT --entry NAME -o OUTPUT"
+                "usage: mrml-rustc --emit elf64|coff|pe|elf-executable --function NAME [-C overflow-checks=yes|no] INPUT -o OUTPUT; or mrml-rustc --link-coff|--link-elf INPUT... --entry NAME -o OUTPUT"
             ));
         }
     };
@@ -129,23 +131,87 @@ fn application_main() -> Result<()> {
             );
         }
         EmitKind::Pe => {
-            write_linked_pe(object.bytes(), function, output)?;
+            write_linked_pe(&[object.bytes()], function, output)?;
         }
         EmitKind::ElfExecutable => {
-            write_linked_elf(object.bytes(), function, output)?;
+            write_linked_elf(&[object.bytes()], function, output)?;
         }
     }
     Ok(())
 }
 
-fn write_linked_pe(object: &[u8], entry: &str, output: &str) -> Result<()> {
-    let mut relocations = [LinkRelocation {
-        offset: 0,
-        target: LinkRelocationTarget::Symbol("unused"),
-        addend: 0,
-    }; MAX_LINK_RELOCATIONS];
-    let input = decode_x86_64_coff(object, &mut relocations).map_err(mrml_error::message)?;
-    let executable = link_x86_64_pe::<MAX_EXECUTABLE_BYTES, MAX_LINKED_BYTES>(&[input], entry)
+fn read_link_objects(paths: &[Text]) -> Result<Vector<Vector<u8>>> {
+    if paths.is_empty() || paths.len() > MAX_LINK_INPUTS {
+        return Err(anyhow!("link input count must be between 1 and 32"));
+    }
+    let mut objects = Vector::with_capacity(paths.len())
+        .map_err(|_| anyhow!("could not allocate link input list"))?;
+    for path in paths {
+        objects
+            .try_push(mrml_runtime::read_file_bounded(path, MAX_OBJECT_BYTES)?)
+            .map_err(|_| anyhow!("could not allocate link input list"))?;
+    }
+    Ok(objects)
+}
+
+fn link_object_refs(objects: &[Vector<u8>]) -> Result<Vector<&[u8]>> {
+    let mut refs = Vector::with_capacity(objects.len())
+        .map_err(|_| anyhow!("could not allocate link input reference list"))?;
+    for object in objects {
+        refs.try_push(&object[..])
+            .map_err(|_| anyhow!("could not allocate link input reference list"))?;
+    }
+    Ok(refs)
+}
+
+fn decode_link_inputs<'data, 'relocations>(
+    objects: &[&'data [u8]],
+    format: ObjectFormat,
+    relocation_arenas: &'relocations mut [[LinkRelocation<'data>; MAX_LINK_RELOCATIONS]],
+) -> Result<Vector<LinkInput<'data, 'relocations>>> {
+    let mut inputs = Vector::with_capacity(objects.len())
+        .map_err(|_| anyhow!("could not allocate decoded link input list"))?;
+    let mut remaining_arenas = relocation_arenas;
+    for object in objects {
+        let (arena, rest) = remaining_arenas
+            .split_first_mut()
+            .ok_or_else(|| anyhow!("link relocation arena count mismatch"))?;
+        let input = match format {
+            ObjectFormat::Coff => decode_x86_64_coff(object, arena),
+            ObjectFormat::Elf64 => decode_x86_64_elf(object, arena),
+        }
+        .map_err(mrml_error::message)?;
+        inputs
+            .try_push(input)
+            .map_err(|_| anyhow!("could not allocate decoded link input list"))?;
+        remaining_arenas = rest;
+    }
+    Ok(inputs)
+}
+
+fn relocation_arenas<'a>(
+    count: usize,
+) -> Result<Vector<[LinkRelocation<'a>; MAX_LINK_RELOCATIONS]>> {
+    let mut arenas = Vector::with_capacity(count)
+        .map_err(|_| anyhow!("could not allocate link relocation arenas"))?;
+    for _ in 0..count {
+        arenas
+            .try_push(
+                [LinkRelocation {
+                    offset: 0,
+                    target: LinkRelocationTarget::Symbol("unused"),
+                    addend: 0,
+                }; MAX_LINK_RELOCATIONS],
+            )
+            .map_err(|_| anyhow!("could not allocate link relocation arenas"))?;
+    }
+    Ok(arenas)
+}
+
+fn write_linked_pe(objects: &[&[u8]], entry: &str, output: &str) -> Result<()> {
+    let mut arenas = relocation_arenas(objects.len())?;
+    let inputs = decode_link_inputs(objects, ObjectFormat::Coff, &mut arenas)?;
+    let executable = link_x86_64_pe::<MAX_EXECUTABLE_BYTES, MAX_LINKED_BYTES>(&inputs, entry)
         .map_err(mrml_error::message)?;
     mrml_runtime::write_file(output, executable.bytes())?;
     println!(
@@ -156,15 +222,11 @@ fn write_linked_pe(object: &[u8], entry: &str, output: &str) -> Result<()> {
     Ok(())
 }
 
-fn write_linked_elf(object: &[u8], entry: &str, output: &str) -> Result<()> {
-    let mut relocations = [LinkRelocation {
-        offset: 0,
-        target: LinkRelocationTarget::Symbol("unused"),
-        addend: 0,
-    }; MAX_LINK_RELOCATIONS];
-    let input = decode_x86_64_elf(object, &mut relocations).map_err(mrml_error::message)?;
+fn write_linked_elf(objects: &[&[u8]], entry: &str, output: &str) -> Result<()> {
+    let mut arenas = relocation_arenas(objects.len())?;
+    let inputs = decode_link_inputs(objects, ObjectFormat::Elf64, &mut arenas)?;
     let executable =
-        link_x86_64_elf_executable::<MAX_EXECUTABLE_BYTES, MAX_LINKED_BYTES>(&[input], entry)
+        link_x86_64_elf_executable::<MAX_EXECUTABLE_BYTES, MAX_LINKED_BYTES>(&inputs, entry)
             .map_err(mrml_error::message)?;
     mrml_runtime::write_file(output, executable.bytes())?;
     println!(

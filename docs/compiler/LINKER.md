@@ -60,14 +60,20 @@ single-section image, and the Windows host observed exit code 42. Empty
 read-only data omits `.rdata` rather than emitting a loader-invalid zero-sized
 section.
 
-`mrml-rustc-driver --link-coff INPUT --entry NAME -o OUTPUT` exposes the same
-bounded path without compilation. This linker-only mode is the comparison
-surface for identical-input cold-process measurements against the pinned
-gnullvm `rust-lld`; it does not accept arbitrary COFF extensions outside the
-documented MRML subset.
+`mrml-rustc-driver --link-coff INPUT... --entry NAME -o OUTPUT` exposes the same
+bounded path without compilation. It accepts one through 32 ordered inputs,
+loads every bounded object before decoding, gives each input independent
+relocation storage, and retains the input order through deterministic layout.
+Object-data and relocation-storage lifetimes are distinct in the core API, so
+the driver can safely retain all decoded inputs without self-references or raw
+pointer assembly. A release-driver probe compiled two separately named objects,
+linked both, produced a 1,024-byte PE, and Windows observed exit code 42. This
+linker-only mode is the comparison surface for identical-input cold-process
+measurements against the pinned gnullvm `rust-lld`; it does not accept arbitrary
+COFF extensions outside the documented MRML subset.
 
 The corresponding explicit Linux-family selections are
-`--emit elf-executable` and `--link-elf INPUT --entry NAME -o OUTPUT`. They use
+`--emit elf-executable` and `--link-elf INPUT... --entry NAME -o OUTPUT`. They use
 ELF64 object emission/decoding and the MRML ELF serializer without silently
 invoking a system linker.
 
@@ -80,6 +86,14 @@ a 1,024-byte PE with a 10.196 ms median and 10.323 ms mean; pinned
 large-program, archive, debug-info, parallel-scaling, or general superiority
 claim. `docs/compiler/linker/benchmark-windows.ps1` preserves the identical-
 input procedure.
+
+The same controlled procedure also measured eight distinct 93-byte MRML COFF
+objects (744 input bytes total), 50 times after five interleaved warmups. MRML's
+median was 10.677 ms and mean was 10.813 ms; the pinned gnullvm `rust-lld`
+median was 27.524 ms and mean was 27.594 ms. Both 1,024-byte executables returned
+42. This is a 2.58x median speedup for a still-small, import-free eight-object
+workload. It broadens the input-count evidence but remains neither a
+large-program nor general linker-superiority claim.
 
 The pass structure is informed by mold's public design notes: establish output
 layout early, run a small sequence of understandable passes, and keep per-input

@@ -9231,3 +9231,14 @@ imports or data directories. The test executes a constant-return entry point on
 the controlled Windows host. It adds no executable packing, compression,
 loader, dynamic-linking, relocation, cryptographic, or code-generation
 algorithm. This technical screen is not legal advice or patent clearance.
+
+# 2026-08-28 — Bounded ordered multi-object linker driver
+
+Patent review: **NOT_TRIGGERED**. This increment loads one through 32 ordered
+objects, assigns independent bounded relocation arenas, passes the decoded
+inputs to the existing deterministic static linker, and extends the existing
+wall-clock harness to accept the same ordered input list for MRML and rust-lld.
+It adds bounded ownership and command routing, not a new symbol-resolution,
+layout, relocation, executable-format, optimization, compression,
+cryptographic, or loading algorithm. This technical screen is not legal advice
+or patent clearance.
