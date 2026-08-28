@@ -4,10 +4,11 @@
 use mrml_error::{anyhow, Result};
 use mrml_runtime::{mrml_println as println, Text, Vector};
 use mrml_rustc::{
-    compile_source_function_with_options, decode_unix_archive, decode_x86_64_coff,
-    decode_x86_64_elf, link_x86_64_elf_executable, link_x86_64_pe, select_static_link_inputs,
-    CodegenOptions, LinkInput, LinkRelocation, LinkRelocationTarget, ObjectFormat, TargetLayout,
-    MAX_LINK_INPUTS, MAX_LINK_RELOCATIONS,
+    compile_source_function_with_options, decode_unix_archive, decode_x86_64_coff_with_definitions,
+    decode_x86_64_elf_with_definitions, link_x86_64_elf_executable, link_x86_64_pe,
+    select_static_link_inputs, CodegenOptions, LinkDefinition, LinkInput, LinkRelocation,
+    LinkRelocationTarget, ObjectFormat, TargetLayout, MAX_LINK_DEFINITIONS, MAX_LINK_INPUTS,
+    MAX_LINK_RELOCATIONS,
 };
 
 #[cfg_attr(test, allow(dead_code))]
@@ -207,29 +208,53 @@ fn link_object_refs(objects: &[Vector<u8>]) -> Result<LinkObjectRefs<'_>> {
     })
 }
 
-fn decode_link_inputs<'data, 'relocations>(
+fn decode_link_inputs<'data, 'relocations, 'definitions>(
     objects: &[&'data [u8]],
     format: ObjectFormat,
     relocation_arenas: &'relocations mut [[LinkRelocation<'data>; MAX_LINK_RELOCATIONS]],
-) -> Result<Vector<LinkInput<'data, 'relocations>>> {
+    definition_arenas: &'definitions mut [[LinkDefinition<'data>; MAX_LINK_DEFINITIONS]],
+) -> Result<Vector<LinkInput<'data, 'relocations, 'definitions>>> {
     let mut inputs = Vector::with_capacity(objects.len())
         .map_err(|_| anyhow!("could not allocate decoded link input list"))?;
     let mut remaining_arenas = relocation_arenas;
+    let mut remaining_definitions = definition_arenas;
     for object in objects {
         let (arena, rest) = remaining_arenas
             .split_first_mut()
             .ok_or_else(|| anyhow!("link relocation arena count mismatch"))?;
+        let (definitions, definition_rest) = remaining_definitions
+            .split_first_mut()
+            .ok_or_else(|| anyhow!("link definition arena count mismatch"))?;
         let input = match format {
-            ObjectFormat::Coff => decode_x86_64_coff(object, arena),
-            ObjectFormat::Elf64 => decode_x86_64_elf(object, arena),
+            ObjectFormat::Coff => decode_x86_64_coff_with_definitions(object, arena, definitions),
+            ObjectFormat::Elf64 => decode_x86_64_elf_with_definitions(object, arena, definitions),
         }
         .map_err(mrml_error::message)?;
         inputs
             .try_push(input)
             .map_err(|_| anyhow!("could not allocate decoded link input list"))?;
         remaining_arenas = rest;
+        remaining_definitions = definition_rest;
     }
     Ok(inputs)
+}
+
+fn definition_arenas<'a>(
+    count: usize,
+) -> Result<Vector<[LinkDefinition<'a>; MAX_LINK_DEFINITIONS]>> {
+    let mut arenas = Vector::with_capacity(count)
+        .map_err(|_| anyhow!("could not allocate link definition arenas"))?;
+    for _ in 0..count {
+        arenas
+            .try_push(
+                [LinkDefinition {
+                    symbol: "unused",
+                    text_offset: 0,
+                }; MAX_LINK_DEFINITIONS],
+            )
+            .map_err(|_| anyhow!("could not allocate link definition arenas"))?;
+    }
+    Ok(arenas)
 }
 
 fn relocation_arenas<'a>(
@@ -251,11 +276,11 @@ fn relocation_arenas<'a>(
     Ok(arenas)
 }
 
-fn selected_link_inputs<'data, 'relocations>(
-    inputs: &[LinkInput<'data, 'relocations>],
+fn selected_link_inputs<'data, 'relocations, 'definitions>(
+    inputs: &[LinkInput<'data, 'relocations, 'definitions>],
     archive_member: &[bool],
     entry: &str,
-) -> Result<Vector<LinkInput<'data, 'relocations>>> {
+) -> Result<Vector<LinkInput<'data, 'relocations, 'definitions>>> {
     let selection =
         select_static_link_inputs(inputs, archive_member, entry).map_err(mrml_error::message)?;
     let mut selected = Vector::with_capacity(selection.indices().len())
@@ -275,7 +300,8 @@ fn write_linked_pe(
     output: &str,
 ) -> Result<()> {
     let mut arenas = relocation_arenas(objects.len())?;
-    let inputs = decode_link_inputs(objects, ObjectFormat::Coff, &mut arenas)?;
+    let mut definitions = definition_arenas(objects.len())?;
+    let inputs = decode_link_inputs(objects, ObjectFormat::Coff, &mut arenas, &mut definitions)?;
     let selected = selected_link_inputs(&inputs, archive_member, entry)?;
     let executable = link_x86_64_pe::<MAX_EXECUTABLE_BYTES, MAX_LINKED_BYTES>(&selected, entry)
         .map_err(mrml_error::message)?;
@@ -295,7 +321,8 @@ fn write_linked_elf(
     output: &str,
 ) -> Result<()> {
     let mut arenas = relocation_arenas(objects.len())?;
-    let inputs = decode_link_inputs(objects, ObjectFormat::Elf64, &mut arenas)?;
+    let mut definitions = definition_arenas(objects.len())?;
+    let inputs = decode_link_inputs(objects, ObjectFormat::Elf64, &mut arenas, &mut definitions)?;
     let selected = selected_link_inputs(&inputs, archive_member, entry)?;
     let executable =
         link_x86_64_elf_executable::<MAX_EXECUTABLE_BYTES, MAX_LINKED_BYTES>(&selected, entry)

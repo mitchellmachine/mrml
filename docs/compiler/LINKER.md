@@ -23,17 +23,29 @@ public platform formats rather than adding a package or loading architecture.
 The first MRML-owned linker increment is a dependency-free, bounded x86-64
 static-link core in `packages/compiler/core/src/linker.rs`. It accepts already
 decoded code and read-only-data fragments, resolves one defined symbol per
-input, freezes a deterministic 16-byte-aligned layout, copies disjoint ranges,
+input plus up to 256 additional checked text-offset definitions, freezes a
+deterministic 16-byte-aligned layout, copies disjoint ranges,
 and applies checked signed 32-bit PC-relative relocations. Duplicate or missing
 symbols, malformed names, invalid relocation fields, arithmetic overflow,
 capacity exhaustion, and displacement overflow fail closed.
 
 The core also decodes the exact bounded x86-64 COFF subset currently emitted by
 `mrml-rustc`: one `.text`, an optional `.rdata`, short or string-table symbol
-names, one defined function symbol, bounded undefined symbols, and
+names, bounded external text definitions and undefined symbols, and
 `IMAGE_REL_AMD64_REL32` relocations. Machine, section, symbol, string-table,
 range, relocation-type, and truncation checks precede linking. This is compiler
 object ingestion, not general COFF compatibility.
+
+The extended COFF and ELF64 decoders retain multiple external/global text
+definitions from one object with checked section-relative offsets. Relocations
+to any definition in the originating text section use a separate typed local
+target, so local and section symbols never enter the global namespace or
+collide across objects. Archive selection considers every global definition;
+entry lookup and cross-object relocations resolve to the definition's exact
+text offset. The original single-definition decoder entry points remain as
+fail-closed compatibility surfaces, while the driver uses the extended bounded
+entry points. Weak definitions, COMDAT groups, symbol versions, and general
+visibility/preemption semantics remain unsupported.
 
 The same format-neutral link core now decodes the exact bounded ELF64
 relocatable subset emitted by `mrml-rustc`: x86-64 little-endian ET_REL,
