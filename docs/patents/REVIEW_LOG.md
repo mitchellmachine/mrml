@@ -9415,3 +9415,12 @@ retains the existing fixed 256-fragment and per-fragment relocation bounds. It
 introduces no new relocation, COMDAT-selection, deduplication, packing,
 compression, cryptographic, or loading algorithm. This technical screen is not
 legal advice or patent clearance.
+
+# 2026-08-28 — Discardable gnullvm COFF metadata admission
+
+Patent review: **NOT_TRIGGERED**. This increment validates and ignores the
+conventional `.llvmbc` and `.llvmcmd` sections only when COFF marks them for
+link-time removal and they contain no relocations. It introduces no bitcode
+interpretation, optimization, relocation, compression, cryptographic, or
+loading algorithm. This technical screen is not legal advice or patent
+clearance.

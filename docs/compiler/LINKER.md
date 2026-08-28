@@ -247,6 +247,18 @@ median and 9.822 ms mean versus pinned gnullvm rust-lld at 27.162 ms median and
 hosted evidence for that object shape, not representative-library or general
 performance superiority evidence.
 
+Pinned gnullvm rlibs may also carry `.llvmbc` and `.llvmcmd` sections marked
+`IMAGE_SCN_LNK_REMOVE`. The COFF decoder now admits only those exact names when
+the remove bit is present and the section has no relocations; their bytes and
+symbols never enter the linked image. Missing remove semantics or any metadata
+relocation fails closed. An exact 7,946-byte rlib containing three text
+fragments and three runtime-function records linked to a 1,536-byte PE and
+returned 42. Over 50 iterations after five warmups, MRML measured 9.751 ms
+median and 9.820 ms mean versus pinned rust-lld at 27.283 ms median and 27.384
+ms mean. rust-lld's output was 1,024 bytes while MRML's was 1,536 bytes, so the
+measurement establishes executable agreement and a narrow timing observation,
+not byte identity or a general performance claim.
+
 After this integration, the controlled 93-byte no-unwind object benchmark ran
 50 iterations after five warmups. MRML measured 10.081 ms median and 10.260 ms
 mean versus pinned gnullvm rust-lld at 27.632 ms median and 27.791 ms mean. Both

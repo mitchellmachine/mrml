@@ -1135,6 +1135,7 @@ pub fn decode_x86_64_coff_text_fragment<'data, 'relocations, 'definitions>(
     let mut other_text_sections = [false; 17];
     let mut unwind_sections = [false; 17];
     let mut writable_sections = [false; 17];
+    let mut metadata_sections = [false; 17];
     let mut relocation_table = (0usize, 0usize);
     let mut text_ordinal = 0usize;
     for section in 0..section_count {
@@ -1192,6 +1193,13 @@ pub fn decode_x86_64_coff_text_fragment<'data, 'relocations, 'definitions>(
             unwind_sections[section + 1] = true;
         } else if name.starts_with(".data$") && !contents.is_empty() {
             writable_sections[section + 1] = true;
+        } else if name == ".llvmbc" || name == ".llvmcmd" {
+            let characteristics = read_u32(object, header + 36)?;
+            let relocation_count = read_u16(object, header + 32)?;
+            if characteristics & 0x0000_0800 == 0 || relocation_count != 0 {
+                return Err(LinkerError::UnsupportedCoff);
+            }
+            metadata_sections[section + 1] = true;
         } else if (name == ".data" || name == ".bss") && contents.is_empty() {
             ignored_empty_sections[section + 1] = true;
         } else {
@@ -1251,6 +1259,10 @@ pub fn decode_x86_64_coff_text_fragment<'data, 'relocations, 'definitions>(
                     .copied()
                     .unwrap_or(false)
                 || writable_sections
+                    .get(usize::try_from(section).map_err(|_| LinkerError::OffsetOverflow)?)
+                    .copied()
+                    .unwrap_or(false)
+                || metadata_sections
                     .get(usize::try_from(section).map_err(|_| LinkerError::OffsetOverflow)?)
                     .copied()
                     .unwrap_or(false))
@@ -2659,6 +2671,22 @@ mod tests {
         object
     }
 
+    fn two_fragment_coff_with_removed_metadata() -> std::vec::Vec<u8> {
+        let original = two_fragment_coff();
+        let mut object = std::vec![0u8; original.len() + 40];
+        object[..100].copy_from_slice(&original[..100]);
+        object[140..].copy_from_slice(&original[100..]);
+        object[2..4].copy_from_slice(&3u16.to_le_bytes());
+        object[8..12].copy_from_slice(&157u32.to_le_bytes());
+        object[40..44].copy_from_slice(&140u32.to_le_bytes());
+        object[44..48].copy_from_slice(&146u32.to_le_bytes());
+        object[80..84].copy_from_slice(&156u32.to_le_bytes());
+        object[100..108].copy_from_slice(b".llvmcmd");
+        object[120..124].copy_from_slice(&156u32.to_le_bytes());
+        object[136..140].copy_from_slice(&0xc010_0800u32.to_le_bytes());
+        object
+    }
+
     fn coff_with_one_runtime_function() -> std::vec::Vec<u8> {
         let mut object = std::vec![0u8; 245];
         object[0..2].copy_from_slice(&0x8664u16.to_le_bytes());
@@ -3408,6 +3436,51 @@ mod tests {
                 .unwrap()
                 .bytes()[16],
             0xc3
+        );
+    }
+
+    #[test]
+    fn ignores_only_relocation_free_coff_link_remove_metadata() {
+        let object = two_fragment_coff_with_removed_metadata();
+        let mut relocations = [LinkRelocation {
+            offset: 0,
+            target: LinkRelocationTarget::Symbol("unused"),
+            addend: 0,
+        }; MAX_LINK_RELOCATIONS];
+        let mut definitions = [LinkDefinition {
+            symbol: "unused",
+            text_offset: 0,
+        }; MAX_LINK_DEFINITIONS];
+        assert!(
+            decode_x86_64_coff_text_fragment(&object, 0, &mut relocations, &mut definitions,)
+                .is_ok()
+        );
+
+        let mut retained = object.clone();
+        retained[136..140].copy_from_slice(&0xc010_0000u32.to_le_bytes());
+        let mut retained_relocations = relocations;
+        let mut retained_definitions = definitions;
+        assert_eq!(
+            decode_x86_64_coff_text_fragment(
+                &retained,
+                0,
+                &mut retained_relocations,
+                &mut retained_definitions,
+            ),
+            Err(LinkerError::UnsupportedCoff)
+        );
+        let mut relocated = object.clone();
+        relocated[132..134].copy_from_slice(&1u16.to_le_bytes());
+        let mut relocated_relocations = relocations;
+        let mut relocated_definitions = definitions;
+        assert_eq!(
+            decode_x86_64_coff_text_fragment(
+                &relocated,
+                0,
+                &mut relocated_relocations,
+                &mut relocated_definitions,
+            ),
+            Err(LinkerError::UnsupportedCoff)
         );
     }
 
