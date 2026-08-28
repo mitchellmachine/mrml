@@ -207,6 +207,8 @@ impl<'guest, const FIRST: usize, const SECOND: usize> PreparedKvmPeerPage<'guest
             })?;
         if let Err(error) = second.backend.map_external_peer_page(second_physical, host) {
             if let Err(cleanup) = first.backend.unmap_external_peer_page(first_physical, host) {
+                first.backend.mapping_poisoned = true;
+                second.backend.mapping_poisoned = true;
                 return Err(KvmPeerPagePrepareFailure {
                     error: KvmPeerPageError::Backend(cleanup),
                     retained: Some(Self {
@@ -397,13 +399,23 @@ impl<'guest, const FIRST: usize, const SECOND: usize> PreparedKvmPeerPage<'guest
 
     fn withdraw_virtual(&mut self) -> Result<(), KvmError> {
         if self.second_virtual_live {
-            self.second
-                .withdraw_peer_page(self.second_virtual, self.second_physical)?;
+            if let Err(error) = self
+                .second
+                .withdraw_peer_page(self.second_virtual, self.second_physical)
+            {
+                self.poison_both();
+                return Err(error);
+            }
             self.second_virtual_live = false;
         }
         if self.first_virtual_live {
-            self.first
-                .withdraw_peer_page(self.first_virtual, self.first_physical)?;
+            if let Err(error) = self
+                .first
+                .withdraw_peer_page(self.first_virtual, self.first_physical)
+            {
+                self.poison_both();
+                return Err(error);
+            }
             self.first_virtual_live = false;
         }
         Ok(())
@@ -420,6 +432,7 @@ impl<'guest, const FIRST: usize, const SECOND: usize> PreparedKvmPeerPage<'guest
                 .backend
                 .unmap_external_peer_page(self.second_physical, host)
             {
+                self.poison_both();
                 return Err(error);
             }
             self.second_live = false;
@@ -430,11 +443,17 @@ impl<'guest, const FIRST: usize, const SECOND: usize> PreparedKvmPeerPage<'guest
                 .backend
                 .unmap_external_peer_page(self.first_physical, host)
             {
+                self.poison_both();
                 return Err(error);
             }
             self.first_live = false;
         }
         Ok(())
+    }
+
+    fn poison_both(&mut self) {
+        self.first.backend.mapping_poisoned = true;
+        self.second.backend.mapping_poisoned = true;
     }
 }
 
@@ -445,6 +464,7 @@ impl<const FIRST: usize, const SECOND: usize> Drop for PreparedKvmPeerPage<'_, F
             uncertain = true;
         }
         if uncertain {
+            self.poison_both();
             if let Some(backing) = self.backing.take() {
                 core::mem::forget(backing);
             }

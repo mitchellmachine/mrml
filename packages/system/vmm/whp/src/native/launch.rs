@@ -299,6 +299,8 @@ impl<'guest, 'system> PreparedWhpPeerPage<'guest, 'system> {
                 .partition
                 .unmap_external_peer_page(first_physical, address)
             {
+                first.partition.mapping_poisoned = true;
+                second.partition.mapping_poisoned = true;
                 return Err(WhpPeerPagePrepareFailure {
                     error: WhpPeerPageError::Backend(cleanup),
                     retained: Some(Self {
@@ -489,13 +491,23 @@ impl<'guest, 'system> PreparedWhpPeerPage<'guest, 'system> {
 
     fn withdraw_virtual(&mut self) -> Result<(), WhpError> {
         if self.second_virtual_live {
-            self.second
-                .withdraw_peer_page(self.second_virtual, self.second_physical)?;
+            if let Err(error) = self
+                .second
+                .withdraw_peer_page(self.second_virtual, self.second_physical)
+            {
+                self.poison_both();
+                return Err(error);
+            }
             self.second_virtual_live = false;
         }
         if self.first_virtual_live {
-            self.first
-                .withdraw_peer_page(self.first_virtual, self.first_physical)?;
+            if let Err(error) = self
+                .first
+                .withdraw_peer_page(self.first_virtual, self.first_physical)
+            {
+                self.poison_both();
+                return Err(error);
+            }
             self.first_virtual_live = false;
         }
         Ok(())
@@ -512,6 +524,7 @@ impl<'guest, 'system> PreparedWhpPeerPage<'guest, 'system> {
                 .partition
                 .unmap_external_peer_page(self.second_physical, address)
             {
+                self.poison_both();
                 return Err(error);
             }
             self.second_live = false;
@@ -522,11 +535,17 @@ impl<'guest, 'system> PreparedWhpPeerPage<'guest, 'system> {
                 .partition
                 .unmap_external_peer_page(self.first_physical, address)
             {
+                self.poison_both();
                 return Err(error);
             }
             self.first_live = false;
         }
         Ok(())
+    }
+
+    fn poison_both(&mut self) {
+        self.first.partition.mapping_poisoned = true;
+        self.second.partition.mapping_poisoned = true;
     }
 }
 
@@ -568,6 +587,7 @@ impl Drop for PreparedWhpPeerPage<'_, '_> {
             }
         }
         if uncertain {
+            self.poison_both();
             if let Some(backing) = self.backing.take() {
                 core::mem::forget(backing);
             }
