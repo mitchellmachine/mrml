@@ -502,6 +502,33 @@ tests. Over 50 identical-input iterations after five warmups, MRML measured
 bytes. The 0.010 ms median difference is within ordinary process-startup noise
 and is retained only as narrow regression evidence, not a speed claim.
 
+Initialized-data `R_X86_64_64` records may now target a named text definition
+in another selected object. The primary ELF decoder records each undefined
+absolute target as a typed non-text dependency: it participates in ordinary
+left-to-right archive selection and missing/duplicate-symbol validation but
+does not pretend to own a PC-relative text field. The writable decoder retains
+the borrowed symbol identity, and final serialization resolves it through the
+same frozen global text layout used by calls. Both dependency and patch records
+remain under the existing 256-relocation bounds.
+
+An independently authored ORACLE-0002 consumer stored an external `helper`
+function in an initialized function-pointer static; the provider was placed in
+a later ordinary archive. The absolute dependency selected that archive member,
+the final pointer resolved to its checked text definition, and the 12,304-byte
+MRML ELF exited 42 under Arch WSL. Windows and Linux each passed 715
+compiler-core tests and four driver tests. Over 50 identical-input iterations
+after five warmups, MRML measured 4.690 ms median and 4.717 ms mean versus
+pinned rust-lld with `--eh-frame-hdr` and the same entry at 5.019 ms median and
+5.054 ms mean; rust-lld emitted 2,008 bytes. This single tiny archive workload
+is narrow process-startup-heavy regression evidence, not a general linker-speed
+or Rust-library compatibility claim. Named absolute targets outside text,
+symbol preemption, weak definitions, and dynamic relocations remain unsupported.
+After the final symbol-table-link and global-binding validation was added, both
+platform driver checks and the exact Linux execution probe passed again. A
+later Windows full-core rerun could not compile because concurrent unrelated
+`codegen/tests.rs` work lacked the `format!` macro; no linker failure was
+reported, and those user changes were left untouched.
+
 This increment does **not** emit PE imports/exports/base
 relocations/debug data, emit ELF dynamic metadata/interpreter/PIE/sections,
 accelerate archive extraction through symbol indexes, read thin archives or

@@ -209,6 +209,9 @@ pub struct LinkRelocation<'a> {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum LinkRelocationTarget<'a> {
     Symbol(&'a str),
+    /// A named dependency discovered outside text. It participates in archive
+    /// selection and symbol validation but owns no text field to patch.
+    RequiredSymbol(&'a str),
     /// A validated indirect call/jump through a GOT slot that can be relaxed
     /// only when the symbol resolves in this fixed static image.
     GotPcRelativeSymbol(&'a str),
@@ -266,7 +269,8 @@ pub struct ElfWritableReference {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum ElfWritableAbsoluteTarget {
+pub enum ElfWritableAbsoluteTarget<'a> {
+    Symbol(&'a str),
     InputText(usize),
     ReadonlyData(usize),
     Initialized(usize),
@@ -274,9 +278,9 @@ pub enum ElfWritableAbsoluteTarget {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub struct ElfWritableAbsoluteRelocation {
+pub struct ElfWritableAbsoluteRelocation<'a> {
     pub offset: usize,
-    pub target: ElfWritableAbsoluteTarget,
+    pub target: ElfWritableAbsoluteTarget<'a>,
     pub addend: i64,
 }
 
@@ -287,7 +291,7 @@ pub struct ElfWritableData<'data, 'relocations> {
     pub zeroed_size: usize,
     pub zeroed_alignment: usize,
     pub references: &'relocations [ElfWritableReference],
-    pub absolute_relocations: &'relocations [ElfWritableAbsoluteRelocation],
+    pub absolute_relocations: &'relocations [ElfWritableAbsoluteRelocation<'data>],
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -528,6 +532,7 @@ fn symbol_is_referenced(
                     relocation.target,
                     LinkRelocationTarget::Symbol(target)
                         | LinkRelocationTarget::GotPcRelativeSymbol(target)
+                        | LinkRelocationTarget::RequiredSymbol(target)
                         if target == symbol
                 )
             })
@@ -1536,6 +1541,7 @@ pub fn decode_x86_64_elf_with_definitions<'data, 'relocations, 'definitions>(
     let mut readonly_span = None;
     let mut writable_sections = [false; MAX_COFF_SECTIONS];
     let mut relocation_sections = [false; MAX_COFF_SECTIONS];
+    let mut data_relocation_sections = [false; MAX_COFF_SECTIONS];
     let mut symbols_index = None;
     let mut strings_index = None;
     let mut ignored_sections = [false; MAX_COFF_SECTIONS];
@@ -1622,6 +1628,7 @@ pub fn decode_x86_64_elf_with_definitions<'data, 'relocations, 'definitions>(
                 {
                     return Err(LinkerError::UnsupportedElf);
                 }
+                data_relocation_sections[index] = true;
                 ignored_sections[index] = true;
             }
             ".eh_frame" => {
@@ -1924,6 +1931,69 @@ pub fn decode_x86_64_elf_with_definitions<'data, 'relocations, 'definitions>(
                 .ok_or(LinkerError::OffsetOverflow)?;
         }
     }
+    for index in 1..section_count {
+        if !data_relocation_sections[index] {
+            continue;
+        }
+        let header = elf_section_header(section_offset, section_count, index)?;
+        let relocated_section = usize::try_from(read_u32_elf(object, header + 44)?)
+            .map_err(|_| LinkerError::OffsetOverflow)?;
+        let relocated_header =
+            elf_section_header(section_offset, section_count, relocated_section)?;
+        if read_u32_elf(object, relocated_header + 4)? != 1
+            || !writable_sections
+                .get(relocated_section)
+                .copied()
+                .unwrap_or(false)
+            || usize::try_from(read_u32_elf(object, header + 40)?)
+                .map_err(|_| LinkerError::OffsetOverflow)?
+                != symbols_index
+        {
+            return Err(LinkerError::UnsupportedElf);
+        }
+        let records = elf_section_contents(object, section_offset, section_count, index)?;
+        if records.len() % 24 != 0 {
+            return Err(LinkerError::InvalidElf);
+        }
+        for record in records.chunks_exact(24) {
+            let info = read_u64_elf(record, 8)?;
+            if u32::try_from(info & 0xffff_ffff).map_err(|_| LinkerError::OffsetOverflow)? != 1 {
+                return Err(LinkerError::UnsupportedElf);
+            }
+            let target_index =
+                usize::try_from(info >> 32).map_err(|_| LinkerError::OffsetOverflow)?;
+            if target_index >= symbol_count {
+                return Err(LinkerError::InvalidElf);
+            }
+            let target_offset = target_index * 24;
+            if read_u16_elf(symbols, target_offset + 6)? != 0 {
+                continue;
+            }
+            if *symbols
+                .get(target_offset + 4)
+                .ok_or(LinkerError::InvalidElf)?
+                >> 4
+                != 1
+                || read_u64_elf(symbols, target_offset + 8)? != 0
+            {
+                return Err(LinkerError::UnsupportedElf);
+            }
+            if relocation_count == relocation_storage.len() {
+                return Err(LinkerError::TooManyRelocations);
+            }
+            let symbol = elf_string(
+                strings,
+                usize::try_from(read_u32_elf(symbols, target_offset)?)
+                    .map_err(|_| LinkerError::OffsetOverflow)?,
+            )?;
+            relocation_storage[relocation_count] = LinkRelocation {
+                offset: 0,
+                target: LinkRelocationTarget::RequiredSymbol(symbol),
+                addend: 0,
+            };
+            relocation_count += 1;
+        }
+    }
     Ok(LinkInput {
         symbol,
         additional_definitions: &definition_storage[..definition_count],
@@ -2161,7 +2231,8 @@ fn validate_elf_fde_field(unwind: &[u8], offset: usize) -> Result<(), LinkerErro
 pub fn decode_x86_64_elf_writable<'data, 'relocations>(
     object: &'data [u8],
     reference_storage: &'relocations mut [ElfWritableReference; MAX_LINK_RELOCATIONS],
-    absolute_storage: &'relocations mut [ElfWritableAbsoluteRelocation; MAX_LINK_RELOCATIONS],
+    absolute_storage: &'relocations mut [ElfWritableAbsoluteRelocation<'data>;
+                          MAX_LINK_RELOCATIONS],
 ) -> Result<ElfWritableData<'data, 'relocations>, LinkerError> {
     if object.get(..7) != Some(b"\x7fELF\x02\x01\x01")
         || !matches!(object.get(7), Some(0 | 3))
@@ -2296,6 +2367,20 @@ pub fn decode_x86_64_elf_writable<'data, 'relocations>(
         .checked_sub(text_start)
         .ok_or(LinkerError::OffsetOverflow)?;
     let symbols_index = symbols_index.ok_or(LinkerError::InvalidElf)?;
+    let symbols_header = elf_section_header(section_offset, section_count, symbols_index)?;
+    let strings_index = usize::try_from(read_u32_elf(object, symbols_header + 40)?)
+        .map_err(|_| LinkerError::OffsetOverflow)?;
+    if read_u32_elf(object, symbols_header + 4)? != 2
+        || read_u64_elf(object, symbols_header + 56)? != 24
+        || strings_index >= section_count
+        || read_u32_elf(
+            object,
+            elf_section_header(section_offset, section_count, strings_index)? + 4,
+        )? != 3
+    {
+        return Err(LinkerError::UnsupportedElf);
+    }
+    let strings = elf_section_contents(object, section_offset, section_count, strings_index)?;
     let symbols = elf_section_contents(object, section_offset, section_count, symbols_index)?;
     if symbols.len() % 24 != 0 {
         return Err(LinkerError::InvalidElf);
@@ -2482,6 +2567,21 @@ pub fn decode_x86_64_elf_writable<'data, 'relocations>(
                         .checked_add(value)
                         .ok_or(LinkerError::OffsetOverflow)?,
                 )
+            } else if target_section == 0 {
+                if *symbols
+                    .get(symbol_offset + 4)
+                    .ok_or(LinkerError::InvalidElf)?
+                    >> 4
+                    != 1
+                    || target_value != 0
+                {
+                    return Err(LinkerError::UnsupportedElf);
+                }
+                ElfWritableAbsoluteTarget::Symbol(elf_string(
+                    strings,
+                    usize::try_from(read_u32_elf(symbols, symbol_offset)?)
+                        .map_err(|_| LinkerError::OffsetOverflow)?,
+                )?)
             } else {
                 return Err(LinkerError::UnsupportedElf);
             };
@@ -3105,6 +3205,7 @@ pub fn link_x86_64_elf_executable_with_unwind_and_writable<
                 .filter(|end| *end <= data.initialized.len())
                 .ok_or(LinkerError::InvalidRelocationOffset)?;
             match relocation.target {
+                ElfWritableAbsoluteTarget::Symbol(symbol) => validate_symbol(symbol)?,
                 ElfWritableAbsoluteTarget::InputText(offset)
                     if offset > inputs[index].text.len() =>
                 {
@@ -3364,6 +3465,9 @@ pub fn link_x86_64_elf_executable_with_unwind_and_writable<
                 .checked_add(relocation.offset)
                 .ok_or(LinkerError::OffsetOverflow)?;
             let target = match relocation.target {
+                ElfWritableAbsoluteTarget::Symbol(symbol) => TEXT_OFFSET
+                    .checked_add(resolve_symbol(inputs, &linked.layouts, symbol)?)
+                    .ok_or(LinkerError::OffsetOverflow)?,
                 ElfWritableAbsoluteTarget::InputText(offset) => TEXT_OFFSET
                     .checked_add(linked.layouts[index].text)
                     .and_then(|target| target.checked_add(offset))
@@ -3511,6 +3615,7 @@ fn link_x86_64_static_aligned<const MAX_BYTES: usize>(
             match relocation.target {
                 LinkRelocationTarget::Symbol(symbol)
                 | LinkRelocationTarget::GotPcRelativeSymbol(symbol)
+                | LinkRelocationTarget::RequiredSymbol(symbol)
                 | LinkRelocationTarget::LocalSymbol(symbol) => validate_symbol(symbol)?,
                 LinkRelocationTarget::InputText(offset) if offset > input.text.len() => {
                     return Err(LinkerError::InvalidRelocationOffset);
@@ -3525,11 +3630,13 @@ fn link_x86_64_static_aligned<const MAX_BYTES: usize>(
                 LinkRelocationTarget::ReadonlyData(_)
                 | LinkRelocationTarget::GotPcRelativeReadonlyData(_) => {}
             }
-            relocation
-                .offset
-                .checked_add(4)
-                .filter(|end| *end <= input.text.len())
-                .ok_or(LinkerError::InvalidRelocationOffset)?;
+            if !matches!(relocation.target, LinkRelocationTarget::RequiredSymbol(_)) {
+                relocation
+                    .offset
+                    .checked_add(4)
+                    .filter(|end| *end <= input.text.len())
+                    .ok_or(LinkerError::InvalidRelocationOffset)?;
+            }
         }
     }
 
@@ -3573,6 +3680,10 @@ fn link_x86_64_static_aligned<const MAX_BYTES: usize>(
     // Pass 4: each relocation patches a disjoint field validated above.
     for (input, layout) in inputs.iter().zip(layouts.iter()) {
         for relocation in input.relocations {
+            if let LinkRelocationTarget::RequiredSymbol(symbol) = relocation.target {
+                resolve_symbol(inputs, &layouts, symbol)?;
+                continue;
+            }
             let place = layout
                 .text
                 .checked_add(relocation.offset)
@@ -3583,6 +3694,7 @@ fn link_x86_64_static_aligned<const MAX_BYTES: usize>(
                 | LinkRelocationTarget::LocalSymbol(symbol) => {
                     resolve_symbol(inputs, &layouts, symbol)?
                 }
+                LinkRelocationTarget::RequiredSymbol(_) => unreachable!(),
                 LinkRelocationTarget::InputText(offset) => layout
                     .text
                     .checked_add(offset)
@@ -4284,6 +4396,34 @@ mod tests {
         let selection =
             select_static_link_inputs(&inputs, &[false, true, true, true], "entry").unwrap();
         assert_eq!(selection.indices(), &[0, 2, 3]);
+    }
+
+    #[test]
+    fn selects_archive_members_required_by_non_text_relocations() {
+        let required = [LinkRelocation {
+            offset: 0,
+            target: LinkRelocationTarget::RequiredSymbol("helper"),
+            addend: 0,
+        }];
+        let inputs = [
+            LinkInput {
+                symbol: "entry",
+                additional_definitions: &[],
+                text: &[0xc3],
+                readonly_data: &[],
+                relocations: &required,
+            },
+            LinkInput {
+                symbol: "helper",
+                additional_definitions: &[],
+                text: &[0xc3],
+                readonly_data: &[],
+                relocations: &[],
+            },
+        ];
+        let selection = select_static_link_inputs(&inputs, &[false, true], "entry").unwrap();
+        assert_eq!(selection.indices(), &[0, 1]);
+        assert!(link_x86_64_static::<64>(&inputs, "entry").is_ok());
     }
 
     #[test]
@@ -5490,11 +5630,23 @@ mod tests {
 
     #[test]
     fn applies_bounded_absolute_relocations_in_elf_writable_data() {
+        let required = [LinkRelocation {
+            offset: 0,
+            target: LinkRelocationTarget::RequiredSymbol("helper"),
+            addend: 0,
+        }];
         let input = LinkInput {
             symbol: "entry",
             additional_definitions: &[],
             text: &[0xc3],
             readonly_data: &[42],
+            relocations: &required,
+        };
+        let helper = LinkInput {
+            symbol: "helper",
+            additional_definitions: &[],
+            text: &[0xc3],
+            readonly_data: &[],
             relocations: &[],
         };
         let absolute_relocations = [
@@ -5513,18 +5665,42 @@ mod tests {
                 target: ElfWritableAbsoluteTarget::Zeroed(0),
                 addend: 0,
             },
+            ElfWritableAbsoluteRelocation {
+                offset: 24,
+                target: ElfWritableAbsoluteTarget::Symbol("helper"),
+                addend: 0,
+            },
         ];
-        let writable = [ElfWritableData {
-            initialized: &[0; 24],
-            initialized_alignment: 8,
-            zeroed_size: 8,
-            zeroed_alignment: 8,
-            references: &[],
-            absolute_relocations: &absolute_relocations,
-        }];
+        let writable = [
+            ElfWritableData {
+                initialized: &[0; 32],
+                initialized_alignment: 8,
+                zeroed_size: 8,
+                zeroed_alignment: 8,
+                references: &[],
+                absolute_relocations: &absolute_relocations,
+            },
+            ElfWritableData {
+                initialized: &[],
+                initialized_alignment: 1,
+                zeroed_size: 0,
+                zeroed_alignment: 1,
+                references: &[],
+                absolute_relocations: &[],
+            },
+        ];
         let elf = link_x86_64_elf_executable_with_unwind_and_writable::<16384, 8192>(
-            &[input],
-            &[],
+            &[input, helper],
+            &[
+                ElfUnwindData {
+                    bytes: &[],
+                    relocations: &[],
+                },
+                ElfUnwindData {
+                    bytes: &[],
+                    relocations: &[],
+                },
+            ],
             &writable,
             "entry",
         )
@@ -5532,19 +5708,32 @@ mod tests {
         assert_eq!(read_u64_elf(elf.bytes(), 0x3000).unwrap(), 0x402000);
         assert_eq!(read_u64_elf(elf.bytes(), 0x3008).unwrap(), 0x403010);
         assert_eq!(read_u64_elf(elf.bytes(), 0x3010).unwrap(), 0x403020);
+        assert_eq!(read_u64_elf(elf.bytes(), 0x3018).unwrap(), 0x401010);
 
         let invalid_relocations = [ElfWritableAbsoluteRelocation {
-            offset: 17,
+            offset: 25,
             ..absolute_relocations[0]
         }];
-        let invalid = [ElfWritableData {
-            absolute_relocations: &invalid_relocations,
-            ..writable[0]
-        }];
+        let invalid = [
+            ElfWritableData {
+                absolute_relocations: &invalid_relocations,
+                ..writable[0]
+            },
+            writable[1],
+        ];
         assert_eq!(
             link_x86_64_elf_executable_with_unwind_and_writable::<16384, 8192>(
-                &[input],
-                &[],
+                &[input, helper],
+                &[
+                    ElfUnwindData {
+                        bytes: &[],
+                        relocations: &[],
+                    },
+                    ElfUnwindData {
+                        bytes: &[],
+                        relocations: &[],
+                    },
+                ],
                 &invalid,
                 "entry"
             ),

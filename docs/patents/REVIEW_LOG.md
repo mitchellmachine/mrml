@@ -9515,3 +9515,13 @@ in the selected object, using existing typed layouts and bounds checks. It
 introduces no new relocation encoding, pointer representation, dynamic-linking
 mechanism, compression, cryptographic mechanism, or loader algorithm. This
 technical screen is not legal advice or patent clearance.
+
+# 2026-08-28 — Cross-object absolute text-symbol relocation
+
+Patent review: **NOT_TRIGGERED**. This increment uses conventional static ELF
+symbol resolution and `R_X86_64_64` arithmetic to select an archive member and
+write the fixed address of its text definition into initialized storage. The
+non-text dependency marker is internal bounded bookkeeping and introduces no
+new archive format, relocation encoding, dynamic-linking mechanism,
+compression, cryptographic mechanism, or loader algorithm. This technical
+screen is not legal advice or patent clearance.

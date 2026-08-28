@@ -1,21 +1,21 @@
 #![no_std]
 #![cfg_attr(not(test), no_main)]
 
-use mrml_error::{Result, anyhow};
-use mrml_runtime::{Text, Vector, mrml_println as println};
+use mrml_error::{anyhow, Result};
+use mrml_runtime::{mrml_println as println, Text, Vector};
 use mrml_rustc::{
-    CodegenOptions, ElfUnwindData, ElfUnwindRelocation, ElfWritableAbsoluteRelocation,
-    ElfWritableAbsoluteTarget, ElfWritableData, ElfWritableReference, ElfWritableTarget,
-    LinkDefinition, LinkInput, LinkRelocation, LinkRelocationTarget, MAX_LINK_DEFINITIONS,
-    MAX_LINK_INPUTS, MAX_LINK_RELOCATIONS, MAX_PE_RUNTIME_FUNCTIONS, ObjectFormat,
-    PeRuntimeFunction, PeWritableData, PeWritableRelocation, TargetLayout,
     compile_source_function_with_options, decode_unix_archive,
     decode_x86_64_coff_runtime_functions, decode_x86_64_coff_text_fragment,
     decode_x86_64_coff_writable_data_fragment, decode_x86_64_elf_unwind,
     decode_x86_64_elf_with_definitions, decode_x86_64_elf_writable,
     link_x86_64_elf_executable_with_unwind_and_writable, link_x86_64_pe_with_data_and_unwind,
     select_ordered_static_link_members, x86_64_coff_text_fragment_count,
-    x86_64_coff_writable_section_count,
+    x86_64_coff_writable_section_count, CodegenOptions, ElfUnwindData, ElfUnwindRelocation,
+    ElfWritableAbsoluteRelocation, ElfWritableAbsoluteTarget, ElfWritableData,
+    ElfWritableReference, ElfWritableTarget, LinkDefinition, LinkInput, LinkRelocation,
+    LinkRelocationTarget, ObjectFormat, PeRuntimeFunction, PeWritableData, PeWritableRelocation,
+    TargetLayout, MAX_LINK_DEFINITIONS, MAX_LINK_INPUTS, MAX_LINK_RELOCATIONS,
+    MAX_PE_RUNTIME_FUNCTIONS,
 };
 
 #[cfg_attr(test, allow(dead_code))]
@@ -805,7 +805,8 @@ fn selected_elf_writable<'data, 'references>(
     objects: &[&'data [u8]],
     selected: &SelectedLinkInputs<'_, '_, '_>,
     arenas: &'references mut [[ElfWritableReference; MAX_LINK_RELOCATIONS]],
-    absolute_arenas: &'references mut [[ElfWritableAbsoluteRelocation; MAX_LINK_RELOCATIONS]],
+    absolute_arenas: &'references mut [[ElfWritableAbsoluteRelocation<'data>;
+                          MAX_LINK_RELOCATIONS]],
 ) -> Result<Vector<ElfWritableData<'data, 'references>>> {
     if selected.inputs.len() != selected.source_object.len()
         || selected.inputs.len() != arenas.len()
@@ -833,9 +834,9 @@ fn selected_elf_writable<'data, 'references>(
     Ok(writable)
 }
 
-fn elf_writable_absolute_arenas(
+fn elf_writable_absolute_arenas<'a>(
     count: usize,
-) -> Result<Vector<[ElfWritableAbsoluteRelocation; MAX_LINK_RELOCATIONS]>> {
+) -> Result<Vector<[ElfWritableAbsoluteRelocation<'a>; MAX_LINK_RELOCATIONS]>> {
     let mut arenas = Vector::with_capacity(count)
         .map_err(|_| anyhow!("could not allocate ELF writable absolute-relocation arenas"))?;
     for _ in 0..count {
