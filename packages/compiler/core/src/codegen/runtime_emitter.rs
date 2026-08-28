@@ -7143,8 +7143,19 @@ impl<
                     self.emit(&[0x4c, 0x89, 0xc0, 0x48, 0x89, 0xca])?;
                 }
                 crate::BinaryOperator::Multiply => {
-                    if layout.signed {
-                        return Err(self.error(CodegenErrorKind::RuntimeExpressionUnsupported));
+                    if layout.signed && self.overflow_checks {
+                        self.emit(&[0x49, 0x89, 0xcb, 0x49, 0x31, 0xd3, 0x48, 0x85, 0xc9])?;
+                        let nonnegative_left = self.emit_forward_branch(0x89)?;
+                        self.emit(&[
+                            0x49, 0xf7, 0xd8, 0x48, 0x83, 0xd1, 0x00, 0x48, 0xf7, 0xd9,
+                        ])?;
+                        self.patch_forward_branch(nonnegative_left)?;
+                        self.emit(&[0x48, 0x85, 0xd2])?;
+                        let nonnegative_right = self.emit_forward_branch(0x89)?;
+                        self.emit(&[
+                            0x48, 0xf7, 0xd8, 0x48, 0x83, 0xd2, 0x00, 0x48, 0xf7, 0xda,
+                        ])?;
+                        self.patch_forward_branch(nonnegative_right)?;
                     }
                     self.emit(&[0x49, 0x89, 0xc1, 0x49, 0x89, 0xd2])?;
                     if self.overflow_checks {
@@ -7176,6 +7187,26 @@ impl<
                     }
                     self.emit(&[0x58])?;
                     self.evaluation_depth -= 2;
+                    if layout.signed && self.overflow_checks {
+                        self.emit(&[0x4d, 0x85, 0xdb])?;
+                        let negative_result = self.emit_forward_branch(0x88)?;
+                        self.emit(&[0x48, 0x85, 0xd2])?;
+                        self.emit_trap_branch(0x88)?;
+                        let signed_end = self.emit_unconditional_forward_branch()?;
+                        self.patch_forward_branch(negative_result)?;
+                        self.emit(&[0x49, 0xba])?;
+                        self.emit(&(1u64 << 63).to_le_bytes())?;
+                        self.emit(&[0x4c, 0x39, 0xd2])?;
+                        self.emit_trap_branch(0x87)?;
+                        let below_minimum_magnitude = self.emit_forward_branch(0x82)?;
+                        self.emit(&[0x48, 0x85, 0xc0])?;
+                        self.emit_trap_branch(0x85)?;
+                        self.patch_forward_branch(below_minimum_magnitude)?;
+                        self.emit(&[
+                            0x48, 0xf7, 0xd8, 0x48, 0x83, 0xd2, 0x00, 0x48, 0xf7, 0xda,
+                        ])?;
+                        self.patch_forward_branch(signed_end)?;
+                    }
                 }
                 _ => unreachable!(),
             }
