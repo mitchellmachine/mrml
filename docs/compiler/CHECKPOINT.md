@@ -77,6 +77,15 @@ not representative `.rlib` diversity or a general speed claim; large real-
 library benchmarks and the remaining format/relocation gates are still
 required.
 
+The same implementation also linked a genuine 85,332-byte pinned-rustc
+`.rlib` containing metadata plus 16 distinct codegen-unit object members. An
+independent consumer referenced functions from two members; MRML emitted 8,432
+bytes and exited 42, matching rust-lld's behavior. A 50-iteration/five-warmup
+measurement recorded MRML at 4.306 ms median versus pinned rust-lld with
+`--eh-frame-hdr` at 4.981 ms; rust-lld emitted 2,120 bytes. This is diverse
+small no-std archive evidence, not general `.rlib` coverage or a broad speed
+claim.
+
 Commit `34b6c6ef` uses a validated GNU archive index to compute a bounded,
 left-to-right unresolved-symbol closure before admitting members to the full
 decode/layout pipeline. Selected mappings are confirmed against independently

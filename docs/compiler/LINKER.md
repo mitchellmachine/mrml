@@ -627,6 +627,17 @@ with `--eh-frame-hdr` at 5.302 ms median and 5.327 ms mean; rust-lld emitted
 2,080 bytes. Repeating one unused object is useful scaling regression evidence
 but is not representative Rust-library diversity or a general speed claim.
 
+A separate pinned-rustc probe uses 32 independently exported functions spread
+across 16 codegen units. Its genuine 85,332-byte `.rlib` contains `lib.rmeta`,
+`lib.rmeta-link`, and 16 distinct rustc object members; the consumer references
+two functions in different members. MRML selected the required members, emitted
+8,432 bytes, and exited 42, matching rust-lld's 2,120-byte output behavior. Over
+50 iterations after five warmups, MRML measured 4.306 ms median and 4.360 ms
+mean versus pinned rust-lld with `--eh-frame-hdr` at 4.981 ms median and 5.028
+ms mean. This is materially more diverse archive evidence than the repeated-
+object probe, but it remains one small no-std hosted workload and does not prove
+general rustc `.rlib` compatibility or speed superiority.
+
 This increment does **not** emit PE imports/exports/base
 relocations/debug data, emit ELF dynamic metadata/interpreter/PIE/sections,
 read thin archives or general `.rlib` contents, perform section GC or ICF, link
