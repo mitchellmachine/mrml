@@ -9,8 +9,8 @@ the named commit and current source.
 ## Recoverable baseline
 
 - Branch: `main`
-- Compiler checkpoint commit: `f74e0489`
-  (`compiler: drive reachable ELF linking`)
+- Compiler checkpoint commit: `608f811a`
+  (`compiler: inventory ELF archive symbols`)
 - Remote state when recorded: `origin/main` includes the bounded MRML-owned
   static-link core, exact MRML COFF and ELF64 ingestion, deterministic
   import-free PE32+/ELF64 executable serialization, explicit compiler-driver
@@ -60,6 +60,21 @@ against all prior accepted probes. Keep Cargo on edition 2024 until a newer
 named edition can be adopted through a pinned, workspace-wide migration.
 
 ## Latest bounded linker milestone
+
+Commit `608f811a` replaces the final legacy whole-object dependency in ELF GNU
+archive selection with a bounded symbol inventory over validated symbol,
+string, and RELA tables. It records at most 4,096 global/weak definitions and
+actual relocation-referenced undefined names without classifying unrelated
+content sections; the archive index remains only an independently checked
+lookup hint. The exact pinned 3,150,398-byte `libcore` archive now passes
+inventory, selects its 3,104,472-byte/1,702-section object, and reaches selected
+linking. A strengthened entry-retained pointer to
+`_RNvNtCs5erv4YX8a5g_4core3fmt17pointer_fmt_inner` caused that core function
+and its transitive sections to be linked into an 8,674-byte ELF, which executed
+on controlled Arch Linux/WSL with exit code 42. Windows and Linux each passed
+726 core unit tests and every integration suite; both driver suites passed five
+tests. Broader rustc object-family conformance, driver benchmarks against the
+pinned rust-lld, and optimization remain active gates.
 
 Commit `f74e0489` adds a bounded cross-object ELF reachability fixed point and
 cuts the Linux compiler-driver link path over to selected sections. Starting at
