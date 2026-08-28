@@ -7,6 +7,7 @@
 //! contains no source copied from the upstream compiler or standard library;
 //! its tests describe independently observed language behavior.
 
+pub mod abi;
 pub mod codegen;
 pub mod expression;
 pub mod ir;
@@ -17,6 +18,10 @@ pub mod pipeline;
 pub mod semantics;
 pub mod trait_goals;
 
+pub use abi::{
+    MrmlV1Integer, MrmlV1Pointee, MrmlV1Signature, MrmlV1SignatureError, MrmlV1SignatureErrorKind,
+    MrmlV1SignatureLocation, MrmlV1Type, classify_mrml_v1_type, validate_mrml_v1_signature,
+};
 pub use codegen::{
     CodegenError, CodegenErrorKind, CodegenOptions, MAX_X86_64_EXTERNAL_RELOCATIONS,
     MAX_X86_64_READONLY_DATA_BYTES, MAX_X86_64_READONLY_RELOCATIONS, MachineCode, X86_64Abi,

@@ -32,17 +32,37 @@ with an explicit native ABI fail closed.
 
 Unknown future versions are never interpreted as version 1.
 
+## Signature validation
+
+The central, allocation-free v1 classifier currently admits these logical
+source types:
+
+- fixed-width `u8` through `u128` and `i8` through `i128` integers;
+- `bool` and `char`;
+- const and mutable raw pointers to those scalar types;
+- shared and mutable references to those scalar types;
+- shared and mutable slices of those scalar types; and
+- shared and mutable `str` references.
+
+An omitted return type is the v1 unit type. `usize` and `isize` fail with a
+distinct platform-sized-integer reason. Undefined aggregates, floats, aliases,
+user types, nested pointers, and every other unclassified spelling fail closed
+as unsupported. Validation reports whether failure belongs to the function,
+an exact parameter index, or the return type. This logical classification does
+not itself define a machine representation.
+
 ## Current implementation boundary
 
-Only the central identity and bounded facade parser are implemented at this
-checkpoint. MRML ABI v1 signature validation, deterministic type layout,
-ownership/borrowing rules, System V and Windows lowering, link compatibility,
-and external execution evidence remain required before an attributed function
-can be emitted. Code generation therefore continues to reject `MrmlV1` rather
-than silently routing it through the C ABI.
+The central identity, bounded facade parser, and initial signature classifier
+are implemented at this checkpoint. Deterministic type layout,
+ownership/borrowing rules beyond ordinary language checking, System V and
+Windows lowering, link compatibility, and external execution evidence remain
+required before an attributed function can be emitted. Code generation
+therefore continues to reject `MrmlV1` rather than silently routing it through
+the C ABI.
 
-In particular, this checkpoint does not define the representation of slices,
-strings, references, arrays, tuples, aggregates, or indirect returns. It also
-does not establish that existing `extern "C"` tests with Rust-specific types are
-C-compatible; those boundaries require a separate fail-closed validation and
-test migration.
+In particular, logical acceptance of slices, strings, or references does not
+yet define their representation. Arrays, tuples, aggregates, and indirect
+returns are not admitted. This checkpoint also does not establish that existing
+`extern "C"` tests with Rust-specific types are C-compatible; those boundaries
+require a separate fail-closed validation and test migration.
