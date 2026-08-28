@@ -9,8 +9,8 @@ the named commit and current source.
 ## Recoverable baseline
 
 - Branch: `main`
-- Compiler checkpoint commit: `cb5a52bb`
-  (`compiler: retain ELF section groups atomically`)
+- Compiler checkpoint commit: `63997977`
+  (`compiler: select ordered ELF COMDAT winners`)
 - Remote state when recorded: `origin/main` includes the bounded MRML-owned
   static-link core, exact MRML COFF and ELF64 ingestion, deterministic
   import-free PE32+/ELF64 executable serialization, explicit compiler-driver
@@ -60,6 +60,22 @@ against all prior accepted probes. Keep Cargo on edition 2024 until a newer
 named edition can be adopted through a pinned, workspace-wide migration.
 
 ## Latest bounded linker milestone
+
+Commit `63997977` inventories up to 4,096 validated COMDAT groups before
+cross-object symbol resolution. Exact input order selects the first signature;
+sparse borrowed loser-group views hide later definitions and relocation edges
+without a 512 KiB common-path bitmap. Independently compiled strong `helper`
+groups return 42 and 7: MRML and pinned rust-lld both returned 42 in
+first/second order and 7 in second/first order. A losing group with an absent
+dependency was discarded before unresolved-symbol closure by both linkers and
+the output still exited 42. Focused COMDAT tests passed on Windows and native
+Arch Linux. Full runs passed 733 of 734 core tests on both hosts before the
+same unrelated concurrently modified wide-return diagnostic assertion failed
+(`OutputTooSmall` versus expected `RuntimeExpressionUnsupported`); 119 frontend
+tests, clippy, and five Windows driver tests passed. Current benchmarks measured
+MRML/rust-lld at 5.206/4.640 ms for the tiny trait-object link and 5.617/6.076
+ms for reachable pinned libcore. Repository audit remained blocked first by
+unrelated fingerprint `fnv1a64:041772d31cad5bfc`.
 
 Commit `cb5a52bb` validates `SHT_GROUP`/`GRP_COMDAT` records against the exact
 symbol table and retains every allocatable member when any member is reachable.
