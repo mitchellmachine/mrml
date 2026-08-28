@@ -36,6 +36,7 @@ pub enum LinkerError {
     UnsupportedArchive,
     TooManyArchiveMembers,
     TooManyArchiveSymbols,
+    TooManyElfSections,
 }
 
 impl core::fmt::Display for LinkerError {
@@ -61,6 +62,7 @@ impl core::fmt::Display for LinkerError {
             Self::UnsupportedArchive => "unsupported Unix archive feature",
             Self::TooManyArchiveMembers => "archive member capacity exceeded",
             Self::TooManyArchiveSymbols => "archive symbol-index capacity exceeded",
+            Self::TooManyElfSections => "selected ELF section capacity exceeded",
         };
         formatter.write_str(message)
     }
@@ -443,6 +445,18 @@ pub struct PeWritableData<'a, 'relocations> {
 pub struct LinkInputSelection {
     indices: [usize; MAX_LINK_INPUTS],
     length: usize,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct ElfSectionSelection {
+    indices: [u16; MAX_LINK_INPUTS],
+    length: usize,
+}
+
+impl ElfSectionSelection {
+    pub fn indices(&self) -> &[u16] {
+        &self.indices[..self.length]
+    }
 }
 
 impl LinkInputSelection {
@@ -1601,6 +1615,167 @@ pub fn decode_x86_64_coff_text_fragment<'data, 'relocations, 'definitions>(
         readonly_data,
         relocations: &relocation_storage[..relocation_table.1],
     })
+}
+
+/// Selects the sections reachable from exact defined ELF symbols through RELA
+/// edges. This is a format-graph pass only; decoding and layout remain separate.
+pub fn select_x86_64_elf_sections(
+    object: &[u8],
+    root_symbols: &[&str],
+) -> Result<ElfSectionSelection, LinkerError> {
+    if root_symbols.is_empty() {
+        return Err(LinkerError::EmptySymbol);
+    }
+    for root in root_symbols {
+        validate_symbol(root)?;
+    }
+    if object.get(..7) != Some(b"\x7fELF\x02\x01\x01")
+        || !matches!(object.get(7), Some(0 | 3))
+        || object.get(8) != Some(&0)
+        || read_u16_elf(object, 16)? != 1
+        || read_u16_elf(object, 18)? != 62
+        || read_u32_elf(object, 20)? != 1
+        || read_u16_elf(object, 52)? != 64
+        || read_u16_elf(object, 58)? != 64
+    {
+        return Err(LinkerError::UnsupportedElf);
+    }
+    let section_offset = to_usize_elf(read_u64_elf(object, 40)?)?;
+    let section_count = usize::from(read_u16_elf(object, 60)?);
+    let section_names_index = usize::from(read_u16_elf(object, 62)?);
+    if !(4..=MAX_ELF_SECTIONS).contains(&section_count) || section_names_index >= section_count {
+        return Err(LinkerError::UnsupportedElf);
+    }
+    let section_bytes = section_count
+        .checked_mul(64)
+        .ok_or(LinkerError::OffsetOverflow)?;
+    object
+        .get(
+            section_offset
+                ..section_offset
+                    .checked_add(section_bytes)
+                    .ok_or(LinkerError::OffsetOverflow)?,
+        )
+        .ok_or(LinkerError::InvalidElf)?;
+
+    let mut symbols_index = None;
+    for index in 1..section_count {
+        let header = elf_section_header(section_offset, section_count, index)?;
+        if read_u32_elf(object, header + 4)? == 2 {
+            if symbols_index.replace(index).is_some() {
+                return Err(LinkerError::UnsupportedElf);
+            }
+        }
+    }
+    let symbols_index = symbols_index.ok_or(LinkerError::InvalidElf)?;
+    let symbols_header = elf_section_header(section_offset, section_count, symbols_index)?;
+    if read_u64_elf(object, symbols_header + 56)? != 24 {
+        return Err(LinkerError::UnsupportedElf);
+    }
+    let strings_index = usize::try_from(read_u32_elf(object, symbols_header + 40)?)
+        .map_err(|_| LinkerError::OffsetOverflow)?;
+    if strings_index >= section_count {
+        return Err(LinkerError::InvalidElf);
+    }
+    let symbols = elf_section_contents(object, section_offset, section_count, symbols_index)?;
+    let strings = elf_section_contents(object, section_offset, section_count, strings_index)?;
+    if symbols.len() % 24 != 0 {
+        return Err(LinkerError::InvalidElf);
+    }
+
+    let mut selected = [false; MAX_ELF_SECTIONS];
+    for root in root_symbols {
+        let mut found = false;
+        for symbol_index in 1..symbols.len() / 24 {
+            let symbol = symbol_index * 24;
+            let name_offset = usize::try_from(read_u32_elf(symbols, symbol)?)
+                .map_err(|_| LinkerError::OffsetOverflow)?;
+            if name_offset == 0 {
+                continue;
+            }
+            if elf_string(strings, name_offset)? != *root {
+                continue;
+            }
+            let section = usize::from(read_u16_elf(symbols, symbol + 6)?);
+            if section == 0 || section == 0xfff1 || section >= section_count {
+                return Err(LinkerError::UndefinedSymbol);
+            }
+            selected[section] = true;
+            found = true;
+            break;
+        }
+        if !found {
+            return Err(LinkerError::UndefinedSymbol);
+        }
+    }
+
+    loop {
+        let mut changed = false;
+        for relocation_index in 1..section_count {
+            let relocation_header =
+                elf_section_header(section_offset, section_count, relocation_index)?;
+            if read_u32_elf(object, relocation_header + 4)? != 4 {
+                continue;
+            }
+            let target = usize::try_from(read_u32_elf(object, relocation_header + 44)?)
+                .map_err(|_| LinkerError::OffsetOverflow)?;
+            if target >= section_count || !selected[target] {
+                continue;
+            }
+            let linked_symbols = usize::try_from(read_u32_elf(object, relocation_header + 40)?)
+                .map_err(|_| LinkerError::OffsetOverflow)?;
+            if linked_symbols != symbols_index
+                || read_u64_elf(object, relocation_header + 56)? != 24
+            {
+                return Err(LinkerError::UnsupportedElf);
+            }
+            let relocations =
+                elf_section_contents(object, section_offset, section_count, relocation_index)?;
+            if relocations.len() % 24 != 0 {
+                return Err(LinkerError::InvalidElf);
+            }
+            for relocation in (0..relocations.len()).step_by(24) {
+                let symbol_index = to_usize_elf(read_u64_elf(relocations, relocation + 8)? >> 32)?;
+                let symbol = symbol_index
+                    .checked_mul(24)
+                    .ok_or(LinkerError::OffsetOverflow)?;
+                symbols
+                    .get(symbol..symbol + 24)
+                    .ok_or(LinkerError::InvalidElf)?;
+                let dependency = usize::from(read_u16_elf(symbols, symbol + 6)?);
+                if dependency == 0 || dependency == 0xfff1 {
+                    continue;
+                }
+                if dependency >= section_count {
+                    return Err(LinkerError::InvalidElf);
+                }
+                if !selected[dependency] {
+                    selected[dependency] = true;
+                    changed = true;
+                }
+            }
+        }
+        if !changed {
+            break;
+        }
+    }
+
+    let mut selection = ElfSectionSelection {
+        indices: [0; MAX_LINK_INPUTS],
+        length: 0,
+    };
+    for (index, is_selected) in selected[..section_count].iter().enumerate() {
+        if !is_selected {
+            continue;
+        }
+        if selection.length == selection.indices.len() {
+            return Err(LinkerError::TooManyElfSections);
+        }
+        selection.indices[selection.length] =
+            u16::try_from(index).map_err(|_| LinkerError::TooManyElfSections)?;
+        selection.length += 1;
+    }
+    Ok(selection)
 }
 
 /// Decodes the exact bounded ELF64 relocatable subset emitted by `mrml-rustc`.
@@ -5710,6 +5885,22 @@ mod tests {
             }],
         )
         .unwrap();
+        assert_eq!(
+            select_x86_64_elf_sections(caller.bytes(), &["entry"])
+                .unwrap()
+                .indices(),
+            &[1]
+        );
+        assert_eq!(
+            select_x86_64_elf_sections(data.bytes(), &["literal"])
+                .unwrap()
+                .indices(),
+            &[1, 3]
+        );
+        assert_eq!(
+            select_x86_64_elf_sections(data.bytes(), &["missing"]),
+            Err(LinkerError::UndefinedSymbol)
+        );
         let empty = [LinkRelocation {
             offset: 0,
             target: LinkRelocationTarget::Symbol("unused"),

@@ -46,8 +46,8 @@ pub use ir::{
 };
 pub use lexer::{LexError, LexErrorKind, Lexer, Span, Token, TokenKind};
 pub use linker::{
-    ArchiveMember, ArchiveMembers, ArchiveSymbol, ElfImage, ElfUnwindData, ElfUnwindRelocation,
-    ElfWritableAbsoluteRelocation, ElfWritableAbsoluteTarget, ElfWritableData,
+    ArchiveMember, ArchiveMembers, ArchiveSymbol, ElfImage, ElfSectionSelection, ElfUnwindData,
+    ElfUnwindRelocation, ElfWritableAbsoluteRelocation, ElfWritableAbsoluteTarget, ElfWritableData,
     ElfWritableReference, ElfWritableTarget, LinkDefinition, LinkDefinitionTarget, LinkInput,
     LinkInputSelection, LinkRelocation, LinkRelocationTarget, LinkedImage, LinkerError,
     MAX_ARCHIVE_MEMBERS, MAX_ARCHIVE_SYMBOLS, MAX_LINK_DEFINITIONS, MAX_LINK_INPUTS,
@@ -60,8 +60,8 @@ pub use linker::{
     link_x86_64_elf_executable_with_unwind, link_x86_64_elf_executable_with_unwind_and_writable,
     link_x86_64_pe, link_x86_64_pe_with_data_and_unwind, link_x86_64_pe_with_unwind,
     link_x86_64_static, select_ordered_static_link_inputs, select_ordered_static_link_members,
-    select_static_link_inputs, x86_64_coff_text_fragment_count, x86_64_coff_unwind_section_count,
-    x86_64_coff_writable_section_count,
+    select_static_link_inputs, select_x86_64_elf_sections, x86_64_coff_text_fragment_count,
+    x86_64_coff_unwind_section_count, x86_64_coff_writable_section_count,
 };
 pub use object::{
     MAX_X86_64_RELOCATIONS, ObjectError, ObjectFile, X86_64PcRelativeRelocation,

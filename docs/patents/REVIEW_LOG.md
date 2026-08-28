@@ -1,5 +1,14 @@
 # Patent review log
 
+## 2026-08-28 — Bounded ELF section reachability graph
+
+Patent review: **NOT_TRIGGERED** for conventionally rooting exact ELF symbols
+and traversing same-object RELA references to identify reachable sections under
+fixed section and result bounds. This is ordinary linker graph reachability and
+format validation; it adds no novel graph algorithm, hashing, compression,
+parallel scheduling, binary rewriting, cryptography, or hardware mechanism.
+This technical screen is not patent clearance.
+
 ## 2026-08-28 — Separate bounded ELF section inventory
 
 Patent review: **NOT_TRIGGERED** for retaining the 256-section COFF bound while

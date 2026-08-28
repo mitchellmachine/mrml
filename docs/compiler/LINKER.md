@@ -713,6 +713,22 @@ read-only relocation modeling, not blindly copying the entire 3.10 MiB member.
 Windows and Linux each passed 722 core unit tests, all integration suites, and
 five driver tests. Actual core-symbol extraction remains incomplete.
 
+A typed ELF section-reachability pass now roots one or more exact defined
+symbols and follows same-object `SHT_RELA` symbol edges to a bounded fixed
+point. It independently validates the ELF header, at most 2,048 section
+headers, one 24-byte-entry symbol table, its linked string table, relocation
+entry size/link/target fields, symbol indexes, and ordinary section indexes.
+Undefined and absolute symbols create no same-object edge; missing roots,
+malformed references, and more than 256 reachable content sections fail
+closed. The result is an ordered `ElfSectionSelection`, not layout authority.
+
+Focused tests show an external call keeps only its root text section, a local
+read-only relocation retains exactly the root text and referenced `.rodata`
+sections, and a missing root is rejected. Windows and Linux each passed 723
+core unit tests and every integration suite. This establishes the graph pass
+needed for section GC; the existing decoder/layout path does not consume it
+yet, so it does not claim smaller output or pinned-core symbol execution.
+
 This increment does **not** emit PE imports/exports/base
 relocations/debug data, emit ELF dynamic metadata/interpreter/PIE/sections,
 read thin archives or general `.rlib` contents, perform section GC or ICF, link
