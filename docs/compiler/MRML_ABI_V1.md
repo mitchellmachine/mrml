@@ -133,6 +133,9 @@ Direct `i128` negation uses carry-aware two-word lowering and traps on `i128::MI
 when ordinary overflow checks are enabled.
 Typed `&`, `|`, and `^` expressions evaluate left-to-right and combine both words
 independently for matching wide integer types.
+Matching-type `u128` and `i128` addition evaluates left-to-right, propagates the
+low-word carry into the high word, and uses unsigned-carry or signed-overflow
+branches respectively when ordinary overflow checks are enabled.
 Closed positive and negative two-word integer literals are range-checked against
 the declared return type and materialized directly into the two return words.
 Other wide casts, expressions, locals, operations, calls, and returns remain
@@ -172,6 +175,8 @@ Non-overflowing signed negation results are compared at both words, while exact
 machine-code checks cover the shared overflow trap.
 Wide bitwise operations are compared at both words across zero, extrema,
 all-ones, and mixed-bit inputs.
+Non-overflowing unsigned and signed addition is compared across both words;
+machine-code tests require the shared overflow trap.
 Exact `u128::MAX`, `i128::MAX`, and `i128::MIN` literal
 words are also compared with the same oracle. This is not linker, dynamic-loader,
 cross-language, or physical-hardware evidence.

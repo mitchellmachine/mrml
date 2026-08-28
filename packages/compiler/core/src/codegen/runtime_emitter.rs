@@ -6972,7 +6972,8 @@ impl<
             operator:
                 operator @ (crate::BinaryOperator::BitAnd
                 | crate::BinaryOperator::BitOr
-                | crate::BinaryOperator::BitXor),
+                | crate::BinaryOperator::BitXor
+                | crate::BinaryOperator::Add),
             left,
             right,
         } = expression.kind
@@ -7015,6 +7016,12 @@ impl<
                 }
                 crate::BinaryOperator::BitXor => {
                     self.emit(&[0x4c, 0x31, 0xc0, 0x48, 0x31, 0xca])?
+                }
+                crate::BinaryOperator::Add => {
+                    self.emit(&[0x4c, 0x01, 0xc0, 0x48, 0x11, 0xca])?;
+                    if self.overflow_checks {
+                        self.emit_trap_branch(if layout.signed { 0x80 } else { 0x82 })?;
+                    }
                 }
                 _ => unreachable!(),
             }
