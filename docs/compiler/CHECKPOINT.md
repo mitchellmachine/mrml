@@ -9,8 +9,8 @@ the named commit and current source.
 ## Recoverable baseline
 
 - Branch: `main`
-- Compiler checkpoint commit: `9a833a5e`
-  (`compiler: scale bounded COFF section ingestion`)
+- Compiler checkpoint commit: `a91e10cd`
+  (`compiler: ingest pinned rustc split-text ELF`)
 - Remote state when recorded: `origin/main` includes the bounded MRML-owned
   static-link core, exact MRML COFF and ELF64 ingestion, deterministic
   import-free PE32+/ELF64 executable serialization, explicit compiler-driver
@@ -60,6 +60,22 @@ against all prior accepted probes. Keep Cargo on edition 2024 until a newer
 named edition can be adopted through a pinned, workspace-wide migration.
 
 ## Latest bounded linker milestone
+
+Commit `a91e10cd` admits one nonempty pinned-rustc `.text.<symbol>` ELF section
+and its `.rela.text.<symbol>` table, an empty base `.text`, local absolute file
+metadata symbols, non-allocating `.comment`, empty `.note.GNU-stack`, and
+excluded `.llvmbc`/`.llvmcmd`. Metadata is validated but never copied into a
+loadable segment. The explicit static-relocation/no-unwind profile links the
+already supported `R_X86_64_PLT32`; default PIC `R_X86_64_GOTPCREL`, multiple
+split text fragments per object, `.eh_frame`, and relocated debug sections
+remain fail-closed.
+
+Under the exact ORACLE-0002 Arch WSL environment, a naked process entry in one
+object called an external helper in a later object and issued Linux `exit` with
+status 42 from the 4,118-byte MRML ELF image. Windows and Linux each passed 707
+compiler-core tests and four driver tests. This is controlled hosted backend-
+parity evidence, not complete rustc ELF, GOT, unwind, debug, or representative-
+library coverage.
 
 Commit `9a833a5e` replaces the incidental 16-section COFF limit with one explicit
 256-section bound shared by the fixed classification arrays and all decoder
