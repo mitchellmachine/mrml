@@ -9,8 +9,8 @@ the named commit and current source.
 ## Recoverable baseline
 
 - Branch: `main`
-- Compiler checkpoint commit: `7488e00b`
-  (`compiler: reuse prepared ELF COMDAT views`)
+- Compiler checkpoint commit: `e2ab220a`
+  (`compiler: retain ELF initializer arrays`)
 - Remote state when recorded: `origin/main` includes the bounded MRML-owned
   static-link core, exact MRML COFF and ELF64 ingestion, deterministic
   import-free PE32+/ELF64 executable serialization, explicit compiler-driver
@@ -60,6 +60,24 @@ against all prior accepted probes. Keep Cargo on edition 2024 until a newer
 named edition can be adopted through a pinned, workspace-wide migration.
 
 ## Latest bounded linker milestone
+
+Commit `e2ab220a` automatically retains the conventional unsuffixed
+`.init_array`/`SHT_INIT_ARRAY` section, inventories it in the same one-time
+cross-object metadata pass as COMDAT groups, gives it a typed writable layout
+class, and applies checked static relocations to its entries. Admission requires
+`SHF_ALLOC|SHF_WRITE`, permits only the pinned rustc's optional
+`SHF_GNU_RETAIN`, requires eight-byte alignment and size, and accepts only
+`sh_entsize` zero or eight. The independently authored Rust 2024 probe leaves
+the initializer uncalled by `start`; MRML and pinned gnullvm rust-lld both
+retained its exact `mov eax, 7; ret` body and produced exit-42 executables of
+8,200 and 1,536 bytes. Windows and native Arch Linux each passed 739 core tests,
+integrations of 1/10/351/49, and five driver tests. Current 50-iteration/five-
+warmup samples measured MRML/rust-lld at 5.726/5.359 ms for the tiny trait
+object, 5.680/5.317 ms for the transitive 16-CGU archive, and 6.342/6.847 ms for
+reachable pinned libcore. Only the larger sample was faster in that run; no
+general superiority claim follows. Runtime constructor iteration, boundary
+symbols, priority suffixes, preinitializers, and finalizers remain unsupported.
+Patent review: **NOT_TRIGGERED**.
 
 Commit `7488e00b` retains every validated ordered COMDAT group as a bounded
 borrowed winner/loser view and partitions that inventory to the exact object
