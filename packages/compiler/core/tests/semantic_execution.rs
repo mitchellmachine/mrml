@@ -46,6 +46,10 @@ const MRML_V1_UNSIGNED_WIDEN_SOURCE: &str =
     "#[mrml_abi::export(version = 1)] pub fn probe(input: u64) -> u128 { input as u128 }";
 const MRML_V1_SIGNED_WIDEN_SOURCE: &str =
     "#[mrml_abi::export(version = 1)] pub fn probe(input: i64) -> i128 { input as i128 }";
+const MRML_V1_NARROW_SIGNED_TO_UNSIGNED_WIDEN_SOURCE: &str =
+    "#[mrml_abi::export(version = 1)] pub fn probe(input: i8) -> u128 { input as u128 }";
+const MRML_V1_NARROW_UNSIGNED_TO_SIGNED_WIDEN_SOURCE: &str =
+    "#[mrml_abi::export(version = 1)] pub fn probe(input: u32) -> i128 { input as i128 }";
 #[cfg(target_os = "windows")]
 const MRML_V1_SPLIT_SLICE_SOURCE: &str = "#[mrml_abi::export(version = 1)] pub fn probe(a: u64, b: u64, c: u64, input: &[u8]) -> u64 { a + b * 2 + c * 3 + input.len() as u64 }";
 #[cfg(not(target_os = "windows"))]
@@ -809,9 +813,11 @@ unsafe fn call_mrml_v1_word_to_wide(function: *const u8, input: u64) -> u128 {
 }
 
 #[test]
-fn mrml_v1_machine_word_widening_sets_the_exact_high_word() {
+fn mrml_v1_one_word_widening_sets_the_exact_high_word() {
     let unsigned = compile(MRML_V1_UNSIGNED_WIDEN_SOURCE);
     let signed = compile(MRML_V1_SIGNED_WIDEN_SOURCE);
+    let narrow_signed = compile(MRML_V1_NARROW_SIGNED_TO_UNSIGNED_WIDEN_SOURCE);
+    let narrow_unsigned = compile(MRML_V1_NARROW_UNSIGNED_TO_SIGNED_WIDEN_SOURCE);
     let inputs = [0u64, 1, i64::MAX as u64, i64::MIN as u64, u64::MAX];
     let actual_unsigned = inputs
         .into_iter()
@@ -836,6 +842,44 @@ fn mrml_v1_machine_word_widening_sets_the_exact_high_word() {
     assert_eq!(
         actual_signed,
         rustc_mrml_v1_observations(MRML_V1_SIGNED_WIDEN_SOURCE, signed_driver)
+    );
+    let narrow_signed_inputs = [0u64, 1, i8::MAX as u64, i8::MIN as u64, u64::MAX];
+    let actual_narrow_signed = narrow_signed_inputs
+        .into_iter()
+        .flat_map(|input| {
+            let returned = unsafe { call_mrml_v1_word_to_wide(narrow_signed.pointer, input) };
+            [returned as u64, (returned >> 64) as u64]
+        })
+        .collect::<Vec<_>>();
+    let narrow_signed_driver = "for input in [0i8, 1, i8::MAX, i8::MIN, -1] { let returned = probe(input); println!(\"{}\", returned as u64); println!(\"{}\", (returned >> 64) as u64); }";
+    assert_eq!(
+        actual_narrow_signed,
+        rustc_mrml_v1_observations(
+            MRML_V1_NARROW_SIGNED_TO_UNSIGNED_WIDEN_SOURCE,
+            narrow_signed_driver,
+        )
+    );
+    let narrow_unsigned_inputs = [
+        0u64,
+        1,
+        i32::MAX as u64,
+        i32::MIN as u32 as u64,
+        u32::MAX as u64,
+    ];
+    let actual_narrow_unsigned = narrow_unsigned_inputs
+        .into_iter()
+        .flat_map(|input| {
+            let returned = unsafe { call_mrml_v1_word_to_wide(narrow_unsigned.pointer, input) };
+            [returned as u64, (returned >> 64) as u64]
+        })
+        .collect::<Vec<_>>();
+    let narrow_unsigned_driver = "for input in [0u32, 1, i32::MAX as u32, i32::MIN as u32, u32::MAX] { let returned = probe(input); println!(\"{}\", returned as u64); println!(\"{}\", ((returned as u128) >> 64) as u64); }";
+    assert_eq!(
+        actual_narrow_unsigned,
+        rustc_mrml_v1_observations(
+            MRML_V1_NARROW_UNSIGNED_TO_SIGNED_WIDEN_SOURCE,
+            narrow_unsigned_driver,
+        )
     );
 }
 

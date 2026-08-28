@@ -6890,19 +6890,23 @@ impl<
                 1,
             )
             .map_err(|kind| self.error(kind))?;
-            let sign_extend = match (operand_type, target) {
+            let source = match (operand_type, target) {
                 (
-                    RuntimeExpressionType::Integer(Some(crate::IntegerType::U64)),
-                    crate::CastType::Integer(crate::IntegerType::U128),
-                ) => false,
-                (
-                    RuntimeExpressionType::Integer(Some(crate::IntegerType::I64)),
-                    crate::CastType::Integer(crate::IntegerType::I128),
-                ) => true,
+                    RuntimeExpressionType::Integer(Some(source)),
+                    crate::CastType::Integer(
+                        crate::IntegerType::U128 | crate::IntegerType::I128,
+                    ),
+                ) if runtime_width(source.name()).is_some() => source,
                 _ => return Err(self.error(CodegenErrorKind::RuntimeExpressionUnsupported)),
             };
-            self.emit_expression(tree, operand, 1)?;
-            if sign_extend {
+            let source_width = runtime_width(source.name())
+                .ok_or(self.error(CodegenErrorKind::UnsupportedRuntimeType))?;
+            let previous_width = self.width;
+            self.width = source_width;
+            let emission = self.emit_expression(tree, operand, 1);
+            self.width = previous_width;
+            emission?;
+            if source.is_signed() {
                 self.emit(&[0x48, 0x89, 0xc2, 0x48, 0xc1, 0xfa, 0x3f])?;
             } else {
                 self.emit(&[0x31, 0xd2])?;

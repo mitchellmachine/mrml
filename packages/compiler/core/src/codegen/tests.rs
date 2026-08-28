@@ -12188,9 +12188,23 @@ mod tests {
     }
 
     #[test]
-    fn mrml_v1_codegen_widens_full_machine_words_for_two_word_returns() {
+    fn mrml_v1_codegen_widens_one_word_integers_for_two_word_returns() {
         for source in [
+            "#[mrml_abi::export(version = 1)] pub fn value(input: u8) -> u128 { input as u128 }",
+            "#[mrml_abi::export(version = 1)] pub fn value(input: u8) -> i128 { input as i128 }",
+            "#[mrml_abi::export(version = 1)] pub fn value(input: u16) -> u128 { input as u128 }",
+            "#[mrml_abi::export(version = 1)] pub fn value(input: u16) -> i128 { input as i128 }",
+            "#[mrml_abi::export(version = 1)] pub fn value(input: u32) -> u128 { input as u128 }",
+            "#[mrml_abi::export(version = 1)] pub fn value(input: u32) -> i128 { input as i128 }",
             "#[mrml_abi::export(version = 1)] pub fn value(input: u64) -> u128 { input as u128 }",
+            "#[mrml_abi::export(version = 1)] pub fn value(input: u64) -> i128 { input as i128 }",
+            "#[mrml_abi::export(version = 1)] pub fn value(input: i8) -> u128 { input as u128 }",
+            "#[mrml_abi::export(version = 1)] pub fn value(input: i8) -> i128 { input as i128 }",
+            "#[mrml_abi::export(version = 1)] pub fn value(input: i16) -> u128 { input as u128 }",
+            "#[mrml_abi::export(version = 1)] pub fn value(input: i16) -> i128 { input as i128 }",
+            "#[mrml_abi::export(version = 1)] pub fn value(input: i32) -> u128 { input as u128 }",
+            "#[mrml_abi::export(version = 1)] pub fn value(input: i32) -> i128 { input as i128 }",
+            "#[mrml_abi::export(version = 1)] pub fn value(input: i64) -> u128 { input as u128 }",
             "#[mrml_abi::export(version = 1)] pub fn value(input: i64) -> i128 { input as i128 }",
         ] {
             let module = Parser::new(source).parse_module::<2, 2>().unwrap();
