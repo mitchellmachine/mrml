@@ -47,6 +47,19 @@ fail-closed compatibility surfaces, while the driver uses the extended bounded
 entry points. Weak definitions, COMDAT groups, symbol versions, and general
 visibility/preemption semantics remain unsupported.
 
+The bounded COFF decoder additionally accepts one nonempty long-name
+`.text$...` code section, uses its actual section number for definitions and
+internal relocations, and ignores only validated empty `.text`, `.data`, and
+`.bss` placeholders plus conventional file/feature records. The archive driver
+skips exactly `lib.rmeta` and `lib.rmeta-link` metadata members. In a controlled
+Windows probe, exact `nightly-2026-08-24` gnullvm rustc with
+`-C embed-bitcode=no` emitted a 2,452-byte no-std `.rlib` containing one such
+COMDAT object. MRML linked its exact mangled entry to a 1,024-byte PE and Windows
+returned 42. This establishes one simple hosted pinned-rustc `.rlib` shape only;
+multiple COMDAT sections, COMDAT selection, writable/BSS data, unwind sections,
+embedded bitcode sections, general metadata naming, and representative Rust
+libraries remain unsupported.
+
 The same format-neutral link core now decodes the exact bounded ELF64
 relocatable subset emitted by `mrml-rustc`: x86-64 little-endian ET_REL,
 `.text`, optional `.rodata`, `.rela.text`, `.symtab`, and their linked string
@@ -122,9 +135,9 @@ The driver assigns each archive a bounded identity and applies left-to-right
 ordering: explicit objects are admitted when encountered, one archive rescans
 only its own contiguous members to a fixed point, and it is not revisited for
 undefined symbols introduced by later inputs. Index-accelerated extraction,
-explicit start/end archive groups, thin archives, non-object metadata members,
-and real `.rlib` admission remain
-unimplemented, so this is not yet the ordinary Rust static-library path. Thin
+explicit start/end archive groups, thin archives, other non-object metadata
+members, and general `.rlib` admission remain unimplemented, so this is not yet
+the ordinary Rust static-library path. Thin
 archive magic fails with an explicit unsupported-feature diagnostic rather
 than being misclassified as a malformed ordinary archive; BSD extended-name
 symbol indexes are skipped only after their embedded names are validated.

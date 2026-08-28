@@ -435,7 +435,7 @@ pub fn decode_x86_64_coff_with_definitions<'data, 'relocations, 'definitions>(
         return Err(LinkerError::UnsupportedCoff);
     }
     let section_count = usize::from(read_u16(object, 2)?);
-    if section_count == 0 || section_count > 2 {
+    if section_count == 0 || section_count > 6 {
         return Err(LinkerError::UnsupportedCoff);
     }
     let symbol_offset =
@@ -465,15 +465,19 @@ pub fn decode_x86_64_coff_with_definitions<'data, 'relocations, 'definitions>(
         .ok_or(LinkerError::InvalidCoff)?;
 
     let mut text = None;
+    let mut text_section = None;
     let mut readonly_data = &object[0..0];
+    let mut readonly_section = None;
+    let mut ignored_empty_sections = [false; 7];
     let mut relocation_table = (0usize, 0usize);
     for section in 0..section_count {
         let header = 20usize
             .checked_add(section.checked_mul(40).ok_or(LinkerError::OffsetOverflow)?)
             .ok_or(LinkerError::OffsetOverflow)?;
-        let name = object
+        let raw_name = object
             .get(header..header + 8)
             .ok_or(LinkerError::InvalidCoff)?;
+        let name = coff_section_name(raw_name, object, symbols_end, string_size)?;
         let size = usize::try_from(read_u32(object, header + 16)?)
             .map_err(|_| LinkerError::OffsetOverflow)?;
         let offset = usize::try_from(read_u32(object, header + 20)?)
@@ -486,8 +490,13 @@ pub fn decode_x86_64_coff_with_definitions<'data, 'relocations, 'definitions>(
                         .ok_or(LinkerError::OffsetOverflow)?,
             )
             .ok_or(LinkerError::InvalidCoff)?;
-        if name == b".text\0\0\0" {
-            if text.replace(contents).is_some() {
+        let section_number = i16::try_from(section + 1).map_err(|_| LinkerError::OffsetOverflow)?;
+        if name == ".text" || name.starts_with(".text$") {
+            if contents.is_empty() {
+                ignored_empty_sections[section + 1] = true;
+                continue;
+            }
+            if text.replace(contents).is_some() || text_section.replace(section_number).is_some() {
                 return Err(LinkerError::InvalidCoff);
             }
             relocation_table = (
@@ -495,13 +504,17 @@ pub fn decode_x86_64_coff_with_definitions<'data, 'relocations, 'definitions>(
                     .map_err(|_| LinkerError::OffsetOverflow)?,
                 usize::from(read_u16(object, header + 32)?),
             );
-        } else if name == b".rdata\0\0" {
+        } else if name == ".rdata" {
             readonly_data = contents;
+            readonly_section = Some(section_number);
+        } else if (name == ".data" || name == ".bss") && contents.is_empty() {
+            ignored_empty_sections[section + 1] = true;
         } else {
             return Err(LinkerError::UnsupportedCoff);
         }
     }
     let text = text.ok_or(LinkerError::InvalidCoff)?;
+    let text_section = text_section.ok_or(LinkerError::InvalidCoff)?;
 
     let mut defined_symbol = None;
     let mut definition_count = 0usize;
@@ -511,7 +524,7 @@ pub fn decode_x86_64_coff_with_definitions<'data, 'relocations, 'definitions>(
         let section = read_i16(object, offset + 12)?;
         let storage_class = *object.get(offset + 16).ok_or(LinkerError::InvalidCoff)?;
         let auxiliary = usize::from(*object.get(offset + 17).ok_or(LinkerError::InvalidCoff)?);
-        if section == 1 && storage_class == 2 {
+        if section == text_section && storage_class == 2 {
             let name = coff_symbol_name(object, offset, symbols_end, string_size)?;
             let text_offset = usize::try_from(read_u32(object, offset + 8)?)
                 .map_err(|_| LinkerError::OffsetOverflow)?;
@@ -530,13 +543,20 @@ pub fn decode_x86_64_coff_with_definitions<'data, 'relocations, 'definitions>(
                 };
                 definition_count += 1;
             }
-        } else if section == 1 && storage_class == 3 {
+        } else if section == text_section && storage_class == 3 {
             let text_offset = usize::try_from(read_u32(object, offset + 8)?)
                 .map_err(|_| LinkerError::OffsetOverflow)?;
             if text_offset > text.len() {
                 return Err(LinkerError::InvalidCoff);
             }
-        } else if section != 0 && section != 2 {
+        } else if (section == -1 && storage_class == 3) || (section == -2 && storage_class == 103) {
+        } else if section > 0
+            && ignored_empty_sections
+                .get(usize::try_from(section).map_err(|_| LinkerError::OffsetOverflow)?)
+                .copied()
+                .unwrap_or(false)
+        {
+        } else if section != 0 && Some(section) != readonly_section {
             return Err(LinkerError::UnsupportedCoff);
         }
         symbol_index = symbol_index
@@ -579,7 +599,7 @@ pub fn decode_x86_64_coff_with_definitions<'data, 'relocations, 'definitions>(
                 )?),
                 i64::from(field_addend) - 4,
             )
-        } else if target_section == 1 {
+        } else if target_section == text_section {
             let text_offset = usize::try_from(read_u32(object, target_offset + 8)?)
                 .map_err(|_| LinkerError::OffsetOverflow)?;
             if text_offset > text.len() {
@@ -589,7 +609,9 @@ pub fn decode_x86_64_coff_with_definitions<'data, 'relocations, 'definitions>(
                 LinkRelocationTarget::InputText(text_offset),
                 i64::from(field_addend) - 4,
             )
-        } else if target_section == 2 && read_u32(object, target_offset + 8)? == 0 {
+        } else if Some(target_section) == readonly_section
+            && read_u32(object, target_offset + 8)? == 0
+        {
             let data_offset =
                 usize::try_from(field_addend).map_err(|_| LinkerError::InvalidRelocationOffset)?;
             if data_offset > readonly_data.len() {
@@ -1467,6 +1489,36 @@ fn coff_symbol_name<'a>(
     Ok(name)
 }
 
+fn coff_section_name<'a>(
+    raw: &'a [u8],
+    object: &'a [u8],
+    strings_offset: usize,
+    strings_size: usize,
+) -> Result<&'a str, LinkerError> {
+    let raw_length = raw.iter().position(|byte| *byte == 0).unwrap_or(raw.len());
+    let raw = core::str::from_utf8(&raw[..raw_length]).map_err(|_| LinkerError::InvalidCoff)?;
+    if let Some(offset) = raw.strip_prefix('/') {
+        let offset =
+            parse_archive_usize(offset.as_bytes()).map_err(|_| LinkerError::InvalidCoff)?;
+        if offset < 4 || offset >= strings_size {
+            return Err(LinkerError::InvalidCoff);
+        }
+        let start = strings_offset
+            .checked_add(offset)
+            .ok_or(LinkerError::OffsetOverflow)?;
+        let limit = strings_offset
+            .checked_add(strings_size)
+            .ok_or(LinkerError::OffsetOverflow)?;
+        let tail = object.get(start..limit).ok_or(LinkerError::InvalidCoff)?;
+        let length = tail
+            .iter()
+            .position(|byte| *byte == 0)
+            .ok_or(LinkerError::InvalidCoff)?;
+        return core::str::from_utf8(&tail[..length]).map_err(|_| LinkerError::InvalidCoff);
+    }
+    Ok(raw)
+}
+
 fn elf_section_header(
     section_offset: usize,
     section_count: usize,
@@ -2068,6 +2120,35 @@ mod tests {
             decode_x86_64_coff(&bytes, &mut legacy_relocations),
             Err(LinkerError::UnsupportedCoff)
         );
+    }
+
+    #[test]
+    fn decodes_one_long_named_coff_comdat_text_section() {
+        let code = MachineCode::<8>::from_bytes_for_test(&[0xc3]);
+        let object = emit_x86_64_coff::<192, 8>("entry", &code).unwrap();
+        let mut bytes = object.bytes().to_vec();
+        bytes[20..28].fill(0);
+        bytes[20..22].copy_from_slice(b"/4");
+        let symbol_offset = usize::try_from(read_u32(&bytes, 8).unwrap()).unwrap();
+        let symbol_count = usize::try_from(read_u32(&bytes, 12).unwrap()).unwrap();
+        let strings_offset = symbol_offset + symbol_count * 18;
+        bytes.extend_from_slice(b".text$entry\0");
+        bytes[strings_offset..strings_offset + 4].copy_from_slice(&16u32.to_le_bytes());
+
+        let mut relocations = [LinkRelocation {
+            offset: 0,
+            target: LinkRelocationTarget::Symbol("unused"),
+            addend: 0,
+        }; MAX_LINK_RELOCATIONS];
+        let mut definitions = [LinkDefinition {
+            symbol: "unused",
+            text_offset: 0,
+        }; MAX_LINK_DEFINITIONS];
+        let decoded =
+            decode_x86_64_coff_with_definitions(&bytes, &mut relocations, &mut definitions)
+                .unwrap();
+        assert_eq!(decoded.symbol, "entry");
+        assert_eq!(decoded.text, &[0xc3]);
     }
 
     #[test]

@@ -183,6 +183,9 @@ fn link_object_refs(objects: &[Vector<u8>]) -> Result<LinkObjectRefs<'_>> {
         if object.get(..8) == Some(b"!<arch>\n") {
             let archive = decode_unix_archive(object).map_err(mrml_error::message)?;
             for member in archive.members() {
+                if member.name == "lib.rmeta" || member.name == "lib.rmeta-link" {
+                    continue;
+                }
                 if refs.len() == MAX_LINK_INPUTS {
                     return Err(anyhow!("expanded link input count exceeds 256"));
                 }

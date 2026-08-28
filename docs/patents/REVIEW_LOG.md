@@ -9297,3 +9297,12 @@ symbols. It corrects ordering without introducing a new archive index,
 resolution, deduplication, compression, executable-format, cryptographic, or
 loading algorithm. This technical screen is not legal advice or patent
 clearance.
+# 2026-08-28 — Bounded long-name COFF COMDAT ingestion
+
+Patent review: **NOT_TRIGGERED**. This increment resolves a conventional COFF
+long section name, admits one nonempty `.text$...` section, retains its actual
+section identity, ignores validated empty placeholder and conventional
+file/feature records, and skips two exact rustc archive metadata member names.
+It implements no COMDAT selection, new object/archive format, deduplication,
+compression, executable-format, cryptographic, or loading algorithm. This
+technical screen is not legal advice or patent clearance.
