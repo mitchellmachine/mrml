@@ -358,6 +358,79 @@ impl<const N: usize> SharedMemoryBindings<N> {
         Ok(SharedBindingId::new(index, generation))
     }
 
+    /// Atomically creates a guest alias and publishes its authority binding.
+    /// All authority, capacity, source-generation, destination, and rights
+    /// checks complete before the alias becomes observable. After alias
+    /// creation, binding publication is infallible because its exact slot and
+    /// generation were reserved during preflight.
+    #[allow(clippy::too_many_arguments)]
+    pub fn share_alias<
+        const CONTROL_CAPS: usize,
+        const DESTINATION_CAPS: usize,
+        const MAPPINGS: usize,
+    >(
+        &mut self,
+        source: SharedBindingId,
+        controller: &CapabilitySpace<CONTROL_CAPS>,
+        control: Capability,
+        destination_capabilities: &CapabilitySpace<DESTINATION_CAPS>,
+        destination_authority: Capability,
+        memory: &mut GuestMemory<MAPPINGS>,
+        destination_vm: VmId,
+        destination_task: Option<TaskId>,
+        source_mapping: GuestMappingId,
+        destination_guest_start: u64,
+        access: SharedAccess,
+    ) -> Result<(SharedBindingId, GuestMappingId), SharedBindingError> {
+        let source_entry = *self.entry(source)?;
+        if source_entry.mapping != source_mapping {
+            return Err(SharedBindingError::WrongMapping);
+        }
+        if controller.authorize(control, Rights::CONTROL)? != source_entry.object
+            || destination_capabilities.authorize(destination_authority, access.rights())?
+                != source_entry.object
+        {
+            return Err(SharedBindingError::WrongObject);
+        }
+        if !source_entry.access.permits(access) {
+            return Err(SharedBindingError::AccessDenied);
+        }
+        let source_region = memory
+            .region(source_mapping)
+            .map_err(|_| SharedBindingError::StaleMapping)?;
+        if source_region.host_start() != source_entry.host_start
+            || source_region.pages() != source_entry.pages
+        {
+            return Err(SharedBindingError::ResourceMismatch);
+        }
+        let index = self
+            .entries
+            .iter()
+            .position(Option::is_none)
+            .ok_or(SharedBindingError::TableFull)?;
+        let generation = self.generations[index]
+            .checked_add(1)
+            .ok_or(SharedBindingError::SequenceExhausted)?;
+
+        let mapping = memory
+            .map_shared_alias(source_mapping, destination_guest_start)
+            .map_err(|_| SharedBindingError::StaleMapping)?;
+        self.generations[index] = generation;
+        self.entries[index] = Some(Binding {
+            generation,
+            resource: source_entry.resource,
+            vm: destination_vm,
+            task: destination_task,
+            mapping,
+            object: source_entry.object,
+            handle: source_entry.handle,
+            access,
+            host_start: source_entry.host_start,
+            pages: source_entry.pages,
+        });
+        Ok((SharedBindingId::new(index, generation), mapping))
+    }
+
     pub fn resolve<const CAPS: usize, const MAPPINGS: usize>(
         &self,
         id: SharedBindingId,
@@ -1666,6 +1739,122 @@ mod tests {
                 handle,
                 last_endpoint: true,
             })
+        );
+    }
+
+    #[test]
+    fn alias_transaction_publishes_mapping_and_binding_together() {
+        let mut vms = VmTable::<1>::new();
+        let vm = vms.create(4).unwrap();
+        let mut memory = GuestMemory::<2>::new();
+        let source_mapping = memory
+            .map(GuestRegion::new(0x1000, PhysAddr::new(0x8000).unwrap(), 1, true, false).unwrap())
+            .unwrap();
+        let mut capabilities = CapabilitySpace::<1>::new();
+        let authority = capabilities
+            .insert(
+                OBJECT,
+                Rights::MAP
+                    .union(Rights::READ)
+                    .union(Rights::WRITE)
+                    .union(Rights::CONTROL),
+            )
+            .unwrap();
+        let mut bindings = SharedMemoryBindings::<2>::new();
+        let source = bindings
+            .bind(
+                &capabilities,
+                authority,
+                &memory,
+                SharedEndpoint::new(vm, source_mapping, SharedAccess::ReadWrite),
+                HostResourceHandle::new(0x91).unwrap(),
+            )
+            .unwrap();
+        let (alias_binding, alias_mapping) = bindings
+            .share_alias(
+                source,
+                &capabilities,
+                authority,
+                &capabilities,
+                authority,
+                &mut memory,
+                vm,
+                None,
+                source_mapping,
+                0x3000,
+                SharedAccess::ReadWrite,
+            )
+            .unwrap();
+        assert_eq!(
+            memory.region(alias_mapping).unwrap().host_start().get(),
+            0x8000
+        );
+        memory.unmap(source_mapping).unwrap();
+        assert_eq!(
+            bindings.resolve(
+                alias_binding,
+                &capabilities,
+                authority,
+                &memory,
+                SharedEndpoint::new(vm, alias_mapping, SharedAccess::ReadWrite),
+            ),
+            Ok(HostResourceHandle::new(0x91).unwrap())
+        );
+        let first = bindings.revoke(source, &capabilities, authority).unwrap();
+        assert!(!first.is_last_endpoint());
+        let last = bindings
+            .revoke(alias_binding, &capabilities, authority)
+            .unwrap();
+        assert!(last.is_last_endpoint());
+    }
+
+    #[test]
+    fn alias_transaction_failure_leaves_no_unbound_alias() {
+        let mut vms = VmTable::<1>::new();
+        let vm = vms.create(2).unwrap();
+        let mut memory = GuestMemory::<2>::new();
+        let mapping = memory
+            .map(GuestRegion::new(0x1000, PhysAddr::new(0x8000).unwrap(), 1, true, false).unwrap())
+            .unwrap();
+        let mut capabilities = CapabilitySpace::<1>::new();
+        let authority = capabilities
+            .insert(
+                OBJECT,
+                Rights::MAP
+                    .union(Rights::READ)
+                    .union(Rights::WRITE)
+                    .union(Rights::CONTROL),
+            )
+            .unwrap();
+        let mut bindings = SharedMemoryBindings::<1>::new();
+        let source = bindings
+            .bind(
+                &capabilities,
+                authority,
+                &memory,
+                SharedEndpoint::new(vm, mapping, SharedAccess::ReadWrite),
+                HostResourceHandle::new(0x92).unwrap(),
+            )
+            .unwrap();
+        assert_eq!(
+            bindings.share_alias(
+                source,
+                &capabilities,
+                authority,
+                &capabilities,
+                authority,
+                &mut memory,
+                vm,
+                None,
+                mapping,
+                0x3000,
+                SharedAccess::ReadWrite,
+            ),
+            Err(SharedBindingError::TableFull)
+        );
+        assert_eq!(
+            memory.prepare_range(0x3000, 1, crate::GuestAccess::Read),
+            Err(crate::VmError::Unmapped)
         );
     }
 

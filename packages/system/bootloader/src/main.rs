@@ -47,6 +47,13 @@ use mrml_kernel::arch::x86_64::LocalApicController;
 ))]
 use mrml_kernel::arch::x86_64::LocalApicTimer;
 #[cfg(any(
+    feature = "application-probe",
+    feature = "uefi-service-preemption-probe"
+))]
+use mrml_kernel::arch::x86_64::PreallocatedPageTableStore;
+#[cfg(feature = "uefi-service-preemption-probe")]
+use mrml_kernel::arch::x86_64::ServiceAddressSpace;
+#[cfg(any(
     feature = "timer-probe",
     feature = "preemption-probe",
     feature = "service-preemption-probe",
@@ -93,22 +100,13 @@ use mrml_kernel::arch::x86_64::{
     ApOnlineTable, CpuDescriptorState, HardwareTrapFrame, MAX_X86_64_CPUS,
     PRIVILEGE_STACK_ARENA_PAGES, PrivilegeStackLayout,
 };
+#[cfg(feature = "application-probe")]
+use mrml_kernel::arch::x86_64::{ApplicationAddressSpace, PageTableBuildError, ServiceSpaceError};
 #[cfg(any(
     feature = "block-guest-driver-probe",
     feature = "pci-configuration-probe"
 ))]
 use mrml_kernel::arch::x86_64::{NativeX86VirtualBlockPortIo, X86VirtualBlockGuestQueueTransport};
-#[cfg(any(
-    feature = "application-probe",
-    feature = "uefi-service-preemption-probe"
-))]
-use mrml_kernel::arch::x86_64::PreallocatedPageTableStore;
-#[cfg(feature = "application-probe")]
-use mrml_kernel::arch::x86_64::{
-    ApplicationAddressSpace, PageTableBuildError, ServiceSpaceError,
-};
-#[cfg(feature = "uefi-service-preemption-probe")]
-use mrml_kernel::arch::x86_64::ServiceAddressSpace;
 #[cfg(feature = "component-service-probe")]
 use mrml_kernel::{
     AccountedServiceSupervisor, AccountedTaskRuntime, MemoryPoolId, MemoryPoolTable,
@@ -825,7 +823,11 @@ unsafe extern "sysv64" fn mrml_user_call_dispatch(frame: *mut UserCallFrame) {
             .page_table();
         *runtime.context_mut(current).unwrap_or_else(|_| halt()) =
             UserContext::from_user_call(root, frame).unwrap_or_else(|_| halt());
-        if ActivePageTables::current().unwrap_or_else(|_| halt()).root() != root {
+        if ActivePageTables::current()
+            .unwrap_or_else(|_| halt())
+            .root()
+            != root
+        {
             halt();
         }
         let terminated = runtime.terminate_current().unwrap_or_else(|_| halt());
@@ -4088,20 +4090,19 @@ unsafe fn provision_service_resource(
         )
         .unwrap_or_else(|_| halt());
     if let (Some(peer), Some([peer_write, peer_read, _])) = (peer, peer_access) {
-        let peer_mapping = memory
-            .map_shared_alias(mapping, SERVICE_PEER_RESOURCE_VIRTUAL)
-            .unwrap_or_else(|_| halt());
-        bindings
-            .share(
+        let (_, peer_mapping) = bindings
+            .share_alias(
                 source_binding,
                 runtime.capabilities(task).unwrap_or_else(|_| halt()),
                 controller,
-                SharedEndpointRequest::new(
-                    runtime.capabilities(peer).unwrap_or_else(|_| halt()),
-                    peer_write,
-                    memory,
-                    SharedEndpoint::for_task(vm, peer, peer_mapping, SharedAccess::ReadWrite),
-                ),
+                runtime.capabilities(peer).unwrap_or_else(|_| halt()),
+                peer_write,
+                memory,
+                vm,
+                Some(peer),
+                mapping,
+                SERVICE_PEER_RESOURCE_VIRTUAL,
+                SharedAccess::ReadWrite,
             )
             .unwrap_or_else(|_| halt());
         bindings

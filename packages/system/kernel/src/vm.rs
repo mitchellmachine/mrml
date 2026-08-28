@@ -466,7 +466,7 @@ impl<const N: usize> GuestMemory<N> {
     /// The caller must bind the returned identity through the same explicit
     /// shared-resource authority that justified the alias; arbitrary host
     /// aliases remain rejected by [`Self::map`].
-    pub fn map_shared_alias(
+    pub(crate) fn map_shared_alias(
         &mut self,
         source: GuestMappingId,
         guest_start: u64,
