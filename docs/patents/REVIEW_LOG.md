@@ -1,5 +1,14 @@
 # Patent review log
 
+## 2026-08-28 — Unresolved-symbol archive work queue
+
+Patent review: **NOT_TRIGGERED** for replacing repeated full index/reference
+rescans with a conventional cursor over a bounded list of unresolved symbols,
+where newly selected object relocations append further work. This is ordinary
+work-list traversal and exact symbol-table lookup; it adds no novel hashing,
+compression, parallel scheduling, binary rewriting, cryptography, or hardware
+mechanism. This technical screen is not patent clearance.
+
 ## 2026-08-28 — Separate indexed-member and selected-input bounds
 
 Patent review: **NOT_TRIGGERED** for raising a fixed archive inventory bound

@@ -243,14 +243,17 @@ fn link_object_refs<'a>(
                     }
                     indexed_selection_initialized = true;
                 }
-                loop {
-                    let candidate = archive.symbols().iter().find(|candidate| {
-                        !selected[candidate.member_index]
-                            && referenced.iter().any(|symbol| *symbol == candidate.symbol)
-                            && !defined.iter().any(|symbol| *symbol == candidate.symbol)
-                    });
-                    let Some(candidate) = candidate else {
-                        break;
+                let mut reference_cursor = 0usize;
+                while reference_cursor < referenced.len() {
+                    let symbol = referenced[reference_cursor];
+                    reference_cursor += 1;
+                    if defined.iter().any(|defined| *defined == symbol) {
+                        continue;
+                    }
+                    let Some(candidate) = archive.symbols().iter().find(|candidate| {
+                        candidate.symbol == symbol && !selected[candidate.member_index]
+                    }) else {
+                        continue;
                     };
                     selected[candidate.member_index] = true;
                     scan_link_object_symbols(
@@ -259,7 +262,7 @@ fn link_object_refs<'a>(
                         &mut referenced,
                         &mut defined,
                     )?;
-                    if !defined.iter().any(|symbol| *symbol == candidate.symbol) {
+                    if !defined.iter().any(|defined| *defined == candidate.symbol) {
                         return Err(anyhow!(
                             "archive symbol index does not match its object member"
                         ));

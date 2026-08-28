@@ -638,6 +638,23 @@ ms mean. This is materially more diverse archive evidence than the repeated-
 object probe, but it remains one small no-std hosted workload and does not prove
 general rustc `.rlib` compatibility or speed superiority.
 
+Index closure now consumes each newly discovered unresolved reference through a
+bounded work-queue cursor instead of repeatedly rescanning every archive-index
+entry against all accumulated references. Each name still performs an exact
+validated index lookup; selecting a member appends its newly decoded named
+relocations to the same queue, so transitive dependencies reach a fixed point
+without changing archive ordering or treating index data as a definition.
+
+The 16-codegen-unit probe was changed so the consumer references only
+`diverse_31`, whose archive member calls `diverse_11` in a different member.
+MRML selected both transitively, emitted 8,344 bytes, and exited 42 like
+rust-lld's 1,880-byte result. Over 50 iterations after five warmups, the queued
+MRML path measured 4.577 ms median and 4.678 ms mean versus pinned rust-lld at
+4.700 ms median and 4.747 ms mean. On the 301-object controlled archive MRML
+measured 4.902 ms median versus rust-lld at 4.886 ms in the same run, so that
+case is a near tie and provides no superiority evidence. These are hosted
+regression measurements, not broad performance claims.
+
 This increment does **not** emit PE imports/exports/base
 relocations/debug data, emit ELF dynamic metadata/interpreter/PIE/sections,
 read thin archives or general `.rlib` contents, perform section GC or ICF, link
