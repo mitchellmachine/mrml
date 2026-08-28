@@ -9,8 +9,8 @@ the named commit and current source.
 ## Recoverable baseline
 
 - Branch: `main`
-- Compiler checkpoint commit: `08dcb3d4`
-  (`compiler: link signed absolute32 relocations`)
+- Compiler checkpoint commit: `56d073ae`
+  (`compiler: reuse ELF selection metadata`)
 - Remote state when recorded: `origin/main` includes the bounded MRML-owned
   static-link core, exact MRML COFF and ELF64 ingestion, deterministic
   import-free PE32+/ELF64 executable serialization, explicit compiler-driver
@@ -60,6 +60,20 @@ against all prior accepted probes. Keep Cargo on edition 2024 until a newer
 named edition can be adopted through a pinned, workspace-wide migration.
 
 ## Latest bounded linker milestone
+
+Commit `56d073ae` carries each fully validated ELF section-table, symbol-table,
+and string-table view through the cross-object reachability queue. This removes
+the prior per-symbol ELF header validation, section scan for `.symtab`, and
+repeat slicing while keeping the public one-object path and fail-closed checks.
+A focused assertion proves even an unused malformed input is rejected. Current
+50-iteration/five-warmup Linux samples measured MRML versus pinned rust-lld at
+5.330/4.847 ms (trait object), 5.220/4.806 ms (one archive), 5.258/5.138 ms
+(transitive 16-CGU archive), and 5.742/6.234 ms (reachable pinned libcore).
+Linux passed 733 core tests and integrations of 2/10/351/43 plus five driver
+tests. Windows passed the same 733 core tests and five driver tests; its new
+43-test semantic-execution suite had one unrelated concurrent wide-division
+failure (`RuntimeExpressionUnsupported`). The repository audit still stopped
+first at unrelated fingerprint `fnv1a64:041772d31cad5bfc`.
 
 Commit `08dcb3d4` admits the AMD64 psABI `R_X86_64_32S` relocation as a
 separate typed case, computes `S + A`, and rejects results outside the exact
