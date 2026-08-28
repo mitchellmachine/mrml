@@ -17,6 +17,15 @@ names, one defined function symbol, bounded undefined symbols, and
 range, relocation-type, and truncation checks precede linking. This is compiler
 object ingestion, not general COFF compatibility.
 
+The same format-neutral link core now decodes the exact bounded ELF64
+relocatable subset emitted by `mrml-rustc`: x86-64 little-endian ET_REL,
+`.text`, optional `.rodata`, `.rela.text`, `.symtab`, and their linked string
+tables. It accepts the compiler's `R_X86_64_PC32` and `R_X86_64_PLT32` records,
+retains explicit RELA addends, types local read-only targets separately, and
+rejects unknown sections, machines, relocation types, malformed links,
+truncation, and range or capacity violations. This is not general ELF input or
+an ELF executable claim.
+
 Relocation targets are typed as either a named code symbol or a bounded offset
 within the originating input's read-only data. COFF `.rdata` section-symbol
 relocations therefore retain their exact local data identity without inventing

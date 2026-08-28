@@ -9176,6 +9176,16 @@ adds a type distinction and adversarial bounds checks, not a new relocation,
 symbol-resolution, deduplication, compression, executable-format, or loading
 algorithm. This technical screen is not legal advice or patent clearance.
 
+# 2026-08-28 — Bounded MRML ELF64 linker ingestion
+
+Patent review: **NOT_TRIGGERED**. This increment decodes conventional ELF64
+headers, bounded section and string tables, symbols, and standard x86-64 PC32
+and PLT32 RELA records emitted by the existing compiler, then feeds the existing
+format-neutral static-link core. It adds adversarial format, link, range,
+capacity, truncation, and arithmetic checks, not a new object format,
+symbol-resolution, executable-format, compression, cryptographic, or loading
+algorithm. This technical screen is not legal advice or patent clearance.
+
 # 2026-08-28 — Identical-input linker benchmark harness
 
 Patent review: **NOT_TRIGGERED**. This increment repeatedly invokes the existing

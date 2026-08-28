@@ -22,6 +22,8 @@ pub enum LinkerError {
     OutputTooSmall,
     InvalidCoff,
     UnsupportedCoff,
+    InvalidElf,
+    UnsupportedElf,
 }
 
 impl core::fmt::Display for LinkerError {
@@ -40,6 +42,8 @@ impl core::fmt::Display for LinkerError {
             Self::OutputTooSmall => "link output capacity is too small",
             Self::InvalidCoff => "invalid bounded COFF input",
             Self::UnsupportedCoff => "unsupported COFF feature",
+            Self::InvalidElf => "invalid bounded ELF64 input",
+            Self::UnsupportedElf => "unsupported ELF64 feature",
         };
         formatter.write_str(message)
     }
@@ -223,6 +227,185 @@ pub fn decode_x86_64_coff<'a>(
         text,
         readonly_data,
         relocations: &relocation_storage[..relocation_table.1],
+    })
+}
+
+/// Decodes the exact bounded ELF64 relocatable subset emitted by `mrml-rustc`.
+pub fn decode_x86_64_elf<'a>(
+    object: &'a [u8],
+    relocation_storage: &'a mut [LinkRelocation<'a>; MAX_LINK_RELOCATIONS],
+) -> Result<LinkInput<'a>, LinkerError> {
+    if object.get(..9) != Some(b"\x7fELF\x02\x01\x01\x00\x00")
+        || read_u16_elf(object, 16)? != 1
+        || read_u16_elf(object, 18)? != 62
+        || read_u32_elf(object, 20)? != 1
+    {
+        return Err(LinkerError::UnsupportedElf);
+    }
+    if read_u16_elf(object, 52)? != 64 || read_u16_elf(object, 58)? != 64 {
+        return Err(LinkerError::UnsupportedElf);
+    }
+    let section_offset = to_usize_elf(read_u64_elf(object, 40)?)?;
+    let section_count = usize::from(read_u16_elf(object, 60)?);
+    let section_names_index = usize::from(read_u16_elf(object, 62)?);
+    if !(5..=7).contains(&section_count) || section_names_index >= section_count {
+        return Err(LinkerError::UnsupportedElf);
+    }
+    let section_bytes = section_count
+        .checked_mul(64)
+        .ok_or(LinkerError::OffsetOverflow)?;
+    object
+        .get(
+            section_offset
+                ..section_offset
+                    .checked_add(section_bytes)
+                    .ok_or(LinkerError::OffsetOverflow)?,
+        )
+        .ok_or(LinkerError::InvalidElf)?;
+    let section_names =
+        elf_section_contents(object, section_offset, section_count, section_names_index)?;
+
+    let mut text_index = None;
+    let mut readonly_index = None;
+    let mut relocations_index = None;
+    let mut symbols_index = None;
+    let mut strings_index = None;
+    for index in 1..section_count {
+        let header = elf_section_header(section_offset, section_count, index)?;
+        let name_offset = usize::try_from(read_u32_elf(object, header)?)
+            .map_err(|_| LinkerError::OffsetOverflow)?;
+        let name = elf_string(section_names, name_offset)?;
+        match name {
+            ".text" if text_index.replace(index).is_none() => {}
+            ".rodata" if readonly_index.replace(index).is_none() => {}
+            ".rela.text" if relocations_index.replace(index).is_none() => {}
+            ".symtab" if symbols_index.replace(index).is_none() => {}
+            ".strtab" if strings_index.replace(index).is_none() => {}
+            ".shstrtab" if index == section_names_index => {}
+            _ => return Err(LinkerError::UnsupportedElf),
+        }
+    }
+    let text_index = text_index.ok_or(LinkerError::InvalidElf)?;
+    let symbols_index = symbols_index.ok_or(LinkerError::InvalidElf)?;
+    let strings_index = strings_index.ok_or(LinkerError::InvalidElf)?;
+    let text = elf_section_contents(object, section_offset, section_count, text_index)?;
+    let readonly_data = match readonly_index {
+        Some(index) => elf_section_contents(object, section_offset, section_count, index)?,
+        None => &object[0..0],
+    };
+    let strings = elf_section_contents(object, section_offset, section_count, strings_index)?;
+
+    let symbols_header = elf_section_header(section_offset, section_count, symbols_index)?;
+    if read_u32_elf(object, symbols_header + 4)? != 2
+        || read_u64_elf(object, symbols_header + 56)? != 24
+        || usize::try_from(read_u32_elf(object, symbols_header + 40)?)
+            .map_err(|_| LinkerError::OffsetOverflow)?
+            != strings_index
+    {
+        return Err(LinkerError::UnsupportedElf);
+    }
+    let symbols = elf_section_contents(object, section_offset, section_count, symbols_index)?;
+    if symbols.len() % 24 != 0 || symbols.len() < 48 {
+        return Err(LinkerError::InvalidElf);
+    }
+    let symbol_count = symbols.len() / 24;
+    let mut defined_symbol = None;
+    for index in 1..symbol_count {
+        let offset = index * 24;
+        let section = usize::from(read_u16_elf(symbols, offset + 6)?);
+        if section == text_index {
+            if read_u64_elf(symbols, offset + 8)? != 0 {
+                return Err(LinkerError::UnsupportedElf);
+            }
+            let name = elf_string(
+                strings,
+                usize::try_from(read_u32_elf(symbols, offset)?)
+                    .map_err(|_| LinkerError::OffsetOverflow)?,
+            )?;
+            if defined_symbol.replace(name).is_some() {
+                return Err(LinkerError::UnsupportedElf);
+            }
+        } else if section != 0 && Some(section) != readonly_index {
+            return Err(LinkerError::UnsupportedElf);
+        }
+    }
+    let symbol = defined_symbol.ok_or(LinkerError::InvalidElf)?;
+
+    let relocation_count = if let Some(index) = relocations_index {
+        let header = elf_section_header(section_offset, section_count, index)?;
+        if read_u32_elf(object, header + 4)? != 4
+            || read_u64_elf(object, header + 56)? != 24
+            || usize::try_from(read_u32_elf(object, header + 40)?)
+                .map_err(|_| LinkerError::OffsetOverflow)?
+                != symbols_index
+            || usize::try_from(read_u32_elf(object, header + 44)?)
+                .map_err(|_| LinkerError::OffsetOverflow)?
+                != text_index
+        {
+            return Err(LinkerError::UnsupportedElf);
+        }
+        let records = elf_section_contents(object, section_offset, section_count, index)?;
+        if records.len() % 24 != 0 || records.len() / 24 > relocation_storage.len() {
+            return Err(LinkerError::TooManyRelocations);
+        }
+        for (record_index, record) in records.chunks_exact(24).enumerate() {
+            let offset = to_usize_elf(read_u64_elf(record, 0)?)?;
+            offset
+                .checked_add(4)
+                .filter(|end| *end <= text.len())
+                .ok_or(LinkerError::InvalidRelocationOffset)?;
+            let info = read_u64_elf(record, 8)?;
+            let relocation_type =
+                u32::try_from(info & 0xffff_ffff).map_err(|_| LinkerError::OffsetOverflow)?;
+            if relocation_type != 2 && relocation_type != 4 {
+                return Err(LinkerError::UnsupportedElf);
+            }
+            let target_index =
+                usize::try_from(info >> 32).map_err(|_| LinkerError::OffsetOverflow)?;
+            if target_index >= symbol_count {
+                return Err(LinkerError::InvalidElf);
+            }
+            let target_offset = target_index * 24;
+            let target_section = usize::from(read_u16_elf(symbols, target_offset + 6)?);
+            let encoded_addend = read_i64_elf(record, 16)?;
+            let (target, addend) = if target_section == 0 {
+                (
+                    LinkRelocationTarget::Symbol(elf_string(
+                        strings,
+                        usize::try_from(read_u32_elf(symbols, target_offset)?)
+                            .map_err(|_| LinkerError::OffsetOverflow)?,
+                    )?),
+                    encoded_addend,
+                )
+            } else if Some(target_section) == readonly_index {
+                let data_offset = usize::try_from(
+                    encoded_addend
+                        .checked_add(4)
+                        .ok_or(LinkerError::OffsetOverflow)?,
+                )
+                .map_err(|_| LinkerError::InvalidRelocationOffset)?;
+                if data_offset > readonly_data.len() {
+                    return Err(LinkerError::InvalidRelocationOffset);
+                }
+                (LinkRelocationTarget::ReadonlyData(data_offset), -4)
+            } else {
+                return Err(LinkerError::UnsupportedElf);
+            };
+            relocation_storage[record_index] = LinkRelocation {
+                offset,
+                target,
+                addend,
+            };
+        }
+        records.len() / 24
+    } else {
+        0
+    };
+    Ok(LinkInput {
+        symbol,
+        text,
+        readonly_data,
+        relocations: &relocation_storage[..relocation_count],
     })
 }
 
@@ -692,13 +875,101 @@ fn coff_symbol_name<'a>(
     Ok(name)
 }
 
+fn elf_section_header(
+    section_offset: usize,
+    section_count: usize,
+    index: usize,
+) -> Result<usize, LinkerError> {
+    if index >= section_count {
+        return Err(LinkerError::InvalidElf);
+    }
+    section_offset
+        .checked_add(index.checked_mul(64).ok_or(LinkerError::OffsetOverflow)?)
+        .ok_or(LinkerError::OffsetOverflow)
+}
+
+fn elf_section_contents<'a>(
+    object: &'a [u8],
+    section_offset: usize,
+    section_count: usize,
+    index: usize,
+) -> Result<&'a [u8], LinkerError> {
+    let header = elf_section_header(section_offset, section_count, index)?;
+    let offset = to_usize_elf(read_u64_elf(object, header + 24)?)?;
+    let size = to_usize_elf(read_u64_elf(object, header + 32)?)?;
+    object
+        .get(
+            offset
+                ..offset
+                    .checked_add(size)
+                    .ok_or(LinkerError::OffsetOverflow)?,
+        )
+        .ok_or(LinkerError::InvalidElf)
+}
+
+fn elf_string(strings: &[u8], offset: usize) -> Result<&str, LinkerError> {
+    let tail = strings.get(offset..).ok_or(LinkerError::InvalidElf)?;
+    let length = tail
+        .iter()
+        .position(|byte| *byte == 0)
+        .ok_or(LinkerError::InvalidElf)?;
+    let name = core::str::from_utf8(&tail[..length]).map_err(|_| LinkerError::InvalidElf)?;
+    validate_symbol(name)?;
+    Ok(name)
+}
+
+fn read_u16_elf(bytes: &[u8], offset: usize) -> Result<u16, LinkerError> {
+    Ok(u16::from_le_bytes(
+        bytes
+            .get(offset..offset + 2)
+            .ok_or(LinkerError::InvalidElf)?
+            .try_into()
+            .map_err(|_| LinkerError::InvalidElf)?,
+    ))
+}
+
+fn read_u32_elf(bytes: &[u8], offset: usize) -> Result<u32, LinkerError> {
+    Ok(u32::from_le_bytes(
+        bytes
+            .get(offset..offset + 4)
+            .ok_or(LinkerError::InvalidElf)?
+            .try_into()
+            .map_err(|_| LinkerError::InvalidElf)?,
+    ))
+}
+
+fn read_u64_elf(bytes: &[u8], offset: usize) -> Result<u64, LinkerError> {
+    Ok(u64::from_le_bytes(
+        bytes
+            .get(offset..offset + 8)
+            .ok_or(LinkerError::InvalidElf)?
+            .try_into()
+            .map_err(|_| LinkerError::InvalidElf)?,
+    ))
+}
+
+fn read_i64_elf(bytes: &[u8], offset: usize) -> Result<i64, LinkerError> {
+    Ok(i64::from_le_bytes(
+        bytes
+            .get(offset..offset + 8)
+            .ok_or(LinkerError::InvalidElf)?
+            .try_into()
+            .map_err(|_| LinkerError::InvalidElf)?,
+    ))
+}
+
+fn to_usize_elf(value: u64) -> Result<usize, LinkerError> {
+    usize::try_from(value).map_err(|_| LinkerError::OffsetOverflow)
+}
+
 #[cfg(test)]
 mod tests {
     extern crate std;
 
     use super::*;
     use crate::{
-        MachineCode, X86_64PcRelativeRelocation, X86_64PcRelativeRelocationKind, emit_x86_64_coff,
+        MachineCode, X86_64PcRelativeRelocation, X86_64PcRelativeRelocationKind, emit_elf64_x86_64,
+        emit_elf64_x86_64_with_readonly_data, emit_elf64_x86_64_with_relocation, emit_x86_64_coff,
         emit_x86_64_coff_with_relocation,
     };
 
@@ -950,5 +1221,82 @@ mod tests {
         assert_eq!(read_u16(pe.bytes(), 0x86).unwrap(), 1);
         assert_eq!(read_u32(pe.bytes(), 0xd0).unwrap(), 0x2000);
         assert_eq!(pe.bytes().len(), 0x400);
+    }
+
+    #[test]
+    fn decodes_and_links_mrml_elf64_objects_and_readonly_data() {
+        use crate::X86_64ReadonlyRelocation;
+
+        let caller_code = MachineCode::<8>::from_bytes_for_test(&[0xe8, 0, 0, 0, 0, 0xc3]);
+        let callee_code = MachineCode::<8>::from_bytes_for_test(&[0xc3]);
+        let external = X86_64PcRelativeRelocation {
+            offset: 1,
+            symbol: "helper",
+            kind: X86_64PcRelativeRelocationKind::Branch,
+        };
+        let caller =
+            emit_elf64_x86_64_with_relocation::<768, 8>("entry", &caller_code, external).unwrap();
+        let callee = emit_elf64_x86_64::<512, 8>("helper", &callee_code).unwrap();
+        let data_code =
+            MachineCode::<8>::from_bytes_for_test(&[0x48, 0x8d, 0x05, 0, 0, 0, 0, 0xc3]);
+        let data = emit_elf64_x86_64_with_readonly_data::<1024, 8>(
+            "literal",
+            &data_code,
+            b"hello",
+            &[X86_64ReadonlyRelocation {
+                offset: 3,
+                data_offset: 1,
+            }],
+        )
+        .unwrap();
+        let empty = [LinkRelocation {
+            offset: 0,
+            target: LinkRelocationTarget::Symbol("unused"),
+            addend: 0,
+        }; MAX_LINK_RELOCATIONS];
+        let mut caller_storage = empty;
+        let mut callee_storage = empty;
+        let mut data_storage = empty;
+        let caller = decode_x86_64_elf(caller.bytes(), &mut caller_storage).unwrap();
+        let callee = decode_x86_64_elf(callee.bytes(), &mut callee_storage).unwrap();
+        let data = decode_x86_64_elf(data.bytes(), &mut data_storage).unwrap();
+        assert_eq!(
+            data.relocations,
+            &[LinkRelocation {
+                offset: 3,
+                target: LinkRelocationTarget::ReadonlyData(1),
+                addend: -4,
+            }]
+        );
+        let linked = link_x86_64_static::<128>(&[caller, callee, data], "entry").unwrap();
+        assert_eq!(
+            i32::from_le_bytes(linked.bytes()[1..5].try_into().unwrap()),
+            11
+        );
+        assert_eq!(&linked.bytes()[48..53], b"hello");
+    }
+
+    #[test]
+    fn elf_decoder_rejects_truncation_and_unsupported_machine() {
+        let code = MachineCode::<8>::from_bytes_for_test(&[0xc3]);
+        let object = emit_elf64_x86_64::<512, 8>("entry", &code).unwrap();
+        let empty = [LinkRelocation {
+            offset: 0,
+            target: LinkRelocationTarget::Symbol("unused"),
+            addend: 0,
+        }; MAX_LINK_RELOCATIONS];
+        let mut truncated_storage = empty;
+        assert_eq!(
+            decode_x86_64_elf(&object.bytes()[..63], &mut truncated_storage),
+            Err(LinkerError::InvalidElf)
+        );
+        let mut wrong_machine = [0u8; 512];
+        wrong_machine[..object.len()].copy_from_slice(object.bytes());
+        wrong_machine[18..20].copy_from_slice(&3u16.to_le_bytes());
+        let mut machine_storage = empty;
+        assert_eq!(
+            decode_x86_64_elf(&wrong_machine[..object.len()], &mut machine_storage),
+            Err(LinkerError::UnsupportedElf)
+        );
     }
 }
