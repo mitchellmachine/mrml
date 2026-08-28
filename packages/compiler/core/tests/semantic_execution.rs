@@ -89,6 +89,7 @@ const MRML_V1_WIDE_SIGNED_REMAINDER_OVERFLOW_SOURCE: &str =
     "#[mrml_abi::export(version = 1)] pub fn probe(input: i128) -> i128 { input % -1 }";
 const MRML_V1_WIDE_CONDITIONAL_SOURCE: &str = "#[mrml_abi::export(version = 1)] pub fn probe(input: u128, choose: bool) -> u128 { if choose { input + 17 } else { 1512366075204170947332355369683137040 } }";
 const MRML_V1_WIDE_SEQUENCE_SOURCE: &str = "#[mrml_abi::export(version = 1)] pub fn probe(input: u128) -> u128 { { 7; input + 17 } }";
+const MRML_V1_WIDE_LOCAL_SOURCE: &str = "#[mrml_abi::export(version = 1)] pub fn probe(input: u128) -> u128 { let adjusted: u128 = input + 17; adjusted }";
 const MRML_V1_UNSIGNED_WIDEN_SOURCE: &str =
     "#[mrml_abi::export(version = 1)] pub fn probe(input: u64) -> u128 { input as u128 }";
 const MRML_V1_SIGNED_WIDEN_SOURCE: &str =
@@ -1590,6 +1591,26 @@ fn mrml_v1_wide_block_sequence_returns_match_oracle_words() {
         actual,
         rustc_mrml_v1_observations(
             MRML_V1_WIDE_SEQUENCE_SOURCE,
+            "for input in [0u128, 1, u64::MAX as u128, u128::MAX - 17] { let returned = probe(input); println!(\"{}\", returned as u64); println!(\"{}\", (returned >> 64) as u64); }",
+        )
+    );
+}
+
+#[test]
+fn mrml_v1_wide_local_returns_match_oracle_words() {
+    let code = compile(MRML_V1_WIDE_LOCAL_SOURCE);
+    let inputs = [0u128, 1, u64::MAX as u128, u128::MAX - 17];
+    let actual = inputs
+        .into_iter()
+        .flat_map(|input| {
+            let returned = unsafe { call_mrml_v1_wide_with_u32(code.pointer, input, 0) };
+            [returned as u64, (returned >> 64) as u64]
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(
+        actual,
+        rustc_mrml_v1_observations(
+            MRML_V1_WIDE_LOCAL_SOURCE,
             "for input in [0u128, 1, u64::MAX as u128, u128::MAX - 17] { let returned = probe(input); println!(\"{}\", returned as u64); println!(\"{}\", (returned >> 64) as u64); }",
         )
     );

@@ -7495,6 +7495,31 @@ impl<
         let ExprKind::Identifier(name) = expression.kind else {
             return Err(self.error(CodegenErrorKind::RuntimeExpressionUnsupported));
         };
+        if let Some((local_index, local)) = self.locals[..self.saved_locals]
+            .iter()
+            .enumerate()
+            .rev()
+            .find_map(|(index, local)| {
+                local
+                    .filter(|local| local.name == name)
+                    .map(|local| (index, local))
+            })
+        {
+            if !runtime_types_compatible(local.ty, expected_type) || local.stack_slots != 2 {
+                return Err(self.error(CodegenErrorKind::RuntimeTypeMismatch));
+            }
+            self.record_identifier_read(name, RuntimePlaceProjections::EMPTY, expression.span)?;
+            let high_slot = self
+                .local_stack_slots_from(local_index + 1)?
+                .checked_add(self.evaluation_depth)
+                .ok_or(self.error(CodegenErrorKind::OutputTooSmall))?;
+            self.emit_stack_slot(high_slot)?;
+            self.emit(&[0x48, 0x89, 0xc2])?;
+            let low_slot = high_slot
+                .checked_add(1)
+                .ok_or(self.error(CodegenErrorKind::OutputTooSmall))?;
+            return self.emit_stack_slot(low_slot);
+        }
         let index = self
             .function
             .parameters()
@@ -8445,6 +8470,14 @@ impl<
                 }
             ) {
                 self.emit_slice_value_to_stack(&tree, tree.root(), 0)?;
+            } else if matches!(
+                local_type,
+                RuntimeExpressionType::Integer(Some(
+                    crate::IntegerType::U128 | crate::IntegerType::I128
+                ))
+            ) {
+                self.emit_wide_integer_return(&tree, tree.root(), local_type)?;
+                self.emit(&[0x50, 0x52])?;
             } else {
                 self.emit_expression(&tree, tree.root(), 0)?;
                 self.emit(&[0x50])?;
