@@ -75,6 +75,10 @@ const MRML_V1_WIDE_SIGNED_MULTIPLY_OVERFLOW_SOURCE: &str =
 const MRML_V1_WIDE_UNSIGNED_SHIFT_LEFT_SOURCE: &str = "#[mrml_abi::export(version = 1)] pub fn probe(input: u128, shift: u32) -> u128 { input << shift }";
 const MRML_V1_WIDE_UNSIGNED_SHIFT_RIGHT_SOURCE: &str = "#[mrml_abi::export(version = 1)] pub fn probe(input: u128, shift: u32) -> u128 { input >> shift }";
 const MRML_V1_WIDE_SIGNED_SHIFT_RIGHT_SOURCE: &str = "#[mrml_abi::export(version = 1)] pub fn probe(input: i128, shift: u32) -> i128 { input >> shift }";
+const MRML_V1_WIDE_UNSIGNED_DIVIDE_SOURCE: &str = "#[mrml_abi::export(version = 1)] pub fn probe(input: u128) -> u128 { input / 18446744073709551617 }";
+const MRML_V1_WIDE_UNSIGNED_REMAINDER_SOURCE: &str = "#[mrml_abi::export(version = 1)] pub fn probe(input: u128) -> u128 { input % 18446744073709551617 }";
+const MRML_V1_WIDE_UNSIGNED_ZERO_DIVISOR_SOURCE: &str =
+    "#[mrml_abi::export(version = 1)] pub fn probe(input: u128) -> u128 { input / 0 }";
 const MRML_V1_UNSIGNED_WIDEN_SOURCE: &str =
     "#[mrml_abi::export(version = 1)] pub fn probe(input: u64) -> u128 { input as u128 }";
 const MRML_V1_SIGNED_WIDEN_SOURCE: &str =
@@ -1365,6 +1369,86 @@ fn mrml_v1_wide_shift_count_overflow_traps() {
     #[cfg(target_os = "windows")]
     {
         assert!(!output.status.success(), "generated shift trap unexpectedly returned");
+        assert_eq!(output.status.code(), Some(101));
+        let stdout = String::from_utf8(output.stdout).expect("UTF-8 child test stdout");
+        let stderr = String::from_utf8(output.stderr).expect("UTF-8 child test stderr");
+        assert!(
+            stdout.contains("unexpected return code -1073741795")
+                || stderr.contains("unexpected return code -1073741795"),
+            "missing Windows illegal-instruction status; stdout: {stdout}; stderr: {stderr}"
+        );
+    }
+}
+
+#[test]
+fn mrml_v1_wide_unsigned_division_and_remainder_match_both_oracle_words() {
+    let quotient = compile(MRML_V1_WIDE_UNSIGNED_DIVIDE_SOURCE);
+    let remainder = compile(MRML_V1_WIDE_UNSIGNED_REMAINDER_SOURCE);
+    let divisor = 18446744073709551617u128;
+    let inputs = [0u128, 1, divisor - 1, divisor, divisor + 1, u128::MAX];
+    for (source, code, driver) in [
+        (
+            MRML_V1_WIDE_UNSIGNED_DIVIDE_SOURCE,
+            &quotient,
+            "for input in [0u128, 1, 18446744073709551616, 18446744073709551617, 18446744073709551618, u128::MAX] { let returned = probe(input); println!(\"{}\", returned as u64); println!(\"{}\", (returned >> 64) as u64); }",
+        ),
+        (
+            MRML_V1_WIDE_UNSIGNED_REMAINDER_SOURCE,
+            &remainder,
+            "for input in [0u128, 1, 18446744073709551616, 18446744073709551617, 18446744073709551618, u128::MAX] { let returned = probe(input); println!(\"{}\", returned as u64); println!(\"{}\", (returned >> 64) as u64); }",
+        ),
+    ] {
+        let actual = inputs
+            .into_iter()
+            .flat_map(|input| {
+                let returned = unsafe { call_mrml_v1_wide_return(code.pointer, input) };
+                [returned as u64, (returned >> 64) as u64]
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(actual, rustc_mrml_v1_observations(source, driver));
+    }
+}
+
+#[test]
+fn mrml_v1_wide_unsigned_zero_divisor_traps() {
+    #[cfg(target_os = "windows")]
+    const CHILD: &str = "MRML_SEMANTIC_WIDE_ZERO_DIVISOR_CHILD";
+    let code = compile(MRML_V1_WIDE_UNSIGNED_ZERO_DIVISOR_SOURCE);
+
+    #[cfg(not(target_os = "windows"))]
+    {
+        let pid = unsafe { fork() };
+        assert!(pid >= 0, "fork failed");
+        if pid == 0 {
+            let _ = unsafe { call_mrml_v1_wide_return(code.pointer, u128::MAX) };
+            unsafe { _exit(120) }
+        }
+        let mut status = 0;
+        assert_eq!(unsafe { waitpid(pid, &mut status, 0) }, pid, "waitpid failed");
+        assert_eq!(status & 0x7f, 4, "unexpected Unix wait status: {status:#x}");
+        return;
+    }
+
+    #[cfg(target_os = "windows")]
+    if std::env::var_os(CHILD).is_some() {
+        unsafe { SetErrorMode(0x0001 | 0x0002) };
+        let _ = unsafe { call_mrml_v1_wide_return(code.pointer, u128::MAX) };
+        panic!("wide division by zero unexpectedly returned");
+    }
+
+    #[cfg(target_os = "windows")]
+    let output = Command::new(std::env::current_exe().expect("locate semantic test binary"))
+        .args([
+            "--exact",
+            "mrml_v1_wide_unsigned_zero_divisor_traps",
+            "--nocapture",
+        ])
+        .env(CHILD, "1")
+        .output()
+        .expect("launch isolated wide zero-divisor trap probe");
+    #[cfg(target_os = "windows")]
+    {
+        assert!(!output.status.success(), "zero-divisor trap unexpectedly returned");
         assert_eq!(output.status.code(), Some(101));
         let stdout = String::from_utf8(output.stdout).expect("UTF-8 child test stdout");
         let stderr = String::from_utf8(output.stderr).expect("UTF-8 child test stderr");

@@ -152,6 +152,9 @@ restores the result sign.
 Wide shifts accept a one-word integer count, explicitly distinguish counts below
 and above the 64-bit word boundary, and trap checked counts of 128 or greater.
 Right shift sign-fills only the declared `i128` high word.
+General `u128` division and remainder use a fixed 128-step restoring divider,
+retain the divisor in bounded temporary stack storage, and trap a zero divisor.
+Signed division and remainder remain unsupported.
 Closed positive and negative two-word integer literals are range-checked against
 the declared return type and materialized directly into the two return words.
 Other wide casts, expressions, locals, operations, calls, and returns remain
@@ -206,6 +209,8 @@ Signed multiplication by `-17` is compared for both operand signs and near both
 signed boundaries, while `i128::MIN * -1` must take the isolated overflow trap.
 Unsigned left/right shifts and signed right shifts are compared at counts 0, 1,
 63, 64, 65, and 127; count 128 must take the isolated overflow trap.
+Unsigned quotient and remainder by `2^64 + 1` are compared below, at, and above
+the divisor through `u128::MAX`; a zero divisor must take the isolated trap.
 Exact `u128::MAX`, `i128::MAX`, and `i128::MIN` literal
 words are also compared with the same oracle. This is not linker, dynamic-loader,
 cross-language, or physical-hardware evidence.

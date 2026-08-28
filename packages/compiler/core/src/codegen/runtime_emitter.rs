@@ -7080,6 +7080,88 @@ impl<
         }
         if let ExprKind::Binary {
             operator:
+                operator @ (crate::BinaryOperator::Divide
+                | crate::BinaryOperator::Remainder),
+            left,
+            right,
+        } = expression.kind
+        {
+            if layout.signed {
+                return Err(self.error(CodegenErrorKind::RuntimeExpressionUnsupported));
+            }
+            let left_type = runtime_expression_type_with_locals(
+                self.function,
+                self.resolver,
+                &self.locals[..self.saved_locals],
+                tree,
+                left,
+                1,
+            )
+            .map_err(|kind| self.error(kind))?;
+            let right_type = runtime_expression_type_with_locals(
+                self.function,
+                self.resolver,
+                &self.locals[..self.saved_locals],
+                tree,
+                right,
+                1,
+            )
+            .map_err(|kind| self.error(kind))?;
+            if !runtime_types_compatible(left_type, expected_type)
+                || !runtime_types_compatible(right_type, expected_type)
+            {
+                return Err(self.error(CodegenErrorKind::RuntimeTypeMismatch));
+            }
+            self.emit_wide_integer_return(tree, left, expected_type)?;
+            self.emit(&[0x50, 0x52])?;
+            self.evaluation_depth += 2;
+            self.emit_wide_integer_return(tree, right, expected_type)?;
+            self.emit(&[0x48, 0x85, 0xc0])?;
+            let nonzero_low = self.emit_forward_branch(0x85)?;
+            self.emit(&[0x48, 0x85, 0xd2])?;
+            self.emit_trap_branch(0x84)?;
+            self.patch_forward_branch(nonzero_low)?;
+            self.emit(&[
+                0x49, 0x89, 0xc2, 0x49, 0x89, 0xd3, 0x59, 0x41, 0x58, 0x41, 0x52, 0x41,
+                0x53,
+            ])?;
+            self.evaluation_depth -= 2;
+            self.evaluation_depth += 2;
+            self.emit(&[
+                0x49, 0x89, 0xc9, 0x4d, 0x31, 0xd2, 0x4d, 0x31, 0xdb, 0xb9, 0x80, 0,
+                0, 0,
+            ])?;
+            let loop_start = self.length;
+            self.emit(&[
+                0x49, 0xd1, 0xe0, 0x49, 0xd1, 0xd1, 0x49, 0xd1, 0xd2, 0x49, 0xd1, 0xd3,
+                0x48, 0x8b, 0x04, 0x24, 0x49, 0x39, 0xc3,
+            ])?;
+            let above_divisor = self.emit_forward_branch(0x87)?;
+            let below_divisor_high = self.emit_forward_branch(0x82)?;
+            self.emit(&[0x48, 0x8b, 0x44, 0x24, 0x08, 0x49, 0x39, 0xc2])?;
+            let below_divisor_low = self.emit_forward_branch(0x82)?;
+            self.patch_forward_branch(above_divisor)?;
+            self.emit(&[
+                0x48, 0x8b, 0x44, 0x24, 0x08, 0x49, 0x29, 0xc2, 0x48, 0x8b, 0x04, 0x24,
+                0x49, 0x19, 0xc3, 0x49, 0x83, 0xc8, 0x01,
+            ])?;
+            self.patch_forward_branch(below_divisor_high)?;
+            self.patch_forward_branch(below_divisor_low)?;
+            self.emit(&[0xff, 0xc9])?;
+            let done = self.emit_forward_branch(0x84)?;
+            self.emit_backward_branch(loop_start)?;
+            self.patch_forward_branch(done)?;
+            self.emit(&[0x48, 0x83, 0xc4, 0x10])?;
+            self.evaluation_depth -= 2;
+            if operator == crate::BinaryOperator::Divide {
+                self.emit(&[0x4c, 0x89, 0xc0, 0x4c, 0x89, 0xca])?;
+            } else {
+                self.emit(&[0x4c, 0x89, 0xd0, 0x4c, 0x89, 0xda])?;
+            }
+            return Ok(());
+        }
+        if let ExprKind::Binary {
+            operator:
                 operator @ (crate::BinaryOperator::ShiftLeft
                 | crate::BinaryOperator::ShiftRight),
             left,
