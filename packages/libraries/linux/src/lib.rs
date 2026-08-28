@@ -138,6 +138,7 @@ unsafe extern "C" {
         start: unsafe extern "C" fn(*mut c_void) -> *mut c_void,
         argument: *mut c_void,
     ) -> c_int;
+    fn pthread_join(thread: usize, result: *mut *mut c_void) -> c_int;
     fn pthread_attr_init(attributes: *mut PthreadAttr) -> c_int;
     fn pthread_attr_setdetachstate(attributes: *mut PthreadAttr, state: c_int) -> c_int;
     fn pthread_attr_destroy(attributes: *mut PthreadAttr) -> c_int;
@@ -709,6 +710,43 @@ pub unsafe fn spawn_detached_thread(
     let created = unsafe { pthread_create(&mut thread, attributes, start, context) } == 0;
     let _ = unsafe { pthread_attr_destroy(attributes) };
     created
+}
+
+#[cfg(unix)]
+pub struct NativeThread(Option<usize>);
+
+#[cfg(unix)]
+unsafe impl Send for NativeThread {}
+
+#[cfg(unix)]
+impl NativeThread {
+    pub fn join(mut self) -> bool {
+        self.join_inner()
+    }
+
+    fn join_inner(&mut self) -> bool {
+        let Some(thread) = self.0.take() else {
+            return true;
+        };
+        unsafe { pthread_join(thread, core::ptr::null_mut()) == 0 }
+    }
+}
+
+#[cfg(unix)]
+impl Drop for NativeThread {
+    fn drop(&mut self) {
+        let _ = self.join_inner();
+    }
+}
+
+#[cfg(unix)]
+pub unsafe fn spawn_joinable_thread(
+    context: *mut c_void,
+    start: unsafe extern "C" fn(*mut c_void) -> *mut c_void,
+) -> Option<NativeThread> {
+    let mut thread = 0usize;
+    (unsafe { pthread_create(&mut thread, core::ptr::null(), start, context) } == 0)
+        .then_some(NativeThread(Some(thread)))
 }
 
 #[derive(Debug)]

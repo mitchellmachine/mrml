@@ -1594,6 +1594,53 @@ pub unsafe fn spawn_detached_thread(
     }
 }
 
+#[cfg(windows)]
+pub struct NativeThread(Option<*mut c_void>);
+
+#[cfg(windows)]
+unsafe impl Send for NativeThread {}
+
+#[cfg(windows)]
+impl NativeThread {
+    pub fn join(mut self) -> bool {
+        self.join_inner()
+    }
+
+    fn join_inner(&mut self) -> bool {
+        let Some(handle) = self.0.take() else {
+            return true;
+        };
+        let waited = unsafe { WaitForSingleObject(handle, u32::MAX) } == 0;
+        let closed = unsafe { CloseHandle(handle) } != 0;
+        waited && closed
+    }
+}
+
+#[cfg(windows)]
+impl Drop for NativeThread {
+    fn drop(&mut self) {
+        let _ = self.join_inner();
+    }
+}
+
+#[cfg(windows)]
+pub unsafe fn spawn_joinable_thread(
+    context: *mut c_void,
+    start: unsafe extern "system" fn(*mut c_void) -> u32,
+) -> Option<NativeThread> {
+    let handle = unsafe {
+        CreateThread(
+            core::ptr::null(),
+            0,
+            start,
+            context,
+            0,
+            core::ptr::null_mut(),
+        )
+    };
+    (!handle.is_null()).then_some(NativeThread(Some(handle)))
+}
+
 #[derive(Debug)]
 #[cfg(windows)]
 pub struct NativeFile(*mut c_void);
