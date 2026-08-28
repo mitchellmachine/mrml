@@ -9,8 +9,8 @@ the named commit and current source.
 ## Recoverable baseline
 
 - Branch: `main`
-- Compiler checkpoint commit: `00888d66`
-  (`compiler: link bounded ordered object lists`)
+- Compiler checkpoint commit: `b97ef1bd`
+  (`compiler: decode bounded Unix archives`)
 - Remote state when recorded: `origin/main` includes the bounded MRML-owned
   static-link core, exact MRML COFF and ELF64 ingestion, deterministic
   import-free PE32+/ELF64 executable serialization, explicit compiler-driver
@@ -82,11 +82,20 @@ controlled result was 10.196 ms versus 26.870 ms. Arch WSL separately executed
 the generated bounded ELF64 image and returned 42; the ordinary MRML Linux test
 target remained unavailable, so this is hosted evidence only.
 
-Archives, PE imports/exports/exception/base-relocation/debug metadata, ELF
-dynamic metadata/interpreter/PIE/sections, section GC, ICF, parallel execution,
-and public `mrml` build-frontend selection remain unimplemented. Upstream rustc
+Symbol-driven archive extraction, PE imports/exports/exception/base-relocation/
+debug metadata, ELF dynamic metadata/interpreter/PIE/sections, section GC, ICF,
+parallel execution, and public `mrml` build-frontend selection remain
+unimplemented. Upstream rustc
 and its pinned linker remain the production path until the profile-specific
 gate in `docs/build/BUILD_SYSTEM.md` passes.
+
+Commit `b97ef1bd` adds allocation-free Unix archive container decoding for at
+most 32 members. It validates fixed headers, decimal sizes, terminators,
+payload ranges, and alignment; decodes ordinary, GNU long, and BSD embedded
+member names; skips conventional symbol-index metadata; and lets the driver
+expand members in order under the existing total input bound. This is an
+all-members path only. Lazy symbol-index extraction, group rescanning, thin
+archives, and real `.rlib` admission remain unimplemented.
 
 Patent review: **NOT_TRIGGERED** for these conventional bounded linker,
 serializer, command-routing, and benchmark increments; see
