@@ -9525,3 +9525,12 @@ non-text dependency marker is internal bounded bookkeeping and introduces no
 new archive format, relocation encoding, dynamic-linking mechanism,
 compression, cryptographic mechanism, or loader algorithm. This technical
 screen is not legal advice or patent clearance.
+
+# 2026-08-28 — Typed global read-only definitions
+
+Patent review: **NOT_TRIGGERED**. This increment generalizes conventional
+static ELF symbol resolution from text-only definitions to bounded read-only
+data definitions and selects an ordinary data-only archive member. It uses
+documented section-relative layout and relocation arithmetic and introduces no
+new symbol, archive, relocation, compression, cryptographic, or loader
+algorithm. This technical screen is not legal advice or patent clearance.

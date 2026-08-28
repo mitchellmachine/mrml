@@ -226,14 +226,21 @@ pub enum LinkRelocationTarget<'a> {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum LinkDefinitionTarget {
+    Text(usize),
+    ReadonlyData(usize),
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct LinkDefinition<'a> {
     pub symbol: &'a str,
-    pub text_offset: usize,
+    pub target: LinkDefinitionTarget,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct LinkInput<'data, 'relocations, 'definitions> {
     pub symbol: &'data str,
+    pub symbol_target: LinkDefinitionTarget,
     pub additional_definitions: &'definitions [LinkDefinition<'data>],
     pub text: &'data [u8],
     pub readonly_data: &'data [u8],
@@ -355,7 +362,7 @@ pub fn select_static_link_inputs(
             }
             let needed = core::iter::once(LinkDefinition {
                 symbol: inputs[candidate].symbol,
-                text_offset: 0,
+                target: inputs[candidate].symbol_target,
             })
             .chain(inputs[candidate].additional_definitions.iter().copied())
             .any(|definition| {
@@ -462,7 +469,7 @@ pub fn select_ordered_static_link_members(
                 }
                 let needed = core::iter::once(LinkDefinition {
                     symbol: inputs[candidate].symbol,
-                    text_offset: 0,
+                    target: inputs[candidate].symbol_target,
                 })
                 .chain(inputs[candidate].additional_definitions.iter().copied())
                 .any(|definition| {
@@ -506,18 +513,21 @@ fn symbol_is_defined(
     inputs
         .iter()
         .enumerate()
-        .any(|(index, input)| selected[index] && input_definition_offset(input, symbol).is_some())
+        .any(|(index, input)| selected[index] && input_definition_target(input, symbol).is_some())
 }
 
-fn input_definition_offset(input: &LinkInput<'_, '_, '_>, symbol: &str) -> Option<usize> {
+fn input_definition_target(
+    input: &LinkInput<'_, '_, '_>,
+    symbol: &str,
+) -> Option<LinkDefinitionTarget> {
     if input.symbol == symbol {
-        return Some(0);
+        return Some(input.symbol_target);
     }
     input
         .additional_definitions
         .iter()
         .find(|definition| definition.symbol == symbol)
-        .map(|definition| definition.text_offset)
+        .map(|definition| definition.target)
 }
 
 fn symbol_is_referenced(
@@ -548,7 +558,7 @@ pub fn decode_x86_64_coff<'data, 'relocations>(
 ) -> Result<LinkInput<'data, 'relocations, 'data>, LinkerError> {
     let mut definitions = [LinkDefinition {
         symbol: "unused",
-        text_offset: 0,
+        target: LinkDefinitionTarget::Text(0),
     }; MAX_LINK_DEFINITIONS];
     let decoded =
         decode_x86_64_coff_with_definitions(object, relocation_storage, &mut definitions)?;
@@ -557,6 +567,7 @@ pub fn decode_x86_64_coff<'data, 'relocations>(
     }
     Ok(LinkInput {
         symbol: decoded.symbol,
+        symbol_target: decoded.symbol_target,
         additional_definitions: &[],
         text: decoded.text,
         readonly_data: decoded.readonly_data,
@@ -1302,7 +1313,7 @@ pub fn decode_x86_64_coff_text_fragment<'data, 'relocations, 'definitions>(
                 }
                 definition_storage[definition_count] = LinkDefinition {
                     symbol: name,
-                    text_offset,
+                    target: LinkDefinitionTarget::Text(text_offset),
                 };
                 definition_count += 1;
             }
@@ -1468,6 +1479,7 @@ pub fn decode_x86_64_coff_text_fragment<'data, 'relocations, 'definitions>(
 
     Ok(LinkInput {
         symbol,
+        symbol_target: LinkDefinitionTarget::Text(0),
         additional_definitions: &definition_storage[..definition_count],
         text,
         readonly_data,
@@ -1482,7 +1494,7 @@ pub fn decode_x86_64_elf<'data, 'relocations>(
 ) -> Result<LinkInput<'data, 'relocations, 'data>, LinkerError> {
     let mut definitions = [LinkDefinition {
         symbol: "unused",
-        text_offset: 0,
+        target: LinkDefinitionTarget::Text(0),
     }; MAX_LINK_DEFINITIONS];
     let decoded = decode_x86_64_elf_with_definitions(object, relocation_storage, &mut definitions)?;
     if !decoded.additional_definitions.is_empty() {
@@ -1490,6 +1502,7 @@ pub fn decode_x86_64_elf<'data, 'relocations>(
     }
     Ok(LinkInput {
         symbol: decoded.symbol,
+        symbol_target: decoded.symbol_target,
         additional_definitions: &[],
         text: decoded.text,
         readonly_data: decoded.readonly_data,
@@ -1681,7 +1694,7 @@ pub fn decode_x86_64_elf_with_definitions<'data, 'relocations, 'definitions>(
             _ => return Err(LinkerError::UnsupportedElf),
         }
     }
-    let (text_start, text_end) = text_span.ok_or(LinkerError::InvalidElf)?;
+    let (text_start, text_end) = text_span.unwrap_or((0, 0));
     let symbols_index = symbols_index.ok_or(LinkerError::InvalidElf)?;
     let strings_index = strings_index.ok_or(LinkerError::InvalidElf)?;
     let text = object
@@ -1731,15 +1744,46 @@ pub fn decode_x86_64_elf_with_definitions<'data, 'relocations, 'definitions>(
                 usize::try_from(read_u32_elf(symbols, offset)?)
                     .map_err(|_| LinkerError::OffsetOverflow)?,
             )?;
-            if text_offset == 0 && defined_symbol.is_none() {
-                defined_symbol = Some(name);
+            let target = LinkDefinitionTarget::Text(text_offset);
+            if defined_symbol.is_none() {
+                defined_symbol = Some((name, target));
             } else {
                 if definition_count == definition_storage.len() {
                     return Err(LinkerError::TooManyDefinitions);
                 }
                 definition_storage[definition_count] = LinkDefinition {
                     symbol: name,
-                    text_offset,
+                    target,
+                };
+                definition_count += 1;
+            }
+        } else if readonly_sections.get(section).copied().unwrap_or(false) && binding == 1 {
+            let readonly_offset = elf_combined_text_offset(
+                object,
+                section_offset,
+                section_count,
+                section,
+                readonly_start.ok_or(LinkerError::InvalidElf)?,
+                read_u64_elf(symbols, offset + 8)?,
+            )?;
+            if readonly_offset > readonly_data.len() {
+                return Err(LinkerError::InvalidElf);
+            }
+            let name = elf_string(
+                strings,
+                usize::try_from(read_u32_elf(symbols, offset)?)
+                    .map_err(|_| LinkerError::OffsetOverflow)?,
+            )?;
+            let target = LinkDefinitionTarget::ReadonlyData(readonly_offset);
+            if defined_symbol.is_none() {
+                defined_symbol = Some((name, target));
+            } else {
+                if definition_count == definition_storage.len() {
+                    return Err(LinkerError::TooManyDefinitions);
+                }
+                definition_storage[definition_count] = LinkDefinition {
+                    symbol: name,
+                    target,
                 };
                 definition_count += 1;
             }
@@ -1766,8 +1810,8 @@ pub fn decode_x86_64_elf_with_definitions<'data, 'relocations, 'definitions>(
             return Err(LinkerError::UnsupportedElf);
         }
     }
-    let symbol = defined_symbol
-        .or(text_owner)
+    let (symbol, symbol_target) = defined_symbol
+        .or_else(|| text_owner.map(|symbol| (symbol, LinkDefinitionTarget::Text(0))))
         .ok_or(LinkerError::InvalidElf)?;
 
     let mut relocation_count = 0usize;
@@ -1996,6 +2040,7 @@ pub fn decode_x86_64_elf_with_definitions<'data, 'relocations, 'definitions>(
     }
     Ok(LinkInput {
         symbol,
+        symbol_target,
         additional_definitions: &definition_storage[..definition_count],
         text,
         readonly_data,
@@ -3579,11 +3624,10 @@ fn link_x86_64_static_aligned<const MAX_BYTES: usize>(
     let mut relocation_count = 0usize;
     for (index, input) in inputs.iter().enumerate() {
         validate_symbol(input.symbol)?;
+        validate_definition_target(input, input.symbol_target)?;
         for (definition_index, definition) in input.additional_definitions.iter().enumerate() {
             validate_symbol(definition.symbol)?;
-            if definition.text_offset > input.text.len() {
-                return Err(LinkerError::InvalidRelocationOffset);
-            }
+            validate_definition_target(input, definition.target)?;
             if definition.symbol == input.symbol
                 || input.additional_definitions[..definition_index]
                     .iter()
@@ -3600,13 +3644,13 @@ fn link_x86_64_static_aligned<const MAX_BYTES: usize>(
         }
         for definition in core::iter::once(LinkDefinition {
             symbol: input.symbol,
-            text_offset: 0,
+            target: input.symbol_target,
         })
         .chain(input.additional_definitions.iter().copied())
         {
             if inputs[..index]
                 .iter()
-                .any(|earlier| input_definition_offset(earlier, definition.symbol).is_some())
+                .any(|earlier| input_definition_target(earlier, definition.symbol).is_some())
             {
                 return Err(LinkerError::DuplicateSymbol);
             }
@@ -3845,17 +3889,33 @@ fn validate_symbol(symbol: &str) -> Result<(), LinkerError> {
     }
 }
 
+fn validate_definition_target(
+    input: &LinkInput<'_, '_, '_>,
+    target: LinkDefinitionTarget,
+) -> Result<(), LinkerError> {
+    let valid = match target {
+        LinkDefinitionTarget::Text(offset) => offset <= input.text.len(),
+        LinkDefinitionTarget::ReadonlyData(offset) => offset <= input.readonly_data.len(),
+    };
+    if valid {
+        Ok(())
+    } else {
+        Err(LinkerError::InvalidRelocationOffset)
+    }
+}
+
 fn resolve_symbol(
     inputs: &[LinkInput<'_, '_, '_>],
     layouts: &[InputLayout; MAX_LINK_INPUTS],
     symbol: &str,
 ) -> Result<usize, LinkerError> {
     for (input, layout) in inputs.iter().zip(layouts.iter()) {
-        if let Some(offset) = input_definition_offset(input, symbol) {
-            return layout
-                .text
-                .checked_add(offset)
-                .ok_or(LinkerError::OffsetOverflow);
+        if let Some(target) = input_definition_target(input, symbol) {
+            return match target {
+                LinkDefinitionTarget::Text(offset) => layout.text.checked_add(offset),
+                LinkDefinitionTarget::ReadonlyData(offset) => layout.readonly.checked_add(offset),
+            }
+            .ok_or(LinkerError::OffsetOverflow);
         }
     }
     Err(LinkerError::UndefinedSymbol)
@@ -3870,7 +3930,7 @@ fn resolve_readonly_symbol(
     data_offset: usize,
 ) -> Result<usize, LinkerError> {
     for (input, layout) in inputs.iter().zip(layouts.iter()) {
-        if input_definition_offset(input, owner_symbol).is_some() {
+        if input_definition_target(input, owner_symbol).is_some() {
             if data_offset > input.readonly_data.len() {
                 return Err(LinkerError::InvalidRelocationOffset);
             }
@@ -4365,6 +4425,7 @@ mod tests {
         let inputs = [
             LinkInput {
                 symbol: "entry",
+                symbol_target: LinkDefinitionTarget::Text(0),
                 additional_definitions: &[],
                 text: &[0; 4],
                 readonly_data: &[],
@@ -4372,6 +4433,7 @@ mod tests {
             },
             LinkInput {
                 symbol: "unused",
+                symbol_target: LinkDefinitionTarget::Text(0),
                 additional_definitions: &[],
                 text: &[0; 4],
                 readonly_data: &[],
@@ -4379,6 +4441,7 @@ mod tests {
             },
             LinkInput {
                 symbol: "middle",
+                symbol_target: LinkDefinitionTarget::Text(0),
                 additional_definitions: &[],
                 text: &[0; 4],
                 readonly_data: &[],
@@ -4386,6 +4449,7 @@ mod tests {
             },
             LinkInput {
                 symbol: "leaf",
+                symbol_target: LinkDefinitionTarget::Text(0),
                 additional_definitions: &[],
                 text: &[0; 4],
                 readonly_data: &[],
@@ -4408,6 +4472,7 @@ mod tests {
         let inputs = [
             LinkInput {
                 symbol: "entry",
+                symbol_target: LinkDefinitionTarget::Text(0),
                 additional_definitions: &[],
                 text: &[0xc3],
                 readonly_data: &[],
@@ -4415,6 +4480,7 @@ mod tests {
             },
             LinkInput {
                 symbol: "helper",
+                symbol_target: LinkDefinitionTarget::Text(0),
                 additional_definitions: &[],
                 text: &[0xc3],
                 readonly_data: &[],
@@ -4427,10 +4493,51 @@ mod tests {
     }
 
     #[test]
+    fn selects_and_resolves_readonly_only_archive_definitions() {
+        let required = [LinkRelocation {
+            offset: 0,
+            target: LinkRelocationTarget::RequiredSymbol("external_data"),
+            addend: 0,
+        }];
+        let inputs = [
+            LinkInput {
+                symbol: "entry",
+                symbol_target: LinkDefinitionTarget::Text(0),
+                additional_definitions: &[],
+                text: &[0xc3],
+                readonly_data: &[],
+                relocations: &required,
+            },
+            LinkInput {
+                symbol: "external_data",
+                symbol_target: LinkDefinitionTarget::ReadonlyData(0),
+                additional_definitions: &[],
+                text: &[],
+                readonly_data: &[42],
+                relocations: &[],
+            },
+        ];
+        let selection = select_static_link_inputs(&inputs, &[false, true], "entry").unwrap();
+        assert_eq!(selection.indices(), &[0, 1]);
+        let linked = link_x86_64_static::<64>(&inputs, "entry").unwrap();
+        assert_eq!(linked.bytes()[16], 42);
+
+        let invalid = LinkInput {
+            symbol_target: LinkDefinitionTarget::ReadonlyData(2),
+            ..inputs[1]
+        };
+        assert_eq!(
+            link_x86_64_static::<64>(&[inputs[0], invalid], "entry"),
+            Err(LinkerError::InvalidRelocationOffset)
+        );
+    }
+
+    #[test]
     fn selects_an_archive_entry_and_ignores_later_duplicate_members() {
         let inputs = [
             LinkInput {
                 symbol: "entry",
+                symbol_target: LinkDefinitionTarget::Text(0),
                 additional_definitions: &[],
                 text: &[0xc3],
                 readonly_data: &[],
@@ -4438,6 +4545,7 @@ mod tests {
             },
             LinkInput {
                 symbol: "entry",
+                symbol_target: LinkDefinitionTarget::Text(0),
                 additional_definitions: &[],
                 text: &[0xcc],
                 readonly_data: &[],
@@ -4445,6 +4553,7 @@ mod tests {
             },
             LinkInput {
                 symbol: "unused",
+                symbol_target: LinkDefinitionTarget::Text(0),
                 additional_definitions: &[],
                 text: &[0xc3],
                 readonly_data: &[],
@@ -4465,6 +4574,7 @@ mod tests {
         }];
         let helper = LinkInput {
             symbol: "helper",
+            symbol_target: LinkDefinitionTarget::Text(0),
             additional_definitions: &[],
             text: &[0; 4],
             readonly_data: &[],
@@ -4472,6 +4582,7 @@ mod tests {
         };
         let entry = LinkInput {
             symbol: "entry",
+            symbol_target: LinkDefinitionTarget::Text(0),
             additional_definitions: &[],
             text: &[0; 4],
             readonly_data: &[],
@@ -4494,6 +4605,7 @@ mod tests {
         }];
         let entry = LinkInput {
             symbol: "entry",
+            symbol_target: LinkDefinitionTarget::Text(0),
             additional_definitions: &[],
             text: &[0, 0, 0, 0],
             readonly_data: &[],
@@ -4501,6 +4613,7 @@ mod tests {
         };
         let helper = LinkInput {
             symbol: "helper",
+            symbol_target: LinkDefinitionTarget::Text(0),
             additional_definitions: &[],
             text: &[0xc3],
             readonly_data: &[],
@@ -4508,6 +4621,7 @@ mod tests {
         };
         let unwind_fragment = LinkInput {
             symbol: "helper.unwind",
+            symbol_target: LinkDefinitionTarget::Text(0),
             additional_definitions: &[],
             text: &[0xc3],
             readonly_data: &[],
@@ -4528,6 +4642,7 @@ mod tests {
     fn ordered_archive_member_identity_fails_closed_outside_archives() {
         let input = LinkInput {
             symbol: "entry",
+            symbol_target: LinkDefinitionTarget::Text(0),
             additional_definitions: &[],
             text: &[0xc3],
             readonly_data: &[],
@@ -4558,6 +4673,7 @@ mod tests {
         let inputs = [
             LinkInput {
                 symbol: "entry",
+                symbol_target: LinkDefinitionTarget::Text(0),
                 additional_definitions: &[],
                 text: &[0xe8, 0, 0, 0, 0, 0xc3],
                 readonly_data: b"A",
@@ -4565,6 +4681,7 @@ mod tests {
             },
             LinkInput {
                 symbol: "helper",
+                symbol_target: LinkDefinitionTarget::Text(0),
                 additional_definitions: &[],
                 text: &[0xe8, 0, 0, 0, 0, 0xc3],
                 readonly_data: b"B",
@@ -4591,10 +4708,11 @@ mod tests {
     fn resolves_multiple_definitions_at_checked_text_offsets() {
         let definitions = [LinkDefinition {
             symbol: "secondary",
-            text_offset: 1,
+            target: LinkDefinitionTarget::Text(1),
         }];
         let input = LinkInput {
             symbol: "primary",
+            symbol_target: LinkDefinitionTarget::Text(0),
             additional_definitions: &definitions,
             text: &[0xc3, 0xb8, 42, 0, 0, 0, 0xc3],
             readonly_data: &[],
@@ -4608,7 +4726,7 @@ mod tests {
         let invalid = LinkInput {
             additional_definitions: &[LinkDefinition {
                 symbol: "outside",
-                text_offset: 8,
+                target: LinkDefinitionTarget::Text(8),
             }],
             ..input
         };
@@ -4627,6 +4745,7 @@ mod tests {
         };
         let entry = LinkInput {
             symbol: "entry",
+            symbol_target: LinkDefinitionTarget::Text(0),
             additional_definitions: &[],
             text: &[0xff, 0x25, 0, 0, 0, 0],
             readonly_data: &[],
@@ -4634,6 +4753,7 @@ mod tests {
         };
         let helper = LinkInput {
             symbol: "helper",
+            symbol_target: LinkDefinitionTarget::Text(0),
             additional_definitions: &[],
             text: &[0xb8, 42, 0, 0, 0, 0xc3],
             readonly_data: &[],
@@ -4661,6 +4781,7 @@ mod tests {
         };
         let input = LinkInput {
             symbol: "entry",
+            symbol_target: LinkDefinitionTarget::Text(0),
             additional_definitions: &[],
             text: &[0x48, 0x8b, 0x0d, 0, 0, 0, 0, 0xc3],
             readonly_data: &42u64.to_le_bytes(),
@@ -4684,10 +4805,11 @@ mod tests {
     fn archive_selection_matches_additional_definitions() {
         let definitions = [LinkDefinition {
             symbol: "entry",
-            text_offset: 1,
+            target: LinkDefinitionTarget::Text(1),
         }];
         let input = LinkInput {
             symbol: "other",
+            symbol_target: LinkDefinitionTarget::Text(0),
             additional_definitions: &definitions,
             text: &[0xc3, 0xc3],
             readonly_data: &[],
@@ -4702,6 +4824,7 @@ mod tests {
     fn rejects_ambiguous_missing_and_out_of_bounds_inputs() {
         let plain = LinkInput {
             symbol: "same",
+            symbol_target: LinkDefinitionTarget::Text(0),
             additional_definitions: &[],
             text: &[0xc3],
             readonly_data: b"hosted-probe",
@@ -4889,7 +5012,7 @@ mod tests {
         }; MAX_LINK_RELOCATIONS];
         let mut definitions = [LinkDefinition {
             symbol: "unused",
-            text_offset: 0,
+            target: LinkDefinitionTarget::Text(0),
         }; MAX_LINK_DEFINITIONS];
         let decoded =
             decode_x86_64_coff_with_definitions(&bytes, &mut relocations, &mut definitions)
@@ -4898,7 +5021,7 @@ mod tests {
             decoded.additional_definitions,
             &[LinkDefinition {
                 symbol: "second",
-                text_offset: 6,
+                target: LinkDefinitionTarget::Text(6),
             }]
         );
         assert_eq!(
@@ -4937,7 +5060,7 @@ mod tests {
         let mut second_relocations = first_relocations;
         let mut first_definitions = [LinkDefinition {
             symbol: "unused",
-            text_offset: 0,
+            target: LinkDefinitionTarget::Text(0),
         }; MAX_LINK_DEFINITIONS];
         let mut second_definitions = first_definitions;
         let first = decode_x86_64_coff_text_fragment(
@@ -4995,7 +5118,7 @@ mod tests {
         let mut second_relocations = first_relocations;
         let mut first_definitions = [LinkDefinition {
             symbol: "unused",
-            text_offset: 0,
+            target: LinkDefinitionTarget::Text(0),
         }; MAX_LINK_DEFINITIONS];
         let mut second_definitions = first_definitions;
         let first = decode_x86_64_coff_text_fragment(
@@ -5045,7 +5168,7 @@ mod tests {
         }; MAX_LINK_RELOCATIONS];
         let mut definitions = [LinkDefinition {
             symbol: "unused",
-            text_offset: 0,
+            target: LinkDefinitionTarget::Text(0),
         }; MAX_LINK_DEFINITIONS];
         assert!(
             decode_x86_64_coff_text_fragment(&object, 0, &mut relocations, &mut definitions,)
@@ -5188,7 +5311,7 @@ mod tests {
         }; MAX_LINK_RELOCATIONS];
         let mut definitions = [LinkDefinition {
             symbol: "unused",
-            text_offset: 0,
+            target: LinkDefinitionTarget::Text(0),
         }; MAX_LINK_DEFINITIONS];
         let decoded =
             decode_x86_64_coff_with_definitions(&bytes, &mut relocations, &mut definitions)
@@ -5206,6 +5329,7 @@ mod tests {
         };
         let input = LinkInput {
             symbol: "entry",
+            symbol_target: LinkDefinitionTarget::Text(0),
             additional_definitions: &[],
             text: &[0x48, 0x8d, 0x05, 0, 0, 0, 0, 0xc3],
             readonly_data: b"hello",
@@ -5235,6 +5359,7 @@ mod tests {
         let inputs = [
             LinkInput {
                 symbol: "entry",
+                symbol_target: LinkDefinitionTarget::Text(0),
                 additional_definitions: &[],
                 text: &[0xc3],
                 readonly_data: &[],
@@ -5242,6 +5367,7 @@ mod tests {
             },
             LinkInput {
                 symbol: "helper",
+                symbol_target: LinkDefinitionTarget::Text(0),
                 additional_definitions: &[],
                 text: &[0xc3],
                 readonly_data: &[],
@@ -5281,6 +5407,7 @@ mod tests {
     fn emits_rw_nx_pe_data_and_resolves_fixed_addr64_targets() {
         let input = LinkInput {
             symbol: "entry",
+            symbol_target: LinkDefinitionTarget::Text(0),
             additional_definitions: &[],
             text: &[0xc3],
             readonly_data: &42u64.to_le_bytes(),
@@ -5313,6 +5440,7 @@ mod tests {
     fn generated_pe_executes_on_the_controlled_windows_host() {
         let input = LinkInput {
             symbol: "entry",
+            symbol_target: LinkDefinitionTarget::Text(0),
             additional_definitions: &[],
             text: &[0xb8, 42, 0, 0, 0, 0xc3],
             readonly_data: b"hosted-probe",
@@ -5331,6 +5459,7 @@ mod tests {
     fn omits_an_empty_readonly_pe_section() {
         let input = LinkInput {
             symbol: "entry",
+            symbol_target: LinkDefinitionTarget::Text(0),
             additional_definitions: &[],
             text: &[0xc3],
             readonly_data: &[],
@@ -5448,7 +5577,7 @@ mod tests {
         }; MAX_LINK_RELOCATIONS];
         let mut definitions = [LinkDefinition {
             symbol: "unused",
-            text_offset: 0,
+            target: LinkDefinitionTarget::Text(0),
         }; MAX_LINK_DEFINITIONS];
         let decoded =
             decode_x86_64_elf_with_definitions(&bytes, &mut relocations, &mut definitions).unwrap();
@@ -5456,7 +5585,7 @@ mod tests {
             decoded.additional_definitions,
             &[LinkDefinition {
                 symbol: "second",
-                text_offset: 6,
+                target: LinkDefinitionTarget::Text(6),
             }]
         );
         assert_eq!(
@@ -5484,6 +5613,7 @@ mod tests {
         };
         let input = LinkInput {
             symbol: "entry",
+            symbol_target: LinkDefinitionTarget::Text(0),
             additional_definitions: &[],
             text: &[0x48, 0x8d, 0x05, 0, 0, 0, 0, 0xc3],
             readonly_data: b"hello",
@@ -5514,6 +5644,7 @@ mod tests {
     fn emits_and_relocates_bounded_elf_unwind_data() {
         let input = LinkInput {
             symbol: "entry",
+            symbol_target: LinkDefinitionTarget::Text(0),
             additional_definitions: &[],
             text: &[0xc3],
             readonly_data: &[],
@@ -5562,6 +5693,7 @@ mod tests {
     fn emits_initialized_and_zeroed_elf_writable_data() {
         let input = LinkInput {
             symbol: "entry",
+            symbol_target: LinkDefinitionTarget::Text(0),
             additional_definitions: &[],
             text: &[0; 8],
             readonly_data: &[],
@@ -5637,6 +5769,7 @@ mod tests {
         }];
         let input = LinkInput {
             symbol: "entry",
+            symbol_target: LinkDefinitionTarget::Text(0),
             additional_definitions: &[],
             text: &[0xc3],
             readonly_data: &[42],
@@ -5644,6 +5777,7 @@ mod tests {
         };
         let helper = LinkInput {
             symbol: "helper",
+            symbol_target: LinkDefinitionTarget::Text(0),
             additional_definitions: &[],
             text: &[0xc3],
             readonly_data: &[],
@@ -5748,6 +5882,7 @@ mod tests {
 
         let input = LinkInput {
             symbol: "entry",
+            symbol_target: LinkDefinitionTarget::Text(0),
             text: &[0xbf, 42, 0, 0, 0, 0xb8, 60, 0, 0, 0, 0x0f, 0x05],
             readonly_data: &[],
             relocations: &[],

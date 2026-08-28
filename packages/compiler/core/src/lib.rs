@@ -48,8 +48,9 @@ pub use lexer::{LexError, LexErrorKind, Lexer, Span, Token, TokenKind};
 pub use linker::{
     ArchiveMember, ArchiveMembers, ElfImage, ElfUnwindData, ElfUnwindRelocation,
     ElfWritableAbsoluteRelocation, ElfWritableAbsoluteTarget, ElfWritableData,
-    ElfWritableReference, ElfWritableTarget, LinkDefinition, LinkInput, LinkInputSelection,
-    LinkRelocation, LinkRelocationTarget, LinkedImage, LinkerError, MAX_ARCHIVE_MEMBERS,
+    ElfWritableReference, ElfWritableTarget, LinkDefinition, LinkDefinitionTarget, LinkInput,
+    LinkInputSelection, LinkRelocation, LinkRelocationTarget, LinkedImage, LinkerError,
+    MAX_ARCHIVE_MEMBERS,
     MAX_LINK_DEFINITIONS, MAX_LINK_INPUTS, MAX_LINK_RELOCATIONS, MAX_PE_RUNTIME_FUNCTIONS, PeImage,
     PeRuntimeFunction, PeWritableData, PeWritableRelocation,
     decode_unix_archive, decode_x86_64_coff, decode_x86_64_coff_runtime_functions,

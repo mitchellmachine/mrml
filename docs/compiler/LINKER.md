@@ -529,6 +529,27 @@ later Windows full-core rerun could not compile because concurrent unrelated
 `codegen/tests.rs` work lacked the `format!` macro; no linker failure was
 reported, and those user changes were left untouched.
 
+Global definitions are now typed as text or read-only-data locations rather
+than assuming every public name begins at text offset zero. This admits an ELF
+object with empty `.text` whose primary global definition resides in ordered
+`.rodata.*`, validates both primary and additional targets against their own
+extents, selects such data-only archive members through the existing non-text
+dependency path, and resolves named PC-relative or absolute references through
+the frozen text/read-only layout. Names continue to identify definitions only;
+the build tool gains no runtime authority from a symbol.
+
+An independently authored ORACLE-0002 consumer stored a pointer to external
+`VALUE`, while the later archive provider contained only empty `.text` and an
+8-byte global `.rodata.VALUE`. MRML selected the provider, emitted a 12,304-byte
+ELF with the value in its R/NX load, and exited 42 under Arch WSL. Windows and
+Linux each passed 716 compiler-core tests and four driver tests. Over 50
+identical-input iterations after five warmups, MRML measured 4.681 ms median
+and 4.720 ms mean versus pinned rust-lld with `--eh-frame-hdr` and the same
+entry at 4.841 ms median and 4.857 ms mean; rust-lld emitted 2,080 bytes. This
+tiny archive probe is narrow hosted regression evidence, not a general speed
+or compatibility claim. Global writable/TLS definitions, weak/versioned
+symbols, preemption, and dynamic relocations remain unsupported.
+
 This increment does **not** emit PE imports/exports/base
 relocations/debug data, emit ELF dynamic metadata/interpreter/PIE/sections,
 accelerate archive extraction through symbol indexes, read thin archives or

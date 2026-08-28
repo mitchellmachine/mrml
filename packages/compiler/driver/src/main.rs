@@ -12,10 +12,10 @@ use mrml_rustc::{
     select_ordered_static_link_members, x86_64_coff_text_fragment_count,
     x86_64_coff_writable_section_count, CodegenOptions, ElfUnwindData, ElfUnwindRelocation,
     ElfWritableAbsoluteRelocation, ElfWritableAbsoluteTarget, ElfWritableData,
-    ElfWritableReference, ElfWritableTarget, LinkDefinition, LinkInput, LinkRelocation,
-    LinkRelocationTarget, ObjectFormat, PeRuntimeFunction, PeWritableData, PeWritableRelocation,
-    TargetLayout, MAX_LINK_DEFINITIONS, MAX_LINK_INPUTS, MAX_LINK_RELOCATIONS,
-    MAX_PE_RUNTIME_FUNCTIONS,
+    ElfWritableReference, ElfWritableTarget, LinkDefinition, LinkDefinitionTarget, LinkInput,
+    LinkRelocation, LinkRelocationTarget, ObjectFormat, PeRuntimeFunction, PeWritableData,
+    PeWritableRelocation, TargetLayout, MAX_LINK_DEFINITIONS, MAX_LINK_INPUTS,
+    MAX_LINK_RELOCATIONS, MAX_PE_RUNTIME_FUNCTIONS,
 };
 
 #[cfg_attr(test, allow(dead_code))]
@@ -337,7 +337,7 @@ fn definition_arenas<'a>(
             .try_push(
                 [LinkDefinition {
                     symbol: "unused",
-                    text_offset: 0,
+                    target: LinkDefinitionTarget::Text(0),
                 }; MAX_LINK_DEFINITIONS],
             )
             .map_err(|_| anyhow!("could not allocate link definition arenas"))?;
@@ -958,6 +958,7 @@ mod tests {
         let inputs = [
             LinkInput {
                 symbol: "a",
+                symbol_target: LinkDefinitionTarget::Text(0),
                 additional_definitions: &[],
                 text: &[0; 3],
                 readonly_data: &[0; 5],
@@ -965,6 +966,7 @@ mod tests {
             },
             LinkInput {
                 symbol: "b",
+                symbol_target: LinkDefinitionTarget::Text(0),
                 additional_definitions: &[],
                 text: &[0; 7],
                 readonly_data: &[],
