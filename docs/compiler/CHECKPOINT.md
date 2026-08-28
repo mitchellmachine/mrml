@@ -9,8 +9,8 @@ the named commit and current source.
 ## Recoverable baseline
 
 - Branch: `main`
-- Compiler checkpoint commit: `4ef4521d`
-  (`compiler: scale linker to 256 inputs`)
+- Compiler checkpoint commit: `0d5d899a`
+  (`compiler: harden archive capacity boundaries`)
 - Remote state when recorded: `origin/main` includes the bounded MRML-owned
   static-link core, exact MRML COFF and ELF64 ingestion, deterministic
   import-free PE32+/ELF64 executable serialization, explicit compiler-driver
@@ -112,6 +112,11 @@ and proportionally raises the driver object-set, linked-image, and executable
 byte bounds. The release driver rebuilt, a controlled release source-to-PE
 probe still emitted 1,024 bytes and returned 42, and the full Windows compiler
 suite passed. No performance result is claimed from the capacity change alone.
+
+Commit `0d5d899a` adds a 257th-member rejection test, explicitly classifies thin
+archives as unsupported, and validates then skips BSD extended-name symbol
+indexes. The full Windows compiler suite passed with 689 core tests; thin
+archive content remains unsupported rather than partially interpreted.
 
 Patent review: **NOT_TRIGGERED** for these conventional bounded linker,
 serializer, command-routing, and benchmark increments; see
