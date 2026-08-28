@@ -9,8 +9,8 @@ the named commit and current source.
 ## Recoverable baseline
 
 - Branch: `main`
-- Compiler checkpoint commit: `1f427bea`
-  (`compiler: validate GNU archive indexes`)
+- Compiler checkpoint commit: `34b6c6ef`
+  (`compiler: lazily extract indexed archive members`)
 - Remote state when recorded: `origin/main` includes the bounded MRML-owned
   static-link core, exact MRML COFF and ELF64 ingestion, deterministic
   import-free PE32+/ELF64 executable serialization, explicit compiler-driver
@@ -60,6 +60,25 @@ against all prior accepted probes. Keep Cargo on edition 2024 until a newer
 named edition can be adopted through a pinned, workspace-wide migration.
 
 ## Latest bounded linker milestone
+
+Commit `34b6c6ef` uses a validated GNU archive index to compute a bounded,
+left-to-right unresolved-symbol closure before admitting members to the full
+decode/layout pipeline. Selected mappings are confirmed against independently
+decoded object definitions, admitted members retain archive order, and an
+unindexed archive disables later pruning so missing metadata cannot be treated
+as completeness evidence. Commands without indexed archives retain the prior
+eager path and do not pay the new preliminary symbol scan.
+
+A focused driver test places an invalid unindexed member beside an indexed
+entry object and proves that the irrelevant member is never decoded. The exact
+ORACLE-0002 indexed data-provider `.rlib` linked to a 12,304-byte ELF and exited
+42 under Arch Linux WSL. Windows and Linux each passed 720 compiler-core tests
+and five driver tests. A 50-iteration/five-warmup identical-input measurement
+recorded MRML at 4.680 ms median versus pinned rust-lld with `--eh-frame-hdr` at
+4.887 ms; rust-lld emitted 2,080 bytes. This one-member archive is narrow
+correctness/regression evidence, not representative scaling evidence or a
+general speed claim. The 256-member archive bound and large representative
+`.rlib` benchmarks remain open gates.
 
 Commit `1f427bea` decodes the GNU 32-bit `/` and 64-bit `/SYM64/` archive
 symbol indexes as bounded, untrusted acceleration hints. It caps an archive at
