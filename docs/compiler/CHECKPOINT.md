@@ -9,8 +9,8 @@ the named commit and current source.
 ## Recoverable baseline
 
 - Branch: `main`
-- Compiler checkpoint commit: `7a5c9858`
-  (`compiler: relax static ELF readonly loads`)
+- Compiler checkpoint commit: `178b78eb`
+  (`compiler: preserve bounded ELF frame data`)
 - Remote state when recorded: `origin/main` includes the bounded MRML-owned
   static-link core, exact MRML COFF and ELF64 ingestion, deterministic
   import-free PE32+/ELF64 executable serialization, explicit compiler-driver
@@ -60,6 +60,26 @@ against all prior accepted probes. Keep Cargo on edition 2024 until a newer
 named edition can be adopted through a pinned, workspace-wide migration.
 
 ## Latest bounded linker milestone
+
+Commit `178b78eb` decodes one selected `.eh_frame`/`.rela.eh_frame` pair per
+ELF object into a separate bounded fragment, validates conventional x86-64
+section identity and up to 256 combined `R_X86_64_PC32` records, retains exact
+source-object identity through archive selection, places frame bytes in the
+R/NX load, and applies checked split-text-relative displacements after final
+layout. Default pinned-rustc objects no longer require
+`force-unwind-tables=no` merely to enter the bounded linker.
+
+Under the exact ORACLE-0002 Arch WSL environment, a default object with two
+retained statics linked to an 8,256-byte ELF and exited 42. A 9,180-byte default
+rlib with nine functions, 256 bytes of frame data, and nine frame relocations
+linked to an 8,448-byte ELF and exited 42. Windows and Linux each passed 710
+compiler-core tests and four driver tests. A 50-iteration/five-warmup
+same-input rlib measurement recorded MRML at 4.787 ms median and pinned
+rust-lld at 5.149 ms; rust-lld emitted 2,440 bytes. This is narrow hosted
+regression evidence, not general superiority. `.eh_frame_hdr` and
+`PT_GNU_EH_FRAME` generation, language-level unwinding/backtraces, general CFI,
+debug sections, dynamic linking, and broad rlib compatibility remain
+unimplemented or unverified.
 
 Commit `7a5c9858` combines multiple ordered `.rodata.*` ELF payloads when every
 intervening byte is present and zero, preserves defined-symbol offsets within
