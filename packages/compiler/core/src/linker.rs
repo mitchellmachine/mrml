@@ -837,6 +837,132 @@ pub fn link_x86_64_elf_selected_sections<const MAX_BYTES: usize>(
     })
 }
 
+/// Serializes the selected-section link result as a fixed-address, import-free
+/// ELF64 executable with page-separated load permissions.
+pub fn link_x86_64_elf_selected_executable<
+    const MAX_IMAGE_BYTES: usize,
+    const MAX_PAYLOAD_BYTES: usize,
+>(
+    inputs: &[ElfSelectedObject<'_, '_>],
+    entry_symbol: &str,
+) -> Result<ElfImage<MAX_IMAGE_BYTES>, LinkerError> {
+    const IMAGE_BASE: u64 = 0x40_0000;
+    const PAYLOAD_OFFSET: usize = 0x1000;
+    let linked = link_x86_64_elf_selected_sections::<MAX_PAYLOAD_BYTES>(
+        inputs,
+        entry_symbol,
+        IMAGE_BASE + PAYLOAD_OFFSET as u64,
+    )?;
+    let has_text = linked.layout.text_length != 0;
+    let has_readonly = linked.layout.readonly_length != 0;
+    let has_writable = linked.memory_length > linked.layout.writable_offset;
+    if !has_text {
+        return Err(LinkerError::UnsupportedElf);
+    }
+    let program_count =
+        1 + usize::from(has_text) + usize::from(has_readonly) + usize::from(has_writable);
+    let header_bytes = 64usize
+        .checked_add(program_count * 56)
+        .ok_or(LinkerError::OffsetOverflow)?;
+    if header_bytes > PAYLOAD_OFFSET {
+        return Err(LinkerError::OutputTooSmall);
+    }
+    let length = PAYLOAD_OFFSET
+        .checked_add(linked.length)
+        .ok_or(LinkerError::OffsetOverflow)?;
+    if length > MAX_IMAGE_BYTES {
+        return Err(LinkerError::OutputTooSmall);
+    }
+    let mut bytes = [0u8; MAX_IMAGE_BYTES];
+    bytes[..16].copy_from_slice(b"\x7fELF\x02\x01\x01\x00\x00\x00\x00\x00\x00\x00\x00\x00");
+    patch_u16(&mut bytes, 16, 2)?;
+    patch_u16(&mut bytes, 18, 62)?;
+    patch_u32(&mut bytes, 20, 1)?;
+    patch_u64(
+        &mut bytes,
+        24,
+        IMAGE_BASE
+            .checked_add(PAYLOAD_OFFSET as u64)
+            .and_then(|value| value.checked_add(linked.entry_offset as u64))
+            .ok_or(LinkerError::OffsetOverflow)?,
+    )?;
+    patch_u64(&mut bytes, 32, 64)?;
+    patch_u16(&mut bytes, 52, 64)?;
+    patch_u16(&mut bytes, 54, 56)?;
+    patch_u16(
+        &mut bytes,
+        56,
+        u16::try_from(program_count).map_err(|_| LinkerError::OffsetOverflow)?,
+    )?;
+    let mut program = 64usize;
+    write_elf_load_segment(
+        &mut bytes,
+        program,
+        4,
+        0,
+        usize::try_from(IMAGE_BASE).map_err(|_| LinkerError::OffsetOverflow)?,
+        header_bytes,
+        header_bytes,
+    )?;
+    program += 56;
+    write_elf_load_segment(
+        &mut bytes,
+        program,
+        5,
+        PAYLOAD_OFFSET,
+        usize::try_from(IMAGE_BASE + PAYLOAD_OFFSET as u64)
+            .map_err(|_| LinkerError::OffsetOverflow)?,
+        linked.layout.text_length,
+        linked.layout.text_length,
+    )?;
+    program += 56;
+    if has_readonly {
+        let offset = PAYLOAD_OFFSET
+            .checked_add(linked.layout.readonly_offset)
+            .ok_or(LinkerError::OffsetOverflow)?;
+        write_elf_load_segment(
+            &mut bytes,
+            program,
+            4,
+            offset,
+            usize::try_from(IMAGE_BASE)
+                .map_err(|_| LinkerError::OffsetOverflow)?
+                .checked_add(offset)
+                .ok_or(LinkerError::OffsetOverflow)?,
+            linked.layout.readonly_length,
+            linked.layout.readonly_length,
+        )?;
+        program += 56;
+    }
+    if has_writable {
+        let offset = PAYLOAD_OFFSET
+            .checked_add(linked.layout.writable_offset)
+            .ok_or(LinkerError::OffsetOverflow)?;
+        let file_size = linked
+            .length
+            .checked_sub(linked.layout.writable_offset)
+            .ok_or(LinkerError::OffsetOverflow)?;
+        let memory_size = linked
+            .memory_length
+            .checked_sub(linked.layout.writable_offset)
+            .ok_or(LinkerError::OffsetOverflow)?;
+        write_elf_load_segment(
+            &mut bytes,
+            program,
+            6,
+            offset,
+            usize::try_from(IMAGE_BASE)
+                .map_err(|_| LinkerError::OffsetOverflow)?
+                .checked_add(offset)
+                .ok_or(LinkerError::OffsetOverflow)?,
+            file_size,
+            memory_size,
+        )?;
+    }
+    copy_at(&mut bytes, PAYLOAD_OFFSET, linked.bytes())?;
+    Ok(ElfImage { bytes, length })
+}
+
 fn validate_selected_definition_set(
     inputs: &[ElfSelectedObject<'_, '_>],
 ) -> Result<(), LinkerError> {
@@ -6909,6 +7035,12 @@ mod tests {
             4058
         );
         assert_eq!(&selected_linked.bytes()[4096..4101], b"hello");
+        let selected_elf =
+            link_x86_64_elf_selected_executable::<16384, 8192>(&selected_objects, "entry").unwrap();
+        assert_eq!(&selected_elf.bytes()[..4], b"\x7fELF");
+        assert_eq!(read_u64_elf(selected_elf.bytes(), 24).unwrap(), 0x401000);
+        assert_eq!(read_u16_elf(selected_elf.bytes(), 56).unwrap(), 3);
+        assert_eq!(&selected_elf.bytes()[8192..8197], b"hello");
         let empty = [LinkRelocation {
             offset: 0,
             target: LinkRelocationTarget::Symbol("unused"),
@@ -7324,5 +7456,32 @@ mod tests {
         let status = std::process::Command::new(&path).status().unwrap();
         std::fs::remove_file(path).unwrap();
         assert_eq!(status.code(), Some(42));
+
+        let code = MachineCode::<16>::from_bytes_for_test(&[
+            0xbf, 42, 0, 0, 0, 0xb8, 60, 0, 0, 0, 0x0f, 0x05,
+        ]);
+        let object = emit_elf64_x86_64::<512, 16>("entry", &code).unwrap();
+        let selection = select_x86_64_elf_sections(object.bytes(), &["entry"]).unwrap();
+        let sections = decode_x86_64_elf_selected_sections(object.bytes(), &selection).unwrap();
+        let definitions =
+            decode_x86_64_elf_selected_definitions(object.bytes(), &selection).unwrap();
+        let relocations =
+            decode_x86_64_elf_selected_relocations(object.bytes(), &selection).unwrap();
+        let objects = [ElfSelectedObject {
+            sections: &sections,
+            definitions: &definitions,
+            relocations: &relocations,
+        }];
+        let selected =
+            link_x86_64_elf_selected_executable::<8192, 4096>(&objects, "entry").unwrap();
+        let selected_path = std::env::temp_dir().join(std::format!(
+            "mrml-selected-linker-elf-{}",
+            std::process::id()
+        ));
+        std::fs::write(&selected_path, selected.bytes()).unwrap();
+        std::fs::set_permissions(&selected_path, std::fs::Permissions::from_mode(0o700)).unwrap();
+        let selected_status = std::process::Command::new(&selected_path).status().unwrap();
+        std::fs::remove_file(selected_path).unwrap();
+        assert_eq!(selected_status.code(), Some(42));
     }
 }

@@ -65,11 +65,11 @@ pub use linker::{
     decode_x86_64_elf_with_definitions, decode_x86_64_elf_writable,
     layout_x86_64_elf_selected_sections, link_x86_64_elf_executable,
     link_x86_64_elf_executable_with_unwind, link_x86_64_elf_executable_with_unwind_and_writable,
-    link_x86_64_elf_selected_sections, link_x86_64_pe, link_x86_64_pe_with_data_and_unwind,
-    link_x86_64_pe_with_unwind, link_x86_64_static, select_ordered_static_link_inputs,
-    select_ordered_static_link_members, select_static_link_inputs, select_x86_64_elf_sections,
-    x86_64_coff_text_fragment_count, x86_64_coff_unwind_section_count,
-    x86_64_coff_writable_section_count,
+    link_x86_64_elf_selected_executable, link_x86_64_elf_selected_sections, link_x86_64_pe,
+    link_x86_64_pe_with_data_and_unwind, link_x86_64_pe_with_unwind, link_x86_64_static,
+    select_ordered_static_link_inputs, select_ordered_static_link_members,
+    select_static_link_inputs, select_x86_64_elf_sections, x86_64_coff_text_fragment_count,
+    x86_64_coff_unwind_section_count, x86_64_coff_writable_section_count,
 };
 pub use object::{
     MAX_X86_64_RELOCATIONS, ObjectError, ObjectFile, X86_64PcRelativeRelocation,

@@ -9670,3 +9670,13 @@ validation and introduces no new resolution policy, relocation encoding,
 relaxation technique, object format, compression, cryptographic mechanism, or
 loader behavior. This technical screen is not legal advice or patent
 clearance.
+
+# 2026-08-28 — Selected-section ELF executable serialization
+
+Patent review: **NOT_TRIGGERED**. This increment serializes the selected and
+relocated payload using conventional ELF64 executable and `PT_LOAD` headers,
+with separate RX, R, and RW segments and the standard distinction between file
+and memory size for zero-fill storage. It introduces no new executable format,
+loading algorithm, relocation mechanism, compression, cryptographic mechanism,
+or runtime policy. This technical screen is not legal advice or patent
+clearance.
