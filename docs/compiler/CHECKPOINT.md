@@ -9,8 +9,8 @@ the named commit and current source.
 ## Recoverable baseline
 
 - Branch: `main`
-- Compiler checkpoint commit: `0d5d899a`
-  (`compiler: harden archive capacity boundaries`)
+- Compiler checkpoint commit: `fc9b0c3b`
+  (`compiler: resolve multiple object definitions`)
 - Remote state when recorded: `origin/main` includes the bounded MRML-owned
   static-link core, exact MRML COFF and ELF64 ingestion, deterministic
   import-free PE32+/ELF64 executable serialization, explicit compiler-driver
@@ -117,6 +117,19 @@ Commit `0d5d899a` adds a 257th-member rejection test, explicitly classifies thin
 archives as unsupported, and validates then skips BSD extended-name symbol
 indexes. The full Windows compiler suite passed with 689 core tests; thin
 archive content remains unsupported rather than partially interpreted.
+
+Commit `fc9b0c3b` extends each decoded object with up to 256 additional checked
+external/global text definitions. Global lookup, duplicate detection, archive
+selection, entry selection, and cross-object relocations use exact definition
+offsets. Defined-symbol relocations within the originating COFF/ELF64 text are
+typed separately and never manufacture global names; local/section definitions
+remain local. Legacy single-definition decoder entry points still fail closed,
+while the driver owns independent bounded definition arenas and uses the
+extended decoders. Weak/COMDAT/versioned/preemptible semantics remain
+unsupported. The full Windows suite passed with 693 core tests, 2 component
+tests, 10 conformance tests, 351 replacement tests, 22 semantic-execution tests,
+and 2 driver tests; the release source-to-PE probe emitted 1,024 bytes and
+returned 42.
 
 Patent review: **NOT_TRIGGERED** for these conventional bounded linker,
 serializer, command-routing, and benchmark increments; see
