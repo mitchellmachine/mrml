@@ -1464,6 +1464,81 @@ mod tests {
         table.destroy(vm).unwrap();
     }
 
+    fn loaded_vm() -> (VmTable<1>, VmId) {
+        let mut table = VmTable::<1>::new();
+        let vm = table.create(4).unwrap();
+        table.mark_loaded(vm).unwrap();
+        (table, vm)
+    }
+
+    #[test]
+    fn injected_cancel_failure_permanently_blocks_guest_execution() {
+        let (mut table, vm) = loaded_vm();
+        table
+            .poison(vm, ExecutionPoisonReason::VcpuRetirementUncertain)
+            .unwrap();
+        assert_eq!(table.start(vm), Err(VmError::ExecutionPoisoned));
+        assert_eq!(table.destroy(vm), Err(VmError::LifecycleBusy));
+    }
+
+    #[test]
+    fn injected_join_failure_retains_worker_and_blocks_resource_destruction() {
+        let (mut table, vm) = loaded_vm();
+        table.worker_started(vm).unwrap();
+        table
+            .poison(vm, ExecutionPoisonReason::VcpuRetirementUncertain)
+            .unwrap();
+        assert_eq!(table.destroy(vm), Err(VmError::LifecycleBusy));
+        assert_eq!(table.start(vm), Err(VmError::ExecutionPoisoned));
+    }
+
+    #[test]
+    fn injected_worker_timeout_cannot_resume_or_destroy_live_worker_state() {
+        let (mut table, vm) = loaded_vm();
+        table.worker_started(vm).unwrap();
+        table
+            .poison(vm, ExecutionPoisonReason::VcpuRetirementUncertain)
+            .unwrap();
+        assert_eq!(table.start(vm), Err(VmError::ExecutionPoisoned));
+        assert_eq!(table.destroy(vm), Err(VmError::LifecycleBusy));
+    }
+
+    #[test]
+    fn injected_peer_withdrawal_failure_poisons_both_guests() {
+        let (mut first, first_vm) = loaded_vm();
+        let (mut second, second_vm) = loaded_vm();
+        first
+            .poison(first_vm, ExecutionPoisonReason::PeerWithdrawalUncertain)
+            .unwrap();
+        second
+            .poison(second_vm, ExecutionPoisonReason::PeerWithdrawalUncertain)
+            .unwrap();
+        assert_eq!(first.start(first_vm), Err(VmError::ExecutionPoisoned));
+        assert_eq!(second.start(second_vm), Err(VmError::ExecutionPoisoned));
+        assert_eq!(first.destroy(first_vm), Err(VmError::LifecycleBusy));
+        assert_eq!(second.destroy(second_vm), Err(VmError::LifecycleBusy));
+    }
+
+    #[test]
+    fn injected_mapping_rollback_failure_keeps_mapping_and_destruction_blocked() {
+        let (mut table, vm) = loaded_vm();
+        table.mapping_attached(vm).unwrap();
+        table
+            .poison(vm, ExecutionPoisonReason::PageTableRemovalUncertain)
+            .unwrap();
+        assert_eq!(table.start(vm), Err(VmError::ExecutionPoisoned));
+        assert_eq!(table.destroy(vm), Err(VmError::LifecycleBusy));
+    }
+
+    #[test]
+    fn destruction_attempted_during_active_execution_is_rejected() {
+        let (mut table, vm) = loaded_vm();
+        table.start(vm).unwrap();
+        table.worker_started(vm).unwrap();
+        assert_eq!(table.destroy(vm), Err(VmError::LifecycleBusy));
+        assert_eq!(table.state(vm), Ok(VmState::Running));
+    }
+
     #[test]
     fn routing_requires_exact_sequence_capability_object_and_mapping() {
         let tool = ObjectId(11);
