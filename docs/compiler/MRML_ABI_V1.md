@@ -126,8 +126,10 @@ fail with a distinct typed codegen reason at the exact type span. Ownership and
 borrowing rules beyond ordinary language checking, other multiword machine-code
 lowering, link compatibility, and external execution evidence remain required.
 The typed runtime stack model reserves two ordered words for `u128` and `i128`
-values as a prerequisite for that lowering; this internal representation does
-not by itself admit those types at the public call boundary.
+values, and its logical integer-layout metadata preserves their exact signed or
+unsigned 128-bit bounds. The existing one-word instruction emitter rejects that
+logical layout instead of narrowing it. These internal representations do not
+by themselves admit the types at the public call boundary.
 
 The admitted subset has controlled native execution evidence on the Windows and
 Linux test hosts: the public pipeline emits the host object, the test harness

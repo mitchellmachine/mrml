@@ -12109,6 +12109,32 @@ mod tests {
     }
 
     #[test]
+    fn runtime_integer_layout_preserves_exact_128_bit_bounds() {
+        assert_eq!(
+            runtime_integer_layout("u128"),
+            Some(RuntimeIntegerLayout {
+                bits: 128,
+                signed: false,
+                minimum: 0,
+                maximum: u128::MAX,
+                words: 2,
+            })
+        );
+        assert_eq!(
+            runtime_integer_layout("i128"),
+            Some(RuntimeIntegerLayout {
+                bits: 128,
+                signed: true,
+                minimum: i128::MIN,
+                maximum: i128::MAX as u128,
+                words: 2,
+            })
+        );
+        assert_eq!(runtime_width("u128"), None);
+        assert_eq!(runtime_width("i128"), None);
+    }
+
+    #[test]
     fn mrml_v1_codegen_rejects_multiword_integer_returns_at_the_type_span() {
         let source = "#[mrml_abi::export(version = 1)] pub fn value() -> u128 { 0 }";
         let module = Parser::new(source).parse_module::<2, 2>().unwrap();

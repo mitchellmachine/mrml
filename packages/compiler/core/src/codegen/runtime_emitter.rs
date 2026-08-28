@@ -11659,56 +11659,97 @@ struct RuntimeWidth {
     maximum: u64,
 }
 
-fn runtime_width(ty: &str) -> Option<RuntimeWidth> {
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct RuntimeIntegerLayout {
+    bits: u8,
+    signed: bool,
+    minimum: i128,
+    maximum: u128,
+    words: usize,
+}
+
+fn runtime_integer_layout(ty: &str) -> Option<RuntimeIntegerLayout> {
     Some(match ty {
-        "u8" => RuntimeWidth {
+        "u8" => RuntimeIntegerLayout {
             bits: 8,
             signed: false,
             minimum: 0,
-            maximum: u64::from(u8::MAX),
+            maximum: u8::MAX.into(),
+            words: 1,
         },
-        "u16" => RuntimeWidth {
+        "u16" => RuntimeIntegerLayout {
             bits: 16,
             signed: false,
             minimum: 0,
-            maximum: u64::from(u16::MAX),
+            maximum: u16::MAX.into(),
+            words: 1,
         },
-        "u32" | "char" => RuntimeWidth {
+        "u32" | "char" => RuntimeIntegerLayout {
             bits: 32,
             signed: false,
             minimum: 0,
-            maximum: u64::from(u32::MAX),
+            maximum: u32::MAX.into(),
+            words: 1,
         },
-        "u64" | "usize" => RuntimeWidth {
+        "u64" | "usize" => RuntimeIntegerLayout {
             bits: 64,
             signed: false,
             minimum: 0,
-            maximum: u64::MAX,
+            maximum: u64::MAX.into(),
+            words: 1,
         },
-        "i8" => RuntimeWidth {
+        "u128" => RuntimeIntegerLayout {
+            bits: 128,
+            signed: false,
+            minimum: 0,
+            maximum: u128::MAX,
+            words: 2,
+        },
+        "i8" => RuntimeIntegerLayout {
             bits: 8,
             signed: true,
-            minimum: i64::from(i8::MIN),
-            maximum: i8::MAX as u64,
+            minimum: i8::MIN.into(),
+            maximum: (i8::MAX as u8).into(),
+            words: 1,
         },
-        "i16" => RuntimeWidth {
+        "i16" => RuntimeIntegerLayout {
             bits: 16,
             signed: true,
-            minimum: i64::from(i16::MIN),
-            maximum: i16::MAX as u64,
+            minimum: i16::MIN.into(),
+            maximum: (i16::MAX as u16).into(),
+            words: 1,
         },
-        "i32" => RuntimeWidth {
+        "i32" => RuntimeIntegerLayout {
             bits: 32,
             signed: true,
-            minimum: i64::from(i32::MIN),
-            maximum: i32::MAX as u64,
+            minimum: i32::MIN.into(),
+            maximum: (i32::MAX as u32).into(),
+            words: 1,
         },
-        "i64" | "isize" => RuntimeWidth {
+        "i64" | "isize" => RuntimeIntegerLayout {
             bits: 64,
             signed: true,
-            minimum: i64::MIN,
-            maximum: i64::MAX as u64,
+            minimum: i64::MIN.into(),
+            maximum: (i64::MAX as u64).into(),
+            words: 1,
+        },
+        "i128" => RuntimeIntegerLayout {
+            bits: 128,
+            signed: true,
+            minimum: i128::MIN,
+            maximum: i128::MAX as u128,
+            words: 2,
         },
         _ => return None,
+    })
+}
+
+fn runtime_width(ty: &str) -> Option<RuntimeWidth> {
+    let layout = runtime_integer_layout(ty)?;
+    Some(RuntimeWidth {
+        bits: layout.bits,
+        signed: layout.signed,
+        minimum: layout.minimum.try_into().ok()?,
+        maximum: layout.maximum.try_into().ok()?,
     })
 }

@@ -12172,9 +12172,9 @@ fn runtime_place_projections_valid(
 fn runtime_type_stack_slots(ty: RuntimeExpressionType) -> usize {
     match ty {
         RuntimeExpressionType::Never => 0,
-        RuntimeExpressionType::Integer(Some(
-            crate::IntegerType::U128 | crate::IntegerType::I128,
-        )) => 2,
+        RuntimeExpressionType::Integer(Some(integer)) => {
+            runtime_integer_layout(integer.name()).map_or(1, |layout| layout.words)
+        }
         RuntimeExpressionType::Array { count, .. } => count,
         RuntimeExpressionType::Tuple { element_count, .. } => element_count,
         RuntimeExpressionType::Reference {
