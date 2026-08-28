@@ -303,8 +303,23 @@ fn write_linked_pe(
     let mut definitions = definition_arenas(objects.len())?;
     let inputs = decode_link_inputs(objects, ObjectFormat::Coff, &mut arenas, &mut definitions)?;
     let selected = selected_link_inputs(&inputs, archive_member, entry)?;
-    let executable = link_x86_64_pe::<MAX_EXECUTABLE_BYTES, MAX_LINKED_BYTES>(&selected, entry)
-        .map_err(mrml_error::message)?;
+    let payload = selected_payload_bound(&selected)?;
+    if payload <= 16 * 1024 {
+        return write_pe_image::<{ 32 * 1024 }, { 16 * 1024 }>(&selected, entry, output);
+    }
+    if payload <= 256 * 1024 {
+        return write_pe_image::<{ 512 * 1024 }, { 256 * 1024 }>(&selected, entry, output);
+    }
+    write_pe_image::<MAX_EXECUTABLE_BYTES, MAX_LINKED_BYTES>(&selected, entry, output)
+}
+
+fn write_pe_image<const MAX_IMAGE: usize, const MAX_LINKED: usize>(
+    inputs: &[LinkInput<'_, '_, '_>],
+    entry: &str,
+    output: &str,
+) -> Result<()> {
+    let executable =
+        link_x86_64_pe::<MAX_IMAGE, MAX_LINKED>(inputs, entry).map_err(mrml_error::message)?;
     mrml_runtime::write_file(output, executable.bytes())?;
     println!(
         "linked {} to {} deterministic PE bytes",
@@ -324,9 +339,23 @@ fn write_linked_elf(
     let mut definitions = definition_arenas(objects.len())?;
     let inputs = decode_link_inputs(objects, ObjectFormat::Elf64, &mut arenas, &mut definitions)?;
     let selected = selected_link_inputs(&inputs, archive_member, entry)?;
-    let executable =
-        link_x86_64_elf_executable::<MAX_EXECUTABLE_BYTES, MAX_LINKED_BYTES>(&selected, entry)
-            .map_err(mrml_error::message)?;
+    let payload = selected_payload_bound(&selected)?;
+    if payload <= 16 * 1024 {
+        return write_elf_image::<{ 32 * 1024 }, { 16 * 1024 }>(&selected, entry, output);
+    }
+    if payload <= 256 * 1024 {
+        return write_elf_image::<{ 512 * 1024 }, { 256 * 1024 }>(&selected, entry, output);
+    }
+    write_elf_image::<MAX_EXECUTABLE_BYTES, MAX_LINKED_BYTES>(&selected, entry, output)
+}
+
+fn write_elf_image<const MAX_IMAGE: usize, const MAX_LINKED: usize>(
+    inputs: &[LinkInput<'_, '_, '_>],
+    entry: &str,
+    output: &str,
+) -> Result<()> {
+    let executable = link_x86_64_elf_executable::<MAX_IMAGE, MAX_LINKED>(inputs, entry)
+        .map_err(mrml_error::message)?;
     mrml_runtime::write_file(output, executable.bytes())?;
     println!(
         "linked {} to {} deterministic ELF64 bytes",
@@ -334,6 +363,18 @@ fn write_linked_elf(
         executable.bytes().len()
     );
     Ok(())
+}
+
+fn selected_payload_bound(inputs: &[LinkInput<'_, '_, '_>]) -> Result<usize> {
+    let mut bytes = 4096usize;
+    for input in inputs {
+        bytes = bytes
+            .checked_add(input.text.len())
+            .and_then(|bytes| bytes.checked_add(input.readonly_data.len()))
+            .and_then(|bytes| bytes.checked_add(32))
+            .ok_or_else(|| anyhow!("selected link payload size overflow"))?;
+    }
+    Ok(bytes)
 }
 
 fn parse_emit_kind(value: &str) -> Result<EmitKind> {
@@ -391,5 +432,29 @@ mod tests {
             CodegenOptions::WRAPPING
         );
         assert!(parse_codegen_options("overflow-checks=maybe").is_err());
+    }
+
+    #[test]
+    fn bounds_selected_payload_with_per_input_alignment_headroom() {
+        let inputs = [
+            LinkInput {
+                symbol: "a",
+                additional_definitions: &[],
+                text: &[0; 3],
+                readonly_data: &[0; 5],
+                relocations: &[],
+            },
+            LinkInput {
+                symbol: "b",
+                additional_definitions: &[],
+                text: &[0; 7],
+                readonly_data: &[],
+                relocations: &[],
+            },
+        ];
+        assert_eq!(
+            selected_payload_bound(&inputs).unwrap(),
+            4096 + 3 + 5 + 7 + 64
+        );
     }
 }

@@ -135,6 +135,17 @@ large-program, archive, debug-info, parallel-scaling, or general superiority
 claim. `docs/compiler/linker/benchmark-windows.ps1` preserves the identical-
 input procedure.
 
+After the input ceiling rose to 256, using the maximum multi-megabyte output
+arrays for every link regressed this same single-object median to 15.232 ms.
+The driver now selects one of three compile-time-bounded output tiers from the
+validated selected text/read-only payload plus conservative alignment
+headroom. Repeating the exact 50-iteration procedure after that change measured
+MRML at 9.465 ms median and 9.550 ms mean versus rust-lld at 26.888 ms median
+and 27.065 ms mean. Both outputs remained 1,024 bytes and returned 42. This is a
+2.84x median result for the same narrow workload and demonstrates removal of
+the measured zero-initialization regression; it is not a general superiority
+claim.
+
 The same controlled procedure also measured eight distinct 93-byte MRML COFF
 objects (744 input bytes total), 50 times after five interleaved warmups. MRML's
 median was 10.677 ms and mean was 10.813 ms; the pinned gnullvm `rust-lld`

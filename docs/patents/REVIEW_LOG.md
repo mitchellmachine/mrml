@@ -9280,3 +9280,11 @@ It extends the existing symbol table representation and standard PC-relative
 arithmetic, not a new resolution, deduplication, archive-index, compression,
 executable-format, cryptographic, or loading algorithm. This technical screen
 is not legal advice or patent clearance.
+# 2026-08-28 — Payload-sized linker output tiers
+
+Patent review: **NOT_TRIGGERED**. This increment chooses among three existing
+fixed output capacities using checked selected text/read-only byte totals plus
+conservative alignment headroom. It reduces unnecessary zero initialization
+without changing layout, resolution, relocation, serialization, compression,
+cryptographic, or loading algorithms. This technical screen is not legal advice
+or patent clearance.
