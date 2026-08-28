@@ -9,8 +9,8 @@ the named commit and current source.
 ## Recoverable baseline
 
 - Branch: `main`
-- Compiler checkpoint commit: `565ae9f6`
-  (`compiler: preserve static archive ordering`)
+- Compiler checkpoint commit: `3f9fbd13`
+  (`compiler: link bounded gnullvm rlib shape`)
 - Remote state when recorded: `origin/main` includes the bounded MRML-owned
   static-link core, exact MRML COFF and ELF64 ingestion, deterministic
   import-free PE32+/ELF64 executable serialization, explicit compiler-driver
@@ -153,6 +153,17 @@ revisited for unresolved symbols introduced later. A focused test distinguishes
 an earlier archive from the same archive placed after the referring object. The
 full Windows suite passed with 694 core tests and 3 driver tests, and the release
 driver built. Explicit archive groups and thin archives remain unsupported.
+
+Commit `3f9fbd13` accepts one nonempty long-name COFF `.text$...` section,
+tracks its real section number, ignores validated empty text/data/BSS
+placeholders and conventional file/feature symbols, and skips exact
+`lib.rmeta`/`lib.rmeta-link` archive members. Exact `nightly-2026-08-24`
+gnullvm rustc with embedded bitcode disabled emitted a 2,452-byte no-std
+`.rlib`; the MRML release driver linked its exact mangled entry to a 1,024-byte
+PE and Windows returned 42. The full Windows compiler suite passed with 695
+core tests and 3 driver tests. This is one simple hosted `.rlib` shape only;
+multiple COMDATs, COMDAT selection, writable/BSS data, unwind data, bitcode
+sections, and representative Rust libraries remain unsupported.
 
 Patent review: **NOT_TRIGGERED** for these conventional bounded linker,
 serializer, command-routing, and benchmark increments; see
