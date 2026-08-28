@@ -9,8 +9,8 @@ the named commit and current source.
 ## Recoverable baseline
 
 - Branch: `main`
-- Compiler checkpoint commit: `951ae996`
-  (`compiler: map bounded linker inputs`)
+- Compiler checkpoint commit: `9af463ed`
+  (`compiler: inventory large ELF section tables`)
 - Remote state when recorded: `origin/main` includes the bounded MRML-owned
   static-link core, exact MRML COFF and ELF64 ingestion, deterministic
   import-free PE32+/ELF64 executable serialization, explicit compiler-driver
@@ -60,6 +60,18 @@ against all prior accepted probes. Keep Cargo on edition 2024 until a newer
 named edition can be adopted through a pinned, workspace-wide migration.
 
 ## Latest bounded linker milestone
+
+Commit `9af463ed` separates section inventory bounds: COFF remains at 256,
+while the primary, unwind, and writable ELF64 passes admit at most 2,048
+headers. Exact member-decoder errors are now preserved through the driver. A
+consumer retaining a pointer to exported pinned-core symbol
+`_RNvNtCs5erv4YX8a5g_4core3fmt17pointer_fmt_inner` selects the 3,104,472-byte
+core object and passes its archive, size, index, and 1,702-section inventory
+gates before failing closed on the next unsupported ELF feature. Its relocated
+read-only section families require section-level dependency/GC and read-only
+relocation modeling rather than whole-object admission. Windows and Linux each
+passed 722 core unit tests, every integration suite, and five driver tests.
+Actual core-symbol extraction remains incomplete.
 
 Commit `951ae996` gives the hosted linker bounded owning read-only mappings
 instead of copying complete inputs. Length is validated against 64 MiB before
