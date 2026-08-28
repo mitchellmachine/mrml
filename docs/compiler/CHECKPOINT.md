@@ -9,8 +9,8 @@ the named commit and current source.
 ## Recoverable baseline
 
 - Branch: `main`
-- Compiler checkpoint commit: `a91e10cd`
-  (`compiler: ingest pinned rustc split-text ELF`)
+- Compiler checkpoint commit: `8cba1b38`
+  (`compiler: relax resolved ELF GOTPCREL calls`)
 - Remote state when recorded: `origin/main` includes the bounded MRML-owned
   static-link core, exact MRML COFF and ELF64 ingestion, deterministic
   import-free PE32+/ELF64 executable serialization, explicit compiler-driver
@@ -60,6 +60,20 @@ against all prior accepted probes. Keep Cargo on edition 2024 until a newer
 named edition can be adopted through a pinned, workspace-wide migration.
 
 ## Latest bounded linker milestone
+
+Commit `8cba1b38` admits `R_X86_64_GOTPCREL` only for an exact six-byte x86-64
+RIP-relative indirect call/jump whose symbol resolves inside the fixed static
+image. It performs a size-preserving rewrite to `nop; call rel32` or
+`nop; jmp rel32`; other GOT uses, opcodes, defined-section targets, unresolved
+symbols, and dynamic interposition remain fail-closed. A focused test verifies
+the exact relaxed bytes/displacement and malformed-opcode rejection.
+
+Under the exact ORACLE-0002 Arch WSL environment, the default-PIC two-object
+probe called its later-object helper and exited 42 from a 4,134-byte MRML image.
+Windows and Linux each passed 708 compiler-core tests and four driver tests. A
+50-iteration/five-warmup same-input Linux measurement recorded MRML at 5.467 ms
+median and pinned rust-lld at 5.997 ms; outputs were 4,134 and 1,376 bytes. This
+is small process-startup-heavy regression evidence, not general superiority.
 
 Commit `a91e10cd` admits one nonempty pinned-rustc `.text.<symbol>` ELF section
 and its `.rela.text.<symbol>` table, an empty base `.text`, local absolute file
