@@ -38,14 +38,26 @@ enum EmitKind {
 #[cfg(windows)]
 #[used]
 #[unsafe(link_section = ".drectve")]
-static WINDOWS_STACK_RESERVE: [u8; 15] = *b"/STACK:8388608 ";
+static WINDOWS_STACK_RESERVE: [u8; 16] = *b"/STACK:16777216 ";
 
 #[cfg_attr(test, allow(dead_code))]
 fn application_main() -> Result<()> {
     let arguments = mrml_runtime::command_arguments();
+    if arguments.len() == 7
+        && arguments[1] == "--link-coff"
+        && arguments[3] == "--entry"
+        && arguments[5] == "-o"
+    {
+        let output = &arguments[6];
+        if mrml_runtime::path_exists(output) {
+            return Err(anyhow!("refusing to overwrite compiler output"));
+        }
+        let object = mrml_runtime::read_file_bounded(&arguments[2], MAX_OBJECT_BYTES)?;
+        return write_linked_pe(&object, &arguments[4], output);
+    }
     if arguments.len() < 8 || arguments[1] != "--emit" || arguments[3] != "--function" {
         return Err(anyhow!(
-            "usage: mrml-rustc --emit elf64|coff|pe --function NAME [-C overflow-checks=yes|no] INPUT -o OUTPUT"
+            "usage: mrml-rustc --emit elf64|coff|pe --function NAME [-C overflow-checks=yes|no] INPUT -o OUTPUT; or mrml-rustc --link-coff INPUT --entry NAME -o OUTPUT"
         ));
     }
     let emit = parse_emit_kind(&arguments[2])?;
@@ -65,7 +77,7 @@ fn application_main() -> Result<()> {
         ),
         _ => {
             return Err(anyhow!(
-                "usage: mrml-rustc --emit elf64|coff|pe --function NAME [-C overflow-checks=yes|no] INPUT -o OUTPUT"
+                "usage: mrml-rustc --emit elf64|coff|pe --function NAME [-C overflow-checks=yes|no] INPUT -o OUTPUT; or mrml-rustc --link-coff INPUT --entry NAME -o OUTPUT"
             ));
         }
     };
@@ -102,24 +114,27 @@ fn application_main() -> Result<()> {
             );
         }
         EmitKind::Pe => {
-            let mut relocations = [LinkRelocation {
-                offset: 0,
-                target: LinkRelocationTarget::Symbol("unused"),
-                addend: 0,
-            }; MAX_LINK_RELOCATIONS];
-            let input = decode_x86_64_coff(object.bytes(), &mut relocations)
-                .map_err(mrml_error::message)?;
-            let executable =
-                link_x86_64_pe::<MAX_EXECUTABLE_BYTES, MAX_LINKED_BYTES>(&[input], function)
-                    .map_err(mrml_error::message)?;
-            mrml_runtime::write_file(output, executable.bytes())?;
-            println!(
-                "compiled and linked {} to {} deterministic PE bytes",
-                function,
-                executable.bytes().len()
-            );
+            write_linked_pe(object.bytes(), function, output)?;
         }
     }
+    Ok(())
+}
+
+fn write_linked_pe(object: &[u8], entry: &str, output: &str) -> Result<()> {
+    let mut relocations = [LinkRelocation {
+        offset: 0,
+        target: LinkRelocationTarget::Symbol("unused"),
+        addend: 0,
+    }; MAX_LINK_RELOCATIONS];
+    let input = decode_x86_64_coff(object, &mut relocations).map_err(mrml_error::message)?;
+    let executable = link_x86_64_pe::<MAX_EXECUTABLE_BYTES, MAX_LINKED_BYTES>(&[input], entry)
+        .map_err(mrml_error::message)?;
+    mrml_runtime::write_file(output, executable.bytes())?;
+    println!(
+        "linked {} to {} deterministic PE bytes",
+        entry,
+        executable.bytes().len()
+    );
     Ok(())
 }
 

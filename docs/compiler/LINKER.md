@@ -40,6 +40,22 @@ single-section image, and the Windows host observed exit code 42. Empty
 read-only data omits `.rdata` rather than emitting a loader-invalid zero-sized
 section.
 
+`mrml-rustc-driver --link-coff INPUT --entry NAME -o OUTPUT` exposes the same
+bounded path without compilation. This linker-only mode is the comparison
+surface for identical-input cold-process measurements against the pinned
+gnullvm `rust-lld`; it does not accept arbitrary COFF extensions outside the
+documented MRML subset.
+
+On 2026-08-28, the controlled Windows cold-process probe linked the same
+93-byte MRML COFF object 50 times after five interleaved warmups. MRML produced
+a 1,024-byte PE with a 10.196 ms median and 10.323 ms mean; pinned
+`nightly-2026-08-24` gnullvm `rust-lld` produced a 1,024-byte PE with a
+26.870 ms median and 27.184 ms mean. Both executables returned 42. This is a
+2.64x median speedup for one tiny import-free object on this host. It is not a
+large-program, archive, debug-info, parallel-scaling, or general superiority
+claim. `docs/compiler/linker/benchmark-windows.ps1` preserves the identical-
+input procedure.
+
 The pass structure is informed by mold's public design notes: establish output
 layout early, run a small sequence of understandable passes, and keep per-input
 validation, copying, and per-relocation work independent so a hosted driver can

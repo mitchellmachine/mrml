@@ -9176,6 +9176,24 @@ adds a type distinction and adversarial bounds checks, not a new relocation,
 symbol-resolution, deduplication, compression, executable-format, or loading
 algorithm. This technical screen is not legal advice or patent clearance.
 
+# 2026-08-28 — Identical-input linker benchmark harness
+
+Patent review: **NOT_TRIGGERED**. This increment repeatedly invokes the existing
+MRML and pinned rust-lld command surfaces on the same object, measures elapsed
+wall-clock time, compares output execution status, and reports bounded summary
+statistics. It introduces no linker, optimization, sampling, compression,
+cryptographic, or executable-format algorithm. This technical screen is not
+legal advice or patent clearance.
+
+# 2026-08-28 — Linker-only MRML COFF driver mode
+
+Patent review: **NOT_TRIGGERED**. This increment exposes the existing checked
+COFF decoder and PE serializer as an explicit linker-only driver command for
+identical-input measurement. It adds command routing, bounded file input, and
+existing no-overwrite output policy, not a new linking, executable-format,
+optimization, compression, cryptographic, or loading algorithm. This technical
+screen is not legal advice or patent clearance.
+
 # 2026-08-28 — Explicit compiler-driver PE linker selection
 
 Patent review: **NOT_TRIGGERED**. This increment routes an explicit `--emit pe`
