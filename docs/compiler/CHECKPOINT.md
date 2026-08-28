@@ -9,8 +9,8 @@ the named commit and current source.
 ## Recoverable baseline
 
 - Branch: `main`
-- Compiler checkpoint commit: `42bc337b`
-  (`compiler: scale lazy archive inventories`)
+- Compiler checkpoint commit: `24ae8794`
+  (`compiler: queue unresolved archive symbols`)
 - Remote state when recorded: `origin/main` includes the bounded MRML-owned
   static-link core, exact MRML COFF and ELF64 ingestion, deterministic
   import-free PE32+/ELF64 executable serialization, explicit compiler-driver
@@ -60,6 +60,23 @@ against all prior accepted probes. Keep Cargo on edition 2024 until a newer
 named edition can be adopted through a pinned, workspace-wide migration.
 
 ## Latest bounded linker milestone
+
+Commit `24ae8794` replaces repeated full archive-index/reference rescans with a
+bounded cursor over unresolved symbols. A selected object's named relocations
+append new work to the same queue, preserving exact validated lookups,
+left-to-right archive ordering, independent object-definition confirmation,
+and transitive fixed-point extraction.
+
+In the genuine 16-codegen-unit pinned-rustc `.rlib`, the consumer referenced
+only `diverse_31`; that member's relocation then required `diverse_11` from a
+different member. MRML selected both transitively, emitted 8,344 bytes, and
+exited 42 like rust-lld's 1,880-byte result. A 50-iteration/five-warmup sample
+recorded MRML at 4.577 ms median versus pinned rust-lld at 4.700 ms. The
+301-object controlled archive measured MRML at 4.902 ms versus rust-lld at
+4.886 ms in the same run, an effective tie rather than superiority evidence.
+Windows and Linux retained five driver passes; the unchanged core retained its
+previous exact 720-test passes on both platforms. These are narrow hosted
+regression results, not general `.rlib` compatibility or speed claims.
 
 Commit `42bc337b` separates indexed archive inventory from admitted linker
 work. The decoder can inventory at most 1,024 independently framed ordinary
