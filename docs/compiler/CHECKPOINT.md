@@ -9,8 +9,8 @@ the named commit and current source.
 ## Recoverable baseline
 
 - Branch: `main`
-- Compiler checkpoint commit: `325dc325`
-  (`compiler: decode bounded COFF unwind records`)
+- Compiler checkpoint commit: `7f1e2b83`
+  (`compiler: link selected COFF unwind records`)
 - Remote state when recorded: `origin/main` includes the bounded MRML-owned
   static-link core, exact MRML COFF and ELF64 ingestion, deterministic
   import-free PE32+/ELF64 executable serialization, explicit compiler-driver
@@ -204,6 +204,15 @@ section targets to external definitions and requires a nonempty zero-offset
 `.xdata$...` target. The full Windows suite passed with 700 core, 2 component,
 10 conformance, 351 replacement, and 24 semantic-execution tests. Driver
 selection and transport of decoded records remain incomplete.
+
+Commit `7f1e2b83` transports runtime-function records only from selected source
+object identities into the typed PE serializer and reuses one bounded decoder
+scratch arena. Four driver tests and the Windows release build passed. An exact
+pinned gnullvm two-function no-std `.rlib` produced a 1,536-byte PE whose one
+exception record covers RVA `0x1000..0x100f`; Windows returned 42. The scoped
+93-byte no-unwind benchmark measured MRML at 10.081 ms median versus rust-lld at
+27.632 ms, with matching 1,024-byte outputs and exit 42. These are narrow hosted
+results, not general Rust-library, exception-semantics, or performance claims.
 
 Patent review: **NOT_TRIGGERED** for these conventional bounded linker,
 serializer, command-routing, and benchmark increments; see
