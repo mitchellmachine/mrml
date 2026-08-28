@@ -9,8 +9,8 @@ the named commit and current source.
 ## Recoverable baseline
 
 - Branch: `main`
-- Compiler checkpoint commit: `de661af6`
-  (`compiler: admit large LLVM rust archives`)
+- Compiler checkpoint commit: `951ae996`
+  (`compiler: map bounded linker inputs`)
 - Remote state when recorded: `origin/main` includes the bounded MRML-owned
   static-link core, exact MRML COFF and ELF64 ingestion, deterministic
   import-free PE32+/ELF64 executable serialization, explicit compiler-driver
@@ -60,6 +60,20 @@ against all prior accepted probes. Keep Cargo on edition 2024 until a newer
 named edition can be adopted through a pinned, workspace-wide migration.
 
 ## Latest bounded linker milestone
+
+Commit `951ae996` gives the hosted linker bounded owning read-only mappings
+instead of copying complete inputs. Length is validated against 64 MiB before
+mapping, empty files need no OS mapping, consumers receive only immutable
+slices, the native file stays alive, and the mapping is released exactly once
+before the file closes. Windows and Linux each passed 45 runtime tests and five
+driver tests.
+
+On identical current 50-iteration/five-warmup samples, the exact 3,150,398-byte
+pinned `libcore` archive measured MRML at 4.835 ms median versus rust-lld at
+5.251 ms; the transitive 16-codegen-unit `.rlib` measured 4.869 versus 5.205
+ms; and the controlled 301-object archive measured 4.921 versus 5.372 ms. All
+outputs retained their expected exit-42 behavior. These are three hosted
+positive regression samples, not proof of general speed superiority.
 
 Commit `de661af6` raises the hosted per-input bound to an explicit 64 MiB,
 preallocates bounded file reads from validated metadata, and admits LLVM's
