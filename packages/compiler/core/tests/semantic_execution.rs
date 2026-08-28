@@ -3,7 +3,17 @@ extern crate std;
 use mrml_rustc::{
     CodegenErrorKind, CompileErrorKind, ObjectFormat, TargetLayout, compile_source_function,
 };
-use std::{ffi::c_void, process::Command, sync::Once, vec::Vec};
+use std::{
+    ffi::c_void,
+    fs,
+    path::{Path, PathBuf},
+    process::Command,
+    sync::{
+        Once,
+        atomic::{AtomicU64, Ordering},
+    },
+    vec::Vec,
+};
 
 #[cfg(target_os = "windows")]
 const FORMAT: ObjectFormat = ObjectFormat::Coff;
@@ -15,6 +25,10 @@ const TOOLCHAIN: &str = "nightly-2026-08-24-x86_64-pc-windows-gnullvm";
 const TOOLCHAIN: &str = "nightly-2026-08-24-x86_64-unknown-linux-gnu";
 const COMMIT: &str = "fb6531d550e0075b9eb9a51464f404805eec87d9";
 static ORACLE: Once = Once::new();
+static ORACLE_DIRECTORY: AtomicU64 = AtomicU64::new(0);
+const MRML_ABI_FACADE: &str = include_str!("oracle_support/mrml_abi.rs");
+const MRML_V1_SCALAR_SOURCE: &str =
+    "#[mrml_abi::export(version = 1)] pub fn probe(value: u64) -> u64 { value + 17 }";
 
 fn verify_oracle() {
     ORACLE.call_once(|| {
@@ -266,14 +280,146 @@ fn compile(source: &str) -> Executable {
     Executable::load(object_image(object.bytes()))
 }
 
+struct OracleDirectory(PathBuf);
+
+impl OracleDirectory {
+    fn create() -> Self {
+        let sequence = ORACLE_DIRECTORY.fetch_add(1, Ordering::Relaxed);
+        let path = std::env::temp_dir().join(format!(
+            "mrml-rustc-oracle-{}-{sequence}",
+            std::process::id()
+        ));
+        fs::create_dir(&path).expect("create isolated oracle directory");
+        Self(path)
+    }
+
+    fn path(&self) -> &Path {
+        &self.0
+    }
+}
+
+impl Drop for OracleDirectory {
+    fn drop(&mut self) {
+        fs::remove_dir_all(&self.0).expect("remove isolated oracle directory");
+    }
+}
+
+#[cfg(target_os = "windows")]
+fn pinned_rust_lld() -> PathBuf {
+    let sysroot = Command::new("rustup")
+        .args(["run", TOOLCHAIN, "rustc", "--print", "sysroot"])
+        .output()
+        .expect("locate pinned rustc sysroot");
+    assert!(sysroot.status.success());
+    let linker = PathBuf::from(
+        String::from_utf8(sysroot.stdout)
+            .expect("pinned rustc sysroot is UTF-8")
+            .trim(),
+    )
+    .join("lib/rustlib/x86_64-pc-windows-gnullvm/bin/rust-lld.exe");
+    assert!(linker.is_file(), "pinned rust-lld is unavailable");
+    linker
+}
+
+fn rustc_mrml_v1_scalar_observations() -> Vec<u64> {
+    verify_oracle();
+    let directory = OracleDirectory::create();
+    let facade_source = directory.path().join("mrml_abi.rs");
+    let shared_source = directory.path().join("shared.rs");
+    #[cfg(target_os = "windows")]
+    let facade_library = directory.path().join("mrml_abi.dll");
+    #[cfg(not(target_os = "windows"))]
+    let facade_library = directory.path().join("libmrml_abi.so");
+    #[cfg(target_os = "windows")]
+    let executable = directory.path().join("shared.exe");
+    #[cfg(not(target_os = "windows"))]
+    let executable = directory.path().join("shared");
+    fs::write(&facade_source, MRML_ABI_FACADE).expect("write oracle facade source");
+    fs::write(
+        &shared_source,
+        format!(
+            "{MRML_V1_SCALAR_SOURCE}\nfn main() {{ for value in [0, 1, 42, u64::MAX - 17] {{ println!(\"{{}}\", probe(value)); }} }}"
+        ),
+    )
+    .expect("write shared oracle source");
+    let mut facade_command = Command::new("rustup");
+    facade_command.args([
+        "run",
+        TOOLCHAIN,
+        "rustc",
+        "--edition=2024",
+        "--crate-name",
+        "mrml_abi",
+        "--crate-type",
+        "proc-macro",
+    ]);
+    #[cfg(target_os = "windows")]
+    facade_command
+        .arg("-C")
+        .arg(format!("linker={}", pinned_rust_lld().display()));
+    let facade = facade_command
+        .arg(&facade_source)
+        .arg("-o")
+        .arg(&facade_library)
+        .output()
+        .expect("compile pinned mrml_abi facade");
+    assert!(
+        facade.status.success(),
+        "{}",
+        String::from_utf8_lossy(&facade.stderr)
+    );
+    let mut oracle_command = Command::new("rustup");
+    oracle_command.args(["run", TOOLCHAIN, "rustc", "--edition=2024", "--extern"]);
+    oracle_command.arg(format!("mrml_abi={}", facade_library.display()));
+    #[cfg(target_os = "windows")]
+    oracle_command
+        .arg("-C")
+        .arg(format!("linker={}", pinned_rust_lld().display()));
+    let oracle = oracle_command
+        .arg(&shared_source)
+        .arg("-o")
+        .arg(&executable)
+        .output()
+        .expect("compile attributed source with pinned rustc");
+    assert!(
+        oracle.status.success(),
+        "{}",
+        String::from_utf8_lossy(&oracle.stderr)
+    );
+    #[cfg(target_os = "windows")]
+    fs::copy(
+        pinned_rust_lld()
+            .parent()
+            .expect("pinned rust-lld has a parent")
+            .join("libunwind.dll"),
+        directory.path().join("libunwind.dll"),
+    )
+    .expect("stage pinned rustc runtime library");
+    let output = Command::new(&executable)
+        .output()
+        .expect("execute pinned rustc artifact");
+    assert!(
+        output.status.success(),
+        "oracle execution failed with {}: {}",
+        output.status,
+        String::from_utf8_lossy(&output.stderr)
+    );
+    String::from_utf8(output.stdout)
+        .expect("oracle output is UTF-8")
+        .lines()
+        .map(|line| line.parse().expect("oracle output is u64"))
+        .collect()
+}
+
 #[test]
 fn mrml_v1_scalar_facade_executes_with_the_host_call_plan() {
-    let code =
-        compile("#[mrml_abi::export(version = 1)] pub fn probe(value: u64) -> u64 { value + 17 }");
+    let code = compile(MRML_V1_SCALAR_SOURCE);
     let probe: unsafe extern "C" fn(u64) -> u64 = unsafe { std::mem::transmute(code.pointer) };
-    for value in [0, 1, 42, u64::MAX - 17] {
-        assert_eq!(unsafe { probe(value) }, value + 17);
-    }
+    let actual: Vec<_> = [0, 1, 42, u64::MAX - 17]
+        .into_iter()
+        .map(|value| unsafe { probe(value) })
+        .collect();
+    assert_eq!(actual, rustc_mrml_v1_scalar_observations());
 }
 
 #[test]

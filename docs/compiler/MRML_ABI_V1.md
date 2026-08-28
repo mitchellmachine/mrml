@@ -23,6 +23,14 @@ upstream build must provide the pinned, repository-controlled `mrml_abi` facade;
 absence or identity mismatch is a comparison failure, not permission to discard
 the attribute.
 
+The compiler oracle support now contains that bounded facade as an identity
+attribute macro. The semantic execution gate builds it with the exact dated
+rustc, builds an executable containing the same attributed scalar function fed
+to MRML, executes both artifacts, and compares their returned observations.
+Windows uses the pinned toolchain's own `rust-lld` and runtime library rather
+than an unpinned system linker. This initial evidence covers one-word scalar
+calls only; it is not yet general differential or cross-language ABI evidence.
+
 The MRML parser accepts only `mrml_abi::export`, requires exactly
 `version = 1`, and records the central `FunctionAbi::MrmlV1` identity. The
 function must currently be an ordinary public Rust-syntax function. The facade

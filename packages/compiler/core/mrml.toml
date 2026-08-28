@@ -66,25 +66,89 @@ source = "packages/compiler/core/tests/semantic_execution.rs"
 stack_bytes = 33554432
 
 [[build_input]]
+fingerprint = "fnv1a64:964d48456069b163"
+id = "included-file.mrml-v1-oracle-facade"
+kind = "included-file"
+line = 29
+path = "packages/compiler/core/tests/semantic_execution.rs"
+reason = "Embed the repository-controlled identity attribute facade compiled by the pinned rustc differential execution test."
+
+[[build_input]]
 fingerprint = "fnv1a64:119cf59b03a62643"
 id = "external-command.verify-oracle.rustup"
 kind = "external-command"
-line = 21
+line = 35
 path = "packages/compiler/core/tests/semantic_execution.rs"
 reason = "Resolve the pinned reference rustc executable used by the compiler semantic differential test harness."
+
+[[build_input]]
+fingerprint = "fnv1a64:ad0a238cc5f06705"
+id = "external-command.pinned-rust-lld.rustup"
+kind = "external-command"
+line = 309
+path = "packages/compiler/core/tests/semantic_execution.rs"
+reason = "Resolve the exact pinned Windows rustc sysroot so its bundled linker and runtime can execute the shared-source oracle."
+
+[[build_input]]
+fingerprint = "fnv1a64:7ca1821834345022"
+id = "external-command.mrml-v1-facade.rustup"
+kind = "external-command"
+line = 345
+path = "packages/compiler/core/tests/semantic_execution.rs"
+reason = "Compile the repository-controlled MRML ABI attribute facade with the exact pinned rustc oracle."
+
+[[build_input]]
+fingerprint = "fnv1a64:7ca18318343451d5"
+id = "external-command.mrml-v1-shared-source.rustup"
+kind = "external-command"
+line = 371
+path = "packages/compiler/core/tests/semantic_execution.rs"
+reason = "Compile the same attributed scalar source into an executable with the exact pinned rustc oracle."
+
+[[build_input]]
+fingerprint = "fnv1a64:f4cb8e731171ef68"
+id = "external-command.mrml-v1-shared-source.executable"
+kind = "external-command"
+line = 398
+path = "packages/compiler/core/tests/semantic_execution.rs"
+reason = "Execute the pinned rustc artifact so its scalar observations can be compared with MRML generated code."
 
 [[build_input]]
 fingerprint = "fnv1a64:e2365a97a0d780f8"
 id = "external-command.subslice-then-index-bounds-report-isolated-traps.current-exe"
 kind = "external-command"
-line = 401
+line = 1160
 path = "packages/compiler/core/tests/semantic_execution.rs"
 reason = "Launch the current semantic test binary in a child process so generated bounds traps cannot terminate the parent test harness."
+
+[[build_input]]
+fingerprint = "fnv1a64:d546254a35670d51"
+id = "external-command.repeated-subslice-then-index-bounds-report-isolated-traps.current-exe"
+kind = "external-command"
+line = 1252
+path = "packages/compiler/core/tests/semantic_execution.rs"
+reason = "Launch the current semantic test binary in a child process so repeated generated bounds traps cannot terminate the parent test harness."
+
+[[build_input]]
+fingerprint = "fnv1a64:750375d2958fb2f5"
+id = "external-command.inclusive-subslice-then-index-bounds-report-isolated-traps.current-exe"
+kind = "external-command"
+line = 1333
+path = "packages/compiler/core/tests/semantic_execution.rs"
+reason = "Launch the current semantic test binary in a child process so inclusive generated bounds traps cannot terminate the parent test harness."
+
+[[build_input]]
+fingerprint = "fnv1a64:95e422f934b98d20"
+id = "external-command.inclusive-slice-subslice-then-index-bounds-report-isolated-traps.current-exe"
+kind = "external-command"
+line = 1427
+path = "packages/compiler/core/tests/semantic_execution.rs"
+reason = "Launch the current semantic test binary in a child process so inclusive slice bounds traps cannot terminate the parent test harness."
 
 [[build_input]]
 fingerprint = "fnv1a64:19837a24a9fd678c"
 id = "external-command.checked-overflow-reports-an-isolated-trap-exit.current-exe"
 kind = "external-command"
-line = 482
+line = 1508
 path = "packages/compiler/core/tests/semantic_execution.rs"
 reason = "Launch the current semantic test binary in a child process so generated overflow traps cannot terminate the parent test harness."
