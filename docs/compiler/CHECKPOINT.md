@@ -9,8 +9,8 @@ the named commit and current source.
 ## Recoverable baseline
 
 - Branch: `main`
-- Compiler checkpoint commit: `2bd8f3d3`
-  (`compiler: link ELF writable and BSS storage`)
+- Compiler checkpoint commit: `a1745b2c`
+  (`compiler: relocate ELF initialized pointers`)
 - Remote state when recorded: `origin/main` includes the bounded MRML-owned
   static-link core, exact MRML COFF and ELF64 ingestion, deterministic
   import-free PE32+/ELF64 executable serialization, explicit compiler-driver
@@ -60,6 +60,27 @@ against all prior accepted probes. Keep Cargo on edition 2024 until a newer
 named edition can be adopted through a pinned, workspace-wide migration.
 
 ## Latest bounded linker milestone
+
+Commit `a1745b2c` admits bounded `R_X86_64_64` relocations from selected
+initialized `.data.*` fields to text or read-only storage in the same object.
+The decoder requires an allocated RELA table linked to the exact symbol table,
+an eight-byte in-bounds field, a defined supported target, and the shared
+256-relocation limit. Final absolute virtual addresses are patched only after
+the separated RX, R/NX, and RW/NX layout is fixed; unsupported relocation kinds
+and targets remain fail-closed.
+
+Under the exact ORACLE-0002 Arch WSL environment, an independently authored
+optimized object stored a `&[u8]` fat pointer with one absolute relocation to a
+local string. The 12,304-byte MRML executable resolved the pointer to
+`0x402000`, retained separate R, RX, R/NX, and RW/NX loads, and exited 42.
+Linux passed 714 compiler-core tests and four driver tests. Windows passed all
+four driver tests and 713 of 714 core tests; the remaining failure is in
+concurrently modified MRML ABI codegen outside the linker changes. A
+50-iteration/five-warmup identical-input measurement recorded MRML at 4.768 ms
+median versus pinned rust-lld with `--eh-frame-hdr` and the same entry at
+5.003 ms; outputs were 12,304 and 1,984 bytes. This is narrow hosted regression
+evidence, not general superiority. Dynamic relocations, TLS, constructors, and
+representative Rust runtime linkage remain unsupported or unverified.
 
 Commit `2bd8f3d3` admits selected ELF `.data.*` PROGBITS and `.bss.*` NOBITS
 storage with exact writable/allocated identity, bounded power-of-two alignment,
