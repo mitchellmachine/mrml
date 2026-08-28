@@ -229,6 +229,24 @@ mean over 50 iterations after five warmups. Both 1,024-byte outputs returned
 42. These hosted probes establish one static-data shape and narrow regression
 evidence, not general writable-data, COMDAT, or performance coverage.
 
+The later bounded fragment milestone supersedes the earlier single-section
+limits for the pinned COFF shape. Adjacent nonempty `.rdata$...` sections form
+one zero-copy read-only span, and each `.data$...` section is decoded by index
+with an independent checked relocation arena. Static functions in separate
+`.text$...` sections use their section identity as a local relocation target;
+those targets resolve after atomic object-member selection but do not make an
+archive member eligible or expose the static Rust symbol as a global
+definition. Duplicate section identities fail closed.
+
+An exact ORACLE-0002 object containing two text fragments, two statics, entry
+unwind metadata, two adjacent read-only fragments, and two writable pointer
+fragments linked to a 2,048-byte PE and returned 42 on Windows. On the same
+1,536-byte input, 50 iterations after five warmups measured MRML at 9.590 ms
+median and 9.822 ms mean versus pinned gnullvm rust-lld at 27.162 ms median and
+27.249 ms mean. Both outputs were 2,048 bytes and returned 42. This is narrow
+hosted evidence for that object shape, not representative-library or general
+performance superiority evidence.
+
 After this integration, the controlled 93-byte no-unwind object benchmark ran
 50 iterations after five warmups. MRML measured 10.081 ms median and 10.260 ms
 mean versus pinned gnullvm rust-lld at 27.632 ms median and 27.791 ms mean. Both
@@ -287,7 +305,7 @@ later use data-parallel loops. MRML does not copy mold source or claim mold
 compatibility or performance. The cited design note warns that its 2020 object
 preloading proposal is outdated, so MRML does not adopt that proposal.
 
-This increment does **not** emit PE imports/exports/exception metadata/base
+This increment does **not** emit PE imports/exports/base
 relocations/debug data, emit ELF dynamic metadata/interpreter/PIE/sections,
 accelerate archive extraction through symbol indexes, read thin archives or
 general `.rlib` contents, perform section GC or ICF, link dynamically, run work

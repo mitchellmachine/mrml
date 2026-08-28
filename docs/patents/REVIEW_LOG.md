@@ -9196,6 +9196,15 @@ adds no executable packing, compression, loader, dynamic-linking, relocation,
 cryptographic, or code-generation algorithm. This technical screen is not
 legal advice or patent clearance.
 
+# 2026-08-28 — COFF static text-fragment resolution
+
+Patent review: **NOT_TRIGGERED**. This increment distinguishes conventional
+COFF static code targets from externally selectable symbols and resolves them
+through already decoded section identities. It adds bounded symbol scoping and
+documented REL32 handling, not a new relocation, name-mangling, selection,
+optimization, compression, cryptographic, or loading algorithm. This technical
+screen is not legal advice or patent clearance.
+
 # 2026-08-28 — Bounded MRML ELF64 linker ingestion
 
 Patent review: **NOT_TRIGGERED**. This increment decodes conventional ELF64
