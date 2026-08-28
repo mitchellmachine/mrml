@@ -9155,3 +9155,14 @@ research but introduces no new linking algorithm, object format, executable
 format, compression, cryptographic primitive, dynamic-loading mechanism, or
 runtime security protocol. This technical screen is not legal advice or patent
 clearance, and broader linker completion remains partial.
+
+# 2026-08-28 — Bounded MRML COFF linker ingestion
+
+Patent review: **NOT_TRIGGERED**. This increment decodes the conventional COFF
+file header, `.text`/`.rdata` section records, short and string-table symbol
+names, and standard x86-64 `IMAGE_REL_AMD64_REL32` records emitted by the
+existing compiler, then feeds them into the existing bounded static-link core.
+It adds adversarial range, type, capacity, truncation, and arithmetic checks,
+not a new object format, symbol-resolution algorithm, executable format,
+compression mechanism, cryptographic primitive, or dynamic-loading protocol.
+This technical screen is not legal advice or patent clearance.

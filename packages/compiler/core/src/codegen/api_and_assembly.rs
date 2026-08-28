@@ -64,6 +64,11 @@ impl<const MAX_BYTES: usize> MachineCode<MAX_BYTES> {
         })
     }
 
+    #[cfg(test)]
+    pub(crate) fn from_bytes_for_test(source: &[u8]) -> Self {
+        Self::from_bytes(source).expect("test machine code fits its declared capacity")
+    }
+
     pub fn bytes(&self) -> &[u8] {
         &self.bytes[..self.length]
     }

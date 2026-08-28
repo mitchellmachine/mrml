@@ -47,7 +47,7 @@ pub use ir::{
 pub use lexer::{LexError, LexErrorKind, Lexer, Span, Token, TokenKind};
 pub use linker::{
     LinkInput, LinkRelocation, LinkedImage, LinkerError, MAX_LINK_INPUTS, MAX_LINK_RELOCATIONS,
-    link_x86_64_static,
+    decode_x86_64_coff, link_x86_64_static,
 };
 pub use object::{
     MAX_X86_64_RELOCATIONS, ObjectError, ObjectFile, X86_64PcRelativeRelocation,
