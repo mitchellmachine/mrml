@@ -138,6 +138,9 @@ low-word carry into the high word, and uses unsigned-carry or signed-overflow
 branches respectively when ordinary overflow checks are enabled.
 Matching-type subtraction likewise propagates low-word borrow into the high word
 and selects unsigned-borrow or signed-overflow trapping by declared type.
+Equality and inequality compare both words after left-to-right evaluation and
+normalize the combined word differences to a boolean that may enter the supported
+one-word integer cast/return path.
 Closed positive and negative two-word integer literals are range-checked against
 the declared return type and materialized directly into the two return words.
 Other wide casts, expressions, locals, operations, calls, and returns remain
@@ -181,6 +184,8 @@ Non-overflowing unsigned and signed addition is compared across both words;
 machine-code tests require the shared overflow trap.
 Non-overflowing unsigned and signed subtraction is compared across both words,
 including low-word borrow cases.
+Unsigned equality and signed inequality are compared with the pinned oracle at
+equal values and values differing in either word.
 Exact `u128::MAX`, `i128::MAX`, and `i128::MIN` literal
 words are also compared with the same oracle. This is not linker, dynamic-loader,
 cross-language, or physical-hardware evidence.

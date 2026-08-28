@@ -63,6 +63,8 @@ const MRML_V1_WIDE_UNSIGNED_SUBTRACT_SOURCE: &str =
     "#[mrml_abi::export(version = 1)] pub fn probe(input: u128) -> u128 { input - 17 }";
 const MRML_V1_WIDE_SIGNED_SUBTRACT_SOURCE: &str =
     "#[mrml_abi::export(version = 1)] pub fn probe(input: i128) -> i128 { input - 17 }";
+const MRML_V1_WIDE_UNSIGNED_EQUAL_SOURCE: &str = "#[mrml_abi::export(version = 1)] pub fn probe(input: u128) -> u64 { (input == 1512366075204170947332355369683137040) as u64 }";
+const MRML_V1_WIDE_SIGNED_NOT_EQUAL_SOURCE: &str = "#[mrml_abi::export(version = 1)] pub fn probe(input: i128) -> u64 { (input != -1512366075204170947332355369683137040) as u64 }";
 const MRML_V1_UNSIGNED_WIDEN_SOURCE: &str =
     "#[mrml_abi::export(version = 1)] pub fn probe(input: u64) -> u128 { input as u128 }";
 const MRML_V1_SIGNED_WIDEN_SOURCE: &str =
@@ -1011,6 +1013,37 @@ fn mrml_v1_wide_checked_subtraction_matches_both_oracle_words() {
                 let returned = unsafe { call_mrml_v1_wide_return(code.pointer, input) };
                 [returned as u64, (returned >> 64) as u64]
             })
+            .collect::<Vec<_>>();
+        assert_eq!(actual, rustc_mrml_v1_observations(source, driver));
+    }
+}
+
+#[test]
+fn mrml_v1_wide_equality_matches_the_oracle() {
+    let equal = compile(MRML_V1_WIDE_UNSIGNED_EQUAL_SOURCE);
+    let not_equal = compile(MRML_V1_WIDE_SIGNED_NOT_EQUAL_SOURCE);
+    let inputs = [
+        0u128,
+        1512366075204170947332355369683137040,
+        1512366075204170947332355369683137041,
+        (-1512366075204170947332355369683137040i128) as u128,
+        u128::MAX,
+    ];
+    for (source, code, driver) in [
+        (
+            MRML_V1_WIDE_UNSIGNED_EQUAL_SOURCE,
+            &equal,
+            "for input in [0u128, 1512366075204170947332355369683137040, 1512366075204170947332355369683137041, (-1512366075204170947332355369683137040i128) as u128, u128::MAX] { println!(\"{}\", probe(input)); }",
+        ),
+        (
+            MRML_V1_WIDE_SIGNED_NOT_EQUAL_SOURCE,
+            &not_equal,
+            "for input in [0i128, 1512366075204170947332355369683137040, 1512366075204170947332355369683137041, -1512366075204170947332355369683137040i128, -1] { println!(\"{}\", probe(input)); }",
+        ),
+    ] {
+        let actual = inputs
+            .into_iter()
+            .map(|input| unsafe { call_mrml_v1_wide_return(code.pointer, input) as u64 })
             .collect::<Vec<_>>();
         assert_eq!(actual, rustc_mrml_v1_observations(source, driver));
     }

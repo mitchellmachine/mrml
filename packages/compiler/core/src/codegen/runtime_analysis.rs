@@ -19199,14 +19199,16 @@ fn runtime_expression_type_with_locals<
                 operand,
                 depth + 1,
             )?;
-            if !matches!(
-                operand_type,
-                RuntimeExpressionType::Integer(_) | RuntimeExpressionType::RawPointer { .. }
-            ) {
-                return Err(CodegenErrorKind::RuntimeTypeMismatch);
-            }
             match target {
                 crate::CastType::Integer(target) => {
+                    if !matches!(
+                        operand_type,
+                        RuntimeExpressionType::Integer(_)
+                            | RuntimeExpressionType::RawPointer { .. }
+                            | RuntimeExpressionType::Bool
+                    ) {
+                        return Err(CodegenErrorKind::RuntimeTypeMismatch);
+                    }
                     if runtime_width(target.name()).is_none()
                         && !runtime_integer_layout(target.name())
                             .is_some_and(|layout| layout.words == 2)
@@ -19216,6 +19218,12 @@ fn runtime_expression_type_with_locals<
                     Ok(RuntimeExpressionType::Integer(Some(target)))
                 }
                 crate::CastType::RawPointer { pointee, mutable } => {
+                    if !matches!(
+                        operand_type,
+                        RuntimeExpressionType::Integer(_) | RuntimeExpressionType::RawPointer { .. }
+                    ) {
+                        return Err(CodegenErrorKind::RuntimeTypeMismatch);
+                    }
                     let pointee = match pointee {
                         crate::PointerPointee::Integer(ty) => {
                             RuntimeArrayElementType::Integer(Some(ty))

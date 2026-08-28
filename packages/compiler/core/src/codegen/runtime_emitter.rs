@@ -1649,8 +1649,22 @@ impl<
             expression_type
         };
         if let RuntimeExpressionType::Integer(Some(integer_type)) = operation_type {
-            self.width = runtime_width(integer_type.name())
-                .ok_or(self.error(CodegenErrorKind::UnsupportedRuntimeType))?;
+            if let Some(width) = runtime_width(integer_type.name()) {
+                self.width = width;
+            } else if !(expression_type == RuntimeExpressionType::Bool
+                && runtime_integer_layout(integer_type.name())
+                    .is_some_and(|layout| layout.words == 2)
+                && matches!(
+                    tree.expression(id).map(|expression| expression.kind),
+                    Some(ExprKind::Binary {
+                        operator:
+                            crate::BinaryOperator::Equal | crate::BinaryOperator::NotEqual,
+                        ..
+                    })
+                ))
+            {
+                return Err(self.error(CodegenErrorKind::UnsupportedRuntimeType));
+            }
         } else if operation_type == RuntimeExpressionType::Char {
             self.width = runtime_width("char")
                 .ok_or(self.error(CodegenErrorKind::UnsupportedRuntimeType))?;
@@ -5770,6 +5784,63 @@ impl<
                 left,
                 right,
             } => {
+                if matches!(
+                    operator,
+                    crate::BinaryOperator::Equal | crate::BinaryOperator::NotEqual
+                ) {
+                    let left_type = runtime_expression_type_with_locals(
+                        self.function,
+                        self.resolver,
+                        &self.locals[..self.saved_locals],
+                        tree,
+                        left,
+                        depth + 1,
+                    )
+                    .map_err(|kind| self.error(kind))?;
+                    let right_type = runtime_expression_type_with_locals(
+                        self.function,
+                        self.resolver,
+                        &self.locals[..self.saved_locals],
+                        tree,
+                        right,
+                        depth + 1,
+                    )
+                    .map_err(|kind| self.error(kind))?;
+                    let wide_type = match (left_type, right_type) {
+                        (
+                            wide @ RuntimeExpressionType::Integer(Some(
+                                crate::IntegerType::U128 | crate::IntegerType::I128,
+                            )),
+                            other,
+                        )
+                        | (
+                            other,
+                            wide @ RuntimeExpressionType::Integer(Some(
+                                crate::IntegerType::U128 | crate::IntegerType::I128,
+                            )),
+                        ) if runtime_types_compatible(other, wide) => Some(wide),
+                        _ => None,
+                    };
+                    if let Some(wide_type) = wide_type {
+                        self.emit_wide_integer_return(tree, left, wide_type)?;
+                        self.emit(&[0x50, 0x52])?;
+                        self.evaluation_depth += 2;
+                        self.emit_wide_integer_return(tree, right, wide_type)?;
+                        self.emit(&[0x59, 0x41, 0x58])?;
+                        self.evaluation_depth -= 2;
+                        self.emit(&[
+                            0x4c, 0x31, 0xc0, 0x48, 0x31, 0xca, 0x48, 0x09, 0xd0, 0x48,
+                            0x85, 0xc0, 0x0f,
+                            if operator == crate::BinaryOperator::Equal {
+                                0x94
+                            } else {
+                                0x95
+                            },
+                            0xc0, 0x0f, 0xb6, 0xc0,
+                        ])?;
+                        return Ok(());
+                    }
+                }
                 if matches!(
                     operator,
                     crate::BinaryOperator::LogicalAnd | crate::BinaryOperator::LogicalOr
@@ -9978,6 +10049,18 @@ impl<
             }
         ) {
             return self.emit_slice_return(tree, root);
+        }
+        if expected_type == RuntimeExpressionType::Bool
+            && matches!(
+                tree.expression(root).map(|expression| expression.kind),
+                Some(ExprKind::Binary {
+                    operator: crate::BinaryOperator::Equal | crate::BinaryOperator::NotEqual,
+                    ..
+                })
+            )
+        {
+            self.emit_expression_with_width(tree, root, 0)?;
+            return self.emit_epilogue();
         }
         let RuntimeExpressionType::Array { element, count } = expected_type else {
             self.emit_expression(tree, root, 0)?;
