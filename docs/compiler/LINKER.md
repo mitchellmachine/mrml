@@ -30,6 +30,16 @@ Windows gnullvm-hosted test executes a generated six-byte entry function in a
 child process and requires exit code 42. This is controlled hosted Windows
 loader evidence, not Secure Boot, recovery, UEFI, or physical-hardware evidence.
 
+`mrml-rustc-driver --emit pe` selects this path explicitly. The driver compiles
+the requested function to MRML COFF in memory, decodes it, links it, and writes
+the bounded PE image without spawning `rust-lld`. Existing `--emit coff` and
+`--emit elf64` modes retain object-only behavior; an unknown emit kind fails
+rather than falling back. A release-driver controlled probe compiled an
+independent constant-return source through `--emit pe`, produced a 1,024-byte
+single-section image, and the Windows host observed exit code 42. Empty
+read-only data omits `.rdata` rather than emitting a loader-invalid zero-sized
+section.
+
 The pass structure is informed by mold's public design notes: establish output
 layout early, run a small sequence of understandable passes, and keep per-input
 validation, copying, and per-relocation work independent so a hosted driver can
@@ -41,8 +51,8 @@ This increment does **not** decode ELF input, write ELF executables, emit PE
 imports/exports/exception metadata/base relocations/debug data, read archives,
 perform section GC or ICF, link dynamically, run work in parallel, or integrate
 linker selection into the public `mrml` build frontend. Those are separate
-milestones and the current upstream linker remains the production linker as
-required by `docs/build/BUILD_SYSTEM.md`.
+milestones and the current upstream linker remains the production linker for
+ordinary package builds as required by `docs/build/BUILD_SYSTEM.md`.
 
 Research source:
 

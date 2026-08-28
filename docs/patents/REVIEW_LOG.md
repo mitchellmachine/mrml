@@ -9176,6 +9176,14 @@ adds a type distinction and adversarial bounds checks, not a new relocation,
 symbol-resolution, deduplication, compression, executable-format, or loading
 algorithm. This technical screen is not legal advice or patent clearance.
 
+# 2026-08-28 — Explicit compiler-driver PE linker selection
+
+Patent review: **NOT_TRIGGERED**. This increment routes an explicit `--emit pe`
+driver request through the existing compiler COFF emission, checked decoding,
+and bounded PE serializer without an external linker. It introduces no new
+linking, executable-format, compression, cryptographic, loading, or optimization
+algorithm. This technical screen is not legal advice or patent clearance.
+
 # 2026-08-28 — Deterministic import-free PE32+ linker output
 
 Patent review: **NOT_TRIGGERED**. This increment serializes the existing linked

@@ -24,6 +24,27 @@ pub enum LinkerError {
     UnsupportedCoff,
 }
 
+impl core::fmt::Display for LinkerError {
+    fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        let message = match self {
+            Self::EmptyInput => "link input set is empty",
+            Self::EmptySymbol => "link symbol is empty",
+            Self::SymbolContainsNul => "link symbol contains NUL",
+            Self::TooManyInputs => "link input capacity exceeded",
+            Self::TooManyRelocations => "link relocation capacity exceeded",
+            Self::DuplicateSymbol => "duplicate link symbol",
+            Self::UndefinedSymbol => "undefined link symbol",
+            Self::InvalidRelocationOffset => "invalid link relocation offset",
+            Self::OffsetOverflow => "link offset arithmetic overflow",
+            Self::RelocationOverflow => "link relocation displacement overflow",
+            Self::OutputTooSmall => "link output capacity is too small",
+            Self::InvalidCoff => "invalid bounded COFF input",
+            Self::UnsupportedCoff => "unsupported COFF feature",
+        };
+        formatter.write_str(message)
+    }
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct LinkRelocation<'a> {
     /// Offset of the four-byte x86-64 PC-relative field in this input's text.
@@ -275,28 +296,41 @@ pub fn link_x86_64_pe<const MAX_IMAGE_BYTES: usize, const MAX_LINKED_BYTES: usiz
     let readonly_raw = HEADERS
         .checked_add(text_raw_size)
         .ok_or(LinkerError::OffsetOverflow)?;
-    let length = readonly_raw
-        .checked_add(readonly_raw_size)
-        .ok_or(LinkerError::OffsetOverflow)?;
+    let length = if readonly_size == 0 {
+        readonly_raw
+    } else {
+        readonly_raw
+            .checked_add(readonly_raw_size)
+            .ok_or(LinkerError::OffsetOverflow)?
+    };
     if length > MAX_IMAGE_BYTES {
         return Err(LinkerError::OutputTooSmall);
     }
     let readonly_rva = TEXT_RVA
         .checked_add(linked.readonly_offset)
         .ok_or(LinkerError::OffsetOverflow)?;
-    let size_of_image = align(
-        readonly_rva
-            .checked_add(readonly_size)
-            .ok_or(LinkerError::OffsetOverflow)?,
-        SECTION_ALIGNMENT,
-    )?;
+    let size_of_image = if readonly_size == 0 {
+        align(
+            TEXT_RVA
+                .checked_add(text_size)
+                .ok_or(LinkerError::OffsetOverflow)?,
+            SECTION_ALIGNMENT,
+        )?
+    } else {
+        align(
+            readonly_rva
+                .checked_add(readonly_size)
+                .ok_or(LinkerError::OffsetOverflow)?,
+            SECTION_ALIGNMENT,
+        )?
+    };
 
     let mut bytes = [0u8; MAX_IMAGE_BYTES];
     bytes[0..2].copy_from_slice(b"MZ");
     patch_u32(&mut bytes, 0x3c, 0x80)?;
     bytes[0x80..0x84].copy_from_slice(b"PE\0\0");
     patch_u16(&mut bytes, 0x84, 0x8664)?;
-    patch_u16(&mut bytes, 0x86, 2)?;
+    patch_u16(&mut bytes, 0x86, if readonly_size == 0 { 1 } else { 2 })?;
     patch_u16(&mut bytes, 0x94, 240)?;
     patch_u16(&mut bytes, 0x96, 0x0023)?;
 
@@ -335,22 +369,26 @@ pub fn link_x86_64_pe<const MAX_IMAGE_BYTES: usize, const MAX_LINKED_BYTES: usiz
         HEADERS,
         0x6000_0020,
     )?;
-    write_pe_section(
-        &mut bytes,
-        0x1b0,
-        b".rdata\0\0",
-        readonly_size,
-        readonly_rva,
-        readonly_raw_size,
-        readonly_raw,
-        0x4000_0040,
-    )?;
+    if readonly_size != 0 {
+        write_pe_section(
+            &mut bytes,
+            0x1b0,
+            b".rdata\0\0",
+            readonly_size,
+            readonly_rva,
+            readonly_raw_size,
+            readonly_raw,
+            0x4000_0040,
+        )?;
+    }
     copy_at(&mut bytes, HEADERS, &linked.bytes[..linked.text_length])?;
-    copy_at(
-        &mut bytes,
-        readonly_raw,
-        &linked.bytes[linked.readonly_offset..linked.length],
-    )?;
+    if readonly_size != 0 {
+        copy_at(
+            &mut bytes,
+            readonly_raw,
+            &linked.bytes[linked.readonly_offset..linked.length],
+        )?;
+    }
     Ok(PeImage { bytes, length })
 }
 
@@ -898,5 +936,19 @@ mod tests {
         let status = std::process::Command::new(&path).status().unwrap();
         std::fs::remove_file(path).unwrap();
         assert_eq!(status.code(), Some(42));
+    }
+
+    #[test]
+    fn omits_an_empty_readonly_pe_section() {
+        let input = LinkInput {
+            symbol: "entry",
+            text: &[0xc3],
+            readonly_data: &[],
+            relocations: &[],
+        };
+        let pe = link_x86_64_pe::<1024, 8192>(&[input], "entry").unwrap();
+        assert_eq!(read_u16(pe.bytes(), 0x86).unwrap(), 1);
+        assert_eq!(read_u32(pe.bytes(), 0xd0).unwrap(), 0x2000);
+        assert_eq!(pe.bytes().len(), 0x400);
     }
 }

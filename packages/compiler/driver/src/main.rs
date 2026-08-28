@@ -4,7 +4,8 @@
 use mrml_error::{Result, anyhow};
 use mrml_runtime::mrml_println as println;
 use mrml_rustc::{
-    CodegenOptions, ObjectFormat, TargetLayout, compile_source_function_with_options,
+    CodegenOptions, LinkRelocation, LinkRelocationTarget, MAX_LINK_RELOCATIONS, ObjectFormat,
+    TargetLayout, compile_source_function_with_options, decode_x86_64_coff, link_x86_64_pe,
 };
 
 #[cfg_attr(test, allow(dead_code))]
@@ -21,6 +22,16 @@ const MAX_PARAMETERS: usize = 16;
 const MAX_CONSTANTS: usize = 64;
 #[cfg_attr(test, allow(dead_code))]
 const MAX_EXPRESSION_NODES: usize = 256;
+#[cfg_attr(test, allow(dead_code))]
+const MAX_LINKED_BYTES: usize = 16 * 1024;
+#[cfg_attr(test, allow(dead_code))]
+const MAX_EXECUTABLE_BYTES: usize = 32 * 1024;
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum EmitKind {
+    Object(ObjectFormat),
+    Pe,
+}
 
 // The fixed-capacity parser intentionally keeps its arenas on the stack. The
 // Windows PE default is too small for debug builds at the public driver limits.
@@ -34,10 +45,10 @@ fn application_main() -> Result<()> {
     let arguments = mrml_runtime::command_arguments();
     if arguments.len() < 8 || arguments[1] != "--emit" || arguments[3] != "--function" {
         return Err(anyhow!(
-            "usage: mrml-rustc --emit elf64|coff --function NAME [-C overflow-checks=yes|no] INPUT -o OUTPUT"
+            "usage: mrml-rustc --emit elf64|coff|pe --function NAME [-C overflow-checks=yes|no] INPUT -o OUTPUT"
         ));
     }
-    let format = parse_format(&arguments[2])?;
+    let emit = parse_emit_kind(&arguments[2])?;
     let function = &arguments[4];
     let (options, input, output) = match arguments.len() {
         8 if arguments[6] == "-o" => (CodegenOptions::CHECKED, &arguments[5], &arguments[7]),
@@ -54,7 +65,7 @@ fn application_main() -> Result<()> {
         ),
         _ => {
             return Err(anyhow!(
-                "usage: mrml-rustc --emit elf64|coff --function NAME [-C overflow-checks=yes|no] INPUT -o OUTPUT"
+                "usage: mrml-rustc --emit elf64|coff|pe --function NAME [-C overflow-checks=yes|no] INPUT -o OUTPUT"
             ));
         }
     };
@@ -62,6 +73,10 @@ fn application_main() -> Result<()> {
         return Err(anyhow!("refusing to overwrite compiler output"));
     }
     let source = mrml_runtime::read_file_text_bounded(input, MAX_SOURCE_BYTES)?;
+    let object_format = match emit {
+        EmitKind::Object(format) => format,
+        EmitKind::Pe => ObjectFormat::Coff,
+    };
     let object = compile_source_function_with_options::<
         MAX_OBJECT_BYTES,
         MAX_CODE_BYTES,
@@ -69,22 +84,51 @@ fn application_main() -> Result<()> {
         MAX_PARAMETERS,
         MAX_CONSTANTS,
         MAX_EXPRESSION_NODES,
-    >(&source, function, format, TargetLayout::X86_64, options)
-    .map_err(mrml_error::message)?;
-    mrml_runtime::write_file(output, object.bytes())?;
-    println!(
-        "compiled {} to {} deterministic object bytes",
+    >(
+        &source,
         function,
-        object.len()
-    );
+        object_format,
+        TargetLayout::X86_64,
+        options,
+    )
+    .map_err(mrml_error::message)?;
+    match emit {
+        EmitKind::Object(_) => {
+            mrml_runtime::write_file(output, object.bytes())?;
+            println!(
+                "compiled {} to {} deterministic object bytes",
+                function,
+                object.len()
+            );
+        }
+        EmitKind::Pe => {
+            let mut relocations = [LinkRelocation {
+                offset: 0,
+                target: LinkRelocationTarget::Symbol("unused"),
+                addend: 0,
+            }; MAX_LINK_RELOCATIONS];
+            let input = decode_x86_64_coff(object.bytes(), &mut relocations)
+                .map_err(mrml_error::message)?;
+            let executable =
+                link_x86_64_pe::<MAX_EXECUTABLE_BYTES, MAX_LINKED_BYTES>(&[input], function)
+                    .map_err(mrml_error::message)?;
+            mrml_runtime::write_file(output, executable.bytes())?;
+            println!(
+                "compiled and linked {} to {} deterministic PE bytes",
+                function,
+                executable.bytes().len()
+            );
+        }
+    }
     Ok(())
 }
 
-fn parse_format(value: &str) -> Result<ObjectFormat> {
+fn parse_emit_kind(value: &str) -> Result<EmitKind> {
     match value {
-        "elf64" => Ok(ObjectFormat::Elf64),
-        "coff" => Ok(ObjectFormat::Coff),
-        _ => Err(anyhow!("object format must be elf64 or coff")),
+        "elf64" => Ok(EmitKind::Object(ObjectFormat::Elf64)),
+        "coff" => Ok(EmitKind::Object(ObjectFormat::Coff)),
+        "pe" => Ok(EmitKind::Pe),
+        _ => Err(anyhow!("emit kind must be elf64, coff, or pe")),
     }
 }
 
@@ -104,9 +148,16 @@ mod tests {
 
     #[test]
     fn parses_only_supported_object_formats() {
-        assert_eq!(parse_format("elf64").unwrap(), ObjectFormat::Elf64);
-        assert_eq!(parse_format("coff").unwrap(), ObjectFormat::Coff);
-        assert!(parse_format("pe").is_err());
+        assert_eq!(
+            parse_emit_kind("elf64").unwrap(),
+            EmitKind::Object(ObjectFormat::Elf64)
+        );
+        assert_eq!(
+            parse_emit_kind("coff").unwrap(),
+            EmitKind::Object(ObjectFormat::Coff)
+        );
+        assert_eq!(parse_emit_kind("pe").unwrap(), EmitKind::Pe);
+        assert!(parse_emit_kind("exe").is_err());
     }
 
     #[test]
