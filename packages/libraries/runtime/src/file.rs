@@ -1,5 +1,6 @@
 use crate::{Text, Vector};
 use core::fmt;
+use core::ptr::NonNull;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum FileError {
@@ -20,6 +21,71 @@ pub struct DirectoryEntry {
     pub name: Text,
     pub is_directory: bool,
     pub is_symlink: bool,
+}
+
+pub struct MappedFile {
+    _file: File,
+    address: NonNull<u8>,
+    length: usize,
+    mapped: bool,
+}
+
+impl MappedFile {
+    pub fn open_bounded(path: &str, limit: usize) -> Result<Self, FileError> {
+        let file = File::open(path)?;
+        let length = usize::try_from(file.len()?).map_err(|_| FileError::ReadFailed)?;
+        if length > limit {
+            return Err(FileError::ReadFailed);
+        }
+        if length == 0 {
+            return Ok(Self {
+                _file: file,
+                address: NonNull::dangling(),
+                length,
+                mapped: false,
+            });
+        }
+        #[cfg(windows)]
+        let address = unsafe { mrml_windows::map_file_read_only(file.raw_handle(), length) };
+        #[cfg(unix)]
+        let address = unsafe { mrml_linux::map_file_read_only(file.raw_fd(), length) };
+        Ok(Self {
+            _file: file,
+            address: address.ok_or(FileError::ReadFailed)?,
+            length,
+            mapped: true,
+        })
+    }
+
+    pub fn bytes(&self) -> &[u8] {
+        unsafe { core::slice::from_raw_parts(self.address.as_ptr(), self.length) }
+    }
+}
+
+impl AsRef<[u8]> for MappedFile {
+    fn as_ref(&self) -> &[u8] {
+        self.bytes()
+    }
+}
+
+impl core::ops::Deref for MappedFile {
+    type Target = [u8];
+
+    fn deref(&self) -> &Self::Target {
+        self.bytes()
+    }
+}
+
+impl Drop for MappedFile {
+    fn drop(&mut self) {
+        if self.mapped {
+            #[cfg(windows)]
+            let unmapped = unsafe { mrml_windows::unmap_file(self.address, self.length) };
+            #[cfg(unix)]
+            let unmapped = unsafe { mrml_linux::unmap_file(self.address, self.length) };
+            debug_assert!(unmapped);
+        }
+    }
 }
 
 pub fn read_file(path: &str) -> Result<Vector<u8>, FileError> {
@@ -688,6 +754,22 @@ mod tests {
         write_file(&path, b"12345").unwrap();
         assert_eq!(&read_file_bounded(&path, 5).unwrap()[..], b"12345");
         assert_eq!(read_file_bounded(&path, 4), Err(FileError::ReadFailed));
+        remove_file(&path).unwrap();
+    }
+
+    #[test]
+    fn bounded_mappings_preserve_exact_bytes_and_reject_oversized_files() {
+        let path = test_path("mrml-mapped.bin");
+        write_file(&path, b"mapped bytes").unwrap();
+        let mapped = MappedFile::open_bounded(&path, 12).unwrap();
+        assert_eq!(mapped.bytes(), b"mapped bytes");
+        drop(mapped);
+        assert!(matches!(
+            MappedFile::open_bounded(&path, 11),
+            Err(FileError::ReadFailed)
+        ));
+        write_file(&path, b"").unwrap();
+        assert!(MappedFile::open_bounded(&path, 0).unwrap().is_empty());
         remove_file(&path).unwrap();
     }
 

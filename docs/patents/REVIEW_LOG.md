@@ -1,5 +1,14 @@
 # Patent review log
 
+## 2026-08-28 — Bounded read-only mapped linker inputs
+
+Patent review: **NOT_TRIGGERED** for using the repository's existing native
+read-only file-mapping primitives behind one owning runtime slice, validating
+length before mapping, and unmapping on drop. Memory-mapped file input is a
+conventional operating-system facility and this use adds no new paging,
+compression, hashing, parallel scheduling, binary rewriting, cryptography, or
+hardware mechanism. This technical screen is not patent clearance.
+
 ## 2026-08-28 — Large LLVM archive admission and exact-length reads
 
 Patent review: **NOT_TRIGGERED** for raising an explicit bounded host-tool file

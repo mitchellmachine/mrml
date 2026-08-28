@@ -5,7 +5,7 @@
 extern crate std;
 
 use mrml_error::{Result, anyhow};
-use mrml_runtime::{Text, Vector, mrml_println as println};
+use mrml_runtime::{MappedFile, Text, Vector, mrml_println as println};
 use mrml_rustc::{
     CodegenOptions, ElfUnwindData, ElfUnwindRelocation, ElfWritableAbsoluteRelocation,
     ElfWritableAbsoluteTarget, ElfWritableData, ElfWritableReference, ElfWritableTarget,
@@ -194,7 +194,7 @@ fn application_main() -> Result<()> {
     Ok(())
 }
 
-fn read_link_objects(paths: &[Text]) -> Result<Vector<Vector<u8>>> {
+fn read_link_objects(paths: &[Text]) -> Result<Vector<MappedFile>> {
     if paths.is_empty() || paths.len() > MAX_LINK_INPUTS {
         return Err(anyhow!("link input count must be between 1 and 256"));
     }
@@ -202,14 +202,14 @@ fn read_link_objects(paths: &[Text]) -> Result<Vector<Vector<u8>>> {
         .map_err(|_| anyhow!("could not allocate link input list"))?;
     for path in paths {
         objects
-            .try_push(mrml_runtime::read_file_bounded(path, MAX_ARCHIVE_BYTES)?)
+            .try_push(MappedFile::open_bounded(path, MAX_ARCHIVE_BYTES)?)
             .map_err(|_| anyhow!("could not allocate link input list"))?;
     }
     Ok(objects)
 }
 
-fn link_object_refs<'a>(
-    objects: &'a [Vector<u8>],
+fn link_object_refs<'a, T: AsRef<[u8]>>(
+    objects: &'a [T],
     format: ObjectFormat,
     entry: &'a str,
 ) -> Result<LinkObjectRefs<'a>> {
@@ -230,6 +230,7 @@ fn link_object_refs<'a>(
     let mut indexed_selection_safe = true;
     let mut indexed_selection_initialized = false;
     for object in objects {
+        let object = object.as_ref();
         if object.get(..8) == Some(b"!<arch>\n") {
             let archive = decode_unix_archive(object).map_err(mrml_error::message)?;
             let mut selected = [false; MAX_ARCHIVE_MEMBERS];

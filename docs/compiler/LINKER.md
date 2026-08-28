@@ -678,6 +678,23 @@ and five driver tests; one concurrently modified wide-integer semantic
 integration probe failed with `RuntimeExpressionUnsupported`, outside linker
 and runtime files, and was preserved untouched.
 
+The hosted linker now keeps each bounded input in an owning read-only file
+mapping rather than copying the entire file into a growing vector. The mapping
+retains its file lifetime, validates the exact length against the 64 MiB bound
+before mapping, represents empty files without an OS mapping, exposes only an
+immutable byte slice, and unmaps exactly once on drop. Both existing Windows
+and Linux native mapping backends are covered through one runtime abstraction;
+ordinary non-linker bounded reads retain their prior behavior.
+
+With mapped inputs, the identical 3,150,398-byte pinned `libcore` probe measured
+MRML at 4.835 ms median and 4.852 ms mean versus rust-lld at 5.251 ms median and
+5.301 ms mean over 50 iterations after five warmups. The transitive 16-codegen-
+unit `.rlib` measured 4.869 ms versus 5.205 ms, and the controlled 301-object
+archive measured 4.921 ms versus 5.372 ms. Every MRML and rust-lld output kept
+its expected exit-42 behavior. Windows and Linux each passed 45 runtime tests
+and five driver tests. These three current hosted samples are positive
+regression evidence, not proof that MRML is generally faster than rust-lld.
+
 This increment does **not** emit PE imports/exports/base
 relocations/debug data, emit ELF dynamic metadata/interpreter/PIE/sections,
 read thin archives or general `.rlib` contents, perform section GC or ICF, link
