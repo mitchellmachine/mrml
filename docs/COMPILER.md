@@ -1053,6 +1053,14 @@ probe executes all three forms over the same start/index matrix on Windows
 gnullvm and Arch Linux WSL. This is a two-step straight-line transfer, not
 arbitrary alias graphs, reassignment, or general fat-reference dataflow.
 
+A shared repeated-subslice may now be returned directly with its shared slice-
+parameter origin. Caller analysis rejects a competing mutable borrow while the
+shared result is live and restores mutable access after its last read. A native
+runtime-slice probe checks three distinct start/index selections without
+modifying the input on Windows gnullvm and Arch Linux WSL. This is exact shared
+repeated-subslice transfer, not mutable-to-shared local coercion or general
+shared-region inference.
+
 An exact two-arm conditional helper may now return different repeated-subslice
 values rooted in the same compatible parameter while retaining that one origin.
 The existing bounded callee merge requires both arms to resolve to the same
