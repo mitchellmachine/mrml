@@ -59,6 +59,10 @@ const MRML_V1_WIDE_UNSIGNED_ADD_SOURCE: &str =
     "#[mrml_abi::export(version = 1)] pub fn probe(input: u128) -> u128 { input + 17 }";
 const MRML_V1_WIDE_SIGNED_ADD_SOURCE: &str =
     "#[mrml_abi::export(version = 1)] pub fn probe(input: i128) -> i128 { input + 17 }";
+const MRML_V1_WIDE_UNSIGNED_SUBTRACT_SOURCE: &str =
+    "#[mrml_abi::export(version = 1)] pub fn probe(input: u128) -> u128 { input - 17 }";
+const MRML_V1_WIDE_SIGNED_SUBTRACT_SOURCE: &str =
+    "#[mrml_abi::export(version = 1)] pub fn probe(input: i128) -> i128 { input - 17 }";
 const MRML_V1_UNSIGNED_WIDEN_SOURCE: &str =
     "#[mrml_abi::export(version = 1)] pub fn probe(input: u64) -> u128 { input as u128 }";
 const MRML_V1_SIGNED_WIDEN_SOURCE: &str =
@@ -956,6 +960,49 @@ fn mrml_v1_wide_checked_addition_matches_both_oracle_words() {
             &signed,
             signed_inputs,
             "for input in [0i128, 1, i128::MIN, -1, i128::MAX - 17] { let returned = probe(input); println!(\"{}\", returned as u64); println!(\"{}\", ((returned as u128) >> 64) as u64); }",
+        ),
+    ] {
+        let actual = inputs
+            .into_iter()
+            .flat_map(|input| {
+                let returned = unsafe { call_mrml_v1_wide_return(code.pointer, input) };
+                [returned as u64, (returned >> 64) as u64]
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(actual, rustc_mrml_v1_observations(source, driver));
+    }
+}
+
+#[test]
+fn mrml_v1_wide_checked_subtraction_matches_both_oracle_words() {
+    let unsigned = compile(MRML_V1_WIDE_UNSIGNED_SUBTRACT_SOURCE);
+    let signed = compile(MRML_V1_WIDE_SIGNED_SUBTRACT_SOURCE);
+    let unsigned_inputs = [
+        17u128,
+        18,
+        u64::MAX as u128,
+        (u64::MAX as u128) << 64,
+        u128::MAX,
+    ];
+    let signed_inputs = [
+        17u128,
+        18,
+        (i128::MIN + 17) as u128,
+        (-1i128) as u128,
+        i128::MAX as u128,
+    ];
+    for (source, code, inputs, driver) in [
+        (
+            MRML_V1_WIDE_UNSIGNED_SUBTRACT_SOURCE,
+            &unsigned,
+            unsigned_inputs,
+            "for input in [17u128, 18, u64::MAX as u128, (u64::MAX as u128) << 64, u128::MAX] { let returned = probe(input); println!(\"{}\", returned as u64); println!(\"{}\", (returned >> 64) as u64); }",
+        ),
+        (
+            MRML_V1_WIDE_SIGNED_SUBTRACT_SOURCE,
+            &signed,
+            signed_inputs,
+            "for input in [17i128, 18, i128::MIN + 17, -1, i128::MAX] { let returned = probe(input); println!(\"{}\", returned as u64); println!(\"{}\", ((returned as u128) >> 64) as u64); }",
         ),
     ] {
         let actual = inputs
