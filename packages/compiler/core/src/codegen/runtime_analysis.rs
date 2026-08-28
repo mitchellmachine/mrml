@@ -16406,7 +16406,7 @@ fn validate_runtime_range_endpoints<
     tree: &crate::ExpressionTree<'_, MAX_NODES>,
 ) -> Result<(), CodegenErrorKind> {
     for validation in tree.range_validations().iter().flatten() {
-        let width = match runtime_expression_type_with_locals(
+        let layout = match runtime_expression_type_with_locals(
             function,
             resolver,
             locals,
@@ -16415,10 +16415,10 @@ fn validate_runtime_range_endpoints<
             1,
         )? {
             RuntimeExpressionType::Integer(Some(ty)) => {
-                runtime_width(ty.name()).ok_or(CodegenErrorKind::UnsupportedRuntimeType)?
+                runtime_integer_layout(ty.name()).ok_or(CodegenErrorKind::UnsupportedRuntimeType)?
             }
             RuntimeExpressionType::Char => {
-                runtime_width("char").ok_or(CodegenErrorKind::UnsupportedRuntimeType)?
+                runtime_integer_layout("char").ok_or(CodegenErrorKind::UnsupportedRuntimeType)?
             }
             RuntimeExpressionType::Integer(None) => continue,
             RuntimeExpressionType::Bool => return Err(CodegenErrorKind::InvalidRangeType),
@@ -16439,26 +16439,28 @@ fn validate_runtime_range_endpoints<
                 .expression(endpoint)
                 .ok_or(CodegenErrorKind::RuntimeExpressionUnsupported)?;
             let fits = match expression.kind {
-                ExprKind::Integer(literal) => literal.value <= u128::from(width.maximum),
+                ExprKind::Integer(literal) => {
+                    runtime_integer_literal_fits(layout, literal.value, false)
+                }
                 ExprKind::Unary {
                     operator: crate::UnaryOperator::Negate,
                     operand,
                 } => match tree.expression(operand).map(|operand| operand.kind) {
                     Some(ExprKind::Integer(literal)) => {
-                        width.signed && literal.value <= width.minimum.unsigned_abs().into()
+                        runtime_integer_literal_fits(layout, literal.value, true)
                     }
                     _ => true,
                 },
                 ExprKind::Identifier(name) => match resolver.resolve_type(name) {
                     Some(ty) => {
-                        let Some(endpoint_width) = runtime_width(ty.name()) else {
+                        let Some(endpoint_layout) = runtime_integer_layout(ty.name()) else {
                             return Err(CodegenErrorKind::UnsupportedRuntimeType);
                         };
-                        endpoint_width == width
+                        endpoint_layout == layout
                     }
                     None => true,
                 },
-                ExprKind::Char(value) => u64::from(value) <= width.maximum,
+                ExprKind::Char(value) => u128::from(value) <= layout.maximum,
                 ExprKind::Bool(_) => return Err(CodegenErrorKind::InvalidRangeType),
                 _ => true,
             };
@@ -16468,6 +16470,18 @@ fn validate_runtime_range_endpoints<
         }
     }
     Ok(())
+}
+
+fn runtime_integer_literal_fits(
+    layout: RuntimeIntegerLayout,
+    magnitude: u128,
+    negative: bool,
+) -> bool {
+    if negative {
+        layout.signed && magnitude <= layout.minimum.unsigned_abs()
+    } else {
+        magnitude <= layout.maximum
+    }
 }
 
 fn runtime_expression_type_with_locals<

@@ -130,6 +130,9 @@ values, and its logical integer-layout metadata preserves their exact signed or
 unsigned 128-bit bounds. The existing one-word instruction emitter rejects that
 logical layout instead of narrowing it. These internal representations do not
 by themselves admit the types at the public call boundary.
+Range-endpoint analysis also uses the logical layout, so positive and negative
+128-bit literal magnitudes are checked exactly even while machine emission
+remains unavailable.
 
 The admitted subset has controlled native execution evidence on the Windows and
 Linux test hosts: the public pipeline emits the host object, the test harness

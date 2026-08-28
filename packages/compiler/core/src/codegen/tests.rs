@@ -12135,6 +12135,30 @@ mod tests {
     }
 
     #[test]
+    fn runtime_integer_literal_bounds_cover_both_128_bit_extremes() {
+        let unsigned = runtime_integer_layout("u128").unwrap();
+        assert!(runtime_integer_literal_fits(unsigned, u128::MAX, false));
+        assert!(!runtime_integer_literal_fits(unsigned, 1, true));
+
+        let signed = runtime_integer_layout("i128").unwrap();
+        assert!(runtime_integer_literal_fits(
+            signed,
+            i128::MAX as u128,
+            false
+        ));
+        assert!(runtime_integer_literal_fits(
+            signed,
+            i128::MIN.unsigned_abs(),
+            true
+        ));
+        assert!(!runtime_integer_literal_fits(
+            signed,
+            i128::MIN.unsigned_abs(),
+            false
+        ));
+    }
+
+    #[test]
     fn mrml_v1_codegen_rejects_multiword_integer_returns_at_the_type_span() {
         let source = "#[mrml_abi::export(version = 1)] pub fn value() -> u128 { 0 }";
         let module = Parser::new(source).parse_module::<2, 2>().unwrap();
