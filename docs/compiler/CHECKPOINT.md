@@ -9,8 +9,8 @@ the named commit and current source.
 ## Recoverable baseline
 
 - Branch: `main`
-- Compiler checkpoint commit: `323bef47`
-  (`compiler: trace reachable ELF sections`)
+- Compiler checkpoint commit: `190c1448`
+  (`compiler: decode reachable ELF sections`)
 - Remote state when recorded: `origin/main` includes the bounded MRML-owned
   static-link core, exact MRML COFF and ELF64 ingestion, deterministic
   import-free PE32+/ELF64 executable serialization, explicit compiler-driver
@@ -60,6 +60,18 @@ against all prior accepted probes. Keep Cargo on edition 2024 until a newer
 named edition can be adopted through a pinned, workspace-wide migration.
 
 ## Latest bounded linker milestone
+
+Commit `190c1448` adds an allocation-free typed view over the sections admitted
+by the ELF reachability graph. Each selection is bound to its exact object
+slice, and the decoder validates ordered indices, the section-name table,
+content bounds, sizes, power-of-two alignments, section types, and allocation,
+write, and execute flags before classifying text, read-only, writable,
+zero-fill, and unwind sections. A selection from another object fails closed.
+Focused probes decode root text alone and root text plus locally referenced
+`.rodata` without admitting unrelated sections. Windows and Linux each passed
+723 core unit tests and every integration suite. Selected relocation decoding,
+layout consumption, section GC in emitted executables, and pinned-core symbol
+execution remain unimplemented gates.
 
 Commit `323bef47` adds a typed allocation-free ELF section graph pass. Exact
 defined roots traverse same-object RELA symbol edges to an ordered fixed point
