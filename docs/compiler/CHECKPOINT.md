@@ -9,8 +9,8 @@ the named commit and current source.
 ## Recoverable baseline
 
 - Branch: `main`
-- Compiler checkpoint commit: `fc9b0c3b`
-  (`compiler: resolve multiple object definitions`)
+- Compiler checkpoint commit: `39e43c02`
+  (`compiler: right-size linker output arenas`)
 - Remote state when recorded: `origin/main` includes the bounded MRML-owned
   static-link core, exact MRML COFF and ELF64 ingestion, deterministic
   import-free PE32+/ELF64 executable serialization, explicit compiler-driver
@@ -130,6 +130,15 @@ unsupported. The full Windows suite passed with 693 core tests, 2 component
 tests, 10 conformance tests, 351 replacement tests, 22 semantic-execution tests,
 and 2 driver tests; the release source-to-PE probe emitted 1,024 bytes and
 returned 42.
+
+Commit `39e43c02` fixes the cold-start regression introduced when maximum output
+capacity grew for 256 inputs. The driver chooses among three fixed bounded
+output tiers using checked selected payload bytes plus alignment headroom. On
+the identical 93-byte COFF, 50-iteration controlled Windows probe, MRML improved
+from the regressed 15.232 ms median to 9.465 ms; pinned gnullvm rust-lld measured
+26.888 ms. Both 1,024-byte outputs returned 42. This is a scoped 2.84x median
+result for one tiny import-free object, not a general superiority claim. Three
+driver tests pass, including payload-bound accounting.
 
 Patent review: **NOT_TRIGGERED** for these conventional bounded linker,
 serializer, command-routing, and benchmark increments; see
