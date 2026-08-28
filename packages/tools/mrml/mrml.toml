@@ -33,6 +33,14 @@ self_extern = false
 source = "packages/tools/mrml/src/main.rs"
 
 [[build_input]]
+fingerprint = "fnv1a64:5ceade778ecc365a"
+id = "external-command.compiler-command.driver"
+kind = "external-command"
+line = 423
+path = "packages/tools/mrml/src/main.rs"
+reason = "Invoke the explicitly selected graph-built experimental MRML compiler driver; compiler_command bounds its arguments and production mode remains unavailable."
+
+[[build_input]]
 fingerprint = "fnv1a64:ef78ccc80a786d32"
 id = "external-command.compile-declared-ptx.rustc"
 kind = "external-command"

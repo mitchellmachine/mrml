@@ -264,6 +264,7 @@ fn run() -> Result<(), String> {
     match args[0].as_str() {
         "list" => list(&workspace, &args[1..]),
         "build" | "test" => build_or_test(&workspace, &args),
+        "compiler" => compiler_command(&workspace, &args[1..]),
         "doctor" => doctor(&workspace, &args[1..]),
         "audit" => audit(&workspace, &args[1..]),
         "assurance" => assurance::command(&workspace, &args[1..]),
@@ -281,10 +282,13 @@ fn run() -> Result<(), String> {
 fn print_help() {
     println!("mrml - canonical MRML repository build frontend (native migration stage)");
     println!(
-        "usage: mrml <list|doctor|audit|assurance|build|test|manifest|interface|package|release> [component] [options]"
+        "usage: mrml <list|doctor|audit|assurance|build|test|compiler|manifest|interface|package|release> [component] [options]"
     );
     println!("       mrml manifest <check|fmt|lock> [--check]");
     println!("       mrml assurance <check|generate>");
+    println!(
+        "       mrml compiler mrml-rustc-experimental link-elf INPUT... --entry NAME -o OUTPUT [--release]"
+    );
     println!("       mrml manifest migrate LEGACY_WORKSPACE NEW_ROOT");
     println!(
         "       mrml package create ID CLASS VERSION ARCH PURPOSE INPUT [OUTPUT] [--compress] [--private-key KEY]"
@@ -320,6 +324,126 @@ fn print_help() {
     println!("  --compile-env N=V     set an allowlisted manifest compile input");
     println!("  --sanitizer address   instrument Linux native tests with AddressSanitizer");
     println!("  --output structured   emit stable key=value records");
+}
+
+#[derive(Debug, Eq, PartialEq)]
+struct ExperimentalElfLinkRequest<'a> {
+    inputs: Vec<&'a str>,
+    entry: &'a str,
+    output: &'a str,
+    release: bool,
+}
+
+fn parse_experimental_elf_link_request(
+    args: &[String],
+) -> Result<ExperimentalElfLinkRequest<'_>, String> {
+    let Some(mode) = args.first().map(String::as_str) else {
+        return Err("CompilerModeMissing".into());
+    };
+    match mode {
+        "mrml-rustc-experimental" => {}
+        "mrml-rustc-production" => {
+            return Err("CompilerModeUnavailable { mode: MrmlRustcProduction }".into());
+        }
+        "upstream-rustc" => {
+            return Err(
+                "CompilerOperationUnsupported { mode: UpstreamRustc, operation: link-elf }".into(),
+            );
+        }
+        other => return Err(format!("CompilerModeInvalid {{ mode: {other} }}")),
+    }
+    if args.get(1).map(String::as_str) != Some("link-elf") {
+        return Err("CompilerOperationInvalid { expected: link-elf }".into());
+    }
+    let release = args.iter().any(|argument| argument == "--release");
+    if args
+        .iter()
+        .filter(|argument| *argument == "--release")
+        .count()
+        > 1
+    {
+        return Err("InvalidOption { option: --release }".into());
+    }
+    let filtered = args
+        .iter()
+        .skip(2)
+        .filter(|argument| argument.as_str() != "--release")
+        .map(String::as_str)
+        .collect::<Vec<_>>();
+    let Some(entry_marker) = filtered.iter().position(|argument| *argument == "--entry") else {
+        return Err("MissingOptionValue { option: --entry }".into());
+    };
+    if entry_marker == 0
+        || filtered.get(entry_marker + 1).is_none()
+        || filtered.get(entry_marker + 2) != Some(&"-o")
+        || filtered.get(entry_marker + 3).is_none()
+        || filtered.len() != entry_marker + 4
+    {
+        return Err("CompilerLinkSyntaxError".into());
+    }
+    let inputs = filtered[..entry_marker].to_vec();
+    if inputs.iter().any(|input| input.starts_with('-')) {
+        return Err("CompilerLinkInputInvalid".into());
+    }
+    let entry = filtered[entry_marker + 1];
+    let output = filtered[entry_marker + 3];
+    if entry.is_empty() || entry.starts_with('-') || output.is_empty() || output.starts_with('-') {
+        return Err("CompilerLinkSyntaxError".into());
+    }
+    Ok(ExperimentalElfLinkRequest {
+        inputs,
+        entry,
+        output,
+        release,
+    })
+}
+
+fn compiler_command(workspace: &Workspace, args: &[String]) -> Result<(), String> {
+    let request = parse_experimental_elf_link_request(args)?;
+    let host = host_family()?;
+    let compile_target = default_rust_target(host)?;
+    let mut build_args = vec!["build".to_owned(), "mrml-rustc-driver".to_owned()];
+    if request.release {
+        build_args.push("--release".to_owned());
+    }
+    build_or_test(workspace, &build_args)?;
+    let component = find_component(workspace, "mrml-rustc-driver")?;
+    let action = component
+        .rust_action
+        .as_ref()
+        .ok_or("NativeActionDisappeared")?;
+    let binary = action
+        .binaries
+        .iter()
+        .find(|binary| binary.output == "mrml-rustc")
+        .ok_or("CompilerDriverBinaryMissing")?;
+    let driver = native_output_dir(workspace, host, compile_target, request.release)?.join(
+        format!("{}{}", binary.output, rust_binary_extension(compile_target)),
+    );
+    let mut command = Command::new(&driver);
+    command.current_dir(&workspace.root).arg("--link-elf");
+    for input in request.inputs {
+        command.arg(input);
+    }
+    let status = command
+        .args(["--entry", request.entry, "-o", request.output])
+        .status()
+        .map_err(|error| {
+            format!(
+                "CompilerDriverUnavailable {{ mode: MrmlRustcExperimental, path: {}, detail: {error} }}",
+                driver.display()
+            )
+        })?;
+    if !status.success() {
+        return Err(format!(
+            "CompilerLinkFailed {{ mode: MrmlRustcExperimental, format: ELF64, status: {:?} }}",
+            status.code()
+        ));
+    }
+    println!(
+        "mrml compiler: mode=MrmlRustcExperimental linker=mrml-rustc format=ELF64 status=PASS"
+    );
+    Ok(())
 }
 
 fn derive_runtime_inventory(
@@ -5387,6 +5511,54 @@ mod tests {
         assert!(valid_gpu_architecture("compute_90"));
         assert!(!valid_gpu_architecture("sm_120;other"));
         assert!(!valid_gpu_architecture("sm_"));
+    }
+
+    #[test]
+    fn experimental_linker_selection_is_explicit_and_fail_closed() {
+        let arguments = [
+            "mrml-rustc-experimental",
+            "link-elf",
+            "entry.o",
+            "core.rlib",
+            "--entry",
+            "start",
+            "-o",
+            "image",
+            "--release",
+        ]
+        .map(str::to_owned);
+        assert_eq!(
+            parse_experimental_elf_link_request(&arguments).unwrap(),
+            ExperimentalElfLinkRequest {
+                inputs: vec!["entry.o", "core.rlib"],
+                entry: "start",
+                output: "image",
+                release: true,
+            }
+        );
+        assert_eq!(
+            parse_experimental_elf_link_request(&[
+                "mrml-rustc-production".into(),
+                "link-elf".into(),
+                "entry.o".into(),
+                "--entry".into(),
+                "start".into(),
+                "-o".into(),
+                "image".into(),
+            ]),
+            Err("CompilerModeUnavailable { mode: MrmlRustcProduction }".into())
+        );
+        assert!(
+            parse_experimental_elf_link_request(&[
+                "mrml-rustc-experimental".into(),
+                "link-elf".into(),
+                "--entry".into(),
+                "start".into(),
+                "-o".into(),
+                "image".into(),
+            ])
+            .is_err()
+        );
     }
     #[test]
     fn linux_address_sanitizer_links_the_unwind_runtime() {

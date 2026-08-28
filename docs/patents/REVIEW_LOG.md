@@ -9240,6 +9240,15 @@ algorithm, object or archive format, relocation mechanism, compression,
 cryptographic mechanism, or loader behavior. This technical screen is not
 legal advice or patent clearance.
 
+# 2026-08-28 — Explicit experimental linker frontend route
+
+Patent review: **NOT_TRIGGERED**. This increment adds a conventional command
+dispatch route that builds the existing declared compiler driver and invokes
+its existing static ELF linker only under an explicit experimental compiler
+mode. It adds no compilation, linking, parsing, object-format, compression,
+cryptographic, or loading mechanism. This technical screen is not legal advice
+or patent clearance.
+
 # 2026-08-28 — Bounded deterministic static-link core
 
 Patent review: **NOT_TRIGGERED**. This increment uses conventional ordered

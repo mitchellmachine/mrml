@@ -794,11 +794,20 @@ identified `memset`, `memcpy`, and the pinned panic endpoint in sequence. This
 is broader libcore graph evidence, not production runtime completeness or
 general libcore conformance; the linker does not synthesize runtime symbols.
 
+The public build frontend exposes this path only through the explicit
+`mrml compiler mrml-rustc-experimental link-elf` command. It first builds the
+declared driver through the native component graph and then forwards the exact
+ordered objects/archives, entry, and output. A three-object invocation produced
+a 4,134-byte ELF that exited 42 under Arch Linux WSL. Requesting
+`mrml-rustc-production` fails before building or writing output; ordinary
+`mrml build` continues to use the pinned upstream production toolchain.
+
 This increment does **not** emit PE imports/exports/base
 relocations/debug data, emit ELF dynamic metadata/interpreter/PIE/sections,
 read thin archives or general `.rlib` contents, perform ICF, link dynamically,
-run work in parallel, or integrate linker selection into the public `mrml`
-build frontend. Section GC and the driver path are implemented for the bounded
+run work in parallel, or use the MRML linker for ordinary production `mrml
+build` actions. Explicit experimental frontend selection, section GC, and the
+driver path are implemented for the bounded
 ELF subset described above, not arbitrary inputs. Index-guided extraction remains bounded to 1,024
 ordinary archive members, 4,096 index symbols, and 256 admitted link inputs and
 has not yet been optimized against broad representative Rust libraries.

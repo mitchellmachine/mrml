@@ -93,6 +93,26 @@ linker, and build-tool version. Compiler identity is provenance, not authority;
 signature, admission, capability, release, and generation checks still apply.
 Policy may temporarily admit honestly labeled mixed-compiler generations.
 
+The public frontend now exposes the first bounded experimental linker route:
+`mrml compiler mrml-rustc-experimental link-elf INPUT... --entry NAME -o
+OUTPUT [--release]`. It builds the declared compiler driver through the native
+dependency graph and invokes its MRML-owned static ELF linker. The mode name is
+mandatory, `MrmlRustcProduction` fails as unavailable, and upstream rustc
+remains the production compiler/linker for ordinary `mrml build` actions. This
+is explicit development-tool integration, not satisfaction of the production
+profile gate or permission to fall back.
+
+```text
+Complexity impact: LOW
+TCB impact: NONE
+New parser boundary: NO
+New authority model: NO
+New persistent state: NO
+External dependency: NO
+Failure isolated: YES
+Existing-object reuse: HIGH
+```
+
 An `mrml-rustc` profile becomes production-eligible only after sufficient Rust
 coverage and explicit unsupported diagnostics; correct ownership/move/borrow,
 trait/generic, typed CFG/body, target ABI, object/executable, and metadata behavior;
