@@ -52,6 +52,9 @@ const MRML_V1_WIDE_SIGNED_NOT_SOURCE: &str =
     "#[mrml_abi::export(version = 1)] pub fn probe(input: i128) -> i128 { !input }";
 const MRML_V1_WIDE_SIGNED_NEGATE_SOURCE: &str =
     "#[mrml_abi::export(version = 1)] pub fn probe(input: i128) -> i128 { -input }";
+const MRML_V1_WIDE_BITAND_SOURCE: &str = "#[mrml_abi::export(version = 1)] pub fn probe(input: u128) -> u128 { input & 1512366075204170947332355369683137040 }";
+const MRML_V1_WIDE_BITOR_SOURCE: &str = "#[mrml_abi::export(version = 1)] pub fn probe(input: u128) -> u128 { input | 1512366075204170947332355369683137040 }";
+const MRML_V1_WIDE_BITXOR_SOURCE: &str = "#[mrml_abi::export(version = 1)] pub fn probe(input: u128) -> u128 { input ^ 1512366075204170947332355369683137040 }";
 const MRML_V1_UNSIGNED_WIDEN_SOURCE: &str =
     "#[mrml_abi::export(version = 1)] pub fn probe(input: u64) -> u128 { input as u128 }";
 const MRML_V1_SIGNED_WIDEN_SOURCE: &str =
@@ -889,6 +892,34 @@ fn mrml_v1_wide_signed_negation_matches_both_oracle_words() {
             "for input in [0i128, 1, i128::MAX, -1, -0x0123_4567_89ab_cdef_fedc_ba98_7654_3210i128] { let returned = probe(input); println!(\"{}\", returned as u64); println!(\"{}\", ((returned as u128) >> 64) as u64); }",
         )
     );
+}
+
+#[test]
+fn mrml_v1_wide_bitwise_operations_match_both_oracle_words() {
+    let inputs = [
+        0u128,
+        1,
+        i128::MAX as u128,
+        i128::MIN as u128,
+        u128::MAX,
+        0x0123_4567_89ab_cdef_fedc_ba98_7654_3210,
+    ];
+    let driver = "for input in [0u128, 1, i128::MAX as u128, i128::MIN as u128, u128::MAX, 0x0123_4567_89ab_cdef_fedc_ba98_7654_3210] { let returned = probe(input); println!(\"{}\", returned as u64); println!(\"{}\", (returned >> 64) as u64); }";
+    for source in [
+        MRML_V1_WIDE_BITAND_SOURCE,
+        MRML_V1_WIDE_BITOR_SOURCE,
+        MRML_V1_WIDE_BITXOR_SOURCE,
+    ] {
+        let code = compile(source);
+        let actual = inputs
+            .into_iter()
+            .flat_map(|input| {
+                let returned = unsafe { call_mrml_v1_wide_return(code.pointer, input) };
+                [returned as u64, (returned >> 64) as u64]
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(actual, rustc_mrml_v1_observations(source, driver));
+    }
 }
 
 unsafe fn call_mrml_v1_word_to_wide(function: *const u8, input: u64) -> u128 {

@@ -6968,6 +6968,58 @@ impl<
             self.emit(&[0x48, 0xf7, 0xd0, 0x48, 0xf7, 0xd2])?;
             return Ok(());
         }
+        if let ExprKind::Binary {
+            operator:
+                operator @ (crate::BinaryOperator::BitAnd
+                | crate::BinaryOperator::BitOr
+                | crate::BinaryOperator::BitXor),
+            left,
+            right,
+        } = expression.kind
+        {
+            let left_type = runtime_expression_type_with_locals(
+                self.function,
+                self.resolver,
+                &self.locals[..self.saved_locals],
+                tree,
+                left,
+                1,
+            )
+            .map_err(|kind| self.error(kind))?;
+            let right_type = runtime_expression_type_with_locals(
+                self.function,
+                self.resolver,
+                &self.locals[..self.saved_locals],
+                tree,
+                right,
+                1,
+            )
+            .map_err(|kind| self.error(kind))?;
+            if !runtime_types_compatible(left_type, expected_type)
+                || !runtime_types_compatible(right_type, expected_type)
+            {
+                return Err(self.error(CodegenErrorKind::RuntimeTypeMismatch));
+            }
+            self.emit_wide_integer_return(tree, left, expected_type)?;
+            self.emit(&[0x50, 0x52])?;
+            self.evaluation_depth += 2;
+            self.emit_wide_integer_return(tree, right, expected_type)?;
+            self.emit(&[0x59, 0x41, 0x58])?;
+            self.evaluation_depth -= 2;
+            match operator {
+                crate::BinaryOperator::BitAnd => {
+                    self.emit(&[0x4c, 0x21, 0xc0, 0x48, 0x21, 0xca])?
+                }
+                crate::BinaryOperator::BitOr => {
+                    self.emit(&[0x4c, 0x09, 0xc0, 0x48, 0x09, 0xca])?
+                }
+                crate::BinaryOperator::BitXor => {
+                    self.emit(&[0x4c, 0x31, 0xc0, 0x48, 0x31, 0xca])?
+                }
+                _ => unreachable!(),
+            }
+            return Ok(());
+        }
         if let ExprKind::Cast { operand, target } = expression.kind {
             let operand_type = runtime_expression_type_with_locals(
                 self.function,

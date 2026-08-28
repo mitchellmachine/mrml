@@ -131,6 +131,8 @@ Direct casts between `u128` and `i128` preserve both parameter words unchanged.
 Direct unary bitwise inversion of a two-word integer inverts both words.
 Direct `i128` negation uses carry-aware two-word lowering and traps on `i128::MIN`
 when ordinary overflow checks are enabled.
+Typed `&`, `|`, and `^` expressions evaluate left-to-right and combine both words
+independently for matching wide integer types.
 Closed positive and negative two-word integer literals are range-checked against
 the declared return type and materialized directly into the two return words.
 Other wide casts, expressions, locals, operations, calls, and returns remain
@@ -168,6 +170,8 @@ extrema, and all-ones. Same-width `u128`/`i128` casts are compared at both words
 Unsigned and signed unary bitwise inversion is likewise compared at both words.
 Non-overflowing signed negation results are compared at both words, while exact
 machine-code checks cover the shared overflow trap.
+Wide bitwise operations are compared at both words across zero, extrema,
+all-ones, and mixed-bit inputs.
 Exact `u128::MAX`, `i128::MAX`, and `i128::MIN` literal
 words are also compared with the same oracle. This is not linker, dynamic-loader,
 cross-language, or physical-hardware evidence.
