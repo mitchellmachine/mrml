@@ -1,7 +1,7 @@
 use core::ffi::{c_char, c_int, c_ulong, c_void};
 use core::ptr::NonNull;
 use core::slice;
-use core::sync::atomic::{AtomicBool, AtomicU8, Ordering};
+use core::sync::atomic::{AtomicBool, AtomicU8, AtomicUsize, Ordering};
 use core::time::Duration;
 use mrml_kernel::arch::x86_64::{
     AddressSpace, Mapping, PagePermissions, PageTableBuildError, PageTableBuilder, PageTableStore,
@@ -2498,7 +2498,7 @@ mod tests {
         assert_eq!(core::mem::size_of::<KvmSpecialRegisters>(), 312);
         assert_eq!(core::mem::align_of::<KvmRegisters>(), 8);
         assert_eq!(core::mem::offset_of!(KvmRegisters, rip), 128);
-        assert_eq!(core::mem::offset_of!(KvmSpecialRegisters, cr3), 256);
+        assert_eq!(core::mem::offset_of!(KvmSpecialRegisters, cr3), 240);
         assert_eq!(core::mem::size_of::<SigSet>(), 128);
         assert_eq!(core::mem::size_of::<SigAction>(), 152);
         assert_eq!(core::mem::align_of::<SigAction>(), 8);
