@@ -172,7 +172,12 @@ impl<const N: usize> CapabilitySpace<N> {
         Ok(entry.object)
     }
 
-    pub fn derive<const M: usize>(
+    /// Low-level attenuation primitive for kernel-owned delegation machinery.
+    ///
+    /// This is deliberately crate-private: cross-domain callers must use the
+    /// tracked `TaskRuntime` IPC path so parent/child ancestry is recorded and
+    /// transitive revocation cannot be bypassed.
+    pub(crate) fn derive<const M: usize>(
         &self,
         capability: Capability,
         requested: Rights,
