@@ -1072,6 +1072,15 @@ rejected, and native probes read three selections without modifying the input on
 Windows gnullvm and Arch Linux WSL. This is one exact mutability-attenuating call
 boundary, not general variance, lifetime, or interprocedural region inference.
 
+Mutability attenuation now also survives two consecutive typed mutable-slice
+locals before the final shared local and return. The bounded local-origin table
+retains the same mutable parameter through both acyclic generations, while the
+call boundary exposes only the shared result loan. Caller conflict and last-read
+restoration tests cover that chain, and a native probe reads three dynamic
+repeated-subslice selections without modifying the input on Windows gnullvm and
+Arch Linux WSL. This is a fixed straight-line chain, not arbitrary alias graphs,
+reassignment, or general region inference.
+
 That mutability attenuation composes with the existing exact two-arm same-origin
 conditional merge. A helper may return either of two shared repeated subslices
 of one mutable slice parameter; caller analysis retains one shared root loan,
