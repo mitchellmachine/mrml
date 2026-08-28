@@ -456,6 +456,18 @@ pub struct ElfSectionSelection {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct ElfLinkSectionSelections {
+    selections: [ElfSectionSelection; MAX_LINK_INPUTS],
+    length: usize,
+}
+
+impl ElfLinkSectionSelections {
+    pub fn selections(&self) -> &[ElfSectionSelection] {
+        &self.selections[..self.length]
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum ElfSectionKind {
     Text,
     ReadonlyData,
@@ -2678,8 +2690,12 @@ pub fn select_x86_64_elf_sections(
             if elf_string(strings, name_offset)? != *root {
                 continue;
             }
+            let binding = *symbols.get(symbol + 4).ok_or(LinkerError::InvalidElf)? >> 4;
             let section = usize::from(read_u16_elf(symbols, symbol + 6)?);
-            if section == 0 || section == 0xfff1 || section >= section_count {
+            if section == 0 || section == 0xfff1 {
+                continue;
+            }
+            if section >= section_count || !matches!(binding, 1 | 2) {
                 return Err(LinkerError::UndefinedSymbol);
             }
             selected[section] = true;
@@ -2760,6 +2776,161 @@ pub fn select_x86_64_elf_sections(
         selection.length += 1;
     }
     Ok(selection)
+}
+
+/// Selects the stable cross-object section graph rooted at an exact entry.
+/// Local RELA edges are expanded by the per-object pass; undefined targets are
+/// resolved with conventional strong-over-weak static symbol selection.
+pub fn select_x86_64_elf_link_sections<'a>(
+    objects: &[&'a [u8]],
+    entry_symbol: &'a str,
+) -> Result<ElfLinkSectionSelections, LinkerError> {
+    if objects.is_empty() {
+        return Err(LinkerError::EmptyInput);
+    }
+    if objects.len() > MAX_LINK_INPUTS {
+        return Err(LinkerError::TooManyInputs);
+    }
+    validate_symbol(entry_symbol)?;
+    let empty = ElfSectionSelection {
+        indices: [0; MAX_LINK_INPUTS],
+        length: 0,
+        object_address: objects[0].as_ptr() as usize,
+        object_length: objects[0].len(),
+    };
+    let mut result = ElfLinkSectionSelections {
+        selections: [empty; MAX_LINK_INPUTS],
+        length: objects.len(),
+    };
+    for (index, object) in objects.iter().enumerate() {
+        result.selections[index] = ElfSectionSelection {
+            indices: [0; MAX_LINK_INPUTS],
+            length: 0,
+            object_address: object.as_ptr() as usize,
+            object_length: object.len(),
+        };
+    }
+    let mut unresolved = [None; MAX_ARCHIVE_SYMBOLS];
+    unresolved[0] = Some(entry_symbol);
+    let mut unresolved_length = 1usize;
+    let mut cursor = 0usize;
+    while cursor < unresolved_length {
+        let symbol = unresolved[cursor].ok_or(LinkerError::InvalidElf)?;
+        cursor += 1;
+        let object_index =
+            resolve_elf_object_definition(objects, symbol)?.ok_or(LinkerError::UndefinedSymbol)?;
+        let addition = select_x86_64_elf_sections(objects[object_index], &[symbol])?;
+        let destination = &mut result.selections[object_index];
+        for &section in addition.indices() {
+            if destination.indices().contains(&section) {
+                continue;
+            }
+            if destination.length == destination.indices.len() {
+                return Err(LinkerError::TooManyElfSections);
+            }
+            destination.indices[destination.length] = section;
+            destination.length += 1;
+        }
+        destination.indices[..destination.length].sort_unstable();
+        let relocations =
+            decode_x86_64_elf_selected_relocations(objects[object_index], destination)?;
+        for relocation in relocations.relocations() {
+            let ElfSelectedRelocationTarget::Symbol(target) = relocation.target else {
+                continue;
+            };
+            if unresolved[..unresolved_length]
+                .iter()
+                .any(|queued| *queued == Some(target))
+            {
+                continue;
+            }
+            if unresolved_length == unresolved.len() {
+                return Err(LinkerError::TooManyArchiveSymbols);
+            }
+            unresolved[unresolved_length] = Some(target);
+            unresolved_length += 1;
+        }
+    }
+    Ok(result)
+}
+
+fn resolve_elf_object_definition(
+    objects: &[&[u8]],
+    symbol: &str,
+) -> Result<Option<usize>, LinkerError> {
+    let mut weak = None;
+    let mut strong = None;
+    for (object_index, object) in objects.iter().enumerate() {
+        let Some(binding) = elf_object_definition_binding(object, symbol)? else {
+            continue;
+        };
+        match binding {
+            ElfSelectedSymbolBinding::Global if strong.replace(object_index).is_some() => {
+                return Err(LinkerError::DuplicateSymbol);
+            }
+            ElfSelectedSymbolBinding::Global => {}
+            ElfSelectedSymbolBinding::Weak if weak.is_none() => weak = Some(object_index),
+            ElfSelectedSymbolBinding::Weak => {}
+        }
+    }
+    Ok(strong.or(weak))
+}
+
+fn elf_object_definition_binding(
+    object: &[u8],
+    symbol_name: &str,
+) -> Result<Option<ElfSelectedSymbolBinding>, LinkerError> {
+    if object.get(..7) != Some(b"\x7fELF\x02\x01\x01") {
+        return Err(LinkerError::UnsupportedElf);
+    }
+    let section_offset = to_usize_elf(read_u64_elf(object, 40)?)?;
+    let section_count = usize::from(read_u16_elf(object, 60)?);
+    if !(4..=MAX_ELF_SECTIONS).contains(&section_count) {
+        return Err(LinkerError::UnsupportedElf);
+    }
+    let mut symbols_index = None;
+    for index in 1..section_count {
+        let header = elf_section_header(section_offset, section_count, index)?;
+        if read_u32_elf(object, header + 4)? == 2 && symbols_index.replace(index).is_some() {
+            return Err(LinkerError::UnsupportedElf);
+        }
+    }
+    let symbols_index = symbols_index.ok_or(LinkerError::InvalidElf)?;
+    let symbols_header = elf_section_header(section_offset, section_count, symbols_index)?;
+    let strings_index = usize::try_from(read_u32_elf(object, symbols_header + 40)?)
+        .map_err(|_| LinkerError::OffsetOverflow)?;
+    if strings_index >= section_count || read_u64_elf(object, symbols_header + 56)? != 24 {
+        return Err(LinkerError::InvalidElf);
+    }
+    let symbols = elf_section_contents(object, section_offset, section_count, symbols_index)?;
+    let strings = elf_section_contents(object, section_offset, section_count, strings_index)?;
+    if symbols.len() % 24 != 0 {
+        return Err(LinkerError::InvalidElf);
+    }
+    let mut found = None;
+    for record in symbols[24..].chunks_exact(24) {
+        let name_offset =
+            usize::try_from(read_u32_elf(record, 0)?).map_err(|_| LinkerError::OffsetOverflow)?;
+        if name_offset == 0 || elf_string(strings, name_offset)? != symbol_name {
+            continue;
+        }
+        let section = usize::from(read_u16_elf(record, 6)?);
+        if section == 0 || section == 0xfff1 {
+            continue;
+        }
+        if section >= section_count {
+            return Err(LinkerError::InvalidElf);
+        }
+        let binding = match *record.get(4).ok_or(LinkerError::InvalidElf)? >> 4 {
+            1 => ElfSelectedSymbolBinding::Global,
+            2 => ElfSelectedSymbolBinding::Weak,
+            _ => continue,
+        };
+        if found.replace(binding).is_some() {
+            return Err(LinkerError::DuplicateSymbol);
+        }
+    }
+    Ok(found)
 }
 
 /// Decodes the exact bounded ELF64 relocatable subset emitted by `mrml-rustc`.
@@ -6971,6 +7142,14 @@ mod tests {
             decode_x86_64_elf_selected_definitions(data.bytes(), &data_selection).unwrap();
         let data_relocations =
             decode_x86_64_elf_selected_relocations(data.bytes(), &data_selection).unwrap();
+        let link_selection = select_x86_64_elf_link_sections(
+            &[caller.bytes(), callee.bytes(), data.bytes()],
+            "entry",
+        )
+        .unwrap();
+        assert_eq!(link_selection.selections()[0].indices(), &[1]);
+        assert_eq!(link_selection.selections()[1].indices(), &[1]);
+        assert_eq!(link_selection.selections()[2].indices(), &[]);
         let selected_objects = [
             ElfSelectedObject {
                 sections: &caller_sections,

@@ -9680,3 +9680,14 @@ and memory size for zero-fill storage. It introduces no new executable format,
 loading algorithm, relocation mechanism, compression, cryptographic mechanism,
 or runtime policy. This technical screen is not legal advice or patent
 clearance.
+
+# 2026-08-28 — Cross-object ELF reachability and driver cutover
+
+Patent review: **NOT_TRIGGERED**. This increment computes a conventional static
+ELF section fixed point from the entry through local relocation edges and exact
+strong/weak external definitions, then makes the compiler driver serialize that
+selected graph instead of flattening every section in each object. It applies
+ordinary graph traversal and static symbol rules and introduces no new archive
+or object format, graph algorithm, relocation mechanism, compression,
+cryptographic mechanism, or loader behavior. This technical screen is not
+legal advice or patent clearance.
