@@ -9,8 +9,8 @@ the named commit and current source.
 ## Recoverable baseline
 
 - Branch: `main`
-- Compiler checkpoint commit: `190c1448`
-  (`compiler: decode reachable ELF sections`)
+- Compiler checkpoint commit: `ac80c7a9`
+  (`compiler: decode reachable ELF relocations`)
 - Remote state when recorded: `origin/main` includes the bounded MRML-owned
   static-link core, exact MRML COFF and ELF64 ingestion, deterministic
   import-free PE32+/ELF64 executable serialization, explicit compiler-driver
@@ -60,6 +60,19 @@ against all prior accepted probes. Keep Cargo on edition 2024 until a newer
 named edition can be adopted through a pinned, workspace-wide migration.
 
 ## Latest bounded linker milestone
+
+Commit `ac80c7a9` decodes only `RELA` records whose destination sections were
+admitted by the exact-object reachability selection. The allocation-free typed
+result distinguishes x86-64 absolute-64, PC-relative-32, PLT-relative-32, and
+GOT-PC-relative-32 records, preserves raw addends, retains selected local
+section identity and offsets, and leaves exact external names unresolved for
+the later cross-object pass. Destination widths, symbol records, linked symbol
+tables, section targets, and the 256-relocation result bound fail closed.
+Focused probes cover an external PLT call and a local text-to-read-only PC
+relative reference. Windows and Linux each passed 724 core unit tests and every
+integration suite. Selected definition decoding, cross-object layout and
+relocation application, section-GC executable emission, and pinned-core symbol
+execution remain unimplemented gates.
 
 Commit `190c1448` adds an allocation-free typed view over the sections admitted
 by the ELF reachability graph. Each selection is bound to its exact object
