@@ -9,8 +9,8 @@ the named commit and current source.
 ## Recoverable baseline
 
 - Branch: `main`
-- Compiler checkpoint commit: `93519784`
-  (`compiler: resolve static COFF text fragments`)
+- Compiler checkpoint commit: `cc0ff1fc`
+  (`compiler: admit discardable gnullvm COFF metadata`)
 - Remote state when recorded: `origin/main` includes the bounded MRML-owned
   static-link core, exact MRML COFF and ELF64 ingestion, deterministic
   import-free PE32+/ELF64 executable serialization, explicit compiler-driver
@@ -60,6 +60,22 @@ against all prior accepted probes. Keep Cargo on edition 2024 until a newer
 named edition can be adopted through a pinned, workspace-wide migration.
 
 ## Latest bounded linker milestone
+
+Commit `cc0ff1fc` admits pinned gnullvm rlib object members containing exact
+`.llvmbc` and `.llvmcmd` sections only when COFF marks them
+`IMAGE_SCN_LNK_REMOVE` and they carry no relocations. The metadata is validated
+but never copied or interpreted; missing remove semantics and metadata
+relocations fail closed. A focused synthetic test covers admission and both
+rejections.
+
+The exact ORACLE-0002 7,946-byte rlib contains three text fragments, two static
+helpers with stack frames, three runtime-function records, and embedded LLVM
+metadata. The release driver emitted a 1,536-byte PE that returned 42 on
+Windows. Windows passed 706 compiler-core tests and four driver tests. A
+50-iteration/five-warmup same-input benchmark measured MRML at 9.751 ms median
+and pinned rust-lld at 27.283 ms; rust-lld emitted 1,024 bytes and MRML emitted
+1,536 bytes. This is narrow hosted evidence, not byte identity,
+representative-library coverage, or general superiority evidence.
 
 Commit `93519784` distinguishes static COFF text targets from externally
 selectable symbols. A text fragment without an external offset-zero definition
