@@ -140,6 +140,12 @@ from the regressed 15.232 ms median to 9.465 ms; pinned gnullvm rust-lld measure
 result for one tiny import-free object, not a general superiority claim. Three
 driver tests pass, including payload-bound accounting.
 
+The subsequent controlled 32-object performance probe used 32 distinct 93-byte
+objects (2,976 bytes total) and the same 50 iterations/five warmups. MRML
+measured 10.514 ms median; pinned gnullvm rust-lld measured 28.747 ms. Matching
+1,024-byte outputs returned 42. This is a scoped 2.73x result for that small
+import-free workload only.
+
 Patent review: **NOT_TRIGGERED** for these conventional bounded linker,
 serializer, command-routing, and benchmark increments; see
 `docs/patents/REVIEW_LOG.md`.

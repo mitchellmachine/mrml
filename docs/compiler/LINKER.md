@@ -154,6 +154,15 @@ median was 27.524 ms and mean was 27.594 ms. Both 1,024-byte executables returne
 workload. It broadens the input-count evidence but remains neither a
 large-program nor general linker-superiority claim.
 
+After multi-definition decoding and payload-sized tiers, a further controlled
+probe compiled 32 distinct functions into 32 separate 93-byte COFF objects
+(2,976 input bytes total). Across 50 iterations after five interleaved warmups,
+MRML measured 10.514 ms median and 10.769 ms mean; pinned gnullvm rust-lld
+measured 28.747 ms median and 29.012 ms mean. Both 1,024-byte executables
+returned 42. This is a 2.73x median result for a small 32-object, import-free
+workload, not archive, large-program, debug-information, or general superiority
+evidence.
+
 The pass structure is informed by mold's public design notes: establish output
 layout early, run a small sequence of understandable passes, and keep per-input
 validation, copying, and per-relocation work independent so a hosted driver can
