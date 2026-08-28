@@ -9,13 +9,13 @@ the named commit and current source.
 ## Recoverable baseline
 
 - Branch: `main`
-- Compiler checkpoint commit: `88d54e05`
-  (`compiler: select needed archive members`)
+- Compiler checkpoint commit: `4ef4521d`
+  (`compiler: scale linker to 256 inputs`)
 - Remote state when recorded: `origin/main` includes the bounded MRML-owned
   static-link core, exact MRML COFF and ELF64 ingestion, deterministic
   import-free PE32+/ELF64 executable serialization, explicit compiler-driver
   selection, identical-input gnullvm rust-lld comparison, and ordered linking
-  of one through 32 object inputs. The original compiler core/driver relocation
+  of one through 256 object inputs. The original compiler core/driver relocation
   remains at `0350249c`.
 - Preceding compiler commits: `9a950ae9` (`build: move compiler core`),
   `885ba7b7` (`compiler: validate nested loop
@@ -62,7 +62,7 @@ named edition can be adopted through a pinned, workspace-wide migration.
 ## Latest bounded linker milestone
 
 Commits `5169d8ed` through `00888d66` establish the MRML-owned linker lane. The
-no-std core resolves one symbol per input across at most 32 inputs and 256
+no-std core resolves one symbol per input across at most 256 inputs and 256
 checked PC-relative relocations, with typed named-code and local-read-only-data
 targets. It decodes the exact bounded COFF and ELF64 subsets emitted by
 `mrml-rustc`, and serializes deterministic fixed-address import-free PE32+ and
@@ -106,6 +106,12 @@ core tests, 2 component tests, 10 conformance tests, 351 replacement tests, 21
 semantic-execution tests, and 2 driver tests. Index acceleration, exact
 traditional group ordering, thin archives, non-object members, and real `.rlib`
 admission remain unimplemented.
+
+Commit `4ef4521d` raises the fixed input and archive-member bound from 32 to 256
+and proportionally raises the driver object-set, linked-image, and executable
+byte bounds. The release driver rebuilt, a controlled release source-to-PE
+probe still emitted 1,024 bytes and returned 42, and the full Windows compiler
+suite passed. No performance result is claimed from the capacity change alone.
 
 Patent review: **NOT_TRIGGERED** for these conventional bounded linker,
 serializer, command-routing, and benchmark increments; see
