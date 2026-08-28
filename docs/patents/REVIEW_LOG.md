@@ -9628,3 +9628,14 @@ alignments are validated before exposure. It introduces no new object format,
 section encoding, graph algorithm, relocation arithmetic, compression,
 cryptographic mechanism, or loader behavior. This technical screen is not
 legal advice or patent clearance.
+
+# 2026-08-28 — Reachability-bound ELF RELA views
+
+Patent review: **NOT_TRIGGERED**. This increment decodes conventional x86-64
+ELF `RELA` records only for sections admitted by the existing bounded
+reachability selection. It preserves standard relocation kinds and raw
+addends, retains local section identity, and leaves external names unresolved
+for ordinary static symbol resolution. It introduces no new object format,
+relocation encoding or arithmetic, symbol-resolution algorithm, compression,
+cryptographic mechanism, or loader behavior. This technical screen is not
+legal advice or patent clearance.

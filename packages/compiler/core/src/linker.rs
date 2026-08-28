@@ -480,6 +480,42 @@ pub struct ElfSelectedSections<'a> {
     length: usize,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum ElfSelectedRelocationKind {
+    Absolute64,
+    PcRelative32,
+    PltRelative32,
+    GotPcRelative32,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum ElfSelectedRelocationTarget<'a> {
+    Section { index: u16, offset: usize },
+    Symbol(&'a str),
+    Absolute(u64),
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct ElfSelectedRelocation<'a> {
+    pub section_index: u16,
+    pub offset: usize,
+    pub kind: ElfSelectedRelocationKind,
+    pub target: ElfSelectedRelocationTarget<'a>,
+    pub addend: i64,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct ElfSelectedRelocations<'a> {
+    relocations: [ElfSelectedRelocation<'a>; MAX_LINK_RELOCATIONS],
+    length: usize,
+}
+
+impl<'a> ElfSelectedRelocations<'a> {
+    pub fn relocations(&self) -> &[ElfSelectedRelocation<'a>] {
+        &self.relocations[..self.length]
+    }
+}
+
 impl<'a> ElfSelectedSections<'a> {
     pub fn sections(&self) -> &[ElfSelectedSection<'a>] {
         &self.sections[..self.length]
@@ -601,6 +637,147 @@ pub fn decode_x86_64_elf_selected_sections<'a>(
             alignment,
         };
         decoded.length += 1;
+    }
+    Ok(decoded)
+}
+
+/// Decodes RELA records whose destination section was admitted by the exact
+/// reachability selection. Local targets retain section identity for layout;
+/// undefined names remain unresolved for the cross-object symbol pass.
+pub fn decode_x86_64_elf_selected_relocations<'a>(
+    object: &'a [u8],
+    selection: &ElfSectionSelection,
+) -> Result<ElfSelectedRelocations<'a>, LinkerError> {
+    let selected_sections = decode_x86_64_elf_selected_sections(object, selection)?;
+    let section_offset = to_usize_elf(read_u64_elf(object, 40)?)?;
+    let section_count = usize::from(read_u16_elf(object, 60)?);
+    let mut selected = [false; MAX_ELF_SECTIONS];
+    let mut selected_sizes = [0usize; MAX_ELF_SECTIONS];
+    for section in selected_sections.sections() {
+        let index = usize::from(section.index);
+        selected[index] = true;
+        selected_sizes[index] = section.size;
+    }
+    let mut symbols_index = None;
+    for index in 1..section_count {
+        let header = elf_section_header(section_offset, section_count, index)?;
+        if read_u32_elf(object, header + 4)? == 2 && symbols_index.replace(index).is_some() {
+            return Err(LinkerError::UnsupportedElf);
+        }
+    }
+    let symbols_index = symbols_index.ok_or(LinkerError::InvalidElf)?;
+    let symbols_header = elf_section_header(section_offset, section_count, symbols_index)?;
+    if read_u64_elf(object, symbols_header + 56)? != 24 {
+        return Err(LinkerError::UnsupportedElf);
+    }
+    let strings_index = usize::try_from(read_u32_elf(object, symbols_header + 40)?)
+        .map_err(|_| LinkerError::OffsetOverflow)?;
+    if strings_index >= section_count {
+        return Err(LinkerError::InvalidElf);
+    }
+    let strings_header = elf_section_header(section_offset, section_count, strings_index)?;
+    if read_u32_elf(object, strings_header + 4)? != 3 {
+        return Err(LinkerError::InvalidElf);
+    }
+    let symbols = elf_section_contents(object, section_offset, section_count, symbols_index)?;
+    let strings = elf_section_contents(object, section_offset, section_count, strings_index)?;
+    if symbols.len() % 24 != 0 {
+        return Err(LinkerError::InvalidElf);
+    }
+    let empty = ElfSelectedRelocation {
+        section_index: 0,
+        offset: 0,
+        kind: ElfSelectedRelocationKind::PcRelative32,
+        target: ElfSelectedRelocationTarget::Absolute(0),
+        addend: 0,
+    };
+    let mut decoded = ElfSelectedRelocations {
+        relocations: [empty; MAX_LINK_RELOCATIONS],
+        length: 0,
+    };
+    for relocation_index in 1..section_count {
+        let header = elf_section_header(section_offset, section_count, relocation_index)?;
+        if read_u32_elf(object, header + 4)? != 4 {
+            continue;
+        }
+        let destination = usize::try_from(read_u32_elf(object, header + 44)?)
+            .map_err(|_| LinkerError::OffsetOverflow)?;
+        if destination >= section_count || !selected[destination] {
+            continue;
+        }
+        if usize::try_from(read_u32_elf(object, header + 40)?)
+            .map_err(|_| LinkerError::OffsetOverflow)?
+            != symbols_index
+            || read_u64_elf(object, header + 56)? != 24
+        {
+            return Err(LinkerError::UnsupportedElf);
+        }
+        let records =
+            elf_section_contents(object, section_offset, section_count, relocation_index)?;
+        if records.len() % 24 != 0 {
+            return Err(LinkerError::InvalidElf);
+        }
+        for record in records.chunks_exact(24) {
+            if decoded.length == decoded.relocations.len() {
+                return Err(LinkerError::TooManyRelocations);
+            }
+            let offset = to_usize_elf(read_u64_elf(record, 0)?)?;
+            let info = read_u64_elf(record, 8)?;
+            let raw_kind =
+                u32::try_from(info & 0xffff_ffff).map_err(|_| LinkerError::OffsetOverflow)?;
+            let (kind, width) = match raw_kind {
+                1 => (ElfSelectedRelocationKind::Absolute64, 8),
+                2 => (ElfSelectedRelocationKind::PcRelative32, 4),
+                4 => (ElfSelectedRelocationKind::PltRelative32, 4),
+                9 => (ElfSelectedRelocationKind::GotPcRelative32, 4),
+                _ => return Err(LinkerError::UnsupportedElf),
+            };
+            offset
+                .checked_add(width)
+                .filter(|end| *end <= selected_sizes[destination])
+                .ok_or(LinkerError::InvalidRelocationOffset)?;
+            let symbol_index = to_usize_elf(info >> 32)?;
+            let symbol_offset = symbol_index
+                .checked_mul(24)
+                .ok_or(LinkerError::OffsetOverflow)?;
+            symbols
+                .get(symbol_offset..symbol_offset + 24)
+                .ok_or(LinkerError::InvalidElf)?;
+            let target_section = usize::from(read_u16_elf(symbols, symbol_offset + 6)?);
+            let value = read_u64_elf(symbols, symbol_offset + 8)?;
+            let target = if target_section == 0 {
+                let name_offset = usize::try_from(read_u32_elf(symbols, symbol_offset)?)
+                    .map_err(|_| LinkerError::OffsetOverflow)?;
+                if name_offset == 0 || value != 0 {
+                    return Err(LinkerError::UnsupportedElf);
+                }
+                ElfSelectedRelocationTarget::Symbol(elf_string(strings, name_offset)?)
+            } else if target_section == 0xfff1 {
+                ElfSelectedRelocationTarget::Absolute(value)
+            } else if target_section < section_count && selected[target_section] {
+                let target_size = selected_sizes[target_section];
+                let offset = to_usize_elf(value)?;
+                if offset > target_size {
+                    return Err(LinkerError::InvalidRelocationOffset);
+                }
+                ElfSelectedRelocationTarget::Section {
+                    index: u16::try_from(target_section)
+                        .map_err(|_| LinkerError::TooManyElfSections)?,
+                    offset,
+                }
+            } else {
+                return Err(LinkerError::InvalidElf);
+            };
+            decoded.relocations[decoded.length] = ElfSelectedRelocation {
+                section_index: u16::try_from(destination)
+                    .map_err(|_| LinkerError::TooManyElfSections)?,
+                offset,
+                kind,
+                target,
+                addend: read_i64_elf(record, 16)?,
+            };
+            decoded.length += 1;
+        }
     }
     Ok(decoded)
 }
@@ -6042,6 +6219,18 @@ mod tests {
         assert_eq!(caller_sections.sections()[0].kind, ElfSectionKind::Text);
         assert_eq!(caller_sections.sections()[0].bytes, caller_code.bytes());
         assert_eq!(caller_sections.sections()[0].size, caller_code.len());
+        assert_eq!(
+            decode_x86_64_elf_selected_relocations(caller.bytes(), &caller_selection)
+                .unwrap()
+                .relocations(),
+            &[ElfSelectedRelocation {
+                section_index: 1,
+                offset: 1,
+                kind: ElfSelectedRelocationKind::PltRelative32,
+                target: ElfSelectedRelocationTarget::Symbol("helper"),
+                addend: -4,
+            }]
+        );
         let callee_selection = select_x86_64_elf_sections(callee.bytes(), &["helper"]).unwrap();
         assert_eq!(
             decode_x86_64_elf_selected_sections(caller.bytes(), &callee_selection),
@@ -6062,6 +6251,21 @@ mod tests {
             ElfSectionKind::ReadonlyData
         );
         assert_eq!(data_sections.sections()[1].bytes, b"hello");
+        assert_eq!(
+            decode_x86_64_elf_selected_relocations(data.bytes(), &data_selection)
+                .unwrap()
+                .relocations(),
+            &[ElfSelectedRelocation {
+                section_index: 1,
+                offset: 3,
+                kind: ElfSelectedRelocationKind::PcRelative32,
+                target: ElfSelectedRelocationTarget::Section {
+                    index: 3,
+                    offset: 0,
+                },
+                addend: -3,
+            }]
+        );
         assert_eq!(
             select_x86_64_elf_sections(data.bytes(), &["missing"]),
             Err(LinkerError::UndefinedSymbol)
