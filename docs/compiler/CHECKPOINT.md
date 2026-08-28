@@ -9,8 +9,8 @@ the named commit and current source.
 ## Recoverable baseline
 
 - Branch: `main`
-- Compiler checkpoint commit: `10706daa`
-  (`compiler: coalesce split ELF text sections`)
+- Compiler checkpoint commit: `7a5c9858`
+  (`compiler: relax static ELF readonly loads`)
 - Remote state when recorded: `origin/main` includes the bounded MRML-owned
   static-link core, exact MRML COFF and ELF64 ingestion, deterministic
   import-free PE32+/ELF64 executable serialization, explicit compiler-driver
@@ -60,6 +60,24 @@ against all prior accepted probes. Keep Cargo on edition 2024 until a newer
 named edition can be adopted through a pinned, workspace-wide migration.
 
 ## Latest bounded linker milestone
+
+Commit `7a5c9858` combines multiple ordered `.rodata.*` ELF payloads when every
+intervening byte is present and zero, preserves defined-symbol offsets within
+that bounded view, and relaxes only the exact pinned-rustc
+`R_X86_64_GOTPCREL` RIP-relative `mov r64` load to a size-preserving `lea` for
+resolved local read-only data. The ModRM register field is preserved. Other
+GOT uses and instruction shapes remain fail-closed. ELF System V and GNU OSABI
+tags are accepted only with ABI version zero.
+
+Under the exact ORACLE-0002 Arch WSL environment, an object with two retained
+static `u64` values and two split `.rodata.*` sections linked with the
+syscall-only process entry to an 8,208-byte ELF and exited 42. Pinned rust-lld
+emitted 1,624 bytes and also exited 42. Windows and Linux each passed 709
+compiler-core tests and four driver tests. A 50-iteration/five-warmup
+same-input Linux measurement recorded MRML at 5.609 ms median and pinned
+rust-lld at 5.954 ms. This is narrow hosted regression evidence, not a general
+speed or compatibility claim. ELF unwind/debug handling, general GOT/PLT and
+dynamic linking remain fail-closed.
 
 Commit `10706daa` combines multiple ordered split `.text.*` ELF payloads into
 one zero-copy span only when intervening alignment bytes are present and zero.
