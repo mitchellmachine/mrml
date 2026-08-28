@@ -9,8 +9,8 @@ the named commit and current source.
 ## Recoverable baseline
 
 - Branch: `main`
-- Compiler checkpoint commit: `65f686b7`
-  (`compiler: decode read-only COFF COMDAT data`)
+- Compiler checkpoint commit: `e0f888de`
+  (`compiler: emit fixed-base writable PE data`)
 - Remote state when recorded: `origin/main` includes the bounded MRML-owned
   static-link core, exact MRML COFF and ELF64 ingestion, deterministic
   import-free PE32+/ELF64 executable serialization, explicit compiler-driver
@@ -221,6 +221,14 @@ component, 10 conformance, 351 replacement, and 24 semantic-execution tests.
 The exact pinned volatile-static probe remains rejected because it additionally
 contains a writable `.data$...` COMDAT with an `ADDR64` relocation; writable PE
 layout is the next gate.
+
+Commit `e0f888de` adds explicit bounded writable PE data, emits a page-separated
+RW/NX `.data` section, and applies checked AMD64 `ADDR64` fields to absolute
+addresses in an owning input's read-only layout. The image remains fixed-base
+without `.reloc`; existing APIs delegate with no writable inputs. The full
+Windows suite passed with 702 core, 2 component, 10 conformance, 351
+replacement, and 24 semantic-execution tests. COFF writable decoding and driver
+transport remain incomplete.
 
 Patent review: **NOT_TRIGGERED** for these conventional bounded linker,
 serializer, command-routing, and benchmark increments; see
