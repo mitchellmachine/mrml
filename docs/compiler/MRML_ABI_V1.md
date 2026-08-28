@@ -113,6 +113,13 @@ and abstract call locations are defined. Ownership/borrowing rules beyond
 ordinary language checking, multiword machine-code lowering, link
 compatibility, and external execution evidence remain required.
 
+The one-word subset has controlled native execution evidence on the Windows and
+Linux test hosts: the public pipeline emits the host object, the test harness
+independently extracts its executable image, applies any bounded read-only
+relocations, changes the mapping from writable to executable, and calls a facade
+scalar function through the host's matching one-word convention. This is not
+linker, dynamic-loader, cross-language, or physical-hardware evidence.
+
 Arrays, tuples, user aggregates, and indirect returns are not admitted. This
 checkpoint also does not establish that existing
 `extern "C"` tests with Rust-specific types are C-compatible; those boundaries

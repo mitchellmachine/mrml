@@ -267,6 +267,16 @@ fn compile(source: &str) -> Executable {
 }
 
 #[test]
+fn mrml_v1_scalar_facade_executes_with_the_host_call_plan() {
+    let code =
+        compile("#[mrml_abi::export(version = 1)] pub fn probe(value: u64) -> u64 { value + 17 }");
+    let probe: unsafe extern "C" fn(u64) -> u64 = unsafe { std::mem::transmute(code.pointer) };
+    for value in [0, 1, 42, u64::MAX - 17] {
+        assert_eq!(unsafe { probe(value) }, value + 17);
+    }
+}
+
+#[test]
 fn nested_else_if_actions_and_returns_match_oracle() {
     let code = compile(
         "#[unsafe(no_mangle)] pub extern \"C\" fn probe(primary: bool, first: bool, second: bool, input: u32) -> u32 { loop { loop { if primary { let selected: u32 = input + 1; selected + 100; return selected; } else if first { let selected: u32 = input + 2; return selected; } else if second { let selected: u32 = input + 3; return selected; } else { let selected: u32 = input + 4; return selected; } } } }",
