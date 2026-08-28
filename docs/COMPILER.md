@@ -1045,6 +1045,14 @@ one acyclic typed alias, not conditional alias joins, reassignment chains,
 arbitrary fat-reference dataflow, or general regions. Both hosts passed the same
 1,035-test compiler gate.
 
+The same repeated-subslice origin now survives two consecutive typed mutable-
+slice locals before return. Each bounded local generation resolves from its
+immediately preceding initializer, and caller conflict plus last-use restoration
+remain identical to the direct and one-alias forms. The runtime-slice native
+probe executes all three forms over the same start/index matrix on Windows
+gnullvm and Arch Linux WSL. This is a two-step straight-line transfer, not
+arbitrary alias graphs, reassignment, or general fat-reference dataflow.
+
 An exact two-arm conditional helper may now return different repeated-subslice
 values rooted in the same compatible parameter while retaining that one origin.
 The existing bounded callee merge requires both arms to resolve to the same

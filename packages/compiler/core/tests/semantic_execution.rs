@@ -689,6 +689,9 @@ fn subslice_then_index_reference_mutation_executes() {
         compile(
             "fn select(input: &mut [u32], first: usize, second: usize) -> &mut [u32] { let alias: &mut [u32] = &mut input[first..][second..]; alias } #[unsafe(no_mangle)] pub extern \"C\" fn probe(input: &mut [u32], first: usize, second: usize, index: usize) -> u32 { let selected: &mut [u32] = select(input, first, second); selected[index] += 19; selected[index] }",
         ),
+        compile(
+            "fn select(input: &mut [u32], first: usize, second: usize) -> &mut [u32] { let initial: &mut [u32] = &mut input[first..][second..]; let alias: &mut [u32] = initial; alias } #[unsafe(no_mangle)] pub extern \"C\" fn probe(input: &mut [u32], first: usize, second: usize, index: usize) -> u32 { let selected: &mut [u32] = select(input, first, second); selected[index] += 19; selected[index] }",
+        ),
     ] {
         #[cfg(not(target_os = "windows"))]
         let probe: unsafe extern "C" fn(*mut u32, usize, usize, usize, usize) -> u32 =
