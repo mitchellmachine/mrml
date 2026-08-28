@@ -9,8 +9,8 @@ the named commit and current source.
 ## Recoverable baseline
 
 - Branch: `main`
-- Compiler checkpoint commit: `a1745b2c`
-  (`compiler: relocate ELF initialized pointers`)
+- Compiler checkpoint commit: `018f11ee`
+  (`compiler: relocate ELF writable pointers`)
 - Remote state when recorded: `origin/main` includes the bounded MRML-owned
   static-link core, exact MRML COFF and ELF64 ingestion, deterministic
   import-free PE32+/ELF64 executable serialization, explicit compiler-driver
@@ -60,6 +60,21 @@ against all prior accepted probes. Keep Cargo on edition 2024 until a newer
 named edition can be adopted through a pinned, workspace-wide migration.
 
 ## Latest bounded linker milestone
+
+Commit `018f11ee` extends bounded initialized-data `R_X86_64_64` relocation
+targets to initialized and zero-fill storage in the same selected input. The
+decoder preserves distinct typed identities and checked section-relative
+offsets; the serializer resolves them through exact per-input RW layouts and
+revalidates each target extent before writing an address.
+
+Under exact ORACLE-0002 Arch WSL, an independently authored optimized object
+held one pointer to initialized storage and one pointer to BSS. Both absolute
+records and both text references linked into a 12,312-byte ELF that exited 42.
+Windows and Linux each passed 714 compiler-core tests and four driver tests. A
+50-iteration/five-warmup identical-input measurement recorded MRML at 4.859 ms
+median versus pinned rust-lld with `--eh-frame-hdr` at 4.869 ms; rust-lld
+emitted 2,200 bytes. The 0.010 ms difference is treated as process-startup
+noise and narrow regression evidence, not a speed claim.
 
 Commit `a1745b2c` admits bounded `R_X86_64_64` relocations from selected
 initialized `.data.*` fields to text or read-only storage in the same object.
