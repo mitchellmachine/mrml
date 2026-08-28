@@ -129,6 +129,8 @@ fixed-width one-word integer to `u128` or `i128` normalizes the low word at the
 source width, then zero-extends unsigned sources or sign-extends signed sources.
 Direct casts between `u128` and `i128` preserve both parameter words unchanged.
 Direct unary bitwise inversion of a two-word integer inverts both words.
+Direct `i128` negation uses carry-aware two-word lowering and traps on `i128::MIN`
+when ordinary overflow checks are enabled.
 Closed positive and negative two-word integer literals are range-checked against
 the declared return type and materialized directly into the two return words.
 Other wide casts, expressions, locals, operations, calls, and returns remain
@@ -164,6 +166,8 @@ It also captures `rax` and `rdx` independently for a nontrivial `u128` identity
 round trip and for unsigned, signed, narrow, and cross-signed widening at zero,
 extrema, and all-ones. Same-width `u128`/`i128` casts are compared at both words.
 Unsigned and signed unary bitwise inversion is likewise compared at both words.
+Non-overflowing signed negation results are compared at both words, while exact
+machine-code checks cover the shared overflow trap.
 Exact `u128::MAX`, `i128::MAX`, and `i128::MIN` literal
 words are also compared with the same oracle. This is not linker, dynamic-loader,
 cross-language, or physical-hardware evidence.

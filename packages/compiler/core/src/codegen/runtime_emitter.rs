@@ -6907,6 +6907,42 @@ impl<
             return self.emit_wide_integer_immediate(0u128.wrapping_sub(literal.value));
         }
         if let ExprKind::Unary {
+            operator: crate::UnaryOperator::Negate,
+            operand,
+        } = expression.kind
+        {
+            let operand_type = runtime_expression_type_with_locals(
+                self.function,
+                self.resolver,
+                &self.locals[..self.saved_locals],
+                tree,
+                operand,
+                1,
+            )
+            .map_err(|kind| self.error(kind))?;
+            if operand_type
+                != RuntimeExpressionType::Integer(Some(crate::IntegerType::I128))
+                || expected_type
+                    != RuntimeExpressionType::Integer(Some(crate::IntegerType::I128))
+            {
+                return Err(self.error(CodegenErrorKind::RuntimeTypeMismatch));
+            }
+            self.emit_wide_integer_return(tree, operand, operand_type)?;
+            if self.overflow_checks {
+                self.emit(&[0x48, 0x85, 0xc0])?;
+                let low_nonzero = self.emit_forward_branch(0x85)?;
+                self.emit(&[0x48, 0xb9])?;
+                self.emit(&(1u64 << 63).to_le_bytes())?;
+                self.emit(&[0x48, 0x39, 0xca])?;
+                self.emit_trap_branch(0x84)?;
+                self.patch_forward_branch(low_nonzero)?;
+            }
+            self.emit(&[
+                0x48, 0xf7, 0xd8, 0x48, 0x83, 0xd2, 0x00, 0x48, 0xf7, 0xda,
+            ])?;
+            return Ok(());
+        }
+        if let ExprKind::Unary {
             operator: crate::UnaryOperator::Not,
             operand,
         } = expression.kind
