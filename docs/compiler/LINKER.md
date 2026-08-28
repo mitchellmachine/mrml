@@ -550,6 +550,25 @@ tiny archive probe is narrow hosted regression evidence, not a general speed
 or compatibility claim. Global writable/TLS definitions, weak/versioned
 symbols, preemption, and dynamic relocations remain unsupported.
 
+Allocated zero-sized `.rodata.*` sections are now retained as typed local
+read-only identities even though they contribute no bytes. A zero-valued
+reference is mapped to the owning input's read-only base only when the section
+has conventional PROGBITS/A identity and power-of-two alignment no greater than
+16; nonzero offsets or stronger unrepresented alignment fail closed. This
+supports Rust zero-sized static identities without fabricating payload bytes or
+trusting their original file offsets.
+
+An independently authored optimized ORACLE-0002 trait-object probe emitted a
+zero-byte `ANSWER` section, a 32-byte vtable in `.data.rel.ro.*`, an initialized
+fat pointer, three absolute relocations, two writable text references, and two
+frame records. MRML linked it into a 12,344-byte ELF with separate RX, R/NX,
+and RW/NX loads, and virtual dispatch exited 42 under Arch WSL. Windows and
+Linux each passed 717 compiler-core tests and four driver tests. Over 50
+identical-input iterations after five warmups, MRML measured 5.092 ms median
+and 5.097 ms mean versus pinned rust-lld with `--eh-frame-hdr` at 5.241 ms
+median and 5.218 ms mean; rust-lld emitted 2,128 bytes. This is one hosted
+trait-object regression probe, not general trait/vtable, speed, or ABI coverage.
+
 This increment does **not** emit PE imports/exports/base
 relocations/debug data, emit ELF dynamic metadata/interpreter/PIE/sections,
 accelerate archive extraction through symbol indexes, read thin archives or

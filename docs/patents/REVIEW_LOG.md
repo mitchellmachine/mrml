@@ -9534,3 +9534,12 @@ data definitions and selects an ordinary data-only archive member. It uses
 documented section-relative layout and relocation arithmetic and introduces no
 new symbol, archive, relocation, compression, cryptographic, or loader
 algorithm. This technical screen is not legal advice or patent clearance.
+
+# 2026-08-28 — Zero-sized read-only static identities
+
+Patent review: **NOT_TRIGGERED**. This increment maps a conventional allocated
+zero-sized ELF read-only section to a bounded aligned read-only identity so
+ordinary static relocations can reference a Rust zero-sized value. It adds no
+payload representation, vtable algorithm, relocation encoding, compression,
+cryptographic mechanism, or loader algorithm. This technical screen is not
+legal advice or patent clearance.

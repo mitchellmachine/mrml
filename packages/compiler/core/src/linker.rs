@@ -1597,6 +1597,14 @@ pub fn decode_x86_64_elf_with_definitions<'data, 'relocations, 'definitions>(
                 });
             }
             name if (name == ".rodata" || name.starts_with(".rodata.")) && contents.is_empty() => {
+                if section_type != 1
+                    || read_u64_elf(object, header + 8)? & 2 == 0
+                    || !matches!(read_u64_elf(object, header + 48)?, 1..=16)
+                    || !read_u64_elf(object, header + 48)?.is_power_of_two()
+                {
+                    return Err(LinkerError::UnsupportedElf);
+                }
+                readonly_sections[index] = true;
                 ignored_sections[index] = true;
             }
             name if name == ".rodata" || name.starts_with(".rodata.") => {
@@ -1758,12 +1766,12 @@ pub fn decode_x86_64_elf_with_definitions<'data, 'relocations, 'definitions>(
                 definition_count += 1;
             }
         } else if readonly_sections.get(section).copied().unwrap_or(false) && binding == 1 {
-            let readonly_offset = elf_combined_text_offset(
+            let readonly_offset = elf_readonly_offset(
                 object,
                 section_offset,
                 section_count,
                 section,
-                readonly_start.ok_or(LinkerError::InvalidElf)?,
+                readonly_start,
                 read_u64_elf(symbols, offset + 8)?,
             )?;
             if readonly_offset > readonly_data.len() {
@@ -1924,12 +1932,12 @@ pub fn decode_x86_64_elf_with_definitions<'data, 'relocations, 'definitions>(
                 .copied()
                 .unwrap_or(false)
             {
-                let symbol_data_offset = elf_combined_text_offset(
+                let symbol_data_offset = elf_readonly_offset(
                     object,
                     section_offset,
                     section_count,
                     target_section,
-                    readonly_start.ok_or(LinkerError::InvalidElf)?,
+                    readonly_start,
                     read_u64_elf(symbols, target_offset + 8)?,
                 )?;
                 if relocation_type == 9 {
@@ -2337,13 +2345,18 @@ pub fn decode_x86_64_elf_writable<'data, 'relocations>(
                 return Err(LinkerError::UnsupportedElf);
             }
             let contents = elf_section_contents(object, section_offset, section_count, index)?;
+            readonly_sections[index] = true;
             if !contents.is_empty() {
                 let start = to_usize_elf(read_u64_elf(object, header + 24)?)?;
                 let end = start
                     .checked_add(contents.len())
                     .ok_or(LinkerError::OffsetOverflow)?;
-                readonly_sections[index] = true;
                 readonly_span = Some(extend_elf_zero_span(object, readonly_span, start, end)?);
+            } else {
+                let alignment = read_u64_elf(object, header + 48)?;
+                if !matches!(alignment, 1..=16) || !alignment.is_power_of_two() {
+                    return Err(LinkerError::UnsupportedElf);
+                }
             }
         } else if name == ".data" || name.starts_with(".data.") {
             if section_type != 1 || read_u64_elf(object, header + 8)? != 3 {
@@ -2574,12 +2587,12 @@ pub fn decode_x86_64_elf_writable<'data, 'relocations>(
                 .copied()
                 .unwrap_or(false)
             {
-                ElfWritableAbsoluteTarget::ReadonlyData(elf_combined_text_offset(
+                ElfWritableAbsoluteTarget::ReadonlyData(elf_readonly_offset(
                     object,
                     section_offset,
                     section_count,
                     target_section,
-                    readonly_span.ok_or(LinkerError::InvalidElf)?.0,
+                    readonly_span.map(|span| span.0),
                     target_value,
                 )?)
             } else if text_sections.get(target_section).copied().unwrap_or(false) {
@@ -2656,6 +2669,33 @@ pub fn decode_x86_64_elf_writable<'data, 'relocations>(
         references: &reference_storage[..reference_count],
         absolute_relocations: &absolute_storage[..absolute_count],
     })
+}
+
+fn elf_readonly_offset(
+    object: &[u8],
+    section_offset: usize,
+    section_count: usize,
+    section: usize,
+    readonly_start: Option<usize>,
+    value: u64,
+) -> Result<usize, LinkerError> {
+    let header = elf_section_header(section_offset, section_count, section)?;
+    let size = read_u64_elf(object, header + 32)?;
+    if size == 0 {
+        let alignment = read_u64_elf(object, header + 48)?;
+        if value != 0 || !matches!(alignment, 1..=16) || !alignment.is_power_of_two() {
+            return Err(LinkerError::InvalidRelocationOffset);
+        }
+        return Ok(0);
+    }
+    elf_combined_text_offset(
+        object,
+        section_offset,
+        section_count,
+        section,
+        readonly_start.ok_or(LinkerError::InvalidElf)?,
+        value,
+    )
 }
 
 fn extend_elf_zero_span(
@@ -5871,6 +5911,22 @@ mod tests {
                 &invalid,
                 "entry"
             ),
+            Err(LinkerError::InvalidRelocationOffset)
+        );
+    }
+
+    #[test]
+    fn bounds_zero_sized_elf_readonly_targets() {
+        let mut object = [0u8; 128];
+        object[64 + 48..64 + 56].copy_from_slice(&8u64.to_le_bytes());
+        assert_eq!(elf_readonly_offset(&object, 64, 1, 0, None, 0), Ok(0));
+        assert_eq!(
+            elf_readonly_offset(&object, 64, 1, 0, None, 1),
+            Err(LinkerError::InvalidRelocationOffset)
+        );
+        object[64 + 48..64 + 56].copy_from_slice(&32u64.to_le_bytes());
+        assert_eq!(
+            elf_readonly_offset(&object, 64, 1, 0, None, 0),
             Err(LinkerError::InvalidRelocationOffset)
         );
     }
