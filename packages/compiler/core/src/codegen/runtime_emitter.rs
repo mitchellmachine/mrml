@@ -6922,9 +6922,17 @@ impl<
                     crate::CastType::Integer(
                         crate::IntegerType::U128 | crate::IntegerType::I128,
                     ),
-                ) if runtime_width(source.name()).is_some() => source,
+                ) if runtime_width(source.name()).is_some()
+                    || runtime_integer_layout(source.name())
+                        .is_some_and(|layout| layout.words == 2) => source,
                 _ => return Err(self.error(CodegenErrorKind::RuntimeExpressionUnsupported)),
             };
+            if matches!(
+                source,
+                crate::IntegerType::U128 | crate::IntegerType::I128
+            ) {
+                return self.emit_wide_integer_return(tree, operand, operand_type);
+            }
             let source_width = runtime_width(source.name())
                 .ok_or(self.error(CodegenErrorKind::UnsupportedRuntimeType))?;
             let previous_width = self.width;

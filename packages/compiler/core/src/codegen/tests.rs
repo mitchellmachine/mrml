@@ -12188,6 +12188,22 @@ mod tests {
     }
 
     #[test]
+    fn mrml_v1_codegen_preserves_two_word_integer_cast_bits() {
+        for source in [
+            "#[mrml_abi::export(version = 1)] pub fn value(input: u128) -> i128 { input as i128 }",
+            "#[mrml_abi::export(version = 1)] pub fn value(input: i128) -> u128 { input as u128 }",
+        ] {
+            let module = Parser::new(source).parse_module::<2, 2>().unwrap();
+            let Some(Item::Function(function)) = module.items()[0] else {
+                panic!("expected function")
+            };
+            for abi in [X86_64Abi::SystemV, X86_64Abi::Windows] {
+                compile_x86_64_function::<_, 256, 2, 16>(&function, &NoConstants, abi).unwrap();
+            }
+        }
+    }
+
+    #[test]
     fn mrml_v1_codegen_widens_one_word_integers_for_two_word_returns() {
         for source in [
             "#[mrml_abi::export(version = 1)] pub fn value(input: u8) -> u128 { input as u128 }",
