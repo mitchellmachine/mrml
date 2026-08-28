@@ -9478,3 +9478,12 @@ selected static inputs under existing fixed bounds. It does not interpret CFI,
 generate a search table, introduce a new unwind encoding, compress records, or
 add a cryptographic or loading algorithm. This technical screen is not legal
 advice or patent clearance.
+
+# 2026-08-28 — Bounded GNU ELF frame search table
+
+Patent review: **NOT_TRIGGERED**. This increment emits the conventional GNU
+`.eh_frame_hdr` version-1 encodings and `PT_GNU_EH_FRAME` program metadata from
+already validated FDE locations, using a bounded insertion sort. It introduces
+no new unwind encoding, CFI algorithm, compression, cryptographic mechanism, or
+loader behavior. This technical screen is not legal advice or patent
+clearance.

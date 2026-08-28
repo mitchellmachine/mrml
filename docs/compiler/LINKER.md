@@ -412,10 +412,28 @@ and exited 42 under Arch WSL. Windows and Linux each passed 710 compiler-core
 tests and four driver tests. Over 50 same-input rlib iterations after five
 warmups, MRML measured 4.787 ms median and 4.813 ms mean versus pinned rust-lld
 at 5.149 ms median and 5.179 ms mean; rust-lld emitted 2,440 bytes. This remains
-narrow hosted regression evidence. MRML does not yet generate `.eh_frame_hdr`
-or `PT_GNU_EH_FRAME`, and no language-level panic/unwind or backtrace behavior
-is claimed; the current milestone preserves and relocates loadable frame data
-as the prerequisite for runtime discovery.
+narrow hosted regression evidence. This first frame-data milestone did not yet
+establish runtime discovery or language-level panic/unwind behavior.
+
+The serializer now derives the bounded GNU frame search header directly from
+the validated FDE relocation fields: version 1, PC-relative signed four-byte
+frame pointer, unsigned four-byte count, and data-relative signed four-byte
+sorted table entries. Before table generation the decoder verifies each
+relocation addresses the initial-location field of a bounded 32-bit-length FDE,
+resolves its backward CIE reference to a bounded zero-identity CIE, and requires
+strictly increasing relocation fields. The R/NX load contains the generated
+header and relocated frames, and a read-only `PT_GNU_EH_FRAME` program header
+identifies the exact search-table range. This interprets record boundaries and
+CIE identity only; it does not interpret CFI instructions.
+
+On the same nine-function default rlib, `readelf -lW` recognized MRML's fourth
+program header as `GNU_EH_FRAME`, covering the 84-byte generated table. The
+8,536-byte executable exited 42. Over 50 identical-input iterations after five
+warmups, MRML measured 4.432 ms median and 4.453 ms mean; pinned rust-lld with
+the equivalent `--eh-frame-hdr` option measured 4.971 ms median and 5.000 ms
+mean and emitted 2,656 bytes. Windows and Linux each passed 710 compiler-core
+tests and four driver tests. Actual stack unwinding, panic propagation, and
+backtrace behavior remain unverified and are not claimed.
 
 This increment does **not** emit PE imports/exports/base
 relocations/debug data, emit ELF dynamic metadata/interpreter/PIE/sections,

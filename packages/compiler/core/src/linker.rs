@@ -1995,12 +1995,18 @@ pub fn decode_x86_64_elf_unwind<'data, 'relocations>(
     if records.len() % 24 != 0 || records.len() / 24 > relocation_storage.len() {
         return Err(LinkerError::TooManyRelocations);
     }
+    let mut previous_offset = None;
     for (index, record) in records.chunks_exact(24).enumerate() {
         let offset = to_usize_elf(read_u64_elf(record, 0)?)?;
         offset
             .checked_add(4)
             .filter(|end| *end <= unwind.len())
             .ok_or(LinkerError::InvalidRelocationOffset)?;
+        if previous_offset.is_some_and(|previous| previous >= offset) {
+            return Err(LinkerError::UnsupportedElf);
+        }
+        previous_offset = Some(offset);
+        validate_elf_fde_field(unwind, offset)?;
         let info = read_u64_elf(record, 8)?;
         if u32::try_from(info & 0xffff_ffff).map_err(|_| LinkerError::OffsetOverflow)? != 2 {
             return Err(LinkerError::UnsupportedElf);
@@ -2039,6 +2045,41 @@ pub fn decode_x86_64_elf_unwind<'data, 'relocations>(
         bytes: unwind,
         relocations: &relocation_storage[..records.len() / 24],
     })
+}
+
+fn validate_elf_fde_field(unwind: &[u8], offset: usize) -> Result<(), LinkerError> {
+    let fde = offset
+        .checked_sub(8)
+        .ok_or(LinkerError::InvalidRelocationOffset)?;
+    let raw_fde_length = read_u32_elf(unwind, fde)?;
+    let fde_length = usize::try_from(raw_fde_length).map_err(|_| LinkerError::OffsetOverflow)?;
+    if fde_length < 12 || raw_fde_length == u32::MAX {
+        return Err(LinkerError::UnsupportedElf);
+    }
+    fde.checked_add(4)
+        .and_then(|end| end.checked_add(fde_length))
+        .filter(|end| *end <= unwind.len())
+        .ok_or(LinkerError::InvalidElf)?;
+    let cie_field = fde.checked_add(4).ok_or(LinkerError::OffsetOverflow)?;
+    let cie_distance = usize::try_from(read_u32_elf(unwind, cie_field)?)
+        .map_err(|_| LinkerError::OffsetOverflow)?;
+    let cie = cie_field
+        .checked_sub(cie_distance)
+        .ok_or(LinkerError::InvalidElf)?;
+    let cie_length =
+        usize::try_from(read_u32_elf(unwind, cie)?).map_err(|_| LinkerError::OffsetOverflow)?;
+    if cie_distance == 0
+        || cie_length < 4
+        || read_u32_elf(unwind, cie + 4)? != 0
+        || cie
+            .checked_add(4)
+            .and_then(|end| end.checked_add(cie_length))
+            .filter(|end| *end <= unwind.len())
+            .is_none()
+    {
+        return Err(LinkerError::UnsupportedElf);
+    }
+    Ok(())
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -2464,6 +2505,26 @@ pub fn link_x86_64_elf_executable_with_unwind<
             .ok_or(LinkerError::OffsetOverflow)?
     };
     let has_unwind = unwind.iter().any(|data| !data.bytes.is_empty());
+    let frame_count = unwind
+        .iter()
+        .try_fold(0usize, |count, data| {
+            count.checked_add(data.relocations.len())
+        })
+        .ok_or(LinkerError::OffsetOverflow)?;
+    if frame_count > MAX_LINK_RELOCATIONS {
+        return Err(LinkerError::TooManyRelocations);
+    }
+    let frame_header_size = if frame_count == 0 {
+        0
+    } else {
+        12usize
+            .checked_add(
+                frame_count
+                    .checked_mul(8)
+                    .ok_or(LinkerError::OffsetOverflow)?,
+            )
+            .ok_or(LinkerError::OffsetOverflow)?
+    };
     let mut unwind_layouts = [0usize; MAX_LINK_INPUTS];
     let mut length = if has_unwind {
         if readonly_size == 0 {
@@ -2473,6 +2534,16 @@ pub fn link_x86_64_elf_executable_with_unwind<
         }
     } else {
         base_length
+    };
+    let frame_header_offset = if frame_header_size == 0 {
+        0
+    } else {
+        length = align(length, 4)?;
+        let offset = length;
+        length = length
+            .checked_add(frame_header_size)
+            .ok_or(LinkerError::OffsetOverflow)?;
+        offset
     };
     let mut unwind_relocation_count = 0usize;
     for (index, data) in unwind.iter().enumerate() {
@@ -2493,6 +2564,7 @@ pub fn link_x86_64_elf_executable_with_unwind<
                 .checked_add(4)
                 .filter(|end| *end <= data.bytes.len())
                 .ok_or(LinkerError::InvalidRelocationOffset)?;
+            validate_elf_fde_field(data.bytes, relocation.offset)?;
             if relocation.target_text_offset > inputs[index].text.len() {
                 return Err(LinkerError::InvalidRelocationOffset);
             }
@@ -2504,7 +2576,7 @@ pub fn link_x86_64_elf_executable_with_unwind<
     let program_count = if readonly_size == 0 && !has_unwind {
         2
     } else {
-        3
+        3 + usize::from(frame_header_size != 0)
     };
     let header_bytes = 64usize
         .checked_add(program_count * 56)
@@ -2555,6 +2627,19 @@ pub fn link_x86_64_elf_executable_with_unwind<
                 .ok_or(LinkerError::OffsetOverflow)?,
         )?;
     }
+    if frame_header_size != 0 {
+        write_elf_program_segment(
+            &mut bytes,
+            232,
+            0x6474_e550,
+            4,
+            frame_header_offset,
+            IMAGE_BASE + frame_header_offset,
+            frame_header_size,
+            frame_header_size,
+            4,
+        )?;
+    }
     copy_at(&mut bytes, TEXT_OFFSET, &linked.bytes[..linked.text_length])?;
     if readonly_size != 0 {
         copy_at(
@@ -2583,6 +2668,76 @@ pub fn link_x86_64_elf_executable_with_unwind<
             bytes[place..place + 4].copy_from_slice(&displacement.to_le_bytes());
         }
     }
+    if frame_header_size != 0 {
+        bytes[frame_header_offset..frame_header_offset + 4].copy_from_slice(&[1, 0x1b, 3, 0x3b]);
+        let first_frame = unwind_layouts
+            .iter()
+            .zip(unwind.iter())
+            .find_map(|(layout, data)| (!data.bytes.is_empty()).then_some(*layout))
+            .ok_or(LinkerError::InvalidElf)?;
+        let frame_pointer = i64::try_from(first_frame)
+            .map_err(|_| LinkerError::OffsetOverflow)?
+            .checked_sub(
+                i64::try_from(frame_header_offset + 4).map_err(|_| LinkerError::OffsetOverflow)?,
+            )
+            .ok_or(LinkerError::OffsetOverflow)?;
+        patch_i32(
+            &mut bytes,
+            frame_header_offset + 4,
+            i32::try_from(frame_pointer).map_err(|_| LinkerError::RelocationOverflow)?,
+        )?;
+        patch_u32(
+            &mut bytes,
+            frame_header_offset + 8,
+            u32::try_from(frame_count).map_err(|_| LinkerError::OffsetOverflow)?,
+        )?;
+        let mut entries = [(0usize, 0usize); MAX_LINK_RELOCATIONS];
+        let mut entry_count = 0usize;
+        for (index, data) in unwind.iter().enumerate() {
+            for relocation in data.relocations {
+                let function = TEXT_OFFSET
+                    .checked_add(linked.layouts[index].text)
+                    .and_then(|target| target.checked_add(relocation.target_text_offset))
+                    .ok_or(LinkerError::OffsetOverflow)?;
+                let fde = unwind_layouts[index]
+                    .checked_add(relocation.offset)
+                    .and_then(|field| field.checked_sub(8))
+                    .ok_or(LinkerError::InvalidRelocationOffset)?;
+                let mut position = entry_count;
+                while position != 0 && entries[position - 1].0 > function {
+                    entries[position] = entries[position - 1];
+                    position -= 1;
+                }
+                entries[position] = (function, fde);
+                entry_count += 1;
+            }
+        }
+        for (index, (function, fde)) in entries[..entry_count].iter().copied().enumerate() {
+            let entry = frame_header_offset + 12 + index * 8;
+            let function = i64::try_from(function)
+                .map_err(|_| LinkerError::OffsetOverflow)?
+                .checked_sub(
+                    i64::try_from(frame_header_offset).map_err(|_| LinkerError::OffsetOverflow)?,
+                )
+                .ok_or(LinkerError::OffsetOverflow)?;
+            let fde = i64::try_from(fde)
+                .map_err(|_| LinkerError::OffsetOverflow)?
+                .checked_sub(
+                    i64::try_from(frame_header_offset).map_err(|_| LinkerError::OffsetOverflow)?,
+                )
+                .ok_or(LinkerError::OffsetOverflow)?;
+            patch_i32(
+                &mut bytes,
+                entry,
+                i32::try_from(function).map_err(|_| LinkerError::RelocationOverflow)?,
+            )?;
+            patch_i32(
+                &mut bytes,
+                entry + 4,
+                i32::try_from(fde).map_err(|_| LinkerError::RelocationOverflow)?,
+            )?;
+        }
+    }
     Ok(ElfImage { bytes, length })
 }
 
@@ -2595,7 +2750,31 @@ fn write_elf_load_segment<const MAX_BYTES: usize>(
     file_size: usize,
     memory_size: usize,
 ) -> Result<(), LinkerError> {
-    patch_u32(output, offset, 1)?;
+    write_elf_program_segment(
+        output,
+        offset,
+        1,
+        flags,
+        file_offset,
+        virtual_address,
+        file_size,
+        memory_size,
+        0x1000,
+    )
+}
+
+fn write_elf_program_segment<const MAX_BYTES: usize>(
+    output: &mut [u8; MAX_BYTES],
+    offset: usize,
+    segment_type: u32,
+    flags: u32,
+    file_offset: usize,
+    virtual_address: usize,
+    file_size: usize,
+    memory_size: usize,
+    alignment: usize,
+) -> Result<(), LinkerError> {
+    patch_u32(output, offset, segment_type)?;
     patch_u32(output, offset + 4, flags)?;
     patch_u64(
         output,
@@ -2615,7 +2794,11 @@ fn write_elf_load_segment<const MAX_BYTES: usize>(
         offset + 40,
         u64::try_from(memory_size).map_err(|_| LinkerError::OffsetOverflow)?,
     )?;
-    patch_u64(output, offset + 48, 0x1000)
+    patch_u64(
+        output,
+        offset + 48,
+        u64::try_from(alignment).map_err(|_| LinkerError::OffsetOverflow)?,
+    )
 }
 
 fn link_x86_64_static_aligned<const MAX_BYTES: usize>(
@@ -2847,6 +3030,18 @@ fn patch_u32<const MAX_BYTES: usize>(
     output: &mut [u8; MAX_BYTES],
     offset: usize,
     value: u32,
+) -> Result<(), LinkerError> {
+    output
+        .get_mut(offset..offset + 4)
+        .ok_or(LinkerError::OutputTooSmall)?
+        .copy_from_slice(&value.to_le_bytes());
+    Ok(())
+}
+
+fn patch_i32<const MAX_BYTES: usize>(
+    output: &mut [u8; MAX_BYTES],
+    offset: usize,
+    value: i32,
 ) -> Result<(), LinkerError> {
     output
         .get_mut(offset..offset + 4)
@@ -4527,9 +4722,12 @@ mod tests {
             readonly_data: &[],
             relocations: &[],
         };
-        let unwind_bytes = [0u8; 8];
+        let mut unwind_bytes = [0u8; 48];
+        unwind_bytes[..4].copy_from_slice(&20u32.to_le_bytes());
+        unwind_bytes[24..28].copy_from_slice(&16u32.to_le_bytes());
+        unwind_bytes[28..32].copy_from_slice(&28u32.to_le_bytes());
         let unwind_relocations = [ElfUnwindRelocation {
-            offset: 0,
+            offset: 32,
             target_text_offset: 0,
             addend: 0,
         }];
@@ -4539,15 +4737,18 @@ mod tests {
         }];
         let elf = link_x86_64_elf_executable_with_unwind::<16384, 8192>(&[input], &unwind, "entry")
             .unwrap();
-        assert_eq!(read_u16_elf(elf.bytes(), 56).unwrap(), 3);
-        assert_eq!(elf.bytes().len(), 0x2008);
+        assert_eq!(read_u16_elf(elf.bytes(), 56).unwrap(), 4);
+        assert_eq!(elf.bytes().len(), 0x2048);
+        assert_eq!(&elf.bytes()[0x2000..0x2004], &[1, 0x1b, 3, 0x3b]);
+        assert_eq!(read_u32_elf(elf.bytes(), 0x2008).unwrap(), 1);
+        assert_eq!(read_u32_elf(elf.bytes(), 232).unwrap(), 0x6474_e550);
         assert_eq!(
-            i32::from_le_bytes(elf.bytes()[0x2000..0x2004].try_into().unwrap()),
-            -0x1000
+            i32::from_le_bytes(elf.bytes()[0x2038..0x203c].try_into().unwrap()),
+            -0x1038
         );
 
         let invalid_relocations = [ElfUnwindRelocation {
-            offset: 5,
+            offset: 45,
             ..unwind_relocations[0]
         }];
         let invalid = [ElfUnwindData {
