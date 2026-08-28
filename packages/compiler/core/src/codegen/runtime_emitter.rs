@@ -6906,6 +6906,32 @@ impl<
             }
             return self.emit_wide_integer_immediate(0u128.wrapping_sub(literal.value));
         }
+        if let ExprKind::Unary {
+            operator: crate::UnaryOperator::Not,
+            operand,
+        } = expression.kind
+        {
+            let operand_type = runtime_expression_type_with_locals(
+                self.function,
+                self.resolver,
+                &self.locals[..self.saved_locals],
+                tree,
+                operand,
+                1,
+            )
+            .map_err(|kind| self.error(kind))?;
+            if !matches!(
+                operand_type,
+                RuntimeExpressionType::Integer(Some(
+                    crate::IntegerType::U128 | crate::IntegerType::I128
+                ))
+            ) {
+                return Err(self.error(CodegenErrorKind::RuntimeTypeMismatch));
+            }
+            self.emit_wide_integer_return(tree, operand, operand_type)?;
+            self.emit(&[0x48, 0xf7, 0xd0, 0x48, 0xf7, 0xd2])?;
+            return Ok(());
+        }
         if let ExprKind::Cast { operand, target } = expression.kind {
             let operand_type = runtime_expression_type_with_locals(
                 self.function,
