@@ -72,6 +72,9 @@ const MRML_V1_WIDE_SIGNED_MULTIPLY_SOURCE: &str =
     "#[mrml_abi::export(version = 1)] pub fn probe(input: i128) -> i128 { input * -17 }";
 const MRML_V1_WIDE_SIGNED_MULTIPLY_OVERFLOW_SOURCE: &str =
     "#[mrml_abi::export(version = 1)] pub fn probe(input: i128) -> i128 { input * -1 }";
+const MRML_V1_WIDE_UNSIGNED_SHIFT_LEFT_SOURCE: &str = "#[mrml_abi::export(version = 1)] pub fn probe(input: u128, shift: u32) -> u128 { input << shift }";
+const MRML_V1_WIDE_UNSIGNED_SHIFT_RIGHT_SOURCE: &str = "#[mrml_abi::export(version = 1)] pub fn probe(input: u128, shift: u32) -> u128 { input >> shift }";
+const MRML_V1_WIDE_SIGNED_SHIFT_RIGHT_SOURCE: &str = "#[mrml_abi::export(version = 1)] pub fn probe(input: i128, shift: u32) -> i128 { input >> shift }";
 const MRML_V1_UNSIGNED_WIDEN_SOURCE: &str =
     "#[mrml_abi::export(version = 1)] pub fn probe(input: u64) -> u128 { input as u128 }";
 const MRML_V1_SIGNED_WIDEN_SOURCE: &str =
@@ -792,6 +795,38 @@ unsafe fn call_mrml_v1_wide_return(function: *const u8, input: u128) -> u128 {
     (u128::from(returned_high) << 64) | u128::from(returned_low)
 }
 
+unsafe fn call_mrml_v1_wide_shift(function: *const u8, input: u128, shift: u32) -> u128 {
+    let returned_low: u64;
+    let returned_high: u64;
+    #[cfg(target_os = "windows")]
+    unsafe {
+        core::arch::asm!(
+            "sub rsp, 32",
+            "call {function}",
+            "add rsp, 32",
+            function = in(reg) function,
+            in("rcx") input as u64,
+            inlateout("rdx") (input >> 64) as u64 => returned_high,
+            in("r8") u64::from(shift),
+            lateout("rax") returned_low,
+            clobber_abi("C"),
+        );
+    }
+    #[cfg(not(target_os = "windows"))]
+    unsafe {
+        core::arch::asm!(
+            "call {function}",
+            function = in(reg) function,
+            in("rdi") input as u64,
+            in("rsi") (input >> 64) as u64,
+            inlateout("rdx") u64::from(shift) => returned_high,
+            lateout("rax") returned_low,
+            clobber_abi("C"),
+        );
+    }
+    (u128::from(returned_high) << 64) | u128::from(returned_low)
+}
+
 #[test]
 fn mrml_v1_wide_integer_parameters_return_both_words() {
     let code = compile(MRML_V1_WIDE_RETURN_SOURCE);
@@ -1239,6 +1274,97 @@ fn mrml_v1_wide_signed_multiplication_overflow_traps() {
     #[cfg(target_os = "windows")]
     {
         assert!(!output.status.success(), "generated overflow trap unexpectedly returned");
+        assert_eq!(output.status.code(), Some(101));
+        let stdout = String::from_utf8(output.stdout).expect("UTF-8 child test stdout");
+        let stderr = String::from_utf8(output.stderr).expect("UTF-8 child test stderr");
+        assert!(
+            stdout.contains("unexpected return code -1073741795")
+                || stderr.contains("unexpected return code -1073741795"),
+            "missing Windows illegal-instruction status; stdout: {stdout}; stderr: {stderr}"
+        );
+    }
+}
+
+#[test]
+fn mrml_v1_wide_shifts_match_both_oracle_words() {
+    let left = compile(MRML_V1_WIDE_UNSIGNED_SHIFT_LEFT_SOURCE);
+    let unsigned_right = compile(MRML_V1_WIDE_UNSIGNED_SHIFT_RIGHT_SOURCE);
+    let signed_right = compile(MRML_V1_WIDE_SIGNED_SHIFT_RIGHT_SOURCE);
+    let input = 1512366075204170947332355369683137040u128;
+    let shifts = [0u32, 1, 63, 64, 65, 127];
+    for (source, code, driver) in [
+        (
+            MRML_V1_WIDE_UNSIGNED_SHIFT_LEFT_SOURCE,
+            &left,
+            "for shift in [0u32, 1, 63, 64, 65, 127] { let returned = probe(1512366075204170947332355369683137040u128, shift); println!(\"{}\", returned as u64); println!(\"{}\", (returned >> 64) as u64); }",
+        ),
+        (
+            MRML_V1_WIDE_UNSIGNED_SHIFT_RIGHT_SOURCE,
+            &unsigned_right,
+            "for shift in [0u32, 1, 63, 64, 65, 127] { let returned = probe(1512366075204170947332355369683137040u128, shift); println!(\"{}\", returned as u64); println!(\"{}\", (returned >> 64) as u64); }",
+        ),
+        (
+            MRML_V1_WIDE_SIGNED_SHIFT_RIGHT_SOURCE,
+            &signed_right,
+            "for shift in [0u32, 1, 63, 64, 65, 127] { let returned = probe(-1512366075204170947332355369683137040i128, shift); println!(\"{}\", returned as u64); println!(\"{}\", ((returned as u128) >> 64) as u64); }",
+        ),
+    ] {
+        let input = if source == MRML_V1_WIDE_SIGNED_SHIFT_RIGHT_SOURCE {
+            (-1512366075204170947332355369683137040i128) as u128
+        } else {
+            input
+        };
+        let actual = shifts
+            .into_iter()
+            .flat_map(|shift| {
+                let returned = unsafe { call_mrml_v1_wide_shift(code.pointer, input, shift) };
+                [returned as u64, (returned >> 64) as u64]
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(actual, rustc_mrml_v1_observations(source, driver));
+    }
+}
+
+#[test]
+fn mrml_v1_wide_shift_count_overflow_traps() {
+    #[cfg(target_os = "windows")]
+    const CHILD: &str = "MRML_SEMANTIC_WIDE_SHIFT_OVERFLOW_CHILD";
+    let code = compile(MRML_V1_WIDE_UNSIGNED_SHIFT_LEFT_SOURCE);
+
+    #[cfg(not(target_os = "windows"))]
+    {
+        let pid = unsafe { fork() };
+        assert!(pid >= 0, "fork failed");
+        if pid == 0 {
+            let _ = unsafe { call_mrml_v1_wide_shift(code.pointer, 1, 128) };
+            unsafe { _exit(120) }
+        }
+        let mut status = 0;
+        assert_eq!(unsafe { waitpid(pid, &mut status, 0) }, pid, "waitpid failed");
+        assert_eq!(status & 0x7f, 4, "unexpected Unix wait status: {status:#x}");
+        return;
+    }
+
+    #[cfg(target_os = "windows")]
+    if std::env::var_os(CHILD).is_some() {
+        unsafe { SetErrorMode(0x0001 | 0x0002) };
+        let _ = unsafe { call_mrml_v1_wide_shift(code.pointer, 1, 128) };
+        panic!("checked wide shift count overflow unexpectedly returned");
+    }
+
+    #[cfg(target_os = "windows")]
+    let output = Command::new(std::env::current_exe().expect("locate semantic test binary"))
+        .args([
+            "--exact",
+            "mrml_v1_wide_shift_count_overflow_traps",
+            "--nocapture",
+        ])
+        .env(CHILD, "1")
+        .output()
+        .expect("launch isolated wide shift trap probe");
+    #[cfg(target_os = "windows")]
+    {
+        assert!(!output.status.success(), "generated shift trap unexpectedly returned");
         assert_eq!(output.status.code(), Some(101));
         let stdout = String::from_utf8(output.stdout).expect("UTF-8 child test stdout");
         let stderr = String::from_utf8(output.stderr).expect("UTF-8 child test stderr");

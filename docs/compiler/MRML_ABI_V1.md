@@ -149,6 +149,9 @@ rejecting every nonzero discarded high product and every carry beyond the high
 result word. Checked `i128` multiplication converts both operands to bounded
 magnitudes, applies the same product, validates the signed result range, and
 restores the result sign.
+Wide shifts accept a one-word integer count, explicitly distinguish counts below
+and above the 64-bit word boundary, and trap checked counts of 128 or greater.
+Right shift sign-fills only the declared `i128` high word.
 Closed positive and negative two-word integer literals are range-checked against
 the declared return type and materialized directly into the two return words.
 Other wide casts, expressions, locals, operations, calls, and returns remain
@@ -201,6 +204,8 @@ the exact non-overflowing `u64::MAX` boundary; a product with nonzero high-by-hi
 contribution is required to terminate through the isolated overflow trap.
 Signed multiplication by `-17` is compared for both operand signs and near both
 signed boundaries, while `i128::MIN * -1` must take the isolated overflow trap.
+Unsigned left/right shifts and signed right shifts are compared at counts 0, 1,
+63, 64, 65, and 127; count 128 must take the isolated overflow trap.
 Exact `u128::MAX`, `i128::MAX`, and `i128::MIN` literal
 words are also compared with the same oracle. This is not linker, dynamic-loader,
 cross-language, or physical-hardware evidence.

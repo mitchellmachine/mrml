@@ -12404,6 +12404,40 @@ mod tests {
     }
 
     #[test]
+    fn mrml_v1_codegen_shifts_two_word_integers_across_the_word_boundary() {
+        for (source, double_shift) in [
+            (
+                "#[mrml_abi::export(version = 1)] pub fn value(input: u128, shift: u32) -> u128 { input << shift }",
+                [0x48, 0x0f, 0xa5, 0xc2],
+            ),
+            (
+                "#[mrml_abi::export(version = 1)] pub fn value(input: u128, shift: u32) -> u128 { input >> shift }",
+                [0x48, 0x0f, 0xad, 0xd0],
+            ),
+            (
+                "#[mrml_abi::export(version = 1)] pub fn value(input: i128, shift: u32) -> i128 { input >> shift }",
+                [0x48, 0x0f, 0xad, 0xd0],
+            ),
+        ] {
+            let module = Parser::new(source).parse_module::<2, 2>().unwrap();
+            let Some(Item::Function(function)) = module.items()[0] else {
+                panic!("expected function")
+            };
+            for abi in [X86_64Abi::SystemV, X86_64Abi::Windows] {
+                let code =
+                    compile_x86_64_function::<_, 512, 2, 16>(&function, &NoConstants, abi)
+                        .unwrap();
+                assert!(code.bytes().windows(4).any(|bytes| bytes == double_shift));
+                assert!(code
+                    .bytes()
+                    .windows(7)
+                    .any(|bytes| bytes == [0x48, 0x81, 0xf9, 0x80, 0, 0, 0]));
+                assert!(code.bytes().ends_with(&[0x0f, 0x0b]));
+            }
+        }
+    }
+
+    #[test]
     fn mrml_v1_codegen_widens_one_word_integers_for_two_word_returns() {
         for source in [
             "#[mrml_abi::export(version = 1)] pub fn value(input: u8) -> u128 { input as u128 }",
