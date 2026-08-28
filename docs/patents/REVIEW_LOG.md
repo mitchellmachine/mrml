@@ -9325,3 +9325,13 @@ selected static-archive object atomically. It extends existing left-to-right
 archive selection bookkeeping and introduces no new archive index, resolution,
 deduplication, compression, executable-format, cryptographic, or loading
 algorithm. This technical screen is not legal advice or patent clearance.
+
+# 2026-08-28 — Driver COFF fragment expansion
+
+Patent review: **NOT_TRIGGERED**. This increment expands each conventional COFF
+object into its bounded text fragments, propagates the existing archive/member
+identity, and allocates existing relocation and definition arenas to the exact
+expanded count. It introduces no new object/archive format, relocation,
+resolution, deduplication, compression, executable-format, cryptographic, or
+loading algorithm. This technical screen is not legal advice or patent
+clearance.

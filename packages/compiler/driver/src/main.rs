@@ -1,14 +1,15 @@
 #![no_std]
 #![cfg_attr(not(test), no_main)]
 
-use mrml_error::{anyhow, Result};
-use mrml_runtime::{mrml_println as println, Text, Vector};
+use mrml_error::{Result, anyhow};
+use mrml_runtime::{Text, Vector, mrml_println as println};
 use mrml_rustc::{
-    compile_source_function_with_options, decode_unix_archive, decode_x86_64_coff_with_definitions,
+    CodegenOptions, LinkDefinition, LinkInput, LinkRelocation, LinkRelocationTarget,
+    MAX_LINK_DEFINITIONS, MAX_LINK_INPUTS, MAX_LINK_RELOCATIONS, ObjectFormat, TargetLayout,
+    compile_source_function_with_options, decode_unix_archive, decode_x86_64_coff_text_fragment,
     decode_x86_64_elf_with_definitions, link_x86_64_elf_executable, link_x86_64_pe,
-    select_ordered_static_link_inputs, CodegenOptions, LinkDefinition, LinkInput, LinkRelocation,
-    LinkRelocationTarget, ObjectFormat, TargetLayout, MAX_LINK_DEFINITIONS, MAX_LINK_INPUTS,
-    MAX_LINK_RELOCATIONS,
+    select_ordered_static_link_members, x86_64_coff_text_fragment_count,
+    x86_64_coff_unwind_section_count,
 };
 
 #[cfg_attr(test, allow(dead_code))]
@@ -42,6 +43,13 @@ enum EmitKind {
 struct LinkObjectRefs<'a> {
     bytes: Vector<&'a [u8]>,
     archive_group: Vector<u16>,
+    archive_member: Vector<u16>,
+}
+
+struct DecodedLinkInputs<'data, 'relocations, 'definitions> {
+    inputs: Vector<LinkInput<'data, 'relocations, 'definitions>>,
+    archive_group: Vector<u16>,
+    archive_member: Vector<u16>,
 }
 
 // The fixed-capacity parser intentionally keeps its arenas on the stack. The
@@ -68,6 +76,7 @@ fn application_main() -> Result<()> {
         return write_linked_pe(
             &object_refs.bytes,
             &object_refs.archive_group,
+            &object_refs.archive_member,
             &arguments[arguments.len() - 3],
             output,
         );
@@ -86,6 +95,7 @@ fn application_main() -> Result<()> {
         return write_linked_elf(
             &object_refs.bytes,
             &object_refs.archive_group,
+            &object_refs.archive_member,
             &arguments[arguments.len() - 3],
             output,
         );
@@ -150,10 +160,10 @@ fn application_main() -> Result<()> {
             );
         }
         EmitKind::Pe => {
-            write_linked_pe(&[object.bytes()], &[0], function, output)?;
+            write_linked_pe(&[object.bytes()], &[0], &[0], function, output)?;
         }
         EmitKind::ElfExecutable => {
-            write_linked_elf(&[object.bytes()], &[0], function, output)?;
+            write_linked_elf(&[object.bytes()], &[0], &[0], function, output)?;
         }
     }
     Ok(())
@@ -178,10 +188,13 @@ fn link_object_refs(objects: &[Vector<u8>]) -> Result<LinkObjectRefs<'_>> {
         .map_err(|_| anyhow!("could not allocate link input reference list"))?;
     let mut archive_group = Vector::with_capacity(MAX_LINK_INPUTS)
         .map_err(|_| anyhow!("could not allocate link input origin list"))?;
+    let mut archive_member = Vector::with_capacity(MAX_LINK_INPUTS)
+        .map_err(|_| anyhow!("could not allocate link member origin list"))?;
     let mut next_archive_group = 1u16;
     for object in objects {
         if object.get(..8) == Some(b"!<arch>\n") {
             let archive = decode_unix_archive(object).map_err(mrml_error::message)?;
+            let mut next_archive_member = 1u16;
             for member in archive.members() {
                 if member.name == "lib.rmeta" || member.name == "lib.rmeta-link" {
                     continue;
@@ -194,6 +207,12 @@ fn link_object_refs(objects: &[Vector<u8>]) -> Result<LinkObjectRefs<'_>> {
                 archive_group
                     .try_push(next_archive_group)
                     .map_err(|_| anyhow!("could not allocate link input origin list"))?;
+                archive_member
+                    .try_push(next_archive_member)
+                    .map_err(|_| anyhow!("could not allocate link member origin list"))?;
+                next_archive_member = next_archive_member
+                    .checked_add(1)
+                    .ok_or_else(|| anyhow!("archive member identity overflow"))?;
             }
             next_archive_group = next_archive_group
                 .checked_add(1)
@@ -204,6 +223,9 @@ fn link_object_refs(objects: &[Vector<u8>]) -> Result<LinkObjectRefs<'_>> {
             archive_group
                 .try_push(0)
                 .map_err(|_| anyhow!("could not allocate link input origin list"))?;
+            archive_member
+                .try_push(0)
+                .map_err(|_| anyhow!("could not allocate link member origin list"))?;
         }
     }
     if refs.is_empty() {
@@ -212,38 +234,83 @@ fn link_object_refs(objects: &[Vector<u8>]) -> Result<LinkObjectRefs<'_>> {
     Ok(LinkObjectRefs {
         bytes: refs,
         archive_group,
+        archive_member,
     })
 }
 
 fn decode_link_inputs<'data, 'relocations, 'definitions>(
     objects: &[&'data [u8]],
+    object_archive_group: &[u16],
+    object_archive_member: &[u16],
     format: ObjectFormat,
     relocation_arenas: &'relocations mut [[LinkRelocation<'data>; MAX_LINK_RELOCATIONS]],
     definition_arenas: &'definitions mut [[LinkDefinition<'data>; MAX_LINK_DEFINITIONS]],
-) -> Result<Vector<LinkInput<'data, 'relocations, 'definitions>>> {
-    let mut inputs = Vector::with_capacity(objects.len())
+) -> Result<DecodedLinkInputs<'data, 'relocations, 'definitions>> {
+    if objects.len() != object_archive_group.len() || objects.len() != object_archive_member.len() {
+        return Err(anyhow!("link input origin count mismatch"));
+    }
+    let mut inputs = Vector::with_capacity(MAX_LINK_INPUTS)
         .map_err(|_| anyhow!("could not allocate decoded link input list"))?;
+    let mut archive_group = Vector::with_capacity(MAX_LINK_INPUTS)
+        .map_err(|_| anyhow!("could not allocate decoded link origin list"))?;
+    let mut archive_member = Vector::with_capacity(MAX_LINK_INPUTS)
+        .map_err(|_| anyhow!("could not allocate decoded link member list"))?;
     let mut remaining_arenas = relocation_arenas;
     let mut remaining_definitions = definition_arenas;
-    for object in objects {
-        let (arena, rest) = remaining_arenas
-            .split_first_mut()
-            .ok_or_else(|| anyhow!("link relocation arena count mismatch"))?;
-        let (definitions, definition_rest) = remaining_definitions
-            .split_first_mut()
-            .ok_or_else(|| anyhow!("link definition arena count mismatch"))?;
-        let input = match format {
-            ObjectFormat::Coff => decode_x86_64_coff_with_definitions(object, arena, definitions),
-            ObjectFormat::Elf64 => decode_x86_64_elf_with_definitions(object, arena, definitions),
+    for (object_index, object) in objects.iter().enumerate() {
+        let fragment_count = match format {
+            ObjectFormat::Coff => {
+                if x86_64_coff_unwind_section_count(object).map_err(mrml_error::message)? != 0 {
+                    return Err(anyhow!(
+                        "COFF unwind sections require PE exception metadata support"
+                    ));
+                }
+                x86_64_coff_text_fragment_count(object).map_err(mrml_error::message)?
+            }
+            ObjectFormat::Elf64 => 1,
+        };
+        if inputs
+            .len()
+            .checked_add(fragment_count)
+            .unwrap_or(usize::MAX)
+            > MAX_LINK_INPUTS
+        {
+            return Err(anyhow!("expanded link fragment count exceeds 256"));
         }
-        .map_err(mrml_error::message)?;
-        inputs
-            .try_push(input)
-            .map_err(|_| anyhow!("could not allocate decoded link input list"))?;
-        remaining_arenas = rest;
-        remaining_definitions = definition_rest;
+        for fragment_index in 0..fragment_count {
+            let (arena, rest) = remaining_arenas
+                .split_first_mut()
+                .ok_or_else(|| anyhow!("link relocation arena count mismatch"))?;
+            let (definitions, definition_rest) = remaining_definitions
+                .split_first_mut()
+                .ok_or_else(|| anyhow!("link definition arena count mismatch"))?;
+            let input = match format {
+                ObjectFormat::Coff => {
+                    decode_x86_64_coff_text_fragment(object, fragment_index, arena, definitions)
+                }
+                ObjectFormat::Elf64 => {
+                    decode_x86_64_elf_with_definitions(object, arena, definitions)
+                }
+            }
+            .map_err(mrml_error::message)?;
+            inputs
+                .try_push(input)
+                .map_err(|_| anyhow!("could not allocate decoded link input list"))?;
+            archive_group
+                .try_push(object_archive_group[object_index])
+                .map_err(|_| anyhow!("could not allocate decoded link origin list"))?;
+            archive_member
+                .try_push(object_archive_member[object_index])
+                .map_err(|_| anyhow!("could not allocate decoded link member list"))?;
+            remaining_arenas = rest;
+            remaining_definitions = definition_rest;
+        }
     }
-    Ok(inputs)
+    Ok(DecodedLinkInputs {
+        inputs,
+        archive_group,
+        archive_member,
+    })
 }
 
 fn definition_arenas<'a>(
@@ -283,13 +350,39 @@ fn relocation_arenas<'a>(
     Ok(arenas)
 }
 
+fn expanded_fragment_count(objects: &[&[u8]], format: ObjectFormat) -> Result<usize> {
+    let mut count = 0usize;
+    for object in objects {
+        let object_fragments = match format {
+            ObjectFormat::Coff => {
+                if x86_64_coff_unwind_section_count(object).map_err(mrml_error::message)? != 0 {
+                    return Err(anyhow!(
+                        "COFF unwind sections require PE exception metadata support"
+                    ));
+                }
+                x86_64_coff_text_fragment_count(object).map_err(mrml_error::message)?
+            }
+            ObjectFormat::Elf64 => 1,
+        };
+        count = count
+            .checked_add(object_fragments)
+            .ok_or_else(|| anyhow!("expanded link fragment count overflow"))?;
+        if count > MAX_LINK_INPUTS {
+            return Err(anyhow!("expanded link fragment count exceeds 256"));
+        }
+    }
+    Ok(count)
+}
+
 fn selected_link_inputs<'data, 'relocations, 'definitions>(
     inputs: &[LinkInput<'data, 'relocations, 'definitions>],
     archive_group: &[u16],
+    archive_member: &[u16],
     entry: &str,
 ) -> Result<Vector<LinkInput<'data, 'relocations, 'definitions>>> {
-    let selection = select_ordered_static_link_inputs(inputs, archive_group, entry)
-        .map_err(mrml_error::message)?;
+    let selection =
+        select_ordered_static_link_members(inputs, archive_group, archive_member, entry)
+            .map_err(mrml_error::message)?;
     let mut selected = Vector::with_capacity(selection.indices().len())
         .map_err(|_| anyhow!("could not allocate selected link input list"))?;
     for index in selection.indices() {
@@ -303,13 +396,27 @@ fn selected_link_inputs<'data, 'relocations, 'definitions>(
 fn write_linked_pe(
     objects: &[&[u8]],
     archive_group: &[u16],
+    archive_member: &[u16],
     entry: &str,
     output: &str,
 ) -> Result<()> {
-    let mut arenas = relocation_arenas(objects.len())?;
-    let mut definitions = definition_arenas(objects.len())?;
-    let inputs = decode_link_inputs(objects, ObjectFormat::Coff, &mut arenas, &mut definitions)?;
-    let selected = selected_link_inputs(&inputs, archive_group, entry)?;
+    let fragment_count = expanded_fragment_count(objects, ObjectFormat::Coff)?;
+    let mut arenas = relocation_arenas(fragment_count)?;
+    let mut definitions = definition_arenas(fragment_count)?;
+    let decoded = decode_link_inputs(
+        objects,
+        archive_group,
+        archive_member,
+        ObjectFormat::Coff,
+        &mut arenas,
+        &mut definitions,
+    )?;
+    let selected = selected_link_inputs(
+        &decoded.inputs,
+        &decoded.archive_group,
+        &decoded.archive_member,
+        entry,
+    )?;
     let payload = selected_payload_bound(&selected)?;
     if payload <= 16 * 1024 {
         return write_pe_image::<{ 32 * 1024 }, { 16 * 1024 }>(&selected, entry, output);
@@ -339,13 +446,27 @@ fn write_pe_image<const MAX_IMAGE: usize, const MAX_LINKED: usize>(
 fn write_linked_elf(
     objects: &[&[u8]],
     archive_group: &[u16],
+    archive_member: &[u16],
     entry: &str,
     output: &str,
 ) -> Result<()> {
-    let mut arenas = relocation_arenas(objects.len())?;
-    let mut definitions = definition_arenas(objects.len())?;
-    let inputs = decode_link_inputs(objects, ObjectFormat::Elf64, &mut arenas, &mut definitions)?;
-    let selected = selected_link_inputs(&inputs, archive_group, entry)?;
+    let fragment_count = expanded_fragment_count(objects, ObjectFormat::Elf64)?;
+    let mut arenas = relocation_arenas(fragment_count)?;
+    let mut definitions = definition_arenas(fragment_count)?;
+    let decoded = decode_link_inputs(
+        objects,
+        archive_group,
+        archive_member,
+        ObjectFormat::Elf64,
+        &mut arenas,
+        &mut definitions,
+    )?;
+    let selected = selected_link_inputs(
+        &decoded.inputs,
+        &decoded.archive_group,
+        &decoded.archive_member,
+        entry,
+    )?;
     let payload = selected_payload_bound(&selected)?;
     if payload <= 16 * 1024 {
         return write_elf_image::<{ 32 * 1024 }, { 16 * 1024 }>(&selected, entry, output);
@@ -410,6 +531,21 @@ mrml_runtime::mrml_entrypoint!(application_main);
 mod tests {
     use super::*;
 
+    fn append_archive_member(archive: &mut Vector<u8>, name: &str, bytes: &[u8]) {
+        let mut header = [b' '; 60];
+        let name = name.as_bytes();
+        header[..name.len()].copy_from_slice(name);
+        assert!(bytes.len() < 10);
+        header[48] = b'0' + u8::try_from(bytes.len()).unwrap();
+        header[58..60].copy_from_slice(b"`\n");
+        for byte in header.into_iter().chain(bytes.iter().copied()) {
+            archive.try_push(byte).unwrap();
+        }
+        if bytes.len() % 2 != 0 {
+            archive.try_push(b'\n').unwrap();
+        }
+    }
+
     #[test]
     fn parses_only_supported_object_formats() {
         assert_eq!(
@@ -463,5 +599,19 @@ mod tests {
             selected_payload_bound(&inputs).unwrap(),
             4096 + 3 + 5 + 7 + 64
         );
+    }
+
+    #[test]
+    fn preserves_archive_and_member_identity_before_fragment_expansion() {
+        let mut archive = Vector::with_capacity(256).unwrap();
+        for byte in b"!<arch>\n" {
+            archive.try_push(*byte).unwrap();
+        }
+        append_archive_member(&mut archive, "first.o/", b"one");
+        append_archive_member(&mut archive, "second.o/", b"two");
+        let objects = [archive, Vector::from(*b"explicit")];
+        let refs = link_object_refs(&objects).unwrap();
+        assert_eq!(&refs.archive_group[..], &[1, 1, 0]);
+        assert_eq!(&refs.archive_member[..], &[1, 2, 0]);
     }
 }

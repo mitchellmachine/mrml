@@ -156,8 +156,19 @@ REL32 targets remain named symbols, while same-fragment targets remain checked
 local offsets. The legacy one-input decoder explicitly rejects multiple text
 fragments and any nonempty `.pdata$...` or `.xdata$...` section, preventing
 metadata loss. A synthetic two-fragment object test resolves and links an entry
-call to its sibling helper. Driver expansion and unwind serialization remain
-the next gate, so ordinary multi-section gnullvm objects are not yet admitted.
+call to its sibling helper. The driver now expands each COFF object into its
+bounded text-fragment count, allocates relocation and definition arenas to the
+exact expanded count, and propagates the source `(archive, member)` identity to
+every fragment before object-atomic selection. Objects with unwind sections
+still reject before expansion, so ordinary unwind-bearing gnullvm objects are
+not yet admitted.
+
+After driver fragment expansion, the controlled one-object procedure measured
+MRML at 9.275 ms median and 9.361 ms mean versus pinned gnullvm rust-lld at
+26.598 ms median and 26.981 ms mean across 50 iterations after five warmups.
+Both 1,024-byte outputs returned 42. This confirms that exact-count arena
+allocation preserved the narrow fast path; it is not multi-fragment,
+archive-scale, or general superiority evidence.
 
 On 2026-08-28, the controlled Windows cold-process probe linked the same
 93-byte MRML COFF object 50 times after five interleaved warmups. MRML produced
