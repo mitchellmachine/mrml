@@ -1,5 +1,14 @@
 # Patent review log
 
+## 2026-08-28 — Bounded ELF initializer-array retention
+
+Patent review: **NOT_TRIGGERED**. This increment retains and lays out one
+conventional unsuffixed ELF `SHT_INIT_ARRAY` section and applies the existing
+checked static relocation machinery to its pointer entries. It implements
+published object-format and static-link behavior and adds no novel ordering,
+graph, deduplication, folding, compression, cryptographic, or loader mechanism.
+This technical screen is not legal advice or patent clearance.
+
 ## 2026-08-28 — Prepared ELF COMDAT selection views
 
 Patent review: **NOT_TRIGGERED**. This increment reuses the already validated

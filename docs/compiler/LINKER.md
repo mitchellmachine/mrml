@@ -826,6 +826,21 @@ pinned libcore. All executable checks exited 42. This run shows parity on the
 tiny sample and an advantage on the two archive samples; it is not a general
 speed claim.
 
+Selected ELF links now retain the conventional unsuffixed `SHT_INIT_ARRAY`
+section even when ordinary relocation reachability does not point to it. The
+typed decoder requires the exact `.init_array` name, writable/allocatable
+flags with only optional `SHF_GNU_RETAIN`, eight-byte alignment and total size,
+and the pinned-rustc forms `sh_entsize = 0` or `8`. It lays the array out at the
+front of the writable segment and applies its checked static relocations, so
+the referenced initializer body also survives section GC. The independently
+authored Rust 2024 probe emits one retained initializer that is never called by
+`start`; MRML and pinned gnullvm rust-lld both retained its exact optimized
+body and produced executables that exited 42. MRML emitted 8,200 bytes and
+rust-lld 1,536 bytes. This is bounded retention and relocation evidence, not
+runtime constructor execution: `.preinit_array`, `.fini_array`, priority-
+suffixed ordering, synthesized boundary symbols, and startup-runtime iteration
+remain unsupported.
+
 The selected relocation path also admits conventional unsigned absolute-32
 `R_X86_64_32` records. It computes the ABI-defined `S + A` value only after
 resolving the exact selected target and rejects any result outside `u32` rather

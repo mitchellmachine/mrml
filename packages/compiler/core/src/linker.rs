@@ -656,6 +656,7 @@ pub fn inventory_x86_64_elf_symbols(
 pub enum ElfSectionKind {
     Text,
     ReadonlyData,
+    InitializerArray,
     WritableData,
     ZeroedData,
     Unwind,
@@ -839,7 +840,9 @@ pub fn layout_x86_64_elf_selected_sections(
         input.sections.sections().iter().any(|section| {
             matches!(
                 section.kind,
-                ElfSectionKind::WritableData | ElfSectionKind::ZeroedData
+                ElfSectionKind::InitializerArray
+                    | ElfSectionKind::WritableData
+                    | ElfSectionKind::ZeroedData
             )
         })
     });
@@ -862,6 +865,7 @@ pub fn layout_x86_64_elf_selected_sections(
         ElfSectionKind::Text,
         ElfSectionKind::ReadonlyData,
         ElfSectionKind::Unwind,
+        ElfSectionKind::InitializerArray,
         ElfSectionKind::WritableData,
         ElfSectionKind::ZeroedData,
     ];
@@ -873,7 +877,7 @@ pub fn layout_x86_64_elf_selected_sections(
                 cursor = align(cursor, PAGE)?;
             }
             layout.readonly_offset = cursor;
-        } else if kind == ElfSectionKind::WritableData {
+        } else if kind == ElfSectionKind::InitializerArray {
             layout.readonly_length = cursor
                 .checked_sub(layout.readonly_offset)
                 .ok_or(LinkerError::OffsetOverflow)?;
@@ -1389,6 +1393,15 @@ pub fn decode_x86_64_elf_selected_sections<'a>(
             && flags & 0x4 == 0
         {
             ElfSectionKind::WritableData
+        } else if name == ".init_array"
+            && section_type == 14
+            && flags & 3 == 3
+            && flags & !0x20_0003 == 0
+            && alignment == 8
+            && size % 8 == 0
+            && matches!(read_u64_elf(object, header + 56)?, 0 | 8)
+        {
+            ElfSectionKind::InitializerArray
         } else if (name == ".bss" || name.starts_with(".bss."))
             && section_type == 8
             && flags & 0x3 == 0x3
@@ -2862,7 +2875,7 @@ pub fn select_x86_64_elf_sections(
     root_symbols: &[&str],
 ) -> Result<ElfSectionSelection, LinkerError> {
     let symbol_table = elf_symbol_table_view(object)?;
-    select_x86_64_elf_sections_from_view(object, root_symbols, symbol_table, 0, None)
+    select_x86_64_elf_sections_from_view(object, root_symbols, symbol_table, 0, None, None)
 }
 
 fn select_x86_64_elf_sections_from_view(
@@ -2871,6 +2884,7 @@ fn select_x86_64_elf_sections_from_view(
     symbol_table: ElfSymbolTableView<'_>,
     object_index: usize,
     prepared_groups: Option<&[ElfComdatGroup<'_>]>,
+    prepared_initializers: Option<&[ElfInitializerSection]>,
 ) -> Result<ElfSectionSelection, LinkerError> {
     if root_symbols.is_empty() {
         return Err(LinkerError::EmptySymbol);
@@ -2914,6 +2928,24 @@ fn select_x86_64_elf_sections_from_view(
         }
         if !found {
             return Err(LinkerError::UndefinedSymbol);
+        }
+    }
+
+    if let Some(initializers) = prepared_initializers {
+        for initializer in initializers {
+            let section = usize::from(initializer.section_index);
+            if !elf_section_is_discarded(prepared_groups.unwrap_or(&[]), object_index, section) {
+                selected[section] = true;
+            }
+        }
+    } else {
+        for section in 1..section_count {
+            let header = elf_section_header(section_offset, section_count, section)?;
+            if read_u32_elf(object, header + 4)? == 14
+                && !elf_section_is_discarded(prepared_groups.unwrap_or(&[]), object_index, section)
+            {
+                selected[section] = true;
+            }
         }
     }
 
@@ -3096,6 +3128,12 @@ pub fn select_x86_64_elf_link_sections_detailed<'a>(
     let mut comdat_winners = [None; MAX_ELF_COMDAT_GROUPS];
     let mut comdat_winner_count = 0usize;
     let mut comdat_group_count = 0usize;
+    let empty_initializer = ElfInitializerSection {
+        object_index: 0,
+        section_index: 0,
+    };
+    let mut initializer_sections = [empty_initializer; MAX_LINK_INPUTS];
+    let mut initializer_count = 0usize;
     let empty_group = ElfComdatGroup {
         object_index: 0,
         members: &[],
@@ -3105,10 +3143,31 @@ pub fn select_x86_64_elf_link_sections_detailed<'a>(
     for (object_index, object) in objects.iter().enumerate() {
         let symbol_table = symbol_tables[object_index].ok_or(LinkerError::InvalidElf)?;
         for group_index in 1..symbol_table.section_count {
+            let header = elf_section_header(
+                symbol_table.section_offset,
+                symbol_table.section_count,
+                group_index,
+            )?;
+            let section_type = read_u32_elf(object, header + 4)?;
+            if section_type == 14 {
+                if initializer_count == initializer_sections.len() {
+                    return Err(LinkerError::TooManyElfSections.into());
+                }
+                initializer_sections[initializer_count] = ElfInitializerSection {
+                    object_index: u16::try_from(object_index)
+                        .map_err(|_| LinkerError::TooManyInputs)?,
+                    section_index: u16::try_from(group_index)
+                        .map_err(|_| LinkerError::TooManyElfSections)?,
+                };
+                initializer_count += 1;
+            }
+            if section_type != 17 {
+                continue;
+            }
             let Some((signature, members)) =
                 elf_comdat_group_view(object, symbol_table, group_index)?
             else {
-                continue;
+                return Err(LinkerError::InvalidElf.into());
             };
             if comdat_group_count == MAX_ELF_COMDAT_GROUPS {
                 return Err(LinkerError::TooManyElfComdatGroups.into());
@@ -3155,12 +3214,17 @@ pub fn select_x86_64_elf_link_sections_detailed<'a>(
             .partition_point(|group| group.object_index < object_index_u16);
         let group_end = comdat_groups[..comdat_group_count]
             .partition_point(|group| group.object_index <= object_index_u16);
+        let initializer_start = initializer_sections[..initializer_count]
+            .partition_point(|section| section.object_index < object_index_u16);
+        let initializer_end = initializer_sections[..initializer_count]
+            .partition_point(|section| section.object_index <= object_index_u16);
         let addition = select_x86_64_elf_sections_from_view(
             objects[object_index],
             &[symbol],
             symbol_table,
             object_index,
             Some(&comdat_groups[group_start..group_end]),
+            Some(&initializer_sections[initializer_start..initializer_end]),
         )?;
         let destination = &mut result.selections[object_index];
         for &section in addition.indices() {
@@ -3210,6 +3274,12 @@ struct ElfComdatGroup<'a> {
     object_index: u16,
     members: &'a [u8],
     winner: bool,
+}
+
+#[derive(Clone, Copy)]
+struct ElfInitializerSection {
+    object_index: u16,
+    section_index: u16,
 }
 
 fn elf_section_is_discarded(
@@ -7949,6 +8019,100 @@ mod tests {
         assert_eq!(
             link_x86_64_elf_selected_sections::<4096>(&objects, "entry", u64::from(u32::MAX)),
             Err(LinkerError::RelocationOverflow)
+        );
+    }
+
+    #[test]
+    fn selected_elf_places_and_relocates_initializer_arrays() {
+        let empty_section = ElfSelectedSection {
+            index: 0,
+            name: "",
+            kind: ElfSectionKind::Text,
+            bytes: &[],
+            size: 0,
+            alignment: 1,
+        };
+        let mut sections = ElfSelectedSections {
+            sections: [empty_section; MAX_LINK_INPUTS],
+            length: 2,
+        };
+        sections.sections[0] = ElfSelectedSection {
+            index: 1,
+            name: ".text",
+            kind: ElfSectionKind::Text,
+            bytes: &[0xc3],
+            size: 1,
+            alignment: 16,
+        };
+        sections.sections[1] = ElfSelectedSection {
+            index: 2,
+            name: ".init_array",
+            kind: ElfSectionKind::InitializerArray,
+            bytes: &[0; 8],
+            size: 8,
+            alignment: 8,
+        };
+        let empty_definition = ElfSelectedDefinition {
+            name: "",
+            section_index: 0,
+            offset: 0,
+            size: 0,
+            binding: ElfSelectedSymbolBinding::Global,
+            visibility: ElfSelectedSymbolVisibility::Default,
+            kind: ElfSelectedSymbolKind::Unspecified,
+        };
+        let mut definitions = ElfSelectedDefinitions {
+            definitions: [empty_definition; MAX_LINK_DEFINITIONS],
+            length: 2,
+        };
+        definitions.definitions[0] = ElfSelectedDefinition {
+            name: "entry",
+            section_index: 1,
+            offset: 0,
+            size: 1,
+            binding: ElfSelectedSymbolBinding::Global,
+            visibility: ElfSelectedSymbolVisibility::Default,
+            kind: ElfSelectedSymbolKind::Function,
+        };
+        definitions.definitions[1] = ElfSelectedDefinition {
+            name: "initializer",
+            section_index: 1,
+            offset: 0,
+            size: 1,
+            binding: ElfSelectedSymbolBinding::Global,
+            visibility: ElfSelectedSymbolVisibility::Hidden,
+            kind: ElfSelectedSymbolKind::Function,
+        };
+        let empty_relocation = ElfSelectedRelocation {
+            section_index: 0,
+            offset: 0,
+            kind: ElfSelectedRelocationKind::Absolute64,
+            target: ElfSelectedRelocationTarget::Absolute(0),
+            addend: 0,
+        };
+        let mut relocations = ElfSelectedRelocations {
+            relocations: [empty_relocation; MAX_LINK_RELOCATIONS],
+            length: 1,
+        };
+        relocations.relocations[0] = ElfSelectedRelocation {
+            section_index: 2,
+            offset: 0,
+            kind: ElfSelectedRelocationKind::Absolute64,
+            target: ElfSelectedRelocationTarget::Symbol("initializer"),
+            addend: 0,
+        };
+        let object = [ElfSelectedObject {
+            sections: &sections,
+            definitions: &definitions,
+            relocations: &relocations,
+        }];
+        let linked = link_x86_64_elf_selected_sections::<8192>(&object, "entry", 0x401000).unwrap();
+        assert_eq!(linked.layout.writable_offset, 4096);
+        assert_eq!(linked.layout.file_length, 4104);
+        assert_eq!(linked.layout.memory_length, 4104);
+        assert_eq!(
+            u64::from_le_bytes(linked.bytes()[4096..4104].try_into().unwrap()),
+            0x401000
         );
     }
 
