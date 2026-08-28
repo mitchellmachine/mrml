@@ -9,8 +9,8 @@ the named commit and current source.
 ## Recoverable baseline
 
 - Branch: `main`
-- Compiler checkpoint commit: `9af463ed`
-  (`compiler: inventory large ELF section tables`)
+- Compiler checkpoint commit: `323bef47`
+  (`compiler: trace reachable ELF sections`)
 - Remote state when recorded: `origin/main` includes the bounded MRML-owned
   static-link core, exact MRML COFF and ELF64 ingestion, deterministic
   import-free PE32+/ELF64 executable serialization, explicit compiler-driver
@@ -60,6 +60,21 @@ against all prior accepted probes. Keep Cargo on edition 2024 until a newer
 named edition can be adopted through a pinned, workspace-wide migration.
 
 ## Latest bounded linker milestone
+
+Commit `323bef47` adds a typed allocation-free ELF section graph pass. Exact
+defined roots traverse same-object RELA symbol edges to an ordered fixed point
+under the 2,048-section inventory and 256-result bounds. The pass validates the
+symbol/string-table relationship, 24-byte symbol and relocation entries,
+relocation target/link fields, and every symbol and section index. Undefined
+and absolute symbols add no same-object edge; missing roots and malformed or
+oversized graphs fail closed.
+
+Focused probes show an external call retains only root text, while a local
+read-only relocation retains exactly root text and its `.rodata`; missing roots
+are rejected. Windows and Linux each passed 723 core unit tests and every
+integration suite. The current decoder/layout does not consume this selection
+yet, so section GC, smaller outputs, and pinned-core symbol execution remain
+unimplemented gates.
 
 Commit `9af463ed` separates section inventory bounds: COFF remains at 256,
 while the primary, unwind, and writable ELF64 passes admit at most 2,048
