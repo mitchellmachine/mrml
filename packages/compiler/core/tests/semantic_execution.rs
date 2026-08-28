@@ -42,6 +42,10 @@ const MRML_V1_STR_RETURN_SOURCE: &str = "#[mrml_abi::export(version = 1)] pub fn
 const MRML_V1_WIDE_NARROW_SOURCE: &str = "#[mrml_abi::export(version = 1)] pub fn probe(unsigned: u128, signed: i128) -> u64 { (unsigned as u32 as u64) ^ (signed as i16 as u64) }";
 const MRML_V1_WIDE_RETURN_SOURCE: &str =
     "#[mrml_abi::export(version = 1)] pub fn probe(input: u128) -> u128 { input }";
+const MRML_V1_UNSIGNED_WIDEN_SOURCE: &str =
+    "#[mrml_abi::export(version = 1)] pub fn probe(input: u64) -> u128 { input as u128 }";
+const MRML_V1_SIGNED_WIDEN_SOURCE: &str =
+    "#[mrml_abi::export(version = 1)] pub fn probe(input: i64) -> i128 { input as i128 }";
 #[cfg(target_os = "windows")]
 const MRML_V1_SPLIT_SLICE_SOURCE: &str = "#[mrml_abi::export(version = 1)] pub fn probe(a: u64, b: u64, c: u64, input: &[u8]) -> u64 { a + b * 2 + c * 3 + input.len() as u64 }";
 #[cfg(not(target_os = "windows"))]
@@ -771,6 +775,67 @@ fn mrml_v1_wide_integer_parameters_return_both_words() {
             MRML_V1_WIDE_RETURN_SOURCE,
             "for input in [0x0123_4567_89ab_cdef_fedc_ba98_7654_3210u128, 0xfedc_ba98_7654_3210_0123_4567_89ab_cdefu128] { let returned = probe(input); println!(\"{}\", returned as u64); println!(\"{}\", (returned >> 64) as u64); }",
         )
+    );
+}
+
+unsafe fn call_mrml_v1_word_to_wide(function: *const u8, input: u64) -> u128 {
+    let returned_low: u64;
+    let returned_high: u64;
+    #[cfg(target_os = "windows")]
+    unsafe {
+        core::arch::asm!(
+            "sub rsp, 32",
+            "call {function}",
+            "add rsp, 32",
+            function = in(reg) function,
+            in("rcx") input,
+            lateout("rax") returned_low,
+            lateout("rdx") returned_high,
+            clobber_abi("C"),
+        );
+    }
+    #[cfg(not(target_os = "windows"))]
+    unsafe {
+        core::arch::asm!(
+            "call {function}",
+            function = in(reg) function,
+            in("rdi") input,
+            lateout("rax") returned_low,
+            lateout("rdx") returned_high,
+            clobber_abi("C"),
+        );
+    }
+    (u128::from(returned_high) << 64) | u128::from(returned_low)
+}
+
+#[test]
+fn mrml_v1_machine_word_widening_sets_the_exact_high_word() {
+    let unsigned = compile(MRML_V1_UNSIGNED_WIDEN_SOURCE);
+    let signed = compile(MRML_V1_SIGNED_WIDEN_SOURCE);
+    let inputs = [0u64, 1, i64::MAX as u64, i64::MIN as u64, u64::MAX];
+    let actual_unsigned = inputs
+        .into_iter()
+        .flat_map(|input| {
+            let returned = unsafe { call_mrml_v1_word_to_wide(unsigned.pointer, input) };
+            [returned as u64, (returned >> 64) as u64]
+        })
+        .collect::<Vec<_>>();
+    let actual_signed = inputs
+        .into_iter()
+        .flat_map(|input| {
+            let returned = unsafe { call_mrml_v1_word_to_wide(signed.pointer, input) };
+            [returned as u64, (returned >> 64) as u64]
+        })
+        .collect::<Vec<_>>();
+    let driver = "for input in [0u64, 1, i64::MAX as u64, i64::MIN as u64, u64::MAX] { let returned = probe(input); println!(\"{}\", returned as u64); println!(\"{}\", (returned >> 64) as u64); }";
+    assert_eq!(
+        actual_unsigned,
+        rustc_mrml_v1_observations(MRML_V1_UNSIGNED_WIDEN_SOURCE, driver)
+    );
+    let signed_driver = "for input in [0i64, 1, i64::MAX, i64::MIN, -1] { let returned = probe(input); println!(\"{}\", returned as u64); println!(\"{}\", ((returned as u128) >> 64) as u64); }";
+    assert_eq!(
+        actual_signed,
+        rustc_mrml_v1_observations(MRML_V1_SIGNED_WIDEN_SOURCE, signed_driver)
     );
 }
 

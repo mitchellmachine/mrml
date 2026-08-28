@@ -19207,7 +19207,10 @@ fn runtime_expression_type_with_locals<
             }
             match target {
                 crate::CastType::Integer(target) => {
-                    if runtime_width(target.name()).is_none() {
+                    if runtime_width(target.name()).is_none()
+                        && !runtime_integer_layout(target.name())
+                            .is_some_and(|layout| layout.words == 2)
+                    {
                         return Err(CodegenErrorKind::UnsupportedRuntimeType);
                     }
                     Ok(RuntimeExpressionType::Integer(Some(target)))

@@ -6872,7 +6872,7 @@ impl<
         self.emit_stack_slot(slot)
     }
 
-    fn emit_wide_parameter_return<const MAX_NODES: usize>(
+    fn emit_wide_integer_return<const MAX_NODES: usize>(
         &mut self,
         tree: &crate::ExpressionTree<'_, MAX_NODES>,
         id: crate::ExprId,
@@ -6880,6 +6880,35 @@ impl<
         let expression = tree
             .expression(id)
             .ok_or(self.error(CodegenErrorKind::RuntimeExpressionUnsupported))?;
+        if let ExprKind::Cast { operand, target } = expression.kind {
+            let operand_type = runtime_expression_type_with_locals(
+                self.function,
+                self.resolver,
+                &self.locals[..self.saved_locals],
+                tree,
+                operand,
+                1,
+            )
+            .map_err(|kind| self.error(kind))?;
+            let sign_extend = match (operand_type, target) {
+                (
+                    RuntimeExpressionType::Integer(Some(crate::IntegerType::U64)),
+                    crate::CastType::Integer(crate::IntegerType::U128),
+                ) => false,
+                (
+                    RuntimeExpressionType::Integer(Some(crate::IntegerType::I64)),
+                    crate::CastType::Integer(crate::IntegerType::I128),
+                ) => true,
+                _ => return Err(self.error(CodegenErrorKind::RuntimeExpressionUnsupported)),
+            };
+            self.emit_expression(tree, operand, 1)?;
+            if sign_extend {
+                self.emit(&[0x48, 0x89, 0xc2, 0x48, 0xc1, 0xfa, 0x3f])?;
+            } else {
+                self.emit(&[0x31, 0xd2])?;
+            }
+            return Ok(());
+        }
         let ExprKind::Identifier(name) = expression.kind else {
             return Err(self.error(CodegenErrorKind::RuntimeExpressionUnsupported));
         };
@@ -9764,7 +9793,7 @@ impl<
                 crate::IntegerType::U128 | crate::IntegerType::I128
             ))
         ) {
-            self.emit_wide_parameter_return(tree, root)?;
+            self.emit_wide_integer_return(tree, root)?;
             return self.emit_epilogue();
         }
         if matches!(
