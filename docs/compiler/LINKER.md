@@ -813,6 +813,19 @@ measured MRML versus rust-lld at 5.206 versus 4.640 ms for the group-free tiny
 trait-object link and 5.617 versus 6.076 ms for reachable pinned libcore. The
 tiny path remains slower; no broad speed-superiority claim follows.
 
+The cross-object fixed point now reuses that same validated COMDAT inventory
+instead of rediscovering every `SHT_GROUP` section for each newly resolved
+symbol. The inventory retains both winner and loser views, is partitioned to
+the exact object before section closure, and therefore keeps loser filtering
+and atomic winner expansion on one prepared representation. The standalone
+one-object API still validates and discovers its groups locally. Current
+50-iteration/five-warmup samples measured MRML versus pinned rust-lld at 5.111
+versus 5.109 ms for the tiny trait-object link, 5.076 versus 5.422 ms for the
+transitive 16-codegen-unit archive, and 5.700 versus 7.097 ms for reachable
+pinned libcore. All executable checks exited 42. This run shows parity on the
+tiny sample and an advantage on the two archive samples; it is not a general
+speed claim.
+
 The selected relocation path also admits conventional unsigned absolute-32
 `R_X86_64_32` records. It computes the ABI-defined `S + A` value only after
 resolving the exact selected target and rejects any result outside `u32` rather

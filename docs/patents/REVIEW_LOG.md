@@ -1,5 +1,15 @@
 # Patent review log
 
+## 2026-08-28 — Prepared ELF COMDAT selection views
+
+Patent review: **NOT_TRIGGERED**. This increment reuses the already validated
+ordered ELF COMDAT inventory during the existing bounded section-reachability
+fixed point instead of rediscovering group sections for each resolved symbol.
+It changes neither COMDAT winner rules nor graph semantics and adds no novel
+deduplication, folding, hashing, scheduling, compression, cryptographic, or
+loader mechanism. This technical screen is not legal advice or patent
+clearance.
+
 ## 2026-08-28 — Ordered cross-object ELF COMDAT selection
 
 Patent review: **NOT_TRIGGERED**. This increment applies conventional ELF
