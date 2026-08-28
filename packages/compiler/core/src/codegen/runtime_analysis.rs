@@ -12386,7 +12386,12 @@ fn runtime_reference_call_origin_parameter<const MAX_PARAMETERS: usize, const MA
         match items {
             [] => Some(ParameterProjection::Identity),
             [Some(RuntimePlaceProjection::Index)] => Some(ParameterProjection::Index),
-            [Some(RuntimePlaceProjection::Subslice)] => Some(ParameterProjection::Subslice),
+            _ if items
+                .iter()
+                .all(|projection| *projection == Some(RuntimePlaceProjection::Subslice)) =>
+            {
+                Some(ParameterProjection::Subslice)
+            }
             _ if items.last() == Some(&Some(RuntimePlaceProjection::Index))
                 && items[..items.len().checked_sub(1)?]
                     .iter()

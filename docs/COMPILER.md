@@ -996,8 +996,8 @@ remained unsupported. This was direct recursive lowering evidence at depth
 three, not unbounded-depth evidence or general slice-value support. Both hosts
 passed the same 1,035-test gate.
 
-Callee-return origin classification now recognizes the bounded structural form
-of an optional leading dereference, one or more contiguous `Subslice`
+Callee-return scalar-origin classification now recognizes the bounded structural
+form of an optional leading dereference, one or more contiguous `Subslice`
 projections, and exactly one final `Index`. It no longer encodes separate one-
 and two-subslice enum cases. Element type and mutability compatibility remain
 mandatory, and any intervening index, tuple field, dereference, or other order
@@ -1018,10 +1018,22 @@ recursively composes the checked pointer/length pair and records that same place
 without appending a scalar `Index`. Fixed-array and runtime-slice probes create
 the fat-reference local, index it afterward, and mutate only the expected one of
 five elements for three start/index combinations on Windows gnullvm and Arch
-Linux WSL. Returning a repeated-subslice value through a helper remains
-unclassified. This is direct/local depth-two slice-value evidence, not general
-fat-reference dataflow or arbitrary-depth execution evidence. Both hosts passed
-the same 1,035-test gate.
+Linux WSL. At that checkpoint, returning a repeated-subslice value through a
+helper remained unclassified. This was direct/local depth-two slice-value
+evidence, not general fat-reference dataflow or arbitrary-depth execution
+evidence. Both hosts passed the same 1,035-test gate.
+
+The slice-result branch of the callee classifier now accepts the same optional
+leading dereference followed by one or more contiguous `Subslice` projections,
+without a final scalar index. Compatible fixed-array and runtime-slice
+parameters therefore retain their origin through a repeated-subslice helper
+return. Caller analysis rejects a competing mutable borrow while the returned
+fat reference remains live and restores access after its last indexed use.
+Direct and helper probes produce the same pointer/length-selected mutations for
+three cases on Windows gnullvm and Arch Linux WSL. Mixed projection orders,
+element mismatches, and shared-to-mutable transfers remain unclassified. This is
+bounded aggregate-origin transfer, not index-sensitive disjointness or general
+fat-reference dataflow. Both hosts passed the same 1,035-test gate.
 
 The repeated-subslice semantic harness now isolates all four checked failure
 layers at depth three. An inner start beyond the runtime owner length, second-
