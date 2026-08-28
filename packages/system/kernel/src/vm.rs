@@ -247,6 +247,75 @@ impl<const N: usize> VmTable<N> {
         decrement(&mut self.slot_mut(id)?.pinned_ranges)
     }
 
+    /// Installs a policy mapping and accounts it against the exact VM as one
+    /// transaction. Counter failure rolls the mapping back before returning.
+    pub fn map_region<const M: usize>(
+        &mut self,
+        id: VmId,
+        memory: &mut GuestMemory<M>,
+        region: GuestRegion,
+    ) -> Result<GuestMappingId, VmError> {
+        self.slot(id)?;
+        let mapping = memory.map(region)?;
+        if let Err(error) = self.mapping_attached(id) {
+            if memory.unmap(mapping).is_err() {
+                let _ = self.poison(id, ExecutionPoisonReason::PageTableRemovalUncertain);
+            }
+            return Err(error);
+        }
+        Ok(mapping)
+    }
+
+    /// Creates and accounts a shared alias. Neither the mapping nor either
+    /// lifecycle count becomes observable unless the whole operation commits.
+    pub fn map_alias<const M: usize>(
+        &mut self,
+        id: VmId,
+        memory: &mut GuestMemory<M>,
+        source: GuestMappingId,
+        guest_start: u64,
+    ) -> Result<GuestMappingId, VmError> {
+        self.slot(id)?;
+        let mapping = memory.map_shared_alias(source, guest_start)?;
+        if let Err(error) = self.mapping_attached(id) {
+            let _ = memory.unmap(mapping);
+            return Err(error);
+        }
+        if let Err(error) = self.alias_attached(id) {
+            let _ = self.mapping_retired(id);
+            if memory.unmap(mapping).is_err() {
+                let _ = self.poison(id, ExecutionPoisonReason::PageTableRemovalUncertain);
+            }
+            return Err(error);
+        }
+        Ok(mapping)
+    }
+
+    pub fn pin_range<const M: usize>(
+        &mut self,
+        id: VmId,
+        memory: &GuestMemory<M>,
+        range: GuestMappedRange,
+    ) -> Result<(), VmError> {
+        memory.resolve_range(range)?;
+        self.range_pinned(id)
+    }
+
+    pub fn retire_mapping<const M: usize>(
+        &mut self,
+        id: VmId,
+        memory: &mut GuestMemory<M>,
+        mapping: GuestMappingId,
+        alias: bool,
+    ) -> Result<GuestRegion, VmError> {
+        let region = memory.unmap(mapping)?;
+        if alias {
+            self.alias_retired(id)?;
+        }
+        self.mapping_retired(id)?;
+        Ok(region)
+    }
+
     fn transition(&mut self, id: VmId, from: VmState, to: VmState) -> Result<(), VmError> {
         let slot = self.slot_mut(id)?;
         if slot.state != from {
@@ -987,6 +1056,36 @@ pub fn revoke_mapping_before_resume<B: GuestMappingRevoker, const N: usize>(
     memory.unmap(id).map_err(MappingRevocationError::Policy)
 }
 
+/// Production VM-aware retirement path. Native uncertainty poisons execution;
+/// policy removal and lifecycle accounting commit only after native withdrawal.
+pub fn revoke_tracked_mapping_before_resume<
+    B: GuestMappingRevoker,
+    const V: usize,
+    const N: usize,
+>(
+    backend: &mut B,
+    vms: &mut VmTable<V>,
+    vm: VmId,
+    memory: &mut GuestMemory<N>,
+    id: GuestMappingId,
+    alias: bool,
+) -> Result<GuestRegion, MappingRevocationError<B::Error>> {
+    let region = memory.region(id).map_err(MappingRevocationError::Policy)?;
+    let bytes = region
+        .pages()
+        .checked_mul(PAGE_SIZE)
+        .ok_or(MappingRevocationError::Policy(VmError::Overflow))?;
+    if let Err(error) = backend.revoke_guest_mapping(region.guest_start(), bytes) {
+        let _ = vms.poison(vm, ExecutionPoisonReason::NativeUnmapUncertain);
+        return Err(MappingRevocationError::Backend(error));
+    }
+    vms.retire_mapping(vm, memory, id, alias)
+        .map_err(|error| {
+            let _ = vms.poison(vm, ExecutionPoisonReason::PageTableRemovalUncertain);
+            MappingRevocationError::Policy(error)
+        })
+}
+
 pub fn decode_hypercall_exit<B: VmBackend>(
     backend: &B,
     exit: VmExit,
@@ -1298,6 +1397,71 @@ mod tests {
         assert!(revoke_mapping_before_resume(&mut revoker, &mut memory, id).is_ok());
         assert_eq!(revoker.0, Some((0x9000, PAGE_SIZE)));
         assert_eq!(memory.region(id), Err(VmError::StaleMapping));
+    }
+
+    #[test]
+    fn partial_native_unmap_failure_poisons_execution_and_blocks_destruction() {
+        let mut table = VmTable::<1>::new();
+        let vm = table.create(4).unwrap();
+        table.mark_loaded(vm).unwrap();
+        let mut memory = GuestMemory::<1>::new();
+        let mapping = table
+            .map_region(
+                vm,
+                &mut memory,
+                GuestRegion::new(0x9000, PhysAddr::new(0x20_000).unwrap(), 1, true, false)
+                    .unwrap(),
+            )
+            .unwrap();
+        let mut backend = RevocationBackend {
+            fail: true,
+            request: None,
+        };
+
+        assert_eq!(
+            revoke_tracked_mapping_before_resume(
+                &mut backend,
+                &mut table,
+                vm,
+                &mut memory,
+                mapping,
+                false,
+            ),
+            Err(MappingRevocationError::Backend(()))
+        );
+        assert_eq!(
+            table.poison_reason(vm),
+            Ok(Some(ExecutionPoisonReason::NativeUnmapUncertain))
+        );
+        assert_eq!(table.start(vm), Err(VmError::ExecutionPoisoned));
+        assert_eq!(table.destroy(vm), Err(VmError::LifecycleBusy));
+        assert!(memory.region(mapping).is_ok());
+    }
+
+    #[test]
+    fn tracked_mapping_alias_and_range_counts_gate_real_resource_operations() {
+        let mut table = VmTable::<1>::new();
+        let vm = table.create(4).unwrap();
+        table.mark_loaded(vm).unwrap();
+        let mut memory = GuestMemory::<2>::new();
+        let mapping = table
+            .map_region(
+                vm,
+                &mut memory,
+                GuestRegion::new(0x1000, PhysAddr::new(0x8000).unwrap(), 1, true, false).unwrap(),
+            )
+            .unwrap();
+        let alias = table.map_alias(vm, &mut memory, mapping, 0x3000).unwrap();
+        let range = memory.prepare_range(0x3000, 16, GuestAccess::Read).unwrap();
+        table.pin_range(vm, &memory, range).unwrap();
+        table.start(vm).unwrap();
+        table.stop(vm).unwrap();
+
+        assert_eq!(table.destroy(vm), Err(VmError::LifecycleBusy));
+        table.range_unpinned(vm).unwrap();
+        table.retire_mapping(vm, &mut memory, alias, true).unwrap();
+        table.retire_mapping(vm, &mut memory, mapping, false).unwrap();
+        table.destroy(vm).unwrap();
     }
 
     #[test]

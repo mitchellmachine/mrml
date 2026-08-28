@@ -328,7 +328,7 @@ pub use vm::{
     MAX_GUEST_REGIONS, MappingRevocationError, MmioWriteCompleter, RevocableVmBackend,
     RoutedHypercall, ScheduledDeadlineVmBackend, ScheduledSmpVmBackend, ScheduledVcpuOutcome,
     VmBackend, VmDeadlineOutcome, VmError, VmExit, VmId, VmRunError, VmState, VmTable,
-    decode_hypercall_exit, revoke_mapping_before_resume,
+    decode_hypercall_exit, revoke_mapping_before_resume, revoke_tracked_mapping_before_resume,
 };
 pub use vm_dispatch::{
     ExitDisposition, IoDirection, IoPortPolicy, IoPortRule, MAX_IO_PORT_RULES, dispatch_vm_exit,

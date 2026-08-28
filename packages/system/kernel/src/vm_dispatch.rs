@@ -1,6 +1,6 @@
 use crate::{
-    CapabilitySpace, GuestMappedRange, GuestMemory, HypercallRouter, RoutedHypercall, VmBackend,
-    VmError, VmExit, VmId, VmRunError, VmTable, decode_hypercall_exit,
+    CapabilitySpace, ExecutionPoisonReason, GuestMappedRange, GuestMemory, HypercallRouter,
+    RoutedHypercall, VmBackend, VmError, VmExit, VmId, VmRunError, VmTable, decode_hypercall_exit,
 };
 
 pub const MAX_IO_PORT_RULES: usize = 32;
@@ -94,13 +94,21 @@ pub fn run_vm_once<B: VmBackend, const V: usize, const C: usize, const M: usize,
     memory: &GuestMemory<M>,
     io: &IoPortPolicy<I>,
 ) -> Result<ExitDisposition, VmRunError<B::Error>> {
+    vms.worker_started(vm).map_err(VmRunError::Policy)?;
     let exit = match backend.run(vcpu) {
         Ok(exit) => exit,
         Err(error) => {
+            if vms.worker_retired(vm).is_err() {
+                let _ = vms.poison(vm, ExecutionPoisonReason::VcpuRetirementUncertain);
+            }
             let _ = vms.fail(vm);
             return Err(VmRunError::Backend(error));
         }
     };
+    if let Err(error) = vms.worker_retired(vm) {
+        let _ = vms.poison(vm, ExecutionPoisonReason::VcpuRetirementUncertain);
+        return Err(VmRunError::Policy(error));
+    }
     dispatch_vm_exit(&*backend, vms, vm, exit, router, capabilities, memory, io)
 }
 
@@ -124,13 +132,21 @@ pub fn run_vm_once_for_mmio<
     memory: &GuestMemory<M>,
     io: &IoPortPolicy<I>,
 ) -> Result<ExitDisposition, VmRunError<B::Error>> {
+    vms.worker_started(vm).map_err(VmRunError::Policy)?;
     let exit = match backend.run(vcpu) {
         Ok(exit) => exit,
         Err(error) => {
+            if vms.worker_retired(vm).is_err() {
+                let _ = vms.poison(vm, ExecutionPoisonReason::VcpuRetirementUncertain);
+            }
             let _ = vms.fail(vm);
             return Err(VmRunError::Backend(error));
         }
     };
+    if let Err(error) = vms.worker_retired(vm) {
+        let _ = vms.poison(vm, ExecutionPoisonReason::VcpuRetirementUncertain);
+        return Err(VmRunError::Policy(error));
+    }
     dispatch_vm_exit_inner(
         &*backend,
         vms,
