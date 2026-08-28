@@ -9,8 +9,8 @@ the named commit and current source.
 ## Recoverable baseline
 
 - Branch: `main`
-- Compiler checkpoint commit: `63997977`
-  (`compiler: select ordered ELF COMDAT winners`)
+- Compiler checkpoint commit: `7488e00b`
+  (`compiler: reuse prepared ELF COMDAT views`)
 - Remote state when recorded: `origin/main` includes the bounded MRML-owned
   static-link core, exact MRML COFF and ELF64 ingestion, deterministic
   import-free PE32+/ELF64 executable serialization, explicit compiler-driver
@@ -60,6 +60,20 @@ against all prior accepted probes. Keep Cargo on edition 2024 until a newer
 named edition can be adopted through a pinned, workspace-wide migration.
 
 ## Latest bounded linker milestone
+
+Commit `7488e00b` retains every validated ordered COMDAT group as a bounded
+borrowed winner/loser view and partitions that inventory to the exact object
+before each section-closure pass. Cross-object selection therefore no longer
+rediscovers `SHT_GROUP` sections for every newly resolved symbol; the public
+one-object API retains its local validation path. The durable first/second,
+second/first, and discarded-unresolved probes continued to match the exact
+pinned gnullvm rust-lld with exits 42, 7, and 42. Windows and native Arch Linux
+each passed 735 core tests plus integrations of 1/10/351/46 tests. Final-code
+50-iteration/five-warmup samples measured MRML/rust-lld at 5.111/5.109 ms for
+the tiny trait-object link, 5.076/5.422 ms for the transitive 16-CGU archive,
+and 5.700/7.097 ms for reachable pinned libcore. This is parity on the tiny
+sample and a measured advantage on those two archive samples, not a general
+superiority claim. Patent review: **NOT_TRIGGERED**.
 
 Commit `63997977` inventories up to 4,096 validated COMDAT groups before
 cross-object symbol resolution. Exact input order selects the first signature;
