@@ -9,8 +9,8 @@ the named commit and current source.
 ## Recoverable baseline
 
 - Branch: `main`
-- Compiler checkpoint commit: `32b50f5b`
-  (`compiler: emit bounded GNU frame headers`)
+- Compiler checkpoint commit: `2bd8f3d3`
+  (`compiler: link ELF writable and BSS storage`)
 - Remote state when recorded: `origin/main` includes the bounded MRML-owned
   static-link core, exact MRML COFF and ELF64 ingestion, deterministic
   import-free PE32+/ELF64 executable serialization, explicit compiler-driver
@@ -60,6 +60,26 @@ against all prior accepted probes. Keep Cargo on edition 2024 until a newer
 named edition can be adopted through a pinned, workspace-wide migration.
 
 ## Latest bounded linker milestone
+
+Commit `2bd8f3d3` admits selected ELF `.data.*` PROGBITS and `.bss.*` NOBITS
+storage with exact writable/allocated identity, bounded power-of-two alignment,
+typed initialized versus zero-fill targets, and checked text-side
+`R_X86_64_PC32` references. All selected initialized bytes precede all BSS
+memory in a page-separated RW/NX load; file size excludes zero-fill while
+memory size includes it. Writable identities remain object-local data, not
+global symbols or archive-selection authority.
+
+Under the exact ORACLE-0002 Arch WSL environment, an independently authored
+volatile-static object with one 8-byte data section, one 8-byte BSS section,
+three writable references, and one FDE linked with the syscall entry to a
+12,296-byte ELF and exited 42. `readelf -lW` reported an 8-byte writable file
+payload and 24-byte writable memory extent. Windows and Linux each passed 712
+compiler-core tests and four driver tests. A 50-iteration/five-warmup
+same-input measurement recorded MRML at 5.004 ms median and pinned rust-lld
+with `--eh-frame-hdr` at 5.090 ms; rust-lld emitted 2,040 bytes. This is narrow
+hosted regression evidence, not general superiority. ELF TLS, COMMON symbols,
+constructors, dynamic relocations, and representative writable runtime state
+remain unsupported or unverified.
 
 Commit `32b50f5b` validates the 32-bit FDE boundaries and backward zero-identity
 CIE references behind every admitted frame relocation, then emits a bounded
