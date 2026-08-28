@@ -30,6 +30,12 @@ const MRML_ABI_FACADE: &str = include_str!("oracle_support/mrml_abi.rs");
 const MRML_V1_SCALAR_SOURCE: &str =
     "#[mrml_abi::export(version = 1)] pub fn probe(value: u64) -> u64 { value + 17 }";
 const MRML_V1_STACK_SOURCE: &str = "#[mrml_abi::export(version = 1)] pub fn probe(a: u64, b: u64, c: u64, d: u64, e: u64, f: u64, g: u64, h: u64) -> u64 { a + b * 2 + c * 3 + d * 4 + e * 5 + f * 6 + g * 7 + h * 8 }";
+const MRML_V1_SLICE_SOURCE: &str =
+    "#[mrml_abi::export(version = 1)] pub fn probe(input: &[u8]) -> u64 { input.len() as u64 }";
+#[cfg(target_os = "windows")]
+const MRML_V1_SPLIT_SLICE_SOURCE: &str = "#[mrml_abi::export(version = 1)] pub fn probe(a: u64, b: u64, c: u64, input: &[u8]) -> u64 { a + b * 2 + c * 3 + input.len() as u64 }";
+#[cfg(not(target_os = "windows"))]
+const MRML_V1_SPLIT_SLICE_SOURCE: &str = "#[mrml_abi::export(version = 1)] pub fn probe(a: u64, b: u64, c: u64, d: u64, e: u64, input: &[u8]) -> u64 { a + b * 2 + c * 3 + d * 4 + e * 5 + input.len() as u64 }";
 
 fn verify_oracle() {
     ORACLE.call_once(|| {
@@ -447,6 +453,54 @@ fn mrml_v1_scalar_facade_crosses_register_and_stack_arguments() {
             MRML_V1_STACK_SOURCE,
             "for [a, b, c, d, e, f, g, h] in [[0, 0, 0, 0, 0, 0, 0, 0], [1, 2, 3, 4, 5, 6, 7, 8], [8, 7, 6, 5, 4, 3, 2, 1]] { println!(\"{}\", probe(a, b, c, d, e, f, g, h)); }",
         )
+    );
+}
+
+#[test]
+fn mrml_v1_slice_facade_passes_pointer_and_length_words() {
+    let code = compile(MRML_V1_SLICE_SOURCE);
+    let probe: unsafe extern "C" fn(*const u8, u64) -> u64 =
+        unsafe { std::mem::transmute(code.pointer) };
+    let empty = [];
+    let short = [10, 20, 30];
+    let long = [0; 17];
+    let actual: Vec<_> = [empty.as_slice(), short.as_slice(), long.as_slice()]
+        .map(|input| unsafe { probe(input.as_ptr(), input.len() as u64) })
+        .into_iter()
+        .collect();
+    assert_eq!(
+        actual,
+        rustc_mrml_v1_observations(
+            MRML_V1_SLICE_SOURCE,
+            "for input in [&[][..], &[10, 20, 30][..], &[0; 17][..]] { println!(\"{}\", probe(input)); }",
+        )
+    );
+}
+
+#[test]
+fn mrml_v1_slice_facade_straddles_the_register_stack_boundary() {
+    let code = compile(MRML_V1_SPLIT_SLICE_SOURCE);
+    let input = [10, 20, 30, 40, 50, 60, 70];
+    #[cfg(target_os = "windows")]
+    let actual = {
+        let probe: unsafe extern "C" fn(u64, u64, u64, *const u8, u64) -> u64 =
+            unsafe { std::mem::transmute(code.pointer) };
+        unsafe { probe(2, 3, 5, input.as_ptr(), input.len() as u64) }
+    };
+    #[cfg(not(target_os = "windows"))]
+    let actual = {
+        let probe: unsafe extern "C" fn(u64, u64, u64, u64, u64, *const u8, u64) -> u64 =
+            unsafe { std::mem::transmute(code.pointer) };
+        unsafe { probe(2, 3, 5, 7, 11, input.as_ptr(), input.len() as u64) }
+    };
+    #[cfg(target_os = "windows")]
+    let driver =
+        "let input = [10, 20, 30, 40, 50, 60, 70]; println!(\"{}\", probe(2, 3, 5, &input));";
+    #[cfg(not(target_os = "windows"))]
+    let driver = "let input = [10, 20, 30, 40, 50, 60, 70]; println!(\"{}\", probe(2, 3, 5, 7, 11, &input));";
+    assert_eq!(
+        vec![actual],
+        rustc_mrml_v1_observations(MRML_V1_SPLIT_SLICE_SOURCE, driver)
     );
 }
 

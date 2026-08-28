@@ -111,25 +111,29 @@ native C or Rust aggregate classification uses these rules.
 
 The central identity, bounded facade parser, initial signature classifier,
 x86-64 in-memory value layout, and abstract call-location planner are
-implemented. Machine-code emission now admits the one-word subset after
-validating the signature and target plan: fixed-width integers through 64 bits,
-`bool`, `char`, scalar raw pointers, scalar references, and unit returns. The
-emitter uses the planned target register or stack order and does not relabel the
-function as C ABI.
+implemented. Machine-code emission now admits one-word parameters and returns
+after validating the signature and target plan: fixed-width integers through 64
+bits, `bool`, `char`, scalar raw pointers, scalar references, and unit returns.
+It also admits two-word shared or mutable slice and string parameters. The
+emitter uses the planned target register or stack order for every parameter word
+and does not relabel the function as C ABI.
 
-Parameters requiring zero or multiple words and returns requiring multiple
-words fail with a distinct typed codegen reason at the exact type span. Thus
-`u128`, `i128`, slices, and strings remain fail-closed even though their layouts
-and abstract call locations are defined. Ownership/borrowing rules beyond
-ordinary language checking, multiword machine-code lowering, link
-compatibility, and external execution evidence remain required.
+Unsupported zero-word parameters, `u128` and `i128` parameters, and returns
+requiring multiple words fail with a distinct typed codegen reason at the exact
+type span. Slice and string returns therefore remain fail-closed even though
+their layouts and abstract call locations are defined. Ownership/borrowing
+rules beyond ordinary language checking, other multiword machine-code lowering,
+link compatibility, and external execution evidence remain required.
 
-The one-word subset has controlled native execution evidence on the Windows and
+The admitted subset has controlled native execution evidence on the Windows and
 Linux test hosts: the public pipeline emits the host object, the test harness
 independently extracts its executable image, applies any bounded read-only
-relocations, changes the mapping from writable to executable, and calls a facade
-scalar function through the host's matching one-word convention. This is not
-linker, dynamic-loader, cross-language, or physical-hardware evidence.
+relocations, changes the mapping from writable to executable, and calls facade
+scalar and slice functions through the host's matching word convention. Exact
+dated-rustc observations cover the same attributed sources, including a slice
+whose pointer and length straddle the register/stack boundary on each target.
+This is not linker, dynamic-loader, cross-language, or physical-hardware
+evidence.
 
 Arrays, tuples, user aggregates, and indirect returns are not admitted. This
 checkpoint also does not establish that existing

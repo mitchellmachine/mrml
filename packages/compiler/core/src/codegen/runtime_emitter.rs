@@ -613,6 +613,9 @@ impl<
     }
 
     fn emit_prologue(&mut self, _validated_body: ValidatedRuntimeBody) -> Result<(), CodegenError> {
+        if self.function.abi == FunctionAbi::MrmlV1 {
+            return self.emit_mrml_v1_parameters();
+        }
         match self.abi {
             X86_64Abi::Windows => {
                 let mut pushed_slots = usize::from(self.uses_sret);
@@ -740,6 +743,54 @@ impl<
                     }
                 }
             }
+        }
+        Ok(())
+    }
+
+    fn emit_mrml_v1_parameters(&mut self) -> Result<(), CodegenError> {
+        let signature = crate::validate_mrml_v1_signature(self.function).map_err(|error| {
+            let span = match error.location {
+                crate::MrmlV1SignatureLocation::Function => self.function.name_span,
+                crate::MrmlV1SignatureLocation::Parameter(index) => self.function.parameters()
+                    [index]
+                    .map_or(self.function.name_span, |parameter| parameter.ty.span),
+                crate::MrmlV1SignatureLocation::Return => self
+                    .function
+                    .return_type
+                    .map_or(self.function.name_span, |return_type| return_type.span),
+            };
+            CodegenError {
+                kind: CodegenErrorKind::MrmlV1Signature(error.kind),
+                span,
+            }
+        })?;
+        let target = match self.abi {
+            X86_64Abi::SystemV => crate::MrmlV1Target::X86_64SystemV,
+            X86_64Abi::Windows => crate::MrmlV1Target::X86_64Windows,
+        };
+        let plan = crate::plan_mrml_v1_call(target, &signature).map_err(|error| CodegenError {
+            kind: CodegenErrorKind::TooManyAbiParameters,
+            span: self.function.parameters()[error.parameter]
+                .map_or(self.function.name_span, |parameter| parameter.ty.span),
+        })?;
+        let mut pushed_slots = 0;
+        for location in plan
+            .parameters()
+            .iter()
+            .flatten()
+            .flat_map(crate::MrmlV1CallValue::words)
+            .flatten()
+        {
+            match location {
+                crate::MrmlV1CallLocation::Register(register) => self.emit(
+                    mrml_v1_parameter_push_encoding(*register)
+                        .ok_or(self.error(CodegenErrorKind::TooManyAbiParameters))?,
+                )?,
+                crate::MrmlV1CallLocation::CalleeStack { offset } => {
+                    self.emit_original_stack_word_push(*offset as usize, pushed_slots)?
+                }
+            }
+            pushed_slots += 1;
         }
         Ok(())
     }
@@ -11557,6 +11608,20 @@ fn parameter_push_encoding(abi: X86_64Abi, index: usize) -> Option<&'static [u8]
         (X86_64Abi::SystemV, 0) => Some(RDI),
         (X86_64Abi::SystemV, 1) => Some(RSI),
         _ => None,
+    }
+}
+
+fn mrml_v1_parameter_push_encoding(
+    register: crate::MrmlV1Register,
+) -> Option<&'static [u8]> {
+    match register {
+        crate::MrmlV1Register::Rcx => parameter_push_encoding(X86_64Abi::Windows, 0),
+        crate::MrmlV1Register::Rdx => parameter_push_encoding(X86_64Abi::Windows, 1),
+        crate::MrmlV1Register::Rdi => parameter_push_encoding(X86_64Abi::SystemV, 0),
+        crate::MrmlV1Register::Rsi => parameter_push_encoding(X86_64Abi::SystemV, 1),
+        crate::MrmlV1Register::R8 => parameter_push_encoding(X86_64Abi::Windows, 2),
+        crate::MrmlV1Register::R9 => parameter_push_encoding(X86_64Abi::Windows, 3),
+        crate::MrmlV1Register::Rax => None,
     }
 }
 

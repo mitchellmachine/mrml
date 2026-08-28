@@ -40,8 +40,19 @@ fn validate_stable_export<const MAX_PARAMETERS: usize>(
         span: function.parameters()[error.parameter]
             .map_or(function.name_span, |parameter| parameter.ty.span),
     })?;
-    for (index, value) in plan.parameters().iter().flatten().enumerate() {
-        if value.words().len() != 1 {
+    for (index, (value, ty)) in plan
+        .parameters()
+        .iter()
+        .flatten()
+        .zip(signature.parameters().iter().flatten())
+        .enumerate()
+    {
+        if value.words().len() != 1
+            && !matches!(
+                ty,
+                crate::MrmlV1Type::Slice { .. } | crate::MrmlV1Type::Str { .. }
+            )
+        {
             return Err(CodegenError {
                 kind: CodegenErrorKind::MrmlV1MultiwordValueUnsupported,
                 span: function.parameters()[index]
