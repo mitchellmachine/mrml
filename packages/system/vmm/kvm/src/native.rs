@@ -615,6 +615,10 @@ impl KvmRunCancellation {
     }
 
     fn request_and_kick(self, thread: usize) -> Result<(), KvmError> {
+        // Re-validate the process-wide disposition at the final send boundary.
+        // This makes every present and future kick caller fail closed even if
+        // it bypasses a higher-level run setup check.
+        install_kvm_kick_signal()?;
         self.request();
         if unsafe { pthread_kill(thread, KVM_KICK_SIGNAL) } != 0 {
             return Err(KvmError::SystemCall);
@@ -1847,6 +1851,10 @@ impl<const N: usize> KvmBackend<N> {
         if self.mapping_poisoned {
             return Err(KvmError::MappingStateUncertain);
         }
+        install_kvm_kick_signal()?;
+        if !kvm_kick_signal_unblocked() {
+            return Err(KvmError::SystemCall);
+        }
         let application = self.secondary.take().ok_or(KvmError::InvalidVcpu)?;
         let cancellation = application.cancellation();
         let result = mrml_runtime::Shared::new(mrml_runtime::SpinMutex::new(None));
@@ -1861,6 +1869,11 @@ impl<const N: usize> KvmBackend<N> {
                 .lock()
                 .take()
                 .expect("KVM secondary owner missing at worker start");
+            if install_kvm_kick_signal().is_err() || !kvm_kick_signal_unblocked() {
+                *worker_result.lock() = Some(Err(KvmError::SystemCall));
+                *worker_application.lock() = Some(application);
+                return;
+            }
             published_thread.store(unsafe { pthread_self() }, Ordering::Release);
             let deadline = mrml_runtime::Instant::now();
             let exit = loop {
@@ -1973,6 +1986,10 @@ impl<const N: usize> KvmBackend<N> {
         if self.mapping_poisoned {
             return Err(KvmError::MappingStateUncertain);
         }
+        install_kvm_kick_signal()?;
+        if !kvm_kick_signal_unblocked() {
+            return Err(KvmError::SystemCall);
+        }
         if logical_cpus[0] == logical_cpus[1] {
             return Err(KvmError::InvalidVcpu);
         }
@@ -2014,6 +2031,11 @@ impl<const N: usize> KvmBackend<N> {
                 .lock()
                 .take()
                 .expect("KVM scheduled secondary owner missing at worker start");
+            if install_kvm_kick_signal().is_err() || !kvm_kick_signal_unblocked() {
+                *worker_result.lock() = Some(Err(KvmError::SystemCall));
+                *worker_application.lock() = Some(application);
+                return;
+            }
             published_thread.store(unsafe { pthread_self() }, Ordering::Release);
             let priority = match ThreadPriorityGuard::bind(priorities[1]) {
                 Ok(guard) => guard,
