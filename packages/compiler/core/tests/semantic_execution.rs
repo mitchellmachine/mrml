@@ -32,6 +32,7 @@ const MRML_V1_SCALAR_SOURCE: &str =
 const MRML_V1_STACK_SOURCE: &str = "#[mrml_abi::export(version = 1)] pub fn probe(a: u64, b: u64, c: u64, d: u64, e: u64, f: u64, g: u64, h: u64) -> u64 { a + b * 2 + c * 3 + d * 4 + e * 5 + f * 6 + g * 7 + h * 8 }";
 const MRML_V1_SLICE_SOURCE: &str =
     "#[mrml_abi::export(version = 1)] pub fn probe(input: &[u8]) -> u64 { input.len() as u64 }";
+const MRML_V1_SLICE_CONTENT_SOURCE: &str = "#[mrml_abi::export(version = 1)] pub fn probe(input: &[u8]) -> u64 { input[0] as u64 + input[input.len() - 1] as u64 * 2 + input.len() as u64 * 3 }";
 #[cfg(target_os = "windows")]
 const MRML_V1_SPLIT_SLICE_SOURCE: &str = "#[mrml_abi::export(version = 1)] pub fn probe(a: u64, b: u64, c: u64, input: &[u8]) -> u64 { a + b * 2 + c * 3 + input.len() as u64 }";
 #[cfg(not(target_os = "windows"))]
@@ -473,6 +474,27 @@ fn mrml_v1_slice_facade_passes_pointer_and_length_words() {
         rustc_mrml_v1_observations(
             MRML_V1_SLICE_SOURCE,
             "for input in [&[][..], &[10, 20, 30][..], &[0; 17][..]] { println!(\"{}\", probe(input)); }",
+        )
+    );
+}
+
+#[test]
+fn mrml_v1_slice_facade_reads_bytes_through_the_data_word() {
+    let code = compile(MRML_V1_SLICE_CONTENT_SOURCE);
+    let probe: unsafe extern "C" fn(*const u8, u64) -> u64 =
+        unsafe { std::mem::transmute(code.pointer) };
+    let one = [7];
+    let short = [10, 20, 30];
+    let long = [3, 5, 8, 13, 21, 34, 55];
+    let actual: Vec<_> = [one.as_slice(), short.as_slice(), long.as_slice()]
+        .map(|input| unsafe { probe(input.as_ptr(), input.len() as u64) })
+        .into_iter()
+        .collect();
+    assert_eq!(
+        actual,
+        rustc_mrml_v1_observations(
+            MRML_V1_SLICE_CONTENT_SOURCE,
+            "for input in [&[7][..], &[10, 20, 30][..], &[3, 5, 8, 13, 21, 34, 55][..]] { println!(\"{}\", probe(input)); }",
         )
     );
 }

@@ -19,20 +19,22 @@ pub fn sum_bytes(input: &[u8]) -> u64 {
 
 The source does not contain a literal `extern "mrml-v1"`, so the same function
 body can be used by MRML and a pinned upstream-rustc differential harness. The
-upstream build must provide the pinned, repository-controlled `mrml_abi` facade;
-absence or identity mismatch is a comparison failure, not permission to discard
-the attribute.
+ABI identity, validation, layout, and lowering are built into `mrml-rustc`. An
+upstream build instead provides the pinned, repository-controlled, modular
+`mrml_abi` facade adapter; official rustc can therefore compile the shared
+source without learning the custom ABI. Absence or identity mismatch is a
+comparison failure, not permission to discard the attribute. The adapter does
+not define or authorize MRML-v1 semantics.
 
-The compiler oracle support now contains that bounded facade as an identity
+The compiler oracle support contains that bounded facade as an identity
 attribute macro. The semantic execution gate builds it with the exact dated
-rustc, builds an executable containing the same attributed scalar function fed
-to MRML, executes both artifacts, and compares their returned observations.
-Windows uses the pinned toolchain's own `rust-lld` and runtime library rather
-than an unpinned system linker. This initial evidence covers one-word scalar
-calls only. It includes an eight-argument function that crosses the Windows
-four-register boundary and the System V six-register boundary, with distinct
-weighted observations that detect reordered or misloaded stack arguments. It
-is not yet general differential or cross-language ABI evidence.
+rustc, builds executables containing the same attributed functions fed to MRML,
+executes both artifacts, and compares their returned observations. Windows uses
+the pinned toolchain's own `rust-lld` and runtime library rather than an unpinned
+system linker. Current evidence covers one-word scalar calls and two-word slice
+parameters, including register/stack crossings and independent data-pointer,
+length, and byte-content observations. It is not yet general differential or
+cross-language ABI evidence.
 
 The MRML parser accepts only `mrml_abi::export`, requires exactly
 `version = 1`, and records the central `FunctionAbi::MrmlV1` identity. The
