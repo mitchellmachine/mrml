@@ -9,8 +9,8 @@ the named commit and current source.
 ## Recoverable baseline
 
 - Branch: `main`
-- Compiler checkpoint commit: `24ae8794`
-  (`compiler: queue unresolved archive symbols`)
+- Compiler checkpoint commit: `de661af6`
+  (`compiler: admit large LLVM rust archives`)
 - Remote state when recorded: `origin/main` includes the bounded MRML-owned
   static-link core, exact MRML COFF and ELF64 ingestion, deterministic
   import-free PE32+/ELF64 executable serialization, explicit compiler-driver
@@ -60,6 +60,24 @@ against all prior accepted probes. Keep Cargo on edition 2024 until a newer
 named edition can be adopted through a pinned, workspace-wide migration.
 
 ## Latest bounded linker milestone
+
+Commit `de661af6` raises the hosted per-input bound to an explicit 64 MiB,
+preallocates bounded file reads from validated metadata, and admits LLVM's
+single GNU-index alignment NUL only after an odd-length fully consumed name
+area. Arbitrary trailing bytes, oversized files, invalid offsets, and malformed
+names still fail closed.
+
+The exact ORACLE-0002 `libcore` archive is 3,150,398 bytes with 551 indexed
+symbols, two metadata members, and one 3,104,472-byte rustc object. Appended to
+an independent entry needing no core symbol, MRML skipped the object, emitted
+8,264 bytes, and exited 42; rust-lld emitted 1,664 bytes. A 50-iteration/five-
+warmup sample recorded MRML at 6.769 ms median versus pinned rust-lld at 5.634
+ms, making faster large-file ingestion an explicit remaining gate. Windows
+passed 721 core unit tests and all integrations; Linux passed the same 721 core
+unit tests but one concurrent wide-integer integration probe outside linker
+files failed with `RuntimeExpressionUnsupported`. Both platforms passed 44
+runtime tests and five driver tests. This proves unused pinned-core archive
+admission, not general core symbol extraction or speed superiority.
 
 Commit `24ae8794` replaces repeated full archive-index/reference rescans with a
 bounded cursor over unresolved symbols. A selected object's named relocations
