@@ -9,8 +9,8 @@ the named commit and current source.
 ## Recoverable baseline
 
 - Branch: `main`
-- Compiler checkpoint commit: `018f11ee`
-  (`compiler: relocate ELF writable pointers`)
+- Compiler checkpoint commit: `3bfb0d8e`
+  (`compiler: resolve ELF absolute text symbols`)
 - Remote state when recorded: `origin/main` includes the bounded MRML-owned
   static-link core, exact MRML COFF and ELF64 ingestion, deterministic
   import-free PE32+/ELF64 executable serialization, explicit compiler-driver
@@ -60,6 +60,26 @@ against all prior accepted probes. Keep Cargo on edition 2024 until a newer
 named edition can be adopted through a pinned, workspace-wide migration.
 
 ## Latest bounded linker milestone
+
+Commit `3bfb0d8e` admits initialized-data `R_X86_64_64` targets that name a
+text definition in another object. The primary decoder represents undefined
+absolute targets as non-text dependencies for left-to-right archive selection
+and missing-symbol validation without inventing a patchable text field. The
+writable decoder retains the symbol identity, validates exact symtab/string
+links and global undefined binding, and resolves the final fixed address through
+the frozen global text layout. Dependency and patch records remain bounded.
+
+Under exact ORACLE-0002 Arch WSL, an independently authored consumer stored an
+external function in initialized data while its provider was placed in a later
+ordinary archive. The dependency selected the provider member and the
+12,304-byte ELF exited 42. Windows and Linux each passed 715 compiler-core
+tests and four driver tests before final symbol-table hardening. After that
+hardening, both platform driver checks and the exact Linux release-driver probe
+passed again; a later Windows full-core rerun was blocked by concurrent
+unrelated `codegen/tests.rs` work missing `format!`. A 50-iteration/five-warmup
+identical-input measurement recorded MRML at 4.690 ms median versus pinned
+rust-lld with `--eh-frame-hdr` at 5.019 ms; rust-lld emitted 2,008 bytes. This
+is narrow hosted evidence, not general speed or Rust-library compatibility.
 
 Commit `018f11ee` extends bounded initialized-data `R_X86_64_64` relocation
 targets to initialized and zero-fill storage in the same selected input. The
