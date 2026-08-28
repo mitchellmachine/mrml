@@ -9,8 +9,8 @@ the named commit and current source.
 ## Recoverable baseline
 
 - Branch: `main`
-- Compiler checkpoint commit: `8e8bbcdc`
-  (`compiler: lay out reachable ELF sections`)
+- Compiler checkpoint commit: `8c16729a`
+  (`compiler: relocate reachable ELF sections`)
 - Remote state when recorded: `origin/main` includes the bounded MRML-owned
   static-link core, exact MRML COFF and ELF64 ingestion, deterministic
   import-free PE32+/ELF64 executable serialization, explicit compiler-driver
@@ -60,6 +60,18 @@ against all prior accepted probes. Keep Cargo on edition 2024 until a newer
 named edition can be adopted through a pinned, workspace-wide migration.
 
 ## Latest bounded linker milestone
+
+Commit `8c16729a` copies selected section content into the frozen layout,
+resolves exact external names with conventional strong-over-weak selection,
+rejects duplicate strong definitions, computes an exact selected function entry
+offset, and applies x86-64 absolute-64, PC-relative-32, PLT-relative-32, and
+instruction-shape-validated GOTPCREL relocations. Local targets retain input and
+section identity through relocation; zero-fill remains memory-only. A focused
+three-object probe verifies the external call displacement, local read-only
+reference, copied payload, entry, and file/memory extents. Windows and Linux
+each passed 724 core unit tests and every integration suite. ELF executable
+serialization from this payload, driver/archive integration, broader rustc
+object coverage, and pinned-core symbol execution remain unimplemented gates.
 
 Commit `8e8bbcdc` adds the first shared layout pass over selected ELF objects.
 It groups reachable sections deterministically into executable, read-only plus
