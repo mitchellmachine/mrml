@@ -6876,10 +6876,36 @@ impl<
         &mut self,
         tree: &crate::ExpressionTree<'_, MAX_NODES>,
         id: crate::ExprId,
+        expected_type: RuntimeExpressionType,
     ) -> Result<(), CodegenError> {
         let expression = tree
             .expression(id)
             .ok_or(self.error(CodegenErrorKind::RuntimeExpressionUnsupported))?;
+        let layout = match expected_type {
+            RuntimeExpressionType::Integer(Some(target @ (
+                crate::IntegerType::U128 | crate::IntegerType::I128
+            ))) => runtime_integer_layout(target.name())
+                .ok_or(self.error(CodegenErrorKind::UnsupportedReturnType))?,
+            _ => return Err(self.error(CodegenErrorKind::UnsupportedReturnType)),
+        };
+        if let ExprKind::Integer(literal) = expression.kind {
+            if !runtime_integer_literal_fits(layout, literal.value, false) {
+                return Err(self.error(CodegenErrorKind::ValueOutOfRange));
+            }
+            return self.emit_wide_integer_immediate(literal.value);
+        }
+        if let ExprKind::Unary {
+            operator: crate::UnaryOperator::Negate,
+            operand,
+        } = expression.kind
+            && let Some(ExprKind::Integer(literal)) =
+                tree.expression(operand).map(|operand| operand.kind)
+        {
+            if !runtime_integer_literal_fits(layout, literal.value, true) {
+                return Err(self.error(CodegenErrorKind::ValueOutOfRange));
+            }
+            return self.emit_wide_integer_immediate(0u128.wrapping_sub(literal.value));
+        }
         if let ExprKind::Cast { operand, target } = expression.kind {
             let operand_type = runtime_expression_type_with_locals(
                 self.function,
@@ -6948,6 +6974,13 @@ impl<
             .checked_add(1)
             .ok_or(self.error(CodegenErrorKind::OutputTooSmall))?;
         self.emit_stack_slot(low_slot)
+    }
+
+    fn emit_wide_integer_immediate(&mut self, value: u128) -> Result<(), CodegenError> {
+        self.emit(&[0x48, 0xb8])?;
+        self.emit(&(value as u64).to_le_bytes())?;
+        self.emit(&[0x48, 0xba])?;
+        self.emit(&((value >> 64) as u64).to_le_bytes())
     }
 
     fn emit_slice_length(&mut self, name: &str) -> Result<(), CodegenError> {
@@ -9797,7 +9830,7 @@ impl<
                 crate::IntegerType::U128 | crate::IntegerType::I128
             ))
         ) {
-            self.emit_wide_integer_return(tree, root)?;
+            self.emit_wide_integer_return(tree, root, expected_type)?;
             return self.emit_epilogue();
         }
         if matches!(

@@ -127,6 +127,8 @@ direct Rust `as` narrowing to supported one-word integer types and for returning
 that same parameter unchanged in `rax` and `rdx`. Direct `as` widening from any
 fixed-width one-word integer to `u128` or `i128` normalizes the low word at the
 source width, then zero-extends unsigned sources or sign-extends signed sources.
+Closed positive and negative two-word integer literals are range-checked against
+the declared return type and materialized directly into the two return words.
 Other wide casts, expressions, locals, operations, calls, and returns remain
 unavailable and fail closed.
 Ownership and borrowing rules beyond ordinary language checking, other
@@ -158,8 +160,9 @@ evidence passes independent `u128` and `i128` low/high words through four target
 argument registers and compares nested narrowing with the pinned rustc facade.
 It also captures `rax` and `rdx` independently for a nontrivial `u128` identity
 round trip and for unsigned, signed, narrow, and cross-signed widening at zero,
-extrema, and all-ones, comparing both words with the same oracle. This is not linker,
-dynamic-loader, cross-language, or physical-hardware evidence.
+extrema, and all-ones. Exact `u128::MAX`, `i128::MAX`, and `i128::MIN` literal
+words are also compared with the same oracle. This is not linker, dynamic-loader,
+cross-language, or physical-hardware evidence.
 
 Arrays, tuples, user aggregates, and indirect returns are not admitted. This
 checkpoint also does not establish that existing

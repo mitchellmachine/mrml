@@ -50,6 +50,9 @@ const MRML_V1_NARROW_SIGNED_TO_UNSIGNED_WIDEN_SOURCE: &str =
     "#[mrml_abi::export(version = 1)] pub fn probe(input: i8) -> u128 { input as u128 }";
 const MRML_V1_NARROW_UNSIGNED_TO_SIGNED_WIDEN_SOURCE: &str =
     "#[mrml_abi::export(version = 1)] pub fn probe(input: u32) -> i128 { input as i128 }";
+const MRML_V1_U128_LITERAL_SOURCE: &str = "#[mrml_abi::export(version = 1)] pub fn probe() -> u128 { 340282366920938463463374607431768211455 }";
+const MRML_V1_I128_MAX_LITERAL_SOURCE: &str = "#[mrml_abi::export(version = 1)] pub fn probe() -> i128 { 170141183460469231731687303715884105727 }";
+const MRML_V1_I128_MIN_LITERAL_SOURCE: &str = "#[mrml_abi::export(version = 1)] pub fn probe() -> i128 { -170141183460469231731687303715884105728 }";
 #[cfg(target_os = "windows")]
 const MRML_V1_SPLIT_SLICE_SOURCE: &str = "#[mrml_abi::export(version = 1)] pub fn probe(a: u64, b: u64, c: u64, input: &[u8]) -> u64 { a + b * 2 + c * 3 + input.len() as u64 }";
 #[cfg(not(target_os = "windows"))]
@@ -881,6 +884,54 @@ fn mrml_v1_one_word_widening_sets_the_exact_high_word() {
             narrow_unsigned_driver,
         )
     );
+}
+
+unsafe fn call_mrml_v1_wide_literal(function: *const u8) -> u128 {
+    let returned_low: u64;
+    let returned_high: u64;
+    #[cfg(target_os = "windows")]
+    unsafe {
+        core::arch::asm!(
+            "sub rsp, 32",
+            "call {function}",
+            "add rsp, 32",
+            function = in(reg) function,
+            lateout("rax") returned_low,
+            lateout("rdx") returned_high,
+            clobber_abi("C"),
+        );
+    }
+    #[cfg(not(target_os = "windows"))]
+    unsafe {
+        core::arch::asm!(
+            "call {function}",
+            function = in(reg) function,
+            lateout("rax") returned_low,
+            lateout("rdx") returned_high,
+            clobber_abi("C"),
+        );
+    }
+    (u128::from(returned_high) << 64) | u128::from(returned_low)
+}
+
+#[test]
+fn mrml_v1_wide_integer_literals_return_exact_words() {
+    for source in [
+        MRML_V1_U128_LITERAL_SOURCE,
+        MRML_V1_I128_MAX_LITERAL_SOURCE,
+        MRML_V1_I128_MIN_LITERAL_SOURCE,
+    ] {
+        let code = compile(source);
+        let returned = unsafe { call_mrml_v1_wide_literal(code.pointer) };
+        let actual = [returned as u64, (returned >> 64) as u64];
+        assert_eq!(
+            actual.as_slice(),
+            rustc_mrml_v1_observations(
+                source,
+                "let returned = probe(); println!(\"{}\", returned as u64); println!(\"{}\", ((returned as u128) >> 64) as u64);",
+            )
+        );
+    }
 }
 
 unsafe fn call_mrml_v1_str_return(

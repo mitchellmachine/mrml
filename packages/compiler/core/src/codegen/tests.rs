@@ -12218,8 +12218,45 @@ mod tests {
     }
 
     #[test]
-    fn mrml_v1_codegen_rejects_non_parameter_wide_returns() {
-        let source = "#[mrml_abi::export(version = 1)] pub fn value() -> u128 { 0 }";
+    fn mrml_v1_codegen_returns_bounded_two_word_integer_literals() {
+        for source in [
+            "#[mrml_abi::export(version = 1)] pub fn value() -> u128 { 340282366920938463463374607431768211455 }",
+            "#[mrml_abi::export(version = 1)] pub fn value() -> i128 { 170141183460469231731687303715884105727 }",
+            "#[mrml_abi::export(version = 1)] pub fn value() -> i128 { -170141183460469231731687303715884105728 }",
+        ] {
+            let module = Parser::new(source).parse_module::<2, 2>().unwrap();
+            let Some(Item::Function(function)) = module.items()[0] else {
+                panic!("expected function")
+            };
+            for abi in [X86_64Abi::SystemV, X86_64Abi::Windows] {
+                compile_x86_64_function::<_, 256, 2, 16>(&function, &NoConstants, abi).unwrap();
+            }
+        }
+    }
+
+    #[test]
+    fn mrml_v1_codegen_rejects_out_of_range_two_word_integer_literals() {
+        for source in [
+            "#[mrml_abi::export(version = 1)] pub fn value() -> i128 { 170141183460469231731687303715884105728 }",
+            "#[mrml_abi::export(version = 1)] pub fn value() -> i128 { -170141183460469231731687303715884105729 }",
+        ] {
+            let module = Parser::new(source).parse_module::<2, 2>().unwrap();
+            let Some(Item::Function(function)) = module.items()[0] else {
+                panic!("expected function")
+            };
+            let error = compile_x86_64_function::<_, 256, 2, 16>(
+                &function,
+                &NoConstants,
+                X86_64Abi::SystemV,
+            )
+            .unwrap_err();
+            assert_eq!(error.kind, CodegenErrorKind::ValueOutOfRange);
+        }
+    }
+
+    #[test]
+    fn mrml_v1_codegen_rejects_other_wide_returns() {
+        let source = "#[mrml_abi::export(version = 1)] pub fn value(input: u128) -> u128 { input + 1 }";
         let module = Parser::new(source).parse_module::<2, 2>().unwrap();
         let Some(Item::Function(function)) = module.items()[0] else {
             panic!("expected function")
