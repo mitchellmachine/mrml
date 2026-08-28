@@ -9,8 +9,8 @@ the named commit and current source.
 ## Recoverable baseline
 
 - Branch: `main`
-- Compiler checkpoint commit: `178b78eb`
-  (`compiler: preserve bounded ELF frame data`)
+- Compiler checkpoint commit: `32b50f5b`
+  (`compiler: emit bounded GNU frame headers`)
 - Remote state when recorded: `origin/main` includes the bounded MRML-owned
   static-link core, exact MRML COFF and ELF64 ingestion, deterministic
   import-free PE32+/ELF64 executable serialization, explicit compiler-driver
@@ -60,6 +60,23 @@ against all prior accepted probes. Keep Cargo on edition 2024 until a newer
 named edition can be adopted through a pinned, workspace-wide migration.
 
 ## Latest bounded linker milestone
+
+Commit `32b50f5b` validates the 32-bit FDE boundaries and backward zero-identity
+CIE references behind every admitted frame relocation, then emits a bounded
+GNU version-1 frame search header with sorted data-relative function/FDE pairs
+and a read-only `PT_GNU_EH_FRAME` program header. It does not interpret CFI
+instructions. The direct serializer revalidates record structure instead of
+trusting only the object decoder.
+
+Under the exact ORACLE-0002 Arch WSL environment, the nine-function default
+rlib linked to an 8,536-byte ELF; `readelf -lW` recognized an 84-byte
+`GNU_EH_FRAME` range and execution exited 42. A 50-iteration/five-warmup
+same-input measurement recorded MRML at 4.432 ms median and pinned rust-lld
+with `--eh-frame-hdr` at 4.971 ms; rust-lld emitted 2,656 bytes. Linux passed
+the current 711-test compiler-core suite and the focused Windows linker test
+passed; a concurrent unrelated Windows diagnostic test was the sole failure in
+that final full-worktree run. Actual stack unwinding, panic propagation, and
+backtraces remain unverified and are not claimed.
 
 Commit `178b78eb` decodes one selected `.eh_frame`/`.rela.eh_frame` pair per
 ELF object into a separate bounded fragment, validates conventional x86-64
