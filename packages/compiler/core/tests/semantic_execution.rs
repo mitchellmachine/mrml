@@ -87,6 +87,7 @@ const MRML_V1_WIDE_SIGNED_DIVIDE_OVERFLOW_SOURCE: &str =
     "#[mrml_abi::export(version = 1)] pub fn probe(input: i128) -> i128 { input / -1 }";
 const MRML_V1_WIDE_SIGNED_REMAINDER_OVERFLOW_SOURCE: &str =
     "#[mrml_abi::export(version = 1)] pub fn probe(input: i128) -> i128 { input % -1 }";
+const MRML_V1_WIDE_CONDITIONAL_SOURCE: &str = "#[mrml_abi::export(version = 1)] pub fn probe(input: u128, choose: bool) -> u128 { if choose { input + 17 } else { 1512366075204170947332355369683137040 } }";
 const MRML_V1_UNSIGNED_WIDEN_SOURCE: &str =
     "#[mrml_abi::export(version = 1)] pub fn probe(input: u64) -> u128 { input as u128 }";
 const MRML_V1_SIGNED_WIDEN_SOURCE: &str =
@@ -807,7 +808,7 @@ unsafe fn call_mrml_v1_wide_return(function: *const u8, input: u128) -> u128 {
     (u128::from(returned_high) << 64) | u128::from(returned_low)
 }
 
-unsafe fn call_mrml_v1_wide_shift(function: *const u8, input: u128, shift: u32) -> u128 {
+unsafe fn call_mrml_v1_wide_with_u32(function: *const u8, input: u128, word: u32) -> u128 {
     let returned_low: u64;
     let returned_high: u64;
     #[cfg(target_os = "windows")]
@@ -819,7 +820,7 @@ unsafe fn call_mrml_v1_wide_shift(function: *const u8, input: u128, shift: u32) 
             function = in(reg) function,
             in("rcx") input as u64,
             inlateout("rdx") (input >> 64) as u64 => returned_high,
-            in("r8") u64::from(shift),
+            in("r8") u64::from(word),
             lateout("rax") returned_low,
             clobber_abi("C"),
         );
@@ -831,7 +832,7 @@ unsafe fn call_mrml_v1_wide_shift(function: *const u8, input: u128, shift: u32) 
             function = in(reg) function,
             in("rdi") input as u64,
             in("rsi") (input >> 64) as u64,
-            inlateout("rdx") u64::from(shift) => returned_high,
+            inlateout("rdx") u64::from(word) => returned_high,
             lateout("rax") returned_low,
             clobber_abi("C"),
         );
@@ -1329,7 +1330,7 @@ fn mrml_v1_wide_shifts_match_both_oracle_words() {
         let actual = shifts
             .into_iter()
             .flat_map(|shift| {
-                let returned = unsafe { call_mrml_v1_wide_shift(code.pointer, input, shift) };
+                let returned = unsafe { call_mrml_v1_wide_with_u32(code.pointer, input, shift) };
                 [returned as u64, (returned >> 64) as u64]
             })
             .collect::<Vec<_>>();
@@ -1348,7 +1349,7 @@ fn mrml_v1_wide_shift_count_overflow_traps() {
         let pid = unsafe { fork() };
         assert!(pid >= 0, "fork failed");
         if pid == 0 {
-            let _ = unsafe { call_mrml_v1_wide_shift(code.pointer, 1, 128) };
+            let _ = unsafe { call_mrml_v1_wide_with_u32(code.pointer, 1, 128) };
             unsafe { _exit(120) }
         }
         let mut status = 0;
@@ -1360,7 +1361,7 @@ fn mrml_v1_wide_shift_count_overflow_traps() {
     #[cfg(target_os = "windows")]
     if std::env::var_os(CHILD).is_some() {
         unsafe { SetErrorMode(0x0001 | 0x0002) };
-        let _ = unsafe { call_mrml_v1_wide_shift(code.pointer, 1, 128) };
+        let _ = unsafe { call_mrml_v1_wide_with_u32(code.pointer, 1, 128) };
         panic!("checked wide shift count overflow unexpectedly returned");
     }
 
@@ -1549,6 +1550,28 @@ fn mrml_v1_wide_signed_division_overflow_traps_for_both_operators() {
             "missing Windows {case} illegal-instruction status; stdout: {stdout}; stderr: {stderr}"
         );
     }
+}
+
+#[test]
+fn mrml_v1_wide_conditional_returns_match_both_oracle_words() {
+    let code = compile(MRML_V1_WIDE_CONDITIONAL_SOURCE);
+    let inputs = [0u128, 1, u64::MAX as u128, u128::MAX - 17];
+    let mut actual = Vec::new();
+    for input in inputs {
+        for choose in [false, true] {
+            let returned = unsafe {
+                call_mrml_v1_wide_with_u32(code.pointer, input, u32::from(choose))
+            };
+            actual.extend([returned as u64, (returned >> 64) as u64]);
+        }
+    }
+    assert_eq!(
+        actual,
+        rustc_mrml_v1_observations(
+            MRML_V1_WIDE_CONDITIONAL_SOURCE,
+            "for input in [0u128, 1, u64::MAX as u128, u128::MAX - 17] { for choose in [false, true] { let returned = probe(input, choose); println!(\"{}\", returned as u64); println!(\"{}\", (returned >> 64) as u64); } }",
+        )
+    );
 }
 
 unsafe fn call_mrml_v1_word_to_wide(function: *const u8, input: u64) -> u128 {

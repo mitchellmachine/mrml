@@ -7078,6 +7078,34 @@ impl<
             self.emit(&[0x48, 0xf7, 0xd0, 0x48, 0xf7, 0xd2])?;
             return Ok(());
         }
+        if let ExprKind::If {
+            condition,
+            then_branch,
+            else_branch,
+        } = expression.kind
+        {
+            let condition_type = runtime_expression_type_with_locals(
+                self.function,
+                self.resolver,
+                &self.locals[..self.saved_locals],
+                tree,
+                condition,
+                1,
+            )
+            .map_err(|kind| self.error(kind))?;
+            if condition_type != RuntimeExpressionType::Bool {
+                return Err(self.error(CodegenErrorKind::RuntimeTypeMismatch));
+            }
+            self.emit_expression(tree, condition, 1)?;
+            self.emit(&[0x48, 0x85, 0xc0])?;
+            let else_patch = self.emit_forward_branch(0x84)?;
+            self.emit_wide_integer_return(tree, then_branch, expected_type)?;
+            let end_patch = self.emit_unconditional_forward_branch()?;
+            self.patch_forward_branch(else_patch)?;
+            self.emit_wide_integer_return(tree, else_branch, expected_type)?;
+            self.patch_forward_branch(end_patch)?;
+            return Ok(());
+        }
         if let ExprKind::Binary {
             operator:
                 operator @ (crate::BinaryOperator::Divide
