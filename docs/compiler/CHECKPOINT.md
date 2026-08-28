@@ -9,8 +9,8 @@ the named commit and current source.
 ## Recoverable baseline
 
 - Branch: `main`
-- Compiler checkpoint commit: `6d35c386`
-  (`compiler: link x86-64 absolute32 relocations`)
+- Compiler checkpoint commit: `e454dfa9`
+  (`compiler: diagnose unresolved ELF symbols`)
 - Remote state when recorded: `origin/main` includes the bounded MRML-owned
   static-link core, exact MRML COFF and ELF64 ingestion, deterministic
   import-free PE32+/ELF64 executable serialization, explicit compiler-driver
@@ -60,6 +60,22 @@ against all prior accepted probes. Keep Cargo on edition 2024 until a newer
 named edition can be adopted through a pinned, workspace-wide migration.
 
 ## Latest bounded linker milestone
+
+Commit `e454dfa9` adds a borrowed detailed selection error that preserves the
+exact unresolved ELF symbol while the compatibility wrapper retains the prior
+typed `LinkerError`. The public driver now reports names such as `memset`
+without allocating or weakening fail-closed resolution. The durable
+`docs/compiler/probes/core_breadth_consumer.rs` probe retains five distinct
+pinned-libcore exports; with the explicitly test-only memory/panic providers in
+`docs/compiler/probes/controlled_runtime_symbols.rs`, the public driver emitted
+a 20,528-byte selected ELF that exited 42 under Arch Linux WSL. Without those
+providers it identified `memset`, then `memcpy`, and finally the pinned panic
+endpoint exactly. This separates final-artifact runtime inputs from linker
+semantics and is not production compiler-runtime evidence. Windows passed 730
+core tests, integrations of 2/10/351/38 tests, and five driver tests. After one
+transient concurrent-CGU artifact race, Linux reran cleanly with 730 core tests,
+integrations of 2/10/351/40 tests, and five driver tests; the count advanced
+while an independent compiler task completed.
 
 Commit `6d35c386` admits conventional x86-64 `R_X86_64_32` records in the
 selected-section path and applies checked unsigned `S + A` arithmetic, failing

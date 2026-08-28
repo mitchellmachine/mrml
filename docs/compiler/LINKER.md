@@ -781,6 +781,19 @@ reference linked through the public driver with the controlled process-entry
 wrapper and exited 42 under Arch Linux WSL. Signed absolute-32 and TLS
 relocations remain unsupported.
 
+Cross-object selection has a detailed companion API that retains the exact
+borrowed symbol when resolution fails; the compatibility entry point still
+returns the original typed error. The driver uses the detailed form, so a
+missing final-artifact dependency is reported as, for example, `undefined link
+symbol: memset`, without heap allocation or relaxed resolution. The durable
+five-export probe in `docs/compiler/probes/core_breadth_consumer.rs`, paired
+with explicitly test-only providers in
+`docs/compiler/probes/controlled_runtime_symbols.rs`, produced a 20,528-byte
+selected ELF and exited 42 under Arch Linux WSL. Removing those providers
+identified `memset`, `memcpy`, and the pinned panic endpoint in sequence. This
+is broader libcore graph evidence, not production runtime completeness or
+general libcore conformance; the linker does not synthesize runtime symbols.
+
 This increment does **not** emit PE imports/exports/base
 relocations/debug data, emit ELF dynamic metadata/interpreter/PIE/sections,
 read thin archives or general `.rlib` contents, perform ICF, link dynamically,
