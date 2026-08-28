@@ -22,6 +22,14 @@ within the originating input's read-only data. COFF `.rdata` section-symbol
 relocations therefore retain their exact local data identity without inventing
 a public symbol or entering the global name-resolution path.
 
+The linker can serialize those inputs as a deterministic, import-free x86-64
+PE32+ executable. It links with page-separated code and data before applying
+relocations, then emits a fixed-base image with zero timestamps, an RX `.text`,
+an R/NX `.rdata`, bounded file/section alignment, and no data directories. A
+Windows gnullvm-hosted test executes a generated six-byte entry function in a
+child process and requires exit code 42. This is controlled hosted Windows
+loader evidence, not Secure Boot, recovery, UEFI, or physical-hardware evidence.
+
 The pass structure is informed by mold's public design notes: establish output
 layout early, run a small sequence of understandable passes, and keep per-input
 validation, copying, and per-relocation work independent so a hosted driver can
@@ -29,11 +37,12 @@ later use data-parallel loops. MRML does not copy mold source or claim mold
 compatibility or performance. The cited design note warns that its 2020 object
 preloading proposal is outdated, so MRML does not adopt that proposal.
 
-This increment does **not** decode ELF input, write PE/ELF executables, read
-archives, perform section GC or ICF, link dynamically, run work in parallel, or
-integrate linker selection into the public `mrml` build frontend. Those are
-separate milestones and the current upstream linker remains the production
-linker as required by `docs/build/BUILD_SYSTEM.md`.
+This increment does **not** decode ELF input, write ELF executables, emit PE
+imports/exports/exception metadata/base relocations/debug data, read archives,
+perform section GC or ICF, link dynamically, run work in parallel, or integrate
+linker selection into the public `mrml` build frontend. Those are separate
+milestones and the current upstream linker remains the production linker as
+required by `docs/build/BUILD_SYSTEM.md`.
 
 Research source:
 

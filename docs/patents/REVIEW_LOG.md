@@ -9175,3 +9175,13 @@ named code-symbol relocations from bounded offsets into an input object's
 adds a type distinction and adversarial bounds checks, not a new relocation,
 symbol-resolution, deduplication, compression, executable-format, or loading
 algorithm. This technical screen is not legal advice or patent clearance.
+
+# 2026-08-28 — Deterministic import-free PE32+ linker output
+
+Patent review: **NOT_TRIGGERED**. This increment serializes the existing linked
+code and read-only data using conventional documented PE32+ headers, fixed-base
+page and file alignment, RX/R-NX section permissions, zero timestamps, and no
+imports or data directories. The test executes a constant-return entry point on
+the controlled Windows host. It adds no executable packing, compression,
+loader, dynamic-linking, relocation, cryptographic, or code-generation
+algorithm. This technical screen is not legal advice or patent clearance.

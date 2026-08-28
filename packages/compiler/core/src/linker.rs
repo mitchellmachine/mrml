@@ -209,8 +209,21 @@ pub fn decode_x86_64_coff<'a>(
 pub struct LinkedImage<const MAX_BYTES: usize> {
     bytes: [u8; MAX_BYTES],
     length: usize,
+    text_length: usize,
     readonly_offset: usize,
     entry_offset: usize,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct PeImage<const MAX_BYTES: usize> {
+    bytes: [u8; MAX_BYTES],
+    length: usize,
+}
+
+impl<const MAX_BYTES: usize> PeImage<MAX_BYTES> {
+    pub fn bytes(&self) -> &[u8] {
+        &self.bytes[..self.length]
+    }
 }
 
 impl<const MAX_BYTES: usize> LinkedImage<MAX_BYTES> {
@@ -238,6 +251,113 @@ struct InputLayout {
 pub fn link_x86_64_static<const MAX_BYTES: usize>(
     inputs: &[LinkInput<'_>],
     entry_symbol: &str,
+) -> Result<LinkedImage<MAX_BYTES>, LinkerError> {
+    link_x86_64_static_aligned(inputs, entry_symbol, 16)
+}
+
+/// Links MRML COFF fragments and writes a deterministic, import-free PE32+
+/// executable with separate RX code and read-only NX data sections.
+pub fn link_x86_64_pe<const MAX_IMAGE_BYTES: usize, const MAX_LINKED_BYTES: usize>(
+    inputs: &[LinkInput<'_>],
+    entry_symbol: &str,
+) -> Result<PeImage<MAX_IMAGE_BYTES>, LinkerError> {
+    const FILE_ALIGNMENT: usize = 0x200;
+    const SECTION_ALIGNMENT: usize = 0x1000;
+    const HEADERS: usize = 0x200;
+    const TEXT_RVA: usize = 0x1000;
+
+    let linked =
+        link_x86_64_static_aligned::<MAX_LINKED_BYTES>(inputs, entry_symbol, SECTION_ALIGNMENT)?;
+    let text_size = linked.text_length;
+    let readonly_size = linked.length - linked.readonly_offset;
+    let text_raw_size = align(text_size, FILE_ALIGNMENT)?;
+    let readonly_raw_size = align(readonly_size, FILE_ALIGNMENT)?;
+    let readonly_raw = HEADERS
+        .checked_add(text_raw_size)
+        .ok_or(LinkerError::OffsetOverflow)?;
+    let length = readonly_raw
+        .checked_add(readonly_raw_size)
+        .ok_or(LinkerError::OffsetOverflow)?;
+    if length > MAX_IMAGE_BYTES {
+        return Err(LinkerError::OutputTooSmall);
+    }
+    let readonly_rva = TEXT_RVA
+        .checked_add(linked.readonly_offset)
+        .ok_or(LinkerError::OffsetOverflow)?;
+    let size_of_image = align(
+        readonly_rva
+            .checked_add(readonly_size)
+            .ok_or(LinkerError::OffsetOverflow)?,
+        SECTION_ALIGNMENT,
+    )?;
+
+    let mut bytes = [0u8; MAX_IMAGE_BYTES];
+    bytes[0..2].copy_from_slice(b"MZ");
+    patch_u32(&mut bytes, 0x3c, 0x80)?;
+    bytes[0x80..0x84].copy_from_slice(b"PE\0\0");
+    patch_u16(&mut bytes, 0x84, 0x8664)?;
+    patch_u16(&mut bytes, 0x86, 2)?;
+    patch_u16(&mut bytes, 0x94, 240)?;
+    patch_u16(&mut bytes, 0x96, 0x0023)?;
+
+    let optional = 0x98;
+    patch_u16(&mut bytes, optional, 0x20b)?;
+    patch_u32(&mut bytes, optional + 4, to_u32_link(text_raw_size)?)?;
+    patch_u32(&mut bytes, optional + 8, to_u32_link(readonly_raw_size)?)?;
+    patch_u32(
+        &mut bytes,
+        optional + 16,
+        to_u32_link(TEXT_RVA + linked.entry_offset)?,
+    )?;
+    patch_u32(&mut bytes, optional + 20, to_u32_link(TEXT_RVA)?)?;
+    patch_u64(&mut bytes, optional + 24, 0x0000_0001_4000_0000)?;
+    patch_u32(&mut bytes, optional + 32, to_u32_link(SECTION_ALIGNMENT)?)?;
+    patch_u32(&mut bytes, optional + 36, to_u32_link(FILE_ALIGNMENT)?)?;
+    patch_u16(&mut bytes, optional + 40, 6)?;
+    patch_u16(&mut bytes, optional + 48, 6)?;
+    patch_u32(&mut bytes, optional + 56, to_u32_link(size_of_image)?)?;
+    patch_u32(&mut bytes, optional + 60, to_u32_link(HEADERS)?)?;
+    patch_u16(&mut bytes, optional + 68, 3)?;
+    patch_u16(&mut bytes, optional + 70, 0x8100)?;
+    patch_u64(&mut bytes, optional + 72, 0x10_0000)?;
+    patch_u64(&mut bytes, optional + 80, 0x1000)?;
+    patch_u64(&mut bytes, optional + 88, 0x10_0000)?;
+    patch_u64(&mut bytes, optional + 96, 0x1000)?;
+    patch_u32(&mut bytes, optional + 108, 16)?;
+
+    write_pe_section(
+        &mut bytes,
+        0x188,
+        b".text\0\0\0",
+        text_size,
+        TEXT_RVA,
+        text_raw_size,
+        HEADERS,
+        0x6000_0020,
+    )?;
+    write_pe_section(
+        &mut bytes,
+        0x1b0,
+        b".rdata\0\0",
+        readonly_size,
+        readonly_rva,
+        readonly_raw_size,
+        readonly_raw,
+        0x4000_0040,
+    )?;
+    copy_at(&mut bytes, HEADERS, &linked.bytes[..linked.text_length])?;
+    copy_at(
+        &mut bytes,
+        readonly_raw,
+        &linked.bytes[linked.readonly_offset..linked.length],
+    )?;
+    Ok(PeImage { bytes, length })
+}
+
+fn link_x86_64_static_aligned<const MAX_BYTES: usize>(
+    inputs: &[LinkInput<'_>],
+    entry_symbol: &str,
+    section_alignment: usize,
 ) -> Result<LinkedImage<MAX_BYTES>, LinkerError> {
     if inputs.is_empty() {
         return Err(LinkerError::EmptyInput);
@@ -294,7 +414,8 @@ pub fn link_x86_64_static<const MAX_BYTES: usize>(
             .checked_add(input.text.len())
             .ok_or(LinkerError::OffsetOverflow)?;
     }
-    let readonly_offset = align(cursor, 16)?;
+    let text_length = cursor;
+    let readonly_offset = align(cursor, section_alignment)?;
     cursor = readonly_offset;
     for (layout, input) in layouts.iter_mut().zip(inputs) {
         cursor = align(cursor, 16)?;
@@ -344,9 +465,71 @@ pub fn link_x86_64_static<const MAX_BYTES: usize>(
     Ok(LinkedImage {
         bytes: output,
         length: cursor,
+        text_length,
         readonly_offset,
         entry_offset,
     })
+}
+
+fn write_pe_section<const MAX_BYTES: usize>(
+    output: &mut [u8; MAX_BYTES],
+    offset: usize,
+    name: &[u8; 8],
+    virtual_size: usize,
+    virtual_address: usize,
+    raw_size: usize,
+    raw_offset: usize,
+    characteristics: u32,
+) -> Result<(), LinkerError> {
+    output
+        .get_mut(offset..offset + 8)
+        .ok_or(LinkerError::OutputTooSmall)?
+        .copy_from_slice(name);
+    patch_u32(output, offset + 8, to_u32_link(virtual_size)?)?;
+    patch_u32(output, offset + 12, to_u32_link(virtual_address)?)?;
+    patch_u32(output, offset + 16, to_u32_link(raw_size)?)?;
+    patch_u32(output, offset + 20, to_u32_link(raw_offset)?)?;
+    patch_u32(output, offset + 36, characteristics)
+}
+
+fn patch_u16<const MAX_BYTES: usize>(
+    output: &mut [u8; MAX_BYTES],
+    offset: usize,
+    value: u16,
+) -> Result<(), LinkerError> {
+    output
+        .get_mut(offset..offset + 2)
+        .ok_or(LinkerError::OutputTooSmall)?
+        .copy_from_slice(&value.to_le_bytes());
+    Ok(())
+}
+
+fn patch_u32<const MAX_BYTES: usize>(
+    output: &mut [u8; MAX_BYTES],
+    offset: usize,
+    value: u32,
+) -> Result<(), LinkerError> {
+    output
+        .get_mut(offset..offset + 4)
+        .ok_or(LinkerError::OutputTooSmall)?
+        .copy_from_slice(&value.to_le_bytes());
+    Ok(())
+}
+
+fn patch_u64<const MAX_BYTES: usize>(
+    output: &mut [u8; MAX_BYTES],
+    offset: usize,
+    value: u64,
+) -> Result<(), LinkerError> {
+    output
+        .get_mut(offset..offset + 8)
+        .ok_or(LinkerError::OutputTooSmall)?
+        .copy_from_slice(&value.to_le_bytes());
+    Ok(())
+}
+
+fn to_u32_link(value: usize) -> Result<u32, LinkerError> {
+    u32::try_from(value).map_err(|_| LinkerError::OffsetOverflow)
 }
 
 fn validate_symbol(symbol: &str) -> Result<(), LinkerError> {
@@ -473,6 +656,8 @@ fn coff_symbol_name<'a>(
 
 #[cfg(test)]
 mod tests {
+    extern crate std;
+
     use super::*;
     use crate::{
         MachineCode, X86_64PcRelativeRelocation, X86_64PcRelativeRelocationKind, emit_x86_64_coff,
@@ -526,7 +711,7 @@ mod tests {
         let plain = LinkInput {
             symbol: "same",
             text: &[0xc3],
-            readonly_data: &[],
+            readonly_data: b"hosted-probe",
             relocations: &[],
         };
         assert_eq!(
@@ -663,5 +848,55 @@ mod tests {
             10
         );
         assert_eq!(&linked.bytes()[16..21], b"hello");
+    }
+
+    #[test]
+    fn emits_deterministic_pe32_plus_with_separate_rx_and_readonly_sections() {
+        let relocation = LinkRelocation {
+            offset: 3,
+            target: LinkRelocationTarget::ReadonlyData(0),
+            addend: -4,
+        };
+        let input = LinkInput {
+            symbol: "entry",
+            text: &[0x48, 0x8d, 0x05, 0, 0, 0, 0, 0xc3],
+            readonly_data: b"hello",
+            relocations: &[relocation],
+        };
+        let pe = link_x86_64_pe::<2048, 8192>(&[input], "entry").unwrap();
+        assert_eq!(&pe.bytes()[..2], b"MZ");
+        assert_eq!(&pe.bytes()[0x80..0x84], b"PE\0\0");
+        assert_eq!(read_u16(pe.bytes(), 0x84).unwrap(), 0x8664);
+        assert_eq!(read_u16(pe.bytes(), 0x98).unwrap(), 0x20b);
+        assert_eq!(read_u32(pe.bytes(), 0xa8).unwrap(), 0x1000);
+        assert_eq!(&pe.bytes()[0x188..0x190], b".text\0\0\0");
+        assert_eq!(read_u32(pe.bytes(), 0x188 + 36).unwrap(), 0x6000_0020);
+        assert_eq!(&pe.bytes()[0x1b0..0x1b8], b".rdata\0\0");
+        assert_eq!(read_u32(pe.bytes(), 0x1b0 + 12).unwrap(), 0x2000);
+        assert_eq!(read_u32(pe.bytes(), 0x1b0 + 36).unwrap(), 0x4000_0040);
+        assert_eq!(
+            i32::from_le_bytes(pe.bytes()[0x203..0x207].try_into().unwrap()),
+            0xff9
+        );
+        assert_eq!(&pe.bytes()[0x400..0x405], b"hello");
+        assert_eq!(pe, link_x86_64_pe::<2048, 8192>(&[input], "entry").unwrap());
+    }
+
+    #[cfg(target_os = "windows")]
+    #[test]
+    fn generated_pe_executes_on_the_controlled_windows_host() {
+        let input = LinkInput {
+            symbol: "entry",
+            text: &[0xb8, 42, 0, 0, 0, 0xc3],
+            readonly_data: b"hosted-probe",
+            relocations: &[],
+        };
+        let pe = link_x86_64_pe::<2048, 8192>(&[input], "entry").unwrap();
+        let path =
+            std::env::temp_dir().join(std::format!("mrml-linker-pe-{}.exe", std::process::id()));
+        std::fs::write(&path, pe.bytes()).unwrap();
+        let status = std::process::Command::new(&path).status().unwrap();
+        std::fs::remove_file(path).unwrap();
+        assert_eq!(status.code(), Some(42));
     }
 }
