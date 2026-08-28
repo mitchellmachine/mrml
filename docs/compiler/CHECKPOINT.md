@@ -9,8 +9,8 @@ the named commit and current source.
 ## Recoverable baseline
 
 - Branch: `main`
-- Compiler checkpoint commit: `cc0ff1fc`
-  (`compiler: admit discardable gnullvm COFF metadata`)
+- Compiler checkpoint commit: `9a833a5e`
+  (`compiler: scale bounded COFF section ingestion`)
 - Remote state when recorded: `origin/main` includes the bounded MRML-owned
   static-link core, exact MRML COFF and ELF64 ingestion, deterministic
   import-free PE32+/ELF64 executable serialization, explicit compiler-driver
@@ -60,6 +60,21 @@ against all prior accepted probes. Keep Cargo on edition 2024 until a newer
 named edition can be adopted through a pinned, workspace-wide migration.
 
 ## Latest bounded linker milestone
+
+Commit `9a833a5e` replaces the incidental 16-section COFF limit with one explicit
+256-section bound shared by the fixed classification arrays and all decoder
+entry points. A focused control rejects 257 before section-header traversal;
+the existing independent 256-input, definition, relocation, runtime-function,
+and writable-fragment limits remain unchanged.
+
+The exact ORACLE-0002 14,606-byte rlib contains a 9,519-byte, 32-section object
+member with eight static framed helpers, nine text fragments, and nine
+runtime-function records. The release driver emitted a 1,536-byte PE that
+returned 42 on Windows. Windows passed 707 compiler-core tests and four driver
+tests. A 50-iteration/five-warmup same-input benchmark measured MRML at 9.807
+ms median and pinned rust-lld at 27.483 ms; outputs were 1,536 and 1,024 bytes
+respectively. This remains small hosted scaling evidence, not representative-
+library or general superiority evidence.
 
 Commit `cc0ff1fc` admits pinned gnullvm rlib object members containing exact
 `.llvmbc` and `.llvmcmd` sections only when COFF marks them
