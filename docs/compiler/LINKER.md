@@ -142,6 +142,14 @@ archive magic fails with an explicit unsupported-feature diagnostic rather
 than being misclassified as a malformed ordinary archive; BSD extended-name
 symbol indexes are skipped only after their embedded names are validated.
 
+The ordered selector also has an explicit bounded object-member identity. A
+selected nonzero `(archive, member)` pair admits all of that object's fragments
+atomically, while explicit inputs must retain member identity zero. This is the
+selection foundation required for gnullvm COFF objects whose `.text$...`,
+`.xdata$...`, and `.pdata$...` sections must remain distinct; the current COFF
+decoder still rejects that multi-section shape until fragment-relative symbols,
+relocations, and PE exception metadata are represented end to end.
+
 On 2026-08-28, the controlled Windows cold-process probe linked the same
 93-byte MRML COFF object 50 times after five interleaved warmups. MRML produced
 a 1,024-byte PE with a 10.196 ms median and 10.323 ms mean; pinned

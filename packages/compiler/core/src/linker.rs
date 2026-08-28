@@ -304,10 +304,41 @@ pub fn select_ordered_static_link_inputs(
     archive_group: &[u16],
     entry_symbol: &str,
 ) -> Result<LinkInputSelection, LinkerError> {
+    if inputs.len() > MAX_LINK_INPUTS {
+        return Err(LinkerError::TooManyInputs);
+    }
+    let mut archive_member = [0u16; MAX_LINK_INPUTS];
+    for index in 0..inputs.len() {
+        if archive_group.get(index).copied().unwrap_or(0) != 0 {
+            archive_member[index] =
+                u16::try_from(index + 1).map_err(|_| LinkerError::TooManyInputs)?;
+        }
+    }
+    select_ordered_static_link_members(
+        inputs,
+        archive_group,
+        &archive_member[..inputs.len()],
+        entry_symbol,
+    )
+}
+
+/// Applies conventional left-to-right archive selection while treating every
+/// fragment with the same nonzero `(archive_group, archive_member)` pair as one
+/// object member. Selecting any definition in that member selects all of its
+/// code and metadata fragments atomically.
+pub fn select_ordered_static_link_members(
+    inputs: &[LinkInput<'_, '_, '_>],
+    archive_group: &[u16],
+    archive_member: &[u16],
+    entry_symbol: &str,
+) -> Result<LinkInputSelection, LinkerError> {
     if inputs.is_empty() {
         return Err(LinkerError::EmptyInput);
     }
-    if inputs.len() > MAX_LINK_INPUTS || inputs.len() != archive_group.len() {
+    if inputs.len() > MAX_LINK_INPUTS
+        || inputs.len() != archive_group.len()
+        || inputs.len() != archive_member.len()
+    {
         return Err(LinkerError::TooManyInputs);
     }
     validate_symbol(entry_symbol)?;
@@ -316,6 +347,9 @@ pub fn select_ordered_static_link_inputs(
     while cursor < inputs.len() {
         let group = archive_group[cursor];
         if group == 0 {
+            if archive_member[cursor] != 0 {
+                return Err(LinkerError::InvalidArchive);
+            }
             selected[cursor] = true;
             cursor += 1;
             continue;
@@ -325,6 +359,9 @@ pub fn select_ordered_static_link_inputs(
             cursor += 1;
         }
         if archive_group[..start].contains(&group) {
+            return Err(LinkerError::InvalidArchive);
+        }
+        if archive_member[start..cursor].contains(&0) {
             return Err(LinkerError::InvalidArchive);
         }
         loop {
@@ -344,7 +381,12 @@ pub fn select_ordered_static_link_inputs(
                             || symbol_is_referenced(inputs, &selected, definition.symbol))
                 });
                 if needed {
-                    selected[candidate] = true;
+                    let member = archive_member[candidate];
+                    for sibling in start..cursor {
+                        if archive_member[sibling] == member {
+                            selected[sibling] = true;
+                        }
+                    }
                     changed = true;
                 }
             }
@@ -1612,9 +1654,9 @@ mod tests {
 
     use super::*;
     use crate::{
-        emit_elf64_x86_64, emit_elf64_x86_64_with_readonly_data, emit_elf64_x86_64_with_relocation,
-        emit_x86_64_coff, emit_x86_64_coff_with_relocation, MachineCode,
-        X86_64PcRelativeRelocation, X86_64PcRelativeRelocationKind,
+        MachineCode, X86_64PcRelativeRelocation, X86_64PcRelativeRelocationKind, emit_elf64_x86_64,
+        emit_elf64_x86_64_with_readonly_data, emit_elf64_x86_64_with_relocation, emit_x86_64_coff,
+        emit_x86_64_coff_with_relocation,
     };
 
     fn append_archive_member(archive: &mut std::vec::Vec<u8>, name: &str, bytes: &[u8]) {
@@ -1824,6 +1866,64 @@ mod tests {
     }
 
     #[test]
+    fn ordered_archive_selection_extracts_all_fragments_of_one_member() {
+        let call_helper = [LinkRelocation {
+            offset: 0,
+            target: LinkRelocationTarget::Symbol("helper"),
+            addend: 0,
+        }];
+        let entry = LinkInput {
+            symbol: "entry",
+            additional_definitions: &[],
+            text: &[0, 0, 0, 0],
+            readonly_data: &[],
+            relocations: &call_helper,
+        };
+        let helper = LinkInput {
+            symbol: "helper",
+            additional_definitions: &[],
+            text: &[0xc3],
+            readonly_data: &[],
+            relocations: &[],
+        };
+        let unwind_fragment = LinkInput {
+            symbol: "helper.unwind",
+            additional_definitions: &[],
+            text: &[0xc3],
+            readonly_data: &[],
+            relocations: &[],
+        };
+
+        let selection = select_ordered_static_link_members(
+            &[entry, helper, unwind_fragment],
+            &[0, 1, 1],
+            &[0, 7, 7],
+            "entry",
+        )
+        .unwrap();
+        assert_eq!(selection.indices(), &[0, 1, 2]);
+    }
+
+    #[test]
+    fn ordered_archive_member_identity_fails_closed_outside_archives() {
+        let input = LinkInput {
+            symbol: "entry",
+            additional_definitions: &[],
+            text: &[0xc3],
+            readonly_data: &[],
+            relocations: &[],
+        };
+        assert_eq!(
+            select_ordered_static_link_members(&[input], &[0], &[1], "entry"),
+            Err(LinkerError::InvalidArchive)
+        );
+        assert_eq!(
+            select_ordered_static_link_members(&[input], &[1], &[0], "entry"),
+            Err(LinkerError::InvalidArchive)
+        );
+    }
+
+    #[test]
     fn links_forward_and_backward_calls_after_freezing_layout() {
         let to_helper = LinkRelocation {
             offset: 1,
@@ -2025,7 +2125,7 @@ mod tests {
 
     #[test]
     fn decodes_and_links_coff_readonly_section_relocations() {
-        use crate::{emit_x86_64_coff_with_readonly_data, X86_64ReadonlyRelocation};
+        use crate::{X86_64ReadonlyRelocation, emit_x86_64_coff_with_readonly_data};
 
         let code = MachineCode::<8>::from_bytes_for_test(&[0x48, 0x8d, 0x05, 0, 0, 0, 0, 0xc3]);
         let object = emit_x86_64_coff_with_readonly_data::<256, 8>(

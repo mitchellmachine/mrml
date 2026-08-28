@@ -9306,3 +9306,12 @@ file/feature records, and skips two exact rustc archive metadata member names.
 It implements no COMDAT selection, new object/archive format, deduplication,
 compression, executable-format, cryptographic, or loading algorithm. This
 technical screen is not legal advice or patent clearance.
+
+# 2026-08-28 — Atomic archive-member fragment selection
+
+Patent review: **NOT_TRIGGERED**. This increment assigns a bounded conventional
+object-member identity to linker fragments and extracts every fragment of a
+selected static-archive object atomically. It extends existing left-to-right
+archive selection bookkeeping and introduces no new archive index, resolution,
+deduplication, compression, executable-format, cryptographic, or loading
+algorithm. This technical screen is not legal advice or patent clearance.
