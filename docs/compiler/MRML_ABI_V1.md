@@ -144,6 +144,9 @@ one-word integer cast/return path.
 Ordering compares high words first (signed for `i128`, unsigned for `u128`) and
 uses an unsigned low-word comparison only when the high words are equal. All four
 ordering operators normalize to the same supported boolean path.
+Checked `u128` multiplication forms the low product and both cross-products,
+rejecting every nonzero discarded high product and every carry beyond the high
+result word. Checked signed multiplication remains unsupported.
 Closed positive and negative two-word integer literals are range-checked against
 the declared return type and materialized directly into the two return words.
 Other wide casts, expressions, locals, operations, calls, and returns remain
@@ -191,6 +194,9 @@ Unsigned equality and signed inequality are compared with the pinned oracle at
 equal values and values differing in either word.
 Unsigned less-than and signed greater-than-or-equal are compared below, at, and
 above their boundaries, including values whose high words select the result.
+Unsigned multiplication by `2^64 + 1` is compared across both result words through
+the exact non-overflowing `u64::MAX` boundary; a product with nonzero high-by-high
+contribution is required to terminate through the isolated overflow trap.
 Exact `u128::MAX`, `i128::MAX`, and `i128::MIN` literal
 words are also compared with the same oracle. This is not linker, dynamic-loader,
 cross-language, or physical-hardware evidence.

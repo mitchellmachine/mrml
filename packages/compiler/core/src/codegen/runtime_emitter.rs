@@ -7084,7 +7084,8 @@ impl<
                 | crate::BinaryOperator::BitOr
                 | crate::BinaryOperator::BitXor
                 | crate::BinaryOperator::Add
-                | crate::BinaryOperator::Subtract),
+                | crate::BinaryOperator::Subtract
+                | crate::BinaryOperator::Multiply),
             left,
             right,
         } = expression.kind
@@ -7140,6 +7141,41 @@ impl<
                         self.emit_trap_branch(if layout.signed { 0x80 } else { 0x82 })?;
                     }
                     self.emit(&[0x4c, 0x89, 0xc0, 0x48, 0x89, 0xca])?;
+                }
+                crate::BinaryOperator::Multiply => {
+                    if layout.signed {
+                        return Err(self.error(CodegenErrorKind::RuntimeExpressionUnsupported));
+                    }
+                    self.emit(&[0x49, 0x89, 0xc1, 0x49, 0x89, 0xd2])?;
+                    if self.overflow_checks {
+                        self.emit(&[0x48, 0x85, 0xc9])?;
+                        let zero_left_high = self.emit_forward_branch(0x84)?;
+                        self.emit(&[0x4d, 0x85, 0xd2])?;
+                        self.emit_trap_branch(0x85)?;
+                        self.patch_forward_branch(zero_left_high)?;
+                    }
+                    self.emit(&[0x4c, 0x89, 0xc0, 0x49, 0xf7, 0xe1, 0x50, 0x52])?;
+                    self.evaluation_depth += 2;
+                    self.emit(&[0x4c, 0x89, 0xc0, 0x49, 0xf7, 0xe2])?;
+                    if self.overflow_checks {
+                        self.emit(&[0x48, 0x85, 0xd2])?;
+                        self.emit_trap_branch(0x85)?;
+                    }
+                    self.emit(&[0x49, 0x89, 0xc0, 0x48, 0x89, 0xc8, 0x49, 0xf7, 0xe1])?;
+                    if self.overflow_checks {
+                        self.emit(&[0x48, 0x85, 0xd2])?;
+                        self.emit_trap_branch(0x85)?;
+                    }
+                    self.emit(&[0x49, 0x01, 0xc0])?;
+                    if self.overflow_checks {
+                        self.emit_trap_branch(0x82)?;
+                    }
+                    self.emit(&[0x5a, 0x4c, 0x01, 0xc2])?;
+                    if self.overflow_checks {
+                        self.emit_trap_branch(0x82)?;
+                    }
+                    self.emit(&[0x58])?;
+                    self.evaluation_depth -= 2;
                 }
                 _ => unreachable!(),
             }

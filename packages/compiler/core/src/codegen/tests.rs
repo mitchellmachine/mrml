@@ -12361,6 +12361,28 @@ mod tests {
     }
 
     #[test]
+    fn mrml_v1_codegen_checked_multiplies_unsigned_two_word_integers() {
+        let source = "#[mrml_abi::export(version = 1)] pub fn value(input: u128) -> u128 { input * 18446744073709551617 }";
+        let module = Parser::new(source).parse_module::<2, 2>().unwrap();
+        let Some(Item::Function(function)) = module.items()[0] else {
+            panic!("expected function")
+        };
+        for abi in [X86_64Abi::SystemV, X86_64Abi::Windows] {
+            let code =
+                compile_x86_64_function::<_, 512, 2, 16>(&function, &NoConstants, abi).unwrap();
+            assert!(code
+                .bytes()
+                .windows(6)
+                .any(|bytes| bytes == [0x4c, 0x89, 0xc0, 0x49, 0xf7, 0xe1]));
+            assert!(code
+                .bytes()
+                .windows(6)
+                .any(|bytes| bytes == [0x4c, 0x89, 0xc0, 0x49, 0xf7, 0xe2]));
+            assert!(code.bytes().ends_with(&[0x0f, 0x0b]));
+        }
+    }
+
+    #[test]
     fn mrml_v1_codegen_widens_one_word_integers_for_two_word_returns() {
         for source in [
             "#[mrml_abi::export(version = 1)] pub fn value(input: u8) -> u128 { input as u128 }",
@@ -12429,7 +12451,7 @@ mod tests {
 
     #[test]
     fn mrml_v1_codegen_rejects_other_wide_returns() {
-        let source = "#[mrml_abi::export(version = 1)] pub fn value(input: u128) -> u128 { input * 2 }";
+        let source = "#[mrml_abi::export(version = 1)] pub fn value(input: i128) -> i128 { input * 2 }";
         let module = Parser::new(source).parse_module::<2, 2>().unwrap();
         let Some(Item::Function(function)) = module.items()[0] else {
             panic!("expected function")

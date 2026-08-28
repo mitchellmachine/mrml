@@ -67,6 +67,7 @@ const MRML_V1_WIDE_UNSIGNED_EQUAL_SOURCE: &str = "#[mrml_abi::export(version = 1
 const MRML_V1_WIDE_SIGNED_NOT_EQUAL_SOURCE: &str = "#[mrml_abi::export(version = 1)] pub fn probe(input: i128) -> u64 { (input != -1512366075204170947332355369683137040) as u64 }";
 const MRML_V1_WIDE_UNSIGNED_LESS_SOURCE: &str = "#[mrml_abi::export(version = 1)] pub fn probe(input: u128) -> u64 { (input < 1512366075204170947332355369683137040) as u64 }";
 const MRML_V1_WIDE_SIGNED_GREATER_EQUAL_SOURCE: &str = "#[mrml_abi::export(version = 1)] pub fn probe(input: i128) -> u64 { (input >= -1512366075204170947332355369683137040) as u64 }";
+const MRML_V1_WIDE_UNSIGNED_MULTIPLY_SOURCE: &str = "#[mrml_abi::export(version = 1)] pub fn probe(input: u128) -> u128 { input * 18446744073709551617 }";
 const MRML_V1_UNSIGNED_WIDEN_SOURCE: &str =
     "#[mrml_abi::export(version = 1)] pub fn probe(input: u64) -> u128 { input as u128 }";
 const MRML_V1_SIGNED_WIDEN_SOURCE: &str =
@@ -1088,6 +1089,83 @@ fn mrml_v1_wide_ordering_matches_the_oracle() {
             .map(|input| unsafe { call_mrml_v1_wide_return(code.pointer, input) as u64 })
             .collect::<Vec<_>>();
         assert_eq!(actual, rustc_mrml_v1_observations(source, driver));
+    }
+}
+
+#[test]
+fn mrml_v1_wide_checked_unsigned_multiplication_matches_both_oracle_words() {
+    let code = compile(MRML_V1_WIDE_UNSIGNED_MULTIPLY_SOURCE);
+    let inputs = [
+        0u128,
+        1,
+        17,
+        (u64::MAX - 1) as u128,
+        u64::MAX as u128,
+    ];
+    let actual = inputs
+        .into_iter()
+        .flat_map(|input| {
+            let returned = unsafe { call_mrml_v1_wide_return(code.pointer, input) };
+            [returned as u64, (returned >> 64) as u64]
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(
+        actual,
+        rustc_mrml_v1_observations(
+            MRML_V1_WIDE_UNSIGNED_MULTIPLY_SOURCE,
+            "for input in [0u128, 1, 17, (u64::MAX - 1) as u128, u64::MAX as u128] { let returned = probe(input); println!(\"{}\", returned as u64); println!(\"{}\", (returned >> 64) as u64); }",
+        )
+    );
+}
+
+#[test]
+fn mrml_v1_wide_unsigned_multiplication_overflow_traps() {
+    #[cfg(target_os = "windows")]
+    const CHILD: &str = "MRML_SEMANTIC_WIDE_MULTIPLY_OVERFLOW_CHILD";
+    let code = compile(MRML_V1_WIDE_UNSIGNED_MULTIPLY_SOURCE);
+
+    #[cfg(not(target_os = "windows"))]
+    {
+        let pid = unsafe { fork() };
+        assert!(pid >= 0, "fork failed");
+        if pid == 0 {
+            let _ = unsafe { call_mrml_v1_wide_return(code.pointer, 1u128 << 64) };
+            unsafe { _exit(120) }
+        }
+        let mut status = 0;
+        assert_eq!(unsafe { waitpid(pid, &mut status, 0) }, pid, "waitpid failed");
+        assert_eq!(status & 0x7f, 4, "unexpected Unix wait status: {status:#x}");
+        return;
+    }
+
+    #[cfg(target_os = "windows")]
+    if std::env::var_os(CHILD).is_some() {
+        unsafe { SetErrorMode(0x0001 | 0x0002) };
+        let _ = unsafe { call_mrml_v1_wide_return(code.pointer, 1u128 << 64) };
+        panic!("checked wide multiplication overflow unexpectedly returned");
+    }
+
+    #[cfg(target_os = "windows")]
+    let output = Command::new(std::env::current_exe().expect("locate semantic test binary"))
+        .args([
+            "--exact",
+            "mrml_v1_wide_unsigned_multiplication_overflow_traps",
+            "--nocapture",
+        ])
+        .env(CHILD, "1")
+        .output()
+        .expect("launch isolated wide multiplication trap probe");
+    #[cfg(target_os = "windows")]
+    {
+        assert!(!output.status.success(), "generated overflow trap unexpectedly returned");
+        assert_eq!(output.status.code(), Some(101));
+        let stdout = String::from_utf8(output.stdout).expect("UTF-8 child test stdout");
+        let stderr = String::from_utf8(output.stderr).expect("UTF-8 child test stderr");
+        assert!(
+            stdout.contains("unexpected return code -1073741795")
+                || stderr.contains("unexpected return code -1073741795"),
+            "missing Windows illegal-instruction status; stdout: {stdout}; stderr: {stderr}"
+        );
     }
 }
 
