@@ -34,6 +34,7 @@ const MRML_V1_SLICE_SOURCE: &str =
     "#[mrml_abi::export(version = 1)] pub fn probe(input: &[u8]) -> u64 { input.len() as u64 }";
 const MRML_V1_SLICE_CONTENT_SOURCE: &str = "#[mrml_abi::export(version = 1)] pub fn probe(input: &[u8]) -> u64 { input[0] as u64 + input[input.len() - 1] as u64 * 2 + input.len() as u64 * 3 }";
 const MRML_V1_STR_SOURCE: &str = "#[mrml_abi::export(version = 1)] pub fn probe(input: &str) -> u64 { let bytes: &[u8] = input.as_bytes(); bytes[0] as u64 + bytes[bytes.len() - 1] as u64 * 2 + input.len() as u64 * 3 }";
+const MRML_V1_MUT_SLICE_SOURCE: &str = "#[mrml_abi::export(version = 1)] pub fn probe(input: &mut [u8]) -> u64 { input[0] += 3; let last: usize = input.len() - 1; input[last] += 5; input[0] as u64 + input[last] as u64 * 2 + input.len() as u64 * 3 }";
 #[cfg(target_os = "windows")]
 const MRML_V1_SPLIT_SLICE_SOURCE: &str = "#[mrml_abi::export(version = 1)] pub fn probe(a: u64, b: u64, c: u64, input: &[u8]) -> u64 { a + b * 2 + c * 3 + input.len() as u64 }";
 #[cfg(not(target_os = "windows"))]
@@ -516,6 +517,24 @@ fn mrml_v1_string_facade_reads_utf8_bytes_and_length() {
         rustc_mrml_v1_observations(
             MRML_V1_STR_SOURCE,
             "for input in [\"MRML\", \"Möbius\"] { println!(\"{}\", probe(input)); }",
+        )
+    );
+}
+
+#[test]
+fn mrml_v1_mutable_slice_facade_writes_through_the_data_word() {
+    let code = compile(MRML_V1_MUT_SLICE_SOURCE);
+    let probe: unsafe extern "C" fn(*mut u8, u64) -> u64 =
+        unsafe { std::mem::transmute(code.pointer) };
+    let mut input = [10, 20, 30, 40];
+    let returned = unsafe { probe(input.as_mut_ptr(), input.len() as u64) };
+    let mut actual = vec![returned];
+    actual.extend(input.into_iter().map(u64::from));
+    assert_eq!(
+        actual,
+        rustc_mrml_v1_observations(
+            MRML_V1_MUT_SLICE_SOURCE,
+            "let mut input = [10, 20, 30, 40]; println!(\"{}\", probe(&mut input)); for byte in input { println!(\"{}\", byte); }",
         )
     );
 }
