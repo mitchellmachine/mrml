@@ -1,14 +1,63 @@
 fn validate_stable_export<const MAX_PARAMETERS: usize>(
     function: &Function<'_, MAX_PARAMETERS>,
+    abi: X86_64Abi,
 ) -> Result<(), CodegenError> {
-    if !function.public || function.abi != FunctionAbi::C || !function.no_mangle {
-        Err(CodegenError {
+    if !function.public || !function.no_mangle {
+        return Err(CodegenError {
             kind: CodegenErrorKind::StableExportRequired,
             span: function.name_span,
-        })
-    } else {
-        Ok(())
+        });
     }
+    if function.abi == FunctionAbi::C {
+        return Ok(());
+    }
+    if function.abi != FunctionAbi::MrmlV1 {
+        return Err(CodegenError {
+            kind: CodegenErrorKind::StableExportRequired,
+            span: function.name_span,
+        });
+    }
+    let signature = crate::validate_mrml_v1_signature(function).map_err(|error| {
+        let span = match error.location {
+            crate::MrmlV1SignatureLocation::Function => function.name_span,
+            crate::MrmlV1SignatureLocation::Parameter(index) => function.parameters()[index]
+                .map_or(function.name_span, |parameter| parameter.ty.span),
+            crate::MrmlV1SignatureLocation::Return => function
+                .return_type
+                .map_or(function.name_span, |return_type| return_type.span),
+        };
+        CodegenError {
+            kind: CodegenErrorKind::MrmlV1Signature(error.kind),
+            span,
+        }
+    })?;
+    let target = match abi {
+        X86_64Abi::SystemV => crate::MrmlV1Target::X86_64SystemV,
+        X86_64Abi::Windows => crate::MrmlV1Target::X86_64Windows,
+    };
+    let plan = crate::plan_mrml_v1_call(target, &signature).map_err(|error| CodegenError {
+        kind: CodegenErrorKind::TooManyAbiParameters,
+        span: function.parameters()[error.parameter]
+            .map_or(function.name_span, |parameter| parameter.ty.span),
+    })?;
+    for (index, value) in plan.parameters().iter().flatten().enumerate() {
+        if value.words().len() != 1 {
+            return Err(CodegenError {
+                kind: CodegenErrorKind::MrmlV1MultiwordValueUnsupported,
+                span: function.parameters()[index]
+                    .map_or(function.name_span, |parameter| parameter.ty.span),
+            });
+        }
+    }
+    if plan.return_value.words().len() > 1 {
+        return Err(CodegenError {
+            kind: CodegenErrorKind::MrmlV1MultiwordValueUnsupported,
+            span: function
+                .return_type
+                .map_or(function.name_span, |return_type| return_type.span),
+        });
+    }
+    Ok(())
 }
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum RuntimeExpressionType {

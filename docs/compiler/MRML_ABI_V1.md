@@ -99,12 +99,19 @@ native C or Rust aggregate classification uses these rules.
 ## Current implementation boundary
 
 The central identity, bounded facade parser, initial signature classifier,
-x86-64 in-memory value layout, and abstract call-location planner are implemented
-at this checkpoint. Ownership/borrowing rules beyond ordinary language
-checking, machine-code lowering from the plan, link compatibility, and external
-execution evidence remain required before an attributed function can be
-emitted. Code generation therefore continues to reject `MrmlV1` rather than
-silently routing it through the C ABI.
+x86-64 in-memory value layout, and abstract call-location planner are
+implemented. Machine-code emission now admits the one-word subset after
+validating the signature and target plan: fixed-width integers through 64 bits,
+`bool`, `char`, scalar raw pointers, scalar references, and unit returns. The
+emitter uses the planned target register or stack order and does not relabel the
+function as C ABI.
+
+Parameters requiring zero or multiple words and returns requiring multiple
+words fail with a distinct typed codegen reason at the exact type span. Thus
+`u128`, `i128`, slices, and strings remain fail-closed even though their layouts
+and abstract call locations are defined. Ownership/borrowing rules beyond
+ordinary language checking, multiword machine-code lowering, link
+compatibility, and external execution evidence remain required.
 
 Arrays, tuples, user aggregates, and indirect returns are not admitted. This
 checkpoint also does not establish that existing

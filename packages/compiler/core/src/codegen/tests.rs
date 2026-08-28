@@ -12054,6 +12054,45 @@ mod tests {
     }
 
     #[test]
+    fn emits_one_word_mrml_v1_exports_through_the_planned_locations() {
+        let module = Parser::new(
+            "#[mrml_abi::export(version = 1)] pub fn identity(value: u64) -> u64 { value }",
+        )
+        .parse_module::<2, 2>()
+        .unwrap();
+        let Some(Item::Function(function)) = module.items()[0] else {
+            panic!("expected function")
+        };
+        let windows =
+            compile_x86_64_function::<_, 16, 2, 8>(&function, &NoConstants, X86_64Abi::Windows)
+                .unwrap();
+        let system_v =
+            compile_x86_64_function::<_, 16, 2, 8>(&function, &NoConstants, X86_64Abi::SystemV)
+                .unwrap();
+        assert_eq!(windows.bytes()[0], 0x51);
+        assert_eq!(system_v.bytes()[0], 0x57);
+        assert_eq!(&windows.bytes()[1..], &system_v.bytes()[1..]);
+    }
+
+    #[test]
+    fn mrml_v1_codegen_rejects_multiword_views_at_the_type_span() {
+        let source =
+            "#[mrml_abi::export(version = 1)] pub fn first(input: &[u8]) -> u8 { input[0] }";
+        let module = Parser::new(source).parse_module::<2, 2>().unwrap();
+        let Some(Item::Function(function)) = module.items()[0] else {
+            panic!("expected function")
+        };
+        let error = compile_x86_64_function::<_, 128, 2, 16>(
+            &function,
+            &NoConstants,
+            X86_64Abi::SystemV,
+        )
+        .unwrap_err();
+        assert_eq!(error.kind, CodegenErrorKind::MrmlV1MultiwordValueUnsupported);
+        assert_eq!(&source[error.span.start..error.span.end], "&[u8]");
+    }
+
+    #[test]
     fn saves_and_reads_stack_passed_parameters_for_both_abis() {
         let windows_module = Parser::new(
             "#[unsafe(no_mangle)] pub extern \"C\" fn fifth(a: u64, b: u64, c: u64, d: u64, value: u64) -> u64 { value }",

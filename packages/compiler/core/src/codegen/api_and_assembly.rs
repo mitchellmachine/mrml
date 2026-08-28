@@ -135,6 +135,8 @@ impl<'symbol, const MAX_BYTES: usize> X86_64RelocatableMachineCode<'symbol, MAX_
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum CodegenErrorKind {
     StableExportRequired,
+    MrmlV1Signature(crate::MrmlV1SignatureErrorKind),
+    MrmlV1MultiwordValueUnsupported,
     ParametersUnsupported,
     TooManyAbiParameters,
     UnsupportedParameterType,
@@ -761,7 +763,8 @@ pub fn compile_x86_64_runtime_function_with_options<
         || parsed_body.while_loop_count() != 0
         || parsed_body.expression_statement_count() != 0
         || parsed_body.return_count() != 0;
-    if function.parameter_count() == 0
+    if function.abi != FunctionAbi::MrmlV1
+        && function.parameter_count() == 0
         && !body_requires_runtime
         && function
             .return_type
@@ -783,7 +786,7 @@ pub fn compile_x86_64_runtime_function_with_options<
             readonly_relocation_count: 0,
         });
     }
-    validate_stable_export(function)?;
+    validate_stable_export(function, abi)?;
     if function.parameter_count() > MAX_X86_64_ABI_PARAMETERS {
         return Err(CodegenError {
             kind: CodegenErrorKind::TooManyAbiParameters,
