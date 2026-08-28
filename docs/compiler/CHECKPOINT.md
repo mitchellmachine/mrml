@@ -9,8 +9,8 @@ the named commit and current source.
 ## Recoverable baseline
 
 - Branch: `main`
-- Compiler checkpoint commit: `8b7e81c8`
-  (`compiler: link selected writable COFF data`)
+- Compiler checkpoint commit: `3ad3116f`
+  (`compiler: link multiple COFF data fragments`)
 - Remote state when recorded: `origin/main` includes the bounded MRML-owned
   static-link core, exact MRML COFF and ELF64 ingestion, deterministic
   import-free PE32+/ELF64 executable serialization, explicit compiler-driver
@@ -60,6 +60,24 @@ against all prior accepted probes. Keep Cargo on edition 2024 until a newer
 named edition can be adopted through a pinned, workspace-wide migration.
 
 ## Latest bounded linker milestone
+
+Commit `3ad3116f` generalizes the selected COFF data path from one read-only and
+one writable COMDAT to an indexed, bounded set. Adjacent `.rdata$...` payloads
+form one zero-copy read-only span; each `.data$...` fragment receives its own
+checked relocation arena, and `ADDR64` targets include the referenced read-only
+section's offset in that span. The driver counts at most 256 writable fragments
+and transports only fragments belonging to selected object members. The legacy
+single-writable decoder remains fail-closed when presented with multiple
+fragments.
+
+The exact ORACLE-0002 gnullvm probe retained two `u64` statics. Its 1,125-byte
+COFF object contains one `.text$entry`, two adjacent `.rdata$...` sections, and
+two independently relocated `.data$...` sections. The release driver produced
+a 2,048-byte deterministic PE that executed on Windows with exit status 42.
+Windows passed 704 compiler-core tests and four driver tests. This checkpoint
+does not claim arbitrary noncontiguous read-only layout, general COFF section
+merging/COMDAT selection, base relocations, or representative-workload
+performance superiority over rust-lld.
 
 Commits `5169d8ed` through `00888d66` establish the MRML-owned linker lane. The
 no-std core resolves one symbol per input across at most 256 inputs and 256
