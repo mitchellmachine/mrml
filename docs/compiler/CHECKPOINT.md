@@ -9,8 +9,8 @@ the named commit and current source.
 ## Recoverable baseline
 
 - Branch: `main`
-- Compiler checkpoint commit: `e454dfa9`
-  (`compiler: diagnose unresolved ELF symbols`)
+- Compiler checkpoint commit: `949b50d3`
+  (`build: expose experimental MRML linker`)
 - Remote state when recorded: `origin/main` includes the bounded MRML-owned
   static-link core, exact MRML COFF and ELF64 ingestion, deterministic
   import-free PE32+/ELF64 executable serialization, explicit compiler-driver
@@ -60,6 +60,20 @@ against all prior accepted probes. Keep Cargo on edition 2024 until a newer
 named edition can be adopted through a pinned, workspace-wide migration.
 
 ## Latest bounded linker milestone
+
+Commit `949b50d3` exposes the MRML-owned static ELF path through the explicit
+public command `mrml compiler mrml-rustc-experimental link-elf`. The frontend
+builds the declared driver through the native dependency graph, forwards the
+bounded ordered inputs, entry, and output, and declares the new process boundary
+by exact input-audit fingerprint. `mrml-rustc-production` remains unavailable
+and fails before output; ordinary builds still use the pinned upstream
+production toolchain. A three-object Windows-host invocation produced a
+4,134-byte ELF that exited 42 under native Arch Linux WSL. Exact Windows gates
+were `cargo +nightly-2026-08-24-x86_64-pc-windows-gnullvm fmt --check`, 119
+frontend tests, and clippy with `-D warnings`, all passing. The repository-wide
+`mrml audit` stopped first at an unrelated concurrently modified compiler-core
+external-command site (`packages/compiler/core/src/linker.rs:7262`, fingerprint
+`fnv1a64:041772d31cad5bfc`); this milestone did not modify or stage that work.
 
 Commit `e454dfa9` adds a borrowed detailed selection error that preserves the
 exact unresolved ELF symbol while the compatibility wrapper retains the prior
