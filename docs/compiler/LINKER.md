@@ -77,6 +77,17 @@ The corresponding explicit Linux-family selections are
 ELF64 object emission/decoding and the MRML ELF serializer without silently
 invoking a system linker.
 
+The linker also has an allocation-free Unix archive container decoder bounded
+to 32 object members. It validates the global magic, every fixed header,
+decimal size arithmetic, member terminators, payload ranges, and even-byte
+padding. Ordinary names, GNU `//` long-name tables and `/offset` references,
+and BSD `#1/length` embedded names are decoded; conventional symbol-index
+members are treated as metadata. The driver expands such a container in member
+order under the same total 32-input bound. This is only an all-members archive
+path: symbol-index-driven lazy extraction, group rescanning, thin archives, and
+real `.rlib` admission remain unimplemented, so it is not yet the ordinary Rust
+static-library path.
+
 On 2026-08-28, the controlled Windows cold-process probe linked the same
 93-byte MRML COFF object 50 times after five interleaved warmups. MRML produced
 a 1,024-byte PE with a 10.196 ms median and 10.323 ms mean; pinned
@@ -104,8 +115,9 @@ preloading proposal is outdated, so MRML does not adopt that proposal.
 
 This increment does **not** emit PE imports/exports/exception metadata/base
 relocations/debug data, emit ELF dynamic metadata/interpreter/PIE/sections,
-read archives, perform section GC or ICF, link dynamically, run work in
-parallel, or integrate linker selection into the public `mrml` build frontend.
+perform symbol-driven archive extraction, read thin archives, perform section
+GC or ICF, link dynamically, run work in parallel, or integrate linker
+selection into the public `mrml` build frontend.
 Those are separate milestones and the current upstream linker remains the
 production linker for ordinary package builds as required by
 `docs/build/BUILD_SYSTEM.md`.

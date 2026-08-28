@@ -9242,3 +9242,13 @@ It adds bounded ownership and command routing, not a new symbol-resolution,
 layout, relocation, executable-format, optimization, compression,
 cryptographic, or loading algorithm. This technical screen is not legal advice
 or patent clearance.
+
+# 2026-08-28 — Bounded Unix archive container decoding
+
+Patent review: **NOT_TRIGGERED**. This increment validates and enumerates
+conventional Unix `ar` members, including GNU long-name tables, BSD embedded
+names, alignment padding, and conventional symbol-index metadata, then expands
+the bounded object members in source order. It does not implement a new archive
+format, symbol-index, member-selection, compression, cryptographic, executable,
+or loading algorithm. This technical screen is not legal advice or patent
+clearance.

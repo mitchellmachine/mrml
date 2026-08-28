@@ -46,9 +46,10 @@ pub use ir::{
 };
 pub use lexer::{LexError, LexErrorKind, Lexer, Span, Token, TokenKind};
 pub use linker::{
-    ElfImage, LinkInput, LinkRelocation, LinkRelocationTarget, LinkedImage, LinkerError,
-    MAX_LINK_INPUTS, MAX_LINK_RELOCATIONS, PeImage, decode_x86_64_coff, decode_x86_64_elf,
-    link_x86_64_elf_executable, link_x86_64_pe, link_x86_64_static,
+    ArchiveMember, ArchiveMembers, ElfImage, LinkInput, LinkRelocation, LinkRelocationTarget,
+    LinkedImage, LinkerError, MAX_ARCHIVE_MEMBERS, MAX_LINK_INPUTS, MAX_LINK_RELOCATIONS, PeImage,
+    decode_unix_archive, decode_x86_64_coff, decode_x86_64_elf, link_x86_64_elf_executable,
+    link_x86_64_pe, link_x86_64_static,
 };
 pub use object::{
     MAX_X86_64_RELOCATIONS, ObjectError, ObjectFile, X86_64PcRelativeRelocation,

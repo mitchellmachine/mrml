@@ -6,6 +6,7 @@
 
 pub const MAX_LINK_INPUTS: usize = 32;
 pub const MAX_LINK_RELOCATIONS: usize = 256;
+pub const MAX_ARCHIVE_MEMBERS: usize = 32;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum LinkerError {
@@ -24,6 +25,8 @@ pub enum LinkerError {
     UnsupportedCoff,
     InvalidElf,
     UnsupportedElf,
+    InvalidArchive,
+    TooManyArchiveMembers,
 }
 
 impl core::fmt::Display for LinkerError {
@@ -44,9 +47,142 @@ impl core::fmt::Display for LinkerError {
             Self::UnsupportedCoff => "unsupported COFF feature",
             Self::InvalidElf => "invalid bounded ELF64 input",
             Self::UnsupportedElf => "unsupported ELF64 feature",
+            Self::InvalidArchive => "invalid Unix archive input",
+            Self::TooManyArchiveMembers => "archive member capacity exceeded",
         };
         formatter.write_str(message)
     }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct ArchiveMember<'a> {
+    pub name: &'a str,
+    pub bytes: &'a [u8],
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct ArchiveMembers<'a> {
+    members: [ArchiveMember<'a>; MAX_ARCHIVE_MEMBERS],
+    length: usize,
+}
+
+impl<'a> ArchiveMembers<'a> {
+    pub fn members(&self) -> &[ArchiveMember<'a>] {
+        &self.members[..self.length]
+    }
+}
+
+/// Decodes ordinary Unix `ar`, GNU long-name, and BSD extended-name members.
+/// Archive symbol indexes are metadata and are skipped; member selection remains
+/// a separate linker pass.
+pub fn decode_unix_archive(archive: &[u8]) -> Result<ArchiveMembers<'_>, LinkerError> {
+    if archive.get(..8) != Some(b"!<arch>\n") {
+        return Err(LinkerError::InvalidArchive);
+    }
+    let empty = ArchiveMember {
+        name: "",
+        bytes: &archive[0..0],
+    };
+    let mut decoded = ArchiveMembers {
+        members: [empty; MAX_ARCHIVE_MEMBERS],
+        length: 0,
+    };
+    let mut string_table = None;
+    let mut cursor = 8usize;
+    while cursor < archive.len() {
+        let header_end = cursor.checked_add(60).ok_or(LinkerError::OffsetOverflow)?;
+        let header = archive
+            .get(cursor..header_end)
+            .ok_or(LinkerError::InvalidArchive)?;
+        if header.get(58..60) != Some(b"`\n") {
+            return Err(LinkerError::InvalidArchive);
+        }
+        let stored_size =
+            parse_archive_decimal(header.get(48..58).ok_or(LinkerError::InvalidArchive)?)?;
+        let stored_end = header_end
+            .checked_add(stored_size)
+            .ok_or(LinkerError::OffsetOverflow)?;
+        let stored = archive
+            .get(header_end..stored_end)
+            .ok_or(LinkerError::InvalidArchive)?;
+        let raw_name = trim_archive_field(header.get(..16).ok_or(LinkerError::InvalidArchive)?)?;
+
+        if raw_name == "//" {
+            string_table = Some(stored);
+        } else if raw_name != "/" && raw_name != "/SYM64/" && !raw_name.starts_with("__.SYMDEF") {
+            let (name, bytes) = decode_archive_member(raw_name, stored, string_table)?;
+            if decoded.length == MAX_ARCHIVE_MEMBERS {
+                return Err(LinkerError::TooManyArchiveMembers);
+            }
+            decoded.members[decoded.length] = ArchiveMember { name, bytes };
+            decoded.length += 1;
+        }
+
+        cursor = stored_end
+            .checked_add(stored_size & 1)
+            .ok_or(LinkerError::OffsetOverflow)?;
+        if cursor > archive.len() {
+            return Err(LinkerError::InvalidArchive);
+        }
+    }
+    Ok(decoded)
+}
+
+fn decode_archive_member<'a>(
+    raw_name: &'a str,
+    stored: &'a [u8],
+    string_table: Option<&'a [u8]>,
+) -> Result<(&'a str, &'a [u8]), LinkerError> {
+    if let Some(length) = raw_name.strip_prefix("#1/") {
+        let name_length = parse_archive_usize(length.as_bytes())?;
+        let name_bytes = stored
+            .get(..name_length)
+            .ok_or(LinkerError::InvalidArchive)?;
+        let name = core::str::from_utf8(name_bytes).map_err(|_| LinkerError::InvalidArchive)?;
+        return Ok((name, &stored[name_length..]));
+    }
+    if let Some(offset) = raw_name.strip_prefix('/') {
+        let offset = parse_archive_usize(offset.as_bytes())?;
+        let strings = string_table.ok_or(LinkerError::InvalidArchive)?;
+        let suffix = strings.get(offset..).ok_or(LinkerError::InvalidArchive)?;
+        let end = suffix
+            .windows(2)
+            .position(|bytes| bytes == b"/\n")
+            .ok_or(LinkerError::InvalidArchive)?;
+        let name = core::str::from_utf8(&suffix[..end]).map_err(|_| LinkerError::InvalidArchive)?;
+        return Ok((name, stored));
+    }
+    Ok((raw_name.strip_suffix('/').unwrap_or(raw_name), stored))
+}
+
+fn trim_archive_field(field: &[u8]) -> Result<&str, LinkerError> {
+    let end = field
+        .iter()
+        .rposition(|byte| *byte != b' ')
+        .map_or(0, |i| i + 1);
+    core::str::from_utf8(&field[..end]).map_err(|_| LinkerError::InvalidArchive)
+}
+
+fn parse_archive_decimal(field: &[u8]) -> Result<usize, LinkerError> {
+    let end = field
+        .iter()
+        .position(|byte| *byte == b' ')
+        .unwrap_or(field.len());
+    parse_archive_usize(&field[..end])
+}
+
+fn parse_archive_usize(digits: &[u8]) -> Result<usize, LinkerError> {
+    if digits.is_empty() || digits.iter().any(|byte| !byte.is_ascii_digit()) {
+        return Err(LinkerError::InvalidArchive);
+    }
+    let mut value = 0usize;
+    for digit in digits {
+        value = value
+            .checked_mul(10)
+            .and_then(|value| value.checked_add(usize::from(*digit - b'0')))
+            .ok_or(LinkerError::OffsetOverflow)?;
+    }
+    Ok(value)
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -1100,6 +1236,86 @@ mod tests {
         emit_x86_64_coff, emit_x86_64_coff_with_relocation, MachineCode,
         X86_64PcRelativeRelocation, X86_64PcRelativeRelocationKind,
     };
+
+    fn append_archive_member(archive: &mut std::vec::Vec<u8>, name: &str, bytes: &[u8]) {
+        let mut header = [b' '; 60];
+        header[..name.len()].copy_from_slice(name.as_bytes());
+        let size = std::format!("{}", bytes.len());
+        header[48..48 + size.len()].copy_from_slice(size.as_bytes());
+        header[58..60].copy_from_slice(b"`\n");
+        archive.extend_from_slice(&header);
+        archive.extend_from_slice(bytes);
+        if bytes.len() & 1 != 0 {
+            archive.push(b'\n');
+        }
+    }
+
+    #[test]
+    fn decodes_ordinary_gnu_and_bsd_archive_member_names() {
+        let mut archive = b"!<arch>\n".to_vec();
+        append_archive_member(&mut archive, "short.o/", b"one");
+        append_archive_member(&mut archive, "//", b"long-object-name.o/\n");
+        append_archive_member(&mut archive, "/0", b"two2");
+        let mut bsd = b"bsd-name.o".to_vec();
+        bsd.extend_from_slice(b"three");
+        append_archive_member(&mut archive, "#1/10", &bsd);
+
+        let members = decode_unix_archive(&archive).unwrap();
+        assert_eq!(members.members().len(), 3);
+        assert_eq!(
+            members.members()[0],
+            ArchiveMember {
+                name: "short.o",
+                bytes: b"one"
+            }
+        );
+        assert_eq!(
+            members.members()[1],
+            ArchiveMember {
+                name: "long-object-name.o",
+                bytes: b"two2"
+            }
+        );
+        assert_eq!(
+            members.members()[2],
+            ArchiveMember {
+                name: "bsd-name.o",
+                bytes: b"three"
+            }
+        );
+    }
+
+    #[test]
+    fn skips_archive_symbol_index_metadata() {
+        let mut archive = b"!<arch>\n".to_vec();
+        append_archive_member(&mut archive, "/", b"index");
+        append_archive_member(&mut archive, "/SYM64/", b"wide");
+        append_archive_member(&mut archive, "entry.o/", b"object");
+
+        let members = decode_unix_archive(&archive).unwrap();
+        assert_eq!(
+            members.members(),
+            &[ArchiveMember {
+                name: "entry.o",
+                bytes: b"object"
+            }]
+        );
+    }
+
+    #[test]
+    fn rejects_truncated_and_unresolved_archive_members() {
+        assert_eq!(
+            decode_unix_archive(b"!<arch>\nshort"),
+            Err(LinkerError::InvalidArchive)
+        );
+
+        let mut archive = b"!<arch>\n".to_vec();
+        append_archive_member(&mut archive, "/9", b"object");
+        assert_eq!(
+            decode_unix_archive(&archive),
+            Err(LinkerError::InvalidArchive)
+        );
+    }
 
     #[test]
     fn links_forward_and_backward_calls_after_freezing_layout() {

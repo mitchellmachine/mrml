@@ -4,15 +4,18 @@
 use mrml_error::{anyhow, Result};
 use mrml_runtime::{mrml_println as println, Text, Vector};
 use mrml_rustc::{
-    compile_source_function_with_options, decode_x86_64_coff, decode_x86_64_elf,
-    link_x86_64_elf_executable, link_x86_64_pe, CodegenOptions, LinkInput, LinkRelocation,
-    LinkRelocationTarget, ObjectFormat, TargetLayout, MAX_LINK_INPUTS, MAX_LINK_RELOCATIONS,
+    compile_source_function_with_options, decode_unix_archive, decode_x86_64_coff,
+    decode_x86_64_elf, link_x86_64_elf_executable, link_x86_64_pe, CodegenOptions, LinkInput,
+    LinkRelocation, LinkRelocationTarget, ObjectFormat, TargetLayout, MAX_LINK_INPUTS,
+    MAX_LINK_RELOCATIONS,
 };
 
 #[cfg_attr(test, allow(dead_code))]
 const MAX_SOURCE_BYTES: usize = 1024 * 1024;
 #[cfg_attr(test, allow(dead_code))]
 const MAX_OBJECT_BYTES: usize = 4096;
+#[cfg_attr(test, allow(dead_code))]
+const MAX_ARCHIVE_BYTES: usize = MAX_OBJECT_BYTES * MAX_LINK_INPUTS;
 #[cfg_attr(test, allow(dead_code))]
 const MAX_CODE_BYTES: usize = 4 * 1024;
 #[cfg_attr(test, allow(dead_code))]
@@ -148,18 +151,32 @@ fn read_link_objects(paths: &[Text]) -> Result<Vector<Vector<u8>>> {
         .map_err(|_| anyhow!("could not allocate link input list"))?;
     for path in paths {
         objects
-            .try_push(mrml_runtime::read_file_bounded(path, MAX_OBJECT_BYTES)?)
+            .try_push(mrml_runtime::read_file_bounded(path, MAX_ARCHIVE_BYTES)?)
             .map_err(|_| anyhow!("could not allocate link input list"))?;
     }
     Ok(objects)
 }
 
 fn link_object_refs(objects: &[Vector<u8>]) -> Result<Vector<&[u8]>> {
-    let mut refs = Vector::with_capacity(objects.len())
+    let mut refs = Vector::with_capacity(MAX_LINK_INPUTS)
         .map_err(|_| anyhow!("could not allocate link input reference list"))?;
     for object in objects {
-        refs.try_push(&object[..])
-            .map_err(|_| anyhow!("could not allocate link input reference list"))?;
+        if object.get(..8) == Some(b"!<arch>\n") {
+            let archive = decode_unix_archive(object).map_err(mrml_error::message)?;
+            for member in archive.members() {
+                if refs.len() == MAX_LINK_INPUTS {
+                    return Err(anyhow!("expanded link input count exceeds 32"));
+                }
+                refs.try_push(member.bytes)
+                    .map_err(|_| anyhow!("could not allocate link input reference list"))?;
+            }
+        } else {
+            refs.try_push(&object[..])
+                .map_err(|_| anyhow!("could not allocate link input reference list"))?;
+        }
+    }
+    if refs.is_empty() {
+        return Err(anyhow!("link input list contains no object members"));
     }
     Ok(refs)
 }
