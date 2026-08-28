@@ -1658,7 +1658,12 @@ impl<
                     tree.expression(id).map(|expression| expression.kind),
                     Some(ExprKind::Binary {
                         operator:
-                            crate::BinaryOperator::Equal | crate::BinaryOperator::NotEqual,
+                            crate::BinaryOperator::Equal
+                                | crate::BinaryOperator::NotEqual
+                                | crate::BinaryOperator::Less
+                                | crate::BinaryOperator::LessEqual
+                                | crate::BinaryOperator::Greater
+                                | crate::BinaryOperator::GreaterEqual,
                         ..
                     })
                 ))
@@ -5786,7 +5791,12 @@ impl<
             } => {
                 if matches!(
                     operator,
-                    crate::BinaryOperator::Equal | crate::BinaryOperator::NotEqual
+                    crate::BinaryOperator::Equal
+                        | crate::BinaryOperator::NotEqual
+                        | crate::BinaryOperator::Less
+                        | crate::BinaryOperator::LessEqual
+                        | crate::BinaryOperator::Greater
+                        | crate::BinaryOperator::GreaterEqual
                 ) {
                     let left_type = runtime_expression_type_with_locals(
                         self.function,
@@ -5828,16 +5838,45 @@ impl<
                         self.emit_wide_integer_return(tree, right, wide_type)?;
                         self.emit(&[0x59, 0x41, 0x58])?;
                         self.evaluation_depth -= 2;
-                        self.emit(&[
-                            0x4c, 0x31, 0xc0, 0x48, 0x31, 0xca, 0x48, 0x09, 0xd0, 0x48,
-                            0x85, 0xc0, 0x0f,
-                            if operator == crate::BinaryOperator::Equal {
-                                0x94
-                            } else {
-                                0x95
-                            },
-                            0xc0, 0x0f, 0xb6, 0xc0,
-                        ])?;
+                        if matches!(
+                            operator,
+                            crate::BinaryOperator::Equal | crate::BinaryOperator::NotEqual
+                        ) {
+                            self.emit(&[
+                                0x4c, 0x31, 0xc0, 0x48, 0x31, 0xca, 0x48, 0x09, 0xd0,
+                                0x48, 0x85, 0xc0, 0x0f,
+                                if operator == crate::BinaryOperator::Equal {
+                                    0x94
+                                } else {
+                                    0x95
+                                },
+                                0xc0, 0x0f, 0xb6, 0xc0,
+                            ])?;
+                        } else {
+                            let signed = matches!(
+                                wide_type,
+                                RuntimeExpressionType::Integer(Some(crate::IntegerType::I128))
+                            );
+                            let high_condition = match (signed, operator) {
+                                (false, crate::BinaryOperator::Less | crate::BinaryOperator::LessEqual) => 0x92,
+                                (false, crate::BinaryOperator::Greater | crate::BinaryOperator::GreaterEqual) => 0x97,
+                                (true, crate::BinaryOperator::Less | crate::BinaryOperator::LessEqual) => 0x9c,
+                                (true, crate::BinaryOperator::Greater | crate::BinaryOperator::GreaterEqual) => 0x9f,
+                                _ => unreachable!(),
+                            };
+                            let low_condition = match operator {
+                                crate::BinaryOperator::Less => 0x92,
+                                crate::BinaryOperator::LessEqual => 0x96,
+                                crate::BinaryOperator::Greater => 0x97,
+                                crate::BinaryOperator::GreaterEqual => 0x93,
+                                _ => unreachable!(),
+                            };
+                            self.emit(&[
+                                0x48, 0x39, 0xd1, 0x0f, high_condition, 0xc1, 0x41, 0x0f,
+                                0x94, 0xc1, 0x49, 0x39, 0xc0, 0x0f, low_condition, 0xc0,
+                                0x44, 0x20, 0xc8, 0x08, 0xc8, 0x0f, 0xb6, 0xc0,
+                            ])?;
+                        }
                         return Ok(());
                     }
                 }
@@ -10054,7 +10093,13 @@ impl<
             && matches!(
                 tree.expression(root).map(|expression| expression.kind),
                 Some(ExprKind::Binary {
-                    operator: crate::BinaryOperator::Equal | crate::BinaryOperator::NotEqual,
+                    operator:
+                        crate::BinaryOperator::Equal
+                            | crate::BinaryOperator::NotEqual
+                            | crate::BinaryOperator::Less
+                            | crate::BinaryOperator::LessEqual
+                            | crate::BinaryOperator::Greater
+                            | crate::BinaryOperator::GreaterEqual,
                     ..
                 })
             )

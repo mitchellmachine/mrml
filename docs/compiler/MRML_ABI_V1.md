@@ -141,6 +141,9 @@ and selects unsigned-borrow or signed-overflow trapping by declared type.
 Equality and inequality compare both words after left-to-right evaluation and
 normalize the combined word differences to a boolean that may enter the supported
 one-word integer cast/return path.
+Ordering compares high words first (signed for `i128`, unsigned for `u128`) and
+uses an unsigned low-word comparison only when the high words are equal. All four
+ordering operators normalize to the same supported boolean path.
 Closed positive and negative two-word integer literals are range-checked against
 the declared return type and materialized directly into the two return words.
 Other wide casts, expressions, locals, operations, calls, and returns remain
@@ -186,6 +189,8 @@ Non-overflowing unsigned and signed subtraction is compared across both words,
 including low-word borrow cases.
 Unsigned equality and signed inequality are compared with the pinned oracle at
 equal values and values differing in either word.
+Unsigned less-than and signed greater-than-or-equal are compared below, at, and
+above their boundaries, including values whose high words select the result.
 Exact `u128::MAX`, `i128::MAX`, and `i128::MIN` literal
 words are also compared with the same oracle. This is not linker, dynamic-loader,
 cross-language, or physical-hardware evidence.

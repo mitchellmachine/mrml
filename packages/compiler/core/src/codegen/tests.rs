@@ -12331,6 +12331,36 @@ mod tests {
     }
 
     #[test]
+    fn mrml_v1_codegen_orders_two_word_integers_by_high_then_low_word() {
+        for (source, high_condition) in [
+            (
+                "#[mrml_abi::export(version = 1)] pub fn value(input: u128) -> u64 { (input < 1512366075204170947332355369683137040) as u64 }",
+                0x92,
+            ),
+            (
+                "#[mrml_abi::export(version = 1)] pub fn value(input: i128) -> u64 { (input >= -1512366075204170947332355369683137040) as u64 }",
+                0x9f,
+            ),
+        ] {
+            let module = Parser::new(source).parse_module::<2, 2>().unwrap();
+            let Some(Item::Function(function)) = module.items()[0] else {
+                panic!("expected function")
+            };
+            for abi in [X86_64Abi::SystemV, X86_64Abi::Windows] {
+                let code =
+                    compile_x86_64_function::<_, 384, 2, 16>(&function, &NoConstants, abi)
+                        .unwrap();
+                assert!(code.bytes().windows(6).any(|bytes| {
+                    bytes == [0x48, 0x39, 0xd1, 0x0f, high_condition, 0xc1]
+                }));
+                assert!(code.bytes().windows(7).any(|bytes| {
+                    bytes == [0x49, 0x39, 0xc0, 0x0f, if high_condition == 0x92 { 0x92 } else { 0x93 }, 0xc0, 0x44]
+                }));
+            }
+        }
+    }
+
+    #[test]
     fn mrml_v1_codegen_widens_one_word_integers_for_two_word_returns() {
         for source in [
             "#[mrml_abi::export(version = 1)] pub fn value(input: u8) -> u128 { input as u128 }",
