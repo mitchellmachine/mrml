@@ -158,6 +158,8 @@ retain the divisor in bounded temporary stack storage, and trap a zero divisor.
 restore quotient/remainder signs, and unconditionally trap the `MIN / -1` case.
 Lazy `if` expressions may select compatible two-word integer values without
 evaluating the unselected branch; both branches retain the declared wide type.
+Block sequences may evaluate supported one-word prefix expressions before a
+compatible two-word integer tail expression.
 Closed positive and negative two-word integer literals are range-checked against
 the declared return type and materialized directly into the two return words.
 Other wide casts, expressions, locals, operations, calls, and returns remain
@@ -218,6 +220,7 @@ Signed quotient and remainder by `-17` are compared for both operand signs and
 the exact `i128::MIN`/`i128::MAX` boundaries; both `MIN / -1` and `MIN % -1`
 must take isolated traps.
 Both branches of a nontrivial wide conditional return are compared word-for-word.
+Wide values returned through a block sequence are also compared word-for-word.
 Exact `u128::MAX`, `i128::MAX`, and `i128::MIN` literal
 words are also compared with the same oracle. This is not linker, dynamic-loader,
 cross-language, or physical-hardware evidence.

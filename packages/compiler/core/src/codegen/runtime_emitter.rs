@@ -7078,6 +7078,10 @@ impl<
             self.emit(&[0x48, 0xf7, 0xd0, 0x48, 0xf7, 0xd2])?;
             return Ok(());
         }
+        if let ExprKind::Sequence { first, then } = expression.kind {
+            self.emit_expression(tree, first, 1)?;
+            return self.emit_wide_integer_return(tree, then, expected_type);
+        }
         if let ExprKind::If {
             condition,
             then_branch,
