@@ -90,26 +90,26 @@ path = "packages/compiler/core/tests/semantic_execution.rs"
 reason = "Resolve the exact pinned Windows rustc sysroot so its bundled linker and runtime can execute the shared-source oracle."
 
 [[build_input]]
-fingerprint = "fnv1a64:7ca1821834345022"
+fingerprint = "fnv1a64:d9efde265940314b"
 id = "external-command.mrml-v1-facade.rustup"
 kind = "external-command"
-line = 345
+line = 344
 path = "packages/compiler/core/tests/semantic_execution.rs"
 reason = "Compile the repository-controlled MRML ABI attribute facade with the exact pinned rustc oracle."
 
 [[build_input]]
-fingerprint = "fnv1a64:7ca18318343451d5"
+fingerprint = "fnv1a64:d9efdd2659402f98"
 id = "external-command.mrml-v1-shared-source.rustup"
 kind = "external-command"
-line = 371
+line = 370
 path = "packages/compiler/core/tests/semantic_execution.rs"
 reason = "Compile the same attributed scalar source into an executable with the exact pinned rustc oracle."
 
 [[build_input]]
-fingerprint = "fnv1a64:f4cb8e731171ef68"
+fingerprint = "fnv1a64:bb114a4fca503825"
 id = "external-command.mrml-v1-shared-source.executable"
 kind = "external-command"
-line = 398
+line = 397
 path = "packages/compiler/core/tests/semantic_execution.rs"
 reason = "Execute the pinned rustc artifact so its scalar observations can be compared with MRML generated code."
 

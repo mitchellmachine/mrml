@@ -29,6 +29,7 @@ static ORACLE_DIRECTORY: AtomicU64 = AtomicU64::new(0);
 const MRML_ABI_FACADE: &str = include_str!("oracle_support/mrml_abi.rs");
 const MRML_V1_SCALAR_SOURCE: &str =
     "#[mrml_abi::export(version = 1)] pub fn probe(value: u64) -> u64 { value + 17 }";
+const MRML_V1_STACK_SOURCE: &str = "#[mrml_abi::export(version = 1)] pub fn probe(a: u64, b: u64, c: u64, d: u64, e: u64, f: u64, g: u64, h: u64) -> u64 { a + b * 2 + c * 3 + d * 4 + e * 5 + f * 6 + g * 7 + h * 8 }";
 
 fn verify_oracle() {
     ORACLE.call_once(|| {
@@ -321,7 +322,7 @@ fn pinned_rust_lld() -> PathBuf {
     linker
 }
 
-fn rustc_mrml_v1_scalar_observations() -> Vec<u64> {
+fn rustc_mrml_v1_observations(source: &str, driver: &str) -> Vec<u64> {
     verify_oracle();
     let directory = OracleDirectory::create();
     let facade_source = directory.path().join("mrml_abi.rs");
@@ -337,9 +338,7 @@ fn rustc_mrml_v1_scalar_observations() -> Vec<u64> {
     fs::write(&facade_source, MRML_ABI_FACADE).expect("write oracle facade source");
     fs::write(
         &shared_source,
-        format!(
-            "{MRML_V1_SCALAR_SOURCE}\nfn main() {{ for value in [0, 1, 42, u64::MAX - 17] {{ println!(\"{{}}\", probe(value)); }} }}"
-        ),
+        format!("{source}\nfn main() {{ {driver} }}"),
     )
     .expect("write shared oracle source");
     let mut facade_command = Command::new("rustup");
@@ -419,7 +418,36 @@ fn mrml_v1_scalar_facade_executes_with_the_host_call_plan() {
         .into_iter()
         .map(|value| unsafe { probe(value) })
         .collect();
-    assert_eq!(actual, rustc_mrml_v1_scalar_observations());
+    assert_eq!(
+        actual,
+        rustc_mrml_v1_observations(
+            MRML_V1_SCALAR_SOURCE,
+            "for value in [0, 1, 42, u64::MAX - 17] { println!(\"{}\", probe(value)); }",
+        )
+    );
+}
+
+#[test]
+fn mrml_v1_scalar_facade_crosses_register_and_stack_arguments() {
+    let code = compile(MRML_V1_STACK_SOURCE);
+    let probe: unsafe extern "C" fn(u64, u64, u64, u64, u64, u64, u64, u64) -> u64 =
+        unsafe { std::mem::transmute(code.pointer) };
+    let cases = [
+        [0, 0, 0, 0, 0, 0, 0, 0],
+        [1, 2, 3, 4, 5, 6, 7, 8],
+        [8, 7, 6, 5, 4, 3, 2, 1],
+    ];
+    let actual: Vec<_> = cases
+        .map(|[a, b, c, d, e, f, g, h]| unsafe { probe(a, b, c, d, e, f, g, h) })
+        .into_iter()
+        .collect();
+    assert_eq!(
+        actual,
+        rustc_mrml_v1_observations(
+            MRML_V1_STACK_SOURCE,
+            "for [a, b, c, d, e, f, g, h] in [[0, 0, 0, 0, 0, 0, 0, 0], [1, 2, 3, 4, 5, 6, 7, 8], [8, 7, 6, 5, 4, 3, 2, 1]] { println!(\"{}\", probe(a, b, c, d, e, f, g, h)); }",
+        )
+    );
 }
 
 #[test]

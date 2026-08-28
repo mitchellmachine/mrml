@@ -29,7 +29,10 @@ rustc, builds an executable containing the same attributed scalar function fed
 to MRML, executes both artifacts, and compares their returned observations.
 Windows uses the pinned toolchain's own `rust-lld` and runtime library rather
 than an unpinned system linker. This initial evidence covers one-word scalar
-calls only; it is not yet general differential or cross-language ABI evidence.
+calls only. It includes an eight-argument function that crosses the Windows
+four-register boundary and the System V six-register boundary, with distinct
+weighted observations that detect reordered or misloaded stack arguments. It
+is not yet general differential or cross-language ABI evidence.
 
 The MRML parser accepts only `mrml_abi::export`, requires exactly
 `version = 1`, and records the central `FunctionAbi::MrmlV1` identity. The
