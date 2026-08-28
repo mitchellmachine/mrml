@@ -9,8 +9,8 @@ the named commit and current source.
 ## Recoverable baseline
 
 - Branch: `main`
-- Compiler checkpoint commit: `8ac039f3`
-  (`compiler: link Rust zero-sized statics`)
+- Compiler checkpoint commit: `1f427bea`
+  (`compiler: validate GNU archive indexes`)
 - Remote state when recorded: `origin/main` includes the bounded MRML-owned
   static-link core, exact MRML COFF and ELF64 ingestion, deterministic
   import-free PE32+/ELF64 executable serialization, explicit compiler-driver
@@ -60,6 +60,25 @@ against all prior accepted probes. Keep Cargo on edition 2024 until a newer
 named edition can be adopted through a pinned, workspace-wide migration.
 
 ## Latest bounded linker milestone
+
+Commit `1f427bea` decodes the GNU 32-bit `/` and 64-bit `/SYM64/` archive
+symbol indexes as bounded, untrusted acceleration hints. It caps an archive at
+4,096 indexed symbols, validates every big-endian member offset against an
+independently parsed ordinary member header, validates nonempty NUL-terminated
+UTF-8 symbol names, rejects duplicate index members and trailing index data,
+and exposes exact symbol-to-member lookup without letting index contents
+authorize or substitute for object decoding.
+
+Under exact ORACLE-0002 Arch WSL, an actual rustc-produced indexed `.rlib`
+containing rustc metadata, a metadata-link object, and a data-only provider
+object linked to a 12,304-byte ELF that exited 42. The pinned Windows suite
+passed 718 compiler-core tests and four driver tests; the pinned Linux suite
+passed 720 compiler-core tests and four driver tests. A 50-iteration/five-warmup
+identical-input measurement recorded MRML at 4.745 ms median versus pinned
+rust-lld with `--eh-frame-hdr` at 5.659 ms; rust-lld emitted 2,080 bytes. The
+driver still scans archive members eagerly and retains the 256-member cap, so
+this is parser and regression evidence rather than a claim that the index has
+accelerated extraction or that MRML is generally faster than rust-lld.
 
 Commit `8ac039f3` retains allocated zero-sized `.rodata.*` sections as typed
 local identities. A zero-valued relocation target maps to the owning input's
