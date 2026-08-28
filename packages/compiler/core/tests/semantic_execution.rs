@@ -79,6 +79,14 @@ const MRML_V1_WIDE_UNSIGNED_DIVIDE_SOURCE: &str = "#[mrml_abi::export(version = 
 const MRML_V1_WIDE_UNSIGNED_REMAINDER_SOURCE: &str = "#[mrml_abi::export(version = 1)] pub fn probe(input: u128) -> u128 { input % 18446744073709551617 }";
 const MRML_V1_WIDE_UNSIGNED_ZERO_DIVISOR_SOURCE: &str =
     "#[mrml_abi::export(version = 1)] pub fn probe(input: u128) -> u128 { input / 0 }";
+const MRML_V1_WIDE_SIGNED_DIVIDE_SOURCE: &str =
+    "#[mrml_abi::export(version = 1)] pub fn probe(input: i128) -> i128 { input / -17 }";
+const MRML_V1_WIDE_SIGNED_REMAINDER_SOURCE: &str =
+    "#[mrml_abi::export(version = 1)] pub fn probe(input: i128) -> i128 { input % -17 }";
+const MRML_V1_WIDE_SIGNED_DIVIDE_OVERFLOW_SOURCE: &str =
+    "#[mrml_abi::export(version = 1)] pub fn probe(input: i128) -> i128 { input / -1 }";
+const MRML_V1_WIDE_SIGNED_REMAINDER_OVERFLOW_SOURCE: &str =
+    "#[mrml_abi::export(version = 1)] pub fn probe(input: i128) -> i128 { input % -1 }";
 const MRML_V1_UNSIGNED_WIDEN_SOURCE: &str =
     "#[mrml_abi::export(version = 1)] pub fn probe(input: u64) -> u128 { input as u128 }";
 const MRML_V1_SIGNED_WIDEN_SOURCE: &str =
@@ -1456,6 +1464,89 @@ fn mrml_v1_wide_unsigned_zero_divisor_traps() {
             stdout.contains("unexpected return code -1073741795")
                 || stderr.contains("unexpected return code -1073741795"),
             "missing Windows illegal-instruction status; stdout: {stdout}; stderr: {stderr}"
+        );
+    }
+}
+
+#[test]
+fn mrml_v1_wide_signed_division_and_remainder_match_both_oracle_words() {
+    let quotient = compile(MRML_V1_WIDE_SIGNED_DIVIDE_SOURCE);
+    let remainder = compile(MRML_V1_WIDE_SIGNED_REMAINDER_SOURCE);
+    let inputs = [0i128, 1, -1, 17, -17, i128::MAX, i128::MIN];
+    for (source, code, driver) in [
+        (
+            MRML_V1_WIDE_SIGNED_DIVIDE_SOURCE,
+            &quotient,
+            "for input in [0i128, 1, -1, 17, -17, i128::MAX, i128::MIN] { let returned = probe(input); println!(\"{}\", returned as u64); println!(\"{}\", ((returned as u128) >> 64) as u64); }",
+        ),
+        (
+            MRML_V1_WIDE_SIGNED_REMAINDER_SOURCE,
+            &remainder,
+            "for input in [0i128, 1, -1, 17, -17, i128::MAX, i128::MIN] { let returned = probe(input); println!(\"{}\", returned as u64); println!(\"{}\", ((returned as u128) >> 64) as u64); }",
+        ),
+    ] {
+        let actual = inputs
+            .into_iter()
+            .flat_map(|input| {
+                let returned =
+                    unsafe { call_mrml_v1_wide_return(code.pointer, input as u128) };
+                [returned as u64, (returned >> 64) as u64]
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(actual, rustc_mrml_v1_observations(source, driver));
+    }
+}
+
+#[test]
+fn mrml_v1_wide_signed_division_overflow_traps_for_both_operators() {
+    #[cfg(target_os = "windows")]
+    const CHILD: &str = "MRML_SEMANTIC_SIGNED_WIDE_DIVISION_OVERFLOW_CHILD";
+    let divide = compile(MRML_V1_WIDE_SIGNED_DIVIDE_OVERFLOW_SOURCE);
+    let remainder = compile(MRML_V1_WIDE_SIGNED_REMAINDER_OVERFLOW_SOURCE);
+
+    #[cfg(not(target_os = "windows"))]
+    for code in [&divide, &remainder] {
+        let pid = unsafe { fork() };
+        assert!(pid >= 0, "fork failed");
+        if pid == 0 {
+            let _ = unsafe { call_mrml_v1_wide_return(code.pointer, i128::MIN as u128) };
+            unsafe { _exit(120) }
+        }
+        let mut status = 0;
+        assert_eq!(unsafe { waitpid(pid, &mut status, 0) }, pid, "waitpid failed");
+        assert_eq!(status & 0x7f, 4, "unexpected Unix wait status: {status:#x}");
+    }
+
+    #[cfg(not(target_os = "windows"))]
+    return;
+
+    #[cfg(target_os = "windows")]
+    if let Some(case) = std::env::var_os(CHILD) {
+        unsafe { SetErrorMode(0x0001 | 0x0002) };
+        let code = if case == "divide" { &divide } else { &remainder };
+        let _ = unsafe { call_mrml_v1_wide_return(code.pointer, i128::MIN as u128) };
+        panic!("signed wide division overflow unexpectedly returned");
+    }
+
+    #[cfg(target_os = "windows")]
+    for case in ["divide", "remainder"] {
+        let output = Command::new(std::env::current_exe().expect("locate semantic test binary"))
+            .args([
+                "--exact",
+                "mrml_v1_wide_signed_division_overflow_traps_for_both_operators",
+                "--nocapture",
+            ])
+            .env(CHILD, case)
+            .output()
+            .expect("launch isolated signed wide division trap probe");
+        assert!(!output.status.success(), "{case} overflow trap unexpectedly returned");
+        assert_eq!(output.status.code(), Some(101));
+        let stdout = String::from_utf8(output.stdout).expect("UTF-8 child test stdout");
+        let stderr = String::from_utf8(output.stderr).expect("UTF-8 child test stderr");
+        assert!(
+            stdout.contains("unexpected return code -1073741795")
+                || stderr.contains("unexpected return code -1073741795"),
+            "missing Windows {case} illegal-instruction status; stdout: {stdout}; stderr: {stderr}"
         );
     }
 }

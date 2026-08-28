@@ -12464,6 +12464,32 @@ mod tests {
     }
 
     #[test]
+    fn mrml_v1_codegen_divides_and_remainders_signed_two_word_integers() {
+        for source in [
+            "#[mrml_abi::export(version = 1)] pub fn value(input: i128) -> i128 { input / -17 }",
+            "#[mrml_abi::export(version = 1)] pub fn value(input: i128) -> i128 { input % -17 }",
+        ] {
+            let module = Parser::new(source).parse_module::<2, 2>().unwrap();
+            let Some(Item::Function(function)) = module.items()[0] else {
+                panic!("expected function")
+            };
+            for abi in [X86_64Abi::SystemV, X86_64Abi::Windows] {
+                let code =
+                    compile_x86_64_function::<_, 896, 2, 16>(&function, &NoConstants, abi)
+                        .unwrap();
+                assert!(code.bytes().windows(6).any(|bytes| {
+                    bytes == [0x49, 0x89, 0xc9, 0x4d, 0x31, 0xd9]
+                }));
+                assert!(code
+                    .bytes()
+                    .windows(5)
+                    .any(|bytes| bytes == [0x48, 0x8b, 0x44, 0x24, 0x10]));
+                assert!(code.bytes().ends_with(&[0x0f, 0x0b]));
+            }
+        }
+    }
+
+    #[test]
     fn mrml_v1_codegen_widens_one_word_integers_for_two_word_returns() {
         for source in [
             "#[mrml_abi::export(version = 1)] pub fn value(input: u8) -> u128 { input as u128 }",
@@ -12532,7 +12558,7 @@ mod tests {
 
     #[test]
     fn mrml_v1_codegen_rejects_other_wide_returns() {
-        let source = "#[mrml_abi::export(version = 1)] pub fn value(input: i128) -> i128 { input / 2 }";
+        let source = "#[mrml_abi::export(version = 1)] pub fn value(input: i128) -> i128 { input.wrapping_div(2) }";
         let module = Parser::new(source).parse_module::<2, 2>().unwrap();
         let Some(Item::Function(function)) = module.items()[0] else {
             panic!("expected function")
@@ -12543,7 +12569,7 @@ mod tests {
             X86_64Abi::SystemV,
         )
         .unwrap_err();
-        assert_eq!(error.kind, CodegenErrorKind::RuntimeExpressionUnsupported);
+        assert_eq!(error.kind, CodegenErrorKind::RuntimeTypeMismatch);
     }
 
     #[test]
