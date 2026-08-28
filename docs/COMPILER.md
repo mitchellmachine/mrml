@@ -968,10 +968,10 @@ mutable aggregate and scalar-reference types are compatible. Caller analysis
 therefore keeps a competing mutable borrow rejected while the returned reference
 remains live and restores access after its last use. Direct and helper-return
 fixed-array probes and their runtime-slice counterparts produce the same
-single-element mutations on Windows gnullvm and Arch Linux WSL. A third subslice
-remains unclassified for helper-return origin inference and therefore fails that
-interprocedural proof closed; this does not add general projection inference or
-index-sensitive alias reasoning. Both hosts passed the same 659
+single-element mutations on Windows gnullvm and Arch Linux WSL. The initial
+helper-return proof was limited to this exact two-subslice shape; it did not add
+general projection inference or index-sensitive alias reasoning. Both hosts
+passed the same 659
 unit, 1 component-interface, 10 conformance, 351 replacement, and 14 semantic-
 execution tests (1,035 total).
 
@@ -990,10 +990,24 @@ consumes its own temporary bounds state before returning one two-word slice to
 the next layer; the final index still records and consumes one canonical nested
 place. Fixed-array and runtime-slice probes exercise three different accumulated
 start combinations and mutate only the expected element on Windows gnullvm and
-Arch Linux WSL. The corresponding repeated-subslice value remains unsupported,
-and helper-return origin inference remains limited to two subslices. This is
-direct recursive lowering evidence at depth three, not unbounded-depth evidence
-or general slice-value support. Both hosts passed the same 1,035-test gate.
+Arch Linux WSL. The corresponding repeated-subslice value remains unsupported.
+This is direct recursive lowering evidence at depth three, not unbounded-depth
+evidence or general slice-value support. Both hosts passed the same 1,035-test
+gate.
+
+Callee-return origin classification now recognizes the bounded structural form
+of an optional leading dereference, one or more contiguous `Subslice`
+projections, and exactly one final `Index`. It no longer encodes separate one-
+and two-subslice enum cases. Element type and mutability compatibility remain
+mandatory, and any intervening index, tuple field, dereference, or other order
+stays unclassified. A depth-three helper retains the aggregate parameter origin,
+keeps a competing caller borrow rejected while its result is live, and restores
+access after last use. Fixed-array and runtime-slice helper probes execute two
+dynamic starts, one fixed third start, and a dynamic final index on Windows
+gnullvm and Arch Linux WSL; the fixed start keeps the call within the compiler's
+existing four-argument subset. This is bounded by the fixed-capacity place
+representation, not arbitrary projection inference or index-sensitive alias
+reasoning. Both hosts passed the same 1,035-test gate.
 
 The repeated-subslice semantic harness now isolates all three checked failure
 layers. An inner start beyond the runtime owner length, an outer start beyond

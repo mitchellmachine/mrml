@@ -12326,43 +12326,26 @@ fn runtime_reference_call_origin_parameter<const MAX_PARAMETERS: usize, const MA
         Index,
         Subslice,
         SubsliceIndex,
-        RepeatedSubsliceIndex,
     }
 
     fn parameter_projection(projections: RuntimePlaceProjections) -> Option<ParameterProjection> {
-        let items = &projections.items[..projections.count];
+        let mut items = &projections.items[..projections.count];
+        if items.first() == Some(&Some(RuntimePlaceProjection::Dereference)) {
+            items = &items[1..];
+        }
         match items {
-            [] | [Some(RuntimePlaceProjection::Dereference)] => Some(ParameterProjection::Identity),
-            [Some(RuntimePlaceProjection::Index)]
-            | [
-                Some(RuntimePlaceProjection::Dereference),
-                Some(RuntimePlaceProjection::Index),
-            ] => Some(ParameterProjection::Index),
-            [Some(RuntimePlaceProjection::Subslice)]
-            | [
-                Some(RuntimePlaceProjection::Dereference),
-                Some(RuntimePlaceProjection::Subslice),
-            ] => Some(ParameterProjection::Subslice),
-            [
-                Some(RuntimePlaceProjection::Subslice),
-                Some(RuntimePlaceProjection::Index),
-            ]
-            | [
-                Some(RuntimePlaceProjection::Dereference),
-                Some(RuntimePlaceProjection::Subslice),
-                Some(RuntimePlaceProjection::Index),
-            ] => Some(ParameterProjection::SubsliceIndex),
-            [
-                Some(RuntimePlaceProjection::Subslice),
-                Some(RuntimePlaceProjection::Subslice),
-                Some(RuntimePlaceProjection::Index),
-            ]
-            | [
-                Some(RuntimePlaceProjection::Dereference),
-                Some(RuntimePlaceProjection::Subslice),
-                Some(RuntimePlaceProjection::Subslice),
-                Some(RuntimePlaceProjection::Index),
-            ] => Some(ParameterProjection::RepeatedSubsliceIndex),
+            [] => Some(ParameterProjection::Identity),
+            [Some(RuntimePlaceProjection::Index)] => Some(ParameterProjection::Index),
+            [Some(RuntimePlaceProjection::Subslice)] => Some(ParameterProjection::Subslice),
+            _ if items.last() == Some(&Some(RuntimePlaceProjection::Index))
+                && items[..items.len().checked_sub(1)?]
+                    .iter()
+                    .all(|projection| {
+                        *projection == Some(RuntimePlaceProjection::Subslice)
+                    }) =>
+            {
+                Some(ParameterProjection::SubsliceIndex)
+            }
             _ => None,
         }
     }
@@ -12433,7 +12416,6 @@ fn runtime_reference_call_origin_parameter<const MAX_PARAMETERS: usize, const MA
                         Some(
                             ParameterProjection::Index
                                 | ParameterProjection::SubsliceIndex
-                                | ParameterProjection::RepeatedSubsliceIndex
                         )
                     ) && matches!(
                         (parameter_target, result_target),
