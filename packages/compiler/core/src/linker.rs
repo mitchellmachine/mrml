@@ -69,6 +69,28 @@ impl core::fmt::Display for LinkerError {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct ElfLinkSelectionError<'a> {
+    pub kind: LinkerError,
+    pub symbol: Option<&'a str>,
+}
+
+impl core::fmt::Display for ElfLinkSelectionError<'_> {
+    fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        self.kind.fmt(formatter)?;
+        if let Some(symbol) = self.symbol {
+            write!(formatter, ": {symbol}")?;
+        }
+        Ok(())
+    }
+}
+
+impl<'a> From<LinkerError> for ElfLinkSelectionError<'a> {
+    fn from(kind: LinkerError) -> Self {
+        Self { kind, symbol: None }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct ArchiveMember<'a> {
     pub name: &'a str,
     pub bytes: &'a [u8],
@@ -2989,11 +3011,20 @@ pub fn select_x86_64_elf_link_sections<'a>(
     objects: &[&'a [u8]],
     entry_symbol: &'a str,
 ) -> Result<ElfLinkSectionSelections, LinkerError> {
+    select_x86_64_elf_link_sections_detailed(objects, entry_symbol).map_err(|error| error.kind)
+}
+
+/// Like [`select_x86_64_elf_link_sections`], but retains the exact unresolved
+/// symbol in a bounded borrowed diagnostic when static resolution fails.
+pub fn select_x86_64_elf_link_sections_detailed<'a>(
+    objects: &[&'a [u8]],
+    entry_symbol: &'a str,
+) -> Result<ElfLinkSectionSelections, ElfLinkSelectionError<'a>> {
     if objects.is_empty() {
-        return Err(LinkerError::EmptyInput);
+        return Err(LinkerError::EmptyInput.into());
     }
     if objects.len() > MAX_LINK_INPUTS {
-        return Err(LinkerError::TooManyInputs);
+        return Err(LinkerError::TooManyInputs.into());
     }
     validate_symbol(entry_symbol)?;
     let empty = ElfSectionSelection {
@@ -3025,8 +3056,14 @@ pub fn select_x86_64_elf_link_sections<'a>(
     while cursor < unresolved_length {
         let symbol = unresolved[cursor].ok_or(LinkerError::InvalidElf)?;
         cursor += 1;
-        let object_index = resolve_elf_object_definition(&symbol_tables[..objects.len()], symbol)?
-            .ok_or(LinkerError::UndefinedSymbol)?;
+        let Some(object_index) =
+            resolve_elf_object_definition(&symbol_tables[..objects.len()], symbol)?
+        else {
+            return Err(ElfLinkSelectionError {
+                kind: LinkerError::UndefinedSymbol,
+                symbol: Some(symbol),
+            });
+        };
         let addition = select_x86_64_elf_sections(objects[object_index], &[symbol])?;
         let destination = &mut result.selections[object_index];
         for &section in addition.indices() {
@@ -3034,7 +3071,7 @@ pub fn select_x86_64_elf_link_sections<'a>(
                 continue;
             }
             if destination.length == destination.indices.len() {
-                return Err(LinkerError::TooManyElfSections);
+                return Err(LinkerError::TooManyElfSections.into());
             }
             destination.indices[destination.length] = section;
             destination.length += 1;
@@ -3053,7 +3090,7 @@ pub fn select_x86_64_elf_link_sections<'a>(
                 continue;
             }
             if unresolved_length == unresolved.len() {
-                return Err(LinkerError::TooManyArchiveSymbols);
+                return Err(LinkerError::TooManyArchiveSymbols.into());
             }
             unresolved[unresolved_length] = Some(target);
             unresolved_length += 1;
@@ -7385,6 +7422,13 @@ mod tests {
             "entry",
         )
         .unwrap();
+        assert_eq!(
+            select_x86_64_elf_link_sections_detailed(&[caller.bytes()], "entry"),
+            Err(ElfLinkSelectionError {
+                kind: LinkerError::UndefinedSymbol,
+                symbol: Some("helper"),
+            })
+        );
         assert_eq!(link_selection.selections()[0].indices(), &[1]);
         assert_eq!(link_selection.selections()[1].indices(), &[1]);
         assert_eq!(link_selection.selections()[2].indices(), &[]);

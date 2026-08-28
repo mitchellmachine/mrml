@@ -9230,6 +9230,16 @@ It introduces no new relocation encoding or arithmetic, object format,
 compression, cryptographic mechanism, or loader behavior. This technical
 screen is not legal advice or patent clearance.
 
+# 2026-08-28 — Borrowed unresolved-symbol diagnostics
+
+Patent review: **NOT_TRIGGERED**. This increment preserves the exact borrowed
+symbol name when conventional static ELF resolution exhausts the bounded input
+set, while retaining the existing typed error and fail-closed behavior. It is
+ordinary diagnostic propagation and introduces no new symbol-resolution
+algorithm, object or archive format, relocation mechanism, compression,
+cryptographic mechanism, or loader behavior. This technical screen is not
+legal advice or patent clearance.
+
 # 2026-08-28 — Bounded deterministic static-link core
 
 Patent review: **NOT_TRIGGERED**. This increment uses conventional ordered

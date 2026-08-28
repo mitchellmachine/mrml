@@ -19,7 +19,7 @@ use mrml_rustc::{
     decode_x86_64_elf_selected_relocations_from_sections, decode_x86_64_elf_selected_sections,
     decode_x86_64_elf_with_definitions, inventory_x86_64_elf_symbols,
     link_x86_64_elf_selected_executable, link_x86_64_pe_with_data_and_unwind,
-    select_ordered_static_link_members, select_x86_64_elf_link_sections,
+    select_ordered_static_link_members, select_x86_64_elf_link_sections_detailed,
     x86_64_coff_text_fragment_count, x86_64_coff_writable_section_count,
 };
 
@@ -815,7 +815,7 @@ fn write_linked_elf(
     entry: &str,
     output: &str,
 ) -> Result<()> {
-    let link_selection = select_x86_64_elf_link_sections(objects, entry)
+    let link_selection = select_x86_64_elf_link_sections_detailed(objects, entry)
         .map_err(|error| anyhow!("could not select reachable ELF sections: {}", error))?;
     let mut sections: Vector<ElfSelectedSections<'_>> = Vector::with_capacity(objects.len())
         .map_err(|_| anyhow!("could not allocate selected ELF section views"))?;
