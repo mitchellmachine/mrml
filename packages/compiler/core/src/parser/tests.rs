@@ -629,6 +629,37 @@ mod tests {
     }
 
     #[test]
+    fn parses_versioned_mrml_abi_export_facade() {
+        let source =
+            "#[mrml_abi::export(version = 1)] pub fn answer(input: &[u8]) -> u64 { 42 }";
+        let module: TestModule<'_> = Parser::new(source).parse_module().unwrap();
+        let Some(Item::Function(function)) = module.items()[0] else {
+            panic!("expected function")
+        };
+        assert!(function.public);
+        assert_eq!(function.abi, FunctionAbi::MrmlV1);
+        assert!(function.no_mangle);
+        assert_eq!(function.name, "answer");
+        assert_eq!(function.parameters()[0].unwrap().ty.text, "&[u8]");
+
+        for source in [
+            "#[mrml_abi::export(version = 2)] pub fn answer() {}",
+            "#[mrml_abi::export(version = 1)] #[mrml_abi::export(version = 1)] pub fn answer() {}",
+            "#[mrml_abi::export(version = 1)] fn answer() {}",
+            "#[mrml_abi::export(version = 1)] pub const fn answer() {}",
+            "#[mrml_abi::export(version = 1)] pub extern \"C\" fn answer() {}",
+            "#[mrml_abi::unknown(version = 1)] pub fn answer() {}",
+            "#[mrml_abi::export(revision = 1)] pub fn answer() {}",
+        ] {
+            let error = Parser::new(source).parse_module::<2, 2>().unwrap_err();
+            assert!(matches!(
+                error.kind,
+                ParseErrorKind::UnsupportedAbi | ParseErrorKind::UnsupportedAttribute
+            ));
+        }
+    }
+
+    #[test]
     fn parses_bounded_naked_function_attributes() {
         let source = concat!(
             "#[unsafe(no_mangle)] #[unsafe(naked)] ",

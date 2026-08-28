@@ -150,6 +150,7 @@ pub enum FunctionWherePredicate<'source> {
 pub enum FunctionAbi {
     Rust,
     C,
+    MrmlV1,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -3738,40 +3739,77 @@ impl<'source> Parser<'source> {
         })
     }
 
-    fn function_attributes(&mut self) -> Result<(bool, bool), ParseError> {
+    fn function_attributes(&mut self) -> Result<(bool, bool, Option<FunctionAbi>), ParseError> {
         let mut no_mangle = false;
         let mut naked = false;
+        let mut export_abi = None;
         while self.take_text("#")?.is_some() {
             self.expect_kind(
                 TokenKind::OpenBracket,
                 ParseErrorKind::ExpectedAttributeDelimiter,
             )?;
-            let unsafe_keyword = self.identifier()?;
-            if unsafe_keyword.text != "unsafe" {
-                return Err(self.error(ParseErrorKind::UnsupportedAttribute, Some(unsafe_keyword)));
-            }
-            self.expect_kind(
-                TokenKind::OpenParen,
-                ParseErrorKind::ExpectedAttributeDelimiter,
-            )?;
-            let attribute = self.identifier()?;
-            match attribute.text {
-                "no_mangle" if !no_mangle => no_mangle = true,
-                "naked" if !naked => naked = true,
-                _ => {
+            let namespace = self.identifier()?;
+            if namespace.text == "mrml_abi" {
+                let separator = self.take()?;
+                if !separator.is_some_and(|token| token.text == "::") {
+                    return Err(self.error(ParseErrorKind::UnsupportedAttribute, separator));
+                }
+                let attribute = self.identifier()?;
+                if attribute.text != "export" || export_abi.is_some() {
                     return Err(self.error(ParseErrorKind::UnsupportedAttribute, Some(attribute)));
                 }
+                self.expect_kind(
+                    TokenKind::OpenParen,
+                    ParseErrorKind::ExpectedAttributeDelimiter,
+                )?;
+                let version = self.identifier()?;
+                if version.text != "version" {
+                    return Err(self.error(ParseErrorKind::UnsupportedAttribute, Some(version)));
+                }
+                let equals = self.take()?;
+                if !equals.is_some_and(|token| token.text == "=") {
+                    return Err(self.error(ParseErrorKind::UnsupportedAttribute, equals));
+                }
+                let value = self.take()?;
+                if !value.is_some_and(|token| token.text == "1") {
+                    return Err(self.error(ParseErrorKind::UnsupportedAbi, value));
+                }
+                self.expect_kind(
+                    TokenKind::CloseParen,
+                    ParseErrorKind::ExpectedAttributeDelimiter,
+                )?;
+                export_abi = Some(FunctionAbi::MrmlV1);
+            } else {
+                if namespace.text != "unsafe" {
+                    return Err(
+                        self.error(ParseErrorKind::UnsupportedAttribute, Some(namespace))
+                    );
+                }
+                self.expect_kind(
+                    TokenKind::OpenParen,
+                    ParseErrorKind::ExpectedAttributeDelimiter,
+                )?;
+                let attribute = self.identifier()?;
+                match attribute.text {
+                    "no_mangle" if !no_mangle => no_mangle = true,
+                    "naked" if !naked => naked = true,
+                    _ => {
+                        return Err(
+                            self.error(ParseErrorKind::UnsupportedAttribute, Some(attribute))
+                        );
+                    }
+                }
+                self.expect_kind(
+                    TokenKind::CloseParen,
+                    ParseErrorKind::ExpectedAttributeDelimiter,
+                )?;
             }
-            self.expect_kind(
-                TokenKind::CloseParen,
-                ParseErrorKind::ExpectedAttributeDelimiter,
-            )?;
             self.expect_kind(
                 TokenKind::CloseBracket,
                 ParseErrorKind::ExpectedAttributeDelimiter,
             )?;
         }
-        Ok((no_mangle, naked))
+        Ok((no_mangle, naked, export_abi))
     }
 
     fn const_item(&mut self, public: bool) -> Result<ConstItem<'source>, ParseError> {
@@ -4306,7 +4344,7 @@ impl<'source> Parser<'source> {
                 let token = self.peek()?;
                 return Err(self.error(ParseErrorKind::TooManyItems, token));
             }
-            let (no_mangle, naked) = self.function_attributes()?;
+            let (no_mangle, naked, export_abi) = self.function_attributes()?;
             let public = self.take_text("pub")?.is_some();
             let keyword = self.take()?;
             let item = match keyword.map(|token| token.text) {
@@ -4458,6 +4496,25 @@ impl<'source> Parser<'source> {
                     Item::TraitImplementation(self.trait_implementation()?)
                 }
                 _ => return Err(self.error(ParseErrorKind::ExpectedItem, keyword)),
+            };
+            let item = if let Some(export_abi) = export_abi {
+                match item {
+                    Item::Function(mut function)
+                        if function.public
+                            && !function.constant
+                            && function.abi == FunctionAbi::Rust
+                            && !function.naked =>
+                    {
+                        function.abi = export_abi;
+                        function.no_mangle = true;
+                        Item::Function(function)
+                    }
+                    _ => {
+                        return Err(self.error(ParseErrorKind::UnsupportedAttribute, keyword));
+                    }
+                }
+            } else {
+                item
             };
             module.items[module.item_count] = Some(item);
             module.item_count += 1;
