@@ -678,6 +678,7 @@ pub struct ElfSelectedSections<'a> {
 pub enum ElfSelectedRelocationKind {
     Absolute64,
     Absolute32,
+    SignedAbsolute32,
     PcRelative32,
     PltRelative32,
     GotPcRelative32,
@@ -1014,6 +1015,19 @@ pub fn link_x86_64_elf_selected_sections<const MAX_BYTES: usize>(
                         .and_then(|value| u32::try_from(value).ok())
                         .ok_or(LinkerError::RelocationOverflow)?;
                     patch_u32(&mut bytes, place, value)?;
+                }
+                ElfSelectedRelocationKind::SignedAbsolute32 => {
+                    let address = if target_is_absolute {
+                        i128::try_from(target).map_err(|_| LinkerError::OffsetOverflow)?
+                    } else {
+                        i128::from(virtual_base)
+                            + i128::try_from(target).map_err(|_| LinkerError::OffsetOverflow)?
+                    };
+                    let value = address
+                        .checked_add(i128::from(relocation.addend))
+                        .and_then(|value| i32::try_from(value).ok())
+                        .ok_or(LinkerError::RelocationOverflow)?;
+                    patch_i32(&mut bytes, place, value)?;
                 }
                 ElfSelectedRelocationKind::PcRelative32
                 | ElfSelectedRelocationKind::PltRelative32
@@ -1505,6 +1519,7 @@ pub fn decode_x86_64_elf_selected_relocations_from_sections<'a>(
             let (kind, width) = match raw_kind {
                 1 => (ElfSelectedRelocationKind::Absolute64, 8),
                 10 => (ElfSelectedRelocationKind::Absolute32, 4),
+                11 => (ElfSelectedRelocationKind::SignedAbsolute32, 4),
                 2 => (ElfSelectedRelocationKind::PcRelative32, 4),
                 4 => (ElfSelectedRelocationKind::PltRelative32, 4),
                 9 => (ElfSelectedRelocationKind::GotPcRelative32, 4),
@@ -7605,6 +7620,86 @@ mod tests {
         );
         assert_eq!(
             link_x86_64_elf_selected_sections::<4096>(&objects, "entry", u64::from(u32::MAX)),
+            Err(LinkerError::RelocationOverflow)
+        );
+    }
+
+    #[test]
+    fn selected_elf_decodes_and_applies_signed_absolute_32_relocations() {
+        let caller_code = MachineCode::<8>::from_bytes_for_test(&[0, 0, 0, 0, 0xc3]);
+        let caller = emit_elf64_x86_64_with_relocation::<1024, 8>(
+            "entry",
+            &caller_code,
+            X86_64PcRelativeRelocation {
+                offset: 1,
+                symbol: "helper",
+                kind: X86_64PcRelativeRelocationKind::Branch,
+            },
+        )
+        .unwrap();
+        let callee_code = MachineCode::<8>::from_bytes_for_test(&[0xc3]);
+        let callee = emit_elf64_x86_64::<512, 8>("helper", &callee_code).unwrap();
+        let mut caller_bytes = [0u8; 1024];
+        caller_bytes[..caller.len()].copy_from_slice(caller.bytes());
+        let section_offset = to_usize_elf(read_u64_elf(&caller_bytes, 40).unwrap()).unwrap();
+        let section_count = usize::from(read_u16_elf(&caller_bytes, 60).unwrap());
+        let relocation_header = (1..section_count)
+            .map(|index| elf_section_header(section_offset, section_count, index).unwrap())
+            .find(|header| read_u32_elf(&caller_bytes, *header + 4).unwrap() == 4)
+            .unwrap();
+        let records_offset =
+            to_usize_elf(read_u64_elf(&caller_bytes, relocation_header + 24).unwrap()).unwrap();
+        let info = read_u64_elf(&caller_bytes, records_offset + 8).unwrap();
+        caller_bytes[records_offset..records_offset + 8].copy_from_slice(&0u64.to_le_bytes());
+        caller_bytes[records_offset + 8..records_offset + 16]
+            .copy_from_slice(&((info & !0xffff_ffff) | 11).to_le_bytes());
+        caller_bytes[records_offset + 16..records_offset + 24].copy_from_slice(&0i64.to_le_bytes());
+        let caller_bytes = &caller_bytes[..caller.len()];
+        let caller_selection = select_x86_64_elf_sections(caller_bytes, &["entry"]).unwrap();
+        let caller_sections =
+            decode_x86_64_elf_selected_sections(caller_bytes, &caller_selection).unwrap();
+        let caller_definitions =
+            decode_x86_64_elf_selected_definitions(caller_bytes, &caller_selection).unwrap();
+        let caller_relocations =
+            decode_x86_64_elf_selected_relocations(caller_bytes, &caller_selection).unwrap();
+        assert_eq!(
+            caller_relocations.relocations()[0].kind,
+            ElfSelectedRelocationKind::SignedAbsolute32
+        );
+        let callee_selection = select_x86_64_elf_sections(callee.bytes(), &["helper"]).unwrap();
+        let callee_sections =
+            decode_x86_64_elf_selected_sections(callee.bytes(), &callee_selection).unwrap();
+        let callee_definitions =
+            decode_x86_64_elf_selected_definitions(callee.bytes(), &callee_selection).unwrap();
+        let callee_relocations =
+            decode_x86_64_elf_selected_relocations(callee.bytes(), &callee_selection).unwrap();
+        let objects = [
+            ElfSelectedObject {
+                sections: &caller_sections,
+                definitions: &caller_definitions,
+                relocations: &caller_relocations,
+            },
+            ElfSelectedObject {
+                sections: &callee_sections,
+                definitions: &callee_definitions,
+                relocations: &callee_relocations,
+            },
+        ];
+        let linked =
+            link_x86_64_elf_selected_sections::<4096>(&objects, "entry", 0x401000).unwrap();
+        let helper_offset = linked
+            .layout
+            .sections()
+            .iter()
+            .find(|section| section.input_index == 1)
+            .unwrap()
+            .offset;
+        assert_eq!(
+            i32::from_le_bytes(linked.bytes()[..4].try_into().unwrap()),
+            i32::try_from(0x401000usize + helper_offset).unwrap()
+        );
+        assert_eq!(
+            link_x86_64_elf_selected_sections::<4096>(&objects, "entry", i32::MAX as u64),
             Err(LinkerError::RelocationOverflow)
         );
     }

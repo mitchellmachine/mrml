@@ -1,5 +1,13 @@
 # Patent review log
 
+## 2026-08-28 — Signed ELF absolute-32 relocation
+
+Patent review: **NOT_TRIGGERED**. This increment implements the conventional
+AMD64 psABI `R_X86_64_32S` relocation as the specified `S + A` calculation with
+a signed 32-bit range check. It adds no novel relocation expression, object
+format, layout algorithm, scheduling mechanism, compression, cryptography, or
+loader behavior. This technical screen is not legal advice or patent clearance.
+
 ## 2026-08-28 — Bounded ELF section reachability graph
 
 Patent review: **NOT_TRIGGERED** for conventionally rooting exact ELF symbols

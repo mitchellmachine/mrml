@@ -778,8 +778,16 @@ resolving the exact selected target and rejects any result outside `u32` rather
 than truncating it. The exact pinned libcore archive contains 8,403 records of
 this type. An independently authored pinned-rustc object carrying one such
 reference linked through the public driver with the controlled process-entry
-wrapper and exited 42 under Arch Linux WSL. Signed absolute-32 and TLS
-relocations remain unsupported.
+wrapper and exited 42 under Arch Linux WSL.
+
+The signed companion `R_X86_64_32S` is now distinct in the decoded relocation
+kind and applies the same ABI expression, `S + A`, with an exact `i32` range
+check before writing. The durable `signed_absolute32.rs` probe is emitted by the
+pinned Linux rustc and its relocation is confirmed by `readelf`; the accompanying
+script links identical inputs with MRML and the pinned gnullvm rust-lld. Both
+controlled outputs exited 42 under Arch Linux WSL. MRML emitted 8,193 bytes and
+rust-lld emitted 1,504 bytes; this is compatibility evidence, not an equivalent
+size or performance comparison. TLS relocations remain unsupported.
 
 Cross-object selection has a detailed companion API that retains the exact
 borrowed symbol when resolution fails; the compatibility entry point still
@@ -818,3 +826,4 @@ production linker for ordinary package builds as required by
 Research source:
 
 - Rui Ueyama, [Design and implementation of mold](https://github.com/rui314/mold/blob/main/docs/design.md).
+- System V ABI, [AMD64 Architecture Processor Supplement](https://refspecs.linuxfoundation.org/elf/x86_64-SysV-psABI.pdf).
