@@ -45,3 +45,68 @@ fn explicit_component_descriptor_has_upstream_and_mrml_object_evidence() {
         assert!(!object.is_empty());
     }
 }
+
+fn u32_at(bytes: &[u8], offset: usize) -> u32 {
+    u32::from_le_bytes(bytes[offset..offset + 4].try_into().unwrap())
+}
+
+fn u64_at(bytes: &[u8], offset: usize) -> u64 {
+    u64::from_le_bytes(bytes[offset..offset + 8].try_into().unwrap())
+}
+
+#[test]
+fn mrml_v1_scalar_facade_has_independently_parsed_native_object_evidence() {
+    let source = "#[mrml_abi::export(version = 1)] pub fn identity(value: u64) -> u64 { value }";
+
+    let coff = compile_source_function::<1024, 128, 2, 2, 2, 16>(
+        source,
+        "identity",
+        ObjectFormat::Coff,
+        TargetLayout::X86_64,
+    )
+    .expect("MRML v1 scalar facade emits COFF");
+    let coff = coff.bytes();
+    assert_eq!(u32_at(coff, 12), 1, "one COFF symbol");
+    let coff_text = u32_at(coff, 40) as usize;
+    assert_eq!(coff[coff_text], 0x51, "Windows entry saves rcx");
+    let coff_symbols = u32_at(coff, 8) as usize;
+    assert_eq!(&coff[coff_symbols..coff_symbols + 8], b"identity");
+    assert_eq!(
+        i16::from_le_bytes(
+            coff[coff_symbols + 12..coff_symbols + 14]
+                .try_into()
+                .unwrap()
+        ),
+        1,
+        "symbol is defined in .text"
+    );
+
+    let elf = compile_source_function::<1024, 128, 2, 2, 2, 16>(
+        source,
+        "identity",
+        ObjectFormat::Elf64,
+        TargetLayout::X86_64,
+    )
+    .expect("MRML v1 scalar facade emits ELF");
+    let elf = elf.bytes();
+    let sections = u64_at(elf, 40) as usize;
+    let text_section = sections + 64;
+    let elf_text = u64_at(elf, text_section + 24) as usize;
+    assert_eq!(elf[elf_text], 0x57, "System V entry saves rdi");
+    let symbol_section = sections + 2 * 64;
+    let symbols = u64_at(elf, symbol_section + 24) as usize;
+    let string_section = sections + 3 * 64;
+    let strings = u64_at(elf, string_section + 24) as usize;
+    let function_symbol = symbols + 24;
+    let name = u32_at(elf, function_symbol) as usize;
+    assert_eq!(&elf[strings + name..strings + name + 8], b"identity");
+    assert_eq!(
+        u16::from_le_bytes(
+            elf[function_symbol + 6..function_symbol + 8]
+                .try_into()
+                .unwrap()
+        ),
+        1,
+        "symbol is defined in .text"
+    );
+}
