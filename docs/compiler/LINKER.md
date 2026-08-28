@@ -118,8 +118,12 @@ an archive member only when it defines the entry or a named relocation target
 from an already selected input. A stable fixed point follows transitive archive
 dependencies while the first selected definition suppresses later unused
 duplicates. The result does not depend on trusting archive index metadata.
-Index-accelerated extraction, exact traditional archive/group rescan ordering,
-thin archives, non-object metadata members, and real `.rlib` admission remain
+The driver assigns each archive a bounded identity and applies left-to-right
+ordering: explicit objects are admitted when encountered, one archive rescans
+only its own contiguous members to a fixed point, and it is not revisited for
+undefined symbols introduced by later inputs. Index-accelerated extraction,
+explicit start/end archive groups, thin archives, non-object metadata members,
+and real `.rlib` admission remain
 unimplemented, so this is not yet the ordinary Rust static-library path. Thin
 archive magic fails with an explicit unsupported-feature diagnostic rather
 than being misclassified as a malformed ordinary archive; BSD extended-name

@@ -9288,3 +9288,12 @@ conservative alignment headroom. It reduces unnecessary zero initialization
 without changing layout, resolution, relocation, serialization, compression,
 cryptographic, or loading algorithms. This technical screen is not legal advice
 or patent clearance.
+# 2026-08-28 — Ordered static archive extraction
+
+Patent review: **NOT_TRIGGERED**. This increment assigns bounded identities to
+ordinary input archives and applies conventional left-to-right member
+selection, rescanning only the current archive for transitive unresolved
+symbols. It corrects ordering without introducing a new archive index,
+resolution, deduplication, compression, executable-format, cryptographic, or
+loading algorithm. This technical screen is not legal advice or patent
+clearance.

@@ -6,7 +6,7 @@ use mrml_runtime::{mrml_println as println, Text, Vector};
 use mrml_rustc::{
     compile_source_function_with_options, decode_unix_archive, decode_x86_64_coff_with_definitions,
     decode_x86_64_elf_with_definitions, link_x86_64_elf_executable, link_x86_64_pe,
-    select_static_link_inputs, CodegenOptions, LinkDefinition, LinkInput, LinkRelocation,
+    select_ordered_static_link_inputs, CodegenOptions, LinkDefinition, LinkInput, LinkRelocation,
     LinkRelocationTarget, ObjectFormat, TargetLayout, MAX_LINK_DEFINITIONS, MAX_LINK_INPUTS,
     MAX_LINK_RELOCATIONS,
 };
@@ -41,7 +41,7 @@ enum EmitKind {
 
 struct LinkObjectRefs<'a> {
     bytes: Vector<&'a [u8]>,
-    archive_member: Vector<bool>,
+    archive_group: Vector<u16>,
 }
 
 // The fixed-capacity parser intentionally keeps its arenas on the stack. The
@@ -67,7 +67,7 @@ fn application_main() -> Result<()> {
         let object_refs = link_object_refs(&objects)?;
         return write_linked_pe(
             &object_refs.bytes,
-            &object_refs.archive_member,
+            &object_refs.archive_group,
             &arguments[arguments.len() - 3],
             output,
         );
@@ -85,7 +85,7 @@ fn application_main() -> Result<()> {
         let object_refs = link_object_refs(&objects)?;
         return write_linked_elf(
             &object_refs.bytes,
-            &object_refs.archive_member,
+            &object_refs.archive_group,
             &arguments[arguments.len() - 3],
             output,
         );
@@ -150,10 +150,10 @@ fn application_main() -> Result<()> {
             );
         }
         EmitKind::Pe => {
-            write_linked_pe(&[object.bytes()], &[false], function, output)?;
+            write_linked_pe(&[object.bytes()], &[0], function, output)?;
         }
         EmitKind::ElfExecutable => {
-            write_linked_elf(&[object.bytes()], &[false], function, output)?;
+            write_linked_elf(&[object.bytes()], &[0], function, output)?;
         }
     }
     Ok(())
@@ -176,8 +176,9 @@ fn read_link_objects(paths: &[Text]) -> Result<Vector<Vector<u8>>> {
 fn link_object_refs(objects: &[Vector<u8>]) -> Result<LinkObjectRefs<'_>> {
     let mut refs = Vector::with_capacity(MAX_LINK_INPUTS)
         .map_err(|_| anyhow!("could not allocate link input reference list"))?;
-    let mut archive_member = Vector::with_capacity(MAX_LINK_INPUTS)
+    let mut archive_group = Vector::with_capacity(MAX_LINK_INPUTS)
         .map_err(|_| anyhow!("could not allocate link input origin list"))?;
+    let mut next_archive_group = 1u16;
     for object in objects {
         if object.get(..8) == Some(b"!<arch>\n") {
             let archive = decode_unix_archive(object).map_err(mrml_error::message)?;
@@ -187,15 +188,18 @@ fn link_object_refs(objects: &[Vector<u8>]) -> Result<LinkObjectRefs<'_>> {
                 }
                 refs.try_push(member.bytes)
                     .map_err(|_| anyhow!("could not allocate link input reference list"))?;
-                archive_member
-                    .try_push(true)
+                archive_group
+                    .try_push(next_archive_group)
                     .map_err(|_| anyhow!("could not allocate link input origin list"))?;
             }
+            next_archive_group = next_archive_group
+                .checked_add(1)
+                .ok_or_else(|| anyhow!("archive group identity overflow"))?;
         } else {
             refs.try_push(&object[..])
                 .map_err(|_| anyhow!("could not allocate link input reference list"))?;
-            archive_member
-                .try_push(false)
+            archive_group
+                .try_push(0)
                 .map_err(|_| anyhow!("could not allocate link input origin list"))?;
         }
     }
@@ -204,7 +208,7 @@ fn link_object_refs(objects: &[Vector<u8>]) -> Result<LinkObjectRefs<'_>> {
     }
     Ok(LinkObjectRefs {
         bytes: refs,
-        archive_member,
+        archive_group,
     })
 }
 
@@ -278,11 +282,11 @@ fn relocation_arenas<'a>(
 
 fn selected_link_inputs<'data, 'relocations, 'definitions>(
     inputs: &[LinkInput<'data, 'relocations, 'definitions>],
-    archive_member: &[bool],
+    archive_group: &[u16],
     entry: &str,
 ) -> Result<Vector<LinkInput<'data, 'relocations, 'definitions>>> {
-    let selection =
-        select_static_link_inputs(inputs, archive_member, entry).map_err(mrml_error::message)?;
+    let selection = select_ordered_static_link_inputs(inputs, archive_group, entry)
+        .map_err(mrml_error::message)?;
     let mut selected = Vector::with_capacity(selection.indices().len())
         .map_err(|_| anyhow!("could not allocate selected link input list"))?;
     for index in selection.indices() {
@@ -295,14 +299,14 @@ fn selected_link_inputs<'data, 'relocations, 'definitions>(
 
 fn write_linked_pe(
     objects: &[&[u8]],
-    archive_member: &[bool],
+    archive_group: &[u16],
     entry: &str,
     output: &str,
 ) -> Result<()> {
     let mut arenas = relocation_arenas(objects.len())?;
     let mut definitions = definition_arenas(objects.len())?;
     let inputs = decode_link_inputs(objects, ObjectFormat::Coff, &mut arenas, &mut definitions)?;
-    let selected = selected_link_inputs(&inputs, archive_member, entry)?;
+    let selected = selected_link_inputs(&inputs, archive_group, entry)?;
     let payload = selected_payload_bound(&selected)?;
     if payload <= 16 * 1024 {
         return write_pe_image::<{ 32 * 1024 }, { 16 * 1024 }>(&selected, entry, output);
@@ -331,14 +335,14 @@ fn write_pe_image<const MAX_IMAGE: usize, const MAX_LINKED: usize>(
 
 fn write_linked_elf(
     objects: &[&[u8]],
-    archive_member: &[bool],
+    archive_group: &[u16],
     entry: &str,
     output: &str,
 ) -> Result<()> {
     let mut arenas = relocation_arenas(objects.len())?;
     let mut definitions = definition_arenas(objects.len())?;
     let inputs = decode_link_inputs(objects, ObjectFormat::Elf64, &mut arenas, &mut definitions)?;
-    let selected = selected_link_inputs(&inputs, archive_member, entry)?;
+    let selected = selected_link_inputs(&inputs, archive_group, entry)?;
     let payload = selected_payload_bound(&selected)?;
     if payload <= 16 * 1024 {
         return write_elf_image::<{ 32 * 1024 }, { 16 * 1024 }>(&selected, entry, output);

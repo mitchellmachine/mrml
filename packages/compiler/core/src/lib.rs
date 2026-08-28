@@ -51,7 +51,7 @@ pub use linker::{
     MAX_LINK_DEFINITIONS, MAX_LINK_INPUTS, MAX_LINK_RELOCATIONS, PeImage, decode_unix_archive,
     decode_x86_64_coff, decode_x86_64_coff_with_definitions, decode_x86_64_elf,
     decode_x86_64_elf_with_definitions, link_x86_64_elf_executable, link_x86_64_pe,
-    link_x86_64_static, select_static_link_inputs,
+    link_x86_64_static, select_ordered_static_link_inputs, select_static_link_inputs,
 };
 pub use object::{
     MAX_X86_64_RELOCATIONS, ObjectError, ObjectFile, X86_64PcRelativeRelocation,

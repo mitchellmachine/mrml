@@ -295,6 +295,77 @@ pub fn select_static_link_inputs(
     Ok(selection)
 }
 
+/// Applies conventional left-to-right static archive selection. Group zero is
+/// an explicit object; each nonzero value identifies one contiguous archive.
+/// An archive is rescanned to its own fixed point and is not revisited after a
+/// later object or archive introduces another unresolved symbol.
+pub fn select_ordered_static_link_inputs(
+    inputs: &[LinkInput<'_, '_, '_>],
+    archive_group: &[u16],
+    entry_symbol: &str,
+) -> Result<LinkInputSelection, LinkerError> {
+    if inputs.is_empty() {
+        return Err(LinkerError::EmptyInput);
+    }
+    if inputs.len() > MAX_LINK_INPUTS || inputs.len() != archive_group.len() {
+        return Err(LinkerError::TooManyInputs);
+    }
+    validate_symbol(entry_symbol)?;
+    let mut selected = [false; MAX_LINK_INPUTS];
+    let mut cursor = 0usize;
+    while cursor < inputs.len() {
+        let group = archive_group[cursor];
+        if group == 0 {
+            selected[cursor] = true;
+            cursor += 1;
+            continue;
+        }
+        let start = cursor;
+        while cursor < inputs.len() && archive_group[cursor] == group {
+            cursor += 1;
+        }
+        if archive_group[..start].contains(&group) {
+            return Err(LinkerError::InvalidArchive);
+        }
+        loop {
+            let mut changed = false;
+            for candidate in start..cursor {
+                if selected[candidate] {
+                    continue;
+                }
+                let needed = core::iter::once(LinkDefinition {
+                    symbol: inputs[candidate].symbol,
+                    text_offset: 0,
+                })
+                .chain(inputs[candidate].additional_definitions.iter().copied())
+                .any(|definition| {
+                    !symbol_is_defined(inputs, &selected, definition.symbol)
+                        && (definition.symbol == entry_symbol
+                            || symbol_is_referenced(inputs, &selected, definition.symbol))
+                });
+                if needed {
+                    selected[candidate] = true;
+                    changed = true;
+                }
+            }
+            if !changed {
+                break;
+            }
+        }
+    }
+    let mut selection = LinkInputSelection {
+        indices: [0; MAX_LINK_INPUTS],
+        length: 0,
+    };
+    for index in 0..inputs.len() {
+        if selected[index] {
+            selection.indices[selection.length] = index;
+            selection.length += 1;
+        }
+    }
+    Ok(selection)
+}
+
 fn symbol_is_defined(
     inputs: &[LinkInput<'_, '_, '_>],
     selected: &[bool; MAX_LINK_INPUTS],
@@ -1672,6 +1743,35 @@ mod tests {
     }
 
     #[test]
+    fn ordered_archive_selection_does_not_revisit_earlier_archives() {
+        let relocation = [LinkRelocation {
+            offset: 0,
+            target: LinkRelocationTarget::Symbol("helper"),
+            addend: -4,
+        }];
+        let helper = LinkInput {
+            symbol: "helper",
+            additional_definitions: &[],
+            text: &[0; 4],
+            readonly_data: &[],
+            relocations: &[],
+        };
+        let entry = LinkInput {
+            symbol: "entry",
+            additional_definitions: &[],
+            text: &[0; 4],
+            readonly_data: &[],
+            relocations: &relocation,
+        };
+
+        let earlier =
+            select_ordered_static_link_inputs(&[helper, entry], &[1, 0], "entry").unwrap();
+        assert_eq!(earlier.indices(), &[1]);
+        let later = select_ordered_static_link_inputs(&[entry, helper], &[0, 1], "entry").unwrap();
+        assert_eq!(later.indices(), &[0, 1]);
+    }
+
+    #[test]
     fn links_forward_and_backward_calls_after_freezing_layout() {
         let to_helper = LinkRelocation {
             offset: 1,
@@ -2215,6 +2315,7 @@ mod tests {
             text: &[0xbf, 42, 0, 0, 0, 0xb8, 60, 0, 0, 0, 0x0f, 0x05],
             readonly_data: &[],
             relocations: &[],
+            additional_definitions: &[],
         };
         let elf = link_x86_64_elf_executable::<8192, 8192>(&[input], "entry").unwrap();
         let path =
