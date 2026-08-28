@@ -786,6 +786,20 @@ tiny samples remain slower or near parity; the libcore sample remains faster,
 so these results are regression evidence rather than a general superiority
 claim.
 
+ELF selection also validates conventional `SHT_GROUP` records against the
+object's exact symbol table: the entry width is four bytes, the signature is a
+named global/weak symbol, the flag word is `GRP_COMDAT`, every member index is
+in range, and every member carries `SHF_GROUP`. If any group member is
+reachable, every allocatable member joins the same bounded fixed point;
+non-allocatable relocation metadata remains metadata and is decoded through
+its target section. A synthetic two-alloc-member group proves atomic closure,
+and the exact pinned libcore object's real `DW.ref.rust_eh_personality` COMDAT
+group passes the public driver path. The reachable-core comparison emitted the
+same 8,674-byte exit-42 MRML executable and measured 6.072 ms median versus
+7.323 ms for pinned rust-lld in that run. Cross-object duplicate COMDAT winner
+selection remains unsupported, so this is group-integrity and reachability
+evidence rather than complete COMDAT support.
+
 The selected relocation path also admits conventional unsigned absolute-32
 `R_X86_64_32` records. It computes the ABI-defined `S + A` value only after
 resolving the exact selected target and rejects any result outside `u32` rather

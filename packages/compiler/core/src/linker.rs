@@ -2911,6 +2911,65 @@ fn select_x86_64_elf_sections_from_view(
 
     loop {
         let mut changed = false;
+        for group_index in 1..section_count {
+            let group_header = elf_section_header(section_offset, section_count, group_index)?;
+            if read_u32_elf(object, group_header + 4)? != 17 {
+                continue;
+            }
+            if usize::try_from(read_u32_elf(object, group_header + 40)?)
+                .map_err(|_| LinkerError::OffsetOverflow)?
+                != symbols_index
+                || read_u64_elf(object, group_header + 56)? != 4
+            {
+                return Err(LinkerError::UnsupportedElf);
+            }
+            let signature_index = usize::try_from(read_u32_elf(object, group_header + 44)?)
+                .map_err(|_| LinkerError::OffsetOverflow)?;
+            let signature_offset = signature_index
+                .checked_mul(24)
+                .ok_or(LinkerError::OffsetOverflow)?;
+            let signature = symbols
+                .get(signature_offset..signature_offset + 24)
+                .ok_or(LinkerError::InvalidElf)?;
+            let signature_name = usize::try_from(read_u32_elf(signature, 0)?)
+                .map_err(|_| LinkerError::OffsetOverflow)?;
+            let signature_binding = *signature.get(4).ok_or(LinkerError::InvalidElf)? >> 4;
+            if signature_name == 0 || !matches!(signature_binding, 1 | 2) {
+                return Err(LinkerError::UnsupportedElf);
+            }
+            validate_symbol(elf_string(strings, signature_name)?)?;
+            let group = elf_section_contents(object, section_offset, section_count, group_index)?;
+            if group.len() < 8 || group.len() % 4 != 0 || read_u32_elf(group, 0)? != 1 {
+                return Err(LinkerError::UnsupportedElf);
+            }
+            let mut selected_member = false;
+            for member in group[4..].chunks_exact(4) {
+                let member_index = usize::try_from(read_u32_elf(member, 0)?)
+                    .map_err(|_| LinkerError::OffsetOverflow)?;
+                if member_index == 0 || member_index >= section_count {
+                    return Err(LinkerError::InvalidElf);
+                }
+                let member_header =
+                    elf_section_header(section_offset, section_count, member_index)?;
+                if read_u64_elf(object, member_header + 8)? & 0x200 == 0 {
+                    return Err(LinkerError::InvalidElf);
+                }
+                selected_member |= selected[member_index];
+            }
+            if !selected_member {
+                continue;
+            }
+            for member in group[4..].chunks_exact(4) {
+                let member_index = usize::try_from(read_u32_elf(member, 0)?)
+                    .map_err(|_| LinkerError::OffsetOverflow)?;
+                let member_header =
+                    elf_section_header(section_offset, section_count, member_index)?;
+                if read_u64_elf(object, member_header + 8)? & 0x2 != 0 && !selected[member_index] {
+                    selected[member_index] = true;
+                    changed = true;
+                }
+            }
+        }
         for relocation_index in 1..section_count {
             let relocation_header =
                 elf_section_header(section_offset, section_count, relocation_index)?;
@@ -7308,6 +7367,97 @@ mod tests {
             }],
         )
         .unwrap();
+        let mut grouped_data = [0u8; 1024];
+        grouped_data[..data.len()].copy_from_slice(data.bytes());
+        let grouped_section_offset =
+            to_usize_elf(read_u64_elf(&grouped_data, 40).unwrap()).unwrap();
+        let grouped_section_count = usize::from(read_u16_elf(&grouped_data, 60).unwrap());
+        let group_header = (1..grouped_section_count)
+            .map(|index| {
+                elf_section_header(grouped_section_offset, grouped_section_count, index).unwrap()
+            })
+            .find(|header| read_u32_elf(&grouped_data, *header + 4).unwrap() == 4)
+            .unwrap();
+        let text_index =
+            usize::try_from(read_u32_elf(&grouped_data, group_header + 44).unwrap()).unwrap();
+        let symbols_index =
+            usize::try_from(read_u32_elf(&grouped_data, group_header + 40).unwrap()).unwrap();
+        let readonly_index = (1..grouped_section_count)
+            .find(|index| {
+                let header =
+                    elf_section_header(grouped_section_offset, grouped_section_count, *index)
+                        .unwrap();
+                read_u32_elf(&grouped_data, header + 4).unwrap() == 1
+                    && read_u64_elf(&grouped_data, header + 8).unwrap() & 0x7 == 0x2
+            })
+            .unwrap();
+        let symbols_header =
+            elf_section_header(grouped_section_offset, grouped_section_count, symbols_index)
+                .unwrap();
+        let symbols = elf_section_contents(
+            &grouped_data,
+            grouped_section_offset,
+            grouped_section_count,
+            symbols_index,
+        )
+        .unwrap();
+        let strings_index =
+            usize::try_from(read_u32_elf(&grouped_data, symbols_header + 40).unwrap()).unwrap();
+        let strings = elf_section_contents(
+            &grouped_data,
+            grouped_section_offset,
+            grouped_section_count,
+            strings_index,
+        )
+        .unwrap();
+        let signature_index = (1..symbols.len() / 24)
+            .find(|index| {
+                let record = index * 24;
+                let name = usize::try_from(read_u32_elf(symbols, record).unwrap()).unwrap();
+                name != 0 && elf_string(strings, name).unwrap() == "literal"
+            })
+            .unwrap();
+        grouped_data[group_header + 4..group_header + 8].copy_from_slice(&17u32.to_le_bytes());
+        grouped_data[group_header + 32..group_header + 40].copy_from_slice(&12u64.to_le_bytes());
+        grouped_data[group_header + 44..group_header + 48]
+            .copy_from_slice(&u32::try_from(signature_index).unwrap().to_le_bytes());
+        grouped_data[group_header + 56..group_header + 64].copy_from_slice(&4u64.to_le_bytes());
+        for member_index in [text_index, readonly_index] {
+            let member_header =
+                elf_section_header(grouped_section_offset, grouped_section_count, member_index)
+                    .unwrap();
+            let flags = read_u64_elf(&grouped_data, member_header + 8).unwrap() | 0x200;
+            grouped_data[member_header + 8..member_header + 16]
+                .copy_from_slice(&flags.to_le_bytes());
+        }
+        let group_offset =
+            to_usize_elf(read_u64_elf(&grouped_data, group_header + 24).unwrap()).unwrap();
+        grouped_data[group_offset..group_offset + 4].copy_from_slice(&1u32.to_le_bytes());
+        grouped_data[group_offset + 4..group_offset + 8]
+            .copy_from_slice(&u32::try_from(text_index).unwrap().to_le_bytes());
+        grouped_data[group_offset + 8..group_offset + 12]
+            .copy_from_slice(&u32::try_from(readonly_index).unwrap().to_le_bytes());
+        let grouped_selection =
+            select_x86_64_elf_sections(&grouped_data[..data.len()], &["literal"]).unwrap();
+        assert_eq!(
+            grouped_selection.indices(),
+            &[
+                u16::try_from(text_index).unwrap(),
+                u16::try_from(readonly_index).unwrap(),
+            ]
+        );
+        grouped_data[group_offset..group_offset + 4].copy_from_slice(&0u32.to_le_bytes());
+        assert_eq!(
+            select_x86_64_elf_sections(&grouped_data[..data.len()], &["literal"]),
+            Err(LinkerError::UnsupportedElf)
+        );
+        grouped_data[group_offset..group_offset + 4].copy_from_slice(&1u32.to_le_bytes());
+        grouped_data[group_offset + 8..group_offset + 12]
+            .copy_from_slice(&u32::try_from(grouped_section_count).unwrap().to_le_bytes());
+        assert_eq!(
+            select_x86_64_elf_sections(&grouped_data[..data.len()], &["literal"]),
+            Err(LinkerError::InvalidElf)
+        );
         let caller_selection = select_x86_64_elf_sections(caller.bytes(), &["entry"]).unwrap();
         let caller_inventory = inventory_x86_64_elf_symbols(caller.bytes()).unwrap();
         assert_eq!(

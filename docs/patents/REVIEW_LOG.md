@@ -1,5 +1,14 @@
 # Patent review log
 
+## 2026-08-28 — Bounded ELF section-group closure
+
+Patent review: **NOT_TRIGGERED**. This increment validates conventional ELF
+`SHT_GROUP`/`GRP_COMDAT` records and retains allocatable members atomically when
+one member becomes reachable. It implements published object-format semantics
+with the existing bounded fixed-point traversal and adds no new deduplication,
+folding, hashing, scheduling, compression, cryptographic, or loader mechanism.
+This technical screen is not legal advice or patent clearance.
+
 ## 2026-08-28 — Reused validated ELF selection views
 
 Patent review: **NOT_TRIGGERED**. This increment carries an already validated
