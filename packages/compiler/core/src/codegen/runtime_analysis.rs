@@ -5407,14 +5407,26 @@ fn preanalyze_runtime_expression_at_reads_with_tuple<
                             );
                         let carries_result_origin =
                             result_origin_parameter == Some(parameter_index);
-                        let argument_context = match (coercion_root, expected) {
-                            (true, RuntimeExpressionType::Reference { mutable: true, .. }) => {
+                        let persistent_result_context = carries_result_origin.then(|| {
+                            match runtime_type_from_scalar(target.return_type) {
+                                RuntimeExpressionType::Reference { mutable: true, .. } => {
+                                    RuntimeReadEffectContext::MutableBorrow
+                                }
+                                RuntimeExpressionType::Reference { mutable: false, .. } => {
+                                    RuntimeReadEffectContext::SharedBorrow
+                                }
+                                _ => RuntimeReadEffectContext::Unclassified,
+                            }
+                        });
+                        let argument_context = match (coercion_root, persistent_result_context, expected) {
+                            (true, Some(context), RuntimeExpressionType::Reference { .. }) => context,
+                            (true, _, RuntimeExpressionType::Reference { mutable: true, .. }) => {
                                 RuntimeReadEffectContext::MutableBorrow
                             }
-                            (true, RuntimeExpressionType::Reference { mutable: false, .. }) => {
+                            (true, _, RuntimeExpressionType::Reference { mutable: false, .. }) => {
                                 RuntimeReadEffectContext::SharedBorrow
                             }
-                            _ if runtime_type_is_copy(expected) => RuntimeReadEffectContext::Value,
+                            (_, _, _) if runtime_type_is_copy(expected) => RuntimeReadEffectContext::Value,
                             _ => RuntimeReadEffectContext::Move,
                         };
                         let generation_borrower = facts.current_loan_generation_borrower;

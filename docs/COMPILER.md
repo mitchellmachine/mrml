@@ -1061,6 +1061,17 @@ modifying the input on Windows gnullvm and Arch Linux WSL. This is exact shared
 repeated-subslice transfer, not mutable-to-shared local coercion or general
 shared-region inference.
 
+Call-origin transfer now attenuates the persistent caller loan to the returned
+reference mutability when a helper accepts a mutable slice but returns a shared
+slice rooted in that parameter. The callee's inlined body retains its own
+bounded mutation checks; only the post-call derived loan becomes shared. A
+mutable repeated-subslice local can therefore be reborrowed into a shared local
+and returned without producing inconsistent place facts. Caller conflict and
+last-read restoration tests cover the result, a shared-to-mutable return remains
+rejected, and native probes read three selections without modifying the input on
+Windows gnullvm and Arch Linux WSL. This is one exact mutability-attenuating call
+boundary, not general variance, lifetime, or interprocedural region inference.
+
 An exact two-arm conditional helper may now return different repeated-subslice
 values rooted in the same compatible parameter while retaining that one origin.
 The existing bounded callee merge requires both arms to resolve to the same
