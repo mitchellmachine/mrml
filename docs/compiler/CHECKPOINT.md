@@ -9,8 +9,8 @@ the named commit and current source.
 ## Recoverable baseline
 
 - Branch: `main`
-- Compiler checkpoint commit: `8c16729a`
-  (`compiler: relocate reachable ELF sections`)
+- Compiler checkpoint commit: `f811de1a`
+  (`compiler: emit reachable ELF executable`)
 - Remote state when recorded: `origin/main` includes the bounded MRML-owned
   static-link core, exact MRML COFF and ELF64 ingestion, deterministic
   import-free PE32+/ELF64 executable serialization, explicit compiler-driver
@@ -60,6 +60,18 @@ against all prior accepted probes. Keep Cargo on edition 2024 until a newer
 named edition can be adopted through a pinned, workspace-wide migration.
 
 ## Latest bounded linker milestone
+
+Commit `f811de1a` serializes the selected and relocated payload into a
+fixed-address import-free ELF64 executable. It emits only present RX, R, and RW
+`PT_LOAD` regions, keeps headers read-only, carries zero-fill through distinct
+file and memory sizes, and binds the executable entry to the resolved selected
+function. Structural probes verify the entry, program-header count, and
+page-separated read-only payload. The selected-section executable was written,
+made executable, and run on the controlled Arch Linux/WSL host with exit code
+42. Windows and Linux each passed 725 core unit tests and every integration
+suite. Driver/archive integration, broader pinned-rustc object coverage,
+pinned-core symbol execution, and comparative performance optimization remain
+unimplemented gates.
 
 Commit `8c16729a` copies selected section content into the frozen layout,
 resolves exact external names with conventional strong-over-weak selection,
