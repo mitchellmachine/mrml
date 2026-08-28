@@ -9,8 +9,8 @@ the named commit and current source.
 ## Recoverable baseline
 
 - Branch: `main`
-- Compiler checkpoint commit: `6f8f03b2`
-  (`compiler: decode reachable ELF definitions`)
+- Compiler checkpoint commit: `8e8bbcdc`
+  (`compiler: lay out reachable ELF sections`)
 - Remote state when recorded: `origin/main` includes the bounded MRML-owned
   static-link core, exact MRML COFF and ELF64 ingestion, deterministic
   import-free PE32+/ELF64 executable serialization, explicit compiler-driver
@@ -60,6 +60,19 @@ against all prior accepted probes. Keep Cargo on edition 2024 until a newer
 named edition can be adopted through a pinned, workspace-wide migration.
 
 ## Latest bounded linker milestone
+
+Commit `8e8bbcdc` adds the first shared layout pass over selected ELF objects.
+It groups reachable sections deterministically into executable, read-only plus
+unwind, initialized writable, and zero-fill regions; honors each validated
+power-of-two alignment; introduces page boundaries only for permission regions
+that exist; and reports distinct file and memory extents. The result retains
+input and section identities for subsequent symbol and relocation resolution,
+with 256 total laid-out sections as the current explicit bound. A focused
+three-object probe verifies aligned text placement, the RX-to-R page boundary,
+read-only extent, and absence of a spurious RW page. Windows and Linux each
+passed 724 core unit tests and every integration suite. Cross-object symbol
+resolution, relocation application, selected-section executable serialization,
+and pinned-core symbol execution remain unimplemented gates.
 
 Commit `6f8f03b2` decodes externally resolvable definitions only from selected
 sections. The bounded typed records retain exact names, global versus weak
