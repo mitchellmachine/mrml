@@ -609,13 +609,24 @@ and 2,080 bytes. This one-member archive does not demonstrate the intended
 scaling benefit and is only correctness/regression evidence; representative
 multi-member `.rlib` measurements remain required.
 
+Indexed archive inventory is now separate from the 256 selected-link-input
+limit: the decoder admits at most 1,024 independently framed ordinary members
+while the final link still admits at most 256 selected objects/fragments. This
+allows the index-guided path to skip large irrelevant tails without allocating
+them as link inputs or weakening the existing output-work bound. A focused
+301-member archive containing one valid indexed entry object and 300
+unreferenced invalid payloads selected only the entry on both Windows and Linux;
+both platforms retained 720 compiler-core passes and five driver passes. This
+is bounded synthetic scaling evidence, not general `.rlib` compatibility or a
+throughput benchmark.
+
 This increment does **not** emit PE imports/exports/base
 relocations/debug data, emit ELF dynamic metadata/interpreter/PIE/sections,
 read thin archives or general `.rlib` contents, perform section GC or ICF, link
 dynamically, run work in parallel, or integrate linker selection into the
-public `mrml` build frontend. Index-guided extraction remains bounded to 256
-ordinary archive members and 4,096 index symbols and has not yet been optimized
-for large representative Rust libraries.
+public `mrml` build frontend. Index-guided extraction remains bounded to 1,024
+ordinary archive members, 4,096 index symbols, and 256 admitted link inputs and
+has not yet been optimized against large representative Rust libraries.
 Those are separate milestones and the current upstream linker remains the
 production linker for ordinary package builds as required by
 `docs/build/BUILD_SYSTEM.md`.

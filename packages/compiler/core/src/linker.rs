@@ -8,7 +8,8 @@ pub const MAX_LINK_INPUTS: usize = 256;
 pub const MAX_LINK_RELOCATIONS: usize = 256;
 pub const MAX_LINK_DEFINITIONS: usize = 256;
 pub const MAX_PE_RUNTIME_FUNCTIONS: usize = 256;
-pub const MAX_ARCHIVE_MEMBERS: usize = MAX_LINK_INPUTS;
+/// Ordinary members that may be indexed without making every member a link input.
+pub const MAX_ARCHIVE_MEMBERS: usize = 1024;
 pub const MAX_ARCHIVE_SYMBOLS: usize = 4096;
 const MAX_COFF_SECTIONS: usize = 256;
 

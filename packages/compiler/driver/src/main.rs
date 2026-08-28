@@ -1172,11 +1172,11 @@ mod tests {
     }
 
     #[test]
-    fn indexed_archive_skips_unreferenced_non_object_members() {
-        run_with_linker_stack(indexed_archive_skips_unreferenced_members_on_linker_stack);
+    fn indexed_archive_skips_hundreds_of_unreferenced_non_object_members() {
+        run_with_linker_stack(indexed_archive_skips_hundreds_on_linker_stack);
     }
 
-    fn indexed_archive_skips_unreferenced_members_on_linker_stack() {
+    fn indexed_archive_skips_hundreds_on_linker_stack() {
         let entry = compile_source_function_with_options::<4096, 4096, 8, 8, 8, 32>(
             "#[unsafe(no_mangle)] pub extern \"C\" fn entry() -> i32 { 42 }",
             "entry",
@@ -1185,14 +1185,16 @@ mod tests {
             CodegenOptions::CHECKED,
         )
         .unwrap();
-        let mut archive = Vector::with_capacity(16 * 1024).unwrap();
+        let mut archive = Vector::with_capacity(64 * 1024).unwrap();
         for byte in b"!<arch>\n" {
             archive.try_push(*byte).unwrap();
         }
         let index = [0, 0, 0, 1, 0, 0, 0, 82, b'e', b'n', b't', b'r', b'y', 0];
         append_archive_member(&mut archive, "/", &index);
         append_archive_member(&mut archive, "entry.o/", entry.bytes());
-        append_archive_member(&mut archive, "unused.o/", b"not an object");
+        for _ in 0..300 {
+            append_archive_member(&mut archive, "unused.o/", b"not an object");
+        }
 
         let objects = [archive];
         let refs = link_object_refs(&objects, ObjectFormat::Elf64, "entry").unwrap();

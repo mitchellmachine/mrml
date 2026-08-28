@@ -1,5 +1,14 @@
 # Patent review log
 
+## 2026-08-28 — Separate indexed-member and selected-input bounds
+
+Patent review: **NOT_TRIGGERED** for raising a fixed archive inventory bound
+from 256 to 1,024 while retaining the separate 256 selected-link-input bound.
+This is conventional bounded resource accounting that permits existing lazy
+selection to skip irrelevant members; it adds no new lookup, compression,
+parallelization, binary-rewriting, cryptographic, or hardware mechanism. This
+technical screen is not patent clearance.
+
 ## 2026-08-28 — Index-guided lazy archive extraction
 
 Patent review: **NOT_TRIGGERED** for conventionally using a validated Unix
