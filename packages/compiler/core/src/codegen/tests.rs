@@ -235,6 +235,23 @@ mod tests {
                         body_expression: "&mut values[0..][1..]",
                     })
                 }
+                ("slice_repeated_subslice_alias", 1) => {
+                    parameters[0] = Some(RuntimeCallParameter {
+                        name: "values",
+                        ty: slice_reference,
+                    });
+                    Some(RuntimeCallTarget {
+                        name: "slice_repeated_subslice_alias",
+                        parameters,
+                        parameter_count: 1,
+                        return_type: slice_reference,
+                        return_type_name: "&mut [u16]",
+                        body_expression: concat!(
+                            "let alias: &mut [u16] = &mut values[0..][1..]; ",
+                            "alias"
+                        ),
+                    })
+                }
                 ("array_element_alias", 1) => {
                     parameters[0] = Some(RuntimeCallParameter {
                         name: "values",
@@ -5870,6 +5887,12 @@ mod tests {
             ),
             concat!(
                 "fn value(input: &mut [u16]) -> u16 { ",
+                "let returned: &mut [u16] = slice_repeated_subslice_alias(input); ",
+                "let competing: &mut u16 = &mut input[1]; ",
+                "*competing += 1; returned[0] }"
+            ),
+            concat!(
+                "fn value(input: &mut [u16]) -> u16 { ",
                 "let returned: &mut [u16] = slice_subslice_alias(input); ",
                 "let competing: &mut u16 = &mut input[1]; ",
                 "*competing += 1; returned[0] }"
@@ -5905,6 +5928,11 @@ mod tests {
             concat!(
                 "fn value(input: &mut [u16]) -> u16 { ",
                 "let returned: &mut [u16] = slice_repeated_subslice(input); returned[0] += 1; ",
+                "let restored: &mut u16 = &mut input[1]; *restored }"
+            ),
+            concat!(
+                "fn value(input: &mut [u16]) -> u16 { ",
+                "let returned: &mut [u16] = slice_repeated_subslice_alias(input); returned[0] += 1; ",
                 "let restored: &mut u16 = &mut input[1]; *restored }"
             ),
             concat!(
@@ -6013,6 +6041,13 @@ mod tests {
         );
         assert_eq!(
             runtime_reference_call_origin_parameter::<2, 16>(slice_repeated_subslice),
+            Some(0)
+        );
+        let slice_repeated_subslice_alias = MutableReferenceCallResolver
+            .resolve_runtime_call::<2>("slice_repeated_subslice_alias", 1)
+            .unwrap();
+        assert_eq!(
+            runtime_reference_call_origin_parameter::<2, 16>(slice_repeated_subslice_alias),
             Some(0)
         );
         let array_element_alias = MutableReferenceCallResolver

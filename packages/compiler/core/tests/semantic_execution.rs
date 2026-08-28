@@ -622,32 +622,40 @@ fn subslice_then_index_reference_mutation_executes() {
         }
     }
 
-    let code = compile(
-        "fn select(input: &mut [u32], first: usize, second: usize) -> &mut [u32] { &mut input[first..][second..] } #[unsafe(no_mangle)] pub extern \"C\" fn probe(input: &mut [u32], first: usize, second: usize, index: usize) -> u32 { let selected: &mut [u32] = select(input, first, second); selected[index] += 19; selected[index] }",
-    );
-    #[cfg(not(target_os = "windows"))]
-    let probe: unsafe extern "C" fn(*mut u32, usize, usize, usize, usize) -> u32 =
-        unsafe { std::mem::transmute(code.pointer) };
-    #[cfg(target_os = "windows")]
-    let probe: unsafe extern "C" fn(*const usize, usize, usize, usize) -> u32 =
-        unsafe { std::mem::transmute(code.pointer) };
-    for (first, second, index, target) in [(0, 1, 3, 4), (1, 1, 0, 2), (2, 0, 2, 4)] {
-        let mut values = [10, 20, 30, 40, 50];
-        let expected = values[target] + 19;
+    for code in [
+        compile(
+            "fn select(input: &mut [u32], first: usize, second: usize) -> &mut [u32] { &mut input[first..][second..] } #[unsafe(no_mangle)] pub extern \"C\" fn probe(input: &mut [u32], first: usize, second: usize, index: usize) -> u32 { let selected: &mut [u32] = select(input, first, second); selected[index] += 19; selected[index] }",
+        ),
+        compile(
+            "fn select(input: &mut [u32], first: usize, second: usize) -> &mut [u32] { let alias: &mut [u32] = &mut input[first..][second..]; alias } #[unsafe(no_mangle)] pub extern \"C\" fn probe(input: &mut [u32], first: usize, second: usize, index: usize) -> u32 { let selected: &mut [u32] = select(input, first, second); selected[index] += 19; selected[index] }",
+        ),
+    ] {
         #[cfg(not(target_os = "windows"))]
-        assert_eq!(
-            unsafe { probe(values.as_mut_ptr(), values.len(), first, second, index) },
-            expected
-        );
+        let probe: unsafe extern "C" fn(*mut u32, usize, usize, usize, usize) -> u32 =
+            unsafe { std::mem::transmute(code.pointer) };
         #[cfg(target_os = "windows")]
+        let probe: unsafe extern "C" fn(*const usize, usize, usize, usize) -> u32 =
+            unsafe { std::mem::transmute(code.pointer) };
+        for (first, second, index, target) in
+            [(0, 1, 3, 4), (1, 1, 0, 2), (2, 0, 2, 4)]
         {
-            let slice = [values.as_mut_ptr() as usize, values.len()];
-            assert_eq!(unsafe { probe(slice.as_ptr(), first, second, index) }, expected);
-        }
-        assert_eq!(values[target], expected);
-        for (position, value) in values.into_iter().enumerate() {
-            if position != target {
-                assert_eq!(value, [10, 20, 30, 40, 50][position]);
+            let mut values = [10, 20, 30, 40, 50];
+            let expected = values[target] + 19;
+            #[cfg(not(target_os = "windows"))]
+            assert_eq!(
+                unsafe { probe(values.as_mut_ptr(), values.len(), first, second, index) },
+                expected
+            );
+            #[cfg(target_os = "windows")]
+            {
+                let slice = [values.as_mut_ptr() as usize, values.len()];
+                assert_eq!(unsafe { probe(slice.as_ptr(), first, second, index) }, expected);
+            }
+            assert_eq!(values[target], expected);
+            for (position, value) in values.into_iter().enumerate() {
+                if position != target {
+                    assert_eq!(value, [10, 20, 30, 40, 50][position]);
+                }
             }
         }
     }

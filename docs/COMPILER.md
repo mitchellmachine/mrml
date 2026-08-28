@@ -1035,6 +1035,16 @@ element mismatches, and shared-to-mutable transfers remain unclassified. This is
 bounded aggregate-origin transfer, not index-sensitive disjointness or general
 fat-reference dataflow. Both hosts passed the same 1,035-test gate.
 
+That repeated-subslice slice origin also survives one direct typed mutable-slice
+local in the callee before return. The bounded local-origin table maps the alias
+back to the aggregate parameter, so caller conflict and last-use restoration are
+identical to the direct helper form. A runtime-slice native probe executes direct
+and aliased helpers for the same three start/index combinations on Windows
+gnullvm and Arch Linux WSL with identical selected-element mutations. This is
+one acyclic typed alias, not conditional alias joins, reassignment chains,
+arbitrary fat-reference dataflow, or general regions. Both hosts passed the same
+1,035-test compiler gate.
+
 The repeated-subslice semantic harness now isolates all four checked failure
 layers at depth three. An inner start beyond the runtime owner length, second-
 and third-layer starts beyond their independently saved input lengths, and a
