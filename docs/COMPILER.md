@@ -1056,6 +1056,14 @@ and Arch Linux WSL. This is same-origin conditional exit merging, not path-
 sensitive ownership, arbitrary branch dataflow, or general interprocedural CFG
 regions. Both hosts passed the same 1,035-test compiler gate.
 
+Explicit early returns now preserve that repeated-subslice origin when the
+continuing tail returns a distinct fat slice derived from the same mutable
+parameter. Caller analysis rejects a competing borrow while either returned
+slice remains live and restores the root loan after last use. Native probes
+exercise both the early-return and tail paths at two indexes on Windows gnullvm
+and Arch Linux WSL. This covers one same-origin early-return join; it is not
+general path-sensitive ownership or arbitrary interprocedural CFG analysis.
+
 The repeated-subslice semantic harness now isolates all four checked failure
 layers at depth three. An inner start beyond the runtime owner length, second-
 and third-layer starts beyond their independently saved input lengths, and a
