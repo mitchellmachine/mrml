@@ -761,6 +761,17 @@ unwind metadata retained by the conventional link, so output-size comparison
 is not equivalent evidence. This is a narrow hosted process-level regression
 measurement, not a general linker-speed or size-superiority claim.
 
+The next optimization caches validated ELF symbol/string table views across
+the reachability fixed point, reuses the selected-section decode for definition
+and relocation views, and avoids allocating archive symbol queues for links
+containing only explicit objects. The same 50-iteration/five-warmup release
+method measured MRML versus exact pinned rust-lld at 5.384 versus 4.982 ms
+median for the trait-object probe, 5.387 versus 4.972 ms for writable pointers,
+5.011 versus 4.953 ms for one archive, and 5.670 versus 6.974 ms for the
+reachable pinned-libcore probe. All outputs exited 42. This preserves the
+workload-specific core advantage but does not make MRML faster on the tiny
+explicit-object probes; no broad superiority claim follows.
+
 This increment does **not** emit PE imports/exports/base
 relocations/debug data, emit ELF dynamic metadata/interpreter/PIE/sections,
 read thin archives or general `.rlib` contents, perform ICF, link dynamically,

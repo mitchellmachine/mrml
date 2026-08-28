@@ -9,8 +9,8 @@ the named commit and current source.
 ## Recoverable baseline
 
 - Branch: `main`
-- Compiler checkpoint commit: `608f811a`
-  (`compiler: inventory ELF archive symbols`)
+- Compiler checkpoint commit: `c227bd73`
+  (`compiler: reuse selected ELF views`)
 - Remote state when recorded: `origin/main` includes the bounded MRML-owned
   static-link core, exact MRML COFF and ELF64 ingestion, deterministic
   import-free PE32+/ELF64 executable serialization, explicit compiler-driver
@@ -60,6 +60,20 @@ against all prior accepted probes. Keep Cargo on edition 2024 until a newer
 named edition can be adopted through a pinned, workspace-wide migration.
 
 ## Latest bounded linker milestone
+
+Commit `c227bd73` caches each input's validated ELF symbol/string table view
+during cross-object reachability, reuses the already decoded selected-section
+view for definition and relocation decoding, and bypasses the two 4,096-symbol
+archive queues when every input is an explicit object. Windows gnullvm and
+native Arch Linux WSL each passed 727 core unit tests, the 2/10/351/35-test
+integration suites, and five driver tests. In 50-iteration/five-warmup Linux
+release measurements, MRML versus exact pinned rust-lld measured 5.384 versus
+4.982 ms median for the trait-object probe, 5.387 versus 4.972 ms for writable
+pointers, 5.011 versus 4.953 ms for one archive, and 5.670 versus 6.974 ms for
+the reachable pinned-libcore probe; every executable returned 42. Thus MRML
+remains faster on the recorded core workload but not on the tiny explicit-
+object probes. These are narrow hosted regression measurements, not a general
+speed claim.
 
 Commit `608f811a` replaces the final legacy whole-object dependency in ELF GNU
 archive selection with a bounded symbol inventory over validated symbol,
