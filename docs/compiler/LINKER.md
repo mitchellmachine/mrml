@@ -772,6 +772,20 @@ reachable pinned-libcore probe. All outputs exited 42. This preserves the
 workload-specific core advantage but does not make MRML faster on the tiny
 explicit-object probes; no broad superiority claim follows.
 
+Cross-object reachability now carries each fully validated ELF header-table,
+symbol-table, and string-table view into every symbol work-queue iteration.
+Previously the cached view was used for definition resolution, but the
+per-symbol section-GC call reparsed the ELF header, rescanned every section to
+rediscover `.symtab`, and sliced the same tables again. The public one-object
+entry point still performs identical validation once. Current 50-iteration,
+five-warmup samples measured MRML versus pinned rust-lld at 5.330 versus 4.847
+ms for the trait-object probe, 5.220 versus 4.806 ms for one archive, 5.258
+versus 5.138 ms for the transitive 16-codegen-unit archive, and 5.742 versus
+6.234 ms for reachable pinned libcore. All executable checks exited 42. The
+tiny samples remain slower or near parity; the libcore sample remains faster,
+so these results are regression evidence rather than a general superiority
+claim.
+
 The selected relocation path also admits conventional unsigned absolute-32
 `R_X86_64_32` records. It computes the ABI-defined `S + A` value only after
 resolving the exact selected target and rejects any result outside `u32` rather

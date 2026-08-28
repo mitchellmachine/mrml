@@ -2858,65 +2858,26 @@ pub fn select_x86_64_elf_sections(
     object: &[u8],
     root_symbols: &[&str],
 ) -> Result<ElfSectionSelection, LinkerError> {
+    let symbol_table = elf_symbol_table_view(object)?;
+    select_x86_64_elf_sections_from_view(object, root_symbols, symbol_table)
+}
+
+fn select_x86_64_elf_sections_from_view(
+    object: &[u8],
+    root_symbols: &[&str],
+    symbol_table: ElfSymbolTableView<'_>,
+) -> Result<ElfSectionSelection, LinkerError> {
     if root_symbols.is_empty() {
         return Err(LinkerError::EmptySymbol);
     }
     for root in root_symbols {
         validate_symbol(root)?;
     }
-    if object.get(..7) != Some(b"\x7fELF\x02\x01\x01")
-        || !matches!(object.get(7), Some(0 | 3))
-        || object.get(8) != Some(&0)
-        || read_u16_elf(object, 16)? != 1
-        || read_u16_elf(object, 18)? != 62
-        || read_u32_elf(object, 20)? != 1
-        || read_u16_elf(object, 52)? != 64
-        || read_u16_elf(object, 58)? != 64
-    {
-        return Err(LinkerError::UnsupportedElf);
-    }
-    let section_offset = to_usize_elf(read_u64_elf(object, 40)?)?;
-    let section_count = usize::from(read_u16_elf(object, 60)?);
-    let section_names_index = usize::from(read_u16_elf(object, 62)?);
-    if !(4..=MAX_ELF_SECTIONS).contains(&section_count) || section_names_index >= section_count {
-        return Err(LinkerError::UnsupportedElf);
-    }
-    let section_bytes = section_count
-        .checked_mul(64)
-        .ok_or(LinkerError::OffsetOverflow)?;
-    object
-        .get(
-            section_offset
-                ..section_offset
-                    .checked_add(section_bytes)
-                    .ok_or(LinkerError::OffsetOverflow)?,
-        )
-        .ok_or(LinkerError::InvalidElf)?;
-
-    let mut symbols_index = None;
-    for index in 1..section_count {
-        let header = elf_section_header(section_offset, section_count, index)?;
-        if read_u32_elf(object, header + 4)? == 2 {
-            if symbols_index.replace(index).is_some() {
-                return Err(LinkerError::UnsupportedElf);
-            }
-        }
-    }
-    let symbols_index = symbols_index.ok_or(LinkerError::InvalidElf)?;
-    let symbols_header = elf_section_header(section_offset, section_count, symbols_index)?;
-    if read_u64_elf(object, symbols_header + 56)? != 24 {
-        return Err(LinkerError::UnsupportedElf);
-    }
-    let strings_index = usize::try_from(read_u32_elf(object, symbols_header + 40)?)
-        .map_err(|_| LinkerError::OffsetOverflow)?;
-    if strings_index >= section_count {
-        return Err(LinkerError::InvalidElf);
-    }
-    let symbols = elf_section_contents(object, section_offset, section_count, symbols_index)?;
-    let strings = elf_section_contents(object, section_offset, section_count, strings_index)?;
-    if symbols.len() % 24 != 0 {
-        return Err(LinkerError::InvalidElf);
-    }
+    let section_offset = symbol_table.section_offset;
+    let section_count = symbol_table.section_count;
+    let symbols_index = symbol_table.symbols_index;
+    let symbols = symbol_table.symbols;
+    let strings = symbol_table.strings;
 
     let mut selected = [false; MAX_ELF_SECTIONS];
     for root in root_symbols {
@@ -3079,7 +3040,9 @@ pub fn select_x86_64_elf_link_sections_detailed<'a>(
                 symbol: Some(symbol),
             });
         };
-        let addition = select_x86_64_elf_sections(objects[object_index], &[symbol])?;
+        let symbol_table = symbol_tables[object_index].ok_or(LinkerError::InvalidElf)?;
+        let addition =
+            select_x86_64_elf_sections_from_view(objects[object_index], &[symbol], symbol_table)?;
         let destination = &mut result.selections[object_index];
         for &section in addition.indices() {
             if destination.indices().contains(&section) {
@@ -3116,7 +3079,9 @@ pub fn select_x86_64_elf_link_sections_detailed<'a>(
 
 #[derive(Clone, Copy)]
 struct ElfSymbolTableView<'a> {
+    section_offset: usize,
     section_count: usize,
+    symbols_index: usize,
     symbols: &'a [u8],
     strings: &'a [u8],
 }
@@ -3180,14 +3145,34 @@ fn elf_object_definition_binding(
 }
 
 fn elf_symbol_table_view(object: &[u8]) -> Result<ElfSymbolTableView<'_>, LinkerError> {
-    if object.get(..7) != Some(b"\x7fELF\x02\x01\x01") {
+    if object.get(..7) != Some(b"\x7fELF\x02\x01\x01")
+        || !matches!(object.get(7), Some(0 | 3))
+        || object.get(8) != Some(&0)
+        || read_u16_elf(object, 16)? != 1
+        || read_u16_elf(object, 18)? != 62
+        || read_u32_elf(object, 20)? != 1
+        || read_u16_elf(object, 52)? != 64
+        || read_u16_elf(object, 58)? != 64
+    {
         return Err(LinkerError::UnsupportedElf);
     }
     let section_offset = to_usize_elf(read_u64_elf(object, 40)?)?;
     let section_count = usize::from(read_u16_elf(object, 60)?);
-    if !(4..=MAX_ELF_SECTIONS).contains(&section_count) {
+    let section_names_index = usize::from(read_u16_elf(object, 62)?);
+    if !(4..=MAX_ELF_SECTIONS).contains(&section_count) || section_names_index >= section_count {
         return Err(LinkerError::UnsupportedElf);
     }
+    let section_bytes = section_count
+        .checked_mul(64)
+        .ok_or(LinkerError::OffsetOverflow)?;
+    object
+        .get(
+            section_offset
+                ..section_offset
+                    .checked_add(section_bytes)
+                    .ok_or(LinkerError::OffsetOverflow)?,
+        )
+        .ok_or(LinkerError::InvalidElf)?;
     let mut symbols_index = None;
     for index in 1..section_count {
         let header = elf_section_header(section_offset, section_count, index)?;
@@ -3208,7 +3193,9 @@ fn elf_symbol_table_view(object: &[u8]) -> Result<ElfSymbolTableView<'_>, Linker
         return Err(LinkerError::InvalidElf);
     }
     Ok(ElfSymbolTableView {
+        section_offset,
         section_count,
+        symbols_index,
         symbols,
         strings,
     })
@@ -7447,6 +7434,20 @@ mod tests {
         assert_eq!(link_selection.selections()[0].indices(), &[1]);
         assert_eq!(link_selection.selections()[1].indices(), &[1]);
         assert_eq!(link_selection.selections()[2].indices(), &[]);
+        let mut invalid_unused = [0u8; 1024];
+        invalid_unused[..data.len()].copy_from_slice(data.bytes());
+        invalid_unused[8] = 1;
+        assert_eq!(
+            select_x86_64_elf_link_sections(
+                &[
+                    caller.bytes(),
+                    callee.bytes(),
+                    &invalid_unused[..data.len()],
+                ],
+                "entry",
+            ),
+            Err(LinkerError::UnsupportedElf)
+        );
         let selected_objects = [
             ElfSelectedObject {
                 sections: &caller_sections,

@@ -1,5 +1,14 @@
 # Patent review log
 
+## 2026-08-28 — Reused validated ELF selection views
+
+Patent review: **NOT_TRIGGERED**. This increment carries an already validated
+ELF section-table, symbol-table, and string-table view through the existing
+bounded reachability work queue instead of rediscovering the same tables for
+each symbol. It changes neither resolution nor section-GC semantics and adds no
+new indexing, graph, scheduling, compression, cryptographic, or loader
+mechanism. This technical screen is not legal advice or patent clearance.
+
 ## 2026-08-28 — Signed ELF absolute-32 relocation
 
 Patent review: **NOT_TRIGGERED**. This increment implements the conventional
