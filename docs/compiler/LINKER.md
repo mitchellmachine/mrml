@@ -215,6 +215,20 @@ recognizes the section without folding it into code, while the legacy decoder
 explicitly rejects it to prevent silent data loss. Multiple writable sections,
 other target classes, and driver transport remain unsupported.
 
+The PE driver now decodes writable data only for selected source-object
+identities, retains each object's independent relocation arena, includes the
+bytes in payload-tier selection, and passes the typed views to the fixed-base
+serializer. The exact pinned volatile-static object linked to a 2,048-byte PE;
+Windows returned 42. The image has three sections, `.data` is at RVA `0x3000`
+with `0xc0000040` RW/NX characteristics, and its pointer field contains the
+exact fixed address `0x140002000` of the read-only value.
+
+The controlled 93-byte no-data benchmark measured MRML at 9.577 ms median and
+9.759 ms mean versus pinned gnullvm rust-lld at 26.952 ms median and 27.186 ms
+mean over 50 iterations after five warmups. Both 1,024-byte outputs returned
+42. These hosted probes establish one static-data shape and narrow regression
+evidence, not general writable-data, COMDAT, or performance coverage.
+
 After this integration, the controlled 93-byte no-unwind object benchmark ran
 50 iterations after five warmups. MRML measured 10.081 ms median and 10.260 ms
 mean versus pinned gnullvm rust-lld at 27.632 ms median and 27.791 ms mean. Both

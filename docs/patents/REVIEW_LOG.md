@@ -9387,3 +9387,12 @@ initialized RW/NX `.data$...` COFF section and its documented AMD64 `ADDR64`
 relocations into the existing typed writable PE input. It introduces no new
 relocation, COMDAT-selection, packing, compression, cryptographic, or loading
 algorithm. This technical screen is not legal advice or patent clearance.
+
+# 2026-08-28 — Selected writable COFF data transport
+
+Patent review: **NOT_TRIGGERED**. This increment carries already decoded
+writable bytes and conventional `ADDR64` fields only from selected source
+objects into the existing fixed-base PE serializer. It adds bounded origin and
+payload bookkeeping, not a new relocation, COMDAT-selection, packing,
+compression, cryptographic, or loading algorithm. This technical screen is not
+legal advice or patent clearance.

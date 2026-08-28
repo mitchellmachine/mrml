@@ -6,9 +6,11 @@ use mrml_runtime::{Text, Vector, mrml_println as println};
 use mrml_rustc::{
     CodegenOptions, LinkDefinition, LinkInput, LinkRelocation, LinkRelocationTarget,
     MAX_LINK_DEFINITIONS, MAX_LINK_INPUTS, MAX_LINK_RELOCATIONS, MAX_PE_RUNTIME_FUNCTIONS,
-    ObjectFormat, PeRuntimeFunction, TargetLayout, compile_source_function_with_options,
-    decode_unix_archive, decode_x86_64_coff_runtime_functions, decode_x86_64_coff_text_fragment,
-    decode_x86_64_elf_with_definitions, link_x86_64_elf_executable, link_x86_64_pe_with_unwind,
+    ObjectFormat, PeRuntimeFunction, PeWritableData, PeWritableRelocation, TargetLayout,
+    compile_source_function_with_options, decode_unix_archive,
+    decode_x86_64_coff_runtime_functions, decode_x86_64_coff_text_fragment,
+    decode_x86_64_coff_writable_data, decode_x86_64_elf_with_definitions,
+    link_x86_64_elf_executable, link_x86_64_pe_with_data_and_unwind,
     select_ordered_static_link_members, x86_64_coff_text_fragment_count,
 };
 
@@ -436,6 +438,69 @@ fn selected_runtime_functions<'data>(
     Ok(runtime_functions)
 }
 
+fn writable_relocation_arenas<'a>(
+    count: usize,
+) -> Result<Vector<[PeWritableRelocation<'a>; MAX_LINK_RELOCATIONS]>> {
+    let mut arenas = Vector::with_capacity(count)
+        .map_err(|_| anyhow!("could not allocate writable relocation arenas"))?;
+    for _ in 0..count {
+        arenas
+            .try_push(
+                [PeWritableRelocation {
+                    offset: 0,
+                    target_readonly_owner: "unused",
+                    target_readonly_offset: 0,
+                }; MAX_LINK_RELOCATIONS],
+            )
+            .map_err(|_| anyhow!("could not allocate writable relocation arenas"))?;
+    }
+    Ok(arenas)
+}
+
+fn selected_writable_data<'data, 'relocations>(
+    objects: &[&'data [u8]],
+    archive_group: &[u16],
+    archive_member: &[u16],
+    selected: &SelectedLinkInputs<'data, '_, '_>,
+    arenas: &'relocations mut [[PeWritableRelocation<'data>; MAX_LINK_RELOCATIONS]],
+) -> Result<Vector<PeWritableData<'data, 'relocations>>> {
+    let mut output = Vector::with_capacity(objects.len())
+        .map_err(|_| anyhow!("could not allocate selected writable data list"))?;
+    let mut remaining = arenas;
+    for object_index in 0..objects.len() {
+        let group = archive_group[object_index];
+        let member = archive_member[object_index];
+        let owner = selected
+            .inputs
+            .iter()
+            .zip(
+                selected
+                    .archive_group
+                    .iter()
+                    .zip(selected.archive_member.iter()),
+            )
+            .find(|(_, (selected_group, selected_member))| {
+                **selected_group == group && **selected_member == member
+            })
+            .map(|(input, _)| input.symbol);
+        let (arena, rest) = remaining
+            .split_first_mut()
+            .ok_or_else(|| anyhow!("writable relocation arena count mismatch"))?;
+        if let Some(owner) = owner {
+            if let Some(data) =
+                decode_x86_64_coff_writable_data(objects[object_index], owner, arena)
+                    .map_err(mrml_error::message)?
+            {
+                output
+                    .try_push(data)
+                    .map_err(|_| anyhow!("could not allocate selected writable data list"))?;
+            }
+        }
+        remaining = rest;
+    }
+    Ok(output)
+}
+
 fn write_linked_pe(
     objects: &[&[u8]],
     archive_group: &[u16],
@@ -474,11 +539,20 @@ fn write_linked_pe(
         &selected,
         &mut runtime_arena,
     )?;
-    let payload = selected_payload_bound(&selected.inputs, &runtime_functions)?;
+    let mut writable_arenas = writable_relocation_arenas(objects.len())?;
+    let writable_data = selected_writable_data(
+        objects,
+        archive_group,
+        archive_member,
+        &selected,
+        &mut writable_arenas,
+    )?;
+    let payload = selected_payload_bound(&selected.inputs, &runtime_functions, &writable_data)?;
     if payload <= 16 * 1024 {
         return write_pe_image::<{ 32 * 1024 }, { 16 * 1024 }>(
             &selected.inputs,
             &runtime_functions,
+            &writable_data,
             entry,
             output,
         );
@@ -487,6 +561,7 @@ fn write_linked_pe(
         return write_pe_image::<{ 512 * 1024 }, { 256 * 1024 }>(
             &selected.inputs,
             &runtime_functions,
+            &writable_data,
             entry,
             output,
         );
@@ -494,6 +569,7 @@ fn write_linked_pe(
     write_pe_image::<MAX_EXECUTABLE_BYTES, MAX_LINKED_BYTES>(
         &selected.inputs,
         &runtime_functions,
+        &writable_data,
         entry,
         output,
     )
@@ -502,12 +578,17 @@ fn write_linked_pe(
 fn write_pe_image<const MAX_IMAGE: usize, const MAX_LINKED: usize>(
     inputs: &[LinkInput<'_, '_, '_>],
     runtime_functions: &[PeRuntimeFunction<'_>],
+    writable_data: &[PeWritableData<'_, '_>],
     entry: &str,
     output: &str,
 ) -> Result<()> {
-    let executable =
-        link_x86_64_pe_with_unwind::<MAX_IMAGE, MAX_LINKED>(inputs, entry, runtime_functions)
-            .map_err(mrml_error::message)?;
+    let executable = link_x86_64_pe_with_data_and_unwind::<MAX_IMAGE, MAX_LINKED>(
+        inputs,
+        entry,
+        runtime_functions,
+        writable_data,
+    )
+    .map_err(mrml_error::message)?;
     mrml_runtime::write_file(output, executable.bytes())?;
     println!(
         "linked {} to {} deterministic PE bytes",
@@ -541,7 +622,7 @@ fn write_linked_elf(
         &decoded.archive_member,
         entry,
     )?;
-    let payload = selected_payload_bound(&selected.inputs, &[])?;
+    let payload = selected_payload_bound(&selected.inputs, &[], &[])?;
     if payload <= 16 * 1024 {
         return write_elf_image::<{ 32 * 1024 }, { 16 * 1024 }>(&selected.inputs, entry, output);
     }
@@ -570,6 +651,7 @@ fn write_elf_image<const MAX_IMAGE: usize, const MAX_LINKED: usize>(
 fn selected_payload_bound(
     inputs: &[LinkInput<'_, '_, '_>],
     runtime_functions: &[PeRuntimeFunction<'_>],
+    writable_data: &[PeWritableData<'_, '_>],
 ) -> Result<usize> {
     let mut bytes = 4096usize;
     for input in inputs {
@@ -584,6 +666,12 @@ fn selected_payload_bound(
             .checked_add(function.unwind_info.len())
             .and_then(|bytes| bytes.checked_add(16))
             .ok_or_else(|| anyhow!("selected unwind payload size overflow"))?;
+    }
+    for data in writable_data {
+        bytes = bytes
+            .checked_add(data.bytes.len())
+            .and_then(|bytes| bytes.checked_add(16))
+            .ok_or_else(|| anyhow!("selected writable payload size overflow"))?;
     }
     Ok(bytes)
 }
@@ -679,7 +767,7 @@ mod tests {
             },
         ];
         assert_eq!(
-            selected_payload_bound(&inputs, &[]).unwrap(),
+            selected_payload_bound(&inputs, &[], &[]).unwrap(),
             4096 + 3 + 5 + 7 + 64
         );
     }
