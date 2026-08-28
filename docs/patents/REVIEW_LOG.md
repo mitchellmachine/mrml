@@ -9370,3 +9370,12 @@ Patent review: **NOT_TRIGGERED**. This increment admits one conventional
 REL32 relocation path. It introduces no COMDAT selection, writable-data,
 relocation, deduplication, compression, cryptographic, or loading algorithm.
 This technical screen is not legal advice or patent clearance.
+
+# 2026-08-28 — Fixed-base writable PE data layout
+
+Patent review: **NOT_TRIGGERED**. This increment emits conventional PE writable
+initialized data in a separate RW/NX section and applies documented AMD64
+`ADDR64` absolute-address relocation arithmetic for the already fixed-base
+image. It introduces no new relocation, packing, compression, cryptographic,
+or loading algorithm. This technical screen is not legal advice or patent
+clearance.

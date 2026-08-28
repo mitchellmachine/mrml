@@ -198,6 +198,15 @@ also emitted a writable `.data$...` COMDAT with an `ADDR64` relocation; that
 section still fails closed pending an explicit writable layout and fixed-base
 relocation model, so the complete probe does not yet link.
 
+The PE serializer now has an explicit bounded writable-data input. It emits a
+separate page-aligned `.data` section with read/write and non-executable
+characteristics, validates every eight-byte field, and resolves typed `ADDR64`
+targets to absolute addresses in an owning input's checked read-only layout.
+The image remains fixed at its declared base and intentionally emits no base
+relocation table. The existing PE APIs delegate with no writable inputs and
+retain their prior output. COFF writable-section decoding and driver transport
+remain separate gates.
+
 After this integration, the controlled 93-byte no-unwind object benchmark ran
 50 iterations after five warmups. MRML measured 10.081 ms median and 10.260 ms
 mean versus pinned gnullvm rust-lld at 27.632 ms median and 27.791 ms mean. Both
