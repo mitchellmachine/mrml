@@ -9,8 +9,8 @@ the named commit and current source.
 ## Recoverable baseline
 
 - Branch: `main`
-- Compiler checkpoint commit: `8cba1b38`
-  (`compiler: relax resolved ELF GOTPCREL calls`)
+- Compiler checkpoint commit: `10706daa`
+  (`compiler: coalesce split ELF text sections`)
 - Remote state when recorded: `origin/main` includes the bounded MRML-owned
   static-link core, exact MRML COFF and ELF64 ingestion, deterministic
   import-free PE32+/ELF64 executable serialization, explicit compiler-driver
@@ -60,6 +60,22 @@ against all prior accepted probes. Keep Cargo on edition 2024 until a newer
 named edition can be adopted through a pinned, workspace-wide migration.
 
 ## Latest bounded linker milestone
+
+Commit `10706daa` combines multiple ordered split `.text.*` ELF payloads into
+one zero-copy span only when intervening alignment bytes are present and zero.
+It translates symbols and every `.rela.text.*` record through checked section-
+relative offsets, retains the 256-relocation bound, gives a first local fragment
+an internal section identity, and preserves later external definitions for
+archive selection. Nonzero gaps and non-text relocation targets fail closed.
+
+Under the exact ORACLE-0002 Arch WSL environment, a 13,586-byte rlib with eight
+static helpers, nine split text sections, and eight internal calls linked with
+a process-entry object to a 4,349-byte ELF image and exited 42. Windows and
+Linux each passed 708 compiler-core tests and four driver tests. A 50-iteration/
+five-warmup same-input Linux measurement recorded MRML at 5.460 ms median and
+pinned rust-lld at 6.079 ms; rust-lld emitted 2,072 bytes. This is small hosted
+regression evidence, not general superiority. ELF unwind/debug handling and
+noncontiguous text payloads remain fail-closed.
 
 Commit `8cba1b38` admits `R_X86_64_GOTPCREL` only for an exact six-byte x86-64
 RIP-relative indirect call/jump whose symbol resolves inside the fixed static
