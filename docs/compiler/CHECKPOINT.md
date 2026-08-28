@@ -9,8 +9,8 @@ the named commit and current source.
 ## Recoverable baseline
 
 - Branch: `main`
-- Compiler checkpoint commit: `949b50d3`
-  (`build: expose experimental MRML linker`)
+- Compiler checkpoint commit: `08dcb3d4`
+  (`compiler: link signed absolute32 relocations`)
 - Remote state when recorded: `origin/main` includes the bounded MRML-owned
   static-link core, exact MRML COFF and ELF64 ingestion, deterministic
   import-free PE32+/ELF64 executable serialization, explicit compiler-driver
@@ -60,6 +60,19 @@ against all prior accepted probes. Keep Cargo on edition 2024 until a newer
 named edition can be adopted through a pinned, workspace-wide migration.
 
 ## Latest bounded linker milestone
+
+Commit `08dcb3d4` admits the AMD64 psABI `R_X86_64_32S` relocation as a
+separate typed case, computes `S + A`, and rejects results outside the exact
+signed 32-bit range. A focused test covers decode, patching, and overflow. The
+durable pinned-rustc probe plus `readelf` confirmed relocation type 11; MRML and
+the exact pinned gnullvm rust-lld outputs both exited 42 under Arch Linux WSL.
+MRML emitted 8,193 bytes and rust-lld 1,504 bytes, which is compatibility rather
+than equivalent size/performance evidence. Windows passed 732 core tests and
+integrations of 2/10/351/40 tests before a concurrent compiler milestone
+advanced the graph; current Linux passed 733 core tests and integrations of
+2/10/351/42 tests. Repository audit remained blocked first by the unrelated
+undeclared compiler-core command site with fingerprint
+`fnv1a64:041772d31cad5bfc`.
 
 Commit `949b50d3` exposes the MRML-owned static ELF path through the explicit
 public command `mrml compiler mrml-rustc-experimental link-elf`. The frontend
