@@ -9,8 +9,8 @@ the named commit and current source.
 ## Recoverable baseline
 
 - Branch: `main`
-- Compiler checkpoint commit: `4fa140eb`
-  (`compiler: expand COFF fragments in linker driver`)
+- Compiler checkpoint commit: `923f70b0`
+  (`compiler: serialize typed PE unwind records`)
 - Remote state when recorded: `origin/main` includes the bounded MRML-owned
   static-link core, exact MRML COFF and ELF64 ingestion, deterministic
   import-free PE32+/ELF64 executable serialization, explicit compiler-driver
@@ -189,6 +189,14 @@ the Windows release build passed. The controlled 93-byte object benchmark
 measured MRML at 9.275 ms median versus pinned gnullvm rust-lld at 26.598 ms;
 both 1,024-byte outputs returned 42. This is narrow regression evidence only.
 Unwind-bearing objects still fail closed before expansion.
+
+Commit `923f70b0` adds bounded typed AMD64 runtime-function records to the PE
+serializer. It resolves checked ranges, stores unwind bytes in read-only NX
+output, sorts 12-byte records by begin RVA, and publishes the exception data
+directory. The legacy API delegates with no records. The full Windows compiler
+suite passed with 699 core, 2 component, 10 conformance, 351 replacement, and
+24 semantic-execution tests. COFF `ADDR32NB` decoding and driver transport are
+still incomplete, so gnullvm unwind-bearing objects remain rejected.
 
 Patent review: **NOT_TRIGGERED** for these conventional bounded linker,
 serializer, command-routing, and benchmark increments; see
