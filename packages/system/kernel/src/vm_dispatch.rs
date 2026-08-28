@@ -1,6 +1,6 @@
 use crate::{
-    CapabilitySpace, GuestMemory, HypercallRouter, RoutedHypercall, VmBackend, VmError, VmExit,
-    VmId, VmRunError, VmTable, decode_hypercall_exit,
+    CapabilitySpace, GuestMappedRange, GuestMemory, HypercallRouter, RoutedHypercall, VmBackend,
+    VmError, VmExit, VmId, VmRunError, VmTable, decode_hypercall_exit,
 };
 
 pub const MAX_IO_PORT_RULES: usize = 32;
@@ -155,13 +155,11 @@ pub enum ExitDisposition {
     Resume,
     Yield,
     Tool {
-        host_address: u64,
-        length: u32,
+        range: GuestMappedRange,
         argument: u64,
     },
     Gpu {
-        host_address: u64,
-        length: u32,
+        range: GuestMappedRange,
         argument: u64,
     },
     Io {
@@ -264,24 +262,12 @@ fn dispatch_inner<B: VmBackend, const C: usize, const M: usize, const I: usize>(
                 .map_err(VmRunError::Policy)?
             {
                 RoutedHypercall::Yield => Ok(ExitDisposition::Yield),
-                RoutedHypercall::Tool {
-                    host_address,
-                    length,
-                    argument,
-                } => Ok(ExitDisposition::Tool {
-                    host_address,
-                    length,
-                    argument,
-                }),
-                RoutedHypercall::Gpu {
-                    host_address,
-                    length,
-                    argument,
-                } => Ok(ExitDisposition::Gpu {
-                    host_address,
-                    length,
-                    argument,
-                }),
+                RoutedHypercall::Tool { range, argument } => {
+                    Ok(ExitDisposition::Tool { range, argument })
+                }
+                RoutedHypercall::Gpu { range, argument } => {
+                    Ok(ExitDisposition::Gpu { range, argument })
+                }
                 RoutedHypercall::Shutdown => Ok(ExitDisposition::Stopped),
             }
         }

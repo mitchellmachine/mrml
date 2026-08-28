@@ -217,6 +217,31 @@ impl GuestMappingId {
     }
 }
 
+/// Pointer-free description of a range within one exact live guest mapping.
+/// Revocation or replacement makes the request stale before consumption.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct GuestMappedRange {
+    mapping: GuestMappingId,
+    offset: u64,
+    length: u64,
+    access: GuestAccess,
+}
+
+impl GuestMappedRange {
+    pub const fn mapping(self) -> GuestMappingId {
+        self.mapping
+    }
+    pub const fn offset(self) -> u64 {
+        self.offset
+    }
+    pub const fn length(self) -> u64 {
+        self.length
+    }
+    pub const fn access(self) -> GuestAccess {
+        self.access
+    }
+}
+
 #[derive(Clone, Copy)]
 struct GuestMapping {
     id: GuestMappingId,
@@ -423,30 +448,62 @@ impl<const N: usize> GuestMemory<N> {
         Ok(())
     }
 
-    pub fn translate(&self, guest: u64, length: u64, access: GuestAccess) -> Result<u64, VmError> {
+    pub fn prepare_range(
+        &self,
+        guest: u64,
+        length: u64,
+        access: GuestAccess,
+    ) -> Result<GuestMappedRange, VmError> {
         if length == 0 {
             return Err(VmError::Unmapped);
         }
         let end = guest.checked_add(length).ok_or(VmError::Overflow)?;
-        let region = self.mappings[..self.count]
+        let mapping = self.mappings[..self.count]
             .iter()
             .flatten()
             .copied()
-            .map(|mapping| mapping.region)
-            .find(|region| {
+            .find(|mapping| {
+                let region = mapping.region;
                 guest >= region.guest_start && end <= region.guest_start + region.length()
             })
             .ok_or(VmError::Unmapped)?;
+        let region = mapping.region;
         if (access == GuestAccess::Write && !region.writable)
             || (access == GuestAccess::Execute && !region.executable)
         {
             return Err(VmError::PermissionDenied);
         }
-        region
+        Ok(GuestMappedRange {
+            mapping: mapping.id,
+            offset: guest - region.guest_start,
+            length,
+            access,
+        })
+    }
+
+    // Kept crate-private for synchronous tool/GPU consumers; current dispatch
+    // returns the pointer-free token before either service is implemented.
+    #[allow(dead_code)]
+    pub(crate) fn resolve_range(&self, range: GuestMappedRange) -> Result<u64, VmError> {
+        let region = self.region(range.mapping)?;
+        let end = range
+            .offset
+            .checked_add(range.length)
+            .ok_or(VmError::Overflow)?;
+        if range.length == 0 || end > region.length() {
+            return Err(VmError::Unmapped);
+        }
+        if (range.access == GuestAccess::Write && !region.writable)
+            || (range.access == GuestAccess::Execute && !region.executable)
+        {
+            return Err(VmError::PermissionDenied);
+        }
+        let address = region
             .host_start
             .get()
-            .checked_add(guest - region.guest_start)
-            .ok_or(VmError::Overflow)
+            .checked_add(range.offset)
+            .ok_or(VmError::Overflow)?;
+        Ok(address)
     }
 }
 
@@ -602,13 +659,11 @@ impl Hypercall {
 pub enum RoutedHypercall {
     Yield,
     Tool {
-        host_address: u64,
-        length: u32,
+        range: GuestMappedRange,
         argument: u64,
     },
     Gpu {
-        host_address: u64,
-        length: u32,
+        range: GuestMappedRange,
         argument: u64,
     },
     Shutdown,
@@ -885,12 +940,11 @@ impl HypercallRouter {
                     self.tool_object,
                 )?;
                 RoutedHypercall::Tool {
-                    host_address: memory.translate(
+                    range: memory.prepare_range(
                         call.guest_address,
                         call.length as u64,
                         GuestAccess::Read,
                     )?,
-                    length: call.length,
                     argument: call.argument,
                 }
             }
@@ -902,12 +956,11 @@ impl HypercallRouter {
                     self.gpu_object,
                 )?;
                 RoutedHypercall::Gpu {
-                    host_address: memory.translate(
+                    range: memory.prepare_range(
                         call.guest_address,
                         call.length as u64,
                         GuestAccess::Read,
                     )?,
-                    length: call.length,
                     argument: call.argument,
                 }
             }
@@ -1040,9 +1093,10 @@ mod tests {
         memory
             .map(GuestRegion::new(0x1000, PhysAddr::new(0x9000).unwrap(), 2, true, false).unwrap())
             .unwrap();
-        assert_eq!(memory.translate(0x1ff0, 32, GuestAccess::Read), Ok(0x9ff0));
+        let range = memory.prepare_range(0x1ff0, 32, GuestAccess::Read).unwrap();
+        assert_eq!(memory.resolve_range(range), Ok(0x9ff0));
         assert_eq!(
-            memory.translate(0x2ff0, 32, GuestAccess::Read),
+            memory.prepare_range(0x2ff0, 32, GuestAccess::Read),
             Err(VmError::Unmapped)
         );
         assert_eq!(
@@ -1059,25 +1113,23 @@ mod tests {
         let id = memory
             .map(GuestRegion::new(0x1000, PhysAddr::new(0x8000).unwrap(), 1, true, false).unwrap())
             .unwrap();
-        assert_eq!(memory.translate(0x1000, 1, GuestAccess::Write), Ok(0x8000));
+        let writable = memory.prepare_range(0x1000, 1, GuestAccess::Write).unwrap();
+        assert_eq!(memory.resolve_range(writable), Ok(0x8000));
         memory.protect(id, false, true).unwrap();
         assert_eq!(
-            memory.translate(0x1000, 1, GuestAccess::Write),
+            memory.resolve_range(writable),
             Err(VmError::PermissionDenied)
         );
-        assert_eq!(
-            memory.translate(0x1000, 1, GuestAccess::Execute),
-            Ok(0x8000)
-        );
+        let executable = memory
+            .prepare_range(0x1000, 1, GuestAccess::Execute)
+            .unwrap();
+        assert_eq!(memory.resolve_range(executable), Ok(0x8000));
         assert_eq!(
             memory.protect(id, true, true),
             Err(VmError::WritableExecutable)
         );
         memory.unmap(id).unwrap();
-        assert_eq!(
-            memory.translate(0x1000, 1, GuestAccess::Read),
-            Err(VmError::Unmapped)
-        );
+        assert_eq!(memory.resolve_range(executable), Err(VmError::StaleMapping));
         assert_eq!(memory.unmap(id), Err(VmError::StaleMapping));
     }
 
@@ -1154,7 +1206,7 @@ mod tests {
         let tool_cap = capabilities.insert(tool, Rights::SIGNAL).unwrap();
         let gpu_cap = capabilities.insert(gpu, Rights::SIGNAL).unwrap();
         let mut memory = GuestMemory::<1>::new();
-        memory
+        let mapping = memory
             .map(GuestRegion::new(0x2000, PhysAddr::new(0x8000).unwrap(), 1, false, false).unwrap())
             .unwrap();
         let mut router = HypercallRouter::new(tool, gpu, control);
@@ -1171,8 +1223,12 @@ mod tests {
         assert_eq!(
             router.route(decoded, &capabilities, &memory),
             Ok(RoutedHypercall::Tool {
-                host_address: 0x8080,
-                length: 32,
+                range: GuestMappedRange {
+                    mapping,
+                    offset: 0x80,
+                    length: 32,
+                    access: GuestAccess::Read
+                },
                 argument: 7
             })
         );
@@ -1244,7 +1300,7 @@ mod tests {
         let wrong_cap = capabilities.insert(wrong, Rights::SIGNAL).unwrap();
         let right_cap = capabilities.insert(tool, Rights::SIGNAL).unwrap();
         let mut memory = GuestMemory::<1>::new();
-        memory
+        let mapping = memory
             .map(GuestRegion::new(0x1000, PhysAddr::new(0x8000).unwrap(), 1, false, false).unwrap())
             .unwrap();
         let mut router = HypercallRouter::new(tool, ObjectId(3), ObjectId(4));
@@ -1270,11 +1326,30 @@ mod tests {
                 &memory
             ),
             Ok(RoutedHypercall::Tool {
-                host_address: 0x8000,
-                length: 1,
+                range: GuestMappedRange {
+                    mapping,
+                    offset: 0,
+                    length: 1,
+                    access: GuestAccess::Read
+                },
                 argument: 0
             })
         );
+    }
+
+    #[test]
+    fn prepared_range_cannot_rebind_after_revocation_and_replacement() {
+        let mut memory = GuestMemory::<1>::new();
+        let original = memory
+            .map(GuestRegion::new(0x1000, PhysAddr::new(0x8000).unwrap(), 1, true, false).unwrap())
+            .unwrap();
+        let request = memory.prepare_range(0x1080, 32, GuestAccess::Read).unwrap();
+        memory.unmap(original).unwrap();
+        let replacement = memory
+            .map(GuestRegion::new(0x1000, PhysAddr::new(0xa000).unwrap(), 1, true, false).unwrap())
+            .unwrap();
+        assert_ne!(original, replacement);
+        assert_eq!(memory.resolve_range(request), Err(VmError::StaleMapping));
     }
 
     #[test]
