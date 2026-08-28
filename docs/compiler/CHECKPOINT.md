@@ -9,8 +9,8 @@ the named commit and current source.
 ## Recoverable baseline
 
 - Branch: `main`
-- Compiler checkpoint commit: `e390047f`
-  (`compiler: select archive object fragments atomically`)
+- Compiler checkpoint commit: `c88448a4`
+  (`compiler: decode bounded COFF text fragments`)
 - Remote state when recorded: `origin/main` includes the bounded MRML-owned
   static-link core, exact MRML COFF and ELF64 ingestion, deterministic
   import-free PE32+/ELF64 executable serialization, explicit compiler-driver
@@ -172,6 +172,15 @@ member identity zero. The full Windows compiler suite passed with 697 core, 2
 component, 10 conformance, 351 replacement, and 23 semantic-execution tests.
 This is selection infrastructure for multi-section gnullvm objects, not yet
 multi-COMDAT or `.pdata`/`.xdata` decoding or PE exception serialization.
+
+Commit `c88448a4` inventories up to 16 COFF sections and decodes a requested
+nonempty text fragment while retaining named REL32 targets across sibling
+fragments. Legacy decoding rejects multiple text fragments and nonempty unwind
+sections, so metadata cannot disappear silently. A synthetic two-fragment
+object decodes, resolves, and links in the focused test; the full Windows suite
+passed with 698 core, 2 component, 10 conformance, 351 replacement, and 23
+semantic-execution tests. Driver fragment expansion and typed `.pdata`/`.xdata`
+serialization remain incomplete.
 
 Patent review: **NOT_TRIGGERED** for these conventional bounded linker,
 serializer, command-routing, and benchmark increments; see
