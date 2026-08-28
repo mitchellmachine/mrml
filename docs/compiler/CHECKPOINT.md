@@ -9,8 +9,8 @@ the named commit and current source.
 ## Recoverable baseline
 
 - Branch: `main`
-- Compiler checkpoint commit: `f811de1a`
-  (`compiler: emit reachable ELF executable`)
+- Compiler checkpoint commit: `f74e0489`
+  (`compiler: drive reachable ELF linking`)
 - Remote state when recorded: `origin/main` includes the bounded MRML-owned
   static-link core, exact MRML COFF and ELF64 ingestion, deterministic
   import-free PE32+/ELF64 executable serialization, explicit compiler-driver
@@ -60,6 +60,20 @@ against all prior accepted probes. Keep Cargo on edition 2024 until a newer
 named edition can be adopted through a pinned, workspace-wide migration.
 
 ## Latest bounded linker milestone
+
+Commit `f74e0489` adds a bounded cross-object ELF reachability fixed point and
+cuts the Linux compiler-driver link path over to selected sections. Starting at
+the exact entry, local RELA edges are expanded within objects and undefined
+names select conventional strong-over-weak definitions in other objects;
+duplicate strong definitions and unresolved names fail closed. The driver now
+builds typed selected content/definition/relocation views and emits them through
+the new executable serializer, removing its obsolete whole-object ELF unwind
+and writable assembly path. A Windows-built driver linked three Linux objects
+to 4,142 bytes, and the result executed on controlled Arch Linux/WSL with exit
+code 42. Windows passed 725 core unit tests and five driver tests; Linux passed
+725 core unit tests, every integration suite, and five driver tests. GNU archive
+index scanning still uses the legacy whole-object ELF inventory path, so actual
+pinned-core archive extraction remains the next integration gate.
 
 Commit `f811de1a` serializes the selected and relocated payload into a
 fixed-address import-free ELF64 executable. It emits only present RX, R, and RW
