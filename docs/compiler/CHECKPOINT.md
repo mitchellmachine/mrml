@@ -9,8 +9,8 @@ the named commit and current source.
 ## Recoverable baseline
 
 - Branch: `main`
-- Compiler checkpoint commit: `ac80c7a9`
-  (`compiler: decode reachable ELF relocations`)
+- Compiler checkpoint commit: `6f8f03b2`
+  (`compiler: decode reachable ELF definitions`)
 - Remote state when recorded: `origin/main` includes the bounded MRML-owned
   static-link core, exact MRML COFF and ELF64 ingestion, deterministic
   import-free PE32+/ELF64 executable serialization, explicit compiler-driver
@@ -60,6 +60,18 @@ against all prior accepted probes. Keep Cargo on edition 2024 until a newer
 named edition can be adopted through a pinned, workspace-wide migration.
 
 ## Latest bounded linker milestone
+
+Commit `6f8f03b2` decodes externally resolvable definitions only from selected
+sections. The bounded typed records retain exact names, global versus weak
+binding, default versus hidden visibility, function/object/unspecified kind,
+section identity, value, and size; local symbols remain section-relative RELA
+targets instead of entering the cross-object namespace. Symbol extents and the
+256-definition result bound fail closed. Focused probes cover selected function
+definitions in text-plus-external-call and text-plus-read-only objects. Windows
+and Linux each passed 724 core unit tests and every integration suite. The
+selected content, definition, and relocation views now provide the inputs for
+the next cross-object resolution and layout pass; section-GC executable
+emission and pinned-core symbol execution remain unimplemented gates.
 
 Commit `ac80c7a9` decodes only `RELA` records whose destination sections were
 admitted by the exact-object reachability selection. The allocation-free typed
