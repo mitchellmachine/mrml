@@ -9,8 +9,8 @@ the named commit and current source.
 ## Recoverable baseline
 
 - Branch: `main`
-- Compiler checkpoint commit: `56d073ae`
-  (`compiler: reuse ELF selection metadata`)
+- Compiler checkpoint commit: `cb5a52bb`
+  (`compiler: retain ELF section groups atomically`)
 - Remote state when recorded: `origin/main` includes the bounded MRML-owned
   static-link core, exact MRML COFF and ELF64 ingestion, deterministic
   import-free PE32+/ELF64 executable serialization, explicit compiler-driver
@@ -60,6 +60,18 @@ against all prior accepted probes. Keep Cargo on edition 2024 until a newer
 named edition can be adopted through a pinned, workspace-wide migration.
 
 ## Latest bounded linker milestone
+
+Commit `cb5a52bb` validates `SHT_GROUP`/`GRP_COMDAT` records against the exact
+symbol table and retains every allocatable member when any member is reachable.
+It rejects invalid entry widths, unnamed/non-global signatures, unsupported
+flags, missing `SHF_GROUP`, and out-of-range members. A synthetic group proves
+two-member atomic closure and malformed flags/indices; the exact pinned
+libcore object's `DW.ref.rust_eh_personality` COMDAT passes through the release
+driver. Its reachable-core output remained 8,674 bytes and exited 42; the
+50-iteration/five-warmup run measured MRML at 6.072 ms median versus pinned
+rust-lld at 7.323 ms. Windows and Linux each passed 734 core tests and
+integrations of 2/10/351/44 tests. Duplicate COMDAT winner selection across
+objects remains unsupported and is not claimed.
 
 Commit `56d073ae` carries each fully validated ELF section-table, symbol-table,
 and string-table view through the cross-object reachability queue. This removes
