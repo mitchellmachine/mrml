@@ -6,15 +6,15 @@ use mrml_kernel::arch::x86_64::{
 };
 use mrml_kernel::{
     ApplicationLaunch, ArtifactKind, BootHandoff, Capability, CapabilitySpace, DeadlineVmBackend,
-    GpuSharedQueueLayout, GpuVmmMemory, MemoryResourceError, MicrovmPeerPageProjection, PhysAddr,
-    PreparedComponentServiceLaunch, RevocableVmBackend, ServiceAddressSpaceEraser, SignedArtifact,
-    TaskId, VerifiedExecutable, VirtualBlockConfigurationPage, VirtualBlockQueueLayout,
-    VirtualBlockResumePage, VirtualBlockVmmMemory, VmBackend, VmExit, PAGE_SIZE,
+    GpuSharedQueueLayout, GpuVmmMemory, MemoryResourceError, MicrovmPeerPageProjection, PAGE_SIZE,
+    PhysAddr, PreparedComponentServiceLaunch, RevocableVmBackend, ServiceAddressSpaceEraser,
+    SignedArtifact, TaskId, VerifiedExecutable, VirtualBlockConfigurationPage,
+    VirtualBlockQueueLayout, VirtualBlockResumePage, VirtualBlockVmmMemory, VmBackend, VmExit,
 };
 
 use super::{
-    map_loaded_handoff, map_loaded_pe, KvmBackend, KvmError, KvmPageTableStore, KvmPeerHostPage,
-    KvmSystem, KvmVcpuSnapshot,
+    KvmBackend, KvmError, KvmPageTableStore, KvmPeerHostPage, KvmSystem, KvmVcpuSnapshot,
+    map_loaded_handoff, map_loaded_pe,
 };
 
 const XAPIC_BASE: u64 = 0xfee0_0000;
@@ -2459,21 +2459,21 @@ fn validate_ranges(ranges: &[(u64, u64)]) -> Result<(), KvmError> {
 mod tests {
     use super::*;
     use mrml_crypto::{
-        lamport_public_key, lamport_sign, Sha3_512, LAMPORT_PRIVATE_KEY_BYTES,
-        LAMPORT_PUBLIC_KEY_BYTES, LAMPORT_SIGNATURE_BYTES,
+        LAMPORT_PRIVATE_KEY_BYTES, LAMPORT_PUBLIC_KEY_BYTES, LAMPORT_SIGNATURE_BYTES, Sha3_512,
+        lamport_public_key, lamport_sign,
     };
     use mrml_kernel::{
-        artifact_statement, release_microvm_peer_page_projection,
-        reserve_microvm_peer_page_projection, run_virtual_block_completion_ack_once,
-        run_virtual_block_doorbell_once, ArtifactKind, CapabilitySpace, GuestMemory,
-        HypercallRouter, InterruptPolicy, IoDirection, IoPortPolicy, IoPortRule, MemoryPoolTable,
-        ObjectId, Rights, SignedArtifact, TrustRoot, VirtualBlockBackend, VirtualBlockCompletion,
-        VirtualBlockCompletionStatus, VirtualBlockConfiguration, VirtualBlockDevice,
-        VirtualBlockMutationError, VirtualBlockProcessOutcome, VirtualBlockQueueBridge,
-        VirtualBlockRequest, VmTable, SIGNED_ARTIFACT_HEADER_BYTES, SIGNED_ARTIFACT_OVERHEAD_BYTES,
+        ArtifactKind, CapabilitySpace, GuestMemory, HypercallRouter, InterruptPolicy, IoDirection,
+        IoPortPolicy, IoPortRule, MemoryPoolTable, ObjectId, Rights, SIGNED_ARTIFACT_HEADER_BYTES,
+        SIGNED_ARTIFACT_OVERHEAD_BYTES, SignedArtifact, TrustRoot,
         VIRTUAL_BLOCK_COMPLETION_ACK_PORT, VIRTUAL_BLOCK_COMPLETION_BYTES,
         VIRTUAL_BLOCK_CONFIGURATION_BYTES, VIRTUAL_BLOCK_DOORBELL_PORT,
-        VIRTUAL_BLOCK_RESUME_STATE_BYTES,
+        VIRTUAL_BLOCK_RESUME_STATE_BYTES, VirtualBlockBackend, VirtualBlockCompletion,
+        VirtualBlockCompletionStatus, VirtualBlockConfiguration, VirtualBlockDevice,
+        VirtualBlockMutationError, VirtualBlockProcessOutcome, VirtualBlockQueueBridge,
+        VirtualBlockRequest, VmTable, artifact_statement, release_microvm_peer_page_projection,
+        reserve_microvm_peer_page_projection, run_virtual_block_completion_ack_once,
+        run_virtual_block_doorbell_once,
     };
 
     fn block_configuration(layout: VirtualBlockQueueLayout) -> VirtualBlockConfiguration {
@@ -2850,19 +2850,21 @@ mod tests {
             validate_ranges(&[(0x1000, 0x2000), (0x2000, 0x1000)]),
             Err(KvmError::MemoryOverlap)
         );
-        assert!(KvmLaunchLayout::new(
-            0x1000,
-            8,
-            0x10000,
-            0x140000000,
-            0x20000,
-            0x200000,
-            0x30000,
-            0x300000,
-            PRIVILEGE_STACK_ARENA_PAGES,
-            true
-        )
-        .is_ok());
+        assert!(
+            KvmLaunchLayout::new(
+                0x1000,
+                8,
+                0x10000,
+                0x140000000,
+                0x20000,
+                0x200000,
+                0x30000,
+                0x300000,
+                PRIVILEGE_STACK_ARENA_PAGES,
+                true
+            )
+            .is_ok()
+        );
     }
 
     #[test]
