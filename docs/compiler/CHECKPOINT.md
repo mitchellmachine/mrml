@@ -9,8 +9,8 @@ the named commit and current source.
 ## Recoverable baseline
 
 - Branch: `main`
-- Compiler checkpoint commit: `3bfb0d8e`
-  (`compiler: resolve ELF absolute text symbols`)
+- Compiler checkpoint commit: `c7ee96a5`
+  (`compiler: resolve ELF global readonly symbols`)
 - Remote state when recorded: `origin/main` includes the bounded MRML-owned
   static-link core, exact MRML COFF and ELF64 ingestion, deterministic
   import-free PE32+/ELF64 executable serialization, explicit compiler-driver
@@ -60,6 +60,24 @@ against all prior accepted probes. Keep Cargo on edition 2024 until a newer
 named edition can be adopted through a pinned, workspace-wide migration.
 
 ## Latest bounded linker milestone
+
+Commit `c7ee96a5` makes global definitions explicitly typed as text or
+read-only-data locations. ELF decoding can therefore admit an object with empty
+text and a primary global `.rodata.*` definition, validate all definition
+offsets against the correct extent, select a data-only archive member through
+the existing non-text dependency path, and resolve named PC-relative or
+absolute references through the frozen text/read-only layout.
+
+Under exact ORACLE-0002 Arch WSL, an independently authored consumer stored a
+pointer to external `VALUE`; its later archive provider contained empty `.text`
+and one 8-byte global `.rodata.VALUE`. MRML selected it, emitted a 12,304-byte
+ELF with separate RX/R-NX/RW-NX storage, and exited 42. Windows and Linux each
+passed 716 compiler-core tests and four driver tests. A
+50-iteration/five-warmup identical-input measurement recorded MRML at 4.681 ms
+median versus pinned rust-lld with `--eh-frame-hdr` at 4.841 ms; rust-lld
+emitted 2,080 bytes. This is narrow hosted evidence, not a general speed or
+compatibility claim. Global writable/TLS definitions and weak/versioned or
+dynamic symbol semantics remain unsupported.
 
 Commit `3bfb0d8e` admits initialized-data `R_X86_64_64` targets that name a
 text definition in another object. The primary decoder represents undefined
