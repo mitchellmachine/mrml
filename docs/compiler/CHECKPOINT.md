@@ -9,8 +9,8 @@ the named commit and current source.
 ## Recoverable baseline
 
 - Branch: `main`
-- Compiler checkpoint commit: `3ad3116f`
-  (`compiler: link multiple COFF data fragments`)
+- Compiler checkpoint commit: `93519784`
+  (`compiler: resolve static COFF text fragments`)
 - Remote state when recorded: `origin/main` includes the bounded MRML-owned
   static-link core, exact MRML COFF and ELF64 ingestion, deterministic
   import-free PE32+/ELF64 executable serialization, explicit compiler-driver
@@ -60,6 +60,23 @@ against all prior accepted probes. Keep Cargo on edition 2024 until a newer
 named edition can be adopted through a pinned, workspace-wide migration.
 
 ## Latest bounded linker milestone
+
+Commit `93519784` distinguishes static COFF text targets from externally
+selectable symbols. A text fragment without an external offset-zero definition
+uses its validated `.text$...` section identity; REL32 references to static
+functions become `LocalSymbol` relocations. They resolve in the final selected
+layout but cannot trigger archive extraction, and duplicate identities fail
+closed. Runtime-function decoding uses the same section-identity fallback for
+static code with unwind metadata.
+
+The exact ORACLE-0002 1,536-byte object contains a static helper and external
+entry in separate text fragments, two adjacent read-only statics, two writable
+pointer fragments, and entry unwind metadata. The release driver emitted a
+2,048-byte PE that returned 42 on Windows. Windows passed 705 compiler-core
+tests and four driver tests. A 50-iteration/five-warmup same-input benchmark
+measured MRML at 9.590 ms median and pinned gnullvm rust-lld at 27.162 ms;
+both outputs were 2,048 bytes and returned 42. This is narrow hosted evidence,
+not representative-library or general superiority evidence.
 
 Commit `3ad3116f` generalizes the selected COFF data path from one read-only and
 one writable COMDAT to an indexed, bounded set. Adjacent `.rdata$...` payloads
