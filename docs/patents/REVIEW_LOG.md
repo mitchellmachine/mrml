@@ -9221,6 +9221,15 @@ increment introduces no new symbol-resolution algorithm, object or archive
 format, relocation mechanism, compression, cryptographic mechanism, or loader
 behavior. This technical screen is not legal advice or patent clearance.
 
+# 2026-08-28 — ELF x86-64 unsigned absolute-32 relocation
+
+Patent review: **NOT_TRIGGERED**. This increment decodes and applies the
+conventional `R_X86_64_32` relocation using the ABI-defined unsigned
+`S + A` calculation and rejects results that do not fit the four-byte field.
+It introduces no new relocation encoding or arithmetic, object format,
+compression, cryptographic mechanism, or loader behavior. This technical
+screen is not legal advice or patent clearance.
+
 # 2026-08-28 — Bounded deterministic static-link core
 
 Patent review: **NOT_TRIGGERED**. This increment uses conventional ordered
