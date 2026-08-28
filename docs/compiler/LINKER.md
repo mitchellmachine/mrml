@@ -259,6 +259,19 @@ ms mean. rust-lld's output was 1,024 bytes while MRML's was 1,536 bytes, so the
 measurement establishes executable agreement and a narrow timing observation,
 not byte identity or a general performance claim.
 
+The COFF parser's explicit section bound is now 256 rather than the earlier
+incidental 16. All per-section classification arrays use the same bound, while
+text fragments, total link inputs, definitions, relocations, runtime functions,
+and writable fragments retain their independent existing limits. A synthetic
+control rejects section count 257 before reading section headers. An exact
+ORACLE-0002 14,606-byte rlib with a 9,519-byte, 32-section object member, eight
+static framed helpers, nine text fragments, and nine runtime-function records
+linked to a 1,536-byte PE and returned 42. The same-input benchmark measured
+MRML at 9.807 ms median and 10.055 ms mean versus pinned rust-lld at 27.483 ms
+median and 27.500 ms mean over 50 iterations after five warmups. Output sizes
+were 1,536 and 1,024 bytes respectively; this remains a small hosted scaling
+probe, not representative-library or general superiority evidence.
+
 After this integration, the controlled 93-byte no-unwind object benchmark ran
 50 iterations after five warmups. MRML measured 10.081 ms median and 10.260 ms
 mean versus pinned gnullvm rust-lld at 27.632 ms median and 27.791 ms mean. Both

@@ -9424,3 +9424,11 @@ link-time removal and they contain no relocations. It introduces no bitcode
 interpretation, optimization, relocation, compression, cryptographic, or
 loading algorithm. This technical screen is not legal advice or patent
 clearance.
+
+# 2026-08-28 — Bounded 256-section COFF ingestion
+
+Patent review: **NOT_TRIGGERED**. This increment raises an incidental parser
+capacity while retaining fixed arrays, checked section traversal, and all
+independent linker bounds. It introduces no section-selection, relocation,
+optimization, compression, cryptographic, or loading algorithm. This technical
+screen is not legal advice or patent clearance.

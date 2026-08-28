@@ -9,6 +9,7 @@ pub const MAX_LINK_RELOCATIONS: usize = 256;
 pub const MAX_LINK_DEFINITIONS: usize = 256;
 pub const MAX_PE_RUNTIME_FUNCTIONS: usize = 256;
 pub const MAX_ARCHIVE_MEMBERS: usize = MAX_LINK_INPUTS;
+const MAX_COFF_SECTIONS: usize = 256;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum LinkerError {
@@ -516,7 +517,7 @@ pub fn x86_64_coff_text_fragment_count(object: &[u8]) -> Result<usize, LinkerErr
         return Err(LinkerError::UnsupportedCoff);
     }
     let section_count = usize::from(read_u16(object, 2)?);
-    if section_count == 0 || section_count > 16 {
+    if section_count == 0 || section_count > MAX_COFF_SECTIONS {
         return Err(LinkerError::UnsupportedCoff);
     }
     let mut fragments = 0usize;
@@ -574,7 +575,7 @@ pub fn x86_64_coff_unwind_section_count(object: &[u8]) -> Result<usize, LinkerEr
         return Err(LinkerError::UnsupportedCoff);
     }
     let section_count = usize::from(read_u16(object, 2)?);
-    if section_count == 0 || section_count > 16 {
+    if section_count == 0 || section_count > MAX_COFF_SECTIONS {
         return Err(LinkerError::UnsupportedCoff);
     }
     let symbol_offset =
@@ -626,7 +627,7 @@ pub fn x86_64_coff_writable_section_count(object: &[u8]) -> Result<usize, Linker
         return Err(LinkerError::UnsupportedCoff);
     }
     let section_count = usize::from(read_u16(object, 2)?);
-    if section_count == 0 || section_count > 16 {
+    if section_count == 0 || section_count > MAX_COFF_SECTIONS {
         return Err(LinkerError::UnsupportedCoff);
     }
     let symbol_offset =
@@ -697,7 +698,7 @@ pub fn decode_x86_64_coff_writable_data_fragment<'data, 'relocations>(
         return Err(LinkerError::UnsupportedCoff);
     }
     let section_count = usize::from(read_u16(object, 2)?);
-    if section_count == 0 || section_count > 16 {
+    if section_count == 0 || section_count > MAX_COFF_SECTIONS {
         return Err(LinkerError::UnsupportedCoff);
     }
     let symbol_offset =
@@ -728,7 +729,7 @@ pub fn decode_x86_64_coff_writable_data_fragment<'data, 'relocations>(
         )
         .ok_or(LinkerError::InvalidCoff)?;
 
-    let mut readonly_sections = [false; 17];
+    let mut readonly_sections = [false; MAX_COFF_SECTIONS + 1];
     let mut readonly_span = None;
     let mut writable = None;
     let mut writable_ordinal = 0usize;
@@ -860,7 +861,7 @@ pub fn decode_x86_64_coff_runtime_functions<'data, 'records>(
         return Err(LinkerError::UnsupportedCoff);
     }
     let section_count = usize::from(read_u16(object, 2)?);
-    if section_count == 0 || section_count > 16 {
+    if section_count == 0 || section_count > MAX_COFF_SECTIONS {
         return Err(LinkerError::UnsupportedCoff);
     }
     let symbol_offset =
@@ -1096,7 +1097,7 @@ pub fn decode_x86_64_coff_text_fragment<'data, 'relocations, 'definitions>(
         return Err(LinkerError::UnsupportedCoff);
     }
     let section_count = usize::from(read_u16(object, 2)?);
-    if section_count == 0 || section_count > 16 {
+    if section_count == 0 || section_count > MAX_COFF_SECTIONS {
         return Err(LinkerError::UnsupportedCoff);
     }
     let symbol_offset =
@@ -1129,13 +1130,13 @@ pub fn decode_x86_64_coff_text_fragment<'data, 'relocations, 'definitions>(
     let mut text_section = None;
     let mut text_section_name = None;
     let mut readonly_data = &object[0..0];
-    let mut readonly_sections = [false; 17];
+    let mut readonly_sections = [false; MAX_COFF_SECTIONS + 1];
     let mut readonly_span = None;
-    let mut ignored_empty_sections = [false; 17];
-    let mut other_text_sections = [false; 17];
-    let mut unwind_sections = [false; 17];
-    let mut writable_sections = [false; 17];
-    let mut metadata_sections = [false; 17];
+    let mut ignored_empty_sections = [false; MAX_COFF_SECTIONS + 1];
+    let mut other_text_sections = [false; MAX_COFF_SECTIONS + 1];
+    let mut unwind_sections = [false; MAX_COFF_SECTIONS + 1];
+    let mut writable_sections = [false; MAX_COFF_SECTIONS + 1];
+    let mut metadata_sections = [false; MAX_COFF_SECTIONS + 1];
     let mut relocation_table = (0usize, 0usize);
     let mut text_ordinal = 0usize;
     for section in 0..section_count {
@@ -3203,6 +3204,15 @@ mod tests {
         let mut machine_storage = empty_storage;
         assert_eq!(
             decode_x86_64_coff(&wrong_machine[..object.len()], &mut machine_storage),
+            Err(LinkerError::UnsupportedCoff)
+        );
+
+        let mut excessive_sections = [0u8; 256];
+        excessive_sections[..object.len()].copy_from_slice(object.bytes());
+        excessive_sections[2..4].copy_from_slice(&257u16.to_le_bytes());
+        let mut excessive_storage = empty_storage;
+        assert_eq!(
+            decode_x86_64_coff(&excessive_sections[..object.len()], &mut excessive_storage),
             Err(LinkerError::UnsupportedCoff)
         );
 
