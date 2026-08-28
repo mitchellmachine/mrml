@@ -1081,6 +1081,17 @@ repeated-subslice selections without modifying the input on Windows gnullvm and
 Arch Linux WSL. This is a fixed straight-line chain, not arbitrary alias graphs,
 reassignment, or general region inference.
 
+A mutable slice local may now be reassigned between two repeated subslices of
+the same mutable parameter before attenuation to a shared return. The bounded
+generation update changes the selected projection while retaining that one
+parameter origin; caller conflict and last-read restoration remain enforced. A
+straight-line cross-parameter replacement transfers the exact final origin,
+while a conditional replacement that can retain either parameter is explicitly
+unclassified. Native probes cover three dynamic initial/replacement/index
+combinations without modifying the input on Windows gnullvm and Arch Linux WSL.
+This is bounded straight-line replacement, not arbitrary alias dataflow,
+path-sensitive projection identity, or general region inference.
+
 That mutability attenuation composes with the existing exact two-arm same-origin
 conditional merge. A helper may return either of two shared repeated subslices
 of one mutable slice parameter; caller analysis retains one shared root loan,

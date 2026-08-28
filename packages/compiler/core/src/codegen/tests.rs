@@ -463,6 +463,24 @@ mod tests {
                         ),
                     })
                 }
+                ("shared_slice_reassigned_repeated_subslice", 1) => {
+                    parameters[0] = Some(RuntimeCallParameter {
+                        name: "values",
+                        ty: slice_reference,
+                    });
+                    Some(RuntimeCallTarget {
+                        name: "shared_slice_reassigned_repeated_subslice",
+                        parameters,
+                        parameter_count: 1,
+                        return_type: shared_slice_reference,
+                        return_type_name: "&[u16]",
+                        body_expression: concat!(
+                            "let mut selected: &mut [u16] = &mut values[0..][1..]; ",
+                            "selected = &mut values[1..][1..]; ",
+                            "let shared: &[u16] = selected; shared"
+                        ),
+                    })
+                }
                 ("identity", 1) => {
                     parameters[0] = Some(RuntimeCallParameter {
                         name: "value",
@@ -6103,6 +6121,12 @@ mod tests {
                 "let competing: &mut u16 = &mut input[1]; ",
                 "*competing += 1; returned[0] }"
             ),
+            concat!(
+                "fn value(input: &mut [u16]) -> u16 { ",
+                "let returned: &[u16] = shared_slice_reassigned_repeated_subslice(input); ",
+                "let competing: &mut u16 = &mut input[1]; ",
+                "*competing += 1; returned[0] }"
+            ),
         ] {
             assert_eq!(
                 analyze(rejected).unwrap_err().kind,
@@ -6188,6 +6212,12 @@ mod tests {
             concat!(
                 "fn value(input: &mut [u16]) -> u16 { ",
                 "let returned: &[u16] = shared_slice_repeated_subslice_alias_chain(input); ",
+                "let value = returned[0]; ",
+                "let restored: &mut u16 = &mut input[1]; *restored += value; *restored }"
+            ),
+            concat!(
+                "fn value(input: &mut [u16]) -> u16 { ",
+                "let returned: &[u16] = shared_slice_reassigned_repeated_subslice(input); ",
                 "let value = returned[0]; ",
                 "let restored: &mut u16 = &mut input[1]; *restored += value; *restored }"
             ),
@@ -6359,6 +6389,9 @@ mod tests {
         let shared_slice_repeated_subslice_alias_chain = MutableReferenceCallResolver
             .resolve_runtime_call::<4>("shared_slice_repeated_subslice_alias_chain", 1)
             .unwrap();
+        let shared_slice_reassigned_repeated_subslice = MutableReferenceCallResolver
+            .resolve_runtime_call::<4>("shared_slice_reassigned_repeated_subslice", 1)
+            .unwrap();
         assert_eq!(
             runtime_reference_call_origin_parameter::<2, 16>(array_element_alias),
             Some(0)
@@ -6447,6 +6480,49 @@ mod tests {
                 shared_slice_repeated_subslice_alias_chain
             ),
             Some(0)
+        );
+        assert_eq!(
+            runtime_reference_call_origin_parameter::<4, 32>(
+                shared_slice_reassigned_repeated_subslice
+            ),
+            Some(0)
+        );
+        let mut cross_origin_parameters = shared_slice_reassigned_repeated_subslice.parameters;
+        cross_origin_parameters[1] = Some(RuntimeCallParameter {
+            name: "alternate",
+            ty: shared_slice_reassigned_repeated_subslice.parameters[0]
+                .unwrap()
+                .ty,
+        });
+        assert_eq!(
+            runtime_reference_call_origin_parameter::<4, 32>(RuntimeCallTarget {
+                parameters: cross_origin_parameters,
+                parameter_count: 2,
+                body_expression: concat!(
+                    "let mut selected: &mut [u16] = &mut values[0..][1..]; ",
+                    "selected = &mut alternate[1..][1..]; ",
+                    "let shared: &[u16] = selected; shared"
+                ),
+                ..shared_slice_reassigned_repeated_subslice
+            }),
+            Some(1)
+        );
+        cross_origin_parameters[2] = Some(RuntimeCallParameter {
+            name: "choose_alternate",
+            ty: ScalarType::Bool,
+        });
+        assert_eq!(
+            runtime_reference_call_origin_parameter::<4, 40>(RuntimeCallTarget {
+                parameters: cross_origin_parameters,
+                parameter_count: 3,
+                body_expression: concat!(
+                    "let mut selected: &mut [u16] = &mut values[0..][1..]; ",
+                    "if choose_alternate { selected = &mut alternate[1..][1..]; } ",
+                    "let shared: &[u16] = selected; shared"
+                ),
+                ..shared_slice_reassigned_repeated_subslice
+            }),
+            None
         );
         let mutable_slice_reference = shared_slice_repeated_subslice_alias.parameters[0]
             .unwrap()
