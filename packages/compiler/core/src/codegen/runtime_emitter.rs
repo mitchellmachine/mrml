@@ -8161,6 +8161,63 @@ impl<
         }
         if let ExprKind::UncheckedIntegerOperation {
             base,
+            argument: Some(distance),
+            second_argument: None,
+            operator:
+                operator @ (crate::BinaryOperator::ShiftLeft
+                | crate::BinaryOperator::ShiftRight),
+            unary: false,
+            disjoint: false,
+            funnel: false,
+        } = expression.kind
+        {
+            let base_type = runtime_expression_type_with_locals(
+                self.function,
+                self.resolver,
+                &self.locals[..self.saved_locals],
+                tree,
+                base,
+                1,
+            )
+            .map_err(|kind| self.error(kind))?;
+            let distance_type = runtime_expression_type_with_locals(
+                self.function,
+                self.resolver,
+                &self.locals[..self.saved_locals],
+                tree,
+                distance,
+                1,
+            )
+            .map_err(|kind| self.error(kind))?;
+            if base_type != expected_type
+                || !matches!(distance_type, RuntimeExpressionType::Integer(None))
+                    && distance_type
+                        != RuntimeExpressionType::Integer(Some(crate::IntegerType::U32))
+            {
+                return Err(self.error(CodegenErrorKind::RuntimeTypeMismatch));
+            }
+            self.emit_wide_integer_return(tree, base, expected_type)?;
+            self.emit(&[0x50, 0x52])?;
+            self.evaluation_depth += 2;
+            let previous_width = self.width;
+            self.width = runtime_width("u32")
+                .ok_or(self.error(CodegenErrorKind::UnsupportedRuntimeType))?;
+            self.emit_expression(tree, distance, 1)?;
+            self.width = previous_width;
+            self.emit(&[0x48, 0x89, 0xc1, 0x5a, 0x58])?;
+            self.evaluation_depth -= 2;
+            let overflow_checks = self.overflow_checks;
+            self.overflow_checks = false;
+            let result = self.emit_wide_shift(
+                layout,
+                operator == crate::BinaryOperator::ShiftLeft,
+            );
+            self.overflow_checks = overflow_checks;
+            result?;
+            return Ok(());
+        }
+        if let ExprKind::UncheckedIntegerOperation {
+            base,
             argument: None,
             second_argument: None,
             operator: crate::BinaryOperator::Subtract,

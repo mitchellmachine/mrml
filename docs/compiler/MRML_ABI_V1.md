@@ -334,6 +334,10 @@ Rust undefined behavior and is never presented as a safe MRML-v1 contract.
 Unsafe wide signed `unchecked_neg` performs a two-word two's-complement negate
 without an overflow branch. Oracle execution excludes `i128::MIN`, whose use
 violates the Rust precondition; semantic admission still requires unsafe scope.
+Unsafe wide `unchecked_shl` and `unchecked_shr` reuse the two-word logical or
+signed-arithmetic shift lowering without a distance trap. Oracle execution uses
+only distances below 128, including 63/64/127 word boundaries; larger distances
+violate Rust's unchecked-shift precondition and are outside the safe contract.
 Lazy `if` expressions may select compatible two-word integer values without
 evaluating the unselected branch; both branches retain the declared wide type.
 Block sequences may evaluate supported one-word prefix expressions before a
