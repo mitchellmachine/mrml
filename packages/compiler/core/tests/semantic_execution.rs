@@ -105,6 +105,10 @@ const MRML_V1_WIDE_UNSIGNED_ISOLATE_HIGHEST_SOURCE: &str =
     "#[mrml_abi::export(version = 1)] pub fn probe(input: u128) -> u128 { input.isolate_highest_one() }";
 const MRML_V1_WIDE_SIGNED_ISOLATE_LOWEST_SOURCE: &str =
     "#[mrml_abi::export(version = 1)] pub fn probe(input: i128) -> i128 { input.isolate_lowest_one() }";
+const MRML_V1_WIDE_UNSIGNED_COUNT_ONES_SOURCE: &str =
+    "#[mrml_abi::export(version = 1)] pub fn probe(input: u128) -> u32 { input.count_ones() }";
+const MRML_V1_WIDE_SIGNED_COUNT_ZEROS_SOURCE: &str =
+    "#[mrml_abi::export(version = 1)] pub fn probe(input: i128) -> u32 { input.count_zeros() }";
 const MRML_V1_WIDE_SIGNED_WRAPPING_DIVIDE_SOURCE: &str =
     "#[mrml_abi::export(version = 1)] pub fn probe(input: i128) -> i128 { input.wrapping_div(-1) }";
 const MRML_V1_WIDE_SIGNED_WRAPPING_REMAINDER_SOURCE: &str =
@@ -1421,6 +1425,33 @@ fn mrml_v1_wide_bit_isolation_matches_both_oracle_words() {
             "for input in [0u128, 1, 0x0123_4567_89ab_cdef_fedc_ba98_7654_3210u128, 1u128 << 127, u128::MAX] { let returned = probe(input as i128); println!(\"{}\", returned as u64); println!(\"{}\", ((returned as u128) >> 64) as u64); }"
         } else {
             "for input in [0u128, 1, 0x0123_4567_89ab_cdef_fedc_ba98_7654_3210u128, 1u128 << 127, u128::MAX] { let returned = probe(input); println!(\"{}\", returned as u64); println!(\"{}\", (returned >> 64) as u64); }"
+        };
+        assert_eq!(actual, rustc_mrml_v1_observations(source, driver));
+    }
+}
+
+#[test]
+fn mrml_v1_wide_population_counts_match_the_oracle() {
+    let inputs = [
+        0u128,
+        1,
+        0x0123_4567_89ab_cdef_fedc_ba98_7654_3210u128,
+        1u128 << 127,
+        u128::MAX,
+    ];
+    for (source, signed) in [
+        (MRML_V1_WIDE_UNSIGNED_COUNT_ONES_SOURCE, false),
+        (MRML_V1_WIDE_SIGNED_COUNT_ZEROS_SOURCE, true),
+    ] {
+        let code = compile(source);
+        let actual = inputs
+            .into_iter()
+            .map(|input| unsafe { call_mrml_v1_wide_return(code.pointer, input) as u64 })
+            .collect::<Vec<_>>();
+        let driver = if signed {
+            "for input in [0u128, 1, 0x0123_4567_89ab_cdef_fedc_ba98_7654_3210u128, 1u128 << 127, u128::MAX] { println!(\"{}\", probe(input as i128)); }"
+        } else {
+            "for input in [0u128, 1, 0x0123_4567_89ab_cdef_fedc_ba98_7654_3210u128, 1u128 << 127, u128::MAX] { println!(\"{}\", probe(input)); }"
         };
         assert_eq!(actual, rustc_mrml_v1_observations(source, driver));
     }

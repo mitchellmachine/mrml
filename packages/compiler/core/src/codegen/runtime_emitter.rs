@@ -5137,12 +5137,36 @@ impl<
                     depth + 1,
                 )
                 .map_err(|kind| self.error(kind))?;
-                let operand_width = runtime_expression_width(base_type)
-                    .ok_or(self.error(CodegenErrorKind::UnsupportedRuntimeType))?;
                 let previous_width = self.width;
-                self.width = operand_width;
-                self.emit_expression(tree, base, depth + 1)?;
-                match count {
+                if matches!(
+                    base_type,
+                    RuntimeExpressionType::Integer(Some(
+                        crate::IntegerType::U128 | crate::IntegerType::I128
+                    ))
+                ) {
+                    if !matches!(count, IntegerBitCount::Ones | IntegerBitCount::Zeros) {
+                        return Err(self.error(CodegenErrorKind::RuntimeExpressionUnsupported));
+                    }
+                    self.emit_wide_integer_return(tree, base, base_type)?;
+                    self.emit(&[0x31, 0xc9, 0x41, 0xb8, 64, 0, 0, 0])?;
+                    let loop_start = self.length;
+                    self.emit(&[
+                        0x48, 0xd1, 0xe8, 0x83, 0xd1, 0, 0x48, 0xd1, 0xea, 0x83, 0xd1, 0,
+                        0x41, 0xff, 0xc8,
+                    ])?;
+                    let done = self.emit_forward_branch(0x84)?;
+                    self.emit_backward_branch(loop_start)?;
+                    self.patch_forward_branch(done)?;
+                    self.emit(&[0x89, 0xc8])?;
+                    if count == IntegerBitCount::Zeros {
+                        self.emit(&[0xb9, 128, 0, 0, 0, 0x29, 0xc1, 0x89, 0xc8])?;
+                    }
+                } else {
+                    let operand_width = runtime_expression_width(base_type)
+                        .ok_or(self.error(CodegenErrorKind::UnsupportedRuntimeType))?;
+                    self.width = operand_width;
+                    self.emit_expression(tree, base, depth + 1)?;
+                    match count {
                     IntegerBitCount::Width => {
                         self.emit(&[0x48, 0x85, 0xc0])?;
                         let zero = self.emit_forward_branch(0x84)?;
@@ -5201,6 +5225,7 @@ impl<
                         self.emit(&[0xb8])?;
                         self.emit(&u32::from(operand_width.bits).to_le_bytes())?;
                         self.patch_forward_branch(end)?;
+                    }
                     }
                 }
                 self.width = previous_width;

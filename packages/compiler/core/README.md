@@ -2219,7 +2219,8 @@ The `count_ones`, `count_zeros`, `leading_zeros`, `trailing_zeros`,
 evaluate each signed or unsigned receiver in its own width and return `u32`, as
 Rust requires. Six native objects matched pinned Rust for zero, all-ones,
 sign-bit, and sparse-bit cases, including the full-width zero results and
-signed narrow representation masks.
+signed narrow representation masks. Runtime `count_ones` and `count_zeros`
+also cover 128-bit receivers through the MRML-v1 two-word lowering.
 Stable unsigned `bit_width` and signed or unsigned `isolate_highest_one` and
 `isolate_lowest_one` work in constants from 8 through 64 bits and in runtime
 functions through 128 bits. Zero remains zero for both isolation methods and has width zero; other
