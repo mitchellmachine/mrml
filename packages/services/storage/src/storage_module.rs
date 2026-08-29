@@ -23,6 +23,8 @@ impl StorageModuleClass {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct StorageModuleBinding {
     pub class: StorageModuleClass,
+    /// Stable identity of this independently replaceable provider slot.
+    pub module_object: ObjectId,
     pub interface_object: ObjectId,
     pub provider_object: ObjectId,
     pub endpoint_object: ObjectId,
@@ -76,18 +78,30 @@ impl<const N: usize> StorageModuleRegistry<N> {
         Self { slots: [None; N] }
     }
 
-    pub fn state(&self, class: StorageModuleClass) -> Option<StorageModuleState> {
+    pub fn state(&self, module_object: ObjectId) -> Option<StorageModuleState> {
         self.slots
             .iter()
             .flatten()
             .copied()
-            .find(|state| state.class() == class)
+            .find(|state| state.module_object() == module_object)
+    }
+
+    pub fn states_for_class(
+        &self,
+        class: StorageModuleClass,
+    ) -> impl Iterator<Item = StorageModuleState> + '_ {
+        self.slots
+            .iter()
+            .flatten()
+            .copied()
+            .filter(move |state| state.class() == class)
     }
 
     #[allow(clippy::too_many_arguments)]
     pub fn bind_initial<const C: usize>(
         &mut self,
         capabilities: &CapabilitySpace<C>,
+        module_capability: Capability,
         interface_capability: Capability,
         provider_capability: Capability,
         endpoint_capability: Capability,
@@ -95,13 +109,14 @@ impl<const N: usize> StorageModuleRegistry<N> {
     ) -> Result<(), StorageModuleError> {
         authorize_binding(
             capabilities,
+            module_capability,
             interface_capability,
             provider_capability,
             endpoint_capability,
             binding,
         )?;
         validate_binding(binding)?;
-        if self.state(binding.class).is_some() {
+        if self.state(binding.module_object).is_some() {
             return Err(StorageModuleError::AlreadyBound);
         }
         let slot = self
@@ -117,6 +132,7 @@ impl<const N: usize> StorageModuleRegistry<N> {
     pub fn replace<const C: usize, B: StorageModuleBackend>(
         &mut self,
         capabilities: &CapabilitySpace<C>,
+        module_capability: Capability,
         interface_capability: Capability,
         provider_capability: Capability,
         endpoint_capability: Capability,
@@ -126,6 +142,7 @@ impl<const N: usize> StorageModuleRegistry<N> {
     ) -> Result<StorageModuleBinding, StorageModuleError> {
         authorize_binding(
             capabilities,
+            module_capability,
             interface_capability,
             provider_capability,
             endpoint_capability,
@@ -133,7 +150,7 @@ impl<const N: usize> StorageModuleRegistry<N> {
         )?;
         validate_binding(candidate)?;
         let index = self
-            .index(candidate.class)
+            .index(candidate.module_object)
             .ok_or(StorageModuleError::Missing)?;
         let old = match self.slots[index] {
             Some(StorageModuleState::Active(old)) => old,
@@ -146,6 +163,9 @@ impl<const N: usize> StorageModuleRegistry<N> {
                     .checked_add(1)
                     .ok_or(StorageModuleError::InvalidBinding)?
             || candidate.system_generation < old.system_generation
+            || candidate.class != old.class
+            || candidate.module_object != old.module_object
+            || candidate.interface_object != old.interface_object
             || (candidate.provider_object == old.provider_object
                 && candidate.provider_generation == old.provider_generation)
         {
@@ -166,10 +186,12 @@ impl<const N: usize> StorageModuleRegistry<N> {
 
     pub fn retry_unavailable<B: StorageModuleBackend>(
         &mut self,
-        class: StorageModuleClass,
+        module_object: ObjectId,
         backend: &mut B,
     ) -> Result<StorageModuleBinding, StorageModuleError> {
-        let index = self.index(class).ok_or(StorageModuleError::Missing)?;
+        let index = self
+            .index(module_object)
+            .ok_or(StorageModuleError::Missing)?;
         let candidate = match self.slots[index] {
             Some(StorageModuleState::Unavailable(candidate)) => candidate,
             _ => return Err(StorageModuleError::NotActive),
@@ -181,10 +203,10 @@ impl<const N: usize> StorageModuleRegistry<N> {
         Ok(candidate)
     }
 
-    fn index(&self, class: StorageModuleClass) -> Option<usize> {
+    fn index(&self, module_object: ObjectId) -> Option<usize> {
         self.slots
             .iter()
-            .position(|slot| slot.is_some_and(|state| state.class() == class))
+            .position(|slot| slot.is_some_and(|state| state.module_object() == module_object))
     }
 }
 
@@ -195,6 +217,15 @@ impl<const N: usize> Default for StorageModuleRegistry<N> {
 }
 
 impl StorageModuleState {
+    const fn module_object(self) -> ObjectId {
+        match self {
+            Self::Active(binding) | Self::Quarantined(binding) | Self::Unavailable(binding) => {
+                binding.module_object
+            }
+            Self::Replacing { old, .. } => old.module_object,
+        }
+    }
+
     const fn class(self) -> StorageModuleClass {
         match self {
             Self::Active(binding) | Self::Quarantined(binding) | Self::Unavailable(binding) => {
@@ -206,9 +237,13 @@ impl StorageModuleState {
 }
 
 fn validate_binding(binding: StorageModuleBinding) -> Result<(), StorageModuleError> {
-    if binding.interface_object.0 == 0
+    if binding.module_object.0 == 0
+        || binding.interface_object.0 == 0
         || binding.provider_object.0 == 0
         || binding.endpoint_object.0 == 0
+        || binding.module_object == binding.interface_object
+        || binding.module_object == binding.provider_object
+        || binding.module_object == binding.endpoint_object
         || binding.interface_object == binding.provider_object
         || binding.interface_object == binding.endpoint_object
         || binding.provider_object == binding.endpoint_object
@@ -224,12 +259,14 @@ fn validate_binding(binding: StorageModuleBinding) -> Result<(), StorageModuleEr
 
 fn authorize_binding<const C: usize>(
     capabilities: &CapabilitySpace<C>,
+    module_capability: Capability,
     interface_capability: Capability,
     provider_capability: Capability,
     endpoint_capability: Capability,
     binding: StorageModuleBinding,
 ) -> Result<(), StorageModuleError> {
     for (capability, rights, expected) in [
+        (module_capability, Rights::CONTROL, binding.module_object),
         (
             interface_capability,
             Rights::INSPECT,
@@ -270,11 +307,19 @@ mod tests {
     impl StorageModuleBackend for Backend {
         fn revoke_cleanup_and_erase(&mut self, _: StorageModuleBinding) -> Result<(), ()> {
             self.calls[0] += 1;
-            if self.cleanup { Ok(()) } else { Err(()) }
+            if self.cleanup {
+                Ok(())
+            } else {
+                Err(())
+            }
         }
         fn launch_and_healthcheck(&mut self, _: StorageModuleBinding) -> Result<(), ()> {
             self.calls[1] += 1;
-            if self.launch { Ok(()) } else { Err(()) }
+            if self.launch {
+                Ok(())
+            } else {
+                Err(())
+            }
         }
     }
 
@@ -284,8 +329,25 @@ mod tests {
         system_generation: u64,
         binding_generation: u64,
     ) -> StorageModuleBinding {
+        binding_in(
+            11,
+            provider,
+            provider_generation,
+            system_generation,
+            binding_generation,
+        )
+    }
+
+    fn binding_in(
+        module: u64,
+        provider: u64,
+        provider_generation: u64,
+        system_generation: u64,
+        binding_generation: u64,
+    ) -> StorageModuleBinding {
         StorageModuleBinding {
             class: StorageModuleClass::BlockProvider,
+            module_object: ObjectId(module),
             interface_object: ObjectId(10),
             provider_object: ObjectId(provider),
             endpoint_object: ObjectId(provider + 1),
@@ -296,9 +358,76 @@ mod tests {
         }
     }
 
-    fn capabilities(binding: StorageModuleBinding) -> (CapabilitySpace<3>, [Capability; 3]) {
+    #[test]
+    fn multiple_block_provider_slots_coexist_and_replace_independently() {
+        let ahci = binding_in(11, 20, 3, 7, 1);
+        let nvme = binding_in(12, 30, 5, 7, 1);
+        let nvme_next = binding_in(12, 40, 6, 8, 2);
+        let (ahci_caps, ahci_handles) = capabilities(ahci);
+        let (nvme_caps, nvme_handles) = capabilities(nvme);
+        let (next_caps, next_handles) = capabilities(nvme_next);
+        let mut registry = StorageModuleRegistry::<3>::new();
+        registry
+            .bind_initial(
+                &ahci_caps,
+                ahci_handles[0],
+                ahci_handles[1],
+                ahci_handles[2],
+                ahci_handles[3],
+                ahci,
+            )
+            .unwrap();
+        registry
+            .bind_initial(
+                &nvme_caps,
+                nvme_handles[0],
+                nvme_handles[1],
+                nvme_handles[2],
+                nvme_handles[3],
+                nvme,
+            )
+            .unwrap();
+        assert_eq!(
+            registry
+                .states_for_class(StorageModuleClass::BlockProvider)
+                .count(),
+            2
+        );
+
+        let mut backend = Backend {
+            cleanup: true,
+            launch: true,
+            calls: [0; 2],
+        };
+        registry
+            .replace(
+                &next_caps,
+                next_handles[0],
+                next_handles[1],
+                next_handles[2],
+                next_handles[3],
+                nvme.binding_generation,
+                nvme_next,
+                &mut backend,
+            )
+            .unwrap();
+        assert_eq!(
+            registry.state(ahci.module_object),
+            Some(StorageModuleState::Active(ahci))
+        );
+        assert_eq!(
+            registry.state(nvme.module_object),
+            Some(StorageModuleState::Active(nvme_next))
+        );
+        assert_eq!(backend.calls, [1, 1]);
+    }
+
+    fn capabilities(binding: StorageModuleBinding) -> (CapabilitySpace<4>, [Capability; 4]) {
         let mut capabilities = CapabilitySpace::new();
         let handles = [
+            capabilities
+                .insert(binding.module_object, Rights::CONTROL)
+                .unwrap(),
             capabilities
                 .insert(binding.interface_object, Rights::INSPECT)
                 .unwrap(),
@@ -320,6 +449,7 @@ mod tests {
     ) -> StorageModuleBinding {
         StorageModuleBinding {
             class: StorageModuleClass::Filesystem,
+            module_object: ObjectId(12),
             interface_object: ObjectId(10),
             provider_object: ObjectId(provider),
             endpoint_object: ObjectId(provider + 1),
@@ -435,6 +565,7 @@ mod tests {
                 old_handles[0],
                 old_handles[1],
                 old_handles[2],
+                old_handles[3],
                 old,
             )
             .unwrap();
@@ -450,6 +581,7 @@ mod tests {
                     new_handles[0],
                     new_handles[1],
                     new_handles[2],
+                    new_handles[3],
                     1,
                     candidate,
                     &mut backend
@@ -458,7 +590,7 @@ mod tests {
             candidate
         );
         assert_eq!(
-            registry.state(StorageModuleClass::BlockProvider),
+            registry.state(old.module_object),
             Some(StorageModuleState::Active(candidate))
         );
         assert_eq!(backend.calls, [1, 1]);
@@ -477,6 +609,7 @@ mod tests {
                 old_handles[0],
                 old_handles[1],
                 old_handles[2],
+                old_handles[3],
                 old,
             )
             .unwrap();
@@ -506,6 +639,7 @@ mod tests {
                 new_handles[0],
                 new_handles[1],
                 new_handles[2],
+                new_handles[3],
                 old.binding_generation,
                 candidate,
                 &mut backend,
@@ -529,7 +663,7 @@ mod tests {
             Ok(Ok(100))
         );
         assert_eq!(
-            registry.state(StorageModuleClass::Filesystem),
+            registry.state(old.module_object),
             Some(StorageModuleState::Active(candidate))
         );
     }
@@ -547,6 +681,7 @@ mod tests {
                 old_handles[0],
                 old_handles[1],
                 old_handles[2],
+                old_handles[3],
                 old,
             )
             .unwrap();
@@ -561,6 +696,7 @@ mod tests {
                 new_handles[0],
                 new_handles[1],
                 new_handles[2],
+                new_handles[3],
                 1,
                 candidate,
                 &mut backend
@@ -568,7 +704,7 @@ mod tests {
             Err(StorageModuleError::CleanupFailed)
         );
         assert_eq!(
-            registry.state(StorageModuleClass::BlockProvider),
+            registry.state(old.module_object),
             Some(StorageModuleState::Quarantined(old))
         );
         assert_eq!(backend.calls, [1, 0]);
@@ -587,6 +723,7 @@ mod tests {
                 old_handles[0],
                 old_handles[1],
                 old_handles[2],
+                old_handles[3],
                 old,
             )
             .unwrap();
@@ -601,6 +738,7 @@ mod tests {
                 new_handles[0],
                 new_handles[1],
                 new_handles[2],
+                new_handles[3],
                 1,
                 candidate,
                 &mut backend
@@ -608,12 +746,12 @@ mod tests {
             Err(StorageModuleError::LaunchFailed)
         );
         assert_eq!(
-            registry.state(StorageModuleClass::BlockProvider),
+            registry.state(old.module_object),
             Some(StorageModuleState::Unavailable(candidate))
         );
         backend.launch = true;
         assert_eq!(
-            registry.retry_unavailable(StorageModuleClass::BlockProvider, &mut backend),
+            registry.retry_unavailable(old.module_object, &mut backend),
             Ok(candidate)
         );
     }
@@ -631,6 +769,7 @@ mod tests {
                 old_handles[0],
                 old_handles[1],
                 old_handles[2],
+                old_handles[3],
                 old,
             )
             .unwrap();
@@ -645,6 +784,7 @@ mod tests {
                 new_handles[0],
                 new_handles[1],
                 new_handles[2],
+                new_handles[3],
                 1,
                 candidate,
                 &mut backend
@@ -657,6 +797,7 @@ mod tests {
                 new_handles[0],
                 new_handles[0],
                 new_handles[2],
+                new_handles[3],
                 1,
                 binding(30, 4, 8, 2),
                 &mut backend

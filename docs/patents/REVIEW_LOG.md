@@ -10256,6 +10256,17 @@ ports and PCI BAR decoding are longstanding interface facts and are expressed
 independently here. This technical screen is not legal advice or patent
 clearance.
 
+# 2026-08-29 — Multiple independently restartable storage-provider slots
+
+Patent review: **NOT_TRIGGERED**. This increment keys the existing bounded
+storage module registry by a stable capability-authorized module object rather
+than by interface class alone. It permits multiple conventional block-provider
+instances to coexist and preserves the existing cleanup-before-launch,
+generation comparison, quarantine, retry, and atomic publication rules per
+slot. It introduces no device algorithm, filesystem algorithm, lookup scheme,
+data encoding, or new authority model. This technical screen is not legal
+advice or patent clearance.
+
 # 2026-08-29 — COFF read-only PC-relative relocation family
 
 Patent review: **NOT_TRIGGERED**. This increment decodes and applies the
