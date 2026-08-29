@@ -6,7 +6,8 @@ use crate::arch::x86_64::{TrapDisposition, UserContext};
 use crate::{
     Capability, CapabilityError, CapabilitySpace, FaultRetirement, MemoryBackingKind,
     MemoryObjectId, MemoryPoolId, MemoryPoolTable, MemoryResourceError, ObjectId, PAGE_SIZE,
-    Priority, Rights, ScheduleOutcome, TaskId, TaskRuntime, TaskRuntimeError, TaskTermination,
+    Priority, Rights, ScheduleOutcome, TaskId, TaskProtocolViolation, TaskRuntime,
+    TaskRuntimeError, TaskTermination, TaskViolationRetirement,
 };
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -117,6 +118,13 @@ pub struct ServiceRetirement {
 pub struct ServiceFault {
     pub service: ServiceId,
     pub retirement: FaultRetirement,
+    pub cleanup: ServiceCleanupTicket,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct ServiceViolation {
+    pub service: ServiceId,
+    pub retirement: TaskViolationRetirement,
     pub cleanup: ServiceCleanupTicket,
 }
 
@@ -611,6 +619,48 @@ impl<const SERVICES: usize> ServiceSupervisor<SERVICES> {
         self.slots[slot].cleanup = Some(cleanup);
         self.slots[slot].next_restart_tick = next_restart_tick;
         Ok(ServiceFault {
+            service,
+            retirement,
+            cleanup,
+        })
+    }
+
+    pub fn violate_current<const TASKS: usize, const CAPS: usize>(
+        &mut self,
+        runtime: &mut TaskRuntime<TASKS, CAPS>,
+        violation: TaskProtocolViolation,
+    ) -> Result<ServiceViolation, ServiceError> {
+        self.violate_current_at(runtime, violation, 0)
+    }
+
+    pub fn violate_current_at<const TASKS: usize, const CAPS: usize>(
+        &mut self,
+        runtime: &mut TaskRuntime<TASKS, CAPS>,
+        violation: TaskProtocolViolation,
+        now: u64,
+    ) -> Result<ServiceViolation, ServiceError> {
+        let current = runtime
+            .current()
+            .ok_or(ServiceError::Runtime(TaskRuntimeError::NoCurrentTask))?;
+        let slot = self.running_task_slot(current)?;
+        let service = self.id(slot);
+        let next_restart_tick = self.restart_deadline(slot, now)?;
+        let retirement = runtime
+            .terminate_current_violation(violation)
+            .map_err(ServiceError::Runtime)?;
+        if retirement.task != current {
+            return Err(ServiceError::TaskMismatch);
+        }
+        self.slots[slot].task = None;
+        self.slots[slot].state = ServiceState::Faulted;
+        let cleanup = ServiceCleanupTicket {
+            service,
+            task: retirement.task,
+            context: retirement.context,
+        };
+        self.slots[slot].cleanup = Some(cleanup);
+        self.slots[slot].next_restart_tick = next_restart_tick;
+        Ok(ServiceViolation {
             service,
             retirement,
             cleanup,
@@ -1122,6 +1172,36 @@ mod tests {
         assert_eq!(fault.service, service);
         assert_eq!(supervisor.state(service), Ok(ServiceState::Faulted));
         complete(&mut supervisor, fault.cleanup);
+    }
+
+    #[test]
+    fn protocol_violating_service_becomes_faulted_with_exact_cleanup() {
+        let mut runtime = TaskRuntime::<1, 0>::new(1_000, 1).unwrap();
+        let task_context = context(0x20_0000, 0x40_0000);
+        let task = runtime.create(Priority::NORMAL, task_context).unwrap();
+        runtime.start();
+        let mut supervisor = ServiceSupervisor::<1>::new();
+        let service = supervisor.register(ObjectId(8), task).unwrap();
+
+        let violation = supervisor
+            .violate_current(
+                &mut runtime,
+                TaskProtocolViolation::InvalidUserReturn,
+            )
+            .unwrap();
+
+        assert_eq!(violation.service, service);
+        assert_eq!(violation.retirement.task, task);
+        assert_eq!(violation.retirement.context, task_context);
+        assert_eq!(
+            violation.retirement.violation,
+            TaskProtocolViolation::InvalidUserReturn
+        );
+        assert_eq!(violation.retirement.next, ScheduleOutcome::Idle);
+        assert_eq!(supervisor.state(service), Ok(ServiceState::Faulted));
+        assert_eq!(supervisor.pending_cleanup(service), Ok(Some(violation.cleanup)));
+        complete(&mut supervisor, violation.cleanup);
+        assert_eq!(supervisor.pending_cleanup(service), Ok(None));
     }
 
     #[test]

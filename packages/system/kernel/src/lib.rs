@@ -233,7 +233,7 @@ pub use service_lifecycle::{
     AccountedServiceSupervisor, AccountedServiceSupervisorError, RestartPolicy,
     ServiceAddressSpaceEraser, ServiceCleanupError, ServiceCleanupTicket, ServiceError,
     ServiceFault, ServiceId, ServiceRecovery, ServiceRecoveryError, ServiceRegistrationPlan,
-    ServiceRetirement, ServiceState, ServiceSupervisor,
+    ServiceRetirement, ServiceState, ServiceSupervisor, ServiceViolation,
 };
 pub use shared_buffer_syscall::{
     SharedBufferSyscallError, SharedBufferSyscallExecutor, SharedBufferUserAccess,

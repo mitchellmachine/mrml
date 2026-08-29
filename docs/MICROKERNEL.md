@@ -6712,6 +6712,12 @@ death and selecting the next task. A focused Linux test proves exact saved
 context return, peer wakeup/reason, task removal, and scheduler handoff; 596
 kernel tests pass. Supervisor cleanup and live syscall dispatch integration
 remain pending, so forged return state still fails stop in the service image.
+The service supervisor now consumes that typed retirement, marks the exact
+service generation `Faulted`, retains its saved context in a one-use cleanup
+ticket, and computes the trusted restart deadline. A focused test proves the
+exact violation/context, idle outcome, state transition, pending cleanup, and
+cleanup completion; 597 Linux kernel tests and both service UEFI profiles pass.
+Live syscall dispatch integration remains pending.
 The bootloader now imports `GuestMappingRevoker` only for the block/component
 profiles that instantiate its hosted cleanup adapter. Ordinary service,
 restart-request, component-service, and block-service UEFI profiles all
@@ -6740,7 +6746,8 @@ not trigger review. Shared-buffer copy-phase typing is the same conventional
 boundary hardening and also does not trigger review. The typed protocol-
 violation retirement is conventional process-lifecycle isolation rather than a
 new algorithm. Patent review: **NOT_TRIGGERED**; see [the review
-log](patents/REVIEW_LOG.md).
+log](patents/REVIEW_LOG.md). Supervisor integration reuses that lifecycle and
+does not trigger separate review.
 
 Rust service code does not assume a fixed PE entry RVA. WHP and KVM publish the
 entry derived from the verified signed executable in a hosted metadata page.

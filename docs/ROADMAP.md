@@ -2126,7 +2126,9 @@ live composition remains pending.
    The task runtime now retires `InvalidUserReturn` as a typed protocol
    violation distinct from exit or hardware fault, revoking the complete domain
    before peer notification and scheduler handoff. A focused test raises the
-   Linux kernel total to 596; supervisor/dispatch integration remains pending.
+   Linux kernel total to 596. The supervisor now converts the retirement into
+   exact `Faulted` state, cleanup ticket, and restart deadline; its focused test
+   raises the total to 597. Live dispatch integration remains pending.
    Exact feature gating now confines `GuestMappingRevoker` to block/component
    cleanup builds; ordinary, restart-request, component, and block service UEFI
    profiles cross-build without the former unused import.

@@ -185,7 +185,8 @@ access. The security/acceptance gate is canonical in
   only the typed validation phase is admitted as a caller denial.
 - The task runtime represents invalid user return state as a typed protocol
   violation, revokes the complete task domain before peer notification, and
-  never misreports it as a hardware exception. Service-supervisor integration
+  never misreports it as a hardware exception. The service supervisor records
+  exact `Faulted` state and a one-use cleanup ticket; live dispatch integration
   remains pending.
 - The MRML-native ZIM consumer applies the same exact-capacity rule at its
   buffered-receive boundary and uses explicitly aligned exact-width storage for
