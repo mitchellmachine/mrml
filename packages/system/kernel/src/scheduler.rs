@@ -207,6 +207,10 @@ pub struct TaskMigration {
     priority: Priority,
 }
 
+pub(crate) struct WakePlan {
+    task: TaskId,
+}
+
 #[derive(Debug, Eq, PartialEq)]
 pub struct DetachedTask {
     source: TaskId,
@@ -595,6 +599,24 @@ impl<const TASKS: usize> KernelScheduler<TASKS> {
             .map_err(KernelScheduleError::Scheduler)
     }
 
+    pub(crate) fn prepare_wake(&self, task: TaskId) -> Result<WakePlan, KernelScheduleError> {
+        self.scheduler
+            .task(task)
+            .map_err(KernelScheduleError::Scheduler)?;
+        Ok(WakePlan { task })
+    }
+
+    pub(crate) fn commit_wake(&mut self, plan: WakePlan) {
+        let task = self
+            .scheduler
+            .task_mut(plan.task)
+            .expect("exclusively owned scheduler preserves a prepared wake identity");
+        task.state = TaskState::Runnable;
+        if task.budget == 0 {
+            task.budget = task.priority.budget();
+        }
+    }
+
     /// Moves a non-running task between exclusively owned schedulers. The
     /// destination is constructed before the source identity is retired, so a
     /// full destination cannot lose the source task. An unexpected retirement
@@ -883,7 +905,8 @@ mod tests {
         );
         assert_eq!(kernel.block_current(), Ok(ScheduleOutcome::Idle));
         assert_eq!(kernel.timer_tick(), Ok(ScheduleOutcome::Idle));
-        kernel.wake(task).unwrap();
+        let wake = kernel.prepare_wake(task).unwrap();
+        kernel.commit_wake(wake);
         assert_eq!(
             kernel.start(),
             ScheduleOutcome::Switch {

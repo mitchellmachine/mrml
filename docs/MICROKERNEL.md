@@ -6975,6 +6975,11 @@ before invoking the transfer transaction. After transfer it publishes directly
 through that plan with no fallible tail search. The multi-client test now
 dequeues one full-ring entry, wraps a third delivery into the freed slot, and
 proves sender/sequence/FIFO order through sequence three; the total remains 629.
+Queued delivery now also prepares the receiver's exact scheduler generation
+before authority, sequence, or inbox mutation. The consuming wake commit occurs
+after inbox publication without a fallible lookup; exclusive runtime ownership
+prevents scheduler mutation between preparation and commit. Existing blocked-
+wake and delivery coverage passes; the total remains 629.
 Patent review: `NOT_TRIGGERED` — this is conventional fixed-array reservation
 and transactional commit for the existing IPC bookkeeping mechanism.
 The service buffered-receive path now resolves one exact empty pending-table

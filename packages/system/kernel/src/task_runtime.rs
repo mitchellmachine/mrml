@@ -1085,6 +1085,10 @@ impl<const TASKS: usize, const CAPS: usize> TaskRuntime<TASKS, CAPS> {
             .map_err(TaskRuntimeError::Ipc)?;
         let _ = self.prepare_delegation_slots(requested.len())?;
         let inbox_plan = self.prepare_inbox_delivery(receiver_slot)?;
+        let wake_plan = self
+            .scheduler
+            .prepare_wake(receiver)
+            .map_err(TaskRuntimeError::Scheduler)?;
         let (sequence, message) = self.send_ipc_prepared(
             sender,
             receiver,
@@ -1104,9 +1108,7 @@ impl<const TASKS: usize, const CAPS: usize> TaskRuntime<TASKS, CAPS> {
         });
         domain.inbox_tail = inbox_plan.next_tail;
         domain.inbox_count = inbox_plan.next_count;
-        self.scheduler
-            .wake(receiver)
-            .map_err(TaskRuntimeError::Scheduler)?;
+        self.scheduler.commit_wake(wake_plan);
         Ok(sequence)
     }
 

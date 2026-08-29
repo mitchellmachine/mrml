@@ -2284,6 +2284,9 @@ live composition remains pending.
    Queued delivery now reserves exact inbox slot/tail/count state before
    transfer and publishes without a fallible post-transfer search. Wrapped FIFO
    coverage passes; the total remains 629.
+   Receiver wake now uses a consuming exact-generation plan prepared before IPC
+   mutation, eliminating fallible scheduler lookup after inbox publication. The
+   total remains 629.
    Buffered service receive now preflights an exact pending-table slot before
    blocking and binds post-switch publication to that slot. Service profiles
    cross-build; live backend execution remains pending.

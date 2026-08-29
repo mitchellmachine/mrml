@@ -301,6 +301,8 @@ access. The security/acceptance gate is canonical in
   delegation publication succeeds; publication failure leaves it reusable.
 - Queued delivery reserves exact inbox publication state before authority
   transfer, eliminating fallible tail discovery after transfer commits.
+- Receiver wake generation is reserved before IPC mutation and consumed after
+  inbox publication, eliminating fallible scheduler lookup after commit.
 - Buffered receive preflights and binds its exact empty pending-table slot before
   scheduler blocking, preventing late capacity discovery after state mutation.
 - Pending buffered completion revalidates zero-capacity address canonicality and
