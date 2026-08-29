@@ -3582,14 +3582,24 @@ to writable definitions. Global text definitions retain precedence. The exact
 ORACLE-0003 `alloc` and `core` archives plus pinned `compiler_builtins` and
 independently assembled temporary platform shims linked to 519,168 deterministic
 PE bytes on the normal 8 MiB Linux stack. A separate enlarged-stack result was
-byte-identical: SHA-256
-`405fa6655cc94d39fd5dcd89629cf9688dcc9e0ce81270e58e8456df4ff73fef`.
+byte-identical. The corrected durable structural probe models the pinned
+allocator marker as callable text and has SHA-256
+`54c3457ccc6a56e150a445d041ed00b1d003af4f0d0a9ae0ae2928e4bcb69b33`.
 The image retained distinct RX `.text`, R/NX `.rdata`, and RW/NX `.data`
 sections. An isolated `./target/debug/mrml test org.mrml.compiler.core --target
 linux --release` equivalent passed 815 unit tests and 122 semantic-execution
 tests with zero failures. Temporary shims remain non-production diagnostic
 inputs; allocator execution, native Windows, general `.rlib` closure, and
 production readiness are not claimed.
+
+An independently authored Rust 2024 execution consumer uses a bounded
+4,096-byte arena allocator, pushes 19 and 23 into `Vec<u32>`, and returns their
+sum. The pinned `alloc`, `core`, and `compiler_builtins` archives plus narrow
+diagnostic runtime stubs linked to 520,704 deterministic PE bytes, SHA-256
+`c16904237c7ab0ce991daa0947a614d37dbdc664a4cfa55316378d7ad4dbe260`.
+Wine 11.16 returned 42. This is one hosted allocator-backed execution path, not
+native Windows, general `alloc` compatibility, a production allocator, or
+physical-hardware evidence.
 
 The concrete projection-premise entry point validates a fully concrete goal and
 reuses the same fixed projection-aware constraint state, proof stack, associated-

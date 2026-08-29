@@ -123,7 +123,6 @@ _RNvCsfLIs8pB8Vef_7___rustc26___rust_alloc_error_handler:
 .Lalloc_error_halt:
     jmp .Lalloc_error_halt
 
-.section .data$shim,"dw"
 .globl _RNvCsfLIs8pB8Vef_7___rustc35___rust_no_alloc_shim_is_unstable_v2
 _RNvCsfLIs8pB8Vef_7___rustc35___rust_no_alloc_shim_is_unstable_v2:
-    .byte 0
+    retq

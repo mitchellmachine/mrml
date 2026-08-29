@@ -6,7 +6,7 @@ rustup_root=${RUSTUP_HOME:-"$HOME/.rustup"}
 sysroot="$rustup_root/toolchains/$toolchain"
 library_root="$sysroot/lib/rustlib/x86_64-pc-windows-gnullvm/lib"
 driver=target/mrml-native/linux/release/mrml-rustc
-expected_hash=405fa6655cc94d39fd5dcd89629cf9688dcc9e0ce81270e58e8456df4ff73fef
+expected_hash=54c3457ccc6a56e150a445d041ed00b1d003af4f0d0a9ae0ae2928e4bcb69b33
 
 test -x "$driver" || {
     echo "missing release driver: run ./target/debug/mrml build org.mrml.compiler.driver --target linux --release" >&2

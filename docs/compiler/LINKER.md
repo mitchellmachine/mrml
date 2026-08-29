@@ -1425,11 +1425,24 @@ references without exposing those identities through global archive selection.
 The exact ORACLE-0003 `alloc` and `core` archives, pinned
 `compiler_builtins`, and independently assembled temporary platform shims linked
 to a deterministic 519,168-byte PE on the normal 8 MiB Linux stack. A separate
-enlarged-stack run was byte-identical, with SHA-256
-`405fa6655cc94d39fd5dcd89629cf9688dcc9e0ce81270e58e8456df4ff73fef`.
+enlarged-stack run was byte-identical. The durable structural probe corrects
+the allocator-marker shim to the pinned toolchain's callable text contract and
+has SHA-256
+`54c3457ccc6a56e150a445d041ed00b1d003af4f0d0a9ae0ae2928e4bcb69b33`.
 `objdump` reported an RX `.text` of `0x294b4` bytes, an R/NX `.rdata` of
 `0x551b4` bytes, and an RW/NX `.data` of `0xb8` bytes. The isolated canonical
 compiler-core package gate passed 815 unit tests and 122 semantic-execution
 tests. The platform shims are diagnostic inputs rather than production
 authority, and this is link/structure evidence rather than allocator execution,
 native Windows, or general Rust-library conformance.
+
+A separate independently authored Rust 2024 execution probe exports `entry`,
+installs a bounded 4,096-byte arena allocator, constructs a `Vec<u32>`, pushes
+19 and 23, and returns their sum. The corrected callable marker plus diagnostic
+memory/unwind/error stubs linked that consumer with the exact ORACLE-0003
+`alloc`, `core`, and `compiler_builtins` archives to a deterministic
+520,704-byte PE with SHA-256
+`c16904237c7ab0ce991daa0947a614d37dbdc664a4cfa55316378d7ad4dbe260`.
+Wine 11.16 executed the image and returned 42. This is hosted Wine execution of
+one bounded allocator-backed `Vec` path, not native Windows, allocator
+production readiness, broad `alloc` conformance, or physical-hardware evidence.
