@@ -44,11 +44,12 @@ the named commit and current source.
   (`Bound runtime place projection facts`), `308c781`
   (`Record stable runtime identifier reads`), and `099b11c` (`Retain bounded
   runtime place facts`).
-- Current build/oracle: `docs/compiler/oracles/ORACLE-0002.md`, rustc
+- Current build/oracle: `docs/compiler/oracles/ORACLE-0003.md`, rustc
   `1.100.0-nightly`, full commit
-  `fb6531d550e0075b9eb9a51464f404805eec87d9`, dated 2026-08-23 and
-  distributed as `nightly-2026-08-24`. Preserve ORACLE-0001 as the prior
-  generation.
+  `17fd5b8a37b6667b6cc137f3cc35f09759768a3b`, dated 2026-08-28 and
+  distributed as `nightly-2026-08-29`. Preserve ORACLE-0001 and ORACLE-0002 as
+  prior generations. Native Arch and Wine-hosted gnullvm each pass 1,295
+  compiler tests; Wine is toolchain coverage, not native Windows evidence.
 - Language direction: Rust 2024 is the edition floor. Contemporary and future
   Rust semantics are the target; obsolete editions, historical unsoundness,
   rustc internals, diagnostic wording, and unstable Rust ABI details are not
@@ -2997,7 +2998,7 @@ requires `rustfmt`, `clippy`, `rust-src`, `nvptx64-nvidia-cuda`, and
 `x86_64-unknown-none` and `x86_64-unknown-uefi`.
 
 On Arch Linux, install the native build prerequisites required by the linker and
-use rustup's `nightly-2026-08-24-x86_64-unknown-linux-gnu` toolchain with the same
+use rustup's `nightly-2026-08-29-x86_64-unknown-linux-gnu` toolchain with the same
 declared components and targets. Do not infer successful cross-host verification
 from a Windows-only run.
 

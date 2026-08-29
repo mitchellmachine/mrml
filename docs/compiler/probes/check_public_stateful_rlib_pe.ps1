@@ -1,6 +1,6 @@
 $ErrorActionPreference = "Stop"
 
-$toolchain = "nightly-2026-08-24-x86_64-pc-windows-gnullvm"
+$toolchain = "nightly-2026-08-29-x86_64-pc-windows-gnullvm"
 $sysroot = (& rustc "+$toolchain" --print sysroot).Trim()
 $lld = Join-Path $sysroot "lib\rustlib\x86_64-pc-windows-gnullvm\bin\rust-lld.exe"
 $probe = Join-Path ([System.IO.Path]::GetTempPath()) "mrml-public-stateful-rlib-$PID"

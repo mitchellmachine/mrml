@@ -71,7 +71,7 @@ const MAX_WORKSPACE_BYTES: u64 = 1024 * 1024;
 const MAX_MANIFEST_BYTES: u64 = 256 * 1024;
 const MAX_COMPONENTS: usize = 256;
 const MAX_DISCOVERY_DIRECTORIES: usize = 4096;
-const PINNED_NIGHTLY: &str = "nightly-2026-08-24";
+const PINNED_NIGHTLY: &str = "nightly-2026-08-29";
 const TARGET_FAMILIES: [&str; 5] = ["WINDOWS", "LINUX", "MRML_NATIVE", "UEFI", "CUDA"];
 
 #[derive(Clone, Debug)]
@@ -1092,7 +1092,7 @@ fn write_workspace_lock(workspace: &Workspace, check: bool) -> Result<(), String
     let mut components = workspace.components.iter().collect::<Vec<_>>();
     components.sort_by(|left, right| left.id.cmp(&right.id));
     let mut encoded = String::from(
-        "[lock]\nformat = \"mrml-workspace-lock\"\nversion = 2\ntoolchain = \"nightly-2026-08-24\"\n\n",
+        "[lock]\nformat = \"mrml-workspace-lock\"\nversion = 2\ntoolchain = \"nightly-2026-08-29\"\n\n",
     );
     let compile_edges = workspace
         .components

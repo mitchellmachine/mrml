@@ -388,7 +388,7 @@ the repository or undoing its invariants.
    and performance impact. Do not test the Windows VMM locally; use the retained
    native GitHub Actions gate where relevant.
 8. For compiler work, read [COMPILER.md](docs/COMPILER.md), preserve the prior
-   oracle records, and use the [current oracle](docs/compiler/oracles/ORACLE-0002.md).
+   oracle records, and use the [current oracle](docs/compiler/oracles/ORACLE-0003.md).
    Rust 2024 is the
    floor; prioritize modern/future semantics and do not infer old-edition,
    stable-Rust, every-nightly, or unstable-Rust-ABI compatibility.

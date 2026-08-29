@@ -27,7 +27,7 @@ jobs:
         with:
           persist-credentials: false
       - name: Install pinned Rust toolchain
-        run: rustup toolchain install nightly-2026-08-24 --profile minimal --component rust-src
+        run: rustup toolchain install nightly-2026-08-29 --profile minimal --component rust-src
       - name: Run locked frontend tests under AddressSanitizer
         env:
           CARGO_TARGET_DIR: target/asan-stage-zero
@@ -45,7 +45,7 @@ jobs:
         with:
           persist-credentials: false
       - name: Install pinned Rust toolchain
-        run: rustup toolchain install nightly-2026-08-24 --profile minimal --component rust-src --target x86_64-unknown-none,x86_64-unknown-uefi
+        run: rustup toolchain install nightly-2026-08-29 --profile minimal --component rust-src --target x86_64-unknown-none,x86_64-unknown-uefi
       - name: Build locked stage-zero frontend
         run: cargo build --locked
       - name: Run every Linux-compatible native test under AddressSanitizer

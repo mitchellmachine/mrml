@@ -3,7 +3,7 @@ set -eu
 
 repo=${1:-/mnt/c/Users/Mitch/Documents/mrml}
 cd "$repo"
-oracle=nightly-2026-08-24-x86_64-unknown-linux-gnu
+oracle=nightly-2026-08-29-x86_64-unknown-linux-gnu
 probe_dir=${TMPDIR:-/tmp}/mrml-comdat-selection
 mkdir -p "$probe_dir"
 

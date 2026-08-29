@@ -1,5 +1,5 @@
 [toolchain]
-channel = "nightly-2026-08-24"
+channel = "nightly-2026-08-29"
 profile = "minimal"
 components = ["rustfmt", "clippy", "rust-src"]
 targets = ["nvptx64-nvidia-cuda", "x86_64-unknown-none", "x86_64-unknown-uefi"]

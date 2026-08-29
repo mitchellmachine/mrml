@@ -1,7 +1,7 @@
 [lock]
 format = "mrml-workspace-lock"
 version = 2
-toolchain = "nightly-2026-08-24"
+toolchain = "nightly-2026-08-29"
 
 [graphs]
 compile_edges = 165

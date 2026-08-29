@@ -39,7 +39,7 @@ jobs:
         with:
           persist-credentials: false
       - name: Install pinned Rust toolchain
-        run: rustup toolchain install nightly-2026-08-24 --profile minimal --component rust-src
+        run: rustup toolchain install nightly-2026-08-29 --profile minimal --component rust-src
       - name: Build locked stage-zero frontend
         run: cargo build --locked
       - name: Test kernel security state machines
@@ -60,10 +60,10 @@ jobs:
         shell: pwsh
         run: |
           rustup set default-host x86_64-pc-windows-gnullvm
-          rustup toolchain install nightly-2026-08-24-x86_64-pc-windows-gnullvm --profile minimal --component rust-mingw,rust-src
-          rustup default nightly-2026-08-24-x86_64-pc-windows-gnullvm
+          rustup toolchain install nightly-2026-08-29-x86_64-pc-windows-gnullvm --profile minimal --component rust-mingw,rust-src
+          rustup default nightly-2026-08-29-x86_64-pc-windows-gnullvm
       - name: Build locked stage-zero frontend
-        run: cargo +nightly-2026-08-24-x86_64-pc-windows-gnullvm build --locked
+        run: cargo +nightly-2026-08-29-x86_64-pc-windows-gnullvm build --locked
       - name: Test kernel security state machines
         run: .\target\debug\mrml.exe test org.mrml.system.kernel --target windows --release
       - name: Test WHP cancellation and native boundaries

@@ -1,6 +1,6 @@
 $ErrorActionPreference = "Stop"
 
-$toolchain = "nightly-2026-08-24-x86_64-pc-windows-gnullvm"
+$toolchain = "nightly-2026-08-29-x86_64-pc-windows-gnullvm"
 $sysroot = (& rustc "+$toolchain" --print sysroot).Trim()
 if ($LASTEXITCODE -ne 0) { throw "pinned rustc sysroot lookup failed" }
 $core = Get-ChildItem `

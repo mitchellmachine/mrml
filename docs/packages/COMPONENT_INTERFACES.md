@@ -743,7 +743,7 @@ update-without-rebuild, retention/GC, performance, fuzzing, WHP/KVM execution,
 or physical-system evidence beyond that bounded hosted path.
 
 The cross-compiler probe is deliberately narrower than binding compatibility.
-Pinned upstream `nightly-2026-08-24` executes the exact generation, operation,
+Pinned upstream `nightly-2026-08-29` executes the exact generation, operation,
 request-size, and response-size identity check; `mrml-rustc` emits bounded COFF
 and ELF objects for the independently authored scalar projection. It does not
 show that `mrml-rustc` can compile the generated binding crate, that either

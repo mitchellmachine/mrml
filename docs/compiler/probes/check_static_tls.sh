@@ -2,7 +2,7 @@
 set -eu
 
 cd /mnt/c/Users/Mitch/Documents/mrml
-toolchain=nightly-2026-08-24-x86_64-unknown-linux-gnu
+toolchain=nightly-2026-08-29-x86_64-unknown-linux-gnu
 sysroot=$(rustc +$toolchain --print sysroot)
 lld="$sysroot/lib/rustlib/x86_64-unknown-linux-gnu/bin/rust-lld"
 mrml=target/mrml-native/linux/release/mrml-rustc
