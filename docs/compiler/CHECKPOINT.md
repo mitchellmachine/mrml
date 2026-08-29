@@ -9,8 +9,8 @@ the named commit and current source.
 ## Recoverable baseline
 
 - Branch: `main`
-- Compiler checkpoint commit: `5a477f78`
-  (`compiler: select writable COFF COMDAT winners`)
+- Compiler checkpoint commit: `a644bd14`
+  (`compiler: select COFF text COMDAT winners`)
 - Remote state when recorded: `origin/main` includes the bounded MRML-owned
   static-link core, exact MRML COFF and ELF64 ingestion, deterministic
   import-free PE32+/ELF64 executable serialization, explicit compiler-driver
@@ -60,6 +60,24 @@ against all prior accepted probes. Keep Cargo on edition 2024 until a newer
 named edition can be adopted through a pinned, workspace-wide migration.
 
 ## Latest bounded linker milestone
+
+Commit `a644bd14` decodes each nonempty COFF text section's section-definition
+selection byte and removes duplicate text fragments before generic layout.
+Only pairs of `SELECT_ANY` definitions coalesce; the deterministic leftmost
+fragment retains its code, local read-only data, definitions, and relocations.
+Plain/NODUPLICATES mixtures and unsupported selection kinds fail closed, and
+PE runtime-function records are filtered by retained symbol and exact source
+object. Synthetic coverage verifies selection-byte decoding, leftmost payload,
+strict duplicate rejection, and unsupported-policy rejection. The exact pinned
+gnullvm stateful archive remains unchanged: both linkers return 42, MRML emits
+2,560 bytes with two valid forwarding pointers and 1,028 zero-fill bytes, and
+rust-lld emits 3,584 bytes. Fifty direct-driver links after five warmups measured
+MRML at 9.357 ms median/9.596 ms mean versus rust-lld at 27.078 ms median/27.167
+ms mean on this narrow host/workload. Windows and Arch Linux each passed 753
+core unit tests, the 2-, 10-, 351-, and 59-test integration groups, seven driver
+tests, and the build graph's downstream suites. `mrml doctor` passed; audit
+retains the unrelated fingerprint `fnv1a64:0fe5cf1836d3e0dc` at line 1244.
+Patent review: **NOT_TRIGGERED**; see `docs/patents/REVIEW_LOG.md`.
 
 Commit `5a477f78` decodes writable COFF section-definition selection metadata and
 applies deterministic leftmost `SELECT_ANY` winner selection. Plain and
