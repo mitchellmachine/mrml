@@ -3,6 +3,7 @@ use core::mem::size_of;
 use core::ops::{Deref, DerefMut};
 
 use crate::arch::x86_64::{TrapDisposition, UserContext};
+use crate::capability::CapabilityRevocationPlan;
 use crate::ipc::EndpointSendPlan;
 use crate::scheduler::WakePlan;
 use crate::{
@@ -201,6 +202,14 @@ struct InboxDeliveryPlan {
 }
 
 type DelegationSet = [Option<(TaskId, Capability)>; MAX_TASK_DELEGATIONS + 1];
+
+#[derive(Clone, Copy)]
+struct TrackedRevocationPlan {
+    domain_slot: usize,
+    capability: CapabilityRevocationPlan,
+}
+
+type TrackedRevocationSet = [Option<TrackedRevocationPlan>; MAX_TASK_DELEGATIONS + 1];
 
 pub struct DetachedTaskDomain<const CAPS: usize> {
     scheduling: DetachedTask,
@@ -706,10 +715,8 @@ impl<const TASKS: usize, const CAPS: usize> TaskRuntime<TASKS, CAPS> {
             .describe(capability)
             .map_err(|error| TaskRuntimeError::Ipc(error.into()))?;
         let descendants = self.delegation_descendants(task, capability)?;
-        self.revoke_tracked(&descendants.0, 1)?;
-        self.capabilities_mut(task)?
-            .revoke(capability)
-            .map_err(|_| TaskRuntimeError::IntegrityFailure)?;
+        let plan = self.prepare_tracked_revocation(&descendants.0, 0)?;
+        self.commit_tracked_revocation(plan);
         self.remove_tracked(&descendants.0);
         Ok(())
     }
@@ -741,25 +748,51 @@ impl<const TASKS: usize, const CAPS: usize> TaskRuntime<TASKS, CAPS> {
         Ok((tracked, count))
     }
 
-    fn revoke_tracked(
-        &mut self,
+    fn prepare_tracked_revocation(
+        &self,
         tracked: &DelegationSet,
         start: usize,
-    ) -> Result<(), TaskRuntimeError> {
+    ) -> Result<TrackedRevocationSet, TaskRuntimeError> {
         // Validate the complete exact-generation set before changing any
         // destination space. A stale graph edge is an integrity failure, but
         // cannot otherwise leave a partially revoked descendant tree.
+        let mut plan: TrackedRevocationSet = array::from_fn(|_| None);
+        let mut plan_count = 0usize;
         for (task, capability) in tracked[start..].iter().flatten().copied() {
-            self.capabilities(task)?
-                .describe(capability)
+            let domain_slot = self.domain_slot(task)?;
+            if !self.scheduler.contains(task) {
+                return Err(TaskRuntimeError::IntegrityFailure);
+            }
+            let capability = self.domains[domain_slot]
+                .as_ref()
+                .ok_or(TaskRuntimeError::IntegrityFailure)?
+                .capabilities
+                .prepare_revoke(capability)
                 .map_err(|_| TaskRuntimeError::IntegrityFailure)?;
+            if plan[..plan_count]
+                .iter()
+                .flatten()
+                .any(|prior| prior.domain_slot == domain_slot && prior.capability == capability)
+            {
+                return Err(TaskRuntimeError::IntegrityFailure);
+            }
+            plan[plan_count] = Some(TrackedRevocationPlan {
+                domain_slot,
+                capability,
+            });
+            plan_count += 1;
         }
-        for (task, capability) in tracked[start..].iter().flatten().copied() {
-            self.capabilities_mut(task)?
-                .revoke(capability)
-                .map_err(|_| TaskRuntimeError::IntegrityFailure)?;
+        Ok(plan)
+    }
+
+    fn commit_tracked_revocation(&mut self, plan: TrackedRevocationSet) {
+        for revocation in plan.into_iter().flatten() {
+            self.domains[revocation.domain_slot]
+                .as_mut()
+                .expect("runtime preserves every prepared revocation domain")
+                .capabilities
+                .commit_revoke(revocation.capability);
         }
-        Ok(())
     }
 
     fn remove_tracked(&mut self, tracked: &DelegationSet) {
@@ -802,7 +835,8 @@ impl<const TASKS: usize, const CAPS: usize> TaskRuntime<TASKS, CAPS> {
                 }
             }
         }
-        self.revoke_tracked(&descendants, 0)?;
+        let plan = self.prepare_tracked_revocation(&descendants, 0)?;
+        self.commit_tracked_revocation(plan);
         self.remove_tracked(&descendants);
         for edge in &mut self.delegations {
             if edge.is_some_and(|edge| edge.source_task == task || edge.destination_task == task) {
@@ -2348,6 +2382,34 @@ mod tests {
                 .unwrap()
                 .authorize(leaf, Rights::READ)
                 .is_err()
+        );
+    }
+
+    #[test]
+    fn tracked_revocation_rejects_duplicate_target_before_mutation() {
+        let mut runtime = TaskRuntime::<1, 2>::new(1_000, 1).unwrap();
+        let task = runtime
+            .create(Priority::NORMAL, context(0x20_0000, 0x40_0000))
+            .unwrap();
+        let capability = runtime
+            .capabilities_mut(task)
+            .unwrap()
+            .insert(ObjectId(0x92), Rights::READ)
+            .unwrap();
+        let mut tracked = [None; MAX_TASK_DELEGATIONS + 1];
+        tracked[0] = Some((task, capability));
+        tracked[1] = Some((task, capability));
+
+        assert!(matches!(
+            runtime.prepare_tracked_revocation(&tracked, 0),
+            Err(TaskRuntimeError::IntegrityFailure)
+        ));
+        assert_eq!(
+            runtime
+                .capabilities(task)
+                .unwrap()
+                .authorize(capability, Rights::READ),
+            Ok(ObjectId(0x92))
         );
     }
 

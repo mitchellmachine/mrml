@@ -2297,6 +2297,10 @@ live composition remains pending.
    reserves the exact scheduler generation before peer/domain mutation and
    consumes it after peer-death publication without a fallible late lookup.
    Existing coverage passes; the total remains 629.
+   Explicit and task-death transitive capability revocation now reserves every
+   exact descendant domain slot and capability generation before mutation, then
+   consumes the bounded plan without late lookup. Duplicate-target preflight
+   coverage raises the Linux kernel total to 630.
    Buffered service receive now preflights an exact pending-table slot before
    blocking and binds post-switch publication to that slot. Service profiles
    cross-build; live backend execution remains pending.

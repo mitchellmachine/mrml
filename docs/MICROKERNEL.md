@@ -6995,6 +6995,12 @@ current scheduler generation before delegation, peer, or domain mutation. After
 peer-death publication, the consuming termination commit retires that prepared
 identity and selects its replacement without a fallible scheduler lookup.
 Existing retirement coverage passes; the total remains 629.
+Transitive capability revocation now prepares every exact domain slot and
+capability generation in the bounded descendant set before revoking any entry.
+The consuming commit clears those prepared entries without repeating fallible
+domain or capability lookup; this applies to explicit revocation and task-death
+cleanup. Existing stale-descendant and transitive-revocation coverage passes;
+duplicate-target preflight coverage raises the Linux kernel total to 630.
 Patent review: `NOT_TRIGGERED` — this is conventional fixed-array reservation
 and transactional commit for the existing IPC and scheduler bookkeeping
 mechanisms.

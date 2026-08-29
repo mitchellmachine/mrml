@@ -310,6 +310,9 @@ access. The security/acceptance gate is canonical in
 - Fault, protocol-violation, and voluntary-exit retirement reserve the exact
   current scheduler generation before peer or domain mutation and consume it
   after peer-death publication without a fallible scheduler lookup.
+- Transitive capability revocation reserves every exact descendant domain slot
+  and capability generation before clearing any authority; its bounded commit
+  performs no fallible domain or capability lookup.
 - Buffered receive preflights and binds its exact empty pending-table slot before
   scheduler blocking, preventing late capacity discovery after state mutation.
 - Pending buffered completion revalidates zero-capacity address canonicality and

@@ -107,6 +107,11 @@ pub enum CapabilityError {
     DelegationDenied,
 }
 
+#[derive(Clone, Copy, Eq, PartialEq)]
+pub(crate) struct CapabilityRevocationPlan {
+    capability: Capability,
+}
+
 /// A fixed-capacity capability space. Handles carry generations so a revoked
 /// slot cannot be reused through a stale handle (the ABA problem).
 pub struct CapabilitySpace<const N: usize> {
@@ -278,11 +283,25 @@ impl<const N: usize> CapabilitySpace<N> {
     }
 
     pub fn revoke(&mut self, capability: Capability) -> Result<(), CapabilityError> {
+        let plan = self.prepare_revoke(capability)?;
+        self.commit_revoke(plan);
+        Ok(())
+    }
+
+    pub(crate) fn prepare_revoke(
+        &self,
+        capability: Capability,
+    ) -> Result<CapabilityRevocationPlan, CapabilityError> {
+        self.entry(capability)?;
+        Ok(CapabilityRevocationPlan { capability })
+    }
+
+    pub(crate) fn commit_revoke(&mut self, plan: CapabilityRevocationPlan) {
         let entry = self
             .entries
-            .get_mut(capability.slot as usize)
-            .filter(|entry| entry.occupied && entry.generation == capability.generation)
-            .ok_or(CapabilityError::Invalid)?;
+            .get_mut(plan.capability.slot as usize)
+            .filter(|entry| entry.occupied && entry.generation == plan.capability.generation)
+            .expect("exclusively owned capability space preserves prepared revocation");
         // Clear every authority-bearing field before advancing or retiring the
         // generation. Revocation remains an atomic success; a later allocation
         // reports typed exhaustion because the slot can never be reused.
@@ -292,11 +311,9 @@ impl<const N: usize> CapabilitySpace<N> {
         match entry.generation.checked_add(1) {
             Some(next) => {
                 entry.generation = next;
-                Ok(())
             }
             None => {
                 entry.retired = true;
-                Ok(())
             }
         }
     }
