@@ -8875,6 +8875,8 @@ IN SOURCE** enumeration, read/write, flush, and reset. It maps only the fixed
 buffered IPC, shared-buffer, and capability-release syscall numbers; launch
 state fixes the reply endpoint and task. Data requests retain exactly one
 transferred capability through copy and release-before-reply, while control
-requests accept none. AHCI passes 74 focused tests on Linux. This is syscall-
+requests accept none. Returned payload/capability counts are bounded by the
+actual supplied buffers before any typed envelope is returned. AHCI passes 75
+focused tests on Linux. This is syscall-
 frame and hostile-model evidence, not installed service execution, supervisor
 launch, or hardware evidence.

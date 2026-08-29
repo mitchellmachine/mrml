@@ -360,8 +360,10 @@ The isolated AHCI userspace adapter now **PARTIALLY IMPLEMENTS IN SOURCE** the
 raw kernel ABI for enumeration, read/write, flush, and reset through the same
 launch-bound reply endpoint. Data requests use only the exact transferred
 shared-memory capability, preserve read/write direction, and release it before
-reply; control requests accept no capability. Focused Linux tests cover all
-seven syscall mappings, bringing AHCI to 74 passing tests. Installed service
+reply; control requests accept no capability. The adapter also rejects kernel-
+reported payload or capability counts beyond the exact supplied buffers before
+returning a typed envelope. Focused Linux tests cover all seven syscall mappings
+and hostile returned counts, bringing AHCI to 75 passing tests. Installed service
 entry and supervisor launch remain planned.
 
 Bounded AHCI port-engine activation is now **PARTIALLY IMPLEMENTED IN SOURCE**.

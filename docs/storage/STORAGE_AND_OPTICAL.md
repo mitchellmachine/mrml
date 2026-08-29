@@ -421,7 +421,8 @@ enumeration, read/write, flush, and reset loops through canonical buffered IPC
 and shared-buffer operations. The launch binding fixes the reply endpoint/task;
 request bytes cannot redirect it. Read/write accepts exactly one transferred
 capability and releases it before reply, while flush/reset accepts none. The
-focused Linux suite passes 74 tests. No installed service entry, supervisor
+adapter rejects returned lengths/counts beyond the supplied buffers before
+publishing an envelope. The focused Linux suite passes 75 tests. No installed service entry, supervisor
 launch, hardware I/O, or physical evidence is claimed.
 
 Patent review: **NOT_TRIGGERED**. This increment only maps existing bounded

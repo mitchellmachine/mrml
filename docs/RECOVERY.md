@@ -1305,7 +1305,8 @@ The isolated AHCI provider's raw userspace adapter now covers enumeration,
 read/write, flush, and reset without creating a second recovery authority path.
 The reply route is launch-bound, data access requires the exact transferred
 shared-memory capability and releases it before reply, and reset/flush reject
-capability transfer. The focused Linux suite passes 74 tests. Installed launch,
+capability transfer. Kernel-reported receive counts cannot exceed the exact
+supplied buffers. The focused Linux suite passes 75 tests. Installed launch,
 durable recovery, and physical-device execution remain unverified.
 
 Stopped-port DMA reclamation is **PARTIALLY IMPLEMENTED IN SOURCE**. Recovery
