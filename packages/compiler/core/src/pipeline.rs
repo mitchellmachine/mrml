@@ -61,6 +61,34 @@ impl<const MAX_CONSTANTS: usize, const MAX_ITEMS: usize, const MAX_PARAMETERS: u
             })
     }
 
+    fn resolve_call_parameter_type(
+        &self,
+        name: &str,
+        argument_count: usize,
+        parameter_index: usize,
+    ) -> Option<crate::IntegerType> {
+        self.module
+            .items()
+            .iter()
+            .flatten()
+            .find_map(|item| match item {
+                Item::Function(function)
+                    if function.name == name
+                        && function.constant
+                        && function.abi == crate::FunctionAbi::Rust
+                        && function.parameter_count() == argument_count =>
+                {
+                    function
+                        .parameters()
+                        .get(parameter_index)
+                        .copied()
+                        .flatten()
+                        .and_then(|parameter| crate::IntegerType::from_name(parameter.ty.text))
+                }
+                _ => None,
+            })
+    }
+
     fn call_resolves_bool(&self, name: &str, argument_count: usize) -> bool {
         self.module.items().iter().flatten().any(|item| {
             matches!(item, Item::Function(function)

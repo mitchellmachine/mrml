@@ -12731,15 +12731,24 @@ mod tests {
             }
 
             fn resolve_call(&self, name: &str, arguments: &[u128]) -> Option<u128> {
-                (name == "select" && arguments.is_empty())
-                    .then_some(1512366075204170947332355369683137040)
+                (name == "select" && arguments.len() == 1).then_some(arguments[0])
             }
 
             fn resolve_call_type(&self, name: &str, argument_count: usize) -> Option<crate::IntegerType> {
-                (name == "select" && argument_count == 0).then_some(crate::IntegerType::U128)
+                (name == "select" && argument_count == 1).then_some(crate::IntegerType::U128)
+            }
+
+            fn resolve_call_parameter_type(
+                &self,
+                name: &str,
+                argument_count: usize,
+                parameter_index: usize,
+            ) -> Option<crate::IntegerType> {
+                (name == "select" && argument_count == 1 && parameter_index == 0)
+                    .then_some(crate::IntegerType::U128)
             }
         }
-        let source = "const fn select() -> u128 { 1512366075204170947332355369683137040 } #[mrml_abi::export(version = 1)] pub fn value() -> u128 { select() }";
+        let source = "const fn select(value: u128) -> u128 { value } #[mrml_abi::export(version = 1)] pub fn value() -> u128 { select(1512366075204170947332355369683137040) }";
         let module = Parser::new(source).parse_module::<4, 4>().unwrap();
         let Some(Item::Function(function)) = module.items()[1] else {
             panic!("expected function")

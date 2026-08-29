@@ -7145,9 +7145,27 @@ impl<
                 }
                 return self.emit_runtime_call(tree, &arguments, target, 1);
             }
-            let values =
-                evaluate_runtime_call_arguments(tree, arguments, argument_count, self.resolver)
-                    .map_err(|kind| self.error(kind))?;
+            let mut values = [0u128; MAX_CALL_ARGUMENTS];
+            for (index, argument) in arguments[..argument_count].iter().enumerate() {
+                let argument = argument
+                    .ok_or(self.error(CodegenErrorKind::RuntimeExpressionUnsupported))?;
+                values[index] = match self.resolver.resolve_call_parameter_type(
+                    callee,
+                    argument_count,
+                    index,
+                ) {
+                    Some(parameter_type @ (crate::IntegerType::U128 | crate::IntegerType::I128)) => {
+                        self.evaluate_wide_const_call_argument(tree, argument, parameter_type)?
+                    }
+                    _ => tree
+                        .evaluate_at(argument, self.resolver)
+                        .map_err(|error| {
+                            self.error(CodegenErrorKind::Execution(ExecutionError::Arithmetic(
+                                error,
+                            )))
+                        })?,
+                };
+            }
             let resolved_type = self.resolver.resolve_call_type(callee, argument_count);
             if resolved_type
                 != match expected_type {
@@ -7640,6 +7658,46 @@ impl<
         self.emit(&(value as u64).to_le_bytes())?;
         self.emit(&[0x48, 0xba])?;
         self.emit(&((value >> 64) as u64).to_le_bytes())
+    }
+
+    fn evaluate_wide_const_call_argument<const MAX_NODES: usize>(
+        &self,
+        tree: &crate::ExpressionTree<'_, MAX_NODES>,
+        id: crate::ExprId,
+        expected_type: crate::IntegerType,
+    ) -> Result<u128, CodegenError> {
+        let layout = runtime_integer_layout(expected_type.name())
+            .ok_or(self.error(CodegenErrorKind::UnsupportedRuntimeType))?;
+        let expression = tree
+            .expression(id)
+            .ok_or(self.error(CodegenErrorKind::RuntimeExpressionUnsupported))?;
+        if let ExprKind::Integer(literal) = expression.kind {
+            if !runtime_integer_literal_fits(layout, literal.value, false) {
+                return Err(self.error(CodegenErrorKind::ValueOutOfRange));
+            }
+            return Ok(literal.value);
+        }
+        if let ExprKind::Unary {
+            operator: crate::UnaryOperator::Negate,
+            operand,
+        } = expression.kind
+            && let Some(ExprKind::Integer(literal)) =
+                tree.expression(operand).map(|operand| operand.kind)
+        {
+            if !runtime_integer_literal_fits(layout, literal.value, true) {
+                return Err(self.error(CodegenErrorKind::ValueOutOfRange));
+            }
+            return Ok(0u128.wrapping_sub(literal.value));
+        }
+        if let ExprKind::Identifier(name) = expression.kind
+            && self.resolver.resolve_type(name) == Some(expected_type)
+        {
+            return self
+                .resolver
+                .resolve(name)
+                .ok_or(self.error(CodegenErrorKind::UnknownRuntimeName));
+        }
+        Err(self.error(CodegenErrorKind::RuntimeExpressionUnsupported))
     }
 
     fn emit_wide_multiply(&mut self, layout: RuntimeIntegerLayout) -> Result<(), CodegenError> {

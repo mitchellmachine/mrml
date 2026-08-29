@@ -129,8 +129,9 @@ fixed-width one-word integer to `u128` or `i128` normalizes the low word at the
 source width, then zero-extends unsigned sources or sign-extends signed sources.
 Direct casts between `u128` and `i128` preserve both parameter words unchanged.
 Typed named `u128` and `i128` constants produce their exact resolved words.
-Bounded zero-argument typed `const fn` calls returning `u128` or `i128` use the
-same exact-word constant resolver.
+Bounded typed `const fn` calls returning `u128` or `i128` use the same exact-word
+constant resolver. Wide literal, negative literal, and matching typed named-
+constant arguments are evaluated under the callee parameter's declared type.
 Direct unary bitwise inversion of a two-word integer inverts both words.
 Direct `i128` negation uses carry-aware two-word lowering and traps on `i128::MIN`
 when ordinary overflow checks are enabled.

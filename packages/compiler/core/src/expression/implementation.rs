@@ -1912,6 +1912,15 @@ pub trait ConstantResolver {
         None
     }
 
+    fn resolve_call_parameter_type(
+        &self,
+        _: &str,
+        _: usize,
+        _: usize,
+    ) -> Option<IntegerType> {
+        None
+    }
+
     fn call_resolves_bool(&self, _: &str, _: usize) -> bool {
         false
     }

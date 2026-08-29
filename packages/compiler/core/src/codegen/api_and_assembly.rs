@@ -240,6 +240,16 @@ impl<R: ConstantResolver, const MAX_LOCALS: usize> ConstantResolver
         self.outer.resolve_call_type(name, argument_count)
     }
 
+    fn resolve_call_parameter_type(
+        &self,
+        name: &str,
+        argument_count: usize,
+        parameter_index: usize,
+    ) -> Option<crate::IntegerType> {
+        self.outer
+            .resolve_call_parameter_type(name, argument_count, parameter_index)
+    }
+
     fn call_resolves_bool(&self, name: &str, argument_count: usize) -> bool {
         self.outer.call_resolves_bool(name, argument_count)
     }

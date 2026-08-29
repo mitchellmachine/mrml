@@ -103,8 +103,8 @@ const MRML_V1_WIDE_UNSIGNED_SHIFT_ASSIGN_SOURCE: &str = "#[mrml_abi::export(vers
 const MRML_V1_WIDE_SIGNED_SHIFT_ASSIGN_SOURCE: &str = "#[mrml_abi::export(version = 1)] pub fn probe(input: i128, shift: u32) -> i128 { let mut value: i128 = input; value >>= shift; value <<= 2; value }";
 const MRML_V1_WIDE_UNSIGNED_CONSTANT_SOURCE: &str = "const WIDE: u128 = 1512366075204170947332355369683137040; #[mrml_abi::export(version = 1)] pub fn probe() -> u128 { WIDE }";
 const MRML_V1_WIDE_SIGNED_CONSTANT_SOURCE: &str = "const WIDE: i128 = -1512366075204170947332355369683137040; #[mrml_abi::export(version = 1)] pub fn probe() -> i128 { WIDE }";
-const MRML_V1_WIDE_UNSIGNED_CONST_CALL_SOURCE: &str = "const fn select() -> u128 { 1512366075204170947332355369683137040 } #[mrml_abi::export(version = 1)] pub fn probe() -> u128 { select() }";
-const MRML_V1_WIDE_SIGNED_CONST_CALL_SOURCE: &str = "const fn select() -> i128 { -1512366075204170947332355369683137040 } #[mrml_abi::export(version = 1)] pub fn probe() -> i128 { select() }";
+const MRML_V1_WIDE_UNSIGNED_CONST_CALL_SOURCE: &str = "const fn select(value: u128) -> u128 { value } #[mrml_abi::export(version = 1)] pub fn probe() -> u128 { select(1512366075204170947332355369683137040) }";
+const MRML_V1_WIDE_SIGNED_CONST_CALL_SOURCE: &str = "const fn select(value: i128) -> i128 { value } #[mrml_abi::export(version = 1)] pub fn probe() -> i128 { select(-1512366075204170947332355369683137040) }";
 const MRML_V1_UNSIGNED_WIDEN_SOURCE: &str =
     "#[mrml_abi::export(version = 1)] pub fn probe(input: u64) -> u128 { input as u128 }";
 const MRML_V1_SIGNED_WIDEN_SOURCE: &str =
