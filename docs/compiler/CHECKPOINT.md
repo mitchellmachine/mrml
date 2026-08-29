@@ -9,8 +9,8 @@ the named commit and current source.
 ## Recoverable baseline
 
 - Branch: `main`
-- Compiler checkpoint commit: `a73a3af7`
-  (`compiler: link stateful multi-CGU PE data`)
+- Compiler checkpoint commit: `0bd379cc`
+  (`compiler: admit external PE writable definitions`)
 - Remote state when recorded: `origin/main` includes the bounded MRML-owned
   static-link core, exact MRML COFF and ELF64 ingestion, deterministic
   import-free PE32+/ELF64 executable serialization, explicit compiler-driver
@@ -60,6 +60,15 @@ against all prior accepted probes. Keep Cargo on edition 2024 until a newer
 named edition can be adopted through a pinned, workspace-wide migration.
 
 ## Latest bounded linker milestone
+
+Commit `0bd379cc` extends selected PE writable storage to exact external
+storage-class-2 `.data$` and `.bss$` definitions. The eight-CGU probe now reads
+one exported initialized global and one exported zero-fill global from their
+defining codegen unit. MRML reports 1,028 zero-fill bytes and emits 2,560 bytes;
+pinned rust-lld consumes identical inputs and emits 2,048 bytes, and both return
+42. Exact unreferenced gnullvm `.data$\u0001__imp_` forwarding slots are
+excluded; cross-object global references through those slots remain fail-closed.
+All six Windows driver tests passed. Patent review: **NOT_TRIGGERED**.
 
 Commit `a73a3af7` adds bounded stateful multi-CGU PE linking for exact
 object-local gnullvm `.data$` and `.bss$` definitions and their AMD64 `REL32`
