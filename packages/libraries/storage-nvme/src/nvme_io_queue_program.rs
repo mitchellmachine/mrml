@@ -31,7 +31,6 @@ impl ActiveNvmeIoQueues {
         self.layout
     }
 
-    #[cfg(test)]
     pub(crate) const fn state(&self) -> (u16, u16, bool, u16) {
         (
             self.submission_tail,
@@ -39,6 +38,38 @@ impl ActiveNvmeIoQueues {
             self.completion_phase,
             self.next_command_id,
         )
+    }
+
+    pub(crate) const fn advance(mut self) -> Self {
+        self.submission_tail += 1;
+        if self.submission_tail == self.layout.queue_depth {
+            self.submission_tail = 0;
+        }
+        self.completion_head += 1;
+        if self.completion_head == self.layout.queue_depth {
+            self.completion_head = 0;
+            self.completion_phase = !self.completion_phase;
+        }
+        self.next_command_id = self.next_command_id.wrapping_add(1);
+        if self.next_command_id == 0 {
+            self.next_command_id = 1;
+        }
+        self
+    }
+
+    #[cfg(test)]
+    pub(crate) const fn from_state(
+        admin_queues: ActiveNvmeAdminQueues,
+        layout: NvmeIoQueueDmaLayout,
+    ) -> Self {
+        Self {
+            admin_queues,
+            layout,
+            submission_tail: 0,
+            completion_head: 0,
+            completion_phase: true,
+            next_command_id: 1,
+        }
     }
 }
 

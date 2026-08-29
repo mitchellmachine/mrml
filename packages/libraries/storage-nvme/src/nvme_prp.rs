@@ -36,6 +36,15 @@ impl PreparedNvmePrps {
     pub const fn request(&self) -> NvmePrpRequest {
         self.request
     }
+
+    #[cfg(test)]
+    pub(crate) const fn with_direction_for_test(
+        mut self,
+        direction: NvmeTransferDirection,
+    ) -> Self {
+        self.request.direction = direction;
+        self
+    }
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]

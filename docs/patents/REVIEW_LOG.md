@@ -10398,3 +10398,13 @@ symbol-table bounds. It does not introduce an object encoding, debug format,
 linking algorithm, compression method, cryptographic mechanism, or loader
 behavior, and it does not emit or preserve debug information. This technical
 screen is not legal advice or patent clearance.
+
+# 2026-08-29 — Semantic bounded NVMe namespace I/O
+
+Patent review: **NOT_TRIGGERED**. This increment encodes the conventional fixed
+NVMe NVM read, write, and flush commands through the existing bounded queue and
+PRP mechanisms. It adds exact capability, namespace-generation, block-range,
+transfer-direction, command-readback, completion-identity, and quarantine
+checks. It introduces no scheduling, caching, allocation, naming, compression,
+or data-layout algorithm. This technical screen is not legal advice or patent
+clearance.

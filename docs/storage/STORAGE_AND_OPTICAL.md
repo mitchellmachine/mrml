@@ -448,8 +448,7 @@ parsed into fixed-capacity printable serial/model/firmware labels, exact
 controller generations, bounded namespace count, checked/capped maximum
 transfer size, and optional-command/cache feature facts. Labels and feature
 bits remain non-authorizing data. Native PCI enumeration, concrete MMIO
-installation, and I/O queues,
-namespaces, commands, DMA/IOMMU revocation, interrupts, reset, service IPC,
+installation, DMA/IOMMU revocation, interrupts, reset, service IPC,
 runtime provider publication, and physical-device evidence remain
 **PLANNED**. The same semantic command engine now admits one nonzero Identify
 Namespace request without exposing raw admin authority. Its hostile result is
@@ -479,8 +478,17 @@ exactly authorized for device-read versus device-write direction, device-write
 buffers are zero-verified, one/two-page requests use direct PRPs, and larger
 requests build and verify at most 255 entries in a distinct zeroed 4 KiB list.
 Missing/excess lists, overlaps, stale or excessive rights, and malformed extents
-fail before mutation; partial list mutation quarantines the request. Fifty focused
-tests pass on Windows and Arch Linux. The class tuple
+fail before mutation; partial list mutation quarantines the request. The active
+I/O queue now accepts only generation-bound namespace read, write, and flush
+requests through exact namespace capabilities. Read/write ranges and transfer
+geometry are checked against the parsed namespace identity and the 1 MiB
+interface bound; PRPs must match the device transfer direction and may not
+overlap queue memory. The provider writes and verifies every command dword,
+rings queue-specific submission/completion doorbells, validates phase, command
+ID, queue ID/head, and advances bounded cursors. Explicit device rejection
+returns live cleanup ownership, while malformed or uncertain completion state
+quarantines admin, I/O, and data ownership. Fifty-six focused tests pass on
+Windows and Arch Linux. The class tuple
 is cross-checked against the
 [PCI-SIG DEVICE_INTERFACE_REPORT ECN](https://pcisig.com/PCIExpress/ECN/Base/AddClasstoDEVICE_INTERFACE_REPORT);
 later register and queue work will use the current
