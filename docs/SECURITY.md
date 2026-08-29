@@ -186,7 +186,8 @@ access. The security/acceptance gate is canonical in
 - The task runtime represents invalid user return state as a typed protocol
   violation, revokes the complete task domain before peer notification, and
   never misreports it as a hardware exception. The service supervisor records
-  exact `Faulted` state and a one-use cleanup ticket; live dispatch integration
+  exact `Faulted` state and a one-use cleanup ticket. Live syscall decoding now
+  completes scoped cleanup and kernel-selected handoff; a dedicated QEMU probe
   remains pending.
 - The MRML-native ZIM consumer applies the same exact-capacity rule at its
   buffered-receive boundary and uses explicitly aligned exact-width storage for

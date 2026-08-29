@@ -2128,7 +2128,9 @@ live composition remains pending.
    before peer notification and scheduler handoff. A focused test raises the
    Linux kernel total to 596. The supervisor now converts the retirement into
    exact `Faulted` state, cleanup ticket, and restart deadline; its focused test
-   raises the total to 597. Live dispatch integration remains pending.
+   raises the total to 597. Live generic and boot-recovery syscall decoding now
+   invokes scoped retirement, exact cleanup, and kernel-selected handoff; three
+   service profiles cross-build. A dedicated QEMU probe remains pending.
    Exact feature gating now confines `GuestMappingRevoker` to block/component
    cleanup builds; ordinary, restart-request, component, and block service UEFI
    profiles cross-build without the former unused import.

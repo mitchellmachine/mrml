@@ -6717,7 +6717,13 @@ service generation `Faulted`, retains its saved context in a one-use cleanup
 ticket, and computes the trusted restart deadline. A focused test proves the
 exact violation/context, idle outcome, state transition, pending cleanup, and
 cleanup completion; 597 Linux kernel tests and both service UEFI profiles pass.
-Live syscall dispatch integration remains pending.
+The live service syscall decoder now routes forged generic or boot-recovery
+return state through that retirement, rejects an impossible pending-buffer
+alias, completes the exact resource/address-space cleanup, and enters only the
+kernel-selected successor. Ordinary, accounted, and block-service UEFI profiles
+cross-build and 597 Linux kernel tests pass. A dedicated QEMU execution probe
+remains pending, so this integration is **PARTIALLY IMPLEMENTED** rather than
+hosted-runtime verified.
 The bootloader now imports `GuestMappingRevoker` only for the block/component
 profiles that instantiate its hosted cleanup adapter. Ordinary service,
 restart-request, component-service, and block-service UEFI profiles all
@@ -6747,7 +6753,8 @@ boundary hardening and also does not trigger review. The typed protocol-
 violation retirement is conventional process-lifecycle isolation rather than a
 new algorithm. Patent review: **NOT_TRIGGERED**; see [the review
 log](patents/REVIEW_LOG.md). Supervisor integration reuses that lifecycle and
-does not trigger separate review.
+does not trigger separate review; live dispatch wiring also adds no new
+mechanism.
 
 Rust service code does not assume a fixed PE entry RVA. WHP and KVM publish the
 entry derived from the verified signed executable in a hosted metadata page.

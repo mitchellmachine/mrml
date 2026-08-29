@@ -127,7 +127,7 @@ use mrml_kernel::{
     MAX_INLINE_PAYLOAD, PeerDeathReason, RestartPolicy, ServiceAddressSpaceEraser, ServiceError,
     ServiceId, ServiceResourceEraser, ServiceSupervisor, SharedAccess, SharedBindingError,
     SharedBufferSyscallError, SharedBufferSyscallExecutor, SharedEndpoint, SharedEndpointRequest,
-    SharedMemoryBindings, VmId, VmTable, decode_capability_transfers,
+    SharedMemoryBindings, TaskProtocolViolation, VmId, VmTable, decode_capability_transfers,
 };
 #[cfg(not(feature = "fault-probe"))]
 use mrml_kernel::{
@@ -923,7 +923,9 @@ unsafe extern "sysv64" fn mrml_user_call_dispatch(frame: *mut UserCallFrame) {
         if frame.rax == BOOT_RECOVERY_SYSCALL_OPERATION {
             let request = match BootRecoverySyscallRequest::decode_frame(frame) {
                 Ok(request) => request,
-                Err(mrml_kernel::BootRecoverySyscallError::InvalidReturn) => halt(),
+                Err(mrml_kernel::BootRecoverySyscallError::InvalidReturn) => {
+                    retire_invalid_service_return()
+                }
                 Err(_) => {
                     frame.complete_error();
                     return;
@@ -972,7 +974,7 @@ unsafe extern "sysv64" fn mrml_user_call_dispatch(frame: *mut UserCallFrame) {
                 | mrml_kernel::SyscallError::InvalidInstruction
                 | mrml_kernel::SyscallError::InvalidStack
                 | mrml_kernel::SyscallError::InvalidFlags,
-            ) => halt(),
+            ) => retire_invalid_service_return(),
             Err(_) => {
                 frame.complete_error();
                 return;
@@ -4310,6 +4312,39 @@ unsafe fn service_resource_mapping(virtual_address: u64) -> Mapping {
         PagePermissions::USER_READ_WRITE,
     )
     .unwrap_or_else(|_| halt())
+}
+
+#[cfg(feature = "service-probe")]
+unsafe fn retire_invalid_service_return() -> ! {
+    let runtime = unsafe {
+        (*core::ptr::addr_of_mut!(SERVICE_RUNTIME))
+            .as_mut()
+            .unwrap_or_else(|| halt())
+    };
+    let current = runtime.current().unwrap_or_else(|| halt());
+    if unsafe { has_pending_buffer(current) } {
+        halt();
+    }
+    let supervisor = unsafe {
+        (*core::ptr::addr_of_mut!(SERVICE_SUPERVISOR))
+            .as_mut()
+            .unwrap_or_else(|| halt())
+    };
+    let violation = supervisor
+        .violate_current(runtime, TaskProtocolViolation::InvalidUserReturn)
+        .unwrap_or_else(|_| halt());
+    if violation.retirement.task != current
+        || violation.retirement.violation != TaskProtocolViolation::InvalidUserReturn
+        || runtime.context(current).is_ok()
+    {
+        halt();
+    }
+    unsafe { complete_service_cleanup(supervisor, violation.cleanup) };
+    match violation.retirement.next {
+        ScheduleOutcome::Switch { to, .. } => unsafe { enter_service_task(runtime, to) },
+        ScheduleOutcome::Idle => halt(),
+        _ => halt(),
+    }
 }
 
 #[cfg(feature = "service-probe")]
