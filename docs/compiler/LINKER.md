@@ -173,7 +173,9 @@ every fragment before object-atomic selection. Objects with unwind sections
 still reject before expansion, so ordinary unwind-bearing gnullvm objects are
 not yet admitted.
 
-The PE serializer now accepts up to 256 typed AMD64 runtime-function records.
+The PE serializer now accepts up to 4,096 typed AMD64 runtime-function records,
+matching the retained-fragment ceiling so an atomically selected COFF member
+cannot retain code while losing its bounded exception metadata.
 It resolves checked begin/end symbols and offsets, rejects empty unwind data or
 non-increasing ranges, places unwind bytes in the read-only NX section, sorts
 12-byte function-table records by begin RVA, and publishes the exact `.pdata`
@@ -183,8 +185,9 @@ driver transport are still required before gnullvm unwind sections are admitted.
 
 The COFF core now decodes bounded `.pdata$...` records into that typed form.
 Each 12-byte record must have exactly three `IMAGE_REL_AMD64_ADDR32NB`
-relocations at offsets 0, 4, and 8. Begin/end targets must resolve to one
-zero-offset external definition in a bounded text section; the third target
+relocations at offsets 0, 4, and 8. Begin/end targets resolve deterministically
+to the first zero-offset external definition in a bounded text section;
+additional names at that exact section and offset are aliases. The third target
 must resolve at offset zero in a nonempty `.xdata$...` section. Section indices,
 symbol records, addends, payloads, and record capacity are checked.
 

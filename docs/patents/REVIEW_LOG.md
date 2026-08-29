@@ -64,6 +64,15 @@ operation. It adds no NVMe register, queue, command, DMA, discovery, storage
 scheduling, caching, allocation, naming, encoding, data-layout, or optimization
 behavior. This technical screen is not legal advice or patent clearance.
 
+# 2026-08-29 — Bounded COFF runtime metadata and exact-location aliases
+
+Patent review: **NOT_TRIGGERED**. This increment retains conventional PE/COFF
+AMD64 runtime-function records under the linker's existing bounded fragment
+ceiling and treats multiple symbol-table names for one exact section and offset
+as aliases. It introduces no object encoding, exception format, compression,
+cryptographic mechanism, loader behavior, or novel symbol-resolution
+algorithm. This technical screen is not legal advice or patent clearance.
+
 # 2026-08-29 — AHCI userspace syscall adapter
 
 Patent review: **NOT_TRIGGERED**. This increment maps the already screened AHCI

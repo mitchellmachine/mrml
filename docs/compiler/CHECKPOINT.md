@@ -139,6 +139,19 @@ because generated input objects were absent, so no package-pass claim is made.
 Decoder/driver adoption remains the next gate. Patent review:
 **NOT_TRIGGERED**; see `docs/patents/REVIEW_LOG.md`.
 
+The production COFF decoder and driver now project every COMDAT read-only
+section, including associative companions, through exact source-object/section
+identities. This crosses the pinned ORACLE-0003 `libcore` discontiguous-layout
+gate. Runtime-function decoding then admitted multiple names for one exact
+zero-offset code location and raised its independent record ceiling from 256
+to the existing 4,096 retained-fragment ceiling. The Linux release driver
+build passes. The exact pinned probe advances to the next fail-closed boundary,
+`could not decode selected writable COFF data`; this is a Linux-hosted parser
+probe, not native Windows execution or full `libcore` support. The canonical
+Linux compiler-core package gate passes all 812 unit tests and its integration
+groups, including 351 replacement tests. Patent review: **NOT_TRIGGERED**; see
+`docs/patents/REVIEW_LOG.md`.
+
 Commit `447af934` gives COFF archive fixed-point discovery a zero-copy,
 fallible external-symbol inventory over validated symbol and string tables.
 Structural metadata admits at most 4,096 sections, covering the pinned

@@ -1046,7 +1046,10 @@ fn selected_runtime_functions<'data>(
                     continue;
                 }
                 if runtime_functions.len() == MAX_PE_RUNTIME_FUNCTIONS {
-                    return Err(anyhow!("selected PE runtime-function count exceeds 256"));
+                    return Err(anyhow!(
+                        "selected PE runtime-function count exceeds {}",
+                        MAX_PE_RUNTIME_FUNCTIONS
+                    ));
                 }
                 runtime_functions
                     .try_push(*function)

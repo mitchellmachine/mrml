@@ -11,7 +11,9 @@ pub const MAX_LINK_INPUTS: usize = 256;
 pub const MAX_LINK_FRAGMENTS: usize = 4096;
 pub const MAX_LINK_RELOCATIONS: usize = 256;
 pub const MAX_LINK_DEFINITIONS: usize = 256;
-pub const MAX_PE_RUNTIME_FUNCTIONS: usize = 256;
+/// Runtime metadata is independently bounded but must cover every retained
+/// code fragment from an atomically selected COFF archive member.
+pub const MAX_PE_RUNTIME_FUNCTIONS: usize = MAX_LINK_FRAGMENTS;
 /// Ordinary members that may be indexed without making every member a link input.
 pub const MAX_ARCHIVE_MEMBERS: usize = 1024;
 pub const MAX_ARCHIVE_SYMBOLS: usize = 4096;
@@ -3885,13 +3887,13 @@ pub fn decode_x86_64_coff_runtime_functions<'data, 'records>(
             )
             .ok_or(LinkerError::InvalidCoff)?;
         if records.is_empty() || records.len() % 12 != 0 {
-            return Err(LinkerError::UnsupportedCoff);
+            return Err(LinkerError::UnsupportedCoffSection);
         }
         let relocation_offset = usize::try_from(read_u32(object, header + 24)?)
             .map_err(|_| LinkerError::OffsetOverflow)?;
         let relocation_count = usize::from(read_u16(object, header + 32)?);
         if relocation_count != records.len() / 4 {
-            return Err(LinkerError::UnsupportedCoff);
+            return Err(LinkerError::UnsupportedCoffRelocation);
         }
         for record_index in 0..records.len() / 12 {
             if record_count == record_storage.len() {
@@ -3917,7 +3919,7 @@ pub fn decode_x86_64_coff_runtime_functions<'data, 'records>(
                     != expected_field
                     || read_u16(object, relocation + 8)? != 3
                 {
-                    return Err(LinkerError::UnsupportedCoff);
+                    return Err(LinkerError::UnsupportedCoffRelocation);
                 }
                 let target_index = usize::try_from(read_u32(object, relocation + 4)?)
                     .map_err(|_| LinkerError::OffsetOverflow)?;
@@ -3930,7 +3932,7 @@ pub fn decode_x86_64_coff_runtime_functions<'data, 'records>(
                     || usize::try_from(target_section).map_err(|_| LinkerError::OffsetOverflow)?
                         > section_count
                 {
-                    return Err(LinkerError::UnsupportedCoff);
+                    return Err(LinkerError::UnsupportedCoffRelocationTarget);
                 }
                 let target_value = usize::try_from(read_u32(object, target + 8)?)
                     .map_err(|_| LinkerError::OffsetOverflow)?;
@@ -3972,7 +3974,7 @@ pub fn decode_x86_64_coff_runtime_functions<'data, 'records>(
                     text_section_names[field] = target_name;
                 } else {
                     if !target_name.starts_with(".xdata$") || addend != 0 {
-                        return Err(LinkerError::UnsupportedCoff);
+                        return Err(LinkerError::UnsupportedCoffRelocationTarget);
                     }
                     let target_size = usize::try_from(read_u32(object, target_header + 16)?)
                         .map_err(|_| LinkerError::OffsetOverflow)?;
@@ -3987,7 +3989,7 @@ pub fn decode_x86_64_coff_runtime_functions<'data, 'records>(
                         )
                         .ok_or(LinkerError::InvalidCoff)?;
                     if bytes.is_empty() {
-                        return Err(LinkerError::UnsupportedCoff);
+                        return Err(LinkerError::UnsupportedCoffSection);
                     }
                     unwind_info = Some(bytes);
                     unwind_section = Some(
@@ -3999,7 +4001,7 @@ pub fn decode_x86_64_coff_runtime_functions<'data, 'records>(
             if text_sections[0] != text_sections[1]
                 || text_section_names[0] != text_section_names[1]
             {
-                return Err(LinkerError::UnsupportedCoff);
+                return Err(LinkerError::InvalidCoffAssociation);
             }
             for (companion, companion_name) in [
                 (Some(pdata_section), Some(pdata_name)),
@@ -4023,7 +4025,7 @@ pub fn decode_x86_64_coff_runtime_functions<'data, 'records>(
                 begin_offset: text_targets[0].1,
                 end_symbol: text_targets[1].0,
                 end_offset: text_targets[1].1,
-                unwind_info: unwind_info.ok_or(LinkerError::UnsupportedCoff)?,
+                unwind_info: unwind_info.ok_or(LinkerError::UnsupportedCoffSection)?,
             };
             record_count += 1;
         }
@@ -4057,8 +4059,8 @@ fn coff_code_symbol_in_section<'a>(
             && read_u32(object, offset + 8)? == 0
         {
             let symbol = coff_symbol_name(object, offset, strings_offset, string_size)?;
-            if found.replace(symbol).is_some() {
-                return Err(LinkerError::UnsupportedCoff);
+            if found.is_none() {
+                found = Some(symbol);
             }
         }
         index = index
@@ -4068,9 +4070,10 @@ fn coff_code_symbol_in_section<'a>(
     if let Some(symbol) = found {
         return Ok(symbol);
     }
-    let section_index = usize::try_from(section).map_err(|_| LinkerError::UnsupportedCoff)?;
+    let section_index =
+        usize::try_from(section).map_err(|_| LinkerError::UnsupportedCoffSymbol)?;
     if section_index == 0 {
-        return Err(LinkerError::UnsupportedCoff);
+        return Err(LinkerError::UnsupportedCoffSymbol);
     }
     let header = 20usize
         .checked_add(
@@ -10799,7 +10802,7 @@ mod tests {
                 &mut relocated_relocations,
                 &mut relocated_definitions,
             ),
-            Err(LinkerError::UnsupportedCoff)
+            Err(LinkerError::UnsupportedCoffSection)
         );
     }
 
@@ -10838,7 +10841,22 @@ mod tests {
         }; MAX_PE_RUNTIME_FUNCTIONS];
         assert_eq!(
             decode_x86_64_coff_runtime_functions(&invalid, &mut invalid_storage),
-            Err(LinkerError::UnsupportedCoff)
+            Err(LinkerError::UnsupportedCoffRelocation)
+        );
+
+        let mut aliased = object.clone();
+        aliased.resize(335, 0);
+        aliased.copy_within(313..317, 331);
+        aliased[12..16].copy_from_slice(&8u32.to_le_bytes());
+        aliased[313..318].copy_from_slice(b"alias");
+        aliased[325..327].copy_from_slice(&1i16.to_le_bytes());
+        aliased[329] = 2;
+        let mut aliased_storage = storage;
+        assert_eq!(
+            decode_x86_64_coff_runtime_functions(&aliased, &mut aliased_storage)
+                .unwrap()[0]
+                .begin_symbol,
+            "entry"
         );
 
         let mut detached = object.clone();
