@@ -223,6 +223,8 @@ Wide signed midpoint uses an arithmetic cross-word half and adjusts negative
 odd sums so division rounds toward zero.
 Wide `min` and `max` compare signed or unsigned high words first, break ties
 with unsigned low words, and return one complete already-evaluated operand.
+Wide `abs_diff` orders operands with the receiver's signedness, subtracts the
+smaller from the larger, and returns the full unsigned magnitude.
 Wide signed sign predicates read negativity from the high word and require a
 nonzero two-word value for positivity, again returning a normalized scalar.
 `wrapping_div` and `wrapping_rem` preserve the mandatory zero-divisor trap but

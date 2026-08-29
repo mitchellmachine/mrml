@@ -7600,6 +7600,49 @@ impl<
             self.emit(&[0x4c, 0x89, 0xc0, 0x48, 0x89, 0xca])?;
             self.patch_forward_branch(done)?;
             return Ok(());
+        } else if let ExprKind::IntegerPairTransform {
+            base,
+            other,
+            transform: crate::expression::IntegerPairTransform::AbsoluteDifference,
+        } = expression.kind
+        {
+            let base_type = runtime_expression_type_with_locals(
+                self.function,
+                self.resolver,
+                &self.locals[..self.saved_locals],
+                tree,
+                base,
+                1,
+            )
+            .map_err(|kind| self.error(kind))?;
+            let expected_result = match base_type {
+                RuntimeExpressionType::Integer(Some(crate::IntegerType::U128)) => base_type,
+                RuntimeExpressionType::Integer(Some(crate::IntegerType::I128)) => {
+                    RuntimeExpressionType::Integer(Some(crate::IntegerType::U128))
+                }
+                _ => return Err(self.error(CodegenErrorKind::RuntimeTypeMismatch)),
+            };
+            if expected_type != expected_result {
+                return Err(self.error(CodegenErrorKind::RuntimeTypeMismatch));
+            }
+            self.emit_wide_binary_operands(tree, base, other, base_type)?;
+            let signed = base_type
+                == RuntimeExpressionType::Integer(Some(crate::IntegerType::I128));
+            self.emit(&[0x48, 0x39, 0xd1])?;
+            let base_larger = self.emit_forward_branch(if signed { 0x8f } else { 0x87 })?;
+            let other_larger = self.emit_forward_branch(if signed { 0x8c } else { 0x82 })?;
+            self.emit(&[0x49, 0x39, 0xc0])?;
+            let base_larger_tie = self.emit_forward_branch(0x83)?;
+            self.patch_forward_branch(other_larger)?;
+            self.emit(&[0x4c, 0x29, 0xc0, 0x48, 0x19, 0xca])?;
+            let done = self.emit_unconditional_forward_branch()?;
+            self.patch_forward_branch(base_larger)?;
+            self.patch_forward_branch(base_larger_tie)?;
+            self.emit(&[
+                0x49, 0x29, 0xc0, 0x48, 0x19, 0xd1, 0x4c, 0x89, 0xc0, 0x48, 0x89, 0xca,
+            ])?;
+            self.patch_forward_branch(done)?;
+            return Ok(());
         } else if let ExprKind::Binary {
             operator:
                 operator @ (crate::BinaryOperator::BitAnd

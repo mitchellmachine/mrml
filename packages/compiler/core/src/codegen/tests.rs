@@ -12863,6 +12863,22 @@ mod tests {
     }
 
     #[test]
+    fn mrml_v1_codegen_computes_wide_absolute_differences() {
+        for source in [
+            "#[mrml_abi::export(version = 1)] pub fn value(left: u128, right: u128) -> u128 { left.abs_diff(right) }",
+            "#[mrml_abi::export(version = 1)] pub fn value(left: i128, right: i128) -> u128 { left.abs_diff(right) }",
+        ] {
+            let module = Parser::new(source).parse_module::<2, 2>().unwrap();
+            let Some(Item::Function(function)) = module.items()[0] else {
+                panic!("expected function")
+            };
+            for abi in [X86_64Abi::SystemV, X86_64Abi::Windows] {
+                compile_x86_64_function::<_, 512, 2, 16>(&function, &NoConstants, abi).unwrap();
+            }
+        }
+    }
+
+    #[test]
     fn mrml_v1_codegen_tests_wide_signed_signs() {
         for source in [
             "#[mrml_abi::export(version = 1)] pub fn value(input: i128) -> u64 { input.is_positive() as u64 }",
