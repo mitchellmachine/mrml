@@ -416,6 +416,21 @@ typed `Get-*`, `Test-*`, `Initialize-*`, `New-*`, `Format-*`, `Write-*`, and
 recovery, accessibility, automation, and AI consume the same capability-scoped
 objects, progress, diagnostics, and redaction.
 
+The NVMe provider is **PARTIALLY IMPLEMENTED** at its first authority-free
+discovery gate. It validates the PCI-SIG mass-storage/NVM/NVMe class tuple,
+type-zero function identity, nonzero configuration generation, and a bounded,
+aligned, non-prefetchable 64-bit controller BAR from an immutable platform-
+enumerator snapshot. It returns identity and geometry only. Native PCI
+enumeration, MMIO mapping, controller registers, admin and I/O queues,
+namespaces, commands, DMA/IOMMU revocation, interrupts, reset, service IPC,
+runtime provider publication, and physical-device evidence remain
+**PLANNED**. Six focused tests pass on Windows and Arch Linux. The class tuple
+is cross-checked against the
+[PCI-SIG DEVICE_INTERFACE_REPORT ECN](https://pcisig.com/PCIExpress/ECN/Base/AddClasstoDEVICE_INTERFACE_REPORT);
+later register and queue work will use the current
+[NVM Express specifications](https://nvmexpress.org/specifications/) as its
+interoperability reference.
+
 ## Disk checking and images
 
 ## Dynamically serviced storage modules
@@ -430,6 +445,37 @@ object, transaction, and policy service. An AHCI library provides
 do not share the storage service address space. “Load into the service” means
 bind an exact admitted provider endpoint into its module registry, not map
 mutable code with ambient service authority.
+
+NVMe and legacy IDE are additional isolated block-provider implementations,
+not new storage authority models. They reuse the same block-provider interface,
+module registry, package admission, generation replacement, and supervisor
+boundary. The current workspace resolver admits only one exact provider for a
+required interface, so the newly introduced `org.mrml.driver.nvme` package does
+not yet publish a provider declaration: explicit multi-provider selection must
+land before a second implementation can enter a coherent release. That missing
+selection gate must fail closed rather than picking a driver from workspace or
+PCI enumeration order.
+
+The NVMe/legacy-IDE expansion has the following architectural score. Work stays
+sequential by provider and each parser/register/queue gate is independently
+bounded and tested.
+
+- Complexity impact: **HIGH**
+- TCB impact: **NONE**
+- New parser boundary: **YES**
+- New authority model: **NO**
+- New persistent state: **NO**
+- External dependency: **NO**
+- Failure isolated: **YES**
+- Existing-object reuse: **HIGH**
+
+The owner may select or replace an admitted compatible provider without vendor
+preference or rebooting the kernel. PCI class, manifest identity, signatures,
+and device names only identify candidates. Exact capabilities separately
+authorize configuration access, MMIO or I/O ports, DMA, interrupts, controller,
+namespace/media objects, and reset. Hostile configuration/register/queue data,
+integer overflow, stale generations, DMA after revocation, and uncertain reset
+all fail closed; uncertainty quarantines the provider and its device state.
 
 Generation resolution validates the complete candidate graph before activation.
 Updating a provider stages immutable package/interface bytes, drains new calls,

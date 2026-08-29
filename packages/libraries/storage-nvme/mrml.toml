@@ -1,0 +1,56 @@
+[manifest]
+format = "mrml"
+version = 2
+
+[package]
+default = true
+id = "org.mrml.driver.nvme"
+kind = "library"
+name = "mrml-storage-nvme"
+profile = "library"
+
+[isolation]
+default = "native-service"
+minimum = "native-service"
+must_run = true
+runtime_class = "microvm-eligible"
+supported = ["native-service", "microvm"]
+
+[[target]]
+arch = "x86_64"
+environment = "mrml"
+
+[[target]]
+arch = "x86_64"
+environment = "windows"
+
+[[target]]
+arch = "x86_64"
+environment = "linux"
+
+[[artifact]]
+kind = "lib"
+name = "mrml_storage_nvme"
+
+[rust]
+crate_name = "mrml_storage_nvme"
+crate_type = "lib"
+source = "packages/libraries/storage-nvme/src/lib.rs"
+
+[[dependency]]
+alias = "mrml_interface_storage_block_provider_v1"
+compile_name = "mrml-interface-storage-block-provider-v1"
+package = "org.mrml.interface.storage.block-provider"
+scope = "compile"
+
+[[dependency]]
+alias = "mrml_kernel"
+compile_name = "mrml-kernel"
+package = "org.mrml.system.kernel"
+scope = "compile"
+
+[[host_test]]
+targets = ["WINDOWS", "LINUX"]
+
+[test_policy]
+stack_bytes = 67108864

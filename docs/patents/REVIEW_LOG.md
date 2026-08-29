@@ -10233,6 +10233,18 @@ checked layout arithmetic, and introduces no new object encoding, association
 algorithm, relocation kind, compression, cryptographic mechanism, or loader
 behavior. This technical screen is not legal advice or patent clearance.
 
+# 2026-08-29 — Authority-free NVMe PCI discovery
+
+Patent review: **NOT_TRIGGERED**. This increment validates conventional PCI
+function identity, the PCI-SIG class/subclass/programming-interface tuple, and
+ordinary 64-bit memory-BAR type, size, alignment, and overflow properties. It
+does not implement NVMe register behavior, commands, queues, namespaces,
+completion processing, DMA, caching, scheduling, or another storage algorithm.
+The current NVM Express specifications were consulted only to bound later
+interoperability work; this gate is an independently expressed defensive PCI
+snapshot validator. This technical screen is not legal advice or patent
+clearance.
+
 # 2026-08-29 — COFF read-only PC-relative relocation family
 
 Patent review: **NOT_TRIGGERED**. This increment decodes and applies the
