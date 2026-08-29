@@ -7337,15 +7337,9 @@ impl<
             self.emit(&[0x59, 0x41, 0x58])?;
             self.evaluation_depth -= 2;
             match operator {
-                crate::BinaryOperator::BitAnd => {
-                    self.emit(&[0x4c, 0x21, 0xc0, 0x48, 0x21, 0xca])?
-                }
-                crate::BinaryOperator::BitOr => {
-                    self.emit(&[0x4c, 0x09, 0xc0, 0x48, 0x09, 0xca])?
-                }
-                crate::BinaryOperator::BitXor => {
-                    self.emit(&[0x4c, 0x31, 0xc0, 0x48, 0x31, 0xca])?
-                }
+                crate::BinaryOperator::BitAnd => self.emit_wide_bitwise(0x21)?,
+                crate::BinaryOperator::BitOr => self.emit_wide_bitwise(0x09)?,
+                crate::BinaryOperator::BitXor => self.emit_wide_bitwise(0x31)?,
                 crate::BinaryOperator::Add => {
                     self.emit_wide_add(layout)?;
                 }
@@ -7719,6 +7713,10 @@ impl<
             self.emit_trap_branch(if layout.signed { 0x80 } else { 0x82 })?;
         }
         self.emit(&[0x4c, 0x89, 0xc0, 0x48, 0x89, 0xca])
+    }
+
+    fn emit_wide_bitwise(&mut self, opcode: u8) -> Result<(), CodegenError> {
+        self.emit(&[0x4c, opcode, 0xc0, 0x48, opcode, 0xca])
     }
 
     fn emit_slice_length(&mut self, name: &str) -> Result<(), CodegenError> {
@@ -9486,15 +9484,9 @@ impl<
                         self.evaluation_depth -= 2;
                     }
                     match assignment.operator {
-                        crate::AssignmentOperator::BitAnd => {
-                            self.emit(&[0x4c, 0x21, 0xc0, 0x48, 0x21, 0xca])?
-                        }
-                        crate::AssignmentOperator::BitOr => {
-                            self.emit(&[0x4c, 0x09, 0xc0, 0x48, 0x09, 0xca])?
-                        }
-                        crate::AssignmentOperator::BitXor => {
-                            self.emit(&[0x4c, 0x31, 0xc0, 0x48, 0x31, 0xca])?
-                        }
+                        crate::AssignmentOperator::BitAnd => self.emit_wide_bitwise(0x21)?,
+                        crate::AssignmentOperator::BitOr => self.emit_wide_bitwise(0x09)?,
+                        crate::AssignmentOperator::BitXor => self.emit_wide_bitwise(0x31)?,
                         crate::AssignmentOperator::Add => {
                             self.emit_wide_add(layout)?;
                         }

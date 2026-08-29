@@ -136,7 +136,8 @@ Direct unary bitwise inversion of a two-word integer inverts both words.
 Direct `i128` negation uses carry-aware two-word lowering and traps on `i128::MIN`
 when ordinary overflow checks are enabled.
 Typed `&`, `|`, and `^` expressions evaluate left-to-right and combine both words
-independently for matching wide integer types.
+independently for matching wide integer types. Binary and wide-local compound
+forms share the same two-word lowering.
 Matching-type `u128` and `i128` addition evaluates left-to-right, propagates the
 low-word carry into the high word, and uses unsigned-carry or signed-overflow
 branches respectively when ordinary overflow checks are enabled.
