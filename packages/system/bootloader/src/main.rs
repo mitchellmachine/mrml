@@ -1042,19 +1042,18 @@ unsafe extern "sysv64" fn mrml_user_call_dispatch(frame: *mut UserCallFrame) {
                 capability_count,
             } => {
                 let payload_length = usize::from(payload_length);
-                let payload = core::slice::from_raw_parts_mut(
-                    core::ptr::addr_of_mut!(SERVICE_SYSCALL_PAYLOAD).cast::<u8>(),
-                    payload_length,
-                );
+                let payload_storage = &mut *core::ptr::addr_of_mut!(SERVICE_SYSCALL_PAYLOAD);
+                payload_storage.fill(0);
+                let payload = &mut payload_storage[..payload_length];
                 copy_from_active_user(root, current, payload_address, payload);
                 let capability_count = usize::from(capability_count);
                 let descriptor_length = capability_count
                     .checked_mul(CAPABILITY_TRANSFER_DESCRIPTOR_BYTES)
                     .unwrap_or_else(|| halt());
-                let descriptor_bytes = core::slice::from_raw_parts_mut(
-                    core::ptr::addr_of_mut!(SERVICE_SYSCALL_CAPABILITIES).cast::<u8>(),
-                    descriptor_length,
-                );
+                let descriptor_storage =
+                    &mut *core::ptr::addr_of_mut!(SERVICE_SYSCALL_CAPABILITIES);
+                descriptor_storage.fill(0);
+                let descriptor_bytes = &mut descriptor_storage[..descriptor_length];
                 if descriptor_length != 0 {
                     copy_from_active_user(root, current, capabilities_address, descriptor_bytes);
                 }
@@ -1066,6 +1065,8 @@ unsafe extern "sysv64" fn mrml_user_call_dispatch(frame: *mut UserCallFrame) {
                 )
                 .is_err()
                 {
+                    payload_storage.fill(0);
+                    descriptor_storage.fill(0);
                     frame.complete_error();
                     return;
                 }
@@ -1076,17 +1077,22 @@ unsafe extern "sysv64" fn mrml_user_call_dispatch(frame: *mut UserCallFrame) {
                 {
                     *slot = (descriptor.capability, descriptor.rights);
                 }
+                descriptors.fill(None);
+                descriptor_storage.fill(0);
                 let endpoint_object = (*core::ptr::addr_of_mut!(SERVICE_ENDPOINT))
                     .as_mut()
                     .unwrap_or_else(|| halt());
-                let sequence = match runtime.deliver_ipc(
-                        current,
-                        receiver,
-                        endpoint_object,
-                        endpoint,
-                        payload,
-                        &requested[..capability_count],
-                    ) {
+                let delivery = runtime.deliver_ipc(
+                    current,
+                    receiver,
+                    endpoint_object,
+                    endpoint,
+                    payload,
+                    &requested[..capability_count],
+                );
+                payload_storage.fill(0);
+                requested.fill((Capability::from_token(0), Rights::NONE));
+                let sequence = match delivery {
                     Ok(sequence) => sequence,
                     Err(error) if error.is_precommit_send_denial() => {
                         frame.complete_error();

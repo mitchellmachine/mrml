@@ -6663,6 +6663,12 @@ denied before delivery. Scheduler and integrity failures remain fail-stop. The
 classification lives on `TaskRuntimeError` and a focused test proves unrelated
 or integrity errors are excluded; 595 Linux kernel tests and ordinary/accounted
 service UEFI profiles pass.
+Buffered-send staging now wipes the complete fixed payload and descriptor
+scratch arrays before reuse and after descriptor failure or delivery. Decoded
+descriptor options are cleared before the runtime call, and the requested
+capability/right tuple array is cleared immediately after it. This bounds
+retention across both success and precommit denial. The same 595-test kernel
+suite and ordinary/accounted service profiles pass.
 The bootloader now imports `GuestMappingRevoker` only for the block/component
 profiles that instantiate its hosted cleanup adapter. Ordinary service,
 restart-request, component-service, and block-service UEFI profiles all
@@ -6679,7 +6685,8 @@ also classifies existing query/restart errors without introducing a new IPC
 algorithm or mechanism, and applies the same fail-stop distinction to existing
 capability authorization plus a conventional scrubbed error completion for
 malformed arguments and precommit send denial. See [the patent review
-log](patents/REVIEW_LOG.md).
+log](patents/REVIEW_LOG.md). Scratch erasure is ordinary data-lifetime hygiene
+on that existing path and does not trigger a separate patent review.
 
 Rust service code does not assume a fixed PE entry RVA. WHP and KVM publish the
 entry derived from the verified signed executable in a hosted metadata page.

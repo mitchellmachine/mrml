@@ -2098,6 +2098,9 @@ live composition remains pending.
    precommit denial set, including malformed transfer descriptors, while
    scheduler/integrity failures halt. Ordinary and accounted profiles build and
    595 Linux kernel tests pass.
+   Buffered-send payload/descriptor scratch is zeroed before reuse and after
+   descriptor failure or delivery; decoded and requested capability temporaries
+   are cleared at their last use. The same build/test gates pass.
    Exact feature gating now confines `GuestMappingRevoker` to block/component
    cleanup builds; ordinary, restart-request, component, and block service UEFI
    profiles cross-build without the former unused import.

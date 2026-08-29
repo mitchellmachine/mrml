@@ -164,6 +164,8 @@ access. The security/acceptance gate is canonical in
   `InvalidReturn` decoder result instead of conflating it with bad arguments.
 - Service sends return scrubbed failure only for a kernel-classified precommit
   denial or malformed descriptor; scheduler and integrity failures fail-stop.
+- Buffered-send payload, descriptor, decoded-handle, and requested-rights
+  staging is erased at bounded last-use points on success and denial.
 - The MRML-native ZIM consumer applies the same exact-capacity rule at its
   buffered-receive boundary and uses explicitly aligned exact-width storage for
   its outgoing capability descriptor.
