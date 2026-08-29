@@ -575,6 +575,7 @@ pub struct Endpoint {
 
 pub(crate) struct EndpointSendPlan {
     object: ObjectId,
+    authority: Capability,
     sequence: u64,
     next_sequence: u64,
 }
@@ -594,7 +595,7 @@ impl Endpoint {
         _message: &Message,
     ) -> Result<u64, IpcError> {
         let plan = self.prepare_send(sender_space, endpoint)?;
-        self.commit_send(plan)
+        self.commit_send(plan, endpoint)
     }
 
     pub(crate) fn prepare_send<const N: usize>(
@@ -609,13 +610,21 @@ impl Endpoint {
         let next_sequence = sequence.checked_add(1).ok_or(IpcError::SequenceExhausted)?;
         Ok(EndpointSendPlan {
             object: self.object,
+            authority: endpoint,
             sequence,
             next_sequence,
         })
     }
 
-    pub(crate) fn commit_send(&mut self, plan: EndpointSendPlan) -> Result<u64, IpcError> {
-        if plan.object != self.object || plan.sequence != self.next_sequence {
+    pub(crate) fn commit_send(
+        &mut self,
+        plan: EndpointSendPlan,
+        endpoint: Capability,
+    ) -> Result<u64, IpcError> {
+        if plan.object != self.object
+            || plan.authority != endpoint
+            || plan.sequence != self.next_sequence
+        {
             return Err(IpcError::InvalidSequencePlan);
         }
         self.next_sequence = plan.next_sequence;
@@ -694,14 +703,22 @@ mod tests {
         ));
         let first = endpoint.prepare_send(&space, allowed).unwrap();
         let stale = endpoint.prepare_send(&space, allowed).unwrap();
-        assert_eq!(endpoint.commit_send(first), Ok(1));
+        assert_eq!(endpoint.commit_send(first, allowed), Ok(1));
         assert_eq!(
-            endpoint.commit_send(stale),
+            endpoint.commit_send(stale, allowed),
             Err(IpcError::InvalidSequencePlan)
         );
         assert_eq!(
-            endpoint.commit_send(endpoint.prepare_send(&space, allowed).unwrap()),
+            endpoint.commit_send(endpoint.prepare_send(&space, allowed).unwrap(), allowed),
             Ok(2)
+        );
+        assert_eq!(
+            endpoint.commit_send(endpoint.prepare_send(&space, allowed).unwrap(), wrong),
+            Err(IpcError::InvalidSequencePlan)
+        );
+        assert_eq!(
+            endpoint.commit_send(endpoint.prepare_send(&space, allowed).unwrap(), allowed),
+            Ok(3)
         );
 
         endpoint.next_sequence = u64::MAX;

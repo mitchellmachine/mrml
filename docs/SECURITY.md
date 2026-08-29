@@ -281,6 +281,8 @@ access. The security/acceptance gate is canonical in
   table capacity is observed, preventing unauthorized kernel-state probes.
 - Sender endpoint authentication precedes receiver scheduler/domain lookup;
   unauthorized callers cannot probe whether a receiver identity exists.
+- Queued delivery carries one capability-generation-bound endpoint send plan
+  from authentication through commit, avoiding a second authority snapshot.
 - Buffered receive preflights and binds its exact empty pending-table slot before
   scheduler blocking, preventing late capacity discovery after state mutation.
 - Pending buffered completion revalidates zero-capacity address canonicality and

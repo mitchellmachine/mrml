@@ -2252,6 +2252,10 @@ live composition remains pending.
    total remains 623.
    Queued/direct send now authenticate before receiver identity lookup. A
    missing-receiver non-disclosure test raises the kernel total to 624.
+   Queued delivery now reuses one exact capability/object/sequence send plan
+   through transfer commit instead of re-authorizing after receiver preflight.
+   Capability substitution at commit fails without sequence consumption; the
+   kernel total remains 624.
    Buffered service receive now preflights an exact pending-table slot before
    blocking and binds post-switch publication to that slot. Service profiles
    cross-build; live backend execution remains pending.

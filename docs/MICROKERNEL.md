@@ -6906,6 +6906,15 @@ Queued and direct send now authenticate the sender endpoint before receiver
 scheduler or domain lookup. An unauthorized missing-receiver probe returns only
 authorization denial, while the same request with valid endpoint authority
 returns `MissingTask`; the Linux kernel total rises to 624.
+Queued delivery now carries that single preflight authorization into the
+transfer commit instead of resolving the sender capability a second time. The
+one-use endpoint plan is bound to the exact capability generation as well as
+the endpoint object and sequence; substituting another live capability at
+commit fails without consuming the sequence. The existing 624 Linux kernel
+tests pass.
+Patent review: `NOT_TRIGGERED` — this is conventional bounded validation and
+transaction commit binding for the existing IPC mechanism; it introduces no
+new externally visible mechanism.
 The service buffered-receive path now resolves one exact empty pending-table
 slot before blocking the current task, then publishes only into that still-empty
 slot after the scheduler switch. Duplicate task identity, full table, slot

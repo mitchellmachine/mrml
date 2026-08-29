@@ -3,6 +3,7 @@ use core::mem::size_of;
 use core::ops::{Deref, DerefMut};
 
 use crate::arch::x86_64::{TrapDisposition, UserContext};
+use crate::ipc::EndpointSendPlan;
 use crate::{
     BalancePolicyError, BalanceTarget, Capability, CapabilitySpace, DetachedTask, Endpoint,
     IpcError, KernelScheduleError, KernelScheduler, MemoryBackingKind, MemoryObjectId,
@@ -945,6 +946,33 @@ impl<const TASKS: usize, const CAPS: usize> TaskRuntime<TASKS, CAPS> {
                 endpoint_capability,
             )
             .map_err(TaskRuntimeError::Ipc)?;
+        self.send_ipc_prepared(
+            sender,
+            receiver,
+            endpoint,
+            endpoint_capability,
+            send_plan,
+            payload,
+            requested,
+        )
+    }
+
+    fn send_ipc_prepared(
+        &mut self,
+        sender: TaskId,
+        receiver: TaskId,
+        endpoint: &mut Endpoint,
+        endpoint_capability: Capability,
+        send_plan: EndpointSendPlan,
+        payload: &[u8],
+        requested: &[(Capability, Rights)],
+    ) -> Result<(u64, Message), TaskRuntimeError> {
+        if !self.scheduler.contains(sender) {
+            return Err(TaskRuntimeError::IntegrityFailure);
+        }
+        let sender_slot = self
+            .domain_slot(sender)
+            .map_err(|_| TaskRuntimeError::IntegrityFailure)?;
         if !self.scheduler.contains(receiver) {
             return Err(TaskRuntimeError::IntegrityFailure);
         }
@@ -984,7 +1012,7 @@ impl<const TASKS: usize, const CAPS: usize> TaskRuntime<TASKS, CAPS> {
             });
         }
         let sequence = endpoint
-            .commit_send(send_plan)
+            .commit_send(send_plan, endpoint_capability)
             .map_err(|_| TaskRuntimeError::IntegrityFailure)?;
         Ok((sequence, message))
     }
@@ -1007,8 +1035,8 @@ impl<const TASKS: usize, const CAPS: usize> TaskRuntime<TASKS, CAPS> {
         let sender_slot = self
             .domain_slot(sender)
             .map_err(|_| TaskRuntimeError::IntegrityFailure)?;
-        endpoint
-            .authorize_member(
+        let send_plan = endpoint
+            .prepare_send(
                 &self.domains[sender_slot]
                     .as_ref()
                     .ok_or(TaskRuntimeError::IntegrityFailure)?
@@ -1031,11 +1059,12 @@ impl<const TASKS: usize, const CAPS: usize> TaskRuntime<TASKS, CAPS> {
         {
             return Err(TaskRuntimeError::InboxFull);
         }
-        let (sequence, message) = self.send_ipc(
+        let (sequence, message) = self.send_ipc_prepared(
             sender,
             receiver,
             endpoint,
             endpoint_capability,
+            send_plan,
             payload,
             requested,
         )?;
