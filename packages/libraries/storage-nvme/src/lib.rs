@@ -13,6 +13,7 @@ mod nvme_io_queue_dma;
 mod nvme_io_queue_program;
 mod nvme_mapping;
 mod nvme_namespace;
+mod nvme_prp;
 mod nvme_queue_dma;
 mod nvme_queue_program;
 
@@ -49,6 +50,10 @@ pub use nvme_mapping::{
 pub use nvme_namespace::{
     parse_nvme_namespace_identity, NvmeNamespaceIdentity, NvmeNamespaceParseError,
     NVME_MAX_LBA_FORMATS,
+};
+pub use nvme_prp::{
+    prepare_nvme_prps, NvmePrpError, NvmePrpFailure, NvmePrpMemoryIo, NvmePrpRequest,
+    NvmeTransferDirection, PreparedNvmePrps, NVME_MAX_PRP_TRANSFER_BYTES, NVME_PRP_LIST_BYTES,
 };
 pub use nvme_queue_dma::{
     prepare_nvme_admin_queue_dma, revoke_nvme_admin_queue_dma, InstalledNvmeAdminQueueDma,

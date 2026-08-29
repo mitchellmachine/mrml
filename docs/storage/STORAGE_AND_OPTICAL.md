@@ -473,7 +473,13 @@ queue, and publishes active cursors only after both commands complete. A
 rejected completion queue removes the DMA layout; a rejected submission queue
 first deletes the already-created completion queue and then removes DMA. Any
 uncertain command, cleanup, or device/IOMMU removal quarantines both admin and
-I/O layouts. Forty-five focused
+I/O layouts. Capability-bound PRP preparation now covers the block interface's
+complete 512-byte through 1 MiB range: each data mapping is page-rounded and
+exactly authorized for device-read versus device-write direction, device-write
+buffers are zero-verified, one/two-page requests use direct PRPs, and larger
+requests build and verify at most 255 entries in a distinct zeroed 4 KiB list.
+Missing/excess lists, overlaps, stale or excessive rights, and malformed extents
+fail before mutation; partial list mutation quarantines the request. Fifty focused
 tests pass on Windows and Arch Linux. The class tuple
 is cross-checked against the
 [PCI-SIG DEVICE_INTERFACE_REPORT ECN](https://pcisig.com/PCIExpress/ECN/Base/AddClasstoDEVICE_INTERFACE_REPORT);

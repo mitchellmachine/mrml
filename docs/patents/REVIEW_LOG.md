@@ -10319,6 +10319,16 @@ admin-command escape hatch. It does not interpret identify data, discover
 namespaces, create I/O queues, or implement a storage scheduling or caching
 algorithm. This technical screen is not legal advice or patent clearance.
 
+# 2026-08-29 — Capability-bound NVMe PRP preparation
+
+Patent review: **NOT_TRIGGERED**. This increment constructs the conventional
+NVMe PRP1/PRP2 and flat PRP-list representation using ordinary page rounding,
+fixed-capacity sequential physical page addresses, exact capability checks,
+zero verification, checked ranges, and readback verification. It supports the
+existing 1 MiB block-interface bound and introduces no scatter/gather
+optimization, scheduling, caching, command, or storage algorithm. This
+technical screen is not legal advice or patent clearance.
+
 # 2026-08-29 — Ordered NVMe I/O-queue creation and cleanup
 
 Patent review: **NOT_TRIGGERED**. This increment encodes the conventional fixed
