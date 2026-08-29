@@ -9,8 +9,8 @@ the named commit and current source.
 ## Recoverable baseline
 
 - Branch: `main`
-- Compiler checkpoint commit: `1974315f`
-  (`compiler: resolve gnullvm PE refptr globals`)
+- Compiler checkpoint commit: `4ed419e5`
+  (`compiler: streamline gnullvm refptr linking`)
 - Remote state when recorded: `origin/main` includes the bounded MRML-owned
   static-link core, exact MRML COFF and ELF64 ingestion, deterministic
   import-free PE32+/ELF64 executable serialization, explicit compiler-driver
@@ -60,6 +60,19 @@ against all prior accepted probes. Keep Cargo on edition 2024 until a newer
 named edition can be adopted through a pinned, workspace-wide migration.
 
 ## Latest bounded linker milestone
+
+Commit `4ed419e5` extends the refptr probe to write both cross-object globals and
+proves that the defining archive member observes the shared state. It removes
+the driver's all-object refptr count pass and the decoder's redundant per-index
+pre-count while retaining the fixed 4,096-record bound. Identical inputs still
+produce exit code 42; MRML emits 2,560 bytes and pinned rust-lld emits 3,584
+bytes. Fifty direct-driver iterations after five warmups measured MRML at 9.067
+ms median/9.267 ms mean versus rust-lld at 26.240 ms median/26.410 ms mean. This
+is a strong narrow stateful eight-CGU result, not broad linker superiority or a
+controlled attribution to one optimization. The focused probe and driver build
+passed; a later driver-suite rebuild stopped before linker tests on unrelated
+uncommitted wide-shift work comparing `RuntimeWidth` with an integer. Patent
+review: **NOT_TRIGGERED**.
 
 Commit `1974315f` resolves cross-object Rust global reads through the exact
 gnullvm `.rdata$.refptr.*` shape. The bounded decoder requires one zeroed
