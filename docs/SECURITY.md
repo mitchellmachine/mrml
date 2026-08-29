@@ -1010,3 +1010,8 @@ currently live exact control capability, and stable commit variants do so
 before storage or authenticated recovery-state mutation. Revocation therefore
 invalidates the cached prepare decision without discarding the prepared
 candidate state.
+
+A prepared stable configuration checkpoint is likewise data, not authority.
+Commit revalidates its retained exact root/read binding before receipt
+consumption, so revocation after staging prevents publication without relying
+on checkpoint contents or storage identity as authorization.

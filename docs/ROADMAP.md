@@ -4036,3 +4036,7 @@ Two-phase deployment activation now revalidates exact live control at commit,
 including before stable storage receipt consumption or recovery-state update.
 A revoked prepare-time handle cannot authorize later publication; a fresh exact
 control handle is required.
+
+Stable configuration checkpoint publication now revalidates the exact live
+root `READ` capability at commit before consuming its one-use storage receipt.
+Prepared bytes and file state no longer preserve revoked inspection authority.

@@ -1178,6 +1178,14 @@ pub struct PreparedStableConfiguration<const EXTENTS: usize> {
     file: PreparedFileWrite<EXTENTS>,
     checkpoint: ConfigurationCheckpoint,
     revision: u64,
+    root: ObjectId,
+    root_capability: Capability,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum StableConfigurationCommitError {
+    Configuration(ConfigError),
+    Transaction(TransactionError),
 }
 
 impl<const EXTENTS: usize> PreparedStableConfiguration<EXTENTS> {
@@ -1196,11 +1204,18 @@ impl<const EXTENTS: usize> PreparedStableConfiguration<EXTENTS> {
         transaction.admit_file(&self.file)
     }
 
-    pub fn commit<const PARTICIPANTS: usize>(
+    pub fn commit<A: CapabilityAuthorizer + ?Sized, const PARTICIPANTS: usize>(
         self,
+        capabilities: &A,
         receipt: &mut TransactionReceipt<PARTICIPANTS>,
-    ) -> Result<StableConfiguration<EXTENTS>, TransactionError> {
-        let file = self.file.commit_transaction(receipt)?;
+    ) -> Result<StableConfiguration<EXTENTS>, StableConfigurationCommitError> {
+        capabilities
+            .authorize_exact(self.root_capability, Rights::READ, self.root)
+            .map_err(StableConfigurationCommitError::Configuration)?;
+        let file = self
+            .file
+            .commit_transaction(receipt)
+            .map_err(StableConfigurationCommitError::Transaction)?;
         Ok(StableConfiguration {
             file,
             checkpoint: self.checkpoint,
@@ -1299,6 +1314,8 @@ pub fn prepare_stable_configuration<
         file: prepared,
         checkpoint,
         revision: configuration.revision(),
+        root: configuration.root,
+        root_capability,
     })
 }
 

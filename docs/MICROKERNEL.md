@@ -7084,6 +7084,12 @@ stable commits perform that check before consuming a storage receipt or
 updating authenticated recovery state. Revocation between prepare and commit
 therefore leaves the candidate prepared and publishes no active generation.
 
+Prepared stable configuration publication now follows the same rule. It
+retains the exact root object and read handle used to stage the checkpoint, then
+revalidates exact live `READ` authority before consuming the storage receipt.
+The focused test observes distinct prepare-time and commit-time authorization
+checks; checkpoint bytes and a prepared file write are not cached authority.
+
 Patent review: `NOT_TRIGGERED` — this reuses conventional exact bitset equality
 at an existing capability check and introduces no new mechanism. See
 `docs/patents/REVIEW_LOG.md`.

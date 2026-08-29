@@ -3465,6 +3465,28 @@ mod tests {
 
     #[test]
     fn stable_checkpoint_requires_both_capabilities_and_one_use_publication_receipt() {
+        struct CountingAuthorizer<'a, const CAPS: usize> {
+            inner: &'a CapabilitySpace<CAPS>,
+            calls: core::cell::Cell<usize>,
+        }
+
+        impl<const CAPS: usize> CapabilityAuthorizer for CountingAuthorizer<'_, CAPS> {
+            fn authorize_exact(
+                &self,
+                capability: Capability,
+                rights: Rights,
+                expected: ObjectId,
+            ) -> Result<(), ConfigError> {
+                self.calls.set(self.calls.get() + 1);
+                <CapabilitySpace<CAPS> as CapabilityAuthorizer>::authorize_exact(
+                    self.inner,
+                    capability,
+                    rights,
+                    expected,
+                )
+            }
+        }
+
         let (mut service, capabilities, root, root_read, enabled, enabled_read, _, _) = fixture();
         let mut update = ConfigTransaction::<1>::new(0);
         update
@@ -3500,9 +3522,13 @@ mod tests {
             corrupt_read: false,
         };
         let mut output = [0; 512];
+        let authorizer = CountingAuthorizer {
+            inner: &capabilities,
+            calls: core::cell::Cell::new(0),
+        };
         let prepared = prepare_stable_configuration(
             &service,
-            &capabilities,
+            &authorizer,
             root_read,
             &current,
             &authority,
@@ -3526,7 +3552,8 @@ mod tests {
         let mut receipt = transaction
             .publish(&publication_plan(images), &mut PublicationBackend)
             .unwrap();
-        let stable = prepared.commit(&mut receipt).unwrap();
+        let stable = prepared.commit(&authorizer, &mut receipt).unwrap();
+        assert_eq!(authorizer.calls.get(), 2);
         assert_eq!(receipt.remaining(), 0);
         assert_eq!(stable.file().generation(), 2);
         assert_eq!(stable.checkpoint(), checkpoint);
@@ -3800,7 +3827,7 @@ mod tests {
                 StorageTransaction::<1, 2>::new(StorageTransactionId::new(72).unwrap(), 2).unwrap();
             prepared.admit(&mut transaction).unwrap();
             let mut receipt = transaction.publish(&plan, &mut volume).unwrap();
-            let stable = prepared.commit(&mut receipt).unwrap();
+            let stable = prepared.commit(&capabilities, &mut receipt).unwrap();
             assert_eq!(receipt.remaining(), 0);
 
             let grants = [StorageRecoveryGrant::root(
@@ -4487,7 +4514,7 @@ mod tests {
         let mut receipt = transaction
             .publish(&publication_plan(images), &mut PublicationBackend)
             .unwrap();
-        let stable = prepared.commit(&mut receipt).unwrap();
+        let stable = prepared.commit(&capabilities, &mut receipt).unwrap();
 
         let mut recovered_bytes = [0xa5; 512];
         assert!(matches!(
