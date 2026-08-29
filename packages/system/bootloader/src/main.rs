@@ -962,7 +962,7 @@ unsafe extern "sysv64" fn mrml_user_call_dispatch(frame: *mut UserCallFrame) {
                     );
                     if core::ptr::addr_of!(SERVICE_RESTARTED).read()
                         && root.get() == SERVICE_B_ROOT
-                        && pending_buffer(current).is_none()
+                        && !has_pending_buffer(current)
                     {
                         let message = runtime.receive_ipc(to).unwrap_or_else(|_| halt());
                         runtime
@@ -1193,7 +1193,7 @@ unsafe extern "sysv64" fn mrml_user_call_dispatch(frame: *mut UserCallFrame) {
             }
             SyscallRequest::Yield => match runtime.yield_current().unwrap_or_else(|_| halt()) {
                 ScheduleOutcome::Switch { to, .. } => {
-                    if pending_buffer(to).is_none() {
+                    if !has_pending_buffer(to) {
                         let message = runtime.receive_ipc(to).unwrap_or_else(|_| halt());
                         runtime
                             .context_mut(to)
@@ -4754,24 +4754,29 @@ unsafe fn complete_pending_buffer(runtime: &mut TaskRuntime<3, 9>, task: mrml_ke
 }
 
 #[cfg(feature = "service-probe")]
-unsafe fn pending_buffer(task: mrml_kernel::TaskId) -> Option<(usize, PendingBufferReceive)> {
-    unsafe { core::ptr::addr_of!(SERVICE_PENDING_BUFFERS).read() }
-        .into_iter()
-        .enumerate()
-        .find_map(|(slot, pending)| {
-            pending
-                .filter(|pending| pending.task == task)
-                .map(|pending| (slot, pending))
-        })
+unsafe fn pending_buffer_slot(task: mrml_kernel::TaskId) -> Option<usize> {
+    let buffers = unsafe { &*core::ptr::addr_of!(SERVICE_PENDING_BUFFERS) };
+    let mut found = None;
+    for (index, pending) in buffers.iter().enumerate() {
+        if pending.is_some_and(|pending| pending.task == task) {
+            if found.replace(index).is_some() {
+                halt();
+            }
+        }
+    }
+    found
+}
+
+#[cfg(feature = "service-probe")]
+unsafe fn has_pending_buffer(task: mrml_kernel::TaskId) -> bool {
+    unsafe { pending_buffer_slot(task) }.is_some()
 }
 
 #[cfg(feature = "service-probe")]
 unsafe fn take_pending_buffer(task: mrml_kernel::TaskId) -> Option<PendingBufferReceive> {
+    let index = unsafe { pending_buffer_slot(task) }?;
     let buffers = unsafe { &mut *core::ptr::addr_of_mut!(SERVICE_PENDING_BUFFERS) };
-    let slot = buffers
-        .iter_mut()
-        .find(|pending| pending.is_some_and(|pending| pending.task == task))?;
-    slot.take()
+    buffers[index].take()
 }
 
 #[cfg(feature = "service-probe")]

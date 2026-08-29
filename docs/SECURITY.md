@@ -137,6 +137,8 @@ access. The security/acceptance gate is canonical in
   its generational task; completion under a substituted root fails closed.
 - Resumed buffered completion takes its pending record before consuming the
   message, so duplicate or re-entrant completion cannot replay the same slot.
+- Pending-record lookup requires a unique generational-task match and fails
+  closed on duplicate internal state.
 - Writable and executable mappings are mutually exclusive.
 - Authority, replay state, ownership, mappings, and lifecycle transitions are
   explicit and commit only after validation; partial failure rolls back or

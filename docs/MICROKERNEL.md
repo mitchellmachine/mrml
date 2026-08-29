@@ -6589,6 +6589,9 @@ addition to the generational task and exact-range ticket checks.
 Resumed completion atomically removes the exact pending record before consuming
 its inbox message or mutating output. A duplicate or re-entrant completion
 therefore cannot observe and replay the same pending receive.
+Pending lookup scans the bounded table for exactly one matching generational
+task. Duplicate internal records fail closed instead of selecting an arbitrary
+first slot, and lookup no longer copies the table's live records.
 
 Patent review: **NOT_TRIGGERED**. This change retains an existing bounds check
 as Rust typestate, adds ordinary complete-range and overlap validation, and
