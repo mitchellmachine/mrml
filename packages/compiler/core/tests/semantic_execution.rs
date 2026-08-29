@@ -95,6 +95,8 @@ const MRML_V1_WIDE_DISCARD_SOURCE: &str = "#[mrml_abi::export(version = 1)] pub 
 const MRML_V1_WIDE_COMPOUND_SOURCE: &str = "#[mrml_abi::export(version = 1)] pub fn probe(input: u128) -> u128 { let mut value: u128 = input; value += 18446744073709551617; value ^= 1512366075204170947332355369683137040; value -= 3; value &= 170141183460469231731687303715884105727; value |= 17; value }";
 const MRML_V1_WIDE_HELPER_SOURCE: &str = "fn adjust(value: u128) -> u128 { value + 17 } #[mrml_abi::export(version = 1)] pub fn probe(input: u128) -> u128 { adjust(input) }";
 const MRML_V1_WIDE_HELPER_RETURN_SOURCE: &str = "fn adjust(value: u128, early: bool) -> u128 { if early { return value + 17; } value ^ 1512366075204170947332355369683137040 } #[mrml_abi::export(version = 1)] pub fn probe(input: u128, early: bool) -> u128 { adjust(input, early) }";
+const MRML_V1_WIDE_UNSIGNED_MULTIPLY_ASSIGN_SOURCE: &str = "#[mrml_abi::export(version = 1)] pub fn probe(input: u128) -> u128 { let mut value: u128 = input; value *= 18446744073709551617; value }";
+const MRML_V1_WIDE_SIGNED_MULTIPLY_ASSIGN_SOURCE: &str = "#[mrml_abi::export(version = 1)] pub fn probe(input: i128) -> i128 { let mut value: i128 = input; value *= -17; value }";
 const MRML_V1_UNSIGNED_WIDEN_SOURCE: &str =
     "#[mrml_abi::export(version = 1)] pub fn probe(input: u64) -> u128 { input as u128 }";
 const MRML_V1_SIGNED_WIDEN_SOURCE: &str =
@@ -1719,6 +1721,45 @@ fn mrml_v1_wide_helper_early_return_matches_oracle_words() {
         rustc_mrml_v1_observations(
             MRML_V1_WIDE_HELPER_RETURN_SOURCE,
             "for input in [0u128, 1, u64::MAX as u128, u128::MAX - 17] { for early in [false, true] { let returned = probe(input, early); println!(\"{}\", returned as u64); println!(\"{}\", (returned >> 64) as u64); } }",
+        )
+    );
+}
+
+#[test]
+fn mrml_v1_wide_multiply_assignments_match_oracle_words() {
+    let unsigned = compile(MRML_V1_WIDE_UNSIGNED_MULTIPLY_ASSIGN_SOURCE);
+    let unsigned_inputs = [0u128, 1, u32::MAX as u128, u64::MAX as u128];
+    let actual_unsigned = unsigned_inputs
+        .into_iter()
+        .flat_map(|input| {
+            let returned = unsafe { call_mrml_v1_wide_with_u32(unsigned.pointer, input, 0) };
+            [returned as u64, (returned >> 64) as u64]
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(
+        actual_unsigned,
+        rustc_mrml_v1_observations(
+            MRML_V1_WIDE_UNSIGNED_MULTIPLY_ASSIGN_SOURCE,
+            "for input in [0u128, 1, u32::MAX as u128, u64::MAX as u128] { let returned = probe(input); println!(\"{}\", returned as u64); println!(\"{}\", (returned >> 64) as u64); }",
+        )
+    );
+
+    let signed = compile(MRML_V1_WIDE_SIGNED_MULTIPLY_ASSIGN_SOURCE);
+    let signed_inputs = [-1i128, 0, 1, i64::MIN as i128, i64::MAX as i128];
+    let actual_signed = signed_inputs
+        .into_iter()
+        .flat_map(|input| {
+            let returned = unsafe {
+                call_mrml_v1_wide_with_u32(signed.pointer, input as u128, 0)
+            };
+            [returned as u64, (returned >> 64) as u64]
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(
+        actual_signed,
+        rustc_mrml_v1_observations(
+            MRML_V1_WIDE_SIGNED_MULTIPLY_ASSIGN_SOURCE,
+            "for input in [-1i128, 0, 1, i64::MIN as i128, i64::MAX as i128] { let returned = probe(input) as u128; println!(\"{}\", returned as u64); println!(\"{}\", (returned >> 64) as u64); }",
         )
     );
 }
