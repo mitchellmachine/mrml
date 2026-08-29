@@ -7375,6 +7375,16 @@ impl<
                 transform == crate::expression::IntegerBitTransform::SaturatingAbsolute,
             );
         }
+        if let ExprKind::SaturatingArithmetic {
+            base,
+            argument,
+            operator: crate::BinaryOperator::Add,
+            mixed_signedness: false,
+        } = expression.kind
+        {
+            self.emit_wide_binary_operands(tree, base, argument, expected_type)?;
+            return self.emit_wide_saturating_add(layout);
+        }
         if let ExprKind::Cast { operand, target } = expression.kind {
             let operand_type = runtime_expression_type_with_locals(
                 self.function,
@@ -8127,6 +8137,28 @@ impl<
             self.patch_forward_branch(nonnegative)?;
         }
         Ok(())
+    }
+
+    fn emit_wide_saturating_add(
+        &mut self,
+        layout: RuntimeIntegerLayout,
+    ) -> Result<(), CodegenError> {
+        self.emit(&[0x4c, 0x01, 0xc0, 0x48, 0x11, 0xca])?;
+        let no_overflow = self.emit_forward_branch(if layout.signed { 0x81 } else { 0x83 })?;
+        if layout.signed {
+            self.emit(&[0x48, 0x85, 0xd2])?;
+            let negative_wrapped_result = self.emit_forward_branch(0x88)?;
+            self.emit(&[0x31, 0xc0, 0x48, 0xba])?;
+            self.emit(&(1u64 << 63).to_le_bytes())?;
+            let saturated = self.emit_unconditional_forward_branch()?;
+            self.patch_forward_branch(negative_wrapped_result)?;
+            self.emit(&[0x48, 0xc7, 0xc0, 0xff, 0xff, 0xff, 0xff, 0x48, 0xba])?;
+            self.emit(&i64::MAX.to_le_bytes())?;
+            self.patch_forward_branch(saturated)?;
+        } else {
+            self.emit(&[0x48, 0xc7, 0xc0, 0xff, 0xff, 0xff, 0xff, 0x48, 0xc7, 0xc2, 0xff, 0xff, 0xff, 0xff])?;
+        }
+        self.patch_forward_branch(no_overflow)
     }
 
     fn emit_slice_length(&mut self, name: &str) -> Result<(), CodegenError> {

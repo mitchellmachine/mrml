@@ -18469,7 +18469,9 @@ fn runtime_expression_type_with_locals<
             } else {
                 Some(base_type)
             };
-            if expected_argument != Some(argument_type) {
+            if expected_argument != Some(argument_type)
+                && (mixed_signedness || argument_type != RuntimeExpressionType::Integer(None))
+            {
                 return Err(CodegenErrorKind::RuntimeTypeMismatch);
             }
             Ok(base_type)

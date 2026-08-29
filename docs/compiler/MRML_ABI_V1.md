@@ -185,6 +185,8 @@ unsigned nonzero inputs or the signed minimum value.
 leaves `i128::MIN` unchanged.
 `saturating_neg` and `saturating_abs` instead map `i128::MIN` to `i128::MAX`;
 other inputs use the corresponding exact two-word negation or absolute value.
+`saturating_add` selects the unsigned maximum on carry, or the signed minimum or
+maximum according to the direction of signed overflow.
 `wrapping_div` and `wrapping_rem` preserve the mandatory zero-divisor trap but
 return `i128::MIN` and zero respectively for the signed minimum divided by or
 remaindered by negative one.
