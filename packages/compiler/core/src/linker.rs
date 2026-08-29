@@ -97,6 +97,8 @@ impl<'a> From<LinkerError> for ElfLinkSelectionError<'a> {
 pub struct ArchiveMember<'a> {
     pub name: &'a str,
     pub bytes: &'a [u8],
+    /// Thin archives name an external file instead of storing its bytes.
+    pub external: bool,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -136,15 +138,14 @@ impl<'a> ArchiveMembers<'a> {
 /// Archive symbol indexes are metadata and are skipped; member selection remains
 /// a separate linker pass.
 pub fn decode_unix_archive(archive: &[u8]) -> Result<ArchiveMembers<'_>, LinkerError> {
-    if archive.get(..8) == Some(b"!<thin>\n") {
-        return Err(LinkerError::UnsupportedArchive);
-    }
-    if archive.get(..8) != Some(b"!<arch>\n") {
+    let thin = archive.get(..8) == Some(b"!<thin>\n");
+    if !thin && archive.get(..8) != Some(b"!<arch>\n") {
         return Err(LinkerError::InvalidArchive);
     }
     let empty = ArchiveMember {
         name: "",
         bytes: &archive[0..0],
+        external: false,
     };
     let empty_symbol = ArchiveSymbol {
         symbol: "",
@@ -170,13 +171,21 @@ pub fn decode_unix_archive(archive: &[u8]) -> Result<ArchiveMembers<'_>, LinkerE
         }
         let stored_size =
             parse_archive_decimal(header.get(48..58).ok_or(LinkerError::InvalidArchive)?)?;
+        let raw_name = trim_archive_field(header.get(..16).ok_or(LinkerError::InvalidArchive)?)?;
+        if thin && raw_name.starts_with("#1/") {
+            return Err(LinkerError::UnsupportedArchive);
+        }
+        let stored_in_archive = !thin
+            || raw_name == "//"
+            || raw_name == "/"
+            || raw_name == "/SYM64/"
+            || raw_name.starts_with("__.SYMDEF");
         let stored_end = header_end
-            .checked_add(stored_size)
+            .checked_add(if stored_in_archive { stored_size } else { 0 })
             .ok_or(LinkerError::OffsetOverflow)?;
         let stored = archive
             .get(header_end..stored_end)
             .ok_or(LinkerError::InvalidArchive)?;
-        let raw_name = trim_archive_field(header.get(..16).ok_or(LinkerError::InvalidArchive)?)?;
 
         if raw_name == "//" {
             string_table = Some(stored);
@@ -187,17 +196,28 @@ pub fn decode_unix_archive(archive: &[u8]) -> Result<ArchiveMembers<'_>, LinkerE
         } else if raw_name != "/" && raw_name != "/SYM64/" && !raw_name.starts_with("__.SYMDEF") {
             let (name, bytes) = decode_archive_member(raw_name, stored, string_table)?;
             if !name.starts_with("__.SYMDEF") {
+                if thin {
+                    validate_thin_archive_member_path(name)?;
+                }
                 if decoded.length == MAX_ARCHIVE_MEMBERS {
                     return Err(LinkerError::TooManyArchiveMembers);
                 }
-                decoded.members[decoded.length] = ArchiveMember { name, bytes };
+                decoded.members[decoded.length] = ArchiveMember {
+                    name,
+                    bytes,
+                    external: thin,
+                };
                 decoded.member_offsets[decoded.length] = cursor;
                 decoded.length += 1;
             }
         }
 
         cursor = stored_end
-            .checked_add(stored_size & 1)
+            .checked_add(if stored_in_archive {
+                stored_size & 1
+            } else {
+                0
+            })
             .ok_or(LinkerError::OffsetOverflow)?;
         if cursor > archive.len() {
             return Err(LinkerError::InvalidArchive);
@@ -212,6 +232,20 @@ pub fn decode_unix_archive(archive: &[u8]) -> Result<ArchiveMembers<'_>, LinkerE
         )?;
     }
     Ok(decoded)
+}
+
+fn validate_thin_archive_member_path(path: &str) -> Result<(), LinkerError> {
+    if path.is_empty()
+        || path.starts_with('/')
+        || path.starts_with('\\')
+        || path.contains(':')
+        || path
+            .split(|character| character == '/' || character == '\\')
+            .any(|component| component.is_empty() || matches!(component, "." | ".."))
+    {
+        return Err(LinkerError::InvalidArchive);
+    }
+    Ok(())
 }
 
 fn decode_archive_member<'a>(
@@ -6746,6 +6780,15 @@ mod tests {
         }
     }
 
+    fn append_thin_archive_member(archive: &mut std::vec::Vec<u8>, name: &str, size: usize) {
+        let mut header = [b' '; 60];
+        header[..name.len()].copy_from_slice(name.as_bytes());
+        let size = std::format!("{size}");
+        header[48..48 + size.len()].copy_from_slice(size.as_bytes());
+        header[58..60].copy_from_slice(b"`\n");
+        archive.extend_from_slice(&header);
+    }
+
     fn two_fragment_coff() -> std::vec::Vec<u8> {
         let mut object = std::vec![0u8; 157];
         object[0..2].copy_from_slice(&0x8664u16.to_le_bytes());
@@ -6890,21 +6933,24 @@ mod tests {
             members.members()[0],
             ArchiveMember {
                 name: "short.o",
-                bytes: b"one"
+                bytes: b"one",
+                external: false,
             }
         );
         assert_eq!(
             members.members()[1],
             ArchiveMember {
                 name: "long-object-name.o",
-                bytes: b"two2"
+                bytes: b"two2",
+                external: false,
             }
         );
         assert_eq!(
             members.members()[2],
             ArchiveMember {
                 name: "bsd-name.o",
-                bytes: b"three"
+                bytes: b"three",
+                external: false,
             }
         );
     }
@@ -6925,7 +6971,8 @@ mod tests {
             members.members(),
             &[ArchiveMember {
                 name: "entry.o",
-                bytes: b"object"
+                bytes: b"object",
+                external: false,
             }]
         );
         assert_eq!(
@@ -6988,9 +7035,11 @@ mod tests {
 
     #[test]
     fn rejects_truncated_and_unresolved_archive_members() {
-        assert_eq!(
-            decode_unix_archive(b"!<thin>\n"),
-            Err(LinkerError::UnsupportedArchive)
+        assert!(
+            decode_unix_archive(b"!<thin>\n")
+                .unwrap()
+                .members()
+                .is_empty()
         );
         assert_eq!(
             decode_unix_archive(b"!<arch>\nshort"),
@@ -7001,6 +7050,50 @@ mod tests {
         append_archive_member(&mut archive, "/9", b"object");
         assert_eq!(
             decode_unix_archive(&archive),
+            Err(LinkerError::InvalidArchive)
+        );
+    }
+
+    #[test]
+    fn decodes_bounded_gnu_thin_archive_member_paths() {
+        let mut archive = b"!<thin>\n".to_vec();
+        append_archive_member(&mut archive, "//", b"sub/entry.o/\nhelper.o/\n");
+        append_thin_archive_member(&mut archive, "/0", 1234);
+        append_thin_archive_member(&mut archive, "/13", 5678);
+        let members = decode_unix_archive(&archive).unwrap();
+        assert_eq!(
+            members.members(),
+            &[
+                ArchiveMember {
+                    name: "sub/entry.o",
+                    bytes: &[],
+                    external: true,
+                },
+                ArchiveMember {
+                    name: "helper.o",
+                    bytes: &[],
+                    external: true,
+                },
+            ]
+        );
+
+        let mut bsd = b"!<thin>\n".to_vec();
+        append_thin_archive_member(&mut bsd, "#1/4", 4);
+        assert_eq!(
+            decode_unix_archive(&bsd),
+            Err(LinkerError::UnsupportedArchive)
+        );
+
+        let mut traversal = b"!<thin>\n".to_vec();
+        append_thin_archive_member(&mut traversal, "../escape.o/", 8);
+        assert_eq!(
+            decode_unix_archive(&traversal),
+            Err(LinkerError::InvalidArchive)
+        );
+        let mut absolute = b"!<thin>\n".to_vec();
+        append_thin_archive_member(&mut absolute, "/tmp/x.o/", 8);
+        assert_eq!(
+            decode_unix_archive(&absolute),
             Err(LinkerError::InvalidArchive)
         );
     }

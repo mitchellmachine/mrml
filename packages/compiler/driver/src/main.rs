@@ -5,7 +5,9 @@
 extern crate std;
 
 use mrml_error::{Result, anyhow};
-use mrml_runtime::{MappedFile, Text, Vector, mrml_println as println};
+use mrml_runtime::{
+    MappedFile, Text, Vector, canonical_path, join_path, mrml_println as println, parent_path,
+};
 use mrml_rustc::{
     CodegenOptions, ElfSelectedDefinitions, ElfSelectedObject, ElfSelectedRelocations,
     ElfSelectedSections, LinkDefinition, LinkDefinitionTarget, LinkInput, LinkRelocation,
@@ -55,6 +57,20 @@ struct LinkObjectRefs<'a> {
     bytes: Vector<&'a [u8]>,
     archive_group: Vector<u16>,
     archive_member: Vector<u16>,
+}
+
+enum LinkFile {
+    Mapped(MappedFile),
+    Buffered(Vector<u8>),
+}
+
+impl AsRef<[u8]> for LinkFile {
+    fn as_ref(&self) -> &[u8] {
+        match self {
+            Self::Mapped(file) => file.as_ref(),
+            Self::Buffered(bytes) => bytes,
+        }
+    }
 }
 
 struct DecodedLinkInputs<'data, 'relocations, 'definitions> {
@@ -195,18 +211,102 @@ fn application_main() -> Result<()> {
     Ok(())
 }
 
-fn read_link_objects(paths: &[Text]) -> Result<Vector<MappedFile>> {
+fn read_link_objects(paths: &[Text]) -> Result<Vector<LinkFile>> {
     if paths.is_empty() || paths.len() > MAX_LINK_INPUTS {
         return Err(anyhow!("link input count must be between 1 and 256"));
     }
     let mut objects = Vector::with_capacity(paths.len())
         .map_err(|_| anyhow!("could not allocate link input list"))?;
     for path in paths {
-        objects
-            .try_push(MappedFile::open_bounded(path, MAX_ARCHIVE_BYTES)?)
-            .map_err(|_| anyhow!("could not allocate link input list"))?;
+        let file = MappedFile::open_bounded(path, MAX_ARCHIVE_BYTES)?;
+        if file.as_ref().get(..8) == Some(b"!<thin>\n") {
+            let archive = decode_unix_archive(file.as_ref()).map_err(mrml_error::message)?;
+            let parent = canonical_path(
+                parent_path(path)
+                    .ok_or_else(|| anyhow!("thin archive path has no parent directory"))?,
+            )?;
+            let mut materialized = Vector::with_capacity(MAX_ARCHIVE_BYTES)
+                .map_err(|_| anyhow!("could not allocate thin archive materialization"))?;
+            materialized
+                .try_extend_from_slice(b"!<arch>\n")
+                .map_err(|_| anyhow!("thin archive materialization exceeds 64 MiB"))?;
+            for member in archive.members() {
+                if !member.external {
+                    return Err(anyhow!("thin archive contains an embedded object member"));
+                }
+                let member_path = canonical_path(&join_path(&parent, member.name))?;
+                let relative = member_path
+                    .strip_prefix(parent.as_str())
+                    .filter(|relative| relative.starts_with('/') || relative.starts_with('\\'))
+                    .ok_or_else(|| anyhow!("thin archive member escapes its archive directory"))?;
+                if relative.len() == 1 {
+                    return Err(anyhow!(
+                        "thin archive member resolves to its archive directory"
+                    ));
+                }
+                let member_file = MappedFile::open_bounded(&member_path, MAX_ARCHIVE_BYTES)?;
+                append_materialized_archive_member(
+                    &mut materialized,
+                    member.name,
+                    member_file.as_ref(),
+                )?;
+            }
+            objects
+                .try_push(LinkFile::Buffered(materialized))
+                .map_err(|_| anyhow!("could not allocate link input list"))?;
+        } else {
+            objects
+                .try_push(LinkFile::Mapped(file))
+                .map_err(|_| anyhow!("could not allocate link input list"))?;
+        }
     }
     Ok(objects)
+}
+
+fn append_materialized_archive_member(
+    archive: &mut Vector<u8>,
+    name: &str,
+    bytes: &[u8],
+) -> Result<()> {
+    let stored_size = name
+        .len()
+        .checked_add(bytes.len())
+        .ok_or_else(|| anyhow!("thin archive member size overflow"))?;
+    let mut header = [b' '; 60];
+    header[..3].copy_from_slice(b"#1/");
+    write_archive_decimal(&mut header[3..16], name.len())?;
+    write_archive_decimal(&mut header[48..58], stored_size)?;
+    header[58..60].copy_from_slice(b"`\n");
+    archive
+        .try_extend_from_slice(&header)
+        .and_then(|_| archive.try_extend_from_slice(name.as_bytes()))
+        .and_then(|_| archive.try_extend_from_slice(bytes))
+        .map_err(|_| anyhow!("thin archive materialization exceeds 64 MiB"))?;
+    if stored_size & 1 != 0 {
+        archive
+            .try_push(b'\n')
+            .map_err(|_| anyhow!("thin archive materialization exceeds 64 MiB"))?;
+    }
+    Ok(())
+}
+
+fn write_archive_decimal(field: &mut [u8], mut value: usize) -> Result<()> {
+    let mut digits = [0u8; 20];
+    let mut start = digits.len();
+    loop {
+        start -= 1;
+        digits[start] = b'0' + u8::try_from(value % 10).map_err(|_| anyhow!("decimal overflow"))?;
+        value /= 10;
+        if value == 0 {
+            break;
+        }
+    }
+    let encoded = &digits[start..];
+    if encoded.len() > field.len() {
+        return Err(anyhow!("archive decimal field overflow"));
+    }
+    field[..encoded.len()].copy_from_slice(encoded);
+    Ok(())
 }
 
 fn link_object_refs<'a, T: AsRef<[u8]>>(
@@ -1026,6 +1126,18 @@ mod tests {
             CodegenOptions::WRAPPING
         );
         assert!(parse_codegen_options("overflow-checks=maybe").is_err());
+    }
+
+    #[test]
+    fn materializes_thin_members_as_valid_bounded_archive_members() {
+        let mut archive = Vector::with_capacity(256).unwrap();
+        archive.try_extend_from_slice(b"!<arch>\n").unwrap();
+        append_materialized_archive_member(&mut archive, "objects/helper.o", b"object").unwrap();
+        let decoded = decode_unix_archive(&archive).unwrap();
+        assert_eq!(decoded.members().len(), 1);
+        assert_eq!(decoded.members()[0].name, "objects/helper.o");
+        assert_eq!(decoded.members()[0].bytes, b"object");
+        assert!(!decoded.members()[0].external);
     }
 
     #[test]

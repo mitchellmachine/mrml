@@ -135,12 +135,18 @@ The driver assigns each archive a bounded identity and applies left-to-right
 ordering: explicit objects are admitted when encountered, one archive rescans
 only its own contiguous members to a fixed point, and it is not revisited for
 undefined symbols introduced by later inputs. Index-accelerated extraction,
-explicit start/end archive groups, thin archives, other non-object metadata
-members, and general `.rlib` admission remain unimplemented, so this is not yet
-the ordinary Rust static-library path. Thin
-archive magic fails with an explicit unsupported-feature diagnostic rather
-than being misclassified as a malformed ordinary archive; BSD extended-name
-symbol indexes are skipped only after their embedded names are validated.
+explicit start/end archive groups, other non-object metadata members, and
+general `.rlib` admission remain incomplete, so this is not yet the ordinary
+Rust static-library path. GNU thin archives admit validated ordinary and
+long-table member paths; the hosted driver resolves each path relative to the
+archive, rejects absolute paths, parent traversal, and canonical/symlink escape
+from that directory, reads every external member under the existing 64 MiB bound, and
+materializes one bounded in-memory ordinary archive before applying the same
+left-to-right member-identity selector. This preserves semantics but does not
+yet reuse the thin archive's symbol index for lazy external-file reads. BSD
+extended names in thin archives remain unsupported; BSD extended-name symbol
+indexes in ordinary archives are skipped only after their embedded names are
+validated.
 
 The ordered selector also has an explicit bounded object-member identity. A
 selected nonzero `(archive, member)` pair admits all of that object's fragments
@@ -917,7 +923,7 @@ a 4,134-byte ELF that exited 42 under Arch Linux WSL. Requesting
 
 This increment does **not** emit PE imports/exports/base
 relocations/debug data, emit ELF dynamic metadata/interpreter/PIE/sections,
-read thin archives or general `.rlib` contents, perform ICF, link dynamically,
+read general `.rlib` contents, perform ICF, link dynamically,
 run work in parallel, or use the MRML linker for ordinary production `mrml
 build` actions. Explicit experimental frontend selection, section GC, and the
 driver path are implemented for the bounded
@@ -927,6 +933,14 @@ has not yet been optimized against broad representative Rust libraries.
 Those are separate milestones and the current upstream linker remains the
 production linker for ordinary package builds as required by
 `docs/build/BUILD_SYSTEM.md`.
+
+The independently authored GNU thin-archive probe stored `thin_helper` in an
+external `objects/helper.o`, linked an explicit entry object plus the thin
+archive through MRML and pinned gnullvm rust-lld, and both hosted Arch Linux
+executables exited 42. MRML emitted 4,126 bytes and rust-lld emitted 1,280
+bytes. This proves relative external-member resolution and established archive
+selection for one exact GNU shape, not lazy thin-index extraction, arbitrary
+filesystem authority, or general `.rlib` compatibility.
 
 Research source:
 

@@ -9295,6 +9295,15 @@ encoding, object format, compression, cryptographic mechanism, or runtime
 thread-management algorithm. This technical screen is not legal advice or
 patent clearance.
 
+# 2026-08-28 — Bounded GNU thin-archive materialization
+
+Patent review: **NOT_TRIGGERED**. This increment validates the conventional GNU
+thin-archive header and external-member naming rules, reads bounded referenced
+files, and materializes their bytes into the already supported ordinary Unix
+archive representation before selection. It introduces no new archive format,
+index or selection algorithm, compression, cryptographic mechanism, or loading
+behavior. This technical screen is not legal advice or patent clearance.
+
 # 2026-08-28 — ELF x86-64 unsigned absolute-32 relocation
 
 Patent review: **NOT_TRIGGERED**. This increment decodes and applies the
