@@ -9961,3 +9961,13 @@ ordinary bounded size comparison and introduces no new selection algorithm,
 object encoding, relocation mechanism, compression, cryptographic mechanism,
 or loader behavior. This technical screen is not legal advice or patent
 clearance.
+
+# 2026-08-29 — Bounded COFF associative unwind validation
+
+Patent review: **NOT_TRIGGERED**. This increment validates conventional PE/COFF
+associative section-definition chains and the established gnullvm/MinGW suffix
+association used for `.pdata$...`, `.xdata$...`, and `.text$...` sections. It
+uses bounded graph traversal and ordinary string comparison, and introduces no
+new object encoding, selection algorithm, relocation mechanism, compression,
+cryptographic mechanism, or loader behavior. This technical screen is not legal
+advice or patent clearance.

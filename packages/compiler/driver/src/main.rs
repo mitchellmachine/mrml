@@ -20,11 +20,12 @@ use mrml_rustc::{
     decode_x86_64_coff_text_fragment, decode_x86_64_coff_writable_data_fragment,
     decode_x86_64_elf_selected_definitions_from_sections,
     decode_x86_64_elf_selected_relocations_from_sections, decode_x86_64_elf_selected_sections,
-    decode_x86_64_elf_with_definitions, inventory_x86_64_elf_symbols,
-    link_x86_64_elf_selected_executable, link_x86_64_pe_with_data_unwind_and_readonly_relocations,
-    select_ordered_static_link_members, select_x86_64_elf_link_sections_detailed,
-    x86_64_coff_readonly_writable_relocation_count, x86_64_coff_text_fragment_comdat_selection,
-    x86_64_coff_text_fragment_count, x86_64_coff_writable_section_count,
+    decode_x86_64_elf_with_definitions, inventory_x86_64_coff_comdat_sections,
+    inventory_x86_64_elf_symbols, link_x86_64_elf_selected_executable,
+    link_x86_64_pe_with_data_unwind_and_readonly_relocations, select_ordered_static_link_members,
+    select_x86_64_elf_link_sections_detailed, x86_64_coff_readonly_writable_relocation_count,
+    x86_64_coff_text_fragment_comdat_selection_from_inventory, x86_64_coff_text_fragment_count,
+    x86_64_coff_writable_section_count,
 };
 
 #[cfg_attr(test, allow(dead_code))]
@@ -715,6 +716,12 @@ fn decode_link_inputs<'data, 'relocations, 'definitions>(
     let mut remaining_arenas = relocation_arenas;
     let mut remaining_definitions = definition_arenas;
     for (object_index, object) in objects.iter().enumerate() {
+        let coff_comdat_sections = match format {
+            ObjectFormat::Coff => {
+                Some(inventory_x86_64_coff_comdat_sections(object).map_err(mrml_error::message)?)
+            }
+            ObjectFormat::Elf64 => None,
+        };
         let fragment_count = match format {
             ObjectFormat::Coff => x86_64_coff_text_fragment_count(object)
                 .map_err(|_| anyhow!("could not count COFF text fragments"))?,
@@ -759,8 +766,14 @@ fn decode_link_inputs<'data, 'relocations, 'definitions>(
             text_comdat_selection
                 .try_push(match format {
                     ObjectFormat::Coff => {
-                        x86_64_coff_text_fragment_comdat_selection(object, fragment_index)
-                            .map_err(|_| anyhow!("could not decode COFF text COMDAT selection"))?
+                        x86_64_coff_text_fragment_comdat_selection_from_inventory(
+                            object,
+                            fragment_index,
+                            coff_comdat_sections
+                                .as_ref()
+                                .ok_or_else(|| anyhow!("missing COFF COMDAT inventory"))?,
+                        )
+                        .map_err(mrml_error::message)?
                     }
                     ObjectFormat::Elf64 => CoffTextComdatSelection::None,
                 })
@@ -939,7 +952,7 @@ fn selected_runtime_functions<'data>(
             .any(|source| *source == object_index);
         if selected_object {
             for function in decode_x86_64_coff_runtime_functions(objects[object_index], arena)
-                .map_err(|_| anyhow!("could not decode selected COFF unwind data"))?
+                .map_err(mrml_error::message)?
             {
                 let retained = selected
                     .inputs

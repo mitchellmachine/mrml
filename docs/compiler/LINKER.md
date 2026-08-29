@@ -1083,6 +1083,27 @@ ms mean and rust-lld at 26.879 ms median/27.059 ms mean on this narrow workload.
 Associative text groups, NEWEST, and independent read-only COMDAT selection
 remain unsupported.
 
+COFF COMDAT metadata is now inventoried once per admitted object before text
+fragment selection. The bounded inventory requires the specified leading STATIC
+section-definition symbol, recognizes selection values 1 through 6, validates
+every associative section number, and rejects missing parents, non-COMDAT
+parents, and cyclic association chains. PE unwind decoding then binds explicit
+associative `.pdata$...` and `.xdata$...` sections to the root text section
+named by their relocations. It also implements the conventional gnullvm/MinGW
+compatibility form in which ordinary COMDAT `.pdata$X` and `.xdata$X` sections
+are implicitly associated with `.text$X`. Runtime records remain eligible only
+through an already-selected begin symbol from the exact source object. Reusing
+the prepared inventory avoids rescanning the symbol table for every text
+fragment. Synthetic tests cover valid roots, malformed section metadata,
+out-of-range parents, cycles, detached unwind companions, and the existing
+selection policies. The exact stateful gnullvm probe returns 42 through both
+linkers: MRML emits 2,560 bytes with 1,028 bytes of zero fill and two forwarding
+pointers, versus rust-lld's 3,584 bytes. Fifty measured links after five warmups
+produced 9.569 ms median/11.661 ms mean for MRML and 27.049 ms median/28.860 ms
+mean for rust-lld on this narrow workload. Independent selection and filtering
+of associative read-only payloads remains incomplete, so this is not broad
+linker compatibility or performance superiority.
+
 Refptr admission no longer performs an all-object count pass, and decoding one
 requested ordinal no longer recursively pre-counts the same object's records.
 The driver allocates the fixed 4,096-record bound once, scans selected objects,

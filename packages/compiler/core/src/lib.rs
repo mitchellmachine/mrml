@@ -46,11 +46,11 @@ pub use ir::{
 };
 pub use lexer::{LexError, LexErrorKind, Lexer, Span, Token, TokenKind};
 pub use linker::{
-    ArchiveMember, ArchiveMembers, ArchiveSymbol, CoffTextComdatSelection, ElfImage,
-    ElfLinkSectionSelections, ElfLinkSelectionError, ElfObjectSymbolDefinition,
-    ElfObjectSymbolInventory, ElfSectionKind, ElfSectionSelection, ElfSelectedCommonLayout,
-    ElfSelectedDefinition, ElfSelectedDefinitions, ElfSelectedLayout, ElfSelectedLinkedImage,
-    ElfSelectedObject, ElfSelectedRelocation, ElfSelectedRelocationKind,
+    ArchiveMember, ArchiveMembers, ArchiveSymbol, CoffComdatSection, CoffComdatSections,
+    CoffTextComdatSelection, ElfImage, ElfLinkSectionSelections, ElfLinkSelectionError,
+    ElfObjectSymbolDefinition, ElfObjectSymbolInventory, ElfSectionKind, ElfSectionSelection,
+    ElfSelectedCommonLayout, ElfSelectedDefinition, ElfSelectedDefinitions, ElfSelectedLayout,
+    ElfSelectedLinkedImage, ElfSelectedObject, ElfSelectedRelocation, ElfSelectedRelocationKind,
     ElfSelectedRelocationTarget, ElfSelectedRelocations, ElfSelectedSection,
     ElfSelectedSectionLayout, ElfSelectedSections, ElfSelectedSymbolBinding, ElfSelectedSymbolKind,
     ElfSelectedSymbolVisibility, ElfUnwindData, ElfUnwindRelocation, ElfWritableAbsoluteRelocation,
@@ -66,7 +66,8 @@ pub use linker::{
     decode_x86_64_elf_selected_definitions, decode_x86_64_elf_selected_definitions_from_sections,
     decode_x86_64_elf_selected_relocations, decode_x86_64_elf_selected_relocations_from_sections,
     decode_x86_64_elf_selected_sections, decode_x86_64_elf_unwind,
-    decode_x86_64_elf_with_definitions, decode_x86_64_elf_writable, inventory_x86_64_elf_symbols,
+    decode_x86_64_elf_with_definitions, decode_x86_64_elf_writable,
+    inventory_x86_64_coff_comdat_sections, inventory_x86_64_elf_symbols,
     layout_x86_64_elf_selected_sections, link_x86_64_elf_executable,
     link_x86_64_elf_executable_with_unwind, link_x86_64_elf_executable_with_unwind_and_writable,
     link_x86_64_elf_selected_executable, link_x86_64_elf_selected_sections, link_x86_64_pe,
@@ -75,8 +76,8 @@ pub use linker::{
     select_ordered_static_link_members, select_static_link_inputs, select_x86_64_elf_link_sections,
     select_x86_64_elf_link_sections_detailed, select_x86_64_elf_sections,
     x86_64_coff_readonly_writable_relocation_count, x86_64_coff_text_fragment_comdat_selection,
-    x86_64_coff_text_fragment_count, x86_64_coff_unwind_section_count,
-    x86_64_coff_writable_section_count,
+    x86_64_coff_text_fragment_comdat_selection_from_inventory, x86_64_coff_text_fragment_count,
+    x86_64_coff_unwind_section_count, x86_64_coff_writable_section_count,
 };
 pub use object::{
     MAX_X86_64_RELOCATIONS, ObjectError, ObjectFile, X86_64PcRelativeRelocation,
