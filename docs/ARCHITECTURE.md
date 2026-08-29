@@ -406,7 +406,9 @@ interface-schema layer. Block transports and filesystems are immutable library
 packages dynamically bound as isolated supervised services to `mrml-storage`;
 they are not ambient in-process plugins. Generation-1 block-provider and
 filesystem interfaces define bounded generational operations and pass focused
-Windows/Arch Linux tests. A fixed-capacity registry now models authority-bound
+Windows/Arch Linux tests; the filesystem interface now includes a canonical
+probe codec and exact-generation isolated endpoint transport. A fixed-capacity
+registry now models authority-bound
 binding and cleanup/launch/health-check replacement; failure quarantines or
 leaves the provider unavailable rather than falling back. Storage passes 181
 tests on both hosts before extraction. The complete existing AHCI mechanism now
@@ -421,8 +423,9 @@ silently retain stale authority.
 `org.mrml.library.storage.fat32` is now a second **PARTIALLY IMPLEMENTED**
 isolated provider. It supplies the filesystem-interface graph edge and a bounded
 read-only FAT32 geometry, FSInfo, bounded FAT-chain parser, atomic 8.3 directory-
-chain composition, checked read-only LFN labels, and atomic bounded file reads
-with twenty-six passing tests on Windows and Arch Linux. It
+chain composition, checked read-only LFN labels, atomic bounded file reads, and
+canonical provider probing with twenty-eight passing tests on Windows and Arch
+Linux. It
 grants no authority from a FAT signature and does not mount or mutate media.
 Storage requires block and filesystem providers as independently replaceable
 generations.

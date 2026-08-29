@@ -4,9 +4,45 @@
 //!
 //! Native MRML storage does not inherit FAT authority or namespace semantics.
 
+use mrml_interface_storage_filesystem_v1::{
+    decode_probe_request, encode_probe_response, FilesystemTransport, ProbeError, ProtocolError,
+    PROBE_REQUEST_BYTES, PROBE_RESPONSE_BYTES,
+};
+
 pub const FAT32_BOOT_SECTOR_BYTES: usize = 512;
 pub const FAT32_MINIMUM_CLUSTERS: u32 = 65_525;
 pub const FAT32_MAXIMUM_CLUSTERS: u32 = 0x0fff_fff4;
+
+pub struct Fat32Provider;
+
+impl FilesystemTransport for Fat32Provider {
+    fn probe(
+        &mut self,
+        request: &[u8; PROBE_REQUEST_BYTES],
+        memory: &mut [u8],
+    ) -> Result<[u8; PROBE_RESPONSE_BYTES], ProtocolError> {
+        let request = decode_probe_request(request, memory.len() as u64)?;
+        if request.header.length() < FAT32_BOOT_SECTOR_BYTES as u64 {
+            return Ok(encode_probe_response(Err(ProbeError::InvalidRequest)));
+        }
+        let start =
+            usize::try_from(request.header.offset()).map_err(|_| ProtocolError::InvalidRequest)?;
+        let end = start
+            .checked_add(FAT32_BOOT_SECTOR_BYTES)
+            .ok_or(ProtocolError::InvalidRequest)?;
+        let mut sector = [0; FAT32_BOOT_SECTOR_BYTES];
+        sector.copy_from_slice(
+            memory
+                .get(start..end)
+                .ok_or(ProtocolError::InvalidRequest)?,
+        );
+        let result = parse_fat32_boot_sector(&sector)
+            .map(|_| 100)
+            .map_err(|_| ProbeError::UnsupportedFilesystem);
+        sector.fill(0);
+        Ok(encode_probe_response(result))
+    }
+}
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct Fat32Geometry {
@@ -844,6 +880,47 @@ mod tests {
         assert_eq!(geometry.fs_info_sector, Some(1));
         assert_eq!(geometry.backup_boot_sector, Some(6));
         assert_eq!(geometry.volume_id, 0x1234_5678);
+    }
+
+    #[test]
+    fn provider_probe_uses_canonical_interface_bytes() {
+        use mrml_interface_storage_filesystem_v1::{
+            decode_probe_response, encode_probe_request, BorrowedReadView, OpaqueHandle,
+        };
+
+        let mut memory = [0; 520];
+        memory[8..].copy_from_slice(&boot_sector());
+        let request = encode_probe_request(
+            OpaqueHandle::new(3, 7).unwrap(),
+            BorrowedReadView::within(8, 512, 520).unwrap(),
+        )
+        .unwrap();
+        assert_eq!(
+            decode_probe_response(&Fat32Provider.probe(&request, &mut memory).unwrap()),
+            Ok(Ok(100))
+        );
+    }
+
+    #[test]
+    fn provider_probe_distinguishes_invalid_call_from_unsupported_media() {
+        use mrml_interface_storage_filesystem_v1::{
+            decode_probe_response, encode_probe_request, BorrowedReadView, OpaqueHandle,
+        };
+
+        let volume = OpaqueHandle::new(3, 7).unwrap();
+        let short =
+            encode_probe_request(volume, BorrowedReadView::within(0, 511, 512).unwrap()).unwrap();
+        let mut memory = [0; 512];
+        assert_eq!(
+            decode_probe_response(&Fat32Provider.probe(&short, &mut memory).unwrap()),
+            Ok(Err(ProbeError::InvalidRequest))
+        );
+        let unsupported =
+            encode_probe_request(volume, BorrowedReadView::within(0, 512, 512).unwrap()).unwrap();
+        assert_eq!(
+            decode_probe_response(&Fat32Provider.probe(&unsupported, &mut memory).unwrap()),
+            Ok(Err(ProbeError::UnsupportedFilesystem))
+        );
     }
 
     #[test]

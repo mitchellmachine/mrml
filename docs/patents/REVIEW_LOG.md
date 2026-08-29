@@ -1,5 +1,14 @@
 # Patent review log
 
+# 2026-08-29 — Canonical filesystem provider probe boundary
+
+Patent review: **NOT_TRIGGERED**. This increment serializes the existing
+generation-1 probe operation, preserves an exact isolated endpoint generation,
+and lets the FAT32 provider classify a caller-supplied bounded header. It adds no
+filesystem algorithm, discovery optimization, mount, name lookup, allocation,
+write, or authority mechanism. This technical screen is not legal advice or
+patent clearance.
+
 # 2026-08-29 — Atomic bounded FAT32 file-range reads
 
 Patent review: **NOT_TRIGGERED**. This increment maps a caller-bounded byte range

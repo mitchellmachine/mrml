@@ -20,8 +20,10 @@ remain independently attributable.
 
 Storage modularization is now **PARTIALLY IMPLEMENTED** at its first dependency
 gate. Canonical generation-1 `storage.block-provider` and `storage.filesystem`
-schemas define bounded opaque-handle operations for isolated library providers;
-each passes one focused test on Windows and Arch Linux. The storage service will
+schemas define bounded opaque-handle operations for isolated library providers.
+The block interface passes one focused test; the filesystem interface's canonical
+probe codec and exact-generation isolated transport pass three on Windows and
+Arch Linux. The storage service will
 bind exact admitted generations and restart through complete cleanup rather than
 load path-selected code or reboot. The fixed-capacity registry is now
 **PARTIALLY IMPLEMENTED** with separate authorities, exact generation changes,
@@ -38,9 +40,11 @@ The FAT32 provider's first gate is now **PARTIALLY IMPLEMENTED** in
 `org.mrml.library.storage.fat32`. Its isolated generation-1 filesystem binding
 and bounded read-only FAT32 geometry, FSInfo, mirrored/active FAT-chain traversal,
 atomic directory-chain composition, bounded read-only LFN decoding, and atomic
-file-range reads pass twenty-six tests on Windows and Arch Linux; storage with
-both dynamic requirements passes 135. Lookup/open policy, checking, formatting,
-writes, service IPC, and live replacement remain next in dependency order.
+file-range reads, and canonical provider probing pass twenty-eight tests on
+Windows and Arch Linux; the filesystem interface codec passes three and storage
+with both dynamic requirements passes 135. Lookup/open policy, checking,
+formatting, writes, service IPC, and live replacement remain next in dependency
+order.
 
 Recovery discovery now has a capability-backed service source. The bounded
 `enumerate_serviced_recovery_devices` scan accepts only explicit live block

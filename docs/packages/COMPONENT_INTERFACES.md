@@ -414,6 +414,10 @@ The storage-side fixed registry exercises cleanup before candidate launch,
 health-check before publication, quarantine on cleanup uncertainty, and an
 unavailable state after launch failure. This is **PARTIALLY IMPLEMENTED** hosted
 model evidence, not yet a live supervisor/provider restart.
+The filesystem interface now has a canonical generation-1 probe byte codec and
+an isolated transport that retains the exact endpoint generation; three focused
+tests pass on both hosts. This is the first executable call boundary, not yet a
+receive/reply service process.
 `org.mrml.library.storage.ahci` is now the first concrete provider package. The
 existing AHCI code was moved intact out of `mrml-storage`, the package advertises
 the exact block-provider fingerprint as `isolated-service`, and its 50 tests pass
@@ -423,8 +427,9 @@ not dynamic execution.
 
 `org.mrml.library.storage.fat32` now provides the matching isolated filesystem
 interface generation. Its bounded read-only geometry, FSInfo, FAT-chain, atomic
-directory-chain, checksum-bound LFN, and atomic file-range readers pass twenty-six
-tests on both hosts, and storage requires this binding separately from AHCI.
+directory-chain, checksum-bound LFN, atomic file-range readers, and canonical
+probe adapter pass twenty-eight tests on both hosts, and storage requires this
+binding separately from AHCI.
 Names remain non-authorizing labels. This is package/parser evidence, not a live
 endpoint, mount, or hot replacement.
 

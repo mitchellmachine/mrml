@@ -457,8 +457,10 @@ PCI classes, and manifests do not authorize.
 - Failure isolated: **YES**
 - Existing-object reuse: **HIGH**
 
-The two schemas and generated safe types are **PARTIALLY IMPLEMENTED** and each
-passes one focused test on Windows and Arch Linux. The fixed-capacity module
+The two schemas and generated safe types are **PARTIALLY IMPLEMENTED**. The block
+interface passes one focused test and the filesystem interface's canonical probe
+codec and exact-generation isolated transport pass three on Windows and Arch
+Linux. The fixed-capacity module
 registry is also **PARTIALLY IMPLEMENTED**. It binds interface inspection,
 provider control, and endpoint signal authorities separately; exact-matches all
 generations; cleanup-gates replacement; and publishes only after fresh launch
@@ -491,8 +493,10 @@ read-only LFN path bounds and validates ordinals, reserved fields, short-name
 checksums, termination, UTF-16 structure, and cross-cluster sequences; decoded
 names remain non-authorizing labels. Bounded read-only file ranges require an
 exact validated chain, stage all requested bytes before publication, preserve
-caller output on failure, and wipe temporary buffers. Twenty-six tests pass on
-Windows and Arch Linux; storage remains 135 on both. This does not implement
+caller output on failure, and wipe temporary buffers. The FAT32 provider now
+consumes the canonical probe bytes and distinguishes malformed calls from
+unsupported media. Twenty-eight tests pass on Windows and Arch Linux; storage
+remains 135 on both. This does not implement
 mount, lookup/open policy, check/repair, format, writes, live IPC, or
 interoperability evidence.
 
