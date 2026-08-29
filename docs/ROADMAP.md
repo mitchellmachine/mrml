@@ -2029,6 +2029,10 @@ live composition remains pending.
    maxima. Immediate and scheduler-wakeup completion paths cannot publish loose
    scalar counts. The focused Linux kernel suite passes 593 tests and the UEFI
    `service_probe` profile cross-builds.
+   Send and receive capability buffers now have separate full-range validators:
+   16-byte attenuation descriptors for send and 8-byte returned tokens for
+   receive. Canonical-address crossing and multiplication/range failure reject
+   the syscall before publication.
    The restart wire record can no longer carry a clock value; bytes 40--47 are
    canonical zero and dispatch receives time only from trusted kernel state.
    Syscall operation 10 decodes only an exact generational capability and

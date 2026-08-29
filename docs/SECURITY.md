@@ -121,6 +121,9 @@ access. The security/acceptance gate is canonical in
 - Buffered IPC completion retains a typed exact-capacity witness through the
   final trap-frame or saved-context publication; loose result scalars cannot
   replace the checked pending receive bounds.
+- Buffered send descriptors and receive-token outputs use distinct element
+  widths and complete checked user ranges; validating only their starting
+  address is insufficient.
 - Writable and executable mappings are mutually exclusive.
 - Authority, replay state, ownership, mappings, and lifecycle transitions are
   explicit and commit only after validation; partial failure rolls back or

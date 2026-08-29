@@ -6560,6 +6560,13 @@ The focused Linux kernel suite passes 593 tests and the UEFI `service_probe`
 profile cross-builds. This is kernel/service mechanism evidence, not a new IPC
 authority or physical execution claim.
 
+Buffered syscall admission now also validates the complete capability-buffer
+range with its directional element width: send uses canonical 16-byte transfer
+descriptors, while receive writes 8-byte opaque capability tokens. Checked
+range-end and user-address bounds reject canonical-space crossings before a
+request exists; a shared start-address-only check no longer conflates the two
+layouts.
+
 Patent review: **NOT_TRIGGERED**. This change retains an existing bounds check
 as Rust typestate across an existing syscall completion path and introduces no
 new IPC algorithm or mechanism. See [the patent review log](patents/REVIEW_LOG.md).

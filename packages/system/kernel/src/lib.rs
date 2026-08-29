@@ -247,7 +247,8 @@ pub use shared_memory::{
 };
 pub use syscall::{
     BufferCompletion, CAPABILITY_TRANSFER_DESCRIPTOR_BYTES, CapabilityTransferDescriptor,
-    MAX_SHARED_BUFFER_SYSCALL_BYTES, MAX_SYSCALL_INLINE_PAYLOAD, SyscallError, SyscallRequest,
+    MAX_SHARED_BUFFER_SYSCALL_BYTES, MAX_SYSCALL_INLINE_PAYLOAD, RECEIVED_CAPABILITY_TOKEN_BYTES,
+    SyscallError, SyscallRequest,
     UserCallFrame, X86_USER_CALL_VECTOR, decode_capability_transfers,
 };
 pub use task_runtime::{

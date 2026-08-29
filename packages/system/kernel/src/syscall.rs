@@ -5,6 +5,7 @@ pub const X86_USER_CALL_VECTOR: u8 = 0x80;
 pub const MAX_SYSCALL_INLINE_PAYLOAD: usize = 24;
 pub const MAX_SHARED_BUFFER_SYSCALL_BYTES: usize = 1024 * 1024;
 pub const CAPABILITY_TRANSFER_DESCRIPTOR_BYTES: usize = 16;
+pub const RECEIVED_CAPABILITY_TOKEN_BYTES: usize = 8;
 const USER_RETURN_FLAGS: u64 = 2
     | (1 << 0)
     | (1 << 2)
@@ -361,7 +362,11 @@ impl SyscallRequest {
                     return Err(SyscallError::TooManyCapabilities);
                 }
                 validate_buffer_address(rdx, 1)?;
-                validate_optional_descriptor_buffer(r8, capability_count)?;
+                validate_optional_capability_buffer(
+                    r8,
+                    capability_count,
+                    CAPABILITY_TRANSFER_DESCRIPTOR_BYTES,
+                )?;
                 Ok(Self::SendBuffer {
                     endpoint: Capability::from_token(rdi),
                     receiver: TaskId::from_token(rsi),
@@ -386,7 +391,11 @@ impl SyscallRequest {
                     return Err(SyscallError::ReservedArgument);
                 }
                 validate_buffer_address(rdi, 1)?;
-                validate_optional_descriptor_buffer(rdx, capability_capacity)?;
+                validate_optional_capability_buffer(
+                    rdx,
+                    capability_capacity,
+                    RECEIVED_CAPABILITY_TOKEN_BYTES,
+                )?;
                 Ok(Self::ReceiveBuffer {
                     payload_address: rdi,
                     payload_capacity: payload_capacity as u16,
@@ -547,9 +556,10 @@ fn validate_buffer_address(address: u64, alignment: u64) -> Result<(), SyscallEr
     Ok(())
 }
 
-fn validate_optional_descriptor_buffer(
+fn validate_optional_capability_buffer(
     address: u64,
     capability_count: usize,
+    entry_bytes: usize,
 ) -> Result<(), SyscallError> {
     if capability_count == 0 {
         if address != 0 {
@@ -557,10 +567,17 @@ fn validate_optional_descriptor_buffer(
         }
         return Ok(());
     }
-    validate_buffer_address(address, 8)?;
-    capability_count
-        .checked_mul(CAPABILITY_TRANSFER_DESCRIPTOR_BYTES)
+    let length = capability_count
+        .checked_mul(entry_bytes)
         .ok_or(SyscallError::InvalidBuffer)?;
+    validate_user_range(
+        address,
+        length,
+        MAX_CAPABILITIES * CAPABILITY_TRANSFER_DESCRIPTOR_BYTES,
+    )?;
+    if !address.is_multiple_of(RECEIVED_CAPABILITY_TOKEN_BYTES as u64) {
+        return Err(SyscallError::InvalidBuffer);
+    }
     Ok(())
 }
 
@@ -746,6 +763,23 @@ mod tests {
         );
         assert_eq!(
             SyscallRequest::decode(4, endpoint, receiver, 0x6000, 48, 0x7001, 1),
+            Err(SyscallError::InvalidBuffer)
+        );
+        assert_eq!(
+            SyscallRequest::decode(4, endpoint, receiver, 0x6000, 48, (1 << 47) - 8, 1),
+            Err(SyscallError::InvalidBuffer)
+        );
+        assert_eq!(
+            SyscallRequest::decode(5, 0x8000, 112, (1 << 47) - 8, 1, 0, 0),
+            Ok(SyscallRequest::ReceiveBuffer {
+                payload_address: 0x8000,
+                payload_capacity: 112,
+                capabilities_address: (1 << 47) - 8,
+                capability_capacity: 1,
+            })
+        );
+        assert_eq!(
+            SyscallRequest::decode(5, 0x8000, 112, (1 << 47) - 8, 2, 0, 0),
             Err(SyscallError::InvalidBuffer)
         );
         assert_eq!(
