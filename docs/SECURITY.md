@@ -303,6 +303,8 @@ access. The security/acceptance gate is canonical in
   transfer, eliminating fallible tail discovery after transfer commits.
 - Receiver wake generation is reserved before IPC mutation and consumed after
   inbox publication, eliminating fallible scheduler lookup after commit.
+- Peer-death publication reserves every exact peer wake generation before any
+  reciprocal relation or death-event mutation.
 - Buffered receive preflights and binds its exact empty pending-table slot before
   scheduler blocking, preventing late capacity discovery after state mutation.
 - Pending buffered completion revalidates zero-capacity address canonicality and

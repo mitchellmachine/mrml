@@ -4,6 +4,7 @@ use core::ops::{Deref, DerefMut};
 
 use crate::arch::x86_64::{TrapDisposition, UserContext};
 use crate::ipc::EndpointSendPlan;
+use crate::scheduler::WakePlan;
 use crate::{
     BalancePolicyError, BalanceTarget, Capability, CapabilitySpace, DetachedTask, Endpoint,
     IpcError, KernelScheduleError, KernelScheduler, MemoryBackingKind, MemoryObjectId,
@@ -1349,7 +1350,24 @@ impl<const TASKS: usize, const CAPS: usize> TaskRuntime<TASKS, CAPS> {
         retired: &TaskDomain<CAPS>,
         reason: PeerDeathReason,
     ) -> Result<(), TaskRuntimeError> {
-        for peer in retired.peers.iter().flatten().copied() {
+        let mut wake_plans: [Option<WakePlan>; TASK_CONTROL_PEERS] = array::from_fn(|_| None);
+        for (slot, peer) in wake_plans
+            .iter_mut()
+            .zip(retired.peers.iter().flatten().copied())
+        {
+            *slot = Some(
+                self.scheduler
+                    .prepare_wake(peer)
+                    .map_err(TaskRuntimeError::Scheduler)?,
+            );
+        }
+        for (peer, wake_plan) in retired
+            .peers
+            .iter()
+            .flatten()
+            .copied()
+            .zip(wake_plans.into_iter().flatten())
+        {
             let slot = self.domain_slot(peer)?;
             let domain = self.domains[slot]
                 .as_mut()
@@ -1369,9 +1387,7 @@ impl<const TASKS: usize, const CAPS: usize> TaskRuntime<TASKS, CAPS> {
                 peer: retired.task,
                 reason,
             });
-            self.scheduler
-                .wake(peer)
-                .map_err(TaskRuntimeError::Scheduler)?;
+            self.scheduler.commit_wake(wake_plan);
         }
         Ok(())
     }

@@ -6980,6 +6980,11 @@ before authority, sequence, or inbox mutation. The consuming wake commit occurs
 after inbox publication without a fallible lookup; exclusive runtime ownership
 prevents scheduler mutation between preparation and commit. Existing blocked-
 wake and delivery coverage passes; the total remains 629.
+Peer-death publication now prepares exact-generation wake plans for the complete
+bounded peer set before removing any reciprocal relation or recording any death.
+Each plan is consumed only after its peer's control event is published, removing
+the former fallible post-mutation wake lookup. Existing protocol-violation and
+multi-peer retirement coverage passes; the total remains 629.
 Patent review: `NOT_TRIGGERED` — this is conventional fixed-array reservation
 and transactional commit for the existing IPC bookkeeping mechanism.
 The service buffered-receive path now resolves one exact empty pending-table
