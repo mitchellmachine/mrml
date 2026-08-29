@@ -14,6 +14,10 @@ pub const READ_REQUEST_BYTES: usize = ABI_CALL_HEADER_BYTES + 40;
 pub const READ_RESPONSE_BYTES: usize = 16;
 pub const WRITE_REQUEST_BYTES: usize = ABI_CALL_HEADER_BYTES + 40;
 pub const WRITE_RESPONSE_BYTES: usize = 16;
+pub const FLUSH_REQUEST_BYTES: usize = ABI_CALL_HEADER_BYTES + 8;
+pub const FLUSH_RESPONSE_BYTES: usize = 16;
+pub const RESET_REQUEST_BYTES: usize = ABI_CALL_HEADER_BYTES + 8;
+pub const RESET_RESPONSE_BYTES: usize = 16;
 const ABI_MAGIC: [u8; 8] = *b"MRMLABI\0";
 const ABI_SCHEMA_VERSION: u16 = 1;
 pub const BLOCK_DEVICE_CATALOG_HEADER_BYTES: usize = 16;
@@ -125,6 +129,17 @@ pub trait BlockProviderWriteTransport {
     ) -> Result<[u8; WRITE_RESPONSE_BYTES], ProtocolError>;
 }
 
+pub trait BlockProviderControlTransport {
+    fn flush(
+        &mut self,
+        request: &[u8; FLUSH_REQUEST_BYTES],
+    ) -> Result<[u8; FLUSH_RESPONSE_BYTES], ProtocolError>;
+    fn reset(
+        &mut self,
+        request: &[u8; RESET_REQUEST_BYTES],
+    ) -> Result<[u8; RESET_RESPONSE_BYTES], ProtocolError>;
+}
+
 pub trait BlockProviderServiceEndpoint {
     fn invoke_enumerate(
         &mut self,
@@ -150,6 +165,19 @@ pub trait BlockProviderWriteServiceEndpoint {
         request: &[u8; WRITE_REQUEST_BYTES],
         memory: &[u8],
     ) -> Result<[u8; WRITE_RESPONSE_BYTES], ProtocolError>;
+}
+
+pub trait BlockProviderControlServiceEndpoint {
+    fn invoke_flush(
+        &mut self,
+        endpoint: OpaqueHandle,
+        request: &[u8; FLUSH_REQUEST_BYTES],
+    ) -> Result<[u8; FLUSH_RESPONSE_BYTES], ProtocolError>;
+    fn invoke_reset(
+        &mut self,
+        endpoint: OpaqueHandle,
+        request: &[u8; RESET_REQUEST_BYTES],
+    ) -> Result<[u8; RESET_RESPONSE_BYTES], ProtocolError>;
 }
 
 pub struct IsolatedBlockProviderTransport<E> {
@@ -229,6 +257,26 @@ impl<E: BlockProviderWriteServiceEndpoint> BlockProviderWriteTransport
         }
         decode_write_request(request, memory.len() as u64)?;
         self.service.invoke_write(self.endpoint, request, memory)
+    }
+}
+
+impl<E: BlockProviderControlServiceEndpoint> BlockProviderControlTransport
+    for IsolatedBlockProviderTransport<E>
+{
+    fn flush(
+        &mut self,
+        request: &[u8; FLUSH_REQUEST_BYTES],
+    ) -> Result<[u8; FLUSH_RESPONSE_BYTES], ProtocolError> {
+        decode_flush_request(request)?;
+        self.service.invoke_flush(self.endpoint, request)
+    }
+
+    fn reset(
+        &mut self,
+        request: &[u8; RESET_REQUEST_BYTES],
+    ) -> Result<[u8; RESET_RESPONSE_BYTES], ProtocolError> {
+        decode_reset_request(request)?;
+        self.service.invoke_reset(self.endpoint, request)
     }
 }
 
@@ -520,6 +568,129 @@ pub fn decode_write_response(
     }
 }
 
+fn encode_control_request(
+    session: OpaqueHandle,
+    operation: u32,
+) -> [u8; FLUSH_REQUEST_BYTES] {
+    let mut bytes = [0; FLUSH_REQUEST_BYTES];
+    bytes[0..8].copy_from_slice(&ABI_MAGIC);
+    bytes[8..10].copy_from_slice(&ABI_SCHEMA_VERSION.to_le_bytes());
+    bytes[16..48].copy_from_slice(&INTERFACE_FINGERPRINT);
+    bytes[48..52].copy_from_slice(&INTERFACE_GENERATION.to_le_bytes());
+    bytes[52..56].copy_from_slice(&operation.to_le_bytes());
+    bytes[56..64].copy_from_slice(&8_u64.to_le_bytes());
+    bytes[64..72].copy_from_slice(&16_u64.to_le_bytes());
+    bytes[72..76].copy_from_slice(&session.index().to_le_bytes());
+    bytes[76..80].copy_from_slice(&session.generation().to_le_bytes());
+    bytes
+}
+
+fn decode_control_request(
+    bytes: &[u8; FLUSH_REQUEST_BYTES],
+    operation: u32,
+) -> Result<OpaqueHandle, ProtocolError> {
+    if bytes[0..8] != ABI_MAGIC
+        || u16::from_le_bytes(bytes[8..10].try_into().unwrap()) != ABI_SCHEMA_VERSION
+        || bytes[10..16] != [0; 6]
+        || bytes[16..48] != INTERFACE_FINGERPRINT
+        || u32::from_le_bytes(bytes[48..52].try_into().unwrap()) != INTERFACE_GENERATION
+        || u32::from_le_bytes(bytes[52..56].try_into().unwrap()) != operation
+        || u64::from_le_bytes(bytes[56..64].try_into().unwrap()) != 8
+        || u64::from_le_bytes(bytes[64..72].try_into().unwrap()) != 16
+    {
+        return Err(ProtocolError::InvalidHeader);
+    }
+    OpaqueHandle::new(
+        u32::from_le_bytes(bytes[72..76].try_into().unwrap()),
+        u32::from_le_bytes(bytes[76..80].try_into().unwrap()),
+    )
+    .ok_or(ProtocolError::InvalidRequest)
+}
+
+pub fn encode_flush_request(session: OpaqueHandle) -> [u8; FLUSH_REQUEST_BYTES] {
+    encode_control_request(session, OP_FLUSH)
+}
+
+pub fn decode_flush_request(
+    bytes: &[u8; FLUSH_REQUEST_BYTES],
+) -> Result<FlushRequest, ProtocolError> {
+    Ok(FlushRequest {
+        session: decode_control_request(bytes, OP_FLUSH)?,
+    })
+}
+
+pub fn encode_flush_response(
+    result: Result<FlushResponse, FlushError>,
+) -> [u8; FLUSH_RESPONSE_BYTES] {
+    let mut bytes = [0; FLUSH_RESPONSE_BYTES];
+    let (status, serial) = match result {
+        Ok(serial) => (0, serial),
+        Err(error) => (error as u32, 0),
+    };
+    bytes[0..4].copy_from_slice(&status.to_le_bytes());
+    bytes[8..16].copy_from_slice(&serial.to_le_bytes());
+    bytes
+}
+
+pub fn decode_flush_response(
+    bytes: &[u8; FLUSH_RESPONSE_BYTES],
+) -> Result<Result<FlushResponse, FlushError>, ProtocolError> {
+    if bytes[4..8] != [0; 4] {
+        return Err(ProtocolError::InvalidResponse);
+    }
+    let status = u32::from_le_bytes(bytes[0..4].try_into().unwrap());
+    let serial = u64::from_le_bytes(bytes[8..16].try_into().unwrap());
+    match status {
+        0 if serial != 0 => Ok(Ok(serial)),
+        1 if serial == 0 => Ok(Err(FlushError::StaleObject)),
+        2 if serial == 0 => Ok(Err(FlushError::PermissionDenied)),
+        3 if serial == 0 => Ok(Err(FlushError::IoFailure)),
+        _ => Err(ProtocolError::InvalidResponse),
+    }
+}
+
+pub fn encode_reset_request(session: OpaqueHandle) -> [u8; RESET_REQUEST_BYTES] {
+    encode_control_request(session, OP_RESET)
+}
+
+pub fn decode_reset_request(
+    bytes: &[u8; RESET_REQUEST_BYTES],
+) -> Result<ResetRequest, ProtocolError> {
+    Ok(ResetRequest {
+        session: decode_control_request(bytes, OP_RESET)?,
+    })
+}
+
+pub fn encode_reset_response(
+    result: Result<ResetResponse, ResetError>,
+) -> [u8; RESET_RESPONSE_BYTES] {
+    let mut bytes = [0; RESET_RESPONSE_BYTES];
+    let (status, generation) = match result {
+        Ok(generation) => (0, generation),
+        Err(error) => (error as u32, 0),
+    };
+    bytes[0..4].copy_from_slice(&status.to_le_bytes());
+    bytes[8..16].copy_from_slice(&generation.to_le_bytes());
+    bytes
+}
+
+pub fn decode_reset_response(
+    bytes: &[u8; RESET_RESPONSE_BYTES],
+) -> Result<Result<ResetResponse, ResetError>, ProtocolError> {
+    if bytes[4..8] != [0; 4] {
+        return Err(ProtocolError::InvalidResponse);
+    }
+    let status = u32::from_le_bytes(bytes[0..4].try_into().unwrap());
+    let generation = u64::from_le_bytes(bytes[8..16].try_into().unwrap());
+    match status {
+        0 if generation != 0 => Ok(Ok(generation)),
+        1 if generation == 0 => Ok(Err(ResetError::StaleObject)),
+        2 if generation == 0 => Ok(Err(ResetError::PermissionDenied)),
+        3 if generation == 0 => Ok(Err(ResetError::CleanupIncomplete)),
+        _ => Err(ProtocolError::InvalidResponse),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -602,6 +773,32 @@ mod tests {
                 return Err(ProtocolError::Transport);
             }
             Ok(encode_write_response(Ok(request.input.length())))
+        }
+    }
+
+    impl BlockProviderControlServiceEndpoint for Endpoint {
+        fn invoke_flush(
+            &mut self,
+            endpoint: OpaqueHandle,
+            request: &[u8; FLUSH_REQUEST_BYTES],
+        ) -> Result<[u8; FLUSH_RESPONSE_BYTES], ProtocolError> {
+            self.seen = Some(endpoint);
+            let request = decode_flush_request(request)?;
+            Ok(encode_flush_response(Ok(u64::from(
+                request.session.generation(),
+            ))))
+        }
+
+        fn invoke_reset(
+            &mut self,
+            endpoint: OpaqueHandle,
+            request: &[u8; RESET_REQUEST_BYTES],
+        ) -> Result<[u8; RESET_RESPONSE_BYTES], ProtocolError> {
+            self.seen = Some(endpoint);
+            let request = decode_reset_request(request)?;
+            Ok(encode_reset_response(Ok(
+                u64::from(request.session.generation()) + 1,
+            )))
         }
     }
 
@@ -753,6 +950,37 @@ mod tests {
         assert_eq!(
             decode_write_response(&encode_write_response(Err(WriteError::ReadOnly)), 512),
             Ok(Err(WriteError::ReadOnly))
+        );
+    }
+
+    #[test]
+    fn flush_and_reset_route_separately_through_exact_endpoint() {
+        let endpoint = OpaqueHandle::new(9, 15).unwrap();
+        let session = OpaqueHandle::new(6, 10).unwrap();
+        let service = Endpoint { seen: None };
+        let mut transport = IsolatedBlockProviderTransport::new(endpoint, 4096, service).unwrap();
+        let flush = transport.flush(&encode_flush_request(session)).unwrap();
+        assert_eq!(decode_flush_response(&flush), Ok(Ok(10)));
+        let reset = transport.reset(&encode_reset_request(session)).unwrap();
+        assert_eq!(decode_reset_response(&reset), Ok(Ok(11)));
+        assert_eq!(transport.into_service().seen, Some(endpoint));
+    }
+
+    #[test]
+    fn control_codecs_reject_cross_operation_stale_and_zero_success() {
+        let session = OpaqueHandle::new(6, 10).unwrap();
+        let flush = encode_flush_request(session);
+        assert_eq!(decode_reset_request(&flush), Err(ProtocolError::InvalidHeader));
+        let mut reset = encode_reset_request(session);
+        reset[16] ^= 1;
+        assert_eq!(decode_reset_request(&reset), Err(ProtocolError::InvalidHeader));
+        assert_eq!(
+            decode_flush_response(&encode_flush_response(Ok(0))),
+            Err(ProtocolError::InvalidResponse)
+        );
+        assert_eq!(
+            decode_reset_response(&encode_reset_response(Err(ResetError::CleanupIncomplete))),
+            Ok(Err(ResetError::CleanupIncomplete))
         );
     }
 }

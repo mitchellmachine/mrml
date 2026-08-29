@@ -1,5 +1,14 @@
 # Patent review log
 
+# 2026-08-29 — Canonical block-provider flush and reset boundaries
+
+Patent review: **NOT_TRIGGERED**. This increment serializes the existing distinct
+generation-1 flush and reset operations, exact endpoint/session identities,
+durability serials, successor generations, and cleanup-incomplete status. It
+adds no device reset sequence, persistence algorithm, storage scheduling,
+caching, allocation, naming, encoding, data-layout, or optimization behavior.
+This technical screen is not legal advice or patent clearance.
+
 # 2026-08-29 — Canonical block-provider write boundary
 
 Patent review: **NOT_TRIGGERED**. This increment serializes the existing bounded
