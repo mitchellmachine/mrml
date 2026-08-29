@@ -189,6 +189,16 @@ const MRML_V1_WIDE_SIGNED_DIVIDE_FLOOR_SOURCE: &str =
     "#[mrml_abi::export(version = 1)] pub fn probe(left: i128, right: i128) -> i128 { left.div_floor(right) }";
 const MRML_V1_WIDE_SIGNED_DIVIDE_CEILING_SOURCE: &str =
     "#[mrml_abi::export(version = 1)] pub fn probe(left: i128, right: i128) -> i128 { left.div_ceil(right) }";
+const MRML_V1_WIDE_UNSIGNED_NEXT_MULTIPLE_SOURCE: &str =
+    "#[mrml_abi::export(version = 1)] pub fn probe(left: u128, right: u128) -> u128 { left.next_multiple_of(right) }";
+const MRML_V1_WIDE_SIGNED_NEXT_MULTIPLE_SOURCE: &str =
+    "#[mrml_abi::export(version = 1)] pub fn probe(left: i128, right: i128) -> i128 { left.next_multiple_of(right) }";
+const MRML_V1_WIDE_UNSIGNED_NEXT_MULTIPLE_ZERO_SOURCE: &str =
+    "#[mrml_abi::export(version = 1)] pub fn probe(left: u128, right: u128) -> u128 { left.next_multiple_of(right) }";
+const MRML_V1_WIDE_UNSIGNED_NEXT_MULTIPLE_OVERFLOW_SOURCE: &str =
+    "#[mrml_abi::export(version = 1)] pub fn probe(left: u128, right: u128) -> u128 { left.next_multiple_of(right) }";
+const MRML_V1_WIDE_SIGNED_NEXT_MULTIPLE_OVERFLOW_SOURCE: &str =
+    "#[mrml_abi::export(version = 1)] pub fn probe(left: i128, right: i128) -> i128 { left.next_multiple_of(right) }";
 const MRML_V1_WIDE_SIGNED_IS_POSITIVE_SOURCE: &str =
     "#[mrml_abi::export(version = 1)] pub fn probe(input: i128) -> u64 { input.is_positive() as u64 }";
 const MRML_V1_WIDE_SIGNED_IS_NEGATIVE_SOURCE: &str =
@@ -600,7 +610,10 @@ fn rustc_mrml_v1_observations(source: &str, driver: &str) -> Vec<u64> {
     #[cfg(not(target_os = "windows"))]
     let executable = directory.path().join("shared");
     fs::write(&facade_source, MRML_ABI_FACADE).expect("write oracle facade source");
-    let oracle_features = if source.contains(".div_floor(") || source.contains(".div_ceil(") {
+    let oracle_features = if source.contains(".div_floor(")
+        || source.contains(".div_ceil(")
+        || source.contains(".next_multiple_of(")
+    {
         "#![feature(int_roundings)]\n"
     } else {
         ""
@@ -2234,6 +2247,131 @@ fn mrml_v1_wide_rounded_division_matches_both_oracle_words() {
                 source,
                 "for (left, right) in [(0i128, 1i128), (7, 3), (-7, 3), (7, -3), (-7, -3), (i128::MIN, 3), (i128::MAX, -3)] { let returned = probe(left, right); println!(\"{}\", returned as u64); println!(\"{}\", ((returned as u128) >> 64) as u64); }",
             )
+        );
+    }
+}
+
+#[test]
+fn mrml_v1_wide_next_multiples_match_both_oracle_words() {
+    let unsigned_inputs = [
+        (0u128, 1u128),
+        (1, 2),
+        ((u64::MAX as u128) - 1, 257),
+        ((u64::MAX as u128) + 1, (u64::MAX as u128) + 1),
+        (u128::MAX - 1, 2),
+    ];
+    let code = compile(MRML_V1_WIDE_UNSIGNED_NEXT_MULTIPLE_SOURCE);
+    let actual = unsigned_inputs
+        .into_iter()
+        .flat_map(|(left, right)| {
+            let returned = unsafe { call_mrml_v1_two_wide_return(code.pointer, left, right) };
+            [returned as u64, (returned >> 64) as u64]
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(
+        actual,
+        rustc_mrml_v1_observations(
+            MRML_V1_WIDE_UNSIGNED_NEXT_MULTIPLE_SOURCE,
+            "for (left, right) in [(0u128, 1u128), (1, 2), ((u64::MAX as u128) - 1, 257), ((u64::MAX as u128) + 1, (u64::MAX as u128) + 1), (u128::MAX - 1, 2)] { let returned = probe(left, right); println!(\"{}\", returned as u64); println!(\"{}\", (returned >> 64) as u64); }",
+        )
+    );
+
+    let signed_inputs = [
+        (0i128, 1i128),
+        (23, 8),
+        (-23, 8),
+        (23, -8),
+        (-23, -8),
+        (i128::MIN, -1),
+        (i128::MAX - 1, 1),
+    ];
+    let code = compile(MRML_V1_WIDE_SIGNED_NEXT_MULTIPLE_SOURCE);
+    let actual = signed_inputs
+        .into_iter()
+        .flat_map(|(left, right)| {
+            let returned = unsafe {
+                call_mrml_v1_two_wide_return(code.pointer, left as u128, right as u128)
+            };
+            [returned as u64, (returned >> 64) as u64]
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(
+        actual,
+        rustc_mrml_v1_observations(
+            MRML_V1_WIDE_SIGNED_NEXT_MULTIPLE_SOURCE,
+            "for (left, right) in [(0i128, 1i128), (23, 8), (-23, 8), (23, -8), (-23, -8), (i128::MIN, -1), (i128::MAX - 1, 1)] { let returned = probe(left, right); println!(\"{}\", returned as u64); println!(\"{}\", ((returned as u128) >> 64) as u64); }",
+        )
+    );
+}
+
+#[test]
+fn mrml_v1_wide_next_multiple_failures_trap() {
+    #[cfg(target_os = "windows")]
+    const CHILD: &str = "MRML_SEMANTIC_WIDE_NEXT_MULTIPLE_TRAP_CHILD";
+    let cases = [
+        (
+            MRML_V1_WIDE_UNSIGNED_NEXT_MULTIPLE_ZERO_SOURCE,
+            1u128,
+            0u128,
+        ),
+        (
+            MRML_V1_WIDE_UNSIGNED_NEXT_MULTIPLE_OVERFLOW_SOURCE,
+            u128::MAX,
+            2u128,
+        ),
+        (
+            MRML_V1_WIDE_SIGNED_NEXT_MULTIPLE_OVERFLOW_SOURCE,
+            i128::MAX as u128,
+            2u128,
+        ),
+    ];
+
+    #[cfg(not(target_os = "windows"))]
+    {
+        for (source, left, right) in cases {
+            let code = compile(source);
+            let pid = unsafe { fork() };
+            assert!(pid >= 0, "fork failed");
+            if pid == 0 {
+                let _ = unsafe { call_mrml_v1_two_wide_return(code.pointer, left, right) };
+                unsafe { _exit(120) }
+            }
+            let mut status = 0;
+            assert_eq!(unsafe { waitpid(pid, &mut status, 0) }, pid, "waitpid failed");
+            assert_eq!(status & 0x7f, 4, "unexpected Unix wait status: {status:#x}");
+        }
+        return;
+    }
+
+    #[cfg(target_os = "windows")]
+    if let Some(index) = std::env::var_os(CHILD) {
+        let index = index.to_string_lossy().parse::<usize>().expect("child case index");
+        let (source, left, right) = cases[index];
+        let code = compile(source);
+        unsafe { SetErrorMode(0x0001 | 0x0002) };
+        let _ = unsafe { call_mrml_v1_two_wide_return(code.pointer, left, right) };
+        panic!("wide next-multiple failure unexpectedly returned");
+    }
+
+    #[cfg(target_os = "windows")]
+    for index in 0..cases.len() {
+        let output = Command::new(std::env::current_exe().expect("locate semantic test binary"))
+            .args([
+                "--exact",
+                "mrml_v1_wide_next_multiple_failures_trap",
+                "--nocapture",
+            ])
+            .env(CHILD, index.to_string())
+            .output()
+            .expect("launch isolated wide next-multiple trap probe");
+        assert!(!output.status.success(), "failure case unexpectedly returned");
+        assert_eq!(output.status.code(), Some(101));
+        let stdout = String::from_utf8(output.stdout).expect("UTF-8 child test stdout");
+        let stderr = String::from_utf8(output.stderr).expect("UTF-8 child test stderr");
+        assert!(
+            stdout.contains("unexpected return code -1073741795")
+                || stderr.contains("unexpected return code -1073741795"),
+            "missing Windows illegal-instruction status; stdout: {stdout}; stderr: {stderr}"
         );
     }
 }

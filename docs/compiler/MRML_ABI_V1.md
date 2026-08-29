@@ -257,6 +257,11 @@ Wide `div_floor` and `div_ceil` preserve one evaluation of each operand, retain
 both quotient and remainder from the bounded divider, and adjust a non-exact
 quotient according to the divisor and remainder signs. Unsigned ceiling adds
 one only for a nonzero remainder; unsigned floor is the ordinary quotient.
+Wide `next_multiple_of` likewise evaluates each operand once and uses the
+bounded remainder. It advances by `divisor - remainder` for matching signs and
+by `-remainder` for opposite signs, retains the exact dividend for zero
+remainders and signed division by negative one, and applies checked wide
+addition to the adjustment. Zero divisors and out-of-range results trap.
 Lazy `if` expressions may select compatible two-word integer values without
 evaluating the unselected branch; both branches retain the declared wide type.
 Block sequences may evaluate supported one-word prefix expressions before a
@@ -332,6 +337,10 @@ must take isolated traps.
 Unsigned and signed wide floor/ceiling division are compared across exact and
 non-exact quotients, opposite-sign pairs, the 64-bit word boundary, and the
 signed and unsigned extrema supported without overflow.
+Unsigned and signed wide next-multiple results are compared across exact and
+non-exact values, both divisor signs, the 64-bit word boundary, and the signed
+minimum divided by negative one. Zero-divisor and signed/unsigned overflow
+paths must take isolated traps.
 Both branches of a nontrivial wide conditional return are compared word-for-word.
 Wide values returned through a block sequence are also compared word-for-word.
 Immutable wide-local round trips are compared word-for-word.

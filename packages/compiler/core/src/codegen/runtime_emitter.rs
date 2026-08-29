@@ -7709,6 +7709,75 @@ impl<
             }
             self.patch_forward_branch(exact)?;
             return Ok(());
+        } else if let ExprKind::IntegerPairTransform {
+            base,
+            other,
+            transform: crate::expression::IntegerPairTransform::NextMultiple,
+        } = expression.kind
+        {
+            let base_type = runtime_expression_type_with_locals(
+                self.function,
+                self.resolver,
+                &self.locals[..self.saved_locals],
+                tree,
+                base,
+                1,
+            )
+            .map_err(|kind| self.error(kind))?;
+            if !matches!(
+                base_type,
+                RuntimeExpressionType::Integer(Some(
+                    crate::IntegerType::U128 | crate::IntegerType::I128
+                ))
+            ) || expected_type != base_type
+            {
+                return Err(self.error(CodegenErrorKind::RuntimeTypeMismatch));
+            }
+            self.emit_wide_binary_operands(tree, base, other, expected_type)?;
+            let negative_one_end = if layout.signed {
+                self.emit(&[0x48, 0x83, 0xf8, 0xff])?;
+                let low_not_negative_one = self.emit_forward_branch(0x85)?;
+                self.emit(&[0x48, 0x83, 0xfa, 0xff])?;
+                let high_not_negative_one = self.emit_forward_branch(0x85)?;
+                self.emit(&[0x4c, 0x89, 0xc0, 0x48, 0x89, 0xca])?;
+                let end = self.emit_unconditional_forward_branch()?;
+                self.patch_forward_branch(low_not_negative_one)?;
+                self.patch_forward_branch(high_not_negative_one)?;
+                Some(end)
+            } else {
+                None
+            };
+            self.emit(&[0x41, 0x50, 0x51, 0x50, 0x52])?;
+            self.evaluation_depth += 4;
+            self.emit_wide_divide_or_remainder(layout, true, false)?;
+            self.emit(&[
+                0x4c, 0x8b, 0x54, 0x24, 0x00, 0x4c, 0x8b, 0x4c, 0x24, 0x08, 0x48, 0x8b,
+                0x4c, 0x24, 0x10, 0x4c, 0x8b, 0x44, 0x24, 0x18, 0x48, 0x83, 0xc4, 32,
+            ])?;
+            self.evaluation_depth -= 4;
+            self.emit(&[0x49, 0x89, 0xc3, 0x49, 0x09, 0xd3])?;
+            let exact = self.emit_forward_branch(0x84)?;
+            if layout.signed {
+                self.emit(&[0x49, 0x89, 0xd3, 0x4d, 0x31, 0xd3, 0x4d, 0x85, 0xdb])?;
+                let same_sign = self.emit_forward_branch(0x89)?;
+                self.emit(&[0x4d, 0x31, 0xc9, 0x4d, 0x31, 0xd2, 0x49, 0x29, 0xc1, 0x49, 0x19, 0xd2])?;
+                let adjustment_ready = self.emit_unconditional_forward_branch()?;
+                self.patch_forward_branch(same_sign)?;
+                self.emit(&[0x49, 0x29, 0xc1, 0x49, 0x19, 0xd2])?;
+                self.patch_forward_branch(adjustment_ready)?;
+            } else {
+                self.emit(&[0x49, 0x29, 0xc1, 0x49, 0x19, 0xd2])?;
+            }
+            self.emit(&[0x4c, 0x89, 0xc0, 0x48, 0x89, 0xca, 0x4d, 0x89, 0xc8, 0x4c, 0x89, 0xd1])?;
+            self.emit_wide_add(layout)?;
+            let done = self.emit_unconditional_forward_branch()?;
+            self.patch_forward_branch(exact)?;
+            self.emit(&[0x4c, 0x89, 0xc0, 0x48, 0x89, 0xca])?;
+            self.patch_forward_branch(done)?;
+            if let Some(negative_one_end) = negative_one_end {
+                self.patch_forward_branch(negative_one_end)?;
+            }
+            return Ok(());
         } else if let ExprKind::Binary {
             operator:
                 operator @ (crate::BinaryOperator::BitAnd
