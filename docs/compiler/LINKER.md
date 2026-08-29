@@ -946,6 +946,14 @@ file for the exact pinned gnullvm rust-lld comparison, whose output also exits
 42. MRML emitted 4,134 bytes and rust-lld emitted 1,416 bytes. This proves lazy
 fixed-point extraction for this GNU thin shape, not arbitrary filesystem
 authority, general `.rlib` compatibility, or broad performance superiority.
+Selected external mappings now remain owned through ordered materialization, so
+each chosen file is opened and mapped once rather than once for verification
+and again for copying. The durable 50-iteration/five-warmup process benchmark
+for this three-member archive measured MRML at 5.055 ms median and 5.109 ms mean
+versus pinned rust-lld at 4.592 ms median and 4.614 ms mean. This tiny workload
+shows that eliminating duplicate selected-member I/O did not overcome MRML's
+remaining startup and parsing overhead; it is a regression baseline, not a
+speed-superiority result.
 
 Research source:
 

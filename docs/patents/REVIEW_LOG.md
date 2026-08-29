@@ -9313,6 +9313,15 @@ unselected files. It introduces no new archive index, symbol-resolution
 algorithm, object format, compression, cryptographic mechanism, or loading
 behavior. This technical screen is not legal advice or patent clearance.
 
+# 2026-08-28 — Retained selected thin-member mappings
+
+Patent review: **NOT_TRIGGERED**. This increment retains each already selected
+read-only file mapping through ordered thin-archive materialization instead of
+opening the same file twice, and directly copies validated symbol names into
+the existing bounded queues. It introduces no new archive, selection, mapping,
+compression, cryptographic, or loading mechanism. This technical screen is not
+legal advice or patent clearance.
+
 # 2026-08-28 — ELF x86-64 unsigned absolute-32 relocation
 
 Patent review: **NOT_TRIGGERED**. This increment decodes and applies the

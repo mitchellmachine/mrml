@@ -64,6 +64,11 @@ enum LinkFile {
     Buffered(Vector<u8>),
 }
 
+struct SelectedThinMember {
+    member_index: usize,
+    file: MappedFile,
+}
+
 impl AsRef<[u8]> for LinkFile {
     fn as_ref(&self) -> &[u8] {
         match self {
@@ -251,6 +256,8 @@ fn read_link_objects(
                 .try_extend_from_slice(b"!<arch>\n")
                 .map_err(|_| anyhow!("thin archive materialization exceeds 64 MiB"))?;
             let mut selected = [false; MAX_ARCHIVE_MEMBERS];
+            let mut selected_files = Vector::with_capacity(MAX_LINK_INPUTS)
+                .map_err(|_| anyhow!("could not allocate selected thin-member list"))?;
             if archive.symbols().is_empty() || !thin_index_selection_safe {
                 selected[..archive.members().len()].fill(true);
                 thin_index_selection_safe = false;
@@ -284,6 +291,12 @@ fn read_link_objects(
                             "thin archive symbol index does not match its object member"
                         ));
                     }
+                    selected_files
+                        .try_push(SelectedThinMember {
+                            member_index: candidate.member_index,
+                            file: member_file,
+                        })
+                        .map_err(|_| anyhow!("selected thin-member count exceeds 256"))?;
                 }
             }
             for (member_index, member) in archive.members().iter().enumerate() {
@@ -294,12 +307,17 @@ fn read_link_objects(
                     append_materialized_archive_member(&mut materialized, "lib.rmeta", &[])?;
                     continue;
                 }
-                let member_file = open_thin_archive_member(&parent, member.name)?;
-                append_materialized_archive_member(
-                    &mut materialized,
-                    member.name,
-                    member_file.as_ref(),
-                )?;
+                let selected_file = selected_files
+                    .iter()
+                    .find(|selected| selected.member_index == member_index);
+                let eager_file;
+                let member_bytes = if let Some(selected_file) = selected_file {
+                    selected_file.file.as_ref()
+                } else {
+                    eager_file = open_thin_archive_member(&parent, member.name)?;
+                    eager_file.as_ref()
+                };
+                append_materialized_archive_member(&mut materialized, member.name, member_bytes)?;
             }
             objects
                 .try_push(LinkFile::Buffered(materialized))
@@ -605,32 +623,66 @@ fn scan_link_object_symbols_owned(
     referenced: &mut Vector<Text>,
     defined: &mut Vector<Text>,
 ) -> Result<()> {
-    let mut borrowed_references = Vector::with_capacity(MAX_ARCHIVE_SYMBOLS)
-        .map_err(|_| anyhow!("could not allocate unresolved-symbol list"))?;
-    let mut borrowed_definitions = Vector::with_capacity(MAX_ARCHIVE_SYMBOLS)
-        .map_err(|_| anyhow!("could not allocate defined-symbol list"))?;
-    scan_link_object_symbols(
-        object,
-        format,
-        &mut borrowed_references,
-        &mut borrowed_definitions,
-    )?;
-    for symbol in borrowed_definitions {
-        if !defined.iter().any(|existing| existing.as_str() == symbol) {
-            defined
-                .try_push(Text::from(symbol))
-                .map_err(|_| anyhow!("defined-symbol capacity exceeded"))?;
+    if format == ObjectFormat::Elf64 {
+        let inventory = inventory_x86_64_elf_symbols(object)
+            .map_err(|error| anyhow!("could not inventory ELF symbols: {}", error))?;
+        for definition in inventory.definitions() {
+            push_owned_symbol(
+                defined,
+                definition.symbol,
+                "defined-symbol capacity exceeded",
+            )?;
+        }
+        for symbol in inventory.references() {
+            push_owned_symbol(referenced, symbol, "referenced-symbol capacity exceeded")?;
+        }
+        return Ok(());
+    }
+    let fragment_count = x86_64_coff_text_fragment_count(object)
+        .map_err(|_| anyhow!("could not count COFF archive member fragments"))?;
+    for fragment_index in 0..fragment_count {
+        let mut relocations = [LinkRelocation {
+            offset: 0,
+            target: LinkRelocationTarget::Symbol("unused"),
+            addend: 0,
+        }; MAX_LINK_RELOCATIONS];
+        let mut definitions = [LinkDefinition {
+            symbol: "unused",
+            target: LinkDefinitionTarget::Text(0),
+        }; MAX_LINK_DEFINITIONS];
+        let input = decode_x86_64_coff_text_fragment(
+            object,
+            fragment_index,
+            &mut relocations,
+            &mut definitions,
+        )
+        .map_err(mrml_error::message)?;
+        for symbol in core::iter::once(input.symbol).chain(
+            input
+                .additional_definitions
+                .iter()
+                .map(|definition| definition.symbol),
+        ) {
+            push_owned_symbol(defined, symbol, "defined-symbol capacity exceeded")?;
+        }
+        for relocation in input.relocations {
+            let symbol = match relocation.target {
+                LinkRelocationTarget::Symbol(symbol)
+                | LinkRelocationTarget::GotPcRelativeSymbol(symbol)
+                | LinkRelocationTarget::RequiredSymbol(symbol) => symbol,
+                _ => continue,
+            };
+            push_owned_symbol(referenced, symbol, "referenced-symbol capacity exceeded")?;
         }
     }
-    for symbol in borrowed_references {
-        if !referenced
-            .iter()
-            .any(|existing| existing.as_str() == symbol)
-        {
-            referenced
-                .try_push(Text::from(symbol))
-                .map_err(|_| anyhow!("referenced-symbol capacity exceeded"))?;
-        }
+    Ok(())
+}
+
+fn push_owned_symbol(symbols: &mut Vector<Text>, symbol: &str, capacity_error: &str) -> Result<()> {
+    if !symbols.iter().any(|existing| existing.as_str() == symbol) {
+        symbols
+            .try_push(Text::from(symbol))
+            .map_err(|_| anyhow!(capacity_error))?;
     }
     Ok(())
 }
