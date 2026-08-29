@@ -668,14 +668,21 @@ fn decode_link_inputs<'data, 'relocations, 'definitions>(
     let mut remaining_definitions = definition_arenas;
     for (object_index, object) in objects.iter().enumerate() {
         let coff_comdat_sections = match format {
-            ObjectFormat::Coff => {
-                Some(inventory_x86_64_coff_comdat_sections(object).map_err(mrml_error::message)?)
-            }
+            ObjectFormat::Coff => Some(
+                inventory_x86_64_coff_comdat_sections(object).map_err(|error| {
+                    anyhow!("COFF object {} COMDAT inventory: {}", object_index, error)
+                })?,
+            ),
             ObjectFormat::Elf64 => None,
         };
         let text_fragment_count = match format {
-            ObjectFormat::Coff => x86_64_coff_text_fragment_count(object)
-                .map_err(|_| anyhow!("could not count COFF text fragments"))?,
+            ObjectFormat::Coff => x86_64_coff_text_fragment_count(object).map_err(|error| {
+                anyhow!(
+                    "COFF object {} text fragment count: {}",
+                    object_index,
+                    error
+                )
+            })?,
             ObjectFormat::Elf64 => 1,
         };
         let readonly_fragment_count = match format {
@@ -685,7 +692,13 @@ fn decode_link_inputs<'data, 'relocations, 'definitions>(
                     .as_ref()
                     .ok_or_else(|| anyhow!("missing COFF COMDAT inventory"))?,
             )
-            .map_err(mrml_error::message)?,
+            .map_err(|error| {
+                anyhow!(
+                    "COFF object {} read-only fragment count: {}",
+                    object_index,
+                    error
+                )
+            })?,
             ObjectFormat::Elf64 => 0,
         };
         let fragment_count = text_fragment_count
@@ -839,16 +852,29 @@ fn relocation_arenas<'a>(
 
 fn expanded_fragment_count(objects: &[&[u8]], format: ObjectFormat) -> Result<usize> {
     let mut count = 0usize;
-    for object in objects {
+    for (object_index, object) in objects.iter().enumerate() {
         let object_fragments = match format {
             ObjectFormat::Coff => {
-                let inventory =
-                    inventory_x86_64_coff_comdat_sections(object).map_err(mrml_error::message)?;
+                let inventory = inventory_x86_64_coff_comdat_sections(object).map_err(|error| {
+                    anyhow!("COFF object {} COMDAT inventory: {}", object_index, error)
+                })?;
                 x86_64_coff_text_fragment_count(object)
-                    .map_err(|_| anyhow!("could not count expanded COFF text fragments"))?
+                    .map_err(|error| {
+                        anyhow!(
+                            "COFF object {} text fragment count: {}",
+                            object_index,
+                            error
+                        )
+                    })?
                     .checked_add(
                         x86_64_coff_section_identity_readonly_fragment_count(object, &inventory)
-                            .map_err(mrml_error::message)?,
+                            .map_err(|error| {
+                                anyhow!(
+                                    "COFF object {} read-only fragment count: {}",
+                                    object_index,
+                                    error
+                                )
+                            })?,
                     )
                     .ok_or_else(|| anyhow!("expanded link fragment count overflow"))?
             }
@@ -980,8 +1006,8 @@ fn selected_link_inputs<'data, 'relocations, 'definitions>(
 
 fn selected_runtime_functions<'data>(
     objects: &[&'data [u8]],
-    _archive_group: &[u16],
-    _archive_member: &[u16],
+    archive_group: &[u16],
+    archive_member: &[u16],
     selected: &SelectedLinkInputs<'_, '_, '_>,
     arena: &mut [PeRuntimeFunction<'data>; MAX_PE_RUNTIME_FUNCTIONS],
 ) -> Result<Vector<PeRuntimeFunction<'data>>> {
@@ -994,7 +1020,15 @@ fn selected_runtime_functions<'data>(
             .any(|source| *source == object_index);
         if selected_object {
             for function in decode_x86_64_coff_runtime_functions(objects[object_index], arena)
-                .map_err(mrml_error::message)?
+                .map_err(|error| {
+                    anyhow!(
+                        "COFF object {} archive group {} member {} runtime-function decode: {}",
+                        object_index,
+                        archive_group[object_index],
+                        archive_member[object_index],
+                        error
+                    )
+                })?
             {
                 let retained = selected
                     .inputs
