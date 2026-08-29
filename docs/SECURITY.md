@@ -242,6 +242,9 @@ access. The security/acceptance gate is canonical in
   receiver capabilities. Its one-use plan binds endpoint object and current
   sequence; denial and exhaustion create no authority, while a stale commit is
   an integrity failure.
+- Cross-domain capability derivation validates the complete requested set and
+  receiver capacity before publishing any child, eliminating partial-transfer
+  rollback as an ordinary failure path.
 - Exit, fault, and protocol-violation peer-death publication preflight the
   complete reciprocal graph before domain or scheduler mutation. Corrupt or
   duplicate relations and unavailable result capacity fail without partial

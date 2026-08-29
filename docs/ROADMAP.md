@@ -2201,6 +2201,9 @@ live composition remains pending.
    deriving receiver capabilities. Authorization denial, exhausted sequence,
    and stale-plan tests prove ordinary rejection is mutation-free and raise the
    kernel total to 611.
+   IPC capability derivation now preflights the complete source set and receiver
+   slot capacity before publishing any child. Late invalid-source and capacity
+   failures leave the destination completely reusable; the total remains 611.
    Warning-free `invalid_return_probe` kernel/service profiles now encode the
    real CPL3 invalid-stack interrupt, typed peer-death cleanup marker, peer
    execution, clean exit, and terminal state marker. Runner execution remains

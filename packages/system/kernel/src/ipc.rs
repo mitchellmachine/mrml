@@ -138,8 +138,8 @@ impl Message {
     }
 
     /// Atomically derives attenuated capabilities into the receiver's space.
-    /// If any requested transfer fails, all capabilities created by this call
-    /// are revoked before the error is returned.
+    /// Every source and destination slot is preflighted before any authority is
+    /// published.
     pub fn transfer<const S: usize, const D: usize>(
         payload: &[u8],
         requested: &[(Capability, Rights)],
@@ -153,17 +153,9 @@ impl Message {
             return Err(IpcError::TooManyCapabilities);
         }
         let mut derived = [None; MAX_CAPABILITIES];
-        for (index, (capability, rights)) in requested.iter().copied().enumerate() {
-            match source.derive(capability, rights, destination) {
-                Ok(capability) => derived[index] = Some(capability),
-                Err(error) => {
-                    for created in derived.into_iter().flatten() {
-                        let _ = destination.revoke(created);
-                    }
-                    return Err(error.into());
-                }
-            }
-        }
+        source
+            .derive_batch(requested, destination, &mut derived[..requested.len()])
+            .map_err(IpcError::from)?;
         let mut message = Self::new(payload, &[])?;
         message.capabilities = derived;
         message.capability_count = requested.len() as u8;
@@ -765,12 +757,15 @@ mod tests {
     }
 
     #[test]
-    fn transfer_attenuates_rights_and_rolls_back_partial_failure() {
-        let mut source = CapabilitySpace::<2>::new();
+    fn transfer_attenuates_rights_and_preflights_complete_batch() {
+        let mut source = CapabilitySpace::<3>::new();
         let delegated = source
             .insert(ObjectId(7), Rights::READ.union(Rights::DELEGATE))
             .unwrap();
         let plain = source.insert(ObjectId(8), Rights::READ).unwrap();
+        let second_delegated = source
+            .insert(ObjectId(9), Rights::READ.union(Rights::DELEGATE))
+            .unwrap();
         let mut destination = CapabilitySpace::<2>::new();
         let message = Message::transfer(
             b"read",
@@ -789,27 +784,32 @@ mod tests {
             Err(CapabilityError::PermissionDenied)
         );
 
-        let mut rollback_destination = CapabilitySpace::<2>::new();
+        let mut denied_destination = CapabilitySpace::<2>::new();
         assert_eq!(
             Message::transfer(
                 b"fail",
                 &[(delegated, Rights::READ), (plain, Rights::READ)],
                 &source,
-                &mut rollback_destination,
+                &mut denied_destination,
             )
             .err(),
             Some(IpcError::Unauthorized)
         );
-        assert!(
-            rollback_destination
-                .insert(ObjectId(1), Rights::READ)
-                .is_ok()
+        assert!(denied_destination.insert(ObjectId(1), Rights::READ).is_ok());
+        assert!(denied_destination.insert(ObjectId(2), Rights::READ).is_ok());
+
+        let mut full_destination = CapabilitySpace::<1>::new();
+        assert_eq!(
+            Message::transfer(
+                b"full",
+                &[(delegated, Rights::READ), (second_delegated, Rights::READ),],
+                &source,
+                &mut full_destination,
+            )
+            .err(),
+            Some(IpcError::Unauthorized)
         );
-        assert!(
-            rollback_destination
-                .insert(ObjectId(2), Rights::READ)
-                .is_ok()
-        );
+        assert!(full_destination.insert(ObjectId(3), Rights::READ).is_ok());
     }
 
     #[test]

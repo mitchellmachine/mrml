@@ -177,6 +177,7 @@ impl<const N: usize> CapabilitySpace<N> {
     /// This is deliberately crate-private: cross-domain callers must use the
     /// tracked `TaskRuntime` IPC path so parent/child ancestry is recorded and
     /// transitive revocation cannot be bypassed.
+    #[cfg(test)]
     pub(crate) fn derive<const M: usize>(
         &self,
         capability: Capability,
@@ -191,6 +192,59 @@ impl<const N: usize> CapabilitySpace<N> {
             return Err(CapabilityError::PermissionDenied);
         }
         destination.insert(source.object, source.rights.intersect(requested))
+    }
+
+    /// Validates a complete bounded derivation set before publishing any
+    /// destination authority.
+    pub(crate) fn derive_batch<const M: usize>(
+        &self,
+        requested: &[(Capability, Rights)],
+        destination: &mut CapabilitySpace<M>,
+        output: &mut [Option<Capability>],
+    ) -> Result<(), CapabilityError> {
+        if requested.len() > output.len() || output.iter().any(Option::is_some) {
+            return Err(CapabilityError::Invalid);
+        }
+        for (capability, rights) in requested.iter().copied() {
+            let source = self.entry(capability)?;
+            if !source.rights.contains(Rights::DELEGATE) {
+                return Err(CapabilityError::DelegationDenied);
+            }
+            if !source.rights.contains(rights) {
+                return Err(CapabilityError::PermissionDenied);
+            }
+        }
+        let available = destination
+            .entries
+            .iter()
+            .filter(|entry| !entry.occupied && !entry.retired)
+            .count();
+        if available < requested.len() {
+            return Err(if destination.entries.iter().any(|entry| entry.retired) {
+                CapabilityError::GenerationExhausted
+            } else {
+                CapabilityError::SpaceFull
+            });
+        }
+        for (output, (capability, rights)) in output.iter_mut().zip(requested.iter().copied()) {
+            let source = self
+                .entry(capability)
+                .expect("batch sources remain immutably borrowed");
+            let slot = destination
+                .entries
+                .iter()
+                .position(|entry| !entry.occupied && !entry.retired)
+                .expect("batch destination capacity was preflighted");
+            let entry = &mut destination.entries[slot];
+            entry.object = source.object;
+            entry.rights = source.rights.intersect(rights);
+            entry.occupied = true;
+            *output = Some(Capability {
+                slot: slot as u32,
+                generation: entry.generation,
+            });
+        }
+        Ok(())
     }
 
     pub fn revoke(&mut self, capability: Capability) -> Result<(), CapabilityError> {
@@ -442,5 +496,4 @@ mod tests {
             }
         }
     }
-
 }

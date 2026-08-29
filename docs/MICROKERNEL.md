@@ -6827,10 +6827,17 @@ and current sequence; stale-plan commit is an integrity failure. Authorization
 denial and sequence exhaustion leave receiver capabilities, delegation edges,
 and endpoint sequence unchanged. Focused Linux tests raise the kernel total to
 611.
+Capability transfer now uses one bounded two-pass batch derivation. Every source
+handle/right attenuation and every usable receiver slot is validated before the
+first destination entry is published; the commit pass contains no fallible
+allocation or revocation rollback. The focused transfer test covers both a late
+invalid source and insufficient destination capacity while proving the receiver
+space remains completely reusable. The Linux kernel total remains 611.
 
 Patent review: `NOT_TRIGGERED` — this is conventional split-phase validation
-and commit for the existing bounded IPC endpoint; it introduces no new external
-protocol, algorithm, or device mechanism. See `docs/patents/REVIEW_LOG.md`.
+and commit for the existing bounded IPC endpoint and capability table; it
+introduces no new external protocol, algorithm, or device mechanism. See
+`docs/patents/REVIEW_LOG.md`.
 Dedicated `invalid_return_probe` kernel and service-image profiles now build
 without warnings. The CPL3 receiver deliberately zeros its stack pointer before
 `int 0x80`; the kernel profile requires typed peer-death cleanup marker `0x26`,
