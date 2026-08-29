@@ -207,6 +207,10 @@ access. The security/acceptance gate is canonical in
   retirement, so unread message authority remains confined to the retiring
   domain. Runtime retirement is tested and profiles build; execution remains
   pending.
+- Dedicated buffer-drift images exact-match and remove only the blocked
+  receiver's writable, non-executable user leaf, then require typed scoped
+  retirement and clean peer exit markers. The markers are not execution
+  evidence until a backend runner admits the profile.
 - Exit, fault, and protocol-violation peer-death publication preflight the
   complete reciprocal graph before domain or scheduler mutation. Corrupt or
   duplicate relations and unavailable result capacity fail without partial

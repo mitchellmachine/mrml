@@ -41,6 +41,9 @@ name = "gpu-benchmark"
 name = "invalid-return-probe"
 
 [[feature]]
+name = "buffer-drift-probe"
+
+[[feature]]
 name = "kernel-image"
 
 [[feature]]
@@ -154,6 +157,11 @@ targets = ["UEFI"]
 [[feature_profile]]
 features = ["service-probe", "invalid-return-probe"]
 name = "invalid_return_probe"
+targets = ["UEFI"]
+
+[[feature_profile]]
+features = ["service-probe", "buffer-drift-probe"]
+name = "buffer_drift_probe"
 targets = ["UEFI"]
 
 [[feature_profile]]

@@ -2163,6 +2163,10 @@ live composition remains pending.
    page table on drift, consumes the pending record, and performs scoped service
    retirement. Ordinary, block-service, and invalid-return profiles build; an
    execution probe remains pending.
+   Warning-free `buffer_drift_probe` kernel/service profiles now remove the
+   exact blocked output leaf before delivery and require typed cleanup marker
+   `0x28`, peer exit, and terminal marker `0x29`. Runner execution remains
+   pending.
    Warning-free `invalid_return_probe` kernel/service profiles now encode the
    real CPL3 invalid-stack interrupt, typed peer-death cleanup marker, peer
    execution, clean exit, and terminal state marker. Runner execution remains

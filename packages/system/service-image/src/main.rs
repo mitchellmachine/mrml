@@ -1,5 +1,6 @@
 #![no_std]
 #![no_main]
+#![cfg_attr(feature = "buffer-drift-probe", allow(dead_code))]
 #![cfg_attr(
     any(feature = "block-service-loop", feature = "invalid-return-probe"),
     allow(dead_code)
@@ -255,7 +256,8 @@ impl ServicePolicyAuthorizer for KernelAuthorizer {
 #[cfg(all(
     not(feature = "preemption-probe"),
     not(feature = "block-service-loop"),
-    not(feature = "invalid-return-probe")
+    not(feature = "invalid-return-probe"),
+    not(feature = "buffer-drift-probe")
 ))]
 #[unsafe(no_mangle)]
 unsafe extern "sysv64" fn mrml_configuration_receiver(
@@ -317,6 +319,30 @@ unsafe extern "sysv64" fn mrml_configuration_receiver(
         halt();
     }
     unsafe { asm!("int3", options(noreturn, nostack)) }
+}
+
+#[cfg(all(not(feature = "preemption-probe"), feature = "buffer-drift-probe"))]
+#[repr(C, align(4096))]
+struct BufferDriftOutput([u8; 64]);
+
+#[cfg(all(not(feature = "preemption-probe"), feature = "buffer-drift-probe"))]
+static mut BUFFER_DRIFT_OUTPUT: BufferDriftOutput = BufferDriftOutput([0; 64]);
+
+#[cfg(all(not(feature = "preemption-probe"), feature = "buffer-drift-probe"))]
+#[unsafe(no_mangle)]
+unsafe extern "sysv64" fn mrml_configuration_receiver(
+    _endpoint: u64,
+    _sender: u64,
+    _generation: u64,
+    _shared_write: u64,
+    _shared_read: u64,
+    _restart_manager: u64,
+    _recovery_capability: u64,
+) -> ! {
+    let output = unsafe { &mut *core::ptr::addr_of_mut!(BUFFER_DRIFT_OUTPUT) };
+    let mut no_capabilities = [0u64; 0];
+    unsafe { receive_buffer(&mut output.0, &mut no_capabilities) };
+    halt()
 }
 
 #[cfg(all(
@@ -976,7 +1002,8 @@ unsafe fn yield_now() {
 #[cfg(all(
     not(feature = "preemption-probe"),
     not(feature = "block-service-loop"),
-    not(feature = "invalid-return-probe")
+    not(feature = "invalid-return-probe"),
+    not(feature = "buffer-drift-probe")
 ))]
 #[unsafe(no_mangle)]
 unsafe extern "sysv64" fn mrml_configuration_sender(
@@ -1135,6 +1162,22 @@ unsafe extern "sysv64" fn mrml_configuration_sender(
         unsafe { receive_buffer(&mut response, &mut no_capabilities) };
         halt();
     }
+    unsafe { terminate(3) }
+}
+
+#[cfg(all(not(feature = "preemption-probe"), feature = "buffer-drift-probe"))]
+#[unsafe(no_mangle)]
+unsafe extern "sysv64" fn mrml_configuration_sender(
+    endpoint: u64,
+    receiver: u64,
+    _root_capability: u64,
+    _setting_capability: u64,
+    _generation: u64,
+    _supervision_read: u64,
+    _supervised_service: u64,
+) -> ! {
+    unsafe { send_buffer(endpoint, receiver, b"mapping-drift", &[]) };
+    unsafe { yield_now() };
     unsafe { terminate(3) }
 }
 

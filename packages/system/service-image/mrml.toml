@@ -25,6 +25,9 @@ name = "block-service-loop"
 name = "invalid-return-probe"
 
 [[feature]]
+name = "buffer-drift-probe"
+
+[[feature]]
 name = "preemption-probe"
 
 [[artifact]]
@@ -91,6 +94,11 @@ targets = ["MRML_NATIVE"]
 [[feature_profile]]
 features = ["invalid-return-probe"]
 name = "invalid_return_probe"
+targets = ["MRML_NATIVE"]
+
+[[feature_profile]]
+features = ["buffer-drift-probe"]
+name = "buffer_drift_probe"
 targets = ["MRML_NATIVE"]
 
 [[target_triple]]

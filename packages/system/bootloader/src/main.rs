@@ -512,6 +512,8 @@ struct PendingBufferReceive {
 #[cfg(feature = "service-probe")]
 static mut SERVICE_PENDING_BUFFERS: [Option<PendingBufferReceive>; SERVICE_TASK_CAPACITY] =
     [None; SERVICE_TASK_CAPACITY];
+#[cfg(feature = "buffer-drift-probe")]
+static mut BUFFER_DRIFT_ARMED: bool = false;
 #[cfg(feature = "service-probe")]
 static mut SERVICE_SYSCALL_PAYLOAD: [u8; MAX_INLINE_PAYLOAD] = [0; MAX_INLINE_PAYLOAD];
 #[cfg(feature = "service-probe")]
@@ -1511,7 +1513,10 @@ unsafe extern "sysv64" fn mrml_user_call_dispatch(frame: *mut UserCallFrame) {
                             );
                             enter_service_task(runtime, to)
                         }
-                        #[cfg(feature = "invalid-return-probe")]
+                        #[cfg(any(
+                            feature = "invalid-return-probe",
+                            feature = "buffer-drift-probe"
+                        ))]
                         ScheduleOutcome::Idle => {
                             let ids = (*core::ptr::addr_of!(SERVICE_IDS))
                                 .unwrap_or_else(|| halt());
@@ -1526,7 +1531,10 @@ unsafe extern "sysv64" fn mrml_user_call_dispatch(frame: *mut UserCallFrame) {
                             {
                                 halt();
                             }
+                            #[cfg(feature = "invalid-return-probe")]
                             service_restart_stage(0x27);
+                            #[cfg(feature = "buffer-drift-probe")]
+                            service_restart_stage(0x29);
                             halt();
                         }
                         _ => halt(),
@@ -4359,7 +4367,10 @@ unsafe fn retire_service_protocol_violation(violation: TaskProtocolViolation) ->
     unsafe { complete_service_cleanup(supervisor, retired.cleanup) };
     match retired.retirement.next {
         ScheduleOutcome::Switch { to, .. } => {
-            #[cfg(feature = "invalid-return-probe")]
+            #[cfg(any(
+                feature = "invalid-return-probe",
+                feature = "buffer-drift-probe"
+            ))]
             {
                 let ControlEvent::PeerDied(death) =
                     runtime.receive_control(to).unwrap_or_else(|_| halt())
@@ -4372,7 +4383,10 @@ unsafe fn retire_service_protocol_violation(violation: TaskProtocolViolation) ->
                 {
                     halt();
                 }
+                #[cfg(feature = "invalid-return-probe")]
                 unsafe { service_restart_stage(0x26) };
+                #[cfg(feature = "buffer-drift-probe")]
+                unsafe { service_restart_stage(0x28) };
             }
             unsafe { enter_service_task(runtime, to) }
         }
@@ -5091,11 +5105,53 @@ unsafe fn insert_pending_buffer(pending: PendingBufferReceive) {
     *slot = Some(pending);
 }
 
+#[cfg(feature = "buffer-drift-probe")]
+unsafe fn arm_buffer_drift_probe() {
+    if unsafe { *core::ptr::addr_of!(BUFFER_DRIFT_ARMED) } {
+        return;
+    }
+    let buffers = unsafe { &*core::ptr::addr_of!(SERVICE_PENDING_BUFFERS) };
+    let mut pending = buffers.iter().flatten().copied();
+    let Some(target) = pending.next() else {
+        return;
+    };
+    if pending.next().is_some() {
+        halt();
+    }
+    let page = target.payload_address & !(mrml_kernel::PAGE_SIZE - 1);
+    let mut active = unsafe { ActivePageTables::current() }.unwrap_or_else(|_| halt());
+    if active.root() != target.page_table {
+        halt();
+    }
+    let virtual_address = VirtAddr::new(page).unwrap_or_else(|_| halt());
+    let leaf = active
+        .leaf(virtual_address)
+        .ok()
+        .flatten()
+        .unwrap_or_else(|| halt());
+    if !leaf.user() || !leaf.writable() || leaf.executable() {
+        halt();
+    }
+    let mapping = Mapping::new(
+        virtual_address,
+        leaf.physical(),
+        1,
+        PagePermissions::USER_READ_WRITE,
+    )
+    .unwrap_or_else(|_| halt());
+    unsafe { active.unmap_exact(mapping) }.unwrap_or_else(|_| halt());
+    unsafe { core::ptr::addr_of_mut!(BUFFER_DRIFT_ARMED).write(true) };
+}
+
 #[cfg(feature = "service-probe")]
 unsafe fn enter_service_task(
     runtime: &mut TaskRuntime<SERVICE_TASK_CAPACITY, SERVICE_CAPABILITY_CAPACITY>,
     task: mrml_kernel::TaskId,
 ) -> ! {
+    #[cfg(feature = "buffer-drift-probe")]
+    unsafe {
+        arm_buffer_drift_probe()
+    };
     unsafe { complete_pending_buffer(runtime, task) };
     let context = runtime
         .context(task)

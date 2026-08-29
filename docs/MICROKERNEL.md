@@ -6768,6 +6768,13 @@ page table on drift, consumes the pending receive record, and invokes scoped
 service retirement. Ordinary, block-service, and invalid-return UEFI profiles
 build. A dedicated execution probe remains pending, so the live integration is
 **PARTIALLY IMPLEMENTED** rather than hosted-runtime evidence.
+Dedicated warning-free `buffer_drift_probe` kernel and service-image profiles
+now encode that acceptance path. The receiver blocks on an aligned output
+page; trusted probe code verifies and removes that exact writable,
+non-executable user leaf before delivery. Retirement must publish the typed
+drift reason and cleanup marker `0x28`; the peer then exits cleanly and terminal
+state emits `0x29`. Runner admission and execution remain pending, so these are
+unexecuted markers rather than hosted evidence.
 Dedicated `invalid_return_probe` kernel and service-image profiles now build
 without warnings. The CPL3 receiver deliberately zeros its stack pointer before
 `int 0x80`; the kernel profile requires typed peer-death cleanup marker `0x26`,
@@ -6829,7 +6836,8 @@ lifecycle record is ordinary diagnostic typing and does not trigger review.
 The buffered-receive drift variant reuses that lifecycle without a new
 algorithm and does not trigger separate review. Pre-dequeue live wiring is
 conventional validation/cleanup ordering on that path and likewise does not
-trigger review.
+trigger review. The dedicated image only exercises that path and does not
+trigger separate review.
 
 Rust service code does not assume a fixed PE entry RVA. WHP and KVM publish the
 entry derived from the verified signed executable in a hosted metadata page.
