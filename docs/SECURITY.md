@@ -256,6 +256,8 @@ access. The security/acceptance gate is canonical in
   records fail before authority access, migration, dequeue, or retirement.
 - The inbox ring requires an exact contiguous circular occupied segment from
   head to tail; exhaustive bounded-state coverage rejects every other topology.
+- Delegation edges require matching live source/destination objects, DELEGATE on
+  the source, and destination rights no broader than the source before graph use.
 - Exit, fault, and protocol-violation peer-death publication preflight the
   complete reciprocal graph before domain or scheduler mutation. Corrupt or
   duplicate relations and unavailable result capacity fail without partial

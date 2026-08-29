@@ -172,6 +172,14 @@ impl<const N: usize> CapabilitySpace<N> {
         Ok(entry.object)
     }
 
+    pub(crate) fn describe(
+        &self,
+        capability: Capability,
+    ) -> Result<(ObjectId, Rights), CapabilityError> {
+        let entry = self.entry(capability)?;
+        Ok((entry.object, entry.rights))
+    }
+
     /// Low-level attenuation primitive for kernel-owned delegation machinery.
     ///
     /// This is deliberately crate-private: cross-domain callers must use the

@@ -6849,6 +6849,11 @@ tail equals head plus count modulo capacity, and each offset is occupied exactly
 when it falls below count. An exhaustive bounded-state test covers every count,
 head, tail, and occupancy-mask combination, raising the Linux kernel total to
 614.
+Delegation graph validation now exact-matches each live edge's capability
+semantics: the source must retain DELEGATE, source and destination objects must
+match, and destination rights must be a subset of source rights. A focused
+live-handle substitution test fails before endpoint sequence mutation and raises
+the Linux kernel total to 615.
 
 Patent review: `NOT_TRIGGERED` — this is conventional split-phase validation
 and commit for the existing bounded IPC endpoint and capability table; it

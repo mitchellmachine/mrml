@@ -1369,12 +1369,20 @@ impl<const TASKS: usize, const CAPS: usize> TaskRuntime<TASKS, CAPS> {
             {
                 return Err(TaskRuntimeError::IntegrityFailure);
             }
-            self.capabilities(edge.source_task)?
-                .authorize(edge.source, Rights::NONE)
+            let (source_object, source_rights) = self
+                .capabilities(edge.source_task)?
+                .describe(edge.source)
                 .map_err(|_| TaskRuntimeError::IntegrityFailure)?;
-            self.capabilities(edge.destination_task)?
-                .authorize(edge.destination, Rights::NONE)
+            let (destination_object, destination_rights) = self
+                .capabilities(edge.destination_task)?
+                .describe(edge.destination)
                 .map_err(|_| TaskRuntimeError::IntegrityFailure)?;
+            if source_object != destination_object
+                || !source_rights.contains(Rights::DELEGATE)
+                || !source_rights.contains(destination_rights)
+            {
+                return Err(TaskRuntimeError::IntegrityFailure);
+            }
         }
         Ok(())
     }
@@ -2644,6 +2652,82 @@ mod tests {
             Err(TaskRuntimeError::IntegrityFailure)
         ));
         runtime.delegations.fill(None);
+        assert_eq!(
+            runtime
+                .send_ipc(
+                    sender,
+                    receiver,
+                    &mut endpoint,
+                    endpoint_capability,
+                    b"second",
+                    &[],
+                )
+                .unwrap()
+                .0,
+            2
+        );
+    }
+
+    #[test]
+    fn direct_transfer_rejects_semantically_substituted_delegation_edge() {
+        let mut runtime = TaskRuntime::<2, 2>::new(1_000, 1).unwrap();
+        let sender = runtime
+            .create(Priority::NORMAL, context(0x20_0000, 0x40_0000))
+            .unwrap();
+        let receiver = runtime
+            .create(Priority::NORMAL, context(0x30_0000, 0x50_0000))
+            .unwrap();
+        let endpoint_object = ObjectId(0x4f);
+        let endpoint_capability = runtime
+            .capabilities_mut(sender)
+            .unwrap()
+            .insert(endpoint_object, Rights::SIGNAL)
+            .unwrap();
+        let root = runtime
+            .capabilities_mut(sender)
+            .unwrap()
+            .insert(ObjectId(0x50), Rights::READ.union(Rights::DELEGATE))
+            .unwrap();
+        let mut endpoint = Endpoint::new(endpoint_object);
+        let (_, message) = runtime
+            .send_ipc(
+                sender,
+                receiver,
+                &mut endpoint,
+                endpoint_capability,
+                b"first",
+                &[(root, Rights::READ)],
+            )
+            .unwrap();
+        let derived = message.capabilities().next().unwrap();
+        let unrelated = runtime
+            .capabilities_mut(receiver)
+            .unwrap()
+            .insert(ObjectId(0x51), Rights::READ)
+            .unwrap();
+        let edge = runtime.delegations.iter_mut().flatten().next().unwrap();
+        edge.destination = unrelated;
+
+        assert_eq!(
+            runtime
+                .send_ipc(
+                    sender,
+                    receiver,
+                    &mut endpoint,
+                    endpoint_capability,
+                    b"rejected",
+                    &[],
+                )
+                .err(),
+            Some(TaskRuntimeError::IntegrityFailure)
+        );
+        runtime
+            .delegations
+            .iter_mut()
+            .flatten()
+            .next()
+            .unwrap()
+            .destination = derived;
         assert_eq!(
             runtime
                 .send_ipc(
