@@ -31,7 +31,7 @@ AHCI package extraction is now **PARTIALLY IMPLEMENTED** without deleting its
 mechanisms: all AHCI modules moved intact to
 `org.mrml.library.storage.ahci`, which provides the generation-1 block interface;
 the storage policy service has no static AHCI module. Windows and Arch Linux each
-pass 46 provider tests and 135 storage tests. The AHCI service entry/IPC adapter,
+pass 50 provider tests and 135 storage tests. The AHCI service entry/IPC adapter,
 then FAT32 provider extraction/implementation, remain next.
 
 Recovery discovery now has a capability-backed service source. The bounded
@@ -288,8 +288,12 @@ Stopped-port DMA reclamation is now **PARTIALLY IMPLEMENTED IN SOURCE**.
 clears and read-verifies command-list and received-FIS base registers, then
 zeroes and verifies every word of only the retained DMA extents. It restores the
 revocable installed owner only after the complete transition; all uncertainty
-remains quarantined. Storage passes 177 tests on Windows and Arch Linux. Command construction,
-data transfer, interrupt handling, and native hardware execution remain planned.
+remains quarantined. The extracted provider now builds and read-verifies one
+capability-direction-checked non-NCQ DMA EXT command in an idle slot, including
+bounded 48-bit LBA, exact byte count, FIS, header, and one contiguous PRDT entry,
+without setting `CI`. The AHCI package passes 50 tests on Windows and Arch Linux.
+Command issue/completion, data verification, interrupt handling, and native
+hardware execution remain planned.
 
 Bounded AHCI port-engine activation is now **PARTIALLY IMPLEMENTED IN SOURCE**.
 `start_ahci_port_engine` consumes only initialized command memory, exact-matches

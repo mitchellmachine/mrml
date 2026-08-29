@@ -8852,6 +8852,14 @@ quiesced. Writes are read-verified; timeout or uncertainty quarantines the DMA
 layout. Storage passes 174 tests on Windows and Arch Linux. This is host register-model evidence,
 not command, transfer, interrupt, IOMMU, OVMF, or physical-device evidence.
 
+The extracted AHCI provider now **PARTIALLY IMPLEMENTS** capability-authorized
+non-NCQ DMA EXT command construction. It exact-checks an idle slot, 48-bit LBA,
+sector/byte relation, data-buffer direction rights and non-overlap, then writes
+and verifies the fixed FIS, header, and one contiguous PRDT entry. Partial writes
+quarantine the active DMA owner. AHCI passes 50 tests on Windows and Arch Linux.
+No command was issued and no completion, interrupt, IOMMU hardware, OVMF, or
+physical device was exercised.
+
 Stopped AHCI DMA reclamation is now **PARTIALLY IMPLEMENTED IN SOURCE**. The
 kernel-facing service restores the backend-revocable owner only after exact
 generation/quiescence checks, verified clearing of all port DMA bases, and

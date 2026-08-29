@@ -6,6 +6,7 @@
 //! object identity, filesystem, transaction, and authority policy.
 
 mod ahci_cleanup;
+mod ahci_command;
 mod ahci_command_memory;
 mod ahci_controller;
 mod ahci_discovery;
@@ -16,6 +17,10 @@ mod ahci_port;
 mod ahci_port_program;
 
 pub use ahci_cleanup::{AhciCleanupError, AhciCleanupFailure, reclaim_stopped_ahci_port_dma};
+pub use ahci_command::{
+    AhciAtaCommand, AhciCommandBuildError, AhciCommandBuildFailure, AhciDataDmaRegion,
+    PreparedAhciCommand, prepare_ahci_dma_command,
+};
 pub use ahci_command_memory::{
     AhciCommandMemoryError, AhciCommandMemoryFailure, AhciCommandMemoryIo,
     InitializedAhciCommandMemory, initialize_ahci_command_memory,

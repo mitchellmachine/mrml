@@ -506,7 +506,7 @@ from `packages/services/storage/src` into
 `packages/libraries/storage-ahci/src` without discarding mechanism. Manifest V2
 now records `org.mrml.library.storage.ahci` as the isolated generation-1
 `org.mrml.interface.storage.block-provider`, and the storage service requires
-that exact dynamic interface. `mrml test` passes 46 AHCI-library and 135 storage-
+that exact dynamic interface. `mrml test` passes 50 AHCI-library and 135 storage-
 service tests on Windows and Arch Linux. This is source/package/interface graph
 evidence; no live provider process, restart, AHCI hardware, IOMMU, OVMF, or
 physical disk was exercised.

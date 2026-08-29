@@ -416,7 +416,7 @@ unavailable state after launch failure. This is **PARTIALLY IMPLEMENTED** hosted
 model evidence, not yet a live supervisor/provider restart.
 `org.mrml.library.storage.ahci` is now the first concrete provider package. The
 existing AHCI code was moved intact out of `mrml-storage`, the package advertises
-the exact block-provider fingerprint as `isolated-service`, and its 46 tests pass
+the exact block-provider fingerprint as `isolated-service`, and its 50 tests pass
 on both hosts while the lean service passes 135. No service entry or live IPC
 route exists yet, so this proves package separation and interface-graph shape,
 not dynamic execution.

@@ -318,6 +318,18 @@ passes 166 tests on Windows and Arch Linux.
 No command header/table content, PRDT, engine start, interrupt, ATA/ATAPI, NCQ,
 IOMMU hardware, OVMF, or physical device was exercised.
 
+The extracted AHCI provider now **PARTIALLY IMPLEMENTS** construction of one
+non-NCQ ATA `READ DMA EXT` or `WRITE DMA EXT` command without issuing it. One
+idle advertised slot receives a checked 48-bit LBA, nonzero exact 512-byte sector
+count, at most 1 MiB contiguous data extent, five-DWORD host-to-device FIS, and
+one PRDT entry. Device-read requires data-buffer `WRITE`; device-write requires
+`READ`, with separate `PIN | MAP`. Control DMA overlap, stale/wrong authority,
+dirty headers/tables, active/issued slots, overflow, and partial mutation fail
+closed. Every written header/FIS/PRDT DWORD is read-verified; post-write
+uncertainty quarantines the active layout. The AHCI library passes 50 tests on
+Windows and Arch Linux. `CI` issue, completion/error handling, data verification,
+interrupts, NCQ, hardware, and physical evidence remain **PLANNED**.
+
 The command-memory gate is now **PARTIALLY IMPLEMENTED IN SOURCE**. The driver
 checks every word in the exact command-list, received-FIS, and per-slot command-
 table extents is zero before writing anything. It then gives every advertised
@@ -456,7 +468,7 @@ the class unavailable until explicit retry and never falls back. Storage passes
 preserved in the separate `org.mrml.library.storage.ahci` package, which declares
 the exact generation-1 block-provider interface and isolated-service placement;
 the policy/storage crate no longer compiles AHCI modules. Windows and Arch Linux
-each pass 46 AHCI-library tests and 135 storage-service tests. The AHCI service
+each pass 50 AHCI-library tests and 135 storage-service tests. The AHCI service
 entry/IPC adapter, FAT32 provider, and live supervised restart evidence remain
 **PLANNED**.
 

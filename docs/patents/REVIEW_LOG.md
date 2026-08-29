@@ -2,6 +2,17 @@
 
 # 2026-08-29 — Cleanup-gated storage module registry
 
+# 2026-08-29 — Capability-bound non-NCQ AHCI command construction
+
+Patent review: **TRIGGERED**, governed by the recorded Canadian AHCI scope. This
+increment constructs only the conventional fixed host-to-device FIS, command
+header, and one contiguous PRDT entry for non-NCQ DMA EXT reads/writes, with
+MRML capability-direction, bound, overlap, read-back, linear-owner, and
+quarantine checks. It does not issue a command, process completion, transfer on
+hardware, schedule/aggregate requests, use NCQ, or implement controller/PHY
+hardware. Existing Canadian exclusions and outside-Canada review requirements
+remain unchanged. This technical screen is not legal advice or patent clearance.
+
 # 2026-08-29 — AHCI provider package extraction
 
 Patent review: **NOT_TRIGGERED**. This increment moves the already reviewed AHCI
