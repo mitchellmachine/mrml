@@ -166,6 +166,9 @@ access. The security/acceptance gate is canonical in
   denial or malformed descriptor; scheduler and integrity failures fail-stop.
 - Buffered-send payload, descriptor, decoded-handle, and requested-rights
   staging is erased at bounded last-use points on success and denial.
+- Shared-buffer syscalls expose only scrubbed failure for proven precommit
+  range, mapping, authorization, binding, and resource denials; uncertain
+  backend effects and internal runtime/copy invariants remain fail-stop.
 - The MRML-native ZIM consumer applies the same exact-capacity rule at its
   buffered-receive boundary and uses explicitly aligned exact-width storage for
   its outgoing capability descriptor.

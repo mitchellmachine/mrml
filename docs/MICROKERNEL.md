@@ -6669,6 +6669,12 @@ descriptor options are cleared before the runtime call, and the requested
 capability/right tuple array is cleared immediately after it. This bounds
 retention across both success and precommit denial. The same 595-test kernel
 suite and ordinary/accounted service profiles pass.
+Shared-buffer read/write syscalls now return the same detail-free failure for
+bounded precommit denials: malformed lengths or user ranges, rejected or stale
+authority/bindings, checked resource-range rejection, and checked direct-host
+address overflow. Backend uncertainty, task/runtime inconsistency, and
+validation-ticket corruption remain fail-stop. Ordinary and accounted service
+UEFI profiles build, and all 595 Linux kernel tests pass.
 The bootloader now imports `GuestMappingRevoker` only for the block/component
 profiles that instantiate its hosted cleanup adapter. Ordinary service,
 restart-request, component-service, and block-service UEFI profiles all
@@ -6686,7 +6692,8 @@ algorithm or mechanism, and applies the same fail-stop distinction to existing
 capability authorization plus a conventional scrubbed error completion for
 malformed arguments and precommit send denial. See [the patent review
 log](patents/REVIEW_LOG.md). Scratch erasure is ordinary data-lifetime hygiene
-on that existing path and does not trigger a separate patent review.
+on that existing path, and shared-buffer denial classification is ordinary
+error-boundary hardening; neither triggers a separate patent review.
 
 Rust service code does not assume a fixed PE entry RVA. WHP and KVM publish the
 entry derived from the verified signed executable in a hosted metadata page.

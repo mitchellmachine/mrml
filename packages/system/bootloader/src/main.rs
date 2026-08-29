@@ -95,8 +95,8 @@ use mrml_kernel::arch::x86_64::{
 };
 #[cfg(feature = "service-probe")]
 use mrml_kernel::arch::x86_64::{
-    ActiveServiceMappingRevoker, ActiveTaskUserCopy, DirectActiveUserMemory, Mapping,
-    PagePermissions, UserBufferAccess, VirtAddr,
+    ActiveServiceMappingRevoker, ActiveTaskUserCopy, ActiveTaskUserCopyError,
+    DirectActiveUserMemory, Mapping, PagePermissions, UserBufferAccess, VirtAddr,
 };
 use mrml_kernel::arch::x86_64::{
     ApOnlineTable, CpuDescriptorState, HardwareTrapFrame, MAX_X86_64_CPUS,
@@ -122,10 +122,11 @@ use mrml_kernel::{ArtifactKind, SignedArtifact, TrustRoot};
 use mrml_kernel::{
     BOOT_RECOVERY_SYSCALL_OPERATION, BootRecoveryDelivery, BootRecoverySyscallExecutor,
     BootRecoverySyscallRequest, CAPABILITY_TRANSFER_DESCRIPTOR_BYTES, Capability, CapabilitySpace,
-    ControlEvent, DirectHostResourceMemory, GuestMemory, GuestRegion, HostResourceTable,
-    MAX_CAPABILITIES, MAX_INLINE_PAYLOAD, PeerDeathReason, RestartPolicy,
-    ServiceAddressSpaceEraser, ServiceError, ServiceId, ServiceResourceEraser, ServiceSupervisor,
-    SharedAccess, SharedBufferSyscallExecutor, SharedEndpoint, SharedEndpointRequest,
+    ControlEvent, DirectHostResourceMemory, GuestMemory, GuestRegion, HostResourceIoError,
+    HostResourceTable, IpcError, IpcSharedBufferError, IpcSharedBufferIoError, MAX_CAPABILITIES,
+    MAX_INLINE_PAYLOAD, PeerDeathReason, RestartPolicy, ServiceAddressSpaceEraser, ServiceError,
+    ServiceId, ServiceResourceEraser, ServiceSupervisor, SharedAccess, SharedBindingError,
+    SharedBufferSyscallError, SharedBufferSyscallExecutor, SharedEndpoint, SharedEndpointRequest,
     SharedMemoryBindings, VmId, VmTable, decode_capability_transfers,
 };
 #[cfg(not(feature = "fault-probe"))]
@@ -1188,11 +1189,79 @@ unsafe extern "sysv64" fn mrml_user_call_dispatch(frame: *mut UserCallFrame) {
                 );
                 let mut user =
                     ActiveTaskUserCopy::new(&active, root, current, DirectActiveUserMemory);
-                SharedBufferSyscallExecutor::execute(
+                let result = SharedBufferSyscallExecutor::execute(
                     request, runtime, current, vm, bindings, memory, resources, &mut user, scratch,
-                )
-                .unwrap_or_else(|_| halt());
-                frame.complete(0);
+                );
+                match result {
+                    Ok(()) => frame.complete(0),
+                    Err(
+                        SharedBufferSyscallError::ScratchTooSmall
+                        | SharedBufferSyscallError::Authorization(
+                            IpcSharedBufferError::Ipc(
+                                IpcError::PayloadTooLarge
+                                | IpcError::TooManyCapabilities
+                                | IpcError::Unauthorized
+                                | IpcError::BufferTooSmall
+                                | IpcError::Malformed
+                                | IpcError::Replay
+                                | IpcError::CapabilityShape,
+                            )
+                            | IpcSharedBufferError::AccessMismatch
+                            | IpcSharedBufferError::Binding(
+                                SharedBindingError::MissingBinding
+                                | SharedBindingError::AmbiguousBinding
+                                | SharedBindingError::StaleBinding
+                                | SharedBindingError::StaleMapping
+                                | SharedBindingError::WrongVm
+                                | SharedBindingError::WrongTask
+                                | SharedBindingError::WrongMapping
+                                | SharedBindingError::WrongObject
+                                | SharedBindingError::AccessDenied
+                                | SharedBindingError::ExecutableMapping
+                                | SharedBindingError::ResourceMismatch
+                                | SharedBindingError::Capability(_),
+                            ),
+                        )
+                        | SharedBufferSyscallError::Buffer(
+                            IpcSharedBufferIoError::Authorization(
+                                IpcSharedBufferError::Ipc(
+                                    IpcError::PayloadTooLarge
+                                    | IpcError::TooManyCapabilities
+                                    | IpcError::Unauthorized
+                                    | IpcError::BufferTooSmall
+                                    | IpcError::Malformed
+                                    | IpcError::Replay
+                                    | IpcError::CapabilityShape,
+                                )
+                                | IpcSharedBufferError::AccessMismatch
+                                | IpcSharedBufferError::Binding(
+                                    SharedBindingError::MissingBinding
+                                    | SharedBindingError::AmbiguousBinding
+                                    | SharedBindingError::StaleBinding
+                                    | SharedBindingError::StaleMapping
+                                    | SharedBindingError::WrongVm
+                                    | SharedBindingError::WrongTask
+                                    | SharedBindingError::WrongMapping
+                                    | SharedBindingError::WrongObject
+                                    | SharedBindingError::AccessDenied
+                                    | SharedBindingError::ExecutableMapping
+                                    | SharedBindingError::ResourceMismatch
+                                    | SharedBindingError::Capability(_),
+                                ),
+                            )
+                            | IpcSharedBufferIoError::Empty
+                            | IpcSharedBufferIoError::OutOfRange
+                            | IpcSharedBufferIoError::AccessDenied
+                            | IpcSharedBufferIoError::Backend(
+                                HostResourceIoError::Empty
+                                | HostResourceIoError::OutOfRange
+                                | HostResourceIoError::StaleHandle,
+                            ),
+                        )
+                        | SharedBufferSyscallError::User(ActiveTaskUserCopyError::Buffer(_)),
+                    ) => frame.complete_error(),
+                    Err(_) => halt(),
+                }
             }
             SyscallRequest::QueryService {
                 capability,

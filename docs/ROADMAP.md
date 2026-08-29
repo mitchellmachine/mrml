@@ -2101,6 +2101,10 @@ live composition remains pending.
    Buffered-send payload/descriptor scratch is zeroed before reuse and after
    descriptor failure or delivery; decoded and requested capability temporaries
    are cleared at their last use. The same build/test gates pass.
+   Shared-buffer read/write syscalls return scrubbed failure for bounded
+   precommit range, user-mapping, authority, binding, and resource-handle
+   denials. Backend uncertainty and internal runtime/copy invariants still halt;
+   ordinary/accounted service builds and 595 Linux kernel tests pass.
    Exact feature gating now confines `GuestMappingRevoker` to block/component
    cleanup builds; ordinary, restart-request, component, and block service UEFI
    profiles cross-build without the former unused import.
