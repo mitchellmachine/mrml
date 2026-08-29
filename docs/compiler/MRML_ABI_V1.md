@@ -193,6 +193,7 @@ Wide rotations mask the distance to 127, exchange the low/high words for the
 upper half of that range, and use paired cross-word shifts in either direction.
 Wide `swap_bytes` and little-endian-target `to_be` byte-swap both words and
 exchange them; `to_le` preserves the two-word value unchanged.
+Wide `reverse_bits` reverses each word and exchanges their positions.
 `wrapping_div` and `wrapping_rem` preserve the mandatory zero-divisor trap but
 return `i128::MIN` and zero respectively for the signed minimum divided by or
 remaindered by negative one.

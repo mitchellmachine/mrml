@@ -7437,6 +7437,7 @@ impl<
                 crate::expression::IntegerBitTransform::SwapBytes
                     | crate::expression::IntegerBitTransform::ToBigEndian
                     | crate::expression::IntegerBitTransform::ToLittleEndian
+                    | crate::expression::IntegerBitTransform::ReverseBits
             )
         {
             let base_type = runtime_expression_type_with_locals(
@@ -7452,10 +7453,27 @@ impl<
                 return Err(self.error(CodegenErrorKind::RuntimeTypeMismatch));
             }
             self.emit_wide_integer_return(tree, base, expected_type)?;
-            if transform != crate::expression::IntegerBitTransform::ToLittleEndian {
-                self.emit(&[
-                    0x48, 0x0f, 0xc8, 0x48, 0x0f, 0xca, 0x48, 0x87, 0xd0,
-                ])?;
+            match transform {
+                crate::expression::IntegerBitTransform::ToLittleEndian => {}
+                crate::expression::IntegerBitTransform::SwapBytes
+                | crate::expression::IntegerBitTransform::ToBigEndian => {
+                    self.emit(&[
+                        0x48, 0x0f, 0xc8, 0x48, 0x0f, 0xca, 0x48, 0x87, 0xd0,
+                    ])?;
+                }
+                crate::expression::IntegerBitTransform::ReverseBits => {
+                    self.emit(&[0x4d, 0x31, 0xc0, 0x4d, 0x31, 0xc9, 0xb9, 64, 0, 0, 0])?;
+                    let loop_start = self.length;
+                    self.emit(&[
+                        0x48, 0xd1, 0xe8, 0x49, 0xd1, 0xd0, 0x48, 0xd1, 0xea, 0x49, 0xd1,
+                        0xd1, 0xff, 0xc9,
+                    ])?;
+                    let done = self.emit_forward_branch(0x84)?;
+                    self.emit_backward_branch(loop_start)?;
+                    self.patch_forward_branch(done)?;
+                    self.emit(&[0x4c, 0x89, 0xc8, 0x4c, 0x89, 0xc2])?;
+                }
+                _ => unreachable!(),
             }
             return Ok(());
         }

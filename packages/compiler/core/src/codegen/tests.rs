@@ -12675,6 +12675,7 @@ mod tests {
             "#[mrml_abi::export(version = 1)] pub fn value(input: u128) -> u128 { input.swap_bytes() }",
             "#[mrml_abi::export(version = 1)] pub fn value(input: i128) -> i128 { input.to_be() }",
             "#[mrml_abi::export(version = 1)] pub fn value(input: u128) -> u128 { input.to_le() }",
+            "#[mrml_abi::export(version = 1)] pub fn value(input: u128) -> u128 { input.reverse_bits() }",
         ] {
             let module = Parser::new(source).parse_module::<2, 2>().unwrap();
             let Some(Item::Function(function)) = module.items()[0] else {

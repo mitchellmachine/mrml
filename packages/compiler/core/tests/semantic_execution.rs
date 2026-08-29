@@ -99,6 +99,8 @@ const MRML_V1_WIDE_SIGNED_TO_BIG_ENDIAN_SOURCE: &str =
     "#[mrml_abi::export(version = 1)] pub fn probe(input: i128) -> i128 { input.to_be() }";
 const MRML_V1_WIDE_UNSIGNED_TO_LITTLE_ENDIAN_SOURCE: &str =
     "#[mrml_abi::export(version = 1)] pub fn probe(input: u128) -> u128 { input.to_le() }";
+const MRML_V1_WIDE_SIGNED_REVERSE_BITS_SOURCE: &str =
+    "#[mrml_abi::export(version = 1)] pub fn probe(input: i128) -> i128 { input.reverse_bits() }";
 const MRML_V1_WIDE_SIGNED_WRAPPING_DIVIDE_SOURCE: &str =
     "#[mrml_abi::export(version = 1)] pub fn probe(input: i128) -> i128 { input.wrapping_div(-1) }";
 const MRML_V1_WIDE_SIGNED_WRAPPING_REMAINDER_SOURCE: &str =
@@ -1371,6 +1373,7 @@ fn mrml_v1_wide_byte_order_transforms_match_both_oracle_words() {
         (MRML_V1_WIDE_UNSIGNED_SWAP_BYTES_SOURCE, false),
         (MRML_V1_WIDE_SIGNED_TO_BIG_ENDIAN_SOURCE, true),
         (MRML_V1_WIDE_UNSIGNED_TO_LITTLE_ENDIAN_SOURCE, false),
+        (MRML_V1_WIDE_SIGNED_REVERSE_BITS_SOURCE, true),
     ] {
         let code = compile(source);
         let actual = inputs
