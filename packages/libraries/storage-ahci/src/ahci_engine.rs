@@ -234,7 +234,7 @@ fn write_and_verify<R: AhciRegisterIo>(
 mod tests {
     use super::*;
     use crate::{
-        AhciDmaRegion, AhciPortDmaLayout, ProgrammedAhciPortDma, initialize_ahci_command_memory,
+        initialize_ahci_command_memory, AhciDmaRegion, AhciPortDmaLayout, ProgrammedAhciPortDma,
     };
     use mrml_kernel::ObjectId;
 
