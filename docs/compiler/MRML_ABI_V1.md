@@ -296,8 +296,11 @@ control flow as checked and wrapping powers, but each two-word multiplication
 detects discarded high product bits and saturates to `u128::MAX` instead of
 trapping. Zero exponents, exact boundary results, and overflow during either
 result multiplication or base squaring are checked against the pinned oracle.
-Signed wide saturation remains fail-closed until its endpoint selection is
-implemented and independently exercised.
+Signed wide saturation tracks the mathematical product sign independently of
+the magnitude multiplication. Overflow selects `i128::MIN` for a negative
+result and `i128::MAX` for a positive result, while the exact `-2^127` boundary
+remains representable. Odd and even overflowing powers and both signed endpoints
+are checked independently against the pinned oracle.
 Lazy `if` expressions may select compatible two-word integer values without
 evaluating the unselected branch; both branches retain the declared wide type.
 Block sequences may evaluate supported one-word prefix expressions before a

@@ -7638,12 +7638,6 @@ impl<
             {
                 return Err(self.error(CodegenErrorKind::RuntimeTypeMismatch));
             }
-            if mode == crate::expression::IntegerPowerMode::Saturating
-                && base_type
-                    == RuntimeExpressionType::Integer(Some(crate::IntegerType::I128))
-            {
-                return Err(self.error(CodegenErrorKind::RuntimeExpressionUnsupported));
-            }
             self.emit_wide_integer_return(tree, base, expected_type)?;
             self.emit(&[0x50, 0x52])?;
             self.evaluation_depth += 2;
@@ -7664,7 +7658,11 @@ impl<
                 0x24, 32, 0x48, 0x8b, 0x54, 0x24, 24,
             ])?;
             if mode == crate::expression::IntegerPowerMode::Saturating {
-                self.emit_wide_unsigned_saturating_multiply()?;
+                if layout.signed {
+                    self.emit_wide_signed_saturating_multiply()?;
+                } else {
+                    self.emit_wide_unsigned_saturating_multiply()?;
+                }
             } else {
                 let overflow_checks = self.overflow_checks;
                 self.overflow_checks = match mode {
@@ -7687,7 +7685,11 @@ impl<
                 0xc0, 0x48, 0x89, 0xca,
             ])?;
             if mode == crate::expression::IntegerPowerMode::Saturating {
-                self.emit_wide_unsigned_saturating_multiply()?;
+                if layout.signed {
+                    self.emit_wide_signed_saturating_multiply()?;
+                } else {
+                    self.emit_wide_unsigned_saturating_multiply()?;
+                }
             } else {
                 let overflow_checks = self.overflow_checks;
                 self.overflow_checks = match mode {
@@ -9188,6 +9190,77 @@ impl<
                     error,
                 )))
             })
+    }
+
+    fn emit_wide_signed_saturating_multiply(&mut self) -> Result<(), CodegenError> {
+        self.emit(&[0x49, 0x89, 0xcb, 0x49, 0x31, 0xd3, 0x48, 0x85, 0xc9])?;
+        let nonnegative_left = self.emit_forward_branch(0x89)?;
+        self.emit(&[0x49, 0xf7, 0xd8, 0x48, 0x83, 0xd1, 0, 0x48, 0xf7, 0xd9])?;
+        self.patch_forward_branch(nonnegative_left)?;
+        self.emit(&[0x48, 0x85, 0xd2])?;
+        let nonnegative_right = self.emit_forward_branch(0x89)?;
+        self.emit(&[0x48, 0xf7, 0xd8, 0x48, 0x83, 0xd2, 0, 0x48, 0xf7, 0xda])?;
+        self.patch_forward_branch(nonnegative_right)?;
+        self.emit(&[0x49, 0x89, 0xc1, 0x49, 0x89, 0xd2, 0x48, 0x85, 0xc9])?;
+        let zero_left_high = self.emit_forward_branch(0x84)?;
+        self.emit(&[0x4d, 0x85, 0xd2])?;
+        let overflow_without_stack = self.emit_forward_branch(0x85)?;
+        self.patch_forward_branch(zero_left_high)?;
+        self.emit(&[0x4c, 0x89, 0xc0, 0x49, 0xf7, 0xe1, 0x50, 0x52])?;
+        self.evaluation_depth += 2;
+        self.emit(&[0x4c, 0x89, 0xc0, 0x49, 0xf7, 0xe2, 0x48, 0x85, 0xd2])?;
+        let cross_high_overflow = self.emit_forward_branch(0x85)?;
+        self.emit(&[
+            0x49, 0x89, 0xc0, 0x48, 0x89, 0xc8, 0x49, 0xf7, 0xe1, 0x48, 0x85, 0xd2,
+        ])?;
+        let other_cross_high_overflow = self.emit_forward_branch(0x85)?;
+        self.emit(&[0x49, 0x01, 0xc0])?;
+        let cross_sum_overflow = self.emit_forward_branch(0x82)?;
+        self.emit(&[0x5a, 0x4c, 0x01, 0xc2])?;
+        self.evaluation_depth -= 1;
+        let high_sum_overflow = self.emit_forward_branch(0x82)?;
+        self.emit(&[0x58])?;
+        self.evaluation_depth -= 1;
+        self.emit(&[0x4d, 0x85, 0xdb])?;
+        let negative_result = self.emit_forward_branch(0x88)?;
+        self.emit(&[0x48, 0x85, 0xd2])?;
+        let positive_range_overflow = self.emit_forward_branch(0x88)?;
+        let signed = self.emit_unconditional_forward_branch()?;
+        self.patch_forward_branch(negative_result)?;
+        self.emit(&[0x49, 0xba])?;
+        self.emit(&(1u64 << 63).to_le_bytes())?;
+        self.emit(&[0x4c, 0x39, 0xd2])?;
+        let negative_range_overflow = self.emit_forward_branch(0x87)?;
+        let below_minimum_magnitude = self.emit_forward_branch(0x82)?;
+        self.emit(&[0x48, 0x85, 0xc0])?;
+        let negative_low_overflow = self.emit_forward_branch(0x85)?;
+        self.patch_forward_branch(below_minimum_magnitude)?;
+        self.emit(&[0x48, 0xf7, 0xd8, 0x48, 0x83, 0xd2, 0, 0x48, 0xf7, 0xda])?;
+        self.patch_forward_branch(signed)?;
+        let done = self.emit_unconditional_forward_branch()?;
+        self.patch_forward_branch(cross_high_overflow)?;
+        self.patch_forward_branch(other_cross_high_overflow)?;
+        self.patch_forward_branch(cross_sum_overflow)?;
+        self.emit(&[0x48, 0x83, 0xc4, 16])?;
+        let saturated_after_two_words = self.emit_unconditional_forward_branch()?;
+        self.patch_forward_branch(high_sum_overflow)?;
+        self.emit(&[0x48, 0x83, 0xc4, 8])?;
+        self.patch_forward_branch(overflow_without_stack)?;
+        self.patch_forward_branch(positive_range_overflow)?;
+        self.patch_forward_branch(negative_range_overflow)?;
+        self.patch_forward_branch(negative_low_overflow)?;
+        self.patch_forward_branch(saturated_after_two_words)?;
+        self.emit(&[0x4d, 0x85, 0xdb])?;
+        let saturate_negative = self.emit_forward_branch(0x88)?;
+        self.emit(&[0x48, 0xc7, 0xc0, 0xff, 0xff, 0xff, 0xff, 0x48, 0xba])?;
+        self.emit(&i64::MAX.to_le_bytes())?;
+        let saturated = self.emit_unconditional_forward_branch()?;
+        self.patch_forward_branch(saturate_negative)?;
+        self.emit(&[0x31, 0xc0, 0x48, 0xba])?;
+        self.emit(&(1u64 << 63).to_le_bytes())?;
+        self.patch_forward_branch(saturated)?;
+        self.patch_forward_branch(done)?;
+        Ok(())
     }
 
     fn emit_wide_unsigned_saturating_multiply(&mut self) -> Result<(), CodegenError> {
