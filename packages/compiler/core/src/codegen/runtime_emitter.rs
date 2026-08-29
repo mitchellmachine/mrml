@@ -7773,6 +7773,38 @@ impl<
         Ok(())
     }
 
+    fn emit_wide_shift(
+        &mut self,
+        layout: RuntimeIntegerLayout,
+        shift_left: bool,
+    ) -> Result<(), CodegenError> {
+        if self.overflow_checks {
+            self.emit(&[0x48, 0x81, 0xf9, 0x80, 0x00, 0x00, 0x00])?;
+            self.emit_trap_branch(0x83)?;
+        } else {
+            self.emit(&[0x83, 0xe1, 0x7f])?;
+        }
+        self.emit(&[0x48, 0x83, 0xf9, 0x40])?;
+        let less_than_word = self.emit_forward_branch(0x82)?;
+        self.emit(&[0x83, 0xe1, 0x3f])?;
+        match (shift_left, layout.signed) {
+            (true, _) => self.emit(&[0x48, 0x89, 0xc2, 0x48, 0xd3, 0xe2, 0x31, 0xc0])?,
+            (false, false) => self.emit(&[0x48, 0x89, 0xd0, 0x48, 0xd3, 0xe8, 0x31, 0xd2])?,
+            (false, true) => self.emit(&[
+                0x48, 0x89, 0xd0, 0x48, 0xd3, 0xf8, 0x48, 0xc1, 0xfa, 0x3f,
+            ])?,
+        }
+        let end = self.emit_unconditional_forward_branch()?;
+        self.patch_forward_branch(less_than_word)?;
+        match (shift_left, layout.signed) {
+            (true, _) => self.emit(&[0x48, 0x0f, 0xa5, 0xc2, 0x48, 0xd3, 0xe0])?,
+            (false, false) => self.emit(&[0x48, 0x0f, 0xad, 0xd0, 0x48, 0xd3, 0xea])?,
+            (false, true) => self.emit(&[0x48, 0x0f, 0xad, 0xd0, 0x48, 0xd3, 0xfa])?,
+        }
+        self.patch_forward_branch(end)?;
+        Ok(())
+    }
+
     fn emit_slice_length(&mut self, name: &str) -> Result<(), CodegenError> {
         let slots = if let Some(index) = self.locals[..self.saved_locals]
             .iter()
@@ -9391,7 +9423,21 @@ impl<
             kind,
             span: translate_span(body_start, assignment.value_span),
         })?;
-        if !runtime_types_compatible(value_type, target.ty) {
+        let wide_shift_count = matches!(
+            target.ty,
+            RuntimeExpressionType::Integer(Some(
+                crate::IntegerType::U128 | crate::IntegerType::I128
+            ))
+        ) && matches!(
+            assignment.operator,
+            crate::AssignmentOperator::ShiftLeft | crate::AssignmentOperator::ShiftRight
+        ) && (matches!(value_type, RuntimeExpressionType::Integer(None))
+            || matches!(
+                value_type,
+                RuntimeExpressionType::Integer(Some(integer_type))
+                    if runtime_width(integer_type.name()).is_some_and(|width| width.bits <= 64)
+            ));
+        if !runtime_types_compatible(value_type, target.ty) && !wide_shift_count {
             return Err(CodegenError {
                 kind: CodegenErrorKind::RuntimeTypeMismatch,
                 span: translate_span(body_start, assignment.value_span),
@@ -9481,6 +9527,8 @@ impl<
                             | crate::AssignmentOperator::Multiply
                             | crate::AssignmentOperator::Divide
                             | crate::AssignmentOperator::Remainder
+                            | crate::AssignmentOperator::ShiftLeft
+                            | crate::AssignmentOperator::ShiftRight
                             | crate::AssignmentOperator::BitAnd
                             | crate::AssignmentOperator::BitOr
                             | crate::AssignmentOperator::BitXor
@@ -9504,9 +9552,23 @@ impl<
                     )?;
                     self.emit(&[0x50])?;
                     self.evaluation_depth += 1;
-                    self.emit_wide_integer_return(&tree, tree.root(), target.ty)?;
-                    self.emit(&[0x59, 0x41, 0x58])?;
-                    self.evaluation_depth -= 2;
+                    if matches!(
+                        assignment.operator,
+                        crate::AssignmentOperator::ShiftLeft
+                            | crate::AssignmentOperator::ShiftRight
+                    ) {
+                        self.emit_expression(&tree, tree.root(), 1)?;
+                        self.emit(&[0x48, 0x89, 0xc1, 0x5a, 0x58])?;
+                        self.evaluation_depth -= 2;
+                        self.emit_wide_shift(
+                            layout,
+                            assignment.operator == crate::AssignmentOperator::ShiftLeft,
+                        )?;
+                    } else {
+                        self.emit_wide_integer_return(&tree, tree.root(), target.ty)?;
+                        self.emit(&[0x59, 0x41, 0x58])?;
+                        self.evaluation_depth -= 2;
+                    }
                     match assignment.operator {
                         crate::AssignmentOperator::BitAnd => {
                             self.emit(&[0x4c, 0x21, 0xc0, 0x48, 0x21, 0xca])?
@@ -9548,6 +9610,8 @@ impl<
                                 assignment.operator == crate::AssignmentOperator::Remainder,
                             )?;
                         }
+                        crate::AssignmentOperator::ShiftLeft
+                        | crate::AssignmentOperator::ShiftRight => {}
                         _ => unreachable!(),
                     }
                 } else {

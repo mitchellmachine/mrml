@@ -164,7 +164,7 @@ Immutable `u128` and `i128` locals preserve both words in bounded stack slots;
 their initializer and later reads retain the declared wide type.
 Mutable wide locals support whole-value assignment through the same typed place
 and ownership checks. Checked `+=`/`-=`/`*=` and `/=`/`%=`, plus bitwise
-`&=`/`|=`/`^=`, preserve both words; shift compounds remain fail-closed.
+`&=`/`|=`/`^=` and checked `<<=`/`>>=`, preserve both words.
 Discarded wide expression statements and block prefixes execute normally,
 including checked traps, without materializing an unused stack value.
 Bounded calls to earlier ordinary Rust helpers may pass and return supported
@@ -235,6 +235,7 @@ Whole-value mutable wide-local assignments are compared word-for-word.
 Supported wide compound assignments are compared word-for-word as one sequence.
 Unsigned and signed wide multiply assignments have separate oracle cases.
 Unsigned and signed wide divide/remainder assignments have separate oracle cases.
+Unsigned and signed wide shift assignments have separate oracle cases.
 Discarded wide-expression prefixes are compared against the retained tail value.
 Wide helper arguments and returns are compared word-for-word after inlining.
 Both paths through an inlined helper's conditional wide early return are also

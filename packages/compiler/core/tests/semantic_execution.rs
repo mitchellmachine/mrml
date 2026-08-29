@@ -99,6 +99,8 @@ const MRML_V1_WIDE_UNSIGNED_MULTIPLY_ASSIGN_SOURCE: &str = "#[mrml_abi::export(v
 const MRML_V1_WIDE_SIGNED_MULTIPLY_ASSIGN_SOURCE: &str = "#[mrml_abi::export(version = 1)] pub fn probe(input: i128) -> i128 { let mut value: i128 = input; value *= -17; value }";
 const MRML_V1_WIDE_UNSIGNED_DIVIDE_ASSIGN_SOURCE: &str = "#[mrml_abi::export(version = 1)] pub fn probe(input: u128) -> u128 { let mut value: u128 = input; value /= 18446744073709551617; value %= 257; value }";
 const MRML_V1_WIDE_SIGNED_DIVIDE_ASSIGN_SOURCE: &str = "#[mrml_abi::export(version = 1)] pub fn probe(input: i128) -> i128 { let mut value: i128 = input; value /= -17; value %= 7; value }";
+const MRML_V1_WIDE_UNSIGNED_SHIFT_ASSIGN_SOURCE: &str = "#[mrml_abi::export(version = 1)] pub fn probe(input: u128, shift: u32) -> u128 { let mut value: u128 = input; value <<= shift; value >>= 3; value }";
+const MRML_V1_WIDE_SIGNED_SHIFT_ASSIGN_SOURCE: &str = "#[mrml_abi::export(version = 1)] pub fn probe(input: i128, shift: u32) -> i128 { let mut value: i128 = input; value >>= shift; value <<= 2; value }";
 const MRML_V1_UNSIGNED_WIDEN_SOURCE: &str =
     "#[mrml_abi::export(version = 1)] pub fn probe(input: u64) -> u128 { input as u128 }";
 const MRML_V1_SIGNED_WIDEN_SOURCE: &str =
@@ -1801,6 +1803,48 @@ fn mrml_v1_wide_divide_and_remainder_assignments_match_oracle_words() {
         rustc_mrml_v1_observations(
             MRML_V1_WIDE_SIGNED_DIVIDE_ASSIGN_SOURCE,
             "for input in [i128::MIN, -17, -1, 0, 1, 17, i128::MAX] { let returned = probe(input) as u128; println!(\"{}\", returned as u64); println!(\"{}\", (returned >> 64) as u64); }",
+        )
+    );
+}
+
+#[test]
+fn mrml_v1_wide_shift_assignments_match_oracle_words() {
+    let unsigned = compile(MRML_V1_WIDE_UNSIGNED_SHIFT_ASSIGN_SOURCE);
+    let unsigned_input = 1512366075204170947332355369683137040u128;
+    let shifts = [0u32, 1, 63, 64, 65, 127];
+    let actual_unsigned = shifts
+        .into_iter()
+        .flat_map(|shift| {
+            let returned = unsafe {
+                call_mrml_v1_wide_with_u32(unsigned.pointer, unsigned_input, shift)
+            };
+            [returned as u64, (returned >> 64) as u64]
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(
+        actual_unsigned,
+        rustc_mrml_v1_observations(
+            MRML_V1_WIDE_UNSIGNED_SHIFT_ASSIGN_SOURCE,
+            "for shift in [0u32, 1, 63, 64, 65, 127] { let returned = probe(1512366075204170947332355369683137040u128, shift); println!(\"{}\", returned as u64); println!(\"{}\", (returned >> 64) as u64); }",
+        )
+    );
+
+    let signed = compile(MRML_V1_WIDE_SIGNED_SHIFT_ASSIGN_SOURCE);
+    let signed_input = -1512366075204170947332355369683137040i128;
+    let actual_signed = shifts
+        .into_iter()
+        .flat_map(|shift| {
+            let returned = unsafe {
+                call_mrml_v1_wide_with_u32(signed.pointer, signed_input as u128, shift)
+            };
+            [returned as u64, (returned >> 64) as u64]
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(
+        actual_signed,
+        rustc_mrml_v1_observations(
+            MRML_V1_WIDE_SIGNED_SHIFT_ASSIGN_SOURCE,
+            "for shift in [0u32, 1, 63, 64, 65, 127] { let returned = probe(-1512366075204170947332355369683137040i128, shift); println!(\"{}\", returned as u64); println!(\"{}\", ((returned as u128) >> 64) as u64); }",
         )
     );
 }

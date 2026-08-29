@@ -12685,6 +12685,28 @@ mod tests {
     }
 
     #[test]
+    fn mrml_v1_codegen_shifts_wide_locals_in_place() {
+        for source in [
+            "#[mrml_abi::export(version = 1)] pub fn value(input: u128, shift: u32) -> u128 { let mut value: u128 = input; value <<= shift; value >>= 3; value }",
+            "#[mrml_abi::export(version = 1)] pub fn value(input: i128, shift: u32) -> i128 { let mut value: i128 = input; value >>= shift; value <<= 2; value }",
+        ] {
+            let module = Parser::new(source).parse_module::<2, 4>().unwrap();
+            let Some(Item::Function(function)) = module.items()[0] else {
+                panic!("expected function")
+            };
+            for abi in [X86_64Abi::SystemV, X86_64Abi::Windows] {
+                let code =
+                    compile_x86_64_function::<_, 1536, 4, 32>(&function, &NoConstants, abi)
+                        .unwrap();
+                assert!(code
+                    .bytes()
+                    .windows(5)
+                    .any(|bytes| bytes == [0x48, 0x0f, 0xad, 0xd0, 0x48]));
+            }
+        }
+    }
+
+    #[test]
     fn mrml_v1_codegen_widens_one_word_integers_for_two_word_returns() {
         for source in [
             "#[mrml_abi::export(version = 1)] pub fn value(input: u8) -> u128 { input as u128 }",
