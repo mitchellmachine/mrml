@@ -1590,7 +1590,9 @@ fn load_manifest_declarations(root: &Path) -> Result<ManifestDeclarations, Strin
         }
     }
     let mut interface_bindings = Vec::new();
-    for (consumer, interface, generation, fingerprint, binding, form, multiplicity, targets) in requirements {
+    for (consumer, interface, generation, fingerprint, binding, form, multiplicity, targets) in
+        requirements
+    {
         let matching = providers
             .iter()
             .filter(
@@ -1638,8 +1640,11 @@ fn load_manifest_declarations(root: &Path) -> Result<ManifestDeclarations, Strin
         }
     }
     interface_bindings.sort_by(|left, right| {
-        (&left.consumer, &left.interface, &left.provider)
-            .cmp(&(&right.consumer, &right.interface, &right.provider))
+        (&left.consumer, &left.interface, &left.provider).cmp(&(
+            &right.consumer,
+            &right.interface,
+            &right.provider,
+        ))
     });
     Ok(ManifestDeclarations {
         records: declarations,
@@ -5592,8 +5597,11 @@ mod tests {
         )
         .unwrap();
         assert!(
-            interface_multiplicity(invalid.array_sections("requires").next().unwrap(), "fixture")
-                .is_err()
+            interface_multiplicity(
+                invalid.array_sections("requires").next().unwrap(),
+                "fixture"
+            )
+            .is_err()
         );
 
         let isolated = ManifestDocument::parse(
