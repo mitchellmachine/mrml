@@ -93,6 +93,12 @@ const MRML_V1_WIDE_UNSIGNED_ROTATE_LEFT_SOURCE: &str =
     "#[mrml_abi::export(version = 1)] pub fn probe(input: u128, distance: u32) -> u128 { input.rotate_left(distance) }";
 const MRML_V1_WIDE_SIGNED_ROTATE_RIGHT_SOURCE: &str =
     "#[mrml_abi::export(version = 1)] pub fn probe(input: i128, distance: u32) -> i128 { input.rotate_right(distance) }";
+const MRML_V1_WIDE_UNSIGNED_SWAP_BYTES_SOURCE: &str =
+    "#[mrml_abi::export(version = 1)] pub fn probe(input: u128) -> u128 { input.swap_bytes() }";
+const MRML_V1_WIDE_SIGNED_TO_BIG_ENDIAN_SOURCE: &str =
+    "#[mrml_abi::export(version = 1)] pub fn probe(input: i128) -> i128 { input.to_be() }";
+const MRML_V1_WIDE_UNSIGNED_TO_LITTLE_ENDIAN_SOURCE: &str =
+    "#[mrml_abi::export(version = 1)] pub fn probe(input: u128) -> u128 { input.to_le() }";
 const MRML_V1_WIDE_SIGNED_WRAPPING_DIVIDE_SOURCE: &str =
     "#[mrml_abi::export(version = 1)] pub fn probe(input: i128) -> i128 { input.wrapping_div(-1) }";
 const MRML_V1_WIDE_SIGNED_WRAPPING_REMAINDER_SOURCE: &str =
@@ -1348,6 +1354,37 @@ fn mrml_v1_wide_rotations_match_both_oracle_words() {
                 [returned as u64, (returned >> 64) as u64]
             })
             .collect::<Vec<_>>();
+        assert_eq!(actual, rustc_mrml_v1_observations(source, driver));
+    }
+}
+
+#[test]
+fn mrml_v1_wide_byte_order_transforms_match_both_oracle_words() {
+    let inputs = [
+        0u128,
+        1,
+        0x0123_4567_89ab_cdef_fedc_ba98_7654_3210u128,
+        1u128 << 127,
+        u128::MAX,
+    ];
+    for (source, signed) in [
+        (MRML_V1_WIDE_UNSIGNED_SWAP_BYTES_SOURCE, false),
+        (MRML_V1_WIDE_SIGNED_TO_BIG_ENDIAN_SOURCE, true),
+        (MRML_V1_WIDE_UNSIGNED_TO_LITTLE_ENDIAN_SOURCE, false),
+    ] {
+        let code = compile(source);
+        let actual = inputs
+            .into_iter()
+            .flat_map(|input| {
+                let returned = unsafe { call_mrml_v1_wide_return(code.pointer, input) };
+                [returned as u64, (returned >> 64) as u64]
+            })
+            .collect::<Vec<_>>();
+        let driver = if signed {
+            "for input in [0u128, 1, 0x0123_4567_89ab_cdef_fedc_ba98_7654_3210u128, 1u128 << 127, u128::MAX] { let returned = probe(input as i128); println!(\"{}\", returned as u64); println!(\"{}\", ((returned as u128) >> 64) as u64); }"
+        } else {
+            "for input in [0u128, 1, 0x0123_4567_89ab_cdef_fedc_ba98_7654_3210u128, 1u128 << 127, u128::MAX] { let returned = probe(input); println!(\"{}\", returned as u64); println!(\"{}\", (returned >> 64) as u64); }"
+        };
         assert_eq!(actual, rustc_mrml_v1_observations(source, driver));
     }
 }

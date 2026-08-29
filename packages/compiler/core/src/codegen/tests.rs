@@ -12670,6 +12670,23 @@ mod tests {
     }
 
     #[test]
+    fn mrml_v1_codegen_transforms_wide_byte_order() {
+        for source in [
+            "#[mrml_abi::export(version = 1)] pub fn value(input: u128) -> u128 { input.swap_bytes() }",
+            "#[mrml_abi::export(version = 1)] pub fn value(input: i128) -> i128 { input.to_be() }",
+            "#[mrml_abi::export(version = 1)] pub fn value(input: u128) -> u128 { input.to_le() }",
+        ] {
+            let module = Parser::new(source).parse_module::<2, 2>().unwrap();
+            let Some(Item::Function(function)) = module.items()[0] else {
+                panic!("expected function")
+            };
+            for abi in [X86_64Abi::SystemV, X86_64Abi::Windows] {
+                compile_x86_64_function::<_, 384, 2, 16>(&function, &NoConstants, abi).unwrap();
+            }
+        }
+    }
+
+    #[test]
     fn mrml_v1_codegen_stores_and_loads_immutable_wide_locals() {
         let source = "#[mrml_abi::export(version = 1)] pub fn value(input: u128) -> u128 { let adjusted: u128 = input + 17; adjusted }";
         let module = Parser::new(source).parse_module::<2, 2>().unwrap();
