@@ -73,6 +73,15 @@ as aliases. It introduces no object encoding, exception format, compression,
 cryptographic mechanism, loader behavior, or novel symbol-resolution
 algorithm. This technical screen is not legal advice or patent clearance.
 
+# 2026-08-29 — Typed COFF data-relocation section ownership
+
+Patent review: **NOT_TRIGGERED**. This increment carries an already validated
+COFF source-object and section identity through conventional writable and
+read-only relocation application, using exact equality and checked offsets.
+It introduces no object encoding, relocation kind, compression, cryptographic
+mechanism, loader behavior, or novel symbol-resolution algorithm. This
+technical screen is not legal advice or patent clearance.
+
 # 2026-08-29 — AHCI userspace syscall adapter
 
 Patent review: **NOT_TRIGGERED**. This increment maps the already screened AHCI

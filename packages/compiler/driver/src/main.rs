@@ -16,10 +16,10 @@ use mrml_rustc::{
     MAX_LINK_RELOCATIONS, MAX_PE_RUNTIME_FUNCTIONS, ObjectFormat, PeReadonlyAbsoluteRelocation,
     PeRuntimeFunction, PeWritableData, PeWritableRelocation, PeWritableRelocationTarget,
     TargetLayout, compile_source_function_with_options, decode_unix_archive,
-    decode_x86_64_coff_readonly_absolute_relocations_from_inventory,
+    decode_x86_64_coff_readonly_absolute_relocations_with_section_identities_from_inventory,
     decode_x86_64_coff_runtime_functions, decode_x86_64_coff_section_identity_readonly_fragment,
     decode_x86_64_coff_text_fragment_with_section_identities_from_inventory,
-    decode_x86_64_coff_writable_data_fragment,
+    decode_x86_64_coff_writable_data_fragment_with_section_identities,
     decode_x86_64_elf_selected_definitions_from_sections,
     decode_x86_64_elf_selected_relocations_from_sections, decode_x86_64_elf_selected_sections,
     decode_x86_64_elf_with_definitions, inventory_x86_64_coff_comdat_sections,
@@ -1136,10 +1136,12 @@ fn selected_writable_data<'data, 'relocations>(
                 let (arena, rest) = remaining
                     .split_first_mut()
                     .ok_or_else(|| anyhow!("writable relocation arena count mismatch"))?;
-                let data = decode_x86_64_coff_writable_data_fragment(
+                let data = decode_x86_64_coff_writable_data_fragment_with_section_identities(
                     objects[object_index],
                     fragment_index,
                     owner,
+                    u16::try_from(object_index + 1)
+                        .map_err(|_| anyhow!("COFF source-object identity overflow"))?,
                     arena,
                 )
                 .map_err(|error| {
@@ -1176,24 +1178,44 @@ fn selected_readonly_absolute_relocations<'data>(
         if selected_object {
             let object = objects[object_index];
             let inventory = inventory_x86_64_coff_comdat_sections(object).map_err(|error| {
-                anyhow!("could not inventory selected COFF sections: {}", error)
+                anyhow!(
+                    "COFF object {} selected-section inventory: {}",
+                    object_index,
+                    error
+                )
             })?;
             let decoded =
-                decode_x86_64_coff_readonly_absolute_relocations_from_inventory(object, &inventory)
+                decode_x86_64_coff_readonly_absolute_relocations_with_section_identities_from_inventory(
+                    object,
+                    &inventory,
+                    u16::try_from(object_index + 1)
+                        .map_err(|_| anyhow!("COFF source-object identity overflow"))?,
+                )
                     .map_err(|error| {
                         anyhow!(
-                            "could not decode selected COFF readonly relocations: {}",
+                            "COFF object {} selected read-only relocations: {}",
+                            object_index,
                             error
                         )
                     })?;
             for relocation in decoded.relocations() {
-                let retained = selected
-                    .inputs
-                    .iter()
-                    .zip(selected.source_object.iter())
-                    .any(|(input, source)| {
-                        *source == object_index && input.symbol == relocation.readonly_owner
-                    });
+                let retained = selected.inputs.iter().zip(selected.source_object.iter()).any(
+                    |(input, source)| {
+                        if *source != object_index {
+                            return false;
+                        }
+                        match relocation.readonly_identity {
+                            Some(identity) => matches!(
+                                input.symbol_target,
+                                LinkDefinitionTarget::CoffSection {
+                                    identity: candidate,
+                                    ..
+                                } if candidate == identity
+                            ),
+                            None => input.symbol == relocation.readonly_owner,
+                        }
+                    },
+                );
                 if retained {
                     if output.len() == MAX_LINK_RELOCATIONS {
                         return Err(anyhow!("too many selected COFF readonly relocations"));

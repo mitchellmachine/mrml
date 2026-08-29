@@ -153,6 +153,17 @@ Linux compiler-core package gate passes all 812 unit tests and its integration
 groups, including 351 replacement tests. Patent review: **NOT_TRIGGERED**; see
 `docs/patents/REVIEW_LOG.md`.
 
+Writable relocations and absolute relocation fields inside projected read-only
+COMDATs now carry the same exact source-object/section identity through PE
+layout. Non-COMDAT spans retain the legacy checked owner/offset path. The exact
+ORACLE-0003 probe crosses writable fragment decoding and missing read-only owner
+names, then fails closed at the next boundary, `unsupported COFF relocation
+target`, for a local target inside selected object 1. The Linux release driver
+build passes. A canonical core run passed 811 of 812 unit tests; its sole
+failure was the intentionally refined `UnsupportedCoffRelocation` classification
+for an unknown relocation kind, and that expectation was corrected afterward.
+Patent review: **NOT_TRIGGERED**; see `docs/patents/REVIEW_LOG.md`.
+
 Commit `447af934` gives COFF archive fixed-point discovery a zero-copy,
 fallible external-symbol inventory over validated symbol and string tables.
 Structural metadata admits at most 4,096 sections, covering the pinned

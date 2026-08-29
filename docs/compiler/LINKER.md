@@ -191,6 +191,13 @@ additional names at that exact section and offset are aliases. The third target
 must resolve at offset zero in a nonempty `.xdata$...` section. Section indices,
 symbol records, addends, payloads, and record capacity are checked.
 
+Projected COFF COMDAT read-only sections also retain exact source-object and
+section identities when referenced by writable `ADDR64` fields or when their
+own absolute relocation fields are patched. PE layout resolves those identities
+once against retained fragment definitions and checks the fragment-relative
+offset. Ordinary non-COMDAT read-only spans continue to use their bounded
+owner-symbol path.
+
 The PE driver now transports unwind records only from source objects whose
 `(archive, member)` identity survived object-atomic selection. One reusable
 bounded scratch arena decodes each selected object, copied typed records retain
