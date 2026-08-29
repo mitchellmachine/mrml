@@ -215,6 +215,10 @@ const MRML_V1_WIDE_SIGNED_WRAPPING_POWER_SOURCE: &str =
     "#[mrml_abi::export(version = 1)] pub fn probe(base: i128, exponent: u32) -> i128 { base.wrapping_pow(exponent) }";
 const MRML_V1_WIDE_UNSIGNED_STRICT_POWER_SOURCE: &str =
     "#[mrml_abi::export(version = 1)] pub fn probe(base: u128, exponent: u32) -> u128 { base.strict_pow(exponent) }";
+const MRML_V1_WIDE_UNSIGNED_SQUARE_ROOT_SOURCE: &str =
+    "#[mrml_abi::export(version = 1)] pub fn probe(input: u128) -> u128 { input.isqrt() }";
+const MRML_V1_WIDE_SIGNED_SQUARE_ROOT_SOURCE: &str =
+    "#[mrml_abi::export(version = 1)] pub fn probe(input: i128) -> i128 { input.isqrt() }";
 const MRML_V1_WIDE_SIGNED_IS_POSITIVE_SOURCE: &str =
     "#[mrml_abi::export(version = 1)] pub fn probe(input: i128) -> u64 { input.is_positive() as u64 }";
 const MRML_V1_WIDE_SIGNED_IS_NEGATIVE_SOURCE: &str =
@@ -2633,6 +2637,105 @@ fn mrml_v1_wide_power_overflows_trap() {
             .output()
             .expect("launch isolated wide power trap probe");
         assert!(!output.status.success(), "power overflow unexpectedly returned");
+        assert_eq!(output.status.code(), Some(101));
+        let stdout = String::from_utf8(output.stdout).expect("UTF-8 child test stdout");
+        let stderr = String::from_utf8(output.stderr).expect("UTF-8 child test stderr");
+        assert!(
+            stdout.contains("unexpected return code -1073741795")
+                || stderr.contains("unexpected return code -1073741795"),
+            "missing Windows illegal-instruction status; stdout: {stdout}; stderr: {stderr}"
+        );
+    }
+}
+
+#[test]
+fn mrml_v1_wide_integer_square_roots_match_both_oracle_words() {
+    let unsigned_inputs = [
+        0u128,
+        1,
+        2,
+        3,
+        4,
+        u64::MAX as u128,
+        1u128 << 64,
+        (1u128 << 126) - 1,
+        1u128 << 126,
+        u128::MAX,
+    ];
+    let code = compile(MRML_V1_WIDE_UNSIGNED_SQUARE_ROOT_SOURCE);
+    let actual = unsigned_inputs
+        .into_iter()
+        .flat_map(|input| {
+            let returned = unsafe { call_mrml_v1_wide_return(code.pointer, input) };
+            [returned as u64, (returned >> 64) as u64]
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(
+        actual,
+        rustc_mrml_v1_observations(
+            MRML_V1_WIDE_UNSIGNED_SQUARE_ROOT_SOURCE,
+            "for input in [0u128, 1, 2, 3, 4, u64::MAX as u128, 1u128 << 64, (1u128 << 126) - 1, 1u128 << 126, u128::MAX] { let returned = probe(input); println!(\"{}\", returned as u64); println!(\"{}\", (returned >> 64) as u64); }",
+        )
+    );
+
+    let signed_inputs = [0i128, 1, 2, 3, 4, i128::MAX];
+    let code = compile(MRML_V1_WIDE_SIGNED_SQUARE_ROOT_SOURCE);
+    let actual = signed_inputs
+        .into_iter()
+        .flat_map(|input| {
+            let returned = unsafe { call_mrml_v1_wide_return(code.pointer, input as u128) };
+            [returned as u64, (returned >> 64) as u64]
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(
+        actual,
+        rustc_mrml_v1_observations(
+            MRML_V1_WIDE_SIGNED_SQUARE_ROOT_SOURCE,
+            "for input in [0i128, 1, 2, 3, 4, i128::MAX] { let returned = probe(input); println!(\"{}\", returned as u64); println!(\"{}\", ((returned as u128) >> 64) as u64); }",
+        )
+    );
+}
+
+#[test]
+fn mrml_v1_wide_signed_square_root_negative_traps() {
+    #[cfg(target_os = "windows")]
+    const CHILD: &str = "MRML_SEMANTIC_WIDE_SIGNED_ISQRT_TRAP_CHILD";
+    let code = compile(MRML_V1_WIDE_SIGNED_SQUARE_ROOT_SOURCE);
+
+    #[cfg(not(target_os = "windows"))]
+    {
+        let pid = unsafe { fork() };
+        assert!(pid >= 0, "fork failed");
+        if pid == 0 {
+            let _ = unsafe { call_mrml_v1_wide_return(code.pointer, (-1i128) as u128) };
+            unsafe { _exit(120) }
+        }
+        let mut status = 0;
+        assert_eq!(unsafe { waitpid(pid, &mut status, 0) }, pid, "waitpid failed");
+        assert_eq!(status & 0x7f, 4, "unexpected Unix wait status: {status:#x}");
+        return;
+    }
+
+    #[cfg(target_os = "windows")]
+    if std::env::var_os(CHILD).is_some() {
+        unsafe { SetErrorMode(0x0001 | 0x0002) };
+        let _ = unsafe { call_mrml_v1_wide_return(code.pointer, (-1i128) as u128) };
+        panic!("negative wide square root unexpectedly returned");
+    }
+
+    #[cfg(target_os = "windows")]
+    let output = Command::new(std::env::current_exe().expect("locate semantic test binary"))
+        .args([
+            "--exact",
+            "mrml_v1_wide_signed_square_root_negative_traps",
+            "--nocapture",
+        ])
+        .env(CHILD, "1")
+        .output()
+        .expect("launch isolated wide square-root trap probe");
+    #[cfg(target_os = "windows")]
+    {
+        assert!(!output.status.success(), "negative square root unexpectedly returned");
         assert_eq!(output.status.code(), Some(101));
         let stdout = String::from_utf8(output.stdout).expect("UTF-8 child test stdout");
         let stderr = String::from_utf8(output.stderr).expect("UTF-8 child test stderr");

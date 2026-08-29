@@ -7499,6 +7499,103 @@ impl<
             let result = self.emit_wide_shift(layout, left);
             self.overflow_checks = previous_overflow_checks;
             return result;
+        } else if let ExprKind::IntegerBitTransform {
+            base,
+            transform: crate::expression::IntegerBitTransform::IntegerSquareRoot,
+        } = expression.kind
+        {
+            let base_type = runtime_expression_type_with_locals(
+                self.function,
+                self.resolver,
+                &self.locals[..self.saved_locals],
+                tree,
+                base,
+                1,
+            )
+            .map_err(|kind| self.error(kind))?;
+            if !matches!(
+                base_type,
+                RuntimeExpressionType::Integer(Some(
+                    crate::IntegerType::U128 | crate::IntegerType::I128
+                ))
+            ) || expected_type != base_type
+            {
+                return Err(self.error(CodegenErrorKind::RuntimeTypeMismatch));
+            }
+            self.emit_wide_integer_return(tree, base, expected_type)?;
+            if layout.signed {
+                self.emit(&[0x48, 0x85, 0xd2])?;
+                self.emit_trap_branch(0x88)?;
+            }
+            self.emit(&[0x50, 0x52, 0x31, 0xc0, 0x50, 0x50, 0x50, 0x49, 0xbb])?;
+            self.emit(&(1u64 << 62).to_le_bytes())?;
+            self.emit(&[0x41, 0x53])?;
+            self.evaluation_depth += 6;
+
+            let reduce_start = self.length;
+            self.emit(&[
+                0x48, 0x8b, 0x14, 0x24, 0x48, 0x8b, 0x4c, 0x24, 32, 0x48, 0x39, 0xca,
+            ])?;
+            let reduced_high = self.emit_forward_branch(0x82)?;
+            let shift_large_one = self.emit_forward_branch(0x87)?;
+            self.emit(&[
+                0x48, 0x8b, 0x44, 0x24, 8, 0x48, 0x8b, 0x4c, 0x24, 40, 0x48, 0x39,
+                0xc8,
+            ])?;
+            let reduced_low = self.emit_forward_branch(0x86)?;
+            self.patch_forward_branch(shift_large_one)?;
+            self.emit(&[
+                0x48, 0x8b, 0x44, 0x24, 8, 0x48, 0x8b, 0x14, 0x24, 0x48, 0x0f, 0xac,
+                0xd0, 2, 0x48, 0xc1, 0xea, 2, 0x48, 0x89, 0x44, 0x24, 8, 0x48, 0x89,
+                0x14, 0x24,
+            ])?;
+            self.emit_backward_branch(reduce_start)?;
+            self.patch_forward_branch(reduced_high)?;
+            self.patch_forward_branch(reduced_low)?;
+
+            let root_loop = self.length;
+            self.emit(&[
+                0x48, 0x8b, 0x44, 0x24, 8, 0x48, 0x8b, 0x14, 0x24, 0x49, 0x89, 0xc3,
+                0x49, 0x09, 0xd3,
+            ])?;
+            let root_done = self.emit_forward_branch(0x84)?;
+            self.emit(&[
+                0x4c, 0x8b, 0x44, 0x24, 24, 0x48, 0x8b, 0x4c, 0x24, 16, 0x49, 0x01,
+                0xc0, 0x48, 0x11, 0xd1, 0x4c, 0x8b, 0x54, 0x24, 32, 0x49, 0x39, 0xca,
+            ])?;
+            let accept_high = self.emit_forward_branch(0x87)?;
+            let reject_high = self.emit_forward_branch(0x82)?;
+            self.emit(&[0x4c, 0x8b, 0x54, 0x24, 40, 0x4d, 0x39, 0xc2])?;
+            let reject_low = self.emit_forward_branch(0x82)?;
+            self.patch_forward_branch(accept_high)?;
+            self.emit(&[
+                0x4c, 0x8b, 0x54, 0x24, 40, 0x4c, 0x8b, 0x5c, 0x24, 32, 0x4d, 0x29,
+                0xc2, 0x49, 0x19, 0xcb, 0x4c, 0x89, 0x54, 0x24, 40, 0x4c, 0x89, 0x5c,
+                0x24, 32, 0x4c, 0x8b, 0x44, 0x24, 24, 0x48, 0x8b, 0x4c, 0x24, 16, 0x49,
+                0x0f, 0xac, 0xc8, 1, 0x48, 0xd1, 0xe9, 0x49, 0x01, 0xc0, 0x48, 0x11, 0xd1,
+                0x4c, 0x89, 0x44, 0x24, 24, 0x48, 0x89, 0x4c, 0x24, 16,
+            ])?;
+            let root_shifted = self.emit_unconditional_forward_branch()?;
+            self.patch_forward_branch(reject_high)?;
+            self.patch_forward_branch(reject_low)?;
+            self.emit(&[
+                0x4c, 0x8b, 0x44, 0x24, 24, 0x48, 0x8b, 0x4c, 0x24, 16, 0x49, 0x0f,
+                0xac, 0xc8, 1, 0x48, 0xd1, 0xe9, 0x4c, 0x89, 0x44, 0x24, 24, 0x48, 0x89,
+                0x4c, 0x24, 16,
+            ])?;
+            self.patch_forward_branch(root_shifted)?;
+            self.emit(&[
+                0x48, 0x0f, 0xac, 0xd0, 2, 0x48, 0xc1, 0xea, 2, 0x48, 0x89, 0x44, 0x24,
+                8, 0x48, 0x89, 0x14, 0x24,
+            ])?;
+            self.emit_backward_branch(root_loop)?;
+            self.patch_forward_branch(root_done)?;
+            self.emit(&[
+                0x48, 0x8b, 0x44, 0x24, 24, 0x48, 0x8b, 0x54, 0x24, 16, 0x48, 0x83,
+                0xc4, 48,
+            ])?;
+            self.evaluation_depth -= 6;
+            return Ok(());
         } else if let ExprKind::IntegerWrappingPower {
             base,
             exponent,

@@ -273,6 +273,11 @@ a `u32` exponent and fixed stack-resident result, factor, and exponent state.
 Every selected result multiply and required factor square uses the existing
 two-word multiplier under the method's overflow policy; exponent zero returns
 one without multiplying. Saturating wide powers remain fail-closed.
+Wide integer square root uses fixed two-word operand, result, and power-of-four
+state. It first reduces `2^126` to the greatest candidate no larger than the
+operand, then performs the bounded restoring recurrence with explicit
+cross-word shifts, comparisons, additions, and subtractions. Unsigned inputs
+cover the full `u128` range; negative signed inputs trap before iteration.
 Lazy `if` expressions may select compatible two-word integer values without
 evaluating the unselected branch; both branches retain the declared wide type.
 Block sequences may evaluate supported one-word prefix expressions before a
@@ -360,6 +365,9 @@ Unsigned and signed wide powers are compared at zero and odd/even exponents,
 across the 64-bit word boundary, and through a non-overflowing cross-word
 square. Wrapping overflow is compared word-for-word; ordinary and strict
 overflow must take isolated traps.
+Wide integer square roots are compared below and above perfect squares, across
+the 64-bit word boundary and power-of-four reduction boundary, and at
+`u128::MAX` and `i128::MAX`. A negative signed input must take an isolated trap.
 Both branches of a nontrivial wide conditional return are compared word-for-word.
 Wide values returned through a block sequence are also compared word-for-word.
 Immutable wide-local round trips are compared word-for-word.

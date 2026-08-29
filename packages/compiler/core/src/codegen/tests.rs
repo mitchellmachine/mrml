@@ -12950,6 +12950,22 @@ mod tests {
     }
 
     #[test]
+    fn mrml_v1_codegen_computes_wide_integer_square_roots() {
+        for source in [
+            "#[mrml_abi::export(version = 1)] pub fn value(input: u128) -> u128 { input.isqrt() }",
+            "#[mrml_abi::export(version = 1)] pub fn value(input: i128) -> i128 { input.isqrt() }",
+        ] {
+            let module = Parser::new(source).parse_module::<2, 2>().unwrap();
+            let Some(Item::Function(function)) = module.items()[0] else {
+                panic!("expected function")
+            };
+            for abi in [X86_64Abi::SystemV, X86_64Abi::Windows] {
+                compile_x86_64_function::<_, 2048, 2, 16>(&function, &NoConstants, abi).unwrap();
+            }
+        }
+    }
+
+    #[test]
     fn mrml_v1_codegen_tests_wide_signed_signs() {
         for source in [
             "#[mrml_abi::export(version = 1)] pub fn value(input: i128) -> u64 { input.is_positive() as u64 }",
