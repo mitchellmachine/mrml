@@ -5,6 +5,10 @@
 //! validation and relocation scanning later without changing link semantics.
 
 pub const MAX_LINK_INPUTS: usize = 256;
+/// Decoded code/read-only fragments retained after bounded object expansion.
+/// This is distinct from the source-input bound so large COFF members do not
+/// inflate archive, path, or source-object workspaces.
+pub const MAX_LINK_FRAGMENTS: usize = 4096;
 pub const MAX_LINK_RELOCATIONS: usize = 256;
 pub const MAX_LINK_DEFINITIONS: usize = 256;
 pub const MAX_PE_RUNTIME_FUNCTIONS: usize = 256;
@@ -690,7 +694,7 @@ impl<'a> PeReadonlyAbsoluteRelocations<'a> {
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct LinkInputSelection {
-    indices: [usize; MAX_LINK_INPUTS],
+    indices: [usize; MAX_LINK_FRAGMENTS],
     length: usize,
 }
 
@@ -2581,11 +2585,11 @@ pub fn select_static_link_inputs(
     if inputs.is_empty() {
         return Err(LinkerError::EmptyInput);
     }
-    if inputs.len() > MAX_LINK_INPUTS || inputs.len() != archive_member.len() {
+    if inputs.len() > MAX_LINK_FRAGMENTS || inputs.len() != archive_member.len() {
         return Err(LinkerError::TooManyInputs);
     }
     validate_symbol(entry_symbol)?;
-    let mut selected = [false; MAX_LINK_INPUTS];
+    let mut selected = [false; MAX_LINK_FRAGMENTS];
     for index in 0..inputs.len() {
         selected[index] = !archive_member[index];
     }
@@ -2615,7 +2619,7 @@ pub fn select_static_link_inputs(
         }
     }
     let mut selection = LinkInputSelection {
-        indices: [0; MAX_LINK_INPUTS],
+        indices: [0; MAX_LINK_FRAGMENTS],
         length: 0,
     };
     for index in 0..inputs.len() {
@@ -2636,10 +2640,10 @@ pub fn select_ordered_static_link_inputs(
     archive_group: &[u16],
     entry_symbol: &str,
 ) -> Result<LinkInputSelection, LinkerError> {
-    if inputs.len() > MAX_LINK_INPUTS {
+    if inputs.len() > MAX_LINK_FRAGMENTS {
         return Err(LinkerError::TooManyInputs);
     }
-    let mut archive_member = [0u16; MAX_LINK_INPUTS];
+    let mut archive_member = [0u16; MAX_LINK_FRAGMENTS];
     for index in 0..inputs.len() {
         if archive_group.get(index).copied().unwrap_or(0) != 0 {
             archive_member[index] =
@@ -2667,14 +2671,14 @@ pub fn select_ordered_static_link_members(
     if inputs.is_empty() {
         return Err(LinkerError::EmptyInput);
     }
-    if inputs.len() > MAX_LINK_INPUTS
+    if inputs.len() > MAX_LINK_FRAGMENTS
         || inputs.len() != archive_group.len()
         || inputs.len() != archive_member.len()
     {
         return Err(LinkerError::TooManyInputs);
     }
     validate_symbol(entry_symbol)?;
-    let mut selected = [false; MAX_LINK_INPUTS];
+    let mut selected = [false; MAX_LINK_FRAGMENTS];
     let mut cursor = 0usize;
     while cursor < inputs.len() {
         let group = archive_group[cursor];
@@ -2728,7 +2732,7 @@ pub fn select_ordered_static_link_members(
         }
     }
     let mut selection = LinkInputSelection {
-        indices: [0; MAX_LINK_INPUTS],
+        indices: [0; MAX_LINK_FRAGMENTS],
         length: 0,
     };
     for index in 0..inputs.len() {
@@ -2742,7 +2746,7 @@ pub fn select_ordered_static_link_members(
 
 fn symbol_is_defined(
     inputs: &[LinkInput<'_, '_, '_>],
-    selected: &[bool; MAX_LINK_INPUTS],
+    selected: &[bool; MAX_LINK_FRAGMENTS],
     symbol: &str,
 ) -> bool {
     inputs
@@ -2767,7 +2771,7 @@ fn input_definition_target(
 
 fn symbol_is_referenced(
     inputs: &[LinkInput<'_, '_, '_>],
-    selected: &[bool; MAX_LINK_INPUTS],
+    selected: &[bool; MAX_LINK_FRAGMENTS],
     symbol: &str,
 ) -> bool {
     inputs.iter().enumerate().any(|(index, input)| {
@@ -6893,7 +6897,7 @@ pub struct LinkedImage<const MAX_BYTES: usize> {
     text_length: usize,
     readonly_offset: usize,
     entry_offset: usize,
-    layouts: [InputLayout; MAX_LINK_INPUTS],
+    layouts: [InputLayout; MAX_LINK_FRAGMENTS],
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -8010,7 +8014,7 @@ fn link_x86_64_static_aligned<const MAX_BYTES: usize>(
     if inputs.is_empty() {
         return Err(LinkerError::EmptyInput);
     }
-    if inputs.len() > MAX_LINK_INPUTS {
+    if inputs.len() > MAX_LINK_FRAGMENTS {
         return Err(LinkerError::TooManyInputs);
     }
     validate_symbol(entry_symbol)?;
@@ -8088,7 +8092,7 @@ fn link_x86_64_static_aligned<const MAX_BYTES: usize>(
     let mut layouts = [InputLayout {
         text: 0,
         readonly: 0,
-    }; MAX_LINK_INPUTS];
+    }; MAX_LINK_FRAGMENTS];
     let mut cursor = 0usize;
     for (layout, input) in layouts.iter_mut().zip(inputs) {
         cursor = align(cursor, 16)?;
@@ -8310,7 +8314,7 @@ fn validate_definition_target(
 
 fn resolve_symbol(
     inputs: &[LinkInput<'_, '_, '_>],
-    layouts: &[InputLayout; MAX_LINK_INPUTS],
+    layouts: &[InputLayout; MAX_LINK_FRAGMENTS],
     symbol: &str,
 ) -> Result<usize, LinkerError> {
     for (input, layout) in inputs.iter().zip(layouts.iter()) {
@@ -8327,7 +8331,7 @@ fn resolve_symbol(
 
 fn resolve_readonly_symbol(
     inputs: &[LinkInput<'_, '_, '_>],
-    layouts: &[InputLayout; MAX_LINK_INPUTS],
+    layouts: &[InputLayout; MAX_LINK_FRAGMENTS],
     linked_readonly_offset: usize,
     readonly_rva: usize,
     owner_symbol: &str,
@@ -8582,9 +8586,9 @@ mod tests {
 
     use super::*;
     use crate::{
-        MachineCode, X86_64PcRelativeRelocation, X86_64PcRelativeRelocationKind, emit_elf64_x86_64,
-        emit_elf64_x86_64_with_readonly_data, emit_elf64_x86_64_with_relocation, emit_x86_64_coff,
-        emit_x86_64_coff_with_relocation,
+        emit_elf64_x86_64, emit_elf64_x86_64_with_readonly_data, emit_elf64_x86_64_with_relocation,
+        emit_x86_64_coff, emit_x86_64_coff_with_relocation, MachineCode,
+        X86_64PcRelativeRelocation, X86_64PcRelativeRelocationKind,
     };
 
     fn append_archive_member(archive: &mut std::vec::Vec<u8>, name: &str, bytes: &[u8]) {
@@ -9046,12 +9050,10 @@ mod tests {
 
     #[test]
     fn rejects_truncated_and_unresolved_archive_members() {
-        assert!(
-            decode_unix_archive(b"!<thin>\n")
-                .unwrap()
-                .members()
-                .is_empty()
-        );
+        assert!(decode_unix_archive(b"!<thin>\n")
+            .unwrap()
+            .members()
+            .is_empty());
         assert_eq!(
             decode_unix_archive(b"!<arch>\nshort"),
             Err(LinkerError::InvalidArchive)
@@ -9347,6 +9349,25 @@ mod tests {
         )
         .unwrap();
         assert_eq!(selection.indices(), &[0, 1, 2]);
+    }
+
+    #[test]
+    fn ordered_archive_selection_separates_fragment_and_source_input_bounds() {
+        let fragment = LinkInput {
+            symbol: "entry",
+            symbol_target: LinkDefinitionTarget::Text(0),
+            additional_definitions: &[],
+            text: &[0xc3],
+            readonly_data: &[],
+            relocations: &[],
+        };
+        let inputs = [fragment; MAX_LINK_INPUTS + 1];
+        let groups = [1; MAX_LINK_INPUTS + 1];
+        let members = [7; MAX_LINK_INPUTS + 1];
+
+        let selection =
+            select_ordered_static_link_members(&inputs, &groups, &members, "entry").unwrap();
+        assert_eq!(selection.indices().len(), MAX_LINK_INPUTS + 1);
     }
 
     #[test]
@@ -9788,7 +9809,7 @@ mod tests {
 
     #[test]
     fn decodes_and_links_coff_readonly_section_relocations() {
-        use crate::{X86_64ReadonlyRelocation, emit_x86_64_coff_with_readonly_data};
+        use crate::{emit_x86_64_coff_with_readonly_data, X86_64ReadonlyRelocation};
 
         let code = MachineCode::<8>::from_bytes_for_test(&[0x48, 0x8d, 0x05, 0, 0, 0, 0, 0xc3]);
         let object = emit_x86_64_coff_with_readonly_data::<256, 8>(

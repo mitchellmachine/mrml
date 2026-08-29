@@ -4,17 +4,11 @@
 #[cfg(test)]
 extern crate std;
 
-use mrml_error::{Result, anyhow};
+use mrml_error::{anyhow, Result};
 use mrml_runtime::{
-    MappedFile, Text, Vector, canonical_path, join_path, mrml_println as println, parent_path,
+    canonical_path, join_path, mrml_println as println, parent_path, MappedFile, Text, Vector,
 };
 use mrml_rustc::{
-    CodegenOptions, CoffObjectSymbolKind, CoffTextComdatSelection, ElfSelectedDefinitions,
-    ElfSelectedObject, ElfSelectedRelocations, ElfSelectedSections, LinkDefinition,
-    LinkDefinitionTarget, LinkInput, LinkRelocation, LinkRelocationTarget, MAX_ARCHIVE_MEMBERS,
-    MAX_ARCHIVE_SYMBOLS, MAX_LINK_DEFINITIONS, MAX_LINK_INPUTS, MAX_LINK_RELOCATIONS,
-    MAX_PE_RUNTIME_FUNCTIONS, ObjectFormat, PeReadonlyAbsoluteRelocation, PeRuntimeFunction,
-    PeWritableData, PeWritableRelocation, PeWritableRelocationTarget, TargetLayout,
     compile_source_function_with_options, decode_unix_archive,
     decode_x86_64_coff_readonly_absolute_relocations_from_inventory,
     decode_x86_64_coff_runtime_functions, decode_x86_64_coff_standalone_readonly_fragment,
@@ -27,7 +21,13 @@ use mrml_rustc::{
     select_ordered_static_link_members, select_x86_64_elf_link_sections_detailed,
     x86_64_coff_standalone_readonly_fragment_count,
     x86_64_coff_text_fragment_comdat_selection_from_inventory, x86_64_coff_text_fragment_count,
-    x86_64_coff_writable_section_count,
+    x86_64_coff_writable_section_count, CodegenOptions, CoffObjectSymbolKind,
+    CoffTextComdatSelection, ElfSelectedDefinitions, ElfSelectedObject, ElfSelectedRelocations,
+    ElfSelectedSections, LinkDefinition, LinkDefinitionTarget, LinkInput, LinkRelocation,
+    LinkRelocationTarget, ObjectFormat, PeReadonlyAbsoluteRelocation, PeRuntimeFunction,
+    PeWritableData, PeWritableRelocation, PeWritableRelocationTarget, TargetLayout,
+    MAX_ARCHIVE_MEMBERS, MAX_ARCHIVE_SYMBOLS, MAX_LINK_DEFINITIONS, MAX_LINK_FRAGMENTS,
+    MAX_LINK_INPUTS, MAX_LINK_RELOCATIONS, MAX_PE_RUNTIME_FUNCTIONS,
 };
 
 #[cfg_attr(test, allow(dead_code))]
@@ -653,15 +653,15 @@ fn decode_link_inputs<'data, 'relocations, 'definitions>(
     if objects.len() != object_archive_group.len() || objects.len() != object_archive_member.len() {
         return Err(anyhow!("link input origin count mismatch"));
     }
-    let mut inputs = Vector::with_capacity(MAX_LINK_INPUTS)
+    let mut inputs = Vector::with_capacity(relocation_arenas.len())
         .map_err(|_| anyhow!("could not allocate decoded link input list"))?;
-    let mut archive_group = Vector::with_capacity(MAX_LINK_INPUTS)
+    let mut archive_group = Vector::with_capacity(relocation_arenas.len())
         .map_err(|_| anyhow!("could not allocate decoded link origin list"))?;
-    let mut archive_member = Vector::with_capacity(MAX_LINK_INPUTS)
+    let mut archive_member = Vector::with_capacity(relocation_arenas.len())
         .map_err(|_| anyhow!("could not allocate decoded link member list"))?;
-    let mut source_object = Vector::with_capacity(MAX_LINK_INPUTS)
+    let mut source_object = Vector::with_capacity(relocation_arenas.len())
         .map_err(|_| anyhow!("could not allocate decoded source-object list"))?;
-    let mut comdat_selection = Vector::with_capacity(MAX_LINK_INPUTS)
+    let mut comdat_selection = Vector::with_capacity(relocation_arenas.len())
         .map_err(|_| anyhow!("could not allocate decoded COMDAT list"))?;
     let mut remaining_arenas = relocation_arenas;
     let mut remaining_definitions = definition_arenas;
@@ -694,9 +694,9 @@ fn decode_link_inputs<'data, 'relocations, 'definitions>(
             .len()
             .checked_add(fragment_count)
             .unwrap_or(usize::MAX)
-            > MAX_LINK_INPUTS
+            > MAX_LINK_FRAGMENTS
         {
-            return Err(anyhow!("expanded link fragment count exceeds 256"));
+            return Err(anyhow!("expanded link fragment capacity exceeded"));
         }
         for fragment_index in 0..fragment_count {
             let (arena, rest) = remaining_arenas
@@ -852,8 +852,8 @@ fn expanded_fragment_count(objects: &[&[u8]], format: ObjectFormat) -> Result<us
         count = count
             .checked_add(object_fragments)
             .ok_or_else(|| anyhow!("expanded link fragment count overflow"))?;
-        if count > MAX_LINK_INPUTS {
-            return Err(anyhow!("expanded link fragment count exceeds 256"));
+        if count > MAX_LINK_FRAGMENTS {
+            return Err(anyhow!("expanded link fragment capacity exceeded"));
         }
     }
     Ok(count)
@@ -1533,17 +1533,15 @@ mod tests {
             CoffTextComdatSelection::Any,
             CoffTextComdatSelection::NoDuplicates,
         ];
-        assert!(
-            selected_link_inputs(
-                &[first, second],
-                &[0, 0],
-                &[0, 0],
-                &[0, 1],
-                &strict,
-                "entry",
-            )
-            .is_err()
-        );
+        assert!(selected_link_inputs(
+            &[first, second],
+            &[0, 0],
+            &[0, 0],
+            &[0, 1],
+            &strict,
+            "entry",
+        )
+        .is_err());
 
         let same_size = [CoffTextComdatSelection::SameSize; 2];
         let selected = selected_link_inputs(
@@ -1560,17 +1558,15 @@ mod tests {
             text: &[0x63, 0xc3],
             ..first
         };
-        assert!(
-            selected_link_inputs(
-                &[first, longer],
-                &[0, 0],
-                &[0, 0],
-                &[0, 1],
-                &same_size,
-                "entry",
-            )
-            .is_err()
-        );
+        assert!(selected_link_inputs(
+            &[first, longer],
+            &[0, 0],
+            &[0, 0],
+            &[0, 1],
+            &same_size,
+            "entry",
+        )
+        .is_err());
 
         let exact = [CoffTextComdatSelection::ExactMatch; 2];
         assert!(
@@ -1674,29 +1670,25 @@ mod tests {
         assert_eq!(selected.source_object[0], 7);
 
         let same_size = [CoffTextComdatSelection::SameSize; 2];
-        assert!(
-            selected_link_inputs(
-                &[first, second],
-                &[0, 0],
-                &[0, 0],
-                &[3, 7],
-                &same_size,
-                "literal",
-            )
-            .is_err()
-        );
+        assert!(selected_link_inputs(
+            &[first, second],
+            &[0, 0],
+            &[0, 0],
+            &[3, 7],
+            &same_size,
+            "literal",
+        )
+        .is_err());
         let exact = [CoffTextComdatSelection::ExactMatch; 2];
-        assert!(
-            selected_link_inputs(
-                &[first, second],
-                &[0, 0],
-                &[0, 0],
-                &[3, 7],
-                &exact,
-                "literal",
-            )
-            .is_err()
-        );
+        assert!(selected_link_inputs(
+            &[first, second],
+            &[0, 0],
+            &[0, 0],
+            &[3, 7],
+            &exact,
+            "literal",
+        )
+        .is_err());
 
         let entry_relocations = [LinkRelocation {
             offset: 0,
