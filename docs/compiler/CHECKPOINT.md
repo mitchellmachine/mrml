@@ -9,8 +9,8 @@ the named commit and current source.
 ## Recoverable baseline
 
 - Branch: `main`
-- Compiler checkpoint commit: `156c5b10`
-  (`compiler: benchmark broad thin archive laziness`)
+- Compiler checkpoint commit: `6ee7106f`
+  (`build: integrate experimental MRML ELF linking`)
 - Remote state when recorded: `origin/main` includes the bounded MRML-owned
   static-link core, exact MRML COFF and ELF64 ingestion, deterministic
   import-free PE32+/ELF64 executable serialization, explicit compiler-driver
@@ -60,6 +60,21 @@ against all prior accepted probes. Keep Cargo on edition 2024 until a newer
 named edition can be adopted through a pinned, workspace-wide migration.
 
 ## Latest bounded linker milestone
+
+Commit `6ee7106f` adds the canonical explicit experimental source-to-linker
+operation: `mrml compiler mrml-rustc-experimental compile-elf INPUT --function
+NAME -o OUTPUT [--release]`. It builds the declared driver, invokes custom
+MRML source compilation plus the MRML-owned ELF serializer, supplies the
+driver's bounded 32 MiB Linux child stack, and never invokes or falls back to
+rust-lld. Production mode remains unavailable. A durable terminal-assembly
+probe emitted a 4,097-byte ELF and reached the expected hosted Linux `SIGTRAP`
+status 133. Windows and Linux each passed 119 build-frontend tests and
+warnings-denied Clippy; Windows `mrml doctor` passed. `mrml audit` still stops
+at the unrelated semantic-execution external-command fingerprint
+`fnv1a64:0fe5cf1836d3e0dc`; no audit success is claimed. This proves one
+supported source function reaches the owned linker through the public frontend,
+not production compiler readiness or general crate compilation. Patent review:
+**NOT_TRIGGERED**.
 
 Commit `08e05e53` uses a GNU thin archive's untrusted symbol index to open only
 candidate external objects when preceding inputs have an exact bounded symbol
