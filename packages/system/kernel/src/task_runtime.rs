@@ -1153,11 +1153,19 @@ impl<const TASKS: usize, const CAPS: usize> TaskRuntime<TASKS, CAPS> {
         }
         let first_slot = self.domain_slot(first)?;
         let second_slot = self.domain_slot(second)?;
+        self.validate_control_topology(
+            self.domains[first_slot]
+                .as_ref()
+                .ok_or(TaskRuntimeError::IntegrityFailure)?,
+        )?;
+        self.validate_control_topology(
+            self.domains[second_slot]
+                .as_ref()
+                .ok_or(TaskRuntimeError::IntegrityFailure)?,
+        )?;
         let (first_domain, second_domain) =
             two_domains_mut(&mut self.domains, first_slot, second_slot)
                 .ok_or(TaskRuntimeError::IntegrityFailure)?;
-        Self::validate_control_state(first_domain)?;
-        Self::validate_control_state(second_domain)?;
         endpoint
             .authorize_member(&first_domain.capabilities, first_capability)
             .map_err(TaskRuntimeError::Ipc)?;
@@ -1197,11 +1205,15 @@ impl<const TASKS: usize, const CAPS: usize> TaskRuntime<TASKS, CAPS> {
         if !self.scheduler.contains(task) {
             return Err(TaskRuntimeError::IntegrityFailure);
         }
+        self.validate_control_topology(
+            self.domains[slot]
+                .as_ref()
+                .ok_or(TaskRuntimeError::IntegrityFailure)?,
+        )?;
         let domain = self.domains[slot]
             .as_mut()
             .ok_or(TaskRuntimeError::IntegrityFailure)?;
         Self::validate_inbox_state(domain)?;
-        Self::validate_control_state(domain)?;
         if let Some(death) = domain.peer_deaths.iter_mut().find_map(Option::take) {
             return Ok(ControlEvent::PeerDied(death));
         }
@@ -1347,6 +1359,30 @@ impl<const TASKS: usize, const CAPS: usize> TaskRuntime<TASKS, CAPS> {
                 .iter()
                 .flatten()
                 .any(|prior| prior.peer == death.peer)
+            {
+                return Err(TaskRuntimeError::IntegrityFailure);
+            }
+        }
+        Ok(())
+    }
+
+    fn validate_control_topology(&self, domain: &TaskDomain<CAPS>) -> Result<(), TaskRuntimeError> {
+        Self::validate_control_state(domain)?;
+        for peer in domain.peers.iter().flatten().copied() {
+            if !self.scheduler.contains(peer) {
+                return Err(TaskRuntimeError::IntegrityFailure);
+            }
+            let slot = self.domain_slot(peer)?;
+            let peer_domain = self.domains[slot]
+                .as_ref()
+                .ok_or(TaskRuntimeError::IntegrityFailure)?;
+            Self::validate_control_state(peer_domain)?;
+            if peer_domain
+                .peers
+                .iter()
+                .filter(|candidate| **candidate == Some(domain.task))
+                .count()
+                != 1
             {
                 return Err(TaskRuntimeError::IntegrityFailure);
             }
@@ -2948,6 +2984,59 @@ mod tests {
                 .flatten()
                 .count(),
             2
+        );
+    }
+
+    #[test]
+    fn control_receive_rejects_unscheduled_live_peer_without_unlinking() {
+        let mut runtime = TaskRuntime::<2, 1>::new(1_000, 1).unwrap();
+        let first = runtime
+            .create(Priority::NORMAL, context(0x20_0000, 0x40_0000))
+            .unwrap();
+        let second = runtime
+            .create(Priority::NORMAL, context(0x30_0000, 0x50_0000))
+            .unwrap();
+        let object = ObjectId(0x52);
+        let first_capability = runtime
+            .capabilities_mut(first)
+            .unwrap()
+            .insert(object, Rights::SIGNAL)
+            .unwrap();
+        let second_capability = runtime
+            .capabilities_mut(second)
+            .unwrap()
+            .insert(object, Rights::SIGNAL)
+            .unwrap();
+        runtime
+            .connect_control_peers(
+                first,
+                second,
+                &Endpoint::new(object),
+                first_capability,
+                second_capability,
+            )
+            .unwrap();
+        runtime.scheduler.detach(second).unwrap();
+
+        assert!(matches!(
+            runtime.receive_control(first),
+            Err(TaskRuntimeError::IntegrityFailure)
+        ));
+        let first_slot = runtime.domain_slot(first).unwrap();
+        let second_slot = runtime.domain_slot(second).unwrap();
+        assert!(
+            runtime.domains[first_slot]
+                .as_ref()
+                .unwrap()
+                .peers
+                .contains(&Some(second))
+        );
+        assert!(
+            runtime.domains[second_slot]
+                .as_ref()
+                .unwrap()
+                .peers
+                .contains(&Some(first))
         );
     }
 

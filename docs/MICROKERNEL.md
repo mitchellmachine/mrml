@@ -6864,6 +6864,10 @@ Ordinary authorization now rejects zero requested rights before capability
 lookup, so liveness cannot be used to disclose an object's identity without a
 real right. Kernel revocation preflight uses the private exact metadata path
 instead. A focused test raises the Linux kernel total to 618.
+Control receive and peer connection now validate every live peer's exact
+scheduler identity and unique reciprocal relation before mutation. A focused
+unscheduled-peer test preserves both relations and raises the Linux kernel total
+to 619.
 
 Patent review: `NOT_TRIGGERED` — this is conventional split-phase validation
 and commit for the existing bounded IPC endpoint and capability table; it
