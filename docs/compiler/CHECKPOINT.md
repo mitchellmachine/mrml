@@ -9,8 +9,8 @@ the named commit and current source.
 ## Recoverable baseline
 
 - Branch: `main`
-- Compiler checkpoint commit: `ba02c515`
-  (`compiler: retain gnullvm writable forwarding records`)
+- Compiler checkpoint commit: `5a477f78`
+  (`compiler: select writable COFF COMDAT winners`)
 - Remote state when recorded: `origin/main` includes the bounded MRML-owned
   static-link core, exact MRML COFF and ELF64 ingestion, deterministic
   import-free PE32+/ELF64 executable serialization, explicit compiler-driver
@@ -60,6 +60,22 @@ against all prior accepted probes. Keep Cargo on edition 2024 until a newer
 named edition can be adopted through a pinned, workspace-wide migration.
 
 ## Latest bounded linker milestone
+
+Commit `5a477f78` decodes writable COFF section-definition selection metadata and
+applies deterministic leftmost `SELECT_ANY` winner selection. Plain and
+NODUPLICATES duplicates remain errors; associative and selection kinds 3-7
+remain fail-closed. Synthetic adversarial coverage proves the first of two
+distinct eight-byte ANY payloads is emitted and a mixed NODUPLICATES pair is
+rejected. The exact stateful gnullvm archive continues to return 42 through both
+linkers with two valid forwarding pointers and 1,028 zero-fill bytes; MRML emits
+2,560 bytes and rust-lld 3,584 bytes. Fifty measured links after five warmups
+produced 9.047 ms median/9.239 ms mean for MRML versus 27.601 ms median/27.599
+ms mean for rust-lld. Windows passed 751 core unit tests, every integration
+group including 59 semantic tests, and six driver tests. After concurrent
+compiler commit `3457a638`, Linux passed 752 core unit tests, every integration
+group, and six driver tests. `mrml doctor` passed; audit retains unrelated
+fingerprint `fnv1a64:0fe5cf1836d3e0dc` at line 1244. Patent review:
+**NOT_TRIGGERED**.
 
 Commit `ba02c515` retains the exact gnullvm `.data$\u0001__imp_` writable
 NODUPLICATES forwarding records and gives writable `ADDR64` relocations a typed
