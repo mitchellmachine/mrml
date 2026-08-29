@@ -7852,6 +7852,78 @@ impl<
             }
             return Ok(());
         }
+        if let ExprKind::WrappingArithmetic {
+            base,
+            argument,
+            operator: operator @ (crate::BinaryOperator::Divide | crate::BinaryOperator::Remainder),
+            euclidean: true,
+            euclidean_wrapping,
+            strict: _,
+            mixed_signedness: false,
+        } = expression.kind
+        {
+            self.emit_wide_binary_operands(tree, base, argument, expected_type)?;
+            if !layout.signed {
+                self.emit_wide_divide_or_remainder(
+                    layout,
+                    operator == crate::BinaryOperator::Remainder,
+                    euclidean_wrapping,
+                )?;
+                return Ok(());
+            }
+            if operator == crate::BinaryOperator::Remainder {
+                self.emit(&[0x50, 0x52])?;
+                self.evaluation_depth += 2;
+                self.emit_wide_divide_or_remainder(layout, true, euclidean_wrapping)?;
+                self.emit(&[
+                    0x4c, 0x8b, 0x14, 0x24, 0x4c, 0x8b, 0x4c, 0x24, 8, 0x48, 0x83, 0xc4,
+                    16,
+                ])?;
+                self.evaluation_depth -= 2;
+                self.emit(&[0x48, 0x85, 0xd2])?;
+                let nonnegative = self.emit_forward_branch(0x89)?;
+                self.emit(&[0x4d, 0x85, 0xd2])?;
+                let positive_divisor = self.emit_forward_branch(0x89)?;
+                self.emit(&[
+                    0x49, 0xf7, 0xd9, 0x49, 0x83, 0xd2, 0x00, 0x49, 0xf7, 0xda,
+                ])?;
+                self.patch_forward_branch(positive_divisor)?;
+                self.emit(&[0x4d, 0x89, 0xc8, 0x4c, 0x89, 0xd1])?;
+                let overflow_checks = self.overflow_checks;
+                self.overflow_checks = false;
+                let result = self.emit_wide_add(layout);
+                self.overflow_checks = overflow_checks;
+                result?;
+                self.patch_forward_branch(nonnegative)?;
+                return Ok(());
+            }
+            self.emit(&[0x41, 0x50, 0x51, 0x50, 0x52])?;
+            self.evaluation_depth += 4;
+            self.emit_wide_divide_or_remainder(layout, true, euclidean_wrapping)?;
+            self.emit(&[0x50, 0x52])?;
+            self.evaluation_depth += 2;
+            self.emit(&[
+                0x4c, 0x8b, 0x44, 0x24, 40, 0x48, 0x8b, 0x4c, 0x24, 32, 0x48, 0x8b,
+                0x44, 0x24, 24, 0x48, 0x8b, 0x54, 0x24, 16,
+            ])?;
+            self.emit_wide_divide_or_remainder(layout, false, euclidean_wrapping)?;
+            self.emit(&[
+                0x48, 0x8b, 0x0c, 0x24, 0x4c, 0x8b, 0x5c, 0x24, 16, 0x48, 0x83, 0xc4,
+                48,
+            ])?;
+            self.evaluation_depth -= 6;
+            self.emit(&[0x48, 0x85, 0xc9])?;
+            let nonnegative_remainder = self.emit_forward_branch(0x89)?;
+            self.emit(&[0x4d, 0x85, 0xdb])?;
+            let negative_divisor = self.emit_forward_branch(0x88)?;
+            self.emit(&[0x48, 0x83, 0xe8, 1, 0x48, 0x83, 0xda, 0])?;
+            let adjusted = self.emit_unconditional_forward_branch()?;
+            self.patch_forward_branch(negative_divisor)?;
+            self.emit(&[0x48, 0x83, 0xc0, 1, 0x48, 0x83, 0xd2, 0])?;
+            self.patch_forward_branch(adjusted)?;
+            self.patch_forward_branch(nonnegative_remainder)?;
+            return Ok(());
+        }
         if let ExprKind::IntegerBitTransform {
             base,
             transform:

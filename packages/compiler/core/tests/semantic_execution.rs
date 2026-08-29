@@ -199,6 +199,14 @@ const MRML_V1_WIDE_UNSIGNED_NEXT_MULTIPLE_OVERFLOW_SOURCE: &str =
     "#[mrml_abi::export(version = 1)] pub fn probe(left: u128, right: u128) -> u128 { left.next_multiple_of(right) }";
 const MRML_V1_WIDE_SIGNED_NEXT_MULTIPLE_OVERFLOW_SOURCE: &str =
     "#[mrml_abi::export(version = 1)] pub fn probe(left: i128, right: i128) -> i128 { left.next_multiple_of(right) }";
+const MRML_V1_WIDE_SIGNED_DIVIDE_EUCLIDEAN_SOURCE: &str =
+    "#[mrml_abi::export(version = 1)] pub fn probe(left: i128, right: i128) -> i128 { left.div_euclid(right) }";
+const MRML_V1_WIDE_SIGNED_REMAINDER_EUCLIDEAN_SOURCE: &str =
+    "#[mrml_abi::export(version = 1)] pub fn probe(left: i128, right: i128) -> i128 { left.rem_euclid(right) }";
+const MRML_V1_WIDE_SIGNED_WRAPPING_DIVIDE_EUCLIDEAN_SOURCE: &str =
+    "#[mrml_abi::export(version = 1)] pub fn probe(left: i128, right: i128) -> i128 { left.wrapping_div_euclid(right) }";
+const MRML_V1_WIDE_SIGNED_WRAPPING_REMAINDER_EUCLIDEAN_SOURCE: &str =
+    "#[mrml_abi::export(version = 1)] pub fn probe(left: i128, right: i128) -> i128 { left.wrapping_rem_euclid(right) }";
 const MRML_V1_WIDE_SIGNED_IS_POSITIVE_SOURCE: &str =
     "#[mrml_abi::export(version = 1)] pub fn probe(input: i128) -> u64 { input.is_positive() as u64 }";
 const MRML_V1_WIDE_SIGNED_IS_NEGATIVE_SOURCE: &str =
@@ -2364,6 +2372,135 @@ fn mrml_v1_wide_next_multiple_failures_trap() {
             .env(CHILD, index.to_string())
             .output()
             .expect("launch isolated wide next-multiple trap probe");
+        assert!(!output.status.success(), "failure case unexpectedly returned");
+        assert_eq!(output.status.code(), Some(101));
+        let stdout = String::from_utf8(output.stdout).expect("UTF-8 child test stdout");
+        let stderr = String::from_utf8(output.stderr).expect("UTF-8 child test stderr");
+        assert!(
+            stdout.contains("unexpected return code -1073741795")
+                || stderr.contains("unexpected return code -1073741795"),
+            "missing Windows illegal-instruction status; stdout: {stdout}; stderr: {stderr}"
+        );
+    }
+}
+
+#[test]
+fn mrml_v1_wide_euclidean_division_matches_both_oracle_words() {
+    let inputs = [
+        (0i128, 1i128),
+        (7, 3),
+        (-7, 3),
+        (7, -3),
+        (-7, -3),
+        (i128::MIN, 3),
+        (i128::MAX, -3),
+    ];
+    for source in [
+        MRML_V1_WIDE_SIGNED_DIVIDE_EUCLIDEAN_SOURCE,
+        MRML_V1_WIDE_SIGNED_REMAINDER_EUCLIDEAN_SOURCE,
+    ] {
+        let code = compile(source);
+        let actual = inputs
+            .into_iter()
+            .flat_map(|(left, right)| {
+                let returned = unsafe {
+                    call_mrml_v1_two_wide_return(code.pointer, left as u128, right as u128)
+                };
+                [returned as u64, (returned >> 64) as u64]
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(
+            actual,
+            rustc_mrml_v1_observations(
+                source,
+                "for (left, right) in [(0i128, 1i128), (7, 3), (-7, 3), (7, -3), (-7, -3), (i128::MIN, 3), (i128::MAX, -3)] { let returned = probe(left, right); println!(\"{}\", returned as u64); println!(\"{}\", ((returned as u128) >> 64) as u64); }",
+            )
+        );
+    }
+}
+
+#[test]
+fn mrml_v1_wide_wrapping_euclidean_overflow_matches_both_oracle_words() {
+    for source in [
+        MRML_V1_WIDE_SIGNED_WRAPPING_DIVIDE_EUCLIDEAN_SOURCE,
+        MRML_V1_WIDE_SIGNED_WRAPPING_REMAINDER_EUCLIDEAN_SOURCE,
+    ] {
+        let code = compile(source);
+        let returned = unsafe {
+            call_mrml_v1_two_wide_return(code.pointer, i128::MIN as u128, (-1i128) as u128)
+        };
+        assert_eq!(
+            [returned as u64, (returned >> 64) as u64],
+            rustc_mrml_v1_observations(
+                source,
+                "let returned = probe(i128::MIN, -1); println!(\"{}\", returned as u64); println!(\"{}\", ((returned as u128) >> 64) as u64);",
+            )
+            .as_slice()
+        );
+    }
+}
+
+#[test]
+fn mrml_v1_wide_euclidean_division_failures_trap() {
+    #[cfg(target_os = "windows")]
+    const CHILD: &str = "MRML_SEMANTIC_WIDE_EUCLIDEAN_TRAP_CHILD";
+    let cases = [
+        (MRML_V1_WIDE_SIGNED_DIVIDE_EUCLIDEAN_SOURCE, 1u128, 0u128),
+        (
+            MRML_V1_WIDE_SIGNED_REMAINDER_EUCLIDEAN_SOURCE,
+            1u128,
+            0u128,
+        ),
+        (
+            MRML_V1_WIDE_SIGNED_DIVIDE_EUCLIDEAN_SOURCE,
+            i128::MIN as u128,
+            (-1i128) as u128,
+        ),
+        (
+            MRML_V1_WIDE_SIGNED_REMAINDER_EUCLIDEAN_SOURCE,
+            i128::MIN as u128,
+            (-1i128) as u128,
+        ),
+    ];
+
+    #[cfg(not(target_os = "windows"))]
+    {
+        for (source, left, right) in cases {
+            let code = compile(source);
+            let pid = unsafe { fork() };
+            assert!(pid >= 0, "fork failed");
+            if pid == 0 {
+                let _ = unsafe { call_mrml_v1_two_wide_return(code.pointer, left, right) };
+                unsafe { _exit(120) }
+            }
+            let mut status = 0;
+            assert_eq!(unsafe { waitpid(pid, &mut status, 0) }, pid, "waitpid failed");
+            assert_eq!(status & 0x7f, 4, "unexpected Unix wait status: {status:#x}");
+        }
+        return;
+    }
+
+    #[cfg(target_os = "windows")]
+    if let Some(index) = std::env::var_os(CHILD) {
+        let index = index.to_string_lossy().parse::<usize>().expect("child case index");
+        let (source, left, right) = cases[index];
+        let code = compile(source);
+        unsafe { SetErrorMode(0x0001 | 0x0002) };
+        let _ = unsafe { call_mrml_v1_two_wide_return(code.pointer, left, right) };
+        panic!("wide Euclidean division failure unexpectedly returned");
+    }
+
+    #[cfg(target_os = "windows")]
+    for index in 0..cases.len() {
+        let output = Command::new(std::env::current_exe().expect("locate semantic test binary"))
+            .args([
+                "--exact",
+                "mrml_v1_wide_euclidean_division_failures_trap",
+                "--nocapture",
+            ])
+            .env(CHILD, index.to_string())
+            .output()
+            .expect("launch isolated wide Euclidean trap probe");
         assert!(!output.status.success(), "failure case unexpectedly returned");
         assert_eq!(output.status.code(), Some(101));
         let stdout = String::from_utf8(output.stdout).expect("UTF-8 child test stdout");

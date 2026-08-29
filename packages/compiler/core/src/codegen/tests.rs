@@ -12913,6 +12913,26 @@ mod tests {
     }
 
     #[test]
+    fn mrml_v1_codegen_divides_wide_integers_euclideanly() {
+        for source in [
+            "#[mrml_abi::export(version = 1)] pub fn value(left: u128, right: u128) -> u128 { left.div_euclid(right) }",
+            "#[mrml_abi::export(version = 1)] pub fn value(left: i128, right: i128) -> i128 { left.rem_euclid(right) }",
+            "#[mrml_abi::export(version = 1)] pub fn value(left: i128, right: i128) -> i128 { left.wrapping_div_euclid(right) }",
+            "#[mrml_abi::export(version = 1)] pub fn value(left: i128, right: i128) -> i128 { left.wrapping_rem_euclid(right) }",
+            "#[mrml_abi::export(version = 1)] pub fn value(left: i128, right: i128) -> i128 { left.strict_div_euclid(right) }",
+            "#[mrml_abi::export(version = 1)] pub fn value(left: i128, right: i128) -> i128 { left.strict_rem_euclid(right) }",
+        ] {
+            let module = Parser::new(source).parse_module::<2, 2>().unwrap();
+            let Some(Item::Function(function)) = module.items()[0] else {
+                panic!("expected function")
+            };
+            for abi in [X86_64Abi::SystemV, X86_64Abi::Windows] {
+                compile_x86_64_function::<_, 3072, 2, 16>(&function, &NoConstants, abi).unwrap();
+            }
+        }
+    }
+
+    #[test]
     fn mrml_v1_codegen_tests_wide_signed_signs() {
         for source in [
             "#[mrml_abi::export(version = 1)] pub fn value(input: i128) -> u64 { input.is_positive() as u64 }",
@@ -13260,7 +13280,7 @@ mod tests {
 
     #[test]
     fn mrml_v1_codegen_rejects_other_wide_returns() {
-        let source = "#[mrml_abi::export(version = 1)] pub fn value(input: i128) -> i128 { input.wrapping_div_euclid(2) }";
+        let source = "#[mrml_abi::export(version = 1)] pub fn value(input: i128) -> i128 { input.pow(2) }";
         let module = Parser::new(source).parse_module::<2, 2>().unwrap();
         let Some(Item::Function(function)) = module.items()[0] else {
             panic!("expected function")
