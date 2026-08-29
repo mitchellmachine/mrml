@@ -9,8 +9,8 @@ the named commit and current source.
 ## Recoverable baseline
 
 - Branch: `main`
-- Compiler checkpoint commit: `4bcd7f6c`
-  (`compiler: retain selected thin archive mappings`)
+- Compiler checkpoint commit: `156c5b10`
+  (`compiler: benchmark broad thin archive laziness`)
 - Remote state when recorded: `origin/main` includes the bounded MRML-owned
   static-link core, exact MRML COFF and ELF64 ingestion, deterministic
   import-free PE32+/ELF64 executable serialization, explicit compiler-driver
@@ -89,6 +89,13 @@ The Linux driver suite and differential exit-42 probe passed. A durable
 tiny three-member archive. This records a negative speed result: reduced I/O
 did not overcome remaining startup and parsing overhead, and no superiority is
 claimed. Patent review: **NOT_TRIGGERED**.
+
+Follow-up `156c5b10` makes the benchmark scale deterministically to the bounded
+member limit. With 1,000 unreferenced external objects, 50 iterations after
+five warmups measured MRML at 4.844 ms median and 4.902 ms mean versus pinned
+rust-lld at 7.490 ms median and 7.509 ms mean. This is a narrow, reproducible
+metadata-heavy thin-archive advantage, not representative Rust-build or general
+linker superiority.
 
 Commit `21f59d59` admits exact allocated `.tdata.*` and `.tbss.*` sections,
 retains typed `STT_TLS` definitions, applies checked local-exec
