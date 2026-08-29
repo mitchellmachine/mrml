@@ -313,6 +313,9 @@ access. The security/acceptance gate is canonical in
 - Scheduler attach/migration creates a destination directly in its final state;
   detach/migration consume a prevalidated exact source generation, avoiding
   fallible post-publication state changes and best-effort rollback.
+- Service exit, fault, and violation reserve exact supervisor identity and
+  restart-deadline state before runtime retirement; cleanup/stopped publication
+  has no fallible identity check after the task is irreversibly retired.
 - Timer preemption binds the current unique domain before advancing scheduler
   state and performs no fallible domain lookup afterward.
 - Fault, protocol-violation, and voluntary-exit retirement reserve the exact

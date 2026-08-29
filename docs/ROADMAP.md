@@ -2300,6 +2300,10 @@ live composition remains pending.
    runnable or blocked state, while detach/migration consume an exact prepared
    source-removal generation without rollback-only late lookups. Existing
    lifecycle coverage passes; the total remains 630.
+   Service exit/fault/violation paths now reserve exact supervisor identity and
+   restart-deadline state before runtime retirement, then publish cleanup and
+   stopped state without a fallible late mismatch check. Existing lifecycle
+   coverage passes; the total remains 630.
    Timer preemption now binds the exact live domain slot before scheduler tick
    mutation and publishes context without a second fallible lookup. Existing
    coverage passes; the total remains 629.

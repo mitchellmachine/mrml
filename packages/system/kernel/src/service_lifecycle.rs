@@ -201,6 +201,13 @@ pub struct ServiceCleanupTicket {
     context: UserContext,
 }
 
+struct CurrentServiceRetirementPlan {
+    slot: usize,
+    service: ServiceId,
+    task: TaskId,
+    next_restart_tick: u64,
+}
+
 impl ServiceCleanupTicket {
     pub const fn service(self) -> ServiceId {
         self.service
@@ -557,27 +564,19 @@ impl<const SERVICES: usize> ServiceSupervisor<SERVICES> {
         let current = runtime
             .current()
             .ok_or(ServiceError::Runtime(TaskRuntimeError::NoCurrentTask))?;
-        let slot = self.running_task_slot(current)?;
-        let service = self.id(slot);
-        let next_restart_tick = self.restart_deadline(slot, now)?;
-        let (TaskTermination { task, next }, context) = runtime
+        let plan = self.prepare_current_retirement(current, now)?;
+        let (TaskTermination { next, .. }, context) = runtime
             .terminate_current_with_context()
             .map_err(ServiceError::Runtime)?;
-        if task != current {
-            return Err(ServiceError::TaskMismatch);
-        }
-        self.slots[slot].task = None;
-        self.slots[slot].state = ServiceState::Exited;
         let cleanup = ServiceCleanupTicket {
-            service,
-            task,
+            service: plan.service,
+            task: plan.task,
             context,
         };
-        self.slots[slot].cleanup = Some(cleanup);
-        self.slots[slot].next_restart_tick = next_restart_tick;
+        self.commit_current_retirement(plan, ServiceState::Exited, cleanup);
         Ok(ServiceRetirement {
-            service,
-            task,
+            service: cleanup.service,
+            task: cleanup.task,
             next,
             cleanup,
         })
@@ -600,26 +599,18 @@ impl<const SERVICES: usize> ServiceSupervisor<SERVICES> {
         let current = runtime
             .current()
             .ok_or(ServiceError::Runtime(TaskRuntimeError::NoCurrentTask))?;
-        let slot = self.running_task_slot(current)?;
-        let service = self.id(slot);
-        let next_restart_tick = self.restart_deadline(slot, now)?;
+        let plan = self.prepare_current_retirement(current, now)?;
         let retirement = runtime
             .terminate_current_fault(disposition)
             .map_err(ServiceError::Runtime)?;
-        if retirement.task != current {
-            return Err(ServiceError::TaskMismatch);
-        }
-        self.slots[slot].task = None;
-        self.slots[slot].state = ServiceState::Faulted;
         let cleanup = ServiceCleanupTicket {
-            service,
-            task: retirement.task,
+            service: plan.service,
+            task: plan.task,
             context: retirement.context,
         };
-        self.slots[slot].cleanup = Some(cleanup);
-        self.slots[slot].next_restart_tick = next_restart_tick;
+        self.commit_current_retirement(plan, ServiceState::Faulted, cleanup);
         Ok(ServiceFault {
-            service,
+            service: cleanup.service,
             retirement,
             cleanup,
         })
@@ -642,29 +633,48 @@ impl<const SERVICES: usize> ServiceSupervisor<SERVICES> {
         let current = runtime
             .current()
             .ok_or(ServiceError::Runtime(TaskRuntimeError::NoCurrentTask))?;
-        let slot = self.running_task_slot(current)?;
-        let service = self.id(slot);
-        let next_restart_tick = self.restart_deadline(slot, now)?;
+        let plan = self.prepare_current_retirement(current, now)?;
         let retirement = runtime
             .terminate_current_violation(violation)
             .map_err(ServiceError::Runtime)?;
-        if retirement.task != current {
-            return Err(ServiceError::TaskMismatch);
-        }
-        self.slots[slot].task = None;
-        self.slots[slot].state = ServiceState::Faulted;
         let cleanup = ServiceCleanupTicket {
-            service,
-            task: retirement.task,
+            service: plan.service,
+            task: plan.task,
             context: retirement.context,
         };
-        self.slots[slot].cleanup = Some(cleanup);
-        self.slots[slot].next_restart_tick = next_restart_tick;
+        self.commit_current_retirement(plan, ServiceState::Faulted, cleanup);
         Ok(ServiceViolation {
-            service,
+            service: cleanup.service,
             retirement,
             cleanup,
         })
+    }
+
+    fn prepare_current_retirement(
+        &self,
+        task: TaskId,
+        now: u64,
+    ) -> Result<CurrentServiceRetirementPlan, ServiceError> {
+        let slot = self.running_task_slot(task)?;
+        Ok(CurrentServiceRetirementPlan {
+            slot,
+            service: self.id(slot),
+            task,
+            next_restart_tick: self.restart_deadline(slot, now)?,
+        })
+    }
+
+    fn commit_current_retirement(
+        &mut self,
+        plan: CurrentServiceRetirementPlan,
+        state: ServiceState,
+        cleanup: ServiceCleanupTicket,
+    ) {
+        let entry = &mut self.slots[plan.slot];
+        entry.task = None;
+        entry.state = state;
+        entry.cleanup = Some(cleanup);
+        entry.next_restart_tick = plan.next_restart_tick;
     }
 
     pub fn complete_cleanup<E: ServiceAddressSpaceEraser>(

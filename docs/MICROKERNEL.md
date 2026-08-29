@@ -7001,6 +7001,12 @@ mutation and consume that removal plan without a repeated lookup, eliminating
 the former best-effort rollback branches. Existing scheduler migration,
 capacity, blocked-state, and stale-identity coverage passes; the total remains
 630.
+Service exit, fault, and protocol-violation retirement now prepare the exact
+supervisor slot, service/task identities, and restart deadline before asking the
+runtime to retire the current task. The supervisor then commits stopped state
+and the cleanup ticket without a fallible post-retirement identity check, so it
+cannot report a still-running service after irreversible runtime retirement.
+Existing service lifecycle coverage passes; the total remains 630.
 Timer preemption now resolves and binds the current task's unique live domain
 slot before advancing scheduler time. The interrupted context is installed
 directly into that preserved slot after the tick, eliminating a fallible second
