@@ -1310,6 +1310,16 @@ fn write_linked_pe(
             output,
         );
     }
+    if payload <= 512 * 1024 {
+        return write_pe_image::<{ 1024 * 1024 }, { 512 * 1024 }>(
+            &selected.inputs,
+            &runtime_functions,
+            &writable_data,
+            &readonly_absolute_relocations,
+            entry,
+            output,
+        );
+    }
     write_pe_image::<MAX_EXECUTABLE_BYTES, MAX_LINKED_BYTES>(
         &selected.inputs,
         &runtime_functions,
