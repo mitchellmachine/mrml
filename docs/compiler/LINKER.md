@@ -1234,3 +1234,20 @@ versus 28.660 ms median/29.022 ms mean for rust-lld on this exact Windows host
 and workload. This is a narrow reproducible advantage, not general linker
 superiority. Other read-only relocation kinds and discontiguous non-COMDAT
 read-only packing remain incomplete.
+
+Read-only COFF relocation records now carry an explicit encoding kind. In
+addition to fixed-image AMD64 `ADDR64`, the decoder admits `ADDR32NB`, validates
+its four-byte field, preserves its signed in-place addend, and the PE serializer
+writes the checked image-relative RVA without adding the image base. Mixed-kind
+synthetic coverage proves decoding, field-width bounds, unsupported-kind
+rejection, exact final RVA output, negative-addend handling, and overflow
+failure. Windows and isolated Arch Linux runs each passed 763 compiler-core
+tests, all four integration groups, and eight driver tests. The unchanged exact
+pinned gnullvm stateful archive returned 42 through both linkers with 2,560 MRML
+bytes, 3,584 rust-lld bytes, 1,028 zero-fill bytes, and two forwarding pointers.
+Fifty links after five warmups measured MRML at 9.984 ms median/9.967 ms mean
+versus rust-lld at 27.864 ms median/27.818 ms mean on this exact Windows host
+and workload. This probe remains a narrow `ADDR64` regression and performance
+comparison, not representative proof for `ADDR32NB` workloads or general
+linker superiority. Other read-only relocation encodings and discontiguous
+non-COMDAT read-only packing remain incomplete.

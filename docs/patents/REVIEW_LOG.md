@@ -19,6 +19,15 @@ image. It introduces no new symbol-resolution policy, object encoding,
 relocation arithmetic, compression, cryptographic mechanism, or loader
 behavior. This technical screen is not legal advice or patent clearance.
 
+# 2026-08-29 — COFF read-only image-relative relocations
+
+Patent review: **NOT_TRIGGERED**. This increment decodes and applies the
+conventional PE/COFF AMD64 `ADDR32NB` image-relative relocation emitted by
+existing toolchains. It uses bounded table traversal and checked integer
+arithmetic, and introduces no new object encoding, relocation kind,
+compression, cryptographic mechanism, or loader behavior. This technical screen
+is not legal advice or patent clearance.
+
 # 2026-08-29 — Static gnullvm COFF refptr resolution
 
 Patent review: **NOT_TRIGGERED**. This increment decodes the conventional

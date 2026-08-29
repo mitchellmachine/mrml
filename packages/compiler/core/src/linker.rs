@@ -592,6 +592,15 @@ pub struct PeReadonlyAbsoluteRelocation<'a> {
     pub readonly_offset: usize,
     pub target_symbol: &'a str,
     pub addend: i64,
+    pub kind: PeReadonlyRelocationKind,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum PeReadonlyRelocationKind {
+    /// `IMAGE_REL_AMD64_ADDR64`: fixed-image virtual address plus addend.
+    Address64,
+    /// `IMAGE_REL_AMD64_ADDR32NB`: image-relative RVA plus addend.
+    Address32NoBase,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -2886,6 +2895,7 @@ pub fn decode_x86_64_coff_readonly_absolute_relocation<'a>(
                     readonly_offset: raw.checked_sub(start).ok_or(LinkerError::OffsetOverflow)?,
                     target_symbol: coff_symbol_name(object, target, symbols_end, string_size)?,
                     addend: i64::from_le_bytes(initial.to_le_bytes()),
+                    kind: PeReadonlyRelocationKind::Address64,
                 });
             }
             ordinal += 1;
@@ -2956,6 +2966,7 @@ pub fn decode_x86_64_coff_readonly_absolute_relocation_for_fragment(
                 readonly_offset: 0,
                 target_symbol: decoded.target_symbol,
                 addend: decoded.addend,
+                kind: decoded.kind,
             });
         }
         ordinal += 1;
@@ -3108,6 +3119,7 @@ pub fn decode_x86_64_coff_readonly_absolute_relocations_from_inventory<'a>(
         readonly_offset: 0,
         target_symbol: "unused",
         addend: 0,
+        kind: PeReadonlyRelocationKind::Address64,
     };
     let mut decoded = PeReadonlyAbsoluteRelocations {
         relocations: [empty; MAX_LINK_RELOCATIONS],
@@ -3177,13 +3189,19 @@ pub fn decode_x86_64_coff_readonly_absolute_relocations_from_inventory<'a>(
             let record = relocation_start + index * 10;
             let field = usize::try_from(read_u32(object, record)?)
                 .map_err(|_| LinkerError::OffsetOverflow)?;
+            let kind = match read_u16(object, record + 8)? {
+                1 => PeReadonlyRelocationKind::Address64,
+                3 => PeReadonlyRelocationKind::Address32NoBase,
+                _ => return Err(LinkerError::UnsupportedCoff),
+            };
+            let field_width = match kind {
+                PeReadonlyRelocationKind::Address64 => 8,
+                PeReadonlyRelocationKind::Address32NoBase => 4,
+            };
             field
-                .checked_add(8)
+                .checked_add(field_width)
                 .filter(|end| *end <= contents.len())
                 .ok_or(LinkerError::InvalidRelocationOffset)?;
-            if read_u16(object, record + 8)? != 1 {
-                return Err(LinkerError::UnsupportedCoff);
-            }
             let target_index = usize::try_from(read_u32(object, record + 4)?)
                 .map_err(|_| LinkerError::OffsetOverflow)?;
             if target_index >= symbol_count {
@@ -3199,13 +3217,20 @@ pub fn decode_x86_64_coff_readonly_absolute_relocations_from_inventory<'a>(
             if *object.get(target + 16).ok_or(LinkerError::InvalidCoff)? != 2 {
                 return Err(LinkerError::UnsupportedCoff);
             }
+            let addend = match kind {
+                PeReadonlyRelocationKind::Address64 => {
+                    i64::from_le_bytes(read_u64_coff(contents, field)?.to_le_bytes())
+                }
+                PeReadonlyRelocationKind::Address32NoBase => i64::from(read_i32(contents, field)?),
+            };
             decoded.relocations[decoded.length] = PeReadonlyAbsoluteRelocation {
                 readonly_owner: owner,
                 readonly_offset: readonly_base
                     .checked_add(field)
                     .ok_or(LinkerError::OffsetOverflow)?,
                 target_symbol: coff_symbol_name(object, target, symbols_end, string_size)?,
-                addend: i64::from_le_bytes(read_u64_coff(contents, field)?.to_le_bytes()),
+                addend,
+                kind,
             };
             decoded.length += 1;
         }
@@ -6966,13 +6991,27 @@ pub fn link_x86_64_pe_with_data_unwind_and_readonly_relocations<
             }
             Err(error) => return Err(error),
         };
-        let target = i128::try_from(IMAGE_BASE)
-            .map_err(|_| LinkerError::OffsetOverflow)?
-            .checked_add(i128::try_from(target_rva).map_err(|_| LinkerError::OffsetOverflow)?)
-            .and_then(|address| address.checked_add(i128::from(relocation.addend)))
-            .and_then(|address| u64::try_from(address).ok())
-            .ok_or(LinkerError::OffsetOverflow)?;
-        patch_u64(&mut bytes, pointer_offset, target)?;
+        match relocation.kind {
+            PeReadonlyRelocationKind::Address64 => {
+                let target = i128::try_from(IMAGE_BASE)
+                    .map_err(|_| LinkerError::OffsetOverflow)?
+                    .checked_add(
+                        i128::try_from(target_rva).map_err(|_| LinkerError::OffsetOverflow)?,
+                    )
+                    .and_then(|address| address.checked_add(i128::from(relocation.addend)))
+                    .and_then(|address| u64::try_from(address).ok())
+                    .ok_or(LinkerError::OffsetOverflow)?;
+                patch_u64(&mut bytes, pointer_offset, target)?;
+            }
+            PeReadonlyRelocationKind::Address32NoBase => {
+                let target = i128::try_from(target_rva)
+                    .map_err(|_| LinkerError::OffsetOverflow)?
+                    .checked_add(i128::from(relocation.addend))
+                    .and_then(|address| u32::try_from(address).ok())
+                    .ok_or(LinkerError::RelocationOverflow)?;
+                patch_u32(&mut bytes, pointer_offset, target)?;
+            }
+        }
     }
     for (input, layout) in inputs.iter().zip(linked.layouts.iter()) {
         for relocation in input.relocations {
@@ -8345,7 +8384,8 @@ mod tests {
             let offset = 120 + record * 10;
             object[offset..offset + 4].copy_from_slice(&field.to_le_bytes());
             object[offset + 4..offset + 8].copy_from_slice(&target.to_le_bytes());
-            object[offset + 8..offset + 10].copy_from_slice(&1u16.to_le_bytes());
+            object[offset + 8..offset + 10]
+                .copy_from_slice(&(if record == 0 { 3u16 } else { 1 }).to_le_bytes());
         }
         object[140..150].copy_from_slice(&original[105..115]);
         object[150..262].copy_from_slice(&original[115..227]);
@@ -9529,12 +9569,14 @@ mod tests {
                     readonly_offset: 0,
                     target_symbol: "helper",
                     addend: 3,
+                    kind: PeReadonlyRelocationKind::Address64,
                 },
                 PeReadonlyAbsoluteRelocation {
                     readonly_owner: "helper",
                     readonly_offset: 0,
                     target_symbol: "entry",
                     addend: -2,
+                    kind: PeReadonlyRelocationKind::Address64,
                 },
             ]
         );
@@ -9648,7 +9690,7 @@ mod tests {
     }
 
     #[test]
-    fn decodes_multiple_addr64_relocations_from_named_readonly_comdats() {
+    fn decodes_multiple_readonly_relocation_kinds_from_named_comdats() {
         let object = coff_with_multiple_standalone_readonly_relocations();
         let inventory = inventory_x86_64_coff_comdat_sections(&object).unwrap();
         let decoded =
@@ -9662,12 +9704,14 @@ mod tests {
                     readonly_offset: 0,
                     target_symbol: "entry",
                     addend: 5,
+                    kind: PeReadonlyRelocationKind::Address32NoBase,
                 },
                 PeReadonlyAbsoluteRelocation {
                     readonly_owner: "literal",
                     readonly_offset: 8,
                     target_symbol: "literal",
                     addend: -4,
+                    kind: PeReadonlyRelocationKind::Address64,
                 },
             ]
         );
@@ -9691,7 +9735,7 @@ mod tests {
             Err(LinkerError::UnsupportedCoff)
         );
         let mut out_of_bounds = object;
-        out_of_bounds[120..124].copy_from_slice(&9u32.to_le_bytes());
+        out_of_bounds[120..124].copy_from_slice(&13u32.to_le_bytes());
         let out_of_bounds_inventory =
             inventory_x86_64_coff_comdat_sections(&out_of_bounds).unwrap();
         assert_eq!(
@@ -10138,7 +10182,7 @@ mod tests {
     }
 
     #[test]
-    fn resolves_readonly_addr64_targets_and_checked_addends_after_layout() {
+    fn resolves_readonly_absolute_targets_and_checked_addends_after_layout() {
         let definitions = [LinkDefinition {
             symbol: "readonly_target",
             target: LinkDefinitionTarget::ReadonlyData(16),
@@ -10148,7 +10192,7 @@ mod tests {
             symbol_target: LinkDefinitionTarget::Text(0),
             additional_definitions: &definitions,
             text: &[0xc3],
-            readonly_data: &[0; 24],
+            readonly_data: &[0; 28],
             relocations: &[],
         };
         let writable = PeWritableData {
@@ -10164,18 +10208,28 @@ mod tests {
                 readonly_offset: 0,
                 target_symbol: "entry",
                 addend: 3,
+                kind: PeReadonlyRelocationKind::Address64,
             },
             PeReadonlyAbsoluteRelocation {
                 readonly_owner: "entry",
                 readonly_offset: 8,
                 target_symbol: "readonly_target",
                 addend: -4,
+                kind: PeReadonlyRelocationKind::Address64,
             },
             PeReadonlyAbsoluteRelocation {
                 readonly_owner: "entry",
                 readonly_offset: 16,
                 target_symbol: "writable",
                 addend: 7,
+                kind: PeReadonlyRelocationKind::Address64,
+            },
+            PeReadonlyAbsoluteRelocation {
+                readonly_owner: "entry",
+                readonly_offset: 24,
+                target_symbol: "readonly_target",
+                addend: -1,
+                kind: PeReadonlyRelocationKind::Address32NoBase,
             },
         ];
         let pe = link_x86_64_pe_with_data_unwind_and_readonly_relocations::<2048, 8192>(
@@ -10198,6 +10252,10 @@ mod tests {
             u64::from_le_bytes(pe.bytes()[0x410..0x418].try_into().unwrap()),
             0x0000_0001_4000_3007
         );
+        assert_eq!(
+            u32::from_le_bytes(pe.bytes()[0x418..0x41c].try_into().unwrap()),
+            0x200f
+        );
 
         let underflow = [PeReadonlyAbsoluteRelocation {
             addend: i64::MIN,
@@ -10212,6 +10270,20 @@ mod tests {
                 &underflow,
             ),
             Err(LinkerError::OffsetOverflow)
+        );
+        let rva_underflow = [PeReadonlyAbsoluteRelocation {
+            addend: i64::MIN,
+            ..relocations[3]
+        }];
+        assert_eq!(
+            link_x86_64_pe_with_data_unwind_and_readonly_relocations::<2048, 8192>(
+                &[input],
+                "entry",
+                &[],
+                &[writable],
+                &rva_underflow,
+            ),
+            Err(LinkerError::RelocationOverflow)
         );
     }
 
