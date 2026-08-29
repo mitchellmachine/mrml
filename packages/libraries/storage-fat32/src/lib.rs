@@ -62,6 +62,7 @@ pub enum Fat32Error {
     DirectoryCapacity,
     UnsupportedLongName,
     InvalidDirectoryEntry,
+    DirectoryAlreadyEnded,
 }
 
 pub trait Fat32EntryReader {
@@ -113,8 +114,22 @@ pub struct Fat32DirectoryBatch<const N: usize> {
 }
 
 impl<const N: usize> Fat32DirectoryBatch<N> {
+    pub const fn new() -> Self {
+        Self {
+            entries: [Fat32ShortDirectoryEntry::EMPTY; N],
+            length: 0,
+            end_of_directory: false,
+        }
+    }
+
     pub fn entries(&self) -> &[Fat32ShortDirectoryEntry] {
         &self.entries[..self.length]
+    }
+}
+
+impl<const N: usize> Default for Fat32DirectoryBatch<N> {
+    fn default() -> Self {
+        Self::new()
     }
 }
 
@@ -272,6 +287,30 @@ pub fn parse_fat32_short_directory<const N: usize>(
     geometry: Fat32Geometry,
     bytes: &[u8],
 ) -> Result<Fat32DirectoryBatch<N>, Fat32Error> {
+    let mut directory = Fat32DirectoryBatch::new();
+    append_fat32_short_directory(geometry, &mut directory, bytes)?;
+    Ok(directory)
+}
+
+pub fn append_fat32_short_directory<const N: usize>(
+    geometry: Fat32Geometry,
+    directory: &mut Fat32DirectoryBatch<N>,
+    bytes: &[u8],
+) -> Result<(), Fat32Error> {
+    let mut candidate = *directory;
+    append_fat32_short_directory_inner(geometry, &mut candidate, bytes)?;
+    *directory = candidate;
+    Ok(())
+}
+
+fn append_fat32_short_directory_inner<const N: usize>(
+    geometry: Fat32Geometry,
+    directory: &mut Fat32DirectoryBatch<N>,
+    bytes: &[u8],
+) -> Result<(), Fat32Error> {
+    if directory.end_of_directory {
+        return Err(Fat32Error::DirectoryAlreadyEnded);
+    }
     let cluster_bytes = usize::from(geometry.bytes_per_sector)
         .checked_mul(usize::from(geometry.sectors_per_cluster))
         .ok_or(Fat32Error::InvalidDirectoryExtent)?;
@@ -286,15 +325,10 @@ pub fn parse_fat32_short_directory<const N: usize>(
         .cluster_count
         .checked_add(1)
         .ok_or(Fat32Error::InvalidExtent)?;
-    let mut entries = [Fat32ShortDirectoryEntry::EMPTY; N];
-    let mut length = 0;
     for raw in bytes.chunks_exact(32) {
         if raw[0] == 0 {
-            return Ok(Fat32DirectoryBatch {
-                entries,
-                length,
-                end_of_directory: true,
-            });
+            directory.end_of_directory = true;
+            return Ok(());
         }
         if raw[0] == 0xe5 {
             continue;
@@ -323,10 +357,10 @@ pub fn parse_fat32_short_directory<const N: usize>(
         let first_cluster = u32::from(read_u16(raw, 26)) | (u32::from(read_u16(raw, 20)) << 16);
         let file_size = read_u32(raw, 28);
         let volume_label = attributes & 0x08 != 0;
-        let directory = attributes & 0x10 != 0;
+        let is_directory = attributes & 0x10 != 0;
         let valid_cluster = if volume_label {
             first_cluster == 0 && file_size == 0
-        } else if directory {
+        } else if is_directory {
             (2..=last_cluster).contains(&first_cluster) && file_size == 0
         } else {
             (first_cluster == 0 && file_size == 0) || (2..=last_cluster).contains(&first_cluster)
@@ -334,22 +368,18 @@ pub fn parse_fat32_short_directory<const N: usize>(
         if !valid_cluster {
             return Err(Fat32Error::InvalidDirectoryEntry);
         }
-        if length == N {
+        if directory.length == N {
             return Err(Fat32Error::DirectoryCapacity);
         }
-        entries[length] = Fat32ShortDirectoryEntry {
+        directory.entries[directory.length] = Fat32ShortDirectoryEntry {
             short_name,
             attributes,
             first_cluster,
             file_size,
         };
-        length += 1;
+        directory.length += 1;
     }
-    Ok(Fat32DirectoryBatch {
-        entries,
-        length,
-        end_of_directory: false,
-    })
+    Ok(())
 }
 
 fn valid_short_component(component: &[u8], allow_empty: bool) -> bool {
@@ -814,5 +844,47 @@ mod tests {
             parse_fat32_short_directory::<1>(geometry, &[0; 31]),
             Err(Fat32Error::InvalidDirectoryExtent)
         );
+    }
+
+    #[test]
+    fn composes_short_directory_across_cluster_extents() {
+        let geometry = parse_fat32_boot_sector(&boot_sector()).unwrap();
+        let first = short_entry(b"FIRST   BIN", 0x20, 5, 1);
+        let mut second = [0; 64];
+        second[..32].copy_from_slice(&short_entry(b"SECOND  BIN", 0x20, 6, 2));
+        let mut directory = Fat32DirectoryBatch::<3>::new();
+        append_fat32_short_directory(geometry, &mut directory, &first).unwrap();
+        assert!(!directory.end_of_directory);
+        append_fat32_short_directory(geometry, &mut directory, &second).unwrap();
+        assert!(directory.end_of_directory);
+        assert_eq!(directory.entries().len(), 2);
+        assert_eq!(directory.entries()[1].short_name, *b"SECOND  BIN");
+    }
+
+    #[test]
+    fn rejects_extent_after_directory_end() {
+        let geometry = parse_fat32_boot_sector(&boot_sector()).unwrap();
+        let mut directory = parse_fat32_short_directory::<1>(geometry, &[0; 32]).unwrap();
+        assert_eq!(
+            append_fat32_short_directory(geometry, &mut directory, &[0; 32]),
+            Err(Fat32Error::DirectoryAlreadyEnded)
+        );
+    }
+
+    #[test]
+    fn failed_extent_append_is_atomic() {
+        let geometry = parse_fat32_boot_sector(&boot_sector()).unwrap();
+        let mut directory = Fat32DirectoryBatch::<2>::new();
+        let first = short_entry(b"FIRST   BIN", 0x20, 5, 1);
+        append_fat32_short_directory(geometry, &mut directory, &first).unwrap();
+        let before = directory;
+        let mut invalid = [0; 64];
+        invalid[..32].copy_from_slice(&short_entry(b"SECOND  BIN", 0x20, 6, 2));
+        invalid[32..].copy_from_slice(&short_entry(b"BAD?    BIN", 0x20, 7, 3));
+        assert_eq!(
+            append_fat32_short_directory(geometry, &mut directory, &invalid),
+            Err(Fat32Error::InvalidDirectoryEntry)
+        );
+        assert_eq!(directory, before);
     }
 }

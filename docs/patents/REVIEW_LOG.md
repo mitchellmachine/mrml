@@ -1,5 +1,13 @@
 # Patent review log
 
+# 2026-08-29 — Bounded FAT32 directory-chain composition
+
+Patent review: **NOT_TRIGGERED**. This increment atomically appends already
+validated conventional FAT short-directory extents into caller-fixed storage and
+rejects data after an end marker. It adds no LFN, allocation, lookup optimization,
+caching, formatting/repair, or write mechanism. This technical screen is not
+legal advice or patent clearance.
+
 # 2026-08-29 — Bounded FAT32 short-directory parser
 
 Patent review: **NOT_TRIGGERED**. This increment parses conventional fixed-size

@@ -420,8 +420,9 @@ silently retain stale authority.
 
 `org.mrml.library.storage.fat32` is now a second **PARTIALLY IMPLEMENTED**
 isolated provider. It supplies the filesystem-interface graph edge and a bounded
-read-only FAT32 geometry, FSInfo, bounded FAT-chain parser, and fail-closed 8.3
-directory-entry parser with fifteen passing tests on Windows and Arch Linux. It
+read-only FAT32 geometry, FSInfo, bounded FAT-chain parser, and atomic fail-closed
+8.3 directory-chain composition with eighteen passing tests on Windows and Arch
+Linux. It
 grants no authority from a FAT signature and does not mount or mutate media.
 Storage requires block and filesystem providers as independently replaceable
 generations.

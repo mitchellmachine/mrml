@@ -422,8 +422,8 @@ route exists yet, so this proves package separation and interface-graph shape,
 not dynamic execution.
 
 `org.mrml.library.storage.fat32` now provides the matching isolated filesystem
-interface generation. Its bounded read-only geometry, FSInfo, FAT-chain, and 8.3
-directory-entry parsers pass fifteen tests on both hosts, and storage requires
+interface generation. Its bounded read-only geometry, FSInfo, FAT-chain, and
+atomic 8.3 directory-chain parsers pass eighteen tests on both hosts, and storage requires
 this binding separately from AHCI. LFN entries fail closed. This is package/parser
 evidence, not a live endpoint, mount, or hot replacement.
 

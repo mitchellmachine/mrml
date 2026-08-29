@@ -485,10 +485,11 @@ mirrored selection, requires exact masked mirror agreement, bounds output to
 caller-fixed capacity, and rejects cycles, free, reserved, bad, or out-of-domain
 clusters. A fixed-capacity short-directory parser now validates 8.3 entries,
 deleted records, attributes, output bounds, file sizes, and first-cluster domains
-while failing closed on every LFN record. Fifteen tests pass on Windows and Arch
-Linux; storage remains 135 on both. This does not implement mount, LFN, directory
-chain composition, file I/O, check/repair, format, live IPC, or interoperability
-evidence.
+while failing closed on every LFN record. Atomic fixed-capacity composition now
+joins validated cluster extents and rejects any extent after an end marker.
+Eighteen tests pass on Windows and Arch Linux; storage remains 135 on both. This
+does not implement mount, LFN, file I/O, check/repair, format, live IPC, or
+interoperability evidence.
 
 Checking has distinct result types for block-device health, partition-table
 validation, filesystem validation, and media readability. Inspection never
