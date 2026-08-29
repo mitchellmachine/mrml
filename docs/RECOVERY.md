@@ -1244,6 +1244,14 @@ post-write uncertainty quarantines it. Recovery must retain the initialized
 slot-to-table relation and must never infer it from mutable memory after an
 uncertain transition. Storage passes 169 tests on Windows and Arch Linux.
 
+Port-engine activation is **PARTIALLY IMPLEMENTED IN SOURCE** as a further
+linear transition. It requires the exact initialized owner and an idle port,
+keeps interrupts disabled, enables FIS receive before command processing, and
+read-verifies both writes. Recovery must treat any post-write uncertainty as a
+quarantine and may not reclaim the DMA layout. Storage passes 172 tests on
+Windows and Arch Linux; no stop/removal path or installed-recovery hardware
+execution is claimed.
+
 The typed native route and installed recovery are now composed atomically as a
 **PARTIALLY IMPLEMENTED** configuration control plane. One bounded operation
 correlates and registers the descriptor, reacquires a read-only session, checks

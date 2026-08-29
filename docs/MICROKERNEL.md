@@ -8836,3 +8836,12 @@ owner; post-write uncertainty quarantines it. Storage passes 169 tests on
 Windows and Arch Linux.
 No engine, PRDT/data buffer, ATA/ATAPI command, interrupt, NCQ, IOMMU hardware,
 OVMF, installed recovery, or physical hardware was exercised.
+
+AHCI port-engine activation is now **PARTIALLY IMPLEMENTED IN SOURCE**. The
+linear transition exact-matches the retained ABAR/DMA generations, accepts only
+an idle task file with interrupts and command state clear, starts FIS receive
+before command processing, and read-verifies both writes. Pre-write failure
+preserves the initialized owner; post-write uncertainty quarantines the layout.
+Storage passes 172 tests on Windows and Arch Linux. No command issue, PRDT/data transfer,
+interrupt, stop/removal, IOMMU hardware, OVMF, or physical hardware was
+exercised.

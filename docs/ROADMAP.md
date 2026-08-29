@@ -260,6 +260,16 @@ Engine activation,
 PRDT/data buffers, ATA/ATAPI commands, interrupts, NCQ, real IOMMU behavior, and
 physical evidence remain **PLANNED**.
 
+Bounded AHCI port-engine activation is now **PARTIALLY IMPLEMENTED IN SOURCE**.
+`start_ahci_port_engine` consumes only initialized command memory, exact-matches
+the ABAR and DMA generations, requires disabled interrupts and an idle task file
+with no active or issued commands, then enables FIS receive before command
+processing and read-verifies both transitions. Pre-write failure preserves the
+owner; post-write uncertainty quarantines the layout. Storage passes 172 tests
+on Windows and Arch Linux. Command construction/issue, PRDT/data buffers,
+interrupts, stop/removal,
+ATA/ATAPI, NCQ, IOMMU hardware, and physical evidence remain **PLANNED**.
+
 Selected-device reopening and redundant-root reads are now **PARTIALLY
 IMPLEMENTED**. Exact path/media/geometry and block-zero header revalidation
 precedes both root reads; any mismatch, second-read failure, or protocol-close

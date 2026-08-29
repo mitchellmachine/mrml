@@ -328,6 +328,16 @@ Arch Linux. No PRDT,
 data buffer, command issue, engine start, interrupt, ATA/ATAPI, NCQ, IOMMU
 hardware, OVMF, or physical device was exercised.
 
+The port-engine activation gate is now **PARTIALLY IMPLEMENTED IN SOURCE**.
+Only the initialized command-memory typestate may enter it. The transition
+exact-matches controller generations, requires an idle task file and no active
+or issued command, keeps interrupts disabled, enables FIS receive before command
+processing, and read-verifies each write. Failure before mutation returns the
+owner; later uncertainty quarantines the layout. Storage passes 172 tests on
+Windows and Arch Linux. No command is built or issued, and no PRDT, data transfer, interrupt,
+engine stop/removal, ATA/ATAPI, NCQ, IOMMU hardware, OVMF, or physical device was
+exercised.
+
 The following DMA-memory ownership boundary is **PARTIALLY IMPLEMENTED IN
 SOURCE**. One safe transaction binds a quiescent discovered SATA port and exact
 controller generations to explicit controller `CONTROL` plus separate

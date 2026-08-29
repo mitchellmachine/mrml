@@ -106,6 +106,17 @@ operation, PHY/controller hardware, or block I/O. Existing Canadian exclusions
 and outside-Canada review requirements remain unchanged. This technical screen
 is not legal advice or patent clearance.
 
+# 2026-08-29 — Bounded AHCI port-engine activation
+
+Patent review: **TRIGGERED**, governed by the recorded Canadian AHCI scope. This
+increment performs only the conventional ordered FIS-receive and command-engine
+enable writes after bounded idle-state checks, exact read-back, and MRML-only
+linear/quarantine typestates. It implements no command construction or issue,
+PRDT, data transfer, interrupt handling, NCQ, aggregation, ATA/ATAPI operation,
+PHY/controller hardware, or block I/O. Existing Canadian exclusions and
+outside-Canada review requirements remain unchanged. This technical screen is
+not legal advice or patent clearance.
+
 # 2026-08-29 — Writable COFF SELECT_ANY winners
 
 Patent review: **NOT_TRIGGERED**. This increment applies the conventional COFF

@@ -60,6 +60,10 @@ impl InitializedAhciCommandMemory {
     pub const fn layout(&self) -> AhciPortDmaLayout {
         self.layout
     }
+
+    pub(crate) const fn into_layout(self) -> AhciPortDmaLayout {
+        self.layout
+    }
 }
 
 pub fn initialize_ahci_command_memory<M: AhciCommandMemoryIo>(
