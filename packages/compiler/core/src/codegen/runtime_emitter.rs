@@ -7244,97 +7244,12 @@ impl<
             self.emit(&[0x50, 0x52])?;
             self.evaluation_depth += 2;
             self.emit_wide_integer_return(tree, right, expected_type)?;
-            self.emit(&[0x48, 0x85, 0xc0])?;
-            let nonzero_low = self.emit_forward_branch(0x85)?;
-            self.emit(&[0x48, 0x85, 0xd2])?;
-            self.emit_trap_branch(0x84)?;
-            self.patch_forward_branch(nonzero_low)?;
-            self.emit(&[0x49, 0x89, 0xc2, 0x49, 0x89, 0xd3, 0x59, 0x41, 0x58])?;
+            self.emit(&[0x59, 0x41, 0x58])?;
             self.evaluation_depth -= 2;
-            let temporary_words = if layout.signed {
-                self.emit(&[0x49, 0x89, 0xc9, 0x4d, 0x31, 0xd9, 0x48, 0x89, 0xc8])?;
-                self.emit(&[0x48, 0x85, 0xc9])?;
-                let nonnegative_dividend = self.emit_forward_branch(0x89)?;
-                self.emit(&[
-                    0x49, 0xf7, 0xd8, 0x48, 0x83, 0xd1, 0x00, 0x48, 0xf7, 0xd9,
-                ])?;
-                self.patch_forward_branch(nonnegative_dividend)?;
-                self.emit(&[0x4d, 0x85, 0xdb])?;
-                let nonnegative_divisor = self.emit_forward_branch(0x89)?;
-                self.emit(&[
-                    0x49, 0xf7, 0xda, 0x49, 0x83, 0xd3, 0x00, 0x49, 0xf7, 0xdb,
-                ])?;
-                self.patch_forward_branch(nonnegative_divisor)?;
-                self.emit(&[0x50, 0x41, 0x51, 0x41, 0x52, 0x41, 0x53])?;
-                self.evaluation_depth += 4;
-                4usize
-            } else {
-                self.emit(&[0x41, 0x52, 0x41, 0x53])?;
-                self.evaluation_depth += 2;
-                2usize
-            };
-            self.emit(&[
-                0x49, 0x89, 0xc9, 0x4d, 0x31, 0xd2, 0x4d, 0x31, 0xdb, 0xb9, 0x80, 0,
-                0, 0,
-            ])?;
-            let loop_start = self.length;
-            self.emit(&[
-                0x49, 0xd1, 0xe0, 0x49, 0xd1, 0xd1, 0x49, 0xd1, 0xd2, 0x49, 0xd1, 0xd3,
-                0x48, 0x8b, 0x04, 0x24, 0x49, 0x39, 0xc3,
-            ])?;
-            let above_divisor = self.emit_forward_branch(0x87)?;
-            let below_divisor_high = self.emit_forward_branch(0x82)?;
-            self.emit(&[0x48, 0x8b, 0x44, 0x24, 0x08, 0x49, 0x39, 0xc2])?;
-            let below_divisor_low = self.emit_forward_branch(0x82)?;
-            self.patch_forward_branch(above_divisor)?;
-            self.emit(&[
-                0x48, 0x8b, 0x44, 0x24, 0x08, 0x49, 0x29, 0xc2, 0x48, 0x8b, 0x04, 0x24,
-                0x49, 0x19, 0xc3, 0x49, 0x83, 0xc8, 0x01,
-            ])?;
-            self.patch_forward_branch(below_divisor_high)?;
-            self.patch_forward_branch(below_divisor_low)?;
-            self.emit(&[0xff, 0xc9])?;
-            let done = self.emit_forward_branch(0x84)?;
-            self.emit_backward_branch(loop_start)?;
-            self.patch_forward_branch(done)?;
-            if layout.signed {
-                self.emit(&[0x48, 0x8b, 0x44, 0x24, 0x10, 0x48, 0x85, 0xc0])?;
-                let negative_quotient = self.emit_forward_branch(0x88)?;
-                self.emit(&[0x4d, 0x85, 0xc9])?;
-                self.emit_trap_branch(0x88)?;
-                let quotient_signed = self.emit_unconditional_forward_branch()?;
-                self.patch_forward_branch(negative_quotient)?;
-                self.emit(&[0x48, 0xb8])?;
-                self.emit(&(1u64 << 63).to_le_bytes())?;
-                self.emit(&[0x49, 0x39, 0xc1])?;
-                self.emit_trap_branch(0x87)?;
-                let quotient_below_minimum_magnitude = self.emit_forward_branch(0x82)?;
-                self.emit(&[0x4d, 0x85, 0xc0])?;
-                self.emit_trap_branch(0x85)?;
-                self.patch_forward_branch(quotient_below_minimum_magnitude)?;
-                self.emit(&[
-                    0x49, 0xf7, 0xd8, 0x49, 0x83, 0xd1, 0x00, 0x49, 0xf7, 0xd9,
-                ])?;
-                self.patch_forward_branch(quotient_signed)?;
-                if operator == crate::BinaryOperator::Remainder {
-                    self.emit(&[0x48, 0x8b, 0x44, 0x24, 0x18, 0x48, 0x85, 0xc0])?;
-                    let nonnegative_remainder = self.emit_forward_branch(0x89)?;
-                    self.emit(&[
-                        0x49, 0xf7, 0xda, 0x49, 0x83, 0xd3, 0x00, 0x49, 0xf7, 0xdb,
-                    ])?;
-                    self.patch_forward_branch(nonnegative_remainder)?;
-                }
-            }
-            let temporary_bytes = u8::try_from(temporary_words * 8)
-                .map_err(|_| self.error(CodegenErrorKind::OutputTooSmall))?;
-            self.emit(&[0x48, 0x83, 0xc4, temporary_bytes])?;
-            self.evaluation_depth -= temporary_words;
-            if operator == crate::BinaryOperator::Divide {
-                self.emit(&[0x4c, 0x89, 0xc0, 0x4c, 0x89, 0xca])?;
-            } else {
-                self.emit(&[0x4c, 0x89, 0xd0, 0x4c, 0x89, 0xda])?;
-            }
-            return Ok(());
+            return self.emit_wide_divide_or_remainder(
+                layout,
+                operator == crate::BinaryOperator::Remainder,
+            );
         }
         if let ExprKind::Binary {
             operator:

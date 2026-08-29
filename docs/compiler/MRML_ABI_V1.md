@@ -163,6 +163,8 @@ General `u128` division and remainder use a fixed 128-step restoring divider,
 retain the divisor in bounded temporary stack storage, and trap a zero divisor.
 `i128` division and remainder store bounded sign state, divide operand magnitudes,
 restore quotient/remainder signs, and unconditionally trap the `MIN / -1` case.
+Binary division/remainder and their wide-local compound assignments share this
+fixed-step lowering and its zero-divisor and signed-overflow traps.
 Lazy `if` expressions may select compatible two-word integer values without
 evaluating the unselected branch; both branches retain the declared wide type.
 Block sequences may evaluate supported one-word prefix expressions before a
