@@ -2238,6 +2238,9 @@ live composition remains pending.
    Capability-transfer descriptor decoding now publishes output only after the
    complete bounded array validates. A late-error atomicity test raises the
    kernel total to 622.
+   Service send-denial classification now uses an explicit closed precommit IPC
+   error set; postcommit/integrity-shaped variants cannot be silently added by
+   enum growth. The kernel total remains 622.
    Buffered service receive now preflights an exact pending-table slot before
    blocking and binds post-switch publication to that slot. Service profiles
    cross-build; live backend execution remains pending.

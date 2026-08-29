@@ -271,6 +271,8 @@ access. The security/acceptance gate is canonical in
   already an ancestor of its source before graph use.
 - Buffered-send capability descriptor parsing is transactional; late invalid
   tokens, rights, or reserved bytes cannot publish a partial decoded prefix.
+- Service-visible send denial uses a closed precommit error set; malformed,
+  replay, shape, buffer, or invalid-plan errors remain integrity-class failures.
 - Buffered receive preflights and binds its exact empty pending-table slot before
   scheduler blocking, preventing late capacity discovery after state mutation.
 - Pending buffered completion revalidates zero-capacity address canonicality and

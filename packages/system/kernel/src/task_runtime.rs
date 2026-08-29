@@ -41,7 +41,12 @@ impl TaskRuntimeError {
             self,
             Self::MissingTask
                 | Self::SameTaskIpc
-                | Self::Ipc(_)
+                | Self::Ipc(
+                    IpcError::PayloadTooLarge
+                        | IpcError::TooManyCapabilities
+                        | IpcError::Unauthorized
+                        | IpcError::SequenceExhausted,
+                )
                 | Self::InboxFull
                 | Self::DelegationTableFull
         )
@@ -1520,6 +1525,11 @@ mod tests {
             TaskRuntimeError::AddressSpaceMismatch,
             TaskRuntimeError::IntegrityFailure,
             TaskRuntimeError::ActiveDelegations,
+            TaskRuntimeError::Ipc(IpcError::InvalidSequencePlan),
+            TaskRuntimeError::Ipc(IpcError::Malformed),
+            TaskRuntimeError::Ipc(IpcError::Replay),
+            TaskRuntimeError::Ipc(IpcError::CapabilityShape),
+            TaskRuntimeError::Ipc(IpcError::BufferTooSmall),
         ] {
             assert!(!error.is_precommit_send_denial());
         }

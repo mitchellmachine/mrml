@@ -6884,6 +6884,11 @@ Buffered-send capability descriptor decoding now parses into bounded scratch and
 publishes the caller output only after every token, right, and reserved byte is
 valid. A late-invalid-descriptor test proves prior output remains unchanged and
 raises the Linux kernel total to 622.
+The service-visible precommit send-denial classifier now names only missing
+task, same-task routing, payload/count bounds, authorization, sequence
+exhaustion, inbox capacity, and delegation capacity. Malformed/replay/shape,
+buffer, and invalid-plan IPC failures remain integrity-class outcomes. The
+Linux kernel total remains 622.
 The service buffered-receive path now resolves one exact empty pending-table
 slot before blocking the current task, then publishes only into that still-empty
 slot after the scheduler switch. Duplicate task identity, full table, slot
