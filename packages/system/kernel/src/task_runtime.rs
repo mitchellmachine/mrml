@@ -994,15 +994,7 @@ impl<const TASKS: usize, const CAPS: usize> TaskRuntime<TASKS, CAPS> {
             .validate_derivation_capacity(requested.len())
             .map_err(IpcError::from)
             .map_err(TaskRuntimeError::Ipc)?;
-        if self
-            .delegations
-            .iter()
-            .filter(|edge| edge.is_none())
-            .count()
-            < requested.len()
-        {
-            return Err(TaskRuntimeError::DelegationTableFull);
-        }
+        self.validate_delegation_capacity(requested.len())?;
         self.validate_delegation_graph()?;
         let (source, destination) = two_domains_mut(&mut self.domains, sender_slot, receiver_slot)
             .ok_or(TaskRuntimeError::IntegrityFailure)?;
@@ -1081,6 +1073,7 @@ impl<const TASKS: usize, const CAPS: usize> TaskRuntime<TASKS, CAPS> {
             .validate_derivation_capacity(requested.len())
             .map_err(IpcError::from)
             .map_err(TaskRuntimeError::Ipc)?;
+        self.validate_delegation_capacity(requested.len())?;
         Self::validate_inbox_state(
             self.domains[receiver_slot]
                 .as_ref()
@@ -1470,6 +1463,19 @@ impl<const TASKS: usize, const CAPS: usize> TaskRuntime<TASKS, CAPS> {
         Ok(())
     }
 
+    fn validate_delegation_capacity(&self, requested: usize) -> Result<(), TaskRuntimeError> {
+        if self
+            .delegations
+            .iter()
+            .filter(|edge| edge.is_none())
+            .count()
+            < requested
+        {
+            return Err(TaskRuntimeError::DelegationTableFull);
+        }
+        Ok(())
+    }
+
     fn validate_delegation_graph(&self) -> Result<(), TaskRuntimeError> {
         let mut parents = [None; MAX_TASK_DELEGATIONS];
         for (index, edge) in self.delegations.iter().enumerate() {
@@ -1754,7 +1760,7 @@ mod tests {
 
     #[test]
     fn user_fault_revokes_domain_before_selecting_replacement() {
-        let mut runtime = TaskRuntime::<2, 2>::new(1_000, 1).unwrap();
+        let mut runtime = TaskRuntime::<2, 3>::new(1_000, 1).unwrap();
         let faulted = runtime
             .create(Priority::NORMAL, context(0x20_0000, 0x40_0000))
             .unwrap();
@@ -2079,7 +2085,7 @@ mod tests {
 
     #[test]
     fn delegation_capacity_denial_precedes_graph_inspection() {
-        let mut runtime = TaskRuntime::<2, 2>::new(1_000, 1).unwrap();
+        let mut runtime = TaskRuntime::<2, 3>::new(1_000, 1).unwrap();
         let sender = runtime
             .create(Priority::NORMAL, context(0x20_0000, 0x40_0000))
             .unwrap();
@@ -2146,6 +2152,47 @@ mod tests {
                 .unwrap()
                 .0,
             2
+        );
+
+        for payload in [b"one".as_slice(), b"two".as_slice()] {
+            runtime
+                .deliver_ipc(
+                    sender,
+                    receiver,
+                    &mut endpoint,
+                    endpoint_capability,
+                    payload,
+                    &[],
+                )
+                .unwrap();
+        }
+        let valid_edges = runtime.delegations;
+        runtime.delegations.fill(Some(edge));
+        assert_eq!(
+            runtime.deliver_ipc(
+                sender,
+                receiver,
+                &mut endpoint,
+                endpoint_capability,
+                b"queued-full",
+                &[(root, Rights::READ)],
+            ),
+            Err(TaskRuntimeError::DelegationTableFull)
+        );
+        runtime.delegations = valid_edges;
+        runtime.receive_ipc(receiver).unwrap();
+        assert_eq!(
+            runtime
+                .deliver_ipc(
+                    sender,
+                    receiver,
+                    &mut endpoint,
+                    endpoint_capability,
+                    b"queued",
+                    &[(root, Rights::READ)],
+                )
+                .unwrap(),
+            5
         );
     }
 

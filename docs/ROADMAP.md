@@ -2273,6 +2273,9 @@ live composition remains pending.
    Delegation-table capacity now precedes graph inspection after all caller and
    receiver preflights. A full-table/corrupt-graph ordering test raises the
    kernel total to 627 without consuming sequence.
+   Queued delivery applies the shared table-capacity gate before inbox
+   inspection; the same test covers simultaneous full inbox/table state and
+   preserves the 627-test total.
    Buffered service receive now preflights an exact pending-table slot before
    blocking and binds post-switch publication to that slot. Service profiles
    cross-build; live backend execution remains pending.

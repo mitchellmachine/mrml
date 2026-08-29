@@ -6954,6 +6954,10 @@ preflight but before delegation-graph inspection. An adversarial test fills the
 table with duplicate live edges and proves the ordinary `DelegationTableFull`
 denial takes precedence without consuming endpoint sequence; restoring the one
 valid edge permits sequence two. The Linux kernel total rises to 627.
+Queued delivery uses the same shared capacity gate before inbox inspection.
+The adversarial test additionally fills the receiver inbox and corrupts/fills
+the delegation table, observes only `DelegationTableFull`, restores valid state,
+and completes the next delivery at sequence five. The total remains 627.
 Patent review: `NOT_TRIGGERED` — this only reorders a conventional fixed-table
 capacity check in the existing IPC transaction.
 The service buffered-receive path now resolves one exact empty pending-table
