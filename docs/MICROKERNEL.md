@@ -9483,3 +9483,19 @@ actual supplied buffers before any typed envelope is returned. AHCI passes 75
 focused tests on Linux. This is syscall-
 frame and hostile-model evidence, not installed service execution, supervisor
 launch, or hardware evidence.
+
+### Exact configuration authorization across placements
+
+The configuration service now **IMPLEMENTS** the same exact-rights check in its
+hosted `CapabilitySpace` adapter and service-image syscall adapter. A read,
+write, or control operation accepts only the corresponding single-right handle;
+an otherwise sufficient combined-right handle fails with `PermissionDenied`.
+Hosted recovery and policy fixtures retain distinct operation-scoped handles,
+so native-process simulation cannot silently exercise broader authority than
+the service-image boundary. This is source and focused hosted-test evidence,
+not installed-service, KVM, WHP, or physical-hardware execution evidence.
+
+Patent review: `NOT_TRIGGERED` — exact bitset equality and operation-scoped
+capability handles are conventional authorization tightening and introduce no
+new algorithm, protocol, or compatibility mechanism. See
+`docs/patents/REVIEW_LOG.md`.

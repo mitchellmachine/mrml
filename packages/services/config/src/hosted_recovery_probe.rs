@@ -8,38 +8,38 @@
 //! rollback evidence.
 
 use super::{
-    reacquire_handoff_installed_recovery_device, recover_selected_runtime_assignment,
-    recover_serviced_stable_total_system_selection, ConfigTransaction, ConfigUpdate, ConfigValue,
-    ConfigurationService, IsolationPolicySetting, OwnerIsolationSelection, PersistedRestartPolicy,
+    ConfigTransaction, ConfigUpdate, ConfigValue, ConfigurationService, IsolationPolicySetting,
+    OwnerIsolationSelection, PERSISTED_RESTART_POLICY_BYTES, PersistedRestartPolicy,
     RecoveredDeploymentTotalControlPlane, RecoveredInstalledStableTotalSystemSelection,
     RuntimeDomainPolicyBinding, SettingId, SettingSchema, StableConfigurationRecoveryValidator,
-    StableServiceRecoveryValidator, PERSISTED_RESTART_POLICY_BYTES,
+    StableServiceRecoveryValidator, reacquire_handoff_installed_recovery_device,
+    recover_selected_runtime_assignment, recover_serviced_stable_total_system_selection,
 };
 use mrml_crypto::Sha3_256;
 use mrml_deployment::{
-    encode_deployment_recovery_state_with_release, encode_deployment_release_checkpoint,
-    DeploymentRecoveryStateStore, DeploymentService, GenerationCandidate,
-    DEPLOYMENT_RECOVERY_STATE_BYTES,
+    DEPLOYMENT_RECOVERY_STATE_BYTES, DeploymentRecoveryStateStore, DeploymentService,
+    GenerationCandidate, encode_deployment_recovery_state_with_release,
+    encode_deployment_release_checkpoint,
 };
-use mrml_kernel::arch::x86_64::UserContext;
 #[cfg(test)]
 use mrml_kernel::InstalledRecoverySource;
+use mrml_kernel::arch::x86_64::UserContext;
 use mrml_kernel::{
     BootHandoff, BootRecoveryEnvelope, CapabilitySpace, InstalledRecoveryBootIdentity, ObjectId,
     Priority, Rights, ServiceSupervisor, TaskRuntime,
 };
 use mrml_package_format::MAX_SYSTEM_RELEASE_BYTES;
 use mrml_storage::{
-    authority_checkpoint_digest, encode_authority_checkpoint,
-    recover_selected_validate_and_commit_stable_authorities, AllocationImage, AllocationKind,
-    AllocationRecord, AuthorityCheckpointProofIssuer, AuthorityRecoveryStateStore,
-    BlockDeviceDescriptor, BlockDeviceId, BlockService, BlockServiceBackend, BootRecoveryAdmission,
-    DirectoryEntry, DirectoryImage, DirectoryMetadata, ExtentImage, ExtentRecord, FileMetadata,
-    FileReadBackend, MetadataPointer, ObjectIdAllocatorImage, OwnerApprovedAuthorityCheckpoint,
+    AUTHORITY_RECOVERY_STATE_BYTES, AllocationImage, AllocationKind, AllocationRecord,
+    AuthorityCheckpointProofIssuer, AuthorityRecoveryStateStore, BlockDeviceDescriptor,
+    BlockDeviceId, BlockService, BlockServiceBackend, BootRecoveryAdmission, DirectoryEntry,
+    DirectoryImage, DirectoryMetadata, ExtentImage, ExtentRecord, FileMetadata, FileReadBackend,
+    MetadataPointer, ObjectIdAllocatorImage, OwnerApprovedAuthorityCheckpoint,
     PlatformBlockDeviceDescriptor, PlatformBlockDeviceIdentity, PlatformBlockTransport,
-    StorageAuthorityTable, StorageName, StorageObjectId, StorageObjectKind, StoragePrincipal,
-    StorageRecoveryGrant, StorageRights, Superblock, VolumeHeader, VolumeId,
-    AUTHORITY_RECOVERY_STATE_BYTES, SUPERBLOCK_BYTES,
+    SUPERBLOCK_BYTES, StorageAuthorityTable, StorageName, StorageObjectId, StorageObjectKind,
+    StoragePrincipal, StorageRecoveryGrant, StorageRights, Superblock, VolumeHeader, VolumeId,
+    authority_checkpoint_digest, encode_authority_checkpoint,
+    recover_selected_validate_and_commit_stable_authorities,
 };
 
 const BLOCK_BYTES: usize = 4096;
@@ -1077,24 +1077,36 @@ unsafe fn recover_total_control_plane_with_domain_policy<const DOMAINS: usize>(
         ],
     )
     .map_err(|_| HostedRecoveryProbeError::Configuration)?;
-    let mut capabilities = CapabilitySpace::<5>::new();
-    let root = capabilities
-        .insert(root_object, Rights::CONTROL.union(Rights::READ))
+    let mut capabilities = CapabilitySpace::<10>::new();
+    let root_control = capabilities
+        .insert(root_object, Rights::CONTROL)
         .map_err(|_| HostedRecoveryProbeError::Configuration)?;
-    let restart_access = capabilities
-        .insert(setting_object, Rights::READ.union(Rights::WRITE))
+    let root_read = capabilities
+        .insert(root_object, Rights::READ)
         .map_err(|_| HostedRecoveryProbeError::Configuration)?;
-    let system_access = capabilities
-        .insert(system.object(), Rights::READ.union(Rights::WRITE))
+    let restart_write = capabilities
+        .insert(setting_object, Rights::WRITE)
         .map_err(|_| HostedRecoveryProbeError::Configuration)?;
-    let component_access = capabilities
-        .insert(component.object(), Rights::READ.union(Rights::WRITE))
+    let restart_read = capabilities
+        .insert(setting_object, Rights::READ)
         .map_err(|_| HostedRecoveryProbeError::Configuration)?;
-    let secondary_component_access = capabilities
-        .insert(
-            secondary_component.object(),
-            Rights::READ.union(Rights::WRITE),
-        )
+    let system_write = capabilities
+        .insert(system.object(), Rights::WRITE)
+        .map_err(|_| HostedRecoveryProbeError::Configuration)?;
+    let system_read = capabilities
+        .insert(system.object(), Rights::READ)
+        .map_err(|_| HostedRecoveryProbeError::Configuration)?;
+    let component_write = capabilities
+        .insert(component.object(), Rights::WRITE)
+        .map_err(|_| HostedRecoveryProbeError::Configuration)?;
+    let component_read = capabilities
+        .insert(component.object(), Rights::READ)
+        .map_err(|_| HostedRecoveryProbeError::Configuration)?;
+    let secondary_component_write = capabilities
+        .insert(secondary_component.object(), Rights::WRITE)
+        .map_err(|_| HostedRecoveryProbeError::Configuration)?;
+    let secondary_component_read = capabilities
+        .insert(secondary_component.object(), Rights::READ)
         .map_err(|_| HostedRecoveryProbeError::Configuration)?;
     let restart = PersistedRestartPolicy::new(service_object, 3, 5, 20)
         .map_err(|_| HostedRecoveryProbeError::Configuration)?;
@@ -1104,39 +1116,35 @@ unsafe fn recover_total_control_plane_with_domain_policy<const DOMAINS: usize>(
     update
         .push(ConfigUpdate::new(
             restart_setting,
-            restart_access,
+            restart_write,
             ConfigValue::bytes(&encoded_restart)
                 .map_err(|_| HostedRecoveryProbeError::Configuration)?,
         ))
         .map_err(|_| HostedRecoveryProbeError::Configuration)?;
     system
-        .stage(
-            &mut update,
-            system_access,
-            OwnerIsolationSelection::Balanced,
-        )
+        .stage(&mut update, system_write, OwnerIsolationSelection::Balanced)
         .map_err(|_| HostedRecoveryProbeError::Configuration)?;
     component
         .stage(
             &mut update,
-            component_access,
+            component_write,
             OwnerIsolationSelection::Native,
         )
         .map_err(|_| HostedRecoveryProbeError::Configuration)?;
     secondary_component
         .stage(
             &mut update,
-            secondary_component_access,
+            secondary_component_write,
             OwnerIsolationSelection::Native,
         )
         .map_err(|_| HostedRecoveryProbeError::Configuration)?;
     configuration
-        .commit(&capabilities, root, &update)
+        .commit(&capabilities, root_control, &update)
         .map_err(|_| HostedRecoveryProbeError::Configuration)?;
 
     let mut configuration_bytes = [0; BLOCK_BYTES];
     let checkpoint = configuration
-        .export_checkpoint(&capabilities, root, &mut configuration_bytes)
+        .export_checkpoint(&capabilities, root_read, &mut configuration_bytes)
         .map_err(|_| HostedRecoveryProbeError::Configuration)?;
     let configuration_object = object(9);
     let mut configuration_backend = CheckpointBackend {
@@ -1241,8 +1249,8 @@ unsafe fn recover_total_control_plane_with_domain_policy<const DOMAINS: usize>(
             0,
             principal(),
             &capabilities,
-            root,
-            restart_access,
+            root_control,
+            restart_read,
             restart_setting,
             service_object,
             &mut recovered_bytes,
@@ -1324,9 +1332,9 @@ unsafe fn recover_total_control_plane_with_domain_policy<const DOMAINS: usize>(
     }
     let bindings: [RuntimeDomainPolicyBinding<'_>; DOMAINS] = core::array::from_fn(|index| {
         let (setting, access) = if distinct_domains && index == 1 {
-            (secondary_component, secondary_component_access)
+            (secondary_component, secondary_component_read)
         } else {
-            (component, component_access)
+            (component, component_read)
         };
         RuntimeDomainPolicyBinding::new(
             deployment
@@ -1343,9 +1351,9 @@ unsafe fn recover_total_control_plane_with_domain_policy<const DOMAINS: usize>(
             reachable.installed(),
             &capabilities,
             system,
-            system_access,
+            system_read,
             component,
-            component_access,
+            component_read,
             deployment,
             &bindings,
         )

@@ -1191,7 +1191,7 @@ unsafe extern "sysv64" fn mrml_user_call_dispatch(frame: *mut UserCallFrame) {
                 rights,
             } => {
                 let authorized =
-                    match runtime.authorize_capability(current, capability, rights, object) {
+                    match runtime.authorize_capability_exact(current, capability, rights, object) {
                         Ok(()) => true,
                         Err(mrml_kernel::TaskRuntimeError::Ipc(_)) => false,
                         Err(_) => halt(),

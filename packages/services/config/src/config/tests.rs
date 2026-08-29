@@ -1102,7 +1102,10 @@ mod tests {
 
     fn fixture() -> (
         ConfigurationService<3, 2>,
-        CapabilitySpace<4>,
+        CapabilitySpace<7>,
+        Capability,
+        Capability,
+        Capability,
         Capability,
         Capability,
         Capability,
@@ -1115,27 +1118,35 @@ mod tests {
         ];
         let service = ConfigurationService::new(ObjectId(10), &schemas).unwrap();
         let mut capabilities = CapabilitySpace::new();
-        let root = capabilities
-            .insert(ObjectId(10), Rights::CONTROL.union(Rights::READ))
-            .unwrap();
-        let enabled_capability = capabilities
-            .insert(ObjectId(11), Rights::READ.union(Rights::WRITE))
-            .unwrap();
-        let limit_capability = capabilities
-            .insert(ObjectId(12), Rights::READ.union(Rights::WRITE))
-            .unwrap();
+        let root_control = capabilities.insert(ObjectId(10), Rights::CONTROL).unwrap();
+        let root_read = capabilities.insert(ObjectId(10), Rights::READ).unwrap();
+        let enabled_write = capabilities.insert(ObjectId(11), Rights::WRITE).unwrap();
+        let enabled_read = capabilities.insert(ObjectId(11), Rights::READ).unwrap();
+        let limit_write = capabilities.insert(ObjectId(12), Rights::WRITE).unwrap();
+        let limit_read = capabilities.insert(ObjectId(12), Rights::READ).unwrap();
         (
             service,
             capabilities,
-            root,
-            enabled_capability,
-            limit_capability,
+            root_control,
+            root_read,
+            enabled_write,
+            enabled_read,
+            limit_write,
+            limit_read,
         )
     }
 
     #[test]
     fn atomic_commit_requires_root_and_each_exact_setting_capability() {
-        let (mut service, capabilities, root, enabled, limit) = fixture();
+        let (mut service, mut capabilities, root, _, enabled, enabled_read, limit, limit_read) =
+            fixture();
+        let overbroad = capabilities
+            .insert(ObjectId(11), Rights::READ.union(Rights::WRITE))
+            .unwrap();
+        assert_eq!(
+            service.read(&capabilities, overbroad, SettingId::new(1).unwrap()),
+            Err(ConfigError::Unauthorized(CapabilityError::PermissionDenied))
+        );
         let mut transaction = ConfigTransaction::<2>::new(0);
         transaction
             .push(ConfigUpdate::new(
@@ -1154,7 +1165,7 @@ mod tests {
         assert_eq!(service.commit(&capabilities, root, &transaction), Ok(1));
         assert_eq!(
             service
-                .read(&capabilities, enabled, SettingId::new(1).unwrap())
+                .read(&capabilities, enabled_read, SettingId::new(1).unwrap())
                 .unwrap()
                 .value
                 .and_then(ConfigValue::as_bool),
@@ -1162,7 +1173,7 @@ mod tests {
         );
         assert_eq!(
             service
-                .read(&capabilities, limit, SettingId::new(2).unwrap())
+                .read(&capabilities, limit_read, SettingId::new(2).unwrap())
                 .unwrap()
                 .value
                 .and_then(ConfigValue::as_u64),
@@ -1172,7 +1183,7 @@ mod tests {
 
     #[test]
     fn late_schema_or_authority_failure_rolls_back_every_update() {
-        let (mut service, capabilities, root, enabled, _) = fixture();
+        let (mut service, capabilities, root, _, enabled, enabled_read, _, _) = fixture();
         let mut transaction = ConfigTransaction::<2>::new(0);
         transaction
             .push(ConfigUpdate::new(
@@ -1195,7 +1206,7 @@ mod tests {
         assert_eq!(service.revision(), 0);
         assert_eq!(
             service
-                .read(&capabilities, enabled, SettingId::new(1).unwrap())
+                .read(&capabilities, enabled_read, SettingId::new(1).unwrap())
                 .unwrap()
                 .value,
             None
@@ -1204,12 +1215,10 @@ mod tests {
 
     #[test]
     fn stale_revision_duplicate_setting_and_stale_capability_fail_closed() {
-        let (mut service, mut capabilities, root, enabled, _) = fixture();
+        let (mut service, mut capabilities, root, _, enabled, _, _, _) = fixture();
         let stale = enabled;
         capabilities.revoke(enabled).unwrap();
-        let replacement = capabilities
-            .insert(ObjectId(11), Rights::READ.union(Rights::WRITE))
-            .unwrap();
+        let replacement = capabilities.insert(ObjectId(11), Rights::WRITE).unwrap();
         let mut stale_transaction = ConfigTransaction::<1>::new(0);
         stale_transaction
             .push(ConfigUpdate::new(
@@ -1241,7 +1250,7 @@ mod tests {
 
     #[test]
     fn bounded_audit_reports_overwrite_gap_with_monotonic_sequence() {
-        let (mut service, capabilities, root, enabled, _) = fixture();
+        let (mut service, capabilities, root, root_read, enabled, _, _, _) = fixture();
         for revision in 0..3 {
             let mut transaction = ConfigTransaction::<1>::new(revision);
             transaction
@@ -1254,11 +1263,11 @@ mod tests {
             service.commit(&capabilities, root, &transaction).unwrap();
         }
         assert_eq!(
-            service.audit_event(&capabilities, root, 1),
+            service.audit_event(&capabilities, root_read, 1),
             Err(ConfigError::AuditUnavailable { oldest: 2 })
         );
         assert_eq!(
-            service.audit_event(&capabilities, root, 3).unwrap(),
+            service.audit_event(&capabilities, root_read, 3).unwrap(),
             Some(AuditEvent {
                 sequence: 3,
                 revision: 3,
@@ -1269,15 +1278,15 @@ mod tests {
 
     #[test]
     fn configuration_wire_is_canonical_bounded_and_pointer_free() {
-        let (_, _, root, enabled, limit) = fixture();
+        let (_, _, root, _, enabled, enabled_read, limit, _) = fixture();
         let mut read_wire = [0; CONFIG_REQUEST_HEADER_BYTES];
-        encode_read_request(8, SettingId::new(1).unwrap(), enabled, &mut read_wire).unwrap();
+        encode_read_request(8, SettingId::new(1).unwrap(), enabled_read, &mut read_wire).unwrap();
         assert_eq!(
             ConfigurationRequest::decode(&read_wire),
             Ok(ConfigurationRequest::Read {
                 request_id: 8,
                 setting: SettingId::new(1).unwrap(),
-                capability: enabled,
+                capability: enabled_read,
             })
         );
         let mut transaction = ConfigTransaction::<2>::new(7);
@@ -1436,7 +1445,7 @@ mod tests {
 
     #[test]
     fn message_dispatch_represents_an_authorized_unset_value() {
-        let (mut service, capabilities, _, enabled, _) = fixture();
+        let (mut service, capabilities, _, _, _, enabled, _, _) = fixture();
         let mut wire = [0; CONFIG_REQUEST_HEADER_BYTES];
         encode_read_message_request(22, SettingId::new(1).unwrap(), &mut wire).unwrap();
         let message = Message::new(&wire, &[enabled]).unwrap();
@@ -1457,7 +1466,7 @@ mod tests {
 
     #[test]
     fn supervision_wire_binds_generation_authority_time_and_version() {
-        let (_, _, root, _, _) = fixture();
+        let (_, _, root, _, _, _, _, _) = fixture();
         let request = SupervisionRequest {
             operation: SupervisionOperation::Restart,
             request_id: 4,
@@ -1949,7 +1958,8 @@ mod tests {
 
     #[test]
     fn checkpoint_round_trip_preserves_schema_values_revisions_and_audit_window() {
-        let (mut service, capabilities, root, enabled, limit) = fixture();
+        let (mut service, capabilities, root, root_read, enabled, enabled_read, limit, limit_read) =
+            fixture();
         let mut first = ConfigTransaction::<2>::new(0);
         first
             .push(ConfigUpdate::new(
@@ -1978,7 +1988,7 @@ mod tests {
 
         let mut bytes = [0; 512];
         let checkpoint = service
-            .export_checkpoint(&capabilities, root, &mut bytes)
+            .export_checkpoint(&capabilities, root_read, &mut bytes)
             .unwrap();
         assert_eq!(checkpoint.length, 368);
         let recovered = ConfigurationService::<3, 2>::recover_checkpoint(
@@ -1992,7 +2002,7 @@ mod tests {
         assert_eq!(recovered.setting_count(), 2);
         assert_eq!(
             recovered
-                .read(&capabilities, enabled, SettingId::new(1).unwrap())
+                .read(&capabilities, enabled_read, SettingId::new(1).unwrap())
                 .unwrap()
                 .value
                 .and_then(ConfigValue::as_bool),
@@ -2000,18 +2010,18 @@ mod tests {
         );
         assert_eq!(
             recovered
-                .read(&capabilities, limit, SettingId::new(2).unwrap())
+                .read(&capabilities, limit_read, SettingId::new(2).unwrap())
                 .unwrap()
                 .value
                 .and_then(ConfigValue::as_u64),
             Some(42)
         );
         assert_eq!(
-            recovered.audit_event(&capabilities, root, 1),
+            recovered.audit_event(&capabilities, root_read, 1),
             Err(ConfigError::AuditUnavailable { oldest: 2 })
         );
         assert_eq!(
-            recovered.audit_event(&capabilities, root, 2).unwrap(),
+            recovered.audit_event(&capabilities, root_read, 2).unwrap(),
             Some(AuditEvent {
                 sequence: 2,
                 revision: 1,
@@ -2019,7 +2029,7 @@ mod tests {
             })
         );
         assert_eq!(
-            recovered.audit_event(&capabilities, root, 3).unwrap(),
+            recovered.audit_event(&capabilities, root_read, 3).unwrap(),
             Some(AuditEvent {
                 sequence: 3,
                 revision: 2,
@@ -2054,10 +2064,10 @@ mod tests {
 
     #[test]
     fn checkpoint_recovery_rejects_corruption_stale_digest_capacity_and_hidden_data() {
-        let (service, capabilities, root, enabled, _) = fixture();
+        let (service, capabilities, root, root_read, _, enabled, _, _) = fixture();
         let mut bytes = [0; 512];
         let checkpoint = service
-            .export_checkpoint(&capabilities, root, &mut bytes)
+            .export_checkpoint(&capabilities, root_read, &mut bytes)
             .unwrap();
         let input = &mut bytes[..checkpoint.length];
         input[CONFIG_CHECKPOINT_HEADER_BYTES + 48] ^= 1;
@@ -3456,7 +3466,7 @@ mod tests {
 
     #[test]
     fn stable_checkpoint_requires_both_capabilities_and_one_use_publication_receipt() {
-        let (mut service, capabilities, root, enabled, _) = fixture();
+        let (mut service, capabilities, root, root_read, enabled, enabled_read, _, _) = fixture();
         let mut update = ConfigTransaction::<1>::new(0);
         update
             .push(ConfigUpdate::new(
@@ -3468,7 +3478,7 @@ mod tests {
         service.commit(&capabilities, root, &update).unwrap();
         let mut expected = [0; 512];
         let checkpoint = service
-            .export_checkpoint(&capabilities, root, &mut expected)
+            .export_checkpoint(&capabilities, root_read, &mut expected)
             .unwrap();
         let (current, next, metadata, images) = stable_layout(&expected[..checkpoint.length]);
         let mut authority = StorageAuthorityTable::<1>::new();
@@ -3494,7 +3504,7 @@ mod tests {
         let prepared = prepare_stable_configuration(
             &service,
             &capabilities,
-            root,
+            root_read,
             &current,
             &authority,
             file,
@@ -3538,7 +3548,7 @@ mod tests {
         assert_eq!(recovered.revision(), 1);
         assert_eq!(
             recovered
-                .read(&capabilities, enabled, SettingId::new(1).unwrap())
+                .read(&capabilities, enabled_read, SettingId::new(1).unwrap())
                 .unwrap()
                 .value
                 .and_then(ConfigValue::as_bool),
@@ -3577,7 +3587,7 @@ mod tests {
             2,
             &capabilities,
             root,
-            enabled,
+            enabled_read,
             SettingId::new(1).unwrap(),
             ObjectId(99),
             &mut dependent_bytes,
@@ -3621,18 +3631,18 @@ mod tests {
             ],
         )
         .unwrap();
-        let mut capabilities = CapabilitySpace::<4>::new();
-        let root = capabilities
-            .insert(root_object, Rights::CONTROL.union(Rights::READ))
+        let mut capabilities = CapabilitySpace::<8>::new();
+        let root_control = capabilities.insert(root_object, Rights::CONTROL).unwrap();
+        let root_read = capabilities.insert(root_object, Rights::READ).unwrap();
+        let setting_write = capabilities.insert(setting_object, Rights::WRITE).unwrap();
+        let setting_read = capabilities.insert(setting_object, Rights::READ).unwrap();
+        let system_write = capabilities.insert(system.object(), Rights::WRITE).unwrap();
+        let system_read = capabilities.insert(system.object(), Rights::READ).unwrap();
+        let component_write = capabilities
+            .insert(component.object(), Rights::WRITE)
             .unwrap();
-        let setting_access = capabilities
-            .insert(setting_object, Rights::READ.union(Rights::WRITE))
-            .unwrap();
-        let system_access = capabilities
-            .insert(system.object(), Rights::READ.union(Rights::WRITE))
-            .unwrap();
-        let component_access = capabilities
-            .insert(component.object(), Rights::READ.union(Rights::WRITE))
+        let component_read = capabilities
+            .insert(component.object(), Rights::READ)
             .unwrap();
         let policy = PersistedRestartPolicy::new(service_object, 3, 5, 20).unwrap();
         let mut encoded_policy = [0; PERSISTED_RESTART_POLICY_BYTES];
@@ -3641,28 +3651,26 @@ mod tests {
         update
             .push(ConfigUpdate::new(
                 setting,
-                setting_access,
+                setting_write,
                 ConfigValue::bytes(&encoded_policy).unwrap(),
             ))
             .unwrap();
         system
-            .stage(
-                &mut update,
-                system_access,
-                OwnerIsolationSelection::Balanced,
-            )
+            .stage(&mut update, system_write, OwnerIsolationSelection::Balanced)
             .unwrap();
         component
             .stage(
                 &mut update,
-                component_access,
+                component_write,
                 OwnerIsolationSelection::Native,
             )
             .unwrap();
-        configuration.commit(&capabilities, root, &update).unwrap();
+        configuration
+            .commit(&capabilities, root_control, &update)
+            .unwrap();
         let mut checkpoint_bytes = [0; 512];
         let checkpoint = configuration
-            .export_checkpoint(&capabilities, root, &mut checkpoint_bytes)
+            .export_checkpoint(&capabilities, root_read, &mut checkpoint_bytes)
             .unwrap();
 
         let device = BlockDeviceId::new(7).unwrap();
@@ -3739,21 +3747,21 @@ mod tests {
             let mut denied_export = [0; 512];
             assert!(
                 prepare_block_stable_configuration(
-                &configuration,
-                &capabilities,
-                root,
-                &current,
-                &storage_authority,
-                file,
-                stable_principal(),
-                denied_next,
-                denied_metadata,
-                MetadataPointer::new(5, 1).unwrap(),
-                &[],
-                &mut denied_export,
-                &mut denied_volume,
-                &mut denied_file_scratch,
-            )
+                    &configuration,
+                    &capabilities,
+                    root_read,
+                    &current,
+                    &storage_authority,
+                    file,
+                    stable_principal(),
+                    denied_next,
+                    denied_metadata,
+                    MetadataPointer::new(5, 1).unwrap(),
+                    &[],
+                    &mut denied_export,
+                    &mut denied_volume,
+                    &mut denied_file_scratch,
+                )
                 .is_err()
             );
         }
@@ -3775,7 +3783,7 @@ mod tests {
             let prepared = prepare_block_stable_configuration(
                 &configuration,
                 &capabilities,
-                root,
+                root_read,
                 &current,
                 &storage_authority,
                 file,
@@ -3900,8 +3908,8 @@ mod tests {
                     stable_principal(),
                     2,
                     &capabilities,
-                    root,
-                    setting_access,
+                    root_control,
+                    setting_read,
                     setting,
                     service_object,
                     &mut recovered_bytes,
@@ -3927,7 +3935,7 @@ mod tests {
             drop(boot_store);
             assert!(
                 supervisor
-                .plan_registration(ObjectId(82), task, RestartPolicy::ONCE_IMMEDIATE)
+                    .plan_registration(ObjectId(82), task, RestartPolicy::ONCE_IMMEDIATE)
                     .is_ok()
             );
             let recovered = prepared_service
@@ -3948,7 +3956,7 @@ mod tests {
             let runtime_binding = RuntimeDomainPolicyBinding::new(
                 "org.mrml.service.config",
                 component,
-                component_access,
+                component_read,
             )
             .unwrap();
             recovered
@@ -3987,12 +3995,9 @@ mod tests {
                 recovered.configuration().revision(),
             )
             .unwrap();
-            let wrong_binding = RuntimeDomainPolicyBinding::new(
-                "org.mrml.service.config",
-                component,
-                system_access,
-            )
-            .unwrap();
+            let wrong_binding =
+                RuntimeDomainPolicyBinding::new("org.mrml.service.config", component, system_read)
+                    .unwrap();
             assert!(matches!(
                 recovered.assign_runtime_domains(
                     &capabilities,
@@ -4100,9 +4105,9 @@ mod tests {
                 .compose_early_boot_isolation_policy(
                     &capabilities,
                     system,
-                    system_access,
+                    system_read,
                     component,
-                    component_access,
+                    component_read,
                     &early,
                 )
                 .unwrap();
@@ -4131,9 +4136,9 @@ mod tests {
                     installed_selection,
                     &capabilities,
                     system,
-                    system_access,
+                    system_read,
                     component,
-                    component_access,
+                    component_read,
                     &handoff,
                     |policy_generation| {
                         Ok::<_, ()>(activated_configuration_release(domain, policy_generation))
@@ -4178,9 +4183,9 @@ mod tests {
                         installed_selection,
                         &capabilities,
                         system,
-                        system_access,
+                        system_read,
                         component,
-                        component_access,
+                        component_read,
                         stale_runtime_plan,
                         &[runtime_binding],
                     )
@@ -4201,9 +4206,9 @@ mod tests {
                     installed_selection,
                     &capabilities,
                     system,
-                    system_access,
+                    system_read,
                     component,
-                    component_access,
+                    component_read,
                     runtime_plan,
                     &[runtime_binding],
                 )
@@ -4283,9 +4288,9 @@ mod tests {
                 installed_selection,
                 &capabilities,
                 system,
-                system_access,
+                system_read,
                 component,
-                component_access,
+                component_read,
                 &stale_handoff,
                 |_| panic!("release builder must not run without installed handoff identity"),
             );
@@ -4299,9 +4304,9 @@ mod tests {
                 recovered.compose_boot_isolation_policy(
                     &capabilities,
                     system,
-                    system_access,
+                    system_read,
                     component,
-                    component_access,
+                    component_read,
                     &stale_handoff,
                 ),
                 Err(ConfigError::RecoveryHandoffMismatch)
@@ -4348,7 +4353,7 @@ mod tests {
 
     #[test]
     fn stable_checkpoint_rejects_wrong_authority_binding_corruption_and_io_uncertainty() {
-        let (service, capabilities, root, enabled, _) = fixture();
+        let (service, capabilities, _, root, _, enabled, _, _) = fixture();
         let mut expected = [0; 512];
         let checkpoint = service
             .export_checkpoint(&capabilities, root, &mut expected)
@@ -4584,13 +4589,11 @@ mod tests {
             SettingSchema::bytes(setting, policy_object, PERSISTED_RESTART_POLICY_BYTES as u8)
                 .unwrap();
         let mut configuration = ConfigurationService::<1, 2>::new(ObjectId(79), &[schema]).unwrap();
-        let mut capabilities = CapabilitySpace::<3>::new();
-        let root = capabilities
-            .insert(ObjectId(79), Rights::CONTROL.union(Rights::READ))
-            .unwrap();
-        let policy_capability = capabilities
-            .insert(policy_object, Rights::READ.union(Rights::WRITE))
-            .unwrap();
+        let mut capabilities = CapabilitySpace::<5>::new();
+        let root_control = capabilities.insert(ObjectId(79), Rights::CONTROL).unwrap();
+        let root_read = capabilities.insert(ObjectId(79), Rights::READ).unwrap();
+        let policy_write = capabilities.insert(policy_object, Rights::WRITE).unwrap();
+        let policy_read = capabilities.insert(policy_object, Rights::READ).unwrap();
         let unrelated = capabilities.insert(ObjectId(81), Rights::READ).unwrap();
         let policy = PersistedRestartPolicy::new(service_object, 1, 10, 10).unwrap();
         let mut encoded = [0; PERSISTED_RESTART_POLICY_BYTES];
@@ -4599,12 +4602,12 @@ mod tests {
         transaction
             .push(ConfigUpdate::new(
                 setting,
-                policy_capability,
+                policy_write,
                 ConfigValue::bytes(&encoded).unwrap(),
             ))
             .unwrap();
         configuration
-            .commit(&capabilities, root, &transaction)
+            .commit(&capabilities, root_control, &transaction)
             .unwrap();
 
         assert!(matches!(
@@ -4623,7 +4626,7 @@ mod tests {
             load_persisted_restart_policy(
                 &configuration,
                 &capabilities,
-                policy_capability,
+                policy_read,
                 setting,
                 ObjectId(71),
             ),
@@ -4632,11 +4635,11 @@ mod tests {
 
         let mut checkpoint_bytes = [0; 256];
         let checkpoint = configuration
-            .export_checkpoint(&capabilities, root, &mut checkpoint_bytes)
+            .export_checkpoint(&capabilities, root_read, &mut checkpoint_bytes)
             .unwrap();
         let recovered = ConfigurationService::<1, 2>::recover_checkpoint(
             &capabilities,
-            root,
+            root_control,
             &checkpoint_bytes[..checkpoint.length],
             checkpoint.digest,
         )
@@ -4644,7 +4647,7 @@ mod tests {
         let bound = load_persisted_restart_policy(
             &recovered,
             &capabilities,
-            policy_capability,
+            policy_read,
             setting,
             service_object,
         )
@@ -4666,7 +4669,7 @@ mod tests {
             .register(
                 &recovered,
                 &capabilities,
-                policy_capability,
+                policy_read,
                 &mut supervisor,
                 task,
             )
@@ -4740,12 +4743,12 @@ mod tests {
             Err(ServiceError::RestartLimit)
         );
 
-        capabilities.revoke(policy_capability).unwrap();
+        capabilities.revoke(policy_read).unwrap();
         assert!(matches!(
             bound.register(
                 &recovered,
                 &capabilities,
-                policy_capability,
+                policy_read,
                 &mut supervisor,
                 task,
             ),
@@ -4757,7 +4760,7 @@ mod tests {
             load_persisted_restart_policy(
                 &recovered,
                 &capabilities,
-                policy_capability,
+                policy_read,
                 setting,
                 service_object,
             ),
@@ -4777,11 +4780,10 @@ mod tests {
             SettingSchema::bytes(setting, policy_object, PERSISTED_RESTART_POLICY_BYTES as u8)
                 .unwrap();
         let mut configuration = ConfigurationService::<1, 3>::new(root_object, &[schema]).unwrap();
-        let mut capabilities = CapabilitySpace::<2>::new();
+        let mut capabilities = CapabilitySpace::<3>::new();
         let root = capabilities.insert(root_object, Rights::CONTROL).unwrap();
-        let policy_capability = capabilities
-            .insert(policy_object, Rights::READ.union(Rights::WRITE))
-            .unwrap();
+        let policy_write = capabilities.insert(policy_object, Rights::WRITE).unwrap();
+        let policy_read = capabilities.insert(policy_object, Rights::READ).unwrap();
 
         let initial = PersistedRestartPolicy::new(service_object, 1, 10, 10).unwrap();
         let mut encoded = [0; PERSISTED_RESTART_POLICY_BYTES];
@@ -4790,7 +4792,7 @@ mod tests {
         transaction
             .push(ConfigUpdate::new(
                 setting,
-                policy_capability,
+                policy_write,
                 ConfigValue::bytes(&encoded).unwrap(),
             ))
             .unwrap();
@@ -4800,7 +4802,7 @@ mod tests {
         let stale = load_persisted_restart_policy(
             &configuration,
             &capabilities,
-            policy_capability,
+            policy_read,
             setting,
             service_object,
         )
@@ -4812,7 +4814,7 @@ mod tests {
         transaction
             .push(ConfigUpdate::new(
                 setting,
-                policy_capability,
+                policy_write,
                 ConfigValue::bytes(&encoded).unwrap(),
             ))
             .unwrap();
@@ -4841,14 +4843,14 @@ mod tests {
                 &mut supervisor,
                 service,
                 &management,
-                RestartPolicyApplicationAuthority::new(policy_capability, control),
+                RestartPolicyApplicationAuthority::new(policy_read, control),
             ),
             Err(PersistedRestartPolicyError::PolicyChanged)
         );
         let current = load_persisted_restart_policy(
             &configuration,
             &capabilities,
-            policy_capability,
+            policy_read,
             setting,
             service_object,
         )
@@ -4862,7 +4864,7 @@ mod tests {
                 &mut supervisor,
                 service,
                 &management,
-                RestartPolicyApplicationAuthority::new(policy_capability, wrong),
+                RestartPolicyApplicationAuthority::new(policy_read, wrong),
             ),
             Err(PersistedRestartPolicyError::Service(
                 ServiceError::Unauthorized(CapabilityError::PermissionDenied)
@@ -4875,10 +4877,10 @@ mod tests {
                 &mut supervisor,
                 service,
                 &management,
-                RestartPolicyApplicationAuthority::new(policy_capability, control),
+                RestartPolicyApplicationAuthority::new(policy_read, control),
             )
             .unwrap();
-        capabilities.revoke(policy_capability).unwrap();
+        capabilities.revoke(policy_read).unwrap();
         assert_eq!(
             current.replace(
                 &configuration,
@@ -4886,7 +4888,7 @@ mod tests {
                 &mut supervisor,
                 service,
                 &management,
-                RestartPolicyApplicationAuthority::new(policy_capability, control),
+                RestartPolicyApplicationAuthority::new(policy_read, control),
             ),
             Err(PersistedRestartPolicyError::Configuration(
                 ConfigError::Unauthorized(CapabilityError::Invalid)
@@ -4924,12 +4926,15 @@ mod tests {
             SettingSchema::bytes(setting, policy_object, PERSISTED_RESTART_POLICY_BYTES as u8)
                 .unwrap();
         let mut configuration = ConfigurationService::<1, 2>::new(root_object, &[schema]).unwrap();
-        let mut configuration_capabilities = CapabilitySpace::<2>::new();
+        let mut configuration_capabilities = CapabilitySpace::<3>::new();
         let root = configuration_capabilities
             .insert(root_object, Rights::CONTROL)
             .unwrap();
+        let setting_write = configuration_capabilities
+            .insert(policy_object, Rights::WRITE)
+            .unwrap();
         let setting_read = configuration_capabilities
-            .insert(policy_object, Rights::READ.union(Rights::WRITE))
+            .insert(policy_object, Rights::READ)
             .unwrap();
         let persisted = PersistedRestartPolicy::new(service_object, 2, 5, 20).unwrap();
         let mut encoded = [0; PERSISTED_RESTART_POLICY_BYTES];
@@ -4938,7 +4943,7 @@ mod tests {
         transaction
             .push(ConfigUpdate::new(
                 setting,
-                setting_read,
+                setting_write,
                 ConfigValue::bytes(&encoded).unwrap(),
             ))
             .unwrap();
@@ -5082,39 +5087,38 @@ mod tests {
         );
         let schemas = [component.schema().unwrap(), system.schema().unwrap()];
         let mut configuration = ConfigurationService::<2, 4>::new(root_object, &schemas).unwrap();
-        let mut capabilities = CapabilitySpace::<5>::new();
-        let root = capabilities
-            .insert(root_object, Rights::CONTROL.union(Rights::READ))
+        let mut capabilities = CapabilitySpace::<7>::new();
+        let root_control = capabilities.insert(root_object, Rights::CONTROL).unwrap();
+        let root_read = capabilities.insert(root_object, Rights::READ).unwrap();
+        let component_write = capabilities
+            .insert(component_object, Rights::WRITE)
             .unwrap();
-        let component_access = capabilities
-            .insert(component_object, Rights::READ.union(Rights::WRITE))
-            .unwrap();
-        let system_access = capabilities
-            .insert(system_object, Rights::READ.union(Rights::WRITE))
-            .unwrap();
+        let component_read = capabilities.insert(component_object, Rights::READ).unwrap();
+        let system_write = capabilities.insert(system_object, Rights::WRITE).unwrap();
+        let system_read = capabilities.insert(system_object, Rights::READ).unwrap();
 
         let mut transaction = ConfigTransaction::<2>::new(0);
         component
             .stage(
                 &mut transaction,
-                component_access,
+                component_write,
                 OwnerIsolationSelection::Microvm,
             )
             .unwrap();
         system
             .stage(
                 &mut transaction,
-                system_access,
+                system_write,
                 OwnerIsolationSelection::TotalMicrovm,
             )
             .unwrap();
         assert_eq!(
-            configuration.commit(&capabilities, root, &transaction),
+            configuration.commit(&capabilities, root_control, &transaction),
             Ok(1)
         );
 
         let component_policy = component
-            .read(&configuration, &capabilities, component_access)
+            .read(&configuration, &capabilities, component_read)
             .unwrap();
         assert_eq!(
             component_policy.selection(),
@@ -5129,12 +5133,12 @@ mod tests {
         )
         .unwrap();
         assert_eq!(
-            substituted_native_class.read(&configuration, &capabilities, component_access),
+            substituted_native_class.read(&configuration, &capabilities, component_read),
             Err(ConfigError::SchemaViolation)
         );
         assert_eq!(
             system
-                .read(&configuration, &capabilities, system_access)
+                .read(&configuration, &capabilities, system_read)
                 .unwrap()
                 .selection(),
             OwnerIsolationSelection::TotalMicrovm
@@ -5143,9 +5147,9 @@ mod tests {
             &configuration,
             &capabilities,
             system,
-            system_access,
+            system_read,
             component,
-            component_access,
+            component_read,
         )
         .unwrap();
         let applied = plan.apply(&configuration, &capabilities).unwrap();
@@ -5227,31 +5231,31 @@ mod tests {
         assert_eq!(blocked.policy_source(), None);
         assert!(!blocked.microvm_supported());
         assert!(matches!(
-            component.read(&configuration, &capabilities, system_access),
+            component.read(&configuration, &capabilities, system_read),
             Err(ConfigError::WrongObject)
         ));
 
         let mut checkpoint_bytes = [0; 512];
         let checkpoint = configuration
-            .export_checkpoint(&capabilities, root, &mut checkpoint_bytes)
+            .export_checkpoint(&capabilities, root_read, &mut checkpoint_bytes)
             .unwrap();
         let recovered = ConfigurationService::<2, 4>::recover_checkpoint(
             &capabilities,
-            root,
+            root_control,
             &checkpoint_bytes[..checkpoint.length],
             checkpoint.digest,
         )
         .unwrap();
         assert_eq!(
             component
-                .read(&recovered, &capabilities, component_access)
+                .read(&recovered, &capabilities, component_read)
                 .unwrap()
                 .selection(),
             OwnerIsolationSelection::Microvm
         );
         assert_eq!(
             system
-                .read(&recovered, &capabilities, system_access)
+                .read(&recovered, &capabilities, system_read)
                 .unwrap()
                 .selection(),
             OwnerIsolationSelection::TotalMicrovm
@@ -5262,7 +5266,7 @@ mod tests {
             &configuration,
             &capabilities,
             system,
-            system_access,
+            system_read,
             component,
             revocable_read,
         )
@@ -5277,21 +5281,21 @@ mod tests {
             &configuration,
             &capabilities,
             system,
-            system_access,
+            system_read,
             component,
-            component_access,
+            component_read,
         )
         .unwrap();
         let mut replacement = ConfigTransaction::<1>::new(1);
         component
             .stage(
                 &mut replacement,
-                component_access,
+                component_write,
                 OwnerIsolationSelection::Default,
             )
             .unwrap();
         configuration
-            .commit(&capabilities, root, &replacement)
+            .commit(&capabilities, root_control, &replacement)
             .unwrap();
         assert_eq!(
             stale_plan.apply(&configuration, &capabilities),
@@ -5311,11 +5315,12 @@ mod tests {
         .unwrap();
         let mut configuration =
             ConfigurationService::<1, 4>::new(root_object, &[setting.schema().unwrap()]).unwrap();
-        let mut capabilities = CapabilitySpace::<4>::new();
+        let mut capabilities = CapabilitySpace::<5>::new();
         let root_control = capabilities.insert(root_object, Rights::CONTROL).unwrap();
-        let setting_access = capabilities
-            .insert(component_object, Rights::READ.union(Rights::WRITE))
+        let setting_write = capabilities
+            .insert(component_object, Rights::WRITE)
             .unwrap();
+        let setting_read = capabilities.insert(component_object, Rights::READ).unwrap();
         let wrong_write = capabilities.insert(ObjectId(99), Rights::WRITE).unwrap();
 
         let settings_edit =
@@ -5358,7 +5363,7 @@ mod tests {
                 &mut configuration,
                 &capabilities,
                 root_control,
-                setting_access,
+                setting_write,
             )
             .unwrap();
         assert_eq!(committed.setting(), setting);
@@ -5366,7 +5371,7 @@ mod tests {
         assert_eq!(committed.policy_generation(), 1);
         assert_eq!(
             setting
-                .read(&configuration, &capabilities, setting_access)
+                .read(&configuration, &capabilities, setting_read)
                 .unwrap()
                 .selection(),
             OwnerIsolationSelection::Microvm
@@ -5377,7 +5382,7 @@ mod tests {
                 &mut configuration,
                 &capabilities,
                 root_control,
-                setting_access,
+                setting_write,
             ),
             Err(ConfigError::RevisionConflict { current: 1 })
         );
@@ -5417,11 +5422,10 @@ mod tests {
         let mut configuration =
             ConfigurationService::<1, 2>::new(ObjectId(419), &[component.schema().unwrap()])
                 .unwrap();
-        let mut capabilities = CapabilitySpace::<2>::new();
+        let mut capabilities = CapabilitySpace::<3>::new();
         let root = capabilities.insert(ObjectId(419), Rights::CONTROL).unwrap();
-        let access = capabilities
-            .insert(ObjectId(420), Rights::READ.union(Rights::WRITE))
-            .unwrap();
+        let write = capabilities.insert(ObjectId(420), Rights::WRITE).unwrap();
+        let read = capabilities.insert(ObjectId(420), Rights::READ).unwrap();
         let mut malformed = [0; ISOLATION_POLICY_VALUE_BYTES];
         malformed[..8].copy_from_slice(&ISOLATION_POLICY_VALUE_MAGIC);
         malformed[8] = 1;
@@ -5431,13 +5435,13 @@ mod tests {
         generic
             .push(ConfigUpdate::new(
                 component.setting(),
-                access,
+                write,
                 ConfigValue::bytes(&malformed).unwrap(),
             ))
             .unwrap();
         configuration.commit(&capabilities, root, &generic).unwrap();
         assert_eq!(
-            component.read(&configuration, &capabilities, access),
+            component.read(&configuration, &capabilities, read),
             Err(ConfigError::NonCanonical)
         );
     }
@@ -5533,12 +5537,12 @@ mod tests {
         );
         assert!(
             IsolationServiceBounds::new(
-            IsolationPlacement::NativeService,
-            IsolationPlacement::Microvm,
-            IsolationPlacement::Microvm,
-            true,
-            true,
-        )
+                IsolationPlacement::NativeService,
+                IsolationPlacement::Microvm,
+                IsolationPlacement::Microvm,
+                true,
+                true,
+            )
             .is_err()
         );
     }
@@ -5908,26 +5912,26 @@ mod tests {
             &[component.schema().unwrap(), system.schema().unwrap()],
         )
         .unwrap();
-        let mut capabilities = CapabilitySpace::<3>::new();
+        let mut capabilities = CapabilitySpace::<5>::new();
         let root = capabilities.insert(root_object, Rights::CONTROL).unwrap();
-        let component_access = capabilities
-            .insert(component_object, Rights::READ.union(Rights::WRITE))
+        let component_write = capabilities
+            .insert(component_object, Rights::WRITE)
             .unwrap();
-        let system_access = capabilities
-            .insert(system_object, Rights::READ.union(Rights::WRITE))
-            .unwrap();
+        let component_read = capabilities.insert(component_object, Rights::READ).unwrap();
+        let system_write = capabilities.insert(system_object, Rights::WRITE).unwrap();
+        let system_read = capabilities.insert(system_object, Rights::READ).unwrap();
         let mut initial = ConfigTransaction::<2>::new(0);
         component
             .stage(
                 &mut initial,
-                component_access,
+                component_write,
                 OwnerIsolationSelection::Microvm,
             )
             .unwrap();
         system
             .stage(
                 &mut initial,
-                system_access,
+                system_write,
                 OwnerIsolationSelection::TotalMicrovm,
             )
             .unwrap();
@@ -5936,9 +5940,9 @@ mod tests {
             &configuration,
             &capabilities,
             system,
-            system_access,
+            system_read,
             component,
-            component_access,
+            component_read,
         )
         .unwrap();
         let bounds = IsolationServiceBounds::new(
@@ -6000,16 +6004,16 @@ mod tests {
             &configuration,
             &capabilities,
             system,
-            system_access,
+            system_read,
             component,
-            component_access,
+            component_read,
         )
         .unwrap();
         let mut replacement = ConfigTransaction::<1>::new(1);
         component
             .stage(
                 &mut replacement,
-                component_access,
+                component_write,
                 OwnerIsolationSelection::Default,
             )
             .unwrap();
@@ -6044,9 +6048,9 @@ mod tests {
             &configuration,
             &capabilities,
             system,
-            system_access,
+            system_read,
             component,
-            component_access,
+            component_read,
         )
         .unwrap();
         let mut wrong_admission =

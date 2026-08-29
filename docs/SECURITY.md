@@ -992,3 +992,10 @@ authorize MRML's CUDA compute channel. Display, presentation, and CUDA compute
 are distinct capabilities. The MRML-specific compute path retains exact signed
 kernel admission, authenticated request/completion binding, bounds, quotas,
 reset/watchdog behavior, and fallback requirements.
+
+Configuration authorization is exact at both supported service placements.
+The hosted capability adapter and the service-image authorization syscall reject
+rights supersets as well as missing rights, preventing a combined capability
+from crossing a read-, write-, or control-only gate. Recovery and policy code
+therefore retain separate operation-scoped handles and revalidate the exact live
+handle at each use; object identity still does not authorize the operation.

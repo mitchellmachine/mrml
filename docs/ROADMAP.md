@@ -4018,3 +4018,10 @@ Kernel passes 578 tests on Windows and Arch Linux, WHP passes 27 tests with one
 manual performance test ignored, and nested KVM passes 23 tests with one manual
 performance test ignored. Guest interrupt handlers, recovered two-domain runner
 ownership, and guest-executed signed ZIM/Zstd calls remain **PLANNED**.
+
+The configuration authorization dependency gate now **IMPLEMENTS** exact-rights
+parity between hosted execution and the service-image syscall path. Recovery,
+checkpoint, restart-policy, and isolation-policy tests use separate read,
+write, and control capabilities, and explicitly reject a combined-right handle
+at an exact-read boundary. Installed service execution and hosted VMM execution
+are not claimed by this increment.

@@ -638,7 +638,7 @@ impl<const CAPS: usize> CapabilityAuthorizer for CapabilitySpace<CAPS> {
         expected: ObjectId,
     ) -> Result<(), ConfigError> {
         let object = self
-            .authorize(capability, rights)
+            .authorize_exact(capability, rights)
             .map_err(ConfigError::Unauthorized)?;
         (object == expected)
             .then_some(())
