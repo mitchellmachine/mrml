@@ -462,7 +462,12 @@ admin executor now also negotiates one through 64 I/O submission/completion
 queues with the standard Number of Queues feature, exact controller-control
 authority, verified command publication, and hostile result bounds; it rejects
 zero, excess requests, excess grants, and authority substitution without
-inventing queue availability. Thirty-seven focused
+inventing queue availability. One negotiated queue-pair DMA gate now retains
+the live admin queue owner while exact controller-control and separate
+pin/map/read/write capabilities authorize two distinct zero-verified 4 KiB
+pages. Queue ID must be nonzero and within both grants, depth is bounded to two
+through 64 entries, admin/I/O regions may not overlap, and backend rejection
+returns the complete grant for retry. Forty-one focused
 tests pass on Windows and Arch Linux. The class tuple
 is cross-checked against the
 [PCI-SIG DEVICE_INTERFACE_REPORT ECN](https://pcisig.com/PCIExpress/ECN/Base/AddClasstoDEVICE_INTERFACE_REPORT);

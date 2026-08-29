@@ -10319,6 +10319,16 @@ admin-command escape hatch. It does not interpret identify data, discover
 namespaces, create I/O queues, or implement a storage scheduling or caching
 algorithm. This technical screen is not legal advice or patent clearance.
 
+# 2026-08-29 — Capability-bound NVMe I/O-queue DMA ownership
+
+Patent review: **NOT_TRIGGERED**. This increment applies MRML's existing exact
+pinned-memory and IOMMU lifetime rules to a negotiated, fixed-capacity NVMe I/O
+queue pair. It uses ordinary grant, range, alignment, generation, object, and
+overlap checks and retains the live admin-queue owner on rejection. It does not
+create queues, issue block commands, schedule requests, cache data, or introduce
+another storage algorithm. This technical screen is not legal advice or patent
+clearance.
+
 # 2026-08-29 — Bounded NVMe I/O-queue count negotiation
 
 Patent review: **NOT_TRIGGERED**. This increment uses the conventional NVMe
