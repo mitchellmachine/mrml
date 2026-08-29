@@ -6936,6 +6936,10 @@ inspection. Batch derivation reuses that non-mutating validator before its
 destination-capacity and commit passes. A stale-source/missing-receiver test
 returns only authorization denial and proves the endpoint sequence remains one
 for the next valid transfer, raising the Linux kernel total to 626.
+Queued delivery performs the same source preflight before inbox topology or
+capacity. The full-inbox adversarial test now includes a stale delegated handle
+and proves it receives only authorization denial without sequence consumption;
+the total remains 626.
 Patent review: `NOT_TRIGGERED` — this factors and reorders conventional
 capability validation in the existing bounded transfer path.
 The service buffered-receive path now resolves one exact empty pending-table

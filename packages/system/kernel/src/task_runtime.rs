@@ -1056,6 +1056,13 @@ impl<const TASKS: usize, const CAPS: usize> TaskRuntime<TASKS, CAPS> {
             return Err(TaskRuntimeError::SameTaskIpc);
         }
         Message::validate_shape(payload.len(), requested.len()).map_err(TaskRuntimeError::Ipc)?;
+        self.domains[sender_slot]
+            .as_ref()
+            .ok_or(TaskRuntimeError::IntegrityFailure)?
+            .capabilities
+            .validate_derivations(requested)
+            .map_err(IpcError::from)
+            .map_err(TaskRuntimeError::Ipc)?;
         let receiver_slot = self.domain_slot(receiver)?;
         if !self.scheduler.contains(receiver) {
             return Err(TaskRuntimeError::IntegrityFailure);
@@ -2473,7 +2480,7 @@ mod tests {
 
     #[test]
     fn unauthorized_delivery_cannot_observe_full_receiver_inbox() {
-        let mut runtime = TaskRuntime::<2, 2>::new(1_000, 1).unwrap();
+        let mut runtime = TaskRuntime::<2, 3>::new(1_000, 1).unwrap();
         let sender = runtime
             .create(Priority::NORMAL, context(0x20_0000, 0x40_0000))
             .unwrap();
@@ -2490,6 +2497,16 @@ mod tests {
             .capabilities_mut(sender)
             .unwrap()
             .insert(ObjectId(0x57), Rights::SIGNAL)
+            .unwrap();
+        let stale_delegation = runtime
+            .capabilities_mut(sender)
+            .unwrap()
+            .insert(ObjectId(0x58), Rights::READ.union(Rights::DELEGATE))
+            .unwrap();
+        runtime
+            .capabilities_mut(sender)
+            .unwrap()
+            .revoke(stale_delegation)
             .unwrap();
         let mut endpoint = Endpoint::new(endpoint_object);
         for payload in [b"one".as_slice(), b"two".as_slice()] {
@@ -2527,6 +2544,19 @@ mod tests {
                 &[],
             ),
             Err(TaskRuntimeError::Ipc(IpcError::PayloadTooLarge))
+        );
+        assert_eq!(
+            runtime
+                .deliver_ipc(
+                    sender,
+                    receiver,
+                    &mut endpoint,
+                    endpoint_capability,
+                    b"stale",
+                    &[(stale_delegation, Rights::READ)],
+                )
+                .err(),
+            Some(TaskRuntimeError::Ipc(IpcError::Unauthorized))
         );
         runtime.receive_ipc(receiver).unwrap();
         assert_eq!(

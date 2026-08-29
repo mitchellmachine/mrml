@@ -2265,6 +2265,8 @@ live composition remains pending.
    Complete requested source delegations now validate before receiver identity,
    delegation graph, or table capacity. A stale-source non-disclosure test
    raises the kernel total to 626 without consuming endpoint sequence.
+   Queued delivery applies that source gate before inbox inspection as well;
+   full-inbox stale-source coverage passes without changing the total.
    Buffered service receive now preflights an exact pending-table slot before
    blocking and binds post-switch publication to that slot. Service profiles
    cross-build; live backend execution remains pending.
