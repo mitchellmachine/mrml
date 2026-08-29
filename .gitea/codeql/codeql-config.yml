@@ -1,8 +1,0 @@
-name: MRML CodeQL configuration for Gitea Actions
-
-queries:
-  - uses: security-and-quality
-
-paths-ignore:
-  - target
-  - "**/target/**"
