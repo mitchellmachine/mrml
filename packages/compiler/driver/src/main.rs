@@ -16,7 +16,7 @@ use mrml_rustc::{
     ObjectFormat, PeReadonlyAbsoluteRelocation, PeRuntimeFunction, PeWritableData,
     PeWritableRelocation, PeWritableRelocationTarget, TargetLayout,
     compile_source_function_with_options, decode_unix_archive,
-    decode_x86_64_coff_readonly_absolute_relocation_for_fragment,
+    decode_x86_64_coff_readonly_absolute_relocations_from_inventory,
     decode_x86_64_coff_runtime_functions, decode_x86_64_coff_standalone_readonly_fragment,
     decode_x86_64_coff_text_fragment_from_inventory, decode_x86_64_coff_writable_data_fragment,
     decode_x86_64_elf_selected_definitions_from_sections,
@@ -24,8 +24,7 @@ use mrml_rustc::{
     decode_x86_64_elf_with_definitions, inventory_x86_64_coff_comdat_sections,
     inventory_x86_64_elf_symbols, link_x86_64_elf_selected_executable,
     link_x86_64_pe_with_data_unwind_and_readonly_relocations, select_ordered_static_link_members,
-    select_x86_64_elf_link_sections_detailed, x86_64_coff_readonly_absolute_relocation_count,
-    x86_64_coff_standalone_readonly_fragment_count,
+    select_x86_64_elf_link_sections_detailed, x86_64_coff_standalone_readonly_fragment_count,
     x86_64_coff_text_fragment_comdat_selection_from_inventory, x86_64_coff_text_fragment_count,
     x86_64_coff_writable_section_count,
 };
@@ -1171,32 +1170,14 @@ fn selected_readonly_absolute_relocations<'data>(
             .any(|source| *source == object_index);
         if selected_object {
             let object = objects[object_index];
-            let relocation_count =
-                x86_64_coff_readonly_absolute_relocation_count(object).map_err(|error| {
-                    anyhow!(
-                        "could not count selected COFF refptr relocations: {}",
-                        error
-                    )
-                })?;
-            if output
-                .len()
-                .checked_add(relocation_count)
-                .filter(|count| *count <= MAX_LINK_RELOCATIONS)
-                .is_none()
-            {
-                return Err(anyhow!("too many selected COFF refptr relocations"));
-            }
-            for relocation_index in 0..relocation_count {
-                let relocation = decode_x86_64_coff_readonly_absolute_relocation_for_fragment(
-                    object,
-                    relocation_index,
-                )
-                .map_err(|error| {
-                    anyhow!(
-                        "could not decode selected COFF refptr relocation: {}",
-                        error
-                    )
-                })?;
+            let inventory = inventory_x86_64_coff_comdat_sections(object)
+                .map_err(|error| anyhow!("could not inventory selected COFF sections: {}", error))?;
+            let decoded =
+                decode_x86_64_coff_readonly_absolute_relocations_from_inventory(object, &inventory)
+            .map_err(|error| {
+                anyhow!("could not decode selected COFF readonly relocations: {}", error)
+            })?;
+            for relocation in decoded.relocations() {
                 let retained = selected
                     .inputs
                     .iter()
@@ -1205,9 +1186,12 @@ fn selected_readonly_absolute_relocations<'data>(
                         *source == object_index && input.symbol == relocation.readonly_owner
                     });
                 if retained {
+                    if output.len() == MAX_LINK_RELOCATIONS {
+                        return Err(anyhow!("too many selected COFF readonly relocations"));
+                    }
                     output
-                        .try_push(relocation)
-                        .map_err(|_| anyhow!("could not allocate selected COFF refptr list"))?;
+                        .try_push(*relocation)
+                        .map_err(|_| anyhow!("could not allocate selected COFF readonly list"))?;
                 }
             }
         }

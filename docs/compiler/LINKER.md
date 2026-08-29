@@ -1160,6 +1160,25 @@ median/26.899 ms mean for rust-lld on this exact Windows host and workload.
 This does not yet admit arbitrary relocation kinds or discontiguous
 non-COMDAT read-only packing, and it is not a claim of general superiority.
 
+Read-only absolute relocation discovery is no longer restricted to
+`.rdata$.refptr...` names or one record per section. One inventory-bound pass
+per selected COFF object discovers the first external offset-zero owner for
+each standalone read-only COMDAT and decodes every bounded AMD64 `ADDR64`
+record with its section-relative field offset and signed in-place addend. The
+driver retains only records belonging to the exact selected winner and enforces
+the aggregate bound during retention, so relocation-heavy discarded COMDATs
+cannot consume the winner budget. Synthetic coverage uses two records in one
+ordinary `.rdata$a` section and rejects inventory substitution, an unsupported
+kind, and an out-of-range field. Isolated Windows and Arch Linux runs each
+passed 758 compiler-core tests, all four integration groups, and eight driver
+tests. The pinned stateful archive again returned 42 through both linkers with
+2,560 MRML bytes, 3,584 rust-lld bytes, 1,028 zero-fill bytes, and two
+forwarding pointers. Fifty links after five warmups measured MRML at 9.993 ms
+median/10.110 ms mean versus rust-lld at 27.872 ms median/28.298 ms mean on
+this exact host and workload. Other read-only relocation kinds, associative
+read-only relocation sources, and discontiguous non-COMDAT packing remain
+incomplete.
+
 Refptr admission no longer performs an all-object count pass, and decoding one
 requested ordinal no longer recursively pre-counts the same object's records.
 The driver allocates the fixed 4,096-record bound once, scans selected objects,

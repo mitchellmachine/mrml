@@ -10002,3 +10002,13 @@ integer address arithmetic, and existing symbol resolution; it introduces no
 new object encoding, relocation kind, compression, cryptographic mechanism, or
 loader behavior. This technical screen is not legal advice or patent
 clearance.
+
+# 2026-08-29 — Bounded standalone COFF read-only relocation sets
+
+Patent review: **NOT_TRIGGERED**. This increment applies the conventional
+PE/COFF AMD64 absolute relocation to multiple records in ordinary standalone
+read-only COMDAT sections. It replaces repeated scans with bounded table
+construction and uses existing selection and symbol resolution; it introduces
+no new object encoding, relocation kind, compression, cryptographic mechanism,
+or loader behavior. This technical screen is not legal advice or patent
+clearance.
