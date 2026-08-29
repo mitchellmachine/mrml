@@ -9,6 +9,7 @@
 
 mod allocation;
 mod ahci_controller;
+mod ahci_dma;
 mod ahci_discovery;
 mod ahci_mapping;
 mod ahci_port;
@@ -41,6 +42,12 @@ pub use ahci_controller::{
     AHCI_CAP_OFFSET, AHCI_GHC_OFFSET, AHCI_PI_OFFSET, AHCI_RESET_POLL_LIMIT,
     AHCI_VERSION_OFFSET, AhciControllerError, AhciControllerSnapshot, AhciRegisterIo,
     NativeAhciRegisterIo, reset_ahci_controller,
+};
+pub use ahci_dma::{
+    AHCI_COMMAND_LIST_ALIGNMENT, AHCI_COMMAND_LIST_BYTES, AHCI_COMMAND_TABLE_ALIGNMENT,
+    AHCI_COMMAND_TABLE_BYTES_PER_SLOT, AHCI_RECEIVED_FIS_ALIGNMENT, AHCI_RECEIVED_FIS_BYTES,
+    AhciDmaRegion, AhciPortDmaBackend, AhciPortDmaError, AhciPortDmaLayout, AhciPortDmaRequest,
+    prepare_ahci_port_dma,
 };
 pub use ahci_discovery::{
     AHCI_ABAR_MINIMUM_BYTES, AHCI_PCI_CLASS, AHCI_PCI_PROGRAMMING_INTERFACE,

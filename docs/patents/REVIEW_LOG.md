@@ -46,6 +46,26 @@ no new COMDAT policy, indirection scheme, symbol authority, object encoding,
 relocation arithmetic, compression, cryptographic mechanism, or loader
 behavior. This technical screen is not legal advice or patent clearance.
 
+# 2026-08-29 — Capability-bound AHCI DMA layout ownership
+
+Patent review: **TRIGGERED**, governed by the 2026-08-26 Canadian AHCI
+software-driver re-evaluation. The owner has reaffirmed development and use in
+Canada under that recorded scope. This increment implements only conventional
+fixed AHCI command-list, received-FIS, and per-slot command-table extent
+preparation plus MRML capability, generation, alignment, overflow, alias, and
+atomic-publication checks. It does not program a port, start an engine, submit
+an ATA/ATAPI command, construct a PRDT, handle an interrupt, implement NCQ or
+aggregation, access PHY/controller hardware, or perform block I/O.
+
+The exclusions recorded in the Canadian review continue to apply: no NVIDIA
+US 7,620,747 software-managed DMA-context sequence, Intel US 7,805,543
+controller circuitry, Apple US 8,713,204 device-controller concurrency, Intel
+US 9,128,699 multi-range aggregation, CN 101840306 VxWorks method, or Canadian
+2,567,219 cryptographic SATA apparatus is implemented. Distribution or use
+outside the reviewed Canadian jurisdiction still requires the repository's
+worldwide family/status review. This technical screen is not legal advice or a
+claim that AHCI is patent-free.
+
 # 2026-08-29 — Writable COFF SELECT_ANY winners
 
 Patent review: **NOT_TRIGGERED**. This increment applies the conventional COFF

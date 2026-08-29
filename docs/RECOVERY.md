@@ -1211,6 +1211,19 @@ count is claimed. This does not prove a physical reset or link, DMA,
 interrupts, block I/O, installed-device reacquisition, OVMF, or hardware
 behavior.
 
+The next DMA-memory ownership prerequisite is **PARTIALLY IMPLEMENTED IN
+SOURCE**. A safe fixed-capacity transaction requires the exact quiescent SATA
+port and controller generations, controller `CONTROL`, and distinct
+`PIN | MAP | READ | WRITE` memory capabilities for the command list, received
+FIS, and command tables. Exact sizes and alignments, nonzero allocation/DMA
+generations, checked physical ends, distinct memory objects, and non-overlap
+must all hold before one complete layout reaches the atomic zeroed/pinned
+backend. Storage passes 161 tests on Windows and Arch Linux. Recovery must not
+reconstruct this layout from names, addresses, or the handed firmware identity;
+it must reacquire fresh capabilities and generations. IOMMU installation,
+register programming, commands, interrupts, OVMF, and physical evidence remain
+unimplemented.
+
 The typed native route and installed recovery are now composed atomically as a
 **PARTIALLY IMPLEMENTED** configuration control plane. One bounded operation
 correlates and registers the descriptor, reacquires a read-only session, checks

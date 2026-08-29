@@ -8801,3 +8801,15 @@ and Arch Linux, and the standard plus WHP/KVM component-SMP UEFI images
 cross-build on both hosts. This is decode/compile evidence, not persistent
 configuration recovery, admitted-system proof, native installed-media, or
 physical execution.
+
+The native storage service now **PARTIALLY IMPLEMENTS IN SOURCE** the next AHCI
+DMA ownership boundary. `prepare_ahci_port_dma` accepts only the exact
+generation-bound quiescent SATA snapshot and explicit controller plus memory
+capabilities. Command-list, received-FIS, and command-table runs retain separate
+object/allocation identities, exact derived extents, checked alignment and
+ends, and a fresh DMA generation; aliasing or overlap fails before the backend.
+The backend contract publishes only a complete pinned, zero-verified mapping and
+must leave no mapping on failure. Storage passes 161 tests on Windows and Arch
+Linux. This is safe policy and hostile host-model evidence, not an implemented
+IOMMU backend, AHCI register programming, command execution, interrupt delivery,
+NCQ, OVMF, installed recovery, or physical hardware evidence.

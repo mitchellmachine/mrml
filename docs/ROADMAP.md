@@ -221,6 +221,19 @@ increment. Command-list/FIS/table allocation, DMA/IOMMU
 composition, interrupts, ATA/ATAPI command execution, NCQ operation, native PCI
 enumeration, and physical evidence remain **PLANNED**.
 
+The next AHCI DMA ownership gate is now **PARTIALLY IMPLEMENTED IN SOURCE**.
+`prepare_ahci_port_dma` accepts only an exact quiescent discovered SATA port,
+`CONTROL` over its controller object, and distinct `PIN | MAP | READ | WRITE`
+capabilities for fixed-size command-list, received-FIS, and per-slot command-
+table memory objects. Every allocation and DMA generation must be nonzero;
+physical ranges must have exact sizes, alignment, checked ends, distinct object
+identity, and no overlap. Only one complete layout reaches the atomic backend,
+whose contract requires pinned zeroed memory and no partial mapping on failure.
+Storage passes 161 tests on Windows and Arch Linux. This is host-modeled policy
+and layout evidence only. No IOMMU backend, register programming, engine start,
+interrupt, ATA/ATAPI command, NCQ operation, native PCI enumeration, or physical
+hardware was exercised.
+
 Selected-device reopening and redundant-root reads are now **PARTIALLY
 IMPLEMENTED**. Exact path/media/geometry and block-zero header revalidation
 precedes both root reads; any mismatch, second-read failure, or protocol-close

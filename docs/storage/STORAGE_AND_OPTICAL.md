@@ -308,6 +308,19 @@ claimed for the increment. No physical HBA, link, DMA, interrupt delivery,
 ATA/ATAPI command, NCQ, media, OVMF, or installed-device reacquisition evidence
 is claimed.
 
+The following DMA-memory ownership boundary is **PARTIALLY IMPLEMENTED IN
+SOURCE**. One safe transaction binds a quiescent discovered SATA port and exact
+controller generations to explicit controller `CONTROL` plus separate
+`PIN | MAP | READ | WRITE` capabilities for command-list, received-FIS, and
+command-table memory objects. It derives the table extent from the validated
+controller slot count and rejects zero generations, wrong objects, missing
+rights, malformed size/alignment, wrapping ranges, physical overlap, memory-
+object aliasing, or backend refusal before publishing a layout. The backend
+must atomically pin, verify zeroed state, and install exactly the complete
+layout, leaving no device mapping on failure. Storage passes 161 tests on
+Windows and Arch Linux. No port register is written and no IOMMU, engine,
+interrupt, ATA/ATAPI, NCQ, block-I/O, OVMF, or physical evidence is claimed.
+
 The configuration service now **PARTIALLY IMPLEMENTS** an atomic
 correlate/register/reacquire operation for this route. It admits the descriptor
 only through the typed verifier, creates the existing principal-bound read-only
