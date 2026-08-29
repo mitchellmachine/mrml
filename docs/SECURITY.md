@@ -261,6 +261,8 @@ access. The security/acceptance gate is canonical in
 - Cross-domain attenuation rejects zero-right capability children before any
   receiver slot is published.
 - Capability-space insertion rejects zero-right roots before consuming a slot.
+- Zero-right authorization cannot disclose a live capability's object identity;
+  internal revocation validation uses a private exact metadata path.
 - Exit, fault, and protocol-violation peer-death publication preflight the
   complete reciprocal graph before domain or scheduler mutation. Corrupt or
   duplicate relations and unavailable result capacity fail without partial

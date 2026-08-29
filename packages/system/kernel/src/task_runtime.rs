@@ -676,8 +676,8 @@ impl<const TASKS: usize, const CAPS: usize> TaskRuntime<TASKS, CAPS> {
         task: TaskId,
         capability: Capability,
     ) -> Result<(), TaskRuntimeError> {
-        self.capabilities_mut(task)?
-            .authorize(capability, Rights::NONE)
+        self.capabilities(task)?
+            .describe(capability)
             .map_err(|error| TaskRuntimeError::Ipc(error.into()))?;
         let descendants = self.delegation_descendants(task, capability)?;
         self.revoke_tracked(&descendants.0, 1)?;
@@ -724,8 +724,8 @@ impl<const TASKS: usize, const CAPS: usize> TaskRuntime<TASKS, CAPS> {
         // destination space. A stale graph edge is an integrity failure, but
         // cannot otherwise leave a partially revoked descendant tree.
         for (task, capability) in tracked[start..].iter().flatten().copied() {
-            self.capabilities_mut(task)?
-                .authorize(capability, Rights::NONE)
+            self.capabilities(task)?
+                .describe(capability)
                 .map_err(|_| TaskRuntimeError::IntegrityFailure)?;
         }
         for (task, capability) in tracked[start..].iter().flatten().copied() {

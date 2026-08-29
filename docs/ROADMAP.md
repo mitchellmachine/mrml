@@ -2221,6 +2221,9 @@ live composition remains pending.
    mutation. A focused reuse test raises the kernel total to 616.
    Root capability insertion now rejects zero rights before slot selection; a
    focused non-consumption test raises the kernel total to 617.
+   Ordinary authorization now rejects zero requested rights before lookup;
+   revocation liveness checks use private exact metadata. A focused
+   non-disclosure test raises the kernel total to 618.
    Warning-free `invalid_return_probe` kernel/service profiles now encode the
    real CPL3 invalid-stack interrupt, typed peer-death cleanup marker, peer
    execution, clean exit, and terminal state marker. Runner execution remains

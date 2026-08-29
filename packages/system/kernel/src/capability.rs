@@ -152,6 +152,7 @@ impl<const N: usize> CapabilitySpace<N> {
         capability: Capability,
         requested: Rights,
     ) -> Result<ObjectId, CapabilityError> {
+        Rights::from_bits(requested.bits())?;
         let entry = self.entry(capability)?;
         entry
             .rights
@@ -345,6 +346,17 @@ mod tests {
             Err(CapabilityError::Invalid)
         );
         assert!(space.insert(ObjectId(2), Rights::READ).is_ok());
+    }
+
+    #[test]
+    fn zero_rights_cannot_disclose_live_object_identity() {
+        let mut space = CapabilitySpace::<1>::new();
+        let capability = space.insert(ObjectId(3), Rights::READ).unwrap();
+        assert_eq!(
+            space.authorize(capability, Rights::NONE),
+            Err(CapabilityError::Invalid)
+        );
+        assert_eq!(space.authorize(capability, Rights::READ), Ok(ObjectId(3)));
     }
 
     #[test]
