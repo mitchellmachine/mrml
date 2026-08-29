@@ -5144,11 +5144,19 @@ impl<
                         crate::IntegerType::U128 | crate::IntegerType::I128
                     ))
                 ) {
-                    if count == IntegerBitCount::Width {
-                        return Err(self.error(CodegenErrorKind::RuntimeExpressionUnsupported));
-                    }
                     self.emit_wide_integer_return(tree, base, base_type)?;
-                    if matches!(count, IntegerBitCount::Ones | IntegerBitCount::Zeros) {
+                    if count == IntegerBitCount::Width {
+                        self.emit(&[0x48, 0x85, 0xd2])?;
+                        let low_word = self.emit_forward_branch(0x84)?;
+                        self.emit(&[0x48, 0x0f, 0xbd, 0xca, 0x8d, 0x41, 65])?;
+                        let done = self.emit_unconditional_forward_branch()?;
+                        self.patch_forward_branch(low_word)?;
+                        self.emit(&[0x48, 0x85, 0xc0])?;
+                        let zero = self.emit_forward_branch(0x84)?;
+                        self.emit(&[0x48, 0x0f, 0xbd, 0xc0, 0xff, 0xc0])?;
+                        self.patch_forward_branch(zero)?;
+                        self.patch_forward_branch(done)?;
+                    } else if matches!(count, IntegerBitCount::Ones | IntegerBitCount::Zeros) {
                         self.emit(&[0x31, 0xc9, 0x41, 0xb8, 64, 0, 0, 0])?;
                         let loop_start = self.length;
                         self.emit(&[

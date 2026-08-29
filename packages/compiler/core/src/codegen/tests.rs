@@ -12706,6 +12706,7 @@ mod tests {
     #[test]
     fn mrml_v1_codegen_counts_wide_integer_bits() {
         for source in [
+            "#[mrml_abi::export(version = 1)] pub fn value(input: u128) -> u32 { input.bit_width() }",
             "#[mrml_abi::export(version = 1)] pub fn value(input: u128) -> u32 { input.count_ones() }",
             "#[mrml_abi::export(version = 1)] pub fn value(input: i128) -> u32 { input.count_zeros() }",
             "#[mrml_abi::export(version = 1)] pub fn value(input: u128) -> u32 { input.leading_zeros() }",

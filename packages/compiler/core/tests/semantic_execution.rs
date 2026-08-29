@@ -107,6 +107,8 @@ const MRML_V1_WIDE_SIGNED_ISOLATE_LOWEST_SOURCE: &str =
     "#[mrml_abi::export(version = 1)] pub fn probe(input: i128) -> i128 { input.isolate_lowest_one() }";
 const MRML_V1_WIDE_UNSIGNED_COUNT_ONES_SOURCE: &str =
     "#[mrml_abi::export(version = 1)] pub fn probe(input: u128) -> u32 { input.count_ones() }";
+const MRML_V1_WIDE_UNSIGNED_BIT_WIDTH_SOURCE: &str =
+    "#[mrml_abi::export(version = 1)] pub fn probe(input: u128) -> u32 { input.bit_width() }";
 const MRML_V1_WIDE_SIGNED_COUNT_ZEROS_SOURCE: &str =
     "#[mrml_abi::export(version = 1)] pub fn probe(input: i128) -> u32 { input.count_zeros() }";
 const MRML_V1_WIDE_UNSIGNED_LEADING_ZEROS_SOURCE: &str =
@@ -1448,6 +1450,7 @@ fn mrml_v1_wide_population_counts_match_the_oracle() {
         u128::MAX,
     ];
     for (source, signed) in [
+        (MRML_V1_WIDE_UNSIGNED_BIT_WIDTH_SOURCE, false),
         (MRML_V1_WIDE_UNSIGNED_COUNT_ONES_SOURCE, false),
         (MRML_V1_WIDE_SIGNED_COUNT_ZEROS_SOURCE, true),
         (MRML_V1_WIDE_UNSIGNED_LEADING_ZEROS_SOURCE, false),

@@ -198,6 +198,8 @@ Wide bit isolation selects the highest nonzero word for `isolate_highest_one`
 and the lowest nonzero word for `isolate_lowest_one`, preserving zero.
 Wide population and leading/trailing bit counts consume both words and return
 the Rust-defined `u32`, including the full-width result for zero or all ones.
+Unsigned wide `bit_width` returns zero for zero and otherwise offsets a set bit
+in the high word by 64.
 `wrapping_div` and `wrapping_rem` preserve the mandatory zero-divisor trap but
 return `i128::MIN` and zero respectively for the signed minimum divided by or
 remaindered by negative one.
