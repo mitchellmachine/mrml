@@ -1227,6 +1227,15 @@ it must reacquire fresh capabilities and generations. IOMMU installation,
 register programming, commands, interrupts, OVMF, and physical evidence remain
 unimplemented.
 
+The next port-programming typestate is **PARTIALLY IMPLEMENTED IN SOURCE**.
+Before any write, exact mapping generations and quiescent interrupt/engine/
+command state are rechecked. The complete 64-bit command-list and received-FIS
+bases are then written and read-verified with engines still disabled. Preflight
+failure returns the unchanged DMA owner, while uncertainty after the first write
+quarantines the layout and forbids ordinary unmapping. Recovery must retain that
+distinction and never reconstruct success from register values. Storage passes
+166 tests on Windows and Arch Linux.
+
 The typed native route and installed recovery are now composed atomically as a
 **PARTIALLY IMPLEMENTED** configuration control plane. One bounded operation
 correlates and registers the descriptor, reacquires a read-only session, checks

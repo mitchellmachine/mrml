@@ -8816,3 +8816,13 @@ Storage passes 163 tests on Windows and Arch Linux. This is safe policy and
 hostile host-model evidence, not an implemented IOMMU backend, AHCI register
 programming, command execution, interrupt delivery, NCQ, OVMF, installed
 recovery, or physical hardware evidence.
+
+The storage driver now **PARTIALLY IMPLEMENTS IN SOURCE** exact AHCI port DMA-
+base programming. The transaction consumes the installed DMA owner, rechecks
+the mapping generations and quiescent port state, writes both halves of the
+command-list and received-FIS addresses, and requires exact read-back without
+enabling interrupts or engines. Pre-write failure returns the untouched owner;
+post-write uncertainty is permanently distinguished as quarantined and cannot
+flow into normal DMA revocation. Storage passes 166 tests on Windows and Arch
+Linux. This is host-register-model evidence only, not IOMMU hardware, commands,
+interrupts, OVMF, installed recovery, or physical execution evidence.

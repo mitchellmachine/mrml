@@ -85,6 +85,16 @@ aggregation, ATA/ATAPI operation, PHY/controller hardware, or block I/O. The
 existing Canadian exclusions and outside-Canada review requirement remain
 unchanged. This technical screen is not legal advice or patent clearance.
 
+# 2026-08-29 — Fail-closed AHCI port DMA-base programming
+
+Patent review: **TRIGGERED**, governed by the recorded Canadian AHCI scope. This
+increment uses the conventional fixed command-list and received-FIS base
+registers, exact read-back, and MRML-only linear/quarantine typestates. It adds
+no command format, PRDT, scheduling, engine activation, interrupt mechanism,
+NCQ, aggregation, ATA/ATAPI operation, PHY/controller hardware, or block I/O.
+Existing Canadian exclusions and outside-Canada review requirements remain
+unchanged. This technical screen is not legal advice or patent clearance.
+
 # 2026-08-29 — Writable COFF SELECT_ANY winners
 
 Patent review: **NOT_TRIGGERED**. This increment applies the conventional COFF

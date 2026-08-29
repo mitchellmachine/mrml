@@ -238,6 +238,17 @@ layout, and lifecycle evidence only. No IOMMU backend, register programming,
 engine start, interrupt, ATA/ATAPI command, NCQ operation, native PCI
 enumeration, or physical hardware was exercised.
 
+The port-base programming gate is now **PARTIALLY IMPLEMENTED IN SOURCE**.
+`program_ahci_port_dma_bases` consumes the installed DMA owner only after exact
+controller/mapping-generation equality and a quiescent port preflight. It writes
+and re-reads the complete 64-bit command-list and received-FIS bases while
+leaving interrupts and both engines disabled. A failure before the first write
+returns the untouched owner; any write or read-back uncertainty instead creates
+a quarantined typestate that cannot enter ordinary DMA removal. Storage passes
+166 tests on Windows and Arch Linux.
+Command headers/tables, engine start, interrupts, ATA/ATAPI, NCQ, IOMMU hardware,
+and physical execution remain **PLANNED**.
+
 Selected-device reopening and redundant-root reads are now **PARTIALLY
 IMPLEMENTED**. Exact path/media/geometry and block-zero header revalidation
 precedes both root reads; any mismatch, second-read failure, or protocol-close

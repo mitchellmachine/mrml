@@ -53,7 +53,16 @@ pub struct InstalledAhciPortDma {
 }
 
 impl InstalledAhciPortDma {
+    #[cfg(test)]
+    pub(crate) const fn from_layout(layout: AhciPortDmaLayout) -> Self {
+        Self { layout }
+    }
+
     pub const fn layout(&self) -> AhciPortDmaLayout {
+        self.layout
+    }
+
+    pub(crate) const fn into_layout(self) -> AhciPortDmaLayout {
         self.layout
     }
 }

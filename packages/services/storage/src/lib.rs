@@ -13,6 +13,7 @@ mod ahci_dma;
 mod ahci_discovery;
 mod ahci_mapping;
 mod ahci_port;
+mod ahci_port_program;
 mod authority;
 mod authority_checkpoint;
 mod block;
@@ -67,6 +68,10 @@ pub use ahci_port::{
     AHCI_PORT_STRIDE_BYTES, AHCI_SATA_SIGNATURE, AhciPortDeviceKind,
     AhciPortDiscoveryError, AhciPortError, AhciPortLinkSpeed, AhciPortLinkState,
     AhciPortPowerState, AhciPortSnapshot, AhciPortSnapshotSet, discover_ahci_ports,
+};
+pub use ahci_port_program::{
+    AhciPortProgramError, AhciPortProgramFailure, ProgrammedAhciPortDma,
+    program_ahci_port_dma_bases,
 };
 pub use authority::{
     StorageAuthorityError, StorageAuthorityReservation, StorageAuthorityTable, StorageHandle,

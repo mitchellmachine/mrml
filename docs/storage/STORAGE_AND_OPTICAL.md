@@ -308,6 +308,16 @@ claimed for the increment. No physical HBA, link, DMA, interrupt delivery,
 ATA/ATAPI command, NCQ, media, OVMF, or installed-device reacquisition evidence
 is claimed.
 
+Port base programming is now **PARTIALLY IMPLEMENTED IN SOURCE** without engine
+activation. Exact mapping generations and a quiescent port are required before
+writing all four 32-bit halves of the command-list and received-FIS physical
+bases, followed by exact read-back. Preflight uncertainty returns the untouched
+DMA owner. Once any write occurs, later write/read/substitution uncertainty
+produces a quarantined owner that cannot use ordinary DMA removal. Storage
+passes 166 tests on Windows and Arch Linux.
+No command header/table content, PRDT, engine start, interrupt, ATA/ATAPI, NCQ,
+IOMMU hardware, OVMF, or physical device was exercised.
+
 The following DMA-memory ownership boundary is **PARTIALLY IMPLEMENTED IN
 SOURCE**. One safe transaction binds a quiescent discovered SATA port and exact
 controller generations to explicit controller `CONTROL` plus separate
