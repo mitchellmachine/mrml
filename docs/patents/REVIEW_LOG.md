@@ -9,15 +9,6 @@ scheduling, caching, allocation, naming, encoding, data-layout, indexing, or
 optimization algorithm. This technical screen is not legal advice or patent
 clearance.
 
-# 2026-08-29 — Zero-copy COFF archive symbol inventory
-
-Patent review: **NOT_TRIGGERED**. This increment validates and traverses the
-conventional PE/COFF symbol and string tables through a bounded zero-copy view
-so archive selection need not decode every section payload. It introduces no
-object encoding, archive format, symbol-resolution rule, compression method,
-cryptographic mechanism, or loader behavior. This technical screen is not
-legal advice or patent clearance.
-
 # 2026-08-29 — Classic IDE userspace syscall adapter
 
 Patent review: **NOT_TRIGGERED**. This increment maps the already screened IDE
