@@ -2036,6 +2036,8 @@ live composition remains pending.
    Buffered send payloads and receive outputs now also validate their complete
    declared ranges during decode, so a valid start with a canonical-boundary
    crossing cannot become a request.
+   Payload and capability regions must be disjoint for both buffered operations;
+   overlap fails decode while exact adjacency remains valid.
    The restart wire record can no longer carry a clock value; bytes 40--47 are
    canonical zero and dispatch receives time only from trusted kernel state.
    Syscall operation 10 decodes only an exact generational capability and

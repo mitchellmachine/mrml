@@ -6570,10 +6570,14 @@ Buffered payload input and output now use the same complete checked-range rule:
 send length and receive capacity must fit below the canonical user boundary,
 not merely begin at a valid address. Cross-boundary payloads fail during decode
 before active page-table validation or copying.
+Payload and capability regions must also be disjoint. Overlap is rejected
+during decode before send parsing or receive copying, while exact adjacency is
+accepted so callers do not need an artificial gap between bounded regions.
 
 Patent review: **NOT_TRIGGERED**. This change retains an existing bounds check
-as Rust typestate across an existing syscall completion path and introduces no
-new IPC algorithm or mechanism. See [the patent review log](patents/REVIEW_LOG.md).
+as Rust typestate and adds ordinary complete-range and overlap validation to an
+existing syscall path; it introduces no new IPC algorithm or mechanism. See
+[the patent review log](patents/REVIEW_LOG.md).
 
 Rust service code does not assume a fixed PE entry RVA. WHP and KVM publish the
 entry derived from the verified signed executable in a hosted metadata page.

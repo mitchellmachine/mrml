@@ -126,6 +126,8 @@ access. The security/acceptance gate is canonical in
   address is insufficient.
 - Buffered payload input and output likewise require complete non-wrapping user
   ranges at syscall decode, before page-table walking or copying.
+- Buffered payload and capability regions must be disjoint; exact adjacency is
+  valid, but overlap fails before parsing or output mutation.
 - Writable and executable mappings are mutually exclusive.
 - Authority, replay state, ownership, mappings, and lifecycle transitions are
   explicit and commit only after validation; partial failure rolls back or

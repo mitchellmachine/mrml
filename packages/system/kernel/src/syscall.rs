@@ -367,6 +367,12 @@ impl SyscallRequest {
                     capability_count,
                     CAPABILITY_TRANSFER_DESCRIPTOR_BYTES,
                 )?;
+                validate_disjoint_user_ranges(
+                    rdx,
+                    payload_length,
+                    r8,
+                    capability_count * CAPABILITY_TRANSFER_DESCRIPTOR_BYTES,
+                )?;
                 Ok(Self::SendBuffer {
                     endpoint: Capability::from_token(rdi),
                     receiver: TaskId::from_token(rsi),
@@ -395,6 +401,12 @@ impl SyscallRequest {
                     rdx,
                     capability_capacity,
                     RECEIVED_CAPABILITY_TOKEN_BYTES,
+                )?;
+                validate_disjoint_user_ranges(
+                    rdi,
+                    payload_capacity,
+                    rdx,
+                    capability_capacity * RECEIVED_CAPABILITY_TOKEN_BYTES,
                 )?;
                 Ok(Self::ReceiveBuffer {
                     payload_address: rdi,
@@ -576,6 +588,27 @@ fn validate_optional_capability_buffer(
         MAX_CAPABILITIES * CAPABILITY_TRANSFER_DESCRIPTOR_BYTES,
     )?;
     if !address.is_multiple_of(RECEIVED_CAPABILITY_TOKEN_BYTES as u64) {
+        return Err(SyscallError::InvalidBuffer);
+    }
+    Ok(())
+}
+
+fn validate_disjoint_user_ranges(
+    first_address: u64,
+    first_length: usize,
+    second_address: u64,
+    second_length: usize,
+) -> Result<(), SyscallError> {
+    if first_length == 0 || second_length == 0 {
+        return Ok(());
+    }
+    let first_end = first_address
+        .checked_add(u64::try_from(first_length).map_err(|_| SyscallError::InvalidBuffer)?)
+        .ok_or(SyscallError::InvalidBuffer)?;
+    let second_end = second_address
+        .checked_add(u64::try_from(second_length).map_err(|_| SyscallError::InvalidBuffer)?)
+        .ok_or(SyscallError::InvalidBuffer)?;
+    if first_address < second_end && second_address < first_end {
         return Err(SyscallError::InvalidBuffer);
     }
     Ok(())
@@ -774,6 +807,14 @@ mod tests {
             Err(SyscallError::InvalidBuffer)
         );
         assert_eq!(
+            SyscallRequest::decode(4, endpoint, receiver, 0x6000, 48, 0x6020, 1),
+            Err(SyscallError::InvalidBuffer)
+        );
+        assert!(matches!(
+            SyscallRequest::decode(4, endpoint, receiver, 0x6000, 48, 0x6030, 1),
+            Ok(SyscallRequest::SendBuffer { .. })
+        ));
+        assert_eq!(
             SyscallRequest::decode(5, 0x8000, 112, (1 << 47) - 8, 1, 0, 0),
             Ok(SyscallRequest::ReceiveBuffer {
                 payload_address: 0x8000,
@@ -786,6 +827,14 @@ mod tests {
             SyscallRequest::decode(5, 0x8000, 112, (1 << 47) - 8, 2, 0, 0),
             Err(SyscallError::InvalidBuffer)
         );
+        assert_eq!(
+            SyscallRequest::decode(5, 0x8000, 112, 0x8068, 1, 0, 0),
+            Err(SyscallError::InvalidBuffer)
+        );
+        assert!(matches!(
+            SyscallRequest::decode(5, 0x8000, 112, 0x8070, 1, 0, 0),
+            Ok(SyscallRequest::ReceiveBuffer { .. })
+        ));
         assert_eq!(
             SyscallRequest::decode(5, 0x8000, 112, 0, 0, 1, 0),
             Err(SyscallError::ReservedArgument)
