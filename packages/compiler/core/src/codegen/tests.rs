@@ -12636,10 +12636,12 @@ mod tests {
     }
 
     #[test]
-    fn mrml_v1_codegen_saturates_wide_addition() {
+    fn mrml_v1_codegen_saturates_wide_addition_and_subtraction() {
         for source in [
             "#[mrml_abi::export(version = 1)] pub fn value(input: u128) -> u128 { input.saturating_add(17) }",
             "#[mrml_abi::export(version = 1)] pub fn value(input: i128) -> i128 { input.saturating_add(17) }",
+            "#[mrml_abi::export(version = 1)] pub fn value(input: u128) -> u128 { input.saturating_sub(17) }",
+            "#[mrml_abi::export(version = 1)] pub fn value(input: i128) -> i128 { input.saturating_sub(17) }",
         ] {
             let module = Parser::new(source).parse_module::<2, 2>().unwrap();
             let Some(Item::Function(function)) = module.items()[0] else {

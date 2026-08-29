@@ -85,6 +85,10 @@ const MRML_V1_WIDE_UNSIGNED_SATURATING_ADD_SOURCE: &str =
     "#[mrml_abi::export(version = 1)] pub fn probe(input: u128) -> u128 { input.saturating_add(17) }";
 const MRML_V1_WIDE_SIGNED_SATURATING_ADD_SOURCE: &str =
     "#[mrml_abi::export(version = 1)] pub fn probe(input: i128) -> i128 { input.saturating_add(17) }";
+const MRML_V1_WIDE_UNSIGNED_SATURATING_SUBTRACT_SOURCE: &str =
+    "#[mrml_abi::export(version = 1)] pub fn probe(input: u128) -> u128 { input.saturating_sub(17) }";
+const MRML_V1_WIDE_SIGNED_SATURATING_SUBTRACT_SOURCE: &str =
+    "#[mrml_abi::export(version = 1)] pub fn probe(input: i128) -> i128 { input.saturating_sub(17) }";
 const MRML_V1_WIDE_SIGNED_WRAPPING_DIVIDE_SOURCE: &str =
     "#[mrml_abi::export(version = 1)] pub fn probe(input: i128) -> i128 { input.wrapping_div(-1) }";
 const MRML_V1_WIDE_SIGNED_WRAPPING_REMAINDER_SOURCE: &str =
@@ -1277,6 +1281,32 @@ fn mrml_v1_wide_saturating_addition_matches_both_oracle_words() {
             MRML_V1_WIDE_SIGNED_SATURATING_ADD_SOURCE,
             [0u128, 1, i128::MIN as u128, (i128::MAX - 17) as u128, i128::MAX as u128],
             "for input in [0i128, 1, i128::MIN, i128::MAX - 17, i128::MAX] { let returned = probe(input); println!(\"{}\", returned as u64); println!(\"{}\", ((returned as u128) >> 64) as u64); }",
+        ),
+    ] {
+        let code = compile(source);
+        let actual = inputs
+            .into_iter()
+            .flat_map(|input| {
+                let returned = unsafe { call_mrml_v1_wide_return(code.pointer, input) };
+                [returned as u64, (returned >> 64) as u64]
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(actual, rustc_mrml_v1_observations(source, driver));
+    }
+}
+
+#[test]
+fn mrml_v1_wide_saturating_subtraction_matches_both_oracle_words() {
+    for (source, inputs, driver) in [
+        (
+            MRML_V1_WIDE_UNSIGNED_SATURATING_SUBTRACT_SOURCE,
+            [0u128, 16, 17, u64::MAX as u128, u128::MAX],
+            "for input in [0u128, 16, 17, u64::MAX as u128, u128::MAX] { let returned = probe(input); println!(\"{}\", returned as u64); println!(\"{}\", (returned >> 64) as u64); }",
+        ),
+        (
+            MRML_V1_WIDE_SIGNED_SATURATING_SUBTRACT_SOURCE,
+            [0u128, 17, i128::MIN as u128, (i128::MIN + 17) as u128, i128::MAX as u128],
+            "for input in [0i128, 17, i128::MIN, i128::MIN + 17, i128::MAX] { let returned = probe(input); println!(\"{}\", returned as u64); println!(\"{}\", ((returned as u128) >> 64) as u64); }",
         ),
     ] {
         let code = compile(source);

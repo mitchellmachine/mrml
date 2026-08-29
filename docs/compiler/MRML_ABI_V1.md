@@ -187,6 +187,8 @@ leaves `i128::MIN` unchanged.
 other inputs use the corresponding exact two-word negation or absolute value.
 `saturating_add` selects the unsigned maximum on carry, or the signed minimum or
 maximum according to the direction of signed overflow.
+`saturating_sub` selects unsigned zero on borrow and uses the same signed-bound
+selection for signed subtraction overflow.
 `wrapping_div` and `wrapping_rem` preserve the mandatory zero-divisor trap but
 return `i128::MIN` and zero respectively for the signed minimum divided by or
 remaindered by negative one.
