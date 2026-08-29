@@ -12,6 +12,8 @@ pub const ENUMERATE_REQUEST_BYTES: usize = ABI_CALL_HEADER_BYTES + 16;
 pub const ENUMERATE_RESPONSE_BYTES: usize = 16;
 pub const READ_REQUEST_BYTES: usize = ABI_CALL_HEADER_BYTES + 40;
 pub const READ_RESPONSE_BYTES: usize = 16;
+pub const WRITE_REQUEST_BYTES: usize = ABI_CALL_HEADER_BYTES + 40;
+pub const WRITE_RESPONSE_BYTES: usize = 16;
 const ABI_MAGIC: [u8; 8] = *b"MRMLABI\0";
 const ABI_SCHEMA_VERSION: u16 = 1;
 pub const BLOCK_DEVICE_CATALOG_HEADER_BYTES: usize = 16;
@@ -115,6 +117,14 @@ pub trait BlockProviderReadTransport {
     ) -> Result<[u8; READ_RESPONSE_BYTES], ProtocolError>;
 }
 
+pub trait BlockProviderWriteTransport {
+    fn write(
+        &mut self,
+        request: &[u8; WRITE_REQUEST_BYTES],
+        memory: &[u8],
+    ) -> Result<[u8; WRITE_RESPONSE_BYTES], ProtocolError>;
+}
+
 pub trait BlockProviderServiceEndpoint {
     fn invoke_enumerate(
         &mut self,
@@ -131,6 +141,15 @@ pub trait BlockProviderReadServiceEndpoint {
         request: &[u8; READ_REQUEST_BYTES],
         memory: &mut [u8],
     ) -> Result<[u8; READ_RESPONSE_BYTES], ProtocolError>;
+}
+
+pub trait BlockProviderWriteServiceEndpoint {
+    fn invoke_write(
+        &mut self,
+        endpoint: OpaqueHandle,
+        request: &[u8; WRITE_REQUEST_BYTES],
+        memory: &[u8],
+    ) -> Result<[u8; WRITE_RESPONSE_BYTES], ProtocolError>;
 }
 
 pub struct IsolatedBlockProviderTransport<E> {
@@ -194,6 +213,22 @@ impl<E: BlockProviderReadServiceEndpoint> BlockProviderReadTransport
         }
         decode_read_request(request, memory.len() as u64)?;
         self.service.invoke_read(self.endpoint, request, memory)
+    }
+}
+
+impl<E: BlockProviderWriteServiceEndpoint> BlockProviderWriteTransport
+    for IsolatedBlockProviderTransport<E>
+{
+    fn write(
+        &mut self,
+        request: &[u8; WRITE_REQUEST_BYTES],
+        memory: &[u8],
+    ) -> Result<[u8; WRITE_RESPONSE_BYTES], ProtocolError> {
+        if memory.len() > self.maximum_memory_bytes {
+            return Err(ProtocolError::InvalidRequest);
+        }
+        decode_write_request(request, memory.len() as u64)?;
+        self.service.invoke_write(self.endpoint, request, memory)
     }
 }
 
@@ -379,6 +414,112 @@ pub fn decode_read_response(
     }
 }
 
+pub fn encode_write_request(
+    session: OpaqueHandle,
+    lba: u64,
+    sector_count: u32,
+    input: BorrowedReadView,
+) -> Result<[u8; WRITE_REQUEST_BYTES], ProtocolError> {
+    let request = WriteRequest {
+        session,
+        lba,
+        sector_count,
+        input,
+    };
+    if !request.validate() || sector_count == 0 || input.length() == 0 {
+        return Err(ProtocolError::InvalidRequest);
+    }
+    let mut bytes = [0; WRITE_REQUEST_BYTES];
+    bytes[0..8].copy_from_slice(&ABI_MAGIC);
+    bytes[8..10].copy_from_slice(&ABI_SCHEMA_VERSION.to_le_bytes());
+    bytes[16..48].copy_from_slice(&INTERFACE_FINGERPRINT);
+    bytes[48..52].copy_from_slice(&INTERFACE_GENERATION.to_le_bytes());
+    bytes[52..56].copy_from_slice(&OP_WRITE.to_le_bytes());
+    bytes[56..64].copy_from_slice(&40_u64.to_le_bytes());
+    bytes[64..72].copy_from_slice(&(WRITE_RESPONSE_BYTES as u64).to_le_bytes());
+    bytes[72..76].copy_from_slice(&session.index().to_le_bytes());
+    bytes[76..80].copy_from_slice(&session.generation().to_le_bytes());
+    bytes[80..88].copy_from_slice(&lba.to_le_bytes());
+    bytes[88..92].copy_from_slice(&sector_count.to_le_bytes());
+    bytes[96..104].copy_from_slice(&input.offset().to_le_bytes());
+    bytes[104..112].copy_from_slice(&input.length().to_le_bytes());
+    Ok(bytes)
+}
+
+pub fn decode_write_request(
+    bytes: &[u8; WRITE_REQUEST_BYTES],
+    memory_length: u64,
+) -> Result<WriteRequest, ProtocolError> {
+    if bytes[0..8] != ABI_MAGIC
+        || u16::from_le_bytes(bytes[8..10].try_into().unwrap()) != ABI_SCHEMA_VERSION
+        || bytes[10..16] != [0; 6]
+        || bytes[16..48] != INTERFACE_FINGERPRINT
+        || u32::from_le_bytes(bytes[48..52].try_into().unwrap()) != INTERFACE_GENERATION
+        || u32::from_le_bytes(bytes[52..56].try_into().unwrap()) != OP_WRITE
+        || u64::from_le_bytes(bytes[56..64].try_into().unwrap()) != 40
+        || u64::from_le_bytes(bytes[64..72].try_into().unwrap()) != WRITE_RESPONSE_BYTES as u64
+        || bytes[92..96] != [0; 4]
+    {
+        return Err(ProtocolError::InvalidHeader);
+    }
+    let session = OpaqueHandle::new(
+        u32::from_le_bytes(bytes[72..76].try_into().unwrap()),
+        u32::from_le_bytes(bytes[76..80].try_into().unwrap()),
+    )
+    .ok_or(ProtocolError::InvalidRequest)?;
+    let input = BorrowedReadView::within(
+        u64::from_le_bytes(bytes[96..104].try_into().unwrap()),
+        u64::from_le_bytes(bytes[104..112].try_into().unwrap()),
+        memory_length,
+    )
+    .ok_or(ProtocolError::InvalidRequest)?;
+    let request = WriteRequest {
+        session,
+        lba: u64::from_le_bytes(bytes[80..88].try_into().unwrap()),
+        sector_count: u32::from_le_bytes(bytes[88..92].try_into().unwrap()),
+        input,
+    };
+    (request.validate() && request.sector_count != 0 && request.input.length() != 0)
+        .then_some(request)
+        .ok_or(ProtocolError::InvalidRequest)
+}
+
+pub fn encode_write_response(
+    result: Result<WriteResponse, WriteError>,
+) -> [u8; WRITE_RESPONSE_BYTES] {
+    let mut bytes = [0; WRITE_RESPONSE_BYTES];
+    let (status, transferred) = match result {
+        Ok(transferred) => (0, transferred),
+        Err(error) => (error as u32, 0),
+    };
+    bytes[0..4].copy_from_slice(&status.to_le_bytes());
+    bytes[8..16].copy_from_slice(&transferred.to_le_bytes());
+    bytes
+}
+
+pub fn decode_write_response(
+    bytes: &[u8; WRITE_RESPONSE_BYTES],
+    input_length: u64,
+) -> Result<Result<WriteResponse, WriteError>, ProtocolError> {
+    if bytes[4..8] != [0; 4] {
+        return Err(ProtocolError::InvalidResponse);
+    }
+    let status = u32::from_le_bytes(bytes[0..4].try_into().unwrap());
+    let transferred = u64::from_le_bytes(bytes[8..16].try_into().unwrap());
+    match status {
+        0 if transferred != 0
+            && transferred <= input_length
+            && transferred <= MAX_BLOCK_TRANSFER_BYTES => Ok(Ok(transferred)),
+        1 if transferred == 0 => Ok(Err(WriteError::InvalidRequest)),
+        2 if transferred == 0 => Ok(Err(WriteError::StaleObject)),
+        3 if transferred == 0 => Ok(Err(WriteError::PermissionDenied)),
+        4 if transferred == 0 => Ok(Err(WriteError::MediaChanged)),
+        5 if transferred == 0 => Ok(Err(WriteError::ReadOnly)),
+        6 if transferred == 0 => Ok(Err(WriteError::IoFailure)),
+        _ => Err(ProtocolError::InvalidResponse),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -432,6 +573,35 @@ mod tests {
                 .ok_or(ProtocolError::InvalidRequest)?
                 .fill(0x5a);
             Ok(encode_read_response(Ok(request.output.length())))
+        }
+    }
+
+    impl BlockProviderWriteServiceEndpoint for Endpoint {
+        fn invoke_write(
+            &mut self,
+            endpoint: OpaqueHandle,
+            request: &[u8; WRITE_REQUEST_BYTES],
+            memory: &[u8],
+        ) -> Result<[u8; WRITE_RESPONSE_BYTES], ProtocolError> {
+            self.seen = Some(endpoint);
+            let request = decode_write_request(request, memory.len() as u64)?;
+            let start = usize::try_from(request.input.offset())
+                .map_err(|_| ProtocolError::InvalidRequest)?;
+            let end = start
+                .checked_add(
+                    usize::try_from(request.input.length())
+                        .map_err(|_| ProtocolError::InvalidRequest)?,
+                )
+                .ok_or(ProtocolError::InvalidRequest)?;
+            if !memory
+                .get(start..end)
+                .ok_or(ProtocolError::InvalidRequest)?
+                .iter()
+                .all(|byte| *byte == 0x3c)
+            {
+                return Err(ProtocolError::Transport);
+            }
+            Ok(encode_write_response(Ok(request.input.length())))
         }
     }
 
@@ -538,6 +708,51 @@ mod tests {
         assert_eq!(
             decode_read_response(&encode_read_response(Err(ReadError::StaleObject)), 512),
             Ok(Err(ReadError::StaleObject))
+        );
+    }
+
+    #[test]
+    fn write_round_trips_without_granting_provider_memory_mutation() {
+        let endpoint = OpaqueHandle::new(9, 14).unwrap();
+        let session = OpaqueHandle::new(5, 8).unwrap();
+        let input = BorrowedReadView::within(16, 1024, 1040).unwrap();
+        let request = encode_write_request(session, 44, 2, input).unwrap();
+        assert_eq!(decode_write_request(&request, 1040).unwrap().session, session);
+        let service = Endpoint { seen: None };
+        let mut transport = IsolatedBlockProviderTransport::new(endpoint, 1040, service).unwrap();
+        let mut memory = [0; 1040];
+        memory[16..].fill(0x3c);
+        let response = transport.write(&request, &memory).unwrap();
+        assert_eq!(decode_write_response(&response, 1024), Ok(Ok(1024)));
+        assert_eq!(transport.into_service().seen, Some(endpoint));
+    }
+
+    #[test]
+    fn write_codec_rejects_zero_reserved_stale_and_excess_results() {
+        let session = OpaqueHandle::new(5, 8).unwrap();
+        let input = BorrowedReadView::within(0, 512, 512).unwrap();
+        assert_eq!(
+            encode_write_request(session, 0, 0, input),
+            Err(ProtocolError::InvalidRequest)
+        );
+        let mut request = encode_write_request(session, 0, 1, input).unwrap();
+        request[92] = 1;
+        assert_eq!(
+            decode_write_request(&request, 512),
+            Err(ProtocolError::InvalidHeader)
+        );
+        request = encode_write_request(session, 0, 1, input).unwrap();
+        assert_eq!(
+            decode_write_request(&request, 511),
+            Err(ProtocolError::InvalidRequest)
+        );
+        assert_eq!(
+            decode_write_response(&encode_write_response(Ok(513)), 512),
+            Err(ProtocolError::InvalidResponse)
+        );
+        assert_eq!(
+            decode_write_response(&encode_write_response(Err(WriteError::ReadOnly)), 512),
+            Ok(Err(WriteError::ReadOnly))
         );
     }
 }

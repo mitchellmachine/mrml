@@ -1,5 +1,14 @@
 # Patent review log
 
+# 2026-08-29 — Canonical block-provider write boundary
+
+Patent review: **NOT_TRIGGERED**. This increment serializes the existing bounded
+generation-1 write operation and validates exact endpoint/session identities,
+an immutable caller-owned input range, reserved framing, and result byte counts.
+It adds no device command, storage scheduling, caching, allocation, naming,
+encoding, data-layout, write-combining, or optimization algorithm. This
+technical screen is not legal advice or patent clearance.
+
 # 2026-08-29 — Canonical block-provider read boundary
 
 Patent review: **NOT_TRIGGERED**. This increment serializes the existing bounded

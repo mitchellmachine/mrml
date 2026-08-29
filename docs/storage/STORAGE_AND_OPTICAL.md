@@ -608,13 +608,17 @@ before publication. The AHCI library implements enumeration over that catalog
 without receiving storage-service authority. Four focused interface tests and
 51 AHCI-library tests pass on Windows and Arch Linux. AHCI, NVMe, and IDE now
 each implement this same enumeration contract independently. Provider-side
-isolated IPC and write/flush/reset transport calls remain **PLANNED**. The read
+isolated IPC and flush/reset transport calls remain **PLANNED**. The read
 transport is now canonical: it binds exact endpoint and session generations,
 LBA and nonzero sector count, one caller-bounded writable view, fixed framing,
 reserved bytes, and operation-specific status. Responses must report a nonzero
 byte count within both that view and the 1-MiB interface limit. Six focused
 interface tests pass on Windows and Arch Linux; provider-side read adapters
-remain **PLANNED**.
+remain **PLANNED**. Write framing independently binds the same identities and
+geometry to an immutable borrowed input view, preserves `ReadOnly` as distinct
+from permission/media/I/O failures, and bounds nonzero completion bytes to the
+view and 1-MiB limit. Eight focused interface tests pass on both hosts;
+provider-side write adapters remain **PLANNED**.
 
 The NVMe/legacy-IDE expansion has the following architectural score. Work stays
 sequential by provider and each parser/register/queue gate is independently
@@ -664,7 +668,7 @@ PCI classes, and manifests do not authorize.
 - Existing-object reuse: **HIGH**
 
 The two schemas and generated safe types are **PARTIALLY IMPLEMENTED**. The block
-interface passes six focused tests and the filesystem interface's canonical probe
+interface passes eight focused tests and the filesystem interface's canonical probe
 codec and exact-generation isolated transport pass three on Windows and Arch
 Linux. The fixed-capacity module registry is also **PARTIALLY IMPLEMENTED**. It
 binds stable module-slot control, interface inspection, provider control, and
