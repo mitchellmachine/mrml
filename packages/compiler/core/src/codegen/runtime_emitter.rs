@@ -7698,6 +7698,44 @@ impl<
         } else if let ExprKind::IntegerPairTransform {
             base,
             other,
+            transform: crate::expression::IntegerPairTransform::CarrylessMultiply,
+        } = expression.kind
+        {
+            let base_type = runtime_expression_type_with_locals(
+                self.function,
+                self.resolver,
+                &self.locals[..self.saved_locals],
+                tree,
+                base,
+                1,
+            )
+            .map_err(|kind| self.error(kind))?;
+            if base_type != RuntimeExpressionType::Integer(Some(crate::IntegerType::U128))
+                || expected_type != base_type
+            {
+                return Err(self.error(CodegenErrorKind::RuntimeTypeMismatch));
+            }
+            self.emit_wide_binary_operands(tree, base, other, expected_type)?;
+            self.emit(&[
+                0x4d, 0x31, 0xc9, 0x4d, 0x31, 0xd2, 0x41, 0xbb, 128, 0, 0, 0,
+            ])?;
+            let loop_start = self.length;
+            self.emit(&[0xa8, 1])?;
+            let clear = self.emit_forward_branch(0x84)?;
+            self.emit(&[0x4d, 0x31, 0xc1, 0x49, 0x31, 0xca])?;
+            self.patch_forward_branch(clear)?;
+            self.emit(&[
+                0x49, 0xd1, 0xe0, 0x48, 0xd1, 0xd1, 0x48, 0x0f, 0xac, 0xd0, 1, 0x48, 0xd1,
+                0xea, 0x41, 0xff, 0xcb,
+            ])?;
+            let done = self.emit_forward_branch(0x84)?;
+            self.emit_backward_branch(loop_start)?;
+            self.patch_forward_branch(done)?;
+            self.emit(&[0x4c, 0x89, 0xc8, 0x4c, 0x89, 0xd2])?;
+            return Ok(());
+        } else if let ExprKind::IntegerPairTransform {
+            base,
+            other,
             transform: crate::expression::IntegerPairTransform::Midpoint,
         } = expression.kind
         {

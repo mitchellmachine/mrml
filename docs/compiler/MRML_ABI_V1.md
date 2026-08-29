@@ -278,6 +278,10 @@ state. It first reduces `2^126` to the greatest candidate no larger than the
 operand, then performs the bounded restoring recurrence with explicit
 cross-word shifts, comparisons, additions, and subtractions. Unsigned inputs
 cover the full `u128` range; negative signed inputs trap before iteration.
+Wide unsigned `carryless_mul` performs exactly 128 XOR/shift rounds in registers.
+It shifts the complete multiplicand left and multiplier right across their word
+boundaries, accumulates selected polynomial terms without carries, and returns
+the low 128 product bits. Signed wide operands remain rejected.
 Lazy `if` expressions may select compatible two-word integer values without
 evaluating the unselected branch; both branches retain the declared wide type.
 Block sequences may evaluate supported one-word prefix expressions before a
@@ -368,6 +372,9 @@ overflow must take isolated traps.
 Wide integer square roots are compared below and above perfect squares, across
 the 64-bit word boundary and power-of-four reduction boundary, and at
 `u128::MAX` and `i128::MAX`. A negative signed input must take an isolated trap.
+Wide carryless products are compared word-for-word for zero, identity, small
+polynomials, cross-word terms, and all-one operands through the pinned nightly's
+explicit `uint_carryless_mul` oracle feature.
 Both branches of a nontrivial wide conditional return are compared word-for-word.
 Wide values returned through a block sequence are also compared word-for-word.
 Immutable wide-local round trips are compared word-for-word.
