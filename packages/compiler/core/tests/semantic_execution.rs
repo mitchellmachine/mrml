@@ -221,6 +221,8 @@ const MRML_V1_WIDE_SIGNED_SQUARE_ROOT_SOURCE: &str =
     "#[mrml_abi::export(version = 1)] pub fn probe(input: i128) -> i128 { input.isqrt() }";
 const MRML_V1_WIDE_UNSIGNED_CARRYLESS_MULTIPLY_SOURCE: &str =
     "#[mrml_abi::export(version = 1)] pub fn probe(left: u128, right: u128) -> u128 { left.carryless_mul(right) }";
+const MRML_V1_WIDE_UNSIGNED_EXTRACT_BITS_SOURCE: &str =
+    "#[mrml_abi::export(version = 1)] pub fn probe(input: u128, mask: u128) -> u128 { input.extract_bits(mask) }";
 const MRML_V1_WIDE_SIGNED_IS_POSITIVE_SOURCE: &str =
     "#[mrml_abi::export(version = 1)] pub fn probe(input: i128) -> u64 { input.is_positive() as u64 }";
 const MRML_V1_WIDE_SIGNED_IS_NEGATIVE_SOURCE: &str =
@@ -634,6 +636,8 @@ fn rustc_mrml_v1_observations(source: &str, driver: &str) -> Vec<u64> {
     fs::write(&facade_source, MRML_ABI_FACADE).expect("write oracle facade source");
     let oracle_features = if source.contains(".carryless_mul(") {
         "#![feature(uint_carryless_mul)]\n"
+    } else if source.contains(".extract_bits(") {
+        "#![feature(uint_gather_scatter_bits)]\n"
     } else if source.contains(".div_floor(")
         || source.contains(".div_ceil(")
         || source.contains(".next_multiple_of(")
@@ -2774,6 +2778,33 @@ fn mrml_v1_wide_carryless_multiplication_matches_both_oracle_words() {
         rustc_mrml_v1_observations(
             MRML_V1_WIDE_UNSIGNED_CARRYLESS_MULTIPLY_SOURCE,
             "for (left, right) in [(0u128, 0u128), (1, u128::MAX), (0b1011, 0b110), (1u128 << 64, 1u128 << 63), ((1u128 << 64) | 3, (1u128 << 63) | 5), (u128::MAX, u128::MAX)] { let returned = probe(left, right); println!(\"{}\", returned as u64); println!(\"{}\", (returned >> 64) as u64); }",
+        )
+    );
+}
+
+#[test]
+fn mrml_v1_wide_bit_extraction_matches_both_oracle_words() {
+    let inputs = [
+        (0u128, 0u128),
+        (u128::MAX, 0),
+        (u128::MAX, u128::MAX),
+        (0b1101_0010, 0b1010_1010),
+        ((1u128 << 127) | (1u128 << 64) | 5, (1u128 << 127) | (1u128 << 64) | 3),
+        (u128::MAX, (1u128 << 127) | 1),
+    ];
+    let code = compile(MRML_V1_WIDE_UNSIGNED_EXTRACT_BITS_SOURCE);
+    let actual = inputs
+        .into_iter()
+        .flat_map(|(input, mask)| {
+            let returned = unsafe { call_mrml_v1_two_wide_return(code.pointer, input, mask) };
+            [returned as u64, (returned >> 64) as u64]
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(
+        actual,
+        rustc_mrml_v1_observations(
+            MRML_V1_WIDE_UNSIGNED_EXTRACT_BITS_SOURCE,
+            "for (input, mask) in [(0u128, 0u128), (u128::MAX, 0), (u128::MAX, u128::MAX), (0b1101_0010, 0b1010_1010), ((1u128 << 127) | (1u128 << 64) | 5, (1u128 << 127) | (1u128 << 64) | 3), (u128::MAX, (1u128 << 127) | 1)] { let returned = probe(input, mask); println!(\"{}\", returned as u64); println!(\"{}\", (returned >> 64) as u64); }",
         )
     );
 }
