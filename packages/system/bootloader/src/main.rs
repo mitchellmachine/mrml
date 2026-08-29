@@ -924,7 +924,9 @@ unsafe extern "sysv64" fn mrml_user_call_dispatch(frame: *mut UserCallFrame) {
             let request = match BootRecoverySyscallRequest::decode_frame(frame) {
                 Ok(request) => request,
                 Err(mrml_kernel::BootRecoverySyscallError::InvalidReturn(error)) => {
-                    retire_invalid_service_return(error)
+                    retire_service_protocol_violation(TaskProtocolViolation::InvalidUserReturn(
+                        error,
+                    ))
                 }
                 Err(_) => {
                     frame.complete_error();
@@ -970,7 +972,7 @@ unsafe extern "sysv64" fn mrml_user_call_dispatch(frame: *mut UserCallFrame) {
         let request = match frame.decode_request() {
             Ok(request) => request,
             Err(mrml_kernel::UserCallDecodeError::Return(error)) => {
-                retire_invalid_service_return(error)
+                retire_service_protocol_violation(TaskProtocolViolation::InvalidUserReturn(error))
             }
             Err(mrml_kernel::UserCallDecodeError::Request(_)) => {
                 frame.complete_error();
@@ -4330,7 +4332,7 @@ unsafe fn service_resource_mapping(virtual_address: u64) -> Mapping {
 }
 
 #[cfg(feature = "service-probe")]
-unsafe fn retire_invalid_service_return(error: mrml_kernel::UserReturnError) -> ! {
+unsafe fn retire_service_protocol_violation(violation: TaskProtocolViolation) -> ! {
     let runtime = unsafe {
         (*core::ptr::addr_of_mut!(SERVICE_RUNTIME))
             .as_mut()
@@ -4345,17 +4347,17 @@ unsafe fn retire_invalid_service_return(error: mrml_kernel::UserReturnError) -> 
             .as_mut()
             .unwrap_or_else(|| halt())
     };
-    let violation = supervisor
-        .violate_current(runtime, TaskProtocolViolation::InvalidUserReturn(error))
+    let retired = supervisor
+        .violate_current(runtime, violation)
         .unwrap_or_else(|_| halt());
-    if violation.retirement.task != current
-        || violation.retirement.violation != TaskProtocolViolation::InvalidUserReturn(error)
+    if retired.retirement.task != current
+        || retired.retirement.violation != violation
         || runtime.context(current).is_ok()
     {
         halt();
     }
-    unsafe { complete_service_cleanup(supervisor, violation.cleanup) };
-    match violation.retirement.next {
+    unsafe { complete_service_cleanup(supervisor, retired.cleanup) };
+    match retired.retirement.next {
         ScheduleOutcome::Switch { to, .. } => {
             #[cfg(feature = "invalid-return-probe")]
             {
@@ -4366,9 +4368,7 @@ unsafe fn retire_invalid_service_return(error: mrml_kernel::UserReturnError) -> 
                 };
                 if death.peer() != current
                     || death.reason()
-                        != PeerDeathReason::ProtocolViolation(
-                            TaskProtocolViolation::InvalidUserReturn(error),
-                        )
+                        != PeerDeathReason::ProtocolViolation(violation)
                 {
                     halt();
                 }
@@ -4912,7 +4912,7 @@ unsafe fn copy_to_active_user(
 #[cfg(feature = "service-probe")]
 unsafe fn active_receive_is_valid(root: PhysAddr, pending: PendingBufferReceive) -> bool {
     if root != pending.page_table {
-        halt();
+        return false;
     }
     if !unsafe {
         service_user_range_is_valid(
@@ -5010,13 +5010,30 @@ unsafe fn complete_pending_buffer(
     let Some(pending) = (unsafe { take_pending_buffer(task) }) else {
         return;
     };
-    let message = runtime.receive_ipc(task).unwrap_or_else(|_| halt());
     let previous = unsafe { ActivePageTables::current() }.unwrap_or_else(|_| halt());
     let target = runtime
         .context(task)
         .unwrap_or_else(|_| halt())
         .page_table();
     unsafe { asm!("mov cr3, {}", in(reg) target.get(), options(nostack, preserves_flags)) };
+    if !unsafe { active_receive_is_valid(target, pending) } {
+        unsafe {
+            asm!(
+                "mov cr3, {}",
+                in(reg) previous.root().get(),
+                options(nostack, preserves_flags)
+            )
+        }
+        if runtime.current() != Some(task) {
+            halt();
+        }
+        unsafe {
+            retire_service_protocol_violation(
+                TaskProtocolViolation::BufferedReceiveMappingDrift,
+            )
+        }
+    }
+    let message = runtime.receive_ipc(task).unwrap_or_else(|_| halt());
     let completion = unsafe { write_buffer_current(target, pending, &message) };
     unsafe {
         asm!(

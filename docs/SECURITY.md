@@ -202,8 +202,10 @@ access. The security/acceptance gate is canonical in
   return cause; the authorized observer can distinguish privilege, instruction,
   stack, and flags failures without receiving unrelated task state.
 - Buffered receive mapping drift has a distinct scoped protocol-violation type,
-  so future live completion wiring need not conflate mapping revocation with a
-  forged return frame. Runtime retirement is tested; live wiring remains
+  rather than being conflated with a forged return frame. Live completion
+  revalidates before dequeue and restores the prior page table before scoped
+  retirement, so unread message authority remains confined to the retiring
+  domain. Runtime retirement is tested and profiles build; execution remains
   pending.
 - Exit, fault, and protocol-violation peer-death publication preflight the
   complete reciprocal graph before domain or scheduler mutation. Corrupt or

@@ -2159,7 +2159,10 @@ live composition remains pending.
    A distinct `BufferedReceiveMappingDrift` protocol violation now provides the
    scoped retirement prerequisite for saved output mappings that fail
    revalidation. Its focused runtime test raises the kernel total to 601; live
-   split-phase completion wiring remains pending.
+   split-phase completion now revalidates before dequeue, restores the prior
+   page table on drift, consumes the pending record, and performs scoped service
+   retirement. Ordinary, block-service, and invalid-return profiles build; an
+   execution probe remains pending.
    Warning-free `invalid_return_probe` kernel/service profiles now encode the
    real CPL3 invalid-stack interrupt, typed peer-death cleanup marker, peer
    execution, clean exit, and terminal state marker. Runner execution remains
