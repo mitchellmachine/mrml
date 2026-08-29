@@ -26,6 +26,12 @@ const TOOLCHAIN: &str = "nightly-2026-08-29-x86_64-unknown-linux-gnu";
 const COMMIT: &str = "17fd5b8a37b6667b6cc137f3cc35f09759768a3b";
 static ORACLE: Once = Once::new();
 static ORACLE_DIRECTORY: AtomicU64 = AtomicU64::new(0);
+
+#[cfg(target_os = "windows")]
+fn current_semantic_test_command() -> Command {
+    Command::new(std::env::current_exe().expect("locate semantic test binary"))
+}
+
 const MRML_ABI_FACADE: &str = include_str!("oracle_support/mrml_abi.rs");
 const MRML_V1_SCALAR_SOURCE: &str =
     "#[mrml_abi::export(version = 1)] pub fn probe(value: u64) -> u64 { value + 17 }";
@@ -1872,7 +1878,7 @@ fn mrml_v1_wide_next_power_of_two_overflow_traps() {
     }
 
     #[cfg(target_os = "windows")]
-    let output = Command::new(std::env::current_exe().expect("locate semantic test binary"))
+    let output = current_semantic_test_command()
         .args([
             "--exact",
             "mrml_v1_wide_next_power_of_two_overflow_traps",
@@ -1990,7 +1996,7 @@ fn mrml_v1_wide_absolute_value_overflows_trap() {
 
     #[cfg(target_os = "windows")]
     for mode in ["checked", "strict"] {
-        let output = Command::new(std::env::current_exe().expect("locate semantic test binary"))
+        let output = current_semantic_test_command()
             .args([
                 "--exact",
                 "mrml_v1_wide_absolute_value_overflows_trap",
@@ -2076,7 +2082,7 @@ fn mrml_v1_wide_strict_negation_overflows_trap() {
 
     #[cfg(target_os = "windows")]
     for mode in ["unsigned", "signed"] {
-        let output = Command::new(std::env::current_exe().expect("locate semantic test binary"))
+        let output = current_semantic_test_command()
             .args([
                 "--exact",
                 "mrml_v1_wide_strict_negation_overflows_trap",
@@ -2165,7 +2171,7 @@ fn mrml_v1_wide_strict_shift_distances_trap() {
 
     #[cfg(target_os = "windows")]
     for mode in ["width", "maximum"] {
-        let output = Command::new(std::env::current_exe().expect("locate semantic test binary"))
+        let output = current_semantic_test_command()
             .args([
                 "--exact",
                 "mrml_v1_wide_strict_shift_distances_trap",
@@ -2528,7 +2534,7 @@ fn mrml_v1_wide_next_multiple_failures_trap() {
 
     #[cfg(target_os = "windows")]
     for index in 0..cases.len() {
-        let output = Command::new(std::env::current_exe().expect("locate semantic test binary"))
+        let output = current_semantic_test_command()
             .args([
                 "--exact",
                 "mrml_v1_wide_next_multiple_failures_trap",
@@ -2657,7 +2663,7 @@ fn mrml_v1_wide_euclidean_division_failures_trap() {
 
     #[cfg(target_os = "windows")]
     for index in 0..cases.len() {
-        let output = Command::new(std::env::current_exe().expect("locate semantic test binary"))
+        let output = current_semantic_test_command()
             .args([
                 "--exact",
                 "mrml_v1_wide_euclidean_division_failures_trap",
@@ -2784,7 +2790,7 @@ fn mrml_v1_wide_power_overflows_trap() {
 
     #[cfg(target_os = "windows")]
     for index in 0..sources.len() {
-        let output = Command::new(std::env::current_exe().expect("locate semantic test binary"))
+        let output = current_semantic_test_command()
             .args(["--exact", "mrml_v1_wide_power_overflows_trap", "--nocapture"])
             .env(CHILD, index.to_string())
             .output()
@@ -3373,7 +3379,7 @@ fn mrml_v1_wide_funnel_shift_count_overflow_traps() {
     }
 
     #[cfg(target_os = "windows")]
-    let output = Command::new(std::env::current_exe().expect("locate semantic test binary"))
+    let output = current_semantic_test_command()
         .args([
             "--exact",
             "mrml_v1_wide_funnel_shift_count_overflow_traps",
@@ -3472,7 +3478,7 @@ fn mrml_v1_wide_signed_square_root_negative_traps() {
     }
 
     #[cfg(target_os = "windows")]
-    let output = Command::new(std::env::current_exe().expect("locate semantic test binary"))
+    let output = current_semantic_test_command()
         .args([
             "--exact",
             "mrml_v1_wide_signed_square_root_negative_traps",
@@ -3770,7 +3776,7 @@ fn mrml_v1_wide_unsigned_multiplication_overflow_traps() {
     }
 
     #[cfg(target_os = "windows")]
-    let output = Command::new(std::env::current_exe().expect("locate semantic test binary"))
+    let output = current_semantic_test_command()
         .args([
             "--exact",
             "mrml_v1_wide_unsigned_multiplication_overflow_traps",
@@ -3821,7 +3827,7 @@ fn mrml_v1_wide_signed_multiplication_overflow_traps() {
     }
 
     #[cfg(target_os = "windows")]
-    let output = Command::new(std::env::current_exe().expect("locate semantic test binary"))
+    let output = current_semantic_test_command()
         .args([
             "--exact",
             "mrml_v1_wide_signed_multiplication_overflow_traps",
@@ -3912,7 +3918,7 @@ fn mrml_v1_wide_shift_count_overflow_traps() {
     }
 
     #[cfg(target_os = "windows")]
-    let output = Command::new(std::env::current_exe().expect("locate semantic test binary"))
+    let output = current_semantic_test_command()
         .args([
             "--exact",
             "mrml_v1_wide_shift_count_overflow_traps",
@@ -4001,7 +4007,7 @@ fn mrml_v1_wide_zero_divisors_trap() {
 
     #[cfg(target_os = "windows")]
     for index in 0..sources.len() {
-        let output = Command::new(std::env::current_exe().expect("locate semantic test binary"))
+        let output = current_semantic_test_command()
             .args(["--exact", "mrml_v1_wide_zero_divisors_trap", "--nocapture"])
             .env(CHILD, index.to_string())
             .output()
@@ -4080,7 +4086,7 @@ fn mrml_v1_wide_signed_division_overflow_traps_for_both_operators() {
 
     #[cfg(target_os = "windows")]
     for case in ["divide", "remainder"] {
-        let output = Command::new(std::env::current_exe().expect("locate semantic test binary"))
+        let output = current_semantic_test_command()
             .args([
                 "--exact",
                 "mrml_v1_wide_signed_division_overflow_traps_for_both_operators",
@@ -5421,7 +5427,7 @@ fn subslice_then_index_bounds_report_isolated_traps() {
 
     #[cfg(target_os = "windows")]
     for case in ["range", "index"] {
-        let output = Command::new(std::env::current_exe().expect("locate semantic test binary"))
+        let output = current_semantic_test_command()
             .args([
                 "--exact",
                 "subslice_then_index_bounds_report_isolated_traps",
@@ -5513,7 +5519,7 @@ fn repeated_subslice_then_index_bounds_report_isolated_traps() {
 
     #[cfg(target_os = "windows")]
     for case in ["inner", "middle", "outer", "index"] {
-        let output = Command::new(std::env::current_exe().expect("locate semantic test binary"))
+        let output = current_semantic_test_command()
             .args([
                 "--exact",
                 "repeated_subslice_then_index_bounds_report_isolated_traps",
@@ -5594,7 +5600,7 @@ fn inclusive_subslice_then_index_bounds_report_isolated_traps() {
 
     #[cfg(target_os = "windows")]
     for case in ["inclusive-overflow", "reversed", "end", "index"] {
-        let output = Command::new(std::env::current_exe().expect("locate semantic test binary"))
+        let output = current_semantic_test_command()
             .args([
                 "--exact",
                 "inclusive_subslice_then_index_bounds_report_isolated_traps",
@@ -5688,7 +5694,7 @@ fn inclusive_slice_subslice_then_index_bounds_report_isolated_traps() {
 
     #[cfg(target_os = "windows")]
     for case in ["inclusive-overflow", "reversed", "end", "index"] {
-        let output = Command::new(std::env::current_exe().expect("locate semantic test binary"))
+        let output = current_semantic_test_command()
             .args([
                 "--exact",
                 "inclusive_slice_subslice_then_index_bounds_report_isolated_traps",
@@ -5769,7 +5775,7 @@ fn checked_overflow_reports_an_isolated_trap_exit() {
     }
 
     #[cfg(target_os = "windows")]
-    let output = Command::new(std::env::current_exe().expect("locate semantic test binary"))
+    let output = current_semantic_test_command()
         .args([
             "--exact",
             "checked_overflow_reports_an_isolated_trap_exit",
