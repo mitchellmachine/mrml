@@ -6868,6 +6868,10 @@ Control receive and peer connection now validate every live peer's exact
 scheduler identity and unique reciprocal relation before mutation. A focused
 unscheduled-peer test preserves both relations and raises the Linux kernel total
 to 619.
+Stable peer-death records now reject the observing task itself and any identity
+that remains scheduled or still owns a domain record. A focused forged-live-
+death test preserves the record and live task, raising the Linux kernel total to
+620.
 
 Patent review: `NOT_TRIGGERED` — this is conventional split-phase validation
 and commit for the existing bounded IPC endpoint and capability table; it

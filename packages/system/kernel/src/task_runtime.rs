@@ -1368,6 +1368,17 @@ impl<const TASKS: usize, const CAPS: usize> TaskRuntime<TASKS, CAPS> {
 
     fn validate_control_topology(&self, domain: &TaskDomain<CAPS>) -> Result<(), TaskRuntimeError> {
         Self::validate_control_state(domain)?;
+        for death in domain.peer_deaths.iter().flatten() {
+            if death.peer == domain.task
+                || self.scheduler.contains(death.peer)
+                || !matches!(
+                    self.domain_slot(death.peer),
+                    Err(TaskRuntimeError::MissingTask)
+                )
+            {
+                return Err(TaskRuntimeError::IntegrityFailure);
+            }
+        }
         for peer in domain.peers.iter().flatten().copied() {
             if !self.scheduler.contains(peer) {
                 return Err(TaskRuntimeError::IntegrityFailure);
@@ -3038,6 +3049,29 @@ mod tests {
                 .peers
                 .contains(&Some(first))
         );
+    }
+
+    #[test]
+    fn control_receive_rejects_death_for_still_live_identity() {
+        let mut runtime = TaskRuntime::<2, 1>::new(1_000, 1).unwrap();
+        let observer = runtime
+            .create(Priority::NORMAL, context(0x20_0000, 0x40_0000))
+            .unwrap();
+        let live = runtime
+            .create(Priority::NORMAL, context(0x30_0000, 0x50_0000))
+            .unwrap();
+        let slot = runtime.domain_slot(observer).unwrap();
+        runtime.domains[slot].as_mut().unwrap().peer_deaths[0] = Some(PeerDeath {
+            peer: live,
+            reason: PeerDeathReason::Exited,
+        });
+
+        assert!(matches!(
+            runtime.receive_control(observer),
+            Err(TaskRuntimeError::IntegrityFailure)
+        ));
+        assert!(runtime.domains[slot].as_ref().unwrap().peer_deaths[0].is_some());
+        assert!(runtime.scheduler.contains(live));
     }
 
     #[test]

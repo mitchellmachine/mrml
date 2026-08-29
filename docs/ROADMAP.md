@@ -2227,6 +2227,9 @@ live composition remains pending.
    Control receive and connection now preflight every live peer's scheduler
    identity and exact reciprocal relation. An unscheduled-peer preservation test
    raises the kernel total to 619.
+   Stable peer-death records now reject self-death and identities that remain
+   scheduled or domain-live. A forged-live-death preservation test raises the
+   kernel total to 620.
    Warning-free `invalid_return_probe` kernel/service profiles now encode the
    real CPL3 invalid-stack interrupt, typed peer-death cleanup marker, peer
    execution, clean exit, and terminal state marker. Runner execution remains
