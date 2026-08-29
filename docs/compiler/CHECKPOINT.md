@@ -9,8 +9,8 @@ the named commit and current source.
 ## Recoverable baseline
 
 - Branch: `main`
-- Compiler checkpoint commit: `a2b3f5c3`
-  (`compiler: validate COFF unwind associations`)
+- Compiler checkpoint commit: `57a82bd5`
+  (`compiler: retain associative COFF readonly data`)
 - Remote state when recorded: `origin/main` includes the bounded MRML-owned
   static-link core, exact MRML COFF and ELF64 ingestion, deterministic
   import-free PE32+/ELF64 executable serialization, explicit compiler-driver
@@ -60,6 +60,24 @@ against all prior accepted probes. Keep Cargo on edition 2024 until a newer
 named edition can be adopted through a pinned, workspace-wide migration.
 
 ## Latest bounded linker milestone
+
+Commit `57a82bd5` makes explicit associative read-only COFF COMDATs follow the
+exact text fragment at their validated association root. Fragment decoding
+reuses the prepared object inventory, ignores symbols in companions owned by
+other roots, and fails closed rather than retaining an excluded section inside
+the borrowed read-only span. A four-section adversarial fixture proves distinct
+`A` and `B` payload ownership and detached-companion removal. Windows and Arch
+Linux each passed 755 compiler-core tests, all four integration groups, seven
+driver tests, and the full dependent-package graph. The unchanged stateful
+gnullvm probe returns 42 through both linkers: MRML emits 2,560 bytes versus
+rust-lld's 3,584, with 1,028 bytes of zero fill and two forwarding pointers.
+Fifty links after five warmups measured 5.749 ms median/6.139 ms mean for MRML
+versus 22.752 ms median/22.926 ms mean for rust-lld on this narrow workload.
+Non-associative read-only COMDAT duplicate selection and arbitrary
+discontiguous read-only packing remain incomplete. `mrml doctor` passed; audit
+retains the unrelated fingerprint `fnv1a64:0fe5cf1836d3e0dc` at
+`semantic_execution.rs:1248`. Patent review: **NOT_TRIGGERED**; see
+`docs/patents/REVIEW_LOG.md`.
 
 Commit `a2b3f5c3` inventories bounded COFF COMDAT section definitions once per
 object and validates that associative chains have in-range COMDAT parents,
