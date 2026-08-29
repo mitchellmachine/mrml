@@ -1,5 +1,18 @@
 # Patent review log
 
+# 2026-08-29 — Bounded read-only FAT32 LFN decoding
+
+Patent review: **TRIGGERED**. The parser validates and decodes the conventional
+adjacent long-name record sequence associated with a checked short directory
+entry, which is close to the historical common-namespace family's subject
+matter. The identified Canadian patent `CA 2,120,461` was filed in 1994 and is
+expired under the statutory twenty-year term; details and the outside-Canada
+limitation are recorded in
+[`FAT_LFN_SCOPE_2026-08-29.md`](FAT_LFN_SCOPE_2026-08-29.md). This increment is
+read-only: it does not create aliases or records, generate names, write media, or
+make names authoritative. This technical screen is not legal advice or patent
+clearance.
+
 # 2026-08-29 — Bounded FAT32 directory-chain composition
 
 Patent review: **NOT_TRIGGERED**. This increment atomically appends already

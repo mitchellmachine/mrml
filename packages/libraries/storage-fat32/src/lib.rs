@@ -60,7 +60,8 @@ pub enum Fat32Error {
     ChainCapacity,
     InvalidDirectoryExtent,
     DirectoryCapacity,
-    UnsupportedLongName,
+    InvalidLongNameSequence,
+    InvalidLongNameEncoding,
     InvalidDirectoryEntry,
     DirectoryAlreadyEnded,
 }
@@ -84,6 +85,7 @@ impl<const N: usize> Fat32ClusterChain<N> {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct Fat32ShortDirectoryEntry {
     pub short_name: [u8; 11],
+    pub long_name: Option<Fat32LongName>,
     pub attributes: u8,
     pub first_cluster: u32,
     pub file_size: u32,
@@ -92,6 +94,7 @@ pub struct Fat32ShortDirectoryEntry {
 impl Fat32ShortDirectoryEntry {
     const EMPTY: Self = Self {
         short_name: [0; 11],
+        long_name: None,
         attributes: 0,
         first_cluster: 0,
         file_size: 0,
@@ -107,10 +110,42 @@ impl Fat32ShortDirectoryEntry {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct Fat32LongName {
+    utf16: [u16; 255],
+    length: u8,
+}
+
+impl Fat32LongName {
+    pub fn utf16(&self) -> &[u16] {
+        &self.utf16[..usize::from(self.length)]
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct PendingLongName {
+    utf16: [u16; 260],
+    slots: u8,
+    next_ordinal: u8,
+    checksum: u8,
+    active: bool,
+}
+
+impl PendingLongName {
+    const EMPTY: Self = Self {
+        utf16: [0; 260],
+        slots: 0,
+        next_ordinal: 0,
+        checksum: 0,
+        active: false,
+    };
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct Fat32DirectoryBatch<const N: usize> {
     entries: [Fat32ShortDirectoryEntry; N],
     length: usize,
     pub end_of_directory: bool,
+    pending_long_name: PendingLongName,
 }
 
 impl<const N: usize> Fat32DirectoryBatch<N> {
@@ -119,6 +154,7 @@ impl<const N: usize> Fat32DirectoryBatch<N> {
             entries: [Fat32ShortDirectoryEntry::EMPTY; N],
             length: 0,
             end_of_directory: false,
+            pending_long_name: PendingLongName::EMPTY,
         }
     }
 
@@ -327,15 +363,20 @@ fn append_fat32_short_directory_inner<const N: usize>(
         .ok_or(Fat32Error::InvalidExtent)?;
     for raw in bytes.chunks_exact(32) {
         if raw[0] == 0 {
+            if directory.pending_long_name.active {
+                return Err(Fat32Error::InvalidLongNameSequence);
+            }
             directory.end_of_directory = true;
             return Ok(());
         }
         if raw[0] == 0xe5 {
+            directory.pending_long_name = PendingLongName::EMPTY;
             continue;
         }
         let attributes = raw[11];
         if attributes == 0x0f {
-            return Err(Fat32Error::UnsupportedLongName);
+            append_long_name_slot(&mut directory.pending_long_name, raw)?;
+            continue;
         }
         if attributes & 0xc0 != 0
             || attributes & 0x18 == 0x18
@@ -346,6 +387,8 @@ fn append_fat32_short_directory_inner<const N: usize>(
         }
         let mut short_name = [0; 11];
         short_name.copy_from_slice(&raw[..11]);
+        let long_name = finish_long_name(&directory.pending_long_name, &short_name)?;
+        directory.pending_long_name = PendingLongName::EMPTY;
         if short_name[0] == 0x05 {
             short_name[0] = 0xe5;
         }
@@ -358,6 +401,9 @@ fn append_fat32_short_directory_inner<const N: usize>(
         let file_size = read_u32(raw, 28);
         let volume_label = attributes & 0x08 != 0;
         let is_directory = attributes & 0x10 != 0;
+        if volume_label && long_name.is_some() {
+            return Err(Fat32Error::InvalidLongNameSequence);
+        }
         let valid_cluster = if volume_label {
             first_cluster == 0 && file_size == 0
         } else if is_directory {
@@ -373,6 +419,7 @@ fn append_fat32_short_directory_inner<const N: usize>(
         }
         directory.entries[directory.length] = Fat32ShortDirectoryEntry {
             short_name,
+            long_name,
             attributes,
             first_cluster,
             file_size,
@@ -380,6 +427,118 @@ fn append_fat32_short_directory_inner<const N: usize>(
         directory.length += 1;
     }
     Ok(())
+}
+
+fn append_long_name_slot(pending: &mut PendingLongName, raw: &[u8]) -> Result<(), Fat32Error> {
+    let sequence = raw[0];
+    let ordinal = sequence & 0x1f;
+    let last = sequence & 0x40 != 0;
+    if sequence & 0xa0 != 0
+        || !(1..=20).contains(&ordinal)
+        || raw[12] != 0
+        || read_u16(raw, 26) != 0
+    {
+        return Err(Fat32Error::InvalidLongNameSequence);
+    }
+    if last {
+        if pending.active {
+            return Err(Fat32Error::InvalidLongNameSequence);
+        }
+        *pending = PendingLongName {
+            slots: ordinal,
+            next_ordinal: ordinal,
+            checksum: raw[13],
+            ..PendingLongName::EMPTY
+        };
+        pending.active = true;
+    } else if !pending.active || pending.next_ordinal != ordinal || pending.checksum != raw[13] {
+        return Err(Fat32Error::InvalidLongNameSequence);
+    }
+
+    let offset = usize::from(ordinal - 1) * 13;
+    let positions = [1, 3, 5, 7, 9, 14, 16, 18, 20, 22, 24, 28, 30];
+    for (index, position) in positions.into_iter().enumerate() {
+        pending.utf16[offset + index] = read_u16(raw, position);
+    }
+    pending.next_ordinal = ordinal - 1;
+    Ok(())
+}
+
+fn finish_long_name(
+    pending: &PendingLongName,
+    short_name: &[u8; 11],
+) -> Result<Option<Fat32LongName>, Fat32Error> {
+    if !pending.active {
+        return Ok(None);
+    }
+    if pending.next_ordinal != 0 || pending.checksum != short_name_checksum(short_name) {
+        return Err(Fat32Error::InvalidLongNameSequence);
+    }
+    let available = usize::from(pending.slots) * 13;
+    let mut length = available;
+    for index in 0..available {
+        match pending.utf16[index] {
+            0 => {
+                length = index;
+                if pending.utf16[index + 1..available]
+                    .iter()
+                    .any(|&unit| unit != 0xffff)
+                {
+                    return Err(Fat32Error::InvalidLongNameEncoding);
+                }
+                break;
+            }
+            0xffff => return Err(Fat32Error::InvalidLongNameEncoding),
+            _ => {}
+        }
+    }
+    if length == 0 || length > 255 || !valid_long_name(&pending.utf16[..length]) {
+        return Err(Fat32Error::InvalidLongNameEncoding);
+    }
+    let mut utf16 = [0; 255];
+    utf16[..length].copy_from_slice(&pending.utf16[..length]);
+    Ok(Some(Fat32LongName {
+        utf16,
+        length: length as u8,
+    }))
+}
+
+fn valid_long_name(units: &[u16]) -> bool {
+    if matches!(units.last().copied(), Some(0x20 | 0x2e))
+        || units == [0x2e]
+        || units == [0x2e, 0x2e]
+    {
+        return false;
+    }
+    let mut index = 0;
+    while index < units.len() {
+        let unit = units[index];
+        if unit < 0x20
+            || matches!(
+                unit,
+                0x22 | 0x2a | 0x2f | 0x3a | 0x3c | 0x3e | 0x3f | 0x5c | 0x7c
+            )
+        {
+            return false;
+        }
+        if (0xd800..=0xdbff).contains(&unit) {
+            if index + 1 == units.len() || !(0xdc00..=0xdfff).contains(&units[index + 1]) {
+                return false;
+            }
+            index += 2;
+        } else if (0xdc00..=0xdfff).contains(&unit) {
+            return false;
+        } else {
+            index += 1;
+        }
+    }
+    true
+}
+
+fn short_name_checksum(short_name: &[u8; 11]) -> u8 {
+    short_name.iter().fold(0_u8, |checksum, &byte| {
+        checksum.rotate_right(1).wrapping_add(byte)
+    })
 }
 
 fn valid_short_component(component: &[u8], allow_empty: bool) -> bool {
@@ -535,6 +694,32 @@ mod tests {
         entry[26..28].copy_from_slice(&(cluster as u16).to_le_bytes());
         entry[28..32].copy_from_slice(&size.to_le_bytes());
         entry
+    }
+
+    fn long_entry(ordinal: u8, last: bool, checksum: u8, units: &[u16]) -> [u8; 32] {
+        let mut entry = [0xff; 32];
+        entry[0] = ordinal | if last { 0x40 } else { 0 };
+        entry[11] = 0x0f;
+        entry[12] = 0;
+        entry[13] = checksum;
+        entry[26..28].copy_from_slice(&0_u16.to_le_bytes());
+        let positions = [1, 3, 5, 7, 9, 14, 16, 18, 20, 22, 24, 28, 30];
+        for (index, position) in positions.into_iter().enumerate() {
+            let unit = units
+                .get(index)
+                .copied()
+                .unwrap_or(if index == units.len() { 0 } else { 0xffff });
+            entry[position..position + 2].copy_from_slice(&unit.to_le_bytes());
+        }
+        entry
+    }
+
+    fn ascii_utf16<const N: usize>(bytes: &[u8; N]) -> [u16; N] {
+        let mut units = [0; N];
+        for (unit, &byte) in units.iter_mut().zip(bytes) {
+            *unit = u16::from(byte);
+        }
+        units
     }
 
     #[test]
@@ -809,13 +994,21 @@ mod tests {
     }
 
     #[test]
-    fn rejects_long_names_and_exhausted_output_capacity() {
+    fn parses_checked_long_name_and_rejects_exhausted_output_capacity() {
         let geometry = parse_fat32_boot_sector(&boot_sector()).unwrap();
-        let mut long_name = short_entry(b"LONGNAMELFN", 0x0f, 0, 0);
-        long_name[12] = 0;
+        let short_name = *b"LONGNA~1MRP";
+        let checksum = short_name_checksum(&short_name);
+        let mut units = [0xffff; 13];
+        for (target, source) in units.iter_mut().zip("Long name.mrp".encode_utf16()) {
+            *target = source;
+        }
+        let mut named = [0; 96];
+        named[..32].copy_from_slice(&long_entry(1, true, checksum, &units));
+        named[32..64].copy_from_slice(&short_entry(&short_name, 0x20, 5, 1));
+        let parsed = parse_fat32_short_directory::<2>(geometry, &named).unwrap();
         assert_eq!(
-            parse_fat32_short_directory::<2>(geometry, &long_name),
-            Err(Fat32Error::UnsupportedLongName)
+            parsed.entries()[0].long_name.unwrap().utf16(),
+            &ascii_utf16(b"Long name.mrp")
         );
         let mut bytes = [0; 64];
         bytes[..32].copy_from_slice(&short_entry(b"FIRST   BIN", 0x20, 5, 1));
@@ -886,5 +1079,104 @@ mod tests {
             Err(Fat32Error::InvalidDirectoryEntry)
         );
         assert_eq!(directory, before);
+    }
+
+    #[test]
+    fn composes_long_name_sequence_across_cluster_extents() {
+        let geometry = parse_fat32_boot_sector(&boot_sector()).unwrap();
+        let short_name = *b"ACCESS~1TXT";
+        let checksum = short_name_checksum(&short_name);
+        let name = ascii_utf16(b"Accessible notes.txt");
+        let mut first = [0; 32];
+        first.copy_from_slice(&long_entry(2, true, checksum, &name[13..]));
+        let mut second = [0; 96];
+        second[..32].copy_from_slice(&long_entry(1, false, checksum, &name[..13]));
+        second[32..64].copy_from_slice(&short_entry(&short_name, 0x20, 8, 20));
+        let mut directory = Fat32DirectoryBatch::<2>::new();
+        append_fat32_short_directory(geometry, &mut directory, &first).unwrap();
+        append_fat32_short_directory(geometry, &mut directory, &second).unwrap();
+        assert_eq!(directory.entries()[0].long_name.unwrap().utf16(), &name);
+    }
+
+    #[test]
+    fn rejects_wrong_long_name_order_checksum_and_reserved_fields_atomically() {
+        let geometry = parse_fat32_boot_sector(&boot_sector()).unwrap();
+        let short_name = *b"INVALID TXT";
+        let checksum = short_name_checksum(&short_name);
+        let units = ascii_utf16(b"Invalid sequence");
+        let mut directory = Fat32DirectoryBatch::<2>::new();
+        let before = directory;
+        let wrong_order = long_entry(1, false, checksum, &units[..13]);
+        assert_eq!(
+            append_fat32_short_directory(geometry, &mut directory, &wrong_order),
+            Err(Fat32Error::InvalidLongNameSequence)
+        );
+        assert_eq!(directory, before);
+
+        let mut wrong_checksum = [0; 64];
+        wrong_checksum[..32].copy_from_slice(&long_entry(
+            1,
+            true,
+            checksum.wrapping_add(1),
+            &units[..13],
+        ));
+        wrong_checksum[32..].copy_from_slice(&short_entry(&short_name, 0x20, 5, 1));
+        assert_eq!(
+            append_fat32_short_directory(geometry, &mut directory, &wrong_checksum),
+            Err(Fat32Error::InvalidLongNameSequence)
+        );
+        assert_eq!(directory, before);
+
+        let mut reserved = long_entry(1, true, checksum, &units[..13]);
+        reserved[26] = 1;
+        assert_eq!(
+            append_fat32_short_directory(geometry, &mut directory, &reserved),
+            Err(Fat32Error::InvalidLongNameSequence)
+        );
+        assert_eq!(directory, before);
+    }
+
+    #[test]
+    fn rejects_invalid_long_name_encoding_and_checksum() {
+        let geometry = parse_fat32_boot_sector(&boot_sector()).unwrap();
+        let short_name = *b"INVALID TXT";
+        let checksum = short_name_checksum(&short_name);
+        for units in [
+            [
+                0xd800, 0, 0xffff, 0xffff, 0xffff, 0xffff, 0xffff, 0xffff, 0xffff, 0xffff, 0xffff,
+                0xffff, 0xffff,
+            ],
+            [
+                b'B' as u16,
+                b'a' as u16,
+                b'd' as u16,
+                b'/' as u16,
+                0,
+                0xffff,
+                0xffff,
+                0xffff,
+                0xffff,
+                0xffff,
+                0xffff,
+                0xffff,
+                0xffff,
+            ],
+        ] {
+            let mut bytes = [0; 64];
+            bytes[..32].copy_from_slice(&long_entry(1, true, checksum, &units));
+            bytes[32..].copy_from_slice(&short_entry(&short_name, 0x20, 5, 1));
+            assert_eq!(
+                parse_fat32_short_directory::<1>(geometry, &bytes),
+                Err(Fat32Error::InvalidLongNameEncoding)
+            );
+        }
+        let units = ascii_utf16(b"Checksum");
+        let mut bytes = [0; 64];
+        bytes[..32].copy_from_slice(&long_entry(1, true, checksum.wrapping_add(1), &units));
+        bytes[32..].copy_from_slice(&short_entry(&short_name, 0x20, 5, 1));
+        assert_eq!(
+            parse_fat32_short_directory::<1>(geometry, &bytes),
+            Err(Fat32Error::InvalidLongNameSequence)
+        );
     }
 }
