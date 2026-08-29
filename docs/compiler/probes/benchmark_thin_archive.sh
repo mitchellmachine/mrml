@@ -7,6 +7,7 @@ sysroot=$(rustc +$toolchain --print sysroot)
 lld="$sysroot/lib/rustlib/x86_64-unknown-linux-gnu/bin/rust-lld"
 mrml=target/mrml-native/linux/release/mrml-rustc
 probe="/tmp/mrml-thin-archive-benchmark-$$"
+unused_count=${1:-1}
 mkdir -p "$probe/objects"
 trap 'rm -rf "$probe"' EXIT
 
@@ -16,7 +17,12 @@ for source in entry helper leaf unused; do
         "docs/compiler/probes/thin_archive_${source}.rs" \
         -o "$probe/objects/${source}.o"
 done
-(cd "$probe" && ar crsT helpers.a objects/helper.o objects/leaf.o objects/unused.o)
+index=1
+while test "$index" -lt "$unused_count"; do
+    cp "$probe/objects/unused.o" "$probe/objects/unused-$index.o"
+    index=$((index + 1))
+done
+(cd "$probe" && ar crsT helpers.a objects/helper.o objects/leaf.o objects/unused*.o)
 
 measure() {
     name=$1
@@ -39,9 +45,9 @@ measure() {
         { values[NR] = $1; total += $1 }
         END {
             median = (values[25] + values[26]) / 2
-            printf "%s median_ms=%.3f mean_ms=%.3f iterations=50 warmups=5\n", name, median, total / NR
+            printf "%s unused=%s median_ms=%.3f mean_ms=%.3f iterations=50 warmups=5\n", name, count, median, total / NR
         }
-    ' "$samples.sorted"
+    ' count="$unused_count" "$samples.sorted"
 }
 
 measure mrml "$mrml" --link-elf "$probe/objects/entry.o" "$probe/helpers.a" \

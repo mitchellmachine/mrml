@@ -954,6 +954,13 @@ versus pinned rust-lld at 4.592 ms median and 4.614 ms mean. This tiny workload
 shows that eliminating duplicate selected-member I/O did not overcome MRML's
 remaining startup and parsing overhead; it is a regression baseline, not a
 speed-superiority result.
+The same harness can deterministically copy the unused object to exercise up to
+the 1,024-member bound. With 1,000 unreferenced external members, the identical
+50-iteration/five-warmup method measured MRML at 4.844 ms median and 4.902 ms
+mean versus pinned rust-lld at 7.490 ms median and 7.509 ms mean. This is direct
+evidence that lazy external-file admission wins on one metadata-heavy GNU thin
+archive; it does not establish general linker superiority or representative
+Rust-build performance.
 
 Research source:
 
