@@ -2241,6 +2241,9 @@ live composition remains pending.
    Service send-denial classification now uses an explicit closed precommit IPC
    error set; postcommit/integrity-shaped variants cannot be silently added by
    enum growth. The kernel total remains 622.
+   Direct send now uses unique domain resolution after scheduler confirmation;
+   missing/duplicate domain state is integrity failure. Existing corruption
+   coverage is extended; the total remains 622.
    Buffered service receive now preflights an exact pending-table slot before
    blocking and binds post-switch publication to that slot. Service profiles
    cross-build; live backend execution remains pending.

@@ -6889,6 +6889,10 @@ task, same-task routing, payload/count bounds, authorization, sequence
 exhaustion, inbox capacity, and delegation capacity. Malformed/replay/shape,
 buffer, and invalid-plan IPC failures remain integrity-class outcomes. The
 Linux kernel total remains 622.
+Direct `send_ipc` now resolves both already-scheduled domains through the same
+unique-domain gate as resource access and retirement. Missing or duplicate
+domain state after scheduler confirmation is an integrity failure; the existing
+duplicate-domain test now covers send without changing the 622-test total.
 The service buffered-receive path now resolves one exact empty pending-table
 slot before blocking the current task, then publishes only into that still-empty
 slot after the scheduler switch. Duplicate task identity, full table, slot

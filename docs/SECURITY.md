@@ -273,6 +273,8 @@ access. The security/acceptance gate is canonical in
   tokens, rights, or reserved bytes cannot publish a partial decoded prefix.
 - Service-visible send denial uses a closed precommit error set; malformed,
   replay, shape, buffer, or invalid-plan errors remain integrity-class failures.
+- After scheduler confirmation, direct send requires exactly one sender and
+  receiver domain; missing or duplicate records are integrity failures.
 - Buffered receive preflights and binds its exact empty pending-table slot before
   scheduler blocking, preventing late capacity discovery after state mutation.
 - Pending buffered completion revalidates zero-capacity address canonicality and

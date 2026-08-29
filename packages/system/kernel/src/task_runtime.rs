@@ -944,19 +944,11 @@ impl<const TASKS: usize, const CAPS: usize> TaskRuntime<TASKS, CAPS> {
             return Err(TaskRuntimeError::DelegationTableFull);
         }
         let sender_slot = self
-            .domains
-            .iter()
-            .position(|domain| domain.as_ref().is_some_and(|domain| domain.task == sender))
-            .ok_or(TaskRuntimeError::MissingTask)?;
+            .domain_slot(sender)
+            .map_err(|_| TaskRuntimeError::IntegrityFailure)?;
         let receiver_slot = self
-            .domains
-            .iter()
-            .position(|domain| {
-                domain
-                    .as_ref()
-                    .is_some_and(|domain| domain.task == receiver)
-            })
-            .ok_or(TaskRuntimeError::MissingTask)?;
+            .domain_slot(receiver)
+            .map_err(|_| TaskRuntimeError::IntegrityFailure)?;
         let send_plan = endpoint
             .prepare_send(
                 &self.domains[sender_slot]
@@ -2661,6 +2653,12 @@ mod tests {
         let second = runtime
             .create(Priority::NORMAL, context(0x30_0000, 0x50_0000))
             .unwrap();
+        let endpoint_object = ObjectId(0x55);
+        let endpoint_capability = runtime
+            .capabilities_mut(first)
+            .unwrap()
+            .insert(endpoint_object, Rights::SIGNAL)
+            .unwrap();
         let second_slot = runtime.domain_slot(second).unwrap();
         runtime.domains[second_slot].as_mut().unwrap().task = first;
 
@@ -2674,6 +2672,19 @@ mod tests {
         ));
         assert_eq!(
             runtime.detach_domain(first).err(),
+            Some(TaskRuntimeError::IntegrityFailure)
+        );
+        assert_eq!(
+            runtime
+                .send_ipc(
+                    first,
+                    second,
+                    &mut Endpoint::new(endpoint_object),
+                    endpoint_capability,
+                    b"rejected",
+                    &[],
+                )
+                .err(),
             Some(TaskRuntimeError::IntegrityFailure)
         );
         assert!(runtime.scheduler.contains(first));
