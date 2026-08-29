@@ -2114,6 +2114,9 @@ live composition remains pending.
    Buffered receive returns scrubbed failure for invalid initial output
    mappings before dequeue/block, while completion revalidates the saved exact
    task/root ranges and still fails stop on later drift.
+   Boot-recovery delivery returns scrubbed failure only for validation and
+   other proven precommit denials; copy uncertainty after one-use consumption
+   and internal delivery/runtime inconsistency remain fail-stop.
    Exact feature gating now confines `GuestMappingRevoker` to block/component
    cleanup builds; ordinary, restart-request, component, and block service UEFI
    profiles cross-build without the former unused import.

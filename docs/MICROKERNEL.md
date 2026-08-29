@@ -6690,6 +6690,11 @@ capability output mapping fails complete validation, before dequeue or block.
 The saved task/root binding and complete ranges are revalidated at completion;
 later drift remains fail-stop pending scoped task retirement. The same service
 builds and 595-test kernel suite pass.
+Boot-recovery delivery now returns scrubbed failure for invalid initial output
+mapping, wrong-task/already-consumed delivery, or precommit capability denial.
+Output-copy uncertainty after one-use authority consumption and all internal
+delivery/runtime inconsistency remain fail-stop. The same UEFI profiles and 595
+Linux kernel tests pass.
 The bootloader now imports `GuestMappingRevoker` only for the block/component
 profiles that instantiate its hosted cleanup adapter. Ordinary service,
 restart-request, component-service, and block-service UEFI profiles all
@@ -6712,7 +6717,8 @@ error-boundary hardening. Post-mutation capability-release classification is
 the same conventional integrity hardening; none triggers a separate patent
 review. Buffered userspace-range denial follows that existing boundary and does
 not introduce a new mechanism; the matching initial receive-range denial has
-the same classification.
+the same classification. Boot-recovery precommit denial classification likewise
+uses the existing one-use delivery boundary and does not trigger review.
 
 Rust service code does not assume a fixed PE entry RVA. WHP and KVM publish the
 entry derived from the verified signed executable in a hosted metadata page.

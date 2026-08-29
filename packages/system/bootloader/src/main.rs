@@ -947,9 +947,22 @@ unsafe extern "sysv64" fn mrml_user_call_dispatch(frame: *mut UserCallFrame) {
                 .as_mut()
                 .unwrap_or_else(|| halt());
             let mut user = ActiveTaskUserCopy::new(&active, root, current, DirectActiveUserMemory);
-            BootRecoverySyscallExecutor::execute(request, runtime, current, delivery, &mut user)
-                .unwrap_or_else(|_| halt());
-            frame.complete(0);
+            match BootRecoverySyscallExecutor::execute(
+                request, runtime, current, delivery, &mut user,
+            ) {
+                Ok(()) => frame.complete(0),
+                Err(mrml_kernel::BootRecoverySyscallError::User(
+                    ActiveTaskUserCopyError::Buffer(_),
+                ))
+                | Err(mrml_kernel::BootRecoverySyscallError::Delivery(
+                    mrml_kernel::BootRecoveryDeliveryError::WrongTask
+                    | mrml_kernel::BootRecoveryDeliveryError::AlreadyDelivered
+                    | mrml_kernel::BootRecoveryDeliveryError::Runtime(
+                        mrml_kernel::TaskRuntimeError::Ipc(_),
+                    ),
+                )) => frame.complete_error(),
+                Err(_) => halt(),
+            }
             return;
         }
         let request = match frame.request() {

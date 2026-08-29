@@ -176,6 +176,8 @@ access. The security/acceptance gate is canonical in
 - Buffered receive rejects invalid initial output mappings before dequeue or
   block, then revalidates saved task/root ranges at completion and fails stop on
   drift pending scoped retirement.
+- Boot-recovery delivery exposes scrubbed precommit denials but fail-stops on
+  output-copy uncertainty after consuming its one-use authority.
 - The MRML-native ZIM consumer applies the same exact-capacity rule at its
   buffered-receive boundary and uses explicitly aligned exact-width storage for
   its outgoing capability descriptor.
