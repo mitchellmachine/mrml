@@ -2123,6 +2123,10 @@ live composition remains pending.
    The shared-buffer executor likewise types initial user validation separately
    from user copy failure, so the boot boundary admits only the former as a
    scrubbed precommit denial.
+   The task runtime now retires `InvalidUserReturn` as a typed protocol
+   violation distinct from exit or hardware fault, revoking the complete domain
+   before peer notification and scheduler handoff. A focused test raises the
+   Linux kernel total to 596; supervisor/dispatch integration remains pending.
    Exact feature gating now confines `GuestMappingRevoker` to block/component
    cleanup builds; ordinary, restart-request, component, and block service UEFI
    profiles cross-build without the former unused import.

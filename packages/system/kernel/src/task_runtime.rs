@@ -70,6 +70,12 @@ impl From<MemoryResourceError> for AccountedTaskRuntimeError {
 pub enum PeerDeathReason {
     Exited,
     Faulted { vector: u8, address: Option<u64> },
+    ProtocolViolation(TaskProtocolViolation),
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum TaskProtocolViolation {
+    InvalidUserReturn,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -126,6 +132,14 @@ pub struct FaultRetirement {
     pub context: UserContext,
     pub vector: u8,
     pub address: Option<u64>,
+    pub next: ScheduleOutcome,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct TaskViolationRetirement {
+    pub task: TaskId,
+    pub context: UserContext,
+    pub violation: TaskProtocolViolation,
     pub next: ScheduleOutcome,
 }
 
@@ -783,6 +797,42 @@ impl<const TASKS: usize, const CAPS: usize> TaskRuntime<TASKS, CAPS> {
             context: domain.context,
             vector,
             address,
+            next,
+        })
+    }
+
+    /// Retires a userspace domain for a kernel-recognized protocol violation.
+    ///
+    /// Protocol violations are distinct from hardware exceptions: the exact
+    /// saved domain and its authority are revoked before peers or a replacement
+    /// can observe the typed reason.
+    pub fn terminate_current_violation(
+        &mut self,
+        violation: TaskProtocolViolation,
+    ) -> Result<TaskViolationRetirement, TaskRuntimeError> {
+        let current = self
+            .scheduler
+            .current()
+            .ok_or(TaskRuntimeError::NoCurrentTask)?;
+        let slot = self
+            .domains
+            .iter()
+            .position(|domain| domain.as_ref().is_some_and(|domain| domain.task == current))
+            .ok_or(TaskRuntimeError::IntegrityFailure)?;
+
+        self.revoke_task_delegations(current)?;
+        let domain = self.domains[slot]
+            .take()
+            .ok_or(TaskRuntimeError::IntegrityFailure)?;
+        self.publish_peer_death(&domain, PeerDeathReason::ProtocolViolation(violation))?;
+        let next = self
+            .scheduler
+            .terminate_current()
+            .map_err(TaskRuntimeError::Scheduler)?;
+        Ok(TaskViolationRetirement {
+            task: current,
+            context: domain.context,
+            violation,
             next,
         })
     }
@@ -2112,6 +2162,64 @@ mod tests {
             })
             .unwrap();
         assert!(matches!(retirement.next, ScheduleOutcome::Switch { to, .. } if to == observer));
+    }
+
+    #[test]
+    fn protocol_violation_revokes_domain_and_wakes_peer_with_typed_reason() {
+        let mut runtime = TaskRuntime::<2, 1>::new(1_000, 1).unwrap();
+        let observer_context = context(0x20_0000, 0x40_0000);
+        let violated_context = context(0x30_0000, 0x50_0000);
+        let observer = runtime
+            .create(Priority::NORMAL, observer_context)
+            .unwrap();
+        let violated = runtime
+            .create(Priority::NORMAL, violated_context)
+            .unwrap();
+        let object = ObjectId(0x75);
+        let observer_capability = runtime
+            .capabilities_mut(observer)
+            .unwrap()
+            .insert(object, Rights::SIGNAL)
+            .unwrap();
+        let violated_capability = runtime
+            .capabilities_mut(violated)
+            .unwrap()
+            .insert(object, Rights::SIGNAL)
+            .unwrap();
+        runtime
+            .connect_control_peers(
+                observer,
+                violated,
+                &Endpoint::new(object),
+                observer_capability,
+                violated_capability,
+            )
+            .unwrap();
+        assert!(matches!(runtime.start(), ScheduleOutcome::Switch { to, .. } if to == observer));
+        assert!(matches!(
+            runtime.receive_control_or_block_current(),
+            Ok(Err(ScheduleOutcome::Switch { to, .. })) if to == violated
+        ));
+
+        let retirement = runtime
+            .terminate_current_violation(TaskProtocolViolation::InvalidUserReturn)
+            .unwrap();
+        assert_eq!(retirement.task, violated);
+        assert_eq!(retirement.context, violated_context);
+        assert_eq!(
+            retirement.violation,
+            TaskProtocolViolation::InvalidUserReturn
+        );
+        assert!(matches!(retirement.next, ScheduleOutcome::Switch { to, .. } if to == observer));
+        assert_eq!(runtime.context(violated), Err(TaskRuntimeError::MissingTask));
+        let ControlEvent::PeerDied(death) = runtime.receive_control(observer).unwrap() else {
+            panic!("expected protocol-violation peer death");
+        };
+        assert_eq!(death.peer(), violated);
+        assert_eq!(
+            death.reason(),
+            PeerDeathReason::ProtocolViolation(TaskProtocolViolation::InvalidUserReturn)
+        );
     }
 
     #[test]

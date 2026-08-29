@@ -6705,6 +6705,13 @@ phase distinction. Initial user-range rejection remains a scrubbed precommit
 denial, while ticket or copy uncertainty cannot be accidentally admitted by
 matching a generic user error. Its focused tests and both service UEFI profiles
 pass under the 595-test kernel gate.
+The task runtime now has a typed `InvalidUserReturn` protocol-violation
+retirement distinct from voluntary exit and hardware fault. It revokes the
+complete current domain and delegated authority before publishing a typed peer
+death and selecting the next task. A focused Linux test proves exact saved
+context return, peer wakeup/reason, task removal, and scheduler handoff; 596
+kernel tests pass. Supervisor cleanup and live syscall dispatch integration
+remain pending, so forged return state still fails stop in the service image.
 The bootloader now imports `GuestMappingRevoker` only for the block/component
 profiles that instantiate its hosted cleanup adapter. Ordinary service,
 restart-request, component-service, and block-service UEFI profiles all
@@ -6730,7 +6737,10 @@ not introduce a new mechanism; the matching initial receive-range denial has
 the same classification. Boot-recovery precommit denial classification likewise
 uses the existing one-use delivery boundary, and typing its existing phases does
 not trigger review. Shared-buffer copy-phase typing is the same conventional
-boundary hardening and also does not trigger review.
+boundary hardening and also does not trigger review. The typed protocol-
+violation retirement is conventional process-lifecycle isolation rather than a
+new algorithm. Patent review: **NOT_TRIGGERED**; see [the review
+log](patents/REVIEW_LOG.md).
 
 Rust service code does not assume a fixed PE entry RVA. WHP and KVM publish the
 entry derived from the verified signed executable in a hosted metadata page.
