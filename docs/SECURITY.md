@@ -247,6 +247,9 @@ access. The security/acceptance gate is canonical in
   rollback as an ordinary failure path.
 - Message shape inspection and message/control dequeue require the receiver's
   exact scheduler generation before observing or consuming queued state.
+- Task capability-space access and exact authorization require the same live
+  scheduler generation, so an orphaned domain record cannot retain an authority
+  path through runtime accessors.
 - Exit, fault, and protocol-violation peer-death publication preflight the
   complete reciprocal graph before domain or scheduler mutation. Corrupt or
   duplicate relations and unavailable result capacity fail without partial

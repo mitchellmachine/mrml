@@ -6836,8 +6836,8 @@ space remains completely reusable. The Linux kernel total remains 611.
 Message shape inspection, direct dequeue, bounded dequeue, and control receive
 now require the domain's exact scheduler identity before observing or consuming
 inbox state. A focused unscheduled-domain test proves all receive projections
-fail closed while the queued message remains present, raising the Linux kernel
-total to 612.
+and mutable, immutable, or exact capability authorization access fail closed
+while the queued message remains present, raising the Linux kernel total to 612.
 
 Patent review: `NOT_TRIGGERED` — this is conventional split-phase validation
 and commit for the existing bounded IPC endpoint and capability table; it

@@ -607,21 +607,25 @@ impl<const TASKS: usize, const CAPS: usize> TaskRuntime<TASKS, CAPS> {
         &mut self,
         task: TaskId,
     ) -> Result<&mut CapabilitySpace<CAPS>, TaskRuntimeError> {
-        self.domains
-            .iter_mut()
-            .flatten()
-            .find(|domain| domain.task == task)
+        let slot = self.domain_slot(task)?;
+        if !self.scheduler.contains(task) {
+            return Err(TaskRuntimeError::IntegrityFailure);
+        }
+        self.domains[slot]
+            .as_mut()
             .map(|domain| &mut domain.capabilities)
-            .ok_or(TaskRuntimeError::MissingTask)
+            .ok_or(TaskRuntimeError::IntegrityFailure)
     }
 
     pub fn capabilities(&self, task: TaskId) -> Result<&CapabilitySpace<CAPS>, TaskRuntimeError> {
-        self.domains
-            .iter()
-            .flatten()
-            .find(|domain| domain.task == task)
+        let slot = self.domain_slot(task)?;
+        if !self.scheduler.contains(task) {
+            return Err(TaskRuntimeError::IntegrityFailure);
+        }
+        self.domains[slot]
+            .as_ref()
             .map(|domain| &domain.capabilities)
-            .ok_or(TaskRuntimeError::MissingTask)
+            .ok_or(TaskRuntimeError::IntegrityFailure)
     }
 
     /// Resolves one opaque task-local handle against its exact generation,
@@ -635,12 +639,7 @@ impl<const TASKS: usize, const CAPS: usize> TaskRuntime<TASKS, CAPS> {
         expected: ObjectId,
     ) -> Result<(), TaskRuntimeError> {
         let object = self
-            .domains
-            .iter()
-            .flatten()
-            .find(|domain| domain.task == task)
-            .ok_or(TaskRuntimeError::MissingTask)?
-            .capabilities
+            .capabilities(task)?
             .authorize(capability, rights)
             .map_err(|error| TaskRuntimeError::Ipc(error.into()))?;
         if object != expected {
@@ -660,12 +659,7 @@ impl<const TASKS: usize, const CAPS: usize> TaskRuntime<TASKS, CAPS> {
         expected: ObjectId,
     ) -> Result<(), TaskRuntimeError> {
         let object = self
-            .domains
-            .iter()
-            .flatten()
-            .find(|domain| domain.task == task)
-            .ok_or(TaskRuntimeError::MissingTask)?
-            .capabilities
+            .capabilities(task)?
             .authorize_exact(capability, rights)
             .map_err(|error| TaskRuntimeError::Ipc(error.into()))?;
         if object != expected {
@@ -2541,6 +2535,23 @@ mod tests {
             runtime.receive_control(receiver),
             Err(TaskRuntimeError::IntegrityFailure)
         ));
+        assert!(matches!(
+            runtime.capabilities(receiver),
+            Err(TaskRuntimeError::IntegrityFailure)
+        ));
+        assert!(matches!(
+            runtime.capabilities_mut(receiver),
+            Err(TaskRuntimeError::IntegrityFailure)
+        ));
+        assert_eq!(
+            runtime.authorize_capability(
+                receiver,
+                Capability::from_token(1),
+                Rights::READ,
+                ObjectId(1),
+            ),
+            Err(TaskRuntimeError::IntegrityFailure)
+        );
         let slot = runtime.domain_slot(receiver).unwrap();
         assert_eq!(runtime.domains[slot].as_ref().unwrap().inbox_count, 1);
     }
