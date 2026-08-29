@@ -10319,6 +10319,17 @@ admin-command escape hatch. It does not interpret identify data, discover
 namespaces, create I/O queues, or implement a storage scheduling or caching
 algorithm. This technical screen is not legal advice or patent clearance.
 
+# 2026-08-29 — Bounded NVMe namespace identification
+
+Patent review: **NOT_TRIGGERED**. This increment applies the existing bounded
+Identify command engine to one nonzero namespace ID and parses conventional
+fixed namespace size, capacity, utilization, LBA-format, GUID, EUI, and feature
+fields. It uses ordinary range/order checks, checked multiplication, a bounded
+baseline format table, and exact controller generations. It does not create I/O
+queues, issue block commands, schedule requests, cache data, or introduce a
+storage allocation or naming algorithm. This technical screen is not legal
+advice or patent clearance.
+
 # 2026-08-29 — Bounded NVMe Identify Controller parsing
 
 Patent review: **NOT_TRIGGERED**. This increment parses conventional fixed

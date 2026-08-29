@@ -448,10 +448,17 @@ parsed into fixed-capacity printable serial/model/firmware labels, exact
 controller generations, bounded namespace count, checked/capped maximum
 transfer size, and optional-command/cache feature facts. Labels and feature
 bits remain non-authorizing data. Native PCI enumeration, concrete MMIO
-installation, namespace discovery, and I/O queues,
+installation, and I/O queues,
 namespaces, commands, DMA/IOMMU revocation, interrupts, reset, service IPC,
 runtime provider publication, and physical-device evidence remain
-**PLANNED**. Twenty-nine focused tests pass on Windows and Arch Linux. The class tuple
+**PLANNED**. The same semantic command engine now admits one nonzero Identify
+Namespace request without exposing raw admin authority. Its hostile result is
+generation-bound to the controller identity and validates namespace ID/count,
+size/capacity/utilization ordering, at most 16 baseline LBA formats, active
+format, absence of unsupported metadata, 512-byte through 64-KiB logical blocks,
+checked total size, transfer-block bounds, GUID/EUI labels, and thin-provisioning
+facts before producing a non-authorizing namespace identity. Thirty-five focused
+tests pass on Windows and Arch Linux. The class tuple
 is cross-checked against the
 [PCI-SIG DEVICE_INTERFACE_REPORT ECN](https://pcisig.com/PCIExpress/ECN/Base/AddClasstoDEVICE_INTERFACE_REPORT);
 later register and queue work will use the current

@@ -1,6 +1,7 @@
 //! Single-outstanding-command NVMe admin queue execution.
 //!
-//! The initial engine deliberately permits only Identify Controller. Broader
+//! The initial engine deliberately permits only Identify Controller and
+//! Identify Namespace. Broader
 //! admin opcodes require separate semantic APIs instead of a universal raw
 //! command escape hatch.
 
@@ -10,6 +11,7 @@ use mrml_kernel::{Capability, CapabilityError, CapabilitySpace, Rights};
 pub const NVME_IDENTIFY_BYTES: u64 = 4096;
 const IDENTIFY_OPCODE: u32 = 0x06;
 const IDENTIFY_CONTROLLER_CNS: u32 = 0x01;
+const IDENTIFY_NAMESPACE_CNS: u32 = 0x00;
 const ADMIN_SUBMISSION_ENTRY_BYTES: u64 = 64;
 const ADMIN_COMPLETION_ENTRY_BYTES: u64 = 16;
 const ADMIN_DOORBELL_BASE: u64 = 0x1000;
@@ -20,6 +22,14 @@ pub struct NvmeIdentifyControllerRequest {
     pub controller_capability: Capability,
     pub data_capability: Capability,
     pub data: NvmeDmaRegion,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct NvmeIdentifyNamespaceRequest {
+    pub controller_capability: Capability,
+    pub data_capability: Capability,
+    pub data: NvmeDmaRegion,
+    pub namespace_id: u32,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -40,6 +50,7 @@ pub enum NvmeAdminCommandError {
     InvalidDataRegion,
     DataOverlapsQueue,
     DataNotZero,
+    InvalidNamespace,
     InvalidQueueState,
     MemoryRead,
     MemoryWrite,
@@ -89,17 +100,62 @@ pub fn execute_nvme_identify_controller<const N: usize, I: NvmeAdminCommandMemor
     request: NvmeIdentifyControllerRequest,
     io: &mut I,
 ) -> Result<ActiveNvmeAdminQueues, NvmeAdminCommandFailure> {
+    execute_nvme_identify(
+        capabilities,
+        queues,
+        request.controller_capability,
+        request.data_capability,
+        request.data,
+        0,
+        IDENTIFY_CONTROLLER_CNS,
+        io,
+    )
+}
+
+pub fn execute_nvme_identify_namespace<const N: usize, I: NvmeAdminCommandMemoryIo>(
+    capabilities: &CapabilitySpace<N>,
+    queues: ActiveNvmeAdminQueues,
+    request: NvmeIdentifyNamespaceRequest,
+    io: &mut I,
+) -> Result<ActiveNvmeAdminQueues, NvmeAdminCommandFailure> {
+    execute_nvme_identify(
+        capabilities,
+        queues,
+        request.controller_capability,
+        request.data_capability,
+        request.data,
+        request.namespace_id,
+        IDENTIFY_NAMESPACE_CNS,
+        io,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn execute_nvme_identify<const N: usize, I: NvmeAdminCommandMemoryIo>(
+    capabilities: &CapabilitySpace<N>,
+    queues: ActiveNvmeAdminQueues,
+    controller_capability: Capability,
+    data_capability: Capability,
+    data: NvmeDmaRegion,
+    namespace_id: u32,
+    cns: u32,
+    io: &mut I,
+) -> Result<ActiveNvmeAdminQueues, NvmeAdminCommandFailure> {
     let layout = queues.layout();
-    let controller =
-        match capabilities.authorize_exact(request.controller_capability, Rights::CONTROL) {
-            Ok(object) => object,
-            Err(error) => {
-                return Err(untouched(
-                    queues,
-                    NvmeAdminCommandError::ControllerCapability(error),
-                ))
-            }
-        };
+    if (cns == IDENTIFY_NAMESPACE_CNS && namespace_id == 0)
+        || (cns == IDENTIFY_CONTROLLER_CNS && namespace_id != 0)
+    {
+        return Err(untouched(queues, NvmeAdminCommandError::InvalidNamespace));
+    }
+    let controller = match capabilities.authorize_exact(controller_capability, Rights::CONTROL) {
+        Ok(object) => object,
+        Err(error) => {
+            return Err(untouched(
+                queues,
+                NvmeAdminCommandError::ControllerCapability(error),
+            ))
+        }
+    };
     if controller != layout.controller_object {
         return Err(untouched(
             queues,
@@ -110,7 +166,7 @@ pub fn execute_nvme_identify_controller<const N: usize, I: NvmeAdminCommandMemor
         .union(Rights::MAP)
         .union(Rights::READ)
         .union(Rights::WRITE);
-    let memory = match capabilities.authorize_exact(request.data_capability, data_rights) {
+    let memory = match capabilities.authorize_exact(data_capability, data_rights) {
         Ok(object) => object,
         Err(error) => {
             return Err(untouched(
@@ -119,27 +175,23 @@ pub fn execute_nvme_identify_controller<const N: usize, I: NvmeAdminCommandMemor
             ))
         }
     };
-    if memory != request.data.memory_object {
+    if memory != data.memory_object {
         return Err(untouched(queues, NvmeAdminCommandError::WrongDataObject));
     }
-    if request.data.allocation_generation == 0
-        || request.data.physical_base == 0
-        || request.data.physical_base & 0xfff != 0
-        || request.data.bytes != NVME_IDENTIFY_BYTES
-        || request
-            .data
-            .physical_base
-            .checked_add(request.data.bytes)
-            .is_none()
+    if data.allocation_generation == 0
+        || data.physical_base == 0
+        || data.physical_base & 0xfff != 0
+        || data.bytes != NVME_IDENTIFY_BYTES
+        || data.physical_base.checked_add(data.bytes).is_none()
     {
         return Err(untouched(queues, NvmeAdminCommandError::InvalidDataRegion));
     }
-    if overlaps(request.data, layout.submission) || overlaps(request.data, layout.completion) {
+    if overlaps(data, layout.submission) || overlaps(data, layout.completion) {
         return Err(untouched(queues, NvmeAdminCommandError::DataOverlapsQueue));
     }
     let mut data_offset = 0;
-    while data_offset < request.data.bytes {
-        match io.read_u32(request.data, data_offset) {
+    while data_offset < data.bytes {
+        match io.read_u32(data, data_offset) {
             Ok(0) => {}
             Ok(_) => return Err(untouched(queues, NvmeAdminCommandError::DataNotZero)),
             Err(()) => return Err(untouched(queues, NvmeAdminCommandError::MemoryRead)),
@@ -177,9 +229,10 @@ pub fn execute_nvme_identify_controller<const N: usize, I: NvmeAdminCommandMemor
     let completion_offset = u64::from(head) * ADMIN_COMPLETION_ENTRY_BYTES;
     let mut command = [0_u32; 16];
     command[0] = IDENTIFY_OPCODE | (u32::from(command_id) << 16);
-    command[6] = request.data.physical_base as u32;
-    command[7] = (request.data.physical_base >> 32) as u32;
-    command[10] = IDENTIFY_CONTROLLER_CNS;
+    command[1] = namespace_id;
+    command[6] = data.physical_base as u32;
+    command[7] = (data.physical_base >> 32) as u32;
+    command[10] = cns;
 
     for (index, value) in command.into_iter().enumerate() {
         let offset = submission_offset + u64::try_from(index).unwrap() * 4;
@@ -432,6 +485,44 @@ mod tests {
         assert_eq!(memory.doorbells, [Some((0x1000, 1)), Some((0x1004, 1))]);
         assert_eq!(memory.delays, 2);
         assert_eq!(queues.state(), (1, 1, true, 2));
+    }
+
+    #[test]
+    fn identifies_one_nonzero_namespace_without_raw_admin_authority() {
+        let (capabilities, queues, request) = fixture();
+        let request = NvmeIdentifyNamespaceRequest {
+            controller_capability: request.controller_capability,
+            data_capability: request.data_capability,
+            data: request.data,
+            namespace_id: 7,
+        };
+        let mut memory = Memory::default();
+        let queues =
+            execute_nvme_identify_namespace(&capabilities, queues, request, &mut memory).unwrap();
+        assert_eq!(memory.submission[0], IDENTIFY_OPCODE | (1 << 16));
+        assert_eq!(memory.submission[1], 7);
+        assert_eq!(memory.submission[10], IDENTIFY_NAMESPACE_CNS);
+        assert_eq!(queues.state(), (1, 1, true, 2));
+    }
+
+    #[test]
+    fn zero_namespace_fails_before_memory_or_doorbells() {
+        let (capabilities, queues, request) = fixture();
+        let request = NvmeIdentifyNamespaceRequest {
+            controller_capability: request.controller_capability,
+            data_capability: request.data_capability,
+            data: request.data,
+            namespace_id: 0,
+        };
+        let mut memory = Memory::default();
+        assert_eq!(
+            execute_nvme_identify_namespace(&capabilities, queues, request, &mut memory)
+                .unwrap_err()
+                .error(),
+            Some(NvmeAdminCommandError::InvalidNamespace)
+        );
+        assert_eq!(memory.writes, 0);
+        assert_eq!(memory.doorbell_count, 0);
     }
 
     #[test]

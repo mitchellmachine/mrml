@@ -10,13 +10,14 @@ mod nvme_controller;
 mod nvme_discovery;
 mod nvme_identify;
 mod nvme_mapping;
+mod nvme_namespace;
 mod nvme_queue_dma;
 mod nvme_queue_program;
 
 pub use nvme_admin_command::{
-    execute_nvme_identify_controller, NvmeAdminCommandError, NvmeAdminCommandFailure,
-    NvmeAdminCommandMemoryIo, NvmeAdminCommandStatus, NvmeIdentifyControllerRequest,
-    NVME_IDENTIFY_BYTES,
+    execute_nvme_identify_controller, execute_nvme_identify_namespace, NvmeAdminCommandError,
+    NvmeAdminCommandFailure, NvmeAdminCommandMemoryIo, NvmeAdminCommandStatus,
+    NvmeIdentifyControllerRequest, NvmeIdentifyNamespaceRequest, NVME_IDENTIFY_BYTES,
 };
 pub use nvme_controller::{
     disable_nvme_controller, NvmeControllerError, NvmeControllerFailure, NvmeControllerRegisterIo,
@@ -34,6 +35,10 @@ pub use nvme_identify::{
 pub use nvme_mapping::{
     map_nvme_controller_bar, NvmeControllerBarMapping, NvmeControllerBarMappingBackend,
     NvmeControllerBarMappingError, NVME_MMIO_PAGE_BYTES,
+};
+pub use nvme_namespace::{
+    parse_nvme_namespace_identity, NvmeNamespaceIdentity, NvmeNamespaceParseError,
+    NVME_MAX_LBA_FORMATS,
 };
 pub use nvme_queue_dma::{
     prepare_nvme_admin_queue_dma, revoke_nvme_admin_queue_dma, InstalledNvmeAdminQueueDma,
