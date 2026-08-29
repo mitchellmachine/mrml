@@ -7192,6 +7192,7 @@ impl<
             return self.emit_wide_divide_or_remainder(
                 layout,
                 operator == crate::BinaryOperator::Remainder,
+                false,
             );
         }
         if let ExprKind::Binary {
@@ -7274,7 +7275,9 @@ impl<
             operator:
                 operator @ (crate::BinaryOperator::Add
                 | crate::BinaryOperator::Subtract
-                | crate::BinaryOperator::Multiply),
+                | crate::BinaryOperator::Multiply
+                | crate::BinaryOperator::Divide
+                | crate::BinaryOperator::Remainder),
             euclidean: false,
             euclidean_wrapping: false,
             strict: false,
@@ -7298,6 +7301,13 @@ impl<
                     let result = self.emit_wide_multiply(layout);
                     self.overflow_checks = overflow_checks;
                     result?;
+                }
+                crate::BinaryOperator::Divide | crate::BinaryOperator::Remainder => {
+                    self.emit_wide_divide_or_remainder(
+                        layout,
+                        operator == crate::BinaryOperator::Remainder,
+                        true,
+                    )?;
                 }
                 _ => unreachable!(),
             }
@@ -7903,6 +7913,7 @@ impl<
         &mut self,
         layout: RuntimeIntegerLayout,
         remainder: bool,
+        wrapping: bool,
     ) -> Result<(), CodegenError> {
         self.emit(&[0x48, 0x85, 0xc0])?;
         let nonzero_low = self.emit_forward_branch(0x85)?;
@@ -7958,18 +7969,22 @@ impl<
         if layout.signed {
             self.emit(&[0x48, 0x8b, 0x44, 0x24, 0x10, 0x48, 0x85, 0xc0])?;
             let negative_quotient = self.emit_forward_branch(0x88)?;
-            self.emit(&[0x4d, 0x85, 0xc9])?;
-            self.emit_trap_branch(0x88)?;
+            if !wrapping {
+                self.emit(&[0x4d, 0x85, 0xc9])?;
+                self.emit_trap_branch(0x88)?;
+            }
             let quotient_signed = self.emit_unconditional_forward_branch()?;
             self.patch_forward_branch(negative_quotient)?;
-            self.emit(&[0x48, 0xb8])?;
-            self.emit(&(1u64 << 63).to_le_bytes())?;
-            self.emit(&[0x49, 0x39, 0xc1])?;
-            self.emit_trap_branch(0x87)?;
-            let quotient_below_minimum_magnitude = self.emit_forward_branch(0x82)?;
-            self.emit(&[0x4d, 0x85, 0xc0])?;
-            self.emit_trap_branch(0x85)?;
-            self.patch_forward_branch(quotient_below_minimum_magnitude)?;
+            if !wrapping {
+                self.emit(&[0x48, 0xb8])?;
+                self.emit(&(1u64 << 63).to_le_bytes())?;
+                self.emit(&[0x49, 0x39, 0xc1])?;
+                self.emit_trap_branch(0x87)?;
+                let quotient_below_minimum_magnitude = self.emit_forward_branch(0x82)?;
+                self.emit(&[0x4d, 0x85, 0xc0])?;
+                self.emit_trap_branch(0x85)?;
+                self.patch_forward_branch(quotient_below_minimum_magnitude)?;
+            }
             self.emit(&[
                 0x49, 0xf7, 0xd8, 0x49, 0x83, 0xd1, 0x00, 0x49, 0xf7, 0xd9,
             ])?;
@@ -9829,6 +9844,7 @@ impl<
                             self.emit_wide_divide_or_remainder(
                                 layout,
                                 assignment.operator == crate::AssignmentOperator::Remainder,
+                                false,
                             )?;
                         }
                         crate::AssignmentOperator::ShiftLeft

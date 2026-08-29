@@ -12930,7 +12930,7 @@ mod tests {
 
     #[test]
     fn mrml_v1_codegen_rejects_other_wide_returns() {
-        let source = "#[mrml_abi::export(version = 1)] pub fn value(input: i128) -> i128 { input.wrapping_div(2) }";
+        let source = "#[mrml_abi::export(version = 1)] pub fn value(input: i128) -> i128 { input.wrapping_div_euclid(2) }";
         let module = Parser::new(source).parse_module::<2, 2>().unwrap();
         let Some(Item::Function(function)) = module.items()[0] else {
             panic!("expected function")
