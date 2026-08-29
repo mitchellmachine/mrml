@@ -6044,9 +6044,10 @@ The computed-wide-narrowing milestone replaces a direct-parameter-only low-word
 loader with the common two-word expression emitter followed by exact target-
 width normalization. Unit coverage admits unsigned locals, computed wrapping
 addition, and signed wrapping negation for both x86-64 calling conventions. A
-native Linux semantic case compares a computed wrapping sum narrowed to `u64`
+semantic case is added to compare a computed wrapping sum narrowed to `u64`
 against exact ORACLE-0003 observations at zero, the low-word carry boundary, a
 high-word-only operand, and full-width wrapping overflow. The release compiler
 build and focused unit test pass; the package-wide attempt passed 809 of 810
-unit tests but stopped on one concurrently edited linker test, so no complete
-package-pass claim is made yet. Windows gnullvm was not run.
+unit tests but stopped on one concurrently edited linker test before integration
+execution, so neither a complete package pass nor execution of that semantic
+case is claimed yet. Windows gnullvm was not run.
