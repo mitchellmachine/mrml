@@ -1,5 +1,14 @@
 # Patent review log
 
+# 2026-08-29 — Bounded FAT32 chain traversal
+
+Patent review: **NOT_TRIGGERED**. This increment follows conventional masked
+FAT32 cluster entries with fixed output capacity, validates the published active-
+versus-mirrored FAT selector, requires mirror equality, and rejects standard
+free/reserved/bad/end/cycle states. It adds no LFN, allocation, caching,
+formatting/repair, write, or optimization algorithm. This technical screen is
+not legal advice or patent clearance.
+
 # 2026-08-29 — Bounded FAT32 FSInfo hint parser
 
 Patent review: **NOT_TRIGGERED**. This increment parses the conventional FAT32

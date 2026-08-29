@@ -15,6 +15,8 @@ pub struct Fat32Geometry {
     pub reserved_sectors: u16,
     pub fat_count: u8,
     pub sectors_per_fat: u32,
+    pub mirroring_enabled: bool,
+    pub active_fat: u8,
     pub total_sectors: u32,
     pub data_start_sector: u32,
     pub data_sectors: u32,
@@ -39,6 +41,7 @@ pub enum Fat32Error {
     InvalidClusterSize,
     InvalidReservedArea,
     InvalidFatCount,
+    InvalidFatSelection,
     NotFat32,
     UnsupportedVersion,
     InvalidExtent,
@@ -48,6 +51,29 @@ pub enum Fat32Error {
     WrongFsInfoSector,
     InvalidFsInfoSignature,
     InvalidFsInfoHint,
+    FatRead,
+    MirroredFatMismatch,
+    FreeClusterInChain,
+    ReservedClusterInChain,
+    BadCluster,
+    ClusterCycle,
+    ChainCapacity,
+}
+
+pub trait Fat32EntryReader {
+    fn read_entry(&mut self, fat_index: u8, cluster: u32) -> Result<u32, ()>;
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct Fat32ClusterChain<const N: usize> {
+    clusters: [u32; N],
+    length: usize,
+}
+
+impl<const N: usize> Fat32ClusterChain<N> {
+    pub fn clusters(&self) -> &[u32] {
+        &self.clusters[..self.length]
+    }
 }
 
 pub fn parse_fat32_boot_sector(
@@ -93,6 +119,22 @@ pub fn parse_fat32_boot_sector(
     if read_u16(sector, 42) != 0 {
         return Err(Fat32Error::UnsupportedVersion);
     }
+    let extended_flags = read_u16(sector, 40);
+    if extended_flags & !0x008f != 0 {
+        return Err(Fat32Error::InvalidFatSelection);
+    }
+    let mirroring_enabled = extended_flags & 0x0080 == 0;
+    let selected = (extended_flags & 0x000f) as u8;
+    let active_fat = if mirroring_enabled {
+        if selected != 0 {
+            return Err(Fat32Error::InvalidFatSelection);
+        }
+        0
+    } else if selected < fat_count {
+        selected
+    } else {
+        return Err(Fat32Error::InvalidFatSelection);
+    };
     let root_cluster = read_u32(sector, 44);
     if !(2..=FAT32_MAXIMUM_CLUSTERS + 1).contains(&root_cluster) {
         return Err(Fat32Error::InvalidRootCluster);
@@ -135,6 +177,8 @@ pub fn parse_fat32_boot_sector(
         reserved_sectors,
         fat_count,
         sectors_per_fat,
+        mirroring_enabled,
+        active_fat,
         total_sectors,
         data_start_sector,
         data_sectors,
@@ -144,6 +188,65 @@ pub fn parse_fat32_boot_sector(
         backup_boot_sector: backup_boot,
         volume_id: read_u32(sector, 67),
     })
+}
+
+pub fn read_fat32_cluster_chain<const N: usize, R: Fat32EntryReader>(
+    geometry: Fat32Geometry,
+    first_cluster: u32,
+    reader: &mut R,
+) -> Result<Fat32ClusterChain<N>, Fat32Error> {
+    let last_cluster = geometry
+        .cluster_count
+        .checked_add(1)
+        .ok_or(Fat32Error::InvalidExtent)?;
+    if N == 0 || !(2..=last_cluster).contains(&first_cluster) {
+        return Err(Fat32Error::InvalidRootCluster);
+    }
+    let mut clusters = [0; N];
+    let mut length = 0;
+    let mut current = first_cluster;
+    loop {
+        if clusters[..length].contains(&current) {
+            return Err(Fat32Error::ClusterCycle);
+        }
+        if length == N {
+            return Err(Fat32Error::ChainCapacity);
+        }
+        clusters[length] = current;
+        length += 1;
+        let entry = read_selected_entry(geometry, current, reader)? & 0x0fff_ffff;
+        match entry {
+            0 => return Err(Fat32Error::FreeClusterInChain),
+            1 | 0x0fff_fff0..=0x0fff_fff6 => return Err(Fat32Error::ReservedClusterInChain),
+            0x0fff_fff7 => return Err(Fat32Error::BadCluster),
+            0x0fff_fff8..=0x0fff_ffff => return Ok(Fat32ClusterChain { clusters, length }),
+            next if (2..=last_cluster).contains(&next) => current = next,
+            _ => return Err(Fat32Error::ReservedClusterInChain),
+        }
+    }
+}
+
+fn read_selected_entry<R: Fat32EntryReader>(
+    geometry: Fat32Geometry,
+    cluster: u32,
+    reader: &mut R,
+) -> Result<u32, Fat32Error> {
+    let first = reader
+        .read_entry(geometry.active_fat, cluster)
+        .map_err(|()| Fat32Error::FatRead)?
+        & 0x0fff_ffff;
+    if geometry.mirroring_enabled {
+        for fat in 1..geometry.fat_count {
+            let other = reader
+                .read_entry(fat, cluster)
+                .map_err(|()| Fat32Error::FatRead)?
+                & 0x0fff_ffff;
+            if other != first {
+                return Err(Fat32Error::MirroredFatMismatch);
+            }
+        }
+    }
+    Ok(first)
 }
 
 pub fn parse_fat32_fs_info(
@@ -356,6 +459,115 @@ mod tests {
             assert_eq!(
                 parse_fat32_fs_info(geometry, 1, &sector),
                 Err(Fat32Error::InvalidFsInfoSignature)
+            );
+        }
+    }
+
+    struct Reader {
+        entries: [[u32; 8]; 2],
+        reads: [usize; 2],
+    }
+
+    impl Fat32EntryReader for Reader {
+        fn read_entry(&mut self, fat_index: u8, cluster: u32) -> Result<u32, ()> {
+            let fat = usize::from(fat_index);
+            let cluster = usize::try_from(cluster).map_err(|_| ())?;
+            self.reads[fat] += 1;
+            self.entries
+                .get(fat)
+                .and_then(|entries| entries.get(cluster))
+                .copied()
+                .ok_or(())
+        }
+    }
+
+    fn chain_reader() -> Reader {
+        let mut entries = [[0; 8]; 2];
+        for fat in &mut entries {
+            fat[2] = 3;
+            fat[3] = 4;
+            fat[4] = 0x0fff_ffff;
+        }
+        Reader {
+            entries,
+            reads: [0; 2],
+        }
+    }
+
+    #[test]
+    fn reads_bounded_chain_only_when_mirrored_fats_agree() {
+        let geometry = parse_fat32_boot_sector(&boot_sector()).unwrap();
+        let mut reader = chain_reader();
+        let chain = read_fat32_cluster_chain::<4, _>(geometry, 2, &mut reader).unwrap();
+        assert_eq!(chain.clusters(), &[2, 3, 4]);
+        assert_eq!(reader.reads, [3, 3]);
+
+        reader = chain_reader();
+        reader.entries[1][3] = 5;
+        assert_eq!(
+            read_fat32_cluster_chain::<4, _>(geometry, 2, &mut reader),
+            Err(Fat32Error::MirroredFatMismatch)
+        );
+    }
+
+    #[test]
+    fn validated_active_fat_disables_mirror_reads() {
+        let mut sector = boot_sector();
+        sector[40..42].copy_from_slice(&0x0081_u16.to_le_bytes());
+        let geometry = parse_fat32_boot_sector(&sector).unwrap();
+        assert_eq!(
+            (geometry.mirroring_enabled, geometry.active_fat),
+            (false, 1)
+        );
+        let mut reader = chain_reader();
+        reader.entries[0][2] = 0;
+        assert_eq!(
+            read_fat32_cluster_chain::<4, _>(geometry, 2, &mut reader)
+                .unwrap()
+                .clusters(),
+            &[2, 3, 4]
+        );
+        assert_eq!(reader.reads, [0, 3]);
+    }
+
+    #[test]
+    fn rejects_cycles_bad_free_reserved_and_capacity_exhaustion() {
+        let geometry = parse_fat32_boot_sector(&boot_sector()).unwrap();
+        for (entry, error) in [
+            (0, Fat32Error::FreeClusterInChain),
+            (1, Fat32Error::ReservedClusterInChain),
+            (0x0fff_fff7, Fat32Error::BadCluster),
+        ] {
+            let mut reader = chain_reader();
+            reader.entries[0][2] = entry;
+            reader.entries[1][2] = entry;
+            assert_eq!(
+                read_fat32_cluster_chain::<4, _>(geometry, 2, &mut reader),
+                Err(error)
+            );
+        }
+        let mut reader = chain_reader();
+        reader.entries[0][4] = 2;
+        reader.entries[1][4] = 2;
+        assert_eq!(
+            read_fat32_cluster_chain::<4, _>(geometry, 2, &mut reader),
+            Err(Fat32Error::ClusterCycle)
+        );
+        let mut reader = chain_reader();
+        assert_eq!(
+            read_fat32_cluster_chain::<2, _>(geometry, 2, &mut reader),
+            Err(Fat32Error::ChainCapacity)
+        );
+    }
+
+    #[test]
+    fn rejects_reserved_active_fat_selection() {
+        for flags in [0x0001_u16, 0x0082, 0x0100] {
+            let mut sector = boot_sector();
+            sector[40..42].copy_from_slice(&flags.to_le_bytes());
+            assert_eq!(
+                parse_fat32_boot_sector(&sector),
+                Err(Fat32Error::InvalidFatSelection)
             );
         }
     }

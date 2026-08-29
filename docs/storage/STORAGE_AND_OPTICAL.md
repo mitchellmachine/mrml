@@ -480,9 +480,12 @@ parser validates FAT32 geometry, checked extents/FAT capacity, root-cluster and
 reserved-sector bounds, and volume identity. The provider also exact-binds the
 declared FSInfo sector, validates all three signatures, accepts unknown free/
 next hints, and bounds known hints to the parsed cluster domain; hints remain
-data and never allocation authority. Seven tests pass on Windows and Arch Linux;
-storage remains 135 on both. This does not implement mount, directories,
-LFN, file I/O, check/repair, format, live IPC, or interoperability evidence.
+data and never allocation authority. FAT-chain traversal validates active versus
+mirrored selection, requires exact masked mirror agreement, bounds output to
+caller-fixed capacity, and rejects cycles, free, reserved, bad, or out-of-domain
+clusters. Eleven tests pass on Windows and Arch Linux; storage remains 135 on
+both. This does not implement mount, directories, LFN, file I/O, check/repair,
+format, live IPC, or interoperability evidence.
 
 Checking has distinct result types for block-device health, partition-table
 validation, filesystem validation, and media readability. Inspection never
