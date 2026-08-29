@@ -181,6 +181,8 @@ corresponding two-word carry, borrow, or low-product result while intentionally
 discarding overflow without entering the checked trap path.
 `wrapping_neg` applies carry-aware two-word negation without trapping on either
 unsigned nonzero inputs or the signed minimum value.
+`wrapping_abs` applies that same negation only to negative signed inputs and
+leaves `i128::MIN` unchanged.
 `wrapping_div` and `wrapping_rem` preserve the mandatory zero-divisor trap but
 return `i128::MIN` and zero respectively for the signed minimum divided by or
 remaindered by negative one.

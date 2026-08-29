@@ -7315,7 +7315,9 @@ impl<
         }
         if let ExprKind::IntegerBitTransform {
             base,
-            transform: crate::expression::IntegerBitTransform::WrappingNegate,
+            transform:
+                transform @ (crate::expression::IntegerBitTransform::WrappingNegate
+                | crate::expression::IntegerBitTransform::WrappingAbsolute),
         } = expression.kind
         {
             let base_type = runtime_expression_type_with_locals(
@@ -7331,9 +7333,20 @@ impl<
                 return Err(self.error(CodegenErrorKind::RuntimeTypeMismatch));
             }
             self.emit_wide_integer_return(tree, base, expected_type)?;
+            let nonnegative = if transform
+                == crate::expression::IntegerBitTransform::WrappingAbsolute
+            {
+                self.emit(&[0x48, 0x85, 0xd2])?;
+                Some(self.emit_forward_branch(0x89)?)
+            } else {
+                None
+            };
             self.emit(&[
                 0x48, 0xf7, 0xd8, 0x48, 0x83, 0xd2, 0x00, 0x48, 0xf7, 0xda,
             ])?;
+            if let Some(nonnegative) = nonnegative {
+                self.patch_forward_branch(nonnegative)?;
+            }
             return Ok(());
         }
         if let ExprKind::Cast { operand, target } = expression.kind {
