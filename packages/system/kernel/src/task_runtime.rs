@@ -4393,7 +4393,7 @@ mod tests {
 
     #[test]
     fn task_authorization_is_exact_and_detail_free() {
-        let mut runtime = TaskRuntime::<1, 1>::new(1_000, 1).unwrap();
+        let mut runtime = TaskRuntime::<1, 2>::new(1_000, 1).unwrap();
         let task = runtime
             .create(Priority::NORMAL, context(0x20_0000, 0x40_0000))
             .unwrap();
@@ -4413,6 +4413,24 @@ mod tests {
         assert_eq!(
             runtime.authorize_capability(task, capability, Rights::READ, ObjectId(8)),
             Err(TaskRuntimeError::Ipc(IpcError::Unauthorized))
+        );
+
+        let overbroad = runtime
+            .capabilities_mut(task)
+            .unwrap()
+            .insert(ObjectId(7), Rights::READ.union(Rights::WRITE))
+            .unwrap();
+        assert_eq!(
+            runtime.authorize_capability(task, overbroad, Rights::READ, ObjectId(7)),
+            Ok(())
+        );
+        assert_eq!(
+            runtime.authorize_capability_exact(task, overbroad, Rights::READ, ObjectId(7)),
+            Err(TaskRuntimeError::Ipc(IpcError::Unauthorized))
+        );
+        assert_eq!(
+            runtime.authorize_capability_exact(task, capability, Rights::READ, ObjectId(7)),
+            Ok(())
         );
     }
 

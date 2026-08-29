@@ -7070,6 +7070,12 @@ also applies the existing generational scheduler check to receive. It introduces
 no new external protocol, algorithm, or device mechanism; exact-unique bounded
 domain lookup is part of the same conventional validation. See
 `docs/patents/REVIEW_LOG.md`.
+
+The kernel runtime regression now distinguishes subset authorization from the
+exact service boundary directly: a combined `READ|WRITE` handle still satisfies
+the general subset API, but the exact API rejects it while accepting a distinct
+`READ` handle for the same object. This is a focused unit-test invariant and
+does not add execution-environment evidence.
 Dedicated `invalid_return_probe` kernel and service-image profiles now build
 without warnings. The CPL3 receiver deliberately zeros its stack pointer before
 `int 0x80`; the kernel profile requires typed peer-death cleanup marker `0x26`,
