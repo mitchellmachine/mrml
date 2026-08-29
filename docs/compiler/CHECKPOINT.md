@@ -9,8 +9,8 @@ the named commit and current source.
 ## Recoverable baseline
 
 - Branch: `main`
-- Compiler checkpoint commit: `319444a5`
-  (`compiler: discard validated COFF debug sections`)
+- Compiler checkpoint commit: `447af934`
+  (`compiler: inventory COFF archive symbols directly`)
 - Remote state when recorded: `origin/main` includes the bounded MRML-owned
   static-link core, exact MRML COFF and ELF64 ingestion, deterministic
   import-free PE32+/ELF64 executable serialization, explicit compiler-driver
@@ -60,6 +60,25 @@ against all prior accepted probes. Keep Cargo on edition 2024 until a newer
 named edition can be adopted through a pinned, workspace-wide migration.
 
 ## Latest bounded linker milestone
+
+Commit `447af934` gives COFF archive fixed-point discovery a zero-copy,
+fallible external-symbol inventory over validated symbol and string tables.
+Structural metadata admits at most 4,096 sections, covering the pinned
+sysroot's observed 3,834-section maximum, while content decoding remains
+separately bounded at 256 tracked sections. The durable pinned `libcore` probe
+crosses symbol discovery for its selected 1,934-section, 5,034-symbol member and
+fails at the explicit next gate, `COFF content section tracking capacity
+exceeded`; full `libcore` support is not claimed. Exact detached Windows
+gnullvm and Arch Linux runs each passed the complete 786-test compiler-core
+package gate and eight driver tests. The stateful archive probe returned 42
+through both linkers, with 2,560 MRML bytes versus 3,584 rust-lld bytes, 1,028
+zero-fill bytes, and two writable forwarder pointers. Fifty measured links
+after five warmups recorded MRML at 7.319 ms median/7.458 ms mean versus pinned
+rust-lld at 22.409 ms median/23.162 ms mean on this narrow Windows workload;
+general superiority is not claimed. `mrml doctor` passed; audit retains the
+unrelated fingerprint `fnv1a64:9c883880f091489a` at
+`semantic_execution.rs:1710`. Patent review: **NOT_TRIGGERED**; see
+`docs/patents/REVIEW_LOG.md`.
 
 Commit `319444a5` validates and discards conventionally named COFF `.debug`,
 `.debug$...`, and `.debug_...` sections only when they are discardable,
