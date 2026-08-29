@@ -9,8 +9,8 @@ the named commit and current source.
 ## Recoverable baseline
 
 - Branch: `main`
-- Compiler checkpoint commit: `78ec9d7f`
-  (`compiler: relocate COFF readonly image RVAs`)
+- Compiler checkpoint commit: `7eb2fdd3`
+  (`compiler: relocate COFF readonly relative fields`)
 - Remote state when recorded: `origin/main` includes the bounded MRML-owned
   static-link core, exact MRML COFF and ELF64 ingestion, deterministic
   import-free PE32+/ELF64 executable serialization, explicit compiler-driver
@@ -60,6 +60,27 @@ against all prior accepted probes. Keep Cargo on edition 2024 until a newer
 named edition can be adopted through a pinned, workspace-wide migration.
 
 ## Latest bounded linker milestone
+
+Commit `7eb2fdd3` admits the complete AMD64 COFF read-only PC-relative family,
+`REL32` through `REL32_5`. A typed zero-through-five trailing-byte bias is
+retained during the existing bounded decode pass; final PE serialization
+computes the checked signed displacement only after exact text and read-only
+RVAs are known. Synthetic coverage decodes all six object encodings, preserves
+a negative addend, rejects relocation number 10, validates the four-byte field,
+asserts the exact final negative displacement, rejects an impossible typed
+bias, and checks overflow. Exact detached Windows and Arch Linux runs each
+passed 771 compiler-core tests, all four integration groups, and eight driver
+tests. The initial shared Windows compile encountered one non-reproduced
+`0xC0000005` compiler-process failure before testing; the detached Windows run
+then passed completely. The unchanged pinned gnullvm archive returned 42
+through both linkers: MRML emitted 2,560 bytes versus rust-lld's 3,584, with
+1,028 zero-fill bytes and two forwarding pointers. Fifty links after five
+warmups measured 10.766 ms median/12.022 ms mean for MRML versus 30.251 ms
+median/31.345 ms mean for rust-lld on this narrow Windows workload. Other
+read-only relocation encodings and discontiguous non-COMDAT packing remain
+incomplete. `mrml doctor` passed; audit retains unrelated fingerprint
+`fnv1a64:9c883880f091489a` at `semantic_execution.rs:1583`. Patent review:
+**NOT_TRIGGERED**; see `docs/patents/REVIEW_LOG.md`.
 
 Commit `78ec9d7f` gives read-only COFF relocations an explicit encoding kind
 and admits AMD64 `ADDR32NB` alongside `ADDR64`. The decoder validates the
