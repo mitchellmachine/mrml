@@ -865,17 +865,36 @@ fn selected_link_inputs<'data, 'relocations, 'definitions>(
         {
             let earlier_selection = selected_comdat[earlier];
             let current_selection = text_comdat_selection[*index];
+            let mut effective_selection = earlier_selection;
+            let mut replace = false;
             let compatible = match (earlier_selection, current_selection) {
                 (CoffTextComdatSelection::Any, CoffTextComdatSelection::Any) => true,
-                (CoffTextComdatSelection::SameSize, CoffTextComdatSelection::SameSize) => {
+                (CoffTextComdatSelection::SameSize, CoffTextComdatSelection::SameSize)
+                | (CoffTextComdatSelection::Any, CoffTextComdatSelection::SameSize)
+                | (CoffTextComdatSelection::SameSize, CoffTextComdatSelection::Any) => {
+                    effective_selection = CoffTextComdatSelection::SameSize;
                     selected[earlier].text.len() == inputs[*index].text.len()
                 }
                 (CoffTextComdatSelection::ExactMatch, CoffTextComdatSelection::ExactMatch) => {
                     selected[earlier].text == inputs[*index].text
                 }
+                (CoffTextComdatSelection::Largest, CoffTextComdatSelection::Largest)
+                | (CoffTextComdatSelection::Any, CoffTextComdatSelection::Largest)
+                | (CoffTextComdatSelection::Largest, CoffTextComdatSelection::Any) => {
+                    effective_selection = CoffTextComdatSelection::Largest;
+                    replace = inputs[*index].text.len() > selected[earlier].text.len();
+                    true
+                }
                 _ => false,
             };
             if compatible {
+                if replace {
+                    selected[earlier] = inputs[*index];
+                    selected_group[earlier] = archive_group[*index];
+                    selected_member[earlier] = archive_member[*index];
+                    selected_source_object[earlier] = source_object[*index];
+                }
+                selected_comdat[earlier] = effective_selection;
                 continue;
             }
             return Err(anyhow!("incompatible duplicate COFF text definition"));
@@ -1547,6 +1566,51 @@ mod tests {
         )
         .unwrap();
         assert_eq!(selected.inputs.len(), 1);
+
+        let largest = [CoffTextComdatSelection::Largest; 2];
+        let selected = selected_link_inputs(
+            &[first, longer],
+            &[0, 0],
+            &[0, 0],
+            &[3, 7],
+            &largest,
+            "entry",
+        )
+        .unwrap();
+        assert_eq!(selected.inputs[0].text, &[0x63, 0xc3]);
+        assert_eq!(selected.source_object[0], 7);
+
+        let any_largest = [
+            CoffTextComdatSelection::Any,
+            CoffTextComdatSelection::Largest,
+        ];
+        let selected = selected_link_inputs(
+            &[first, longer],
+            &[0, 0],
+            &[0, 0],
+            &[3, 7],
+            &any_largest,
+            "entry",
+        )
+        .unwrap();
+        assert_eq!(selected.inputs[0].text, &[0x63, 0xc3]);
+        assert_eq!(selected.source_object[0], 7);
+
+        let largest_any = [
+            CoffTextComdatSelection::Largest,
+            CoffTextComdatSelection::Any,
+        ];
+        let selected = selected_link_inputs(
+            &[longer, first],
+            &[0, 0],
+            &[0, 0],
+            &[7, 3],
+            &largest_any,
+            "entry",
+        )
+        .unwrap();
+        assert_eq!(selected.inputs[0].text, &[0x63, 0xc3]);
+        assert_eq!(selected.source_object[0], 7);
     }
 
     #[test]

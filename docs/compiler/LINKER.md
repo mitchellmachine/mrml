@@ -1064,7 +1064,24 @@ zero fill and two valid forwarding pointers. Fifty measured links after five
 warmups produced 9.175 ms median/9.847 ms mean for MRML versus 26.384 ms
 median/26.877 ms mean for rust-lld. This remains narrow evidence. Associative
 text groups, LARGEST, NEWEST, and independent read-only COMDAT selection remain
-unsupported.
+unsupported at that checkpoint.
+
+Text `LARGEST` selection now compares all selected duplicate definitions before
+layout and retains the largest raw text section, with deterministic leftmost
+tie-breaking. Replacing an earlier winner atomically replaces its input,
+archive/member origin, and exact source-object identity, so discarded code and
+unwind records cannot leak into the PE. Matching current lld behavior, mixed
+`ANY`/`LARGEST` resolves as `LARGEST`; for the gnullvm lane, mixed
+`ANY`/`SAME_SIZE` resolves as `SAME_SIZE` and still rejects unequal lengths.
+This pre-layout replacement avoids lld's documented stale-section limitation
+when a later largest definition prevails. Tests verify larger-later replacement,
+larger-first retention, exact origin propagation, both `ANY`/`LARGEST` orders,
+and selection byte 6. The exact stateful probe still returns 42 through both
+linkers with the same 2,560/3,584-byte outputs, zero fill, and forwarding
+pointers. Fifty links after five warmups measured MRML at 9.303 ms median/9.518
+ms mean and rust-lld at 26.879 ms median/27.059 ms mean on this narrow workload.
+Associative text groups, NEWEST, and independent read-only COMDAT selection
+remain unsupported.
 
 Refptr admission no longer performs an all-object count pass, and decoding one
 requested ordinal no longer recursively pre-counts the same object's records.

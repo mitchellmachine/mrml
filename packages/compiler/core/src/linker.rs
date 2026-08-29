@@ -518,6 +518,7 @@ pub enum CoffTextComdatSelection {
     Any,
     SameSize,
     ExactMatch,
+    Largest,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -3763,6 +3764,7 @@ pub fn x86_64_coff_text_fragment_comdat_selection(
                 2 => CoffTextComdatSelection::Any,
                 3 => CoffTextComdatSelection::SameSize,
                 4 => CoffTextComdatSelection::ExactMatch,
+                6 => CoffTextComdatSelection::Largest,
                 _ => return Err(LinkerError::UnsupportedCoff),
             };
         }
@@ -8201,6 +8203,11 @@ mod tests {
         assert_eq!(
             x86_64_coff_text_fragment_comdat_selection(&object, 0),
             Ok(CoffTextComdatSelection::ExactMatch)
+        );
+        object[93] = 6;
+        assert_eq!(
+            x86_64_coff_text_fragment_comdat_selection(&object, 0),
+            Ok(CoffTextComdatSelection::Largest)
         );
         object[93] = 5;
         assert_eq!(

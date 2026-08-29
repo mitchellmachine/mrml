@@ -9951,3 +9951,13 @@ and contents before deterministic layout. It follows longstanding public object-
 format behavior and introduces no new comparison algorithm, object encoding,
 relocation mechanism, compression, cryptographic mechanism, or loader behavior.
 This technical screen is not legal advice or patent clearance.
+
+# 2026-08-29 — Bounded COFF text LARGEST resolution
+
+Patent review: **NOT_TRIGGERED**. This increment applies conventional PE/COFF
+`LARGEST` duplicate selection with deterministic leftmost tie-breaking before
+layout and propagates the winning fragment's existing origin metadata. It uses
+ordinary bounded size comparison and introduces no new selection algorithm,
+object encoding, relocation mechanism, compression, cryptographic mechanism,
+or loader behavior. This technical screen is not legal advice or patent
+clearance.
