@@ -6844,6 +6844,11 @@ identity. Detach, rebalance admission checks, fault/protocol/voluntary
 retirement, context, capability, and receive paths reject duplicate domain
 records before mutation. A focused corruption test preserves both scheduler
 identities and raises the Linux kernel total to 613.
+Inbox validation now defines the complete circular-ring invariant directly:
+tail equals head plus count modulo capacity, and each offset is occupied exactly
+when it falls below count. An exhaustive bounded-state test covers every count,
+head, tail, and occupancy-mask combination, raising the Linux kernel total to
+614.
 
 Patent review: `NOT_TRIGGERED` — this is conventional split-phase validation
 and commit for the existing bounded IPC endpoint and capability table; it

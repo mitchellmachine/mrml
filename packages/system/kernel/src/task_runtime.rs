@@ -1120,11 +1120,15 @@ impl<const TASKS: usize, const CAPS: usize> TaskRuntime<TASKS, CAPS> {
         if count > TASK_INBOX_MESSAGES
             || head >= TASK_INBOX_MESSAGES
             || tail >= TASK_INBOX_MESSAGES
-            || domain.inbox.iter().flatten().count() != count
-            || (count != 0 && domain.inbox[head].is_none())
-            || (count != TASK_INBOX_MESSAGES && domain.inbox[tail].is_some())
+            || tail != (head + count) % TASK_INBOX_MESSAGES
         {
             return Err(TaskRuntimeError::IntegrityFailure);
+        }
+        for offset in 0..TASK_INBOX_MESSAGES {
+            let slot = (head + offset) % TASK_INBOX_MESSAGES;
+            if domain.inbox[slot].is_some() != (offset < count) {
+                return Err(TaskRuntimeError::IntegrityFailure);
+            }
         }
         Ok(())
     }
@@ -2713,6 +2717,49 @@ mod tests {
                 .unwrap(),
             2
         );
+    }
+
+    #[test]
+    fn inbox_validator_exhaustively_matches_exact_circular_topology() {
+        let mut runtime = TaskRuntime::<1, 1>::new(1_000, 1).unwrap();
+        let task = runtime
+            .create(Priority::NORMAL, context(0x20_0000, 0x40_0000))
+            .unwrap();
+        let slot = runtime.domain_slot(task).unwrap();
+
+        for count in 0..=3usize {
+            for head in 0..=2usize {
+                for tail in 0..=2usize {
+                    for occupied in 0..4usize {
+                        let domain = runtime.domains[slot].as_mut().unwrap();
+                        domain.inbox_count = count as u8;
+                        domain.inbox_head = head as u8;
+                        domain.inbox_tail = tail as u8;
+                        for index in 0..TASK_INBOX_MESSAGES {
+                            domain.inbox[index] =
+                                ((occupied >> index) & 1 == 1).then(|| ReceivedMessage {
+                                    sender: task,
+                                    sequence: 1,
+                                    message: Message::new(b"x", &[]).unwrap(),
+                                });
+                        }
+                        let valid = count <= TASK_INBOX_MESSAGES
+                            && head < TASK_INBOX_MESSAGES
+                            && tail < TASK_INBOX_MESSAGES
+                            && tail == (head + count) % TASK_INBOX_MESSAGES
+                            && (0..TASK_INBOX_MESSAGES).all(|offset| {
+                                let index = (head + offset) % TASK_INBOX_MESSAGES;
+                                ((occupied >> index) & 1 == 1) == (offset < count)
+                            });
+                        assert_eq!(
+                            TaskRuntime::<1, 1>::validate_inbox_state(domain).is_ok(),
+                            valid,
+                            "count={count} head={head} tail={tail} occupied={occupied:02b}"
+                        );
+                    }
+                }
+            }
+        }
     }
 
     #[test]

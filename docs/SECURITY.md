@@ -254,6 +254,8 @@ access. The security/acceptance gate is canonical in
   scheduler generation as well.
 - Every task-domain lookup requires one unique generational identity; duplicate
   records fail before authority access, migration, dequeue, or retirement.
+- The inbox ring requires an exact contiguous circular occupied segment from
+  head to tail; exhaustive bounded-state coverage rejects every other topology.
 - Exit, fault, and protocol-violation peer-death publication preflight the
   complete reciprocal graph before domain or scheduler mutation. Corrupt or
   duplicate relations and unavailable result capacity fail without partial

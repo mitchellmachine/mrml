@@ -2211,6 +2211,9 @@ live composition remains pending.
    Task-domain lookup now rejects duplicate generational identities before
    resource access, detach, rebalance, or retirement. A focused corruption test
    preserves both scheduler identities and raises the kernel total to 613.
+   Inbox validation now exact-matches the complete circular segment rather than
+   relying on aggregate count and endpoint implications. Exhaustive bounded
+   topology coverage raises the kernel total to 614.
    Warning-free `invalid_return_probe` kernel/service profiles now encode the
    real CPL3 invalid-stack interrupt, typed peer-death cleanup marker, peer
    execution, clean exit, and terminal state marker. Runner execution remains
