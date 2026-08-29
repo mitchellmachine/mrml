@@ -9,8 +9,8 @@ the named commit and current source.
 ## Recoverable baseline
 
 - Branch: `main`
-- Compiler checkpoint commit: `6ee7106f`
-  (`build: integrate experimental MRML ELF linking`)
+- Compiler checkpoint commit: `d4c9e64a`
+  (`build: expose experimental MRML PE linking`)
 - Remote state when recorded: `origin/main` includes the bounded MRML-owned
   static-link core, exact MRML COFF and ELF64 ingestion, deterministic
   import-free PE32+/ELF64 executable serialization, explicit compiler-driver
@@ -60,6 +60,17 @@ against all prior accepted probes. Keep Cargo on edition 2024 until a newer
 named edition can be adopted through a pinned, workspace-wide migration.
 
 ## Latest bounded linker milestone
+
+Commit `d4c9e64a` adds symmetric explicit `link-pe` and `compile-pe` operations
+to the experimental compiler frontend. They route COFF inputs or one supported
+custom-compiler source function through the existing MRML-owned PE32+
+serializer without rust-lld or fallback. A durable Windows probe emitted a
+1,024-byte import-free PE and returned exit code 42. Windows and Linux each
+passed all 119 build-frontend tests and warnings-denied Clippy; Windows
+`mrml doctor` passed. `mrml audit` retains the unrelated external-command
+fingerprint failure named below. Ordinary production builds still use pinned
+upstream rustc/rust-lld until their profile gate passes. Patent review:
+**NOT_TRIGGERED**.
 
 Commit `6ee7106f` adds the canonical explicit experimental source-to-linker
 operation: `mrml compiler mrml-rustc-experimental compile-elf INPUT --function
