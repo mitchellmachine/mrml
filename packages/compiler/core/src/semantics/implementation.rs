@@ -2031,7 +2031,9 @@ fn evaluate_boolean_const_expression<
     if inline_const_has_invalid_capture(tree, id, constants, false, 0) {
         return Err(SemanticErrorKind::UnsupportedConstCall);
     }
-    if expression_contains_call(tree, id, 0) {
+    if expression_contains_call(tree, id, 0)
+        || expression_requires_typed_integer_evaluation(tree)
+    {
         evaluate_call_aware_boolean(context, symbol_count, tree, id, constants, depth)
     } else {
         evaluate_boolean_constant(tree, id, constants, 0).map_err(SemanticErrorKind::Execution)

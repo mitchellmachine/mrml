@@ -334,11 +334,11 @@ mod tests {
     #[test]
     fn evaluates_typed_shift_distances_in_wide_const_functions() {
         let module = Parser::new(
-            "const fn unsigned(value: u128, distance: u32) -> u128 { value >> distance } const fn signed(value: i128, distance: u32) -> i128 { value >> distance } const fn unsigned_assign(value: u128, distance: u32) -> u128 { let mut result: u128 = value; result >>= distance; result } const fn signed_assign(value: i128, distance: u32) -> i128 { let mut result: i128 = value; result >>= distance; result }",
+            "const fn unsigned(value: u128, distance: u32) -> u128 { value >> distance } const fn signed(value: i128, distance: u32) -> i128 { value >> distance } const fn unsigned_assign(value: u128, distance: u32) -> u128 { let mut result: u128 = value; result >>= distance; result } const fn signed_assign(value: i128, distance: u32) -> i128 { let mut result: i128 = value; result >>= distance; result } const fn unsigned_matches(value: u128, distance: u32, expected: u128) -> bool { (value >> distance) == expected } const fn signed_matches(value: i128, distance: u32, expected: i128) -> bool { (value >> distance) == expected }",
         )
-        .parse_module::<8, 4>()
+        .parse_module::<10, 4>()
         .unwrap();
-        let values = analyze_constants::<2, 32, 8, 4>(&module, TargetLayout::X86_64).unwrap();
+        let values = analyze_constants::<2, 32, 10, 4>(&module, TargetLayout::X86_64).unwrap();
         let unsigned = 1512366075204170947332355369683137040u128;
         let signed = -1512366075204170947332355369683137040i128;
         assert_eq!(
@@ -360,6 +360,26 @@ mod tests {
                 &[signed as u128, 65],
             ),
             Some((signed >> 65) as u128)
+        );
+        assert_eq!(
+            evaluate_scalar_const_function(
+                &module,
+                &values,
+                TargetLayout::X86_64,
+                "unsigned_matches",
+                &[unsigned, 65, unsigned >> 65],
+            ),
+            Some(1)
+        );
+        assert_eq!(
+            evaluate_scalar_const_function(
+                &module,
+                &values,
+                TargetLayout::X86_64,
+                "signed_matches",
+                &[signed as u128, 65, (signed >> 65) as u128],
+            ),
+            Some(1)
         );
         assert_eq!(
             evaluate_scalar_const_function(
