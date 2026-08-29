@@ -343,6 +343,11 @@ lowering but additionally require every shifted-out bit to be redundant for the
 operation. Oracle vectors satisfy both the distance and exactness preconditions
 at the 63/64/127 boundaries; the compiler does not turn invalid calls into a
 defined or safe operation.
+Unsafe wide `unchecked_div_exact` reuses signed or unsigned two-word quotient
+lowering. Pinned-nightly oracle vectors cover exact positive, negative, and
+cross-word quotients. Zero divisors, signed minimum divided by negative one, and
+nonzero remainders violate the method's preconditions and remain outside the
+defined contract.
 Lazy `if` expressions may select compatible two-word integer values without
 evaluating the unselected branch; both branches retain the declared wide type.
 Block sequences may evaluate supported one-word prefix expressions before a

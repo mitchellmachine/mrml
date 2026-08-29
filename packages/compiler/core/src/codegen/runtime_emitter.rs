@@ -8161,6 +8161,20 @@ impl<
         }
         if let ExprKind::UncheckedIntegerOperation {
             base,
+            argument: Some(argument),
+            second_argument: None,
+            operator: crate::BinaryOperator::Divide,
+            unary: false,
+            disjoint: false,
+            funnel: false,
+        } = expression.kind
+        {
+            self.emit_wide_binary_operands(tree, base, argument, expected_type)?;
+            self.emit_wide_divide_or_remainder(layout, false, false)?;
+            return Ok(());
+        }
+        if let ExprKind::UncheckedIntegerOperation {
+            base,
             argument: Some(distance),
             second_argument: None,
             operator:
