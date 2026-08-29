@@ -260,6 +260,7 @@ access. The security/acceptance gate is canonical in
   the source, and destination rights no broader than the source before graph use.
 - Cross-domain attenuation rejects zero-right capability children before any
   receiver slot is published.
+- Capability-space insertion rejects zero-right roots before consuming a slot.
 - Exit, fault, and protocol-violation peer-death publication preflight the
   complete reciprocal graph before domain or scheduler mutation. Corrupt or
   duplicate relations and unavailable result capacity fail without partial

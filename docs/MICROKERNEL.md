@@ -6857,6 +6857,9 @@ the Linux kernel total to 615.
 Single and batched attenuation now reject zero requested rights before
 destination mutation. A focused IPC test proves the destination slot remains
 fully reusable and raises the Linux kernel total to 616.
+Capability-space insertion now applies the same nonzero known-rights rule before
+slot selection. A focused test proves invalid insertion consumes no slot and
+raises the Linux kernel total to 617.
 
 Patent review: `NOT_TRIGGERED` — this is conventional split-phase validation
 and commit for the existing bounded IPC endpoint and capability table; it

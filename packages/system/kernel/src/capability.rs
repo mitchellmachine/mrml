@@ -125,6 +125,7 @@ impl<const N: usize> CapabilitySpace<N> {
         object: ObjectId,
         rights: Rights,
     ) -> Result<Capability, CapabilityError> {
+        Rights::from_bits(rights.bits())?;
         let slot = self
             .entries
             .iter()
@@ -334,6 +335,16 @@ mod tests {
             child.authorize(read, Rights::READ),
             Err(CapabilityError::Invalid)
         );
+    }
+
+    #[test]
+    fn insertion_rejects_zero_rights_without_consuming_slot() {
+        let mut space = CapabilitySpace::<1>::new();
+        assert_eq!(
+            space.insert(ObjectId(1), Rights::NONE),
+            Err(CapabilityError::Invalid)
+        );
+        assert!(space.insert(ObjectId(2), Rights::READ).is_ok());
     }
 
     #[test]
