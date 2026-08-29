@@ -7667,6 +7667,35 @@ impl<
         let expression = tree
             .expression(id)
             .ok_or(self.error(CodegenErrorKind::RuntimeExpressionUnsupported))?;
+        if let ExprKind::Unary {
+            operator: crate::UnaryOperator::Not,
+            operand,
+        } = expression.kind
+        {
+            return self
+                .evaluate_wide_const_condition(tree, operand)
+                .map(|value| !value);
+        }
+        if let ExprKind::Binary {
+            operator,
+            left,
+            right,
+        } = expression.kind
+            && matches!(
+                operator,
+                crate::BinaryOperator::LogicalAnd | crate::BinaryOperator::LogicalOr
+            )
+        {
+            let left = self.evaluate_wide_const_condition(tree, left)?;
+            return match operator {
+                crate::BinaryOperator::LogicalAnd if !left => Ok(false),
+                crate::BinaryOperator::LogicalOr if left => Ok(true),
+                crate::BinaryOperator::LogicalAnd | crate::BinaryOperator::LogicalOr => {
+                    self.evaluate_wide_const_condition(tree, right)
+                }
+                _ => unreachable!(),
+            };
+        }
         if let ExprKind::Binary {
             operator,
             left,
