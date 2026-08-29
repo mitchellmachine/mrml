@@ -7179,6 +7179,54 @@ impl<
         if let ExprKind::UnsafeBlock { operand } = expression.kind {
             return self.emit_wide_integer_return(tree, operand, expected_type);
         }
+        if let ExprKind::IntegerSignCast {
+            base,
+            signed,
+            saturating,
+            strict,
+        } = expression.kind
+        {
+            let base_type = runtime_expression_type_with_locals(
+                self.function,
+                self.resolver,
+                &self.locals[..self.saved_locals],
+                tree,
+                base,
+                1,
+            )
+            .map_err(|kind| self.error(kind))?;
+            let valid_types = if signed {
+                (
+                    RuntimeExpressionType::Integer(Some(crate::IntegerType::U128)),
+                    RuntimeExpressionType::Integer(Some(crate::IntegerType::I128)),
+                )
+            } else {
+                (
+                    RuntimeExpressionType::Integer(Some(crate::IntegerType::I128)),
+                    RuntimeExpressionType::Integer(Some(crate::IntegerType::U128)),
+                )
+            };
+            if (base_type, expected_type) != valid_types {
+                return Err(self.error(CodegenErrorKind::RuntimeTypeMismatch));
+            }
+            self.emit_wide_integer_return(tree, base, base_type)?;
+            if saturating || strict {
+                self.emit(&[0x48, 0x85, 0xd2])?;
+                if strict {
+                    self.emit_trap_branch(0x88)?;
+                } else {
+                    let in_range = self.emit_forward_branch(0x89)?;
+                    if signed {
+                        self.emit(&[0x48, 0xc7, 0xc0, 0xff, 0xff, 0xff, 0xff, 0x48, 0xba])?;
+                        self.emit(&i64::MAX.to_le_bytes())?;
+                    } else {
+                        self.emit(&[0x31, 0xc0, 0x31, 0xd2])?;
+                    }
+                    self.patch_forward_branch(in_range)?;
+                }
+            }
+            return Ok(());
+        }
         if let ExprKind::Integer(literal) = expression.kind {
             if !runtime_integer_literal_fits(layout, literal.value, false) {
                 return Err(self.error(CodegenErrorKind::ValueOutOfRange));

@@ -383,6 +383,9 @@ the declared return type and materialized directly into the two return words.
 Ordinary narrowing `as` casts may consume a parameter, local, or computed wide
 expression through the common two-word emitter; the low word is then normalized
 to the exact target width and the high word carries no result authority.
+Same-width `cast_signed` and `cast_unsigned` methods preserve both words.
+Their saturating variants clamp values excluded by the target signedness, while
+strict variants trap at that same high-word sign-bit boundary.
 Other wide casts, expressions, locals, operations, calls, and returns remain
 unavailable and fail closed.
 Ownership and borrowing rules beyond ordinary language checking, other

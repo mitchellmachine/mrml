@@ -6052,3 +6052,12 @@ passes all 812 unit tests and every integration group; semantic execution passes
 121 tests. ORACLE-0003 comparisons cover both the unsigned computed `u64` case
 and signed computed wrapping sums narrowed through `i16` before widening to
 `u64`, including narrow and full-width boundaries. Windows gnullvm was not run.
+
+Modern same-width wide sign-cast methods now reuse the two-word emitter.
+`cast_signed` and `cast_unsigned` preserve both words; saturating variants clamp
+an out-of-range unsigned value to `i128::MAX` or a negative signed value to zero,
+and strict variants trap on that same high-word sign-bit boundary. Unit coverage
+compiles all six method/direction combinations for both x86-64 ABIs. The native
+Linux gate passes 814 unit tests and every integration group, including 351
+replacement and 121 semantic-execution tests. Direct execution evidence for the
+new wide paths remains pending. Windows gnullvm was not run.

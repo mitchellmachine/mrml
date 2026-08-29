@@ -62,6 +62,18 @@ named edition can be adopted through a pinned, workspace-wide migration.
 
 ## Latest bounded language milestone
 
+The MRML V1 two-word emitter now accepts modern same-width `cast_signed` and
+`cast_unsigned` methods for `u128`/`i128`, together with their saturating and
+strict policy variants. Stable casts preserve both words. Saturating conversion
+maps an out-of-range unsigned value to `i128::MAX` or a negative signed value to
+zero; strict conversion traps on the same high-word sign-bit boundary. Exact
+source/target direction checks fail closed. The release Linux build and the
+canonical compiler gate pass: 814 unit tests and every integration group,
+including 351 replacement and 121 semantic-execution tests. Execution evidence
+for these new wide method paths remains pending. Windows gnullvm was not run.
+Patent review: **NOT_TRIGGERED**; this extends ordinary integer conversion
+lowering without introducing a new mechanism. See `docs/patents/REVIEW_LOG.md`.
+
 Wide-to-narrow `as` casts now evaluate any admitted `u128` or `i128` operand
 through the common two-word emitter before normalizing the low word to the
 target width. This replaces the old direct-parameter-only loader and admits

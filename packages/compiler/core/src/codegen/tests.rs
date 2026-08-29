@@ -12252,6 +12252,26 @@ mod tests {
     }
 
     #[test]
+    fn mrml_v1_codegen_applies_wide_sign_cast_policies() {
+        for source in [
+            "#[mrml_abi::export(version = 1)] pub fn value(input: u128) -> i128 { input.cast_signed() }",
+            "#[mrml_abi::export(version = 1)] pub fn value(input: i128) -> u128 { input.cast_unsigned() }",
+            "#[mrml_abi::export(version = 1)] pub fn value(input: u128) -> i128 { input.saturating_cast_signed() }",
+            "#[mrml_abi::export(version = 1)] pub fn value(input: i128) -> u128 { input.saturating_cast_unsigned() }",
+            "#[mrml_abi::export(version = 1)] pub fn value(input: u128) -> i128 { input.strict_cast_signed() }",
+            "#[mrml_abi::export(version = 1)] pub fn value(input: i128) -> u128 { input.strict_cast_unsigned() }",
+        ] {
+            let module = Parser::new(source).parse_module::<2, 2>().unwrap();
+            let Some(Item::Function(function)) = module.items()[0] else {
+                panic!("expected function")
+            };
+            for abi in [X86_64Abi::SystemV, X86_64Abi::Windows] {
+                compile_x86_64_function::<_, 512, 2, 16>(&function, &NoConstants, abi).unwrap();
+            }
+        }
+    }
+
+    #[test]
     fn mrml_v1_codegen_inverts_both_two_word_integer_halves() {
         for source in [
             "#[mrml_abi::export(version = 1)] pub fn value(input: u128) -> u128 { !input }",
