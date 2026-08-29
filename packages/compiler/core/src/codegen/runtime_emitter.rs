@@ -7179,6 +7179,70 @@ impl<
         if let ExprKind::UnsafeBlock { operand } = expression.kind {
             return self.emit_wide_integer_return(tree, operand, expected_type);
         }
+        if let ExprKind::IntegerOptionUnwrapOr {
+            option,
+            fallback,
+            trap,
+            message: _,
+            unchecked,
+            lazy,
+        } = expression.kind
+        {
+            if lazy {
+                return Err(self.error(CodegenErrorKind::RuntimeExpressionUnsupported));
+            }
+            let option = tree
+                .expression(option)
+                .ok_or(self.error(CodegenErrorKind::RuntimeExpressionUnsupported))?;
+            let ExprKind::CheckedIntegerOption {
+                base,
+                argument: None,
+                operation: crate::expression::CheckedIntegerOptionOperation::SignCast { signed },
+            } = option.kind
+            else {
+                return Err(self.error(CodegenErrorKind::RuntimeExpressionUnsupported));
+            };
+            let base_type = runtime_expression_type_with_locals(
+                self.function,
+                self.resolver,
+                &self.locals[..self.saved_locals],
+                tree,
+                base,
+                1,
+            )
+            .map_err(|kind| self.error(kind))?;
+            let valid_types = if signed {
+                (
+                    RuntimeExpressionType::Integer(Some(crate::IntegerType::U128)),
+                    RuntimeExpressionType::Integer(Some(crate::IntegerType::I128)),
+                )
+            } else {
+                (
+                    RuntimeExpressionType::Integer(Some(crate::IntegerType::I128)),
+                    RuntimeExpressionType::Integer(Some(crate::IntegerType::U128)),
+                )
+            };
+            if (base_type, expected_type) != valid_types {
+                return Err(self.error(CodegenErrorKind::RuntimeTypeMismatch));
+            }
+            self.emit_wide_integer_return(tree, base, base_type)?;
+            if unchecked {
+                return Ok(());
+            }
+            self.emit(&[0x48, 0x85, 0xd2])?;
+            if trap {
+                self.emit_trap_branch(0x88)?;
+                return Ok(());
+            }
+            let some = self.emit_forward_branch(0x89)?;
+            if let Some(fallback) = fallback {
+                self.emit_wide_integer_return(tree, fallback, expected_type)?;
+            } else {
+                self.emit_wide_integer_immediate(0)?;
+            }
+            self.patch_forward_branch(some)?;
+            return Ok(());
+        }
         if let ExprKind::IntegerSignCast {
             base,
             signed,

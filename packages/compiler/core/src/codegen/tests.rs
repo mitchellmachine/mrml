@@ -12272,6 +12272,38 @@ mod tests {
     }
 
     #[test]
+    fn mrml_v1_codegen_consumes_checked_wide_sign_cast_options() {
+        for source in [
+            "#[mrml_abi::export(version = 1)] pub fn value(input: u128, fallback: i128) -> i128 { input.checked_cast_signed().unwrap_or(fallback) }",
+            "#[mrml_abi::export(version = 1)] pub fn value(input: i128) -> u128 { input.checked_cast_unsigned().unwrap_or_default() }",
+            "#[mrml_abi::export(version = 1)] pub fn value(input: u128) -> i128 { input.checked_cast_signed().unwrap() }",
+            "#[mrml_abi::export(version = 1)] pub fn value(input: i128) -> u128 { input.checked_cast_unsigned().expect(\"nonnegative\") }",
+        ] {
+            let module = Parser::new(source).parse_module::<3, 2>().unwrap();
+            let Some(Item::Function(function)) = module.items()[0] else {
+                panic!("expected function")
+            };
+            for abi in [X86_64Abi::SystemV, X86_64Abi::Windows] {
+                compile_x86_64_function::<_, 768, 2, 32>(&function, &NoConstants, abi).unwrap();
+            }
+        }
+
+        let source = "#[mrml_abi::export(version = 1)] pub fn value(input: u128, fallback: i128) -> i128 { input.checked_cast_signed().unwrap_or_else(|| fallback) }";
+        let module = Parser::new(source).parse_module::<3, 2>().unwrap();
+        let Some(Item::Function(function)) = module.items()[0] else {
+            panic!("expected function")
+        };
+        assert!(
+            compile_x86_64_function::<_, 768, 2, 32>(
+                &function,
+                &NoConstants,
+                X86_64Abi::SystemV,
+            )
+            .is_err()
+        );
+    }
+
+    #[test]
     fn mrml_v1_codegen_inverts_both_two_word_integer_halves() {
         for source in [
             "#[mrml_abi::export(version = 1)] pub fn value(input: u128) -> u128 { !input }",

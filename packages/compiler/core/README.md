@@ -6064,3 +6064,14 @@ exact ORACLE-0003 results across both words for stable, saturating, and in-range
 strict paths at zero, signed boundaries, and all-ones input where admitted.
 Isolated Linux children also confirm strict conversions trap at both invalid
 boundary classes. Windows gnullvm was not run.
+
+Checked same-width `u128`/`i128` sign casts also reach the two-word emitter when
+consumed directly by `unwrap_or`, `unwrap_or_default`, `unwrap`, or `expect`.
+Valid values preserve both words, invalid values select the exact wide fallback
+or zero default, and trapping consumers use the shared illegal-instruction
+path. Lazy and compositional wide option consumers remain unsupported and fail
+closed. Both x86-64 ABIs compile the terminal forms. The canonical Linux gate
+passes 816 unit tests, 351 replacement tests, and 124 semantic-execution tests;
+defaulting in both directions matches exact ORACLE-0003 results across both
+words at zero, signed boundaries, and all-ones input. Windows gnullvm was not
+run.

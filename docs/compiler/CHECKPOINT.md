@@ -78,6 +78,18 @@ Windows gnullvm was not run.
 Patent review: **NOT_TRIGGERED**; this extends ordinary integer conversion
 lowering without introducing a new mechanism. See `docs/patents/REVIEW_LOG.md`.
 
+Checked same-width `u128`/`i128` sign casts now reach the two-word emitter when
+consumed directly by `unwrap_or`, `unwrap_or_default`, `unwrap`, or `expect`.
+Valid values preserve both words, invalid values select the exact wide fallback
+or zero default, and trapping consumers use the shared illegal-instruction
+path. Lazy and compositional wide option consumers remain unsupported and fail
+closed. Both x86-64 ABIs compile the terminal forms. The canonical Linux gate
+passes 816 unit tests, 351 replacement tests, and 124 semantic-execution tests;
+defaulting in both directions matches exact ORACLE-0003 results across both
+words at zero, signed boundaries, and all-ones input. Windows gnullvm was not
+run. Patent review: **NOT_TRIGGERED**; this reuses the existing bounded option
+consumer and integer conversion mechanisms. See `docs/patents/REVIEW_LOG.md`.
+
 Wide-to-narrow `as` casts now evaluate any admitted `u128` or `i128` operand
 through the common two-word emitter before normalizing the low word to the
 target width. This replaces the old direct-parameter-only loader and admits
