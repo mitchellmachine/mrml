@@ -9,8 +9,8 @@ the named commit and current source.
 ## Recoverable baseline
 
 - Branch: `main`
-- Compiler checkpoint commit: `4ed419e5`
-  (`compiler: streamline gnullvm refptr linking`)
+- Compiler checkpoint commit: `ba02c515`
+  (`compiler: retain gnullvm writable forwarding records`)
 - Remote state when recorded: `origin/main` includes the bounded MRML-owned
   static-link core, exact MRML COFF and ELF64 ingestion, deterministic
   import-free PE32+/ELF64 executable serialization, explicit compiler-driver
@@ -60,6 +60,23 @@ against all prior accepted probes. Keep Cargo on edition 2024 until a newer
 named edition can be adopted through a pinned, workspace-wide migration.
 
 ## Latest bounded linker milestone
+
+Commit `ba02c515` retains the exact gnullvm `.data$\u0001__imp_` writable
+NODUPLICATES forwarding records and gives writable `ADDR64` relocations a typed
+writable-symbol target alongside the existing readonly target. The strengthened
+eight-CGU probe verifies two distinct absolute pointers into the final `.data`
+virtual range, cross-object shared-state writes, exact 1,028-byte zero fill, and
+exit code 42 from both MRML and pinned rust-lld. MRML emits 2,560 bytes versus
+rust-lld at 3,584 bytes. Fifty measured links after five warmups produced 9.564
+ms median/9.850 ms mean for MRML and 27.215 ms median/27.585 ms mean for
+rust-lld. Windows passed 748 core unit tests, all integration groups including
+58 semantic tests, and six driver tests; Linux passed 749 core unit tests, all
+integration groups, and six driver tests after concurrent compiler commit
+`b9549c4a`. The first Windows attempt collided with another native build that
+removed shared temporary rustc objects; the isolated rerun passed. `mrml doctor`
+passed; audit retains unrelated fingerprint `fnv1a64:0fe5cf1836d3e0dc` at line
+1242. Arbitrary/associative COMDAT selection remains unsupported. Patent
+review: **NOT_TRIGGERED**.
 
 Commit `4ed419e5` extends the refptr probe to write both cross-object globals and
 proves that the defining archive member observes the shared state. It removes
