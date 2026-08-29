@@ -30,6 +30,13 @@ pub enum NvmeControllerBarMappingError {
 
 pub trait NvmeControllerBarMappingBackend {
     fn map_read_write_nx(&mut self, mapping: NvmeControllerBarMapping) -> Result<(), ()>;
+    /// Removes the exact supervisor mapping and completes TLB invalidation.
+    fn unmap_read_write_nx(&mut self, mapping: NvmeControllerBarMapping) -> Result<(), ()>;
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct NvmeControllerBarUnmapError {
+    pub mapping: NvmeControllerBarMapping,
 }
 
 pub fn map_nvme_controller_bar<const N: usize, B: NvmeControllerBarMappingBackend>(
@@ -74,6 +81,15 @@ pub fn map_nvme_controller_bar<const N: usize, B: NvmeControllerBarMappingBacken
     Ok(mapping)
 }
 
+pub fn unmap_nvme_controller_bar<B: NvmeControllerBarMappingBackend>(
+    mapping: NvmeControllerBarMapping,
+    backend: &mut B,
+) -> Result<(), NvmeControllerBarUnmapError> {
+    backend
+        .unmap_read_write_nx(mapping)
+        .map_err(|_| NvmeControllerBarUnmapError { mapping })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -94,6 +110,13 @@ mod tests {
                 return Err(());
             }
             self.mapping = Some(mapping);
+            Ok(())
+        }
+        fn unmap_read_write_nx(&mut self, mapping: NvmeControllerBarMapping) -> Result<(), ()> {
+            if self.reject || self.mapping != Some(mapping) {
+                return Err(());
+            }
+            self.mapping = None;
             Ok(())
         }
     }
@@ -249,5 +272,30 @@ mod tests {
             ),
             Err(NvmeControllerBarMappingError::BackendRejected)
         );
+    }
+
+    #[test]
+    fn unmap_retains_exact_mapping_until_backend_confirms_invalidation() {
+        let rights = Rights::MAP.union(Rights::READ).union(Rights::WRITE);
+        let (capabilities, capability, object) = authority(rights);
+        let mut backend = RecordingBackend::default();
+        let mapping = map_nvme_controller_bar(
+            &capabilities,
+            capability,
+            object,
+            descriptor(),
+            0x8000_0000,
+            1,
+            &mut backend,
+        )
+        .unwrap();
+        backend.reject = true;
+        assert_eq!(
+            unmap_nvme_controller_bar(mapping, &mut backend),
+            Err(NvmeControllerBarUnmapError { mapping })
+        );
+        backend.reject = false;
+        assert_eq!(unmap_nvme_controller_bar(mapping, &mut backend), Ok(()));
+        assert_eq!(backend.mapping, None);
     }
 }

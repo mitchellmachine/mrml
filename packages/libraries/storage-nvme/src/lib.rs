@@ -51,8 +51,9 @@ pub use nvme_io_queue_program::{
     NvmeIoQueueDeleteFailure,
 };
 pub use nvme_mapping::{
-    map_nvme_controller_bar, NvmeControllerBarMapping, NvmeControllerBarMappingBackend,
-    NvmeControllerBarMappingError, NVME_MMIO_PAGE_BYTES,
+    map_nvme_controller_bar, unmap_nvme_controller_bar, NvmeControllerBarMapping,
+    NvmeControllerBarMappingBackend, NvmeControllerBarMappingError, NvmeControllerBarUnmapError,
+    NVME_MMIO_PAGE_BYTES,
 };
 pub use nvme_namespace::{
     parse_nvme_namespace_identity, NvmeNamespaceIdentity, NvmeNamespaceParseError,

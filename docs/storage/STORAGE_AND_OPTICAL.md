@@ -495,7 +495,10 @@ or DMA-removal failure retains both layouts as quarantined ownership. Active
 admin-queue teardown now clears `CC.EN`, bounds readiness-clear polling, and
 reconstructs the exclusive admin-DMA owner only after `CSTS.RDY` is zero.
 Register uncertainty, fatal status, or timeout retains the exact layout for
-quarantine. Sixty focused tests pass on Windows and Arch Linux. The class tuple
+quarantine. The exact supervisor-only BAR mapping can now be removed only after
+the backend confirms mapping and TLB invalidation; failure returns the complete
+generation-bound mapping for quarantine/retry. Sixty-one focused tests pass on
+Windows and Arch Linux. The class tuple
 is cross-checked against the
 [PCI-SIG DEVICE_INTERFACE_REPORT ECN](https://pcisig.com/PCIExpress/ECN/Base/AddClasstoDEVICE_INTERFACE_REPORT);
 later register and queue work will use the current
