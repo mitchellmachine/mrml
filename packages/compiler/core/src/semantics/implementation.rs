@@ -2085,7 +2085,11 @@ fn evaluate_integer_const_expression<
     if tree.nodes().iter().flatten().any(|expression| {
         matches!(
             expression.kind,
-            ExprKind::WrappingArithmetic { .. }
+            ExprKind::Binary {
+                operator: BinaryOperator::ShiftLeft | BinaryOperator::ShiftRight,
+                ..
+            }
+                | ExprKind::WrappingArithmetic { .. }
                 | ExprKind::SaturatingArithmetic { .. }
                 | ExprKind::IntegerRotate { .. }
                 | ExprKind::IntegerFunnelShift { .. }
@@ -2742,7 +2746,30 @@ fn evaluate_call_aware_integer<
             right,
         } => {
             let left_bits = recurse(left)?;
-            let right_bits = recurse(right)?;
+            let right_bits = if matches!(
+                operator,
+                BinaryOperator::ShiftLeft | BinaryOperator::ShiftRight
+            ) {
+                let right_type = integer_expression_type(
+                    context,
+                    symbol_count,
+                    tree,
+                    right,
+                    constants,
+                )
+                .unwrap_or(ty);
+                evaluate_call_aware_integer(
+                    context,
+                    symbol_count,
+                    tree,
+                    right,
+                    right_type,
+                    constants,
+                    depth,
+                )?
+            } else {
+                recurse(right)?
+            };
             if ty.is_signed() {
                 evaluate_call_aware_signed_binary(operator, left_bits, right_bits, bits)
                     .map_err(arithmetic_error)?

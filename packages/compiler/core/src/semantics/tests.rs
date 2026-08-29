@@ -332,6 +332,38 @@ mod tests {
     }
 
     #[test]
+    fn evaluates_typed_shift_distances_in_wide_const_functions() {
+        let module = Parser::new(
+            "const fn unsigned(value: u128, distance: u32) -> u128 { value >> distance } const fn signed(value: i128, distance: u32) -> i128 { value >> distance }",
+        )
+        .parse_module::<4, 4>()
+        .unwrap();
+        let values = analyze_constants::<2, 32, 4, 4>(&module, TargetLayout::X86_64).unwrap();
+        let unsigned = 1512366075204170947332355369683137040u128;
+        let signed = -1512366075204170947332355369683137040i128;
+        assert_eq!(
+            evaluate_scalar_const_function(
+                &module,
+                &values,
+                TargetLayout::X86_64,
+                "unsigned",
+                &[unsigned, 65],
+            ),
+            Some(unsigned >> 65)
+        );
+        assert_eq!(
+            evaluate_scalar_const_function(
+                &module,
+                &values,
+                TargetLayout::X86_64,
+                "signed",
+                &[signed as u128, 65],
+            ),
+            Some((signed >> 65) as u128)
+        );
+    }
+
+    #[test]
     fn evaluates_unconditional_early_returns_in_const_functions() {
         let module = Parser::new(
             "const fn integer(value: u8) -> u8 { let adjusted = value + 1; return adjusted; let ignored = 255 / 0; ignored } const fn boolean() -> bool { return true; false } const VALUE: u8 = integer(41); const FLAG: bool = boolean();",
