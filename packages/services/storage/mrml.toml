@@ -64,6 +64,12 @@ package = "org.mrml.system.kernel"
 scope = "compile"
 
 [[dependency]]
+alias = "mrml_interface_storage_block_provider_v1"
+compile_name = "mrml-interface-storage-block-provider-v1"
+package = "org.mrml.interface.storage.block-provider"
+scope = "compile"
+
+[[dependency]]
 alias = "mrml_interface_storage_filesystem_v1"
 compile_name = "mrml-interface-storage-filesystem-v1"
 package = "org.mrml.interface.storage.filesystem"

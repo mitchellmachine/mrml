@@ -707,10 +707,16 @@ slot unavailable until explicit retry and never falls back. Storage passes
 preserved in the separate `org.mrml.library.storage.ahci` package, which declares
 the exact generation-1 block-provider interface and isolated-service placement;
 the policy/storage crate no longer compiles AHCI modules. Windows and Arch Linux
-each pass 55 AHCI-library tests. The storage service now passes 137 tests with a
+each pass 55 AHCI-library tests. The storage service now passes 140 tests with a
 hosted cleanup-gated FAT32 generation replacement that invalidates the old
 endpoint, health-checks the candidate through canonical probe bytes, and leaves
-the modeled kernel epoch unchanged. The AHCI library now has a canonical catalog
+the modeled kernel epoch unchanged. A production block-provider health-check now
+constructs the exact endpoint handle from the candidate endpoint object and
+provider generation, invokes bounded enumeration, validates the complete hostile
+catalog before admission, and wipes scratch on success or failure. Wrong class,
+interface generation, unrepresentable identities, provider rejection, and
+malformed catalogs fail before registry publication. The AHCI library now has a
+canonical catalog
 enumeration endpoint, capability-cleanup-gated service loop, and raw userspace
 syscall adapter; installed supervisor execution remains **PLANNED**.
 
@@ -741,7 +747,7 @@ register-level syscall adapter erase transient buffers on every path; the
 serves calls until fail-stop or supervised replacement. Thirty-three tests pass
 on Windows and Arch Linux, and the MRML-native release binary builds on Windows
 as a 5,120-byte x86-64 PE32+ EFI application with entrypoint `0x1c60`. Storage
-passes 137 tests on both hosts. This does not implement mount, lookup/open policy,
+passes 140 tests on both hosts. This does not implement mount, lookup/open policy,
 check/repair, format, writes, installed-kernel launch, or physical interoperability
 evidence.
 

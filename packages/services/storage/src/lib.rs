@@ -12,6 +12,7 @@ mod authority;
 mod authority_checkpoint;
 mod block;
 mod block_protocol;
+mod block_provider_health;
 mod block_service;
 mod cow;
 mod create;
@@ -30,17 +31,21 @@ mod storage_module;
 mod transaction;
 
 pub use allocation::{
-    ALLOCATION_IMAGE_HEADER_BYTES, ALLOCATION_RECORD_BYTES, AllocationChange, AllocationError,
-    AllocationImage, AllocationIndex, AllocationKind, AllocationRecord, AllocationUpdateError,
-    AllocationWriteBackend, MAX_ALLOCATION_BLOCKS, PreparedAllocationUpdate,
+    AllocationChange, AllocationError, AllocationImage, AllocationIndex, AllocationKind,
+    AllocationRecord, AllocationUpdateError, AllocationWriteBackend, PreparedAllocationUpdate,
+    ALLOCATION_IMAGE_HEADER_BYTES, ALLOCATION_RECORD_BYTES, MAX_ALLOCATION_BLOCKS,
 };
 pub use authority::{
     StorageAuthorityError, StorageAuthorityReservation, StorageAuthorityTable, StorageHandle,
     StorageObjectKind, StoragePrincipal, StorageRights,
 };
 pub use authority_checkpoint::{
-    AUTHORITY_CHECKPOINT_GRANT_BYTES, AUTHORITY_CHECKPOINT_HEADER_BYTES,
-    AUTHORITY_RECOVERY_STATE_BYTES, AuthenticatedAuthorityCheckpoint,
+    authority_checkpoint_digest, decode_canonical_authority_recovery_state,
+    encode_authority_checkpoint, prepare_stable_authorities, recover_selected_stable_authorities,
+    recover_selected_stable_authorities_and_commit,
+    recover_selected_validate_and_commit_stable_authorities, recover_stable_authorities,
+    recover_stable_authorities_and_commit, recover_validate_and_commit_stable_authorities,
+    validate_authenticated_authority_recovery_state, AuthenticatedAuthorityCheckpoint,
     AuthenticatedAuthorityRecoveryState, AuthorityCheckpoint, AuthorityCheckpointError,
     AuthorityCheckpointProofIssuer, AuthorityRecoveryCommitError, AuthorityRecoveryGuard,
     AuthorityRecoveryStateStore, AuthorityRecoveryValidationError,
@@ -48,32 +53,30 @@ pub use authority_checkpoint::{
     BootBoundRecoveryStateStore, BootRecoveryAdmission, BootRecoveryStateError,
     CanonicalAuthorityRecoveryState, CommittedRecoveredStorageAuthorities,
     OwnerApprovedAuthorityCheckpoint, PreparedStableAuthorities, RecoveredStorageAuthorities,
-    StableAuthorities, StorageRecoveryGrant, authority_checkpoint_digest,
-    decode_canonical_authority_recovery_state, encode_authority_checkpoint,
-    prepare_stable_authorities, recover_selected_stable_authorities,
-    recover_selected_stable_authorities_and_commit,
-    recover_selected_validate_and_commit_stable_authorities, recover_stable_authorities,
-    recover_stable_authorities_and_commit, recover_validate_and_commit_stable_authorities,
-    validate_authenticated_authority_recovery_state,
+    StableAuthorities, StorageRecoveryGrant, AUTHORITY_CHECKPOINT_GRANT_BYTES,
+    AUTHORITY_CHECKPOINT_HEADER_BYTES, AUTHORITY_RECOVERY_STATE_BYTES,
 };
 pub use block::{BlockFileSession, BlockVolume, BlockVolumeError, StorageBlockDevice};
 pub use block_protocol::{
-    BLOCK_PROTOCOL_VERSION, BLOCK_REQUEST_BYTES, BLOCK_RESPONSE_BYTES, BlockBufferAccess,
-    BlockDispatchBuffer, BlockOpcode, BlockProtocolDispatcher, BlockProtocolError, BlockRequest,
-    BlockResponse, BlockStatus, MAX_BLOCK_TRANSFER_BYTES,
+    BlockBufferAccess, BlockDispatchBuffer, BlockOpcode, BlockProtocolDispatcher,
+    BlockProtocolError, BlockRequest, BlockResponse, BlockStatus, BLOCK_PROTOCOL_VERSION,
+    BLOCK_REQUEST_BYTES, BLOCK_RESPONSE_BYTES, MAX_BLOCK_TRANSFER_BYTES,
+};
+pub use block_provider_health::{
+    healthcheck_block_provider, BlockProviderHealthError, BlockProviderHealthReceipt,
 };
 pub use block_service::{
-    BlockDeviceDescriptor, BlockDeviceId, BlockRights, BlockService, BlockServiceBackend,
-    BlockServiceError, BlockSessionGrant, BlockSessionHandle, CanonicalUefiBlockDevicePathError,
+    canonical_uefi_block_stable_id, parse_canonical_uefi_sata_block_route, BlockDeviceDescriptor,
+    BlockDeviceId, BlockRights, BlockService, BlockServiceBackend, BlockServiceError,
+    BlockSessionGrant, BlockSessionHandle, CanonicalUefiBlockDevicePathError,
     CanonicalUefiHardDriveMedia, CanonicalUefiPciHop, CanonicalUefiSataBlockRoute,
     CanonicalUefiSataRouteError, ExactNativeBlockCorrelationError,
     ExactNativeBlockCorrelationVerifier, InstalledRecoveryBlockSession,
-    InstalledRecoverySessionError, MAX_CANONICAL_UEFI_BLOCK_DEVICE_PATH_BYTES,
-    MAX_CANONICAL_UEFI_PCI_HOPS, NativeBlockCorrelationError, NativeBlockCorrelationVerifier,
+    InstalledRecoverySessionError, NativeBlockCorrelationError, NativeBlockCorrelationVerifier,
     NativeSataBlockRoute, NativeSataRouteError, PlatformBlockDeviceDescriptor,
     PlatformBlockDeviceIdentity, PlatformBlockTransport, SataNativeBlockCorrelationError,
-    SataNativeBlockCorrelationVerifier, ServicedBlockDevice, canonical_uefi_block_stable_id,
-    parse_canonical_uefi_sata_block_route,
+    SataNativeBlockCorrelationVerifier, ServicedBlockDevice,
+    MAX_CANONICAL_UEFI_BLOCK_DEVICE_PATH_BYTES, MAX_CANONICAL_UEFI_PCI_HOPS,
 };
 pub use cow::{
     CowMetadataImage, CowMetadataWrite, CowPlanError, CowPublicationBackend, CowPublicationPlan,
@@ -84,50 +87,50 @@ pub use create::{
     PreparedCreateError, PreparedInitialObject,
 };
 pub use directory::{
-    CommittedDirectoryMovePlan, DIRECTORY_IMAGE_HEADER_BYTES, DirectoryAncestryBackend,
-    DirectoryAncestryError, DirectoryAncestryProof, DirectoryClosureError, DirectoryError,
-    DirectoryImage, DirectoryImageError, DirectoryMoveStageError, DirectoryMoveSuccessor,
+    prepare_initial_directory, prove_directory_move_ancestry, prove_directory_mutation_ancestry,
+    CommittedDirectoryMovePlan, DirectoryAncestryBackend, DirectoryAncestryError,
+    DirectoryAncestryProof, DirectoryClosureError, DirectoryError, DirectoryImage,
+    DirectoryImageError, DirectoryMoveStageError, DirectoryMoveSuccessor,
     DirectoryMoveSuccessorPlan, DirectoryMutationProof, DirectoryMutationSuccessorPlan,
     DirectoryState, DirectorySuccessorBackend, DirectorySuccessorClosure, DirectorySuccessorError,
     DirectorySuccessorLayout, DirectoryUpdateError, DirectoryWriteBackend,
     PreparedDirectoryMovePlan, PreparedDirectoryUpdate, PreparedInitialDirectory,
-    StorageObjectAllocator, prepare_initial_directory, prove_directory_move_ancestry,
-    prove_directory_mutation_ancestry,
+    StorageObjectAllocator, DIRECTORY_IMAGE_HEADER_BYTES,
 };
 pub use extent::{
-    EXTENT_IMAGE_HEADER_BYTES, EXTENT_RECORD_BYTES, ExtentError, ExtentImage, ExtentKind,
-    ExtentLocation, ExtentMap, ExtentRecord, MAX_EXTENT_BLOCKS,
+    ExtentError, ExtentImage, ExtentKind, ExtentLocation, ExtentMap, ExtentRecord,
+    EXTENT_IMAGE_HEADER_BYTES, EXTENT_RECORD_BYTES, MAX_EXTENT_BLOCKS,
 };
 pub use file::{
-    FileReadBackend, FileReadError, FileState, FileStateError, FileWriteBackend, FileWriteError,
-    FileWritePublishError, InitialFileError, InitialFileWriteBackend, MAX_FILE_READ_BYTES,
-    MAX_FILE_WRITE_BYTES, MAX_PROTECTED_METADATA_RANGES, PreparedFileWrite, PreparedInitialFile,
-    prepare_initial_file,
+    prepare_initial_file, FileReadBackend, FileReadError, FileState, FileStateError,
+    FileWriteBackend, FileWriteError, FileWritePublishError, InitialFileError,
+    InitialFileWriteBackend, PreparedFileWrite, PreparedInitialFile, MAX_FILE_READ_BYTES,
+    MAX_FILE_WRITE_BYTES, MAX_PROTECTED_METADATA_RANGES,
 };
 pub use format::{
-    DIRECTORY_ENTRY_BYTES, DIRECTORY_METADATA_BYTES, DirectoryEntry, DirectoryMetadata,
-    FILE_METADATA_BYTES, FileMetadata, MAX_METADATA_BLOCKS, MAX_STORAGE_NAME_BYTES, MetadataError,
-    MetadataPointer, SUPERBLOCK_BYTES, StorageName, Superblock, VOLUME_HEADER_BYTES, VolumeHeader,
+    DirectoryEntry, DirectoryMetadata, FileMetadata, MetadataError, MetadataPointer, StorageName,
+    Superblock, VolumeHeader, DIRECTORY_ENTRY_BYTES, DIRECTORY_METADATA_BYTES, FILE_METADATA_BYTES,
+    MAX_METADATA_BLOCKS, MAX_STORAGE_NAME_BYTES, SUPERBLOCK_BYTES, VOLUME_HEADER_BYTES,
 };
 pub use identity::{StorageIdentityError, StorageObjectId, VolumeId};
 pub use kernel_transport::{BlockKernelTransport, BlockKernelTransportError};
 pub use object_id_allocator::{
-    OBJECT_ID_ALLOCATOR_HEADER_BYTES, ObjectIdAllocatorError, ObjectIdAllocatorImage,
-    ObjectIdAllocatorUpdateError, ObjectIdAllocatorWriteBackend, PreparedObjectIdReservation,
+    ObjectIdAllocatorError, ObjectIdAllocatorImage, ObjectIdAllocatorUpdateError,
+    ObjectIdAllocatorWriteBackend, PreparedObjectIdReservation, OBJECT_ID_ALLOCATOR_HEADER_BYTES,
 };
 pub use recovery::{
+    recover_reachable_state, recover_reachable_superblock, recover_superblock,
     CandidateValidationError, CowRecoveryValidator, ReachableFileSelection,
     ReachableRecoveryValidator, RecoveredReachableState, RecoveredSuperblock, RecoveryError,
-    RecoveryMetadataBackend, recover_reachable_state, recover_reachable_superblock,
-    recover_superblock,
+    RecoveryMetadataBackend,
 };
 pub use recovery_journal::{
-    AuthenticatedRecoveryJournal, RECOVERY_JOURNAL_SLOT_BYTES, RecoveryJournalBackend,
-    RecoveryJournalError,
+    AuthenticatedRecoveryJournal, RecoveryJournalBackend, RecoveryJournalError,
+    RECOVERY_JOURNAL_SLOT_BYTES,
 };
 pub use release_journal::{
-    AuthenticatedReleaseStateJournal, RELEASE_STATE_JOURNAL_SLOT_BYTES, ReleaseStateJournalBackend,
-    ReleaseStateJournalError,
+    AuthenticatedReleaseStateJournal, ReleaseStateJournalBackend, ReleaseStateJournalError,
+    RELEASE_STATE_JOURNAL_SLOT_BYTES,
 };
 pub use service_loop::{
     BlockServiceLoop, BlockServiceLoopError, BlockServiceSyscalls, ReceivedBlockEnvelope,

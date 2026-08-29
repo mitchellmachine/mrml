@@ -4,7 +4,7 @@ version = 2
 toolchain = "nightly-2026-08-24"
 
 [graphs]
-compile_edges = 164
+compile_edges = 165
 build_tool_edges = 0
 runtime_interface_edges = 5
 package_edges = 151
@@ -550,7 +550,7 @@ isolation_default = "native-service"
 isolation_minimum = "native-service"
 isolation_maximum = "native-service"
 isolation_supported = ["native-service"]
-compile_dependencies = ["org.mrml.interface.storage.filesystem", "org.mrml.library.crypto", "org.mrml.library.storage.fat32", "org.mrml.system.kernel"]
+compile_dependencies = ["org.mrml.interface.storage.block-provider", "org.mrml.interface.storage.filesystem", "org.mrml.library.crypto", "org.mrml.library.storage.fat32", "org.mrml.system.kernel"]
 
 static_runtime = ["org.mrml.library.crypto", "org.mrml.system.kernel"]
 boot_bound = []
