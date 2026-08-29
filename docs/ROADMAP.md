@@ -2192,6 +2192,8 @@ live composition remains pending.
    the kernel total to 607.
    Control-peer connection now requires both scheduler identities before either
    reciprocal relation changes; a stale-peer test raises the total to 608.
+   Direct IPC transfer now enforces the same endpoint scheduler preflight even
+   without enqueue; its stale-endpoint test raises the total to 609.
    Warning-free `invalid_return_probe` kernel/service profiles now encode the
    real CPL3 invalid-stack interrupt, typed peer-death cleanup marker, peer
    execution, clean exit, and terminal state marker. Runner execution remains

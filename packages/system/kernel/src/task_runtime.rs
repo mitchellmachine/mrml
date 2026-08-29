@@ -937,6 +937,9 @@ impl<const TASKS: usize, const CAPS: usize> TaskRuntime<TASKS, CAPS> {
         if sender == receiver {
             return Err(TaskRuntimeError::SameTaskIpc);
         }
+        if !self.scheduler.contains(sender) || !self.scheduler.contains(receiver) {
+            return Err(TaskRuntimeError::IntegrityFailure);
+        }
         if self
             .delegations
             .iter()
@@ -2424,6 +2427,36 @@ mod tests {
             runtime.peek_ipc_shape(receiver),
             Err(TaskRuntimeError::InboxEmpty)
         );
+    }
+
+    #[test]
+    fn direct_transfer_rejects_unscheduled_endpoint_before_authorization() {
+        let mut runtime = TaskRuntime::<2, 1>::new(1_000, 1).unwrap();
+        let sender = runtime
+            .create(Priority::NORMAL, context(0x20_0000, 0x40_0000))
+            .unwrap();
+        let receiver = runtime
+            .create(Priority::NORMAL, context(0x30_0000, 0x50_0000))
+            .unwrap();
+        let object = ObjectId(0x4a);
+        let endpoint_capability = runtime
+            .capabilities_mut(sender)
+            .unwrap()
+            .insert(object, Rights::SIGNAL)
+            .unwrap();
+        runtime.scheduler.detach(receiver).unwrap();
+
+        assert!(matches!(
+            runtime.send_ipc(
+                sender,
+                receiver,
+                &mut Endpoint::new(object),
+                endpoint_capability,
+                b"not-transferred",
+                &[],
+            ),
+            Err(TaskRuntimeError::IntegrityFailure)
+        ));
     }
 
     #[test]

@@ -233,6 +233,8 @@ access. The security/acceptance gate is canonical in
   sequencing, capability transfer, enqueue, or wake can begin.
 - Symmetric control-peer connection verifies both scheduler identities before
   authorizing or publishing either side of the relation.
+- The non-queued direct transfer primitive enforces the same two-endpoint
+  scheduler identity requirement, preventing wrapper bypass.
 - Exit, fault, and protocol-violation peer-death publication preflight the
   complete reciprocal graph before domain or scheduler mutation. Corrupt or
   duplicate relations and unavailable result capacity fail without partial
