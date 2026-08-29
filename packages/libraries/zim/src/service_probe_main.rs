@@ -142,10 +142,12 @@ unsafe fn receive(payload: &mut [u8], capabilities: &mut [u64]) -> (usize, usize
     if status != 0 {
         halt();
     }
-    (
-        usize::try_from(payload_length).unwrap_or_else(|_| halt()),
-        usize::try_from(capability_count).unwrap_or_else(|_| halt()),
-    )
+    let payload_length = usize::try_from(payload_length).unwrap_or_else(|_| halt());
+    let capability_count = usize::try_from(capability_count).unwrap_or_else(|_| halt());
+    if payload_length > payload.len() || capability_count > capabilities.len() {
+        halt();
+    }
+    (payload_length, capability_count)
 }
 
 unsafe fn shared_call(

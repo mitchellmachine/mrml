@@ -141,6 +141,8 @@ access. The security/acceptance gate is canonical in
   closed on duplicate internal state.
 - Service-image receive adapters reject kernel-returned payload or capability
   counts beyond their exact supplied slices before exposing the result.
+- The MRML-native ZIM consumer applies the same exact-capacity rule at its
+  buffered-receive boundary.
 - Writable and executable mappings are mutually exclusive.
 - Authority, replay state, ownership, mappings, and lifecycle transitions are
   explicit and commit only after validation; partial failure rolls back or
