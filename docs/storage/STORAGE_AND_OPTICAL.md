@@ -420,11 +420,14 @@ The NVMe provider is **PARTIALLY IMPLEMENTED** at its first authority-free
 discovery gate. It validates the PCI-SIG mass-storage/NVM/NVMe class tuple,
 type-zero function identity, nonzero configuration generation, and a bounded,
 aligned, non-prefetchable 64-bit controller BAR from an immutable platform-
-enumerator snapshot. It returns identity and geometry only. Native PCI
-enumeration, MMIO mapping, controller registers, admin and I/O queues,
+enumerator snapshot. A separately authorized exact controller capability now
+prepares a generation-bound, supervisor-only read/write NX mapping through a
+backend that may reject without publication; missing, excess, stale, or
+substituted authority and invalid ranges fail before the backend. Native PCI
+enumeration, concrete MMIO installation, controller registers, admin and I/O queues,
 namespaces, commands, DMA/IOMMU revocation, interrupts, reset, service IPC,
 runtime provider publication, and physical-device evidence remain
-**PLANNED**. Six focused tests pass on Windows and Arch Linux. The class tuple
+**PLANNED**. Nine focused tests pass on Windows and Arch Linux. The class tuple
 is cross-checked against the
 [PCI-SIG DEVICE_INTERFACE_REPORT ECN](https://pcisig.com/PCIExpress/ECN/Base/AddClasstoDEVICE_INTERFACE_REPORT);
 later register and queue work will use the current

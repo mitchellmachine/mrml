@@ -10267,6 +10267,16 @@ slot. It introduces no device algorithm, filesystem algorithm, lookup scheme,
 data encoding, or new authority model. This technical screen is not legal
 advice or patent clearance.
 
+# 2026-08-29 — Capability-bound NVMe controller BAR mapping
+
+Patent review: **NOT_TRIGGERED**. This increment applies the existing MRML exact
+capability and generation model to a conventional page-aligned, read/write,
+non-executable MMIO mapping request. It performs checked range validation and
+requires the backend to preserve the exact validated controller BAR extent. It
+does not implement NVMe registers, commands, queues, completion processing,
+DMA, caching, scheduling, or another storage algorithm. This technical screen
+is not legal advice or patent clearance.
+
 # 2026-08-29 — COFF read-only PC-relative relocation family
 
 Patent review: **NOT_TRIGGERED**. This increment decodes and applies the
