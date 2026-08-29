@@ -19,6 +19,8 @@ use mrml_kernel::GuestMappingRevoker;
 use mrml_kernel::KernelScheduler;
 #[cfg(all(feature = "smp-ipi-probe", not(feature = "smp-periodic-balance-probe")))]
 use mrml_kernel::PeriodicBalancer;
+#[cfg(feature = "service-probe")]
+use mrml_kernel::SharedBufferUserCopy;
 #[cfg(any(
     feature = "application-probe",
     feature = "user-probe",
@@ -1011,7 +1013,7 @@ unsafe extern "sysv64" fn mrml_user_call_dispatch(frame: *mut UserCallFrame) {
                     core::ptr::addr_of_mut!(SERVICE_SYSCALL_PAYLOAD).cast::<u8>(),
                     payload_length,
                 );
-                copy_from_active_user(root, payload_address, payload);
+                copy_from_active_user(root, current, payload_address, payload);
                 let capability_count = usize::from(capability_count);
                 let descriptor_length = capability_count
                     .checked_mul(CAPABILITY_TRANSFER_DESCRIPTOR_BYTES)
@@ -1021,7 +1023,7 @@ unsafe extern "sysv64" fn mrml_user_call_dispatch(frame: *mut UserCallFrame) {
                     descriptor_length,
                 );
                 if descriptor_length != 0 {
-                    copy_from_active_user(root, capabilities_address, descriptor_bytes);
+                    copy_from_active_user(root, current, capabilities_address, descriptor_bytes);
                 }
                 let mut descriptors = [None; MAX_CAPABILITIES];
                 decode_capability_transfers(descriptor_bytes, capability_count, &mut descriptors)
@@ -4597,19 +4599,44 @@ unsafe fn validate_service_user_range(
 }
 
 #[cfg(feature = "service-probe")]
-unsafe fn copy_from_active_user(root: PhysAddr, address: u64, output: &mut [u8]) {
-    unsafe {
-        validate_service_user_range(
-            root,
-            address,
-            output.len(),
-            MAX_INLINE_PAYLOAD,
-            UserBufferAccess::Read,
-        )
-    };
-    unsafe {
-        core::ptr::copy_nonoverlapping(address as *const u8, output.as_mut_ptr(), output.len())
-    };
+unsafe fn copy_from_active_user(
+    root: PhysAddr,
+    task: mrml_kernel::TaskId,
+    address: u64,
+    output: &mut [u8],
+) {
+    let active = unsafe { ActivePageTables::current() }.unwrap_or_else(|_| halt());
+    let mut user = ActiveTaskUserCopy::new(&active, root, task, DirectActiveUserMemory);
+    user.validate(
+        task,
+        address,
+        output.len(),
+        mrml_kernel::SharedBufferUserAccess::Read,
+    )
+    .unwrap_or_else(|_| halt());
+    user.read(task, address, output).unwrap_or_else(|_| halt());
+}
+
+#[cfg(feature = "service-probe")]
+unsafe fn copy_to_active_user(
+    root: PhysAddr,
+    task: mrml_kernel::TaskId,
+    address: u64,
+    input: &[u8],
+) {
+    if input.is_empty() {
+        return;
+    }
+    let active = unsafe { ActivePageTables::current() }.unwrap_or_else(|_| halt());
+    let mut user = ActiveTaskUserCopy::new(&active, root, task, DirectActiveUserMemory);
+    user.validate(
+        task,
+        address,
+        input.len(),
+        mrml_kernel::SharedBufferUserAccess::Write,
+    )
+    .unwrap_or_else(|_| halt());
+    user.write(task, address, input).unwrap_or_else(|_| halt());
 }
 
 #[cfg(feature = "service-probe")]
@@ -4655,10 +4682,11 @@ unsafe fn write_buffer_current(
     .unwrap_or_else(|_| halt());
     unsafe { validate_active_receive(root, pending) };
     unsafe {
-        core::ptr::copy_nonoverlapping(
-            message.payload().as_ptr(),
-            pending.payload_address as *mut u8,
-            message.payload().len(),
+        copy_to_active_user(
+            root,
+            pending.task,
+            pending.payload_address,
+            message.payload(),
         )
     };
     if message.capability_count() != 0 {
@@ -4667,11 +4695,13 @@ unsafe fn write_buffer_current(
             let start = index * core::mem::size_of::<u64>();
             encoded[start..start + 8].copy_from_slice(&capability.token().to_le_bytes());
         }
+        let encoded_length = message.capability_count() * core::mem::size_of::<u64>();
         unsafe {
-            core::ptr::copy_nonoverlapping(
-                encoded.as_ptr(),
-                pending.capabilities_address as *mut u8,
-                message.capability_count() * core::mem::size_of::<u64>(),
+            copy_to_active_user(
+                root,
+                pending.task,
+                pending.capabilities_address,
+                &encoded[..encoded_length],
             )
         };
     }

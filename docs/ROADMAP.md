@@ -2038,6 +2038,10 @@ live composition remains pending.
    crossing cannot become a request.
    Payload and capability regions must be disjoint for both buffered operations;
    overlap fails decode while exact adjacency remains valid.
+   The UEFI service-probe dispatcher now copies buffered IPC data only through
+   task-bound, directional, single-use active-user-copy tickets. Pending receive
+   capacity is checked before blocking and exact returned lengths are rechecked
+   against the resumed task and page-table root before output mutation.
    The restart wire record can no longer carry a clock value; bytes 40--47 are
    canonical zero and dispatch receives time only from trusted kernel state.
    Syscall operation 10 decodes only an exact generational capability and

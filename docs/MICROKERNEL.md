@@ -6573,11 +6573,18 @@ before active page-table validation or copying.
 Payload and capability regions must also be disjoint. Overlap is rejected
 during decode before send parsing or receive copying, while exact adjacency is
 accepted so callers do not need an artificial gap between bounded regions.
+The UEFI service-probe dispatcher now performs buffered send reads and receive
+writes through the same task-bound, directional, single-use active-user-copy
+ticket used by shared-buffer syscalls. The ticket binds the active page-table
+root, task, address, exact copied length, and direction, and is consumed before
+the direct memory operation; receive capacities are still checked before a task
+blocks, then the exact returned lengths are revalidated when copied.
 
 Patent review: **NOT_TRIGGERED**. This change retains an existing bounds check
-as Rust typestate and adds ordinary complete-range and overlap validation to an
-existing syscall path; it introduces no new IPC algorithm or mechanism. See
-[the patent review log](patents/REVIEW_LOG.md).
+as Rust typestate, adds ordinary complete-range and overlap validation, and
+reuses the existing active-user-copy ticket on an existing syscall path; it
+introduces no new IPC algorithm or mechanism. See [the patent review
+log](patents/REVIEW_LOG.md).
 
 Rust service code does not assume a fixed PE entry RVA. WHP and KVM publish the
 entry derived from the verified signed executable in a hosted metadata page.

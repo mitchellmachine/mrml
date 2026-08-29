@@ -128,6 +128,9 @@ access. The security/acceptance gate is canonical in
   ranges at syscall decode, before page-table walking or copying.
 - Buffered payload and capability regions must be disjoint; exact adjacency is
   valid, but overlap fails before parsing or output mutation.
+- Hosted service-probe buffered IPC copies use task-bound, directional,
+  single-use active-user-copy tickets; pending capacity validation does not
+  substitute for exact-length validation at resumed output-copy time.
 - Writable and executable mappings are mutually exclusive.
 - Authority, replay state, ownership, mappings, and lifecycle transitions are
   explicit and commit only after validation; partial failure rolls back or
