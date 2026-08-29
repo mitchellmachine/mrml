@@ -2111,6 +2111,9 @@ live composition remains pending.
    Buffered send returns scrubbed failure for invalid payload or descriptor
    userspace mappings, erasing any prior staging first; ticket/copy invariants
    still halt. Ordinary/accounted builds and 595 Linux kernel tests pass.
+   Buffered receive returns scrubbed failure for invalid initial output
+   mappings before dequeue/block, while completion revalidates the saved exact
+   task/root ranges and still fails stop on later drift.
    Exact feature gating now confines `GuestMappingRevoker` to block/component
    cleanup builds; ordinary, restart-request, component, and block service UEFI
    profiles cross-build without the former unused import.

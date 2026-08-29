@@ -1137,7 +1137,10 @@ unsafe extern "sysv64" fn mrml_user_call_dispatch(frame: *mut UserCallFrame) {
                     capabilities_address,
                     capability_capacity: usize::from(capability_capacity),
                 };
-                validate_active_receive(root, pending);
+                if !active_receive_is_valid(root, pending) {
+                    frame.complete_error();
+                    return;
+                }
                 match runtime
                     .receive_or_block_current()
                     .unwrap_or_else(|_| halt())
@@ -4761,17 +4764,20 @@ unsafe fn enter_service_preemption_context(context: &UserContext) -> ! {
 }
 
 #[cfg(feature = "service-probe")]
-unsafe fn validate_service_user_range(
+unsafe fn service_user_range_is_valid(
     root: PhysAddr,
     address: u64,
     length: usize,
     maximum_length: usize,
     access: UserBufferAccess,
-) {
+) -> bool {
     let active = unsafe { ActivePageTables::current() }.unwrap_or_else(|_| halt());
+    if active.root() != root {
+        halt();
+    }
     active
         .resolve_user_buffer(root, address, length, maximum_length, access)
-        .unwrap_or_else(|_| halt());
+        .is_ok()
 }
 
 #[cfg(feature = "service-probe")]
@@ -4820,34 +4826,39 @@ unsafe fn copy_to_active_user(
 }
 
 #[cfg(feature = "service-probe")]
-unsafe fn validate_active_receive(root: PhysAddr, pending: PendingBufferReceive) {
+unsafe fn active_receive_is_valid(root: PhysAddr, pending: PendingBufferReceive) -> bool {
     if root != pending.page_table {
         halt();
     }
-    unsafe {
-        validate_service_user_range(
+    if !unsafe {
+        service_user_range_is_valid(
             root,
             pending.payload_address,
             pending.payload_capacity,
             MAX_INLINE_PAYLOAD,
             UserBufferAccess::Write,
         )
-    };
+    } {
+        return false;
+    }
     if pending.capability_capacity != 0 {
         let length = pending
             .capability_capacity
             .checked_mul(core::mem::size_of::<u64>())
             .unwrap_or_else(|| halt());
-        unsafe {
-            validate_service_user_range(
+        if !unsafe {
+            service_user_range_is_valid(
                 root,
                 pending.capabilities_address,
                 length,
                 MAX_CAPABILITIES * core::mem::size_of::<u64>(),
                 UserBufferAccess::Write,
             )
-        };
+        } {
+            return false;
+        }
     }
+    true
 }
 
 #[cfg(feature = "service-probe")]
@@ -4863,7 +4874,9 @@ unsafe fn write_buffer_current(
         pending.capability_capacity,
     )
     .unwrap_or_else(|_| halt());
-    unsafe { validate_active_receive(root, pending) };
+    if !unsafe { active_receive_is_valid(root, pending) } {
+        halt();
+    }
     unsafe {
         copy_to_active_user(
             root,

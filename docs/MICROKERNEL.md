@@ -6685,6 +6685,11 @@ already-copied payload and the complete fixed staging arrays are erased before
 return; impossible validation-ticket or copy failures remain fail-stop. Both
 ordinary and accounted service UEFI profiles build, and 595 Linux kernel tests
 pass.
+Buffered receive now returns a scrubbed error when its initial payload or
+capability output mapping fails complete validation, before dequeue or block.
+The saved task/root binding and complete ranges are revalidated at completion;
+later drift remains fail-stop pending scoped task retirement. The same service
+builds and 595-test kernel suite pass.
 The bootloader now imports `GuestMappingRevoker` only for the block/component
 profiles that instantiate its hosted cleanup adapter. Ordinary service,
 restart-request, component-service, and block-service UEFI profiles all
@@ -6706,7 +6711,8 @@ on that existing path, and shared-buffer denial classification is ordinary
 error-boundary hardening. Post-mutation capability-release classification is
 the same conventional integrity hardening; none triggers a separate patent
 review. Buffered userspace-range denial follows that existing boundary and does
-not introduce a new mechanism.
+not introduce a new mechanism; the matching initial receive-range denial has
+the same classification.
 
 Rust service code does not assume a fixed PE entry RVA. WHP and KVM publish the
 entry derived from the verified signed executable in a hosted metadata page.
