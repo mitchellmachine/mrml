@@ -8162,6 +8162,24 @@ impl<
         if let ExprKind::WrappingArithmetic {
             base,
             argument,
+            operator: operator @ (crate::BinaryOperator::Divide | crate::BinaryOperator::Remainder),
+            euclidean: false,
+            euclidean_wrapping: false,
+            strict: true,
+            mixed_signedness: false,
+        } = expression.kind
+        {
+            self.emit_wide_binary_operands(tree, base, argument, expected_type)?;
+            self.emit_wide_divide_or_remainder(
+                layout,
+                operator == crate::BinaryOperator::Remainder,
+                false,
+            )?;
+            return Ok(());
+        }
+        if let ExprKind::WrappingArithmetic {
+            base,
+            argument,
             operator:
                 operator @ (crate::BinaryOperator::Add
                 | crate::BinaryOperator::Subtract

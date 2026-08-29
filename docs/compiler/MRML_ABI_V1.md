@@ -309,6 +309,10 @@ Wide `strict_add`, `strict_sub`, and `strict_mul` force overflow checking even
 when the surrounding compilation mode disables ordinary debug overflow checks.
 Their successful two-word results match the pinned strict-overflow oracle; an
 overflow reaches the same fail-closed trap used by checked MRML-v1 arithmetic.
+Wide `strict_div` and `strict_rem` reuse the bounded 128-round divider and never
+inherit wrapping behavior. Zero divisors and the signed `i128::MIN / -1`
+overflow fail closed; successful unsigned division and signed remainder results
+are checked against the pinned strict-overflow oracle.
 Lazy `if` expressions may select compatible two-word integer values without
 evaluating the unselected branch; both branches retain the declared wide type.
 Block sequences may evaluate supported one-word prefix expressions before a
