@@ -12,6 +12,9 @@ pub const NVME_IDENTIFY_BYTES: u64 = 4096;
 const IDENTIFY_OPCODE: u32 = 0x06;
 const IDENTIFY_CONTROLLER_CNS: u32 = 0x01;
 const IDENTIFY_NAMESPACE_CNS: u32 = 0x00;
+const SET_FEATURES_OPCODE: u32 = 0x09;
+const NUMBER_OF_QUEUES_FEATURE: u32 = 0x07;
+pub const NVME_IO_QUEUE_COUNT_LIMIT: u16 = 64;
 const ADMIN_SUBMISSION_ENTRY_BYTES: u64 = 64;
 const ADMIN_COMPLETION_ENTRY_BYTES: u64 = 16;
 const ADMIN_DOORBELL_BASE: u64 = 0x1000;
@@ -30,6 +33,13 @@ pub struct NvmeIdentifyNamespaceRequest {
     pub data_capability: Capability,
     pub data: NvmeDmaRegion,
     pub namespace_id: u32,
+}
+
+#[derive(Debug, Eq, PartialEq)]
+pub struct NvmeIoQueueGrant {
+    pub queues: ActiveNvmeAdminQueues,
+    pub submission_queues: u16,
+    pub completion_queues: u16,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -51,6 +61,8 @@ pub enum NvmeAdminCommandError {
     DataOverlapsQueue,
     DataNotZero,
     InvalidNamespace,
+    InvalidQueueRequest,
+    InvalidQueueGrant,
     InvalidQueueState,
     MemoryRead,
     MemoryWrite,
@@ -70,6 +82,10 @@ pub enum NvmeAdminCommandFailure {
         queues: ActiveNvmeAdminQueues,
         status: NvmeAdminCommandStatus,
     },
+    InvalidResult {
+        queues: ActiveNvmeAdminQueues,
+        error: NvmeAdminCommandError,
+    },
     Quarantined {
         layout: NvmeAdminQueueDmaLayout,
         error: NvmeAdminCommandError,
@@ -79,10 +95,65 @@ pub enum NvmeAdminCommandFailure {
 impl NvmeAdminCommandFailure {
     pub const fn error(&self) -> Option<NvmeAdminCommandError> {
         match self {
-            Self::Untouched { error, .. } | Self::Quarantined { error, .. } => Some(*error),
+            Self::Untouched { error, .. }
+            | Self::InvalidResult { error, .. }
+            | Self::Quarantined { error, .. } => Some(*error),
             Self::Rejected { .. } => None,
         }
     }
+}
+
+pub fn negotiate_nvme_io_queue_count<const N: usize, I: NvmeAdminCommandMemoryIo>(
+    capabilities: &CapabilitySpace<N>,
+    queues: ActiveNvmeAdminQueues,
+    controller_capability: Capability,
+    requested: u16,
+    io: &mut I,
+) -> Result<NvmeIoQueueGrant, NvmeAdminCommandFailure> {
+    if requested == 0 || requested > NVME_IO_QUEUE_COUNT_LIMIT {
+        return Err(untouched(
+            queues,
+            NvmeAdminCommandError::InvalidQueueRequest,
+        ));
+    }
+    let controller = match capabilities.authorize_exact(controller_capability, Rights::CONTROL) {
+        Ok(object) => object,
+        Err(error) => {
+            return Err(untouched(
+                queues,
+                NvmeAdminCommandError::ControllerCapability(error),
+            ));
+        }
+    };
+    if controller != queues.layout().controller_object {
+        return Err(untouched(
+            queues,
+            NvmeAdminCommandError::WrongControllerObject,
+        ));
+    }
+    let zero_based = u32::from(requested - 1);
+    let mut command = [0_u32; 16];
+    command[0] = SET_FEATURES_OPCODE;
+    command[10] = NUMBER_OF_QUEUES_FEATURE;
+    command[11] = zero_based | (zero_based << 16);
+    let completion = execute_prepared_admin(queues, command, io)?;
+    let submission_queues = (completion.result & 0xffff) + 1;
+    let completion_queues = (completion.result >> 16) + 1;
+    if submission_queues > u32::from(requested)
+        || completion_queues > u32::from(requested)
+        || submission_queues > u32::from(u16::MAX)
+        || completion_queues > u32::from(u16::MAX)
+    {
+        return Err(NvmeAdminCommandFailure::InvalidResult {
+            queues: completion.queues,
+            error: NvmeAdminCommandError::InvalidQueueGrant,
+        });
+    }
+    Ok(NvmeIoQueueGrant {
+        queues: completion.queues,
+        submission_queues: u16::try_from(submission_queues).unwrap(),
+        completion_queues: u16::try_from(completion_queues).unwrap(),
+    })
 }
 
 pub trait NvmeAdminCommandMemoryIo {
@@ -199,10 +270,31 @@ fn execute_nvme_identify<const N: usize, I: NvmeAdminCommandMemoryIo>(
         data_offset += 4;
     }
 
+    let mut command = [0_u32; 16];
+    command[0] = IDENTIFY_OPCODE;
+    command[1] = namespace_id;
+    command[6] = data.physical_base as u32;
+    command[7] = (data.physical_base >> 32) as u32;
+    command[10] = cns;
+    execute_prepared_admin(queues, command, io).map(|completion| completion.queues)
+}
+
+struct CompletedAdminCommand {
+    queues: ActiveNvmeAdminQueues,
+    result: u32,
+}
+
+fn execute_prepared_admin<I: NvmeAdminCommandMemoryIo>(
+    queues: ActiveNvmeAdminQueues,
+    mut command: [u32; 16],
+    io: &mut I,
+) -> Result<CompletedAdminCommand, NvmeAdminCommandFailure> {
+    let layout = queues.layout();
     let (tail, head, phase, command_id) = queues.state();
     if tail >= layout.queue_depth
         || head >= layout.queue_depth
         || command_id == 0
+        || command[0] & 0xffff_0000 != 0
         || !matches!(
             layout.doorbell_stride_bytes,
             4 | 8
@@ -224,15 +316,9 @@ fn execute_nvme_identify<const N: usize, I: NvmeAdminCommandMemoryIo>(
     {
         return Err(untouched(queues, NvmeAdminCommandError::InvalidQueueState));
     }
-
+    command[0] |= u32::from(command_id) << 16;
     let submission_offset = u64::from(tail) * ADMIN_SUBMISSION_ENTRY_BYTES;
     let completion_offset = u64::from(head) * ADMIN_COMPLETION_ENTRY_BYTES;
-    let mut command = [0_u32; 16];
-    command[0] = IDENTIFY_OPCODE | (u32::from(command_id) << 16);
-    command[1] = namespace_id;
-    command[6] = data.physical_base as u32;
-    command[7] = (data.physical_base >> 32) as u32;
-    command[10] = cns;
 
     for (index, value) in command.into_iter().enumerate() {
         let offset = submission_offset + u64::try_from(index).unwrap() * 4;
@@ -277,6 +363,10 @@ fn execute_nvme_identify<const N: usize, I: NvmeAdminCommandMemoryIo>(
     let completion = observed_completion
         .ok_or_else(|| quarantined(layout, NvmeAdminCommandError::CompletionTimeout))?;
 
+    let completion_result = match io.read_u32(layout.completion, completion_offset) {
+        Ok(value) => value,
+        Err(()) => return Err(quarantined(layout, NvmeAdminCommandError::MemoryRead)),
+    };
     let completion_command_id = u16::try_from(completion & 0xffff).unwrap();
     let queue = match io.read_u32(layout.completion, completion_offset + 8) {
         Ok(value) => value,
@@ -310,7 +400,10 @@ fn execute_nvme_identify<const N: usize, I: NvmeAdminCommandMemoryIo>(
     if status.status_code != 0 || status.status_code_type != 0 {
         return Err(NvmeAdminCommandFailure::Rejected { queues, status });
     }
-    Ok(queues)
+    Ok(CompletedAdminCommand {
+        queues,
+        result: completion_result,
+    })
 }
 
 fn overlaps(left: NvmeDmaRegion, right: NvmeDmaRegion) -> bool {
@@ -523,6 +616,66 @@ mod tests {
         );
         assert_eq!(memory.writes, 0);
         assert_eq!(memory.doorbell_count, 0);
+    }
+
+    #[test]
+    fn negotiates_bounded_io_queue_counts_through_shared_admin_executor() {
+        let (capabilities, queues, request) = fixture();
+        let mut memory = Memory::default();
+        memory.completion[0] = 1;
+        let grant = negotiate_nvme_io_queue_count(
+            &capabilities,
+            queues,
+            request.controller_capability,
+            4,
+            &mut memory,
+        )
+        .unwrap();
+        assert_eq!(grant.submission_queues, 2);
+        assert_eq!(grant.completion_queues, 1);
+        assert_eq!(grant.queues.state(), (1, 1, true, 2));
+        assert_eq!(memory.submission[0], SET_FEATURES_OPCODE | (1 << 16));
+        assert_eq!(memory.submission[10], NUMBER_OF_QUEUES_FEATURE);
+        assert_eq!(memory.submission[11], 3 | (3 << 16));
+    }
+
+    #[test]
+    fn invalid_queue_request_or_excess_controller_grant_fails_closed() {
+        for requested in [0, NVME_IO_QUEUE_COUNT_LIMIT + 1] {
+            let (capabilities, queues, request) = fixture();
+            let mut memory = Memory::default();
+            assert_eq!(
+                negotiate_nvme_io_queue_count(
+                    &capabilities,
+                    queues,
+                    request.controller_capability,
+                    requested,
+                    &mut memory,
+                )
+                .unwrap_err()
+                .error(),
+                Some(NvmeAdminCommandError::InvalidQueueRequest)
+            );
+            assert_eq!(memory.writes, 0);
+        }
+        let (capabilities, queues, request) = fixture();
+        let mut memory = Memory::default();
+        memory.completion[0] = 4 | (4 << 16);
+        let failure = negotiate_nvme_io_queue_count(
+            &capabilities,
+            queues,
+            request.controller_capability,
+            4,
+            &mut memory,
+        )
+        .unwrap_err();
+        assert!(matches!(
+            failure,
+            NvmeAdminCommandFailure::InvalidResult {
+                error: NvmeAdminCommandError::InvalidQueueGrant,
+                ..
+            }
+        ));
     }
 
     #[test]

@@ -15,9 +15,10 @@ mod nvme_queue_dma;
 mod nvme_queue_program;
 
 pub use nvme_admin_command::{
-    execute_nvme_identify_controller, execute_nvme_identify_namespace, NvmeAdminCommandError,
-    NvmeAdminCommandFailure, NvmeAdminCommandMemoryIo, NvmeAdminCommandStatus,
-    NvmeIdentifyControllerRequest, NvmeIdentifyNamespaceRequest, NVME_IDENTIFY_BYTES,
+    execute_nvme_identify_controller, execute_nvme_identify_namespace,
+    negotiate_nvme_io_queue_count, NvmeAdminCommandError, NvmeAdminCommandFailure,
+    NvmeAdminCommandMemoryIo, NvmeAdminCommandStatus, NvmeIdentifyControllerRequest,
+    NvmeIdentifyNamespaceRequest, NvmeIoQueueGrant, NVME_IDENTIFY_BYTES, NVME_IO_QUEUE_COUNT_LIMIT,
 };
 pub use nvme_controller::{
     disable_nvme_controller, NvmeControllerError, NvmeControllerFailure, NvmeControllerRegisterIo,

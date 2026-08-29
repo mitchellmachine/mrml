@@ -457,7 +457,12 @@ generation-bound to the controller identity and validates namespace ID/count,
 size/capacity/utilization ordering, at most 16 baseline LBA formats, active
 format, absence of unsupported metadata, 512-byte through 64-KiB logical blocks,
 checked total size, transfer-block bounds, GUID/EUI labels, and thin-provisioning
-facts before producing a non-authorizing namespace identity. Thirty-five focused
+facts before producing a non-authorizing namespace identity. The shared bounded
+admin executor now also negotiates one through 64 I/O submission/completion
+queues with the standard Number of Queues feature, exact controller-control
+authority, verified command publication, and hostile result bounds; it rejects
+zero, excess requests, excess grants, and authority substitution without
+inventing queue availability. Thirty-seven focused
 tests pass on Windows and Arch Linux. The class tuple
 is cross-checked against the
 [PCI-SIG DEVICE_INTERFACE_REPORT ECN](https://pcisig.com/PCIExpress/ECN/Base/AddClasstoDEVICE_INTERFACE_REPORT);

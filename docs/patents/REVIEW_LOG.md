@@ -10319,6 +10319,16 @@ admin-command escape hatch. It does not interpret identify data, discover
 namespaces, create I/O queues, or implement a storage scheduling or caching
 algorithm. This technical screen is not legal advice or patent clearance.
 
+# 2026-08-29 — Bounded NVMe I/O-queue count negotiation
+
+Patent review: **NOT_TRIGGERED**. This increment uses the conventional NVMe
+Number of Queues feature through the existing bounded admin executor and
+validates the fixed zero-based completion result against a fixed request cap.
+It consolidates queue submission/completion handling rather than creating a
+second mechanism. It does not allocate or create queues, issue block commands,
+schedule requests, cache data, or introduce another storage algorithm. This
+technical screen is not legal advice or patent clearance.
+
 # 2026-08-29 — Bounded NVMe namespace identification
 
 Patent review: **NOT_TRIGGERED**. This increment applies the existing bounded
