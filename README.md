@@ -27,6 +27,19 @@ MRML is dedicated to the public domain under CC0. It is experimental research,
 not a production-secure operating system, a complete Rust compiler, or a
 drop-in replacement for mature codec and inference ecosystems.
 
+## Homepage, hosting, and contact
+
+The MRML homepage is [mrml.ca](https://mrml.ca). The project is hosted at
+[git.mrml.ca](https://git.mrml.ca). To request an account on the Git server, or
+to report an issue or send comments by email, contact
+[mitchellrenouf@mrml.ca](mailto:mitchellrenouf@mrml.ca), the project owner's
+commit email address.
+
+MRML was originally hosted at
+[github.com/mitchellrenouf/mrml](https://github.com/mitchellrenouf/mrml). I
+decided that I no longer agreed with Microsoft hosting the project and wanted
+the code hosted outside the United States.
+
 ## Project scope
 
 The planned canonical package, Store, immutable system-generation, image,
