@@ -14,9 +14,7 @@ pub const MAX_ARCHIVE_SYMBOLS: usize = 4096;
 /// Pinned ORACLE-0002 Windows archives peak at 3,834 sections in one `std`
 /// member. Keep one power-of-two bounded table that admits that exact family.
 const MAX_COFF_SECTIONS: usize = 4096;
-/// Content decoders retain the preceding bound until their per-section tables
-/// are represented compactly; metadata-only inventory may use the larger cap.
-const MAX_COFF_TRACKED_SECTIONS: usize = 256;
+const COFF_SECTION_SET_WORDS: usize = (MAX_COFF_SECTIONS + 64) / 64;
 const MAX_ELF_SECTIONS: usize = 2048;
 const MAX_ELF_COMDAT_GROUPS: usize = 4096;
 
@@ -44,7 +42,6 @@ pub enum LinkerError {
     TooManyArchiveMembers,
     TooManyArchiveSymbols,
     TooManyCoffSections,
-    TooManyCoffTrackedSections,
     TooManyElfSections,
     TooManyElfComdatGroups,
 }
@@ -74,7 +71,6 @@ impl core::fmt::Display for LinkerError {
             Self::TooManyArchiveMembers => "archive member capacity exceeded",
             Self::TooManyArchiveSymbols => "archive symbol-index capacity exceeded",
             Self::TooManyCoffSections => "COFF section capacity exceeded",
-            Self::TooManyCoffTrackedSections => "COFF content section tracking capacity exceeded",
             Self::TooManyElfSections => "selected ELF section capacity exceeded",
             Self::TooManyElfComdatGroups => "ELF COMDAT group capacity exceeded",
         };
@@ -541,11 +537,22 @@ pub struct CoffComdatSection {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub struct CoffComdatSections {
-    sections: [CoffComdatSection; MAX_COFF_TRACKED_SECTIONS],
+pub struct CoffComdatSections<'a> {
+    object: &'a [u8],
+    section_count: u16,
     len: usize,
-    object_address: usize,
-    object_length: usize,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct CoffComdatSectionIter<'inventory, 'object> {
+    inventory: &'inventory CoffComdatSections<'object>,
+    next_section: u16,
+    remaining: usize,
+}
+
+#[derive(Clone, Copy)]
+struct CoffSectionSet {
+    words: [u64; COFF_SECTION_SET_WORDS],
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -554,24 +561,55 @@ pub struct CoffReadonlyLinkInput<'data, 'definitions> {
     pub selection: CoffTextComdatSelection,
 }
 
-impl CoffComdatSections {
+impl CoffSectionSet {
+    const fn empty() -> Self {
+        Self {
+            words: [0; COFF_SECTION_SET_WORDS],
+        }
+    }
+
+    fn contains(&self, section: usize) -> bool {
+        section <= MAX_COFF_SECTIONS && self.words[section / 64] & (1u64 << (section % 64)) != 0
+    }
+
+    fn insert(&mut self, section: usize) -> Result<(), LinkerError> {
+        if section > MAX_COFF_SECTIONS {
+            return Err(LinkerError::TooManyCoffSections);
+        }
+        self.words[section / 64] |= 1u64 << (section % 64);
+        Ok(())
+    }
+
+    fn remove(&mut self, section: usize) -> Result<(), LinkerError> {
+        if section > MAX_COFF_SECTIONS {
+            return Err(LinkerError::TooManyCoffSections);
+        }
+        self.words[section / 64] &= !(1u64 << (section % 64));
+        Ok(())
+    }
+}
+
+impl<'a> CoffComdatSections<'a> {
     fn validate_object(&self, object: &[u8]) -> Result<(), LinkerError> {
-        if self.object_address == object.as_ptr() as usize && self.object_length == object.len() {
+        if self.object.as_ptr() == object.as_ptr() && self.object.len() == object.len() {
             Ok(())
         } else {
             Err(LinkerError::InvalidCoffAssociation)
         }
     }
 
-    pub fn sections(&self) -> &[CoffComdatSection] {
-        &self.sections[..self.len]
+    pub fn sections(&self) -> CoffComdatSectionIter<'_, 'a> {
+        CoffComdatSectionIter {
+            inventory: self,
+            next_section: 1,
+            remaining: self.len,
+        }
     }
 
     pub fn section(&self, section_number: u16) -> Option<CoffComdatSection> {
-        self.sections()
-            .iter()
-            .copied()
-            .find(|section| section.section_number == section_number)
+        coff_comdat_metadata_for_section(self.object, self.section_count, section_number)
+            .ok()
+            .flatten()
     }
 
     pub fn root_section(&self, section_number: u16) -> Option<u16> {
@@ -585,6 +623,28 @@ impl CoffComdatSections {
         None
     }
 }
+
+impl Iterator for CoffComdatSectionIter<'_, '_> {
+    type Item = CoffComdatSection;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        while self.next_section <= self.inventory.section_count {
+            let section = self.next_section;
+            self.next_section += 1;
+            if let Some(metadata) = self.inventory.section(section) {
+                self.remaining -= 1;
+                return Some(metadata);
+            }
+        }
+        None
+    }
+
+    fn size_hint(&self) -> (usize, Option<usize>) {
+        (self.remaining, Some(self.remaining))
+    }
+}
+
+impl ExactSizeIterator for CoffComdatSectionIter<'_, '_> {}
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct PeWritableData<'a, 'relocations> {
@@ -2759,8 +2819,8 @@ pub fn decode_x86_64_coff_with_definitions<'data, 'relocations, 'definitions>(
         return Err(LinkerError::UnsupportedCoff);
     }
     let section_count = usize::from(read_u16(object, 2)?);
-    if section_count > MAX_COFF_TRACKED_SECTIONS {
-        return Err(LinkerError::TooManyCoffTrackedSections);
+    if section_count > MAX_COFF_SECTIONS {
+        return Err(LinkerError::TooManyCoffSections);
     }
     if x86_64_coff_text_fragment_count(object)? != 1
         || x86_64_coff_unwind_section_count(object)? != 0
@@ -3180,9 +3240,88 @@ pub fn decode_x86_64_coff_readonly_absolute_relocation_for_fragment(
 /// associative sections use the text root's external symbol and the exact raw
 /// span used by text-fragment decoding. The prepared inventory binds all
 /// association and selection decisions to this exact object.
+fn coff_external_section_owner<'a>(
+    object: &'a [u8],
+    symbol_offset: usize,
+    symbol_count: usize,
+    symbols_end: usize,
+    string_size: usize,
+    requested_section: usize,
+) -> Result<Option<&'a str>, LinkerError> {
+    let requested = i16::try_from(requested_section).map_err(|_| LinkerError::OffsetOverflow)?;
+    let mut owner = None;
+    let mut symbol_index = 0usize;
+    while symbol_index < symbol_count {
+        let symbol = symbol_offset
+            .checked_add(
+                symbol_index
+                    .checked_mul(18)
+                    .ok_or(LinkerError::OffsetOverflow)?,
+            )
+            .ok_or(LinkerError::OffsetOverflow)?;
+        let auxiliary = usize::from(*object.get(symbol + 17).ok_or(LinkerError::InvalidCoff)?);
+        if read_i16(object, symbol + 12)? == requested
+            && *object.get(symbol + 16).ok_or(LinkerError::InvalidCoff)? == 2
+            && read_u32(object, symbol + 8)? == 0
+            && owner.is_none()
+        {
+            owner = Some(coff_symbol_name(object, symbol, symbols_end, string_size)?);
+        }
+        symbol_index = symbol_index
+            .checked_add(auxiliary + 1)
+            .ok_or(LinkerError::OffsetOverflow)?;
+    }
+    Ok(owner)
+}
+
+fn coff_associative_readonly_start_for_root(
+    object: &[u8],
+    inventory: &CoffComdatSections<'_>,
+    symbols_end: usize,
+    string_size: usize,
+    root: u16,
+) -> Result<Option<usize>, LinkerError> {
+    let section_count = usize::from(read_u16(object, 2)?);
+    let mut start = None;
+    for section in 0..section_count {
+        let section_number = u16::try_from(section + 1).map_err(|_| LinkerError::OffsetOverflow)?;
+        let Some(metadata) = inventory.section(section_number) else {
+            continue;
+        };
+        if metadata.selection != CoffTextComdatSelection::Associative
+            || inventory.root_section(section_number) != Some(root)
+        {
+            continue;
+        }
+        let header = 20usize
+            .checked_add(section.checked_mul(40).ok_or(LinkerError::OffsetOverflow)?)
+            .ok_or(LinkerError::OffsetOverflow)?;
+        let name = coff_section_name(
+            object
+                .get(header..header + 8)
+                .ok_or(LinkerError::InvalidCoff)?,
+            object,
+            symbols_end,
+            string_size,
+        )?;
+        let size = usize::try_from(read_u32(object, header + 16)?)
+            .map_err(|_| LinkerError::OffsetOverflow)?;
+        if size == 0 || !(name == ".rdata" || name.starts_with(".rdata$")) {
+            continue;
+        }
+        let raw = usize::try_from(read_u32(object, header + 20)?)
+            .map_err(|_| LinkerError::OffsetOverflow)?;
+        object
+            .get(raw..raw.checked_add(size).ok_or(LinkerError::OffsetOverflow)?)
+            .ok_or(LinkerError::InvalidCoff)?;
+        start = Some(start.map_or(raw, |current| core::cmp::min(current, raw)));
+    }
+    Ok(start)
+}
+
 pub fn decode_x86_64_coff_readonly_absolute_relocations_from_inventory<'a>(
     object: &'a [u8],
-    inventory: &CoffComdatSections,
+    inventory: &CoffComdatSections<'_>,
 ) -> Result<PeReadonlyAbsoluteRelocations<'a>, LinkerError> {
     inventory.validate_object(object)?;
     if read_u16(object, 0)? != 0x8664 || read_u16(object, 16)? != 0 {
@@ -3223,101 +3362,6 @@ pub fn decode_x86_64_coff_readonly_absolute_relocations_from_inventory<'a>(
         )
         .ok_or(LinkerError::InvalidCoff)?;
 
-    let mut owners = [None; MAX_COFF_TRACKED_SECTIONS + 1];
-    let mut symbol_index = 0usize;
-    while symbol_index < symbol_count {
-        let symbol = symbol_offset
-            .checked_add(
-                symbol_index
-                    .checked_mul(18)
-                    .ok_or(LinkerError::OffsetOverflow)?,
-            )
-            .ok_or(LinkerError::OffsetOverflow)?;
-        let auxiliary = usize::from(*object.get(symbol + 17).ok_or(LinkerError::InvalidCoff)?);
-        if symbol_index
-            .checked_add(auxiliary)
-            .filter(|end| *end < symbol_count)
-            .is_none()
-        {
-            return Err(LinkerError::InvalidCoff);
-        }
-        let section = read_i16(object, symbol + 12)?;
-        if section > 0
-            && *object.get(symbol + 16).ok_or(LinkerError::InvalidCoff)? == 2
-            && read_u32(object, symbol + 8)? == 0
-        {
-            let section = usize::try_from(section).map_err(|_| LinkerError::OffsetOverflow)?;
-            if section > section_count {
-                return Err(LinkerError::InvalidCoff);
-            }
-            if owners[section].is_none() {
-                owners[section] = Some(coff_symbol_name(object, symbol, symbols_end, string_size)?);
-            }
-        }
-        symbol_index = symbol_index
-            .checked_add(auxiliary + 1)
-            .ok_or(LinkerError::OffsetOverflow)?;
-    }
-
-    let mut associative_starts = [None; MAX_COFF_TRACKED_SECTIONS + 1];
-    for section in 0..section_count {
-        let header = 20usize
-            .checked_add(section.checked_mul(40).ok_or(LinkerError::OffsetOverflow)?)
-            .ok_or(LinkerError::OffsetOverflow)?;
-        let section_number = u16::try_from(section + 1).map_err(|_| LinkerError::OffsetOverflow)?;
-        let Some(metadata) = inventory.section(section_number) else {
-            continue;
-        };
-        if metadata.selection != CoffTextComdatSelection::Associative {
-            continue;
-        }
-        let name = coff_section_name(
-            object
-                .get(header..header + 8)
-                .ok_or(LinkerError::InvalidCoff)?,
-            object,
-            symbols_end,
-            string_size,
-        )?;
-        let size = usize::try_from(read_u32(object, header + 16)?)
-            .map_err(|_| LinkerError::OffsetOverflow)?;
-        if size == 0 || !(name == ".rdata" || name.starts_with(".rdata$")) {
-            continue;
-        }
-        let root = usize::from(
-            inventory
-                .root_section(section_number)
-                .ok_or(LinkerError::InvalidCoffAssociation)?,
-        );
-        let root_header = 20usize
-            .checked_add(
-                root.checked_sub(1)
-                    .ok_or(LinkerError::InvalidCoffAssociation)?
-                    .checked_mul(40)
-                    .ok_or(LinkerError::OffsetOverflow)?,
-            )
-            .ok_or(LinkerError::OffsetOverflow)?;
-        let root_name = coff_section_name(
-            object
-                .get(root_header..root_header + 8)
-                .ok_or(LinkerError::InvalidCoff)?,
-            object,
-            symbols_end,
-            string_size,
-        )?;
-        if root_name != ".text" && !root_name.starts_with(".text$") {
-            continue;
-        }
-        let raw = usize::try_from(read_u32(object, header + 20)?)
-            .map_err(|_| LinkerError::OffsetOverflow)?;
-        let end = raw.checked_add(size).ok_or(LinkerError::OffsetOverflow)?;
-        object.get(raw..end).ok_or(LinkerError::InvalidCoff)?;
-        associative_starts[root] = Some(match associative_starts[root] {
-            None => raw,
-            Some(start) => core::cmp::min(start, raw),
-        });
-    }
-
     let empty = PeReadonlyAbsoluteRelocation {
         readonly_owner: "unused",
         readonly_offset: 0,
@@ -3354,22 +3398,35 @@ pub fn decode_x86_64_coff_readonly_absolute_relocations_from_inventory<'a>(
             .map_err(|_| LinkerError::OffsetOverflow)?;
         let (owner_section, readonly_base) =
             if metadata.selection == CoffTextComdatSelection::Associative {
-                let root = usize::from(
-                    inventory
-                        .root_section(section_number)
-                        .ok_or(LinkerError::InvalidCoffAssociation)?,
-                );
-                let Some(start) = associative_starts[root] else {
+                let root = inventory
+                    .root_section(section_number)
+                    .ok_or(LinkerError::InvalidCoffAssociation)?;
+                let Some(start) = coff_associative_readonly_start_for_root(
+                    object,
+                    inventory,
+                    symbols_end,
+                    string_size,
+                    root,
+                )?
+                else {
                     continue;
                 };
                 (
-                    root,
+                    usize::from(root),
                     raw.checked_sub(start).ok_or(LinkerError::OffsetOverflow)?,
                 )
             } else {
                 (section + 1, 0)
             };
-        let owner = owners[owner_section].ok_or(LinkerError::UnsupportedCoff)?;
+        let owner = coff_external_section_owner(
+            object,
+            symbol_offset,
+            symbol_count,
+            symbols_end,
+            string_size,
+            owner_section,
+        )?
+        .ok_or(LinkerError::UnsupportedCoff)?;
         let contents = object
             .get(raw..raw.checked_add(size).ok_or(LinkerError::OffsetOverflow)?)
             .ok_or(LinkerError::InvalidCoff)?;
@@ -3479,8 +3536,8 @@ pub fn decode_x86_64_coff_writable_data_fragment<'data, 'relocations>(
     if section_count == 0 {
         return Err(LinkerError::UnsupportedCoff);
     }
-    if section_count > MAX_COFF_TRACKED_SECTIONS {
-        return Err(LinkerError::TooManyCoffTrackedSections);
+    if section_count > MAX_COFF_SECTIONS {
+        return Err(LinkerError::TooManyCoffSections);
     }
     let symbol_offset =
         usize::try_from(read_u32(object, 8)?).map_err(|_| LinkerError::OffsetOverflow)?;
@@ -3510,8 +3567,8 @@ pub fn decode_x86_64_coff_writable_data_fragment<'data, 'relocations>(
         )
         .ok_or(LinkerError::InvalidCoff)?;
 
-    let mut readonly_sections = [false; MAX_COFF_TRACKED_SECTIONS + 1];
-    let mut writable_sections = [false; MAX_COFF_TRACKED_SECTIONS + 1];
+    let mut readonly_sections = CoffSectionSet::empty();
+    let mut writable_sections = CoffSectionSet::empty();
     let mut readonly_span = None;
     let mut writable = None;
     let mut writable_ordinal = 0usize;
@@ -3535,14 +3592,14 @@ pub fn decode_x86_64_coff_writable_data_fragment<'data, 'relocations>(
                 .map_err(|_| LinkerError::OffsetOverflow)?;
             let end = raw.checked_add(size).ok_or(LinkerError::OffsetOverflow)?;
             object.get(raw..end).ok_or(LinkerError::InvalidCoff)?;
-            readonly_sections[section + 1] = true;
+            readonly_sections.insert(section + 1)?;
             readonly_span = Some(match readonly_span {
                 None => (raw, end),
                 Some((start, previous_end)) if previous_end <= raw => (start, end),
                 Some(_) => return Err(LinkerError::UnsupportedCoff),
             });
         } else if name.starts_with(".data$") || name.starts_with(".bss$") {
-            writable_sections[section + 1] = true;
+            writable_sections.insert(section + 1)?;
             let characteristics = read_u32(object, header + 36)?;
             let zeroed = name.starts_with(".bss$");
             let expected = if zeroed { 0xc000_0080 } else { 0xc000_0040 };
@@ -3647,11 +3704,7 @@ pub fn decode_x86_64_coff_writable_data_fragment<'data, 'relocations>(
         let target_section = read_i16(object, target + 12)?;
         let target_section_index =
             usize::try_from(target_section).map_err(|_| LinkerError::UnsupportedCoff)?;
-        let relocation_target = if readonly_sections
-            .get(target_section_index)
-            .copied()
-            .unwrap_or(false)
-        {
+        let relocation_target = if readonly_sections.contains(target_section_index) {
             let target_header = 20 + (target_section_index - 1) * 40;
             let target_raw = usize::try_from(read_u32(object, target_header + 20)?)
                 .map_err(|_| LinkerError::OffsetOverflow)?;
@@ -3675,11 +3728,7 @@ pub fn decode_x86_64_coff_writable_data_fragment<'data, 'relocations>(
                 owner: readonly_owner,
                 offset,
             }
-        } else if writable_sections
-            .get(target_section_index)
-            .copied()
-            .unwrap_or(false)
-        {
+        } else if writable_sections.contains(target_section_index) {
             let storage_class = *object.get(target + 16).ok_or(LinkerError::InvalidCoff)?;
             if (storage_class != 2 && storage_class != 3)
                 || read_u32(object, target + 8)? != 0
@@ -4070,7 +4119,7 @@ pub fn decode_x86_64_coff_text_fragment<'data, 'relocations, 'definitions>(
 pub fn decode_x86_64_coff_text_fragment_from_inventory<'data, 'relocations, 'definitions>(
     object: &'data [u8],
     fragment_index: usize,
-    inventory: &CoffComdatSections,
+    inventory: &CoffComdatSections<'_>,
     relocation_storage: &'relocations mut [LinkRelocation<'data>; MAX_LINK_RELOCATIONS],
     definition_storage: &'definitions mut [LinkDefinition<'data>; MAX_LINK_DEFINITIONS],
 ) -> Result<LinkInput<'data, 'relocations, 'definitions>, LinkerError> {
@@ -4115,14 +4164,14 @@ pub fn decode_x86_64_coff_text_fragment_from_inventory<'data, 'relocations, 'def
     let mut text_section = None;
     let mut text_section_name = None;
     let mut readonly_data = &object[0..0];
-    let mut readonly_sections = [false; MAX_COFF_TRACKED_SECTIONS + 1];
-    let mut discarded_readonly_sections = [false; MAX_COFF_TRACKED_SECTIONS + 1];
-    let mut ignored_empty_sections = [false; MAX_COFF_TRACKED_SECTIONS + 1];
-    let mut other_text_sections = [false; MAX_COFF_TRACKED_SECTIONS + 1];
-    let mut unwind_sections = [false; MAX_COFF_TRACKED_SECTIONS + 1];
-    let mut writable_sections = [false; MAX_COFF_TRACKED_SECTIONS + 1];
-    let mut metadata_sections = [false; MAX_COFF_TRACKED_SECTIONS + 1];
-    let mut debug_sections = [false; MAX_COFF_TRACKED_SECTIONS + 1];
+    let mut readonly_sections = CoffSectionSet::empty();
+    let mut discarded_readonly_sections = CoffSectionSet::empty();
+    let mut ignored_empty_sections = CoffSectionSet::empty();
+    let mut other_text_sections = CoffSectionSet::empty();
+    let mut unwind_sections = CoffSectionSet::empty();
+    let mut writable_sections = CoffSectionSet::empty();
+    let mut metadata_sections = CoffSectionSet::empty();
+    let mut debug_sections = CoffSectionSet::empty();
     let mut relocation_table = (0usize, 0usize);
     let mut text_ordinal = 0usize;
     for section in 0..section_count {
@@ -4152,10 +4201,10 @@ pub fn decode_x86_64_coff_text_fragment_from_inventory<'data, 'relocations, 'def
         let section_number = i16::try_from(section + 1).map_err(|_| LinkerError::OffsetOverflow)?;
         if name == ".text" || name.starts_with(".text$") {
             if contents.is_empty() {
-                ignored_empty_sections[section + 1] = true;
+                ignored_empty_sections.insert(section + 1)?;
                 continue;
             }
-            other_text_sections[section + 1] = true;
+            other_text_sections.insert(section + 1)?;
             if text_ordinal == fragment_index {
                 text = Some(contents);
                 text_section = Some(section_number);
@@ -4169,26 +4218,26 @@ pub fn decode_x86_64_coff_text_fragment_from_inventory<'data, 'relocations, 'def
             text_ordinal += 1;
         } else if name == ".rdata" || name.starts_with(".rdata$") {
             if contents.is_empty() {
-                ignored_empty_sections[section + 1] = true;
+                ignored_empty_sections.insert(section + 1)?;
                 continue;
             }
-            readonly_sections[section + 1] = true;
+            readonly_sections.insert(section + 1)?;
         } else if name.starts_with(".xdata$") || name.starts_with(".pdata$") {
-            unwind_sections[section + 1] = true;
+            unwind_sections.insert(section + 1)?;
         } else if (name.starts_with(".data$") || name.starts_with(".bss$")) && size != 0 {
-            writable_sections[section + 1] = true;
+            writable_sections.insert(section + 1)?;
         } else if name == ".llvmbc" || name == ".llvmcmd" {
             let characteristics = read_u32(object, header + 36)?;
             let relocation_count = read_u16(object, header + 32)?;
             if characteristics & 0x0000_0800 == 0 || relocation_count != 0 {
                 return Err(LinkerError::UnsupportedCoff);
             }
-            metadata_sections[section + 1] = true;
+            metadata_sections.insert(section + 1)?;
         } else if name == ".debug" || name.starts_with(".debug$") || name.starts_with(".debug_") {
             validate_discardable_coff_debug_section(object, header, contents.len(), symbol_count)?;
-            debug_sections[section + 1] = true;
+            debug_sections.insert(section + 1)?;
         } else if (name == ".data" || name == ".bss") && contents.is_empty() {
-            ignored_empty_sections[section + 1] = true;
+            ignored_empty_sections.insert(section + 1)?;
         } else {
             return Err(LinkerError::UnsupportedCoff);
         }
@@ -4199,7 +4248,7 @@ pub fn decode_x86_64_coff_text_fragment_from_inventory<'data, 'relocations, 'def
 
     let mut readonly_span = None;
     for section in 0..section_count {
-        if !readonly_sections[section + 1] {
+        if !readonly_sections.contains(section + 1) {
             continue;
         }
         let section_number = u16::try_from(section + 1).map_err(|_| LinkerError::OffsetOverflow)?;
@@ -4207,8 +4256,8 @@ pub fn decode_x86_64_coff_text_fragment_from_inventory<'data, 'relocations, 'def
             metadata.selection != CoffTextComdatSelection::Associative
                 || inventory.root_section(section_number) != Some(text_section_u16)
         }) {
-            readonly_sections[section + 1] = false;
-            discarded_readonly_sections[section + 1] = true;
+            readonly_sections.remove(section + 1)?;
+            discarded_readonly_sections.insert(section + 1)?;
             continue;
         }
         let header = 20usize
@@ -4226,7 +4275,7 @@ pub fn decode_x86_64_coff_text_fragment_from_inventory<'data, 'relocations, 'def
     }
     if let Some((start, end)) = readonly_span {
         for section in 0..section_count {
-            if !discarded_readonly_sections[section + 1] {
+            if !discarded_readonly_sections.contains(section + 1) {
                 continue;
             }
             let header = 20usize + section * 40;
@@ -4280,43 +4329,27 @@ pub fn decode_x86_64_coff_text_fragment_from_inventory<'data, 'relocations, 'def
         } else if (section == -1 && storage_class == 3) || (section == -2 && storage_class == 103) {
         } else if section > 0
             && ignored_empty_sections
-                .get(usize::try_from(section).map_err(|_| LinkerError::OffsetOverflow)?)
-                .copied()
-                .unwrap_or(false)
+                .contains(usize::try_from(section).map_err(|_| LinkerError::OffsetOverflow)?)
         {
         } else if section > 0
             && (other_text_sections
-                .get(usize::try_from(section).map_err(|_| LinkerError::OffsetOverflow)?)
-                .copied()
-                .unwrap_or(false)
+                .contains(usize::try_from(section).map_err(|_| LinkerError::OffsetOverflow)?)
                 || unwind_sections
-                    .get(usize::try_from(section).map_err(|_| LinkerError::OffsetOverflow)?)
-                    .copied()
-                    .unwrap_or(false)
+                    .contains(usize::try_from(section).map_err(|_| LinkerError::OffsetOverflow)?)
                 || writable_sections
-                    .get(usize::try_from(section).map_err(|_| LinkerError::OffsetOverflow)?)
-                    .copied()
-                    .unwrap_or(false)
+                    .contains(usize::try_from(section).map_err(|_| LinkerError::OffsetOverflow)?)
                 || metadata_sections
-                    .get(usize::try_from(section).map_err(|_| LinkerError::OffsetOverflow)?)
-                    .copied()
-                    .unwrap_or(false)
+                    .contains(usize::try_from(section).map_err(|_| LinkerError::OffsetOverflow)?)
                 || debug_sections
-                    .get(usize::try_from(section).map_err(|_| LinkerError::OffsetOverflow)?)
-                    .copied()
-                    .unwrap_or(false))
+                    .contains(usize::try_from(section).map_err(|_| LinkerError::OffsetOverflow)?))
         {
         } else if section > 0
             && readonly_sections
-                .get(usize::try_from(section).map_err(|_| LinkerError::OffsetOverflow)?)
-                .copied()
-                .unwrap_or(false)
+                .contains(usize::try_from(section).map_err(|_| LinkerError::OffsetOverflow)?)
         {
         } else if section > 0
             && discarded_readonly_sections
-                .get(usize::try_from(section).map_err(|_| LinkerError::OffsetOverflow)?)
-                .copied()
-                .unwrap_or(false)
+                .contains(usize::try_from(section).map_err(|_| LinkerError::OffsetOverflow)?)
         {
         } else if section != 0 {
             return Err(LinkerError::UnsupportedCoff);
@@ -4375,9 +4408,7 @@ pub fn decode_x86_64_coff_text_fragment_from_inventory<'data, 'relocations, 'def
             )
         } else if target_section > 0
             && other_text_sections
-                .get(usize::try_from(target_section).map_err(|_| LinkerError::OffsetOverflow)?)
-                .copied()
-                .unwrap_or(false)
+                .contains(usize::try_from(target_section).map_err(|_| LinkerError::OffsetOverflow)?)
         {
             let storage_class = *object
                 .get(target_offset + 16)
@@ -4408,9 +4439,7 @@ pub fn decode_x86_64_coff_text_fragment_from_inventory<'data, 'relocations, 'def
             (target, i64::from(field_addend) - 4)
         } else if target_section > 0
             && readonly_sections
-                .get(usize::try_from(target_section).map_err(|_| LinkerError::OffsetOverflow)?)
-                .copied()
-                .unwrap_or(false)
+                .contains(usize::try_from(target_section).map_err(|_| LinkerError::OffsetOverflow)?)
         {
             let target_header = 20
                 + (usize::try_from(target_section).map_err(|_| LinkerError::OffsetOverflow)? - 1)
@@ -4433,9 +4462,7 @@ pub fn decode_x86_64_coff_text_fragment_from_inventory<'data, 'relocations, 'def
             (LinkRelocationTarget::ReadonlyData(data_offset), -4)
         } else if target_section > 0
             && discarded_readonly_sections
-                .get(usize::try_from(target_section).map_err(|_| LinkerError::OffsetOverflow)?)
-                .copied()
-                .unwrap_or(false)
+                .contains(usize::try_from(target_section).map_err(|_| LinkerError::OffsetOverflow)?)
             && inventory
                 .section(u16::try_from(target_section).map_err(|_| LinkerError::OffsetOverflow)?)
                 .is_some_and(|metadata| metadata.selection != CoffTextComdatSelection::Associative)
@@ -4458,9 +4485,7 @@ pub fn decode_x86_64_coff_text_fragment_from_inventory<'data, 'relocations, 'def
             )
         } else if target_section > 0
             && writable_sections
-                .get(usize::try_from(target_section).map_err(|_| LinkerError::OffsetOverflow)?)
-                .copied()
-                .unwrap_or(false)
+                .contains(usize::try_from(target_section).map_err(|_| LinkerError::OffsetOverflow)?)
         {
             let storage_class = *object
                 .get(target_offset + 16)
@@ -4501,7 +4526,7 @@ pub fn decode_x86_64_coff_text_fragment_from_inventory<'data, 'relocations, 'def
 
 pub fn x86_64_coff_standalone_readonly_fragment_count(
     object: &[u8],
-    inventory: &CoffComdatSections,
+    inventory: &CoffComdatSections<'_>,
 ) -> Result<usize, LinkerError> {
     inventory.validate_object(object)?;
     let section_count = usize::from(read_u16(object, 2)?);
@@ -4545,7 +4570,7 @@ pub fn x86_64_coff_standalone_readonly_fragment_count(
 pub fn decode_x86_64_coff_standalone_readonly_fragment<'data, 'definitions>(
     object: &'data [u8],
     fragment_index: usize,
-    inventory: &CoffComdatSections,
+    inventory: &CoffComdatSections<'_>,
     definition_storage: &'definitions mut [LinkDefinition<'data>; MAX_LINK_DEFINITIONS],
 ) -> Result<CoffReadonlyLinkInput<'data, 'definitions>, LinkerError> {
     inventory.validate_object(object)?;
@@ -4647,9 +4672,82 @@ pub fn decode_x86_64_coff_standalone_readonly_fragment<'data, 'definitions>(
 
 /// Builds a bounded inventory of COFF COMDAT section definitions and validates
 /// that every associative chain terminates at a non-associative COMDAT section.
+fn coff_comdat_metadata_for_section(
+    object: &[u8],
+    section_count: u16,
+    requested: u16,
+) -> Result<Option<CoffComdatSection>, LinkerError> {
+    if requested == 0 || requested > section_count {
+        return Ok(None);
+    }
+    let header = 20usize
+        .checked_add(
+            usize::from(requested - 1)
+                .checked_mul(40)
+                .ok_or(LinkerError::OffsetOverflow)?,
+        )
+        .ok_or(LinkerError::OffsetOverflow)?;
+    if read_u32(object, header + 36)? & 0x0000_1000 == 0 {
+        return Ok(None);
+    }
+    let symbol_offset =
+        usize::try_from(read_u32(object, 8)?).map_err(|_| LinkerError::OffsetOverflow)?;
+    let symbol_count =
+        usize::try_from(read_u32(object, 12)?).map_err(|_| LinkerError::OffsetOverflow)?;
+    let mut symbol_index = 0usize;
+    while symbol_index < symbol_count {
+        let symbol = symbol_offset
+            .checked_add(
+                symbol_index
+                    .checked_mul(18)
+                    .ok_or(LinkerError::OffsetOverflow)?,
+            )
+            .ok_or(LinkerError::OffsetOverflow)?;
+        let auxiliary = usize::from(*object.get(symbol + 17).ok_or(LinkerError::InvalidCoff)?);
+        if read_i16(object, symbol + 12)?
+            == i16::try_from(requested).map_err(|_| LinkerError::OffsetOverflow)?
+        {
+            if *object.get(symbol + 16).ok_or(LinkerError::InvalidCoff)? != 3
+                || auxiliary != 1
+                || read_u32(object, symbol + 8)? != 0
+                || read_u16(object, symbol + 14)? != 0
+            {
+                return Err(LinkerError::InvalidCoffAssociation);
+            }
+            let selection = match *object.get(symbol + 32).ok_or(LinkerError::InvalidCoff)? {
+                1 => CoffTextComdatSelection::NoDuplicates,
+                2 => CoffTextComdatSelection::Any,
+                3 => CoffTextComdatSelection::SameSize,
+                4 => CoffTextComdatSelection::ExactMatch,
+                5 => CoffTextComdatSelection::Associative,
+                6 => CoffTextComdatSelection::Largest,
+                _ => return Err(LinkerError::InvalidCoffAssociation),
+            };
+            let associated_section = if selection == CoffTextComdatSelection::Associative {
+                let number = read_u16(object, symbol + 30)?;
+                if number == 0 || number > section_count {
+                    return Err(LinkerError::InvalidCoffAssociation);
+                }
+                Some(number)
+            } else {
+                None
+            };
+            return Ok(Some(CoffComdatSection {
+                section_number: requested,
+                selection,
+                associated_section,
+            }));
+        }
+        symbol_index = symbol_index
+            .checked_add(auxiliary + 1)
+            .ok_or(LinkerError::OffsetOverflow)?;
+    }
+    Err(LinkerError::InvalidCoffAssociation)
+}
+
 pub fn inventory_x86_64_coff_comdat_sections(
     object: &[u8],
-) -> Result<CoffComdatSections, LinkerError> {
+) -> Result<CoffComdatSections<'_>, LinkerError> {
     if read_u16(object, 0)? != 0x8664 || read_u16(object, 16)? != 0 {
         return Err(LinkerError::UnsupportedCoff);
     }
@@ -4657,8 +4755,8 @@ pub fn inventory_x86_64_coff_comdat_sections(
     if section_count == 0 {
         return Err(LinkerError::UnsupportedCoff);
     }
-    if section_count > MAX_COFF_TRACKED_SECTIONS {
-        return Err(LinkerError::TooManyCoffTrackedSections);
+    if section_count > MAX_COFF_SECTIONS {
+        return Err(LinkerError::TooManyCoffSections);
     }
     let symbol_offset =
         usize::try_from(read_u32(object, 8)?).map_err(|_| LinkerError::OffsetOverflow)?;
@@ -4688,7 +4786,7 @@ pub fn inventory_x86_64_coff_comdat_sections(
         )
         .ok_or(LinkerError::InvalidCoff)?;
 
-    let mut is_comdat = [false; MAX_COFF_TRACKED_SECTIONS + 1];
+    let mut is_comdat = CoffSectionSet::empty();
     for section in 0..section_count {
         let header = 20usize
             .checked_add(section.checked_mul(40).ok_or(LinkerError::OffsetOverflow)?)
@@ -4696,11 +4794,12 @@ pub fn inventory_x86_64_coff_comdat_sections(
         object
             .get(header..header + 40)
             .ok_or(LinkerError::InvalidCoff)?;
-        is_comdat[section + 1] = read_u32(object, header + 36)? & 0x0000_1000 != 0;
+        if read_u32(object, header + 36)? & 0x0000_1000 != 0 {
+            is_comdat.insert(section + 1)?;
+        }
     }
 
-    let mut first_symbol_seen = [false; MAX_COFF_TRACKED_SECTIONS + 1];
-    let mut selections = [None; MAX_COFF_TRACKED_SECTIONS + 1];
+    let mut first_symbol_seen = CoffSectionSet::empty();
     let mut symbol_index = 0usize;
     while symbol_index < symbol_count {
         let symbol = symbol_offset + symbol_index * 18;
@@ -4718,9 +4817,9 @@ pub fn inventory_x86_64_coff_comdat_sections(
             if section > section_count {
                 return Err(LinkerError::InvalidCoff);
             }
-            if !first_symbol_seen[section] {
-                first_symbol_seen[section] = true;
-                if is_comdat[section] {
+            if !first_symbol_seen.contains(section) {
+                first_symbol_seen.insert(section)?;
+                if is_comdat.contains(section) {
                     if *object.get(symbol + 16).ok_or(LinkerError::InvalidCoff)? != 3
                         || auxiliary != 1
                         || read_u32(object, symbol + 8)? != 0
@@ -4747,12 +4846,7 @@ pub fn inventory_x86_64_coff_comdat_sections(
                     } else {
                         None
                     };
-                    selections[section] = Some(CoffComdatSection {
-                        section_number: u16::try_from(section)
-                            .map_err(|_| LinkerError::OffsetOverflow)?,
-                        selection,
-                        associated_section,
-                    });
+                    let _ = (selection, associated_section);
                 } else if *object.get(symbol + 16).ok_or(LinkerError::InvalidCoff)? == 3
                     && auxiliary == 1
                     && *object.get(symbol + 32).ok_or(LinkerError::InvalidCoff)? != 0
@@ -4766,44 +4860,49 @@ pub fn inventory_x86_64_coff_comdat_sections(
             .ok_or(LinkerError::OffsetOverflow)?;
     }
 
-    let empty = CoffComdatSection {
-        section_number: 0,
-        selection: CoffTextComdatSelection::None,
-        associated_section: None,
-    };
-    let mut output = CoffComdatSections {
-        sections: [empty; MAX_COFF_TRACKED_SECTIONS],
-        len: 0,
-        object_address: object.as_ptr() as usize,
-        object_length: object.len(),
-    };
+    let section_count_u16 =
+        u16::try_from(section_count).map_err(|_| LinkerError::OffsetOverflow)?;
+    let mut comdat_count = 0usize;
     for section in 1..=section_count {
-        if !is_comdat[section] {
+        if !is_comdat.contains(section) {
             continue;
         }
-        let metadata = selections[section].ok_or(LinkerError::InvalidCoffAssociation)?;
+        comdat_count += 1;
+        let metadata = coff_comdat_metadata_for_section(
+            object,
+            section_count_u16,
+            u16::try_from(section).map_err(|_| LinkerError::OffsetOverflow)?,
+        )?
+        .ok_or(LinkerError::InvalidCoffAssociation)?;
         let mut cursor = metadata;
-        let mut visited = [false; MAX_COFF_TRACKED_SECTIONS + 1];
+        let mut visited = CoffSectionSet::empty();
         while cursor.selection == CoffTextComdatSelection::Associative {
             let cursor_index = usize::from(cursor.section_number);
-            if visited[cursor_index] {
+            if visited.contains(cursor_index) {
                 return Err(LinkerError::InvalidCoffAssociation);
             }
-            visited[cursor_index] = true;
+            visited.insert(cursor_index)?;
             let parent = usize::from(
                 cursor
                     .associated_section
                     .ok_or(LinkerError::InvalidCoffAssociation)?,
             );
-            if !is_comdat[parent] {
+            if !is_comdat.contains(parent) {
                 return Err(LinkerError::InvalidCoffAssociation);
             }
-            cursor = selections[parent].ok_or(LinkerError::InvalidCoffAssociation)?;
+            cursor = coff_comdat_metadata_for_section(
+                object,
+                section_count_u16,
+                u16::try_from(parent).map_err(|_| LinkerError::OffsetOverflow)?,
+            )?
+            .ok_or(LinkerError::InvalidCoffAssociation)?;
         }
-        output.sections[output.len] = metadata;
-        output.len += 1;
     }
-    Ok(output)
+    Ok(CoffComdatSections {
+        object,
+        section_count: section_count_u16,
+        len: comdat_count,
+    })
 }
 
 /// Returns the section-definition duplicate-selection policy for one nonempty
@@ -4819,7 +4918,7 @@ pub fn x86_64_coff_text_fragment_comdat_selection(
 pub fn x86_64_coff_text_fragment_comdat_selection_from_inventory(
     object: &[u8],
     fragment_index: usize,
-    inventory: &CoffComdatSections,
+    inventory: &CoffComdatSections<'_>,
 ) -> Result<CoffTextComdatSelection, LinkerError> {
     inventory.validate_object(object)?;
     if read_u16(object, 0)? != 0x8664 || read_u16(object, 16)? != 0 {
@@ -9672,7 +9771,7 @@ mod tests {
         let mut excessive_storage = empty_storage;
         assert_eq!(
             decode_x86_64_coff(&excessive_sections[..object.len()], &mut excessive_storage),
-            Err(LinkerError::TooManyCoffTrackedSections)
+            Err(LinkerError::InvalidCoff)
         );
 
         let mut wrong_relocation = wrong_machine;
@@ -9858,12 +9957,6 @@ mod tests {
 
     #[test]
     fn admits_pinned_sysroot_scale_and_rejects_the_next_coff_section() {
-        let mut tracked = two_fragment_coff();
-        tracked[2..4].copy_from_slice(&((MAX_COFF_TRACKED_SECTIONS + 1) as u16).to_le_bytes());
-        assert_eq!(
-            inventory_x86_64_coff_comdat_sections(&tracked),
-            Err(LinkerError::TooManyCoffTrackedSections)
-        );
         let mut object = two_fragment_coff();
         object[2..4].copy_from_slice(&(MAX_COFF_SECTIONS as u16).to_le_bytes());
         assert_eq!(

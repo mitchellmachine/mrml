@@ -23,11 +23,11 @@ try {
     if ($LASTEXITCODE -eq 0) {
         throw "pinned core probe unexpectedly linked; update this recovery probe"
     }
-    $expected = "COFF content section tracking capacity exceeded"
+    $expected = "expanded link fragment count exceeds 256"
     if ($diagnostic -notmatch [regex]::Escape($expected)) {
         throw "pinned core probe did not reach the expected content boundary: $diagnostic"
     }
-    Write-Output "pinned-core-coff-inventory archive=$($core.Name) result=EXPECTED_CONTENT_BOUNDARY"
+    Write-Output "pinned-core-coff-inventory archive=$($core.Name) result=EXPECTED_FRAGMENT_BOUNDARY"
 } finally {
     if (Test-Path -LiteralPath $probe) { Remove-Item -LiteralPath $probe -Recurse }
 }

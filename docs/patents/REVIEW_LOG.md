@@ -10759,3 +10759,12 @@ so archive selection need not decode every section payload. It introduces no
 object encoding, archive format, symbol-resolution rule, compression method,
 cryptographic mechanism, or loader behavior. This technical screen is not
 legal advice or patent clearance.
+
+# 2026-08-29 — Compact large-COFF section classification
+
+Patent review: **NOT_TRIGGERED**. This increment replaces fixed per-section
+COFF metadata and boolean arrays with a borrowed validated view and ordinary
+bounded bit sets. It preserves the existing PE/COFF association and selection
+rules and introduces no object encoding, archive format, compression method,
+cryptographic mechanism, or loader behavior. This technical screen is not
+legal advice or patent clearance.

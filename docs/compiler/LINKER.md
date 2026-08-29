@@ -1317,3 +1317,15 @@ exact Windows host and workload. This is a narrow reproducible advantage, not
 general linker superiority. The next gate is bounded content representation
 for large selected COFF objects without introducing per-object maximum-sized
 stack arrays or weakening section identity and COMDAT semantics.
+
+Large selected COFF objects now use a borrowed zero-copy COMDAT view and
+compact 4,096-bit section-classification sets instead of fixed per-section
+metadata and boolean arrays. Association chains remain bounded, cycle-checked,
+and bound to the exact immutable object; writable, read-only, unwind, metadata,
+debug, and discarded-section identities remain distinct. The exact pinned
+`libcore` probe advances from the former content-tracking rejection to the next
+existing gate, `expanded link fragment count exceeds 256`, in 627 ms on this
+Windows run. The detached Windows package passed all 801 compiler-core unit
+tests, its integration groups, and eight driver tests. Linux and comparative
+performance were not rerun for this stop-point commit, and full `libcore`
+support is not claimed.
