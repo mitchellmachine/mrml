@@ -6990,6 +6990,10 @@ reciprocal-relation slot, and empty death-event slot. Authority cleanup may run
 between preparation and commit, but commit performs no repeated domain or table
 search. Existing fault, violation, exit, and multi-peer coverage passes; the
 current total remains 630.
+Control-peer connection now resolves both exact empty reciprocal-table slots
+after authorization and capacity validation but before writing either relation.
+The two writes therefore have no fallible search between them. Existing
+connection and topology coverage passes; the total remains 630.
 Timer preemption now resolves and binds the current task's unique live domain
 slot before advancing scheduler time. The interrupted context is installed
 directly into that preserved slot after the tick, eliminating a fallible second

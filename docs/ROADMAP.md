@@ -2293,6 +2293,9 @@ live composition remains pending.
    Peer publication plans now also bind each exact domain, reciprocal relation,
    and death-event slot before authority cleanup, eliminating commit-time table
    searches. Existing coverage passes; the current total remains 630.
+   Control-peer connection reserves both reciprocal relation slots before
+   either table is mutated. Existing topology coverage passes; the total
+   remains 630.
    Timer preemption now binds the exact live domain slot before scheduler tick
    mutation and publishes context without a second fallible lookup. Existing
    coverage passes; the total remains 629.

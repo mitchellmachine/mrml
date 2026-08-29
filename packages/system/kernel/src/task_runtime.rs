@@ -1334,16 +1334,18 @@ impl<const TASKS: usize, const CAPS: usize> TaskRuntime<TASKS, CAPS> {
         if first_used == TASK_CONTROL_PEERS || second_used == TASK_CONTROL_PEERS {
             return Err(TaskRuntimeError::PeerTableFull);
         }
-        *first_domain
+        let first_peer_slot = first_domain
             .peers
-            .iter_mut()
-            .find(|peer| peer.is_none())
-            .ok_or(TaskRuntimeError::IntegrityFailure)? = Some(second);
-        *second_domain
+            .iter()
+            .position(Option::is_none)
+            .ok_or(TaskRuntimeError::IntegrityFailure)?;
+        let second_peer_slot = second_domain
             .peers
-            .iter_mut()
-            .find(|peer| peer.is_none())
-            .ok_or(TaskRuntimeError::IntegrityFailure)? = Some(first);
+            .iter()
+            .position(Option::is_none)
+            .ok_or(TaskRuntimeError::IntegrityFailure)?;
+        first_domain.peers[first_peer_slot] = Some(second);
+        second_domain.peers[second_peer_slot] = Some(first);
         Ok(())
     }
 

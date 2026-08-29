@@ -308,6 +308,8 @@ access. The security/acceptance gate is canonical in
 - Peer-death preparation also reserves each peer's exact domain, reciprocal
   relation, and empty death-event slots, so authority cleanup cannot be followed
   by a fallible publication lookup.
+- Control-peer connection reserves both exact reciprocal slots before either
+  relation is written, preventing a one-sided partial connection.
 - Timer preemption binds the current unique domain before advancing scheduler
   state and performs no fallible domain lookup afterward.
 - Fault, protocol-violation, and voluntary-exit retirement reserve the exact
