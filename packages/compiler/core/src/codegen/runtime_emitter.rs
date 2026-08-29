@@ -7499,6 +7499,105 @@ impl<
             let result = self.emit_wide_shift(layout, left);
             self.overflow_checks = previous_overflow_checks;
             return result;
+        } else if let ExprKind::IntegerWrappingPower {
+            base,
+            exponent,
+            mode:
+                mode @ (crate::expression::IntegerPowerMode::Checked
+                | crate::expression::IntegerPowerMode::Strict
+                | crate::expression::IntegerPowerMode::Wrapping),
+        } = expression.kind
+        {
+            let base_type = runtime_expression_type_with_locals(
+                self.function,
+                self.resolver,
+                &self.locals[..self.saved_locals],
+                tree,
+                base,
+                1,
+            )
+            .map_err(|kind| self.error(kind))?;
+            let exponent_type = runtime_expression_type_with_locals(
+                self.function,
+                self.resolver,
+                &self.locals[..self.saved_locals],
+                tree,
+                exponent,
+                1,
+            )
+            .map_err(|kind| self.error(kind))?;
+            if !matches!(
+                base_type,
+                RuntimeExpressionType::Integer(Some(
+                    crate::IntegerType::U128 | crate::IntegerType::I128
+                ))
+            ) || expected_type != base_type
+                || !matches!(
+                    exponent_type,
+                    RuntimeExpressionType::Integer(None)
+                        | RuntimeExpressionType::Integer(Some(crate::IntegerType::U32))
+                )
+            {
+                return Err(self.error(CodegenErrorKind::RuntimeTypeMismatch));
+            }
+            self.emit_wide_integer_return(tree, base, expected_type)?;
+            self.emit(&[0x50, 0x52])?;
+            self.evaluation_depth += 2;
+            let previous_width = self.width;
+            self.width = runtime_width("u32")
+                .ok_or(self.error(CodegenErrorKind::UnsupportedRuntimeType))?;
+            self.emit_expression(tree, exponent, 1)?;
+            self.width = previous_width;
+            self.emit(&[0x50, 0x6a, 1, 0x6a, 0])?;
+            self.evaluation_depth += 3;
+            let loop_start = self.length;
+            self.emit(&[0x4c, 0x8b, 0x5c, 0x24, 16, 0x4d, 0x85, 0xdb])?;
+            let done = self.emit_forward_branch(0x84)?;
+            self.emit(&[0x41, 0xf6, 0xc3, 1])?;
+            let even = self.emit_forward_branch(0x84)?;
+            self.emit(&[
+                0x4c, 0x8b, 0x44, 0x24, 8, 0x48, 0x8b, 0x0c, 0x24, 0x48, 0x8b, 0x44,
+                0x24, 32, 0x48, 0x8b, 0x54, 0x24, 24,
+            ])?;
+            let overflow_checks = self.overflow_checks;
+            self.overflow_checks = match mode {
+                crate::expression::IntegerPowerMode::Checked => overflow_checks,
+                crate::expression::IntegerPowerMode::Strict => true,
+                crate::expression::IntegerPowerMode::Wrapping => false,
+                crate::expression::IntegerPowerMode::Saturating => unreachable!(),
+            };
+            let result = self.emit_wide_multiply(layout);
+            self.overflow_checks = overflow_checks;
+            result?;
+            self.emit(&[0x48, 0x89, 0x44, 0x24, 8, 0x48, 0x89, 0x14, 0x24])?;
+            self.patch_forward_branch(even)?;
+            self.emit(&[0x48, 0xd1, 0x6c, 0x24, 16])?;
+            self.emit(&[0x48, 0x83, 0x7c, 0x24, 16, 0])?;
+            let finished = self.emit_forward_branch(0x84)?;
+            self.emit(&[
+                0x4c, 0x8b, 0x44, 0x24, 32, 0x48, 0x8b, 0x4c, 0x24, 24, 0x4c, 0x89,
+                0xc0, 0x48, 0x89, 0xca,
+            ])?;
+            let overflow_checks = self.overflow_checks;
+            self.overflow_checks = match mode {
+                crate::expression::IntegerPowerMode::Checked => overflow_checks,
+                crate::expression::IntegerPowerMode::Strict => true,
+                crate::expression::IntegerPowerMode::Wrapping => false,
+                crate::expression::IntegerPowerMode::Saturating => unreachable!(),
+            };
+            let result = self.emit_wide_multiply(layout);
+            self.overflow_checks = overflow_checks;
+            result?;
+            self.emit(&[0x48, 0x89, 0x44, 0x24, 32, 0x48, 0x89, 0x54, 0x24, 24])?;
+            self.emit_backward_branch(loop_start)?;
+            self.patch_forward_branch(finished)?;
+            self.patch_forward_branch(done)?;
+            self.emit(&[
+                0x48, 0x8b, 0x44, 0x24, 8, 0x48, 0x8b, 0x14, 0x24, 0x48, 0x83, 0xc4,
+                40,
+            ])?;
+            self.evaluation_depth -= 5;
+            return Ok(());
         } else if let ExprKind::IntegerPairTransform {
             base,
             other,

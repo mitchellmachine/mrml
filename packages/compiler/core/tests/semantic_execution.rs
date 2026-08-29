@@ -207,6 +207,14 @@ const MRML_V1_WIDE_SIGNED_WRAPPING_DIVIDE_EUCLIDEAN_SOURCE: &str =
     "#[mrml_abi::export(version = 1)] pub fn probe(left: i128, right: i128) -> i128 { left.wrapping_div_euclid(right) }";
 const MRML_V1_WIDE_SIGNED_WRAPPING_REMAINDER_EUCLIDEAN_SOURCE: &str =
     "#[mrml_abi::export(version = 1)] pub fn probe(left: i128, right: i128) -> i128 { left.wrapping_rem_euclid(right) }";
+const MRML_V1_WIDE_UNSIGNED_POWER_SOURCE: &str =
+    "#[mrml_abi::export(version = 1)] pub fn probe(base: u128, exponent: u32) -> u128 { base.pow(exponent) }";
+const MRML_V1_WIDE_SIGNED_POWER_SOURCE: &str =
+    "#[mrml_abi::export(version = 1)] pub fn probe(base: i128, exponent: u32) -> i128 { base.pow(exponent) }";
+const MRML_V1_WIDE_SIGNED_WRAPPING_POWER_SOURCE: &str =
+    "#[mrml_abi::export(version = 1)] pub fn probe(base: i128, exponent: u32) -> i128 { base.wrapping_pow(exponent) }";
+const MRML_V1_WIDE_UNSIGNED_STRICT_POWER_SOURCE: &str =
+    "#[mrml_abi::export(version = 1)] pub fn probe(base: u128, exponent: u32) -> u128 { base.strict_pow(exponent) }";
 const MRML_V1_WIDE_SIGNED_IS_POSITIVE_SOURCE: &str =
     "#[mrml_abi::export(version = 1)] pub fn probe(input: i128) -> u64 { input.is_positive() as u64 }";
 const MRML_V1_WIDE_SIGNED_IS_NEGATIVE_SOURCE: &str =
@@ -2502,6 +2510,129 @@ fn mrml_v1_wide_euclidean_division_failures_trap() {
             .output()
             .expect("launch isolated wide Euclidean trap probe");
         assert!(!output.status.success(), "failure case unexpectedly returned");
+        assert_eq!(output.status.code(), Some(101));
+        let stdout = String::from_utf8(output.stdout).expect("UTF-8 child test stdout");
+        let stderr = String::from_utf8(output.stderr).expect("UTF-8 child test stderr");
+        assert!(
+            stdout.contains("unexpected return code -1073741795")
+                || stderr.contains("unexpected return code -1073741795"),
+            "missing Windows illegal-instruction status; stdout: {stdout}; stderr: {stderr}"
+        );
+    }
+}
+
+#[test]
+fn mrml_v1_wide_powers_match_both_oracle_words() {
+    let unsigned_inputs = [
+        (0u128, 0u32),
+        (0, 7),
+        (1, u32::MAX),
+        (2, 64),
+        ((1u128 << 63) + 1, 2),
+        (3, 40),
+    ];
+    let code = compile(MRML_V1_WIDE_UNSIGNED_POWER_SOURCE);
+    let actual = unsigned_inputs
+        .into_iter()
+        .flat_map(|(base, exponent)| {
+            let returned = unsafe { call_mrml_v1_wide_with_u32(code.pointer, base, exponent) };
+            [returned as u64, (returned >> 64) as u64]
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(
+        actual,
+        rustc_mrml_v1_observations(
+            MRML_V1_WIDE_UNSIGNED_POWER_SOURCE,
+            "for (base, exponent) in [(0u128, 0u32), (0, 7), (1, u32::MAX), (2, 64), ((1u128 << 63) + 1, 2), (3, 40)] { let returned = probe(base, exponent); println!(\"{}\", returned as u64); println!(\"{}\", (returned >> 64) as u64); }",
+        )
+    );
+
+    let signed_inputs = [(-3i128, 0u32), (-3, 1), (-3, 2), (-3, 3), (3, 40)];
+    let code = compile(MRML_V1_WIDE_SIGNED_POWER_SOURCE);
+    let actual = signed_inputs
+        .into_iter()
+        .flat_map(|(base, exponent)| {
+            let returned = unsafe {
+                call_mrml_v1_wide_with_u32(code.pointer, base as u128, exponent)
+            };
+            [returned as u64, (returned >> 64) as u64]
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(
+        actual,
+        rustc_mrml_v1_observations(
+            MRML_V1_WIDE_SIGNED_POWER_SOURCE,
+            "for (base, exponent) in [(-3i128, 0u32), (-3, 1), (-3, 2), (-3, 3), (3, 40)] { let returned = probe(base, exponent); println!(\"{}\", returned as u64); println!(\"{}\", ((returned as u128) >> 64) as u64); }",
+        )
+    );
+}
+
+#[test]
+fn mrml_v1_wide_wrapping_powers_match_both_oracle_words() {
+    let source = MRML_V1_WIDE_SIGNED_WRAPPING_POWER_SOURCE;
+    let code = compile(source);
+    let inputs = [(-3i128, 81u32), (i128::MIN, 2), (i128::MAX, 2)];
+    let actual = inputs
+        .into_iter()
+        .flat_map(|(base, exponent)| {
+            let returned = unsafe {
+                call_mrml_v1_wide_with_u32(code.pointer, base as u128, exponent)
+            };
+            [returned as u64, (returned >> 64) as u64]
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(
+        actual,
+        rustc_mrml_v1_observations(
+            source,
+            "for (base, exponent) in [(-3i128, 81u32), (i128::MIN, 2), (i128::MAX, 2)] { let returned = probe(base, exponent); println!(\"{}\", returned as u64); println!(\"{}\", ((returned as u128) >> 64) as u64); }",
+        )
+    );
+}
+
+#[test]
+fn mrml_v1_wide_power_overflows_trap() {
+    #[cfg(target_os = "windows")]
+    const CHILD: &str = "MRML_SEMANTIC_WIDE_POWER_TRAP_CHILD";
+    let sources = [
+        MRML_V1_WIDE_UNSIGNED_POWER_SOURCE,
+        MRML_V1_WIDE_UNSIGNED_STRICT_POWER_SOURCE,
+    ];
+
+    #[cfg(not(target_os = "windows"))]
+    {
+        for source in sources {
+            let code = compile(source);
+            let pid = unsafe { fork() };
+            assert!(pid >= 0, "fork failed");
+            if pid == 0 {
+                let _ = unsafe { call_mrml_v1_wide_with_u32(code.pointer, u128::MAX, 2) };
+                unsafe { _exit(120) }
+            }
+            let mut status = 0;
+            assert_eq!(unsafe { waitpid(pid, &mut status, 0) }, pid, "waitpid failed");
+            assert_eq!(status & 0x7f, 4, "unexpected Unix wait status: {status:#x}");
+        }
+        return;
+    }
+
+    #[cfg(target_os = "windows")]
+    if let Some(index) = std::env::var_os(CHILD) {
+        let index = index.to_string_lossy().parse::<usize>().expect("child source index");
+        let code = compile(sources[index]);
+        unsafe { SetErrorMode(0x0001 | 0x0002) };
+        let _ = unsafe { call_mrml_v1_wide_with_u32(code.pointer, u128::MAX, 2) };
+        panic!("wide power overflow unexpectedly returned");
+    }
+
+    #[cfg(target_os = "windows")]
+    for index in 0..sources.len() {
+        let output = Command::new(std::env::current_exe().expect("locate semantic test binary"))
+            .args(["--exact", "mrml_v1_wide_power_overflows_trap", "--nocapture"])
+            .env(CHILD, index.to_string())
+            .output()
+            .expect("launch isolated wide power trap probe");
+        assert!(!output.status.success(), "power overflow unexpectedly returned");
         assert_eq!(output.status.code(), Some(101));
         let stdout = String::from_utf8(output.stdout).expect("UTF-8 child test stdout");
         let stderr = String::from_utf8(output.stderr).expect("UTF-8 child test stderr");

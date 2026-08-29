@@ -268,6 +268,11 @@ from truncation according to the divisor sign; Euclidean remainder adds the
 divisor magnitude and is therefore nonnegative. Ordinary and strict forms trap
 on zero and signed minimum divided by negative one, while wrapping forms retain
 Rust's minimum quotient or zero remainder for that overflow pair.
+Wide ordinary, strict, and wrapping powers use exponentiation by squaring with
+a `u32` exponent and fixed stack-resident result, factor, and exponent state.
+Every selected result multiply and required factor square uses the existing
+two-word multiplier under the method's overflow policy; exponent zero returns
+one without multiplying. Saturating wide powers remain fail-closed.
 Lazy `if` expressions may select compatible two-word integer values without
 evaluating the unselected branch; both branches retain the declared wide type.
 Block sequences may evaluate supported one-word prefix expressions before a
@@ -351,6 +356,10 @@ Signed wide Euclidean quotient/remainder pairs are compared for every operand
 sign combination and both signed extrema. Wrapping minimum-by-negative-one is
 compared word-for-word, while ordinary zero-divisor and signed-overflow cases
 must take isolated traps for both operators.
+Unsigned and signed wide powers are compared at zero and odd/even exponents,
+across the 64-bit word boundary, and through a non-overflowing cross-word
+square. Wrapping overflow is compared word-for-word; ordinary and strict
+overflow must take isolated traps.
 Both branches of a nontrivial wide conditional return are compared word-for-word.
 Wide values returned through a block sequence are also compared word-for-word.
 Immutable wide-local round trips are compared word-for-word.
