@@ -7029,6 +7029,11 @@ Pending buffered-receive completion now rechecks that zero capability capacity
 has a zero address and that nonempty payload/capability output ranges remain
 disjoint, in addition to exact root and writable mapping validation. Both
 service profiles cross-build; backend execution remains pending.
+Pending completion now also prepares the exact pending-table slot and complete
+record before context or active-page-table validation. It consumes only that
+same record immediately before inbox dequeue, or before scoped mapping-drift
+retirement, eliminating the repeated task-key lookup after validation. Both
+service profiles cross-build; backend execution remains pending.
 Pending-layout multiplication, conversion, and end-address overflow now return
 invalid layout rather than invoking the global halt path. Immediate calls receive
 a scrubbed error; resumed drift follows the existing scoped protocol-retirement

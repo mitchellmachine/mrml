@@ -499,7 +499,7 @@ static mut SERVICE_RESOURCE_PAGE: HostedServiceResourcePage =
     HostedServiceResourcePage([0; mrml_kernel::PAGE_SIZE as usize]);
 
 #[cfg(feature = "service-probe")]
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Eq, PartialEq)]
 struct PendingBufferReceive {
     task: mrml_kernel::TaskId,
     page_table: PhysAddr,
@@ -5053,7 +5053,7 @@ unsafe fn complete_pending_buffer(
     runtime: &mut TaskRuntime<SERVICE_TASK_CAPACITY, SERVICE_CAPABILITY_CAPACITY>,
     task: mrml_kernel::TaskId,
 ) {
-    let Some(pending) = (unsafe { take_pending_buffer(task) }) else {
+    let Some((pending_slot, pending)) = (unsafe { prepare_pending_buffer(task) }) else {
         return;
     };
     let previous = unsafe { ActivePageTables::current() }.unwrap_or_else(|_| halt());
@@ -5073,12 +5073,12 @@ unsafe fn complete_pending_buffer(
         if runtime.current() != Some(task) {
             halt();
         }
+        unsafe { commit_pending_buffer_take(pending_slot, pending) };
         unsafe {
-            retire_service_protocol_violation(
-                TaskProtocolViolation::BufferedReceiveMappingDrift,
-            )
+            retire_service_protocol_violation(TaskProtocolViolation::BufferedReceiveMappingDrift)
         }
     }
+    unsafe { commit_pending_buffer_take(pending_slot, pending) };
     let message = match runtime.receive_ipc_bounded(
         task,
         pending.payload_capacity,
@@ -5135,10 +5135,21 @@ unsafe fn has_pending_buffer(task: mrml_kernel::TaskId) -> bool {
 }
 
 #[cfg(feature = "service-probe")]
-unsafe fn take_pending_buffer(task: mrml_kernel::TaskId) -> Option<PendingBufferReceive> {
+unsafe fn prepare_pending_buffer(
+    task: mrml_kernel::TaskId,
+) -> Option<(usize, PendingBufferReceive)> {
     let index = unsafe { pending_buffer_slot(task) }?;
+    let buffers = unsafe { &*core::ptr::addr_of!(SERVICE_PENDING_BUFFERS) };
+    Some((index, buffers[index].unwrap_or_else(|| halt())))
+}
+
+#[cfg(feature = "service-probe")]
+unsafe fn commit_pending_buffer_take(slot: usize, expected: PendingBufferReceive) {
     let buffers = unsafe { &mut *core::ptr::addr_of_mut!(SERVICE_PENDING_BUFFERS) };
-    buffers[index].take()
+    if buffers.get(slot).copied().flatten() != Some(expected) {
+        halt();
+    }
+    buffers[slot] = None;
 }
 
 #[cfg(feature = "service-probe")]

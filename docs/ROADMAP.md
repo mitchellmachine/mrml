@@ -2317,6 +2317,10 @@ live composition remains pending.
    Completion-time pending-record validation now rechecks optional-address
    canonicality and exact output-range disjointness. Both service profiles
    cross-build; live execution remains pending.
+   Pending completion now carries an exact slot-and-record plan through context
+   and mapping validation, consuming only that record before dequeue or scoped
+   drift retirement. Both service profiles cross-build; execution remains
+   pending.
    Pending-layout arithmetic overflow now feeds existing invalid-layout policy
    instead of global halt. Both service profiles cross-build.
    Warning-free `invalid_return_probe` kernel/service profiles now encode the

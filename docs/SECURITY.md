@@ -325,6 +325,9 @@ access. The security/acceptance gate is canonical in
   scheduler blocking, preventing late capacity discovery after state mutation.
 - Pending buffered completion revalidates zero-capacity address canonicality and
   payload/capability output disjointness before dequeue or user writes.
+- Pending buffered completion binds the exact table slot and complete record
+  before context/mapping validation and consumes that record without a repeated
+  task-key search before dequeue or scoped drift retirement.
 - Pending-layout arithmetic overflow is a scoped invalid-layout result, not an
   assertion or global halt condition.
 - Exit, fault, and protocol-violation peer-death publication preflight the
