@@ -70,9 +70,10 @@ zero; strict conversion traps on the same high-word sign-bit boundary. Exact
 source/target direction checks fail closed. The release Linux build and the
 canonical compiler gate pass: 815 unit tests and every integration group,
 including 351 replacement and 123 semantic-execution tests. Controlled Linux
-execution matches exact ORACLE-0003 results across both words for stable and
-saturating paths at zero, signed boundaries, and all-ones input. Isolated Linux
-children also confirm strict conversions trap at both invalid boundary classes.
+execution matches exact ORACLE-0003 results across both words for stable,
+saturating, and in-range strict paths at zero, signed boundaries, and all-ones
+input where admitted. Isolated Linux children also confirm strict conversions
+trap at both invalid boundary classes.
 Windows gnullvm was not run.
 Patent review: **NOT_TRIGGERED**; this extends ordinary integer conversion
 lowering without introducing a new mechanism. See `docs/patents/REVIEW_LOG.md`.
