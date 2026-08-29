@@ -2024,6 +2024,11 @@ live composition remains pending.
    userspace service invokes operation 9 before returning a canonical 48-byte
    detail-free response. Fresh signed KVM and WHP probes repeat that exchange in
    both generations.
+   Buffered receive completion now carries a typed proof that returned payload
+   and capability counts fit both the exact pending buffers and global kernel
+   maxima. Immediate and scheduler-wakeup completion paths cannot publish loose
+   scalar counts. The focused Linux kernel suite passes 593 tests and the UEFI
+   `service_probe` profile cross-builds.
    The restart wire record can no longer carry a clock value; bytes 40--47 are
    canonical zero and dispatch receives time only from trusted kernel state.
    Syscall operation 10 decodes only an exact generational capability and

@@ -118,6 +118,9 @@ access. The security/acceptance gate is canonical in
   boundary. Uncertain device/DMA teardown quarantines or fails closed.
 - Boundary copies validate complete ranges, overlap, wrapping, alignment,
   length, reserved fields, and exact encodings before mutation.
+- Buffered IPC completion retains a typed exact-capacity witness through the
+  final trap-frame or saved-context publication; loose result scalars cannot
+  replace the checked pending receive bounds.
 - Writable and executable mappings are mutually exclusive.
 - Authority, replay state, ownership, mappings, and lifecycle transitions are
   explicit and commit only after validation; partial failure rolls back or

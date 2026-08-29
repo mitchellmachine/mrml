@@ -4645,12 +4645,14 @@ unsafe fn write_buffer_current(
     root: PhysAddr,
     pending: PendingBufferReceive,
     message: &mrml_kernel::Message,
-) -> (usize, usize) {
-    if message.payload().len() > pending.payload_capacity
-        || message.capability_count() > pending.capability_capacity
-    {
-        halt();
-    }
+) -> mrml_kernel::BufferCompletion {
+    let completion = mrml_kernel::BufferCompletion::new(
+        message.payload().len(),
+        message.capability_count(),
+        pending.payload_capacity,
+        pending.capability_capacity,
+    )
+    .unwrap_or_else(|_| halt());
     unsafe { validate_active_receive(root, pending) };
     unsafe {
         core::ptr::copy_nonoverlapping(
@@ -4673,7 +4675,7 @@ unsafe fn write_buffer_current(
             )
         };
     }
-    (message.payload().len(), message.capability_count())
+    completion
 }
 
 #[cfg(feature = "service-probe")]
@@ -4683,9 +4685,8 @@ unsafe fn complete_buffer_current(
     message: &mrml_kernel::Message,
     frame: &mut UserCallFrame,
 ) {
-    let (payload_length, capability_count) =
-        unsafe { write_buffer_current(root, pending, message) };
-    frame.complete_buffer(payload_length, capability_count);
+    let completion = unsafe { write_buffer_current(root, pending, message) };
+    frame.complete_buffer(completion);
 }
 
 #[cfg(feature = "service-probe")]
@@ -4700,7 +4701,7 @@ unsafe fn complete_pending_buffer(runtime: &mut TaskRuntime<3, 9>, task: mrml_ke
         .unwrap_or_else(|_| halt())
         .page_table();
     unsafe { asm!("mov cr3, {}", in(reg) target.get(), options(nostack, preserves_flags)) };
-    let result = unsafe { write_buffer_current(target, pending, &message) };
+    let completion = unsafe { write_buffer_current(target, pending, &message) };
     unsafe {
         asm!(
             "mov cr3, {}",
@@ -4711,7 +4712,7 @@ unsafe fn complete_pending_buffer(runtime: &mut TaskRuntime<3, 9>, task: mrml_ke
     runtime
         .context_mut(task)
         .unwrap_or_else(|_| halt())
-        .complete_buffer(result.0, result.1);
+        .complete_buffer(completion);
     unsafe { (*core::ptr::addr_of_mut!(SERVICE_PENDING_BUFFERS))[slot] = None };
 }
 

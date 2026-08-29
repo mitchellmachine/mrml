@@ -246,7 +246,7 @@ pub use shared_memory::{
     revoke_task_shared_bindings_before_resume,
 };
 pub use syscall::{
-    CAPABILITY_TRANSFER_DESCRIPTOR_BYTES, CapabilityTransferDescriptor,
+    BufferCompletion, CAPABILITY_TRANSFER_DESCRIPTOR_BYTES, CapabilityTransferDescriptor,
     MAX_SHARED_BUFFER_SYSCALL_BYTES, MAX_SYSCALL_INLINE_PAYLOAD, SyscallError, SyscallRequest,
     UserCallFrame, X86_USER_CALL_VECTOR, decode_capability_transfers,
 };

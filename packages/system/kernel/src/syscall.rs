@@ -42,6 +42,40 @@ pub struct CapabilityTransferDescriptor {
     pub rights: Rights,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct BufferCompletion {
+    payload_length: u16,
+    capability_count: u8,
+}
+
+impl BufferCompletion {
+    pub fn new(
+        payload_length: usize,
+        capability_count: usize,
+        payload_capacity: usize,
+        capability_capacity: usize,
+    ) -> Result<Self, SyscallError> {
+        if payload_length > payload_capacity
+            || payload_length > MAX_INLINE_PAYLOAD
+            || capability_count > capability_capacity
+            || capability_count > MAX_CAPABILITIES
+        {
+            return Err(SyscallError::InvalidBuffer);
+        }
+        Ok(Self {
+            payload_length: payload_length as u16,
+            capability_count: capability_count as u8,
+        })
+    }
+
+    pub const fn payload_length(self) -> u16 {
+        self.payload_length
+    }
+    pub const fn capability_count(self) -> u8 {
+        self.capability_count
+    }
+}
+
 pub fn decode_capability_transfers(
     input: &[u8],
     count: usize,
@@ -144,10 +178,10 @@ impl UserCallFrame {
         self.r9 = words[2];
     }
 
-    pub fn complete_buffer(&mut self, payload_length: usize, capability_count: usize) {
+    pub fn complete_buffer(&mut self, completion: BufferCompletion) {
         self.rax = 0;
-        self.rdx = payload_length as u64;
-        self.r10 = capability_count as u64;
+        self.rdx = u64::from(completion.payload_length());
+        self.r10 = u64::from(completion.capability_count());
         self.r8 = 0;
         self.r9 = 0;
     }
@@ -588,12 +622,30 @@ mod tests {
         let mut frame = valid_yield_frame();
         frame.r8 = u64::MAX;
         frame.r9 = u64::MAX;
-        frame.complete_buffer(368, 5);
+        frame.complete_buffer(BufferCompletion::new(368, 5, 368, 5).unwrap());
         assert_eq!(frame.rax, 0);
         assert_eq!(frame.rdx, 368);
         assert_eq!(frame.r10, 5);
         assert_eq!(frame.r8, 0);
         assert_eq!(frame.r9, 0);
+    }
+
+    #[test]
+    fn buffer_completion_requires_exact_receive_capacities() {
+        assert_eq!(
+            BufferCompletion::new(112, 1, 112, 1)
+                .unwrap()
+                .payload_length(),
+            112
+        );
+        assert_eq!(
+            BufferCompletion::new(113, 1, 112, 1),
+            Err(SyscallError::InvalidBuffer)
+        );
+        assert_eq!(
+            BufferCompletion::new(112, 2, 112, 1),
+            Err(SyscallError::InvalidBuffer)
+        );
     }
 
     #[test]

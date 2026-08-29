@@ -1,5 +1,5 @@
 use super::{TrapFrame, VirtAddr};
-use crate::{PAGE_SIZE, PhysAddr, TaskId, UserCallFrame};
+use crate::{BufferCompletion, PAGE_SIZE, PhysAddr, TaskId, UserCallFrame};
 use core::arch::{asm, global_asm};
 
 global_asm!(
@@ -221,10 +221,10 @@ impl UserContext {
         self.r9 = words[2];
     }
 
-    pub fn complete_buffer(&mut self, payload_length: usize, capability_count: usize) {
+    pub fn complete_buffer(&mut self, completion: BufferCompletion) {
         self.rax = 0;
-        self.rdx = payload_length as u64;
-        self.r10 = capability_count as u64;
+        self.rdx = u64::from(completion.payload_length());
+        self.r10 = u64::from(completion.capability_count());
         self.r8 = 0;
         self.r9 = 0;
     }
@@ -516,7 +516,7 @@ mod tests {
         assert_eq!(context.stack_pointer(), frame.rsp);
         assert_eq!(context.r15, 15);
         assert_eq!(context.rax, 2);
-        context.complete_buffer(368, 5);
+        context.complete_buffer(BufferCompletion::new(368, 5, 368, 5).unwrap());
         assert_eq!(context.rax, 0);
         assert_eq!(context.rdx, 368);
         assert_eq!(context.r10, 5);

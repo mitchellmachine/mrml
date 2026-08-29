@@ -6551,6 +6551,19 @@ buffered receives are a two-slot task-keyed table rather than one global value,
 so the client and service can block simultaneously without one overwriting the
 other. Sender exit still transitively revokes its derived authority.
 
+Buffered completion now retains its receive-bound proof as a typed
+`BufferCompletion` rather than dropping back to two unconstrained `usize`
+values after copy. Construction requires payload and capability counts to fit
+both the exact pending capacities and the kernel global maxima. The immediate
+trap-frame path and scheduler-wakeup `UserContext` path accept only that witness.
+The focused Linux kernel suite passes 593 tests and the UEFI `service_probe`
+profile cross-builds. This is kernel/service mechanism evidence, not a new IPC
+authority or physical execution claim.
+
+Patent review: **NOT_TRIGGERED**. This change retains an existing bounds check
+as Rust typestate across an existing syscall completion path and introduces no
+new IPC algorithm or mechanism. See [the patent review log](patents/REVIEW_LOG.md).
+
 Rust service code does not assume a fixed PE entry RVA. WHP and KVM publish the
 entry derived from the verified signed executable in a hosted metadata page.
 That page is supervisor-only identity mapped in the kernel and service roots;
