@@ -7580,6 +7580,14 @@ impl<
                 expected_type,
             );
         }
+        if let ExprKind::Sequence { first, then } = expression.kind {
+            tree.evaluate_at(first, self.resolver).map_err(|error| {
+                self.error(CodegenErrorKind::Execution(ExecutionError::Arithmetic(
+                    error,
+                )))
+            })?;
+            return self.evaluate_wide_const_call_argument(tree, then, expected_type);
+        }
         if let ExprKind::Identifier(name) = expression.kind
             && self.resolver.resolve_type(name) == Some(expected_type)
         {

@@ -145,6 +145,8 @@ Wide const-call shift arguments use an independently evaluated one-word count,
 reject counts of 128 or greater, and sign-fill only typed `i128` right shifts.
 Constant `if` arguments evaluate only the selected compatible wide branch before
 passing its exact words to the callee.
+Bounded block-sequence arguments evaluate and discard one ordinary const prefix
+before resolving a compatible wide tail.
 Direct unary bitwise inversion of a two-word integer inverts both words.
 Direct `i128` negation uses carry-aware two-word lowering and traps on `i128::MIN`
 when ordinary overflow checks are enabled.
