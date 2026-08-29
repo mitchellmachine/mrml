@@ -318,6 +318,16 @@ passes 166 tests on Windows and Arch Linux.
 No command header/table content, PRDT, engine start, interrupt, ATA/ATAPI, NCQ,
 IOMMU hardware, OVMF, or physical device was exercised.
 
+The command-memory gate is now **PARTIALLY IMPLEMENTED IN SOURCE**. The driver
+checks every word in the exact command-list, received-FIS, and per-slot command-
+table extents is zero before writing anything. It then gives every advertised
+header its exact distinct 64-bit table base and read-verifies all values. A
+dirty/unreadable preflight returns the untouched programmed owner; uncertainty
+after a write quarantines the layout. Storage passes 169 tests on Windows and
+Arch Linux. No PRDT,
+data buffer, command issue, engine start, interrupt, ATA/ATAPI, NCQ, IOMMU
+hardware, OVMF, or physical device was exercised.
+
 The following DMA-memory ownership boundary is **PARTIALLY IMPLEMENTED IN
 SOURCE**. One safe transaction binds a quiescent discovered SATA port and exact
 controller generations to explicit controller `CONTROL` plus separate

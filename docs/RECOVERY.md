@@ -1236,6 +1236,14 @@ quarantines the layout and forbids ordinary unmapping. Recovery must retain that
 distinction and never reconstruct success from register values. Storage passes
 166 tests on Windows and Arch Linux.
 
+Command-memory initialization is **PARTIALLY IMPLEMENTED IN SOURCE** as the
+next typestate. The driver first verifies the complete exact DMA extents remain
+zero, then writes and verifies one distinct 64-bit table base per advertised
+command slot. Pre-write dirty/read uncertainty preserves the prior owner;
+post-write uncertainty quarantines it. Recovery must retain the initialized
+slot-to-table relation and must never infer it from mutable memory after an
+uncertain transition. Storage passes 169 tests on Windows and Arch Linux.
+
 The typed native route and installed recovery are now composed atomically as a
 **PARTIALLY IMPLEMENTED** configuration control plane. One bounded operation
 correlates and registers the descriptor, reacquires a read-only session, checks

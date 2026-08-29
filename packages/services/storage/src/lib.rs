@@ -8,6 +8,7 @@
 //! Physical device drivers and durability evidence remain later layers.
 
 mod allocation;
+mod ahci_command_memory;
 mod ahci_controller;
 mod ahci_dma;
 mod ahci_discovery;
@@ -43,6 +44,10 @@ pub use ahci_controller::{
     AHCI_CAP_OFFSET, AHCI_GHC_OFFSET, AHCI_PI_OFFSET, AHCI_RESET_POLL_LIMIT,
     AHCI_VERSION_OFFSET, AhciControllerError, AhciControllerSnapshot, AhciRegisterIo,
     NativeAhciRegisterIo, reset_ahci_controller,
+};
+pub use ahci_command_memory::{
+    AhciCommandMemoryError, AhciCommandMemoryFailure, AhciCommandMemoryIo,
+    InitializedAhciCommandMemory, initialize_ahci_command_memory,
 };
 pub use ahci_dma::{
     AHCI_COMMAND_LIST_ALIGNMENT, AHCI_COMMAND_LIST_BYTES, AHCI_COMMAND_TABLE_ALIGNMENT,

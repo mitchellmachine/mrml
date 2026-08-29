@@ -249,6 +249,17 @@ a quarantined typestate that cannot enter ordinary DMA removal. Storage passes
 Command headers/tables, engine start, interrupts, ATA/ATAPI, NCQ, IOMMU hardware,
 and physical execution remain **PLANNED**.
 
+Command-memory initialization is now **PARTIALLY IMPLEMENTED IN SOURCE**.
+`initialize_ahci_command_memory` consumes only the programmed-port typestate,
+verifies every word of the exact command-list, received-FIS, and advertised
+command-table extents is zero, then binds each advertised header slot to its
+own fixed table address and read-verifies every 64-bit value. Dirty or unreadable
+memory before mutation returns the untouched owner; write or read-back
+uncertainty quarantines it. Storage passes 169 tests on Windows and Arch Linux.
+Engine activation,
+PRDT/data buffers, ATA/ATAPI commands, interrupts, NCQ, real IOMMU behavior, and
+physical evidence remain **PLANNED**.
+
 Selected-device reopening and redundant-root reads are now **PARTIALLY
 IMPLEMENTED**. Exact path/media/geometry and block-zero header revalidation
 precedes both root reads; any mismatch, second-read failure, or protocol-close

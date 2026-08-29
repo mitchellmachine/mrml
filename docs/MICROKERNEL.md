@@ -8826,3 +8826,13 @@ post-write uncertainty is permanently distinguished as quarantined and cannot
 flow into normal DMA revocation. Storage passes 166 tests on Windows and Arch
 Linux. This is host-register-model evidence only, not IOMMU hardware, commands,
 interrupts, OVMF, installed recovery, or physical execution evidence.
+
+AHCI command memory is now **PARTIALLY IMPLEMENTED IN SOURCE** through an exact
+bounded typestate transition. Every word of the command-list, received-FIS, and
+advertised command-table regions must still be zero before mutation. Each
+advertised header then receives its own checked 64-bit table base and every
+written value is read-verified. Pre-write failure preserves the programmed
+owner; post-write uncertainty quarantines it. Storage passes 169 tests on
+Windows and Arch Linux.
+No engine, PRDT/data buffer, ATA/ATAPI command, interrupt, NCQ, IOMMU hardware,
+OVMF, installed recovery, or physical hardware was exercised.

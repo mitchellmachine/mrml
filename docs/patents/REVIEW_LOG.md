@@ -95,6 +95,17 @@ NCQ, aggregation, ATA/ATAPI operation, PHY/controller hardware, or block I/O.
 Existing Canadian exclusions and outside-Canada review requirements remain
 unchanged. This technical screen is not legal advice or patent clearance.
 
+# 2026-08-29 — Bounded AHCI command-memory initialization
+
+Patent review: **TRIGGERED**, governed by the recorded Canadian AHCI scope. This
+increment uses conventional fixed command headers and per-slot table addresses,
+plus complete zero preflight, checked arithmetic, exact read-back, and MRML-only
+linear/quarantine typestates. It implements no PRDT, data transfer, command
+issue, scheduling, engine activation, interrupt, NCQ, aggregation, ATA/ATAPI
+operation, PHY/controller hardware, or block I/O. Existing Canadian exclusions
+and outside-Canada review requirements remain unchanged. This technical screen
+is not legal advice or patent clearance.
+
 # 2026-08-29 — Writable COFF SELECT_ANY winners
 
 Patent review: **NOT_TRIGGERED**. This increment applies the conventional COFF
