@@ -120,6 +120,16 @@ architecture. It implements no AHCI command, FAT32 on-disk algorithm, storage
 optimization, crash-recovery algorithm, or new loading technique. This technical
 screen is not legal advice or patent clearance.
 
+# 2026-08-29 — Bounded classic IDE bus-master execution
+
+Patent review: **NOT_TRIGGERED**. This increment performs the conventional
+classic IDE bus-master stop, status clear, PRDT publication, ATA DMA command,
+directional start, bounded completion, status acknowledgement, and stop
+sequence. It adds exact capability, generation, transfer, readback, completion,
+and quarantine checks. It introduces no scheduling, caching, allocation,
+naming, encoding, or data-layout algorithm. This technical screen is not legal
+advice or patent clearance.
+
 # 2026-08-29 — Capability-bound classic IDE PRD ownership
 
 Patent review: **NOT_TRIGGERED**. This increment constructs the conventional

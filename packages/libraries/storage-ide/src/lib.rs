@@ -7,6 +7,7 @@
 
 mod ide_discovery;
 mod ide_dma;
+mod ide_dma_command;
 mod ide_identify;
 mod ide_pio;
 mod ide_ports;
@@ -20,6 +21,10 @@ pub use ide_dma::{
     prepare_ide_dma, revoke_ide_dma, IdeDmaBackend, IdeDmaDirection, IdeDmaError, IdeDmaFailure,
     IdeDmaLayout, IdeDmaMemoryIo, IdeDmaRegion, IdeDmaRequest, IdeDmaRevocationError,
     PreparedIdeDma, IDE_PRD_ENTRY_LIMIT, IDE_PRD_TABLE_BYTES,
+};
+pub use ide_dma_command::{
+    execute_ide_dma, CompletedIdeDma, IdeDmaCommandError, IdeDmaCommandFailure, IdeDmaCommandIo,
+    IdeDmaCommandRequest, IdeDmaOperation,
 };
 pub use ide_identify::{
     identify_ide_device, IdeDevice, IdeDeviceIdentity, IdeIdentifyError, IdeIdentifyFailure,

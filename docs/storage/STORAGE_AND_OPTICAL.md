@@ -510,7 +510,7 @@ generation-bound channel grant containing only its eight command ports, one
 control port, and optional channel-specific eight-byte bus-master window.
 Excess rights, substituted objects, invalid generations/ranges, overlaps, and
 backend rejection fail before publication. Media generations, interrupts,
-bus-master DMA execution, service IPC, runtime publication, and
+service IPC, runtime publication, and
 physical-device evidence remain
 **PLANNED**. The IDENTIFY gate now selects master/slave devices, performs four
 alternate-status settling reads, clears the task-file address registers, issues
@@ -541,6 +541,15 @@ zero-verifies the 4-KiB table, writes and verifies every entry and terminal bit,
 and rejects overlap or substitution. Backend rejection is untouched; partial
 PRD mutation and uncertain IOMMU removal retain quarantined ownership. Twenty
 focused tests pass on Windows and Arch Linux.
+Bus-master execution now exact-authorizes the selected device operation, binds
+the identity and DMA generations to the same channel, verifies transfer size
+and direction, stops the engine before programming, clears stale status, writes
+and reads back the PRDT address, programs LBA28/LBA48 task files, and starts the
+engine with the exact device-to-memory direction bit. Completion polling is
+bounded, requires the interrupt indication, checks bus-master and ATA errors,
+then stops and verifies the engine before returning live DMA cleanup ownership.
+Any post-mutation error, missing interrupt, or timeout quarantines the channel
+and DMA layout. Twenty-three focused tests pass on Windows and Arch Linux.
 
 ## Disk checking and images
 
