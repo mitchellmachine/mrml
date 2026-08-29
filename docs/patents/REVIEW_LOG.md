@@ -19,6 +19,15 @@ image. It introduces no new symbol-resolution policy, object encoding,
 relocation arithmetic, compression, cryptographic mechanism, or loader
 behavior. This technical screen is not legal advice or patent clearance.
 
+# 2026-08-29 — Static gnullvm COFF refptr resolution
+
+Patent review: **NOT_TRIGGERED**. This increment decodes the conventional
+gnullvm/COFF readonly pointer record and applies its standard AMD64 absolute
+relocation after deterministic writable-section layout. It introduces no new
+indirection scheme, symbol-resolution policy, object encoding, relocation
+arithmetic, compression, cryptographic mechanism, or loader behavior. This
+technical screen is not legal advice or patent clearance.
+
 ## 2026-08-28 — Bounded ELF initializer-array retention
 
 Patent review: **NOT_TRIGGERED**. This increment retains and lays out one

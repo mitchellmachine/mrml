@@ -506,6 +506,13 @@ pub struct PeWritableData<'a, 'relocations> {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct PeReadonlyWritableRelocation<'a> {
+    pub readonly_owner: &'a str,
+    pub readonly_offset: usize,
+    pub target_writable_symbol: &'a str,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct LinkInputSelection {
     indices: [usize; MAX_LINK_INPUTS],
     length: usize,
@@ -2641,6 +2648,164 @@ pub fn x86_64_coff_writable_section_count(object: &[u8]) -> Result<usize, Linker
     Ok(count)
 }
 
+pub fn x86_64_coff_readonly_writable_relocation_count(object: &[u8]) -> Result<usize, LinkerError> {
+    if read_u16(object, 0)? != 0x8664 || read_u16(object, 16)? != 0 {
+        return Err(LinkerError::UnsupportedCoff);
+    }
+    let section_count = usize::from(read_u16(object, 2)?);
+    if section_count == 0 || section_count > MAX_COFF_SECTIONS {
+        return Err(LinkerError::UnsupportedCoff);
+    }
+    let symbol_offset =
+        usize::try_from(read_u32(object, 8)?).map_err(|_| LinkerError::OffsetOverflow)?;
+    let symbol_count =
+        usize::try_from(read_u32(object, 12)?).map_err(|_| LinkerError::OffsetOverflow)?;
+    let symbols_end = symbol_offset
+        .checked_add(
+            symbol_count
+                .checked_mul(18)
+                .ok_or(LinkerError::OffsetOverflow)?,
+        )
+        .ok_or(LinkerError::OffsetOverflow)?;
+    let string_size =
+        usize::try_from(read_u32(object, symbols_end)?).map_err(|_| LinkerError::OffsetOverflow)?;
+    if string_size < 4 {
+        return Err(LinkerError::InvalidCoff);
+    }
+    object
+        .get(
+            symbols_end
+                ..symbols_end
+                    .checked_add(string_size)
+                    .ok_or(LinkerError::OffsetOverflow)?,
+        )
+        .ok_or(LinkerError::InvalidCoff)?;
+    let mut count = 0usize;
+    for section in 0..section_count {
+        let header = 20 + section * 40;
+        let name = coff_section_name(
+            object
+                .get(header..header + 8)
+                .ok_or(LinkerError::InvalidCoff)?,
+            object,
+            symbols_end,
+            string_size,
+        )?;
+        if name.starts_with(".rdata$.refptr.") && read_u32(object, header + 16)? != 0 {
+            count = count.checked_add(1).ok_or(LinkerError::OffsetOverflow)?;
+        }
+    }
+    Ok(count)
+}
+
+pub fn decode_x86_64_coff_readonly_writable_relocation<'a>(
+    object: &'a [u8],
+    relocation_index: usize,
+    readonly_owner: &'a str,
+) -> Result<PeReadonlyWritableRelocation<'a>, LinkerError> {
+    validate_symbol(readonly_owner)?;
+    let count = x86_64_coff_readonly_writable_relocation_count(object)?;
+    if relocation_index >= count {
+        return Err(LinkerError::InvalidCoff);
+    }
+    let section_count = usize::from(read_u16(object, 2)?);
+    let symbol_offset =
+        usize::try_from(read_u32(object, 8)?).map_err(|_| LinkerError::OffsetOverflow)?;
+    let symbol_count =
+        usize::try_from(read_u32(object, 12)?).map_err(|_| LinkerError::OffsetOverflow)?;
+    let symbols_end = symbol_offset
+        .checked_add(
+            symbol_count
+                .checked_mul(18)
+                .ok_or(LinkerError::OffsetOverflow)?,
+        )
+        .ok_or(LinkerError::OffsetOverflow)?;
+    let string_size =
+        usize::try_from(read_u32(object, symbols_end)?).map_err(|_| LinkerError::OffsetOverflow)?;
+    let mut readonly_start = None;
+    let mut readonly_end = None;
+    let mut selected = None;
+    let mut ordinal = 0usize;
+    for section in 0..section_count {
+        let header = 20 + section * 40;
+        let name = coff_section_name(
+            object
+                .get(header..header + 8)
+                .ok_or(LinkerError::InvalidCoff)?,
+            object,
+            symbols_end,
+            string_size,
+        )?;
+        let size = usize::try_from(read_u32(object, header + 16)?)
+            .map_err(|_| LinkerError::OffsetOverflow)?;
+        if size == 0 || !(name == ".rdata" || name.starts_with(".rdata$")) {
+            continue;
+        }
+        let raw = usize::try_from(read_u32(object, header + 20)?)
+            .map_err(|_| LinkerError::OffsetOverflow)?;
+        let end = raw.checked_add(size).ok_or(LinkerError::OffsetOverflow)?;
+        object.get(raw..end).ok_or(LinkerError::InvalidCoff)?;
+        match readonly_end {
+            Some(previous_end) if previous_end > raw => return Err(LinkerError::UnsupportedCoff),
+            _ => readonly_end = Some(end),
+        }
+        let start = *readonly_start.get_or_insert(raw);
+        if name.starts_with(".rdata$.refptr.") {
+            if ordinal == relocation_index {
+                if size != 8 || read_u16(object, header + 32)? != 1 {
+                    return Err(LinkerError::UnsupportedCoff);
+                }
+                let relocation = usize::try_from(read_u32(object, header + 24)?)
+                    .map_err(|_| LinkerError::OffsetOverflow)?;
+                object
+                    .get(relocation..relocation + 10)
+                    .ok_or(LinkerError::InvalidCoff)?;
+                if read_u32(object, relocation)? != 0 || read_u16(object, relocation + 8)? != 1 {
+                    return Err(LinkerError::UnsupportedCoff);
+                }
+                let target_index = usize::try_from(read_u32(object, relocation + 4)?)
+                    .map_err(|_| LinkerError::OffsetOverflow)?;
+                if target_index >= symbol_count {
+                    return Err(LinkerError::InvalidCoff);
+                }
+                let target = symbol_offset
+                    .checked_add(
+                        target_index
+                            .checked_mul(18)
+                            .ok_or(LinkerError::OffsetOverflow)?,
+                    )
+                    .ok_or(LinkerError::OffsetOverflow)?;
+                if read_i16(object, target + 12)? != 0
+                    || *object.get(target + 16).ok_or(LinkerError::InvalidCoff)? != 2
+                {
+                    return Err(LinkerError::UnsupportedCoff);
+                }
+                let initial = read_u64_coff(
+                    object
+                        .get(raw..raw + size)
+                        .ok_or(LinkerError::InvalidCoff)?,
+                    0,
+                )?;
+                if initial != 0 {
+                    return Err(LinkerError::UnsupportedCoff);
+                }
+                selected = Some(PeReadonlyWritableRelocation {
+                    readonly_owner,
+                    readonly_offset: raw.checked_sub(start).ok_or(LinkerError::OffsetOverflow)?,
+                    target_writable_symbol: coff_symbol_name(
+                        object,
+                        target,
+                        symbols_end,
+                        string_size,
+                    )?,
+                });
+            }
+            ordinal += 1;
+        }
+    }
+    selected.ok_or(LinkerError::InvalidCoff)
+}
+
 pub fn decode_x86_64_coff_writable_data<'data, 'relocations>(
     object: &'data [u8],
     readonly_owner: &'data str,
@@ -2725,7 +2890,7 @@ pub fn decode_x86_64_coff_writable_data_fragment<'data, 'relocations>(
             readonly_sections[section + 1] = true;
             readonly_span = Some(match readonly_span {
                 None => (raw, end),
-                Some((start, previous_end)) if previous_end == raw => (start, end),
+                Some((start, previous_end)) if previous_end <= raw => (start, end),
                 Some(_) => return Err(LinkerError::UnsupportedCoff),
             });
         } else if (name.starts_with(".data$") || name.starts_with(".bss$"))
@@ -3201,7 +3366,7 @@ pub fn decode_x86_64_coff_text_fragment<'data, 'relocations, 'definitions>(
             readonly_sections[section + 1] = true;
             readonly_span = Some(match readonly_span {
                 None => (offset, offset + size),
-                Some((start, end)) if end == offset => (start, offset + size),
+                Some((start, end)) if end <= offset => (start, offset + size),
                 Some(_) => return Err(LinkerError::UnsupportedCoff),
             });
             let (start, end) = readonly_span.ok_or(LinkerError::InvalidCoff)?;
@@ -5439,6 +5604,25 @@ pub fn link_x86_64_pe_with_data_and_unwind<
     runtime_functions: &[PeRuntimeFunction<'_>],
     writable_data: &[PeWritableData<'_, '_>],
 ) -> Result<PeImage<MAX_IMAGE_BYTES>, LinkerError> {
+    link_x86_64_pe_with_data_unwind_and_readonly_relocations::<MAX_IMAGE_BYTES, MAX_LINKED_BYTES>(
+        inputs,
+        entry_symbol,
+        runtime_functions,
+        writable_data,
+        &[],
+    )
+}
+
+pub fn link_x86_64_pe_with_data_unwind_and_readonly_relocations<
+    const MAX_IMAGE_BYTES: usize,
+    const MAX_LINKED_BYTES: usize,
+>(
+    inputs: &[LinkInput<'_, '_, '_>],
+    entry_symbol: &str,
+    runtime_functions: &[PeRuntimeFunction<'_>],
+    writable_data: &[PeWritableData<'_, '_>],
+    readonly_writable_relocations: &[PeReadonlyWritableRelocation<'_>],
+) -> Result<PeImage<MAX_IMAGE_BYTES>, LinkerError> {
     const FILE_ALIGNMENT: usize = 0x200;
     const SECTION_ALIGNMENT: usize = 0x1000;
     const HEADERS: usize = 0x200;
@@ -5448,6 +5632,9 @@ pub fn link_x86_64_pe_with_data_and_unwind<
     let linked =
         link_x86_64_static_aligned::<MAX_LINKED_BYTES>(inputs, entry_symbol, SECTION_ALIGNMENT)?;
     if runtime_functions.len() > MAX_PE_RUNTIME_FUNCTIONS {
+        return Err(LinkerError::TooManyRelocations);
+    }
+    if readonly_writable_relocations.len() > MAX_LINK_RELOCATIONS {
         return Err(LinkerError::TooManyRelocations);
     }
     let text_size = linked.text_length;
@@ -5754,6 +5941,38 @@ pub fn link_x86_64_pe_with_data_and_unwind<
                 u64::try_from(target).map_err(|_| LinkerError::OffsetOverflow)?,
             )?;
         }
+    }
+    for relocation in readonly_writable_relocations {
+        validate_symbol(relocation.readonly_owner)?;
+        validate_symbol(relocation.target_writable_symbol)?;
+        let target_index = writable_data
+            .iter()
+            .position(|data| data.symbol == relocation.target_writable_symbol)
+            .ok_or(LinkerError::UndefinedSymbol)?;
+        let pointer_rva = resolve_readonly_symbol(
+            inputs,
+            &linked.layouts,
+            linked.readonly_offset,
+            readonly_rva,
+            relocation.readonly_owner,
+            relocation.readonly_offset,
+        )?;
+        let pointer_offset = readonly_raw
+            .checked_add(
+                pointer_rva
+                    .checked_sub(readonly_rva)
+                    .ok_or(LinkerError::OffsetOverflow)?,
+            )
+            .ok_or(LinkerError::OffsetOverflow)?;
+        let target = IMAGE_BASE
+            .checked_add(writable_rva)
+            .and_then(|address| address.checked_add(writable_offsets[target_index]))
+            .ok_or(LinkerError::OffsetOverflow)?;
+        patch_u64(
+            &mut bytes,
+            pointer_offset,
+            u64::try_from(target).map_err(|_| LinkerError::OffsetOverflow)?,
+        )?;
     }
     for (input, layout) in inputs.iter().zip(linked.layouts.iter()) {
         for relocation in input.relocations {

@@ -983,12 +983,24 @@ The next bounded PE increment admits externally visible storage-class-2
 definitions in selected `.data$` and `.bss$` sections. The same eight-CGU probe
 now reads one exported initialized global and one exported zero-fill global from
 the defining codegen unit, alongside its object-local state. Exact unreferenced
-gnullvm `.data$\u0001__imp_` forwarding slots are excluded; cross-object Rust
-global access through those slots remains unsupported and fails closed. MRML
+gnullvm `.data$\u0001__imp_` forwarding slots are excluded. MRML
 reports 1,028 zero-fill bytes, emits 2,560 bytes, and returns 42; pinned rust-lld
 consumes the identical inputs, emits 2,048 bytes, and also returns 42. This is
 external-definition compatibility evidence, not import-table or general global
 data support.
+
+Cross-object Rust global reads are now supported for the exact gnullvm
+`.rdata$.refptr.*` shape. The bounded decoder requires one eight-byte zero
+payload, one AMD64 `ADDR64` relocation, and one undefined external target per
+record. Ordered gaps occupied by COFF relocation records remain part of the
+non-executable readonly input extent, and the PE serializer patches each
+pointer only after final writable layout. The entry object in the durable probe
+reads both exported globals through two refptr records while the archive's
+defining codegen unit also reads them directly. MRML emits 2,560 bytes and
+pinned rust-lld emits 3,584 bytes from identical inputs; both return 42 and the
+MRML image still reports exactly 1,028 zero-fill bytes. This proves the bounded
+static refptr form, not arbitrary COFF import pointers, DLL imports, writable
+COMDAT selection, or general PE relocation support.
 
 The independently authored GNU thin-archive probe stores a helper, its
 transitive leaf, and an unused function in three external objects. It deletes

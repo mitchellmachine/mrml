@@ -13,16 +13,17 @@ use mrml_rustc::{
     ElfSelectedSections, LinkDefinition, LinkDefinitionTarget, LinkInput, LinkRelocation,
     LinkRelocationTarget, MAX_ARCHIVE_MEMBERS, MAX_ARCHIVE_SYMBOLS, MAX_LINK_DEFINITIONS,
     MAX_LINK_INPUTS, MAX_LINK_RELOCATIONS, MAX_PE_RUNTIME_FUNCTIONS, ObjectFormat,
-    PeRuntimeFunction, PeWritableData, PeWritableRelocation, TargetLayout,
-    compile_source_function_with_options, decode_unix_archive,
-    decode_x86_64_coff_runtime_functions, decode_x86_64_coff_text_fragment,
-    decode_x86_64_coff_writable_data_fragment,
+    PeReadonlyWritableRelocation, PeRuntimeFunction, PeWritableData, PeWritableRelocation,
+    TargetLayout, compile_source_function_with_options, decode_unix_archive,
+    decode_x86_64_coff_readonly_writable_relocation, decode_x86_64_coff_runtime_functions,
+    decode_x86_64_coff_text_fragment, decode_x86_64_coff_writable_data_fragment,
     decode_x86_64_elf_selected_definitions_from_sections,
     decode_x86_64_elf_selected_relocations_from_sections, decode_x86_64_elf_selected_sections,
     decode_x86_64_elf_with_definitions, inventory_x86_64_elf_symbols,
-    link_x86_64_elf_selected_executable, link_x86_64_pe_with_data_and_unwind,
+    link_x86_64_elf_selected_executable, link_x86_64_pe_with_data_unwind_and_readonly_relocations,
     select_ordered_static_link_members, select_x86_64_elf_link_sections_detailed,
-    x86_64_coff_text_fragment_count, x86_64_coff_writable_section_count,
+    x86_64_coff_readonly_writable_relocation_count, x86_64_coff_text_fragment_count,
+    x86_64_coff_writable_section_count,
 };
 
 #[cfg_attr(test, allow(dead_code))]
@@ -972,6 +973,73 @@ fn selected_writable_data<'data, 'relocations>(
     Ok(output)
 }
 
+fn selected_readonly_writable_relocations<'data>(
+    objects: &[&'data [u8]],
+    archive_group: &[u16],
+    archive_member: &[u16],
+    selected: &SelectedLinkInputs<'data, '_, '_>,
+) -> Result<Vector<PeReadonlyWritableRelocation<'data>>> {
+    let mut count = 0usize;
+    for object in objects {
+        count = count
+            .checked_add(
+                x86_64_coff_readonly_writable_relocation_count(object).map_err(|error| {
+                    anyhow!("could not count COFF refptr relocations: {}", error)
+                })?,
+            )
+            .ok_or_else(|| anyhow!("COFF refptr relocation count overflow"))?;
+    }
+    if count > MAX_LINK_RELOCATIONS {
+        return Err(anyhow!("too many COFF refptr relocations: {}", count));
+    }
+    let mut output = Vector::with_capacity(count)
+        .map_err(|_| anyhow!("could not allocate selected COFF refptr list"))?;
+    for object_index in 0..objects.len() {
+        let group = archive_group[object_index];
+        let member = archive_member[object_index];
+        let owner = selected
+            .inputs
+            .iter()
+            .zip(
+                selected
+                    .archive_group
+                    .iter()
+                    .zip(selected.archive_member.iter()),
+            )
+            .find(|(_, (selected_group, selected_member))| {
+                **selected_group == group && **selected_member == member
+            })
+            .map(|(input, _)| input.symbol);
+        if let Some(owner) = owner {
+            let object = objects[object_index];
+            let relocation_count =
+                x86_64_coff_readonly_writable_relocation_count(object).map_err(|error| {
+                    anyhow!(
+                        "could not count selected COFF refptr relocations: {}",
+                        error
+                    )
+                })?;
+            for relocation_index in 0..relocation_count {
+                let relocation = decode_x86_64_coff_readonly_writable_relocation(
+                    object,
+                    relocation_index,
+                    owner,
+                )
+                .map_err(|error| {
+                    anyhow!(
+                        "could not decode selected COFF refptr relocation: {}",
+                        error
+                    )
+                })?;
+                output
+                    .try_push(relocation)
+                    .map_err(|_| anyhow!("could not allocate selected COFF refptr list"))?;
+            }
+        }
+    }
+    Ok(output)
+}
+
 fn write_linked_pe(
     objects: &[&[u8]],
     archive_group: &[u16],
@@ -1019,12 +1087,15 @@ fn write_linked_pe(
         &selected,
         &mut writable_arenas,
     )?;
+    let readonly_writable_relocations =
+        selected_readonly_writable_relocations(objects, archive_group, archive_member, &selected)?;
     let payload = selected_payload_bound(&selected.inputs, &runtime_functions, &writable_data)?;
     if payload <= 16 * 1024 {
         return write_pe_image::<{ 32 * 1024 }, { 16 * 1024 }>(
             &selected.inputs,
             &runtime_functions,
             &writable_data,
+            &readonly_writable_relocations,
             entry,
             output,
         );
@@ -1034,6 +1105,7 @@ fn write_linked_pe(
             &selected.inputs,
             &runtime_functions,
             &writable_data,
+            &readonly_writable_relocations,
             entry,
             output,
         );
@@ -1042,6 +1114,7 @@ fn write_linked_pe(
         &selected.inputs,
         &runtime_functions,
         &writable_data,
+        &readonly_writable_relocations,
         entry,
         output,
     )
@@ -1051,16 +1124,19 @@ fn write_pe_image<const MAX_IMAGE: usize, const MAX_LINKED: usize>(
     inputs: &[LinkInput<'_, '_, '_>],
     runtime_functions: &[PeRuntimeFunction<'_>],
     writable_data: &[PeWritableData<'_, '_>],
+    readonly_writable_relocations: &[PeReadonlyWritableRelocation<'_>],
     entry: &str,
     output: &str,
 ) -> Result<()> {
-    let executable = link_x86_64_pe_with_data_and_unwind::<MAX_IMAGE, MAX_LINKED>(
-        inputs,
-        entry,
-        runtime_functions,
-        writable_data,
-    )
-    .map_err(|_| anyhow!("could not serialize linked PE image"))?;
+    let executable =
+        link_x86_64_pe_with_data_unwind_and_readonly_relocations::<MAX_IMAGE, MAX_LINKED>(
+            inputs,
+            entry,
+            runtime_functions,
+            writable_data,
+            readonly_writable_relocations,
+        )
+        .map_err(|_| anyhow!("could not serialize linked PE image"))?;
     mrml_runtime::write_file(output, executable.bytes())?;
     println!(
         "linked {} to {} deterministic PE bytes",
