@@ -1023,6 +1023,9 @@ impl<const TASKS: usize, const CAPS: usize> TaskRuntime<TASKS, CAPS> {
                     .is_some_and(|domain| domain.task == receiver)
             })
             .ok_or(TaskRuntimeError::MissingTask)?;
+        if !self.scheduler.contains(receiver) {
+            return Err(TaskRuntimeError::IntegrityFailure);
+        }
         if self.domains[receiver_slot]
             .as_ref()
             .is_none_or(|domain| usize::from(domain.inbox_count) == TASK_INBOX_MESSAGES)
@@ -2283,6 +2286,41 @@ mod tests {
                 .unwrap()
                 .authorize(derived, Rights::READ),
             Ok(delegated_object)
+        );
+    }
+
+    #[test]
+    fn delivery_rejects_unscheduled_receiver_before_enqueue() {
+        let mut runtime = TaskRuntime::<2, 1>::new(1_000, 1).unwrap();
+        let sender = runtime
+            .create(Priority::NORMAL, context(0x20_0000, 0x40_0000))
+            .unwrap();
+        let receiver = runtime
+            .create(Priority::NORMAL, context(0x30_0000, 0x50_0000))
+            .unwrap();
+        let object = ObjectId(0x47);
+        let endpoint_capability = runtime
+            .capabilities_mut(sender)
+            .unwrap()
+            .insert(object, Rights::SIGNAL)
+            .unwrap();
+        assert!(matches!(runtime.start(), ScheduleOutcome::Switch { to, .. } if to == sender));
+        runtime.scheduler.detach(receiver).unwrap();
+
+        assert_eq!(
+            runtime.deliver_ipc(
+                sender,
+                receiver,
+                &mut Endpoint::new(object),
+                endpoint_capability,
+                b"not-enqueued",
+                &[],
+            ),
+            Err(TaskRuntimeError::IntegrityFailure)
+        );
+        assert_eq!(
+            runtime.peek_ipc_shape(receiver),
+            Err(TaskRuntimeError::InboxEmpty)
         );
     }
 

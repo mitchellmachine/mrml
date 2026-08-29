@@ -219,6 +219,9 @@ access. The security/acceptance gate is canonical in
 - A capacity-denied receive does not consume or orphan derived authority; a
   focused test retrieves the exact attenuated handle only after sufficient
   capability capacity is supplied.
+- IPC delivery verifies the receiver's exact scheduler identity before any
+  capability transfer or enqueue, preventing a late wake failure from leaving
+  an apparently failed message queued.
 - Exit, fault, and protocol-violation peer-death publication preflight the
   complete reciprocal graph before domain or scheduler mutation. Corrupt or
   duplicate relations and unavailable result capacity fail without partial

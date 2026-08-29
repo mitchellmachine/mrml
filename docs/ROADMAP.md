@@ -2176,6 +2176,9 @@ live composition remains pending.
    A capability-bearing retry test proves the insufficient attempt retains the
    queued authority and the sufficient retry yields the exact derived READ
    handle, raising the kernel total to 602.
+   Delivery now preflights the receiver's exact scheduler identity before
+   transfer, sequence, enqueue, or wake. A divergence test proves no message is
+   enqueued on rejection and raises the kernel total to 603.
    Warning-free `invalid_return_probe` kernel/service profiles now encode the
    real CPL3 invalid-stack interrupt, typed peer-death cleanup marker, peer
    execution, clean exit, and terminal state marker. Runner execution remains
