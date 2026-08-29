@@ -9,8 +9,8 @@ the named commit and current source.
 ## Recoverable baseline
 
 - Branch: `main`
-- Compiler checkpoint commit: `e5109815`
-  (`compiler: admit bounded GNU thin archives`)
+- Compiler checkpoint commit: `08e05e53`
+  (`compiler: lazily extract GNU thin archives`)
 - Remote state when recorded: `origin/main` includes the bounded MRML-owned
   static-link core, exact MRML COFF and ELF64 ingestion, deterministic
   import-free PE32+/ELF64 executable serialization, explicit compiler-driver
@@ -61,24 +61,24 @@ named edition can be adopted through a pinned, workspace-wide migration.
 
 ## Latest bounded linker milestone
 
-Commit `e5109815` validates GNU thin-archive headers, long-name-table member
-paths, omitted external payloads, and member-count/offset arithmetic in the
-dependency-free core. The hosted driver resolves relative members against the
-archive directory, rejects absolute paths, parent traversal, drive/ADS forms,
-and canonical or symlink escape, reads each member under the existing 64 MiB
-bound, and materializes one bounded ordinary archive before using the existing
-left-to-right archive/member selector. This preserves selection identity and
-ordering but does not yet use the thin symbol index to avoid reading unused
-external members. An independently authored Rust 2024 entry plus external
-`objects/helper.o` linked through MRML and exact pinned gnullvm rust-lld; both
-hosted Arch Linux outputs exited 42. MRML emitted 4,126 bytes and rust-lld
-emitted 1,280 bytes. Windows and native Arch Linux each passed 744 core tests,
-integrations of 2/10/351/52, and six driver tests. Formatting and `mrml doctor`
+Commit `08e05e53` uses a GNU thin archive's untrusted symbol index to open only
+candidate external objects when preceding inputs have an exact bounded symbol
+inventory. Every selected candidate is independently inventoried, transitive
+references reach a stable fixed point, and empty metadata placeholders preserve
+original member identities without reading unused files. Missing indexes and a
+preceding ordinary archive conservatively retain eager materialization. The
+durable three-member probe deletes an indexed but unreferenced external object;
+MRML still selects the helper and its transitive leaf and exits 42. The probe
+restores the unused file for exact pinned gnullvm rust-lld, which also exits 42.
+MRML emitted 4,134 bytes and rust-lld emitted 1,416 bytes. Windows passed 744
+core tests, integrations of 2/10/351/52, and six driver tests. Concurrent
+compiler work advanced the Linux run to 745 core tests and integrations of
+2/10/351/53; all passed with six driver tests. Formatting and `mrml doctor`
 passed. `mrml audit` still stops at the unrelated concurrently modified
 semantic-execution command fingerprint `fnv1a64:0fe5cf1836d3e0dc`; no audit
-success is claimed. General `.rlib` compatibility, lazy thin-index extraction,
-production linker selection, and broad performance superiority remain
-unproven. Patent review: **NOT_TRIGGERED**.
+success is claimed. General `.rlib` compatibility, production linker selection,
+and broad performance superiority remain unproven. Patent review:
+**NOT_TRIGGERED**.
 
 Commit `21f59d59` admits exact allocated `.tdata.*` and `.tbss.*` sections,
 retains typed `STT_TLS` definitions, applies checked local-exec
