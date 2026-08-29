@@ -7620,6 +7620,40 @@ impl<
             self.patch_forward_branch(done_small)?;
             return Ok(());
         }
+        if let ExprKind::IntegerBitTransform {
+            base,
+            transform: crate::expression::IntegerBitTransform::Signum,
+        } = expression.kind
+        {
+            let base_type = runtime_expression_type_with_locals(
+                self.function,
+                self.resolver,
+                &self.locals[..self.saved_locals],
+                tree,
+                base,
+                1,
+            )
+            .map_err(|kind| self.error(kind))?;
+            if base_type != RuntimeExpressionType::Integer(Some(crate::IntegerType::I128))
+                || expected_type != base_type
+            {
+                return Err(self.error(CodegenErrorKind::RuntimeTypeMismatch));
+            }
+            self.emit_wide_integer_return(tree, base, expected_type)?;
+            self.emit(&[0x48, 0x85, 0xd2])?;
+            let negative = self.emit_forward_branch(0x88)?;
+            self.emit(&[
+                0x48, 0x09, 0xd0, 0x0f, 0x95, 0xc0, 0x0f, 0xb6, 0xc0, 0x31, 0xd2,
+            ])?;
+            let done = self.emit_unconditional_forward_branch()?;
+            self.patch_forward_branch(negative)?;
+            self.emit(&[
+                0x48, 0xc7, 0xc0, 0xff, 0xff, 0xff, 0xff, 0x48, 0xc7, 0xc2, 0xff, 0xff,
+                0xff, 0xff,
+            ])?;
+            self.patch_forward_branch(done)?;
+            return Ok(());
+        }
         if let ExprKind::IntegerBitTransform { base, transform } = expression.kind
             && matches!(
                 transform,

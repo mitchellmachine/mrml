@@ -203,6 +203,8 @@ in the high word by 64.
 Unsigned wide next-power operations distinguish the low/high-word crossover;
 overflow traps for checked `next_power_of_two` and wraps to zero for the
 wrapping form.
+Wide signed `signum` returns the canonical two-word representations of negative
+one, zero, or positive one.
 `wrapping_div` and `wrapping_rem` preserve the mandatory zero-divisor trap but
 return `i128::MIN` and zero respectively for the signed minimum divided by or
 remaindered by negative one.

@@ -123,6 +123,8 @@ const MRML_V1_WIDE_UNSIGNED_NEXT_POWER_SOURCE: &str =
     "#[mrml_abi::export(version = 1)] pub fn probe(input: u128) -> u128 { input.next_power_of_two() }";
 const MRML_V1_WIDE_UNSIGNED_WRAPPING_NEXT_POWER_SOURCE: &str =
     "#[mrml_abi::export(version = 1)] pub fn probe(input: u128) -> u128 { input.wrapping_next_power_of_two() }";
+const MRML_V1_WIDE_SIGNED_SIGNUM_SOURCE: &str =
+    "#[mrml_abi::export(version = 1)] pub fn probe(input: i128) -> i128 { input.signum() }";
 const RUSTC_WIDE_UNSIGNED_WRAPPING_NEXT_POWER_SOURCE: &str = concat!(
     "#![feature(wrapping_next_power_of_two)]\n",
     "#[mrml_abi::export(version = 1)] pub fn probe(input: u128) -> u128 { input.wrapping_next_power_of_two() }"
@@ -1512,6 +1514,27 @@ fn mrml_v1_wide_next_powers_of_two_match_both_oracle_words() {
         };
         assert_eq!(actual, rustc_mrml_v1_observations(oracle_source, driver));
     }
+}
+
+#[test]
+fn mrml_v1_wide_signed_signum_matches_both_oracle_words() {
+    let source = MRML_V1_WIDE_SIGNED_SIGNUM_SOURCE;
+    let code = compile(source);
+    let inputs = [i128::MIN, -1, 0, 1, i128::MAX];
+    let actual = inputs
+        .into_iter()
+        .flat_map(|input| {
+            let returned = unsafe { call_mrml_v1_wide_return(code.pointer, input as u128) };
+            [returned as u64, (returned >> 64) as u64]
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(
+        actual,
+        rustc_mrml_v1_observations(
+            source,
+            "for input in [i128::MIN, -1, 0, 1, i128::MAX] { let returned = probe(input); println!(\"{}\", returned as u64); println!(\"{}\", ((returned as u128) >> 64) as u64); }",
+        )
+    );
 }
 
 #[test]
