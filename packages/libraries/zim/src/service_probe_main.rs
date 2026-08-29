@@ -90,14 +90,28 @@ unsafe extern "sysv64" fn mrml_zim_probe(
     unsafe { terminate() }
 }
 
-fn capability_descriptor(capability: u64, rights: Rights) -> [u8; 16] {
-    let mut descriptor = [0; 16];
-    descriptor[..8].copy_from_slice(&capability.to_le_bytes());
-    descriptor[8..10].copy_from_slice(&rights.bits().to_le_bytes());
+#[repr(C, align(8))]
+struct CapabilityDescriptor([u8; mrml_kernel::CAPABILITY_TRANSFER_DESCRIPTOR_BYTES]);
+
+fn capability_descriptor(capability: u64, rights: Rights) -> CapabilityDescriptor {
+    let mut descriptor = CapabilityDescriptor([
+        0;
+        mrml_kernel::CAPABILITY_TRANSFER_DESCRIPTOR_BYTES
+    ]);
+    descriptor.0[..8].copy_from_slice(&capability.to_le_bytes());
+    descriptor.0[8..10].copy_from_slice(&rights.bits().to_le_bytes());
     descriptor
 }
 
-unsafe fn send(endpoint: u64, receiver: u64, payload: &[u8], descriptor: &[u8; 16]) {
+unsafe fn send(
+    endpoint: u64,
+    receiver: u64,
+    payload: &[u8],
+    descriptor: &CapabilityDescriptor,
+) {
+    if payload.is_empty() || payload.len() > mrml_kernel::MAX_INLINE_PAYLOAD {
+        halt();
+    }
     let mut status = 4u64;
     unsafe {
         asm!(
@@ -107,7 +121,7 @@ unsafe fn send(endpoint: u64, receiver: u64, payload: &[u8], descriptor: &[u8; 1
             in("rsi") receiver,
             inlateout("rdx") payload.as_ptr() as u64 => _,
             in("r10") payload.len() as u64,
-            in("r8") descriptor.as_ptr() as u64,
+            in("r8") descriptor.0.as_ptr() as u64,
             in("r9") 1u64,
             options(nostack)
         )

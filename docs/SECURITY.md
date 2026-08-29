@@ -144,7 +144,8 @@ access. The security/acceptance gate is canonical in
 - Service-image capability-transfer descriptors have explicit ABI alignment;
   malformed width, count, alignment, or payload bounds fail before the trap.
 - The MRML-native ZIM consumer applies the same exact-capacity rule at its
-  buffered-receive boundary.
+  buffered-receive boundary and uses explicitly aligned exact-width storage for
+  its outgoing capability descriptor.
 - Writable and executable mappings are mutually exclusive.
 - Authority, replay state, ownership, mappings, and lifecycle transitions are
   explicit and commit only after validation; partial failure rolls back or

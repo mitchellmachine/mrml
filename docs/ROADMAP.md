@@ -510,7 +510,9 @@ Three new persistent deltas are documented before implementation:
   reply ordering.
   The MRML-native ZIM consumer's receive wrapper now rejects payload or
   capability counts beyond its supplied slices before returning them. Its
-  native artifact builds and the Linux ZIM suite passes six tests.
+  outgoing descriptor uses explicit 8-byte-aligned, exact 16-byte storage and
+  its send wrapper rejects invalid payload lengths. Its native artifact builds
+  and the Linux ZIM suite passes six tests.
   The configuration service now provides a bounded typed persistence
   prerequisite for component placement preference and system isolation-mode
   selection, using exact setting/root capabilities and its authenticated

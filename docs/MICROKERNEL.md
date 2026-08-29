@@ -77,9 +77,12 @@ service envelope is returned. Focused Linux suites pass 27 Zstd and 34 FAT32
 tests. This is service-boundary hardening, not new provider authority or
 installed-service evidence. The MRML-native ZIM consumer probe now applies the
 same exact-capacity rule before exposing receive results; its native artifact
-builds and its Linux suite passes six tests. Patent review: **NOT_TRIGGERED**;
-this is an ordinary bounds check in an existing syscall adapter. See [the patent
-review log](patents/REVIEW_LOG.md). A hosted `TaskRuntime` adapter also completes the full
+builds and its Linux suite passes six tests. Its single outgoing capability
+descriptor now also uses explicit 8-byte-aligned, exact 16-byte storage, and
+its send wrapper rejects an invalid payload length before trapping. Patent
+review: **NOT_TRIGGERED**; these are ordinary bounds and ABI-alignment checks in
+an existing syscall adapter. See [the patent review log](patents/REVIEW_LOG.md).
+A hosted `TaskRuntime` adapter also completes the full
 authenticated request/
 reply path: only the launch-bound sender is accepted, reply authority is
 separate, the transferred leaf is revoked before reply visibility, and
