@@ -1271,3 +1271,23 @@ mean on this exact Windows host and workload. The probe is an `ADDR64`
 regression and narrow performance comparison, not representative REL32 evidence
 or general linker superiority. Other read-only relocation encodings and
 discontiguous non-COMDAT read-only packing remain incomplete.
+
+Conventionally named COFF `.debug`, `.debug$...`, and `.debug_...` sections
+may now be validated and discarded when they are explicitly discardable,
+initialized-data sections and are neither writable nor executable. The bounded
+validator checks the relocation-table extent, every target symbol index, the
+known AMD64 relocation kind, and the complete relocation field width before
+omission. Retained debug sections and malformed records continue to fail
+closed; this does not emit or preserve debug information. Synthetic tests cover
+the accepted `SECREL` shape and reject a missing discardable flag, an invalid
+symbol index, an unknown kind, an out-of-range field, and a truncated field.
+Exact detached Windows gnullvm and Arch Linux runs each passed 780 compiler-core
+unit tests, both component probes, 10 conformance tests, 351 replacement tests,
+85 semantic-execution tests, and eight driver tests. The durable pinned gnullvm
+debug-rlib probe produced 1,024-byte executables through both MRML and rust-lld;
+both returned 42. Fifty measured links after five warmups recorded MRML at
+5.549 ms median/6.714 ms mean versus rust-lld at 22.794 ms median/24.226 ms mean
+on this exact Windows host and tiny workload. This is a narrow startup-heavy
+regression result, not representative-library or general linker superiority
+evidence. Retained debug information, CodeView/PDB production, arbitrary COFF
+sections, and broader Rust-library admission remain incomplete.

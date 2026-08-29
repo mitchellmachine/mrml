@@ -3785,6 +3785,63 @@ fn coff_code_symbol_in_section<'a>(
     )
 }
 
+fn validate_discardable_coff_debug_section(
+    object: &[u8],
+    header: usize,
+    section_size: usize,
+    symbol_count: usize,
+) -> Result<(), LinkerError> {
+    let characteristics = read_u32(object, header + 36)?;
+    if characteristics & 0x0200_0000 == 0
+        || characteristics & 0xa100_0000 != 0
+        || characteristics & 0x0000_0040 == 0
+    {
+        return Err(LinkerError::UnsupportedCoff);
+    }
+    let relocation_count = usize::from(read_u16(object, header + 32)?);
+    let relocation_start =
+        usize::try_from(read_u32(object, header + 24)?).map_err(|_| LinkerError::OffsetOverflow)?;
+    let relocation_end = relocation_start
+        .checked_add(
+            relocation_count
+                .checked_mul(10)
+                .ok_or(LinkerError::OffsetOverflow)?,
+        )
+        .ok_or(LinkerError::OffsetOverflow)?;
+    object
+        .get(relocation_start..relocation_end)
+        .ok_or(LinkerError::InvalidCoff)?;
+    for index in 0..relocation_count {
+        let record = relocation_start
+            .checked_add(index.checked_mul(10).ok_or(LinkerError::OffsetOverflow)?)
+            .ok_or(LinkerError::OffsetOverflow)?;
+        let field =
+            usize::try_from(read_u32(object, record)?).map_err(|_| LinkerError::OffsetOverflow)?;
+        let relocation_width = match read_u16(object, record + 8)? {
+            0 | 15 => 0,
+            1 => 8,
+            2..=9 | 11 | 13 | 14 | 16 => 4,
+            10 => 2,
+            12 => 1,
+            _ => return Err(LinkerError::UnsupportedCoff),
+        };
+        if field >= section_size
+            || field
+                .checked_add(relocation_width)
+                .filter(|end| *end <= section_size)
+                .is_none()
+        {
+            return Err(LinkerError::InvalidRelocationOffset);
+        }
+        let target = usize::try_from(read_u32(object, record + 4)?)
+            .map_err(|_| LinkerError::OffsetOverflow)?;
+        if target >= symbol_count {
+            return Err(LinkerError::InvalidCoff);
+        }
+    }
+    Ok(())
+}
+
 /// Decodes one nonempty COFF text fragment by section order. Unwind sections
 /// are validated and retained for the separate typed unwind decoder; they are
 /// never folded into executable bytes or silently treated as ordinary data.
@@ -3856,6 +3913,7 @@ pub fn decode_x86_64_coff_text_fragment_from_inventory<'data, 'relocations, 'def
     let mut unwind_sections = [false; MAX_COFF_SECTIONS + 1];
     let mut writable_sections = [false; MAX_COFF_SECTIONS + 1];
     let mut metadata_sections = [false; MAX_COFF_SECTIONS + 1];
+    let mut debug_sections = [false; MAX_COFF_SECTIONS + 1];
     let mut relocation_table = (0usize, 0usize);
     let mut text_ordinal = 0usize;
     for section in 0..section_count {
@@ -3917,6 +3975,9 @@ pub fn decode_x86_64_coff_text_fragment_from_inventory<'data, 'relocations, 'def
                 return Err(LinkerError::UnsupportedCoff);
             }
             metadata_sections[section + 1] = true;
+        } else if name == ".debug" || name.starts_with(".debug$") || name.starts_with(".debug_") {
+            validate_discardable_coff_debug_section(object, header, contents.len(), symbol_count)?;
+            debug_sections[section + 1] = true;
         } else if (name == ".data" || name == ".bss") && contents.is_empty() {
             ignored_empty_sections[section + 1] = true;
         } else {
@@ -4028,6 +4089,10 @@ pub fn decode_x86_64_coff_text_fragment_from_inventory<'data, 'relocations, 'def
                     .copied()
                     .unwrap_or(false)
                 || metadata_sections
+                    .get(usize::try_from(section).map_err(|_| LinkerError::OffsetOverflow)?)
+                    .copied()
+                    .unwrap_or(false)
+                || debug_sections
                     .get(usize::try_from(section).map_err(|_| LinkerError::OffsetOverflow)?)
                     .copied()
                     .unwrap_or(false))
@@ -8278,6 +8343,26 @@ mod tests {
         object
     }
 
+    fn two_fragment_coff_with_discardable_debug() -> std::vec::Vec<u8> {
+        let original = two_fragment_coff_with_removed_metadata();
+        let mut object = std::vec![0u8; original.len() + 14];
+        object[..157].copy_from_slice(&original[..157]);
+        object[171..].copy_from_slice(&original[157..]);
+        object[8..12].copy_from_slice(&171u32.to_le_bytes());
+
+        object[100..140].fill(0);
+        object[100..106].copy_from_slice(b".debug");
+        object[116..120].copy_from_slice(&4u32.to_le_bytes());
+        object[120..124].copy_from_slice(&157u32.to_le_bytes());
+        object[124..128].copy_from_slice(&161u32.to_le_bytes());
+        object[132..134].copy_from_slice(&1u16.to_le_bytes());
+        object[136..140].copy_from_slice(&0x4230_0040u32.to_le_bytes());
+        object[157..161].copy_from_slice(&[1, 2, 3, 4]);
+        object[165..169].copy_from_slice(&0u32.to_le_bytes());
+        object[169..171].copy_from_slice(&11u16.to_le_bytes());
+        object
+    }
+
     fn two_fragment_coff_with_associative_readonly() -> std::vec::Vec<u8> {
         let mut object = std::vec![0u8; 368];
         object[0..2].copy_from_slice(&0x8664u16.to_le_bytes());
@@ -9528,6 +9613,48 @@ mod tests {
                 &mut legacy_definitions,
             ),
             Err(LinkerError::UnsupportedCoff)
+        );
+    }
+
+    #[test]
+    fn validates_and_discards_bounded_coff_debug_sections() {
+        fn decode(object: &[u8]) -> Result<(), LinkerError> {
+            let mut relocations = [LinkRelocation {
+                offset: 0,
+                target: LinkRelocationTarget::Symbol("unused"),
+                addend: 0,
+            }; MAX_LINK_RELOCATIONS];
+            let mut definitions = [LinkDefinition {
+                symbol: "unused",
+                target: LinkDefinitionTarget::Text(0),
+            }; MAX_LINK_DEFINITIONS];
+            decode_x86_64_coff_text_fragment(object, 0, &mut relocations, &mut definitions)
+                .map(|_| ())
+        }
+
+        let object = two_fragment_coff_with_discardable_debug();
+        assert_eq!(decode(&object), Ok(()));
+
+        let mut retained = object.clone();
+        retained[136..140].copy_from_slice(&0x4030_0040u32.to_le_bytes());
+        assert_eq!(decode(&retained), Err(LinkerError::UnsupportedCoff));
+        let mut bad_target = object.clone();
+        bad_target[165..169].copy_from_slice(&2u32.to_le_bytes());
+        assert_eq!(decode(&bad_target), Err(LinkerError::InvalidCoff));
+        let mut bad_kind = object.clone();
+        bad_kind[169..171].copy_from_slice(&17u16.to_le_bytes());
+        assert_eq!(decode(&bad_kind), Err(LinkerError::UnsupportedCoff));
+        let mut bad_field = object;
+        bad_field[161..165].copy_from_slice(&4u32.to_le_bytes());
+        assert_eq!(
+            decode(&bad_field),
+            Err(LinkerError::InvalidRelocationOffset)
+        );
+        let mut truncated_field = two_fragment_coff_with_discardable_debug();
+        truncated_field[161..165].copy_from_slice(&1u32.to_le_bytes());
+        assert_eq!(
+            decode(&truncated_field),
+            Err(LinkerError::InvalidRelocationOffset)
         );
     }
 
