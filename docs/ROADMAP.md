@@ -320,6 +320,11 @@ rejects read-only writes before invoking a replaceable AHCI mechanism backend.
 AHCI passes 60 tests on Windows and Arch Linux. Production DMA-buffer binding
 and service-loop dispatch remain planned.
 
+Verified completed-slot recycling is now **PARTIALLY IMPLEMENTED IN SOURCE**.
+The exact completed command table and mutable header fields are cleared and
+read-verified before the active port and data extent can be reused; all cleanup
+uncertainty quarantines both. AHCI passes 62 tests on Windows and Arch Linux.
+
 Bounded AHCI port-engine activation is now **PARTIALLY IMPLEMENTED IN SOURCE**.
 `start_ahci_port_engine` consumes only initialized command memory, exact-matches
 the ABAR and DMA generations, requires disabled interrupts and an idle task file

@@ -353,6 +353,15 @@ library passes 60 tests on Windows and Arch Linux. A production DMA-buffer
 backend and read/write service-loop dispatch remain **PLANNED**; no hardware I/O
 is claimed.
 
+Completed AHCI command-slot recycling is now **PARTIALLY IMPLEMENTED IN
+SOURCE**. It consumes only a verified completion, zeroes and verifies the exact
+completed 256-byte command table, then restores and verifies that slot's
+initialized 32-byte header with only its immutable table address retained.
+Other slots are not touched. Any write or read-back uncertainty quarantines the
+exact port layout and data extent; only full cleanup returns both for reuse. The
+AHCI library passes 62 tests on Windows and Arch Linux. This is memory-model
+evidence, not cache-coherence, DMA, IOMMU, or physical-device evidence.
+
 The command-memory gate is now **PARTIALLY IMPLEMENTED IN SOURCE**. The driver
 checks every word in the exact command-list, received-FIS, and per-slot command-
 table extents is zero before writing anything. It then gives every advertised

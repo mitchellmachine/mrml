@@ -9,6 +9,7 @@ mod ahci_cleanup;
 mod ahci_command;
 mod ahci_command_execute;
 mod ahci_command_memory;
+mod ahci_command_recycle;
 mod ahci_controller;
 mod ahci_discovery;
 mod ahci_dma;
@@ -38,6 +39,10 @@ pub use ahci_command_execute::{
 pub use ahci_command_memory::{
     initialize_ahci_command_memory, AhciCommandMemoryError, AhciCommandMemoryFailure,
     AhciCommandMemoryIo, InitializedAhciCommandMemory,
+};
+pub use ahci_command_recycle::{
+    recycle_ahci_command_slot, AhciCommandRecycleError, AhciCommandRecycleFailure,
+    RecycledAhciCommand,
 };
 pub use ahci_controller::{
     reset_ahci_controller, AhciControllerError, AhciControllerSnapshot, AhciRegisterIo,

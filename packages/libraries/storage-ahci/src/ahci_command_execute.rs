@@ -67,6 +67,7 @@ impl AhciCommandExecuteFailure {
 #[derive(Debug, Eq, PartialEq)]
 pub struct AhciCommandCompletion {
     owner: ActiveAhciPort,
+    slot: u8,
     command: AhciAtaCommand,
     data: AhciDataDmaRegion,
     lba: u64,
@@ -74,11 +75,33 @@ pub struct AhciCommandCompletion {
 }
 
 impl AhciCommandCompletion {
+    #[cfg(test)]
+    pub(crate) const fn from_parts(
+        owner: ActiveAhciPort,
+        slot: u8,
+        command: AhciAtaCommand,
+        data: AhciDataDmaRegion,
+        lba: u64,
+        sector_count: u16,
+    ) -> Self {
+        Self {
+            owner,
+            slot,
+            command,
+            data,
+            lba,
+            sector_count,
+        }
+    }
+
     pub const fn owner(&self) -> &ActiveAhciPort {
         &self.owner
     }
     pub const fn command(&self) -> AhciAtaCommand {
         self.command
+    }
+    pub const fn slot(&self) -> u8 {
+        self.slot
     }
     pub const fn data(&self) -> AhciDataDmaRegion {
         self.data
@@ -181,6 +204,7 @@ pub fn execute_ahci_dma_command<R: AhciRegisterIo, M: AhciCommandMemoryIo>(
 
     Ok(AhciCommandCompletion {
         owner: ActiveAhciPort::from_layout(layout),
+        slot: command.slot(),
         command: command.command(),
         data: command.data(),
         lba: command.lba(),

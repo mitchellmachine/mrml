@@ -261,6 +261,18 @@ filesystem algorithm, or storage optimization. The separate AHCI command
 mechanisms retain their existing **TRIGGERED** Canadian scope review. This
 technical screen is not legal advice or patent clearance.
 
+# 2026-08-29 — Verified AHCI completed-slot recycling
+
+Patent review: **TRIGGERED**, governed by the recorded Canadian AHCI scope. This
+increment restores one completed conventional command header/table slot to its
+initialized state using bounded zeroing and read-back verification, while MRML's
+linear ownership quarantines all uncertain cleanup. It adds no NCQ, scheduling,
+aggregation, interrupt-driven termination/re-receipt, inline cryptography,
+controller circuitry, or device-controller concurrency behavior excluded by
+the recorded scope. Existing Canadian conditions and outside-Canada review
+requirements remain unchanged. This technical screen is not legal advice or
+patent clearance.
+
 # 2026-08-29 — Capability-bound non-NCQ AHCI command construction
 
 Patent review: **TRIGGERED**, governed by the recorded Canadian AHCI scope. This
