@@ -56,6 +56,20 @@ const MRML_V1_WIDE_UNSIGNED_TO_SIGNED_SOURCE: &str =
     "#[mrml_abi::export(version = 1)] pub fn probe(input: u128) -> i128 { input as i128 }";
 const MRML_V1_WIDE_SIGNED_TO_UNSIGNED_SOURCE: &str =
     "#[mrml_abi::export(version = 1)] pub fn probe(input: i128) -> u128 { input as u128 }";
+const MRML_V1_WIDE_CAST_SIGNED_METHOD_SOURCE: &str =
+    "#[mrml_abi::export(version = 1)] pub fn probe(input: u128) -> i128 { input.cast_signed() }";
+const MRML_V1_WIDE_CAST_UNSIGNED_METHOD_SOURCE: &str =
+    "#[mrml_abi::export(version = 1)] pub fn probe(input: i128) -> u128 { input.cast_unsigned() }";
+const MRML_V1_WIDE_SATURATING_CAST_SIGNED_SOURCE: &str = "#[mrml_abi::export(version = 1)] pub fn probe(input: u128) -> i128 { input.saturating_cast_signed() }";
+const MRML_V1_WIDE_SATURATING_CAST_UNSIGNED_SOURCE: &str = "#[mrml_abi::export(version = 1)] pub fn probe(input: i128) -> u128 { input.saturating_cast_unsigned() }";
+const RUSTC_WIDE_SATURATING_CAST_SIGNED_SOURCE: &str = concat!(
+    "#![feature(integer_sign_cast)]\n",
+    "#[mrml_abi::export(version = 1)] pub fn probe(input: u128) -> i128 { input.saturating_cast_signed() }",
+);
+const RUSTC_WIDE_SATURATING_CAST_UNSIGNED_SOURCE: &str = concat!(
+    "#![feature(integer_sign_cast)]\n",
+    "#[mrml_abi::export(version = 1)] pub fn probe(input: i128) -> u128 { input.saturating_cast_unsigned() }",
+);
 const MRML_V1_WIDE_UNSIGNED_NOT_SOURCE: &str =
     "#[mrml_abi::export(version = 1)] pub fn probe(input: u128) -> u128 { !input }";
 const MRML_V1_WIDE_SIGNED_NOT_SOURCE: &str =
@@ -1391,6 +1405,49 @@ fn mrml_v1_wide_integer_casts_preserve_both_words() {
             })
             .collect::<Vec<_>>();
         assert_eq!(actual, rustc_mrml_v1_observations(source, driver));
+    }
+}
+
+#[test]
+fn mrml_v1_wide_sign_cast_methods_match_both_oracle_words() {
+    let inputs = [
+        0u128,
+        1,
+        i128::MAX as u128,
+        i128::MIN as u128,
+        u128::MAX,
+    ];
+    for (source, oracle_source, driver) in [
+        (
+            MRML_V1_WIDE_CAST_SIGNED_METHOD_SOURCE,
+            MRML_V1_WIDE_CAST_SIGNED_METHOD_SOURCE,
+            "for input in [0u128, 1, i128::MAX as u128, i128::MIN as u128, u128::MAX] { let returned = probe(input); println!(\"{}\", returned as u64); println!(\"{}\", ((returned as u128) >> 64) as u64); }",
+        ),
+        (
+            MRML_V1_WIDE_CAST_UNSIGNED_METHOD_SOURCE,
+            MRML_V1_WIDE_CAST_UNSIGNED_METHOD_SOURCE,
+            "for input in [0i128, 1, i128::MAX, i128::MIN, -1] { let returned = probe(input); println!(\"{}\", returned as u64); println!(\"{}\", (returned >> 64) as u64); }",
+        ),
+        (
+            MRML_V1_WIDE_SATURATING_CAST_SIGNED_SOURCE,
+            RUSTC_WIDE_SATURATING_CAST_SIGNED_SOURCE,
+            "for input in [0u128, 1, i128::MAX as u128, i128::MIN as u128, u128::MAX] { let returned = probe(input); println!(\"{}\", returned as u64); println!(\"{}\", ((returned as u128) >> 64) as u64); }",
+        ),
+        (
+            MRML_V1_WIDE_SATURATING_CAST_UNSIGNED_SOURCE,
+            RUSTC_WIDE_SATURATING_CAST_UNSIGNED_SOURCE,
+            "for input in [0i128, 1, i128::MAX, i128::MIN, -1] { let returned = probe(input); println!(\"{}\", returned as u64); println!(\"{}\", (returned >> 64) as u64); }",
+        ),
+    ] {
+        let code = compile(source);
+        let actual = inputs
+            .into_iter()
+            .flat_map(|input| {
+                let returned = unsafe { call_mrml_v1_wide_return(code.pointer, input) };
+                [returned as u64, (returned >> 64) as u64]
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(actual, rustc_mrml_v1_observations(oracle_source, driver));
     }
 }
 
