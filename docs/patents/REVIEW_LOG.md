@@ -1,5 +1,14 @@
 # Patent review log
 
+# 2026-08-29 — Ordered full NVMe provider shutdown
+
+Patent review: **NOT_TRIGGERED**. This increment composes the already reviewed
+conventional NVMe queue deletion and controller-disable sequences with MRML's
+existing exact DMA/IOMMU and MMIO-mapping revocation rules. It adds no storage
+scheduling, caching, allocation, naming, encoding, data-layout, or controller
+optimization algorithm. This technical screen is not legal advice or patent
+clearance.
+
 # 2026-08-29 — Restartable FAT32 isolated service entry
 
 Patent review: **NOT_TRIGGERED**. This increment applies MRML's existing

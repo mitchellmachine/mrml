@@ -17,6 +17,7 @@ mod nvme_namespace;
 mod nvme_prp;
 mod nvme_queue_dma;
 mod nvme_queue_program;
+mod nvme_shutdown;
 
 pub use nvme_admin_command::{
     execute_nvme_identify_controller, execute_nvme_identify_namespace,
@@ -75,4 +76,7 @@ pub use nvme_queue_program::{
     NvmeAdminQueueRegisterIo, NvmeQueueDisableError, NvmeQueueDisableFailure,
     NvmeQueueProgramError, NvmeQueueProgramFailure, NVME_ACQ_OFFSET, NVME_AQA_OFFSET,
     NVME_ASQ_OFFSET,
+};
+pub use nvme_shutdown::{
+    shutdown_nvme_provider, NvmeShutdownError, NvmeShutdownFailure, NvmeShutdownReceipt,
 };
