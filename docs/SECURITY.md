@@ -287,6 +287,8 @@ access. The security/acceptance gate is canonical in
   or inbox inspection, so inbox capacity cannot supersede the routing invariant.
 - Authenticated message shape is bounded before receiver inbox or delegation
   state is inspected, preventing malformed sends from probing those capacities.
+- Requested source delegations are validated as a complete non-mutating batch
+  before receiver identity or internal delegation state is inspected.
 - Buffered receive preflights and binds its exact empty pending-table slot before
   scheduler blocking, preventing late capacity discovery after state mutation.
 - Pending buffered completion revalidates zero-capacity address canonicality and

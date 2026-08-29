@@ -6930,6 +6930,14 @@ message returns `PayloadTooLarge` without consuming sequence or inbox state;
 the Linux kernel total remains 625.
 Patent review: `NOT_TRIGGERED` — this consolidates conventional bounds checks
 and moves them earlier in the existing IPC validation sequence.
+The sender capability space now preflights the complete requested delegation
+set before receiver identity, delegation graph, or delegation-table capacity
+inspection. Batch derivation reuses that non-mutating validator before its
+destination-capacity and commit passes. A stale-source/missing-receiver test
+returns only authorization denial and proves the endpoint sequence remains one
+for the next valid transfer, raising the Linux kernel total to 626.
+Patent review: `NOT_TRIGGERED` — this factors and reorders conventional
+capability validation in the existing bounded transfer path.
 The service buffered-receive path now resolves one exact empty pending-table
 slot before blocking the current task, then publishes only into that still-empty
 slot after the scheduler switch. Duplicate task identity, full table, slot

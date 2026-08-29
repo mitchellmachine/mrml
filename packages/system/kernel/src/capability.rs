@@ -207,15 +207,10 @@ impl<const N: usize> CapabilitySpace<N> {
 
     /// Validates a complete bounded derivation set before publishing any
     /// destination authority.
-    pub(crate) fn derive_batch<const M: usize>(
+    pub(crate) fn validate_derivations(
         &self,
         requested: &[(Capability, Rights)],
-        destination: &mut CapabilitySpace<M>,
-        output: &mut [Option<Capability>],
     ) -> Result<(), CapabilityError> {
-        if requested.len() > output.len() || output.iter().any(Option::is_some) {
-            return Err(CapabilityError::Invalid);
-        }
         for (capability, rights) in requested.iter().copied() {
             Rights::from_bits(rights.bits())?;
             let source = self.entry(capability)?;
@@ -226,6 +221,21 @@ impl<const N: usize> CapabilitySpace<N> {
                 return Err(CapabilityError::PermissionDenied);
             }
         }
+        Ok(())
+    }
+
+    /// Validates a complete bounded derivation set and destination capacity
+    /// before publishing any destination authority.
+    pub(crate) fn derive_batch<const M: usize>(
+        &self,
+        requested: &[(Capability, Rights)],
+        destination: &mut CapabilitySpace<M>,
+        output: &mut [Option<Capability>],
+    ) -> Result<(), CapabilityError> {
+        if requested.len() > output.len() || output.iter().any(Option::is_some) {
+            return Err(CapabilityError::Invalid);
+        }
+        self.validate_derivations(requested)?;
         let available = destination
             .entries
             .iter()

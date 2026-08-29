@@ -2262,6 +2262,9 @@ live composition remains pending.
    Authenticated sends now validate payload/capability-count bounds before
    receiver inbox or delegation-table inspection. Full-inbox coverage proves
    oversized input receives its shape denial first; the total remains 625.
+   Complete requested source delegations now validate before receiver identity,
+   delegation graph, or table capacity. A stale-source non-disclosure test
+   raises the kernel total to 626 without consuming endpoint sequence.
    Buffered service receive now preflights an exact pending-table slot before
    blocking and binds post-switch publication to that slot. Service profiles
    cross-build; live backend execution remains pending.

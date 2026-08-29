@@ -974,6 +974,13 @@ impl<const TASKS: usize, const CAPS: usize> TaskRuntime<TASKS, CAPS> {
         let sender_slot = self
             .domain_slot(sender)
             .map_err(|_| TaskRuntimeError::IntegrityFailure)?;
+        self.domains[sender_slot]
+            .as_ref()
+            .ok_or(TaskRuntimeError::IntegrityFailure)?
+            .capabilities
+            .validate_derivations(requested)
+            .map_err(IpcError::from)
+            .map_err(TaskRuntimeError::Ipc)?;
         if !self.scheduler.contains(receiver) {
             return Err(TaskRuntimeError::IntegrityFailure);
         }
@@ -2578,6 +2585,76 @@ mod tests {
                 &[],
             ),
             Err(TaskRuntimeError::MissingTask)
+        );
+    }
+
+    #[test]
+    fn invalid_delegation_cannot_probe_direct_receiver_identity() {
+        let mut runtime = TaskRuntime::<2, 2>::new(1_000, 1).unwrap();
+        let sender = runtime
+            .create(Priority::NORMAL, context(0x20_0000, 0x40_0000))
+            .unwrap();
+        let receiver = runtime
+            .create(Priority::NORMAL, context(0x30_0000, 0x50_0000))
+            .unwrap();
+        let endpoint_object = ObjectId(0x5d);
+        let endpoint_capability = runtime
+            .capabilities_mut(sender)
+            .unwrap()
+            .insert(endpoint_object, Rights::SIGNAL)
+            .unwrap();
+        let stale = runtime
+            .capabilities_mut(sender)
+            .unwrap()
+            .insert(ObjectId(0x5e), Rights::READ.union(Rights::DELEGATE))
+            .unwrap();
+        runtime
+            .capabilities_mut(sender)
+            .unwrap()
+            .revoke(stale)
+            .unwrap();
+        let missing = TaskId::from_token((1u64 << 32) | 7);
+        let mut endpoint = Endpoint::new(endpoint_object);
+
+        assert_eq!(
+            runtime
+                .send_ipc(
+                    sender,
+                    missing,
+                    &mut endpoint,
+                    endpoint_capability,
+                    b"probe",
+                    &[(stale, Rights::READ)],
+                )
+                .err(),
+            Some(TaskRuntimeError::Ipc(IpcError::Unauthorized))
+        );
+        assert_eq!(
+            runtime
+                .send_ipc(
+                    sender,
+                    missing,
+                    &mut endpoint,
+                    endpoint_capability,
+                    b"authorized",
+                    &[],
+                )
+                .err(),
+            Some(TaskRuntimeError::IntegrityFailure)
+        );
+        assert_eq!(
+            runtime
+                .send_ipc(
+                    sender,
+                    receiver,
+                    &mut endpoint,
+                    endpoint_capability,
+                    b"valid",
+                    &[],
+                )
+                .unwrap()
+                .0,
+            1
         );
     }
 
