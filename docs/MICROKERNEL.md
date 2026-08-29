@@ -6579,6 +6579,9 @@ ticket used by shared-buffer syscalls. The ticket binds the active page-table
 root, task, address, exact copied length, and direction, and is consumed before
 the direct memory operation; receive capacities are still checked before a task
 blocks, then the exact returned lengths are revalidated when copied.
+Capability-buffer byte lengths are computed once with checked multiplication
+and the validated result is reused for disjointness and token-output slicing;
+later stages do not reconstruct the length with unchecked arithmetic.
 
 Patent review: **NOT_TRIGGERED**. This change retains an existing bounds check
 as Rust typestate, adds ordinary complete-range and overlap validation, and

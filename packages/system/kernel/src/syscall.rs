@@ -362,17 +362,12 @@ impl SyscallRequest {
                     return Err(SyscallError::TooManyCapabilities);
                 }
                 validate_user_range(rdx, payload_length, MAX_INLINE_PAYLOAD)?;
-                validate_optional_capability_buffer(
+                let capability_bytes = validate_optional_capability_buffer(
                     r8,
                     capability_count,
                     CAPABILITY_TRANSFER_DESCRIPTOR_BYTES,
                 )?;
-                validate_disjoint_user_ranges(
-                    rdx,
-                    payload_length,
-                    r8,
-                    capability_count * CAPABILITY_TRANSFER_DESCRIPTOR_BYTES,
-                )?;
+                validate_disjoint_user_ranges(rdx, payload_length, r8, capability_bytes)?;
                 Ok(Self::SendBuffer {
                     endpoint: Capability::from_token(rdi),
                     receiver: TaskId::from_token(rsi),
@@ -397,17 +392,12 @@ impl SyscallRequest {
                     return Err(SyscallError::ReservedArgument);
                 }
                 validate_user_range(rdi, payload_capacity, MAX_INLINE_PAYLOAD)?;
-                validate_optional_capability_buffer(
+                let capability_bytes = validate_optional_capability_buffer(
                     rdx,
                     capability_capacity,
                     RECEIVED_CAPABILITY_TOKEN_BYTES,
                 )?;
-                validate_disjoint_user_ranges(
-                    rdi,
-                    payload_capacity,
-                    rdx,
-                    capability_capacity * RECEIVED_CAPABILITY_TOKEN_BYTES,
-                )?;
+                validate_disjoint_user_ranges(rdi, payload_capacity, rdx, capability_bytes)?;
                 Ok(Self::ReceiveBuffer {
                     payload_address: rdi,
                     payload_capacity: payload_capacity as u16,
@@ -572,12 +562,12 @@ fn validate_optional_capability_buffer(
     address: u64,
     capability_count: usize,
     entry_bytes: usize,
-) -> Result<(), SyscallError> {
+) -> Result<usize, SyscallError> {
     if capability_count == 0 {
         if address != 0 {
             return Err(SyscallError::ReservedArgument);
         }
-        return Ok(());
+        return Ok(0);
     }
     let length = capability_count
         .checked_mul(entry_bytes)
@@ -590,7 +580,7 @@ fn validate_optional_capability_buffer(
     if !address.is_multiple_of(RECEIVED_CAPABILITY_TOKEN_BYTES as u64) {
         return Err(SyscallError::InvalidBuffer);
     }
-    Ok(())
+    Ok(length)
 }
 
 fn validate_disjoint_user_ranges(

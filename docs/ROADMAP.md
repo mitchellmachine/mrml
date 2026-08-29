@@ -2042,6 +2042,8 @@ live composition remains pending.
    task-bound, directional, single-use active-user-copy tickets. Pending receive
    capacity is checked before blocking and exact returned lengths are rechecked
    against the resumed task and page-table root before output mutation.
+   Checked capability-buffer byte lengths now flow from syscall range validation
+   into overlap checks and hosted token output without unchecked recomputation.
    The restart wire record can no longer carry a clock value; bytes 40--47 are
    canonical zero and dispatch receives time only from trusted kernel state.
    Syscall operation 10 decodes only an exact generational capability and

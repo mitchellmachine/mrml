@@ -4695,7 +4695,10 @@ unsafe fn write_buffer_current(
             let start = index * core::mem::size_of::<u64>();
             encoded[start..start + 8].copy_from_slice(&capability.token().to_le_bytes());
         }
-        let encoded_length = message.capability_count() * core::mem::size_of::<u64>();
+        let encoded_length = message
+            .capability_count()
+            .checked_mul(core::mem::size_of::<u64>())
+            .unwrap_or_else(|| halt());
         unsafe {
             copy_to_active_user(
                 root,
