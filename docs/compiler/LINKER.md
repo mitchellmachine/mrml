@@ -455,9 +455,8 @@ exited 42 under Arch WSL. Windows and Linux each passed 712 compiler-core tests
 and four driver tests. Over 50 same-input iterations after five warmups, MRML
 measured 5.004 ms median and 5.016 ms mean versus pinned rust-lld with
 `--eh-frame-hdr` at 5.090 ms median and 5.137 ms mean; rust-lld emitted 2,040
-bytes. This is narrow hosted evidence only. ELF TLS, COMMON symbols,
-copy/dynamic relocations, constructors, and general writable Rust runtime state
-remain unsupported or unverified.
+bytes. This is narrow hosted evidence only. ELF TLS, copy/dynamic relocations,
+and general writable Rust runtime state remain unsupported or unverified.
 
 Initialized ELF writable storage can now also carry bounded `R_X86_64_64`
 relocations to text or read-only data in the same selected input. The decoder
@@ -842,6 +841,22 @@ exact state order before exiting. MRML and pinned gnullvm rust-lld both exited
 42; their executables measured 8,232 and 3,072 bytes. This proves bounded
 retention, priority layout, boundary relocation, and freestanding runtime
 iteration, not automatic invocation by a production MRML startup runtime.
+
+Conventional ELF `SHN_COMMON` tentative objects now participate in the same
+bounded symbol and reachability passes. A regular global definition wins over
+COMMON, COMMON wins over a regular weak definition, and repeated COMMON
+declarations coalesce to one zero-filled allocation using the maximum declared
+size and power-of-two alignment. Alignment is capped at one page, arithmetic
+is checked, COMMON function symbols reject, and the resulting storage extends
+only the RW segment's memory size. Relocations resolve through the coalesced
+symbol rather than treating its alignment-valued `st_value` as a section
+offset. Independently authored Rust 2024 objects declared 8-byte/alignment-8
+and 24-byte/alignment-32 forms; MRML and pinned gnullvm rust-lld both observed
+zero initialization, a writable value, and exit 42. A second link added an
+initialized regular definition and both linkers observed its value instead.
+MRML emitted 8,192-byte and 8,200-byte executables versus rust-lld's 1,480-byte
+and 1,456-byte outputs. This proves bounded static COMMON resolution for these
+objects, not TLS, dynamic preemption, or broad ELF compatibility.
 
 The selected relocation path also admits conventional unsigned absolute-32
 `R_X86_64_32` records. It computes the ABI-defined `S + A` value only after

@@ -66,6 +66,30 @@ source = "packages/compiler/core/tests/semantic_execution.rs"
 stack_bytes = 33554432
 
 [[build_input]]
+fingerprint = "fnv1a64:041772d31cad5bfc"
+id = "external-command.generated-pe-executes-on-controlled-windows-host"
+kind = "external-command"
+line = 7933
+path = "packages/compiler/core/src/linker.rs"
+reason = "Execute the generated PE in an isolated child process for controlled hosted Windows loader evidence."
+
+[[build_input]]
+fingerprint = "fnv1a64:46a07655b72cc379"
+id = "external-command.generated-elf-executes-on-controlled-linux-host"
+kind = "external-command"
+line = 9215
+path = "packages/compiler/core/src/linker.rs"
+reason = "Execute the generated ELF in an isolated child process for controlled hosted Linux loader evidence."
+
+[[build_input]]
+fingerprint = "fnv1a64:1c8fe33bf9eba90f"
+id = "external-command.selected-elf-executes-on-controlled-linux-host"
+kind = "external-command"
+line = 9242
+path = "packages/compiler/core/src/linker.rs"
+reason = "Execute the selected-section ELF in an isolated child process for controlled hosted Linux loader evidence."
+
+[[build_input]]
 fingerprint = "fnv1a64:964d48456069b163"
 id = "included-file.mrml-v1-oracle-facade"
 kind = "included-file"

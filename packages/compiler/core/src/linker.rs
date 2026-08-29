@@ -576,8 +576,14 @@ pub fn inventory_x86_64_elf_symbols(
         if section == 0 || section == 0xfff1 {
             continue;
         }
-        if section >= section_count {
+        if section != 0xfff2 && section >= section_count {
             return Err(LinkerError::InvalidElf);
+        }
+        if section == 0xfff2 {
+            validate_elf_common_shape(
+                to_usize_elf(read_u64_elf(record, 16)?)?,
+                to_usize_elf(read_u64_elf(record, 8)?)?,
+            )?;
         }
         let name_offset =
             usize::try_from(read_u32_elf(record, 0)?).map_err(|_| LinkerError::OffsetOverflow)?;
@@ -763,9 +769,20 @@ pub struct ElfSelectedSectionLayout {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct ElfSelectedCommonLayout {
+    pub input_index: u16,
+    pub definition_index: u16,
+    pub offset: usize,
+    pub size: usize,
+    pub alignment: usize,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct ElfSelectedLayout {
     sections: [ElfSelectedSectionLayout; MAX_LINK_INPUTS],
     length: usize,
+    commons: [ElfSelectedCommonLayout; MAX_LINK_DEFINITIONS],
+    common_length: usize,
     pub text_length: usize,
     pub readonly_offset: usize,
     pub readonly_length: usize,
@@ -798,6 +815,10 @@ impl<const MAX_BYTES: usize> ElfSelectedLinkedImage<MAX_BYTES> {
 impl ElfSelectedLayout {
     pub fn sections(&self) -> &[ElfSelectedSectionLayout] {
         &self.sections[..self.length]
+    }
+
+    pub fn commons(&self) -> &[ElfSelectedCommonLayout] {
+        &self.commons[..self.common_length]
     }
 }
 
@@ -845,25 +866,39 @@ pub fn layout_x86_64_elf_selected_sections(
         })
     });
     let has_writable = inputs.iter().any(|input| {
-        input.sections.sections().iter().any(|section| {
-            matches!(
-                section.kind,
-                ElfSectionKind::PreInitializerArray
-                    | ElfSectionKind::InitializerArray
-                    | ElfSectionKind::FinalizerArray
-                    | ElfSectionKind::WritableData
-                    | ElfSectionKind::ZeroedData
-            )
-        })
+        input
+            .definitions
+            .definitions()
+            .iter()
+            .any(|definition| definition.section_index == 0xfff2)
+            || input.sections.sections().iter().any(|section| {
+                matches!(
+                    section.kind,
+                    ElfSectionKind::PreInitializerArray
+                        | ElfSectionKind::InitializerArray
+                        | ElfSectionKind::FinalizerArray
+                        | ElfSectionKind::WritableData
+                        | ElfSectionKind::ZeroedData
+                )
+            })
     });
     let empty = ElfSelectedSectionLayout {
         input_index: 0,
         section_index: 0,
         offset: 0,
     };
+    let empty_common = ElfSelectedCommonLayout {
+        input_index: 0,
+        definition_index: 0,
+        offset: 0,
+        size: 0,
+        alignment: 1,
+    };
     let mut layout = ElfSelectedLayout {
         sections: [empty; MAX_LINK_INPUTS],
         length: 0,
+        commons: [empty_common; MAX_LINK_DEFINITIONS],
+        common_length: 0,
         text_length: 0,
         readonly_offset: 0,
         readonly_length: 0,
@@ -932,8 +967,54 @@ pub fn layout_x86_64_elf_selected_sections(
             _ => {}
         }
     }
+    append_elf_common_layouts(inputs, &mut layout, &mut cursor)?;
     layout.memory_length = cursor;
     Ok(layout)
+}
+
+fn append_elf_common_layouts(
+    inputs: &[ElfSelectedObject<'_, '_>],
+    layout: &mut ElfSelectedLayout,
+    cursor: &mut usize,
+) -> Result<(), LinkerError> {
+    for (input_index, input) in inputs.iter().enumerate() {
+        for (definition_index, definition) in input.definitions.definitions().iter().enumerate() {
+            if definition.section_index != 0xfff2
+                || resolve_selected_definition(inputs, definition.name)?
+                    != Some((input_index, definition))
+            {
+                continue;
+            }
+            let mut size = definition.size;
+            let mut alignment = definition.offset;
+            for candidate_input in inputs {
+                for candidate in candidate_input.definitions.definitions() {
+                    if candidate.section_index == 0xfff2 && candidate.name == definition.name {
+                        size = size.max(candidate.size);
+                        alignment = alignment.max(candidate.offset);
+                    }
+                }
+            }
+            validate_elf_common_shape(size, alignment)?;
+            if layout.common_length == layout.commons.len() {
+                return Err(LinkerError::TooManyDefinitions);
+            }
+            *cursor = align(*cursor, alignment)?;
+            layout.commons[layout.common_length] = ElfSelectedCommonLayout {
+                input_index: u16::try_from(input_index).map_err(|_| LinkerError::TooManyInputs)?,
+                definition_index: u16::try_from(definition_index)
+                    .map_err(|_| LinkerError::TooManyDefinitions)?,
+                offset: *cursor,
+                size,
+                alignment,
+            };
+            layout.common_length += 1;
+            *cursor = cursor
+                .checked_add(size)
+                .ok_or(LinkerError::OffsetOverflow)?;
+        }
+    }
+    Ok(())
 }
 
 fn append_elf_sections_in_input_order(
@@ -1124,16 +1205,23 @@ pub fn link_x86_64_elf_selected_sections<const MAX_BYTES: usize>(
                     if let Some((target_input, definition)) =
                         resolve_selected_definition(inputs, symbol)?
                     {
-                        (
-                            selected_section_layout_offset(
-                                &layout,
-                                target_input,
-                                definition.section_index,
-                            )?
-                            .checked_add(definition.offset)
-                            .ok_or(LinkerError::OffsetOverflow)?,
-                            false,
-                        )
+                        if definition.section_index == 0xfff2 {
+                            (
+                                selected_common_layout_offset(&layout, inputs, symbol)?,
+                                false,
+                            )
+                        } else {
+                            (
+                                selected_section_layout_offset(
+                                    &layout,
+                                    target_input,
+                                    definition.section_index,
+                                )?
+                                .checked_add(definition.offset)
+                                .ok_or(LinkerError::OffsetOverflow)?,
+                                false,
+                            )
+                        }
                     } else {
                         (
                             selected_elf_array_boundary(&layout, symbol)
@@ -1360,10 +1448,15 @@ fn validate_selected_definition_set(
             if definition.binding != ElfSelectedSymbolBinding::Global {
                 continue;
             }
+            if definition.section_index == 0xfff2 {
+                validate_elf_common_shape(definition.size, definition.offset)?;
+                continue;
+            }
             for earlier in &inputs[..input_index] {
                 if earlier.definitions.definitions().iter().any(|candidate| {
                     candidate.name == definition.name
                         && candidate.binding == ElfSelectedSymbolBinding::Global
+                        && candidate.section_index != 0xfff2
                 }) {
                     return Err(LinkerError::DuplicateSymbol);
                 }
@@ -1373,6 +1466,7 @@ fn validate_selected_definition_set(
                 .any(|candidate| {
                     candidate.name == definition.name
                         && candidate.binding == ElfSelectedSymbolBinding::Global
+                        && candidate.section_index != 0xfff2
                 })
             {
                 return Err(LinkerError::DuplicateSymbol);
@@ -1387,10 +1481,18 @@ fn resolve_selected_definition<'data, 'view, 'inputs>(
     symbol: &str,
 ) -> Result<Option<(usize, &'inputs ElfSelectedDefinition<'data>)>, LinkerError> {
     let mut weak = None;
+    let mut common = None;
     let mut strong = None;
     for (input_index, input) in inputs.iter().enumerate() {
         for definition in input.definitions.definitions() {
             if definition.name != symbol {
+                continue;
+            }
+            if definition.section_index == 0xfff2 {
+                validate_elf_common_shape(definition.size, definition.offset)?;
+                if common.is_none() {
+                    common = Some((input_index, definition));
+                }
                 continue;
             }
             match definition.binding {
@@ -1407,7 +1509,32 @@ fn resolve_selected_definition<'data, 'view, 'inputs>(
             }
         }
     }
-    Ok(strong.or(weak))
+    Ok(strong.or(common).or(weak))
+}
+
+fn validate_elf_common_shape(size: usize, alignment: usize) -> Result<(), LinkerError> {
+    if size == 0 || alignment == 0 || !alignment.is_power_of_two() || alignment > 0x1000 {
+        return Err(LinkerError::UnsupportedElf);
+    }
+    Ok(())
+}
+
+fn selected_common_layout_offset(
+    layout: &ElfSelectedLayout,
+    inputs: &[ElfSelectedObject<'_, '_>],
+    symbol: &str,
+) -> Result<usize, LinkerError> {
+    for common in layout.commons() {
+        let definition = inputs[usize::from(common.input_index)]
+            .definitions
+            .definitions()
+            .get(usize::from(common.definition_index))
+            .ok_or(LinkerError::InvalidElf)?;
+        if definition.name == symbol {
+            return Ok(common.offset);
+        }
+    }
+    Err(LinkerError::InvalidElf)
 }
 
 fn selected_elf_array_boundary(layout: &ElfSelectedLayout, symbol: &str) -> Option<usize> {
@@ -1752,6 +1879,15 @@ pub fn decode_x86_64_elf_selected_relocations_from_sections<'a>(
                 ElfSelectedRelocationTarget::Symbol(elf_string(strings, name_offset)?)
             } else if target_section == 0xfff1 {
                 ElfSelectedRelocationTarget::Absolute(value)
+            } else if target_section == 0xfff2 {
+                let name_offset = usize::try_from(read_u32_elf(symbols, symbol_offset)?)
+                    .map_err(|_| LinkerError::OffsetOverflow)?;
+                let size = to_usize_elf(read_u64_elf(symbols, symbol_offset + 16)?)?;
+                validate_elf_common_shape(size, to_usize_elf(value)?)?;
+                if name_offset == 0 {
+                    return Err(LinkerError::EmptySymbol);
+                }
+                ElfSelectedRelocationTarget::Symbol(elf_string(strings, name_offset)?)
             } else if target_section < section_count && selected[target_section] {
                 let target_size = selected_sizes[target_section];
                 let offset = to_usize_elf(value)?;
@@ -1848,8 +1984,14 @@ pub fn decode_x86_64_elf_selected_definitions_from_sections<'a>(
     };
     for record in symbols[24..].chunks_exact(24) {
         let section = usize::from(read_u16_elf(record, 6)?);
-        let Some(section_size) = selected_sizes.get(section).copied().flatten() else {
-            continue;
+        let common = section == 0xfff2;
+        let section_size = if common {
+            None
+        } else {
+            let Some(section_size) = selected_sizes.get(section).copied().flatten() else {
+                continue;
+            };
+            Some(section_size)
         };
         let info = *record.get(4).ok_or(LinkerError::InvalidElf)?;
         let binding = match info >> 4 {
@@ -1878,10 +2020,18 @@ pub fn decode_x86_64_elf_selected_definitions_from_sections<'a>(
         validate_symbol(name)?;
         let offset = to_usize_elf(read_u64_elf(record, 8)?)?;
         let size = to_usize_elf(read_u64_elf(record, 16)?)?;
-        offset
-            .checked_add(size)
-            .filter(|end| *end <= section_size)
-            .ok_or(LinkerError::InvalidElf)?;
+        if common {
+            validate_elf_common_shape(size, offset)?;
+            if kind == ElfSelectedSymbolKind::Function {
+                return Err(LinkerError::UnsupportedElf);
+            }
+        } else {
+            let section_size = section_size.ok_or(LinkerError::InvalidElf)?;
+            offset
+                .checked_add(size)
+                .filter(|end| *end <= section_size)
+                .ok_or(LinkerError::InvalidElf)?;
+        }
         if decoded.length == decoded.definitions.len() {
             return Err(LinkerError::TooManyDefinitions);
         }
@@ -3105,7 +3255,18 @@ fn select_x86_64_elf_sections_from_view(
             if section == 0 || section == 0xfff1 {
                 continue;
             }
-            if section >= section_count || !matches!(binding, 1 | 2) {
+            if !matches!(binding, 1 | 2) {
+                return Err(LinkerError::UndefinedSymbol);
+            }
+            if section == 0xfff2 {
+                validate_elf_common_shape(
+                    to_usize_elf(read_u64_elf(symbols, symbol + 16)?)?,
+                    to_usize_elf(read_u64_elf(symbols, symbol + 8)?)?,
+                )?;
+                found = true;
+                break;
+            }
+            if section >= section_count {
                 return Err(LinkerError::UndefinedSymbol);
             }
             if elf_section_is_discarded(prepared_groups.unwrap_or(&[]), object_index, section) {
@@ -3573,16 +3734,23 @@ fn resolve_elf_object_definition(
     symbol: &str,
 ) -> Result<Option<usize>, LinkerError> {
     let mut weak = None;
+    let mut common = None;
     let mut strong = None;
     for (object_index, symbol_table) in symbol_tables.iter().enumerate() {
         let Some(symbol_table) = symbol_table else {
             return Err(LinkerError::InvalidElf);
         };
-        let Some(binding) =
+        let Some((binding, is_common)) =
             elf_object_definition_binding(*symbol_table, discarded, object_index, symbol)?
         else {
             continue;
         };
+        if is_common {
+            if common.is_none() {
+                common = Some(object_index);
+            }
+            continue;
+        }
         match binding {
             ElfSelectedSymbolBinding::Global if strong.replace(object_index).is_some() => {
                 return Err(LinkerError::DuplicateSymbol);
@@ -3592,7 +3760,7 @@ fn resolve_elf_object_definition(
             ElfSelectedSymbolBinding::Weak => {}
         }
     }
-    Ok(strong.or(weak))
+    Ok(strong.or(common).or(weak))
 }
 
 fn elf_object_definition_binding(
@@ -3600,11 +3768,11 @@ fn elf_object_definition_binding(
     discarded: &[ElfComdatGroup<'_>],
     object_index: usize,
     symbol_name: &str,
-) -> Result<Option<ElfSelectedSymbolBinding>, LinkerError> {
+) -> Result<Option<(ElfSelectedSymbolBinding, bool)>, LinkerError> {
     let symbols = symbol_table.symbols;
     let strings = symbol_table.strings;
     let section_count = symbol_table.section_count;
-    let mut found = None;
+    let mut found: Option<(ElfSelectedSymbolBinding, bool)> = None;
     for record in symbols[24..].chunks_exact(24) {
         let name_offset =
             usize::try_from(read_u32_elf(record, 0)?).map_err(|_| LinkerError::OffsetOverflow)?;
@@ -3615,10 +3783,11 @@ fn elf_object_definition_binding(
         if section == 0 || section == 0xfff1 {
             continue;
         }
-        if section >= section_count {
+        let is_common = section == 0xfff2;
+        if !is_common && section >= section_count {
             return Err(LinkerError::InvalidElf);
         }
-        if elf_section_is_discarded(discarded, object_index, section) {
+        if !is_common && elf_section_is_discarded(discarded, object_index, section) {
             continue;
         }
         let binding = match *record.get(4).ok_or(LinkerError::InvalidElf)? >> 4 {
@@ -3626,9 +3795,20 @@ fn elf_object_definition_binding(
             2 => ElfSelectedSymbolBinding::Weak,
             _ => continue,
         };
-        if found.replace(binding).is_some() {
+        if is_common {
+            validate_elf_common_shape(
+                to_usize_elf(read_u64_elf(record, 16)?)?,
+                to_usize_elf(read_u64_elf(record, 8)?)?,
+            )?;
+        }
+        let candidate = (binding, is_common);
+        if let Some(existing) = found {
+            if existing.1 && is_common {
+                continue;
+            }
             return Err(LinkerError::DuplicateSymbol);
         }
+        found = Some(candidate);
     }
     Ok(found)
 }
@@ -8218,6 +8398,161 @@ mod tests {
         assert_eq!(
             link_x86_64_elf_selected_sections::<4096>(&objects, "entry", u64::from(u32::MAX)),
             Err(LinkerError::RelocationOverflow)
+        );
+    }
+
+    #[test]
+    fn selected_elf_coalesces_common_storage_and_prefers_regular_definitions() {
+        let empty_section = ElfSelectedSection {
+            index: 0,
+            name: "",
+            kind: ElfSectionKind::Text,
+            bytes: &[],
+            size: 0,
+            alignment: 1,
+        };
+        let mut caller_sections = ElfSelectedSections {
+            sections: [empty_section; MAX_LINK_INPUTS],
+            length: 1,
+        };
+        caller_sections.sections[0] = ElfSelectedSection {
+            index: 1,
+            name: ".text",
+            kind: ElfSectionKind::Text,
+            bytes: &[0; 8],
+            size: 8,
+            alignment: 1,
+        };
+        let empty_definition = ElfSelectedDefinition {
+            name: "",
+            section_index: 0,
+            offset: 0,
+            size: 0,
+            binding: ElfSelectedSymbolBinding::Global,
+            visibility: ElfSelectedSymbolVisibility::Default,
+            kind: ElfSelectedSymbolKind::Unspecified,
+        };
+        let mut caller_definitions = ElfSelectedDefinitions {
+            definitions: [empty_definition; MAX_LINK_DEFINITIONS],
+            length: 1,
+        };
+        caller_definitions.definitions[0] = ElfSelectedDefinition {
+            name: "entry",
+            section_index: 1,
+            offset: 0,
+            size: 8,
+            binding: ElfSelectedSymbolBinding::Global,
+            visibility: ElfSelectedSymbolVisibility::Default,
+            kind: ElfSelectedSymbolKind::Function,
+        };
+        let empty_relocation = ElfSelectedRelocation {
+            section_index: 0,
+            offset: 0,
+            kind: ElfSelectedRelocationKind::PcRelative32,
+            target: ElfSelectedRelocationTarget::Absolute(0),
+            addend: 0,
+        };
+        let mut caller_relocations = ElfSelectedRelocations {
+            relocations: [empty_relocation; MAX_LINK_RELOCATIONS],
+            length: 1,
+        };
+        caller_relocations.relocations[0] = ElfSelectedRelocation {
+            section_index: 1,
+            offset: 0,
+            kind: ElfSelectedRelocationKind::PcRelative32,
+            target: ElfSelectedRelocationTarget::Symbol("shared"),
+            addend: -4,
+        };
+        let empty_sections = ElfSelectedSections {
+            sections: [empty_section; MAX_LINK_INPUTS],
+            length: 0,
+        };
+        let empty_relocations = ElfSelectedRelocations {
+            relocations: [empty_relocation; MAX_LINK_RELOCATIONS],
+            length: 0,
+        };
+        let mut common_small = ElfSelectedDefinitions {
+            definitions: [empty_definition; MAX_LINK_DEFINITIONS],
+            length: 1,
+        };
+        common_small.definitions[0] = ElfSelectedDefinition {
+            name: "shared",
+            section_index: 0xfff2,
+            offset: 8,
+            size: 8,
+            binding: ElfSelectedSymbolBinding::Global,
+            visibility: ElfSelectedSymbolVisibility::Default,
+            kind: ElfSelectedSymbolKind::Object,
+        };
+        let mut common_large = common_small;
+        common_large.definitions[0].offset = 32;
+        common_large.definitions[0].size = 24;
+        let common_objects = [
+            ElfSelectedObject {
+                sections: &caller_sections,
+                definitions: &caller_definitions,
+                relocations: &caller_relocations,
+            },
+            ElfSelectedObject {
+                sections: &empty_sections,
+                definitions: &common_small,
+                relocations: &empty_relocations,
+            },
+            ElfSelectedObject {
+                sections: &empty_sections,
+                definitions: &common_large,
+                relocations: &empty_relocations,
+            },
+        ];
+        let linked =
+            link_x86_64_elf_selected_sections::<8192>(&common_objects, "entry", 0x401000).unwrap();
+        assert_eq!(linked.layout.commons().len(), 1);
+        assert_eq!(linked.layout.commons()[0].alignment, 32);
+        assert_eq!(linked.layout.commons()[0].size, 24);
+        assert_eq!(linked.layout.commons()[0].offset, 4096);
+        assert_eq!(linked.length, 4096);
+        assert_eq!(linked.memory_length, 4120);
+        assert_eq!(
+            i32::from_le_bytes(linked.bytes()[..4].try_into().unwrap()),
+            4092
+        );
+
+        let mut strong_sections = ElfSelectedSections {
+            sections: [empty_section; MAX_LINK_INPUTS],
+            length: 1,
+        };
+        strong_sections.sections[0] = ElfSelectedSection {
+            index: 2,
+            name: ".data",
+            kind: ElfSectionKind::WritableData,
+            bytes: &[7; 8],
+            size: 8,
+            alignment: 8,
+        };
+        let mut strong_definition = common_small;
+        strong_definition.definitions[0].section_index = 2;
+        strong_definition.definitions[0].offset = 0;
+        let strong_objects = [
+            common_objects[0],
+            common_objects[1],
+            ElfSelectedObject {
+                sections: &strong_sections,
+                definitions: &strong_definition,
+                relocations: &empty_relocations,
+            },
+        ];
+        let linked =
+            link_x86_64_elf_selected_sections::<8192>(&strong_objects, "entry", 0x401000).unwrap();
+        assert!(linked.layout.commons().is_empty());
+        assert_eq!(linked.memory_length, 4104);
+        assert_eq!(&linked.bytes()[4096..4104], &[7; 8]);
+        assert_eq!(
+            i32::from_le_bytes(linked.bytes()[..4].try_into().unwrap()),
+            4092
+        );
+        assert_eq!(
+            validate_elf_common_shape(8, 3),
+            Err(LinkerError::UnsupportedElf)
         );
     }
 

@@ -9805,3 +9805,13 @@ members are independently checked. It introduces no new archive index, symbol
 resolution algorithm, object format, compression, cryptographic mechanism, or
 loader behavior. This technical screen is not legal advice or patent
 clearance.
+
+# 2026-08-28 — Bounded ELF COMMON coalescing
+
+Patent review: **NOT_TRIGGERED**. This increment implements the conventional
+ELF `SHN_COMMON` static-link rule: regular definitions take precedence and
+tentative declarations share zero-filled storage using their maximum size and
+alignment. It adds bounded validation and checked layout around a longstanding
+public object-format behavior and introduces no new symbol-resolution
+algorithm, object encoding, compression, cryptographic mechanism, or loader
+behavior. This technical screen is not legal advice or patent clearance.
