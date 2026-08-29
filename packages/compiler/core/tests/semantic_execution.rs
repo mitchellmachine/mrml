@@ -95,6 +95,8 @@ const MRML_V1_WIDE_UNSIGNED_DIVIDE_SOURCE: &str = "#[mrml_abi::export(version = 
 const MRML_V1_WIDE_UNSIGNED_REMAINDER_SOURCE: &str = "#[mrml_abi::export(version = 1)] pub fn probe(input: u128) -> u128 { input % 18446744073709551617 }";
 const MRML_V1_WIDE_UNSIGNED_ZERO_DIVISOR_SOURCE: &str =
     "#[mrml_abi::export(version = 1)] pub fn probe(input: u128) -> u128 { input / 0 }";
+const MRML_V1_WIDE_UNSIGNED_WRAPPING_ZERO_DIVISOR_SOURCE: &str =
+    "#[mrml_abi::export(version = 1)] pub fn probe(input: u128) -> u128 { input.wrapping_div(0) }";
 const MRML_V1_WIDE_SIGNED_DIVIDE_SOURCE: &str =
     "#[mrml_abi::export(version = 1)] pub fn probe(input: i128) -> i128 { input / -17 }";
 const MRML_V1_WIDE_SIGNED_REMAINDER_SOURCE: &str =
@@ -1583,44 +1585,47 @@ fn mrml_v1_wide_unsigned_division_and_remainder_match_both_oracle_words() {
 }
 
 #[test]
-fn mrml_v1_wide_unsigned_zero_divisor_traps() {
+fn mrml_v1_wide_zero_divisors_trap() {
     #[cfg(target_os = "windows")]
     const CHILD: &str = "MRML_SEMANTIC_WIDE_ZERO_DIVISOR_CHILD";
-    let code = compile(MRML_V1_WIDE_UNSIGNED_ZERO_DIVISOR_SOURCE);
+    let sources = [
+        MRML_V1_WIDE_UNSIGNED_ZERO_DIVISOR_SOURCE,
+        MRML_V1_WIDE_UNSIGNED_WRAPPING_ZERO_DIVISOR_SOURCE,
+    ];
 
     #[cfg(not(target_os = "windows"))]
     {
-        let pid = unsafe { fork() };
-        assert!(pid >= 0, "fork failed");
-        if pid == 0 {
-            let _ = unsafe { call_mrml_v1_wide_return(code.pointer, u128::MAX) };
-            unsafe { _exit(120) }
+        for source in sources {
+            let code = compile(source);
+            let pid = unsafe { fork() };
+            assert!(pid >= 0, "fork failed");
+            if pid == 0 {
+                let _ = unsafe { call_mrml_v1_wide_return(code.pointer, u128::MAX) };
+                unsafe { _exit(120) }
+            }
+            let mut status = 0;
+            assert_eq!(unsafe { waitpid(pid, &mut status, 0) }, pid, "waitpid failed");
+            assert_eq!(status & 0x7f, 4, "unexpected Unix wait status: {status:#x}");
         }
-        let mut status = 0;
-        assert_eq!(unsafe { waitpid(pid, &mut status, 0) }, pid, "waitpid failed");
-        assert_eq!(status & 0x7f, 4, "unexpected Unix wait status: {status:#x}");
         return;
     }
 
     #[cfg(target_os = "windows")]
-    if std::env::var_os(CHILD).is_some() {
+    if let Some(index) = std::env::var_os(CHILD) {
+        let index = index.to_string_lossy().parse::<usize>().expect("child source index");
+        let code = compile(sources[index]);
         unsafe { SetErrorMode(0x0001 | 0x0002) };
         let _ = unsafe { call_mrml_v1_wide_return(code.pointer, u128::MAX) };
         panic!("wide division by zero unexpectedly returned");
     }
 
     #[cfg(target_os = "windows")]
-    let output = Command::new(std::env::current_exe().expect("locate semantic test binary"))
-        .args([
-            "--exact",
-            "mrml_v1_wide_unsigned_zero_divisor_traps",
-            "--nocapture",
-        ])
-        .env(CHILD, "1")
-        .output()
-        .expect("launch isolated wide zero-divisor trap probe");
-    #[cfg(target_os = "windows")]
-    {
+    for index in 0..sources.len() {
+        let output = Command::new(std::env::current_exe().expect("locate semantic test binary"))
+            .args(["--exact", "mrml_v1_wide_zero_divisors_trap", "--nocapture"])
+            .env(CHILD, index.to_string())
+            .output()
+            .expect("launch isolated wide zero-divisor trap probe");
         assert!(!output.status.success(), "zero-divisor trap unexpectedly returned");
         assert_eq!(output.status.code(), Some(101));
         let stdout = String::from_utf8(output.stdout).expect("UTF-8 child test stdout");
