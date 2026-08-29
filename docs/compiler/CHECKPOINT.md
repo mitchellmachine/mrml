@@ -3593,10 +3593,11 @@ inputs; allocator execution, native Windows, general `.rlib` closure, and
 production readiness are not claimed.
 
 An independently authored Rust 2024 execution consumer uses a bounded
-4,096-byte arena allocator, pushes 19 and 23 into `Vec<u32>`, and returns their
-sum. The pinned `alloc`, `core`, and `compiler_builtins` archives plus narrow
+4,096-byte arena allocator, pushes 0 through 63 into `Vec<u32>` across repeated
+capacity growth, and returns 42 only after verifying their sum is 2,016. The
+pinned `alloc`, `core`, and `compiler_builtins` archives plus narrow
 diagnostic runtime stubs linked to 520,704 deterministic PE bytes, SHA-256
-`c16904237c7ab0ce991daa0947a614d37dbdc664a4cfa55316378d7ad4dbe260`.
+`52d2c50df2cf4dd0b58a70f60d49fc765e461dafc7dea5433b5ea4671460aa5e`.
 Wine 11.16 returned 42. This is one hosted allocator-backed execution path, not
 native Windows, general `alloc` compatibility, a production allocator, or
 physical-hardware evidence.

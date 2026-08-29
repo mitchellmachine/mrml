@@ -1438,11 +1438,12 @@ native Windows, or general Rust-library conformance.
 
 A separate independently authored Rust 2024 execution probe exports `entry`,
 installs a bounded 4,096-byte arena allocator, constructs a `Vec<u32>`, pushes
-19 and 23, and returns their sum. The corrected callable marker plus diagnostic
+the values 0 through 63 across repeated capacity growth, and returns 42 only
+after verifying their sum is 2,016. The corrected callable marker plus diagnostic
 memory/unwind/error stubs linked that consumer with the exact ORACLE-0003
 `alloc`, `core`, and `compiler_builtins` archives to a deterministic
 520,704-byte PE with SHA-256
-`c16904237c7ab0ce991daa0947a614d37dbdc664a4cfa55316378d7ad4dbe260`.
+`52d2c50df2cf4dd0b58a70f60d49fc765e461dafc7dea5433b5ea4671460aa5e`.
 Wine 11.16 executed the image and returned 42. This is hosted Wine execution of
 one bounded allocator-backed `Vec` path, not native Windows, allocator
 production readiness, broad `alloc` conformance, or physical-hardware evidence.

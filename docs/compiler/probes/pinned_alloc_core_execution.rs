@@ -58,9 +58,14 @@ fn panic(_: &PanicInfo<'_>) -> ! {
 #[unsafe(no_mangle)]
 pub extern "C" fn entry() -> u32 {
     let mut values = Vec::new();
-    values.push(19u32);
-    values.push(23u32);
-    values.into_iter().sum()
+    for value in 0..64u32 {
+        values.push(value);
+    }
+    if values.into_iter().sum::<u32>() == 2016 {
+        42
+    } else {
+        1
+    }
 }
 
 #[unsafe(no_mangle)]
