@@ -7446,6 +7446,27 @@ impl<
             }
             return Ok(0u128.wrapping_sub(literal.value));
         }
+        if let ExprKind::Unary { operator, operand } = expression.kind
+            && matches!(
+                operator,
+                crate::UnaryOperator::Not | crate::UnaryOperator::Negate
+            )
+        {
+            let value = self.evaluate_wide_const_call_argument(tree, operand, expected_type)?;
+            return match operator {
+                crate::UnaryOperator::Not => Ok(!value),
+                crate::UnaryOperator::Negate
+                    if expected_type == crate::IntegerType::I128
+                        && value != i128::MIN as u128 =>
+                {
+                    Ok(0u128.wrapping_sub(value))
+                }
+                crate::UnaryOperator::Negate => {
+                    Err(self.error(CodegenErrorKind::ValueOutOfRange))
+                }
+                _ => unreachable!(),
+            };
+        }
         if let ExprKind::Identifier(name) = expression.kind
             && self.resolver.resolve_type(name) == Some(expected_type)
         {

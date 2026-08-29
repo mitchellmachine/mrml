@@ -131,8 +131,9 @@ Direct casts between `u128` and `i128` preserve both parameter words unchanged.
 Typed named `u128` and `i128` constants produce their exact resolved words.
 Bounded typed `const fn` calls returning `u128` or `i128` use the same exact-word
 constant resolver, including nested calls whose result feeds a matching wide
-parameter. Wide literal, negative literal, matching typed named-constant, and
-nested-call arguments are evaluated under the callee parameter's declared type.
+parameter. Wide literal, negative literal, matching typed named-constant,
+nested-call, bitwise-inverted, and checked signed-negated arguments are evaluated
+under the callee parameter's declared type.
 Direct unary bitwise inversion of a two-word integer inverts both words.
 Direct `i128` negation uses carry-aware two-word lowering and traps on `i128::MIN`
 when ordinary overflow checks are enabled.
