@@ -9,8 +9,8 @@ the named commit and current source.
 ## Recoverable baseline
 
 - Branch: `main`
-- Compiler checkpoint commit: `7390417a`
-  (`compiler: select COFF readonly definitions`)
+- Compiler checkpoint commit: `19115911`
+  (`compiler: resolve COFF readonly absolute relocations`)
 - Remote state when recorded: `origin/main` includes the bounded MRML-owned
   static-link core, exact MRML COFF and ELF64 ingestion, deterministic
   import-free PE32+/ELF64 executable serialization, explicit compiler-driver
@@ -60,6 +60,26 @@ against all prior accepted probes. Keep Cargo on edition 2024 until a newer
 named edition can be adopted through a pinned, workspace-wide migration.
 
 ## Latest bounded linker milestone
+
+Commit `19115911` replaces the writable-only `.rdata$.refptr...` model with a
+typed PE read-only absolute relocation. The decoder preserves the in-place
+signed addend of each validated `IMAGE_REL_AMD64_ADDR64` record; after final
+layout the serializer resolves named targets in selected text, read-only, or
+writable data and rejects checked-address underflow or overflow. The path stays
+allocation-free and bounded by `MAX_LINK_RELOCATIONS`. Windows and Arch Linux
+each passed 757 compiler-core unit tests and eight driver tests; Arch Linux also
+passed all four compiler integration groups. The Windows integration run had
+one unrelated concurrent wide-const failure while all 757 units passed; the
+same 59-test integration group passed on Linux. The exact pinned gnullvm
+stateful archive returned 42 through both linkers: MRML emitted 2,560 bytes
+versus rust-lld's 3,584, with 1,028 bytes of zero fill and two forwarding
+pointers. Fifty links after five warmups measured 9.620 ms median/9.896 ms mean
+for MRML versus 26.746 ms median/26.899 ms mean for rust-lld on this narrow
+Windows workload. Arbitrary read-only relocation kinds and discontiguous
+non-COMDAT packing remain incomplete. `mrml doctor` passed; audit retains the
+unrelated fingerprint `fnv1a64:0fe5cf1836d3e0dc` at
+`semantic_execution.rs:1270`. Patent review: **NOT_TRIGGERED**; see
+`docs/patents/REVIEW_LOG.md`.
 
 Commit `7390417a` expands every non-associative read-only COFF COMDAT into an
 independent named link input. Text relocations target its external definition,
