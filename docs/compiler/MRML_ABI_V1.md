@@ -152,7 +152,8 @@ Checked `u128` multiplication forms the low product and both cross-products,
 rejecting every nonzero discarded high product and every carry beyond the high
 result word. Checked `i128` multiplication converts both operands to bounded
 magnitudes, applies the same product, validates the signed result range, and
-restores the result sign.
+restores the result sign. Binary multiplication and wide-local multiply
+assignment share this lowering and its overflow traps.
 Wide shifts accept a one-word integer count, explicitly distinguish counts below
 and above the 64-bit word boundary, and trap checked counts of 128 or greater.
 Right shift sign-fills only the declared `i128` high word. Binary shifts and
