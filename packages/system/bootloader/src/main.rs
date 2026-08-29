@@ -493,6 +493,7 @@ static mut SERVICE_RESOURCE_PAGE: HostedServiceResourcePage =
 #[derive(Clone, Copy)]
 struct PendingBufferReceive {
     task: mrml_kernel::TaskId,
+    page_table: PhysAddr,
     payload_address: u64,
     payload_capacity: usize,
     capabilities_address: u64,
@@ -1064,6 +1065,7 @@ unsafe extern "sysv64" fn mrml_user_call_dispatch(frame: *mut UserCallFrame) {
             } => {
                 let pending = PendingBufferReceive {
                     task: current,
+                    page_table: root,
                     payload_address,
                     payload_capacity: usize::from(payload_capacity),
                     capabilities_address,
@@ -4641,6 +4643,9 @@ unsafe fn copy_to_active_user(
 
 #[cfg(feature = "service-probe")]
 unsafe fn validate_active_receive(root: PhysAddr, pending: PendingBufferReceive) {
+    if root != pending.page_table {
+        halt();
+    }
     unsafe {
         validate_service_user_range(
             root,

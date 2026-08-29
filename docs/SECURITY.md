@@ -133,6 +133,8 @@ access. The security/acceptance gate is canonical in
   substitute for exact-length validation at resumed output-copy time.
 - Capability-buffer byte lengths are checked once and retained through overlap
   validation and hosted token encoding rather than recomputed unchecked.
+- A pending buffered receive is bound to its admitted page-table root as well as
+  its generational task; completion under a substituted root fails closed.
 - Writable and executable mappings are mutually exclusive.
 - Authority, replay state, ownership, mappings, and lifecycle transitions are
   explicit and commit only after validation; partial failure rolls back or

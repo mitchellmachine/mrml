@@ -2044,6 +2044,9 @@ live composition remains pending.
    against the resumed task and page-table root before output mutation.
    Checked capability-buffer byte lengths now flow from syscall range validation
    into overlap checks and hosted token output without unchecked recomputation.
+   Pending buffered receives retain their admitted page-table root and reject
+   completion after context-root substitution, alongside generational task and
+   exact-range validation.
    The restart wire record can no longer carry a clock value; bytes 40--47 are
    canonical zero and dispatch receives time only from trusted kernel state.
    Syscall operation 10 decodes only an exact generational capability and

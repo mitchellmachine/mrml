@@ -6582,6 +6582,10 @@ blocks, then the exact returned lengths are revalidated when copied.
 Capability-buffer byte lengths are computed once with checked multiplication
 and the validated result is reused for disjointness and token-output slicing;
 later stages do not reconstruct the length with unchecked arithmetic.
+Each pending buffered receive also retains the exact page-table root under
+which its output regions were admitted. Immediate and resumed completion fail
+closed unless the active completion root matches that retained root, in
+addition to the generational task and exact-range ticket checks.
 
 Patent review: **NOT_TRIGGERED**. This change retains an existing bounds check
 as Rust typestate, adds ordinary complete-range and overlap validation, and
