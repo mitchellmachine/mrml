@@ -6728,6 +6728,11 @@ before publication can begin, so a later wake cannot discover an already
 missing peer after relation mutation. A focused scheduler/domain divergence
 test raises the Linux kernel total to 599 without claiming such corruption is a
 normal public transition.
+Task retirement now computes one bounded union of every capability descendant
+reachable from all retiring-domain delegation roots, validates the complete
+exact-generation set, and only then begins revocation. A stale descendant under
+a later root therefore cannot leave an earlier root partially revoked; the
+focused adversarial test raises the Linux kernel total to 600.
 The live service syscall decoder now routes forged generic or boot-recovery
 return state through that retirement, rejects an impossible pending-buffer
 alias, completes the exact resource/address-space cleanup, and enters only the
@@ -6785,6 +6790,8 @@ checking on that same path and does not trigger separate review. Peer-death
 preflight is conventional transactional integrity validation on the existing
 lifecycle and does not trigger separate review. Exact scheduler-identity
 preflight is the same conventional integrity check.
+Whole-retirement descendant preflight applies the existing capability graph and
+revocation rules and does not introduce a new mechanism or trigger review.
 
 Rust service code does not assume a fixed PE entry RVA. WHP and KVM publish the
 entry derived from the verified signed executable in a hosted metadata page.

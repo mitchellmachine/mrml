@@ -737,21 +737,35 @@ impl<const TASKS: usize, const CAPS: usize> TaskRuntime<TASKS, CAPS> {
     }
 
     fn revoke_task_delegations(&mut self, task: TaskId) -> Result<(), TaskRuntimeError> {
-        let mut roots = [None; MAX_TASK_DELEGATIONS];
-        let mut root_count = 0usize;
+        let mut descendants = [None; MAX_TASK_DELEGATIONS + 1];
+        let mut count = 0usize;
         for edge in self.delegations.iter().flatten().copied() {
             if edge.source_task == task
-                && !roots[..root_count].contains(&Some((edge.source_task, edge.source)))
+                && !descendants[..count].contains(&Some((edge.destination_task, edge.destination)))
             {
-                roots[root_count] = Some((edge.source_task, edge.source));
-                root_count += 1;
+                descendants[count] = Some((edge.destination_task, edge.destination));
+                count += 1;
             }
         }
-        for (source_task, source) in roots[..root_count].iter().flatten().copied() {
-            let descendants = self.delegation_descendants(source_task, source)?;
-            self.revoke_tracked(&descendants.0, 1)?;
-            self.remove_tracked(&descendants.0);
+        let mut changed = true;
+        while changed {
+            changed = false;
+            for edge in self.delegations.iter().flatten().copied() {
+                if descendants[..count].contains(&Some((edge.source_task, edge.source)))
+                    && !descendants[..count]
+                        .contains(&Some((edge.destination_task, edge.destination)))
+                {
+                    let slot = descendants
+                        .get_mut(count)
+                        .ok_or(TaskRuntimeError::IntegrityFailure)?;
+                    *slot = Some((edge.destination_task, edge.destination));
+                    count += 1;
+                    changed = true;
+                }
+            }
         }
+        self.revoke_tracked(&descendants, 0)?;
+        self.remove_tracked(&descendants);
         for edge in &mut self.delegations {
             if edge.is_some_and(|edge| edge.source_task == task || edge.destination_task == task) {
                 *edge = None;
@@ -1978,6 +1992,79 @@ mod tests {
                 .unwrap()
                 .authorize(unrelated, Rights::READ),
             Ok(ObjectId(0xb2))
+        );
+    }
+
+    #[test]
+    fn task_death_preflights_all_delegation_roots_before_revocation() {
+        let mut runtime = TaskRuntime::<3, 4>::new(1_000, 1).unwrap();
+        let source = runtime
+            .create(Priority::NORMAL, context(0x20_0000, 0x40_0000))
+            .unwrap();
+        let first = runtime
+            .create(Priority::NORMAL, context(0x30_0000, 0x50_0000))
+            .unwrap();
+        let second = runtime
+            .create(Priority::NORMAL, context(0x40_0000, 0x60_0000))
+            .unwrap();
+        let endpoint_object = ObjectId(0xb3);
+        let endpoint_capability = runtime
+            .capabilities_mut(source)
+            .unwrap()
+            .insert(endpoint_object, Rights::SIGNAL)
+            .unwrap();
+        let first_root = runtime
+            .capabilities_mut(source)
+            .unwrap()
+            .insert(ObjectId(0xb4), Rights::READ.union(Rights::DELEGATE))
+            .unwrap();
+        let second_root = runtime
+            .capabilities_mut(source)
+            .unwrap()
+            .insert(ObjectId(0xb5), Rights::READ.union(Rights::DELEGATE))
+            .unwrap();
+        let mut endpoint = Endpoint::new(endpoint_object);
+        let (_, first_message) = runtime
+            .send_ipc(
+                source,
+                first,
+                &mut endpoint,
+                endpoint_capability,
+                &[],
+                &[(first_root, Rights::READ)],
+            )
+            .unwrap();
+        let first_derived = first_message.capabilities().next().unwrap();
+        let (_, second_message) = runtime
+            .send_ipc(
+                source,
+                second,
+                &mut endpoint,
+                endpoint_capability,
+                &[],
+                &[(second_root, Rights::READ)],
+            )
+            .unwrap();
+        let second_derived = second_message.capabilities().next().unwrap();
+        runtime
+            .capabilities_mut(second)
+            .unwrap()
+            .revoke(second_derived)
+            .unwrap();
+        assert!(matches!(runtime.start(), ScheduleOutcome::Switch { to, .. } if to == source));
+
+        assert_eq!(
+            runtime.terminate_current_violation(TaskProtocolViolation::InvalidUserReturn),
+            Err(TaskRuntimeError::IntegrityFailure)
+        );
+        assert_eq!(runtime.current(), Some(source));
+        assert!(runtime.context(source).is_ok());
+        assert_eq!(
+            runtime
+                .capabilities_mut(first)
+                .unwrap()
+                .authorize(first_derived, Rights::READ),
+            Ok(ObjectId(0xb4))
         );
     }
 

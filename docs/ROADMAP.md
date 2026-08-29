@@ -2139,6 +2139,10 @@ live composition remains pending.
    The same preflight now requires each peer's exact scheduler identity before
    publication, preventing a late wake failure after relation mutation; a
    focused divergence test raises the kernel total to 599.
+   Retirement now unions descendants across every outgoing delegation root and
+   validates the complete exact-generation set before revoking any of them. A
+   stale later root cannot partially revoke an earlier root; the adversarial
+   test raises the kernel total to 600.
    Warning-free `invalid_return_probe` kernel/service profiles now encode the
    real CPL3 invalid-stack interrupt, typed peer-death cleanup marker, peer
    execution, clean exit, and terminal state marker. Runner execution remains
