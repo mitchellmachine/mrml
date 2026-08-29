@@ -9,12 +9,12 @@ use mrml_runtime::{
     MappedFile, Text, Vector, canonical_path, join_path, mrml_println as println, parent_path,
 };
 use mrml_rustc::{
-    CodegenOptions, CoffTextComdatSelection, ElfSelectedDefinitions, ElfSelectedObject,
-    ElfSelectedRelocations, ElfSelectedSections, LinkDefinition, LinkDefinitionTarget, LinkInput,
-    LinkRelocation, LinkRelocationTarget, MAX_ARCHIVE_MEMBERS, MAX_ARCHIVE_SYMBOLS,
-    MAX_LINK_DEFINITIONS, MAX_LINK_INPUTS, MAX_LINK_RELOCATIONS, MAX_PE_RUNTIME_FUNCTIONS,
-    ObjectFormat, PeReadonlyAbsoluteRelocation, PeRuntimeFunction, PeWritableData,
-    PeWritableRelocation, PeWritableRelocationTarget, TargetLayout,
+    CodegenOptions, CoffObjectSymbolKind, CoffTextComdatSelection, ElfSelectedDefinitions,
+    ElfSelectedObject, ElfSelectedRelocations, ElfSelectedSections, LinkDefinition,
+    LinkDefinitionTarget, LinkInput, LinkRelocation, LinkRelocationTarget, MAX_ARCHIVE_MEMBERS,
+    MAX_ARCHIVE_SYMBOLS, MAX_LINK_DEFINITIONS, MAX_LINK_INPUTS, MAX_LINK_RELOCATIONS,
+    MAX_PE_RUNTIME_FUNCTIONS, ObjectFormat, PeReadonlyAbsoluteRelocation, PeRuntimeFunction,
+    PeWritableData, PeWritableRelocation, PeWritableRelocationTarget, TargetLayout,
     compile_source_function_with_options, decode_unix_archive,
     decode_x86_64_coff_readonly_absolute_relocations_from_inventory,
     decode_x86_64_coff_runtime_functions, decode_x86_64_coff_standalone_readonly_fragment,
@@ -22,9 +22,10 @@ use mrml_rustc::{
     decode_x86_64_elf_selected_definitions_from_sections,
     decode_x86_64_elf_selected_relocations_from_sections, decode_x86_64_elf_selected_sections,
     decode_x86_64_elf_with_definitions, inventory_x86_64_coff_comdat_sections,
-    inventory_x86_64_elf_symbols, link_x86_64_elf_selected_executable,
-    link_x86_64_pe_with_data_unwind_and_readonly_relocations, select_ordered_static_link_members,
-    select_x86_64_elf_link_sections_detailed, x86_64_coff_standalone_readonly_fragment_count,
+    inventory_x86_64_coff_symbols, inventory_x86_64_elf_symbols,
+    link_x86_64_elf_selected_executable, link_x86_64_pe_with_data_unwind_and_readonly_relocations,
+    select_ordered_static_link_members, select_x86_64_elf_link_sections_detailed,
+    x86_64_coff_standalone_readonly_fragment_count,
     x86_64_coff_text_fragment_comdat_selection_from_inventory, x86_64_coff_text_fragment_count,
     x86_64_coff_writable_section_count,
 };
@@ -569,67 +570,24 @@ fn scan_link_object_symbols<'a>(
         }
         return Ok(());
     }
-    let inventory = inventory_x86_64_coff_comdat_sections(object).map_err(mrml_error::message)?;
-    let text_fragment_count = x86_64_coff_text_fragment_count(object)
-        .map_err(|_| anyhow!("could not count COFF archive member fragments"))?;
-    let fragment_count = text_fragment_count
-        .checked_add(
-            x86_64_coff_standalone_readonly_fragment_count(object, &inventory)
-                .map_err(mrml_error::message)?,
-        )
-        .ok_or_else(|| anyhow!("expanded archive member fragment count overflow"))?;
-    for fragment_index in 0..fragment_count {
-        let mut relocations = [LinkRelocation {
-            offset: 0,
-            target: LinkRelocationTarget::Symbol("unused"),
-            addend: 0,
-        }; MAX_LINK_RELOCATIONS];
-        let mut definitions = [LinkDefinition {
-            symbol: "unused",
-            target: LinkDefinitionTarget::Text(0),
-        }; MAX_LINK_DEFINITIONS];
-        let input = if fragment_index < text_fragment_count {
-            decode_x86_64_coff_text_fragment_from_inventory(
-                object,
-                fragment_index,
-                &inventory,
-                &mut relocations,
-                &mut definitions,
-            )
-            .map_err(mrml_error::message)?
-        } else {
-            decode_x86_64_coff_standalone_readonly_fragment(
-                object,
-                fragment_index - text_fragment_count,
-                &inventory,
-                &mut definitions,
-            )
-            .map_err(mrml_error::message)?
-            .input
-        };
-        for symbol in core::iter::once(input.symbol).chain(
-            input
-                .additional_definitions
-                .iter()
-                .map(|definition| definition.symbol),
-        ) {
-            if !defined.iter().any(|existing| *existing == symbol) {
-                defined
-                    .try_push(symbol)
-                    .map_err(|_| anyhow!("defined-symbol capacity exceeded"))?;
+    let inventory = inventory_x86_64_coff_symbols(object)
+        .map_err(|error| anyhow!("could not inventory COFF symbols: {}", error))?;
+    for symbol in inventory.symbols() {
+        let symbol = symbol.map_err(|error| anyhow!("could not read COFF symbol: {}", error))?;
+        match symbol.kind {
+            CoffObjectSymbolKind::Definition => {
+                if !defined.iter().any(|existing| *existing == symbol.name) {
+                    defined
+                        .try_push(symbol.name)
+                        .map_err(|_| anyhow!("defined-symbol capacity exceeded"))?;
+                }
             }
-        }
-        for relocation in input.relocations {
-            let symbol = match relocation.target {
-                LinkRelocationTarget::Symbol(symbol)
-                | LinkRelocationTarget::GotPcRelativeSymbol(symbol)
-                | LinkRelocationTarget::RequiredSymbol(symbol) => symbol,
-                _ => continue,
-            };
-            if !referenced.iter().any(|existing| *existing == symbol) {
-                referenced
-                    .try_push(symbol)
-                    .map_err(|_| anyhow!("referenced-symbol capacity exceeded"))?;
+            CoffObjectSymbolKind::Reference => {
+                if !referenced.iter().any(|existing| *existing == symbol.name) {
+                    referenced
+                        .try_push(symbol.name)
+                        .map_err(|_| anyhow!("referenced-symbol capacity exceeded"))?;
+                }
             }
         }
     }
@@ -657,60 +615,19 @@ fn scan_link_object_symbols_owned(
         }
         return Ok(());
     }
-    let inventory = inventory_x86_64_coff_comdat_sections(object).map_err(mrml_error::message)?;
-    let text_fragment_count = x86_64_coff_text_fragment_count(object)
-        .map_err(|_| anyhow!("could not count COFF archive member fragments"))?;
-    let fragment_count = text_fragment_count
-        .checked_add(
-            x86_64_coff_standalone_readonly_fragment_count(object, &inventory)
-                .map_err(mrml_error::message)?,
-        )
-        .ok_or_else(|| anyhow!("expanded archive member fragment count overflow"))?;
-    for fragment_index in 0..fragment_count {
-        let mut relocations = [LinkRelocation {
-            offset: 0,
-            target: LinkRelocationTarget::Symbol("unused"),
-            addend: 0,
-        }; MAX_LINK_RELOCATIONS];
-        let mut definitions = [LinkDefinition {
-            symbol: "unused",
-            target: LinkDefinitionTarget::Text(0),
-        }; MAX_LINK_DEFINITIONS];
-        let input = if fragment_index < text_fragment_count {
-            decode_x86_64_coff_text_fragment_from_inventory(
-                object,
-                fragment_index,
-                &inventory,
-                &mut relocations,
-                &mut definitions,
-            )
-            .map_err(mrml_error::message)?
-        } else {
-            decode_x86_64_coff_standalone_readonly_fragment(
-                object,
-                fragment_index - text_fragment_count,
-                &inventory,
-                &mut definitions,
-            )
-            .map_err(mrml_error::message)?
-            .input
-        };
-        for symbol in core::iter::once(input.symbol).chain(
-            input
-                .additional_definitions
-                .iter()
-                .map(|definition| definition.symbol),
-        ) {
-            push_owned_symbol(defined, symbol, "defined-symbol capacity exceeded")?;
-        }
-        for relocation in input.relocations {
-            let symbol = match relocation.target {
-                LinkRelocationTarget::Symbol(symbol)
-                | LinkRelocationTarget::GotPcRelativeSymbol(symbol)
-                | LinkRelocationTarget::RequiredSymbol(symbol) => symbol,
-                _ => continue,
-            };
-            push_owned_symbol(referenced, symbol, "referenced-symbol capacity exceeded")?;
+    let inventory = inventory_x86_64_coff_symbols(object)
+        .map_err(|error| anyhow!("could not inventory COFF symbols: {}", error))?;
+    for symbol in inventory.symbols() {
+        let symbol = symbol.map_err(|error| anyhow!("could not read COFF symbol: {}", error))?;
+        match symbol.kind {
+            CoffObjectSymbolKind::Definition => {
+                push_owned_symbol(defined, symbol.name, "defined-symbol capacity exceeded")?;
+            }
+            CoffObjectSymbolKind::Reference => push_owned_symbol(
+                referenced,
+                symbol.name,
+                "referenced-symbol capacity exceeded",
+            )?,
         }
     }
     Ok(())
@@ -801,13 +718,27 @@ fn decode_link_inputs<'data, 'relocations, 'definitions>(
                             arena,
                             definitions,
                         )
-                        .map_err(mrml_error::message)?,
+                        .map_err(|error| {
+                            anyhow!(
+                                "COFF object {} text fragment {}: {}",
+                                object_index,
+                                fragment_index,
+                                error
+                            )
+                        })?,
                         x86_64_coff_text_fragment_comdat_selection_from_inventory(
                             object,
                             fragment_index,
                             inventory,
                         )
-                        .map_err(mrml_error::message)?,
+                        .map_err(|error| {
+                            anyhow!(
+                                "COFF object {} text fragment {} selection: {}",
+                                object_index,
+                                fragment_index,
+                                error
+                            )
+                        })?,
                     )
                 }
                 ObjectFormat::Coff => {
@@ -819,7 +750,15 @@ fn decode_link_inputs<'data, 'relocations, 'definitions>(
                             .ok_or_else(|| anyhow!("missing COFF COMDAT inventory"))?,
                         definitions,
                     )
-                    .map_err(mrml_error::message)?;
+                    .map_err(|error| {
+                        let readonly_index = fragment_index - text_fragment_count;
+                        anyhow!(
+                            "COFF object {} read-only fragment {}: {}",
+                            object_index,
+                            readonly_index,
+                            error
+                        )
+                    })?;
                     (decoded.input, decoded.selection)
                 }
                 ObjectFormat::Elf64 => (
@@ -1170,13 +1109,17 @@ fn selected_readonly_absolute_relocations<'data>(
             .any(|source| *source == object_index);
         if selected_object {
             let object = objects[object_index];
-            let inventory = inventory_x86_64_coff_comdat_sections(object)
-                .map_err(|error| anyhow!("could not inventory selected COFF sections: {}", error))?;
+            let inventory = inventory_x86_64_coff_comdat_sections(object).map_err(|error| {
+                anyhow!("could not inventory selected COFF sections: {}", error)
+            })?;
             let decoded =
                 decode_x86_64_coff_readonly_absolute_relocations_from_inventory(object, &inventory)
-            .map_err(|error| {
-                anyhow!("could not decode selected COFF readonly relocations: {}", error)
-            })?;
+                    .map_err(|error| {
+                        anyhow!(
+                            "could not decode selected COFF readonly relocations: {}",
+                            error
+                        )
+                    })?;
             for relocation in decoded.relocations() {
                 let retained = selected
                     .inputs

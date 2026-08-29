@@ -1291,3 +1291,29 @@ on this exact Windows host and tiny workload. This is a narrow startup-heavy
 regression result, not representative-library or general linker superiority
 evidence. Retained debug information, CodeView/PDB production, arbitrary COFF
 sections, and broader Rust-library admission remain incomplete.
+
+Archive fixed-point discovery now inventories ordinary AMD64 COFF external
+definitions and references directly from the validated symbol and string
+tables. The inventory is a zero-copy, fallible iterator: it neither decodes
+section payloads nor allocates one relocation/definition workspace per
+fragment. Structural metadata admission is separately bounded at 4,096 COFF
+sections, while the existing content decoder remains bounded at 256 tracked
+sections. A scan of the exact dated Windows gnullvm sysroot found a maximum of
+3,834 sections in one `std` member; the selected `libcore` member exercised by
+the durable probe has 1,934 sections and 5,034 symbols. The probe now crosses
+archive symbol discovery and fails at the precise next unsupported gate,
+`COFF content section tracking capacity exceeded`, rather than generically
+failing while decoding every candidate fragment. This is metadata-scale and
+recovery evidence, not full `libcore` or general `.rlib` link support.
+
+Detached Windows and Arch Linux runs each passed the complete 786-test
+compiler-core package gate and the eight driver tests. The unchanged durable
+stateful gnullvm archive produced executable outputs returning 42 through both
+linkers; MRML emitted 2,560 bytes versus rust-lld's 3,584, with 1,028 bytes of
+loader-backed zero fill and two distinct writable forwarder pointers. Fifty
+measured links after five warmups recorded MRML at 7.319 ms median/7.458 ms
+mean versus pinned gnullvm rust-lld at 22.409 ms median/23.162 ms mean on this
+exact Windows host and workload. This is a narrow reproducible advantage, not
+general linker superiority. The next gate is bounded content representation
+for large selected COFF objects without introducing per-object maximum-sized
+stack arrays or weakening section identity and COMDAT semantics.

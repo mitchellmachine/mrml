@@ -47,6 +47,7 @@ pub use ir::{
 pub use lexer::{LexError, LexErrorKind, Lexer, Span, Token, TokenKind};
 pub use linker::{
     ArchiveMember, ArchiveMembers, ArchiveSymbol, CoffComdatSection, CoffComdatSections,
+    CoffObjectSymbol, CoffObjectSymbolInventory, CoffObjectSymbolKind, CoffObjectSymbols,
     CoffReadonlyLinkInput, CoffTextComdatSelection, ElfImage, ElfLinkSectionSelections,
     ElfLinkSelectionError, ElfObjectSymbolDefinition, ElfObjectSymbolInventory, ElfSectionKind,
     ElfSectionSelection, ElfSelectedCommonLayout, ElfSelectedDefinition, ElfSelectedDefinitions,
@@ -72,8 +73,8 @@ pub use linker::{
     decode_x86_64_elf_selected_relocations, decode_x86_64_elf_selected_relocations_from_sections,
     decode_x86_64_elf_selected_sections, decode_x86_64_elf_unwind,
     decode_x86_64_elf_with_definitions, decode_x86_64_elf_writable,
-    inventory_x86_64_coff_comdat_sections, inventory_x86_64_elf_symbols,
-    layout_x86_64_elf_selected_sections, link_x86_64_elf_executable,
+    inventory_x86_64_coff_comdat_sections, inventory_x86_64_coff_symbols,
+    inventory_x86_64_elf_symbols, layout_x86_64_elf_selected_sections, link_x86_64_elf_executable,
     link_x86_64_elf_executable_with_unwind, link_x86_64_elf_executable_with_unwind_and_writable,
     link_x86_64_elf_selected_executable, link_x86_64_elf_selected_sections, link_x86_64_pe,
     link_x86_64_pe_with_data_and_unwind, link_x86_64_pe_with_data_unwind_and_readonly_relocations,
