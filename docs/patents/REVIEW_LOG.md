@@ -106,6 +106,16 @@ operation, PHY/controller hardware, or block I/O. Existing Canadian exclusions
 and outside-Canada review requirements remain unchanged. This technical screen
 is not legal advice or patent clearance.
 
+# 2026-08-29 — Bounded AHCI engine-stop lifecycle
+
+Patent review: **TRIGGERED**, governed by the recorded Canadian AHCI scope. This
+increment performs only conventional ordered engine-disable writes and bounded
+quiescence polling with MRML quarantine semantics. It adds no command, PRDT,
+data transfer, interrupt, NCQ, aggregation, ATA/ATAPI operation, controller
+hardware, or block I/O. Existing Canadian exclusions and outside-Canada review
+requirements remain unchanged. This technical screen is not legal advice or
+patent clearance.
+
 # 2026-08-29 — Bounded AHCI port-engine activation
 
 Patent review: **TRIGGERED**, governed by the recorded Canadian AHCI scope. This

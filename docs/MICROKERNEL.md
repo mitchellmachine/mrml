@@ -8845,3 +8845,9 @@ preserves the initialized owner; post-write uncertainty quarantines the layout.
 Storage passes 172 tests on Windows and Arch Linux. No command issue, PRDT/data transfer,
 interrupt, stop/removal, IOMMU hardware, OVMF, or physical hardware was
 exercised.
+
+AHCI engine stop is now **PARTIALLY IMPLEMENTED IN SOURCE**. Command processing
+is disabled and boundedly quiesced before FIS receive is disabled and boundedly
+quiesced. Writes are read-verified; timeout or uncertainty quarantines the DMA
+layout. Storage passes 174 tests on Windows and Arch Linux. This is host register-model evidence,
+not command, transfer, interrupt, IOMMU, OVMF, or physical-device evidence.

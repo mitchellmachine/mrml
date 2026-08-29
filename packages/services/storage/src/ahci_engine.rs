@@ -17,6 +17,7 @@ const CMD_FRE: u32 = 1 << 4;
 const CMD_FR: u32 = 1 << 14;
 const CMD_CR: u32 = 1 << 15;
 const TFD_BUSY_OR_DRQ: u32 = (1 << 7) | (1 << 3);
+pub const AHCI_ENGINE_STOP_POLL_LIMIT: u32 = 1024;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum AhciEngineError {
@@ -63,6 +64,80 @@ impl ActiveAhciPort {
     pub const fn layout(&self) -> AhciPortDmaLayout {
         self.layout
     }
+}
+
+#[derive(Debug, Eq, PartialEq)]
+pub struct StoppedAhciPort {
+    layout: AhciPortDmaLayout,
+}
+
+impl StoppedAhciPort {
+    pub const fn layout(&self) -> AhciPortDmaLayout {
+        self.layout
+    }
+}
+
+pub fn stop_ahci_port_engine<R: AhciRegisterIo>(
+    mapping: AhciAbarMapping,
+    owner: ActiveAhciPort,
+    registers: &mut R,
+) -> Result<StoppedAhciPort, AhciEngineFailure> {
+    let layout = owner.layout;
+    if layout.device_object != mapping.device_object
+        || layout.configuration_generation != mapping.configuration_generation
+        || layout.mapping_generation != mapping.mapping_generation
+        || layout.port >= 32
+    {
+        return Err(AhciEngineFailure::Quarantined {
+            layout,
+            error: AhciEngineError::LayoutMismatch,
+        });
+    }
+    let command_offset = PORT_BASE + u32::from(layout.port) * PORT_STRIDE + CMD;
+    let command =
+        registers
+            .read_u32(command_offset)
+            .map_err(|()| AhciEngineFailure::Quarantined {
+                layout,
+                error: AhciEngineError::RegisterRead,
+            })?;
+    if command & (CMD_ST | CMD_FRE) != CMD_ST | CMD_FRE {
+        return Err(AhciEngineFailure::Quarantined {
+            layout,
+            error: AhciEngineError::VerificationFailed,
+        });
+    }
+    let receive_only = command & !CMD_ST;
+    write_and_verify(registers, command_offset, receive_only, layout)?;
+    wait_until_clear(registers, command_offset, CMD_CR, layout)?;
+    let stopped = receive_only & !CMD_FRE;
+    write_and_verify(registers, command_offset, stopped, layout)?;
+    wait_until_clear(registers, command_offset, CMD_FR, layout)?;
+    Ok(StoppedAhciPort { layout })
+}
+
+fn wait_until_clear<R: AhciRegisterIo>(
+    registers: &mut R,
+    offset: u32,
+    mask: u32,
+    layout: AhciPortDmaLayout,
+) -> Result<(), AhciEngineFailure> {
+    for _ in 0..AHCI_ENGINE_STOP_POLL_LIMIT {
+        match registers.read_u32(offset) {
+            Ok(value) if value & mask == 0 => return Ok(()),
+            Ok(_) => {}
+            Err(()) => {
+                return Err(AhciEngineFailure::Quarantined {
+                    layout,
+                    error: AhciEngineError::RegisterRead,
+                });
+            }
+        }
+    }
+    Err(AhciEngineFailure::Quarantined {
+        layout,
+        error: AhciEngineError::VerificationFailed,
+    })
 }
 
 pub fn start_ahci_port_engine<R: AhciRegisterIo>(
@@ -292,5 +367,24 @@ mod tests {
             let failure = start_ahci_port_engine(mapping(), owner(), &mut registers).unwrap_err();
             assert!(matches!(failure, AhciEngineFailure::Quarantined { .. }));
         }
+    }
+
+    #[test]
+    fn stops_command_processing_before_fis_receive() {
+        let mut registers = Registers::default();
+        let active = start_ahci_port_engine(mapping(), owner(), &mut registers).unwrap();
+        let stopped = stop_ahci_port_engine(mapping(), active, &mut registers).unwrap();
+        assert_eq!(stopped.layout().dma_generation, 11);
+        assert_eq!(registers.values[(CMD / 4) as usize], 0);
+        assert_eq!(registers.writes, 4);
+    }
+
+    #[test]
+    fn stop_write_uncertainty_quarantines_active_dma() {
+        let mut registers = Registers::default();
+        let active = start_ahci_port_engine(mapping(), owner(), &mut registers).unwrap();
+        registers.reject_write = Some(registers.writes);
+        let failure = stop_ahci_port_engine(mapping(), active, &mut registers).unwrap_err();
+        assert!(matches!(failure, AhciEngineFailure::Quarantined { .. }));
     }
 }

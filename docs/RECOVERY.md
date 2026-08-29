@@ -1252,6 +1252,11 @@ quarantine and may not reclaim the DMA layout. Storage passes 172 tests on
 Windows and Arch Linux; no stop/removal path or installed-recovery hardware
 execution is claimed.
 
+Engine stop is **PARTIALLY IMPLEMENTED IN SOURCE** with ordered disable and
+bounded command/FIS quiescence polling. Any uncertainty remains quarantined;
+recovery cannot infer that DMA is reclaimable from a requested stop. Storage
+passes 174 tests on Windows and Arch Linux. Base clearing and sanitizing reclamation remain next.
+
 The typed native route and installed recovery are now composed atomically as a
 **PARTIALLY IMPLEMENTED** configuration control plane. One bounded operation
 correlates and registers the descriptor, reacquires a read-only session, checks

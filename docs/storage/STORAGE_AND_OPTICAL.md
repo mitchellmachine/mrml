@@ -338,6 +338,12 @@ Windows and Arch Linux. No command is built or issued, and no PRDT, data transfe
 engine stop/removal, ATA/ATAPI, NCQ, IOMMU hardware, OVMF, or physical device was
 exercised.
 
+The inverse engine-stop lifecycle is **PARTIALLY IMPLEMENTED IN SOURCE**. It
+clears command processing before FIS receive and bounds both hardware-quiescence
+waits to 1024 reads. Exact read-back is required, and all uncertainty retains a
+quarantined DMA layout. Storage passes 174 tests on Windows and Arch Linux. Register-base clearing,
+DMA sanitization/reclamation, command issue, and data transfer remain unimplemented.
+
 The following DMA-memory ownership boundary is **PARTIALLY IMPLEMENTED IN
 SOURCE**. One safe transaction binds a quiescent discovered SATA port and exact
 controller generations to explicit controller `CONTROL` plus separate

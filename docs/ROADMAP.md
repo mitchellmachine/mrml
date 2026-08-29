@@ -260,6 +260,13 @@ Engine activation,
 PRDT/data buffers, ATA/ATAPI commands, interrupts, NCQ, real IOMMU behavior, and
 physical evidence remain **PLANNED**.
 
+Bounded AHCI engine stop is now **PARTIALLY IMPLEMENTED IN SOURCE**. The active
+typestate clears command processing, waits a fixed maximum for command-list
+quiescence, clears FIS receive, then waits for receive quiescence. Every write is
+read-verified; any mismatch, timeout, or access uncertainty quarantines the DMA
+layout. Storage passes 174 tests on Windows and Arch Linux. Base clearing, memory sanitization,
+reclamation, and command/data paths remain **PLANNED**.
+
 Bounded AHCI port-engine activation is now **PARTIALLY IMPLEMENTED IN SOURCE**.
 `start_ahci_port_engine` consumes only initialized command memory, exact-matches
 the ABAR and DMA generations, requires disabled interrupts and an idle task file

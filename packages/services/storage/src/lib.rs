@@ -76,7 +76,8 @@ pub use ahci_port::{
     AhciPortPowerState, AhciPortSnapshot, AhciPortSnapshotSet, discover_ahci_ports,
 };
 pub use ahci_engine::{
-    ActiveAhciPort, AhciEngineError, AhciEngineFailure, start_ahci_port_engine,
+    AHCI_ENGINE_STOP_POLL_LIMIT, ActiveAhciPort, AhciEngineError, AhciEngineFailure,
+    StoppedAhciPort, start_ahci_port_engine, stop_ahci_port_engine,
 };
 pub use ahci_port_program::{
     AhciPortProgramError, AhciPortProgramFailure, ProgrammedAhciPortDma,
