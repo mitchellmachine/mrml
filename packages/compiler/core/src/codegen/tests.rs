@@ -13594,6 +13594,45 @@ mod tests {
     }
 
     #[test]
+    fn mrml_v1_codegen_bounds_wide_funnel_shift_admission() {
+        let accepted =
+            "#[mrml_abi::export(version = 1)] pub fn value(left: u128, right: u128, distance: u32) -> u128 { unsafe { left.unchecked_funnel_shl(right, distance) } }";
+        let module = Parser::new(accepted).parse_module::<2, 3>().unwrap();
+        let Some(Item::Function(function)) = module.items()[0] else {
+            panic!("expected function")
+        };
+        for abi in [X86_64Abi::SystemV, X86_64Abi::Windows] {
+            compile_x86_64_function::<_, 1024, 3, 24>(&function, &NoConstants, abi).unwrap();
+        }
+
+        for rejected in [
+            "#[mrml_abi::export(version = 1)] pub fn value(left: u128, right: u128, distance: u32) -> u128 { left.unchecked_funnel_shl(right, distance) }",
+            "#[mrml_abi::export(version = 1)] pub unsafe fn value(left: i128, right: i128, distance: u32) -> i128 { left.unchecked_funnel_shl(right, distance) }",
+            "#[mrml_abi::export(version = 1)] pub unsafe fn value(left: u128, right: u64, distance: u32) -> u128 { left.unchecked_funnel_shr(right, distance) }",
+            "#[mrml_abi::export(version = 1)] pub unsafe fn value(left: u128, right: u128, distance: u16) -> u128 { left.unchecked_funnel_shr(right, distance) }",
+            "#[mrml_abi::export(version = 1)] pub fn value(left: i128, right: i128, distance: u32) -> i128 { left.funnel_shl(right, distance) }",
+            "#[mrml_abi::export(version = 1)] pub fn value(left: u128, right: u64, distance: u32) -> u128 { left.funnel_shr(right, distance) }",
+            "#[mrml_abi::export(version = 1)] pub fn value(left: u128, right: u128, distance: usize) -> u128 { left.funnel_shr(right, distance) }",
+        ] {
+            let module = Parser::new(rejected).parse_module::<2, 3>().unwrap();
+            let Some(Item::Function(function)) = module.items()[0] else {
+                panic!("expected function")
+            };
+            for abi in [X86_64Abi::SystemV, X86_64Abi::Windows] {
+                assert!(
+                    compile_x86_64_function::<_, 1024, 3, 24>(
+                        &function,
+                        &NoConstants,
+                        abi,
+                    )
+                    .is_err(),
+                    "unexpectedly admitted {rejected} for {abi:?}",
+                );
+            }
+        }
+    }
+
+    #[test]
     fn mrml_v1_codegen_rejects_zero_word_parameters_at_the_type_span() {
         let source = "#[mrml_abi::export(version = 1)] pub fn consume(input: ()) { }";
         let module = Parser::new(source).parse_module::<2, 2>().unwrap();

@@ -60,6 +60,19 @@ oracle upgrade receives a new immutable record and differential classification
 against all prior accepted probes. Keep Cargo on edition 2024 until a newer
 named edition can be adopted through a pinned, workspace-wide migration.
 
+## Latest bounded language milestone
+
+Wide two-word integer emission now unwraps an explicitly scoped `unsafe` block
+before lowering its typed operand, matching the existing one-word emitter
+without granting unsafe authority to the surrounding safe function. Focused
+funnel-shift admission tests accept `u128` unchecked use only inside that scope
+and reject safe unchecked calls, signed receivers, mismatched peer widths, and
+non-`u32` distances on both x86-64 ABIs. The complete native Linux compiler
+gate passes 808 unit tests and all integration groups, for 1,296 tests. Windows
+gnullvm was not run for this increment. Patent review: **NOT_TRIGGERED**; this
+is a compiler safety-context propagation correction, not a new mechanism. See
+`docs/patents/REVIEW_LOG.md`.
+
 ## Latest bounded linker milestone
 
 Commit `b03f61cb` replaces fixed per-section COFF COMDAT metadata and boolean

@@ -6028,3 +6028,12 @@ ORACLE-0002 Arch execution. Windows and Arch each passed 657 library, 1
 component-interface, 10 conformance, 351 replacement, and 8 semantic-execution
 tests: 1,027 per host. External relocations and production loading remain
 outside the claim.
+The scoped-wide-unsafe milestone propagates an expression's already-validated
+`unsafe` block into two-word integer emission instead of rejecting the wrapper
+after semantic analysis. Focused funnel-shift coverage accepts an unchecked
+`u128` operation in an explicit unsafe block while rejecting a safe unchecked
+call, signed receivers, mismatched peer widths, and non-`u32` distances for both
+x86-64 calling conventions. The native Linux compiler gate passes 808 unit
+tests and all integration groups, for 1,296 tests. Windows gnullvm was not run
+for this increment. This does not expand the set of unchecked operations or
+define behavior for violated unsafe-method preconditions.

@@ -356,7 +356,10 @@ Unsafe unsigned wide `unchecked_funnel_shl` and `unchecked_funnel_shr` combine
 two adjacent two-word values without reducing either operand to a host scalar.
 Pinned-nightly oracle vectors cover zero and the 1/63/64/127 boundaries. Shift
 distances at or above 128 violate the unchecked methods' precondition and remain
-outside the defined contract.
+outside the defined contract. An explicitly scoped `unsafe` block inside a safe
+function carries the required language context through two-word emission; it
+does not make sibling expressions unsafe or admit a signed or mismatched-width
+funnel operation.
 Safe unsigned wide `funnel_shl` and `funnel_shr` reuse the same two-word
 composition and trap before emission when the distance is at least 128. Their
 valid boundary results are compared against the pinned nightly independently of

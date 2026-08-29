@@ -7217,6 +7217,9 @@ impl<
                 .ok_or(self.error(CodegenErrorKind::UnsupportedReturnType))?,
             _ => return Err(self.error(CodegenErrorKind::UnsupportedReturnType)),
         };
+        if let ExprKind::UnsafeBlock { operand } = expression.kind {
+            return self.emit_wide_integer_return(tree, operand, expected_type);
+        }
         if let ExprKind::Integer(literal) = expression.kind {
             if !runtime_integer_literal_fits(layout, literal.value, false) {
                 return Err(self.error(CodegenErrorKind::ValueOutOfRange));
