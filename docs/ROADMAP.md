@@ -4031,3 +4031,8 @@ staging and activation require only `CONTROL`, while active-generation and
 runtime-assignment reads require only `READ`. A combined authority is rejected
 before state or storage access. Hosted VMM and installed-media execution remain
 outside this evidence.
+
+Two-phase deployment activation now revalidates exact live control at commit,
+including before stable storage receipt consumption or recovery-state update.
+A revoked prepare-time handle cannot authorize later publication; a fresh exact
+control handle is required.

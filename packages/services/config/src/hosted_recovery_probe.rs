@@ -1010,7 +1010,7 @@ unsafe fn recover_total_control_plane_with_domain_policy<const DOMAINS: usize>(
         .prepare_activation(&deployment_capabilities, control, candidate, None)
         .map_err(|_| HostedRecoveryProbeError::Deployment)?;
     let active = deployment_service
-        .commit_activation(prepared)
+        .commit_activation(&deployment_capabilities, control, prepared)
         .map_err(|_| HostedRecoveryProbeError::Deployment)?;
     let active_release = deployment_service
         .active_release(&deployment_capabilities, inspect)

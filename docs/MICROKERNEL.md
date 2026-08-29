@@ -7078,6 +7078,12 @@ combined `CONTROL|READ` handle is rejected by both paths before deployment
 state or release storage is touched. Deployment passes its focused hosted
 suite. This adds no UEFI, KVM, WHP, installed-media, or physical evidence.
 
+Prepared activation no longer acts as cached authority. Direct activation and
+both stable-publication commits revalidate a live exact `CONTROL` capability;
+stable commits perform that check before consuming a storage receipt or
+updating authenticated recovery state. Revocation between prepare and commit
+therefore leaves the candidate prepared and publishes no active generation.
+
 Patent review: `NOT_TRIGGERED` — this reuses conventional exact bitset equality
 at an existing capability check and introduces no new mechanism. See
 `docs/patents/REVIEW_LOG.md`.

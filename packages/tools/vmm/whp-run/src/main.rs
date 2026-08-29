@@ -2776,7 +2776,7 @@ fn application_main() -> Result<()> {
             .prepare_activation(&capabilities, control, candidate, None)
             .map_err(|error| anyhow!("WHP generation preparation failed: {:?}", error))?;
         let active = deployment
-            .commit_activation(prepared)
+            .commit_activation(&capabilities, control, prepared)
             .map_err(|error| anyhow!("WHP generation activation failed: {:?}", error))?;
         if *active.generation_digest()
             != SystemGenerationView::decode(&bytes[..*length])

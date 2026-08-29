@@ -1004,3 +1004,9 @@ DeploymentService likewise requires exact operation-scoped authority. Control
 cannot double as inspection authority, inspection cannot mutate generations,
 and a combined control/read handle satisfies neither narrow boundary. These
 checks precede candidate mutation and active-release storage reads.
+
+Prepared deployment activation is state, not authority. Commit revalidates a
+currently live exact control capability, and stable commit variants do so
+before storage or authenticated recovery-state mutation. Revocation therefore
+invalidates the cached prepare decision without discarding the prepared
+candidate state.

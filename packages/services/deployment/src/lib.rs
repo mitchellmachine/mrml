@@ -245,10 +245,13 @@ impl<const CANDIDATES: usize> DeploymentService<CANDIDATES> {
         })
     }
 
-    pub fn commit_activation(
+    pub fn commit_activation<const N: usize>(
         &mut self,
+        capabilities: &CapabilitySpace<N>,
+        control: Capability,
         prepared: PreparedActivation,
     ) -> Result<ActivatedSystemGeneration, DeploymentError> {
+        self.authorize(capabilities, control, Rights::CONTROL)?;
         if prepared.expected_activation_sequence != self.next_activation_sequence {
             return Err(DeploymentError::StaleActivation);
         }
@@ -690,11 +693,16 @@ impl<const EXTENTS: usize> PreparedStableActivation<EXTENTS> {
         transaction.admit_file(&self.file)
     }
 
-    pub fn commit<const CANDIDATES: usize, const PARTICIPANTS: usize>(
+    pub fn commit<const CANDIDATES: usize, const PARTICIPANTS: usize, const CAPS: usize>(
         self,
         service: &mut DeploymentService<CANDIDATES>,
+        capabilities: &CapabilitySpace<CAPS>,
+        control: Capability,
         receipt: &mut TransactionReceipt<PARTICIPANTS>,
     ) -> Result<StableActivation<EXTENTS>, StableActivationCommitError> {
+        service
+            .authorize(capabilities, control, Rights::CONTROL)
+            .map_err(StableActivationCommitError::Deployment)?;
         if service.preview_activation(self.activation) != Ok(self.active) {
             return Err(StableActivationCommitError::StaleActivation);
         }
@@ -706,7 +714,7 @@ impl<const EXTENTS: usize> PreparedStableActivation<EXTENTS> {
             .commit_transaction(receipt)
             .map_err(StableActivationCommitError::Transaction)?;
         let active = service
-            .commit_activation(self.activation)
+            .commit_activation(capabilities, control, self.activation)
             .map_err(StableActivationCommitError::Deployment)?;
         if active != self.active {
             return Err(StableActivationCommitError::StaleActivation);
@@ -724,13 +732,19 @@ impl<const EXTENTS: usize> PreparedStableActivation<EXTENTS> {
     pub fn commit_authenticated<
         const CANDIDATES: usize,
         const PARTICIPANTS: usize,
+        const CAPS: usize,
         S: DeploymentRecoveryStateStore,
     >(
         self,
         service: &mut DeploymentService<CANDIDATES>,
+        capabilities: &CapabilitySpace<CAPS>,
+        control: Capability,
         receipt: &mut TransactionReceipt<PARTICIPANTS>,
         state_store: &mut S,
     ) -> Result<StableActivation<EXTENTS>, AuthenticatedActivationCommitError<S::Error>> {
+        service
+            .authorize(capabilities, control, Rights::CONTROL)
+            .map_err(AuthenticatedActivationCommitError::Deployment)?;
         if service.preview_activation(self.activation) != Ok(self.active) {
             return Err(AuthenticatedActivationCommitError::StaleActivation);
         }
@@ -767,7 +781,7 @@ impl<const EXTENTS: usize> PreparedStableActivation<EXTENTS> {
             .compare_and_store(&expected, &replacement)
             .map_err(AuthenticatedActivationCommitError::StateStore)?;
         let active = service
-            .commit_activation(self.activation)
+            .commit_activation(capabilities, control, self.activation)
             .map_err(AuthenticatedActivationCommitError::Deployment)?;
         if active != self.active {
             return Err(AuthenticatedActivationCommitError::StaleActivation);
@@ -1949,7 +1963,17 @@ mod tests {
         let prepared = service
             .prepare_activation(&capabilities, control, id, None)
             .unwrap();
-        let active = service.commit_activation(prepared).unwrap();
+        capabilities.revoke(control).unwrap();
+        assert_eq!(
+            service.commit_activation(&capabilities, control, prepared),
+            Err(DeploymentError::Unauthorized)
+        );
+        let replacement = capabilities
+            .insert(ObjectId(0x4445_504c_4f59), Rights::CONTROL)
+            .unwrap();
+        let active = service
+            .commit_activation(&capabilities, replacement, prepared)
+            .unwrap();
         let activated_release = service
             .active_release(&capabilities, inspect)
             .unwrap()
@@ -2410,13 +2434,15 @@ mod tests {
         let prepared = service
             .prepare_activation(&capabilities, control, id, None)
             .unwrap();
-        let active = service.commit_activation(prepared).unwrap();
+        let active = service
+            .commit_activation(&capabilities, control, prepared)
+            .unwrap();
         assert_eq!(active.generation(), 8);
         assert_eq!(active.generation_digest(), &[0x51; 64]);
         assert_eq!(active.interface_catalog_digest(), &[0x52; 64]);
         assert_eq!(service.active(&capabilities, inspect), Ok(Some(active)));
         assert_eq!(
-            service.commit_activation(prepared),
+            service.commit_activation(&capabilities, control, prepared),
             Err(DeploymentError::StaleActivation)
         );
     }
@@ -2440,7 +2466,9 @@ mod tests {
         let prepared = service
             .prepare_activation(&capabilities, control, id, None)
             .unwrap();
-        let active = service.commit_activation(prepared).unwrap();
+        let active = service
+            .commit_activation(&capabilities, control, prepared)
+            .unwrap();
         assert_eq!(
             service.stage(&capabilities, control, candidate(7, 0x50)),
             Err(DeploymentError::RollbackRequiresSeparateAuthorization)
@@ -2499,7 +2527,13 @@ mod tests {
             .unwrap();
         let mut recovery_state = RecoveryStateStore::empty();
         let stable = stable
-            .commit_authenticated(&mut service, &mut receipt, &mut recovery_state)
+            .commit_authenticated(
+                &mut service,
+                &capabilities,
+                control,
+                &mut receipt,
+                &mut recovery_state,
+            )
             .unwrap();
         assert_eq!(receipt.remaining(), 0);
         assert_eq!(stable.active(), preview);

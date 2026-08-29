@@ -1515,7 +1515,9 @@ fn build_probe_deployment_evidence(
     let prepared = service
         .prepare_activation(&capabilities, control, candidate, None)
         .unwrap_or_else(|_| halt());
-    let active = service.commit_activation(prepared).unwrap_or_else(|_| halt());
+    let active = service
+        .commit_activation(&capabilities, control, prepared)
+        .unwrap_or_else(|_| halt());
     let active_release = service
         .active_release(&capabilities, inspect)
         .unwrap_or_else(|_| halt())
