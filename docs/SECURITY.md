@@ -124,6 +124,8 @@ access. The security/acceptance gate is canonical in
 - Buffered send descriptors and receive-token outputs use distinct element
   widths and complete checked user ranges; validating only their starting
   address is insufficient.
+- Buffered payload input and output likewise require complete non-wrapping user
+  ranges at syscall decode, before page-table walking or copying.
 - Writable and executable mappings are mutually exclusive.
 - Authority, replay state, ownership, mappings, and lifecycle transitions are
   explicit and commit only after validation; partial failure rolls back or

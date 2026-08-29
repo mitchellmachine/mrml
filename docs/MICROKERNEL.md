@@ -6566,6 +6566,10 @@ descriptors, while receive writes 8-byte opaque capability tokens. Checked
 range-end and user-address bounds reject canonical-space crossings before a
 request exists; a shared start-address-only check no longer conflates the two
 layouts.
+Buffered payload input and output now use the same complete checked-range rule:
+send length and receive capacity must fit below the canonical user boundary,
+not merely begin at a valid address. Cross-boundary payloads fail during decode
+before active page-table validation or copying.
 
 Patent review: **NOT_TRIGGERED**. This change retains an existing bounds check
 as Rust typestate across an existing syscall completion path and introduces no

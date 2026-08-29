@@ -361,7 +361,7 @@ impl SyscallRequest {
                 if capability_count > MAX_CAPABILITIES {
                     return Err(SyscallError::TooManyCapabilities);
                 }
-                validate_buffer_address(rdx, 1)?;
+                validate_user_range(rdx, payload_length, MAX_INLINE_PAYLOAD)?;
                 validate_optional_capability_buffer(
                     r8,
                     capability_count,
@@ -390,7 +390,7 @@ impl SyscallRequest {
                 if r8 | r9 != 0 {
                     return Err(SyscallError::ReservedArgument);
                 }
-                validate_buffer_address(rdi, 1)?;
+                validate_user_range(rdi, payload_capacity, MAX_INLINE_PAYLOAD)?;
                 validate_optional_capability_buffer(
                     rdx,
                     capability_capacity,
@@ -742,6 +742,10 @@ mod tests {
             Err(SyscallError::InvalidBuffer)
         );
         assert_eq!(
+            SyscallRequest::decode(4, endpoint, receiver, (1 << 47) - 32, 48, 0, 0),
+            Err(SyscallError::InvalidBuffer)
+        );
+        assert_eq!(
             SyscallRequest::decode(4, endpoint, receiver, 0x6000, 0, 0, 0),
             Err(SyscallError::PayloadTooLarge)
         );
@@ -785,6 +789,10 @@ mod tests {
         assert_eq!(
             SyscallRequest::decode(5, 0x8000, 112, 0, 0, 1, 0),
             Err(SyscallError::ReservedArgument)
+        );
+        assert_eq!(
+            SyscallRequest::decode(5, (1 << 47) - 64, 112, 0, 0, 0, 0),
+            Err(SyscallError::InvalidBuffer)
         );
         assert_eq!(
             SyscallRequest::decode(5, 0x8000, 112, 0, MAX_CAPABILITIES as u64 + 1, 0, 0),

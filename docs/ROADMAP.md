@@ -2033,6 +2033,9 @@ live composition remains pending.
    16-byte attenuation descriptors for send and 8-byte returned tokens for
    receive. Canonical-address crossing and multiplication/range failure reject
    the syscall before publication.
+   Buffered send payloads and receive outputs now also validate their complete
+   declared ranges during decode, so a valid start with a canonical-boundary
+   crossing cannot become a request.
    The restart wire record can no longer carry a clock value; bytes 40--47 are
    canonical zero and dispatch receives time only from trusted kernel state.
    Syscall operation 10 decodes only an exact generational capability and
