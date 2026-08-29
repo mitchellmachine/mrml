@@ -7553,6 +7553,53 @@ impl<
             }
             self.emit(&[0x4c, 0x89, 0xc8, 0x4c, 0x89, 0xd2])?;
             return Ok(());
+        } else if let ExprKind::IntegerPairTransform {
+            base,
+            other,
+            transform:
+                transform @ (crate::expression::IntegerPairTransform::Minimum
+                | crate::expression::IntegerPairTransform::Maximum),
+        } = expression.kind
+        {
+            let base_type = runtime_expression_type_with_locals(
+                self.function,
+                self.resolver,
+                &self.locals[..self.saved_locals],
+                tree,
+                base,
+                1,
+            )
+            .map_err(|kind| self.error(kind))?;
+            if !matches!(
+                base_type,
+                RuntimeExpressionType::Integer(Some(
+                    crate::IntegerType::U128 | crate::IntegerType::I128
+                ))
+            ) || expected_type != base_type
+            {
+                return Err(self.error(CodegenErrorKind::RuntimeTypeMismatch));
+            }
+            self.emit_wide_binary_operands(tree, base, other, expected_type)?;
+            let signed = base_type
+                == RuntimeExpressionType::Integer(Some(crate::IntegerType::I128));
+            let minimum = transform == crate::expression::IntegerPairTransform::Minimum;
+            self.emit(&[0x48, 0x39, 0xd1])?;
+            let use_base = self.emit_forward_branch(match (signed, minimum) {
+                (false, true) => 0x82,
+                (false, false) => 0x87,
+                (true, true) => 0x8c,
+                (true, false) => 0x8f,
+            })?;
+            let use_other = self.emit_forward_branch(0x85)?;
+            self.emit(&[0x49, 0x39, 0xc0])?;
+            let use_base_tie = self.emit_forward_branch(if minimum { 0x86 } else { 0x83 })?;
+            self.patch_forward_branch(use_other)?;
+            let done = self.emit_unconditional_forward_branch()?;
+            self.patch_forward_branch(use_base)?;
+            self.patch_forward_branch(use_base_tie)?;
+            self.emit(&[0x4c, 0x89, 0xc0, 0x48, 0x89, 0xca])?;
+            self.patch_forward_branch(done)?;
+            return Ok(());
         } else if let ExprKind::Binary {
             operator:
                 operator @ (crate::BinaryOperator::BitAnd
