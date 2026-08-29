@@ -953,6 +953,18 @@ through the canonical frontend, emitted a 1,024-byte import-free PE32+ image,
 and returned exit code 42 on the Windows gnullvm host. These operations do not
 invoke rust-lld, silently fall back, or alter ordinary production builds.
 
+A durable public-route `.rlib` probe now uses exact pinned Windows gnullvm rustc
+to produce an 18,280-byte no-std archive containing `lib.rmeta`,
+`lib.rmeta-link`, and eight distinct COFF codegen-unit members. Its external
+entry reaches 32 non-inlined functions across eight source modules. Both
+`mrml compiler mrml-rustc-experimental link-pe` and pinned rust-lld consume the
+identical entry object and archive and return exit code 42; MRML emits 2,048
+bytes and rust-lld emits 1,536 bytes. Over 50 direct-driver iterations after
+five warmups, MRML measured 5.269 ms median and 5.562 ms mean versus rust-lld at
+22.565 ms median and 22.645 ms mean. This is reproducible multi-member gnullvm
+archive and public-routing evidence with a strong narrow process-level speed
+advantage, not general `.rlib` compatibility or broad linker superiority.
+
 The independently authored GNU thin-archive probe stores a helper, its
 transitive leaf, and an unused function in three external objects. It deletes
 the indexed but unreferenced object before the MRML link; MRML reaches the leaf

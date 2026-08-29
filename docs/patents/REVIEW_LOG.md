@@ -9339,6 +9339,14 @@ operations. It introduces no new compilation, linking, object-format,
 compression, cryptographic, or loading mechanism. This technical screen is not
 legal advice or patent clearance.
 
+# 2026-08-28 — Public multi-CGU gnullvm rlib evidence
+
+Patent review: **NOT_TRIGGERED**. This increment adds a reproducible probe and
+benchmark for the existing conventional archive selection, COFF relocation,
+unwind, and PE serialization mechanisms. It introduces no new archive,
+selection, linking, compression, cryptographic, or loading mechanism. This
+technical screen is not legal advice or patent clearance.
+
 # 2026-08-28 — ELF x86-64 unsigned absolute-32 relocation
 
 Patent review: **NOT_TRIGGERED**. This increment decodes and applies the
