@@ -5,10 +5,13 @@
 //! selected catalog record and the exact borrowed memory extent.
 
 use mrml_interface_storage_block_provider_v1::{
-    decode_read_request, decode_write_request, encode_read_response, encode_write_response,
-    BlockProviderDevice, BlockProviderReadTransport, BlockProviderWriteTransport, ProtocolError,
-    ReadError, WriteError, BLOCK_DEVICE_FLAG_READ_ONLY, READ_REQUEST_BYTES, READ_RESPONSE_BYTES,
-    WRITE_REQUEST_BYTES, WRITE_RESPONSE_BYTES,
+    decode_flush_request, decode_read_request, decode_reset_request, decode_write_request,
+    encode_flush_response, encode_read_response, encode_reset_response, encode_write_response,
+    BlockProviderControlTransport, BlockProviderDevice, BlockProviderReadTransport,
+    BlockProviderWriteTransport, FlushError, ProtocolError, ReadError, ResetError, WriteError,
+    BLOCK_DEVICE_FLAG_FLUSH, BLOCK_DEVICE_FLAG_READ_ONLY, BLOCK_DEVICE_FLAG_RESET,
+    FLUSH_REQUEST_BYTES, FLUSH_RESPONSE_BYTES, READ_REQUEST_BYTES, READ_RESPONSE_BYTES,
+    RESET_REQUEST_BYTES, RESET_RESPONSE_BYTES, WRITE_REQUEST_BYTES, WRITE_RESPONSE_BYTES,
 };
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -39,6 +42,99 @@ pub trait AhciBlockIoBackend {
         sector_count: u32,
         input: &[u8],
     ) -> Result<(), AhciBlockIoError>;
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum AhciBlockControlError {
+    PermissionDenied,
+    IoFailure,
+    CleanupIncomplete,
+}
+
+pub trait AhciBlockControlBackend {
+    fn flush(&mut self, device: BlockProviderDevice) -> Result<u64, AhciBlockControlError>;
+    fn reset(&mut self, device: BlockProviderDevice) -> Result<u64, AhciBlockControlError>;
+}
+
+pub struct AhciBlockControlAdapter<'a, B> {
+    devices: &'a [BlockProviderDevice],
+    backend: B,
+}
+
+impl<'a, B> AhciBlockControlAdapter<'a, B> {
+    pub const fn new(devices: &'a [BlockProviderDevice], backend: B) -> Self {
+        Self { devices, backend }
+    }
+    pub fn into_backend(self) -> B {
+        self.backend
+    }
+    fn device(
+        &self,
+        session: mrml_interface_storage_block_provider_v1::OpaqueHandle,
+    ) -> Option<BlockProviderDevice> {
+        self.devices
+            .iter()
+            .copied()
+            .find(|device| device.session == session)
+    }
+}
+
+impl<B: AhciBlockControlBackend> BlockProviderControlTransport for AhciBlockControlAdapter<'_, B> {
+    fn flush(
+        &mut self,
+        request: &[u8; FLUSH_REQUEST_BYTES],
+    ) -> Result<[u8; FLUSH_RESPONSE_BYTES], ProtocolError> {
+        let request = decode_flush_request(request)?;
+        let Some(device) = self.device(request.session) else {
+            return Ok(encode_flush_response(Err(FlushError::StaleObject)));
+        };
+        if device.flags & BLOCK_DEVICE_FLAG_FLUSH == 0 {
+            return Ok(encode_flush_response(Err(FlushError::PermissionDenied)));
+        }
+        let result = self
+            .backend
+            .flush(device)
+            .and_then(|serial| {
+                (serial != 0)
+                    .then_some(serial)
+                    .ok_or(AhciBlockControlError::IoFailure)
+            })
+            .map_err(|error| match error {
+                AhciBlockControlError::PermissionDenied => FlushError::PermissionDenied,
+                AhciBlockControlError::IoFailure | AhciBlockControlError::CleanupIncomplete => {
+                    FlushError::IoFailure
+                }
+            });
+        Ok(encode_flush_response(result))
+    }
+
+    fn reset(
+        &mut self,
+        request: &[u8; RESET_REQUEST_BYTES],
+    ) -> Result<[u8; RESET_RESPONSE_BYTES], ProtocolError> {
+        let request = decode_reset_request(request)?;
+        let Some(device) = self.device(request.session) else {
+            return Ok(encode_reset_response(Err(ResetError::StaleObject)));
+        };
+        if device.flags & BLOCK_DEVICE_FLAG_RESET == 0 {
+            return Ok(encode_reset_response(Err(ResetError::PermissionDenied)));
+        }
+        let result = self
+            .backend
+            .reset(device)
+            .and_then(|generation| {
+                (generation != 0)
+                    .then_some(generation)
+                    .ok_or(AhciBlockControlError::CleanupIncomplete)
+            })
+            .map_err(|error| match error {
+                AhciBlockControlError::PermissionDenied => ResetError::PermissionDenied,
+                AhciBlockControlError::IoFailure | AhciBlockControlError::CleanupIncomplete => {
+                    ResetError::CleanupIncomplete
+                }
+            });
+        Ok(encode_reset_response(result))
+    }
 }
 
 pub struct AhciBlockIoAdapter<'a, B> {
@@ -168,7 +264,8 @@ const fn map_write_error(error: AhciBlockIoError) -> WriteError {
 mod tests {
     use super::*;
     use mrml_interface_storage_block_provider_v1::{
-        decode_read_response, decode_write_response, encode_read_request, encode_write_request,
+        decode_flush_response, decode_read_response, decode_reset_response, decode_write_response,
+        encode_flush_request, encode_read_request, encode_reset_request, encode_write_request,
         BorrowedReadView, BorrowedWriteView, OpaqueHandle,
     };
 
@@ -290,5 +387,52 @@ mod tests {
         );
         let backend = adapter.into_backend();
         assert_eq!((backend.reads, backend.writes), (0, 0));
+    }
+
+    struct ControlBackend;
+    impl AhciBlockControlBackend for ControlBackend {
+        fn flush(&mut self, _: BlockProviderDevice) -> Result<u64, AhciBlockControlError> {
+            Ok(9)
+        }
+        fn reset(&mut self, _: BlockProviderDevice) -> Result<u64, AhciBlockControlError> {
+            Ok(13)
+        }
+    }
+
+    #[test]
+    fn control_flags_and_sessions_gate_nonzero_backend_receipts() {
+        let devices = [device(BLOCK_DEVICE_FLAG_FLUSH | BLOCK_DEVICE_FLAG_RESET)];
+        let mut adapter = AhciBlockControlAdapter::new(&devices, ControlBackend);
+        assert_eq!(
+            decode_flush_response(
+                &adapter
+                    .flush(&encode_flush_request(devices[0].session))
+                    .unwrap()
+            ),
+            Ok(Ok(9))
+        );
+        assert_eq!(
+            decode_reset_response(
+                &adapter
+                    .reset(&encode_reset_request(devices[0].session))
+                    .unwrap()
+            ),
+            Ok(Ok(13))
+        );
+        let stale = OpaqueHandle::new(3, 8).unwrap();
+        assert_eq!(
+            decode_flush_response(&adapter.flush(&encode_flush_request(stale)).unwrap()),
+            Ok(Err(FlushError::StaleObject))
+        );
+        let unsupported = [device(0)];
+        let mut adapter = AhciBlockControlAdapter::new(&unsupported, ControlBackend);
+        assert_eq!(
+            decode_reset_response(
+                &adapter
+                    .reset(&encode_reset_request(unsupported[0].session))
+                    .unwrap()
+            ),
+            Ok(Err(ResetError::PermissionDenied))
+        );
     }
 }

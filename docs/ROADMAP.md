@@ -338,6 +338,12 @@ release-before-reply, and unconditional local-buffer wiping. AHCI passes 66
 tests on Windows and Arch Linux. Raw syscall adaptation and flush/reset control
 dispatch remain planned.
 
+AHCI flush/reset adaptation and zero-capability isolated dispatch are now
+**PARTIALLY IMPLEMENTED IN SOURCE**. Exact session and operation flags gate the
+backend; nonzero receipts are mandatory; every transferred capability causes
+rejection without reply. AHCI passes 69 tests on Windows and Arch Linux.
+Concrete ATA flush/reset mechanism and raw syscall wiring remain planned.
+
 Bounded AHCI port-engine activation is now **PARTIALLY IMPLEMENTED IN SOURCE**.
 `start_ahci_port_engine` consumes only initialized command memory, exact-matches
 the ABAR and DMA generations, requires disabled interrupts and an idle task file

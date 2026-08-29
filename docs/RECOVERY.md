@@ -1280,6 +1280,13 @@ that authority before reply, and never copies failed read results outward.
 AHCI passes 66 tests on Windows and Arch Linux. Raw syscall wiring, control
 operations, installed recovery, and physical execution remain unverified.
 
+AHCI control dispatch is **PARTIALLY IMPLEMENTED IN SOURCE** as a strictly
+buffer-free boundary. Flush/reset require the exact generational session and
+advertised operation, reject all transferred capabilities, and preserve cleanup-
+incomplete reset failure. AHCI passes 69 tests on Windows and Arch Linux.
+Concrete ATA flush/reset, syscall wiring, installed recovery, and physical
+execution remain unverified.
+
 Stopped-port DMA reclamation is **PARTIALLY IMPLEMENTED IN SOURCE**. Recovery
 may regain the revocable installed owner only after exact-generation quiescence,
 verified base-register clearing, and verified zeroing of all retained extents.

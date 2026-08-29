@@ -385,6 +385,15 @@ The AHCI library passes 66 tests on Windows and Arch Linux. The raw syscall
 adapter and control-operation dispatch remain **PLANNED**; no hardware evidence
 is claimed.
 
+AHCI control adaptation and isolated dispatch are now **PARTIALLY IMPLEMENTED
+IN SOURCE**. Flush/reset exact-match the generational session and advertised
+operation flag, reject zero backend receipts, and preserve reset cleanup failure
+separately. Their service loop accepts exactly the fixed control envelope and
+rejects every transferred capability or token, sends no reply for malformed
+authority, and wipes request/token/response buffers. The AHCI library passes 69
+tests on Windows and Arch Linux. Concrete ATA flush and device-reset mechanisms
+plus raw syscall wiring remain **PLANNED**.
+
 The command-memory gate is now **PARTIALLY IMPLEMENTED IN SOURCE**. The driver
 checks every word in the exact command-list, received-FIS, and per-slot command-
 table extents is zero before writing anything. It then gives every advertised
@@ -688,17 +697,20 @@ transport is now canonical: it binds exact endpoint and session generations,
 LBA and nonzero sector count, one caller-bounded writable view, fixed framing,
 reserved bytes, and operation-specific status. Responses must report a nonzero
 byte count within both that view and the 1-MiB interface limit. Six focused
-interface tests pass on Windows and Arch Linux; provider-side read adapters
-remain **PLANNED**. Write framing independently binds the same identities and
+interface tests pass on Windows and Arch Linux. AHCI provider-side read
+adaptation and isolated dispatch are implemented in the bounded source model;
+NVMe and IDE remain **PLANNED**. Write framing independently binds the same identities and
 geometry to an immutable borrowed input view, preserves `ReadOnly` as distinct
 from permission/media/I/O failures, and bounds nonzero completion bytes to the
 view and 1-MiB limit. Eight focused interface tests pass on both hosts;
-provider-side write adapters remain **PLANNED**. Flush and reset now use separate
+AHCI provider-side write adaptation and isolated dispatch are implemented;
+NVMe and IDE remain **PLANNED**. Flush and reset now use separate
 buffer-free calls through the exact endpoint: flush accepts only a nonzero
 durability serial, while reset accepts only a nonzero successor generation and
 preserves cleanup-incomplete failure separately. Cross-operation frames fail
-closed. Eleven focused interface tests pass on Windows and Arch Linux. Provider-side
-control adapters remain **PLANNED**.
+closed. Eleven focused interface tests pass on Windows and Arch Linux. AHCI
+control adaptation and isolated dispatch are implemented, while its concrete
+ATA flush/reset mechanisms and the NVMe/IDE adapters remain **PLANNED**.
 
 The NVMe/legacy-IDE expansion has the following architectural score. Work stays
 sequential by provider and each parser/register/queue gate is independently

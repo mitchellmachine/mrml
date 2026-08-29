@@ -297,6 +297,17 @@ optimization. The invoked AHCI command backend retains its existing
 **TRIGGERED** Canadian scope review. This technical screen is not legal advice
 or patent clearance.
 
+# 2026-08-29 — AHCI control adapter and buffer-free service dispatch
+
+Patent review: **NOT_TRIGGERED**. This increment validates existing stable flush
+and reset envelopes, exact-matches generational catalog records and advertised
+flags, enforces nonzero abstract backend receipts, rejects transferred
+capabilities, and wipes fixed local buffers. It implements no ATA flush command,
+AHCI reset/register sequence, DMA, scheduling, caching, filesystem behavior, or
+storage optimization. Future concrete AHCI control mechanisms require their own
+review under the recorded Canadian scope. This technical screen is not legal
+advice or patent clearance.
+
 # 2026-08-29 — Capability-bound non-NCQ AHCI command construction
 
 Patent review: **TRIGGERED**, governed by the recorded Canadian AHCI scope. This
